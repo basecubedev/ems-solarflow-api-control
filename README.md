@@ -5,7 +5,6 @@ Simple and lightweight EMS (Energy Management System) for Zendure Solarflow syst
 No YAML. No complex Home Assistant setups.
 Just Python + direct API control.
 
----
 
 ## 💡 Why this project?
 
@@ -22,7 +21,6 @@ This project is different:
 * easy to modify
 * runs standalone
 
----
 
 ## 🚀 What it does
 
@@ -32,7 +30,6 @@ This project is different:
 * distributes load across multiple devices
 * optionally integrates with Home Assistant
 
----
 
 ## ⚙️ Features
 
@@ -43,7 +40,22 @@ This project is different:
 * 🧩 JSON-based configuration
 * 🚫 no YAML required
 
+
+## 🖥️ Dashboard
+
+Ready-to-use Home Assistant dashboard included:
+
+```text
+homeassistent-dashboard/dashboard.yaml
+```
+
+<p align="center">
+  <img src="./homeassistent-dashboard/dashboard-preview.jpg" width="900">
+</p>
+
+
 ---
+
 
 ## 🔌 Zendure API Basics
 
@@ -401,9 +413,8 @@ sudo apt install python3-requests
 
 ## 🛠️ Roadmap
 
-* smoother ramp control
+* serial/parallel controll mode for VDE AR-N 4105:2026 (Germany <7000W PV)
 * watchdog / failsafe
-* MQTT support
 * better visualization
 
 ---

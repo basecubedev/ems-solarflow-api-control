@@ -1,0 +1,250 @@
+views:
+  - type: sections
+    max_columns: 4
+    title: ems-solarflow-api-control
+    path: ems-neu
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: ems-solarflow-api-control
+            heading_style: title
+          - type: vertical-stack
+            cards:
+              - type: markdown
+                content: |
+                  # ⚡ EMS SolarFlow
+              - type: grid
+                columns: 3
+                square: false
+                cards:
+                  - type: tile
+                    entity: sensor.ems_solarflow_solar_total
+                    name: Solar
+                    color: amber
+                  - type: tile
+                    entity: sensor.ems_solarflow_battery_power
+                    name: Battery
+                    color: green
+                  - type: tile
+                    entity: sensor.ems_solarflow_home
+                    name: Home
+                    color: blue
+                  - type: tile
+                    entity: sensor.ems_solarflow_load
+                    name: Grid
+                    color: red
+                  - type: tile
+                    entity: sensor.ems_solarflow_soc_avg
+                    name: Avg SOC
+                    color: teal
+                  - type: tile
+                    entity: sensor.ems_solarflow_target_total
+                    name: Target
+                    color: purple
+              - type: horizontal-stack
+                cards:
+                  - type: entities
+                    title: 🎛 EMS Control
+                    show_header_toggle: false
+                    entities:
+                      - entity: input_boolean.ems_solarflow_enable
+                        name: Enabled
+                      - entity: input_number.ems_solarflow_max_power
+                        name: Max Power
+                      - entity: input_number.ems_solarflow_interval
+                        name: Interval
+                      - type: divider
+                      - entity: sensor.ems_solarflow_load
+                        name: Load
+                      - entity: sensor.ems_solarflow_target_total
+                        name: Target
+                  - type: entities
+                    title: ⚙️ Regulation
+                    show_header_toggle: false
+                    entities:
+                      - entity: sensor.ems_solarflow_wr1_target
+                        name: WR1 Target
+                      - entity: sensor.ems_solarflow_wr1_output
+                        name: WR1 Output
+                      - type: divider
+                      - entity: sensor.ems_solarflow_wr2_target
+                        name: WR2 Target
+                      - entity: sensor.ems_solarflow_wr2_output
+                        name: WR2 Output
+              - type: horizontal-stack
+                cards:
+                  - type: entities
+                    title: 🔋 WR1 Battery
+                    show_header_toggle: false
+                    entities:
+                      - entity: sensor.ems_solarflow_wr1_soc
+                        name: SOC
+                      - entity: sensor.ems_solarflow_wr1_voltage
+                        name: Voltage
+                      - entity: sensor.ems_solarflow_wr1_temp
+                        name: Temp
+                      - entity: sensor.ems_solarflow_wr1_remaining_minutes
+                        name: Runtime
+                      - type: divider
+                      - entity: sensor.ems_solarflow_wr1_battery_charge
+                        name: Charge
+                      - entity: sensor.ems_solarflow_wr1_battery_discharge
+                        name: Discharge
+                  - type: entities
+                    title: 🔋 WR2 Battery
+                    show_header_toggle: false
+                    entities:
+                      - entity: sensor.ems_solarflow_wr2_soc
+                        name: SOC
+                      - entity: sensor.ems_solarflow_wr2_voltage
+                        name: Voltage
+                      - entity: sensor.ems_solarflow_wr2_temp
+                        name: Temp
+                      - entity: sensor.ems_solarflow_wr2_remaining_minutes
+                        name: Runtime
+                      - type: divider
+                      - entity: sensor.ems_solarflow_wr2_battery_charge
+                        name: Charge
+                      - entity: sensor.ems_solarflow_wr2_battery_discharge
+                        name: Discharge
+              - type: horizontal-stack
+                cards:
+                  - type: entities
+                    title: ☀️ WR1 PV
+                    show_header_toggle: false
+                    entities:
+                      - entity: sensor.ems_solarflow_wr1_panel1
+                        name: Panel 1
+                      - entity: sensor.ems_solarflow_wr1_panel2
+                        name: Panel 2
+                      - entity: sensor.ems_solarflow_wr1_panel3
+                        name: Panel 3
+                      - entity: sensor.ems_solarflow_wr1_panel4
+                        name: Panel 4
+                      - type: divider
+                      - entity: sensor.ems_solarflow_wr1_solar
+                        name: Total
+                  - type: entities
+                    title: ☀️ WR2 PV
+                    show_header_toggle: false
+                    entities:
+                      - entity: sensor.ems_solarflow_wr2_panel1
+                        name: Panel 1
+                      - entity: sensor.ems_solarflow_wr2_panel2
+                        name: Panel 2
+                      - entity: sensor.ems_solarflow_wr2_panel3
+                        name: Panel 3
+                      - entity: sensor.ems_solarflow_wr2_panel4
+                        name: Panel 4
+                      - type: divider
+                      - entity: sensor.ems_solarflow_wr2_solar
+                        name: Total
+              - type: horizontal-stack
+                cards:
+                  - type: entities
+                    title: 🩺 WR1 Diagnostics
+                    show_header_toggle: false
+                    entities:
+                      - entity: sensor.ems_solarflow_wr1_rssi
+                        name: RSSI
+                      - entity: binary_sensor.wr1_fault
+                        name: Fault
+                      - entity: binary_sensor.wr1_ac_active
+                        name: AC
+                      - entity: binary_sensor.wr1_dc_active
+                        name: DC
+                      - entity: binary_sensor.wr1_grid_online
+                        name: Grid
+                  - type: entities
+                    title: 🩺 WR2 Diagnostics
+                    show_header_toggle: false
+                    entities:
+                      - entity: sensor.ems_solarflow_wr2_rssi
+                        name: RSSI
+                      - entity: binary_sensor.wr2_fault
+                        name: Fault
+                      - entity: binary_sensor.wr2_ac_active
+                        name: AC
+                      - entity: binary_sensor.wr2_dc_active
+                        name: DC
+                      - entity: binary_sensor.wr2_grid_online
+                        name: Grid
+            grid_options:
+              columns: 24
+              rows: auto
+        column_span: 2
+      - type: grid
+        cards:
+          - type: heading
+            heading: ems-solarflow-api-control - Flow
+            heading_style: title
+          - type: custom:power-flow-card-plus
+            entities:
+              battery:
+                invert_state: true
+                color_value: false
+                entity: sensor.ems_solarflow_battery_power
+                consumption: sensor.ems_solarflow_battery_charge
+                production: sensor.ems_solarflow_battery_discharge
+              grid:
+                entity: sensor.ems_solarflow_load
+                color:
+                  consumption:
+                    - 203
+                    - 93
+                    - 234
+                  production:
+                    - 203
+                    - 93
+                    - 234
+                color_value: false
+                display_zero: true
+              solar:
+                entity: sensor.ems_solarflow_solar_total
+                display_zero_state: true
+                display_zero: true
+                color_value: false
+                color_icon: false
+                use_metadata: false
+              home:
+                entity: sensor.ems_solarflow_home
+                subtract_individual: false
+                use_metadata: false
+                override_state: false
+                secondary_info:
+                  color_value: false
+                  accept_negative: false
+                  decimals: 0
+                  unit_white_space: true
+                hide: false
+                name: Bedarf
+              fossil_fuel_percentage:
+                color:
+                  - 33
+                  - 80
+                  - 140
+              individual: []
+            clickable_entities: true
+            display_zero_lines:
+              mode: transparency
+              transparency: 70
+              grey_color:
+                - 189
+                - 189
+                - 189
+            use_new_flow_rate_model: true
+            base_decimals: 0
+            kilo_decimals: 1
+            min_flow_rate: 0.75
+            max_flow_rate: 6
+            max_expected_power: 2000
+            min_expected_power: 0.01
+            kilo_threshold: 1000
+            mega_threshold: 1000000
+            transparency_zero_lines: 0
+            sort_individual_devices: true
+            disable_dots: false
+            allow_layout_break: false
+        column_span: 1
+    cards: []
