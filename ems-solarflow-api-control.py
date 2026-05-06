@@ -22,6 +22,9 @@ except FileNotFoundError:
     exit(1)
 
 # Extract configuration
+SYSTEM_ENABLED = CONFIG["system"].get("enabled", True)
+HA_ENABLED = CONFIG["ha"].get("enabled", True)
+
 HA_URL = CONFIG["ha"]["url"]
 HA_TOKEN = CONFIG["ha"]["token"]
 
@@ -681,7 +684,7 @@ class EMSController:
         else:
 
             max_power = MAX_TOTAL_POWER
-            enabled = True
+            enabled = SYSTEM_ENABLED
             interval = LOOP_INTERVAL
 
         # =====================
@@ -770,11 +773,14 @@ if __name__ == "__main__":
 
     session = create_session()
 
-    ha = HAClient(
-        HA_URL,
-        HA_TOKEN,
-        session
-    )
+    ha = None
+
+    if HA_ENABLED:
+        ha = HAClient(
+            HA_URL,
+            HA_TOKEN,
+            session
+        )
 
     devices = [
         ZendureClient(
