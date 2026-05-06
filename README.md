@@ -133,6 +133,22 @@ Look for:
 
 Uses the REST API.
 
+Home Assistant is fully optional.
+
+The EMS can run:
+
+- standalone
+- without HA
+- only via local Zendure APIs
+
+Enable/disable HA via:
+
+```json
+"ha": {
+  "enabled": false
+}
+```
+
 ### Read state
 
 ```
@@ -152,13 +168,34 @@ Used for:
 * loop interval
 * telemetry (solar, battery, load)
 
-## 🏠 Home Assistant Helpers
-
-The EMS can be controlled via Home Assistant helpers.
-
-Create the following entities in Home Assistant:
 
 ---
+
+## 🔘 Enable / Disable EMS (standalone)
+
+config.json
+```json
+"system": {
+  "enabled": true
+}
+```
+
+
+---
+
+## 🏠 Home Assistant Helpers
+
+The EMS can be controlled via local configuration or Home Assistant helpers.
+
+## 🔘 Enable / Disable HA
+
+```json
+"ha": {
+  "enabled": true
+}
+```
+
+Create the following entities in Home Assistant:
 
 ### 🔘 Enable / Disable EMS
 
@@ -168,8 +205,6 @@ input_boolean:
     name: EMS Solarflow Enable
     icon: mdi:solar-power-variant
 ```
-
----
 
 ### ⚡ Max Total Power (W)
 
@@ -183,8 +218,6 @@ input_number:
     unit_of_measurement: W
     mode: slider
 ```
-
----
 
 ### ⏱️ Control Interval (seconds)
 
@@ -215,7 +248,6 @@ sensor.ems_solarflow_battery_charge
 sensor.ems_solarflow_battery_discharge
 ```
 
----
 
 ### 🔌 Per Device Sensors
 
@@ -240,13 +272,6 @@ sensor.ems_solarflow_wr2_output
 * Entities appear automatically once the script is running
 * Restart of Home Assistant may reset temporary states
 
----
-
-## ⚠️ Important
-
-* The EMS must be **enabled** via `input_boolean.ems_solarflow_enable`
-* Otherwise no control commands will be sent
-* Sensors are still updated even if EMS is disabled
 
 ---
 
@@ -255,6 +280,7 @@ sensor.ems_solarflow_wr2_output
 ```
 ems-solarflow-api-control/
 │
+├── /homeassistent-dashboard/
 ├── ems-solarflow-api-control.py
 ├── config.json
 ├── config.template.json
