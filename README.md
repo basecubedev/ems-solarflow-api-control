@@ -3,42 +3,42 @@
 Simple and lightweight EMS (Energy Management System) for Zendure Solarflow systems.
 
 No YAML. No complex Home Assistant setups.
-Just Python + direct API control.
+Just Python + local API control.
 
 
 ## 💡 Why this project?
 
 Most Solarflow integrations are:
 
-* complex
-* YAML-heavy
-* hard to debug
+- complex
+- YAML-heavy
+- hard to debug
 
 This project is different:
 
-* direct API control
-* easy to understand
-* easy to modify
-* runs standalone
+- direct API control
+- easy to understand
+- easy to modify
+- runs standalone
 
 
 ## 🚀 What it does
 
-* reads house consumption (Shelly)
-* reads Solarflow data (local API)
-* calculates optimal output power
-* distributes load across multiple devices
-* optionally integrates with Home Assistant
+- reads house consumption (Shelly)
+- reads Solarflow data (local API)
+- calculates optimal output power
+- distributes load across multiple devices
+- optionally integrates with Home Assistant
 
 
 ## ⚙️ Features
 
-* ⚡ real-time control loop
-* 🔌 multi-device support
-* 🧠 SOC-based load distribution
-* 🏠 Home Assistant integration (optional)
-* 🧩 JSON-based configuration
-* 🚫 no YAML required
+- ⚡ real-time control loop
+- 🔌 multi-device support
+- 🧠 SOC-based load distribution
+- 🏠 Home Assistant integration (optional)
+- 🧩 JSON-based configuration
+- 🚫 no YAML required
 
 
 ## 🖥️ Dashboard
@@ -46,16 +46,14 @@ This project is different:
 Ready-to-use Home Assistant dashboard included:
 
 ```text
-homeassistent-dashboard/dashboard.yaml
+homeassistant-dashboard/dashboard.yaml
 ```
 
 <p align="center">
-  <img src="./homeassistent-dashboard/dashboard-preview.jpg" width="900">
+  <img src="./homeassistant-dashboard/dashboard-preview.jpg" width="900">
 </p>
 
-
 ---
-
 
 ## 🔌 Zendure API Basics
 
@@ -69,11 +67,11 @@ curl http://DEVICE_IP/properties/report
 
 Important fields:
 
-* `electricLevel` → battery SOC (%)
-* `solarInputPower` → solar input (W)
-* `outputHomePower` → current output (W)
-* `packInputPower` → battery charging power (W)
-* `outputPackPower` → battery discharge power (W)
+- `electricLevel` → battery SOC (%)
+- `solarInputPower` → solar input (W)
+- `outputHomePower` → current output (W)
+- `packInputPower` → battery charging power (W)
+- `outputPackPower` → battery discharge power (W)
 
 ---
 
@@ -94,10 +92,12 @@ curl -X POST http://DEVICE_IP/properties/write \
 
 ### ⚠️ Important behavior
 
-* values are **not persistent**
-* control works like RAM (temporary state)
-* your script must run continuously
-* if the script stops → last value remains active
+- values are not persistent
+- control works like RAM (temporary state)
+- your script must run continuously
+- if the script stops unexpectedly, the last configured output limit remains active
+- always use conservative power limits
+- additional failsafe mechanisms are recommended
 
 ---
 
@@ -113,19 +113,35 @@ curl http://DEVICE_IP/properties/report
 
 Look for:
 
-```
+```text
 "sn": "EOD1XXXXXXXXXXXX"
 ```
 
 ### Option 2: device label
 
-* printed on the device
-* visible in the Zendure app
+- printed on the device
+- visible in the Zendure app
 
 ### ⚠️ Important
 
-* required for write commands
-* without SN → no output control possible
+- required for write commands
+- without SN → no output control possible
+
+---
+
+## 🔘 Main EMS Enable / Disable (standalone)
+
+The EMS can run fully standalone without Home Assistant.
+
+Enable or disable the complete control loop via:
+
+config.json
+
+```json
+"system": {
+  "enabled": true
+}
+```
 
 ---
 
@@ -151,35 +167,22 @@ Enable/disable HA via:
 
 ### Read state
 
-```
+```text
 GET /api/states/<entity_id>
 ```
 
 ### Write state
 
-```
+```text
 POST /api/states/<entity_id>
 ```
 
 Used for:
 
-* enable/disable control
-* max power setting
-* loop interval
-* telemetry (solar, battery, load)
-
-
----
-
-## 🔘 Enable / Disable EMS (standalone)
-
-config.json
-```json
-"system": {
-  "enabled": true
-}
-```
-
+- enable/disable control
+- max power setting
+- loop interval
+- telemetry (solar, battery, load)
 
 ---
 
@@ -248,7 +251,6 @@ sensor.ems_solarflow_battery_charge
 sensor.ems_solarflow_battery_discharge
 ```
 
-
 ### 🔌 Per Device Sensors
 
 For each device (e.g. WR1, WR2):
@@ -267,20 +269,19 @@ sensor.ems_solarflow_wr2_output
 
 ## 💡 Notes
 
-* All sensors are created via the Home Assistant REST API
-* No manual sensor configuration required
-* Entities appear automatically once the script is running
-* Restart of Home Assistant may reset temporary states
-
+- All sensors are created via the Home Assistant REST API
+- No manual sensor configuration required
+- Entities appear automatically once the script is running
+- Restart of Home Assistant may reset temporary states
 
 ---
 
 ## 📁 Project Structure
 
-```
+```text
 ems-solarflow-api-control/
 │
-├── /homeassistent-dashboard/
+├── /homeassistant-dashboard/
 ├── ems-solarflow-api-control.py
 ├── config.json
 ├── config.template.json
@@ -297,20 +298,20 @@ ems-solarflow-api-control/
 
 Main control loop:
 
-* device polling
-* power calculation
-* load distribution
-* API communication
-* HA integration
+- device polling
+- power calculation
+- load distribution
+- API communication
+- HA integration
 
 ### `config.json`
 
 User configuration (not in git):
 
-* IPs
-* serial numbers
-* HA token
-* system settings
+- IPs
+- serial numbers
+- HA token
+- system settings
 
 ### `config.template.json`
 
@@ -324,13 +325,13 @@ cp config.template.json config.json
 
 Systemd service for:
 
-* auto start
-* background execution
-* restart on crash
+- auto start
+- background execution
+- restart on crash
 
 ### `.gitignore`
 
-```
+```text
 config.json
 ```
 
@@ -353,9 +354,9 @@ cp config.template.json config.json
 
 Edit:
 
-* HA URL + token
-* device IPs
-* SN
+- HA URL + token
+- device IPs
+- SN
 
 ### 3. Run
 
@@ -395,27 +396,36 @@ journalctl -u ems-solarflow -f
 
 ---
 
+## 🐍 Requirements
+
+- Python 3.10+
+- Linux recommended
+- tested on Debian / Ubuntu
+
+---
+
 ## 🧠 Control Logic
 
 1. read load (Shelly)
 2. read solar + battery (Zendure)
 3. calculate total power
-4. distribute power:
+4. distribute power
 
-   * solar first
-   * battery by SOC
+   - solar first
+   - battery by SOC
+
 5. write output limits
 
 ---
 
 ## ⚡ Design Philosophy
 
-* one script
-* one config
-* no frameworks
-* no hidden magic
+- one script
+- one config
+- no frameworks
+- no hidden magic
 
-```
+```text
 simple > complex
 ```
 
@@ -437,14 +447,57 @@ sudo apt install python3-requests
 
 ---
 
-## 🛠️ Roadmap
+## 🚧 Experimental Software
 
-* serial/parallel controll mode for VDE AR-N 4105:2026 (Germany <7000W PV)
-* watchdog / failsafe
-* better visualization
+This project is experimental software intended for self-hosting and development purposes.
+
+Do not use this project in safety-critical environments.
 
 ---
 
 ## 📜 License
 
-MIT
+This project is licensed under the Apache License 2.0.
+
+See the `LICENSE` file for details.
+
+---
+
+## ⚠️ Disclaimer
+
+This project is an unofficial community project and is not affiliated with,
+endorsed by, or supported by Zendure.
+
+Use this software at your own risk.
+
+The software directly controls power output behavior of connected energy devices.
+
+No guarantee is provided regarding:
+
+- safety
+- stability
+- reliability
+- regulatory compliance
+- protection against incorrect device behavior
+
+The author is not responsible for:
+
+- hardware damage
+- battery damage
+- energy losses
+- grid violations
+- legal or regulatory issues
+- data loss
+- any direct or indirect damages
+
+Always verify local electrical and grid regulations before using this software.
+
+This project is intended for technically experienced users only.
+
+---
+
+## 🛠️ Roadmap
+
+- serial/parallel control mode for VDE AR-N 4105:2026 (Germany <7000W PV)
+- watchdog / failsafe
+- better visualization
