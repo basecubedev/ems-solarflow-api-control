@@ -1,0 +1,27 @@
+{
+  "ha": {
+    "url": "http://homeassistant.local:8123",
+    "token": "YOUR_TOKEN_HERE"
+  },
+  "system": {
+    "max_total_power": 800,
+    "max_device_power": 800,
+    "deadband": 10,
+    "loop_interval": 2
+  },
+  "devices": [
+    {
+      "name": "WR1",
+      "ip": "192.168.1.100",
+      "sn": "YOUR_SN"
+    },
+    {
+      "name": "WR2",
+      "ip": "192.168.1.101",
+      "sn": "YOUR_SN"
+    }
+  ],
+  "shelly": {
+    "ip": "192.168.1.50"
+  }
+}

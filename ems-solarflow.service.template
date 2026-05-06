@@ -1,0 +1,35 @@
+[Unit]
+Description=EMS Solarflow API Controller
+After=network.target
+
+[Service]
+Type=simple
+
+# ===== USER CONFIG =====
+# Change this to your system user
+User=YOUR_USER
+
+# Path to your project directory
+WorkingDirectory=/home/YOUR_USER/ems-solarflow-api-control
+
+# Path to your Python script
+ExecStart=/usr/bin/python3 /home/YOUR_USER/ems-solarflow-api-control/ems-solarflow-api-control.py
+
+# ===== BEHAVIOR =====
+# Always restart if the script crashes
+Restart=always
+RestartSec=5
+
+# Prevent restart limits
+StartLimitIntervalSec=0
+
+# ===== LOGGING =====
+# Send logs to journalctl
+StandardOutput=journal
+StandardError=journal
+
+# Ensure Python logs are not buffered
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
