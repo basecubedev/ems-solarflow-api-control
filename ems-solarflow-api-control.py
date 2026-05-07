@@ -548,17 +548,18 @@ class EMSController:
                 "power"
             )
 
-            # Battery
-            self.publish_sensor(
-                base + "battery_charge",
-                d.pack_in,
-                "W",
-                "power"
-            )
+            # Zendure API uses controller/inverter perspective:
+            # pack_out behaves like charging power
+            # pack_in behaves like discharge power
+
+            # Positive  = charging
+            # Negative  = discharging
+            
+            device_battery_power = d.pack_out - d.pack_in
 
             self.publish_sensor(
-                base + "battery_discharge",
-                d.pack_out,
+                base + "battery_power",
+                round(device_battery_power, 1),
                 "W",
                 "power"
             )
