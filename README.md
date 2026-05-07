@@ -37,7 +37,10 @@ The EMS:
 * calculates optimal output power
 * distributes load across multiple devices
 * prioritizes solar power usage
-* distributes battery usage by SOC
+* dynamically balances charge/discharge across multiple batteries
+* prevents PV curtailment on full batteries
+* protects low SOC batteries during discharge
+* automatically balances uneven battery states
 * optionally integrates with Home Assistant
 
 ---
@@ -46,7 +49,12 @@ The EMS:
 
 * ⚡ real-time control loop
 * 🔌 multi-device support
-* 🧠 SOC-based load distribution
+* 🧠 intelligent SOC-aware balancing
+* 🔋 intelligent multi-battery balancing
+* ☀️ PV curtailment avoidance
+* 🪫 low battery protection
+* ⚖️ automatic SOC equalization
+* 🔄 mixed battery / non-battery system support
 * 🏠 optional Home Assistant integration
 * 🧩 JSON-based configuration
 * 🚫 no YAML required
@@ -54,6 +62,28 @@ The EMS:
 * 🔄 automatic entity cleanup
 * 🐍 pure Python
 * 🧰 standalone operation possible
+
+---
+
+# 🔋 Intelligent Battery Balancing
+
+The EMS dynamically balances power distribution across all connected devices.
+
+Features:
+
+* fuller batteries feed more directly into household load
+* batteries with remaining capacity keep more solar energy for charging
+* low SOC batteries are protected during discharge
+* battery SOC levels naturally converge over time
+* mixed systems with and without batteries are supported automatically
+
+This improves:
+
+* PV utilization
+* battery lifetime
+* charge/discharge symmetry
+* multi-device efficiency
+* overall energy balancing
 
 ---
 
@@ -327,6 +357,8 @@ The EMS creates:
 
 ```text
 sensor.ems_solarflow_wr1_soc
+sensor.ems_solarflow_wr1_min_soc
+sensor.ems_solarflow_wr1_max_soc
 sensor.ems_solarflow_wr1_solar
 sensor.ems_solarflow_wr1_output
 sensor.ems_solarflow_wr1_target
@@ -400,8 +432,9 @@ Main EMS control loop:
 
 * device polling
 * power calculation
-* SOC balancing
-* load distribution
+* intelligent SOC balancing
+* PV-aware load distribution
+* battery headroom management
 * API communication
 * Home Assistant integration
 
@@ -516,9 +549,12 @@ journalctl -u ems-solarflow -f
 2. read Zendure solar + battery state
 3. calculate required total power
 4. prioritize direct solar usage
-5. distribute remaining load by SOC
-6. update inverter output limits
-7. publish telemetry to Home Assistant
+5. detect battery charge/discharge headroom
+6. avoid PV curtailment on full batteries
+7. protect low SOC batteries
+8. dynamically balance battery usage
+9. update inverter output limits
+10. publish telemetry to Home Assistant
 
 ---
 
@@ -624,4 +660,4 @@ See the `LICENSE` file for details.
 * serial / parallel inverter control for VDE AR-N 4105:2026 F 1.2
 * watchdog / failsafe
 * improved dashboard visualization
-* historical telemetry -> Publish to InfluxDB
+* historical telemetry -> publish to InfluxDB
