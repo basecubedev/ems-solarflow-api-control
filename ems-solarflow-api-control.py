@@ -32,6 +32,10 @@ MAX_TOTAL_POWER = CONFIG["system"]["max_total_power"]
 MAX_DEVICE_POWER = CONFIG["system"]["max_device_power"]
 DEADBAND = CONFIG["system"]["deadband"]
 LOOP_INTERVAL = CONFIG["system"]["loop_interval"]
+SOC_RECONCILE_INTERVAL = CONFIG["system"].get(
+    "soc_reconcile_interval",
+    10
+)
 
 ZENDURE_CONFIG = CONFIG["devices"]
 SHELLY_IP = CONFIG["shelly"]["ip"]
@@ -214,8 +218,8 @@ def parse_device(data):
     return DeviceState(
         soc=props.get("electricLevel") or 0,
 
-        min_soc=props.get("minSoc") or 0,
-        max_soc=props.get("maxSoc") or 0,
+        min_soc=(props.get("minSoc") or 0) / 10,
+        max_soc=(props.get("socSet") or 0) / 10,
 
         solar=props.get("solarInputPower") or 0,
         output=props.get("outputHomePower") or 0,
@@ -251,11 +255,21 @@ def parse_device(data):
 class ZendureClient:
     """Client for a single Zendure device."""
 
-    def __init__(self, name, ip, sn, session):
+    def __init__(
+        self,
+        name,
+        ip,
+        sn,
+        session,
+        min_soc,
+        max_soc
+    ):
         self.name = name
         self.ip = ip
         self.sn = sn
         self.session = session
+        self.min_soc = min_soc
+        self.max_soc = max_soc
 
     def fetch(self):
         """Fetch current device state."""
@@ -465,6 +479,7 @@ class EMSController:
         self.devices = devices
         self.shelly = shelly
         self.ha = ha
+        self.soc_reconcile_counter = SOC_RECONCILE_INTERVAL
 
     def set_output_limit(self, dev, value):
         """Write output limit to device."""
@@ -487,6 +502,59 @@ class EMSController:
 
         except Exception as e:
             logging.warning(f"Write error {dev.name}: {e}")
+
+    def apply_soc_limits(self, dev, state):
+        """Apply configured SOC limits if required."""
+
+        #
+        # 0 = unmanaged
+        #
+
+        if dev.min_soc <= 0 and dev.max_soc <= 0:
+            return
+
+        #
+        # Already configured
+        #
+
+        if (
+            int(state.min_soc) == int(dev.min_soc)
+            and
+            int(state.max_soc) == int(dev.max_soc)
+        ):
+
+            logging.info(
+                f"SOC LIMITS {dev.name}: already configured"
+            )
+
+            return
+
+        try:
+
+            dev.session.post(
+                f"http://{dev.ip}/properties/write",
+                json={
+                    "sn": dev.sn,
+                    "properties": {
+                        "minSoc": int(dev.min_soc * 10),
+                        "maxSoc": int(dev.max_soc * 10)
+                    }
+                },
+                timeout=2
+            )
+
+            logging.info(
+                f"SOC LIMITS {dev.name}: "
+                f"min={dev.min_soc}% "
+                f"max={dev.max_soc}%"
+            )
+
+        except Exception as e:
+
+            logging.warning(
+                f"SOC write error {dev.name}: {e}"
+            )
+
 
     def publish_sensor(
         self,
@@ -788,8 +856,8 @@ class EMSController:
         states = [
             s if s else DeviceState(
                 0,
-                5,
-                100,
+                0,
+                0,
                 0,
                 0,
                 0,
@@ -810,6 +878,32 @@ class EMSController:
             )
             for s in raw_states
         ]
+
+        #
+        # Reconcile SOC limits
+        #
+
+        if SOC_RECONCILE_INTERVAL > 0:
+
+            self.soc_reconcile_counter += 1
+
+            if (
+                self.soc_reconcile_counter
+                >= SOC_RECONCILE_INTERVAL
+            ):
+
+                self.soc_reconcile_counter = 0
+
+                for dev, state in zip(
+                    self.devices,
+                    raw_states
+                ):
+
+                    if state:
+                        self.apply_soc_limits(
+                            dev,
+                            state
+                        ) 
 
         # =====================
         # CALCULATE TARGETS
@@ -893,7 +987,9 @@ if __name__ == "__main__":
             d["name"],
             d["ip"],
             d["sn"],
-            session
+            session,
+            d.get("min_soc", 0),
+            d.get("max_soc", 0)
         )
         for d in ZENDURE_CONFIG
     ]

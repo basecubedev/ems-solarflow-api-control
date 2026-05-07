@@ -10,19 +10,29 @@
     "max_total_power": 800,
     "max_device_power": 800,
     "deadband": 10,
-    "loop_interval": 5
+    "loop_interval": 5,
+
+    "soc_reconcile_interval": 10
   },
 
   "devices": [
     {
       "name": "WR1",
       "ip": "192.168.1.100",
-      "sn": "YOUR_SN"
+      "sn": "YOUR_SN",
+
+      "_comment": "min/max soc = 0 = unmanaged / keep Zendure app settings or no battery",
+      "min_soc": 15,
+      "max_soc": 100
     },
     {
       "name": "WR2",
       "ip": "192.168.1.101",
-      "sn": "YOUR_SN"
+      "sn": "YOUR_SN",
+
+      "_comment": "min/max soc = 0 = unmanaged / keep Zendure app settings or no battery",
+      "min_soc": 15,
+      "max_soc": 100
     }
   ],
 

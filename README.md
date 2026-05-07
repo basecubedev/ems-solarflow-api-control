@@ -33,27 +33,25 @@ This project is different:
 The EMS:
 
 * reads house consumption (Shelly)
-* reads Solarflow data (local API)
-* calculates optimal output power
-* distributes load across multiple devices
-* prioritizes solar power usage
-* dynamically balances charge/discharge across multiple batteries
-* prevents PV curtailment on full batteries
-* protects low SOC batteries during discharge
-* automatically balances uneven battery states
+* reads Solarflow telemetry via local API
+* calculates optimal inverter output power
+* dynamically distributes energy across multiple devices
+* intelligently balances solar and battery usage
+* continuously reconciles desired device configuration
 * optionally integrates with Home Assistant
-
 ---
 
 # ⚙️ Features
 
 * ⚡ real-time control loop
 * 🔌 multi-device support
-* 🧠 intelligent SOC-aware balancing
-* 🔋 intelligent multi-battery balancing
+* 🧠 intelligent SOC-aware multi-battery balancing
+* 🔄 runtime SOC drift correction
 * ☀️ PV curtailment avoidance
 * 🪫 low battery protection
 * ⚖️ automatic SOC equalization
+* 🧭 desired-state SOC reconciliation
+* 🧠 idempotent configuration management
 * 🔄 mixed battery / non-battery system support
 * 🏠 optional Home Assistant integration
 * 🧩 JSON-based configuration
@@ -84,6 +82,40 @@ This improves:
 * charge/discharge symmetry
 * multi-device efficiency
 * overall energy balancing
+
+---
+
+# 🔄 SOC Limit Reconciliation
+
+Optional SOC limits can be managed directly by the EMS.
+
+The EMS continuously reconciles configured SOC limits with the actual device state.
+
+Features:
+
+* automatic SOC drift correction
+* optional device-side SOC management
+* supports mixed managed / unmanaged devices
+* avoids unnecessary API writes
+* configurable reconciliation interval
+
+Example:
+
+```json
+{
+  "_comment": "min/max soc = 0 = unmanaged / keep Zendure app settings or no battery",
+
+  "min_soc": 15,
+  "max_soc": 100
+}
+```
+
+Behavior:
+
+| Value | Meaning |
+|---|---|
+| `0` | unmanaged / keep Zendure settings |
+| `>0` | EMS actively manages SOC limits |
 
 ---
 
@@ -164,7 +196,9 @@ curl -X POST http://DEVICE_IP/properties/write \
 
 # ⚠️ Important behavior
 
-* values are not persistent
+* inverter output limits are temporary runtime values
+* configured SOC limits may persist on the device
+* the EMS continuously reconciles desired SOC configuration
 * control works like RAM (temporary state)
 * your script must run continuously
 * if the script stops unexpectedly, the last configured output limit remains active
@@ -449,6 +483,9 @@ User configuration:
 * Shelly IP
 * Home Assistant token
 * EMS settings
+* min_soc
+* max_soc
+* soc_reconcile_interval
 
 ---
 
