@@ -49,8 +49,10 @@ logging.basicConfig(
 # HTTP SESSION
 # =====================
 
+
 def create_session():
     """Create a requests session with retry logic."""
+
     session = requests.Session()
 
     retry = Retry(
@@ -70,6 +72,7 @@ def create_session():
 # =====================
 # HOME ASSISTANT CLIENT
 # =====================
+
 
 class HAClient:
     """Simple REST client for Home Assistant."""
@@ -124,6 +127,7 @@ class HAClient:
                 json=payload,
                 timeout=2
             )
+
         except Exception as e:
             logging.warning(f"HA write {entity_id}: {e}")
 
@@ -164,9 +168,13 @@ class HAClient:
 # DATA MODEL
 # =====================
 
+
 @dataclass
 class DeviceState:
     soc: float
+
+    min_soc: float
+    max_soc: float
 
     solar: float
     output: float
@@ -197,43 +205,48 @@ class DeviceState:
 # DEVICE PARSING
 # =====================
 
+
 def parse_device(data):
     """Extract relevant values from Zendure API response."""
 
     props = data.get("properties", {})
 
     return DeviceState(
-        soc=props.get("electricLevel", 0),
+        soc=props.get("electricLevel") or 0,
 
-        solar=props.get("solarInputPower", 0),
-        output=props.get("outputHomePower", 0),
+        min_soc=props.get("minSoc") or 0,
+        max_soc=props.get("maxSoc") or 0,
 
-        pack_in=props.get("packInputPower", 0),
-        pack_out=props.get("outputPackPower", 0),
+        solar=props.get("solarInputPower") or 0,
+        output=props.get("outputHomePower") or 0,
 
-        temp=round((props.get("hyperTmp", 0) / 100), 2),
-        voltage=round((props.get("BatVolt", 0) / 100), 2),
-        rssi=props.get("rssi", 0),
+        pack_in=props.get("packInputPower") or 0,
+        pack_out=props.get("outputPackPower") or 0,
 
-        remain_minutes=round((props.get("remainOutTime", 0) / 60), 1),
+        temp=round(((props.get("hyperTmp") or 0) / 100), 2),
+        voltage=round(((props.get("BatVolt") or 0) / 100), 2),
+        rssi=props.get("rssi") or 0,
 
-        solar1=props.get("solarPower1", 0),
-        solar2=props.get("solarPower2", 0),
-        solar3=props.get("solarPower3", 0),
-        solar4=props.get("solarPower4", 0),
+        remain_minutes=round(((props.get("remainOutTime") or 0) / 60), 1),
 
-        output_limit=props.get("outputLimit", 0),
+        solar1=props.get("solarPower1") or 0,
+        solar2=props.get("solarPower2") or 0,
+        solar3=props.get("solarPower3") or 0,
+        solar4=props.get("solarPower4") or 0,
 
-        fault_level=props.get("faultLevel", 0),
+        output_limit=props.get("outputLimit") or 0,
 
-        ac_status=props.get("acStatus", 0),
-        dc_status=props.get("dcStatus", 0),
-        grid_state=props.get("gridState", 0),
+        fault_level=props.get("faultLevel") or 0,
+
+        ac_status=props.get("acStatus") or 0,
+        dc_status=props.get("dcStatus") or 0,
+        grid_state=props.get("gridState") or 0,
     )
 
 # =====================
 # DEVICE CLIENTS
 # =====================
+
 
 class ZendureClient:
     """Client for a single Zendure device."""
@@ -258,6 +271,7 @@ class ZendureClient:
         except Exception as e:
             logging.warning(f"{self.name} fetch failed: {e}")
             return None
+
 
 class ShellyClient:
     """Client for Shelly power meter."""
@@ -290,6 +304,7 @@ class ShellyClient:
 # PARALLEL FETCH
 # =====================
 
+
 def fetch_all_devices(devices):
     """Fetch all device states in parallel."""
 
@@ -316,13 +331,22 @@ def fetch_all_devices(devices):
 # CONTROL LOGIC
 # =====================
 
+
 def calculate_targets(load, devices, max_power):
     """
-    Calculate power targets per device.
+    Intelligent EMS target calculation.
 
     Strategy:
-    1. Use solar first
-    2. Distribute remaining load by SOC
+
+    Solar surplus:
+    - prioritize batteries with remaining charge capacity
+
+    Battery discharge:
+    - prioritize batteries with more usable SOC
+
+    This avoids:
+    - PV curtailment on full batteries
+    - overusing nearly empty batteries
     """
 
     current_total = sum(d.output for d in devices)
@@ -333,16 +357,55 @@ def calculate_targets(load, devices, max_power):
         min(max_power, current_total + load)
     )
 
+    targets = [0] * len(devices)
+
+    # =====================
+    # CASE 1:
+    # Enough solar available
+    # =====================
+
     if solar_total >= new_total:
 
-        targets = [
-            new_total * (
-                d.solar / solar_total
-                if solar_total else
+        weights = []
+
+        for d in devices:
+
+            if d.max_soc <= 0:
+
+                #
+                # No battery:
+                # direct solar priority
+                #
+
+                charge_headroom = 1
+
+            else:
+
+                charge_headroom = max(
+                    1,
+                    d.max_soc - d.soc
+                )
+
+            weight = d.solar / charge_headroom
+
+            weights.append(weight)
+
+        weight_total = sum(weights)
+
+        for i, d in enumerate(devices):
+
+            share = (
+                weights[i] / weight_total
+                if weight_total else
                 1 / len(devices)
             )
-            for d in devices
-        ]
+
+            targets[i] = new_total * share
+
+    # =====================
+    # CASE 2:
+    # Battery discharge required
+    # =====================
 
     else:
 
@@ -350,23 +413,50 @@ def calculate_targets(load, devices, max_power):
 
         remaining = new_total - solar_total
 
-        soc_total = sum(d.soc for d in devices)
+        weights = []
+
+        for d in devices:
+
+            if d.max_soc <= 0:
+
+                #
+                # No battery available
+                #
+
+                usable_soc = 0
+
+            else:
+
+                usable_soc = max(
+                    0,
+                    d.soc - d.min_soc
+                )
+
+            weights.append(usable_soc)
+
+        weight_total = sum(weights)
 
         for i, d in enumerate(devices):
 
             share = (
-                d.soc / soc_total
-                if soc_total else
+                weights[i] / weight_total
+                if weight_total else
                 1 / len(devices)
             )
 
             targets[i] += remaining * share
 
-    return [round(t) for t in targets], current_total, new_total
+    targets = [
+        max(0, min(MAX_DEVICE_POWER, round(t)))
+        for t in targets
+    ]
+
+    return targets, current_total, new_total
 
 # =====================
 # EMS CONTROLLER
 # =====================
+
 
 class EMSController:
     """Main EMS control loop."""
@@ -475,20 +565,6 @@ class EMSController:
         )
 
         self.publish_sensor(
-            p + "battery_charge",
-            round(pack_in_total, 1),
-            "W",
-            "power"
-        )
-
-        self.publish_sensor(
-            p + "battery_discharge",
-            round(pack_out_total, 1),
-            "W",
-            "power"
-        )
-
-        self.publish_sensor(
             p + "home",
             round(home, 1),
             "W",
@@ -516,6 +592,20 @@ class EMSController:
             self.publish_sensor(
                 base + "soc",
                 d.soc,
+                "%",
+                "battery"
+            )
+
+            self.publish_sensor(
+                base + "min_soc",
+                d.min_soc,
+                "%",
+                "battery"
+            )
+
+            self.publish_sensor(
+                base + "max_soc",
+                d.max_soc,
                 "%",
                 "battery"
             )
@@ -549,12 +639,13 @@ class EMSController:
             )
 
             # Zendure API uses controller/inverter perspective:
-            # pack_out behaves like charging power
-            # pack_in behaves like discharge power
+            # outputPackPower = charging
+            # packInputPower  = discharging
+            #
+            # EMS convention:
+            # Positive = charging
+            # Negative = discharging
 
-            # Positive  = charging
-            # Negative  = discharging
-            
             device_battery_power = d.pack_out - d.pack_in
 
             self.publish_sensor(
@@ -696,13 +787,26 @@ class EMSController:
 
         states = [
             s if s else DeviceState(
-                0, 0, 0, 0, 0,
-                0, 0, 0,
                 0,
-                0, 0, 0, 0,
+                5,
+                100,
                 0,
                 0,
-                0, 0, 0
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
             )
             for s in raw_states
         ]
@@ -769,6 +873,7 @@ class EMSController:
 # =====================
 # MAIN
 # =====================
+
 
 if __name__ == "__main__":
 
