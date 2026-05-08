@@ -200,7 +200,10 @@ class DeviceState:
     output_limit: float
 
     fault_level: int
-
+    
+    smart_mode: int
+    grid_off_mode: int
+    ac_mode: int
     ac_status: int
     dc_status: int
     grid_state: int
@@ -242,6 +245,9 @@ def parse_device(data):
 
         fault_level=props.get("faultLevel") or 0,
 
+        smart_mode=props.get("smartMode") or 0,
+        grid_off_mode=props.get("gridOffMode") or 2,
+        ac_mode=props.get("acMode") or 0,
         ac_status=props.get("acStatus") or 0,
         dc_status=props.get("dcStatus") or 0,
         grid_state=props.get("gridState") or 0,
@@ -262,7 +268,9 @@ class ZendureClient:
         sn,
         session,
         min_soc,
-        max_soc
+        max_soc,
+        smart_mode,
+        grid_off_mode
     ):
         self.name = name
         self.ip = ip
@@ -270,6 +278,8 @@ class ZendureClient:
         self.session = session
         self.min_soc = min_soc
         self.max_soc = max_soc
+        self.smart_mode = smart_mode
+        self.grid_off_mode = grid_off_mode
 
     def fetch(self):
         """Fetch current device state."""
@@ -490,9 +500,7 @@ class EMSController:
                 json={
                     "sn": dev.sn,
                     "properties": {
-                        "acMode": 2,
-                        "outputLimit": int(value),
-                        "smartMode": 0
+                        "outputLimit": int(value)
                     }
                 },
                 timeout=2
@@ -553,6 +561,62 @@ class EMSController:
 
             logging.warning(
                 f"SOC write error {dev.name}: {e}"
+            )
+
+    def apply_device_modes(self, dev, state):
+        """Apply device operating modes if required."""
+
+        #
+        # unmanaged
+        #
+
+        if dev.smart_mode is None:
+            return
+
+        #
+        # already configured
+        #
+
+        if (
+            int(state.smart_mode) == int(dev.smart_mode)
+            and
+            int(state.ac_mode) == 2
+            and
+            int(state.grid_off_mode) == int(dev.grid_off_mode)
+        ):
+
+            logging.info(
+                f"DEVICE MODES {dev.name}: already configured"
+            )
+
+            return
+
+        try:
+
+            dev.session.post(
+                f"http://{dev.ip}/properties/write",
+                json={
+                    "sn": dev.sn,
+                    "properties": {
+                        "smartMode": int(dev.smart_mode),
+                        "acMode": 2,
+                        "gridOffMode": int(dev.grid_off_mode)
+                    }
+                },
+                timeout=2
+            )
+
+            logging.info(
+                f"DEVICE MODES {dev.name}: "
+                f"smartMode={dev.smart_mode} "
+                f"acMode=2 "
+                f"gridOffMode={dev.grid_off_mode}"
+            )
+            
+        except Exception as e:
+
+            logging.warning(
+                f"Device mode write error {dev.name}: {e}"
             )
 
 
@@ -875,6 +939,8 @@ class EMSController:
                 0,
                 0,
                 0,
+                0,
+                0,
             )
             for s in raw_states
         ]
@@ -900,10 +966,16 @@ class EMSController:
                 ):
 
                     if state:
+
                         self.apply_soc_limits(
                             dev,
                             state
-                        ) 
+                        )
+
+                        self.apply_device_modes(
+                            dev,
+                            state
+                        )
 
         # =====================
         # CALCULATE TARGETS
@@ -989,7 +1061,9 @@ if __name__ == "__main__":
             d["sn"],
             session,
             d.get("min_soc", 0),
-            d.get("max_soc", 0)
+            d.get("max_soc", 0),
+            d.get("smart_mode", 1),
+            d.get("grid_off_mode", 2)
         )
         for d in ZENDURE_CONFIG
     ]

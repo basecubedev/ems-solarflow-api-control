@@ -21,6 +21,10 @@
       "ip": "192.168.1.100",
       "sn": "YOUR_SN",
 
+      "_comment": "smart_mode: 1 = runtime/RAM mode",
+      "smart_mode": 1,
+      "grid_off_mode": 2,
+
       "_comment": "min/max soc = 0 = unmanaged / keep Zendure app settings or no battery",
       "min_soc": 15,
       "max_soc": 100
@@ -29,6 +33,10 @@
       "name": "WR2",
       "ip": "192.168.1.101",
       "sn": "YOUR_SN",
+
+      "_comment": "smart_mode: 1 = runtime/RAM mode",
+      "smart_mode": 1,
+      "grid_off_mode": 2,
 
       "_comment": "min/max soc = 0 = unmanaged / keep Zendure app settings or no battery",
       "min_soc": 15,
