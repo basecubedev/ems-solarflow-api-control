@@ -40,9 +40,31 @@ The EMS:
 * continuously reconciles desired device configuration
 * optionally integrates with Home Assistant
 
+```mermaid
+flowchart LR
+
+    Shelly["Shelly Power Meter"]
+    EMS["EMS Controller\nPython"]
+    WR1["Zendure WR1"]
+    WR2["Zendure WR2"]
+    HA["Home Assistant\n(optional)"]
+
+    Shelly -->|house load| EMS
+
+    WR1 -->|telemetry| EMS
+    WR2 -->|telemetry| EMS
+
+    EMS -->|outputLimit| WR1
+    EMS -->|outputLimit| WR2
+
+    EMS <-->|REST API| HA
+```
+
 ---
 
 # ⚙️ Features
+
+### ⚡ Core EMS Control
 
 * ⚡ real-time control loop
 * 🔌 multi-device support
@@ -51,17 +73,25 @@ The EMS:
 * 🪫 low battery protection
 * 🔄 mixed battery / non-battery system support
 
+### 🛡️ Runtime Stability & Failsafe
+
 * 🛡️ cached-state failsafe handling
 * 📡 offline device detection
 * 🚫 automatic write suppression for unreachable devices
 * 🔄 automatic reconnect recovery
 
+### 🧭 Device Management
+
 * 🧭 desired-state device reconciliation
 * 🧠 idempotent configuration management
+
+### 🏠 Home Assistant Integration
 
 * 🏠 optional Home Assistant integration
 * ♻️ dynamic Home Assistant entities
 * 🔄 automatic Home Assistant entity cleanup
+
+### 🧩 Project Design
 
 * 🧩 JSON-based configuration
 * 🚫 no YAML required
@@ -103,6 +133,38 @@ The EMS dynamically adjusts inverter output based on:
 * configured battery protection limits
 
 The control logic operates differently depending on the current energy situation.
+
+```mermaid
+flowchart TD
+
+    LOAD[Household Load]
+    SOLAR[Available Solar]
+    SOC[Battery SOC]
+    HEADROOM[Charge Headroom]
+    LIMITS[Protection Limits]
+
+    EMS[EMS Balancing Engine]
+
+    LOAD --> EMS
+    SOLAR --> EMS
+    SOC --> EMS
+    HEADROOM --> EMS
+    LIMITS --> EMS
+
+    EMS --> SURPLUS[Solar Surplus Strategy]
+    EMS --> DISCHARGE[Battery Discharge Strategy]
+
+    SURPLUS --> CURTAIL[Reduce PV Curtailment]
+    SURPLUS --> CHARGE[Prioritize Empty Batteries]
+
+    DISCHARGE --> PROTECT[Protect Low SOC Batteries]
+    DISCHARGE --> BALANCE[Balance By Usable SOC]
+
+    CURTAIL --> OUTPUT[Dynamic outputLimit]
+    CHARGE --> OUTPUT
+    PROTECT --> OUTPUT
+    BALANCE --> OUTPUT
+```
 
 ---
 
@@ -148,6 +210,21 @@ Because fuller batteries contribute more during discharge and emptier batteries 
 
 No dedicated equalization cycle is required.
 
+```mermaid
+flowchart LR
+
+    A["Battery A\nSOC 90%"]
+    B["Battery B\nSOC 45%"]
+
+    HOME["🏠 Household Load"]
+
+    A -->|higher discharge share| HOME
+    B -->|reduced discharge| HOME
+
+    style A fill:#d5f5d5
+    style B fill:#fff0c2
+```
+
 ---
 
 ## 🔄 Mixed Device Support
@@ -174,6 +251,17 @@ Desired device state reconciliation optionally manages:
 - smartMode
 - battery SOC limits
 - inverter operating mode
+
+```mermaid
+flowchart LR
+
+    A["Runtime Control"]
+    B["Desired State Reconciliation"]
+
+    A -->|"outputLimit"| DEV["Zendure Device"]
+
+    B -->|"smartMode\nminSOC\nmaxSOC\nacMode"| DEV
+```
 
 Example:
 ```json
@@ -293,8 +381,6 @@ As a result, fast EMS response times can be achieved without excessive API traff
 
 ---
 
----
-
 # 🛡️ Runtime Failsafe Behavior
 
 The EMS includes several runtime stability mechanisms to improve behavior during temporary network outages or unstable WiFi environments.
@@ -333,6 +419,36 @@ WR2 = 800W
 ```
 
 caused purely by temporary communication loss.
+
+```mermaid
+sequenceDiagram
+
+    participant EMS
+    participant WR1
+    participant WR2
+    participant HOME as Household Load
+
+    Note over WR1,WR2: Normal operation
+
+    WR1->>HOME: 400W
+    WR2->>HOME: 400W
+
+    EMS->>WR1: fetch telemetry
+    WR1-->>EMS: timeout
+
+    Note over EMS: use cached state for WR1
+
+    EMS->>WR1: skip writes
+    EMS->>WR2: continue normal control
+
+    WR1--xEMS: WiFi offline
+    WR2->>HOME: remains stable at 400W
+
+    Note over EMS,WR2: no sudden jump to 800W
+
+    WR1-->>EMS: reconnect
+    EMS->>WR1: resume normal operation
+```
 
 ---
 
