@@ -51,6 +51,11 @@ The EMS:
 * 🪫 low battery protection
 * 🔄 mixed battery / non-battery system support
 
+* 🛡️ cached-state failsafe handling
+* 📡 offline device detection
+* 🚫 automatic write suppression for unreachable devices
+* 🔄 automatic reconnect recovery
+
 * 🧭 desired-state device reconciliation
 * 🧠 idempotent configuration management
 
@@ -285,6 +290,106 @@ This means:
 * desired device configuration is only updated when drift is detected
 
 As a result, fast EMS response times can be achieved without excessive API traffic or continuous device reconfiguration.
+
+---
+
+---
+
+# 🛡️ Runtime Failsafe Behavior
+
+The EMS includes several runtime stability mechanisms to improve behavior during temporary network outages or unstable WiFi environments.
+
+This is especially important for multi-device balancing systems where abrupt telemetry loss could otherwise cause large inverter output jumps.
+
+---
+
+## 🔄 Cached State Fallback
+
+If a Zendure device becomes temporarily unreachable:
+
+* the last known valid device state is reused
+* energy balancing remains stable
+* inverter output distribution does not abruptly jump to remaining devices
+* write operations to unreachable devices are automatically suspended
+* normal operation resumes automatically after reconnect
+
+Example:
+
+```text
+WR1 = 400W
+WR2 = 400W
+```
+
+If WR1 temporarily loses WiFi connectivity, the EMS will continue using the last valid telemetry snapshot instead of immediately assuming:
+
+```text
+WR1 = 0W
+```
+
+This prevents sudden jumps such as:
+
+```text
+WR2 = 800W
+```
+
+caused purely by temporary communication loss.
+
+---
+
+## 📡 Offline Device Handling
+
+The EMS differentiates between:
+
+| State | Behavior |
+|---|---|
+| Device reachable | normal telemetry + writes |
+| Temporary communication loss | cached telemetry used |
+| Device unreachable | writes suspended |
+| Device reconnects | automatic recovery |
+
+This helps:
+
+* maintain stable load balancing
+* avoid unnecessary API retries
+* prevent excessive timeout accumulation
+* keep the control loop responsive
+
+---
+
+## ⚠️ Runtime Communication Behavior
+
+Temporary network instability may produce logs similar to:
+
+```text
+2026-05-08 14:37:22,570 | WARNING | WR1 fetch failed: HTTPConnectionPool(host='192.168.1.100', port=80)
+2026-05-08 14:37:22,571 | WARNING | WR1: using cached state 13.8s old (output=312W solar=237W soc=78%)
+2026-05-08 14:37:23,012 | WARNING | WR1: offline -> skip write
+```
+
+This behavior is expected and indicates that:
+
+* the device became temporarily unreachable
+* the EMS entered failsafe mode
+* the last known telemetry snapshot is being used
+* write operations are intentionally suspended
+
+After reconnect, the device automatically resumes normal EMS participation.
+
+---
+
+## 🧠 Stability Philosophy
+
+The EMS prioritizes stable energy balancing behavior over aggressive correction.
+
+Failsafe mechanisms are designed to:
+
+* avoid sudden inverter output jumps
+* maintain stable multi-device distribution
+* tolerate temporary WiFi instability
+* minimize unnecessary API traffic
+* recover automatically after reconnect
+
+This helps achieve smoother real-world EMS behavior in unstable network environments.
 
 ---
 
