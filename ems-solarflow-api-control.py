@@ -491,6 +491,10 @@ class EMSController:
         self.ha = ha
         self.soc_reconcile_counter = SOC_RECONCILE_INTERVAL
 
+        self.last_states = {}
+        self.last_seen = {}
+        self.device_online = {}
+
     def set_output_limit(self, dev, value):
         """Write output limit to device."""
 
@@ -917,33 +921,88 @@ class EMSController:
 
         raw_states = fetch_all_devices(self.devices)
 
-        states = [
-            s if s else DeviceState(
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
+        states = []
+
+        for dev, state in zip(self.devices, raw_states):
+
+            #
+            # Fresh state available
+            #
+
+            if state:
+
+                self.last_states[dev.name] = state
+                self.last_seen[dev.name] = time.time()
+                self.device_online[dev.name] = True
+
+                states.append(state)
+
+                continue
+
+            #
+            # Fallback to last known state
+            #
+
+            if dev.name in self.last_states:
+
+                self.device_online[dev.name] = False
+
+                cached = self.last_states[dev.name]
+
+                age = round(
+                    time.time() - self.last_seen.get(dev.name, 0),
+                    1
+                )
+
+                logging.warning(
+                    f"{dev.name}: using cached state "
+                    f"{age}s old "
+                    f"(output={cached.output}W "
+                    f"solar={cached.solar}W "
+                    f"soc={cached.soc}%)"
+                )
+
+                states.append(cached)
+
+                continue
+
+            #
+            # No valid state available
+            #
+
+            logging.error(
+                f"{dev.name}: no valid state available"
             )
-            for s in raw_states
-        ]
+
+            self.device_online[dev.name] = False
+
+            states.append(
+                DeviceState(
+                    0,  # soc
+                    0,  # min_soc
+                    0,  # max_soc
+                    0,  # solar
+                    0,  # output
+                    0,  # pack_in
+                    0,  # pack_out
+                    0,  # temp
+                    0,  # voltage
+                    0,  # rssi
+                    0,  # remain_minutes
+                    0,  # solar1
+                    0,  # solar2
+                    0,  # solar3
+                    0,  # solar4
+                    0,  # output_limit
+                    0,  # fault_level
+                    0,  # smart_mode
+                    0,  # grid_off_mode
+                    0,  # ac_mode
+                    0,  # ac_status
+                    0,  # dc_status
+                    0,  # grid_state
+                )
+            )
 
         #
         # Reconcile SOC limits
@@ -1010,23 +1069,29 @@ class EMSController:
         # APPLY CONTROL
         # =====================
 
-        if enabled:
+        for i, dev in enumerate(self.devices):
 
-            for i, dev in enumerate(self.devices):
+            if not self.device_online.get(dev.name, True):
 
-                target = targets[i]
-
-                current_output = states[i].output
-
-                if abs(target - current_output) < DEADBAND:
-                    continue
-
-                target = max(
-                    0,
-                    min(MAX_DEVICE_POWER, target)
+                logging.warning(
+                    f"{dev.name}: offline -> skip write"
                 )
 
-                self.set_output_limit(dev, target)
+                continue
+
+            target = targets[i]
+
+            current_output = states[i].output
+
+            if abs(target - current_output) < DEADBAND:
+                continue
+
+            target = max(
+                0,
+                min(MAX_DEVICE_POWER, target)
+            )
+
+            self.set_output_limit(dev, target)
 
         # =====================
         # LOOP TIMING
