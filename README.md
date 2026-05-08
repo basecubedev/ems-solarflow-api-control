@@ -39,6 +39,7 @@ The EMS:
 * intelligently balances solar and battery usage
 * continuously reconciles desired device configuration
 * optionally integrates with Home Assistant
+
 ---
 
 # ⚙️ Features
@@ -46,20 +47,21 @@ The EMS:
 * ⚡ real-time control loop
 * 🔌 multi-device support
 * 🧠 intelligent SOC-aware multi-battery balancing
-* 🔄 runtime SOC drift correction
 * ☀️ PV curtailment avoidance
 * 🪫 low battery protection
-* ⚖️ automatic SOC equalization
-* 🧭 desired-state SOC reconciliation
-* 🧠 idempotent configuration management
 * 🔄 mixed battery / non-battery system support
+
+* 🧭 desired-state device reconciliation
+* 🧠 idempotent configuration management
+
 * 🏠 optional Home Assistant integration
+* ♻️ dynamic Home Assistant entities
+* 🔄 automatic Home Assistant entity cleanup
+
 * 🧩 JSON-based configuration
 * 🚫 no YAML required
-* ♻️ dynamic Home Assistant entities
-* 🔄 automatic entity cleanup
-* 🐍 pure Python
 * 🧰 standalone operation possible
+* 🐍 pure Python
 
 ---
 
@@ -85,25 +87,97 @@ This improves:
 
 ---
 
-# 🔄 SOC Limit Reconciliation
+# ⚖️ Energy Distribution Strategy
 
-Optional SOC limits can be managed directly by the EMS.
+The EMS dynamically adjusts inverter output based on:
 
-The EMS continuously reconciles configured SOC limits with the actual device state.
+* household demand
+* available solar power
+* battery charge headroom
+* usable battery SOC
+* configured battery protection limits
 
-Features:
+The control logic operates differently depending on the current energy situation.
 
-* automatic SOC drift correction
-* optional device-side SOC management
-* supports mixed managed / unmanaged devices
-* avoids unnecessary API writes
-* configurable reconciliation interval
+---
+
+## ☀️ Solar Surplus
+
+When solar generation exceeds household demand:
+
+* devices with remaining battery charge capacity are prioritized
+* fuller batteries feed more energy directly into household consumption
+* batteries with more headroom retain more solar charging power
+* PV curtailment is reduced
+
+This helps maximize solar utilization while naturally balancing battery charge levels.
+
+---
+
+## 🔋 Battery Discharge
+
+When household demand exceeds available solar power:
+
+* batteries with more usable SOC contribute more output power
+* low SOC batteries are automatically protected
+* discharge load is distributed proportionally across available batteries
+* battery wear is reduced through balanced utilization
+
+The EMS uses usable SOC weighting:
+
+```text
+usable_soc = current_soc - configured_min_soc
+```
+
+This creates gradual low battery protection without hard switching behavior.
+
+---
+
+## ⚖️ Natural SOC Equalization
+
+Because fuller batteries contribute more during discharge and emptier batteries retain more solar charging power:
+
+* battery SOC levels naturally converge over time
+* uneven battery drift is automatically reduced
+* mixed battery systems remain balanced without explicit synchronization logic
+
+No dedicated equalization cycle is required.
+
+---
+
+## 🔄 Mixed Device Support
+
+The EMS automatically supports mixed systems:
+
+* devices with batteries
+* devices without batteries
+* partially managed devices
+* unmanaged SOC configurations
+
+Devices without battery management naturally favor direct solar utilization.
+
+---
+
+# 🔄 Device State Reconciliation
+
+The EMS manages operating modes separately from runtime power control.
+
+Runtime control only updates:
+- outputLimit
+
+Desired device state reconciliation optionally manages:
+- smartMode
+- battery SOC limits
+- inverter operating mode
 
 Example:
-
 ```json
 {
-  "_comment": "min/max soc = 0 = unmanaged / keep Zendure app settings or no battery",
+  "_comment": "smart_mode: 1 = runtime/RAM mode",
+
+  "smart_mode": 1,
+
+  "_comment2": "min/max soc = 0 = unmanaged / keep Zendure app settings or no battery",
 
   "min_soc": 15,
   "max_soc": 100
@@ -112,10 +186,105 @@ Example:
 
 Behavior:
 
-| Value | Meaning |
+| Setting          | Meaning                |
+| ---------------- | ---------------------- |
+| `smart_mode = 1` | volatile runtime mode  |
+| `smart_mode = 0` | persistent device mode |
+| `min_soc = 0`    | unmanaged              |
+| `max_soc = 0`    | unmanaged              |
+
+---
+
+# ⚡ Recommended External EMS Runtime Configuration
+
+The EMS uses several Zendure runtime parameters to improve external inverter control behavior.
+
+Recommended configuration:
+
+| Property | Recommended Value | Purpose |
+|---|---|---|
+| smartMode | 1 | volatile runtime control / avoid flash writes |
+| acMode | 2 | enable inverter output mode |
+| gridOffMode | 2 | prioritize AC output behavior |
+
+The EMS automatically reconciles these values during runtime.
+
+---
+
+## 🔍 Observed gridOffMode Behavior
+
+The official Zendure documentation currently only describes:
+
+| Value | Description |
 |---|---|
-| `0` | unmanaged / keep Zendure settings |
-| `>0` | EMS actively manages SOC limits |
+| 0 | Standard Mode |
+| 1 | Economic Mode |
+| 2 | Closure (observed as direct AC priority behavior) |
+
+During runtime testing on SolarFlow 800 Pro 2 devices, the following behavior was observed:
+
+| Mode | Observed Behavior |
+|---|---|
+| 1 | stronger battery charging priority / softer AC regulation |
+| 2 | improved AC output tracking / more direct external EMS behavior |
+
+With `gridOffMode=2`:
+
+* inverter output follows `outputLimit` more closely
+* battery charging behavior becomes less dominant
+* external EMS regulation becomes more predictable
+* AC output ramps behave more consistently
+
+This behavior was determined experimentally and may vary between firmware versions or device generations.
+
+Possible runtime usage patterns:
+
+| Mode | Potential Use Case |
+|---|---|
+| gridOffMode = 2 | responsive external EMS / direct AC output tracking |
+| gridOffMode = 1 | conservative battery-preserving operation |
+
+Observed during runtime testing:
+
+`gridOffMode=1` appears to prioritize battery charging behavior more strongly and may help preserve battery reserve during low-production winter conditions.
+
+This may be beneficial when:
+
+- PV generation is frequently below household demand
+- battery reserve should be preserved overnight
+- aggressive AC output tracking is not desired
+- minimizing deep discharge cycles is preferred
+
+In contrast, `gridOffMode=2` appears to prioritize more direct AC output behavior and closer `outputLimit` tracking.
+
+Behavior may vary depending on:
+
+- firmware version
+- device generation
+- battery state
+- PV availability
+- runtime conditions
+
+---
+
+# ⚡ Runtime Control Behavior
+
+The EMS control loop may run at high frequency (for example every 1 second).
+
+However, the EMS minimizes unnecessary device communication through several mechanisms:
+
+* per-device deadband filtering
+* idempotent desired-state reconciliation
+* runtime/persistent state separation
+* conditional configuration synchronization
+
+This means:
+
+* inverter writes only occur when output changes are meaningful
+* unchanged devices are skipped automatically
+* desired device configuration is only updated when drift is detected
+
+As a result, fast EMS response times can be achieved without excessive API traffic or continuous device reconfiguration.
 
 ---
 
@@ -185,21 +354,43 @@ curl -X POST http://DEVICE_IP/properties/write \
   -d '{
     "sn": "YOUR_SN",
     "properties": {
-      "acMode": 2,
-      "outputLimit": 300,
-      "smartMode": 0
+      "outputLimit": 300
     }
   }'
-```
+  ```
+---
+
+# ⚠️ Zendure Cloud / HEMS Requirements
+
+The EMS uses direct local API control.
+
+Zendure devices may remain connected to the Zendure cloud and mobile app.
+
+However:
+
+* devices must NOT be actively managed by Zendure HEMS
+* no parallel cloud-side energy management should control the same devices
+* local EMS control and cloud HEMS control may otherwise conflict
+
+Recommended setup:
+
+| Component | Allowed |
+|---|---|
+| Zendure cloud connection | ✅ |
+| Zendure mobile app | ✅ |
+| Local API access | ✅ |
+| Zendure HEMS active control | ❌ |
+
+The EMS assumes exclusive runtime control over inverter output regulation.
 
 ---
 
 # ⚠️ Important behavior
 
 * inverter output limits are temporary runtime values
-* configured SOC limits may persist on the device
+* configured device operating modes and SOC limits may persist on the device
 * the EMS continuously reconciles desired SOC configuration
-* control works like RAM (temporary state)
+* runtime power control behaves like temporary state
 * your script must run continuously
 * if the script stops unexpectedly, the last configured output limit remains active
 * always use conservative power limits
@@ -586,12 +777,14 @@ journalctl -u ems-solarflow -f
 2. read Zendure solar + battery state
 3. calculate required total power
 4. prioritize direct solar usage
-5. detect battery charge/discharge headroom
-6. avoid PV curtailment on full batteries
-7. protect low SOC batteries
-8. dynamically balance battery usage
-9. update inverter output limits
-10. publish telemetry to Home Assistant
+5. calculate battery charge/discharge headroom
+6. prioritize direct solar utilization
+7. reduce PV curtailment on full batteries
+8. protect low SOC batteries during discharge
+9. dynamically balance multi-battery power distribution
+10. reconcile desired device state
+11. update inverter output limits
+12. publish telemetry to Home Assistant
 
 ---
 
@@ -636,6 +829,23 @@ sudo apt install python3-requests
 * Python 3.10+
 * Linux recommended
 * tested on Debian / Ubuntu
+
+---
+
+# 🔄 Configuration Compatibility
+
+The project is currently in active development and pre-release state.
+
+Configuration structure and device management behavior may evolve between releases.
+
+After updating:
+
+* review release notes carefully
+* compare your `config.json` with the latest `config.template.json`
+* verify newly introduced configuration options
+* validate device behavior after upgrades
+
+Especially during early releases, configuration migration may require manual adjustments.
 
 ---
 
