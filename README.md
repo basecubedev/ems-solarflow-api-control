@@ -1348,6 +1348,7 @@ sensor.ems_solarflow_wr1_output
 sensor.ems_solarflow_wr1_target
 sensor.ems_solarflow_wr1_output_limit
 sensor.ems_solarflow_wr1_battery_power
+sensor.ems_solarflow_wr1_fault_level
 sensor.ems_solarflow_wr1_voltage
 sensor.ems_solarflow_wr1_remaining_minutes
 sensor.ems_solarflow_wr1_temp
@@ -1366,6 +1367,10 @@ binary_sensor.wr1_ac_active
 binary_sensor.wr1_dc_active
 binary_sensor.wr1_grid_online
 ```
+
+`faultLevel` is observed firmware telemetry. It is published as a numeric
+sensor because current live testing showed it is not a guaranteed fatal error
+state on all firmware/runtime conditions.
 
 ---
 

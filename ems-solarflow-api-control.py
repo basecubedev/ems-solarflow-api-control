@@ -1649,6 +1649,12 @@ class EMSController:
             )
 
             # Status
+            self.publish_sensor(
+                base + "fault_level",
+                d.fault_level,
+                state_class=None
+            )
+
             self.ha.set_state(
                 f"binary_sensor.{dev.name.lower()}_fault",
                 "on" if d.fault_level > 0 else "off",
