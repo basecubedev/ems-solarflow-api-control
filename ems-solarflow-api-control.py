@@ -135,6 +135,13 @@ MAX_TOTAL_POWER = CONFIG["system"]["max_total_power"]
 MAX_DEVICE_POWER = CONFIG["system"]["max_device_power"]
 DEADBAND = CONFIG["system"]["deadband"]
 LOOP_INTERVAL = CONFIG["system"]["loop_interval"]
+try:
+    MIN_OUTPUT_LIMIT = max(
+        0,
+        int(CONFIG["system"].get("min_output_limit", 0))
+    )
+except (TypeError, ValueError):
+    MIN_OUTPUT_LIMIT = 0
 DRY_RUN = CONFIG["system"].get("dry_run", True) or ARGS.dry_run
 SIMULATION_MODE = CONFIG["system"].get("simulation_mode", False) or ARGS.simulate
 ALLOW_HARDWARE_WRITES = CONFIG["system"].get("allow_hardware_writes", False)
@@ -904,6 +911,28 @@ def apply_constraints_and_redistribute(
             break
 
     return redistributed, excess
+
+
+def apply_min_output_limit(target, device):
+    """Apply the configured minimum outputLimit for enabled EMS control."""
+
+    if MIN_OUTPUT_LIMIT <= 0:
+        return target
+
+    guarded_target = max(target, MIN_OUTPUT_LIMIT)
+    guarded_target = min(device.max_power, guarded_target)
+
+    if guarded_target != target:
+        log_event(
+            logging.INFO,
+            "min_output_limit_guard",
+            device=device.name,
+            original_target_w=target,
+            guarded_target_w=guarded_target,
+            min_output_limit_w=MIN_OUTPUT_LIMIT
+        )
+
+    return guarded_target
 
 
 def calculate_targets(
@@ -1870,6 +1899,11 @@ class EMSController:
                 continue
 
             target = targets[i]
+
+            target = apply_min_output_limit(
+                target,
+                dev
+            )
 
             deadband_reference = (
                 states[i].output_limit

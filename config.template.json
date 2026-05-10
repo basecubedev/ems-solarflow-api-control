@@ -16,6 +16,7 @@
     "max_total_power": 800,
     "max_device_power": 800,
     "deadband": 10,
+    "min_output_limit": 30,
     "loop_interval": 5,
     "redistribute_clamped_power": true,
     "pv_kwp_weighting": true,
