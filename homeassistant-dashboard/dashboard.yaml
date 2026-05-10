@@ -87,10 +87,8 @@ views:
                       - entity: sensor.ems_solarflow_wr1_remaining_minutes
                         name: Runtime
                       - type: divider
-                      - entity: sensor.ems_solarflow_wr1_battery_charge
-                        name: Charge
-                      - entity: sensor.ems_solarflow_wr1_battery_discharge
-                        name: Discharge
+                      - entity: sensor.ems_solarflow_wr1_battery_power
+                        name: Battery power
                   - type: entities
                     title: 🔋 WR2 Battery
                     show_header_toggle: false
@@ -104,10 +102,8 @@ views:
                       - entity: sensor.ems_solarflow_wr2_remaining_minutes
                         name: Runtime
                       - type: divider
-                      - entity: sensor.ems_solarflow_wr2_battery_charge
-                        name: Charge
-                      - entity: sensor.ems_solarflow_wr2_battery_discharge
-                        name: Discharge
+                      - entity: sensor.ems_solarflow_wr2_battery_power
+                        name: Battery power
               - type: horizontal-stack
                 cards:
                   - type: entities
@@ -143,33 +139,33 @@ views:
               - type: horizontal-stack
                 cards:
                   - type: entities
-                    title: 🩺 WR1 Diagnostics
+                    title: 🩺 WR1 Runtime Status
                     show_header_toggle: false
                     entities:
                       - entity: sensor.ems_solarflow_wr1_rssi
                         name: RSSI
-                      - entity: binary_sensor.wr1_fault
-                        name: Fault
+                      - entity: sensor.ems_solarflow_wr1_fault_level
+                        name: FaultLevel signal
                       - entity: binary_sensor.wr1_ac_active
-                        name: AC
+                        name: AC path
                       - entity: binary_sensor.wr1_dc_active
-                        name: DC
+                        name: DC path
                       - entity: binary_sensor.wr1_grid_online
-                        name: Grid
+                        name: Grid online
                   - type: entities
-                    title: 🩺 WR2 Diagnostics
+                    title: 🩺 WR2 Runtime Status
                     show_header_toggle: false
                     entities:
                       - entity: sensor.ems_solarflow_wr2_rssi
                         name: RSSI
-                      - entity: binary_sensor.wr2_fault
-                        name: Fault
+                      - entity: sensor.ems_solarflow_wr2_fault_level
+                        name: FaultLevel signal
                       - entity: binary_sensor.wr2_ac_active
-                        name: AC
+                        name: AC path
                       - entity: binary_sensor.wr2_dc_active
-                        name: DC
+                        name: DC path
                       - entity: binary_sensor.wr2_grid_online
-                        name: Grid
+                        name: Grid online
             grid_options:
               columns: 24
               rows: auto
@@ -185,8 +181,6 @@ views:
                 invert_state: true
                 color_value: false
                 entity: sensor.ems_solarflow_battery_power
-                consumption: sensor.ems_solarflow_battery_charge
-                production: sensor.ems_solarflow_battery_discharge
               grid:
                 entity: sensor.ems_solarflow_load
                 color:
