@@ -7,6 +7,7 @@ import logging
 import json
 import os
 import sys
+from collections import deque
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -135,6 +136,9 @@ MAX_TOTAL_POWER = CONFIG["system"]["max_total_power"]
 MAX_DEVICE_POWER = CONFIG["system"]["max_device_power"]
 DEADBAND = CONFIG["system"]["deadband"]
 LOOP_INTERVAL = CONFIG["system"]["loop_interval"]
+REMAINING_TIME_POWER_SAMPLES = 10
+REMAINING_TIME_MIN_POWER_W = 10
+REMAINING_TIME_MAX_HOURS = 999
 try:
     MIN_OUTPUT_LIMIT = max(
         0,
@@ -444,7 +448,7 @@ def parse_device(data):
         voltage=round(((props.get("BatVolt") or 0) / 100), 2),
         rssi=props.get("rssi") or 0,
 
-        remain_minutes=round(((props.get("remainOutTime") or 0) / 60), 1),
+        remain_minutes=round((props.get("remainOutTime") or 0), 1),
 
         solar1=props.get("solarPower1") or 0,
         solar2=props.get("solarPower2") or 0,
@@ -758,6 +762,35 @@ def get_device_battery_kwh(device_config):
         return 1.0
 
     return max(0.01, device_config.battery_kwh)
+
+
+def calculate_remaining_time_hours(state, device_config, avg_battery_power_w):
+    """Estimate remaining charge/discharge time from smoothed battery power."""
+
+    battery_kwh = getattr(device_config, "battery_kwh", 0) or 0
+
+    if battery_kwh <= 0:
+        return 0
+
+    if abs(avg_battery_power_w) < REMAINING_TIME_MIN_POWER_W:
+        return 0
+
+    if avg_battery_power_w > 0:
+        max_soc = getattr(device_config, "max_soc", 0) or state.max_soc or 100
+        soc_delta = max(0, max_soc - state.soc)
+        power_kw = avg_battery_power_w / 1000
+    else:
+        min_soc = getattr(device_config, "min_soc", 0) or state.min_soc or 0
+        soc_delta = max(0, state.soc - min_soc)
+        power_kw = abs(avg_battery_power_w) / 1000
+
+    if soc_delta <= 0 or power_kw <= 0:
+        return 0
+
+    energy_kwh = battery_kwh * soc_delta / 100
+    hours = energy_kwh / power_kw
+
+    return round(min(REMAINING_TIME_MAX_HOURS, hours), 1)
 
 
 def usable_battery_weight(state, device_config, capability):
@@ -1186,6 +1219,7 @@ class EMSController:
         self.last_states = {}
         self.last_seen = {}
         self.device_online = {}
+        self.battery_power_history = {}
 
     def set_output_limit(self, dev, value):
         """Write output limit to device."""
@@ -1581,10 +1615,29 @@ class EMSController:
             # Negative = discharging
 
             device_battery_power = d.pack_out - d.pack_in
+            history = self.battery_power_history.setdefault(
+                dev.name,
+                deque(maxlen=REMAINING_TIME_POWER_SAMPLES)
+            )
+            history.append(device_battery_power)
+
+            avg_battery_power = sum(history) / len(history)
+            remaining_time = calculate_remaining_time_hours(
+                d,
+                dev,
+                avg_battery_power
+            )
 
             self.publish_sensor(
                 base + "battery_power",
                 round(device_battery_power, 1),
+                "W",
+                "power"
+            )
+
+            self.publish_sensor(
+                base + "battery_power_avg",
+                round(avg_battery_power, 1),
                 "W",
                 "power"
             )
@@ -1601,6 +1654,14 @@ class EMSController:
                 d.remain_minutes,
                 "min",
                 state_class=None,
+                icon="mdi:timer-outline"
+            )
+
+            self.publish_sensor(
+                base + "remaining_time",
+                remaining_time,
+                "h",
+                "duration",
                 icon="mdi:timer-outline"
             )
 

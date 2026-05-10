@@ -84,11 +84,13 @@ views:
                         name: Voltage
                       - entity: sensor.ems_solarflow_wr1_temp
                         name: Temp
-                      - entity: sensor.ems_solarflow_wr1_remaining_minutes
-                        name: Runtime
+                      - entity: sensor.ems_solarflow_wr1_remaining_time
+                        name: Remaining time
                       - type: divider
                       - entity: sensor.ems_solarflow_wr1_battery_power
                         name: Battery power
+                      - entity: sensor.ems_solarflow_wr1_battery_power_avg
+                        name: Battery power avg
                   - type: entities
                     title: 🔋 WR2 Battery
                     show_header_toggle: false
@@ -99,11 +101,13 @@ views:
                         name: Voltage
                       - entity: sensor.ems_solarflow_wr2_temp
                         name: Temp
-                      - entity: sensor.ems_solarflow_wr2_remaining_minutes
-                        name: Runtime
+                      - entity: sensor.ems_solarflow_wr2_remaining_time
+                        name: Remaining time
                       - type: divider
                       - entity: sensor.ems_solarflow_wr2_battery_power
                         name: Battery power
+                      - entity: sensor.ems_solarflow_wr2_battery_power_avg
+                        name: Battery power avg
               - type: horizontal-stack
                 cards:
                   - type: entities
