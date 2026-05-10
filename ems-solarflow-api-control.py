@@ -289,15 +289,28 @@ class HAClient:
         }
 
         try:
-            self.session.post(
+            r = self.session.post(
                 f"{self.base_url}/api/states/{entity_id}",
                 headers=self.headers,
                 json=payload,
                 timeout=2
             )
 
+            if r.status_code >= 300:
+                log_event(
+                    logging.WARNING,
+                    "ha_write_error",
+                    entity=entity_id,
+                    status_code=r.status_code
+                )
+
         except Exception as e:
-            logging.warning(f"HA write {entity_id}: {e}")
+            log_event(
+                logging.WARNING,
+                "ha_write_error",
+                entity=entity_id,
+                error=e
+            )
 
     def get_state(self, entity_id):
         """Read a state from HA."""
@@ -438,7 +451,7 @@ def parse_device(data):
         fault_level=props.get("faultLevel") or 0,
 
         smart_mode=props.get("smartMode") or 0,
-        grid_off_mode=props.get("gridOffMode") or 2,
+        grid_off_mode=props.get("gridOffMode") or 0,
         ac_mode=props.get("acMode") or 0,
         ac_status=props.get("acStatus") or 0,
         dc_status=props.get("dcStatus") or 0,
@@ -483,10 +496,35 @@ def detect_capabilities(state):
 
     reasons = []
 
+    fault_observed = state.fault_level > 0
+    pv_evidence = state.solar > 0
+    output_evidence = state.output > 0
+    output_limit_evidence = state.output_limit > 0
+    ac_evidence = state.ac_status != 0
+    discharge_evidence = (
+        state.dc_status != 0
+        or state.pack_in > 0
+        or output_evidence
+    )
+    export_evidence = (
+        pv_evidence
+        or output_evidence
+        or output_limit_evidence
+        or ac_evidence
+    )
+    paths_inactive = state.dc_status == 0 and state.ac_status == 0
+
+    # faultLevel is observed firmware telemetry. Live testing showed it may be
+    # present while output/PV export is still possible, so it is logged as a
+    # warning signal instead of being used as a blanket capability blocker.
     can_charge = state.soc_limit != 1
-    can_discharge = state.soc_limit != 2 and state.dc_status != 0
-    can_export = state.soc_limit != 2 and not (
-        state.dc_status == 0 and state.ac_status == 0
+    can_discharge = (
+        state.soc_limit != 2
+        and discharge_evidence
+    )
+    can_export = export_evidence or (
+        state.soc_limit != 2
+        and not paths_inactive
     )
     can_ac_charge = state.ac_status == 2 and can_charge
 
@@ -504,6 +542,21 @@ def detect_capabilities(state):
 
     if state.pack_state == 0:
         reasons.append("pack_standby")
+
+    if fault_observed:
+        reasons.append("fault_observed")
+
+    if pv_evidence:
+        reasons.append("pv_evidence")
+
+    if output_evidence:
+        reasons.append("output_evidence")
+
+    if output_limit_evidence:
+        reasons.append("output_limit_evidence")
+
+    if ac_evidence:
+        reasons.append("ac_evidence")
 
     return DeviceCapabilities(
         can_charge=can_charge,
@@ -624,7 +677,7 @@ class SimulatedZendureClient:
         self.min_soc = 0
         self.max_soc = 100
         self.smart_mode = 1
-        self.grid_off_mode = 2
+        self.grid_off_mode = None
         self.max_power = max_power
         self.pv_kwp = pv_kwp
         self.battery_kwh = battery_kwh
@@ -646,6 +699,9 @@ def fetch_all_devices(devices):
     """Fetch all device states in parallel."""
 
     results = [None] * len(devices)
+
+    if not devices:
+        return results
 
     with ThreadPoolExecutor(max_workers=len(devices)) as executor:
 
@@ -697,26 +753,6 @@ def get_device_battery_kwh(device_config):
     return max(0.01, device_config.battery_kwh)
 
 
-def charge_headroom_weight(state, device_config, capability):
-    """Return available charge headroom in weighted units."""
-
-    if capability and not capability.can_charge:
-        return 0.01
-
-    if state.max_soc <= 0:
-        return 1.0
-
-    headroom_percent = max(1.0, state.max_soc - state.soc)
-
-    if not BATTERY_KWH_WEIGHTING:
-        return headroom_percent
-
-    return max(
-        0.01,
-        get_device_battery_kwh(device_config) * headroom_percent / 100
-    )
-
-
 def usable_battery_weight(state, device_config, capability):
     """Return usable discharge energy in weighted units."""
 
@@ -737,26 +773,76 @@ def usable_battery_weight(state, device_config, capability):
     )
 
 
-def solar_weight(state, device_config, capability):
-    """Return weighted current PV contribution for allocation."""
+def pv_first_weight(pv_only, device_config):
+    """Return the weighted PV-first allocation signal."""
 
-    if capability and not capability.can_export:
+    if pv_only <= 0:
         return 0
 
     if not PV_KWP_WEIGHTING:
-        return state.solar
+        return pv_only
 
     return (
-        state.solar
+        pv_only
         * get_device_pv_kwp(device_config)
         * get_device_pv_priority_factor(device_config)
     )
 
 
+def weighted_limited_allocation(total, weights, limits):
+    """Allocate a total by weights while preserving per-device limits."""
+
+    allocation = [0] * len(weights)
+    active = [
+        i
+        for i, limit in enumerate(limits)
+        if limit > 0 and weights[i] > 0
+    ]
+    remaining = total
+
+    while active and remaining > 0:
+        weight_total = sum(weights[i] for i in active)
+
+        if weight_total <= 0:
+            break
+
+        saturated = []
+        proposed = {}
+
+        for i in active:
+            share = remaining * weights[i] / weight_total
+            headroom = limits[i] - allocation[i]
+
+            if share >= headroom:
+                proposed[i] = headroom
+                saturated.append(i)
+            else:
+                proposed[i] = share
+
+        if not saturated:
+            for i, value in proposed.items():
+                allocation[i] += value
+            break
+
+        for i in saturated:
+            moved = proposed[i]
+            allocation[i] += moved
+            remaining -= moved
+
+        active = [
+            i
+            for i in active
+            if i not in saturated and allocation[i] < limits[i]
+        ]
+
+    return allocation
+
+
 def apply_constraints_and_redistribute(
     targets,
     device_configs=None,
-    capabilities=None
+    capabilities=None,
+    target_limits=None
 ):
     """Clamp targets and redistribute excess power to devices with headroom."""
 
@@ -771,6 +857,9 @@ def apply_constraints_and_redistribute(
 
         if cap and not cap.can_export:
             limit = 0
+
+        if target_limits:
+            limit = min(limit, max(0, target_limits[i]))
 
         limits.append(limit)
 
@@ -830,15 +919,24 @@ def calculate_targets(
     Strategy:
 
     Solar surplus:
-    - prioritize batteries with remaining charge capacity
+    - allocate by weighted PV-only contribution
 
     Battery discharge:
-    - prioritize batteries with more usable SOC
+    - allocate only confirmed usable battery energy
 
     This avoids:
-    - PV curtailment on full batteries
+    - cross-device battery charge/discharge churn
     - overusing nearly empty batteries
     """
+
+    if not devices:
+        log_event(
+            logging.WARNING,
+            "no_devices",
+            load=load,
+            max_power=max_power
+        )
+        return [], 0, 0
 
     current_total = sum(d.output for d in devices)
     solar_total = sum(d.solar for d in devices)
@@ -849,6 +947,7 @@ def calculate_targets(
     )
 
     targets = [0] * len(devices)
+    target_limits = None
 
     # =====================
     # CASE 1:
@@ -868,9 +967,11 @@ def calculate_targets(
         #
 
         pv_only_limits = []
+        pv_weights = []
 
         for i, d in enumerate(devices):
             cap = capabilities[i] if capabilities else None
+            dev_config = device_configs[i] if device_configs else None
 
             if cap and not cap.can_export:
                 pv_only = 0
@@ -883,6 +984,8 @@ def calculate_targets(
                 pv_only = max(0, d.solar - d.pack_in)
 
             pv_only_limits.append(pv_only)
+            pv_weight = pv_first_weight(pv_only, dev_config)
+            pv_weights.append(pv_weight)
 
             log_event(
                 logging.DEBUG,
@@ -893,6 +996,9 @@ def calculate_targets(
                 output_w=d.output,
                 output_limit_w=d.output_limit,
                 pv_only_limit_w=round(pv_only),
+                pv_weight=round(pv_weight, 3),
+                pv_kwp=get_device_pv_kwp(dev_config),
+                pv_priority_factor=get_device_pv_priority_factor(dev_config),
                 soc=d.soc,
                 pack_state=d.pack_state,
                 soc_limit=d.soc_limit,
@@ -901,21 +1007,38 @@ def calculate_targets(
             )
 
         pv_only_total = sum(pv_only_limits)
+        target_limits = pv_only_limits
 
         if pv_only_total > 0:
+            targets = weighted_limited_allocation(
+                new_total,
+                pv_weights,
+                pv_only_limits
+            )
 
-            for i, pv_only in enumerate(pv_only_limits):
+            pv_unmet = new_total - sum(targets)
 
-                share = pv_only / pv_only_total
-
-                targets[i] = min(
-                    pv_only,
-                    new_total * share
+            if pv_unmet > 0:
+                log_event(
+                    logging.WARNING,
+                    "pv_first_limited",
+                    requested_total=new_total,
+                    pv_only_total=round(pv_only_total),
+                    unmet_w=round(pv_unmet)
                 )
 
         else:
 
             targets = [0] * len(devices)
+
+            if new_total > 0:
+                log_event(
+                    logging.WARNING,
+                    "pv_first_limited",
+                    requested_total=new_total,
+                    pv_only_total=0,
+                    unmet_w=round(new_total)
+                )
 
     # =====================
     # CASE 2:
@@ -924,9 +1047,18 @@ def calculate_targets(
 
     else:
 
-        targets = [d.solar for d in devices]
+        targets = []
 
-        remaining = new_total - solar_total
+        for i, d in enumerate(devices):
+            cap = capabilities[i] if capabilities else None
+            targets.append(
+                d.solar
+                if not cap or cap.can_export
+                else 0
+            )
+
+        exportable_solar_total = sum(targets)
+        remaining = max(0, new_total - exportable_solar_total)
 
         weights = []
 
@@ -970,22 +1102,28 @@ def calculate_targets(
 
         weight_total = sum(weights)
 
-        for i, d in enumerate(devices):
+        if weight_total > 0:
+            for i, d in enumerate(devices):
 
-            share = (
-                weights[i] / weight_total
-                if weight_total else
-                1 / len(devices)
+                share = weights[i] / weight_total
+
+                targets[i] += remaining * share
+        elif remaining > 0:
+            log_event(
+                logging.WARNING,
+                "no_discharge_capacity",
+                requested_total=new_total,
+                exportable_solar_total=exportable_solar_total,
+                unmet_w=round(remaining)
             )
-
-            targets[i] += remaining * share
 
     raw_targets = targets[:]
 
     targets, undistributed = apply_constraints_and_redistribute(
         targets,
         device_configs=device_configs,
-        capabilities=capabilities
+        capabilities=capabilities,
+        target_limits=target_limits
     )
 
     log_event(
@@ -1151,10 +1289,18 @@ class EMSController:
         # already configured
         #
 
+        manage_grid_off_mode = dev.grid_off_mode is not None
+
         if (
             int(state.smart_mode) == int(dev.smart_mode)
             and
             int(state.ac_mode) == 2
+            and
+            (
+                not manage_grid_off_mode
+                or
+                int(state.grid_off_mode) == int(dev.grid_off_mode)
+            )
         ):
 
             log_event(
@@ -1166,42 +1312,59 @@ class EMSController:
             return
 
         if not state_reconciliation_writes_allowed():
+            fields = {
+                "device": dev.name,
+                "smart_mode": dev.smart_mode,
+                "ac_mode": 2,
+                "dry_run": DRY_RUN,
+                "simulation": SIMULATION_MODE,
+                "allow_hardware_writes": ALLOW_HARDWARE_WRITES,
+                "allow_state_reconciliation_writes": (
+                    ALLOW_STATE_RECONCILIATION_WRITES
+                )
+            }
+
+            if manage_grid_off_mode:
+                fields["grid_off_mode"] = dev.grid_off_mode
+
             log_event(
                 logging.INFO,
                 "dry_run_device_modes",
-                device=dev.name,
-                smart_mode=dev.smart_mode,
-                ac_mode=2,
-                grid_off_mode=dev.grid_off_mode,
-                dry_run=DRY_RUN,
-                simulation=SIMULATION_MODE,
-                allow_hardware_writes=ALLOW_HARDWARE_WRITES,
-                allow_state_reconciliation_writes=(
-                    ALLOW_STATE_RECONCILIATION_WRITES
-                )
+                **fields
             )
             return
 
         try:
+            properties = {
+                "smartMode": int(dev.smart_mode),
+                "acMode": 2,
+            }
+
+            if manage_grid_off_mode:
+                properties["gridOffMode"] = int(dev.grid_off_mode)
 
             dev.session.post(
                 f"http://{dev.ip}/properties/write",
                 json={
                     "sn": dev.sn,
-                    "properties": {
-                        "smartMode": int(dev.smart_mode),
-                        "acMode": 2,
-                    }
+                    "properties": properties
                 },
                 timeout=2
             )
 
+            fields = {
+                "device": dev.name,
+                "smart_mode": dev.smart_mode,
+                "ac_mode": 2,
+            }
+
+            if manage_grid_off_mode:
+                fields["grid_off_mode"] = dev.grid_off_mode
+
             log_event(
                 logging.INFO,
                 "write_device_modes",
-                device=dev.name,
-                smart_mode=dev.smart_mode,
-                ac_mode=2,
+                **fields
             )
             
         except Exception as e:
@@ -1243,6 +1406,10 @@ class EMSController:
         new
     ):
         """Publish values to Home Assistant."""
+
+        if not states:
+            log_event(logging.WARNING, "ha_publish_no_devices")
+            return
 
         p = "sensor.ems_solarflow_"
 
@@ -1598,6 +1765,11 @@ class EMSController:
                 dc_status=state.dc_status,
                 ac_status=state.ac_status,
                 pack_state=state.pack_state,
+                fault_level=state.fault_level,
+                solar_w=state.solar,
+                output_w=state.output,
+                output_limit_w=state.output_limit,
+                pack_input_w=state.pack_in,
                 can_charge=cap.can_charge,
                 can_discharge=cap.can_discharge,
                 can_export=cap.can_export,
@@ -1609,7 +1781,11 @@ class EMSController:
         # Reconcile SOC limits
         #
 
-        if SOC_RECONCILE_INTERVAL > 0:
+        if (
+            SOC_RECONCILE_INTERVAL > 0
+            and not SIMULATION_MODE
+            and not ARGS.replay
+        ):
 
             self.soc_reconcile_counter += 1
 
@@ -1695,15 +1871,25 @@ class EMSController:
 
             target = targets[i]
 
-            current_output = states[i].output
+            deadband_reference = (
+                states[i].output_limit
+                if states[i].output_limit > 0
+                else states[i].output
+            )
+            deadband_reference_source = (
+                "output_limit"
+                if states[i].output_limit > 0
+                else "output"
+            )
 
-            if abs(target - current_output) < DEADBAND:
+            if abs(target - deadband_reference) < DEADBAND:
                 log_event(
                     logging.DEBUG,
                     "deadband_skip_write",
                     device=dev.name,
                     target_w=target,
-                    current_output_w=current_output,
+                    reference_w=deadband_reference,
+                    reference_source=deadband_reference_source,
                     deadband_w=DEADBAND
                 )
                 continue
@@ -1737,14 +1923,24 @@ def value_from_trace(data, *keys, default=0):
     return default
 
 
+def percent_from_trace(data, normalized_key, raw_key):
+    if normalized_key in data:
+        return data[normalized_key]
+
+    if raw_key in data:
+        return data[raw_key] / 10
+
+    return 0
+
+
 def state_from_trace_device(data):
     """Build DeviceState from replay/simulation trace data."""
 
     state = zero_device_state()
 
     state.soc = value_from_trace(data, "soc", "electricLevel")
-    state.min_soc = value_from_trace(data, "min_soc", "minSoc")
-    state.max_soc = value_from_trace(data, "max_soc", "socSet")
+    state.min_soc = percent_from_trace(data, "min_soc", "minSoc")
+    state.max_soc = percent_from_trace(data, "max_soc", "socSet")
     state.solar = value_from_trace(data, "solar", "solarInputPower")
     state.output = value_from_trace(data, "output", "outputHomePower")
     state.pack_in = value_from_trace(data, "pack_in", "packInputPower")
@@ -1792,6 +1988,8 @@ def built_in_simulation_frames():
                 {
                     "name": "WR1",
                     "soc": 80,
+                    "min_soc": 15,
+                    "max_soc": 100,
                     "solarInputPower": 260,
                     "outputHomePower": 150,
                     "socLimit": 0,
@@ -1802,6 +2000,8 @@ def built_in_simulation_frames():
                 {
                     "name": "WR2",
                     "soc": 45,
+                    "min_soc": 15,
+                    "max_soc": 100,
                     "solarInputPower": 180,
                     "outputHomePower": 150,
                     "socLimit": 0,
@@ -1818,6 +2018,8 @@ def built_in_simulation_frames():
                 {
                     "name": "WR1",
                     "soc": 78,
+                    "min_soc": 15,
+                    "max_soc": 100,
                     "solarInputPower": 120,
                     "outputHomePower": 220,
                     "socLimit": 0,
@@ -1828,6 +2030,8 @@ def built_in_simulation_frames():
                 {
                     "name": "WR2",
                     "soc": 15,
+                    "min_soc": 15,
+                    "max_soc": 100,
                     "solarInputPower": 80,
                     "outputHomePower": 0,
                     "socLimit": 2,
@@ -1846,6 +2050,10 @@ def run_frames(frames, source_name):
         return
 
     first_devices = frames[0].get("devices", [])
+
+    if not first_devices:
+        log_event(logging.ERROR, "no_frame_devices", source=source_name)
+        return
 
     devices = []
 
@@ -1868,6 +2076,9 @@ def run_frames(frames, source_name):
         sleep_enabled=False
     )
 
+    start_time = time.time()
+    cycles = 0
+
     for frame_index, frame in enumerate(frames, start=1):
         shelly.set_power(frame.get("house_load", 0))
 
@@ -1885,6 +2096,35 @@ def run_frames(frames, source_name):
             timestamp=frame.get("timestamp", "")
         )
         ems.run_once()
+        cycles += 1
+
+        if ARGS.once:
+            log_event(
+                logging.INFO,
+                "replay_stopped",
+                reason="once",
+                cycles=cycles
+            )
+            break
+
+        if ARGS.max_cycles and cycles >= ARGS.max_cycles:
+            log_event(
+                logging.INFO,
+                "replay_stopped",
+                reason="max_cycles",
+                cycles=cycles
+            )
+            break
+
+        if ARGS.duration and time.time() - start_time >= ARGS.duration:
+            log_event(
+                logging.INFO,
+                "replay_stopped",
+                reason="duration",
+                cycles=cycles,
+                duration_s=round(time.time() - start_time, 1)
+            )
+            break
 
 
 # =====================
@@ -2003,7 +2243,18 @@ if __name__ == "__main__":
         sys.exit(0)
 
     if ARGS.replay:
-        run_frames(load_replay_frames(ARGS.replay), ARGS.replay)
+        try:
+            replay_frames = load_replay_frames(ARGS.replay)
+        except Exception as e:
+            log_event(
+                logging.ERROR,
+                "replay_load_error",
+                source=ARGS.replay,
+                error=e
+            )
+            sys.exit(1)
+
+        run_frames(replay_frames, ARGS.replay)
         sys.exit(0)
 
     session = create_session()
@@ -2026,7 +2277,7 @@ if __name__ == "__main__":
             d.get("min_soc", 0),
             d.get("max_soc", 0),
             d.get("smart_mode", 1),
-            d.get("grid_off_mode", 2),
+            d.get("grid_off_mode"),
             d.get("max_power", MAX_DEVICE_POWER),
             d.get("pv_kwp", 1.0),
             d.get("battery_kwh", 1.0),
@@ -2034,6 +2285,10 @@ if __name__ == "__main__":
         )
         for d in ZENDURE_CONFIG
     ]
+
+    if not devices:
+        log_event(logging.ERROR, "startup_abort", reason="no_devices")
+        sys.exit(1)
 
     shelly = ShellyClient(
         SHELLY_IP,
