@@ -220,6 +220,28 @@ def state_reconciliation_writes_allowed():
         and ALLOW_STATE_RECONCILIATION_WRITES
     )
 
+
+def zendure_write_succeeded(error_event, dev, response, **fields):
+    """Log failed Zendure write responses and return success state."""
+
+    status_code = getattr(response, "status_code", 0)
+
+    if status_code < 300:
+        return True
+
+    response_text = getattr(response, "text", "") or ""
+    fields.setdefault("device", dev.name)
+
+    log_event(
+        logging.WARNING,
+        error_event,
+        status_code=status_code,
+        response_text=response_text[:200],
+        **fields
+    )
+
+    return False
+
 # =====================
 # HTTP SESSION
 # =====================
@@ -1203,7 +1225,7 @@ class EMSController:
             return
 
         try:
-            dev.session.post(
+            response = dev.session.post(
                 f"http://{dev.ip}/properties/write",
                 json={
                     "sn": dev.sn,
@@ -1213,6 +1235,14 @@ class EMSController:
                 },
                 timeout=2
             )
+
+            if not zendure_write_succeeded(
+                "write_output_limit_error",
+                dev,
+                response,
+                target_w=value
+            ):
+                return
 
             log_event(
                 logging.INFO,
@@ -1275,7 +1305,7 @@ class EMSController:
 
         try:
 
-            dev.session.post(
+            response = dev.session.post(
                 f"http://{dev.ip}/properties/write",
                 json={
                     "sn": dev.sn,
@@ -1286,6 +1316,15 @@ class EMSController:
                 },
                 timeout=2
             )
+
+            if not zendure_write_succeeded(
+                "write_soc_limits_error",
+                dev,
+                response,
+                min_soc=dev.min_soc,
+                max_soc=dev.max_soc
+            ):
+                return
 
             log_event(
                 logging.INFO,
@@ -1372,7 +1411,7 @@ class EMSController:
             if manage_grid_off_mode:
                 properties["gridOffMode"] = int(dev.grid_off_mode)
 
-            dev.session.post(
+            response = dev.session.post(
                 f"http://{dev.ip}/properties/write",
                 json={
                     "sn": dev.sn,
@@ -1389,6 +1428,14 @@ class EMSController:
 
             if manage_grid_off_mode:
                 fields["grid_off_mode"] = dev.grid_off_mode
+
+            if not zendure_write_succeeded(
+                "write_device_modes_error",
+                dev,
+                response,
+                **fields
+            ):
+                return
 
             log_event(
                 logging.INFO,
