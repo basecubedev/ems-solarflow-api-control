@@ -1,44 +1,134 @@
 # ems-solarflow-api-control
 
-Simple and lightweight EMS (Energy Management System) for Zendure Solarflow systems.
+Local-first EMS (Energy Management System) control for Zendure SolarFlow systems.
 
-No YAML. No complex Home Assistant setups.
-Just Python + local API control.
+No YAML. No cloud dependency. No complex Home Assistant automation stack.  
+Just Python, JSON configuration, local device telemetry, and transparent runtime control.
+
+This project is designed for advanced users who want a deterministic, inspectable and firmware-aware controller for Zendure SolarFlow devices.
 
 ---
 
-# 💡 Why this project?
+## ⚠️ Status And Safety Warning
 
-Most Solarflow integrations are:
+This software interacts with real power hardware.
 
-* complex
-* YAML-heavy
-* hard to debug
-* tightly coupled to Home Assistant
+It is:
+
+- experimental
+- under active development
+- intended for testing and validation
+- designed for advanced users
+- not production-certified
+- not guaranteed safe for unattended operation
+
+Live hardware writes are disabled by default.
+
+Start with dry-run, simulation, replay, or preflight mode. Inspect the logs. Only enable live writes after you understand the calculated targets and the current firmware state of your devices.
+
+Recommended safe defaults:
+
+```json
+{
+  "dry_run": true,
+  "allow_hardware_writes": false,
+  "allow_state_reconciliation_writes": false,
+  "max_total_power": 800
+}
+```
+
+The EMS should not run in parallel with another controller that writes Zendure `outputLimit`.
+
+---
+
+## 💡 Why This Project?
+
+Most SolarFlow integrations are:
+
+- complex
+- YAML-heavy
+- hard to debug
+- tightly coupled to Home Assistant
+- difficult to reason about during runtime
 
 This project is different:
 
-* direct local API control
-* easy to understand
-* easy to modify
-* runs standalone
-* Home Assistant optional
-* dynamic entities
-* no hidden automation logic
+- direct local API control
+- simple Python control loop
+- JSON-based configuration
+- standalone operation possible
+- Home Assistant optional
+- structured runtime logging
+- transparent balancing logic
+- no hidden automation logic
+- firmware-aware runtime behavior
+- designed for debugging and validation
+
+The goal is not magical automation.  
+The goal is observable, deterministic and understandable energy control.
+
+```text
+observable > magical
+runtime truth > assumed state
+simple > complex
+```
 
 ---
 
-# 🚀 What it does
+## 🚀 Feature Overview
 
-The EMS:
+### ⚡ EMS Control
 
-* reads house consumption (Shelly)
-* reads Solarflow telemetry via local API
-* calculates optimal inverter output power
-* dynamically distributes energy across multiple devices
-* intelligently balances solar and battery usage
-* continuously reconciles desired device configuration
-* optionally integrates with Home Assistant
+- Local Zendure SolarFlow control through the device API
+- Shelly-based household load tracking
+- Multi-device inverter balancing
+- Runtime `outputLimit` control
+- PV-aware output allocation
+- Battery-aware discharge balancing
+- PV-first operation when enough solar is available
+- Clamp and redistribution logic
+- Deadband filtered writes
+
+### 🧠 Firmware Awareness
+
+- Runtime capability detection
+- `socLimit`, `dcStatus`, `acStatus`, `packState` evaluation
+- Separation of runtime truth and config truth
+- Conservative firmware cooperation model
+- Handles firmware protection states instead of fighting them
+
+### 🛡️ Safety And Stability
+
+- Dry-run mode
+- Preflight validation
+- Simulation mode
+- Replay mode
+- Bounded live tests with `--duration` and `--max-cycles`
+- Cached-state fallback during temporary device outages
+- Offline write suppression
+- Central hardware write guard
+- Separate state reconciliation write guard
+
+### 🏠 Home Assistant
+
+- Optional Home Assistant integration
+- Dynamic REST-created entities
+- HA can be used for monitoring only
+- HA helper-based runtime control optional
+- Dashboard support
+
+### 🧪 Testing And Debugging
+
+- Structured `event=...` logs
+- Simulation without hardware
+- Replay of runtime traces
+- Preflight check before live operation
+- Easy one-shot dry-run testing
+- Python syntax validation with `py_compile`
+
+---
+
+## 🧭 Architecture Overview
 
 ```mermaid
 flowchart LR
@@ -47,101 +137,481 @@ flowchart LR
     EMS["EMS Controller\nPython"]
     WR1["Zendure WR1"]
     WR2["Zendure WR2"]
-    HA["Home Assistant\n(optional)"]
+    HA["Home Assistant\noptional"]
 
     Shelly -->|house load| EMS
 
     WR1 -->|telemetry| EMS
     WR2 -->|telemetry| EMS
 
-    EMS -->|outputLimit| WR1
-    EMS -->|outputLimit| WR2
+    EMS -->|runtime outputLimit| WR1
+    EMS -->|runtime outputLimit| WR2
 
-    EMS <-->|REST API| HA
+    EMS -->|status sensors| HA
+    HA -->|optional helper values| EMS
+```
+
+The EMS operates locally.
+
+Home Assistant is optional and is not required for control decisions.
+
+---
+
+## ⚡ Quick Start
+
+### 1. Clone Repository
+
+```bash
+git clone https://github.com/basecubedev/ems-solarflow-api-control
+cd ems-solarflow-api-control
+```
+
+### 2. Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+Alternative on Debian / Ubuntu:
+
+```bash
+sudo apt install python3-requests
+```
+
+### 3. Create Config
+
+```bash
+cp config.template.json config.json
+```
+
+Edit:
+
+- Zendure device IPs
+- Zendure serial numbers
+- Shelly IP
+- Home Assistant URL and token if used
+- power limits
+- SOC limits
+- safety flags
+
+### 4. Run Safe Preflight
+
+```bash
+python3 -B ems-solarflow-api-control.py --preflight
+```
+
+### 5. Run Read-Only Dry-Run
+
+```bash
+python3 -B ems-solarflow-api-control.py --dry-run --no-ha --once
+```
+
+### 6. Start EMS
+
+Only after reviewing the preflight and dry-run logs:
+
+```bash
+python3 -B ems-solarflow-api-control.py
 ```
 
 ---
 
-# ⚙️ Features
+## 🛡️ Safety First: Preflight Mode
 
-### ⚡ Core EMS Control
+`--preflight` is a read-only live system validation mode.
 
-* ⚡ real-time control loop
-* 🔌 multi-device support
-* 🧠 intelligent SOC-aware multi-battery balancing
-* ☀️ PV curtailment avoidance
-* 🪫 low battery protection
-* 🔄 mixed battery / non-battery system support
+It checks:
 
-### 🛡️ Runtime Stability & Failsafe
+- Shelly connectivity
+- Zendure device connectivity
+- Home Assistant connectivity if enabled
+- device telemetry
+- firmware runtime states
+- `smartMode`
+- `acMode`
+- `gridOffMode`
+- `socLimit`
+- `dcStatus`
+- `acStatus`
+- `packState`
+- derived export capability
 
-* 🛡️ cached-state failsafe handling
-* 📡 offline device detection
-* 🚫 automatic write suppression for unreachable devices
-* 🔄 automatic reconnect recovery
+It does not run active control dispatch.
 
-### 🧭 Device Management
+It does not write:
 
-* 🧭 desired-state device reconciliation
-* 🧠 idempotent configuration management
+- `outputLimit`
+- `minSoc`
+- `socSet`
+- `smartMode`
+- `gridOffMode`
+- `acMode`
 
-### 🏠 Home Assistant Integration
+Example:
 
-* 🏠 optional Home Assistant integration
-* ♻️ dynamic Home Assistant entities
-* 🔄 automatic Home Assistant entity cleanup
+```bash
+python3 -B ems-solarflow-api-control.py --preflight
+```
 
-### 🧩 Project Design
+Typical successful events:
 
-* 🧩 JSON-based configuration
-* 🚫 no YAML required
-* 🧰 standalone operation possible
-* 🐍 pure Python
+```text
+event=preflight_start
+event=preflight_shelly_ok
+event=preflight_ha_ok
+event=preflight_device_ok
+event=preflight_ok
+```
+
+Possible abort events:
+
+```text
+event=preflight_abort reason=hardware_writes_enabled
+event=preflight_abort reason=ha_unreachable
+event=preflight_abort reason=smart_mode_not_1
+```
+
+Preflight is intended for:
+
+- first installation
+- live-test readiness
+- debugging after firmware updates
+- verifying network reachability
+- checking safe runtime prerequisites
 
 ---
 
-# 🔋 Intelligent Battery Balancing
+## 🧪 Runtime Modes
 
-The EMS dynamically balances power distribution across all connected devices.
+### Dry-Run Mode
 
-Features:
+Dry-run calculates targets but blocks hardware writes.
 
-* fuller batteries feed more directly into household load
-* batteries with remaining capacity keep more solar energy for charging
-* low SOC batteries are protected during discharge
-* battery SOC levels naturally converge over time
-* mixed systems with and without batteries are supported automatically
+```bash
+python3 -B ems-solarflow-api-control.py --dry-run --no-ha --once
+```
 
-This improves:
+Expected write event:
 
-* PV utilization
-* battery lifetime
-* charge/discharge symmetry
-* multi-device efficiency
-* overall energy balancing
+```text
+event=dry_run_output_limit
+```
+
+No Zendure `/properties/write` call should happen.
 
 ---
 
-# ⚖️ Energy Distribution Strategy
+### Simulation Mode
 
-The EMS dynamically adjusts inverter output based on:
+Simulation mode runs deterministic built-in test frames and does not contact real hardware or Home Assistant.
 
-* household demand
-* available solar power
-* battery charge headroom
-* usable battery SOC
-* configured battery protection limits
+```bash
+python3 -B ems-solarflow-api-control.py --simulate
+```
 
-The control logic operates differently depending on the current energy situation.
+---
+
+### Replay Mode
+
+Replay mode processes JSONL runtime traces through the same target calculation path.
+
+```bash
+python3 -B ems-solarflow-api-control.py --replay trace.jsonl
+```
+
+This is useful for:
+
+- regression testing
+- runtime analysis
+- firmware behavior investigation
+- validating balancing changes before live tests
+
+---
+
+### Bounded Live Test
+
+Use an explicit temporary config and limit runtime.
+
+```bash
+python3 -B ems-solarflow-api-control.py \
+  --config /tmp/ems-live-test-config.json \
+  --duration 60
+```
+
+Recommended live-test system flags:
+
+```json
+{
+  "dry_run": false,
+  "simulation_mode": false,
+  "allow_hardware_writes": true,
+  "allow_state_reconciliation_writes": false,
+  "soc_reconcile_interval": 0
+}
+```
+
+This allows runtime `outputLimit` writes but prevents SOC and mode reconciliation writes.
+
+---
+
+## ⚙️ Configuration Reference
+
+The EMS uses a single JSON config file.
+
+```bash
+cp config.template.json config.json
+```
+
+---
+
+### `system`
+
+| Option | Description | Example |
+|---|---|---|
+| `enabled` | Enables or disables EMS control | `true` |
+| `dry_run` | Calculates targets but blocks hardware writes | `true` |
+| `simulation_mode` | Runs without real hardware | `false` |
+| `allow_hardware_writes` | Allows Zendure `/properties/write` calls | `false` |
+| `allow_state_reconciliation_writes` | Allows SOC and mode reconciliation writes | `false` |
+| `log_level` | Logging verbosity | `"debug"` |
+| `max_total_power` | Maximum combined EMS output | `800` |
+| `max_device_power` | Default per-device max power | `800` |
+| `deadband` | Minimum target delta before writing | `10` |
+| `loop_interval` | Control loop interval in seconds | `5` |
+| `redistribute_clamped_power` | Redistribute clamped target power | `true` |
+| `pv_kwp_weighting` | Use configured PV size for weighting | `true` |
+| `battery_kwh_weighting` | Use configured battery size for weighting | `true` |
+| `soc_reconcile_interval` | Interval in EMS cycles for SOC/mode checks | `10` |
+
+Safe development example:
+
+```json
+{
+  "system": {
+    "enabled": true,
+    "dry_run": true,
+    "simulation_mode": false,
+    "allow_hardware_writes": false,
+    "allow_state_reconciliation_writes": false,
+    "log_level": "debug",
+    "max_total_power": 800,
+    "max_device_power": 800,
+    "deadband": 10,
+    "loop_interval": 5
+  }
+}
+```
+
+Live runtime control example:
+
+```json
+{
+  "system": {
+    "dry_run": false,
+    "allow_hardware_writes": true,
+    "allow_state_reconciliation_writes": false
+  }
+}
+```
+
+State reconciliation example:
+
+```json
+{
+  "system": {
+    "allow_state_reconciliation_writes": true,
+    "soc_reconcile_interval": 10
+  }
+}
+```
+
+Use this only when you intentionally want the EMS to keep device modes and SOC settings aligned with config.
+
+---
+
+### `devices`
+
+Example:
+
+```json
+{
+  "name": "WR1",
+  "ip": "192.168.100.77",
+  "sn": "YOUR_SN",
+  "smart_mode": 1,
+  "grid_off_mode": 2,
+  "max_power": 800,
+  "pv_kwp": 1.0,
+  "pv_priority_factor": 1.0,
+  "battery_kwh": 1.92,
+  "min_soc": 15,
+  "max_soc": 100
+}
+```
+
+| Option | Description |
+|---|---|
+| `name` | Device name used in logs and HA entities |
+| `ip` | Local Zendure device IP |
+| `sn` | Zendure device serial number |
+| `smart_mode` | Recommended `1` for runtime/RAM mode |
+| `grid_off_mode` | Recommended `2` for external EMS tracking |
+| `max_power` | Per-device maximum output target |
+| `pv_kwp` | Installed PV size connected to this device |
+| `pv_priority_factor` | Manual PV-side tuning factor |
+| `battery_kwh` | Battery size used for weighting |
+| `min_soc` | Desired minimum SOC |
+| `max_soc` | Desired maximum SOC |
+
+`pv_priority_factor=1.0` is neutral.
+
+Values above `1.0` increase PV-side priority.  
+Values below `1.0` reduce PV-side priority.
+
+---
+
+### `ha`
+
+Home Assistant is optional.
+
+```json
+{
+  "ha": {
+    "enabled": true,
+    "control_enabled": false,
+    "url": "http://homeassistant.local:8123",
+    "token": "YOUR_TOKEN"
+  }
+}
+```
+
+| Option | Description |
+|---|---|
+| `enabled` | Enables HA status publishing |
+| `control_enabled` | Allows HA helper values to steer EMS |
+| `url` | Home Assistant base URL |
+| `token` | Long-lived access token |
+
+Use:
+
+```json
+"control_enabled": false
+```
+
+when you want HA monitoring but no HA helper control.
+
+---
+
+### `shelly`
+
+```json
+{
+  "shelly": {
+    "ip": "192.168.100.93"
+  }
+}
+```
+
+The Shelly meter is used as household load feedback source.
+
+---
+
+## 📋 Logging And Debugging
+
+### Loglevels
+
+Supported values:
+
+| Level | Description |
+|---|---|
+| `debug` | Full runtime analysis |
+| `info` | Normal operation and writes |
+| `warning` | Temporary issues or fallback behavior |
+| `error` | Critical errors |
+| `critical` | Severe failures |
+
+Example:
+
+```json
+{
+  "system": {
+    "log_level": "debug"
+  }
+}
+```
+
+Recommended:
+
+| Use Case | Loglevel |
+|---|---|
+| Development | `debug` |
+| Live tuning | `debug` |
+| Normal operation | `info` |
+| Minimal logs | `warning` |
+
+---
+
+### Important Runtime Events
+
+| Event | Meaning |
+|---|---|
+| `startup` | Shows active safety flags and runtime mode |
+| `preflight_start` | Preflight validation started |
+| `preflight_device_ok` | Device passed live-read validation |
+| `capability_detection` | Runtime capability detection result |
+| `pv_first_limit` | PV-first output limit per device |
+| `balance_weight` | Weighting details for target allocation |
+| `target_calculation` | Final target calculation |
+| `dry_run_output_limit` | Target calculated but not written |
+| `write_output_limit` | Target written to device |
+| `deadband_skip_write` | Write skipped because target delta was too small |
+| `offline_skip_write` | Write skipped because device is offline |
+| `dry_run_soc_limits` | SOC write blocked by safety flags |
+| `dry_run_device_modes` | Mode write blocked by safety flags |
+| `write_device_modes` | Device mode reconciliation write |
+| `write_soc_limits` | SOC reconciliation write |
+
+Example:
+
+```text
+event=target_calculation current_total=555 final_targets=[96,302] load=-157.0 requested_total=398.0
+```
+
+---
+
+## 🔋 Intelligent Battery Balancing
+
+The EMS dynamically balances power distribution across connected devices.
+
+It considers:
+
+- current household load
+- current solar production
+- runtime firmware capability
+- battery SOC
+- configured minimum SOC
+- runtime maximum SOC
+- charge headroom
+- usable battery energy
+- per-device power limits
+- configured PV and battery sizes
+
+The goal is stable and fair energy distribution.
+
+---
+
+## ⚖️ Energy Distribution Strategy
+
+The EMS has two main target calculation branches.
 
 ```mermaid
 flowchart TD
 
     LOAD[Household Load]
-    SOLAR[Available Solar]
+    SOLAR[Current Solar Telemetry]
     SOC[Battery SOC]
     HEADROOM[Charge Headroom]
-    LIMITS[Protection Limits]
+    LIMITS[Firmware Capability]
 
     EMS[EMS Balancing Engine]
 
@@ -154,61 +624,284 @@ flowchart TD
     EMS --> SURPLUS[Solar Surplus Strategy]
     EMS --> DISCHARGE[Battery Discharge Strategy]
 
-    SURPLUS --> CURTAIL[Reduce PV Curtailment]
-    SURPLUS --> CHARGE[Prioritize Empty Batteries]
+    SURPLUS --> PVFIRST[PV-first Allocation]
+    SURPLUS --> NO_BATTERY_DISCHARGE[Avoid Battery Discharge]
 
     DISCHARGE --> PROTECT[Protect Low SOC Batteries]
-    DISCHARGE --> BALANCE[Balance By Usable SOC]
+    DISCHARGE --> BALANCE[Balance By Usable Energy]
 
-    CURTAIL --> OUTPUT[Dynamic outputLimit]
-    CHARGE --> OUTPUT
+    PVFIRST --> OUTPUT[Dynamic outputLimit]
+    NO_BATTERY_DISCHARGE --> OUTPUT
     PROTECT --> OUTPUT
     BALANCE --> OUTPUT
 ```
 
----
-
-## ☀️ Solar Surplus
-
-When solar generation exceeds household demand:
-
-* devices with remaining battery charge capacity are prioritized
-* fuller batteries feed more energy directly into household consumption
-* batteries with more headroom retain more solar charging power
-* PV curtailment is reduced
-
-This helps maximize solar utilization while naturally balancing battery charge levels.
 
 ---
 
-## 🔋 Battery Discharge
+## ⚙️ EMS Control Pipeline
 
-When household demand exceeds available solar power:
+The EMS operates as an external supervisory control loop on top of the Zendure firmware runtime.
 
-* batteries with more usable SOC contribute more output power
-* low SOC batteries are automatically protected
-* discharge load is distributed proportionally across available batteries
-* battery wear is reduced through balanced utilization
+Unlike traditional inverter controllers, the EMS does not directly control internal energy flow paths.
 
-The EMS uses usable SOC weighting:
+Instead, the EMS continuously:
+
+1. reads live telemetry
+2. detects current runtime capabilities
+3. estimates exportable behavior
+4. calculates desired AC output targets
+5. applies balancing and protection logic
+6. requests inverter output changes via `outputLimit`
+
+The internal Zendure firmware still decides how energy is routed between:
+
+- PV generation
+- battery charging
+- battery discharge
+- AC export
+
+This means the EMS behaves as a firmware-aware external regulator rather than a direct power controller.
+
+### Runtime Control Stages
 
 ```text
-usable_soc = current_soc - configured_min_soc
+1. Read household load
+2. Read Zendure telemetry
+3. Detect runtime capabilities
+4. Estimate exportable energy
+5. Calculate requested total output
+6. Select operating strategy:
+   - solar surplus mode
+   - battery discharge mode
+7. Apply weighted balancing
+8. Apply PV-first limiting
+9. Clamp per-device limits
+10. Redistribute remaining headroom
+11. Apply deadband filtering
+12. Write outputLimit
 ```
 
-This creates gradual low battery protection without hard switching behavior.
+### Runtime Capability Detection
+
+The EMS continuously derives runtime behavior from live telemetry.
+
+| Capability | Derived From |
+|---|---|
+| `can_charge` | `socLimit` |
+| `can_discharge` | `dcStatus` + `socLimit` |
+| `can_export` | `dcStatus` + `acStatus` |
+| `can_ac_charge` | `acStatus` |
+
+This is important because configured device state does not always match actual runtime behavior.
+
+The EMS therefore prioritizes:
+
+```text
+runtime truth > config truth
+```
+
+This helps avoid invalid assumptions during:
+
+- full battery conditions
+- inverter standby states
+- firmware-imposed limits
+- AC/DC path changes
+- temporary runtime transitions
 
 ---
 
-## ⚖️ Natural SOC Equalization
+## 🔬 Runtime Semantics
 
-Because fuller batteries contribute more during discharge and emptier batteries retain more solar charging power:
+Zendure devices internally manage several energy routing decisions inside firmware.
 
-* battery SOC levels naturally converge over time
-* uneven battery drift is automatically reduced
-* mixed battery systems remain balanced without explicit synchronization logic
+As a result:
 
-No dedicated equalization cycle is required.
+```text
+available PV power
+≠
+exportable AC power
+```
+
+The EMS therefore cannot assume that current solar generation automatically translates into available inverter output capacity.
+
+### Full Battery Behavior
+
+When batteries approach full charge:
+
+- firmware may reduce PV harvesting
+- PV input may become internally curtailed
+- available AC-follow behavior may change
+- inverter response to `outputLimit` may soften
+
+Observed behavior:
+
+```text
+battery full
+→ firmware prioritizes battery protection
+→ PV input becomes limited
+→ available export capability decreases
+```
+
+This means:
+
+```text
+solarInputPower
+```
+
+does not always represent physically available PV panel power.
+
+Instead, it represents:
+
+```text
+firmware-accepted PV power
+```
+
+after internal battery and protection logic.
+
+### `outputLimit` Semantics
+
+The EMS writes:
+
+```text
+outputLimit
+```
+
+as a requested AC export target.
+
+However:
+
+- the Zendure firmware still controls internal routing
+- battery protection logic may override behavior
+- charge/discharge priorities may affect tracking
+- firmware modes influence output responsiveness
+
+Therefore, `outputLimit` should be interpreted as desired export behavior rather than guaranteed direct inverter output.
+
+---
+
+## ⚠️ Firmware-Controlled Energy Paths
+
+The EMS operates on top of firmware-controlled internal energy paths.
+
+```mermaid
+flowchart TD
+    PV[PV Input]
+    EMS[External EMS]
+    FW[Zendure Firmware Runtime]
+
+    BAT[Battery Charging]
+    AC[AC Export]
+
+    EMS -->|outputLimit request| FW
+
+    PV --> FW
+
+    FW --> BAT
+    FW --> AC
+
+    BAT -->|battery state feedback| FW
+```
+
+The firmware dynamically decides:
+
+- battery charging priority
+- AC export behavior
+- PV curtailment
+- discharge permission
+- passthrough behavior
+- runtime protection handling
+
+This behavior may vary depending on:
+
+- firmware version
+- battery SOC
+- PV availability
+- runtime operating mode
+- `gridOffMode`
+- thermal conditions
+- battery protection state
+
+### External EMS Philosophy
+
+The EMS intentionally avoids fighting the internal firmware logic aggressively.
+
+Instead, the project follows a cooperative supervisory control approach.
+
+Goals:
+
+- stable runtime behavior
+- predictable balancing
+- reduced oscillation
+- firmware-compatible control
+- minimal unnecessary writes
+- graceful degradation during runtime limitations
+
+This results in more stable real-world operation compared to aggressive direct-control strategies.
+
+
+### ☀️ Solar Surplus / PV-First Mode
+
+When current solar telemetry is sufficient to cover the requested AC output, the EMS prioritizes direct PV usage and avoids battery discharge.
+
+Simplified rule:
+
+```text
+if total_solar >= requested_output:
+    use PV first
+    do not allocate more AC output than PV-only contribution
+```
+
+Per-device PV-only contribution:
+
+```text
+pv_only = solarInputPower - packInputPower
+```
+
+Where:
+
+| Field | Meaning |
+|---|---|
+| `solarInputPower` | Current PV power reported by device |
+| `packInputPower` | Battery discharge power |
+
+This avoids inefficient behavior such as:
+
+```text
+Device A charges battery
+Device B discharges battery
+```
+
+while enough PV exists globally.
+
+---
+
+### 🔋 Battery Discharge Mode
+
+When household demand exceeds available solar power, the EMS uses battery discharge.
+
+Discharge is weighted by usable battery energy:
+
+```text
+usable_battery = battery_kwh * (soc - min_soc)
+```
+
+This means:
+
+- batteries with more usable energy contribute more
+- batteries closer to minimum SOC contribute less
+- discharge is gradual, not hard-switched
+- larger batteries can contribute proportionally more
+
+---
+
+### ⚖️ Natural SOC Equalization
+
+Over time, the EMS tends to balance battery SOC because:
+
+- batteries with more usable energy discharge more
+- batteries with less headroom are less preferred for charging
+- low SOC batteries are protected naturally
 
 ```mermaid
 flowchart LR
@@ -216,209 +909,255 @@ flowchart LR
     A["Battery A\nSOC 90%"]
     B["Battery B\nSOC 45%"]
 
-    HOME["🏠 Household Load"]
+    HOME["Household Load"]
 
     A -->|higher discharge share| HOME
-    B -->|reduced discharge| HOME
-
-    style A fill:#d5f5d5
-    style B fill:#fff0c2
+    B -->|reduced discharge share| HOME
 ```
 
 ---
 
-## 🔄 Mixed Device Support
+### 🔄 Mixed Device Support
 
-The EMS automatically supports mixed systems:
+The EMS can handle mixed systems:
 
-* devices with batteries
-* devices without batteries
-* partially managed devices
-* unmanaged SOC configurations
+- devices with batteries
+- devices without batteries
+- partially managed devices
+- unmanaged SOC configurations
 
 Devices without battery management naturally favor direct solar utilization.
 
 ---
 
-# 🔄 Device State Reconciliation
 
-The EMS manages operating modes separately from runtime power control.
+## 🧩 Runtime Truth vs Config Truth
 
-Runtime control only updates:
-- outputLimit
+Configured values are not always equal to runtime behavior.
 
-Desired device state reconciliation optionally manages:
-- smartMode
-- battery SOC limits
-- inverter operating mode
+| Type | Meaning |
+|---|---|
+| Config truth | What the EMS or user requested |
+| Runtime truth | What the firmware currently allows |
+
+Example:
+
+```text
+Configured outputLimit = 300 W
+Runtime outputHomePower = 0 W
+socLimit = 2
+dcStatus = 0
+```
+
+Meaning:
+
+The firmware blocked discharge due to SOC protection.
+
+The EMS therefore follows a cooperation model:
+
+1. calculate desired targets
+2. write runtime values if allowed
+3. observe actual firmware behavior
+4. adapt next cycle
+
+---
+
+## 🌤️ Zendure Firmware Runtime Behavior
+
+### PV Curtailment At Full Battery
+
+Current `solarInputPower` is not always the physically available PV power.
+
+When a battery is full or charge-limited, the Zendure firmware may internally reduce PV harvesting.
+
+This means:
+
+```text
+solarInputPower != physically available PV
+```
+
+Example:
+
+```text
+Battery reaches 100%
+Firmware enters charge inhibit
+PV is curtailed
+solarInputPower drops
+EMS sees lower current PV
+```
+
+This is important for understanding target allocation.
+
+The EMS currently uses runtime telemetry as source of truth.  
+Future versions may add estimated available PV based on historical peaks, curtailment detection and runtime state.
+
+---
+
+### Passthrough Behavior
+
+Zendure devices expose a `pass` state, but passthrough behavior is firmware-controlled.
+
+Important implications:
+
+- passthrough may not be fully controlled by `outputLimit`
+- power flow may be affected by firmware state
+- behavior can depend on SOC, PV, grid mode and device generation
+- runtime observation is required
+
+The EMS logs runtime state so passthrough-related behavior can be investigated.
+
+---
+
+### MPPT And Response Lag
+
+Zendure output and PV telemetry may react with delay.
+
+After changing `outputLimit`:
+
+- PV may ramp slowly
+- battery charge/discharge state may lag
+- output may take seconds to stabilize
+- firmware hysteresis may delay state transitions
+
+This is expected behavior.
+
+---
+
+## 🔄 Device State Reconciliation
+
+Runtime power control is separate from device-state reconciliation.
+
+Runtime control writes:
+
+```text
+outputLimit
+```
+
+Device-state reconciliation may write:
+
+```text
+smartMode
+minSoc
+socSet
+acMode
+gridOffMode
+```
 
 ```mermaid
 flowchart LR
 
     A["Runtime Control"]
-    B["Desired State Reconciliation"]
+    B["Device State Reconciliation"]
 
     A -->|"outputLimit"| DEV["Zendure Device"]
 
-    B -->|"smartMode\nminSOC\nmaxSOC\nacMode"| DEV
+    B -->|"smartMode\nminSoc\nsocSet\nacMode\ngridOffMode"| DEV
 ```
 
-Example:
+This separation is important.
+
+Runtime output may change frequently.  
+SOC and mode settings should change rarely and only when explicitly allowed.
+
+---
+
+### Recommended External EMS Runtime Settings
+
+| Property | Recommended Value | Purpose |
+|---|---:|---|
+| `smartMode` | `1` | Runtime/RAM mode, avoids flash writes |
+| `acMode` | `2` | Normal / discharge output mode |
+| `gridOffMode` | `2` | Better external EMS AC tracking |
+
+`smartMode=1` means runtime parameters are not written to flash.
+
+---
+
+### State Reconciliation Safety Flag
+
 ```json
 {
-  "_comment": "smart_mode: 1 = runtime/RAM mode",
-
-  "smart_mode": 1,
-
-  "_comment2": "min/max soc = 0 = unmanaged / keep Zendure app settings or no battery",
-
-  "min_soc": 15,
-  "max_soc": 100
+  "allow_state_reconciliation_writes": false
 }
 ```
 
-Behavior:
+When false:
 
-| Setting          | Meaning                |
-| ---------------- | ---------------------- |
-| `smart_mode = 1` | volatile runtime mode  |
-| `smart_mode = 0` | persistent device mode |
-| `min_soc = 0`    | unmanaged              |
-| `max_soc = 0`    | unmanaged              |
+- `outputLimit` writes may still be allowed
+- SOC writes are blocked
+- mode writes are blocked
 
----
+When true:
 
-# ⚡ Recommended External EMS Runtime Configuration
+- EMS may restore configured `smartMode`
+- EMS may restore configured `acMode`
+- EMS may restore configured `gridOffMode`
+- EMS may restore configured SOC limits
 
-The EMS uses several Zendure runtime parameters to improve external inverter control behavior.
-
-Recommended configuration:
-
-| Property | Recommended Value | Purpose |
-|---|---|---|
-| smartMode | 1 | volatile runtime control / avoid flash writes |
-| acMode | 2 | enable inverter output mode |
-| gridOffMode | 2 | prioritize AC output behavior |
-
-The EMS automatically reconciles these values during runtime.
+Use with care.
 
 ---
 
-## 🔍 Observed gridOffMode Behavior
+## 🔍 Observed `gridOffMode` Behavior
 
-The official Zendure documentation currently only describes:
+Official documentation describes:
 
 | Value | Description |
 |---|---|
-| 0 | Standard Mode |
-| 1 | Economic Mode |
-| 2 | Closure (observed as direct AC priority behavior) |
+| `0` | Standard Mode |
+| `1` | Economic Mode |
+| `2` | Closure |
 
-During runtime testing on SolarFlow 800 Pro 2 devices, the following behavior was observed:
+Observed behavior on SolarFlow 800 Pro 2:
 
 | Mode | Observed Behavior |
 |---|---|
-| 1 | stronger battery charging priority / softer AC regulation |
-| 2 | improved AC output tracking / more direct external EMS behavior |
+| `1` | Stronger battery charging priority / softer AC regulation |
+| `2` | Improved AC output tracking / more direct external EMS behavior |
 
 With `gridOffMode=2`:
 
-* inverter output follows `outputLimit` more closely
-* battery charging behavior becomes less dominant
-* external EMS regulation becomes more predictable
-* AC output ramps behave more consistently
+- inverter output follows `outputLimit` more closely
+- battery charging behavior becomes less dominant
+- external EMS regulation becomes more predictable
+- AC output ramps behave more consistently
 
-This behavior was determined experimentally and may vary between firmware versions or device generations.
-
-Possible runtime usage patterns:
-
-| Mode | Potential Use Case |
-|---|---|
-| gridOffMode = 2 | responsive external EMS / direct AC output tracking |
-| gridOffMode = 1 | conservative battery-preserving operation |
-
-Observed during runtime testing:
-
-`gridOffMode=1` appears to prioritize battery charging behavior more strongly and may help preserve battery reserve during low-production winter conditions.
-
-This may be beneficial when:
-
-- PV generation is frequently below household demand
-- battery reserve should be preserved overnight
-- aggressive AC output tracking is not desired
-- minimizing deep discharge cycles is preferred
-
-In contrast, `gridOffMode=2` appears to prioritize more direct AC output behavior and closer `outputLimit` tracking.
-
-Behavior may vary depending on:
-
-- firmware version
-- device generation
-- battery state
-- PV availability
-- runtime conditions
+This behavior is based on runtime observation and may vary by firmware version or device generation.
 
 ---
 
-# ⚡ Runtime Control Behavior
+## 🛡️ Runtime Failsafe Behavior
 
-The EMS control loop may run at high frequency (for example every 1 second).
+The EMS includes runtime stability mechanisms for temporary network outages.
 
-However, the EMS minimizes unnecessary device communication through several mechanisms:
-
-* per-device deadband filtering
-* idempotent desired-state reconciliation
-* runtime/persistent state separation
-* conditional configuration synchronization
-
-This means:
-
-* inverter writes only occur when output changes are meaningful
-* unchanged devices are skipped automatically
-* desired device configuration is only updated when drift is detected
-
-As a result, fast EMS response times can be achieved without excessive API traffic or continuous device reconfiguration.
-
----
-
-# 🛡️ Runtime Failsafe Behavior
-
-The EMS includes several runtime stability mechanisms to improve behavior during temporary network outages or unstable WiFi environments.
-
-This is especially important for multi-device balancing systems where abrupt telemetry loss could otherwise cause large inverter output jumps.
-
----
-
-## 🔄 Cached State Fallback
+### Cached State Fallback
 
 If a Zendure device becomes temporarily unreachable:
 
-* the last known valid device state is reused
-* energy balancing remains stable
-* inverter output distribution does not abruptly jump to remaining devices
-* write operations to unreachable devices are automatically suspended
-* normal operation resumes automatically after reconnect
+- the last known valid state is reused
+- balancing remains stable
+- output distribution does not abruptly jump
+- writes to unreachable devices are suspended
+- normal operation resumes after reconnect
 
 Example:
 
 ```text
-WR1 = 400W
-WR2 = 400W
+WR1 = 400 W
+WR2 = 400 W
 ```
 
-If WR1 temporarily loses WiFi connectivity, the EMS will continue using the last valid telemetry snapshot instead of immediately assuming:
+If WR1 temporarily loses connectivity, the EMS does not immediately assume:
 
 ```text
-WR1 = 0W
+WR1 = 0 W
 ```
 
-This prevents sudden jumps such as:
+This avoids sudden jumps such as:
 
 ```text
-WR2 = 800W
+WR2 = 800 W
 ```
-
-caused purely by temporary communication loss.
 
 ```mermaid
 sequenceDiagram
@@ -442,9 +1181,7 @@ sequenceDiagram
     EMS->>WR2: continue normal control
 
     WR1--xEMS: WiFi offline
-    WR2->>HOME: remains stable at 400W
-
-    Note over EMS,WR2: no sudden jump to 800W
+    WR2->>HOME: remains stable
 
     WR1-->>EMS: reconnect
     EMS->>WR1: resume normal operation
@@ -452,225 +1189,34 @@ sequenceDiagram
 
 ---
 
-## 📡 Offline Device Handling
-
-The EMS differentiates between:
+### Offline Device Handling
 
 | State | Behavior |
 |---|---|
-| Device reachable | normal telemetry + writes |
-| Temporary communication loss | cached telemetry used |
-| Device unreachable | writes suspended |
-| Device reconnects | automatic recovery |
-
-This helps:
-
-* maintain stable load balancing
-* avoid unnecessary API retries
-* prevent excessive timeout accumulation
-* keep the control loop responsive
+| Device reachable | Normal telemetry and writes |
+| Temporary communication loss | Cached telemetry used |
+| Device unreachable | Writes suspended |
+| Device reconnects | Automatic recovery |
 
 ---
 
-## ⚠️ Runtime Communication Behavior
+## 🏠 Home Assistant Integration
 
-Temporary network instability may produce logs similar to:
-
-```text
-2026-05-08 14:37:22,570 | WARNING | WR1 fetch failed: HTTPConnectionPool(host='192.168.1.100', port=80)
-2026-05-08 14:37:22,571 | WARNING | WR1: using cached state 13.8s old (output=312W solar=237W soc=78%)
-2026-05-08 14:37:23,012 | WARNING | WR1: offline -> skip write
-```
-
-This behavior is expected and indicates that:
-
-* the device became temporarily unreachable
-* the EMS entered failsafe mode
-* the last known telemetry snapshot is being used
-* write operations are intentionally suspended
-
-After reconnect, the device automatically resumes normal EMS participation.
-
----
-
-## 🧠 Stability Philosophy
-
-The EMS prioritizes stable energy balancing behavior over aggressive correction.
-
-Failsafe mechanisms are designed to:
-
-* avoid sudden inverter output jumps
-* maintain stable multi-device distribution
-* tolerate temporary WiFi instability
-* minimize unnecessary API traffic
-* recover automatically after reconnect
-
-This helps achieve smoother real-world EMS behavior in unstable network environments.
-
----
-
-# 🖥️ Dashboard
-
-Ready-to-use Home Assistant dashboard included:
-
-```text
-homeassistant-dashboard/dashboard.yaml
-```
-
-<p align="center">
-  <img src="./homeassistant-dashboard/dashboard-preview.jpg" width="900">
-</p>
-
----
-
-# 🔌 Zendure API Basics
-
-Zendure Solarflow devices provide a local HTTP API.
-
-## 📥 Read device data
-
-```bash
-curl http://DEVICE_IP/properties/report
-```
-
-Important fields:
-
-| Field             | Meaning                     |
-| ----------------- | --------------------------- |
-| `electricLevel`   | battery SOC (%)             |
-| `solarInputPower` | solar input power           |
-| `outputHomePower` | AC output to home           |
-| `outputPackPower` | power sent TO battery       |
-| `packInputPower`  | power received FROM battery |
-
----
-
-## 🔋 Battery Power Semantics
-
-Zendure reports battery values from the controller/inverter perspective.
-
-This means:
-
-| API Field         | Battery Meaning     |
-| ----------------- | ------------------- |
-| `outputPackPower` | battery charging    |
-| `packInputPower`  | battery discharging |
-
-The EMS converts this into a battery-centric model:
-
-| EMS Value              | Meaning     |
-| ---------------------- | ----------- |
-| positive battery power | charging    |
-| negative battery power | discharging |
-
-This applies to all `battery_power` sensors.
-
----
-
-## 📤 Write output limit
-
-```bash
-curl -X POST http://DEVICE_IP/properties/write \
-  -H "Content-Type: application/json" \
-  -d '{
-    "sn": "YOUR_SN",
-    "properties": {
-      "outputLimit": 300
-    }
-  }'
-  ```
----
-
-# ⚠️ Zendure Cloud / HEMS Requirements
-
-The EMS uses direct local API control.
-
-Zendure devices may remain connected to the Zendure cloud and mobile app.
-
-However:
-
-* devices must NOT be actively managed by Zendure HEMS
-* no parallel cloud-side energy management should control the same devices
-* local EMS control and cloud HEMS control may otherwise conflict
-
-Recommended setup:
-
-| Component | Allowed |
-|---|---|
-| Zendure cloud connection | ✅ |
-| Zendure mobile app | ✅ |
-| Local API access | ✅ |
-| Zendure HEMS active control | ❌ |
-
-The EMS assumes exclusive runtime control over inverter output regulation.
-
----
-
-# ⚠️ Important behavior
-
-* inverter output limits are temporary runtime values
-* configured device operating modes and SOC limits may persist on the device
-* the EMS continuously reconciles desired SOC configuration
-* runtime power control behaves like temporary state
-* your script must run continuously
-* if the script stops unexpectedly, the last configured output limit remains active
-* always use conservative power limits
-* additional failsafe mechanisms are recommended
-
----
-
-# 🔍 How to get your device serial number (SN)
-
-The serial number (SN) is required to send write commands.
-
-## Option 1: via API (recommended)
-
-```bash
-curl http://DEVICE_IP/properties/report
-```
-
-Look for:
-
-```text
-"sn": "EOD1XXXXXXXXXXXX"
-```
-
-## Option 2: device label
-
-* printed on device
-* visible in Zendure app
-
----
-
-# 🔘 Standalone Enable / Disable
-
-The EMS can run fully standalone without Home Assistant.
-
-Enable/disable via:
-
-```json
-"system": {
-  "enabled": true
-}
-```
-
----
-
-# 🏠 Home Assistant Integration
-
-Home Assistant support is fully optional.
+Home Assistant support is optional.
 
 The EMS can run:
 
-* standalone
-* without HA
-* only via local Zendure APIs
+- standalone
+- without Home Assistant
+- only via local Shelly and Zendure APIs
 
-Enable/disable HA:
+Enable HA:
 
 ```json
-"ha": {
-  "enabled": true
+{
+  "ha": {
+    "enabled": true
+  }
 }
 ```
 
@@ -683,35 +1229,45 @@ POST /api/states/<entity_id>
 
 Used for:
 
-* enable/disable control
-* max power setting
-* loop interval
-* telemetry publishing
-* dashboard integration
+- telemetry publishing
+- dashboard integration
+- optional enable/disable control
+- optional max power control
+- optional interval control
 
 ---
 
-# ♻️ Dynamic Home Assistant Entities
+### Monitoring-Only HA Mode
 
-Entities are created dynamically via the REST API.
+```json
+{
+  "ha": {
+    "enabled": true,
+    "control_enabled": false
+  }
+}
+```
+
+This publishes sensors but does not read HA helper values for control.
+
+---
+
+### Dynamic Home Assistant Entities
+
+Entities are created dynamically via REST API.
 
 Behavior:
 
-* entities appear automatically while EMS is running
-* removed sensors disappear automatically
-* no YAML sensor definitions required
-* no manual cleanup necessary
-* entities are runtime-driven
-
-This keeps the Home Assistant setup minimal and clean.
+- entities appear automatically while EMS is running
+- no YAML sensor definitions required
+- no manual sensor cleanup needed
+- sensors are runtime-driven
 
 ---
 
-# 🏠 Home Assistant Helpers
+### Optional HA Helpers
 
-Optional HA helper entities.
-
-## 🔘 Enable / Disable EMS
+#### Enable / Disable EMS
 
 ```yaml
 input_boolean:
@@ -720,9 +1276,7 @@ input_boolean:
     icon: mdi:solar-power-variant
 ```
 
----
-
-## ⚡ Max Total Power
+#### Max Total Power
 
 ```yaml
 input_number:
@@ -735,9 +1289,7 @@ input_number:
     mode: slider
 ```
 
----
-
-## ⏱️ Control Loop Interval
+#### Control Loop Interval
 
 ```yaml
 input_number:
@@ -752,54 +1304,22 @@ input_number:
 
 ---
 
-# 📊 Global Sensors
+### Global Sensors
 
-Automatically created by the EMS.
-
-| Entity                               | Meaning                      |
-| ------------------------------------ | ---------------------------- |
-| `sensor.ems_solarflow_load`          | current household load       |
-| `sensor.ems_solarflow_target_total`  | calculated EMS output target |
-| `sensor.ems_solarflow_solar_total`   | total solar generation       |
-| `sensor.ems_solarflow_battery_power` | signed battery power         |
-| `sensor.ems_solarflow_home`          | estimated home power         |
-| `sensor.ems_solarflow_soc_avg`       | average battery SOC          |
+| Entity | Meaning |
+|---|---|
+| `sensor.ems_solarflow_load` | Current household load |
+| `sensor.ems_solarflow_target_total` | Calculated EMS output target |
+| `sensor.ems_solarflow_solar_total` | Total current solar telemetry |
+| `sensor.ems_solarflow_battery_power` | Signed total battery power |
+| `sensor.ems_solarflow_home` | Estimated home power |
+| `sensor.ems_solarflow_soc_avg` | Average battery SOC |
 
 ---
 
-# 🔋 Battery Power Convention
+### Per-Device Sensors
 
-All `battery_power` sensors use signed values:
-
-| Value    | Meaning     |
-| -------- | ----------- |
-| positive | charging    |
-| negative | discharging |
-| zero     | idle        |
-
-Example:
-
-```text
-+250 W  -> charging
--180 W  -> discharging
-```
-
----
-
-# 🔌 Per Device Sensors
-
-For each device:
-
-Example:
-
-```text
-WR1
-WR2
-```
-
-The EMS creates:
-
-## Core Sensors
+For each device such as `WR1`, the EMS creates:
 
 ```text
 sensor.ems_solarflow_wr1_soc
@@ -810,40 +1330,17 @@ sensor.ems_solarflow_wr1_output
 sensor.ems_solarflow_wr1_target
 sensor.ems_solarflow_wr1_output_limit
 sensor.ems_solarflow_wr1_battery_power
-```
-
----
-
-## Battery / Electrical
-
-```text
 sensor.ems_solarflow_wr1_voltage
 sensor.ems_solarflow_wr1_remaining_minutes
-```
-
----
-
-## Thermal / Signal
-
-```text
 sensor.ems_solarflow_wr1_temp
 sensor.ems_solarflow_wr1_rssi
-```
-
----
-
-## Solar Panel Inputs
-
-```text
 sensor.ems_solarflow_wr1_panel1
 sensor.ems_solarflow_wr1_panel2
 sensor.ems_solarflow_wr1_panel3
 sensor.ems_solarflow_wr1_panel4
 ```
 
----
-
-## Binary Sensors
+Binary sensors:
 
 ```text
 binary_sensor.wr1_fault
@@ -854,127 +1351,147 @@ binary_sensor.wr1_grid_online
 
 ---
 
-# 📁 Project Structure
+### Battery Power Convention
+
+All EMS battery power sensors use signed values:
+
+| Value | Meaning |
+|---:|---|
+| Positive | Charging |
+| Negative | Discharging |
+| Zero | Idle |
+
+Example:
 
 ```text
-ems-solarflow-api-control/
-│
-├── homeassistant-dashboard/
-├── ems-solarflow-api-control.py
-├── config.json
-├── config.template.json
-├── ems-solarflow.service.template
-├── README.md
-└── .gitignore
++250 W -> charging
+-180 W -> discharging
+```
+
+Zendure API fields are interpreted as:
+
+| API Field | Meaning |
+|---|---|
+| `outputPackPower` | Battery charging power |
+| `packInputPower` | Battery discharge power |
+
+---
+
+## 🖥️ Dashboard
+
+A Home Assistant dashboard can be included in:
+
+```text
+homeassistant-dashboard/dashboard.yaml
+```
+
+Optional preview:
+
+```md
+![Dashboard Preview](./homeassistant-dashboard/dashboard-preview.jpg)
 ```
 
 ---
 
-# 📄 File Overview
+## 🔌 Zendure API Basics
 
-## `ems-solarflow-api-control.py`
-
-Main EMS control loop:
-
-* device polling
-* power calculation
-* intelligent SOC balancing
-* PV-aware load distribution
-* battery headroom management
-* API communication
-* Home Assistant integration
-
----
-
-## `config.json`
-
-User configuration:
-
-* device IPs
-* serial numbers
-* Shelly IP
-* Home Assistant token
-* EMS settings
-* min_soc
-* max_soc
-* soc_reconcile_interval
-
----
-
-## `config.template.json`
-
-Template configuration:
+### Read Device Data
 
 ```bash
-cp config.template.json config.json
+curl http://DEVICE_IP/properties/report
 ```
 
+Important fields:
+
+| Field | Meaning |
+|---|---|
+| `electricLevel` | Battery SOC |
+| `solarInputPower` | Current PV input power |
+| `outputHomePower` | AC output to home |
+| `outputPackPower` | Battery charging power |
+| `packInputPower` | Battery discharge power |
+| `socLimit` | Firmware SOC limit state |
+| `dcStatus` | DC runtime state |
+| `acStatus` | AC runtime state |
+| `packState` | Battery pack runtime state |
+| `outputLimit` | Runtime inverter output target |
+| `smartMode` | Runtime/flash write behavior |
+
 ---
 
-## `ems-solarflow.service.template`
-
-Systemd service template:
-
-* auto start
-* restart on crash
-* background execution
-
----
-
-# ⚙️ Installation
-
-## 1. Clone repository
+### Write Output Limit
 
 ```bash
-git clone https://github.com/basecubedev/ems-solarflow-api-control
-cd ems-solarflow-api-control
+curl -X POST http://DEVICE_IP/properties/write \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sn": "YOUR_SN",
+    "properties": {
+      "outputLimit": 300
+    }
+  }'
 ```
 
 ---
 
-## 2. Create config
+### Get Device Serial Number
 
 ```bash
-cp config.template.json config.json
+curl http://DEVICE_IP/properties/report
 ```
 
-Edit:
+Look for:
 
-* device IPs
-* serial numbers
-* Home Assistant token
-* system limits
+```text
+"sn": "EOD1XXXXXXXXXXXX"
+```
+
+The SN is also printed on the device and visible in the Zendure app.
 
 ---
 
-## 3. Start EMS
+## ⚠️ Zendure Cloud / HEMS Requirements
 
-```bash
-python3 ems-solarflow-api-control.py
-```
+The EMS uses direct local API control.
+
+Zendure devices may remain connected to Zendure cloud and the mobile app.
+
+However:
+
+- devices must not be actively controlled by Zendure HEMS at the same time
+- no parallel cloud-side energy management should control the same devices
+- no second local EMS should write `outputLimit`
+
+Recommended setup:
+
+| Component | Allowed |
+|---|---|
+| Zendure cloud connection | yes |
+| Zendure mobile app | yes |
+| Local API access | yes |
+| Zendure HEMS active control | no |
+| Parallel local EMS output control | no |
+
+The EMS assumes exclusive runtime control over inverter output regulation.
 
 ---
 
-# 🔧 systemd (recommended)
+## 🛠️ Installation As systemd Service
 
-## Install service
+### Install Service
 
 ```bash
 sudo cp ems-solarflow.service.template \
   /etc/systemd/system/ems-solarflow.service
 ```
 
----
-
-## Edit service
+### Edit Service
 
 ```bash
 sudo nano /etc/systemd/system/ems-solarflow.service
 ```
 
----
-
-## Enable + start
+### Enable And Start
 
 ```bash
 sudo systemctl daemon-reload
@@ -982,108 +1499,337 @@ sudo systemctl enable ems-solarflow
 sudo systemctl start ems-solarflow
 ```
 
----
-
-## Logs
+### Logs
 
 ```bash
 journalctl -u ems-solarflow -f
 ```
 
----
+or:
 
-# 🧠 Control Logic
-
-1. read house consumption (Shelly)
-2. read Zendure solar + battery state
-3. calculate required total power
-4. prioritize direct solar usage
-5. calculate battery charge/discharge headroom
-6. prioritize direct solar utilization
-7. reduce PV curtailment on full batteries
-8. protect low SOC batteries during discharge
-9. dynamically balance multi-battery power distribution
-10. reconcile desired device state
-11. update inverter output limits
-12. publish telemetry to Home Assistant
+```bash
+sudo journalctl -u ems-solarflow.service -n 100 --no-pager
+```
 
 ---
 
-# ⚡ Design Philosophy
+## 🧰 Development And Testing
+
+### Syntax Check
+
+```bash
+python3 -m py_compile ems-solarflow-api-control.py
+```
+
+### One-Shot Dry Run
+
+```bash
+python3 -B ems-solarflow-api-control.py --dry-run --no-ha --once
+```
+
+### Simulation
+
+```bash
+python3 -B ems-solarflow-api-control.py --simulate
+```
+
+### Replay
+
+```bash
+python3 -B ems-solarflow-api-control.py --replay trace.jsonl
+```
+
+### Bounded Test
+
+```bash
+python3 -B ems-solarflow-api-control.py --duration 60
+```
+
+### Bounded Cycle Count
+
+```bash
+python3 -B ems-solarflow-api-control.py --max-cycles 12
+```
+
+---
+
+## 📁 Project Structure
+
+```text
+ems-solarflow-api-control/
+│
+├── ems-solarflow-api-control.py
+├── config.json
+├── config.template.json
+├── ems-solarflow.service.template
+├── requirements.txt
+├── README.md
+├── LICENSE
+├── docs/
+└── homeassistant-dashboard/
+```
+
+---
+
+## 📄 File Overview
+
+### `ems-solarflow-api-control.py`
+
+Main EMS controller:
+
+- device polling
+- Shelly load reading
+- runtime capability detection
+- target calculation
+- PV-first logic
+- battery balancing
+- output limit dispatch
+- Home Assistant integration
+
+### `config.json`
+
+User configuration:
+
+- device IPs
+- serial numbers
+- Shelly IP
+- Home Assistant settings
+- EMS safety flags
+- power limits
+- weighting options
+
+### `config.template.json`
+
+Template configuration.
+
+```bash
+cp config.template.json config.json
+```
+
+### `ems-solarflow.service.template`
+
+Systemd service template.
+
+### `docs/`
+
+Development notes, runtime observations and firmware state research.
+
+---
+
+## 🧯 Troubleshooting
+
+### No Power Changes
+
+Check logs for:
+
+```text
+event=dry_run_output_limit
+```
+
+If present, writes are blocked.
+
+Check:
+
+```json
+{
+  "dry_run": false,
+  "allow_hardware_writes": true
+}
+```
+
+---
+
+### EMS Calculates Targets But Device Keeps Old `outputLimit`
+
+Possible causes:
+
+- `dry_run=true`
+- `allow_hardware_writes=false`
+- another EMS is overwriting values
+- deadband skipped write
+- device offline
+- firmware ignored command temporarily
+
+Look for:
+
+```text
+event=write_output_limit
+event=deadband_skip_write
+event=offline_skip_write
+```
+
+---
+
+### Device Ignores Output Limit
+
+Possible causes:
+
+- firmware protection state
+- `socLimit=2`
+- `dcStatus=0`
+- passthrough behavior
+- AC/DC path inactive
+- device recovering from standby
+
+Check:
+
+```text
+event=capability_detection
+```
+
+---
+
+### PV Lower Than Expected
+
+Possible causes:
+
+- battery full
+- charge inhibit active
+- firmware PV curtailment
+- MPPT ramp delay
+- shading
+- panel orientation
+
+Important:
+
+```text
+solarInputPower is current harvested PV, not guaranteed available PV.
+```
+
+---
+
+### Device Offline
+
+Expected logs:
+
+```text
+fetch failed
+using cached state
+event=offline_skip_write
+```
+
+The EMS will use the last valid telemetry state and avoid writes to the offline device.
+
+---
+
+### Home Assistant Entities Missing
+
+Check:
+
+- HA URL
+- long-lived access token
+- `ha.enabled`
+- network reachability
+- service logs
+
+---
+
+### Unexpected SOC Or Mode Changes
+
+Check:
+
+```json
+{
+  "allow_state_reconciliation_writes": true
+}
+```
+
+When enabled, the EMS may restore configured SOC and mode values.
+
+---
+
+## 🔄 Configuration Compatibility
+
+The project is under active development.
+
+Configuration structure and runtime behavior may evolve.
+
+After updating:
+
+- compare your `config.json` with `config.template.json`
+- review changed safety flags
+- validate with `--preflight`
+- run `--dry-run --no-ha --once`
+- inspect logs before enabling live writes
+
+---
+
+## 🧠 Design Philosophy
 
 ```text
 simple > complex
+local > cloud
+observable > magical
+runtime truth > config assumption
+stability > aggressiveness
 ```
 
 Principles:
 
-* one script
-* one config
-* local control
-* minimal dependencies
-* no frameworks
-* no hidden logic
-* transparent behavior
+- one script
+- one config
+- local control
+- minimal dependencies
+- no frameworks
+- no hidden automation logic
+- deterministic behavior
+- firmware cooperation
+- structured logs
+- reproducible tests
+
+The EMS should cooperate with Zendure firmware behavior, not pretend to replace the firmware protection logic.
 
 ---
 
-# 📦 Dependencies
+## 🚧 Known Limitations
 
-## pip
+Known limitations and open areas:
 
-```bash
-pip install -r requirements.txt
-```
-
----
-
-## Debian / Ubuntu
-
-```bash
-sudo apt install python3-requests
-```
-
----
-
-# 🐍 Requirements
-
-* Python 3.10+
-* Linux recommended
-* tested on Debian / Ubuntu
+- `solarInputPower` may be lower than physically available PV during firmware curtailment
+- full batteries may internally reduce PV harvesting
+- passthrough behavior is firmware-controlled
+- output changes may take seconds to stabilize
+- MPPT behavior is not instantaneous
+- firmware hysteresis around SOC limits still needs more validation
+- runtime trace recording is still evolving
+- ramp/damping may need further tuning
+- external control should not run in parallel with another writer
+- unattended long-term operation needs careful validation
 
 ---
 
-# 🔄 Configuration Compatibility
+## 🛣️ Roadmap
 
-The project is currently in active development and pre-release state.
+Possible future improvements:
 
-Configuration structure and device management behavior may evolve between releases.
-
-After updating:
-
-* review release notes carefully
-* compare your `config.json` with the latest `config.template.json`
-* verify newly introduced configuration options
-* validate device behavior after upgrades
-
-Especially during early releases, configuration migration may require manual adjustments.
+- better available PV estimation
+- passthrough-aware regulation
+- improved runtime trace recording
+- adaptive ramp limiting
+- firmware state replay tests
+- watchdog / failsafe enhancements
+- historical telemetry export
+- InfluxDB publishing
+- improved dashboard visualization
+- VDE AR-N 4105:2026 F 1.2 related inverter control research
 
 ---
 
-# 🚧 Experimental Software
+## 🚧 Experimental Software
 
 This project is experimental software intended for:
 
-* self-hosting
-* development
-* experimentation
-* private energy systems
+- self-hosting
+- development
+- testing
+- experimentation
+- private energy systems
 
 Do not use this project in safety-critical environments.
 
 ---
 
-# ⚠️ Disclaimer
+## ⚠️ Disclaimer
 
 This project is an unofficial community project and is not affiliated with, endorsed by, or supported by Zendure.
 
@@ -1093,21 +1839,22 @@ The software directly controls power output behavior of connected energy devices
 
 No guarantee is provided regarding:
 
-* safety
-* stability
-* reliability
-* regulatory compliance
-* protection against incorrect device behavior
+- safety
+- stability
+- reliability
+- regulatory compliance
+- correct device behavior
+- protection against firmware changes
 
 The author is not responsible for:
 
-* hardware damage
-* battery damage
-* energy losses
-* grid violations
-* legal or regulatory issues
-* data loss
-* direct or indirect damages
+- hardware damage
+- battery damage
+- energy losses
+- grid violations
+- legal or regulatory issues
+- data loss
+- direct or indirect damages
 
 Always verify local electrical and grid regulations before using this software.
 
@@ -1115,17 +1862,8 @@ This project is intended for technically experienced users only.
 
 ---
 
-# 📜 License
+## 📜 License
 
 Licensed under the Apache License 2.0.
 
 See the `LICENSE` file for details.
-
----
-
-# 🛠️ Roadmap
-
-* serial / parallel inverter control for VDE AR-N 4105:2026 F 1.2
-* watchdog / failsafe
-* improved dashboard visualization
-* historical telemetry -> publish to InfluxDB
