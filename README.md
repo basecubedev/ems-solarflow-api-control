@@ -439,7 +439,6 @@ Example:
   "ip": "192.168.100.77",
   "sn": "YOUR_SN",
   "smart_mode": 1,
-  "grid_off_mode": 2,
   "max_power": 800,
   "pv_kwp": 1.0,
   "pv_priority_factor": 1.0,
@@ -455,7 +454,7 @@ Example:
 | `ip` | Local Zendure device IP |
 | `sn` | Zendure device serial number |
 | `smart_mode` | Recommended `1` for runtime/RAM mode |
-| `grid_off_mode` | Recommended `2` for external EMS tracking |
+| `grid_off_mode` | Optional manual reconciliation for off-grid socket state; omit to leave Zendure App control untouched |
 | `max_power` | Per-device maximum output target |
 | `pv_kwp` | Installed PV size connected to this device |
 | `pv_priority_factor` | Manual PV-side tuning factor |
@@ -689,11 +688,13 @@ The EMS continuously derives runtime behavior from live telemetry.
 | Capability | Derived From |
 |---|---|
 | `can_charge` | `socLimit` |
-| `can_discharge` | `dcStatus` + `socLimit` |
-| `can_export` | `dcStatus` + `acStatus` |
+| `can_discharge` | `socLimit` + DC/battery/output evidence |
+| `can_export` | live PV/output/output-limit/AC evidence, otherwise AC/DC path state |
 | `can_ac_charge` | `acStatus` |
 
 This is important because configured device state does not always match actual runtime behavior.
+
+`faultLevel` is logged as `fault_observed`, but current live testing showed it is not a reliable fatal export blocker on all firmware states. The EMS therefore treats real PV/output telemetry as stronger runtime evidence than `faultLevel` alone.
 
 The EMS therefore prioritizes:
 
@@ -1040,7 +1041,7 @@ smartMode
 minSoc
 socSet
 acMode
-gridOffMode
+gridOffMode only when grid_off_mode is explicitly configured
 ```
 
 ```mermaid
@@ -1051,7 +1052,8 @@ flowchart LR
 
     A -->|"outputLimit"| DEV["Zendure Device"]
 
-    B -->|"smartMode\nminSoc\nsocSet\nacMode\ngridOffMode"| DEV
+    B -->|"smartMode\nminSoc\nsocSet\nacMode"| DEV
+    B -. "optional explicit\ngridOffMode" .-> DEV
 ```
 
 This separation is important.
@@ -1067,9 +1069,10 @@ SOC and mode settings should change rarely and only when explicitly allowed.
 |---|---:|---|
 | `smartMode` | `1` | Runtime/RAM mode, avoids flash writes |
 | `acMode` | `2` | Normal / discharge output mode |
-| `gridOffMode` | `2` | Better external EMS AC tracking |
 
 `smartMode=1` means runtime parameters are not written to flash.
+
+`gridOffMode` reflects the off-grid socket state. The EMS leaves it unmanaged by default so manual changes in the Zendure App are not overwritten. Only set per-device `grid_off_mode` if you intentionally want reconciliation to control that socket state later.
 
 ---
 
@@ -1091,7 +1094,7 @@ When true:
 
 - EMS may restore configured `smartMode`
 - EMS may restore configured `acMode`
-- EMS may restore configured `gridOffMode`
+- EMS may restore configured `gridOffMode` only if `grid_off_mode` is explicitly configured for the device
 - EMS may restore configured SOC limits
 
 Use with care.
