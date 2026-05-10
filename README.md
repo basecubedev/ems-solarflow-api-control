@@ -1360,8 +1360,10 @@ sensor.ems_solarflow_wr1_output
 sensor.ems_solarflow_wr1_target
 sensor.ems_solarflow_wr1_output_limit
 sensor.ems_solarflow_wr1_battery_power
+sensor.ems_solarflow_wr1_battery_power_avg
 sensor.ems_solarflow_wr1_fault_level
 sensor.ems_solarflow_wr1_voltage
+sensor.ems_solarflow_wr1_remaining_time
 sensor.ems_solarflow_wr1_remaining_minutes
 sensor.ems_solarflow_wr1_temp
 sensor.ems_solarflow_wr1_rssi
@@ -1383,6 +1385,23 @@ binary_sensor.wr1_grid_online
 `faultLevel` is observed firmware telemetry. It is published as a numeric
 sensor because current live testing showed it is not a guaranteed fatal error
 state on all firmware/runtime conditions.
+
+---
+
+### Smoothed Remaining Time
+
+`sensor.ems_solarflow_wr1_remaining_time` is an EMS estimate in hours. It is
+calculated from SOC, configured battery capacity, configured SOC limits, and
+the average battery power from the last 10 measurements.
+
+This avoids using raw Zendure `remainOutTime` as the dashboard value. The raw
+compatibility sensor `sensor.ems_solarflow_wr1_remaining_minutes` is still
+published, but the dashboard uses the smoothed estimate.
+
+When average battery power is close to zero or the relevant SOC limit has
+already been reached, the estimate is `0`. The value is a telemetry estimate,
+not a firmware guarantee, and may change as household load and solar input
+change.
 
 ---
 
