@@ -1,1 +1,11 @@
+# local AI / research docs
+docs/
+
+# runtime traces
+runtime-traces/
+
+# local config
 config.json
+
+# logs
+*.log

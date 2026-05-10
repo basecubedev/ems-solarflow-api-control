@@ -1,16 +1,25 @@
 {
   "ha": {
     "enabled": true,
+    "control_enabled": true,
     "url": "http://homeassistant.local:8123",
     "token": "YOUR_TOKEN_HERE"
   },
 
   "system": {
     "enabled": true,
+    "dry_run": true,
+    "simulation_mode": false,
+    "allow_hardware_writes": true,
+    "allow_state_reconciliation_writes": true,
+    "log_level": "info",
     "max_total_power": 800,
     "max_device_power": 800,
     "deadband": 10,
     "loop_interval": 5,
+    "redistribute_clamped_power": true,
+    "pv_kwp_weighting": true,
+    "battery_kwh_weighting": true,
 
     "soc_reconcile_interval": 10
   },
@@ -23,7 +32,10 @@
 
       "_comment": "smart_mode: 1 = runtime/RAM mode",
       "smart_mode": 1,
-      "grid_off_mode": 2,
+      "max_power": 800,
+      "pv_kwp": 1.0,
+      "pv_priority_factor": 1.0,
+      "battery_kwh": 1.0,
 
       "_comment": "min/max soc = 0 = unmanaged / keep Zendure app settings or no battery",
       "min_soc": 15,
@@ -36,7 +48,10 @@
 
       "_comment": "smart_mode: 1 = runtime/RAM mode",
       "smart_mode": 1,
-      "grid_off_mode": 2,
+      "max_power": 800,
+      "pv_kwp": 1.0,
+      "pv_priority_factor": 1.0,
+      "battery_kwh": 1.0,
 
       "_comment": "min/max soc = 0 = unmanaged / keep Zendure app settings or no battery",
       "min_soc": 15,
