@@ -572,12 +572,20 @@ Recommended:
 | `target_calculation` | Final target calculation |
 | `dry_run_output_limit` | Target calculated but not written |
 | `write_output_limit` | Target written to device |
+| `write_output_limit_error` | Output-limit write failed or returned non-2xx |
 | `deadband_skip_write` | Write skipped because target delta was too small |
 | `offline_skip_write` | Write skipped because device is offline |
 | `dry_run_soc_limits` | SOC write blocked by safety flags |
 | `dry_run_device_modes` | Mode write blocked by safety flags |
 | `write_device_modes` | Device mode reconciliation write |
+| `write_device_modes_error` | Device mode reconciliation write failed or returned non-2xx |
 | `write_soc_limits` | SOC reconciliation write |
+| `write_soc_limits_error` | SOC reconciliation write failed or returned non-2xx |
+
+Zendure write success events are logged only after a 2xx HTTP response from
+`/properties/write`. Non-2xx responses are logged as the existing `*_error`
+events with `status_code` and a short `response_text` preview. Exceptions remain
+`*_error` events as well.
 
 Example:
 
@@ -1111,6 +1119,10 @@ When true:
 - EMS may restore configured `acMode`
 - EMS may restore configured `gridOffMode` only if `grid_off_mode` is explicitly configured for the device
 - EMS may restore configured SOC limits
+
+SOC and mode writes check the Zendure HTTP response before logging success.
+This only improves observability; it does not add retries or change write
+payloads.
 
 Use with care.
 
@@ -1671,12 +1683,14 @@ Possible causes:
 - another EMS is overwriting values
 - deadband skipped write
 - device offline
+- Zendure API returned a non-2xx response
 - firmware ignored command temporarily
 
 Look for:
 
 ```text
 event=write_output_limit
+event=write_output_limit_error
 event=deadband_skip_write
 event=offline_skip_write
 ```
