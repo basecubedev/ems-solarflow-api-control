@@ -377,6 +377,7 @@ cp config.template.json config.json
 | `max_total_power` | Maximum combined EMS output | `800` |
 | `max_device_power` | Default per-device max power | `800` |
 | `deadband` | Minimum target delta before writing | `10` |
+| `min_output_limit` | Minimum `outputLimit` while EMS control is enabled | `30` |
 | `loop_interval` | Control loop interval in seconds | `5` |
 | `redistribute_clamped_power` | Redistribute clamped target power | `true` |
 | `pv_kwp_weighting` | Use configured PV size for weighting | `true` |
@@ -397,10 +398,18 @@ Safe development example:
     "max_total_power": 800,
     "max_device_power": 800,
     "deadband": 10,
+    "min_output_limit": 30,
     "loop_interval": 5
   }
 }
 ```
+
+`min_output_limit=30` is the default guard against writing `outputLimit=0`
+during enabled EMS control. This helps keep Zendure inverters out of a
+stop/idle-like state where PV or MPPT telemetry may not become visible again
+reliably. Set it to `0` only when you intentionally want the previous behavior.
+The guard applies only when EMS control is enabled and the device is online,
+before deadband handling.
 
 Live runtime control example:
 
@@ -677,8 +686,9 @@ This means the EMS behaves as a firmware-aware external regulator rather than a 
 8. Apply PV-first limiting
 9. Clamp per-device limits
 10. Redistribute remaining headroom
-11. Apply deadband filtering
-12. Write outputLimit
+11. Apply configured minimum output limit
+12. Apply deadband filtering
+13. Write outputLimit
 ```
 
 ### Runtime Capability Detection
@@ -1019,6 +1029,11 @@ After changing `outputLimit`:
 - battery charge/discharge state may lag
 - output may take seconds to stabilize
 - firmware hysteresis may delay state transitions
+
+When `outputLimit=0`, some inverters may enter an idle or standby-like state
+where PV telemetry remains hidden even when sun is available.
+`min_output_limit=30` avoids that blind state during enabled EMS control
+without weather models, time-based probing or per-cycle mode writes.
 
 This is expected behavior.
 
