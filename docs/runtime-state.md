@@ -34,12 +34,12 @@ Example:
     "WR1": {
       "enabled": true,
       "max_power": 800,
-      "offgrid_socket": false
+      "offgrid_socket_mode": "off"
     },
     "WR2": {
       "enabled": true,
       "max_power": 800,
-      "offgrid_socket": false
+      "offgrid_socket_mode": "off"
     }
   }
 }
@@ -64,13 +64,14 @@ and only while EMS control is enabled.
 |---|---|
 | `enabled` | Skip writes for this device when false |
 | `max_power` | Runtime per-device power limit |
-| `offgrid_socket` | Operator intent for Zendure offgrid socket state |
+| `offgrid_socket_mode` | Operator intent for Zendure offgrid socket mode |
 
 Offgrid mapping:
 
 ```text
-offgrid_socket=true  -> gridOffMode=0
-offgrid_socket=false -> gridOffMode=2
+off      -> gridOffMode=2
+eco      -> gridOffMode=1
+standard -> gridOffMode=0
 ```
 
 The CLI and Home Assistant only change the intent. The EMS is the only

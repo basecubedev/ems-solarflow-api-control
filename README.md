@@ -158,7 +158,7 @@ loop_interval
 min_output_limit
 per-device enabled
 per-device max_power
-per-device offgrid_socket intent
+per-device offgrid_socket_mode
 ```
 
 Safe runtime-state edits:
@@ -166,7 +166,7 @@ Safe runtime-state edits:
 ```bash
 python3 emsctl.py status
 python3 emsctl.py system min-output-limit 30
-python3 emsctl.py device WR1 offgrid on
+python3 emsctl.py device WR1 offgrid eco
 python3 emsctl.py winter enable
 python3 emsctl.py ha disable
 ```
@@ -257,6 +257,7 @@ Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md).
 | Home Assistant | [docs/home-assistant.md](docs/home-assistant.md) |
 | Control logic | [docs/control-logic.md](docs/control-logic.md) |
 | Winter mode | [docs/winter-mode.md](docs/winter-mode.md) |
+| Release notes | [docs/release.md](docs/release.md) |
 | Safety model | [docs/safety.md](docs/safety.md) |
 | Troubleshooting | [docs/troubleshooting.md](docs/troubleshooting.md) |
 

@@ -45,10 +45,18 @@ Per-device helpers:
 ```text
 input_boolean.ems_solarflow_wr1_enabled
 input_number.ems_solarflow_wr1_max_power
-input_boolean.ems_solarflow_wr1_offgrid_socket
+input_select.ems_solarflow_wr1_offgrid_socket_mode
 ```
 
 Repeat for each device name in lowercase.
+
+Offgrid socket mode options:
+
+```text
+off
+eco
+standard
+```
 
 ## Published Global Sensors
 

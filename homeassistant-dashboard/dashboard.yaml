@@ -88,15 +88,15 @@ views:
                         name: WR1 Enabled
                       - entity: input_number.ems_solarflow_wr1_max_power
                         name: WR1 Max Power
-                      - entity: input_boolean.ems_solarflow_wr1_offgrid_socket
-                        name: WR1 Offgrid Socket
+                      - entity: input_select.ems_solarflow_wr1_offgrid_socket_mode
+                        name: WR1 Offgrid Mode
                       - type: divider
                       - entity: input_boolean.ems_solarflow_wr2_enabled
                         name: WR2 Enabled
                       - entity: input_number.ems_solarflow_wr2_max_power
                         name: WR2 Max Power
-                      - entity: input_boolean.ems_solarflow_wr2_offgrid_socket
-                        name: WR2 Offgrid Socket
+                      - entity: input_select.ems_solarflow_wr2_offgrid_socket_mode
+                        name: WR2 Offgrid Mode
                   - type: entities
                     title: ❄️ Winter Mode
                     show_header_toggle: false

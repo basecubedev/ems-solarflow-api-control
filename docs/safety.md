@@ -40,6 +40,14 @@ gridOffMode for explicit offgrid socket intent
 inputLimit only during winter recovery reconciliation
 ```
 
+Offgrid socket intent uses the Zendure `gridOffMode` tri-state mapping:
+
+```text
+off      -> 2
+eco      -> 1
+standard -> 0
+```
+
 Startup may initialize `acMode=2` once when the device appears idle and no
 firmware recovery/charge condition is active.
 
@@ -69,4 +77,3 @@ Simulation and replay never contact hardware:
 python3 -B ems-solarflow-api-control.py --simulate --max-cycles 1
 python3 -B ems-solarflow-api-control.py --replay /path/to/trace.jsonl --once
 ```
-

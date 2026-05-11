@@ -56,8 +56,9 @@ timing, and AC charge power remain static `config.json` settings.
 python3 emsctl.py device WR1 enable
 python3 emsctl.py device WR1 disable
 python3 emsctl.py device WR1 max-power 800
-python3 emsctl.py device WR1 offgrid on
 python3 emsctl.py device WR1 offgrid off
+python3 emsctl.py device WR1 offgrid eco
+python3 emsctl.py device WR1 offgrid standard
 ```
 
 ## Validation
@@ -67,7 +68,7 @@ The CLI rejects invalid input without changing the file:
 - unknown device
 - negative watt values
 - `loop_interval <= 0`
-- invalid offgrid value
+- invalid offgrid value; allowed values are `off`, `eco`, and `standard`
 - invalid runtime-state JSON
 - unknown command
 

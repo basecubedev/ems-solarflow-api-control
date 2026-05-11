@@ -10,6 +10,7 @@ import sys
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 DEFAULT_RUNTIME_STATE_PATH = os.path.join(BASE_DIR, "runtime-state.json")
+OFFGRID_SOCKET_MODES = ("off", "eco", "standard")
 
 
 def fail(message, code=1):
@@ -142,7 +143,7 @@ def config_device_defaults(config):
                 f"devices.{name}.max_power",
                 minimum=0
             ),
-            "offgrid_socket": False
+            "offgrid_socket_mode": "off"
         }
 
     return devices
@@ -161,7 +162,7 @@ def runtime_defaults(config, existing=None):
                 devices[name] = {
                     "enabled": True,
                     "max_power": 800,
-                    "offgrid_socket": False
+                    "offgrid_socket_mode": "off"
                 }
 
     return {
@@ -233,10 +234,13 @@ def merge_defaults(data, defaults):
             **default_device,
             **device
         }
+        merged_devices[name].pop("offgrid_socket", None)
 
     for name, device in devices.items():
         if name not in merged_devices:
             merged_devices[name] = device
+            if isinstance(merged_devices[name], dict):
+                merged_devices[name].pop("offgrid_socket", None)
 
     merged["devices"] = merged_devices
     return merged
@@ -336,9 +340,12 @@ def update_device(args, state):
                 minimum=0
             )
         case "offgrid":
-            if args.value not in ("on", "off"):
-                raise ValueError("device offgrid value must be 'on' or 'off'")
-            device["offgrid_socket"] = args.value == "on"
+            value = str(args.value or "").strip().lower()
+            if value not in OFFGRID_SOCKET_MODES:
+                raise ValueError(
+                    "device offgrid value must be 'off', 'eco', or 'standard'"
+                )
+            device["offgrid_socket_mode"] = value
         case _:
             raise ValueError(f"unknown device action {args.action}")
 

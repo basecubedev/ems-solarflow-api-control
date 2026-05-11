@@ -246,6 +246,11 @@ WINTER_CONFIG = {
     **WINTER_DEFAULTS,
     **CONFIG.get("winter", {})
 }
+OFFGRID_SOCKET_MODES = {
+    "standard": 0,
+    "eco": 1,
+    "off": 2
+}
 
 ZENDURE_CONFIG = CONFIG["devices"]
 SHELLY_IP = CONFIG["shelly"]["ip"]
@@ -487,10 +492,13 @@ def merge_runtime_defaults(data, defaults):
             **device_defaults,
             **device_state
         }
+        merged_devices[name].pop("offgrid_socket", None)
 
     for name, device_state in devices.items():
         if name not in merged_devices:
             merged_devices[name] = device_state
+            if isinstance(merged_devices[name], dict):
+                merged_devices[name].pop("offgrid_socket", None)
 
     merged["devices"] = merged_devices
 
@@ -635,7 +643,7 @@ def build_runtime_defaults(devices):
                 MAX_DEVICE_POWER,
                 minimum=0
             ),
-            "offgrid_socket": False
+            "offgrid_socket_mode": "off"
         }
 
     return {
@@ -2500,19 +2508,24 @@ class EMSController:
             )
 
             changed |= self.ha_update_runtime_field(
-                f"input_boolean.{base}_offgrid_socket",
-                lambda dev=dev: self.runtime_device_bool(
-                    dev.name,
-                    "offgrid_socket",
-                    False
+                f"input_select.{base}_offgrid_socket_mode",
+                lambda dev=dev: str(
+                    self.runtime_state.get_device(
+                        dev.name,
+                        "offgrid_socket_mode",
+                        "off"
+                    )
                 ),
                 lambda value, dev=dev: self.runtime_state.set_device(
                     dev.name,
-                    "offgrid_socket",
+                    "offgrid_socket_mode",
                     value
                 ),
-                lambda value, default: safe_bool(value, default),
-                lambda value: "on" if value else "off"
+                lambda value, default: (
+                    str(value).strip().lower()
+                    if str(value).strip().lower() in OFFGRID_SOCKET_MODES
+                    else default
+                )
             )
 
         if changed:
@@ -2980,35 +2993,43 @@ class EMSController:
         if not self.runtime_state:
             return
 
-        desired_offgrid_socket = self.runtime_state.get_device(
+        desired_offgrid_socket_mode = self.runtime_state.get_device(
             dev.name,
-            "offgrid_socket",
+            "offgrid_socket_mode",
             None
         )
 
-        if desired_offgrid_socket is None:
+        if desired_offgrid_socket_mode is None:
             return
 
-        if not isinstance(desired_offgrid_socket, bool):
+        desired_offgrid_socket_mode = str(
+            desired_offgrid_socket_mode
+        ).strip().lower()
+
+        if desired_offgrid_socket_mode not in OFFGRID_SOCKET_MODES:
             log_event(
                 logging.WARNING,
                 "runtime_device_state_invalid",
                 device=dev.name,
-                field="offgrid_socket",
-                value=desired_offgrid_socket,
+                field="offgrid_socket_mode",
+                value=desired_offgrid_socket_mode,
                 runtime_source="runtime-state"
             )
             return
 
         # Zendure gridOffMode mapping:
-        # offgrid_socket=true  -> gridOffMode=0
-        # offgrid_socket=false -> gridOffMode=2
-        desired_grid_off_mode = 0 if desired_offgrid_socket else 2
+        # off      -> gridOffMode=2
+        # eco      -> gridOffMode=1
+        # standard -> gridOffMode=0
+        desired_grid_off_mode = OFFGRID_SOCKET_MODES[
+            desired_offgrid_socket_mode
+        ]
         current_grid_off_mode = int(state.grid_off_mode)
         fields = {
             "device": dev.name,
             "field": "gridOffMode",
             "current_value": current_grid_off_mode,
+            "desired_mode": desired_offgrid_socket_mode,
             "desired_value": desired_grid_off_mode,
             "runtime_source": "runtime-state"
         }
