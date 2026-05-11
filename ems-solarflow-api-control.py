@@ -93,6 +93,8 @@ def default_safe_config():
             "dry_run": True,
             "simulation_mode": True,
             "allow_hardware_writes": False,
+            "reconcile_ac_mode_on_start": True,
+            "reconcile_smart_mode": True,
             "max_total_power": 800,
             "max_device_power": 800,
             "deadband": 10,
@@ -152,6 +154,14 @@ ALLOW_HARDWARE_WRITES = CONFIG["system"].get("allow_hardware_writes", False)
 ALLOW_STATE_RECONCILIATION_WRITES = CONFIG["system"].get(
     "allow_state_reconciliation_writes",
     False
+)
+RECONCILE_AC_MODE_ON_START = CONFIG["system"].get(
+    "reconcile_ac_mode_on_start",
+    True
+)
+RECONCILE_SMART_MODE = CONFIG["system"].get(
+    "reconcile_smart_mode",
+    True
 )
 HA_ENABLED = (
     CONFIG["ha"].get("enabled", True)
@@ -598,6 +608,47 @@ def detect_capabilities(state):
         can_ac_charge=can_ac_charge,
         reason=",".join(reasons) if reasons else "normal"
     )
+
+
+def firmware_recovery_or_ac_charge_active(state):
+    """Return True when firmware appears to be handling charge/recovery."""
+
+    return (
+        int(state.ac_status) == 2
+        or int(state.soc_limit) == 2
+        or (
+            state.min_soc > 0
+            and state.soc <= state.min_soc
+        )
+        or state.pack_out > 0
+    )
+
+
+def startup_ac_mode_initialization_blocker(state):
+    """Return the reason acMode startup initialization should be skipped."""
+
+    if int(state.ac_mode) != 1:
+        return "unknown_or_unsupported_ac_mode"
+
+    if int(state.ac_status) == 2:
+        return "ac_charge_active"
+
+    if int(state.soc_limit) == 2:
+        return "discharge_cutoff"
+
+    if state.min_soc > 0 and state.soc <= state.min_soc:
+        return "soc_at_or_below_min"
+
+    if state.output > 0:
+        return "output_active"
+
+    if state.pack_in > 0:
+        return "battery_discharge_active"
+
+    if state.pack_out > 0:
+        return "battery_charge_active"
+
+    return None
 
 # =====================
 # DEVICE CLIENTS
@@ -1242,6 +1293,7 @@ class EMSController:
         self.last_seen = {}
         self.device_online = {}
         self.battery_power_history = {}
+        self.initial_ac_mode_reconciled = {}
 
     def set_output_limit(self, dev, value):
         """Write output limit to device."""
@@ -1377,33 +1429,144 @@ class EMSController:
                 error=e
             )
 
+    def run_startup_ac_mode_reconcile_once(self, dev, state):
+        """Initialize acMode=2 at most once after first valid telemetry."""
+
+        if self.initial_ac_mode_reconciled.get(dev.name, False):
+            return
+
+        self.initial_ac_mode_reconciled[dev.name] = True
+
+        if not RECONCILE_AC_MODE_ON_START:
+            log_event(
+                logging.INFO,
+                "startup_ac_mode_reconcile_disabled",
+                device=dev.name
+            )
+            return
+
+        if int(state.ac_mode) == 2:
+            log_event(
+                logging.INFO,
+                "startup_ac_mode_already_ok",
+                device=dev.name,
+                ac_mode=state.ac_mode,
+                ac_status=state.ac_status
+            )
+            return
+
+        skip_reason = startup_ac_mode_initialization_blocker(state)
+
+        if skip_reason:
+            log_event(
+                logging.INFO,
+                "startup_ac_mode_skip",
+                device=dev.name,
+                ac_mode=state.ac_mode,
+                ac_status=state.ac_status,
+                soc=state.soc,
+                min_soc=state.min_soc,
+                soc_limit=state.soc_limit,
+                output_w=state.output,
+                pack_input_w=state.pack_in,
+                output_pack_w=state.pack_out,
+                reason=skip_reason
+            )
+            return
+
+        if not state_reconciliation_writes_allowed():
+            log_event(
+                logging.INFO,
+                "dry_run_startup_ac_mode_write",
+                device=dev.name,
+                ac_mode=2,
+                dry_run=DRY_RUN,
+                simulation=SIMULATION_MODE,
+                allow_hardware_writes=ALLOW_HARDWARE_WRITES,
+                allow_state_reconciliation_writes=(
+                    ALLOW_STATE_RECONCILIATION_WRITES
+                )
+            )
+            return
+
+        try:
+            response = dev.session.post(
+                f"http://{dev.ip}/properties/write",
+                json={
+                    "sn": dev.sn,
+                    "properties": {
+                        "acMode": 2
+                    }
+                },
+                timeout=2
+            )
+
+            if not zendure_write_succeeded(
+                "startup_ac_mode_write_error",
+                dev,
+                response,
+                ac_mode=2
+            ):
+                return
+
+            log_event(
+                logging.INFO,
+                "startup_ac_mode_write",
+                device=dev.name,
+                ac_mode=2
+            )
+
+        except Exception as e:
+            log_event(
+                logging.WARNING,
+                "startup_ac_mode_write_error",
+                device=dev.name,
+                error=e
+            )
+
     def apply_device_modes(self, dev, state):
         """Apply device operating modes if required."""
 
-        #
-        # unmanaged
-        #
-
-        if dev.smart_mode is None:
-            return
-
-        #
-        # already configured
-        #
-
         manage_grid_off_mode = dev.grid_off_mode is not None
+        properties = {}
+        fields = {
+            "device": dev.name
+        }
 
         if (
-            int(state.smart_mode) == int(dev.smart_mode)
-            and
-            int(state.ac_mode) == 2
-            and
-            (
-                not manage_grid_off_mode
-                or
-                int(state.grid_off_mode) == int(dev.grid_off_mode)
-            )
+            RECONCILE_SMART_MODE
+            and dev.smart_mode is not None
+            and int(state.smart_mode) != int(dev.smart_mode)
         ):
+            properties["smartMode"] = int(dev.smart_mode)
+            fields["smart_mode"] = dev.smart_mode
+
+        if (
+            manage_grid_off_mode
+            and int(state.grid_off_mode) != int(dev.grid_off_mode)
+        ):
+            properties["gridOffMode"] = int(dev.grid_off_mode)
+            fields["grid_off_mode"] = dev.grid_off_mode
+
+        if (
+            int(state.ac_mode) != 2
+            or firmware_recovery_or_ac_charge_active(state)
+        ):
+            log_event(
+                logging.INFO,
+                "ac_mode_firmware_control_observed",
+                device=dev.name,
+                ac_mode=state.ac_mode,
+                ac_status=state.ac_status,
+                soc=state.soc,
+                min_soc=state.min_soc,
+                soc_limit=state.soc_limit,
+                output_w=state.output,
+                pack_input_w=state.pack_in,
+                output_pack_w=state.pack_out
+            )
+
+        if not properties:
 
             log_event(
                 logging.INFO,
@@ -1414,20 +1577,14 @@ class EMSController:
             return
 
         if not state_reconciliation_writes_allowed():
-            fields = {
-                "device": dev.name,
-                "smart_mode": dev.smart_mode,
-                "ac_mode": 2,
+            fields.update({
                 "dry_run": DRY_RUN,
                 "simulation": SIMULATION_MODE,
                 "allow_hardware_writes": ALLOW_HARDWARE_WRITES,
                 "allow_state_reconciliation_writes": (
                     ALLOW_STATE_RECONCILIATION_WRITES
                 )
-            }
-
-            if manage_grid_off_mode:
-                fields["grid_off_mode"] = dev.grid_off_mode
+            })
 
             log_event(
                 logging.INFO,
@@ -1437,14 +1594,6 @@ class EMSController:
             return
 
         try:
-            properties = {
-                "smartMode": int(dev.smart_mode),
-                "acMode": 2,
-            }
-
-            if manage_grid_off_mode:
-                properties["gridOffMode"] = int(dev.grid_off_mode)
-
             response = dev.session.post(
                 f"http://{dev.ip}/properties/write",
                 json={
@@ -1453,15 +1602,6 @@ class EMSController:
                 },
                 timeout=2
             )
-
-            fields = {
-                "device": dev.name,
-                "smart_mode": dev.smart_mode,
-                "ac_mode": 2,
-            }
-
-            if manage_grid_off_mode:
-                fields["grid_off_mode"] = dev.grid_off_mode
 
             if not zendure_write_succeeded(
                 "write_device_modes_error",
@@ -1846,6 +1986,8 @@ class EMSController:
                 self.last_states[dev.name] = state
                 self.last_seen[dev.name] = time.time()
                 self.device_online[dev.name] = True
+
+                self.run_startup_ac_mode_reconcile_once(dev, state)
 
                 states.append(state)
 

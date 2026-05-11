@@ -12,6 +12,8 @@
     "simulation_mode": false,
     "allow_hardware_writes": true,
     "allow_state_reconciliation_writes": true,
+    "reconcile_ac_mode_on_start": true,
+    "reconcile_smart_mode": true,
     "log_level": "info",
     "max_total_power": 800,
     "max_device_power": 800,

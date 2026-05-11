@@ -373,6 +373,8 @@ cp config.template.json config.json
 | `simulation_mode` | Runs without real hardware | `false` |
 | `allow_hardware_writes` | Allows Zendure `/properties/write` calls | `false` |
 | `allow_state_reconciliation_writes` | Allows SOC and mode reconciliation writes | `false` |
+| `reconcile_ac_mode_on_start` | Allows one safe startup `acMode=2` initialization | `true` |
+| `reconcile_smart_mode` | Allows cyclic `smartMode` reconciliation | `true` |
 | `log_level` | Logging verbosity | `"debug"` |
 | `max_total_power` | Maximum combined EMS output | `800` |
 | `max_device_power` | Default per-device max power | `800` |
@@ -1063,7 +1065,6 @@ Device-state reconciliation may write:
 smartMode
 minSoc
 socSet
-acMode
 gridOffMode only when grid_off_mode is explicitly configured
 ```
 
@@ -1075,7 +1076,7 @@ flowchart LR
 
     A -->|"outputLimit"| DEV["Zendure Device"]
 
-    B -->|"smartMode\nminSoc\nsocSet\nacMode"| DEV
+    B -->|"smartMode\nminSoc\nsocSet"| DEV
     B -. "optional explicit\ngridOffMode" .-> DEV
 ```
 
@@ -1091,9 +1092,11 @@ SOC and mode settings should change rarely and only when explicitly allowed.
 | Property | Recommended Value | Purpose |
 |---|---:|---|
 | `smartMode` | `1` | Runtime/RAM mode, avoids flash writes |
-| `acMode` | `2` | Normal / discharge output mode |
+| `acMode` | `2` | Startup output-mode initialization only |
 
 `smartMode=1` means runtime parameters are not written to flash.
+
+`acMode=2` is initialized once after the first valid device telemetry when the device is idle and no firmware charge/recovery condition is visible. The EMS does not cyclically force `acMode` back to `2`, so firmware standby and AC charge/recovery states can take priority.
 
 `gridOffMode` reflects the off-grid socket state. The EMS leaves it unmanaged by default so manual changes in the Zendure App are not overwritten. Only set per-device `grid_off_mode` if you intentionally want reconciliation to control that socket state later.
 
@@ -1116,7 +1119,7 @@ When false:
 When true:
 
 - EMS may restore configured `smartMode`
-- EMS may restore configured `acMode`
+- EMS may initialize `acMode=2` once at startup when safe
 - EMS may restore configured `gridOffMode` only if `grid_off_mode` is explicitly configured for the device
 - EMS may restore configured SOC limits
 
