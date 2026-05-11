@@ -2611,6 +2611,108 @@ class EMSController:
                 error=e
             )
 
+    def apply_runtime_device_state(self, dev, state):
+        """Apply runtime-state device intents through safe reconciliation."""
+
+        if not self.runtime_state:
+            return
+
+        desired_offgrid_socket = self.runtime_state.get_device(
+            dev.name,
+            "offgrid_socket",
+            None
+        )
+
+        if desired_offgrid_socket is None:
+            return
+
+        if not isinstance(desired_offgrid_socket, bool):
+            log_event(
+                logging.WARNING,
+                "runtime_device_state_invalid",
+                device=dev.name,
+                field="offgrid_socket",
+                value=desired_offgrid_socket,
+                runtime_source="runtime-state"
+            )
+            return
+
+        # Zendure gridOffMode mapping:
+        # offgrid_socket=true  -> gridOffMode=0
+        # offgrid_socket=false -> gridOffMode=2
+        desired_grid_off_mode = 0 if desired_offgrid_socket else 2
+        current_grid_off_mode = int(state.grid_off_mode)
+        fields = {
+            "device": dev.name,
+            "field": "gridOffMode",
+            "current_value": current_grid_off_mode,
+            "desired_value": desired_grid_off_mode,
+            "runtime_source": "runtime-state"
+        }
+
+        if current_grid_off_mode == desired_grid_off_mode:
+            log_event(
+                logging.INFO,
+                "runtime_device_state_unchanged",
+                **fields
+            )
+            return
+
+        if not state_reconciliation_writes_allowed():
+            fields.update({
+                "dry_run": DRY_RUN,
+                "simulation": SIMULATION_MODE,
+                "allow_hardware_writes": ALLOW_HARDWARE_WRITES,
+                "allow_state_reconciliation_writes": (
+                    ALLOW_STATE_RECONCILIATION_WRITES
+                )
+            })
+
+            log_event(
+                logging.INFO,
+                "dry_run_runtime_device_state_write",
+                **fields
+            )
+            return
+
+        try:
+            response = dev.session.post(
+                f"http://{dev.ip}/properties/write",
+                json={
+                    "sn": dev.sn,
+                    "properties": {
+                        "gridOffMode": desired_grid_off_mode
+                    }
+                },
+                timeout=2
+            )
+
+            if not zendure_write_succeeded(
+                "write_runtime_device_state_error",
+                dev,
+                response,
+                **fields
+            ):
+                return
+
+            log_event(
+                logging.INFO,
+                "write_runtime_device_state",
+                **fields
+            )
+
+        except Exception as e:
+            log_event(
+                logging.WARNING,
+                "write_runtime_device_state_error",
+                device=dev.name,
+                field="gridOffMode",
+                current_value=current_grid_off_mode,
+                desired_value=desired_grid_off_mode,
+                runtime_source="runtime-state",
+                error=e
+            )
+
 
     def publish_sensor(
         self,
@@ -3089,6 +3191,18 @@ class EMSController:
                             dev,
                             state
                         )
+
+        for dev, state in zip(
+            self.devices,
+            raw_states
+        ):
+
+            if state:
+
+                self.apply_runtime_device_state(
+                    dev,
+                    state
+                )
 
         # =====================
         # CALCULATE TARGETS

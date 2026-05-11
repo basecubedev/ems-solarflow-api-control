@@ -418,6 +418,9 @@ device is online, before deadband handling.
 `runtime-state.json` is the mutable operator state. It is created on first run
 from static config defaults and is intentionally ignored by Git. Home Assistant
 helpers, when enabled, act as an optional UI over this runtime state.
+Per-device `offgrid_socket` is also a runtime intent: HA or `emsctl.py`
+may change it in `runtime-state.json`, while only the EMS applies it to
+Zendure hardware.
 
 Live runtime control example:
 
@@ -1104,7 +1107,7 @@ SOC and mode settings should change rarely and only when explicitly allowed.
 
 `acMode=2` is initialized once after the first valid device telemetry when the device is idle and no firmware charge/recovery condition is visible. The EMS does not cyclically force `acMode` back to `2`, so firmware standby and AC charge/recovery states can take priority.
 
-`gridOffMode` reflects the off-grid socket state. The EMS leaves it unmanaged by default so manual changes in the Zendure App are not overwritten. Only set per-device `grid_off_mode` if you intentionally want reconciliation to control that socket state later.
+`gridOffMode` reflects the off-grid socket state. Static config leaves it unmanaged by default unless per-device `grid_off_mode` is explicitly configured. Runtime-state `offgrid_socket` is the preferred operator intent for this socket: `true` maps to `gridOffMode=0`, `false` maps to `gridOffMode=2`, and the EMS writes it only through state-reconciliation safety gates.
 
 ---
 
@@ -1127,6 +1130,7 @@ When true:
 - EMS may restore configured `smartMode`
 - EMS may initialize `acMode=2` once at startup when safe
 - EMS may restore configured `gridOffMode` only if `grid_off_mode` is explicitly configured for the device
+- EMS may apply runtime-state `offgrid_socket` intent to `gridOffMode`
 - EMS may restore configured SOC limits
 
 SOC and mode writes check the Zendure HTTP response before logging success.
