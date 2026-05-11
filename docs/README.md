@@ -10,6 +10,8 @@ Start here:
 | Runtime state | [runtime-state.md](runtime-state.md) |
 | CLI tool | [cli.md](cli.md) |
 | Home Assistant | [home-assistant.md](home-assistant.md) |
+| Architecture | [architecture.md](architecture.md) |
+| Development | [development.md](development.md) |
 | Control logic | [control-logic.md](control-logic.md) |
 | Winter mode | [winter-mode.md](winter-mode.md) |
 | Release notes | [release.md](release.md) |

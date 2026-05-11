@@ -93,6 +93,37 @@ Control details: [docs/control-logic.md](docs/control-logic.md).
 
 ---
 
+## Project Structure
+
+The EMS keeps a simple user-facing model:
+
+```text
+one start script, one static config
+```
+
+You still start the EMS with:
+
+```bash
+python3 ems-solarflow-api-control.py
+```
+
+and configure the installation through:
+
+```text
+config.json
+```
+
+The `ems/` package contains internal implementation modules only. This keeps
+the main script small and makes future changes easier to review, while
+preserving the same operating model.
+
+`runtime-state.json` is not a second static config. It is local mutable runtime
+state created and updated by the EMS.
+
+More: [docs/architecture.md](docs/architecture.md).
+
+---
+
 ## Quick Start
 
 Install dependencies:
@@ -214,7 +245,7 @@ More: [docs/winter-mode.md](docs/winter-mode.md).
 Compile:
 
 ```bash
-python3 -m py_compile ems-solarflow-api-control.py emsctl.py
+python3 -m py_compile ems-solarflow-api-control.py ems/*.py emsctl.py scripts/check_log_events.py
 ```
 
 Self-test:
@@ -255,6 +286,8 @@ Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md).
 | Runtime state | [docs/runtime-state.md](docs/runtime-state.md) |
 | CLI tool | [docs/cli.md](docs/cli.md) |
 | Home Assistant | [docs/home-assistant.md](docs/home-assistant.md) |
+| Architecture | [docs/architecture.md](docs/architecture.md) |
+| Development | [docs/development.md](docs/development.md) |
 | Control logic | [docs/control-logic.md](docs/control-logic.md) |
 | Winter mode | [docs/winter-mode.md](docs/winter-mode.md) |
 | Release notes | [docs/release.md](docs/release.md) |
@@ -267,7 +300,8 @@ Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md).
 
 | Path | Purpose |
 |---|---|
-| `ems-solarflow-api-control.py` | Main EMS controller |
+| `ems-solarflow-api-control.py` | Main EMS entry script |
+| `ems/` | Internal EMS implementation modules |
 | `emsctl.py` | Safe runtime-state CLI |
 | `config.template.json` | Versioned config template |
 | `config.json` | Local config, ignored by Git |

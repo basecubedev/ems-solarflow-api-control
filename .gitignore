@@ -17,3 +17,8 @@ config.json
 
 # logs
 *.log
+
+# Python cache artifacts
+__pycache__/
+*.py[cod]
+*$py.class
