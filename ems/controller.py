@@ -203,7 +203,65 @@ class EMSController:
 
         return stale
 
-    def stabilized_total_target(self, raw_load, states, max_power):
+    def active_online_device_indexes(self):
+        """Return indexes for devices currently eligible for EMS control."""
+
+        indexes = []
+
+        for i, dev in enumerate(self.devices):
+            if not self.device_online.get(dev.name, True):
+                continue
+
+            if not self.runtime_device_bool(dev.name, "enabled", True):
+                continue
+
+            indexes.append(i)
+
+        return indexes
+
+    def state_has_positive_pv(self, state):
+        """Return true when any PV telemetry field is positive."""
+
+        return (
+            state.solar > 0
+            or state.solar1 > 0
+            or state.solar2 > 0
+            or state.solar3 > 0
+            or state.solar4 > 0
+        )
+
+    def has_output_control_export_capacity(
+        self,
+        states,
+        capabilities,
+        active_indexes
+    ):
+        """Return true when positive load can be served by any active device."""
+
+        for i in active_indexes:
+            state = states[i]
+            capability = capabilities[i]
+
+            if self.state_has_positive_pv(state):
+                return True
+
+            if capability.can_discharge:
+                return True
+
+            if state.output > 0:
+                return True
+
+        return False
+
+    def stabilized_total_target(
+        self,
+        raw_load,
+        states,
+        max_power,
+        has_export_capacity=True,
+        standby_total_w=0,
+        active_device_count=None
+    ):
         if self.commanded_total_w is None:
             self.initialize_commanded_total(states, max_power)
 
@@ -217,7 +275,28 @@ class EMSController:
             minimum=0
         )
 
-        if abs(filtered_load) <= load_deadband:
+        if (
+            raw_load > 0
+            and not has_export_capacity
+        ):
+            clamped = min(self.commanded_total_w, standby_total_w)
+
+            if clamped != self.commanded_total_w:
+                self.commanded_total_w = clamped
+
+            desired = self.commanded_total_w
+            held = True
+            log_event(
+                logging.INFO,
+                "output_control_no_export_capacity_hold",
+                raw_load_w=round(raw_load, 1),
+                filtered_load_w=round(filtered_load, 1),
+                commanded_total_w=round(self.commanded_total_w, 1),
+                standby_total_w=round(standby_total_w, 1),
+                active_devices=active_device_count,
+                reason="no_export_capacity"
+            )
+        elif abs(filtered_load) <= load_deadband:
             held = True
             log_event(
                 logging.INFO,
@@ -583,6 +662,35 @@ class EMSController:
             self.set_output_limit(dev, min_output_limit)
             self.last_output_write_at[dev.name] = time.time()
             self.night_min_soc_idle_parked.add(dev.name)
+    def effective_control_targets(self, targets, enabled, min_output_limit):
+        """Return the per-device output command intent after control gates."""
+
+        effective_targets = []
+
+        for dev, target in zip(self.devices, targets):
+            if not enabled:
+                effective_targets.append(0)
+                continue
+
+            if not self.device_online.get(dev.name, True):
+                effective_targets.append(0)
+                continue
+
+            if not self.runtime_device_bool(dev.name, "enabled", True):
+                effective_targets.append(0)
+                continue
+
+            if min_output_limit > 0:
+                target = max(target, min_output_limit)
+
+            effective_targets.append(
+                max(
+                    0,
+                    min(dev.max_power, target)
+                )
+            )
+
+        return effective_targets
 
     def runtime_system_bool(self, key, default):
         if not self.runtime_state:
@@ -1580,6 +1688,7 @@ class EMSController:
         load,
         states,
         targets,
+        effective_targets,
         current,
         new
     ):
@@ -1597,6 +1706,8 @@ class EMSController:
 
         battery_power = pack_out_total - pack_in_total
         home = current + max(load, 0)
+        allocated_target_total = sum(targets)
+        effective_target_total = sum(effective_targets)
 
         soc_avg = round(
             sum(d.soc for d in states) / len(states),
@@ -1616,9 +1727,13 @@ class EMSController:
 
         self.publish_sensor(
             p + "target_total",
-            round(new, 1),
+            round(effective_target_total, 1),
             "W",
-            "power"
+            "power",
+            extra={
+                "controller_target_w": round(new, 1),
+                "allocated_target_w": round(allocated_target_total, 1)
+            }
         )
 
         self.publish_sensor(
@@ -1699,9 +1814,12 @@ class EMSController:
 
             self.publish_sensor(
                 base + "target",
-                targets[i],
+                effective_targets[i],
                 "W",
-                "power"
+                "power",
+                extra={
+                    "allocated_target_w": targets[i]
+                }
             )
 
             self.publish_sensor(
@@ -1973,6 +2091,7 @@ class EMSController:
             detect_capabilities(state)
             for state in states
         ]
+        active_indexes = self.active_online_device_indexes()
 
         for dev, state, cap in zip(
             self.devices,
@@ -2142,10 +2261,20 @@ class EMSController:
         # CALCULATE TARGETS
         # =====================
 
+        has_export_capacity = self.has_output_control_export_capacity(
+            states,
+            capabilities,
+            active_indexes
+        )
+        standby_total_w = min_output_limit * len(active_indexes)
+
         stabilized_total = self.stabilized_total_target(
             load,
             states,
-            max_power
+            max_power,
+            has_export_capacity=has_export_capacity,
+            standby_total_w=standby_total_w,
+            active_device_count=len(active_indexes)
         )
 
         targets, current, new = calculate_targets(
@@ -2161,10 +2290,17 @@ class EMSController:
             targets,
             load
         )
+        effective_targets = self.effective_control_targets(
+            targets,
+            enabled,
+            min_output_limit
+        )
 
         logging.info(
             f"Load={load}W "
-            f"Target={new}W "
+            f"ControllerTarget={new}W "
+            f"AllocatedTarget={sum(targets)}W "
+            f"EffectiveTarget={sum(effective_targets)}W "
             f"Enabled={enabled}"
         )
 
@@ -2177,6 +2313,7 @@ class EMSController:
                 load,
                 states,
                 targets,
+                effective_targets,
                 current,
                 new
             )
@@ -2215,13 +2352,14 @@ class EMSController:
                 )
                 continue
 
-            target = targets[i]
+            target = effective_targets[i]
 
-            target = apply_min_output_limit(
-                target,
-                dev,
-                min_output_limit
-            )
+            if target != targets[i] and min_output_limit > 0:
+                apply_min_output_limit(
+                    targets[i],
+                    dev,
+                    min_output_limit
+                )
 
             deadband_reference = (
                 states[i].output_limit
@@ -2245,11 +2383,6 @@ class EMSController:
                     deadband_w=cfg.DEADBAND
                 )
                 continue
-
-            target = max(
-                0,
-                min(dev.max_power, target)
-            )
 
             cooldown = self.output_control_float(
                 "write_cooldown_seconds",

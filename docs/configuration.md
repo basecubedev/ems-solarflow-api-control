@@ -122,8 +122,10 @@ AC mode.
 `runtime-state.json`.
 
 `system.min_output_limit` is the default runtime minimum `outputLimit` while EMS
-is enabled. It is also the standby/wakeup value used by strict night/minSoc idle.
-Use `0` to disable this floor and the idle parking behavior.
+is enabled. It also defines the standby total used when positive house load is
+present but no active online device has export capacity, and the standby/wakeup
+value used by strict night/minSoc idle. Use `0` to disable this floor and the
+idle parking behavior.
 
 `system.loop_interval` is the control loop interval in seconds.
 

@@ -69,6 +69,12 @@ sensor.ems_solarflow_home
 sensor.ems_solarflow_soc_avg
 ```
 
+`sensor.ems_solarflow_target_total` is the effective EMS command intent: the
+sum of per-device targets after allocation, device ramp, enabled/offline gates,
+`min_output_limit`, and device max clamping. The sensor exposes
+`controller_target_w` for the internal stabilized controller target and
+`allocated_target_w` for the post-allocation target before final control gates.
+
 ## Published Device Sensors
 
 For each device:
@@ -95,6 +101,10 @@ binary_sensor.wr1_ac_active
 binary_sensor.wr1_dc_active
 binary_sensor.wr1_grid_online
 ```
+
+`sensor.ems_solarflow_wr1_target` follows the same effective command semantics
+as the global target. Its `allocated_target_w` attribute contains the
+post-allocation per-device target before final control gates.
 
 ## Winter Sensors
 
