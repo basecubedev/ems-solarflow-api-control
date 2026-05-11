@@ -56,6 +56,8 @@ class EMSController:
         self.last_output_write_at = {}
         self.last_winter_adjust_date = None
         self.winter_min_soc_targets = {}
+        self.night_min_soc_idle_active = False
+        self.night_min_soc_idle_parked = set()
 
     def output_control_bool(self, key, default=False):
         return cfg.safe_bool(
@@ -392,6 +394,195 @@ class EMSController:
             ramped_targets.append(ramped)
 
         return ramped_targets
+
+    def reset_output_control_state(self):
+        """Reset output-control memory after a blocked operating state."""
+
+        self.commanded_total_w = None
+        self.filtered_load_w = None
+        self.load_history.clear()
+        self.commanded_device_targets = {}
+
+    def night_min_soc_controllable_indices(self):
+        """Return device indexes controlled by EMS in the current cycle."""
+
+        indexes = []
+
+        for i, dev in enumerate(self.devices):
+            if not self.device_online.get(dev.name, True):
+                continue
+
+            if not self.runtime_device_bool(dev.name, "enabled", True):
+                continue
+
+            indexes.append(i)
+
+        return indexes
+
+    def state_has_positive_pv(self, state):
+        """Return true when any PV telemetry field is positive."""
+
+        return (
+            state.solar > 0
+            or state.solar1 > 0
+            or state.solar2 > 0
+            or state.solar3 > 0
+            or state.solar4 > 0
+        )
+
+    def state_is_strict_night_min_soc_idle(self, state):
+        """Detect the exact no-PV, no-flow, min-SOC blocked idle state."""
+
+        no_pv = (
+            state.solar == 0
+            and state.solar1 == 0
+            and state.solar2 == 0
+            and state.solar3 == 0
+            and state.solar4 == 0
+        )
+        no_power_flow = (
+            state.pack_in == 0
+            and state.pack_out == 0
+            and state.output == 0
+        )
+        battery_blocked = (
+            state.soc <= state.min_soc
+            or state.soc_limit == 2
+        )
+
+        return no_pv and no_power_flow and battery_blocked
+
+    def night_min_soc_idle_should_enter(self, states, indexes):
+        """Return true when all controllable devices are strictly idle."""
+
+        if not indexes:
+            return False
+
+        return all(
+            self.state_is_strict_night_min_soc_idle(states[i])
+            for i in indexes
+        )
+
+    def update_night_min_soc_idle_state(
+        self,
+        states,
+        indexes,
+        enabled,
+        min_output_limit
+    ):
+        """Update night/min-SOC idle state and log transitions."""
+
+        if not enabled or min_output_limit <= 0 or not indexes:
+            if self.night_min_soc_idle_active:
+                log_event(
+                    logging.INFO,
+                    "night_min_soc_idle_exit",
+                    reason="control_unavailable",
+                    enabled=enabled,
+                    min_output_limit_w=min_output_limit,
+                    controllable_devices=len(indexes)
+                )
+                self.reset_output_control_state()
+
+            self.night_min_soc_idle_active = False
+            self.night_min_soc_idle_parked.clear()
+            return False
+
+        pv_devices = [
+            self.devices[i].name
+            for i in indexes
+            if self.state_has_positive_pv(states[i])
+        ]
+
+        if self.night_min_soc_idle_active and pv_devices:
+            log_event(
+                logging.INFO,
+                "night_min_soc_idle_exit",
+                reason="pv_returned",
+                devices=",".join(pv_devices),
+                min_output_limit_w=min_output_limit
+            )
+            self.night_min_soc_idle_active = False
+            self.night_min_soc_idle_parked.clear()
+            self.reset_output_control_state()
+            return False
+
+        should_enter = self.night_min_soc_idle_should_enter(
+            states,
+            indexes
+        )
+
+        if should_enter:
+            if not self.night_min_soc_idle_active:
+                log_event(
+                    logging.INFO,
+                    "night_min_soc_idle_enter",
+                    devices=",".join(self.devices[i].name for i in indexes),
+                    min_output_limit_w=min_output_limit
+                )
+                self.night_min_soc_idle_parked.clear()
+
+            self.night_min_soc_idle_active = True
+            return True
+
+        if self.night_min_soc_idle_active:
+            log_event(
+                logging.INFO,
+                "night_min_soc_idle_exit",
+                reason="state_changed",
+                min_output_limit_w=min_output_limit
+            )
+            self.night_min_soc_idle_active = False
+            self.night_min_soc_idle_parked.clear()
+            self.reset_output_control_state()
+
+        return False
+
+    def apply_night_min_soc_idle_control(
+        self,
+        states,
+        indexes,
+        min_output_limit
+    ):
+        """Park devices once and suppress further outputLimit writes."""
+
+        for i in indexes:
+            dev = self.devices[i]
+            state = states[i]
+
+            if dev.name in self.night_min_soc_idle_parked:
+                log_event(
+                    logging.INFO,
+                    "night_min_soc_idle_hold_skip_write",
+                    device=dev.name,
+                    output_limit_w=state.output_limit,
+                    min_output_limit_w=min_output_limit,
+                    reason="already_parked"
+                )
+                continue
+
+            if state.output_limit == min_output_limit:
+                log_event(
+                    logging.INFO,
+                    "night_min_soc_idle_hold_skip_write",
+                    device=dev.name,
+                    output_limit_w=state.output_limit,
+                    min_output_limit_w=min_output_limit,
+                    reason="already_at_min_output_limit"
+                )
+                self.night_min_soc_idle_parked.add(dev.name)
+                continue
+
+            log_event(
+                logging.INFO,
+                "night_min_soc_idle_park_write",
+                device=dev.name,
+                current_output_limit_w=state.output_limit,
+                target_w=min_output_limit
+            )
+            self.set_output_limit(dev, min_output_limit)
+            self.last_output_write_at[dev.name] = time.time()
+            self.night_min_soc_idle_parked.add(dev.name)
 
     def runtime_system_bool(self, key, default):
         if not self.runtime_state:
@@ -1901,6 +2092,51 @@ class EMSController:
                     dev,
                     state
                 )
+
+        controllable_indexes = self.night_min_soc_controllable_indices()
+        night_min_soc_idle = self.update_night_min_soc_idle_state(
+            states,
+            controllable_indexes,
+            enabled,
+            min_output_limit
+        )
+
+        if night_min_soc_idle:
+            targets = [
+                min_output_limit if i in controllable_indexes else 0
+                for i, _dev in enumerate(self.devices)
+            ]
+            current = sum(d.output for d in states)
+            new = sum(targets)
+
+            logging.info(
+                f"Load={load}W "
+                f"Target={new}W "
+                f"Enabled={enabled} "
+                f"NightMinSocIdle=True"
+            )
+
+            if self.ha and self.runtime_ha_enabled():
+                self.publish_to_ha(
+                    load,
+                    states,
+                    targets,
+                    current,
+                    new
+                )
+
+            self.apply_night_min_soc_idle_control(
+                states,
+                controllable_indexes,
+                min_output_limit
+            )
+
+            elapsed = time.time() - start
+
+            if self.sleep_enabled:
+                time.sleep(max(0, interval - elapsed))
+
+            return
 
         # =====================
         # CALCULATE TARGETS
