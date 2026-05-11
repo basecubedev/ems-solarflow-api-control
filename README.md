@@ -592,6 +592,12 @@ Recommended:
 | `write_device_modes_error` | Device mode reconciliation write failed or returned non-2xx |
 | `write_soc_limits` | SOC reconciliation write |
 | `write_soc_limits_error` | SOC reconciliation write failed or returned non-2xx |
+| `winter_mode_state` | Winter reconciliation state for the current cycle |
+| `winter_ramp` | Daily winter minSoc target calculation |
+| `winter_summer_reset` | Winter target cleared and summer minSoc requested |
+| `dry_run_winter_ac_charge_limit` | Winter AC inputLimit blocked by safety flags |
+| `write_winter_ac_charge_limit` | Winter AC inputLimit written |
+| `write_winter_ac_charge_limit_error` | Winter AC inputLimit write failed or returned non-2xx |
 
 Zendure write success events are logged only after a 2xx HTTP response from
 `/properties/write`. Non-2xx responses are logged as the existing `*_error`
@@ -1074,6 +1080,7 @@ Device-state reconciliation may write:
 smartMode
 minSoc
 socSet
+inputLimit only during winter recovery reconciliation
 gridOffMode only when grid_off_mode is explicitly configured
 ```
 
@@ -1085,7 +1092,7 @@ flowchart LR
 
     A -->|"outputLimit"| DEV["Zendure Device"]
 
-    B -->|"smartMode\nminSoc\nsocSet"| DEV
+    B -->|"smartMode\nminSoc\nsocSet\nwinter inputLimit"| DEV
     B -. "optional explicit\ngridOffMode" .-> DEV
 ```
 
@@ -1108,6 +1115,47 @@ SOC and mode settings should change rarely and only when explicitly allowed.
 `acMode=2` is initialized once after the first valid device telemetry when the device is idle and no firmware charge/recovery condition is visible. The EMS does not cyclically force `acMode` back to `2`, so firmware standby and AC charge/recovery states can take priority.
 
 `gridOffMode` reflects the off-grid socket state. Static config leaves it unmanaged by default unless per-device `grid_off_mode` is explicitly configured. Runtime-state `offgrid_socket` is the preferred operator intent for this socket: `true` maps to `gridOffMode=0`, `false` maps to `gridOffMode=2`, and the EMS writes it only through state-reconciliation safety gates.
+
+---
+
+### Winter minSoc Ramp
+
+Winter mode is configured at top level:
+
+```json
+{
+  "winter": {
+    "enabled": true,
+    "months": [10, 11, 12, 1, 2],
+    "summer_min_soc": 15,
+    "winter_min_soc": 40,
+    "ramp_step_percent": 5,
+    "adjust_hour": 12,
+    "ac_charge_power": 200
+  }
+}
+```
+
+When enabled, winter mode runs only through SOC/state reconciliation. It raises
+`minSoc` once per day during `adjust_hour` and resets to `summer_min_soc`
+outside configured winter months. During a winter adjustment it may write a
+conservative `inputLimit`; the payload contains no `acMode`, `smartMode`, or
+`outputLimit`.
+
+The EMS publishes winter status to Home Assistant:
+
+```text
+binary_sensor.ems_solarflow_winter_enabled
+binary_sensor.ems_solarflow_winter_active
+binary_sensor.ems_solarflow_winter_adjust_window
+sensor.ems_solarflow_winter_summer_min_soc
+sensor.ems_solarflow_winter_min_soc
+sensor.ems_solarflow_winter_ramp_step
+sensor.ems_solarflow_winter_ac_charge_power
+sensor.ems_solarflow_winter_last_adjust_date
+sensor.ems_solarflow_wr1_winter_min_soc_target
+sensor.ems_solarflow_wr1_winter_estimated_ramp_days
+```
 
 ---
 

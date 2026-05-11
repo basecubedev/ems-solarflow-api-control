@@ -10,6 +10,7 @@ import sys
 from collections import deque
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 
 # =====================
 # CLI
@@ -66,6 +67,11 @@ def parse_args():
         action="store_true",
         help="Read telemetry and validate live-test prerequisites without control writes"
     )
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="Run local helper tests without hardware access"
+    )
 
     return parser.parse_args()
 
@@ -99,6 +105,16 @@ OUTPUT_CONTROL_DEFAULTS = {
     "stale_telemetry_ramp_factor": 0.5
 }
 
+WINTER_DEFAULTS = {
+    "enabled": False,
+    "months": [10, 11, 12, 1, 2],
+    "summer_min_soc": 15,
+    "winter_min_soc": 40,
+    "ramp_step_percent": 5,
+    "adjust_hour": 12,
+    "ac_charge_power": 200
+}
+
 
 def default_safe_config():
     """Return a minimal safe config for simulation and replay."""
@@ -129,6 +145,7 @@ def default_safe_config():
             "pv_kwp_weighting": True,
             "battery_kwh_weighting": True
         },
+        "winter": WINTER_DEFAULTS,
         "devices": [],
         "shelly": {
             "ip": ""
@@ -143,7 +160,7 @@ def load_config():
         with open(path) as f:
             return json.load(f)
     except FileNotFoundError:
-        if ARGS.simulate or ARGS.replay:
+        if ARGS.simulate or ARGS.replay or ARGS.self_test:
             return default_safe_config()
 
         print("config.json missing. Please create it from template.")
@@ -225,6 +242,10 @@ SOC_RECONCILE_INTERVAL = CONFIG["system"].get(
     "soc_reconcile_interval",
     10
 )
+WINTER_CONFIG = {
+    **WINTER_DEFAULTS,
+    **CONFIG.get("winter", {})
+}
 
 ZENDURE_CONFIG = CONFIG["devices"]
 SHELLY_IP = CONFIG["shelly"]["ip"]
@@ -316,6 +337,107 @@ def safe_bool(value, default=False):
         return False
 
     return default
+
+
+def winter_config_bool(key, default=False):
+    return safe_bool(WINTER_CONFIG.get(key, default), default)
+
+
+def winter_config_int(key, default=0, minimum=None):
+    return safe_int(WINTER_CONFIG.get(key, default), default, minimum=minimum)
+
+
+def winter_months():
+    months = WINTER_CONFIG.get("months", WINTER_DEFAULTS["months"])
+
+    if not isinstance(months, list):
+        months = WINTER_DEFAULTS["months"]
+
+    parsed = []
+
+    for month in months:
+        value = safe_int(month, 0)
+        if 1 <= value <= 12:
+            parsed.append(value)
+
+    return parsed or WINTER_DEFAULTS["months"]
+
+
+def winter_month_active(now):
+    """Return True when the configured winter month set contains now.month."""
+
+    return now.month in winter_months()
+
+
+def winter_feature_enabled(ha=None):
+    """Return whether winter mode is enabled.
+
+    HA/runtime toggles can be layered here later. V1 is config-controlled.
+    """
+
+    return winter_config_bool("enabled", False)
+
+
+def winter_mode_active(now, ha=None):
+    return winter_feature_enabled(ha) and winter_month_active(now)
+
+
+def calculate_winter_min_soc_target(
+    current_soc,
+    effective_min_soc,
+    winter_active,
+    summer_min_soc=None,
+    winter_min_soc=None,
+    ramp_step=None
+):
+    """Calculate the next minSoc target for winter/summer reconciliation."""
+
+    if summer_min_soc is None:
+        summer_min_soc = winter_config_int("summer_min_soc", 15, minimum=0)
+    else:
+        summer_min_soc = safe_int(summer_min_soc, 15, minimum=0)
+
+    if winter_min_soc is None:
+        winter_min_soc = winter_config_int("winter_min_soc", 40, minimum=0)
+    else:
+        winter_min_soc = safe_int(winter_min_soc, 40, minimum=0)
+
+    if ramp_step is None:
+        ramp_step = winter_config_int("ramp_step_percent", 5, minimum=1)
+    else:
+        ramp_step = safe_int(ramp_step, 5, minimum=1)
+
+    if not winter_active:
+        return summer_min_soc
+
+    if current_soc >= winter_min_soc:
+        return winter_min_soc
+
+    if current_soc > effective_min_soc + ramp_step:
+        return min(current_soc, winter_min_soc)
+
+    return min(effective_min_soc + ramp_step, winter_min_soc)
+
+
+def estimate_winter_ramp_days(current_min_soc):
+    """Estimate remaining daily adjustments until winter minSoc is reached."""
+
+    winter_min_soc = winter_config_int("winter_min_soc", 40, minimum=0)
+    ramp_step = winter_config_int("ramp_step_percent", 5, minimum=1)
+    remaining = max(0, winter_min_soc - current_min_soc)
+
+    return int((remaining + ramp_step - 1) / ramp_step)
+
+
+def winter_adjustment_window_active(now):
+    adjust_hour = winter_config_int("adjust_hour", 12, minimum=0) % 24
+    return adjust_hour <= now.hour < adjust_hour + 1
+
+
+def build_winter_ac_charge_limit_payload():
+    return {
+        "inputLimit": winter_config_int("ac_charge_power", 200, minimum=0)
+    }
 
 
 def merge_runtime_defaults(data, defaults):
@@ -1727,6 +1849,8 @@ class EMSController:
         )
         self.commanded_device_targets = {}
         self.last_output_write_at = {}
+        self.last_winter_adjust_date = None
+        self.winter_min_soc_targets = {}
 
     def output_control_bool(self, key, default=False):
         return safe_bool(
@@ -2342,14 +2466,20 @@ class EMSController:
                 error=e
             )
 
-    def apply_soc_limits(self, dev, state):
+    def apply_soc_limits(self, dev, state, desired_min_soc=None):
         """Apply configured SOC limits if required."""
+
+        effective_min_soc = (
+            safe_int(desired_min_soc, dev.min_soc, minimum=0)
+            if desired_min_soc is not None
+            else dev.min_soc
+        )
 
         #
         # 0 = unmanaged
         #
 
-        if dev.min_soc <= 0 and dev.max_soc <= 0:
+        if effective_min_soc <= 0 and dev.max_soc <= 0:
             return
 
         #
@@ -2357,7 +2487,7 @@ class EMSController:
         #
 
         if (
-            int(state.min_soc) == int(dev.min_soc)
+            int(state.min_soc) == int(effective_min_soc)
             and
             int(state.max_soc) == int(dev.max_soc)
         ):
@@ -2375,7 +2505,7 @@ class EMSController:
                 logging.INFO,
                 "dry_run_soc_limits",
                 device=dev.name,
-                min_soc=dev.min_soc,
+                min_soc=effective_min_soc,
                 max_soc=dev.max_soc,
                 max_soc_property="socSet",
                 dry_run=DRY_RUN,
@@ -2394,7 +2524,7 @@ class EMSController:
                 json={
                     "sn": dev.sn,
                     "properties": {
-                        "minSoc": int(dev.min_soc * 10),
+                        "minSoc": int(effective_min_soc * 10),
                         "socSet": int(dev.max_soc * 10)
                     }
                 },
@@ -2405,7 +2535,7 @@ class EMSController:
                 "write_soc_limits_error",
                 dev,
                 response,
-                min_soc=dev.min_soc,
+                min_soc=effective_min_soc,
                 max_soc=dev.max_soc,
                 max_soc_property="socSet"
             ):
@@ -2415,7 +2545,7 @@ class EMSController:
                 logging.INFO,
                 "write_soc_limits",
                 device=dev.name,
-                min_soc=dev.min_soc,
+                min_soc=effective_min_soc,
                 max_soc=dev.max_soc,
                 max_soc_property="socSet"
             )
@@ -2426,9 +2556,122 @@ class EMSController:
                 logging.WARNING,
                 "write_soc_limits_error",
                 device=dev.name,
-                min_soc=dev.min_soc,
+                min_soc=effective_min_soc,
                 max_soc=dev.max_soc,
                 max_soc_property="socSet",
+                error=e
+            )
+
+    def winter_reconciliation_target(self, dev, state, winter_active, adjust_today):
+        """Return desired winter/summer minSoc target and adjustment context."""
+
+        if not winter_feature_enabled(self.ha):
+            return None, False
+
+        summer_min_soc = winter_config_int("summer_min_soc", 15, minimum=0)
+
+        if not winter_active:
+            had_target = dev.name in self.winter_min_soc_targets
+            self.winter_min_soc_targets.pop(dev.name, None)
+
+            if had_target or int(state.min_soc) != int(summer_min_soc):
+                log_event(
+                    logging.INFO,
+                    "winter_summer_reset",
+                    device=dev.name,
+                    current_min_soc=state.min_soc,
+                    target_min_soc=summer_min_soc
+                )
+
+            return summer_min_soc, False
+
+        if dev.name in self.winter_min_soc_targets and not adjust_today:
+            return self.winter_min_soc_targets[dev.name], False
+
+        if not adjust_today:
+            return None, False
+
+        effective_min_soc = self.winter_min_soc_targets.get(
+            dev.name,
+            state.min_soc if state.min_soc > 0 else dev.min_soc
+        )
+        target = calculate_winter_min_soc_target(
+            state.soc,
+            effective_min_soc,
+            winter_active
+        )
+        self.winter_min_soc_targets[dev.name] = target
+
+        log_event(
+            logging.INFO,
+            "winter_ramp",
+            device=dev.name,
+            current_soc=state.soc,
+            current_min_soc=state.min_soc,
+            effective_min_soc=effective_min_soc,
+            target_min_soc=target,
+            winter_min_soc=winter_config_int("winter_min_soc", 40, minimum=0),
+            estimated_days_remaining=estimate_winter_ramp_days(target)
+        )
+
+        return target, True
+
+    def apply_winter_ac_charge_limit(self, dev):
+        """Apply conservative winter AC charge input limit."""
+
+        properties = build_winter_ac_charge_limit_payload()
+        fields = {
+            "device": dev.name,
+            "input_limit_w": properties["inputLimit"]
+        }
+
+        if not state_reconciliation_writes_allowed():
+            fields.update({
+                "dry_run": DRY_RUN,
+                "simulation": SIMULATION_MODE,
+                "allow_hardware_writes": ALLOW_HARDWARE_WRITES,
+                "allow_state_reconciliation_writes": (
+                    ALLOW_STATE_RECONCILIATION_WRITES
+                )
+            })
+
+            log_event(
+                logging.INFO,
+                "dry_run_winter_ac_charge_limit",
+                **fields
+            )
+            return
+
+        try:
+            response = dev.session.post(
+                f"http://{dev.ip}/properties/write",
+                json={
+                    "sn": dev.sn,
+                    "properties": properties
+                },
+                timeout=2
+            )
+
+            if not zendure_write_succeeded(
+                "write_winter_ac_charge_limit_error",
+                dev,
+                response,
+                **fields
+            ):
+                return
+
+            log_event(
+                logging.INFO,
+                "write_winter_ac_charge_limit",
+                **fields
+            )
+
+        except Exception as e:
+            log_event(
+                logging.WARNING,
+                "write_winter_ac_charge_limit_error",
+                device=dev.name,
+                input_limit_w=properties["inputLimit"],
                 error=e
             )
 
@@ -2752,6 +2995,110 @@ class EMSController:
             extra_attributes=extra
         )
 
+    def publish_winter_to_ha(self, states):
+        """Publish winter-mode state and calculated targets to HA."""
+
+        now = datetime.now()
+        enabled = winter_feature_enabled(self.ha)
+        active = winter_mode_active(now, self.ha)
+        adjust_window = winter_adjustment_window_active(now)
+        p = "sensor.ems_solarflow_"
+
+        self.ha.set_state(
+            "binary_sensor.ems_solarflow_winter_enabled",
+            "on" if enabled else "off",
+            extra_attributes={
+                "months": ",".join(str(m) for m in winter_months())
+            }
+        )
+
+        self.ha.set_state(
+            "binary_sensor.ems_solarflow_winter_active",
+            "on" if active else "off",
+            extra_attributes={
+                "month": now.month
+            }
+        )
+
+        self.ha.set_state(
+            "binary_sensor.ems_solarflow_winter_adjust_window",
+            "on" if adjust_window else "off",
+            extra_attributes={
+                "adjust_hour": winter_config_int(
+                    "adjust_hour",
+                    12,
+                    minimum=0
+                ) % 24
+            }
+        )
+
+        self.publish_sensor(
+            p + "winter_summer_min_soc",
+            winter_config_int("summer_min_soc", 15, minimum=0),
+            "%",
+            "battery"
+        )
+
+        self.publish_sensor(
+            p + "winter_min_soc",
+            winter_config_int("winter_min_soc", 40, minimum=0),
+            "%",
+            "battery"
+        )
+
+        self.publish_sensor(
+            p + "winter_ramp_step",
+            winter_config_int("ramp_step_percent", 5, minimum=1),
+            "%",
+            None
+        )
+
+        self.publish_sensor(
+            p + "winter_ac_charge_power",
+            winter_config_int("ac_charge_power", 200, minimum=0),
+            "W",
+            "power"
+        )
+
+        self.publish_sensor(
+            p + "winter_last_adjust_date",
+            self.last_winter_adjust_date or "never",
+            state_class=None,
+            icon="mdi:calendar-clock"
+        )
+
+        for dev, state in zip(self.devices, states):
+            base = p + dev.name.lower() + "_winter_"
+            effective_min_soc = self.winter_min_soc_targets.get(
+                dev.name,
+                state.min_soc if state.min_soc > 0 else dev.min_soc
+            )
+            target = calculate_winter_min_soc_target(
+                state.soc,
+                effective_min_soc,
+                active
+            )
+
+            self.publish_sensor(
+                base + "min_soc_target",
+                target,
+                "%",
+                "battery",
+                extra={
+                    "effective_min_soc": effective_min_soc,
+                    "current_soc": state.soc,
+                    "winter_active": active
+                }
+            )
+
+            self.publish_sensor(
+                base + "estimated_ramp_days",
+                estimate_winter_ramp_days(target),
+                "d",
+                None,
+                icon="mdi:calendar-range"
+            )
+
     def publish_to_ha(
         self,
         load,
@@ -2825,6 +3172,8 @@ class EMSController:
             "%",
             "battery"
         )
+
+        self.publish_winter_to_ha(states)
 
         # =====================
         # PER DEVICE
@@ -3193,6 +3542,36 @@ class EMSController:
             ):
 
                 self.soc_reconcile_counter = 0
+                now = datetime.now()
+                winter_active = winter_mode_active(now, self.ha)
+                winter_window_active = winter_adjustment_window_active(now)
+                today = now.date().isoformat()
+                winter_adjust_today = (
+                    winter_active
+                    and winter_window_active
+                    and self.last_winter_adjust_date != today
+                )
+
+                if winter_feature_enabled(self.ha):
+                    log_event(
+                        logging.INFO,
+                        "winter_mode_state",
+                        active=winter_active,
+                        month=now.month,
+                        adjust_window=winter_window_active,
+                        adjust_today=winter_adjust_today,
+                        last_adjust_date=self.last_winter_adjust_date,
+                        summer_min_soc=winter_config_int(
+                            "summer_min_soc",
+                            15,
+                            minimum=0
+                        ),
+                        winter_min_soc=winter_config_int(
+                            "winter_min_soc",
+                            40,
+                            minimum=0
+                        )
+                    )
 
                 for dev, state in zip(
                     self.devices,
@@ -3200,16 +3579,31 @@ class EMSController:
                 ):
 
                     if state:
+                        desired_min_soc, winter_adjustment = (
+                            self.winter_reconciliation_target(
+                                dev,
+                                state,
+                                winter_active,
+                                winter_adjust_today
+                            )
+                        )
 
                         self.apply_soc_limits(
                             dev,
-                            state
+                            state,
+                            desired_min_soc=desired_min_soc
                         )
 
                         self.apply_device_modes(
                             dev,
                             state
                         )
+
+                        if winter_adjustment:
+                            self.apply_winter_ac_charge_limit(dev)
+
+                if winter_adjust_today:
+                    self.last_winter_adjust_date = today
 
         for dev, state in zip(
             self.devices,
@@ -3690,6 +4084,59 @@ def run_live_preflight(devices, shelly, ha=None):
     return ok
 
 
+def run_self_tests():
+    """Run local helper checks without hardware or HA access."""
+
+    cases = [
+        (15, 18, True, 20),
+        (15, 22, True, 22),
+        (15, 13, True, 20),
+        (15, 45, True, 40),
+        (40, 30, False, 15),
+        (38, 39, True, 40)
+    ]
+    ok = True
+
+    for current_min, current_soc, winter_active, expected in cases:
+        actual = calculate_winter_min_soc_target(
+            current_soc,
+            current_min,
+            winter_active,
+            summer_min_soc=15,
+            winter_min_soc=40,
+            ramp_step=5
+        )
+
+        if actual != expected:
+            ok = False
+            log_event(
+                logging.ERROR,
+                "self_test_failed",
+                test="calculate_winter_min_soc_target",
+                current_min_soc=current_min,
+                current_soc=current_soc,
+                winter_active=winter_active,
+                expected=expected,
+                actual=actual
+            )
+
+    payload = build_winter_ac_charge_limit_payload()
+    if set(payload.keys()) != {"inputLimit"}:
+        ok = False
+        log_event(
+            logging.ERROR,
+            "self_test_failed",
+            test="winter_ac_charge_limit_payload",
+            payload=json.dumps(payload, sort_keys=True)
+        )
+
+    if ok:
+        log_event(logging.INFO, "self_test_ok")
+        return True
+
+    return False
+
+
 # =====================
 # MAIN
 # =====================
@@ -3708,6 +4155,9 @@ if __name__ == "__main__":
         ha_enabled=HA_ENABLED,
         ha_control_enabled=HA_CONTROL_ENABLED
     )
+
+    if ARGS.self_test:
+        sys.exit(0 if run_self_tests() else 2)
 
     if SIMULATION_MODE and not ARGS.replay:
         run_frames(built_in_simulation_frames(), "built_in_simulation")
