@@ -88,6 +88,10 @@ def state_from_trace_device(data):
     state.output = value_from_trace(data, "output", "outputHomePower")
     state.pack_in = value_from_trace(data, "pack_in", "packInputPower")
     state.pack_out = value_from_trace(data, "pack_out", "outputPackPower")
+    state.solar1 = value_from_trace(data, "solar1", "solarPower1")
+    state.solar2 = value_from_trace(data, "solar2", "solarPower2")
+    state.solar3 = value_from_trace(data, "solar3", "solarPower3")
+    state.solar4 = value_from_trace(data, "solar4", "solarPower4")
     state.output_limit = value_from_trace(data, "output_limit", "outputLimit")
     state.soc_limit = value_from_trace(data, "soc_limit", "socLimit")
     state.pack_state = value_from_trace(data, "pack_state", "packState")
@@ -405,6 +409,48 @@ def run_self_tests():
                 actual=actual
             )
 
+    sim_device = SimulatedZendureClient("WR1")
+    sim_ems = EMSController(
+        [sim_device],
+        SimulatedShellyClient(),
+        ha=None,
+        sleep_enabled=False,
+        runtime_state=None
+    )
+    idle_state = zero_device_state()
+    idle_state.soc = 15
+    idle_state.min_soc = 15
+    idle_state.soc_limit = 2
+
+    if not sim_ems.state_is_strict_night_min_soc_idle(idle_state):
+        ok = False
+        log_event(
+            logging.ERROR,
+            "self_test_failed",
+            test="night_min_soc_idle_detection",
+            reason="strict_idle_not_detected"
+        )
+
+    idle_state.solar1 = 1
+
+    if sim_ems.state_is_strict_night_min_soc_idle(idle_state):
+        ok = False
+        log_event(
+            logging.ERROR,
+            "self_test_failed",
+            test="night_min_soc_idle_detection",
+            reason="positive_panel_power_accepted"
+        )
+
+    if not sim_ems.state_has_positive_pv(idle_state):
+        ok = False
+        log_event(
+            logging.ERROR,
+            "self_test_failed",
+            test="night_min_soc_idle_detection",
+            reason="positive_panel_power_not_detected"
+        )
+
     payload = cfg.build_winter_ac_charge_limit_payload()
     if set(payload.keys()) != {"inputLimit"}:
         ok = False
@@ -420,4 +466,3 @@ def run_self_tests():
         return True
 
     return False
-

@@ -10,12 +10,13 @@ The EMS calculates power targets from local load and device telemetry.
 4. Read Zendure telemetry.
 5. Detect runtime capabilities.
 6. Run state reconciliation when due.
-7. Stabilize total target.
-8. Allocate target across devices.
-9. Apply device ramp and limits.
-10. Apply `min_output_limit` while enabled.
-11. Apply deadband and write cooldown.
-12. Write `outputLimit` only behind safety gates.
+7. Detect strict night/minSoc idle.
+8. Stabilize total target.
+9. Allocate target across devices.
+10. Apply device ramp and limits.
+11. Apply `min_output_limit` while enabled.
+12. Apply deadband and write cooldown.
+13. Write `outputLimit` only behind safety gates.
 
 ## Stable Fast Output Control
 
@@ -39,6 +40,35 @@ Then it applies:
 - large import/export ramp bypass multiplier
 
 This makes short loop intervals usable without large alternating target swings.
+
+## Night / minSoc Idle
+
+When all active and online devices are blocked at their discharge floor, the EMS
+can enter a strict night/minSoc idle state. This state exists to avoid repeated
+night-time API writes while still keeping the inverter wakeup value configured.
+
+The state is entered only when every controlled device reports all of these
+values exactly:
+
+- `solarInputPower == 0`
+- `solarPower1 == 0`
+- `solarPower2 == 0`
+- `solarPower3 == 0`
+- `solarPower4 == 0`
+- `packInputPower == 0`
+- `outputPackPower == 0`
+- `outputHomePower == 0`
+- `electricLevel <= minSoc` or `socLimit == 2`
+
+In this state the existing runtime `min_output_limit` is used as the
+standby/wakeup `outputLimit`. If a device is already at that value, no write is
+sent. If it is not, the EMS writes the value once and then suppresses further
+`outputLimit` writes until the state is left.
+
+The idle state is left as soon as any controlled device reports positive PV on
+`solarInputPower` or one of `solarPower1` through `solarPower4`. The output
+control memory is reset so the normal controller initializes from fresh
+telemetry.
 
 ## PV-First Allocation
 
@@ -71,4 +101,3 @@ The EMS compares the calculated target with the runtime `outputLimit` when
 available. If `outputLimit` is missing or zero, it falls back to current output.
 
 Small changes below `deadband` are skipped.
-
