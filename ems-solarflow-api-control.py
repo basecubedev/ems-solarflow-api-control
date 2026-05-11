@@ -1177,6 +1177,124 @@ def weighted_limited_allocation(total, weights, limits):
     return allocation
 
 
+def apply_battery_topup_after_pv_first(
+    targets,
+    states,
+    device_configs,
+    capabilities,
+    requested_total
+):
+    """Top up PV-first targets with battery power where safely available."""
+
+    deliverable_targets = []
+
+    for i, target in enumerate(targets):
+        dev_config = device_configs[i] if device_configs else None
+        cap = capabilities[i] if capabilities else None
+        max_power = get_device_max_power(dev_config)
+
+        if cap and not cap.can_export:
+            max_power = 0
+
+        deliverable_targets.append(max(0, min(max_power, target)))
+
+    targets = deliverable_targets
+    pv_first_total = sum(targets)
+    missing = max(0, requested_total - pv_first_total)
+
+    if missing <= 0:
+        return targets
+
+    weights = []
+    limits = []
+    reasons = []
+
+    for i, state in enumerate(states):
+        dev_config = device_configs[i] if device_configs else None
+        cap = capabilities[i] if capabilities else None
+        device_name = dev_config.name if dev_config else i
+        max_power = get_device_max_power(dev_config)
+        headroom = max(0, max_power - targets[i])
+
+        if cap and not cap.can_export:
+            weights.append(0)
+            limits.append(0)
+            reasons.append(f"{device_name}:cannot_export")
+            continue
+
+        if cap and not cap.can_discharge:
+            weights.append(0)
+            limits.append(0)
+            reasons.append(f"{device_name}:cannot_discharge")
+            continue
+
+        if state.soc <= state.min_soc:
+            weights.append(0)
+            limits.append(0)
+            reasons.append(f"{device_name}:soc_at_or_below_min")
+            continue
+
+        if headroom <= 0:
+            weights.append(0)
+            limits.append(0)
+            reasons.append(f"{device_name}:no_headroom")
+            continue
+
+        weight = usable_battery_weight(
+            state,
+            dev_config,
+            cap
+        )
+
+        weights.append(weight)
+        limits.append(headroom)
+
+        if weight <= 0:
+            reasons.append(f"{device_name}:no_usable_battery")
+
+    topup = weighted_limited_allocation(
+        missing,
+        weights,
+        limits
+    )
+    topup_total = sum(topup)
+
+    if topup_total > 0:
+        targets = [
+            target + add
+            for target, add in zip(targets, topup)
+        ]
+
+        log_event(
+            logging.INFO,
+            "pv_first_battery_topup",
+            requested_total=requested_total,
+            pv_first_total=round(pv_first_total),
+            topup_w=round(topup_total),
+            final_targets=json.dumps([round(t) for t in targets])
+        )
+
+    unmet = max(0, requested_total - sum(targets))
+
+    if unmet > 0:
+        reason = "no_topup_candidates" if topup_total <= 0 else "topup_limited"
+        if reasons:
+            reason = f"{reason}:{','.join(reasons)}"
+
+        log_event(
+            logging.WARNING,
+            "pv_first_battery_topup_unmet",
+            requested_total=requested_total,
+            pv_first_total=round(pv_first_total),
+            topup_w=round(topup_total),
+            unmet_w=round(unmet),
+            final_targets=json.dumps([round(t) for t in targets]),
+            reason=reason
+        )
+
+    return targets
+
+
 def apply_constraints_and_redistribute(
     targets,
     device_configs=None,
@@ -1307,8 +1425,6 @@ def calculate_targets(
     )
 
     targets = [0] * len(devices)
-    target_limits = None
-
     # =====================
     # CASE 1:
     # Enough solar available
@@ -1367,7 +1483,6 @@ def calculate_targets(
             )
 
         pv_only_total = sum(pv_only_limits)
-        target_limits = pv_only_limits
 
         if pv_only_total > 0:
             targets = weighted_limited_allocation(
@@ -1387,6 +1502,14 @@ def calculate_targets(
                     unmet_w=round(pv_unmet)
                 )
 
+            targets = apply_battery_topup_after_pv_first(
+                targets,
+                devices,
+                device_configs,
+                capabilities,
+                new_total
+            )
+
         else:
 
             targets = [0] * len(devices)
@@ -1398,6 +1521,14 @@ def calculate_targets(
                     requested_total=new_total,
                     pv_only_total=0,
                     unmet_w=round(new_total)
+                )
+
+                targets = apply_battery_topup_after_pv_first(
+                    targets,
+                    devices,
+                    device_configs,
+                    capabilities,
+                    new_total
                 )
 
     # =====================
@@ -1482,8 +1613,7 @@ def calculate_targets(
     targets, undistributed = apply_constraints_and_redistribute(
         targets,
         device_configs=device_configs,
-        capabilities=capabilities,
-        target_limits=target_limits
+        capabilities=capabilities
     )
 
     log_event(
