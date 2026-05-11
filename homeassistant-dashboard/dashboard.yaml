@@ -50,6 +50,10 @@ views:
                     entities:
                       - entity: input_boolean.ems_solarflow_enable
                         name: Enabled
+                      - entity: input_boolean.ems_solarflow_ha_enabled
+                        name: HA Publishing
+                      - entity: input_boolean.ems_solarflow_ha_control_enabled
+                        name: HA Runtime Control
                       - entity: input_number.ems_solarflow_max_power
                         name: Max Power
                       - entity: input_number.ems_solarflow_interval
@@ -99,6 +103,8 @@ views:
                     entities:
                       - entity: binary_sensor.ems_solarflow_winter_enabled
                         name: Enabled
+                      - entity: input_boolean.ems_solarflow_winter_enabled
+                        name: Runtime Toggle
                       - entity: binary_sensor.ems_solarflow_winter_active
                         name: Active
                       - entity: binary_sensor.ems_solarflow_winter_adjust_window

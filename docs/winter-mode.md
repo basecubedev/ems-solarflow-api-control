@@ -4,6 +4,10 @@ Winter mode is implemented as SOC/state reconciliation, not output control.
 
 It never changes normal target calculation.
 
+`winter.enabled` can be toggled at runtime through `runtime-state.json`,
+`emsctl.py`, or the optional Home Assistant helper. The technical winter
+settings below remain static config.
+
 ## Configuration
 
 ```json
@@ -95,3 +99,8 @@ write_winter_ac_charge_limit_error
 Winter status and calculated targets are published to HA. See
 [home-assistant.md](home-assistant.md).
 
+Runtime toggle:
+
+```text
+input_boolean.ems_solarflow_winter_enabled
+```

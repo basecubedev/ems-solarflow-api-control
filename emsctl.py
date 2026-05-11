@@ -56,6 +56,21 @@ def parse_args():
     )
     device.add_argument("value", nargs="?")
 
+    ha = subparsers.add_parser("ha", help="Edit HA runtime publishing state.")
+    ha.add_argument("action", choices=["enable", "disable"])
+    ha.add_argument("value", nargs="?")
+
+    ha_control = subparsers.add_parser(
+        "ha-control",
+        help="Edit HA runtime helper-control state."
+    )
+    ha_control.add_argument("action", choices=["enable", "disable"])
+    ha_control.add_argument("value", nargs="?")
+
+    winter = subparsers.add_parser("winter", help="Edit winter runtime state.")
+    winter.add_argument("action", choices=["enable", "disable", "status"])
+    winter.add_argument("value", nargs="?")
+
     return parser.parse_args()
 
 
@@ -168,6 +183,16 @@ def runtime_defaults(config, existing=None):
                 minimum=0
             )
         },
+        "ha": {
+            "enabled": config.get("ha", {}).get("enabled", True),
+            "control_enabled": config.get("ha", {}).get(
+                "control_enabled",
+                True
+            )
+        },
+        "winter": {
+            "enabled": config.get("winter", {}).get("enabled", False)
+        },
         "devices": devices
     }
 
@@ -185,6 +210,15 @@ def merge_defaults(data, defaults):
         **defaults.get("system", {}),
         **system
     }
+
+    for section_name in ("ha", "winter"):
+        section = merged.get(section_name)
+        if not isinstance(section, dict):
+            section = {}
+        merged[section_name] = {
+            **defaults.get(section_name, {}),
+            **section
+        }
 
     devices = merged.get("devices")
     if not isinstance(devices, dict):
@@ -309,6 +343,19 @@ def update_device(args, state):
             raise ValueError(f"unknown device action {args.action}")
 
 
+def set_bool_section(args, state, section_name, key):
+    ensure_no_value(args)
+    section = state.setdefault(section_name, {})
+
+    match args.action:
+        case "enable":
+            section[key] = True
+        case "disable":
+            section[key] = False
+        case _:
+            raise ValueError(f"unknown {section_name} action {args.action}")
+
+
 def print_status(path, state):
     payload = {
         "runtime_state_path": path,
@@ -331,10 +378,25 @@ def main():
             print_status(runtime_path, state)
             return 0
 
+        if args.command == "winter" and args.action == "status":
+            ensure_no_value(args)
+            if created:
+                save_atomic(runtime_path, state)
+            print_status(runtime_path, {
+                "winter": state.get("winter", {})
+            })
+            return 0
+
         if args.command == "system":
             update_system(args, state)
         elif args.command == "device":
             update_device(args, state)
+        elif args.command == "ha":
+            set_bool_section(args, state, "ha", "enabled")
+        elif args.command == "ha-control":
+            set_bool_section(args, state, "ha", "control_enabled")
+        elif args.command == "winter":
+            set_bool_section(args, state, "winter", "enabled")
         else:
             raise ValueError(f"unknown command {args.command}")
 

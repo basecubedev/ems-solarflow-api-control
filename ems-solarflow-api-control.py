@@ -369,17 +369,22 @@ def winter_month_active(now):
     return now.month in winter_months()
 
 
-def winter_feature_enabled(ha=None):
+def winter_feature_enabled(runtime_state=None):
     """Return whether winter mode is enabled.
 
     HA/runtime toggles can be layered here later. V1 is config-controlled.
     """
 
+    if runtime_state:
+        winter = runtime_state.data.get("winter", {})
+        if isinstance(winter, dict) and "enabled" in winter:
+            return safe_bool(winter.get("enabled"), False)
+
     return winter_config_bool("enabled", False)
 
 
-def winter_mode_active(now, ha=None):
-    return winter_feature_enabled(ha) and winter_month_active(now)
+def winter_mode_active(now, runtime_state=None):
+    return winter_feature_enabled(runtime_state) and winter_month_active(now)
 
 
 def calculate_winter_min_soc_target(
@@ -456,6 +461,16 @@ def merge_runtime_defaults(data, defaults):
         **defaults.get("system", {}),
         **system
     }
+
+    for section_name in ("ha", "winter"):
+        section = merged.get(section_name)
+        if not isinstance(section, dict):
+            section = {}
+
+        merged[section_name] = {
+            **defaults.get(section_name, {}),
+            **section
+        }
 
     devices = merged.get("devices")
     if not isinstance(devices, dict):
@@ -571,10 +586,23 @@ class RuntimeState:
 
         return system.get(key, default)
 
+    def get_section(self, section_name, key, default=None):
+        section = self.data.get(section_name, {})
+        if not isinstance(section, dict):
+            return default
+
+        return section.get(key, default)
+
     def set_system(self, key, value):
         system = self.data.setdefault("system", {})
         previous = system.get(key)
         system[key] = value
+        return previous != value
+
+    def set_section(self, section_name, key, value):
+        section = self.data.setdefault(section_name, {})
+        previous = section.get(key)
+        section[key] = value
         return previous != value
 
     def get_device(self, device_name, key, default=None):
@@ -616,6 +644,13 @@ def build_runtime_defaults(devices):
             "max_total_power": MAX_TOTAL_POWER,
             "loop_interval": LOOP_INTERVAL,
             "min_output_limit": MIN_OUTPUT_LIMIT
+        },
+        "ha": {
+            "enabled": CONFIG["ha"].get("enabled", True),
+            "control_enabled": CONFIG["ha"].get("control_enabled", True)
+        },
+        "winter": {
+            "enabled": winter_config_bool("enabled", False)
         },
         "devices": device_defaults
     }
@@ -2207,6 +2242,29 @@ class EMSController:
             minimum=minimum
         )
 
+    def runtime_section_bool(self, section_name, key, default):
+        if not self.runtime_state:
+            return default
+
+        return safe_bool(
+            self.runtime_state.get_section(section_name, key, default),
+            default
+        )
+
+    def runtime_ha_enabled(self):
+        return self.runtime_section_bool(
+            "ha",
+            "enabled",
+            CONFIG["ha"].get("enabled", True)
+        )
+
+    def runtime_ha_control_enabled(self):
+        return self.runtime_section_bool(
+            "ha",
+            "control_enabled",
+            CONFIG["ha"].get("control_enabled", True)
+        )
+
     def runtime_device_bool(self, device_name, key, default):
         if not self.runtime_state:
             return default
@@ -2313,6 +2371,38 @@ class EMSController:
         changed = False
 
         changed |= self.ha_update_runtime_field(
+            "input_boolean.ems_solarflow_ha_enabled",
+            lambda: self.runtime_ha_enabled(),
+            lambda value: self.runtime_state.set_section(
+                "ha",
+                "enabled",
+                value
+            ),
+            lambda value, default: safe_bool(value, default),
+            lambda value: "on" if value else "off"
+        )
+
+        changed |= self.ha_update_runtime_field(
+            "input_boolean.ems_solarflow_ha_control_enabled",
+            lambda: self.runtime_ha_control_enabled(),
+            lambda value: self.runtime_state.set_section(
+                "ha",
+                "control_enabled",
+                value
+            ),
+            lambda value, default: safe_bool(value, default),
+            lambda value: "on" if value else "off"
+        )
+
+        if (
+            not self.runtime_ha_enabled()
+            or not self.runtime_ha_control_enabled()
+        ):
+            if changed:
+                self.runtime_state.save_atomic()
+            return
+
+        changed |= self.ha_update_runtime_field(
             "input_boolean.ems_solarflow_enable",
             lambda: self.runtime_system_bool("enabled", SYSTEM_ENABLED),
             lambda value: self.runtime_state.set_system("enabled", value),
@@ -2360,6 +2450,18 @@ class EMSController:
                 value
             ),
             lambda value, default: safe_int(value, default, minimum=0)
+        )
+
+        changed |= self.ha_update_runtime_field(
+            "input_boolean.ems_solarflow_winter_enabled",
+            lambda: winter_feature_enabled(self.runtime_state),
+            lambda value: self.runtime_state.set_section(
+                "winter",
+                "enabled",
+                value
+            ),
+            lambda value, default: safe_bool(value, default),
+            lambda value: "on" if value else "off"
         )
 
         for dev in self.devices:
@@ -2565,7 +2667,7 @@ class EMSController:
     def winter_reconciliation_target(self, dev, state, winter_active, adjust_today):
         """Return desired winter/summer minSoc target and adjustment context."""
 
-        if not winter_feature_enabled(self.ha):
+        if not winter_feature_enabled(self.runtime_state):
             return None, False
 
         summer_min_soc = winter_config_int("summer_min_soc", 15, minimum=0)
@@ -2999,8 +3101,8 @@ class EMSController:
         """Publish winter-mode state and calculated targets to HA."""
 
         now = datetime.now()
-        enabled = winter_feature_enabled(self.ha)
-        active = winter_mode_active(now, self.ha)
+        enabled = winter_feature_enabled(self.runtime_state)
+        active = winter_mode_active(now, self.runtime_state)
         adjust_window = winter_adjustment_window_active(now)
         p = "sensor.ems_solarflow_"
 
@@ -3543,7 +3645,7 @@ class EMSController:
 
                 self.soc_reconcile_counter = 0
                 now = datetime.now()
-                winter_active = winter_mode_active(now, self.ha)
+                winter_active = winter_mode_active(now, self.runtime_state)
                 winter_window_active = winter_adjustment_window_active(now)
                 today = now.date().isoformat()
                 winter_adjust_today = (
@@ -3552,7 +3654,7 @@ class EMSController:
                     and self.last_winter_adjust_date != today
                 )
 
-                if winter_feature_enabled(self.ha):
+                if winter_feature_enabled(self.runtime_state):
                     log_event(
                         logging.INFO,
                         "winter_mode_state",
@@ -3651,7 +3753,7 @@ class EMSController:
         # PUBLISH TO HA
         # =====================
 
-        if self.ha:
+        if self.ha and self.runtime_ha_enabled():
             self.publish_to_ha(
                 load,
                 states,

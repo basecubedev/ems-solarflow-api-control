@@ -167,6 +167,8 @@ Safe runtime-state edits:
 python3 emsctl.py status
 python3 emsctl.py system min-output-limit 30
 python3 emsctl.py device WR1 offgrid on
+python3 emsctl.py winter enable
+python3 emsctl.py ha disable
 ```
 
 More:

@@ -23,6 +23,13 @@ Example:
     "loop_interval": 5,
     "min_output_limit": 30
   },
+  "ha": {
+    "enabled": true,
+    "control_enabled": true
+  },
+  "winter": {
+    "enabled": true
+  },
   "devices": {
     "WR1": {
       "enabled": true,
@@ -69,6 +76,25 @@ offgrid_socket=false -> gridOffMode=2
 The CLI and Home Assistant only change the intent. The EMS is the only
 component that writes `gridOffMode` to hardware.
 
+## HA Fields
+
+| Field | Meaning |
+|---|---|
+| `enabled` | Enables or disables HA publishing in the EMS loop |
+| `control_enabled` | Enables or disables HA helper sync |
+
+These fields can only affect HA when HA is statically configured and the EMS has
+an HA client. They do not edit HA URL or token.
+
+## Winter Fields
+
+| Field | Meaning |
+|---|---|
+| `enabled` | Enables or disables winter mode at runtime |
+
+Winter months, SOC limits, ramp step, adjustment hour, and AC charge power stay
+static in `config.json`.
+
 ## Home Assistant Sync
 
 Home Assistant helper values can act as a UI over runtime state. The EMS avoids
@@ -76,4 +102,3 @@ writing HA every cycle and avoids interpreting its own HA writes as user changes
 
 Helpers are optional. If a helper is missing, the EMS continues with local
 runtime-state values.
-

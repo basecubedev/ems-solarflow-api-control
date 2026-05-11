@@ -27,6 +27,29 @@ python3 emsctl.py system loop-interval 5
 python3 emsctl.py system min-output-limit 30
 ```
 
+## HA Commands
+
+```bash
+python3 emsctl.py ha enable
+python3 emsctl.py ha disable
+python3 emsctl.py ha-control enable
+python3 emsctl.py ha-control disable
+```
+
+`ha` controls runtime HA publishing. `ha-control` controls runtime HA helper
+sync. Neither command edits HA URL or token.
+
+## Winter Commands
+
+```bash
+python3 emsctl.py winter status
+python3 emsctl.py winter enable
+python3 emsctl.py winter disable
+```
+
+This only toggles winter mode at runtime. Winter SOC targets, months, ramp
+timing, and AC charge power remain static `config.json` settings.
+
 ## Device Commands
 
 ```bash
@@ -65,4 +88,3 @@ runtime-state.json.<pid>.tmp -> runtime-state.json
 ```
 
 This keeps runtime-state edits robust even when the EMS is running.
-

@@ -31,10 +31,13 @@ Use `--no-ha` to disable HA for a run.
 Global helpers:
 
 ```text
+input_boolean.ems_solarflow_ha_enabled
+input_boolean.ems_solarflow_ha_control_enabled
 input_boolean.ems_solarflow_enable
 input_number.ems_solarflow_max_power
 input_number.ems_solarflow_interval
 input_number.ems_solarflow_min_output_limit
+input_boolean.ems_solarflow_winter_enabled
 ```
 
 Per-device helpers:
@@ -110,4 +113,3 @@ homeassistant-dashboard/dashboard.yaml
 
 It includes EMS control, runtime device control, winter status, device state,
 battery status, PV details, and power-flow visualization.
-
