@@ -78,6 +78,27 @@ ARGS = parse_args()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+OUTPUT_CONTROL_DEFAULTS = {
+    "load_deadband_w": 5,
+    "target_deadband_w": 10,
+    "filter_enabled": True,
+    "filter_method": "median_ema",
+    "median_window": 3,
+    "ema_alpha": 0.65,
+    "ramp_enabled": True,
+    "ramp_up_w_per_cycle": 300,
+    "ramp_down_w_per_cycle": 500,
+    "device_ramp_enabled": True,
+    "device_ramp_up_w_per_cycle": 250,
+    "device_ramp_down_w_per_cycle": 400,
+    "write_cooldown_seconds": 2,
+    "large_import_bypass_w": 600,
+    "large_export_bypass_w": 500,
+    "bypass_ramp_multiplier": 1.5,
+    "telemetry_max_age_seconds": 10,
+    "stale_telemetry_ramp_factor": 0.5
+}
+
 
 def default_safe_config():
     """Return a minimal safe config for simulation and replay."""
@@ -101,6 +122,7 @@ def default_safe_config():
             "runtime_state_path": "runtime-state.json",
             "min_output_limit": 0,
             "loop_interval": 5,
+            "output_control": OUTPUT_CONTROL_DEFAULTS,
             "soc_reconcile_interval": 0,
             "log_level": "debug",
             "redistribute_clamped_power": True,
@@ -140,6 +162,10 @@ MAX_TOTAL_POWER = CONFIG["system"]["max_total_power"]
 MAX_DEVICE_POWER = CONFIG["system"]["max_device_power"]
 DEADBAND = CONFIG["system"]["deadband"]
 LOOP_INTERVAL = CONFIG["system"]["loop_interval"]
+OUTPUT_CONTROL_CONFIG = {
+    **OUTPUT_CONTROL_DEFAULTS,
+    **CONFIG["system"].get("output_control", {})
+}
 RUNTIME_STATE_PATH = CONFIG["system"].get(
     "runtime_state_path",
     "runtime-state.json"
@@ -253,6 +279,18 @@ def runtime_state_path():
 def safe_int(value, default=0, minimum=None):
     try:
         parsed = int(float(value))
+    except (TypeError, ValueError):
+        parsed = default
+
+    if minimum is not None:
+        parsed = max(minimum, parsed)
+
+    return parsed
+
+
+def safe_float(value, default=0.0, minimum=None):
+    try:
+        parsed = float(value)
     except (TypeError, ValueError):
         parsed = default
 
@@ -1389,7 +1427,8 @@ def calculate_targets(
     devices,
     max_power,
     device_configs=None,
-    capabilities=None
+    capabilities=None,
+    requested_total=None
 ):
     """
     Intelligent EMS target calculation.
@@ -1419,10 +1458,16 @@ def calculate_targets(
     current_total = sum(d.output for d in devices)
     solar_total = sum(d.solar for d in devices)
 
-    new_total = max(
-        0,
-        min(max_power, current_total + load)
-    )
+    if requested_total is None:
+        new_total = max(
+            0,
+            min(max_power, current_total + load)
+        )
+    else:
+        new_total = max(
+            0,
+            min(max_power, requested_total)
+        )
 
     targets = [0] * len(devices)
     # =====================
@@ -1659,6 +1704,353 @@ class EMSController:
         self.initial_ac_mode_reconciled = {}
         self.last_ha_seen = {}
         self.last_ha_written = {}
+        self.commanded_total_w = None
+        self.filtered_load_w = None
+        self.load_history = deque(
+            maxlen=safe_int(
+                OUTPUT_CONTROL_CONFIG.get("median_window", 3),
+                3,
+                minimum=1
+            )
+        )
+        self.commanded_device_targets = {}
+        self.last_output_write_at = {}
+
+    def output_control_bool(self, key, default=False):
+        return safe_bool(
+            OUTPUT_CONTROL_CONFIG.get(key, default),
+            default
+        )
+
+    def output_control_int(self, key, default=0, minimum=0):
+        return safe_int(
+            OUTPUT_CONTROL_CONFIG.get(key, default),
+            default,
+            minimum=minimum
+        )
+
+    def output_control_float(self, key, default=0.0, minimum=0.0):
+        return safe_float(
+            OUTPUT_CONTROL_CONFIG.get(key, default),
+            default,
+            minimum=minimum
+        )
+
+    def output_control_bypass_active(self, raw_load):
+        import_limit = self.output_control_float(
+            "large_import_bypass_w",
+            600,
+            minimum=0
+        )
+        export_limit = self.output_control_float(
+            "large_export_bypass_w",
+            500,
+            minimum=0
+        )
+
+        return raw_load >= import_limit or raw_load <= -export_limit
+
+    def filter_output_control_load(self, raw_load):
+        if not self.output_control_bool("filter_enabled", True):
+            return raw_load
+
+        window = self.output_control_int("median_window", 3, minimum=1)
+
+        if self.load_history.maxlen != window:
+            self.load_history = deque(
+                list(self.load_history)[-window:],
+                maxlen=window
+            )
+
+        self.load_history.append(raw_load)
+        values = sorted(self.load_history)
+        mid = len(values) // 2
+
+        if len(values) % 2:
+            median = values[mid]
+        else:
+            median = (values[mid - 1] + values[mid]) / 2
+
+        method = str(
+            OUTPUT_CONTROL_CONFIG.get("filter_method", "median_ema")
+        )
+
+        if method != "median_ema":
+            return raw_load
+
+        alpha = min(
+            1.0,
+            self.output_control_float("ema_alpha", 0.65, minimum=0.0)
+        )
+
+        if self.filtered_load_w is None:
+            self.filtered_load_w = median
+        else:
+            self.filtered_load_w = (
+                alpha * median
+                + (1 - alpha) * self.filtered_load_w
+            )
+
+        return self.filtered_load_w
+
+    def initialize_commanded_total(self, states, max_power):
+        limit_total = sum(
+            state.output_limit
+            for state in states
+            if state.output_limit > 0
+        )
+
+        if limit_total > 0:
+            initial = limit_total
+            source = "output_limit"
+        else:
+            initial = sum(state.output for state in states)
+            source = "output"
+
+        self.commanded_total_w = max(0, min(max_power, initial))
+
+        log_event(
+            logging.INFO,
+            "output_control_state",
+            initialized=True,
+            initialization_source=source,
+            commanded_total_w=round(self.commanded_total_w, 1),
+            raw_load_w=0,
+            filtered_load_w=0,
+            desired_total_w=round(self.commanded_total_w, 1),
+            ramped_total_w=round(self.commanded_total_w, 1)
+        )
+
+    def telemetry_stale(self):
+        max_age = self.output_control_float(
+            "telemetry_max_age_seconds",
+            10,
+            minimum=0
+        )
+
+        if max_age <= 0:
+            log_event(
+                logging.WARNING,
+                "output_control_stale_telemetry",
+                device="all",
+                age_s=0,
+                max_age_s=max_age
+            )
+            return True
+
+        now = time.time()
+        stale = False
+
+        for dev in self.devices:
+            seen = self.last_seen.get(dev.name)
+            if not seen:
+                continue
+
+            age = now - seen
+
+            if age > max_age:
+                stale = True
+                log_event(
+                    logging.WARNING,
+                    "output_control_stale_telemetry",
+                    device=dev.name,
+                    age_s=round(age, 1),
+                    max_age_s=max_age
+                )
+
+        return stale
+
+    def stabilized_total_target(self, raw_load, states, max_power):
+        if self.commanded_total_w is None:
+            self.initialize_commanded_total(states, max_power)
+
+        filtered_load = self.filter_output_control_load(raw_load)
+        desired = self.commanded_total_w
+        held = False
+
+        load_deadband = self.output_control_float(
+            "load_deadband_w",
+            5,
+            minimum=0
+        )
+
+        if abs(filtered_load) <= load_deadband:
+            held = True
+            log_event(
+                logging.INFO,
+                "output_control_deadband_hold",
+                reason="load_deadband",
+                raw_load_w=round(raw_load, 1),
+                filtered_load_w=round(filtered_load, 1),
+                commanded_total_w=round(self.commanded_total_w, 1),
+                deadband_w=load_deadband
+            )
+        else:
+            desired = self.commanded_total_w + filtered_load
+
+        desired = max(0, min(max_power, desired))
+
+        target_deadband = self.output_control_float(
+            "target_deadband_w",
+            10,
+            minimum=0
+        )
+
+        if (
+            not held
+            and abs(desired - self.commanded_total_w) <= target_deadband
+        ):
+            desired = self.commanded_total_w
+            held = True
+            log_event(
+                logging.INFO,
+                "output_control_deadband_hold",
+                reason="target_deadband",
+                raw_load_w=round(raw_load, 1),
+                filtered_load_w=round(filtered_load, 1),
+                commanded_total_w=round(self.commanded_total_w, 1),
+                deadband_w=target_deadband
+            )
+
+        ramped = desired
+        delta = desired - self.commanded_total_w
+        bypass = self.output_control_bypass_active(raw_load)
+        stale = self.telemetry_stale()
+
+        if bypass:
+            log_event(
+                logging.INFO,
+                "output_control_bypass",
+                raw_load_w=round(raw_load, 1),
+                filtered_load_w=round(filtered_load, 1)
+            )
+
+        if (
+            not held
+            and self.output_control_bool("ramp_enabled", True)
+            and delta != 0
+        ):
+            if delta > 0:
+                ramp_limit = self.output_control_float(
+                    "ramp_up_w_per_cycle",
+                    300,
+                    minimum=0
+                )
+            else:
+                ramp_limit = self.output_control_float(
+                    "ramp_down_w_per_cycle",
+                    500,
+                    minimum=0
+                )
+
+            if bypass:
+                ramp_limit *= self.output_control_float(
+                    "bypass_ramp_multiplier",
+                    1.5,
+                    minimum=1.0
+                )
+
+            if stale:
+                ramp_limit *= self.output_control_float(
+                    "stale_telemetry_ramp_factor",
+                    0.5,
+                    minimum=0.0
+                )
+
+            if ramp_limit > 0 and abs(delta) > ramp_limit:
+                ramped = (
+                    self.commanded_total_w + ramp_limit
+                    if delta > 0
+                    else self.commanded_total_w - ramp_limit
+                )
+                log_event(
+                    logging.INFO,
+                    "output_control_ramp_limited",
+                    previous_total_w=round(self.commanded_total_w, 1),
+                    desired_total_w=round(desired, 1),
+                    ramped_total_w=round(ramped, 1),
+                    ramp_limit_w=round(ramp_limit, 1)
+                )
+
+        ramped = max(0, min(max_power, ramped))
+
+        log_event(
+            logging.INFO,
+            "output_control_state",
+            initialized=False,
+            raw_load_w=round(raw_load, 1),
+            filtered_load_w=round(filtered_load, 1),
+            commanded_total_w=round(self.commanded_total_w, 1),
+            desired_total_w=round(desired, 1),
+            ramped_total_w=round(ramped, 1)
+        )
+
+        self.commanded_total_w = ramped
+        return ramped
+
+    def apply_device_ramp(self, targets, raw_load):
+        if not self.output_control_bool("device_ramp_enabled", True):
+            for dev, target in zip(self.devices, targets):
+                self.commanded_device_targets[dev.name] = target
+            return targets
+
+        bypass = self.output_control_bypass_active(raw_load)
+        multiplier = (
+            self.output_control_float(
+                "bypass_ramp_multiplier",
+                1.5,
+                minimum=1.0
+            )
+            if bypass
+            else 1.0
+        )
+        up_limit = (
+            self.output_control_float(
+                "device_ramp_up_w_per_cycle",
+                250,
+                minimum=0
+            )
+            * multiplier
+        )
+        down_limit = (
+            self.output_control_float(
+                "device_ramp_down_w_per_cycle",
+                400,
+                minimum=0
+            )
+            * multiplier
+        )
+        ramped_targets = []
+
+        for dev, target in zip(self.devices, targets):
+            previous = self.commanded_device_targets.get(dev.name)
+
+            if previous is None:
+                self.commanded_device_targets[dev.name] = target
+                ramped_targets.append(target)
+                continue
+
+            delta = target - previous
+            limit = up_limit if delta > 0 else down_limit
+            ramped = target
+
+            if limit > 0 and abs(delta) > limit:
+                ramped = previous + limit if delta > 0 else previous - limit
+                log_event(
+                    logging.INFO,
+                    "output_control_device_ramp_limited",
+                    device=dev.name,
+                    previous_target_w=round(previous),
+                    desired_target_w=round(target),
+                    ramped_target_w=round(ramped),
+                    ramp_limit_w=round(limit)
+                )
+
+            ramped = max(0, min(dev.max_power, ramped))
+            self.commanded_device_targets[dev.name] = ramped
+            ramped_targets.append(ramped)
+
+        return ramped_targets
 
     def runtime_system_bool(self, key, default):
         if not self.runtime_state:
@@ -2702,12 +3094,24 @@ class EMSController:
         # CALCULATE TARGETS
         # =====================
 
+        stabilized_total = self.stabilized_total_target(
+            load,
+            states,
+            max_power
+        )
+
         targets, current, new = calculate_targets(
             load,
             states,
             max_power,
             device_configs=self.devices,
-            capabilities=capabilities
+            capabilities=capabilities,
+            requested_total=stabilized_total
+        )
+
+        targets = self.apply_device_ramp(
+            targets,
+            load
         )
 
         logging.info(
@@ -2799,7 +3203,34 @@ class EMSController:
                 min(dev.max_power, target)
             )
 
+            cooldown = self.output_control_float(
+                "write_cooldown_seconds",
+                2,
+                minimum=0
+            )
+            last_write = self.last_output_write_at.get(dev.name)
+            bypass = self.output_control_bypass_active(load)
+
+            if (
+                cooldown > 0
+                and last_write is not None
+                and not bypass
+            ):
+                age = time.time() - last_write
+
+                if age < cooldown:
+                    log_event(
+                        logging.INFO,
+                        "output_control_settle_hold",
+                        device=dev.name,
+                        target_w=target,
+                        last_write_age_s=round(age, 2),
+                        cooldown_s=cooldown
+                    )
+                    continue
+
             self.set_output_limit(dev, target)
+            self.last_output_write_at[dev.name] = time.time()
 
         # =====================
         # LOOP TIMING
