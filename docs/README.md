@@ -7,6 +7,7 @@ Start here:
 | Topic | Document |
 |---|---|
 | Configuration | [configuration.md](configuration.md) |
+| Configuration examples | [configuration-examples.md](configuration-examples.md) |
 | Runtime state | [runtime-state.md](runtime-state.md) |
 | CLI tool | [cli.md](cli.md) |
 | Home Assistant | [home-assistant.md](home-assistant.md) |

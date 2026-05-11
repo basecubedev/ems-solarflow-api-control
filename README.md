@@ -176,6 +176,18 @@ Configuration details: [docs/configuration.md](docs/configuration.md).
 
 ---
 
+## Configuration
+
+Start with `config.template.json`.
+
+Short comments inside the template explain the main sections. Detailed
+explanations and copy/paste examples are in:
+
+- [docs/configuration.md](docs/configuration.md)
+- [docs/configuration-examples.md](docs/configuration-examples.md)
+
+---
+
 ## Runtime State And CLI
 
 Static installation data belongs in `config.json`.
@@ -283,6 +295,7 @@ Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md).
 | Topic | Document |
 |---|---|
 | Configuration | [docs/configuration.md](docs/configuration.md) |
+| Configuration examples | [docs/configuration-examples.md](docs/configuration-examples.md) |
 | Runtime state | [docs/runtime-state.md](docs/runtime-state.md) |
 | CLI tool | [docs/cli.md](docs/cli.md) |
 | Home Assistant | [docs/home-assistant.md](docs/home-assistant.md) |

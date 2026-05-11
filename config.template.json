@@ -1,5 +1,9 @@
 {
+  "_comment": "Copy this file to config.json and adjust your local setup.",
+  "_comment_docs": "Detailed configuration guide and examples: docs/configuration.md and docs/configuration-examples.md",
+
   "ha": {
+    "_comment": "Optional Home Assistant integration. Set enabled=false if you run EMS standalone.",
     "enabled": true,
     "control_enabled": true,
     "url": "http://homeassistant.local:8123",
@@ -7,11 +11,12 @@
   },
 
   "system": {
+    "_comment": "Global EMS settings and safety flags. Start with dry_run=true.",
     "enabled": true,
     "dry_run": true,
     "simulation_mode": false,
-    "allow_hardware_writes": true,
-    "allow_state_reconciliation_writes": true,
+    "allow_hardware_writes": false,
+    "allow_state_reconciliation_writes": false,
     "reconcile_ac_mode_on_start": true,
     "reconcile_smart_mode": true,
     "log_level": "info",
@@ -22,6 +27,7 @@
     "min_output_limit": 0,
     "loop_interval": 5,
     "output_control": {
+      "_comment_output_control": "Advanced output smoothing/tuning. Most users should keep the defaults.",
       "load_deadband_w": 5,
       "target_deadband_w": 10,
       "filter_enabled": true,
@@ -44,12 +50,12 @@
     "redistribute_clamped_power": true,
     "pv_kwp_weighting": true,
     "battery_kwh_weighting": true,
-
     "soc_reconcile_interval": 10
   },
 
   "winter": {
-    "enabled": true,
+    "_comment": "Optional winter SOC strategy. See docs/configuration-examples.md before changing advanced values.",
+    "enabled": false,
     "months": [10, 11, 12, 1, 2],
     "summer_min_soc": 15,
     "winter_min_soc": 40,
@@ -58,20 +64,21 @@
     "ac_charge_power": 200
   },
 
+  "_comment_devices": "One entry per Zendure device. IP and SN must match your local device.",
   "devices": [
     {
       "name": "WR1",
       "ip": "192.168.1.100",
       "sn": "YOUR_SN",
 
-      "_comment": "smart_mode: 1 = runtime/RAM mode",
+      "_comment_smart_mode": "smart_mode=1 is runtime/RAM mode.",
       "smart_mode": 1,
       "max_power": 800,
       "pv_kwp": 1.0,
       "pv_priority_factor": 1.0,
       "battery_kwh": 1.0,
 
-      "_comment": "min/max soc = 0 = unmanaged / keep Zendure app settings or no battery",
+      "_comment_soc": "min_soc/max_soc in percent. Use 0 to leave the value unmanaged.",
       "min_soc": 15,
       "max_soc": 100
     },
@@ -80,20 +87,21 @@
       "ip": "192.168.1.101",
       "sn": "YOUR_SN",
 
-      "_comment": "smart_mode: 1 = runtime/RAM mode",
+      "_comment_smart_mode": "smart_mode=1 is runtime/RAM mode.",
       "smart_mode": 1,
       "max_power": 800,
       "pv_kwp": 1.0,
       "pv_priority_factor": 1.0,
       "battery_kwh": 1.0,
 
-      "_comment": "min/max soc = 0 = unmanaged / keep Zendure app settings or no battery",
+      "_comment_soc": "min_soc/max_soc in percent. Use 0 to leave the value unmanaged.",
       "min_soc": 15,
       "max_soc": 100
     }
   ],
 
   "shelly": {
+    "_comment": "Shelly device used for household power measurement.",
     "ip": "192.168.1.50"
   }
 }
