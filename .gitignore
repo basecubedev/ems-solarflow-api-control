@@ -7,6 +7,8 @@ zenSDK/
 
 # runtime traces
 runtime-traces/
+runtime-state.json
+runtime-state.json.tmp
 
 # local config
 config.json

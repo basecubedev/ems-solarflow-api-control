@@ -98,6 +98,8 @@ def default_safe_config():
             "max_total_power": 800,
             "max_device_power": 800,
             "deadband": 10,
+            "runtime_state_path": "runtime-state.json",
+            "min_output_limit": 0,
             "loop_interval": 5,
             "soc_reconcile_interval": 0,
             "log_level": "debug",
@@ -138,6 +140,10 @@ MAX_TOTAL_POWER = CONFIG["system"]["max_total_power"]
 MAX_DEVICE_POWER = CONFIG["system"]["max_device_power"]
 DEADBAND = CONFIG["system"]["deadband"]
 LOOP_INTERVAL = CONFIG["system"]["loop_interval"]
+RUNTIME_STATE_PATH = CONFIG["system"].get(
+    "runtime_state_path",
+    "runtime-state.json"
+)
 REMAINING_TIME_POWER_SAMPLES = 10
 REMAINING_TIME_MIN_POWER_W = 10
 REMAINING_TIME_MAX_HOURS = 999
@@ -233,6 +239,226 @@ def state_reconciliation_writes_allowed():
         hardware_writes_allowed()
         and ALLOW_STATE_RECONCILIATION_WRITES
     )
+
+
+def runtime_state_path():
+    """Return absolute path to mutable runtime state."""
+
+    if os.path.isabs(RUNTIME_STATE_PATH):
+        return RUNTIME_STATE_PATH
+
+    return os.path.join(BASE_DIR, RUNTIME_STATE_PATH)
+
+
+def safe_int(value, default=0, minimum=None):
+    try:
+        parsed = int(float(value))
+    except (TypeError, ValueError):
+        parsed = default
+
+    if minimum is not None:
+        parsed = max(minimum, parsed)
+
+    return parsed
+
+
+def safe_bool(value, default=False):
+    if isinstance(value, bool):
+        return value
+
+    if value is None:
+        return default
+
+    normalized = str(value).strip().lower()
+
+    if normalized in ("on", "true", "1", "yes", "enabled"):
+        return True
+
+    if normalized in ("off", "false", "0", "no", "disabled"):
+        return False
+
+    return default
+
+
+def merge_runtime_defaults(data, defaults):
+    """Merge runtime data over defaults while preserving unknown keys."""
+
+    if not isinstance(data, dict):
+        data = {}
+
+    merged = dict(data)
+
+    system = merged.get("system")
+    if not isinstance(system, dict):
+        system = {}
+
+    merged["system"] = {
+        **defaults.get("system", {}),
+        **system
+    }
+
+    devices = merged.get("devices")
+    if not isinstance(devices, dict):
+        devices = {}
+
+    merged_devices = {}
+
+    for name, device_defaults in defaults.get("devices", {}).items():
+        device_state = devices.get(name)
+        if not isinstance(device_state, dict):
+            device_state = {}
+
+        merged_devices[name] = {
+            **device_defaults,
+            **device_state
+        }
+
+    for name, device_state in devices.items():
+        if name not in merged_devices:
+            merged_devices[name] = device_state
+
+    merged["devices"] = merged_devices
+
+    return merged
+
+
+class RuntimeState:
+    """Persist mutable operator state outside static config."""
+
+    def __init__(self, path, defaults):
+        self.path = path
+        self.tmp_path = f"{path}.tmp"
+        self.defaults = defaults
+        self.data = merge_runtime_defaults({}, defaults)
+        self.last_mtime = None
+
+    def load_or_create(self):
+        if not os.path.exists(self.path):
+            self.data = merge_runtime_defaults({}, self.defaults)
+            log_event(
+                logging.INFO,
+                "runtime_state_created",
+                path=self.path
+            )
+            self.save_atomic()
+            return self.data
+
+        return self.load_if_changed(force=True)
+
+    def load_if_changed(self, force=False):
+        try:
+            mtime = os.path.getmtime(self.path)
+        except FileNotFoundError:
+            return self.load_or_create()
+
+        if not force and self.last_mtime == mtime:
+            return self.data
+
+        try:
+            with open(self.path) as f:
+                loaded = json.load(f)
+
+            if not force and self.last_mtime is not None:
+                log_event(
+                    logging.INFO,
+                    "runtime_state_changed",
+                    path=self.path
+                )
+
+            self.data = merge_runtime_defaults(loaded, self.defaults)
+            self.last_mtime = mtime
+
+            log_event(
+                logging.INFO,
+                "runtime_state_loaded",
+                path=self.path
+            )
+
+        except Exception as e:
+            log_event(
+                logging.WARNING,
+                "runtime_state_load_error",
+                path=self.path,
+                error=e
+            )
+
+        return self.data
+
+    def save_atomic(self):
+        parent = os.path.dirname(self.path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+
+        with open(self.tmp_path, "w") as f:
+            json.dump(self.data, f, indent=2, sort_keys=True)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+
+        os.replace(self.tmp_path, self.path)
+        self.last_mtime = os.path.getmtime(self.path)
+
+        log_event(
+            logging.INFO,
+            "runtime_state_saved",
+            path=self.path
+        )
+
+    def get_system(self, key, default=None):
+        system = self.data.get("system", {})
+        if not isinstance(system, dict):
+            return default
+
+        return system.get(key, default)
+
+    def set_system(self, key, value):
+        system = self.data.setdefault("system", {})
+        previous = system.get(key)
+        system[key] = value
+        return previous != value
+
+    def get_device(self, device_name, key, default=None):
+        devices = self.data.get("devices", {})
+        device = devices.get(device_name, {})
+
+        if not isinstance(device, dict):
+            return default
+
+        return device.get(key, default)
+
+    def set_device(self, device_name, key, value):
+        devices = self.data.setdefault("devices", {})
+        device = devices.setdefault(device_name, {})
+        previous = device.get(key)
+        device[key] = value
+        return previous != value
+
+
+def build_runtime_defaults(devices):
+    """Build runtime defaults from current device configuration."""
+
+    device_defaults = {}
+
+    for dev in devices:
+        device_defaults[dev.name] = {
+            "enabled": True,
+            "max_power": safe_int(
+                getattr(dev, "max_power", MAX_DEVICE_POWER),
+                MAX_DEVICE_POWER,
+                minimum=0
+            ),
+            "offgrid_socket": False
+        }
+
+    return {
+        "system": {
+            "enabled": SYSTEM_ENABLED,
+            "max_total_power": MAX_TOTAL_POWER,
+            "loop_interval": LOOP_INTERVAL,
+            "min_output_limit": MIN_OUTPUT_LIMIT
+        },
+        "devices": device_defaults
+    }
 
 
 def zendure_write_succeeded(error_event, dev, response, **fields):
@@ -1019,23 +1245,22 @@ def apply_constraints_and_redistribute(
     return redistributed, excess
 
 
-def apply_min_output_limit(target, device):
+def apply_min_output_limit(target, device, min_output_limit):
     """Apply the configured minimum outputLimit for enabled EMS control."""
 
-    if MIN_OUTPUT_LIMIT <= 0:
+    if min_output_limit <= 0:
         return target
 
-    guarded_target = max(target, MIN_OUTPUT_LIMIT)
-    guarded_target = min(device.max_power, guarded_target)
+    guarded_target = max(target, min_output_limit)
 
     if guarded_target != target:
         log_event(
             logging.INFO,
-            "min_output_limit_guard",
+            "min_output_limit_applied",
             device=device.name,
             original_target_w=target,
             guarded_target_w=guarded_target,
-            min_output_limit_w=MIN_OUTPUT_LIMIT
+            min_output_limit_w=min_output_limit
         )
 
     return guarded_target
@@ -1282,11 +1507,19 @@ def calculate_targets(
 class EMSController:
     """Main EMS control loop."""
 
-    def __init__(self, devices, shelly, ha=None, sleep_enabled=True):
+    def __init__(
+        self,
+        devices,
+        shelly,
+        ha=None,
+        sleep_enabled=True,
+        runtime_state=None
+    ):
         self.devices = devices
         self.shelly = shelly
         self.ha = ha
         self.sleep_enabled = sleep_enabled
+        self.runtime_state = runtime_state
         self.soc_reconcile_counter = SOC_RECONCILE_INTERVAL
 
         self.last_states = {}
@@ -1294,6 +1527,236 @@ class EMSController:
         self.device_online = {}
         self.battery_power_history = {}
         self.initial_ac_mode_reconciled = {}
+        self.last_ha_seen = {}
+        self.last_ha_written = {}
+
+    def runtime_system_bool(self, key, default):
+        if not self.runtime_state:
+            return default
+
+        return safe_bool(
+            self.runtime_state.get_system(key, default),
+            default
+        )
+
+    def runtime_system_int(self, key, default, minimum=0):
+        if not self.runtime_state:
+            return default
+
+        return safe_int(
+            self.runtime_state.get_system(key, default),
+            default,
+            minimum=minimum
+        )
+
+    def runtime_device_bool(self, device_name, key, default):
+        if not self.runtime_state:
+            return default
+
+        return safe_bool(
+            self.runtime_state.get_device(device_name, key, default),
+            default
+        )
+
+    def runtime_device_int(self, device_name, key, default, minimum=0):
+        if not self.runtime_state:
+            return default
+
+        return safe_int(
+            self.runtime_state.get_device(device_name, key, default),
+            default,
+            minimum=minimum
+        )
+
+    def ha_update_runtime_field(
+        self,
+        entity_id,
+        runtime_getter,
+        runtime_setter,
+        parser,
+        formatter=lambda value: value
+    ):
+        """Synchronize one HA helper with one runtime-state field."""
+
+        if not self.ha or not HA_CONTROL_ENABLED or not self.runtime_state:
+            return False
+
+        try:
+            ha_state = self.ha.get_state(entity_id)
+        except Exception as e:
+            log_event(
+                logging.WARNING,
+                "runtime_state_ha_read_error",
+                entity=entity_id,
+                error=e
+            )
+            return False
+
+        runtime_value = runtime_getter()
+
+        if ha_state is None:
+            return False
+
+        try:
+            parsed_ha = parser(ha_state, runtime_value)
+        except Exception as e:
+            log_event(
+                logging.WARNING,
+                "runtime_state_ha_read_error",
+                entity=entity_id,
+                state=ha_state,
+                error=e
+            )
+            return False
+
+        last_written = self.last_ha_written.get(entity_id)
+        last_seen = self.last_ha_seen.get(entity_id)
+
+        if (
+            last_seen is not None
+            and parsed_ha != last_seen
+            and parsed_ha != last_written
+        ):
+            changed = runtime_setter(parsed_ha)
+            self.last_ha_seen[entity_id] = parsed_ha
+
+            if changed:
+                log_event(
+                    logging.INFO,
+                    "runtime_state_ha_sync",
+                    direction="ha_to_runtime",
+                    entity=entity_id,
+                    value=parsed_ha
+                )
+
+            return changed
+
+        if parsed_ha != runtime_value and runtime_value != last_written:
+            self.ha.set_state(entity_id, formatter(runtime_value))
+            self.last_ha_written[entity_id] = runtime_value
+            self.last_ha_seen[entity_id] = runtime_value
+            log_event(
+                logging.INFO,
+                "runtime_state_ha_write",
+                entity=entity_id,
+                value=runtime_value
+            )
+            return False
+
+        self.last_ha_seen[entity_id] = parsed_ha
+        return False
+
+    def sync_ha_runtime_state(self):
+        """Use HA helpers as an optional UI over runtime-state."""
+
+        if not self.ha or not HA_CONTROL_ENABLED or not self.runtime_state:
+            return
+
+        changed = False
+
+        changed |= self.ha_update_runtime_field(
+            "input_boolean.ems_solarflow_enable",
+            lambda: self.runtime_system_bool("enabled", SYSTEM_ENABLED),
+            lambda value: self.runtime_state.set_system("enabled", value),
+            lambda value, default: safe_bool(value, default),
+            lambda value: "on" if value else "off"
+        )
+
+        changed |= self.ha_update_runtime_field(
+            "input_number.ems_solarflow_max_power",
+            lambda: self.runtime_system_int(
+                "max_total_power",
+                MAX_TOTAL_POWER,
+                minimum=0
+            ),
+            lambda value: self.runtime_state.set_system(
+                "max_total_power",
+                value
+            ),
+            lambda value, default: safe_int(value, default, minimum=0)
+        )
+
+        changed |= self.ha_update_runtime_field(
+            "input_number.ems_solarflow_interval",
+            lambda: self.runtime_system_int(
+                "loop_interval",
+                LOOP_INTERVAL,
+                minimum=1
+            ),
+            lambda value: self.runtime_state.set_system(
+                "loop_interval",
+                value
+            ),
+            lambda value, default: safe_int(value, default, minimum=1)
+        )
+
+        changed |= self.ha_update_runtime_field(
+            "input_number.ems_solarflow_min_output_limit",
+            lambda: self.runtime_system_int(
+                "min_output_limit",
+                MIN_OUTPUT_LIMIT,
+                minimum=0
+            ),
+            lambda value: self.runtime_state.set_system(
+                "min_output_limit",
+                value
+            ),
+            lambda value, default: safe_int(value, default, minimum=0)
+        )
+
+        for dev in self.devices:
+            base = f"ems_solarflow_{dev.name.lower()}"
+
+            changed |= self.ha_update_runtime_field(
+                f"input_boolean.{base}_enabled",
+                lambda dev=dev: self.runtime_device_bool(
+                    dev.name,
+                    "enabled",
+                    True
+                ),
+                lambda value, dev=dev: self.runtime_state.set_device(
+                    dev.name,
+                    "enabled",
+                    value
+                ),
+                lambda value, default: safe_bool(value, default),
+                lambda value: "on" if value else "off"
+            )
+
+            changed |= self.ha_update_runtime_field(
+                f"input_number.{base}_max_power",
+                lambda dev=dev: self.runtime_device_int(
+                    dev.name,
+                    "max_power",
+                    dev.max_power,
+                    minimum=0
+                ),
+                lambda value, dev=dev: self.runtime_state.set_device(
+                    dev.name,
+                    "max_power",
+                    value
+                ),
+                lambda value, default: safe_int(value, default, minimum=0)
+            )
+
+            changed |= self.ha_update_runtime_field(
+                f"input_boolean.{base}_offgrid_socket",
+                lambda dev=dev: self.runtime_device_bool(
+                    dev.name,
+                    "offgrid_socket",
+                    False
+                ),
+                lambda value, dev=dev: self.runtime_state.set_device(
+                    dev.name,
+                    "offgrid_socket",
+                    value
+                ),
+                lambda value, default: safe_bool(value, default),
+                lambda value: "on" if value else "off"
+            )
+
+        if changed:
+            self.runtime_state.save_atomic()
 
     def set_output_limit(self, dev, value):
         """Write output limit to device."""
@@ -1935,37 +2398,44 @@ class EMSController:
 
         start = time.time()
 
+        if self.runtime_state:
+            self.runtime_state.load_if_changed()
+
+        self.sync_ha_runtime_state()
+
         load = self.shelly.get_power()
 
         # =====================
-        # HA CONFIG
+        # RUNTIME CONFIG
         # =====================
 
-        if self.ha and HA_CONTROL_ENABLED:
+        max_power = self.runtime_system_int(
+            "max_total_power",
+            MAX_TOTAL_POWER,
+            minimum=0
+        )
+        enabled = self.runtime_system_bool(
+            "enabled",
+            SYSTEM_ENABLED
+        )
+        interval = self.runtime_system_int(
+            "loop_interval",
+            LOOP_INTERVAL,
+            minimum=1
+        )
+        min_output_limit = self.runtime_system_int(
+            "min_output_limit",
+            MIN_OUTPUT_LIMIT,
+            minimum=0
+        )
 
-            max_power = self.ha.get_float(
-                "input_number.ems_solarflow_max_power",
-                MAX_TOTAL_POWER
+        for dev in self.devices:
+            dev.max_power = self.runtime_device_int(
+                dev.name,
+                "max_power",
+                dev.max_power,
+                minimum=0
             )
-
-            val = self.ha.get_state(
-                "input_boolean.ems_solarflow_enable"
-            )
-
-            enabled = (
-                str(val).strip().lower() == "on"
-            )
-
-            interval = self.ha.get_float(
-                "input_number.ems_solarflow_interval",
-                LOOP_INTERVAL
-            )
-
-        else:
-
-            max_power = MAX_TOTAL_POWER
-            enabled = SYSTEM_ENABLED
-            interval = LOOP_INTERVAL
 
         # =====================
         # FETCH STATES
@@ -2154,11 +2624,21 @@ class EMSController:
 
                 continue
 
+            if not self.runtime_device_bool(dev.name, "enabled", True):
+                log_event(
+                    logging.INFO,
+                    "device_disabled_skip_write",
+                    device=dev.name,
+                    target_w=targets[i]
+                )
+                continue
+
             target = targets[i]
 
             target = apply_min_output_limit(
                 target,
-                dev
+                dev,
+                min_output_limit
             )
 
             deadband_reference = (
@@ -2359,11 +2839,18 @@ def run_frames(frames, source_name):
         )
 
     shelly = SimulatedShellyClient()
+    runtime_state = RuntimeState(
+        runtime_state_path(),
+        build_runtime_defaults(devices)
+    )
+    runtime_state.load_or_create()
+
     ems = EMSController(
         devices,
         shelly,
         ha=None,
-        sleep_enabled=False
+        sleep_enabled=False,
+        runtime_state=runtime_state
     )
 
     start_time = time.time()
@@ -2585,6 +3072,12 @@ if __name__ == "__main__":
         session
     )
 
+    runtime_state = RuntimeState(
+        runtime_state_path(),
+        build_runtime_defaults(devices)
+    )
+    runtime_state.load_or_create()
+
     if ARGS.preflight:
         if run_live_preflight(devices, shelly, ha):
             sys.exit(0)
@@ -2594,7 +3087,8 @@ if __name__ == "__main__":
     ems = EMSController(
         devices,
         shelly,
-        ha
+        ha,
+        runtime_state=runtime_state
     )
 
     log_event(logging.INFO, "ems_started")

@@ -379,7 +379,8 @@ cp config.template.json config.json
 | `max_total_power` | Maximum combined EMS output | `800` |
 | `max_device_power` | Default per-device max power | `800` |
 | `deadband` | Minimum target delta before writing | `10` |
-| `min_output_limit` | Minimum `outputLimit` while EMS control is enabled | `30` |
+| `runtime_state_path` | Mutable runtime-state file path | `"runtime-state.json"` |
+| `min_output_limit` | Default runtime minimum `outputLimit` while EMS control is enabled | `0` |
 | `loop_interval` | Control loop interval in seconds | `5` |
 | `redistribute_clamped_power` | Redistribute clamped target power | `true` |
 | `pv_kwp_weighting` | Use configured PV size for weighting | `true` |
@@ -400,18 +401,23 @@ Safe development example:
     "max_total_power": 800,
     "max_device_power": 800,
     "deadband": 10,
-    "min_output_limit": 30,
+    "runtime_state_path": "runtime-state.json",
+    "min_output_limit": 0,
     "loop_interval": 5
   }
 }
 ```
 
-`min_output_limit=30` is the default guard against writing `outputLimit=0`
-during enabled EMS control. This helps keep Zendure inverters out of a
-stop/idle-like state where PV or MPPT telemetry may not become visible again
-reliably. Set it to `0` only when you intentionally want the previous behavior.
-The guard applies only when EMS control is enabled and the device is online,
-before deadband handling.
+`min_output_limit` defaults to `0` for backwards compatibility. A local value
+such as `30` can be set in `runtime-state.json` to avoid writing
+`outputLimit=0` during enabled EMS control. This helps keep Zendure inverters
+out of a stop/idle-like state where PV or MPPT telemetry may not become visible
+again reliably. The guard applies only when EMS control is enabled and the
+device is online, before deadband handling.
+
+`runtime-state.json` is the mutable operator state. It is created on first run
+from static config defaults and is intentionally ignored by Git. Home Assistant
+helpers, when enabled, act as an optional UI over this runtime state.
 
 Live runtime control example:
 
