@@ -1,12 +1,16 @@
 # local AI / research docs
-docs/
+docs/develop/
 Zendure-HA/
 zenSDK/
+docs/release.md
 
 
 
 # runtime traces
 runtime-traces/
+runtime-state.json
+runtime-state.json.tmp
+runtime-state.json.*.tmp
 
 # local config
 config.json

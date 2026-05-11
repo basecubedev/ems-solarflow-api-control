@@ -50,10 +50,16 @@ views:
                     entities:
                       - entity: input_boolean.ems_solarflow_enable
                         name: Enabled
+                      - entity: input_boolean.ems_solarflow_ha_enabled
+                        name: HA Publishing
+                      - entity: input_boolean.ems_solarflow_ha_control_enabled
+                        name: HA Runtime Control
                       - entity: input_number.ems_solarflow_max_power
                         name: Max Power
                       - entity: input_number.ems_solarflow_interval
                         name: Interval
+                      - entity: input_number.ems_solarflow_min_output_limit
+                        name: Min Output
                       - type: divider
                       - entity: sensor.ems_solarflow_load
                         name: Load
@@ -75,11 +81,62 @@ views:
               - type: horizontal-stack
                 cards:
                   - type: entities
+                    title: 🧭 Runtime Control
+                    show_header_toggle: false
+                    entities:
+                      - entity: input_boolean.ems_solarflow_wr1_enabled
+                        name: WR1 Enabled
+                      - entity: input_number.ems_solarflow_wr1_max_power
+                        name: WR1 Max Power
+                      - entity: input_select.ems_solarflow_wr1_offgrid_socket_mode
+                        name: WR1 Offgrid Mode
+                      - type: divider
+                      - entity: input_boolean.ems_solarflow_wr2_enabled
+                        name: WR2 Enabled
+                      - entity: input_number.ems_solarflow_wr2_max_power
+                        name: WR2 Max Power
+                      - entity: input_select.ems_solarflow_wr2_offgrid_socket_mode
+                        name: WR2 Offgrid Mode
+                  - type: entities
+                    title: ❄️ Winter Mode
+                    show_header_toggle: false
+                    entities:
+                      - entity: binary_sensor.ems_solarflow_winter_enabled
+                        name: Enabled
+                      - entity: input_boolean.ems_solarflow_winter_enabled
+                        name: Runtime Toggle
+                      - entity: binary_sensor.ems_solarflow_winter_active
+                        name: Active
+                      - entity: binary_sensor.ems_solarflow_winter_adjust_window
+                        name: Adjust Window
+                      - type: divider
+                      - entity: sensor.ems_solarflow_winter_summer_min_soc
+                        name: Summer minSoc
+                      - entity: sensor.ems_solarflow_winter_min_soc
+                        name: Winter minSoc
+                      - entity: sensor.ems_solarflow_winter_ramp_step
+                        name: Ramp Step
+                      - entity: sensor.ems_solarflow_winter_ac_charge_power
+                        name: AC Charge Limit
+                      - entity: sensor.ems_solarflow_winter_last_adjust_date
+                        name: Last Adjust
+              - type: horizontal-stack
+                cards:
+                  - type: entities
                     title: 🔋 WR1 Battery
                     show_header_toggle: false
                     entities:
                       - entity: sensor.ems_solarflow_wr1_soc
                         name: SOC
+                      - entity: sensor.ems_solarflow_wr1_min_soc
+                        name: minSoc
+                      - entity: sensor.ems_solarflow_wr1_max_soc
+                        name: maxSoc
+                      - entity: sensor.ems_solarflow_wr1_winter_min_soc_target
+                        name: Winter minSoc Target
+                      - entity: sensor.ems_solarflow_wr1_winter_estimated_ramp_days
+                        name: Winter Ramp Days
+                      - type: divider
                       - entity: sensor.ems_solarflow_wr1_voltage
                         name: Voltage
                       - entity: sensor.ems_solarflow_wr1_temp
@@ -97,6 +154,15 @@ views:
                     entities:
                       - entity: sensor.ems_solarflow_wr2_soc
                         name: SOC
+                      - entity: sensor.ems_solarflow_wr2_min_soc
+                        name: minSoc
+                      - entity: sensor.ems_solarflow_wr2_max_soc
+                        name: maxSoc
+                      - entity: sensor.ems_solarflow_wr2_winter_min_soc_target
+                        name: Winter minSoc Target
+                      - entity: sensor.ems_solarflow_wr2_winter_estimated_ramp_days
+                        name: Winter Ramp Days
+                      - type: divider
                       - entity: sensor.ems_solarflow_wr2_voltage
                         name: Voltage
                       - entity: sensor.ems_solarflow_wr2_temp
@@ -148,8 +214,17 @@ views:
                     entities:
                       - entity: sensor.ems_solarflow_wr1_rssi
                         name: RSSI
+                      - entity: binary_sensor.wr1_fault
+                        name: Fault
                       - entity: sensor.ems_solarflow_wr1_fault_level
                         name: FaultLevel signal
+                      - entity: sensor.ems_solarflow_wr1_output_limit
+                        name: Output Limit
+                      - entity: sensor.ems_solarflow_wr1_soc_limit
+                        name: SOC Limit
+                      - entity: sensor.ems_solarflow_wr1_pack_state
+                        name: Pack State
+                      - type: divider
                       - entity: binary_sensor.wr1_ac_active
                         name: AC path
                       - entity: binary_sensor.wr1_dc_active
@@ -162,8 +237,17 @@ views:
                     entities:
                       - entity: sensor.ems_solarflow_wr2_rssi
                         name: RSSI
+                      - entity: binary_sensor.wr2_fault
+                        name: Fault
                       - entity: sensor.ems_solarflow_wr2_fault_level
                         name: FaultLevel signal
+                      - entity: sensor.ems_solarflow_wr2_output_limit
+                        name: Output Limit
+                      - entity: sensor.ems_solarflow_wr2_soc_limit
+                        name: SOC Limit
+                      - entity: sensor.ems_solarflow_wr2_pack_state
+                        name: Pack State
+                      - type: divider
                       - entity: binary_sensor.wr2_ac_active
                         name: AC path
                       - entity: binary_sensor.wr2_dc_active

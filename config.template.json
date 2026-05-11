@@ -12,17 +12,50 @@
     "simulation_mode": false,
     "allow_hardware_writes": true,
     "allow_state_reconciliation_writes": true,
+    "reconcile_ac_mode_on_start": true,
+    "reconcile_smart_mode": true,
     "log_level": "info",
     "max_total_power": 800,
     "max_device_power": 800,
     "deadband": 10,
-    "min_output_limit": 30,
+    "runtime_state_path": "runtime-state.json",
+    "min_output_limit": 0,
     "loop_interval": 5,
+    "output_control": {
+      "load_deadband_w": 5,
+      "target_deadband_w": 10,
+      "filter_enabled": true,
+      "filter_method": "median_ema",
+      "median_window": 3,
+      "ema_alpha": 0.65,
+      "ramp_enabled": true,
+      "ramp_up_w_per_cycle": 300,
+      "ramp_down_w_per_cycle": 500,
+      "device_ramp_enabled": true,
+      "device_ramp_up_w_per_cycle": 250,
+      "device_ramp_down_w_per_cycle": 400,
+      "write_cooldown_seconds": 2,
+      "large_import_bypass_w": 600,
+      "large_export_bypass_w": 500,
+      "bypass_ramp_multiplier": 1.5,
+      "telemetry_max_age_seconds": 10,
+      "stale_telemetry_ramp_factor": 0.5
+    },
     "redistribute_clamped_power": true,
     "pv_kwp_weighting": true,
     "battery_kwh_weighting": true,
 
     "soc_reconcile_interval": 10
+  },
+
+  "winter": {
+    "enabled": true,
+    "months": [10, 11, 12, 1, 2],
+    "summer_min_soc": 15,
+    "winter_min_soc": 40,
+    "ramp_step_percent": 5,
+    "adjust_hour": 12,
+    "ac_charge_power": 200
   },
 
   "devices": [
