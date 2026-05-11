@@ -874,6 +874,18 @@ def detect_capabilities(state):
     )
 
 
+def derive_soc_runtime_state(state):
+    """Classify SOC telemetry for diagnostics only."""
+
+    if state.soc_limit == 1 or state.soc >= state.max_soc:
+        return "soc_full"
+
+    if state.soc_limit == 2 or state.soc <= state.min_soc:
+        return "soc_empty"
+
+    return "soc_normal"
+
+
 def firmware_recovery_or_ac_charge_active(state):
     """Return True when firmware appears to be handling charge/recovery."""
 
@@ -2365,6 +2377,7 @@ class EMSController:
                 device=dev.name,
                 min_soc=dev.min_soc,
                 max_soc=dev.max_soc,
+                max_soc_property="socSet",
                 dry_run=DRY_RUN,
                 simulation=SIMULATION_MODE,
                 allow_hardware_writes=ALLOW_HARDWARE_WRITES,
@@ -2382,7 +2395,7 @@ class EMSController:
                     "sn": dev.sn,
                     "properties": {
                         "minSoc": int(dev.min_soc * 10),
-                        "maxSoc": int(dev.max_soc * 10)
+                        "socSet": int(dev.max_soc * 10)
                     }
                 },
                 timeout=2
@@ -2393,7 +2406,8 @@ class EMSController:
                 dev,
                 response,
                 min_soc=dev.min_soc,
-                max_soc=dev.max_soc
+                max_soc=dev.max_soc,
+                max_soc_property="socSet"
             ):
                 return
 
@@ -2402,7 +2416,8 @@ class EMSController:
                 "write_soc_limits",
                 device=dev.name,
                 min_soc=dev.min_soc,
-                max_soc=dev.max_soc
+                max_soc=dev.max_soc,
+                max_soc_property="socSet"
             )
 
         except Exception as e:
@@ -2411,6 +2426,9 @@ class EMSController:
                 logging.WARNING,
                 "write_soc_limits_error",
                 device=dev.name,
+                min_soc=dev.min_soc,
+                max_soc=dev.max_soc,
+                max_soc_property="socSet",
                 error=e
             )
 
@@ -3149,6 +3167,7 @@ class EMSController:
                 output_w=state.output,
                 output_limit_w=state.output_limit,
                 pack_input_w=state.pack_in,
+                soc_runtime_state=derive_soc_runtime_state(state),
                 can_charge=cap.can_charge,
                 can_discharge=cap.can_discharge,
                 can_export=cap.can_export,

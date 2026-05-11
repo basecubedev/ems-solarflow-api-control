@@ -577,7 +577,7 @@ Recommended:
 | `startup` | Shows active safety flags and runtime mode |
 | `preflight_start` | Preflight validation started |
 | `preflight_device_ok` | Device passed live-read validation |
-| `capability_detection` | Runtime capability detection result |
+| `capability_detection` | Runtime capability detection result, including log-only SOC runtime state |
 | `pv_first_limit` | PV-first output limit per device |
 | `balance_weight` | Weighting details for target allocation |
 | `target_calculation` | Final target calculation |
@@ -1745,6 +1745,9 @@ Check:
 ```text
 event=capability_detection
 ```
+
+This log includes `soc_runtime_state` as a diagnostic value only. It does not
+change output target calculation.
 
 ---
 
