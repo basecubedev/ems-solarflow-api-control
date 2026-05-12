@@ -29,7 +29,7 @@ class SimulatedZendureClient:
     def __init__(
         self,
         name,
-        max_power=cfg.MAX_DEVICE_POWER,
+        max_power=None,
         pv_kwp=1.0,
         battery_kwh=1.0,
         pv_priority_factor=1.0
@@ -42,7 +42,11 @@ class SimulatedZendureClient:
         self.max_soc = 100
         self.smart_mode = 1
         self.grid_off_mode = None
-        self.max_power = max_power
+        self.max_power = (
+            cfg.MAX_DEVICE_POWER
+            if max_power is None
+            else max_power
+        )
         self.pv_kwp = pv_kwp
         self.battery_kwh = battery_kwh
         self.pv_priority_factor = pv_priority_factor
@@ -53,6 +57,28 @@ class SimulatedZendureClient:
 
     def fetch(self):
         return self.state
+
+
+class SimulatedHAClient:
+    """Minimal HA-compatible state sink for self-tests."""
+
+    def __init__(self):
+        self.states = {}
+
+    def set_state(
+        self,
+        entity_id,
+        state,
+        unit=None,
+        device_class=None,
+        state_class=None,
+        icon=None,
+        extra_attributes=None
+    ):
+        self.states[entity_id] = {
+            "state": state,
+            "attributes": extra_attributes or {}
+        }
 
 # =====================
 # PARALLEL FETCH
@@ -459,6 +485,256 @@ def run_self_tests():
             "self_test_failed",
             test="winter_ac_charge_limit_payload",
             payload=json.dumps(payload, sort_keys=True)
+        )
+
+    sim_devices = [
+        SimulatedZendureClient("WR1"),
+        SimulatedZendureClient("WR2")
+    ]
+    sim_ems = EMSController(
+        sim_devices,
+        SimulatedShellyClient(),
+        ha=None,
+        sleep_enabled=False,
+        runtime_state=None
+    )
+
+    idle_states = []
+
+    for _dev in sim_devices:
+        state = zero_device_state()
+        state.soc = 15
+        state.min_soc = 15
+        state.max_soc = 100
+        state.soc_limit = 2
+        state.output_limit = 30
+        idle_states.append(state)
+
+    idle_capabilities = [
+        detect_capabilities(state)
+        for state in idle_states
+    ]
+    active_indexes = [0, 1]
+
+    if sim_ems.has_output_control_export_capacity(
+        idle_states,
+        idle_capabilities,
+        active_indexes
+    ):
+        ok = False
+        log_event(
+            logging.ERROR,
+            "self_test_failed",
+            test="output_control_export_capacity",
+            reason="idle_state_has_export_capacity"
+        )
+
+    first_target = sim_ems.stabilized_total_target(
+        300,
+        idle_states,
+        800,
+        has_export_capacity=False,
+        standby_total_w=60,
+        active_device_count=2
+    )
+    second_target = sim_ems.stabilized_total_target(
+        300,
+        idle_states,
+        800,
+        has_export_capacity=False,
+        standby_total_w=60,
+        active_device_count=2
+    )
+
+    if first_target != 60 or second_target != 60:
+        ok = False
+        log_event(
+            logging.ERROR,
+            "self_test_failed",
+            test="output_control_no_export_capacity_hold",
+            expected="60,60",
+            actual=f"{first_target},{second_target}"
+        )
+
+    sim_ems.commanded_total_w = 400
+    max_change_target = sim_ems.stabilized_total_target(
+        300,
+        idle_states,
+        800,
+        has_export_capacity=False,
+        standby_total_w=60,
+        active_device_count=2
+    )
+
+    if max_change_target != 60:
+        ok = False
+        log_event(
+            logging.ERROR,
+            "self_test_failed",
+            test="output_control_no_export_capacity_max_change",
+            expected=60,
+            actual=max_change_target
+        )
+
+    pv_state = zero_device_state()
+    pv_state.soc = 15
+    pv_state.min_soc = 15
+    pv_state.max_soc = 100
+    pv_state.soc_limit = 2
+    pv_state.output_limit = 30
+    pv_state.solar1 = 1
+
+    if not sim_ems.has_output_control_export_capacity(
+        [pv_state],
+        [detect_capabilities(pv_state)],
+        [0]
+    ):
+        ok = False
+        log_event(
+            logging.ERROR,
+            "self_test_failed",
+            test="output_control_export_capacity",
+            reason="positive_panel_power_not_detected"
+        )
+
+    discharge_state = zero_device_state()
+    discharge_state.soc = 50
+    discharge_state.min_soc = 15
+    discharge_state.max_soc = 100
+    discharge_state.soc_limit = 0
+    discharge_state.dc_status = 1
+    discharge_state.output_limit = 30
+    discharge_capability = detect_capabilities(discharge_state)
+
+    if not sim_ems.has_output_control_export_capacity(
+        [discharge_state],
+        [discharge_capability],
+        [0]
+    ):
+        ok = False
+        log_event(
+            logging.ERROR,
+            "self_test_failed",
+            test="output_control_export_capacity",
+            reason="discharge_capacity_not_detected"
+        )
+
+    sim_ems.commanded_total_w = None
+    sim_ems.filtered_load_w = None
+    sim_ems.load_history.clear()
+    discharge_target = sim_ems.stabilized_total_target(
+        300,
+        [discharge_state],
+        800,
+        has_export_capacity=True,
+        standby_total_w=30,
+        active_device_count=1
+    )
+
+    if discharge_target <= 30:
+        ok = False
+        log_event(
+            logging.ERROR,
+            "self_test_failed",
+            test="output_control_export_capacity_ramp",
+            expected=">30",
+            actual=discharge_target
+        )
+
+    sim_ems.runtime_state = RuntimeState(
+        "",
+        build_runtime_defaults(sim_devices)
+    )
+    sim_ems.runtime_state.set_device("WR2", "enabled", False)
+    sim_ems.device_online = {
+        "WR1": True,
+        "WR2": True
+    }
+    effective_targets = sim_ems.effective_control_targets(
+        [10, 100],
+        enabled=True,
+        min_output_limit=30
+    )
+
+    if effective_targets != [30, 0]:
+        ok = False
+        log_event(
+            logging.ERROR,
+            "self_test_failed",
+            test="effective_control_targets_disabled_min_output",
+            expected="[30,0]",
+            actual=json.dumps(effective_targets)
+        )
+
+    sim_ems.device_online["WR1"] = False
+    effective_targets = sim_ems.effective_control_targets(
+        [10, 100],
+        enabled=True,
+        min_output_limit=30
+    )
+
+    if effective_targets != [0, 0]:
+        ok = False
+        log_event(
+            logging.ERROR,
+            "self_test_failed",
+            test="effective_control_targets_offline",
+            expected="[0,0]",
+            actual=json.dumps(effective_targets)
+        )
+
+    sim_ems.device_online["WR1"] = True
+    sim_ems.runtime_state.set_device("WR2", "enabled", True)
+    effective_targets = sim_ems.effective_control_targets(
+        [10, 100],
+        enabled=False,
+        min_output_limit=30
+    )
+
+    if effective_targets != [0, 0]:
+        ok = False
+        log_event(
+            logging.ERROR,
+            "self_test_failed",
+            test="effective_control_targets_system_disabled",
+            expected="[0,0]",
+            actual=json.dumps(effective_targets)
+        )
+
+    sim_ha = SimulatedHAClient()
+    sim_ems.ha = sim_ha
+    sim_ems.publish_to_ha(
+        50,
+        idle_states,
+        [10, 100],
+        [30, 0],
+        30,
+        110
+    )
+    target_total = sim_ha.states.get("sensor.ems_solarflow_target_total")
+    wr1_target = sim_ha.states.get("sensor.ems_solarflow_wr1_target")
+    wr2_target = sim_ha.states.get("sensor.ems_solarflow_wr2_target")
+
+    if (
+        not target_total
+        or target_total["state"] != 30
+        or target_total["attributes"].get("controller_target_w") != 110
+        or target_total["attributes"].get("allocated_target_w") != 110
+        or not wr1_target
+        or wr1_target["state"] != 30
+        or wr1_target["attributes"].get("allocated_target_w") != 10
+        or not wr2_target
+        or wr2_target["state"] != 0
+        or wr2_target["attributes"].get("allocated_target_w") != 100
+    ):
+        ok = False
+        log_event(
+            logging.ERROR,
+            "self_test_failed",
+            test="ha_effective_target_publish",
+            target_total=json.dumps(target_total, sort_keys=True),
+            wr1_target=json.dumps(wr1_target, sort_keys=True),
+            wr2_target=json.dumps(wr2_target, sort_keys=True)
         )
 
     if ok:

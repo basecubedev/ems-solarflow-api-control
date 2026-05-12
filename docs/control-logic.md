@@ -28,9 +28,17 @@ It calculates:
 desired_total_w = commanded_total_w + filtered_load_w
 ```
 
+Positive load is integrated only when at least one active online device has
+export capacity. Export capacity means current PV on `solarInputPower` or
+`solarPower1` through `solarPower4`, confirmed discharge capability, or current
+home output. Without export capacity, the controller holds `commanded_total_w`
+at the standby total derived from `min_output_limit` and the number of active
+online devices.
+
 Then it applies:
 
 - load deadband
+- no-export-capacity hold
 - target deadband
 - median/EMA filtering
 - total ramp limit
@@ -69,6 +77,23 @@ The idle state is left as soon as any controlled device reports positive PV on
 `solarInputPower` or one of `solarPower1` through `solarPower4`. The output
 control memory is reset so the normal controller initializes from fresh
 telemetry.
+
+## No Export Capacity Hold
+
+If house load is positive but no active online device currently has export
+capacity, the EMS does not add that load to `commanded_total_w`. This prevents a
+night or blocked-battery state from ramping the global target to
+`max_total_power` when no device can actually serve the load.
+
+The hold uses:
+
+```text
+standby_total_w = min_output_limit * active_online_device_count
+```
+
+With two active devices and `min_output_limit=30`, the global target is held at
+`60W` instead of integrating toward `800W`. Once PV, discharge capability, or
+current output is observed again, the normal fast output controller resumes.
 
 ## PV-First Allocation
 
