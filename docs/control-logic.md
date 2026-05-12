@@ -50,6 +50,10 @@ Then it applies:
 
 This makes short loop intervals usable without large alternating target swings.
 
+The sign-change fast response only adjusts the filtered load value inside the
+median/EMA stage. It does not bypass total ramping, per-device ramping, write
+cooldown, deadbands, or state reconciliation safeguards.
+
 ## Night / minSoc Idle
 
 When all active and online devices are blocked at their discharge floor, the EMS
@@ -78,9 +82,6 @@ The idle state is left as soon as any controlled device reports positive PV on
 `solarInputPower` or one of `solarPower1` through `solarPower4`. The output
 control memory is reset so the normal controller initializes from fresh
 telemetry.
-The sign-change fast response only adjusts the filtered load value inside the
-median/EMA stage. It does not bypass total ramping, per-device ramping, write
-cooldown, deadbands, or state reconciliation safeguards.
 
 ## No Export Capacity Hold
 
