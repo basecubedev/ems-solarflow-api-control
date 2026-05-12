@@ -168,6 +168,18 @@ commanded target.
 
 `ema_alpha` controls exponential smoothing. Higher values react faster.
 
+`sign_change_fast_response_enabled` lets the median/EMA filter react faster
+when `raw_load` has already crossed zero with meaningful magnitude but the
+smoothed value still points in the old direction.
+
+`sign_change_threshold_w` is the fixed watt threshold used to qualify a
+sign-change mismatch. It is intentionally a fixed configurable value in V1, not
+a percentage of system power.
+
+`sign_change_filter_reset_factor` controls how strongly the smoothed value is
+pulled toward `raw_load` during a sign-change mismatch. `1.0` resets directly to
+`raw_load`. Lower values keep a softer transition.
+
 `ramp_enabled` limits total target changes per cycle.
 
 `ramp_up_w_per_cycle` limits how fast the total target can rise.

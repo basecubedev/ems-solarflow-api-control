@@ -125,16 +125,67 @@ class EMSController:
             1.0,
             self.output_control_float("ema_alpha", 0.65, minimum=0.0)
         )
+        previous_filtered = self.filtered_load_w
 
-        if self.filtered_load_w is None:
-            self.filtered_load_w = median
+        if previous_filtered is None:
+            normal_filtered = median
         else:
-            self.filtered_load_w = (
+            normal_filtered = (
                 alpha * median
-                + (1 - alpha) * self.filtered_load_w
+                + (1 - alpha) * previous_filtered
             )
 
-        return self.filtered_load_w
+        self.filtered_load_w = normal_filtered
+
+        if not self.output_control_bool(
+            "sign_change_fast_response_enabled",
+            True
+        ):
+            return normal_filtered
+
+        threshold = self.output_control_float(
+            "sign_change_threshold_w",
+            50,
+            minimum=0.0
+        )
+
+        export_mismatch = raw_load <= -threshold and normal_filtered > 0
+        import_mismatch = raw_load >= threshold and normal_filtered < 0
+
+        if not export_mismatch and not import_mismatch:
+            return normal_filtered
+
+        reset_factor = min(
+            1.0,
+            self.output_control_float(
+                "sign_change_filter_reset_factor",
+                1.0,
+                minimum=0.0
+            )
+        )
+        adjusted_filtered = (
+            reset_factor * raw_load
+            + (1.0 - reset_factor) * normal_filtered
+        )
+        self.filtered_load_w = adjusted_filtered
+
+        log_event(
+            logging.INFO,
+            "output_control_sign_change_fast_response",
+            raw_load_w=round(raw_load, 1),
+            previous_filtered_load_w=(
+                None
+                if previous_filtered is None
+                else round(previous_filtered, 1)
+            ),
+            normal_filtered_load_w=round(normal_filtered, 1),
+            adjusted_filtered_load_w=round(adjusted_filtered, 1),
+            threshold_w=round(threshold, 1),
+            reset_factor=round(reset_factor, 3),
+            direction="export" if export_mismatch else "import"
+        )
+
+        return adjusted_filtered
 
     def initialize_commanded_total(self, states, max_power):
         limit_total = sum(

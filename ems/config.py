@@ -10,6 +10,9 @@ OUTPUT_CONTROL_DEFAULTS = {
     "filter_method": "median_ema",
     "median_window": 3,
     "ema_alpha": 0.65,
+    "sign_change_fast_response_enabled": True,
+    "sign_change_threshold_w": 50,
+    "sign_change_filter_reset_factor": 1.0,
     "ramp_enabled": True,
     "ramp_up_w_per_cycle": 300,
     "ramp_down_w_per_cycle": 500,
@@ -391,4 +394,3 @@ def build_winter_ac_charge_limit_payload():
     return {
         "inputLimit": winter_config_int("ac_charge_power", 200, minimum=0)
     }
-
