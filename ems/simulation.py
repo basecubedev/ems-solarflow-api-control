@@ -1,6 +1,7 @@
 import json
 import logging
 import time
+from copy import deepcopy
 
 from ems import config as cfg
 from ems.clients import fetch_all_devices, zero_device_state
@@ -402,6 +403,7 @@ def run_live_preflight(devices, shelly, ha=None):
 def run_self_tests():
     """Run local helper checks without hardware or HA access."""
 
+    original_output_control = deepcopy(cfg.OUTPUT_CONTROL_CONFIG)
     cases = [
         (15, 18, True, 20),
         (15, 22, True, 22),
@@ -641,6 +643,99 @@ def run_self_tests():
             actual=discharge_target
         )
 
+    cfg.OUTPUT_CONTROL_CONFIG = {
+        **original_output_control,
+        "filter_enabled": True,
+        "filter_method": "median_ema",
+        "median_window": 1,
+        "ema_alpha": 0.0,
+        "sign_change_fast_response_enabled": True,
+        "sign_change_threshold_w": 50,
+        "sign_change_filter_reset_factor": 1.0
+    }
+    sim_ems.load_history.clear()
+    sim_ems.filtered_load_w = 150
+    export_fast_response = sim_ems.filter_output_control_load(-120)
+
+    if export_fast_response != -120:
+        ok = False
+        log_event(
+            logging.ERROR,
+            "self_test_failed",
+            test="output_control_sign_change_fast_response_export",
+            expected=-120,
+            actual=export_fast_response
+        )
+
+    sim_ems.load_history.clear()
+    sim_ems.filtered_load_w = -120
+    import_fast_response = sim_ems.filter_output_control_load(150)
+
+    if import_fast_response != 150:
+        ok = False
+        log_event(
+            logging.ERROR,
+            "self_test_failed",
+            test="output_control_sign_change_fast_response_import",
+            expected=150,
+            actual=import_fast_response
+        )
+
+    cfg.OUTPUT_CONTROL_CONFIG = {
+        **cfg.OUTPUT_CONTROL_CONFIG,
+        "sign_change_filter_reset_factor": 0.5
+    }
+    sim_ems.load_history.clear()
+    sim_ems.filtered_load_w = 30
+    partial_fast_response = sim_ems.filter_output_control_load(-120)
+
+    if partial_fast_response != -45:
+        ok = False
+        log_event(
+            logging.ERROR,
+            "self_test_failed",
+            test="output_control_sign_change_fast_response_partial",
+            expected=-45,
+            actual=partial_fast_response
+        )
+
+    cfg.OUTPUT_CONTROL_CONFIG = {
+        **cfg.OUTPUT_CONTROL_CONFIG,
+        "sign_change_fast_response_enabled": False,
+        "sign_change_filter_reset_factor": 1.0
+    }
+    sim_ems.load_history.clear()
+    sim_ems.filtered_load_w = 30
+    disabled_fast_response = sim_ems.filter_output_control_load(-120)
+
+    if disabled_fast_response != 30:
+        ok = False
+        log_event(
+            logging.ERROR,
+            "self_test_failed",
+            test="output_control_sign_change_fast_response_disabled",
+            expected=30,
+            actual=disabled_fast_response
+        )
+
+    cfg.OUTPUT_CONTROL_CONFIG = {
+        **cfg.OUTPUT_CONTROL_CONFIG,
+        "sign_change_fast_response_enabled": True
+    }
+    sim_ems.load_history.clear()
+    sim_ems.filtered_load_w = 30
+    below_threshold_response = sim_ems.filter_output_control_load(-30)
+
+    if below_threshold_response != 30:
+        ok = False
+        log_event(
+            logging.ERROR,
+            "self_test_failed",
+            test="output_control_sign_change_fast_response_threshold",
+            expected=30,
+            actual=below_threshold_response
+        )
+
     sim_ems.runtime_state = RuntimeState(
         "",
         build_runtime_defaults(sim_devices)
@@ -738,7 +833,9 @@ def run_self_tests():
         )
 
     if ok:
+        cfg.OUTPUT_CONTROL_CONFIG = original_output_control
         log_event(logging.INFO, "self_test_ok")
         return True
 
+    cfg.OUTPUT_CONTROL_CONFIG = original_output_control
     return False

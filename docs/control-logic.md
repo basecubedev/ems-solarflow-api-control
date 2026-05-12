@@ -41,6 +41,7 @@ Then it applies:
 - no-export-capacity hold
 - target deadband
 - median/EMA filtering
+- optional sign-change fast response for large import/export direction flips
 - total ramp limit
 - per-device ramp limit
 - write cooldown
@@ -77,6 +78,9 @@ The idle state is left as soon as any controlled device reports positive PV on
 `solarInputPower` or one of `solarPower1` through `solarPower4`. The output
 control memory is reset so the normal controller initializes from fresh
 telemetry.
+The sign-change fast response only adjusts the filtered load value inside the
+median/EMA stage. It does not bypass total ramping, per-device ramping, write
+cooldown, deadbands, or state reconciliation safeguards.
 
 ## No Export Capacity Hold
 
