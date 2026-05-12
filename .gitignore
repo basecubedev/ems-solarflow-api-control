@@ -17,6 +17,19 @@ config.json
 
 # logs
 *.log
+*.influx.csv
+*.influx.jsonl
+
+# InfluxDB local development
+/develop/influxdb/.env
+/develop/influxdb/data/
+/develop/influxdb/data/**
+/develop/influxdb/exports/
+/develop/influxdb/exports/**
+/develop/influxdb/.influxdbv2/
+/develop/influxdb/tmp/
+/develop/influxdb/*.sqlite
+/develop/influxdb/*.bolt
 
 # Python cache artifacts
 __pycache__/
