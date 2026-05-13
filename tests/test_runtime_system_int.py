@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from ems.controller import EMSController
 
@@ -79,6 +80,24 @@ class RuntimeSystemIntTest(unittest.TestCase):
             ),
             0
         )
+
+    def test_safe_int_call_shape(self):
+        controller = self.controller(
+            RuntimeStateStub({"max_total_power": "900"})
+        )
+
+        with patch(
+            "ems.controller.cfg.safe_int",
+            return_value=900
+        ) as safe_int:
+            result = controller.runtime_system_int(
+                "max_total_power",
+                1200,
+                minimum=0
+            )
+
+        self.assertEqual(result, 900)
+        safe_int.assert_called_once_with("900", 1200, minimum=0)
 
 
 if __name__ == "__main__":
