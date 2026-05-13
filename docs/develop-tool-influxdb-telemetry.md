@@ -138,6 +138,9 @@ Important flags:
 Use the compact event query first. This avoids scanning or printing large raw
 ranges.
 
+For a focused 24h transition analysis workflow, see
+`docs/develop-tool-influxdb-state-transition-analysis.md`.
+
 Example:
 
 ```bash
