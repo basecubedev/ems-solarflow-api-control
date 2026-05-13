@@ -109,3 +109,7 @@ writing HA every cycle and avoids interpreting its own HA writes as user changes
 
 Helpers are optional. If a helper is missing, the EMS continues with local
 runtime-state values.
+
+HA sync failures do not block the EMS loop. The EMS logs the failed sync and
+continues with the previous local runtime-state values so telemetry fetch,
+safety decisions, and output-control decisions can still run.

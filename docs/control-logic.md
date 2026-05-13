@@ -78,6 +78,11 @@ standby/wakeup `outputLimit`. If a device is already at that value, no write is
 sent. If it is not, the EMS writes the value once and then suppresses further
 `outputLimit` writes until the state is left.
 
+Night/minSoc idle is a control-idle state, not a system-idle state. The EMS loop
+continues to fetch device state, process runtime state, publish Home Assistant
+telemetry, and expose status and safety visibility. Only repeated output-control
+writes are suppressed after the optional parking write.
+
 The idle state is left as soon as any controlled device reports positive PV on
 `solarInputPower` or one of `solarPower1` through `solarPower4`. The output
 control memory is reset so the normal controller initializes from fresh
@@ -131,3 +136,13 @@ The EMS compares the calculated target with the runtime `outputLimit` when
 available. If `outputLimit` is missing or zero, it falls back to current output.
 
 Small changes below `deadband` are skipped.
+
+## Offline Devices
+
+If a device cannot be read, the EMS may use a cached state, or a zero fallback
+when no cached state exists, so the loop can continue safely. Offline devices
+are marked offline and skipped for output writes.
+
+Cached telemetry is last-known data. Offline does not automatically mean the
+device is currently producing `0W`; it means the EMS does not have fresh device
+telemetry for that cycle.

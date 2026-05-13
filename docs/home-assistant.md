@@ -11,6 +11,10 @@ Home Assistant has two independent roles:
 - status publishing
 - optional runtime-state control helpers
 
+Home Assistant is not a safety authority. If helper sync fails, times out, or
+raises an error, the EMS logs the failure and continues the control loop with
+the current local runtime-state values.
+
 Status publishing is enabled with:
 
 ```json
@@ -100,11 +104,25 @@ binary_sensor.wr1_fault
 binary_sensor.wr1_ac_active
 binary_sensor.wr1_dc_active
 binary_sensor.wr1_grid_online
+binary_sensor.wr1_available
 ```
 
 `sensor.ems_solarflow_wr1_target` follows the same effective command semantics
 as the global target. Its `allocated_target_w` attribute contains the
 post-allocation per-device target before final control gates.
+
+Per-device sensors include freshness attributes:
+
+```text
+available
+telemetry_source
+last_seen
+last_seen_age_s
+```
+
+`binary_sensor.wr1_available` is `off` when the EMS is publishing cached or
+fallback telemetry for that device. Cached values remain visible in HA, but
+should be treated as last-known data rather than live measurements.
 
 ## Winter Sensors
 
