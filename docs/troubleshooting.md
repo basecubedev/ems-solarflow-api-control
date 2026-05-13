@@ -22,6 +22,15 @@ Run self-tests:
 python3 -B ems-solarflow-api-control.py --self-test
 ```
 
+Run tests from the repository root:
+
+```bash
+python -m pytest -q
+```
+
+Direct `pytest -q` is also supported when `pytest.ini` is present. Both
+commands require `pytest` in the active Python environment.
+
 Run simulation:
 
 ```bash
@@ -116,4 +125,3 @@ Check:
 - valid HA URL and token
 - not running with `--no-ha`
 - not running simulation or replay
-
