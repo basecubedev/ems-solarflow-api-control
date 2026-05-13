@@ -8,7 +8,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ems.logging_utils import log_event, setup_logging
-from scripts.influx_utils import InfluxHTTPClient, load_env_file, require_env
+from scripts.influx_utils import (
+    InfluxHTTPClient,
+    load_env_file,
+    require_influx_api_env,
+)
 
 
 def parse_args():
@@ -41,6 +45,11 @@ def parse_args():
         default="info",
         help="Logging level"
     )
+    parser.add_argument(
+        "--check-connection",
+        action="store_true",
+        help="Validate URL, token, org, and raw bucket, then exit"
+    )
     return parser.parse_args()
 
 
@@ -62,6 +71,20 @@ def ensure_bucket(client, bucket_name):
         bucket=bucket_name,
         created=created,
         bucket_id=bucket.get("id", "")
+    )
+
+
+def check_connection(client, raw_bucket):
+    org_id = client.get_org_id()
+    bucket, created = client.ensure_bucket(raw_bucket, retention_seconds=0)
+    log_event(
+        logging.INFO,
+        "influx_connection_ok",
+        org_found=True,
+        org_id=org_id,
+        raw_bucket=raw_bucket,
+        raw_bucket_created=created,
+        raw_bucket_id=bucket.get("id", "")
     )
 
 
@@ -90,15 +113,26 @@ def main():
     setup_logging(args.log_level)
 
     env_values = load_env_file(args.env)
-    require_env(
-        env_values,
+    required_keys = [
         "INFLUXDB_URL",
         "INFLUXDB_ORG",
         "INFLUXDB_TOKEN",
         "INFLUXDB_BUCKET_RAW",
-        "INFLUXDB_BUCKET_1M",
-        "INFLUXDB_BUCKET_15M",
-    )
+    ]
+
+    if not args.check_connection:
+        required_keys.extend([
+            "INFLUXDB_BUCKET_1M",
+            "INFLUXDB_BUCKET_15M",
+        ])
+
+    try:
+        require_influx_api_env(
+            env_values,
+            *required_keys,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc))
 
     client = InfluxHTTPClient(
         env_values["INFLUXDB_URL"],
@@ -106,6 +140,10 @@ def main():
         env_values["INFLUXDB_TOKEN"]
     )
     raw_bucket = env_values["INFLUXDB_BUCKET_RAW"]
+
+    if args.check_connection:
+        check_connection(client, raw_bucket)
+        return
 
     log_event(
         logging.INFO,

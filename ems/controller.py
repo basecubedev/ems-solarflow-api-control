@@ -5,7 +5,11 @@ from collections import deque
 from datetime import datetime
 
 from ems import config as cfg
-from ems.clients import fetch_all_devices, zendure_write_succeeded
+from ems.clients import (
+    fetch_all_devices,
+    zendure_write_succeeded,
+    zero_device_state,
+)
 from ems.logging_utils import log_event
 from ems.target_control import (
     apply_min_output_limit,
@@ -548,17 +552,6 @@ class EMSController:
             indexes.append(i)
 
         return indexes
-
-    def state_has_positive_pv(self, state):
-        """Return true when any PV telemetry field is positive."""
-
-        return (
-            state.solar > 0
-            or state.solar1 > 0
-            or state.solar2 > 0
-            or state.solar3 > 0
-            or state.solar4 > 0
-        )
 
     def state_is_strict_night_min_soc_idle(self, state):
         """Detect the exact no-PV, no-flow, min-SOC blocked idle state."""
@@ -1630,6 +1623,37 @@ class EMSController:
             extra_attributes=extra
         )
 
+    def device_ha_availability_attributes(self, dev):
+        """Return HA attributes describing device telemetry freshness."""
+
+        online = self.device_online.get(dev.name, True)
+        seen = self.last_seen.get(dev.name)
+        attrs = {
+            "available": online,
+            "telemetry_source": "live" if online else "cached"
+        }
+
+        if seen is None:
+            attrs["last_seen"] = None
+
+            if not online:
+                attrs["telemetry_source"] = "zero_fallback"
+
+            return attrs
+
+        attrs["last_seen"] = datetime.fromtimestamp(seen).isoformat()
+        attrs["last_seen_age_s"] = round(time.time() - seen, 1)
+
+        return attrs
+
+    def device_ha_extra(self, dev, extra=None):
+        attrs = self.device_ha_availability_attributes(dev)
+
+        if extra:
+            attrs.update(extra)
+
+        return attrs
+
     def publish_winter_to_ha(self, states):
         """Publish winter-mode state and calculated targets to HA."""
 
@@ -1719,11 +1743,14 @@ class EMSController:
                 target,
                 "%",
                 "battery",
-                extra={
-                    "effective_min_soc": effective_min_soc,
-                    "current_soc": state.soc,
-                    "winter_active": active
-                }
+                extra=self.device_ha_extra(
+                    dev,
+                    {
+                        "effective_min_soc": effective_min_soc,
+                        "current_soc": state.soc,
+                        "winter_active": active
+                    }
+                )
             )
 
             self.publish_sensor(
@@ -1731,7 +1758,8 @@ class EMSController:
                 cfg.estimate_winter_ramp_days(target),
                 "d",
                 None,
-                icon="mdi:calendar-range"
+                icon="mdi:calendar-range",
+                extra=self.device_ha_extra(dev)
             )
 
     def publish_to_ha(
@@ -1827,40 +1855,55 @@ class EMSController:
 
             base = p + dev.name.lower() + "_"
 
+            def device_extra(extra=None):
+                return self.device_ha_extra(dev, extra)
+
+            self.ha.set_state(
+                f"binary_sensor.{dev.name.lower()}_available",
+                "on" if self.device_online.get(dev.name, True) else "off",
+                device_class="connectivity",
+                extra_attributes=device_extra()
+            )
+
             # Core
             self.publish_sensor(
                 base + "soc",
                 d.soc,
                 "%",
-                "battery"
+                "battery",
+                extra=device_extra()
             )
 
             self.publish_sensor(
                 base + "min_soc",
                 d.min_soc,
                 "%",
-                "battery"
+                "battery",
+                extra=device_extra()
             )
 
             self.publish_sensor(
                 base + "max_soc",
                 d.max_soc,
                 "%",
-                "battery"
+                "battery",
+                extra=device_extra()
             )
 
             self.publish_sensor(
                 base + "solar",
                 d.solar,
                 "W",
-                "power"
+                "power",
+                extra=device_extra()
             )
 
             self.publish_sensor(
                 base + "output",
                 d.output,
                 "W",
-                "power"
+                "power",
+                extra=device_extra()
             )
 
             self.publish_sensor(
@@ -1868,28 +1911,29 @@ class EMSController:
                 effective_targets[i],
                 "W",
                 "power",
-                extra={
-                    "allocated_target_w": targets[i]
-                }
+                extra=device_extra({"allocated_target_w": targets[i]})
             )
 
             self.publish_sensor(
                 base + "output_limit",
                 d.output_limit,
                 "W",
-                "power"
+                "power",
+                extra=device_extra()
             )
 
             self.publish_sensor(
                 base + "soc_limit",
                 d.soc_limit,
-                state_class=None
+                state_class=None,
+                extra=device_extra()
             )
 
             self.publish_sensor(
                 base + "pack_state",
                 d.pack_state,
-                state_class=None
+                state_class=None,
+                extra=device_extra()
             )
 
             # Zendure API uses controller/inverter perspective:
@@ -1918,21 +1962,24 @@ class EMSController:
                 base + "battery_power",
                 round(device_battery_power, 1),
                 "W",
-                "power"
+                "power",
+                extra=device_extra()
             )
 
             self.publish_sensor(
                 base + "battery_power_avg",
                 round(avg_battery_power, 1),
                 "W",
-                "power"
+                "power",
+                extra=device_extra()
             )
 
             self.publish_sensor(
                 base + "voltage",
                 d.voltage,
                 "V",
-                "voltage"
+                "voltage",
+                extra=device_extra()
             )
 
             self.publish_sensor(
@@ -1940,7 +1987,8 @@ class EMSController:
                 d.remain_minutes,
                 "min",
                 state_class=None,
-                icon="mdi:timer-outline"
+                icon="mdi:timer-outline",
+                extra=device_extra()
             )
 
             self.publish_sensor(
@@ -1948,7 +1996,8 @@ class EMSController:
                 remaining_time,
                 "h",
                 "duration",
-                icon="mdi:timer-outline"
+                icon="mdi:timer-outline",
+                extra=device_extra()
             )
 
             # Thermal / Signal
@@ -1956,14 +2005,16 @@ class EMSController:
                 base + "temp",
                 d.temp,
                 "°C",
-                "temperature"
+                "temperature",
+                extra=device_extra()
             )
 
             self.publish_sensor(
                 base + "rssi",
                 d.rssi,
                 "dBm",
-                "signal_strength"
+                "signal_strength",
+                extra=device_extra()
             )
 
             # Panels
@@ -1971,62 +2022,68 @@ class EMSController:
                 base + "panel1",
                 d.solar1,
                 "W",
-                "power"
+                "power",
+                extra=device_extra()
             )
 
             self.publish_sensor(
                 base + "panel2",
                 d.solar2,
                 "W",
-                "power"
+                "power",
+                extra=device_extra()
             )
 
             self.publish_sensor(
                 base + "panel3",
                 d.solar3,
                 "W",
-                "power"
+                "power",
+                extra=device_extra()
             )
 
             self.publish_sensor(
                 base + "panel4",
                 d.solar4,
                 "W",
-                "power"
+                "power",
+                extra=device_extra()
             )
 
             # Status
             self.publish_sensor(
                 base + "fault_level",
                 d.fault_level,
-                state_class=None
+                state_class=None,
+                extra=device_extra()
             )
 
             self.ha.set_state(
                 f"binary_sensor.{dev.name.lower()}_fault",
                 "on" if d.fault_level > 0 else "off",
                 device_class="problem",
-                extra_attributes={
-                    "fault_level": d.fault_level
-                }
+                extra_attributes=device_extra({"fault_level": d.fault_level})
             )
 
             self.ha.set_state(
                 f"binary_sensor.{dev.name.lower()}_ac_active",
                 "on" if d.ac_status else "off",
-                device_class="power"
+                device_class="power",
+                extra_attributes=device_extra()
             )
 
             self.ha.set_state(
                 f"binary_sensor.{dev.name.lower()}_dc_active",
                 "on" if d.dc_status else "off",
-                device_class="power"
+                device_class="power",
+                extra_attributes=device_extra()
             )
 
             self.ha.set_state(
                 f"binary_sensor.{dev.name.lower()}_grid_online",
                 "on" if d.grid_state else "off",
-                device_class="connectivity"
+                device_class="connectivity",
+                extra_attributes=device_extra()
             )
 
     def run_once(self):
@@ -2037,7 +2094,14 @@ class EMSController:
         if self.runtime_state:
             self.runtime_state.load_if_changed()
 
-        self.sync_ha_runtime_state()
+        try:
+            self.sync_ha_runtime_state()
+        except Exception as e:
+            log_event(
+                logging.WARNING,
+                "ha_runtime_sync_failed",
+                error=e
+            )
 
         load = self.shelly.get_power()
 
@@ -2276,8 +2340,9 @@ class EMSController:
                 min_output_limit if i in controllable_indexes else 0
                 for i, _dev in enumerate(self.devices)
             ]
+            effective_targets = list(targets)
             current = sum(d.output for d in states)
-            new = sum(targets)
+            new = sum(effective_targets)
 
             logging.info(
                 f"Load={load}W "
@@ -2291,6 +2356,7 @@ class EMSController:
                     load,
                     states,
                     targets,
+                    effective_targets,
                     current,
                     new
                 )

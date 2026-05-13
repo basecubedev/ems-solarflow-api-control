@@ -26,6 +26,11 @@ about storage.
 
 2. Edit the local `.env` values.
 
+   The Python scripts authenticate with `INFLUXDB_TOKEN`. The InfluxDB web UI
+   uses `INFLUXDB_ADMIN_USER` and `INFLUXDB_ADMIN_PASSWORD`. For the simple
+   local setup, keep `INFLUXDB_TOKEN` equal to `INFLUXDB_ADMIN_TOKEN` unless you
+   intentionally create a separate API token.
+
 3. Start InfluxDB:
 
    ```bash
@@ -40,8 +45,33 @@ about storage.
      --backfill-start=-24h
    ```
 
+   To check URL/token/org access without backfilling:
+
+   ```bash
+   python3 scripts/setup_influx_buckets.py \
+     --env develop/influxdb/.env \
+     --check-connection
+   ```
+
 5. Import the Flux task files in the InfluxDB UI if you want automatic
    recurring downsampling tasks.
+
+## First Start And Reset
+
+Docker applies `DOCKER_INFLUXDB_INIT_*` values only when `develop/influxdb/data/`
+is initialized for the first time. After that, changing `.env` does not change
+the existing UI login or token.
+
+If the local login or token was initialized incorrectly, reset the local data
+directory:
+
+```bash
+docker compose -f develop/influxdb/docker-compose.yml down
+rm -rf develop/influxdb/data
+docker compose -f develop/influxdb/docker-compose.yml up -d
+```
+
+This deletes locally captured InfluxDB data.
 
 ## Capture
 

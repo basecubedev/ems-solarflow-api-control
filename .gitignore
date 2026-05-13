@@ -1,8 +1,8 @@
 # local AI / research docs
-docs/develop/
-Zendure-HA/
-zenSDK/
-docs/release.md
+/docs/develop/
+/docs/release.md
+/CODEX_AGENT_GUIDE.md
+/tasks/
 
 
 
@@ -13,7 +13,7 @@ runtime-state.json.tmp
 runtime-state.json.*.tmp
 
 # local config
-config.json
+/config.json
 
 # logs
 *.log

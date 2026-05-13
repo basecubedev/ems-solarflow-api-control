@@ -47,14 +47,31 @@ def normalize_negative_option_args(argv, option_names):
     return normalized
 
 
-def require_env(values, *keys):
+def require_env(values, *keys, description="environment values", hint=None):
     missing = [key for key in keys if not values.get(key)]
 
     if missing:
-        raise ValueError(
-            "Missing required environment values: "
+        message = (
+            f"Missing required {description}: "
             + ", ".join(sorted(missing))
         )
+
+        if hint:
+            message += f"\n{hint}"
+
+        raise ValueError(message)
+
+
+def require_influx_api_env(values, *keys):
+    require_env(
+        values,
+        *keys,
+        description="InfluxDB API settings for Python scripts",
+        hint=(
+            "The admin password is only used by Docker/UI login, "
+            "not by the Python scripts."
+        )
+    )
 
 
 def escape_measurement(value):
