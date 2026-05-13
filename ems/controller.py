@@ -5,7 +5,11 @@ from collections import deque
 from datetime import datetime
 
 from ems import config as cfg
-from ems.clients import fetch_all_devices, zendure_write_succeeded
+from ems.clients import (
+    fetch_all_devices,
+    zendure_write_succeeded,
+    zero_device_state,
+)
 from ems.logging_utils import log_event
 from ems.target_control import (
     apply_min_output_limit,
