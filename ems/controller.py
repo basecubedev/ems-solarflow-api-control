@@ -2030,7 +2030,14 @@ class EMSController:
         if self.runtime_state:
             self.runtime_state.load_if_changed()
 
-        self.sync_ha_runtime_state()
+        try:
+            self.sync_ha_runtime_state()
+        except Exception as e:
+            log_event(
+                logging.WARNING,
+                "ha_runtime_sync_failed",
+                error=e
+            )
 
         load = self.shelly.get_power()
 
