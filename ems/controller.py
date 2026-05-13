@@ -2276,8 +2276,9 @@ class EMSController:
                 min_output_limit if i in controllable_indexes else 0
                 for i, _dev in enumerate(self.devices)
             ]
+            effective_targets = list(targets)
             current = sum(d.output for d in states)
-            new = sum(targets)
+            new = sum(effective_targets)
 
             logging.info(
                 f"Load={load}W "
@@ -2291,6 +2292,7 @@ class EMSController:
                     load,
                     states,
                     targets,
+                    effective_targets,
                     current,
                     new
                 )
