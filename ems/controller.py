@@ -553,17 +553,6 @@ class EMSController:
 
         return indexes
 
-    def state_has_positive_pv(self, state):
-        """Return true when any PV telemetry field is positive."""
-
-        return (
-            state.solar > 0
-            or state.solar1 > 0
-            or state.solar2 > 0
-            or state.solar3 > 0
-            or state.solar4 > 0
-        )
-
     def state_is_strict_night_min_soc_idle(self, state):
         """Detect the exact no-PV, no-flow, min-SOC blocked idle state."""
 
