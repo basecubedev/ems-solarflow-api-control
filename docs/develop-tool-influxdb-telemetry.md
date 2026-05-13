@@ -65,6 +65,11 @@ Copy the local environment file:
 cp develop/influxdb/.env.example develop/influxdb/.env
 ```
 
+`INFLUXDB_TOKEN` is the API token used by the Python scripts. The InfluxDB web
+UI login uses `INFLUXDB_ADMIN_USER` and `INFLUXDB_ADMIN_PASSWORD`. For simple
+local development, keep `INFLUXDB_TOKEN` equal to `INFLUXDB_ADMIN_TOKEN` unless
+you intentionally create a separate API token.
+
 Start InfluxDB:
 
 ```bash
@@ -79,12 +84,32 @@ python3 scripts/setup_influx_buckets.py \
   --backfill-start=-24h
 ```
 
+Connection check:
+
+```bash
+python3 scripts/setup_influx_buckets.py \
+  --env develop/influxdb/.env \
+  --check-connection
+```
+
 This setup helper:
 
 - creates `zendure_1m` if missing
 - creates `zendure_15m` if missing
 - can backfill both buckets from `zendure_raw`
 - is safe to rerun
+
+Docker first-start values are applied only when `develop/influxdb/data/` is
+created. Changing `.env` later does not update an already initialized
+username/password/token. To reset a local development instance:
+
+```bash
+docker compose -f develop/influxdb/docker-compose.yml down
+rm -rf develop/influxdb/data
+docker compose -f develop/influxdb/docker-compose.yml up -d
+```
+
+This deletes locally captured InfluxDB data.
 
 ## Capture
 

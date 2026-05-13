@@ -13,7 +13,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ems.clients import ShellyClient, ZendureClient, create_session, fetch_all_devices
 from ems.logging_utils import log_event, setup_logging
-from scripts.influx_utils import InfluxHTTPClient, build_line_protocol, load_env_file, require_env
+from scripts.influx_utils import (
+    InfluxHTTPClient,
+    build_line_protocol,
+    load_env_file,
+    require_influx_api_env,
+)
 
 
 def parse_args():
@@ -167,13 +172,16 @@ def main():
 
     config = load_config(args.config)
     env_values = load_env_file(args.env)
-    require_env(
-        env_values,
-        "INFLUXDB_URL",
-        "INFLUXDB_ORG",
-        "INFLUXDB_TOKEN",
-        "INFLUXDB_BUCKET_RAW",
-    )
+    try:
+        require_influx_api_env(
+            env_values,
+            "INFLUXDB_URL",
+            "INFLUXDB_ORG",
+            "INFLUXDB_TOKEN",
+            "INFLUXDB_BUCKET_RAW",
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc))
 
     bucket = args.bucket or env_values["INFLUXDB_BUCKET_RAW"]
     session = create_session()
