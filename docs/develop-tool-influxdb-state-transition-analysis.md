@@ -94,6 +94,7 @@ from(bucket: "zendure_raw")
   |> sort(columns: ["_time"])
   |> difference(nonNegative: false)
   |> filter(fn: (r) => exists r._value and r._value != 0)
+  |> rename(columns: {_value: "delta"})
   |> yield(name: "state_changes")
 ```
 
@@ -109,6 +110,7 @@ from(bucket: "zendure_raw")
   |> sort(columns: ["_time"])
   |> difference(nonNegative: false)
   |> filter(fn: (r) => exists r._value and r._value != 0)
+  |> rename(columns: {_value: "delta"})
   |> yield(name: "availability_changes")
 ```
 
@@ -138,6 +140,11 @@ python3 scripts/analyze_influx_state_transitions.py \
 
 The helper reports transition candidates only. Confirm each candidate with raw
 window inspection.
+
+The transition tables use `delta`, not the actual new firmware status value.
+`delta` is the numeric difference between consecutive samples after Flux
+`difference()`. For binary status fields, `-1` usually means `1 -> 0` and `+1`
+usually means `0 -> 1`. Do not infer firmware meaning from the delta alone.
 
 ## Key Windows To Identify
 

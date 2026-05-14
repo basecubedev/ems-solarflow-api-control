@@ -76,6 +76,7 @@ from(bucket: {json.dumps(bucket)})
   |> difference(nonNegative: false)
   |> filter(fn: (r) => exists r._value and r._value != 0)
   |> keep(columns: ["_time", "device", "_field", "_value"])
+  |> rename(columns: {{_value: "delta"}})
   |> limit(n: {int(limit)})
 '''.strip()
 
@@ -92,6 +93,7 @@ from(bucket: {json.dumps(bucket)})
   |> difference(nonNegative: false)
   |> filter(fn: (r) => exists r._value and r._value != 0)
   |> keep(columns: ["_time", "device", "_field", "_value"])
+  |> rename(columns: {{_value: "delta"}})
   |> limit(n: {int(limit)})
 '''.strip()
 
@@ -136,6 +138,20 @@ def markdown_table(title, rows, columns):
     return lines
 
 
+def transition_rows_with_delta(rows):
+    normalized = []
+
+    for row in rows:
+        item = dict(row)
+
+        if "delta" not in item and "_value" in item:
+            item["delta"] = item["_value"]
+
+        normalized.append(item)
+
+    return normalized
+
+
 def build_report(bucket, range_start, state_rows, availability_rows, gap_rows):
     lines = [
         "# InfluxDB State Transition Candidates",
@@ -147,19 +163,23 @@ def build_report(bucket, range_start, state_rows, availability_rows, gap_rows):
         "inspecting raw values around each timestamp before creating EMS logic",
         "changes.",
         "",
+        "The `delta` column is the numeric difference between consecutive",
+        "samples. It is not the new firmware status value. For binary status",
+        "fields, `-1` usually means `1 -> 0` and `+1` usually means `0 -> 1`.",
+        "",
     ]
     lines.extend(
         markdown_table(
             "Discrete State Changes",
-            state_rows,
-            ["_time", "device", "_field", "_value"]
+            transition_rows_with_delta(state_rows),
+            ["_time", "device", "_field", "delta"]
         )
     )
     lines.extend(
         markdown_table(
             "Availability Changes",
-            availability_rows,
-            ["_time", "device", "_field", "_value"]
+            transition_rows_with_delta(availability_rows),
+            ["_time", "device", "_field", "delta"]
         )
     )
     lines.extend(
