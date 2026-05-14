@@ -1,7 +1,9 @@
 import csv
 import json
+import logging
 import os
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -270,6 +272,64 @@ class InfluxHTTPClient:
         )
         response.raise_for_status()
         return response.json(), True
+
+
+def wait_for_influx_ready(client, timeout_s=60, interval_s=2):
+    """Wait until the InfluxDB /health endpoint reports readiness."""
+
+    deadline = time.monotonic() + timeout_s
+    last_error = None
+    attempts = 0
+
+    while True:
+        attempts += 1
+
+        try:
+            response = client.session.get(
+                f"{client.base_url}/health",
+                headers={"Accept": "application/json"},
+                timeout=min(client.timeout, max(interval_s, 0.1))
+            )
+
+            if 200 <= response.status_code < 300:
+                try:
+                    payload = response.json()
+                except ValueError:
+                    payload = {}
+
+                status = str(payload.get("status", "pass")).lower()
+
+                if status in ("pass", "ready", "ok"):
+                    logging.info(
+                        "event=influx_ready "
+                        f"url={client.base_url} attempts={attempts}"
+                    )
+                    return
+
+                last_error = f"health_status={status}"
+            else:
+                last_error = f"http_status={response.status_code}"
+
+        except requests.RequestException as exc:
+            last_error = exc.__class__.__name__
+
+        remaining = deadline - time.monotonic()
+
+        if remaining <= 0:
+            raise TimeoutError(
+                "InfluxDB did not become ready "
+                f"within {timeout_s}s at {client.base_url}; "
+                f"last_error={last_error}"
+            )
+
+        logging.warning(
+            "event=influx_waiting_for_ready "
+            f"url={client.base_url} "
+            f"attempt={attempts} "
+            f"retry_in_s={min(interval_s, remaining):.1f} "
+            f"last_error={last_error}"
+        )
+        time.sleep(min(interval_s, remaining))
 
 
 def parse_influx_csv(raw_text):

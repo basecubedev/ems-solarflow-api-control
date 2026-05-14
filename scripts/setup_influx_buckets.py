@@ -12,6 +12,7 @@ from scripts.influx_utils import (
     InfluxHTTPClient,
     load_env_file,
     require_influx_api_env,
+    wait_for_influx_ready,
 )
 
 
@@ -140,6 +141,16 @@ def main():
         env_values["INFLUXDB_TOKEN"]
     )
     raw_bucket = env_values["INFLUXDB_BUCKET_RAW"]
+
+    try:
+        wait_for_influx_ready(client)
+    except TimeoutError as exc:
+        log_event(
+            logging.ERROR,
+            "influx_readiness_timeout",
+            error=exc
+        )
+        raise SystemExit(1)
 
     if args.check_connection:
         check_connection(client, raw_bucket)
