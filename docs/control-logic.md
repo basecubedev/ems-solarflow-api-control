@@ -110,6 +110,11 @@ current output is observed again, the normal fast output controller resumes.
 When PV can cover the requested target, the EMS allocates output using PV-first
 weights and PV-only limits.
 
+PV-first weights can include a charge-balancing bias. When SOC spread is above
+the configured deadband, fuller batteries receive more PV-first output weight
+so lower-SOC batteries can keep more local PV for charging. The allocation still
+uses each device's PV-only limit.
+
 If PV-first allocation leaves unmet demand, the EMS may top up from battery only
 on devices that:
 

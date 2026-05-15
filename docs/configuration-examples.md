@@ -35,6 +35,10 @@ Use this for standalone EMS operation without Home Assistant.
     "loop_interval": 5,
     "redistribute_clamped_power": true,
     "pv_kwp_weighting": true,
+    "pv_charge_balance_enabled": true,
+    "pv_charge_balance_deadband_percent": 5,
+    "pv_charge_balance_full_bias_percent": 15,
+    "pv_charge_balance_strength": 1.0,
     "battery_kwh_weighting": true,
     "soc_reconcile_interval": 10
   },

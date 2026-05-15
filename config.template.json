@@ -24,8 +24,8 @@
     "max_device_power": 800,
     "deadband": 10,
     "runtime_state_path": "runtime-state.json",
-    "min_output_limit": 0,
-    "loop_interval": 5,
+    "min_output_limit": 35,
+    "loop_interval": 3,
     "output_control": {
       "_comment_output_control": "Advanced output smoothing/tuning. Most users should keep the defaults.",
       "load_deadband_w": 5,
@@ -52,6 +52,10 @@
     },
     "redistribute_clamped_power": true,
     "pv_kwp_weighting": true,
+    "pv_charge_balance_enabled": true,
+    "pv_charge_balance_deadband_percent": 1,
+    "pv_charge_balance_full_bias_percent": 15,
+    "pv_charge_balance_strength": 0.7,
     "battery_kwh_weighting": true,
     "soc_reconcile_interval": 10
   },
@@ -59,7 +63,7 @@
   "winter": {
     "_comment": "Optional winter SOC strategy. See docs/configuration-examples.md before changing advanced values.",
     "enabled": false,
-    "months": [10, 11, 12, 1, 2],
+    "months": [10, 11, 12, 1, 2, 3],
     "summer_min_soc": 15,
     "winter_min_soc": 40,
     "ramp_step_percent": 5,

@@ -231,6 +231,80 @@ def pv_first_weight(pv_only, device_config):
     )
 
 
+def pv_charge_balance_context(states):
+    """Return SOC spread data used for PV-first charge balancing."""
+
+    soc_values = [
+        state.soc
+        for state in states
+        if state.max_soc > 0
+    ]
+
+    if not soc_values:
+        return {
+            "min_soc": 0,
+            "max_soc": 0,
+            "soc_gap": 0,
+            "balance_factor": 0,
+            "balance_strength": 0
+        }
+
+    min_soc = min(soc_values)
+    max_soc = max(soc_values)
+    soc_gap = max_soc - min_soc
+    deadband = max(0.0, cfg.PV_CHARGE_BALANCE_DEADBAND_PERCENT)
+    full_bias = max(0.0, cfg.PV_CHARGE_BALANCE_FULL_BIAS_PERCENT)
+
+    if (
+        not cfg.PV_CHARGE_BALANCE_ENABLED
+        or soc_gap <= deadband
+    ):
+        balance_factor = 0.0
+    else:
+        balance_factor = min(
+            1.0,
+            (soc_gap - deadband) / max(1.0, full_bias - deadband)
+        )
+
+    configured_strength = min(
+        1.0,
+        max(0.0, cfg.PV_CHARGE_BALANCE_STRENGTH)
+    )
+
+    return {
+        "min_soc": min_soc,
+        "max_soc": max_soc,
+        "soc_gap": soc_gap,
+        "balance_factor": balance_factor,
+        "balance_strength": balance_factor * configured_strength
+    }
+
+
+def pv_charge_balance_multiplier(state, pv_only, balance_context):
+    """Bias PV-first output toward fuller batteries."""
+
+    strength = balance_context["balance_strength"]
+
+    if (
+        pv_only <= 0
+        or strength <= 0
+        or state.max_soc <= 0
+        or balance_context["soc_gap"] <= 0
+    ):
+        return 1.0
+
+    soc_position = (
+        (state.soc - balance_context["min_soc"])
+        / max(1.0, balance_context["soc_gap"])
+    )
+    soc_position = min(1.0, max(0.0, soc_position))
+
+    return max(
+        0.0,
+        1.0 + strength * ((2.0 * soc_position) - 1.0)
+    )
+
+
 def weighted_limited_allocation(total, weights, limits):
     """Allocate a total by weights while preserving per-device limits."""
 
@@ -535,6 +609,7 @@ def calculate_targets(
         )
 
     targets = [0] * len(devices)
+    final_target_limits = None
     # =====================
     # CASE 1:
     # Enough solar available
@@ -554,6 +629,7 @@ def calculate_targets(
 
         pv_only_limits = []
         pv_weights = []
+        balance_context = pv_charge_balance_context(devices)
 
         for i, d in enumerate(devices):
             cap = capabilities[i] if capabilities else None
@@ -570,7 +646,13 @@ def calculate_targets(
                 pv_only = max(0, d.solar - d.pack_in)
 
             pv_only_limits.append(pv_only)
-            pv_weight = pv_first_weight(pv_only, dev_config)
+            base_pv_weight = pv_first_weight(pv_only, dev_config)
+            charge_balance_multiplier = pv_charge_balance_multiplier(
+                d,
+                pv_only,
+                balance_context
+            )
+            pv_weight = base_pv_weight * charge_balance_multiplier
             pv_weights.append(pv_weight)
 
             log_event(
@@ -590,6 +672,28 @@ def calculate_targets(
                 soc_limit=d.soc_limit,
                 can_export=cap.can_export if cap else True,
                 can_discharge=cap.can_discharge if cap else True
+            )
+            log_event(
+                logging.DEBUG,
+                "pv_charge_balance_weight",
+                device=device_configs[i].name if device_configs else i,
+                soc=d.soc,
+                min_soc=balance_context["min_soc"],
+                max_soc=balance_context["max_soc"],
+                headroom_percent=max(0, d.max_soc - d.soc),
+                pv_only_limit_w=round(pv_only),
+                base_pv_weight=round(base_pv_weight, 3),
+                charge_balance_multiplier=round(
+                    charge_balance_multiplier,
+                    3
+                ),
+                final_pv_weight=round(pv_weight, 3),
+                soc_gap_percent=round(balance_context["soc_gap"], 3),
+                balance_factor=round(balance_context["balance_factor"], 3),
+                balance_strength=round(
+                    balance_context["balance_strength"],
+                    3
+                )
             )
 
         pv_only_total = sum(pv_only_limits)
@@ -619,6 +723,8 @@ def calculate_targets(
                 capabilities,
                 new_total
             )
+            if pv_only_total >= new_total:
+                final_target_limits = pv_only_limits[:]
 
         else:
 
@@ -723,7 +829,8 @@ def calculate_targets(
     targets, undistributed = apply_constraints_and_redistribute(
         targets,
         device_configs=device_configs,
-        capabilities=capabilities
+        capabilities=capabilities,
+        target_limits=final_target_limits
     )
 
     log_event(

@@ -100,8 +100,11 @@ Runtime-editable values are limited to the fields shown above:
 Other safety and tuning values are config-only and require editing
 `config.json` plus a restart. Examples: `dry_run`, `allow_hardware_writes`,
 `allow_state_reconciliation_writes`, `deadband`, `output_control`,
-`redistribute_clamped_power`, `pv_kwp_weighting`, `battery_kwh_weighting`,
-`soc_reconcile_interval`, HA URL/token, and device IP/SN.
+`redistribute_clamped_power`, `pv_kwp_weighting`,
+`pv_charge_balance_enabled`, `pv_charge_balance_deadband_percent`,
+`pv_charge_balance_full_bias_percent`, `pv_charge_balance_strength`,
+`battery_kwh_weighting`, `soc_reconcile_interval`, HA URL/token, and device
+IP/SN.
 
 Reset runtime state:
 

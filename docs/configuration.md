@@ -136,6 +136,18 @@ is clamped by limits.
 
 `system.pv_kwp_weighting` weights PV-first distribution by configured PV size.
 
+`system.pv_charge_balance_enabled` enables a PV-first charge balancing bias.
+When total PV can cover the requested output, devices with higher SOC receive
+more PV-first output weight so lower-SOC devices can keep more local PV for
+charging.
+
+`system.pv_charge_balance_deadband_percent` defines the SOC gap where the bias
+starts. `system.pv_charge_balance_full_bias_percent` defines the gap where the
+configured bias reaches full strength.
+
+`system.pv_charge_balance_strength` controls the maximum PV-first charge
+balancing bias. Values above `1.0` are clamped to `1.0`.
+
 `system.battery_kwh_weighting` weights battery top-up by configured battery
 capacity.
 
