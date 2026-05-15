@@ -76,6 +76,10 @@ Start InfluxDB:
 docker compose -f develop/influxdb/docker-compose.yml up -d
 ```
 
+`docker compose up -d` starts the container, but the InfluxDB API may need a few
+seconds before it can authenticate and create buckets. The setup helper waits
+for `/health` readiness before running bucket checks.
+
 Create the downsample buckets:
 
 ```bash

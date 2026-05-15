@@ -60,11 +60,29 @@ def load_config(path):
 
 
 def read_runtime_state(path):
-    if not path or not os.path.exists(path):
+    if not path:
         return None
 
-    with open(path) as handle:
-        return json.load(handle)
+    if not os.path.exists(path):
+        log_event(
+            logging.WARNING,
+            "influx_capture_runtime_state_read_error",
+            path=path,
+            error="file_missing"
+        )
+        return None
+
+    try:
+        with open(path) as handle:
+            return json.load(handle)
+    except Exception as exc:
+        log_event(
+            logging.WARNING,
+            "influx_capture_runtime_state_read_error",
+            path=path,
+            error=exc
+        )
+        return None
 
 
 def build_device_fields(device_state):

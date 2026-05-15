@@ -65,6 +65,10 @@ def default_safe_config():
             "log_level": "debug",
             "redistribute_clamped_power": True,
             "pv_kwp_weighting": True,
+            "pv_charge_balance_enabled": True,
+            "pv_charge_balance_deadband_percent": 5,
+            "pv_charge_balance_full_bias_percent": 15,
+            "pv_charge_balance_strength": 1.0,
             "battery_kwh_weighting": True
         },
         "winter": WINTER_DEFAULTS,
@@ -102,6 +106,10 @@ HA_CONTROL_ENABLED = False
 LOG_LEVEL = "info"
 REDISTRIBUTE_CLAMPED_POWER = True
 PV_KWP_WEIGHTING = True
+PV_CHARGE_BALANCE_ENABLED = True
+PV_CHARGE_BALANCE_DEADBAND_PERCENT = 5.0
+PV_CHARGE_BALANCE_FULL_BIAS_PERCENT = 15.0
+PV_CHARGE_BALANCE_STRENGTH = 1.0
 BATTERY_KWH_WEIGHTING = True
 SOC_RECONCILE_INTERVAL = 10
 WINTER_CONFIG = WINTER_DEFAULTS.copy()
@@ -137,7 +145,10 @@ def initialize(args, base_dir):
     global DRY_RUN, SIMULATION_MODE, ALLOW_HARDWARE_WRITES
     global ALLOW_STATE_RECONCILIATION_WRITES, RECONCILE_AC_MODE_ON_START
     global RECONCILE_SMART_MODE, HA_ENABLED, HA_CONTROL_ENABLED, LOG_LEVEL
-    global REDISTRIBUTE_CLAMPED_POWER, PV_KWP_WEIGHTING, BATTERY_KWH_WEIGHTING
+    global REDISTRIBUTE_CLAMPED_POWER, PV_KWP_WEIGHTING
+    global PV_CHARGE_BALANCE_ENABLED, PV_CHARGE_BALANCE_DEADBAND_PERCENT
+    global PV_CHARGE_BALANCE_FULL_BIAS_PERCENT, PV_CHARGE_BALANCE_STRENGTH
+    global BATTERY_KWH_WEIGHTING
     global SOC_RECONCILE_INTERVAL, WINTER_CONFIG, ZENDURE_CONFIG, SHELLY_IP
 
     ARGS = args
@@ -205,6 +216,28 @@ def initialize(args, base_dir):
     PV_KWP_WEIGHTING = CONFIG["system"].get(
         "pv_kwp_weighting",
         True
+    )
+    PV_CHARGE_BALANCE_ENABLED = safe_bool(
+        CONFIG["system"].get("pv_charge_balance_enabled", True),
+        True
+    )
+    PV_CHARGE_BALANCE_DEADBAND_PERCENT = safe_float(
+        CONFIG["system"].get("pv_charge_balance_deadband_percent", 5),
+        5.0,
+        minimum=0.0
+    )
+    PV_CHARGE_BALANCE_FULL_BIAS_PERCENT = safe_float(
+        CONFIG["system"].get("pv_charge_balance_full_bias_percent", 15),
+        15.0,
+        minimum=0.0
+    )
+    PV_CHARGE_BALANCE_STRENGTH = min(
+        1.0,
+        safe_float(
+            CONFIG["system"].get("pv_charge_balance_strength", 1.0),
+            1.0,
+            minimum=0.0
+        )
     )
     BATTERY_KWH_WEIGHTING = CONFIG["system"].get(
         "battery_kwh_weighting",

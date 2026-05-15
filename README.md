@@ -126,16 +126,29 @@ More: [docs/architecture.md](docs/architecture.md).
 
 ## Quick Start
 
+Detailed first live-control setup: [docs/quickstart.md](docs/quickstart.md).
+
 Install dependencies:
 
 ```bash
-pip install -r requirements.txt
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 ```
 
-Alternative on Debian / Ubuntu:
+Install Python, venv support, and pip first if needed. Debian / Ubuntu /
+Raspberry Pi OS:
 
 ```bash
-sudo apt install python3-requests
+sudo apt update
+sudo apt install python3 python3-venv python3-pip
+```
+
+openSUSE:
+
+```bash
+sudo zypper install python3 python3-pip python3-virtualenv
 ```
 
 Create local config:
@@ -328,4 +341,3 @@ Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md).
 ## License
 
 See [LICENSE](LICENSE).
-

@@ -6,6 +6,7 @@ Start here:
 
 | Topic | Document |
 |---|---|
+| Quickstart live control | [quickstart.md](quickstart.md) |
 | Configuration | [configuration.md](configuration.md) |
 | Configuration examples | [configuration-examples.md](configuration-examples.md) |
 | Runtime state | [runtime-state.md](runtime-state.md) |

@@ -215,8 +215,6 @@ def main():
             )
             break
 
-        time.sleep(cfg.LOOP_INTERVAL)
-
 
 if __name__ == "__main__":
     main()
