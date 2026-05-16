@@ -90,6 +90,7 @@ flowchart LR
 Home Assistant is optional and is not required for control decisions.
 
 Control details: [docs/control-logic.md](docs/control-logic.md).
+Visual control-flow map: [docs/control-flow.md](docs/control-flow.md).
 
 ---
 
@@ -309,6 +310,7 @@ Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md).
 |---|---|
 | Configuration | [docs/configuration.md](docs/configuration.md) |
 | Configuration examples | [docs/configuration-examples.md](docs/configuration-examples.md) |
+| Power control flow | [docs/control-flow.md](docs/control-flow.md) |
 | Runtime state | [docs/runtime-state.md](docs/runtime-state.md) |
 | CLI tool | [docs/cli.md](docs/cli.md) |
 | Home Assistant | [docs/home-assistant.md](docs/home-assistant.md) |

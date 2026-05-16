@@ -9,6 +9,7 @@ Start here:
 | Quickstart live control | [quickstart.md](quickstart.md) |
 | Configuration | [configuration.md](configuration.md) |
 | Configuration examples | [configuration-examples.md](configuration-examples.md) |
+| Power control flow | [control-flow.md](control-flow.md) |
 | Runtime state | [runtime-state.md](runtime-state.md) |
 | CLI tool | [cli.md](cli.md) |
 | Home Assistant | [home-assistant.md](home-assistant.md) |
