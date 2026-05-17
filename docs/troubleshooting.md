@@ -125,6 +125,8 @@ runtime_state_saved
 runtime_state_load_error
 ```
 
+More detail: [runtime-state.md](runtime-state.md), [configuration.md](configuration.md).
+
 ## No Power Changes
 
 ### Symptoms
@@ -180,6 +182,9 @@ deadband_skip_write
 write_output_limit_error
 ```
 
+More detail: [safety.md](safety.md), [configuration.md](configuration.md),
+[runtime-state.md](runtime-state.md).
+
 ## Regulation Is Too Slow
 
 ### Symptoms
@@ -232,6 +237,9 @@ Validate after tuning:
 ```bash
 python3 -B ems-solarflow-api-control.py --dry-run --duration 120
 ```
+
+Control-chain details: [control-logic.md](control-logic.md) and
+[control-flow.md](control-flow.md).
 
 Relevant events:
 
@@ -291,6 +299,29 @@ deadband_skip_write
 output_control_settle_hold
 write_output_limit
 ```
+
+Control-chain details: [control-logic.md](control-logic.md) and
+[control-flow.md](control-flow.md).
+
+## Dashboard Values Do Not Add Up Exactly
+
+### Symptoms
+
+- `home`, target, output limit, and actual output differ in the same moment
+- global target and per-device output do not match exactly
+- off-grid socket mode looks like it should affect power totals
+
+`home` is a calculated runtime/dashboard value. It is not the smoothed control
+target. The EMS target can be filtered, ramped, clamped, and rate-limited before
+an `outputLimit` write is attempted. The actual Zendure output can then lag or
+remain lower because of device state, available PV/battery power, API timing, or
+firmware behavior.
+
+Off-grid socket mode is a mode/state value, not power. Do not add it to the
+home-load, target, output-limit, or actual-output calculation.
+
+More detail: [control-logic.md](control-logic.md),
+[home-assistant.md](home-assistant.md), and [runtime-state.md](runtime-state.md).
 
 ## Device Is Online But Does Not Deliver Power
 
@@ -353,6 +384,9 @@ night_min_soc_idle_park_write
 min_output_limit_applied
 ```
 
+Related docs: [configuration.md](configuration.md), [winter-mode.md](winter-mode.md),
+[safety.md](safety.md).
+
 ## Output Stays At 0 W Or Device Does Not Wake Up
 
 Some installations treat repeated `outputLimit=0` like a stop, idle, or sleep
@@ -389,6 +423,9 @@ night_min_soc_idle_hold_skip_write
 
 Home Assistant entities are created by REST state writes. They appear after the
 EMS has published at least once.
+
+After an HA restart, entities can temporarily appear as stale, unavailable, or
+restored until the EMS publishes fresh states again.
 
 Check:
 
@@ -475,6 +512,8 @@ HA helper values can update `runtime-state.json` only when static
 and runtime `ha.control_enabled=true`. `--no-ha`, simulation, and replay disable
 HA reads and writes for that run.
 
+More detail: [home-assistant.md](home-assistant.md).
+
 ## Device Offline Or Stale Telemetry
 
 ### Symptoms
@@ -502,6 +541,9 @@ Check:
 - device Wi-Fi quality
 - `telemetry_max_age_seconds`
 - HA `last_seen_age_s` attribute
+
+More detail: [configuration.md](configuration.md) and
+[home-assistant.md](home-assistant.md).
 
 ## Unexpected SOC Or Mode Changes
 
@@ -538,6 +580,9 @@ write_runtime_device_state
 
 Set `allow_state_reconciliation_writes=false` while validating normal output
 control.
+
+Related docs: [configuration.md](configuration.md), [winter-mode.md](winter-mode.md),
+[safety.md](safety.md).
 
 ## Winter Mode
 

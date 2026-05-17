@@ -34,6 +34,7 @@ The EMS should not run in parallel with another controller that writes Zendure
 `outputLimit`.
 
 Detailed safety model: [docs/safety.md](docs/safety.md).
+Release-readiness notes: [docs/release.md](docs/release.md).
 
 ---
 
@@ -89,6 +90,7 @@ flowchart LR
 
 Home Assistant is optional and is not required for control decisions.
 
+Architecture details: [docs/architecture.md](docs/architecture.md).
 Control details: [docs/control-logic.md](docs/control-logic.md).
 Visual control-flow map: [docs/control-flow.md](docs/control-flow.md).
 
@@ -187,6 +189,7 @@ python3 -B ems-solarflow-api-control.py
 ```
 
 Configuration details: [docs/configuration.md](docs/configuration.md).
+Copy/paste examples: [docs/configuration-examples.md](docs/configuration-examples.md).
 
 ---
 
@@ -249,6 +252,12 @@ Dashboard example:
 homeassistant-dashboard/dashboard.yaml
 ```
 
+Dashboard preview:
+
+```text
+homeassistant-dashboard/dashboard-preview.jpg
+```
+
 More: [docs/home-assistant.md](docs/home-assistant.md).
 
 ---
@@ -301,6 +310,7 @@ python3 scripts/check_log_events.py /tmp/ems-sim.log \
 ```
 
 Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md).
+Safety checks: [docs/safety.md](docs/safety.md).
 
 ---
 
@@ -308,6 +318,7 @@ Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md).
 
 | Topic | Document |
 |---|---|
+| Documentation index | [docs/README.md](docs/README.md) |
 | Configuration | [docs/configuration.md](docs/configuration.md) |
 | Configuration examples | [docs/configuration-examples.md](docs/configuration-examples.md) |
 | Power control flow | [docs/control-flow.md](docs/control-flow.md) |
@@ -321,6 +332,10 @@ Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md).
 | Release notes | [docs/release.md](docs/release.md) |
 | Safety model | [docs/safety.md](docs/safety.md) |
 | Troubleshooting | [docs/troubleshooting.md](docs/troubleshooting.md) |
+| InfluxDB telemetry capture | [docs/develop-tool-influxdb-telemetry.md](docs/develop-tool-influxdb-telemetry.md) |
+| InfluxDB state-transition analysis | [docs/develop-tool-influxdb-state-transition-analysis.md](docs/develop-tool-influxdb-state-transition-analysis.md) |
+| Observed firmware behavior | [docs/observed-firmware-no-energy-path.md](docs/observed-firmware-no-energy-path.md) |
+| Codex agent notes | [CODEX_AGENT_GUIDE.md](CODEX_AGENT_GUIDE.md) |
 
 ---
 
@@ -335,6 +350,7 @@ Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md).
 | `config.json` | Local config, ignored by Git |
 | `runtime-state.json` | Mutable runtime state, ignored by Git |
 | `homeassistant-dashboard/dashboard.yaml` | HA dashboard example |
+| `homeassistant-dashboard/dashboard-preview.jpg` | HA dashboard preview image |
 | `scripts/check_log_events.py` | Structured log validator |
 | `docs/` | Public documentation |
 

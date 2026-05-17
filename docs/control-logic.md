@@ -57,6 +57,21 @@ The sign-change fast response only adjusts the filtered load value inside the
 median/EMA stage. It does not bypass total ramping, per-device ramping, write
 cooldown, deadbands, or state reconciliation safeguards.
 
+## Calculated Values And Targets
+
+`home` is a calculated runtime/dashboard value derived from currently available
+telemetry. It is useful for visibility, but it is not the same thing as the
+smoothed control target.
+
+The control target can be filtered, smoothed, ramped, clamped, limited by
+device state, and held back by write cooldowns. The `outputLimit` written to a
+Zendure device is the EMS command limit for that device; the actual Zendure
+output can differ for a short time because of API delay, device behavior,
+available PV/battery power, or firmware state.
+
+Off-grid socket mode is an operator/device mode state. It is not output power
+and should not be added to the home-load, target, or output calculation.
+
 ## Night / minSoc Idle
 
 When all active and online devices are blocked at their discharge floor, the EMS

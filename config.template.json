@@ -32,7 +32,7 @@
       "target_deadband_w": 10,
       "filter_enabled": true,
       "filter_method": "median_ema",
-      "median_window": 3,
+      "median_window": 2,
       "ema_alpha": 0.85,
       "sign_change_fast_response_enabled": true,
       "sign_change_threshold_w": 50,
