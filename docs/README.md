@@ -19,7 +19,6 @@ Start here:
 | Troubleshooting | [troubleshooting.md](troubleshooting.md) | Common symptoms, relevant events, and links back to detail pages. |
 | Architecture | [architecture.md](architecture.md) | Project structure and runtime component boundaries. |
 | Development notes | [development.md](development.md) | Developer workflow and validation notes. |
-| Release notes | [release.md](release.md) | Current release/RC readiness notes. |
 | InfluxDB telemetry capture | [develop-tool-influxdb-telemetry.md](develop-tool-influxdb-telemetry.md) | Development tool for recording EMS runtime telemetry into InfluxDB. |
 | InfluxDB state-transition analysis | [develop-tool-influxdb-state-transition-analysis.md](develop-tool-influxdb-state-transition-analysis.md) | Development tool for analyzing runtime state transitions from InfluxDB data. |
 | Observed firmware behavior | [observed-firmware-no-energy-path.md](observed-firmware-no-energy-path.md) | Observed Zendure behavior when no energy path is available. |

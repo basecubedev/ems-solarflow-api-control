@@ -34,7 +34,6 @@ The EMS should not run in parallel with another controller that writes Zendure
 `outputLimit`.
 
 Detailed safety model: [docs/safety.md](docs/safety.md).
-Release-readiness notes: [docs/release.md](docs/release.md).
 
 ---
 
@@ -329,7 +328,6 @@ Safety checks: [docs/safety.md](docs/safety.md).
 | Development | [docs/development.md](docs/development.md) |
 | Control logic | [docs/control-logic.md](docs/control-logic.md) |
 | Winter mode | [docs/winter-mode.md](docs/winter-mode.md) |
-| Release notes | [docs/release.md](docs/release.md) |
 | Safety model | [docs/safety.md](docs/safety.md) |
 | Troubleshooting | [docs/troubleshooting.md](docs/troubleshooting.md) |
 | InfluxDB telemetry capture | [docs/develop-tool-influxdb-telemetry.md](docs/develop-tool-influxdb-telemetry.md) |
