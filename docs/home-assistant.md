@@ -15,6 +15,10 @@ Home Assistant is not a safety authority. If helper sync fails, times out, or
 raises an error, the EMS logs the failure and continues the control loop with
 the current local runtime-state values.
 
+`runtime-state.json` remains the local control state. Home Assistant helpers can
+change only the runtime fields documented below, and only when both static and
+runtime HA control are enabled.
+
 Status publishing is enabled with:
 
 ```json
@@ -62,6 +66,10 @@ eco
 standard
 ```
 
+Helper changes are ignored for a run when static `ha.enabled=false`, static
+`ha.control_enabled=false`, runtime `ha.enabled=false`, runtime
+`ha.control_enabled=false`, `--no-ha`, simulation, or replay is active.
+
 ## Published Global Sensors
 
 ```text
@@ -78,6 +86,12 @@ sum of per-device targets after allocation, device ramp, enabled/offline gates,
 `min_output_limit`, and device max clamping. The sensor exposes
 `controller_target_w` for the internal stabilized controller target and
 `allocated_target_w` for the post-allocation target before final control gates.
+
+`sensor.ems_solarflow_home` is a calculated display/runtime value, not the
+smoothed control target. Short-term differences between home load, controller
+target, per-device target, written `outputLimit`, and actual device output are
+expected because the EMS filters, ramps, clamps, rate-limits writes, and then
+waits for device/API behavior to catch up.
 
 ## Published Device Sensors
 
@@ -147,5 +161,14 @@ The repository contains a dashboard example:
 homeassistant-dashboard/dashboard.yaml
 ```
 
+Dashboard preview:
+
+```text
+homeassistant-dashboard/dashboard-preview.jpg
+```
+
 It includes EMS control, runtime device control, winter status, device state,
 battery status, PV details, and power-flow visualization.
+
+Troubleshooting stale, unavailable, or ignored HA values:
+[troubleshooting.md](troubleshooting.md).

@@ -57,7 +57,6 @@ class EMSController:
             )
         )
         self.commanded_device_targets = {}
-        self.last_output_write_at = {}
         self.last_winter_adjust_date = None
         self.winter_min_soc_targets = {}
         self.night_min_soc_idle_active = False
@@ -704,7 +703,6 @@ class EMSController:
                 target_w=min_output_limit
             )
             self.set_output_limit(dev, min_output_limit)
-            self.last_output_write_at[dev.name] = time.time()
             self.night_min_soc_idle_parked.add(dev.name)
     def effective_control_targets(self, targets, enabled, min_output_limit):
         """Return the per-device output command intent after control gates."""
@@ -2501,34 +2499,7 @@ class EMSController:
                 )
                 continue
 
-            cooldown = self.output_control_float(
-                "write_cooldown_seconds",
-                2,
-                minimum=0
-            )
-            last_write = self.last_output_write_at.get(dev.name)
-            bypass = self.output_control_bypass_active(load)
-
-            if (
-                cooldown > 0
-                and last_write is not None
-                and not bypass
-            ):
-                age = time.time() - last_write
-
-                if age < cooldown:
-                    log_event(
-                        logging.INFO,
-                        "output_control_settle_hold",
-                        device=dev.name,
-                        target_w=target,
-                        last_write_age_s=round(age, 2),
-                        cooldown_s=cooldown
-                    )
-                    continue
-
             self.set_output_limit(dev, target)
-            self.last_output_write_at[dev.name] = time.time()
 
         # =====================
         # LOOP TIMING

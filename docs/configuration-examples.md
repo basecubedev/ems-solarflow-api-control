@@ -45,7 +45,7 @@ Use this for standalone EMS operation without Home Assistant.
 
   "winter": {
     "enabled": false,
-    "months": [10, 11, 12, 1, 2],
+    "months": [10, 11, 12, 1, 2, 3],
     "summer_min_soc": 15,
     "winter_min_soc": 40,
     "ramp_step_percent": 5,
@@ -269,7 +269,7 @@ control.
 {
   "winter": {
     "enabled": true,
-    "months": [10, 11, 12, 1, 2],
+    "months": [10, 11, 12, 1, 2, 3],
     "summer_min_soc": 15,
     "winter_min_soc": 40,
     "ramp_step_percent": 5,
@@ -314,17 +314,19 @@ logs show target oscillation, stale telemetry, or excessive write frequency.
       "target_deadband_w": 10,
       "filter_enabled": true,
       "filter_method": "median_ema",
-      "median_window": 3,
-      "ema_alpha": 0.65,
+      "median_window": 2,
+      "ema_alpha": 0.85,
+      "sign_change_fast_response_enabled": true,
+      "sign_change_threshold_w": 50,
+      "sign_change_filter_reset_factor": 1.0,
       "ramp_enabled": true,
-      "ramp_up_w_per_cycle": 300,
+      "ramp_up_w_per_cycle": 500,
       "ramp_down_w_per_cycle": 500,
       "device_ramp_enabled": true,
-      "device_ramp_up_w_per_cycle": 250,
+      "device_ramp_up_w_per_cycle": 400,
       "device_ramp_down_w_per_cycle": 400,
-      "write_cooldown_seconds": 2,
       "large_import_bypass_w": 600,
-      "large_export_bypass_w": 500,
+      "large_export_bypass_w": 600,
       "bypass_ramp_multiplier": 1.5,
       "telemetry_max_age_seconds": 10,
       "stale_telemetry_ramp_factor": 0.5

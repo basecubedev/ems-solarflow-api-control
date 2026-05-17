@@ -210,6 +210,59 @@ class WriteGateTest(unittest.TestCase):
 
         controller.set_output_limit.assert_not_called()
 
+    def test_consecutive_eligible_writes_are_not_time_blocked(self):
+        controlled = device("WR1")
+        controller = EMSController(
+            devices=[controlled],
+            shelly=ShellyStub(300),
+            sleep_enabled=False,
+            runtime_state=RuntimeStateStub()
+        )
+        controller.run_startup_ac_mode_reconcile_once = Mock()
+        controller.set_output_limit = Mock()
+
+        with patch(
+            "ems.controller.fetch_all_devices",
+            side_effect=[
+                [state()],
+                [state()]
+            ]
+        ), patch(
+            "ems.controller.cfg.SYSTEM_ENABLED",
+            True
+        ), patch(
+            "ems.controller.cfg.MAX_TOTAL_POWER",
+            800
+        ), patch(
+            "ems.controller.cfg.MAX_DEVICE_POWER",
+            800
+        ), patch(
+            "ems.controller.cfg.MIN_OUTPUT_LIMIT",
+            0
+        ), patch(
+            "ems.controller.cfg.LOOP_INTERVAL",
+            5
+        ), patch(
+            "ems.controller.cfg.DEADBAND",
+            10
+        ), patch(
+            "ems.controller.cfg.SOC_RECONCILE_INTERVAL",
+            0
+        ), patch(
+            "ems.controller.cfg.REDISTRIBUTE_CLAMPED_POWER",
+            True
+        ), patch(
+            "ems.controller.cfg.PV_KWP_WEIGHTING",
+            True
+        ), patch(
+            "ems.controller.cfg.BATTERY_KWH_WEIGHTING",
+            True
+        ):
+            controller.run_once()
+            controller.run_once()
+
+        self.assertEqual(controller.set_output_limit.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -126,8 +126,6 @@ is enabled. It also defines the standby total used when positive house load is
 present but no active online device has export capacity, and the standby/wakeup
 value used by strict night/minSoc idle. Use `0` to disable this floor and the
 idle parking behavior.
-present but no active online device has export capacity. Use `0` to disable this
-floor.
 
 `system.loop_interval` is the control loop interval in seconds.
 
@@ -158,9 +156,11 @@ Safe development flags:
 
 ```json
 {
-  "dry_run": true,
-  "allow_hardware_writes": false,
-  "allow_state_reconciliation_writes": false
+  "system": {
+    "dry_run": true,
+    "allow_hardware_writes": false,
+    "allow_state_reconciliation_writes": false
+  }
 }
 ```
 
@@ -205,8 +205,6 @@ pulled toward `raw_load` during a sign-change mismatch. `1.0` resets directly to
 `device_ramp_up_w_per_cycle` limits per-device upward changes.
 
 `device_ramp_down_w_per_cycle` limits per-device downward changes.
-
-`write_cooldown_seconds` avoids writing output limits too frequently.
 
 `large_import_bypass_w` can bypass normal smoothing during large imports.
 

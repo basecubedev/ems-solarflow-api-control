@@ -45,6 +45,21 @@ Simulation:
 python3 -B ems-solarflow-api-control.py --simulate --max-cycles 1
 ```
 
+Offline power-control regression tests:
+
+```bash
+pytest tests/ -m "simulation and power_control"
+```
+
+These tests are deterministic simulated checks for pull requests. They do not
+require Home Assistant, Shelly, Zendure devices, InfluxDB, secrets, or network
+access, and they do not replace longer runtime tests, InfluxDB analysis, or
+real hardware validation.
+
+The GitHub Actions job `Simulated power-control regression tests` can be used
+as a required status check for `main` in branch protection or repository
+rulesets.
+
 Log event checks:
 
 ```bash

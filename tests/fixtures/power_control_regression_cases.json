@@ -1,0 +1,94 @@
+[
+  {
+    "name": "import_step_ramps_up_without_overshoot",
+    "config": {
+      "filter_enabled": false,
+      "load_deadband_w": 5,
+      "target_deadband_w": 5,
+      "ramp_enabled": true,
+      "ramp_up_w_per_cycle": 300,
+      "ramp_down_w_per_cycle": 500,
+      "large_import_bypass_w": 10000,
+      "large_export_bypass_w": 10000
+    },
+    "initial_state": {
+      "output_limit_w": 300
+    },
+    "max_power_w": 1200,
+    "steps": [
+      {
+        "shelly_power_w": 500,
+        "expected_target_min_w": 600,
+        "expected_target_max_w": 600
+      },
+      {
+        "shelly_power_w": 500,
+        "expected_target_min_w": 900,
+        "expected_target_max_w": 900
+      }
+    ]
+  },
+  {
+    "name": "export_step_ramps_down_without_overshoot",
+    "config": {
+      "filter_enabled": false,
+      "load_deadband_w": 5,
+      "target_deadband_w": 5,
+      "ramp_enabled": true,
+      "ramp_up_w_per_cycle": 300,
+      "ramp_down_w_per_cycle": 250,
+      "large_import_bypass_w": 10000,
+      "large_export_bypass_w": 10000
+    },
+    "initial_state": {
+      "output_limit_w": 800
+    },
+    "max_power_w": 1200,
+    "steps": [
+      {
+        "shelly_power_w": -600,
+        "expected_target_min_w": 550,
+        "expected_target_max_w": 550
+      },
+      {
+        "shelly_power_w": -600,
+        "expected_target_min_w": 300,
+        "expected_target_max_w": 300
+      }
+    ]
+  },
+  {
+    "name": "near_zero_load_stays_inside_deadband",
+    "config": {
+      "filter_enabled": false,
+      "load_deadband_w": 5,
+      "target_deadband_w": 5,
+      "ramp_enabled": true,
+      "ramp_up_w_per_cycle": 300,
+      "ramp_down_w_per_cycle": 300,
+      "large_import_bypass_w": 10000,
+      "large_export_bypass_w": 10000
+    },
+    "initial_state": {
+      "output_limit_w": 300
+    },
+    "max_power_w": 1200,
+    "steps": [
+      {
+        "shelly_power_w": 4,
+        "expected_target_min_w": 300,
+        "expected_target_max_w": 300
+      },
+      {
+        "shelly_power_w": -3,
+        "expected_target_min_w": 300,
+        "expected_target_max_w": 300
+      },
+      {
+        "shelly_power_w": 6,
+        "expected_target_min_w": 306,
+        "expected_target_max_w": 306
+      }
+    ]
+  }
+]
