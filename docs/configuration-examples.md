@@ -325,7 +325,6 @@ logs show target oscillation, stale telemetry, or excessive write frequency.
       "device_ramp_enabled": true,
       "device_ramp_up_w_per_cycle": 250,
       "device_ramp_down_w_per_cycle": 400,
-      "write_cooldown_seconds": 1,
       "large_import_bypass_w": 600,
       "large_export_bypass_w": 500,
       "bypass_ramp_multiplier": 1.5,

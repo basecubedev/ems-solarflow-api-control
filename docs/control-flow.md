@@ -44,7 +44,7 @@ flowchart TD
     N --> O[Limits, clamping and redistribution]
     O --> P[Device ramp]
     P --> Q[Effective target and min output limit]
-    Q --> R[Deadband and write cooldown]
+    Q --> R[Deadband and write gates]
     R --> S[Safety gates]
     S --> T[Zendure outputLimit API write]
 
@@ -64,7 +64,7 @@ flowchart TD
     O -. config .-> O_CFG["system.max_device_power<br/>system.max_total_power<br/>devices[].max_power<br/>system.redistribute_clamped_power"]
     P -. config .-> P_CFG["system.output_control.device_ramp_enabled<br/>system.output_control.device_ramp_up_w_per_cycle<br/>system.output_control.device_ramp_down_w_per_cycle<br/>system.output_control.bypass_ramp_multiplier"]
     Q -. config .-> Q_CFG["system.enabled<br/>system.min_output_limit<br/>devices[].max_power"]
-    R -. config .-> R_CFG["system.deadband<br/>system.output_control.write_cooldown_seconds<br/>system.output_control.large_import_bypass_w<br/>system.output_control.large_export_bypass_w"]
+    R -. config .-> R_CFG["system.deadband"]
     S -. config .-> S_CFG["system.dry_run<br/>system.allow_hardware_writes<br/>system.allow_state_reconciliation_writes"]
 ```
 
@@ -104,9 +104,8 @@ flowchart TD
 | `system.output_control.device_ramp_enabled` | Device ramp | Enables per-device target ramping after allocation. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
 | `system.output_control.device_ramp_up_w_per_cycle` | Device ramp | Limits how quickly each device target can rise per EMS cycle. | [configuration.md](configuration.md) |
 | `system.output_control.device_ramp_down_w_per_cycle` | Device ramp | Limits how quickly each device target can fall per EMS cycle. | [configuration.md](configuration.md) |
-| `system.output_control.write_cooldown_seconds` | Deadband and write cooldown | Prevents repeated writes to the same device until the cooldown has passed, except during large import/export bypass. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
-| `system.output_control.large_import_bypass_w` | Total ramp / write cooldown | Detects large import situations. The controller increases ramp speed and bypasses final write cooldown. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
-| `system.output_control.large_export_bypass_w` | Total ramp / write cooldown | Detects large export situations. The controller increases ramp speed and bypasses final write cooldown. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
+| `system.output_control.large_import_bypass_w` | Total ramp / bypass | Detects large import situations. The controller increases ramp speed during bypass behavior. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
+| `system.output_control.large_export_bypass_w` | Total ramp / bypass | Detects large export situations. The controller increases ramp speed during bypass behavior. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
 | `system.output_control.bypass_ramp_multiplier` | Total ramp and device ramp | Multiplies total and per-device ramp limits during large import/export bypass situations. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
 | `system.output_control.telemetry_max_age_seconds` | Telemetry freshness / stale ramp | Marks device telemetry as stale after this age. Stale telemetry reduces ramp speed. | [configuration.md](configuration.md), [troubleshooting.md](troubleshooting.md) |
 | `system.output_control.stale_telemetry_ramp_factor` | Total ramp / stale telemetry | Multiplies total ramp speed when telemetry is stale. Lower values make stale-telemetry changes more conservative. | [configuration.md](configuration.md), [troubleshooting.md](troubleshooting.md) |
@@ -128,7 +127,7 @@ Filters and smoothing reduce noise or slow changes. `load_deadband_w` suppresses
 small filtered load changes before the total target moves. `target_deadband_w`
 suppresses small total-target changes against the controller's current
 commanded total. Ramps limit how far the total target or device targets can move
-per cycle. `write_cooldown_seconds` suppresses frequent final API writes.
+per cycle.
 
 Weighting values influence distribution between devices, but do not create
 additional PV or battery power. PV-first weighting uses this simplified signal:

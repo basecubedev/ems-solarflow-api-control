@@ -18,7 +18,7 @@ control chain, see [control-flow.md](control-flow.md).
 9. Allocate target across devices.
 10. Apply device ramp and limits.
 11. Apply `min_output_limit` while enabled.
-12. Apply deadband and write cooldown.
+12. Apply deadband and write gates.
 13. Write `outputLimit` only behind safety gates.
 
 ## Stable Fast Output Control
@@ -47,7 +47,6 @@ Then it applies:
 - optional sign-change fast response for large import/export direction flips
 - total ramp limit
 - per-device ramp limit
-- write cooldown
 - stale telemetry ramp reduction
 - large import/export ramp bypass multiplier
 
@@ -55,7 +54,7 @@ This makes short loop intervals usable without large alternating target swings.
 
 The sign-change fast response only adjusts the filtered load value inside the
 median/EMA stage. It does not bypass total ramping, per-device ramping, write
-cooldown, deadbands, or state reconciliation safeguards.
+deadbands, write gates, or state reconciliation safeguards.
 
 ## Calculated Values And Targets
 
@@ -64,7 +63,7 @@ telemetry. It is useful for visibility, but it is not the same thing as the
 smoothed control target.
 
 The control target can be filtered, smoothed, ramped, clamped, limited by
-device state, and held back by write cooldowns. The `outputLimit` written to a
+device state, and held back by write gates. The `outputLimit` written to a
 Zendure device is the EMS command limit for that device; the actual Zendure
 output can differ for a short time because of API delay, device behavior,
 available PV/battery power, or firmware state.

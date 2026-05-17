@@ -19,7 +19,6 @@ OUTPUT_CONTROL_DEFAULTS = {
     "device_ramp_enabled": True,
     "device_ramp_up_w_per_cycle": 250,
     "device_ramp_down_w_per_cycle": 400,
-    "write_cooldown_seconds": 2,
     "large_import_bypass_w": 600,
     "large_export_bypass_w": 500,
     "bypass_ramp_multiplier": 1.5,

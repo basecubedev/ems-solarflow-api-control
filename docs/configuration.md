@@ -206,8 +206,6 @@ pulled toward `raw_load` during a sign-change mismatch. `1.0` resets directly to
 
 `device_ramp_down_w_per_cycle` limits per-device downward changes.
 
-`write_cooldown_seconds` avoids writing output limits too frequently.
-
 `large_import_bypass_w` can bypass normal smoothing during large imports.
 
 `large_export_bypass_w` can bypass normal smoothing during large exports.

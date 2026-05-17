@@ -209,7 +209,6 @@ More detail: [safety.md](safety.md), [configuration.md](configuration.md),
       "device_ramp_enabled": true,
       "device_ramp_up_w_per_cycle": 500,
       "device_ramp_down_w_per_cycle": 600,
-      "write_cooldown_seconds": 1,
       "large_import_bypass_w": 600,
       "large_export_bypass_w": 500,
       "bypass_ramp_multiplier": 1.5,
@@ -229,7 +228,6 @@ More detail: [safety.md](safety.md), [configuration.md](configuration.md),
 | Total target rises too slowly | `ramp_up_w_per_cycle` | increase |
 | Total target falls too slowly | `ramp_down_w_per_cycle` | increase |
 | Per-device target changes too slowly | `device_ramp_*_w_per_cycle` | increase |
-| Writes happen too rarely | `write_cooldown_seconds` | lower |
 | Stale telemetry slows response | `telemetry_max_age_seconds` / `stale_telemetry_ramp_factor` | check telemetry freshness first |
 
 Validate after tuning:
@@ -274,8 +272,7 @@ target_calculation
       "filter_enabled": true,
       "median_window": 3,
       "ema_alpha": 0.85,
-      "ramp_enabled": true,
-      "write_cooldown_seconds": 1
+      "ramp_enabled": true
     }
   }
 }
@@ -296,7 +293,6 @@ Relevant events:
 ```text
 output_control_deadband_hold
 deadband_skip_write
-output_control_settle_hold
 write_output_limit
 ```
 
