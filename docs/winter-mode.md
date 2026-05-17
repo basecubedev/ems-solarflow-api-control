@@ -14,7 +14,7 @@ settings below remain static config.
 {
   "winter": {
     "enabled": true,
-    "months": [10, 11, 12, 1, 2],
+    "months": [10, 11, 12, 1, 2, 3],
     "summer_min_soc": 15,
     "winter_min_soc": 40,
     "ramp_step_percent": 5,

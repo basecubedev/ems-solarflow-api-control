@@ -210,7 +210,7 @@ More detail: [safety.md](safety.md), [configuration.md](configuration.md),
       "device_ramp_up_w_per_cycle": 500,
       "device_ramp_down_w_per_cycle": 600,
       "large_import_bypass_w": 600,
-      "large_export_bypass_w": 500,
+      "large_export_bypass_w": 600,
       "bypass_ramp_multiplier": 1.5,
       "telemetry_max_age_seconds": 10,
       "stale_telemetry_ramp_factor": 0.5

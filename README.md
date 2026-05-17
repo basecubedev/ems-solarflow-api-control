@@ -333,7 +333,6 @@ Safety checks: [docs/safety.md](docs/safety.md).
 | InfluxDB telemetry capture | [docs/develop-tool-influxdb-telemetry.md](docs/develop-tool-influxdb-telemetry.md) |
 | InfluxDB state-transition analysis | [docs/develop-tool-influxdb-state-transition-analysis.md](docs/develop-tool-influxdb-state-transition-analysis.md) |
 | Observed firmware behavior | [docs/observed-firmware-no-energy-path.md](docs/observed-firmware-no-energy-path.md) |
-| Codex agent notes | [CODEX_AGENT_GUIDE.md](CODEX_AGENT_GUIDE.md) |
 
 ---
 
