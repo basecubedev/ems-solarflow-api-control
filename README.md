@@ -6,12 +6,13 @@ No YAML automation stack. No cloud dependency for control decisions. Just
 Python, JSON configuration, local device telemetry, structured logs, and
 transparent runtime control.
 
-This project is designed for advanced users who want a deterministic,
-inspectable, firmware-aware controller for Zendure SolarFlow devices.
+This project is designed for stable standalone EMS operation with a
+deterministic, inspectable, firmware-aware controller for Zendure SolarFlow
+devices.
 
 ---
 
-## Status And Safety Warning
+## Safety And Responsibility
 
 This project is no longer considered experimental. It is intended for stable
 EMS control use and has been tested in real-world operation.

@@ -6,9 +6,9 @@ The EMS uses structured logs:
 event=<name> key=value key=value
 ```
 
-Use these logs to validate behavior before enabling live writes. Change one
-setting at a time and run a short dry-run or bounded live test after each
-change.
+Use these logs to validate behavior during dry-run checks and live operation.
+Change one setting at a time and run a short dry-run or bounded live test after
+each change.
 
 The template default is standalone live control after local configuration:
 Home Assistant disabled, `dry_run=false`, `allow_hardware_writes=true`, and
