@@ -156,6 +156,12 @@ When total PV can cover the requested output, devices with higher SOC receive
 more PV-first output weight so lower-SOC devices can keep more local PV for
 charging.
 
+In PV-first mode, devices that are full or charge-inhibited are prioritized for
+AC output up to their available PV and device limits. This helps Zendure systems
+use PV from a full battery directly in the house while batteries with charge
+headroom keep more PV for charging. Export capability, max power, SOC limits,
+and safety gates still apply.
+
 `system.pv_charge_balance_deadband_percent` defines the SOC gap where the bias
 starts. `system.pv_charge_balance_full_bias_percent` defines the gap where the
 configured bias reaches full strength.

@@ -316,6 +316,110 @@ class EnergyAllocationTest(unittest.TestCase):
         self.assert_pv_only_limits(enabled_targets, states)
         self.assert_pv_only_limits(disabled_targets, states)
 
+    def test_full_soc_device_gets_pv_export_priority(self):
+        states = [
+            state(
+                soc=100,
+                max_soc=100,
+                solar=722,
+                output=657,
+                output_limit=657,
+                soc_limit=1,
+                pack_state=2
+            ),
+            state(
+                soc=98,
+                max_soc=100,
+                solar=735,
+                output=364,
+                output_limit=364,
+                soc_limit=0,
+                pack_out=371,
+                pack_state=1
+            )
+        ]
+
+        targets, _, _ = self.calculate(
+            states,
+            requested_total=1000,
+            max_power=1600,
+            pv_charge_balance_enabled=True
+        )
+
+        self.assertEqual([722, 278], targets)
+        self.assertGreater(targets[0], targets[1])
+        self.assertLess(targets[1], states[1].solar)
+        self.assert_pv_only_limits(targets, states)
+        self.assert_total(targets, 1000)
+
+    def test_no_full_device_preserves_charge_balance_allocation(self):
+        states = [
+            state(soc=80, solar=600),
+            state(soc=40, solar=400)
+        ]
+
+        targets, _, _ = self.calculate(
+            states,
+            requested_total=600,
+            pv_charge_balance_enabled=True
+        )
+
+        self.assertEqual([600, 0], targets)
+        self.assert_pv_only_limits(targets, states)
+
+    def test_full_soc_device_that_cannot_export_is_skipped(self):
+        states = [
+            state(soc=100, max_soc=100, solar=700, soc_limit=1),
+            state(soc=80, max_soc=100, solar=700, soc_limit=0)
+        ]
+        capabilities = [
+            DeviceCapabilities(
+                can_charge=False,
+                can_discharge=True,
+                can_export=False,
+                can_ac_charge=False,
+                reason="test_cannot_export"
+            ),
+            DeviceCapabilities(
+                can_charge=True,
+                can_discharge=True,
+                can_export=True,
+                can_ac_charge=False,
+                reason="test_can_export"
+            )
+        ]
+
+        targets, _, _ = self.calculate(
+            states,
+            requested_total=600,
+            capabilities=capabilities,
+            pv_charge_balance_enabled=True
+        )
+
+        self.assertEqual([0, 600], targets)
+
+    def test_full_soc_priority_respects_device_max_power(self):
+        states = [
+            state(soc=100, max_soc=100, solar=1200, soc_limit=1),
+            state(soc=80, max_soc=100, solar=800, soc_limit=0)
+        ]
+        configs = [
+            device("WR1", max_power=800),
+            device("WR2", max_power=800)
+        ]
+
+        targets, _, _ = self.calculate(
+            states,
+            configs,
+            requested_total=1200,
+            max_power=1600,
+            pv_charge_balance_enabled=True
+        )
+
+        self.assertEqual([800, 400], targets)
+        self.assert_device_caps(targets, configs)
+        self.assert_total(targets, 1200)
+
     def test_pv_insufficient_balances_discharge_by_usable_soc(self):
         states = [
             state(soc=80, min_soc=20, solar=100),
