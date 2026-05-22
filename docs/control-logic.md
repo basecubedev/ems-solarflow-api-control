@@ -140,6 +140,10 @@ on devices that:
 - have SOC above minSoc
 - have target headroom
 
+When battery top-up is used, the final constraint pass keeps the normal device
+and capability limits but does not clamp the intentional top-up back to the
+PV-only limits.
+
 ## Battery Balancing
 
 Battery discharge is weighted by usable battery energy:

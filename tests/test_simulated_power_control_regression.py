@@ -409,9 +409,13 @@ def test_device_caps_limit_total_to_achievable_output():
     )
 
     assert new_total == 900
-    assert targets == [250, 500]
-    assert sum(targets) <= new_total
+    assert targets == [250, 650]
+    assert sum(targets) == new_total
     assert all(target >= 0 for target in targets)
+    assert all(
+        target <= dev.max_power
+        for target, dev in zip(targets, devices)
+    )
 
 
 def test_soc_charge_balance_strength_changes_pv_first_distribution():

@@ -209,6 +209,91 @@ class EnergyAllocationTest(unittest.TestCase):
         self.assert_pv_only_limits(targets, states)
         self.assert_total(targets, 600)
 
+    def test_pv_first_battery_topup_survives_final_constraints(self):
+        states = [
+            state(soc=40, min_soc=15, solar=724),
+            state(soc=80, min_soc=15, solar=1000)
+        ]
+        configs = [
+            device("WR1", max_power=800),
+            device("WR2", max_power=800)
+        ]
+
+        targets, _, _ = self.calculate(
+            states,
+            configs,
+            requested_total=1600,
+            max_power=1600,
+            pv_charge_balance_enabled=True
+        )
+
+        self.assertEqual([800, 800], targets)
+        self.assertGreater(targets[0], states[0].solar)
+        self.assert_total(targets, 1600)
+
+    def test_pv_first_keeps_pv_only_limits_when_no_topup_is_needed(self):
+        states = [
+            state(soc=40, min_soc=15, solar=724),
+            state(soc=80, min_soc=15, solar=1000)
+        ]
+        configs = [
+            device("WR1", max_power=800),
+            device("WR2", max_power=800)
+        ]
+
+        targets, _, _ = self.calculate(
+            states,
+            configs,
+            requested_total=1200,
+            max_power=1600,
+            pv_charge_balance_enabled=False
+        )
+
+        self.assert_pv_only_limits(targets, states)
+        self.assert_total(targets, 1200)
+
+    def test_pv_first_battery_topup_respects_discharge_protection(self):
+        states = [
+            state(soc=20, min_soc=20, solar=800, pack_in=600),
+            state(soc=70, min_soc=20, solar=900, pack_in=200)
+        ]
+        configs = [
+            device("WR1", max_power=800),
+            device("WR2", max_power=800)
+        ]
+        capabilities = [
+            DeviceCapabilities(
+                can_charge=True,
+                can_discharge=False,
+                can_export=True,
+                can_ac_charge=False,
+                reason="test_cannot_discharge"
+            ),
+            DeviceCapabilities(
+                can_charge=True,
+                can_discharge=True,
+                can_export=True,
+                can_ac_charge=False,
+                reason="test_can_discharge"
+            )
+        ]
+
+        targets, _, _ = self.calculate(
+            states,
+            configs,
+            requested_total=1000,
+            max_power=1000,
+            capabilities=capabilities
+        )
+
+        self.assertEqual([200, 800], targets)
+        self.assertEqual(targets[0], states[0].solar - states[0].pack_in)
+        self.assertEqual(
+            targets[1],
+            states[1].solar - states[1].pack_in + 100
+        )
+        self.assert_total(targets, 1000)
+
     def test_pv_charge_balance_biases_output_to_higher_soc_device(self):
         states = [
             state(soc=80, solar=600),
