@@ -85,7 +85,13 @@ def detect_capabilities(state):
 def derive_soc_runtime_state(state):
     """Classify SOC telemetry for diagnostics only."""
 
-    if state.soc_limit == 1 or state.soc >= state.max_soc:
+    if (
+        state.soc_limit == 1
+        or (
+            state.max_soc > 0
+            and state.soc >= state.max_soc
+        )
+    ):
         return "soc_full"
 
     if state.soc_limit == 2 or state.soc <= state.min_soc:
@@ -231,6 +237,19 @@ def pv_first_weight(pv_only, device_config):
     )
 
 
+def is_full_soc_device(state):
+    """Return True when the device cannot usefully absorb more PV charge."""
+
+    return (
+        state.soc_limit == 1
+        or (
+            state.max_soc > 0
+            and state.soc >= state.max_soc
+        )
+        or derive_soc_runtime_state(state) == "soc_full"
+    )
+
+
 def pv_charge_balance_context(states):
     """Return SOC spread data used for PV-first charge balancing."""
 
@@ -354,6 +373,68 @@ def weighted_limited_allocation(total, weights, limits):
     return allocation
 
 
+def allocate_full_soc_pv_first(
+    requested_total,
+    states,
+    pv_weights,
+    pv_only_limits,
+    device_configs=None,
+    capabilities=None
+):
+    """Prioritize PV export from full batteries before normal PV balancing."""
+
+    full_limits = []
+    full_weights = []
+    normal_limits = []
+    normal_weights = []
+    full_indices = []
+
+    for i, state in enumerate(states):
+        cap = capabilities[i] if capabilities else None
+        dev_config = device_configs[i] if device_configs else None
+        can_export = cap.can_export if cap else True
+        max_power = get_device_max_power(dev_config)
+        full_candidate = (
+            can_export
+            and is_full_soc_device(state)
+            and pv_only_limits[i] > 0
+        )
+
+        if full_candidate:
+            full_indices.append(i)
+            full_limits.append(min(pv_only_limits[i], max_power))
+            full_weights.append(pv_weights[i])
+            normal_limits.append(0)
+            normal_weights.append(0)
+        else:
+            full_limits.append(0)
+            full_weights.append(0)
+            normal_limits.append(pv_only_limits[i])
+            normal_weights.append(pv_weights[i])
+
+    if not full_indices:
+        return None, []
+
+    full_targets = weighted_limited_allocation(
+        requested_total,
+        full_weights,
+        full_limits
+    )
+    remaining = max(0, requested_total - sum(full_targets))
+    normal_targets = weighted_limited_allocation(
+        remaining,
+        normal_weights,
+        normal_limits
+    )
+
+    targets = [
+        full_target + normal_target
+        for full_target, normal_target in zip(full_targets, normal_targets)
+    ]
+
+    return targets, full_indices
+
+
 def apply_battery_topup_after_pv_first(
     targets,
     states,
@@ -361,7 +442,10 @@ def apply_battery_topup_after_pv_first(
     capabilities,
     requested_total
 ):
-    """Top up PV-first targets with battery power where safely available."""
+    """Top up PV-first targets with battery power where safely available.
+
+    Returns the updated targets and whether any battery top-up was applied.
+    """
 
     deliverable_targets = []
 
@@ -380,7 +464,7 @@ def apply_battery_topup_after_pv_first(
     missing = max(0, requested_total - pv_first_total)
 
     if missing <= 0:
-        return targets
+        return targets, False
 
     weights = []
     limits = []
@@ -469,7 +553,7 @@ def apply_battery_topup_after_pv_first(
             reason=reason
         )
 
-    return targets
+    return targets, topup_total > 0
 
 
 def apply_constraints_and_redistribute(
@@ -610,6 +694,7 @@ def calculate_targets(
 
     targets = [0] * len(devices)
     final_target_limits = None
+    battery_topup_used = False
     # =====================
     # CASE 1:
     # Enough solar available
@@ -699,11 +784,32 @@ def calculate_targets(
         pv_only_total = sum(pv_only_limits)
 
         if pv_only_total > 0:
-            targets = weighted_limited_allocation(
+            targets, full_soc_indices = allocate_full_soc_pv_first(
                 new_total,
+                devices,
                 pv_weights,
-                pv_only_limits
+                pv_only_limits,
+                device_configs=device_configs,
+                capabilities=capabilities
             )
+
+            if targets is not None:
+                log_event(
+                    logging.INFO,
+                    "pv_first_full_soc_priority",
+                    requested_total=new_total,
+                    devices=json.dumps(full_soc_indices),
+                    full_soc_target_w=round(
+                        sum(targets[i] for i in full_soc_indices)
+                    ),
+                    pv_only_total=round(pv_only_total)
+                )
+            else:
+                targets = weighted_limited_allocation(
+                    new_total,
+                    pv_weights,
+                    pv_only_limits
+                )
 
             pv_unmet = new_total - sum(targets)
 
@@ -716,14 +822,17 @@ def calculate_targets(
                     unmet_w=round(pv_unmet)
                 )
 
-            targets = apply_battery_topup_after_pv_first(
+            (
+                targets,
+                battery_topup_used
+            ) = apply_battery_topup_after_pv_first(
                 targets,
                 devices,
                 device_configs,
                 capabilities,
                 new_total
             )
-            if pv_only_total >= new_total:
+            if pv_only_total >= new_total and not battery_topup_used:
                 final_target_limits = pv_only_limits[:]
 
         else:
@@ -739,7 +848,10 @@ def calculate_targets(
                     unmet_w=round(new_total)
                 )
 
-                targets = apply_battery_topup_after_pv_first(
+                (
+                    targets,
+                    battery_topup_used
+                ) = apply_battery_topup_after_pv_first(
                     targets,
                     devices,
                     device_configs,
@@ -825,6 +937,18 @@ def calculate_targets(
             )
 
     raw_targets = targets[:]
+
+    if final_target_limits or battery_topup_used:
+        log_event(
+            logging.DEBUG,
+            "pv_first_target_limits",
+            topup_used=battery_topup_used,
+            final_target_limits=(
+                json.dumps([round(limit) for limit in final_target_limits])
+                if final_target_limits
+                else "none"
+            )
+        )
 
     targets, undistributed = apply_constraints_and_redistribute(
         targets,

@@ -763,17 +763,19 @@ class EMSController:
         )
 
     def runtime_ha_enabled(self):
+        ha_config = cfg.CONFIG.get("ha", {})
         return self.runtime_section_bool(
             "ha",
             "enabled",
-            cfg.CONFIG["ha"].get("enabled", True)
+            ha_config.get("enabled", False)
         )
 
     def runtime_ha_control_enabled(self):
+        ha_config = cfg.CONFIG.get("ha", {})
         return self.runtime_section_bool(
             "ha",
             "control_enabled",
-            cfg.CONFIG["ha"].get("control_enabled", True)
+            ha_config.get("control_enabled", False)
         )
 
     def runtime_device_bool(self, device_name, key, default):
@@ -790,6 +792,16 @@ class EMSController:
             return default
 
         return cfg.safe_int(
+            self.runtime_state.get_device(device_name, key, default),
+            default,
+            minimum=minimum
+        )
+
+    def runtime_device_float(self, device_name, key, default, minimum=0.0):
+        if not self.runtime_state:
+            return default
+
+        return cfg.safe_float(
             self.runtime_state.get_device(device_name, key, default),
             default,
             minimum=minimum
@@ -2133,6 +2145,12 @@ class EMSController:
                 "max_power",
                 dev.max_power,
                 minimum=0
+            )
+            dev.pv_priority_factor = self.runtime_device_float(
+                dev.name,
+                "pv_priority_factor",
+                dev.pv_priority_factor,
+                minimum=0.01
             )
 
         # =====================

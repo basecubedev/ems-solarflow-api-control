@@ -2,8 +2,24 @@
 
 This software can write to real power hardware.
 
-Start with simulation, replay, dry-run, and preflight checks. Do not enable live
-writes until the logs match the behavior you expect.
+The template default is standalone live control: Home Assistant disabled,
+`dry_run=false`, `allow_hardware_writes=true`, and
+`allow_state_reconciliation_writes=true`. Set `dry_run=true` manually when you
+want a no-write validation run.
+
+## Operator Responsibility
+
+The EMS can write to real power hardware. The documented defaults are intended
+for normal standalone operation after local configuration, but every
+installation must be reviewed by the operator.
+
+Before unattended operation, verify device serial numbers, IP addresses, Shelly
+readings, maximum power limits, minimum and maximum SOC limits, battery sizes,
+PV factors, and any local grid or electrical requirements.
+
+The EMS should not run in parallel with another controller that writes Zendure
+`outputLimit`. Monitor the first live run and every run after relevant
+configuration changes.
 
 ## Write Gates
 
@@ -50,6 +66,9 @@ standard -> 0
 
 Startup may initialize `acMode=2` once when the device appears idle and no
 firmware recovery/charge condition is active.
+
+`reconcile_ac_mode_on_start` is a startup reconciliation helper, not permanent
+cyclic forcing of `acMode`.
 
 ## Preflight
 

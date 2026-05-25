@@ -4,6 +4,11 @@ Winter mode is implemented as SOC/state reconciliation, not output control.
 
 It never changes normal target calculation.
 
+The template default enables state reconciliation writes as part of normal
+standalone regulation. Winter still only writes during its reconciliation
+context when winter mode is enabled and active. Review SOC limits and battery
+capacity for the installation before unattended winter operation.
+
 `winter.enabled` can be toggled at runtime through `runtime-state.json`,
 `emsctl.py`, or the optional Home Assistant helper. The technical winter
 settings below remain static config.

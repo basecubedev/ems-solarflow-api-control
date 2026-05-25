@@ -24,8 +24,8 @@ Example:
     "min_output_limit": 30
   },
   "ha": {
-    "enabled": true,
-    "control_enabled": true
+    "enabled": false,
+    "control_enabled": false
   },
   "winter": {
     "enabled": true
@@ -34,12 +34,14 @@ Example:
     "WR1": {
       "enabled": true,
       "max_power": 800,
-      "offgrid_socket_mode": "off"
+      "offgrid_socket_mode": "off",
+      "pv_priority_factor": 1.0
     },
     "WR2": {
       "enabled": true,
       "max_power": 800,
-      "offgrid_socket_mode": "off"
+      "offgrid_socket_mode": "off",
+      "pv_priority_factor": 1.0
     }
   }
 }
@@ -71,6 +73,19 @@ further `outputLimit` writes until PV telemetry becomes positive again.
 | `enabled` | Skip writes for this device when false |
 | `max_power` | Runtime per-device power limit |
 | `offgrid_socket_mode` | Operator intent for Zendure offgrid socket mode |
+| `pv_priority_factor` | Runtime PV-first allocation weight override |
+
+`pv_priority_factor` defaults from `config.json` and can be changed at runtime:
+
+```bash
+python3 emsctl.py device WR1 pv-priority-factor 1.3
+python3 emsctl.py device WR2 pv-priority-factor 0.7
+```
+
+Values above `1.0` increase the device's PV-first share, values below `1.0`
+reduce it. The setting only changes allocation weight. It does not create
+additional PV power and does not override real PV availability, device state,
+SOC logic, or configured power limits.
 
 Offgrid mapping:
 
@@ -92,6 +107,9 @@ component that writes `gridOffMode` to hardware.
 
 These fields can only affect HA when HA is statically configured and the EMS has
 an HA client. They do not edit HA URL or token.
+
+The template default is standalone operation, so both HA runtime fields start as
+`false` unless Home Assistant is enabled in `config.json`.
 
 ## Winter Fields
 

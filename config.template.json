@@ -3,20 +3,20 @@
   "_comment_docs": "Detailed configuration guide and examples: docs/configuration.md and docs/configuration-examples.md",
 
   "ha": {
-    "_comment": "Optional Home Assistant integration. Set enabled=false if you run EMS standalone.",
-    "enabled": true,
-    "control_enabled": true,
+    "_comment": "Optional Home Assistant integration. Standalone default keeps HA disabled.",
+    "enabled": false,
+    "control_enabled": false,
     "url": "http://homeassistant.local:8123",
     "token": "YOUR_TOKEN_HERE"
   },
 
   "system": {
-    "_comment": "Global EMS settings and safety flags. Start with dry_run=true.",
+    "_comment": "Standalone default: HA disabled, live Zendure control enabled. Set dry_run=true for a no-write validation run.",
     "enabled": true,
-    "dry_run": true,
+    "dry_run": false,
     "simulation_mode": false,
-    "allow_hardware_writes": false,
-    "allow_state_reconciliation_writes": false,
+    "allow_hardware_writes": true,
+    "allow_state_reconciliation_writes": true,
     "reconcile_ac_mode_on_start": true,
     "reconcile_smart_mode": true,
     "log_level": "info",

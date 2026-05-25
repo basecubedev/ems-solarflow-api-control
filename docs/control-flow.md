@@ -15,6 +15,12 @@ Some operator values can also be changed through runtime state or Home
 Assistant. In that case the runtime value is used during the cycle, but the
 control block shown here is the same.
 
+The template default is standalone-first: Home Assistant disabled, live
+Zendure `outputLimit` writes enabled, and required regulation/state
+reconciliation enabled after local configuration. This is a starting point for
+normal standalone operation, not a universal safety profile. Set
+`system.dry_run=true` for an optional no-write validation run.
+
 ## How To Read This Diagram
 
 Read the main path from top to bottom. Solid arrows show the order of one EMS
@@ -73,9 +79,9 @@ flowchart TD
 | Parameter | Control Block | What It Changes | Details |
 |---|---|---|---|
 | `system.enabled` | Runtime state / effective target | Enables or disables EMS output control. When disabled, effective targets become `0` and output writes are skipped. | [configuration.md](configuration.md), [runtime-state.md](runtime-state.md) |
-| `system.dry_run` | Safety gates | Blocks real Zendure writes while still calculating targets and logging intended writes. | [configuration.md](configuration.md), [safety.md](safety.md) |
-| `system.allow_hardware_writes` | Safety gates | Allows Zendure `/properties/write` calls only when dry-run and simulation/replay gates also allow them. | [configuration.md](configuration.md), [safety.md](safety.md) |
-| `system.allow_state_reconciliation_writes` | SOC / mode reconciliation | Allows SOC, mode, runtime device state, and winter reconciliation writes after hardware writes are also allowed. | [configuration.md](configuration.md), [safety.md](safety.md) |
+| `system.dry_run` | Safety gates | Blocks real Zendure writes while still calculating targets and logging intended writes. The template default is `false`; set `true` for manual no-write validation. | [configuration.md](configuration.md), [safety.md](safety.md) |
+| `system.allow_hardware_writes` | Safety gates | Allows Zendure `/properties/write` calls only when dry-run and simulation/replay gates also allow them. The template default is `true` for live output control. | [configuration.md](configuration.md), [safety.md](safety.md) |
+| `system.allow_state_reconciliation_writes` | SOC / mode reconciliation | Allows SOC, mode, runtime device state, and winter reconciliation writes after hardware writes are also allowed. The template default is `true` for the normal regulation profile after local limits have been reviewed. | [configuration.md](configuration.md), [safety.md](safety.md) |
 | `system.max_total_power` | Total target calculation / limits | Caps the combined EMS target before allocation. Runtime state can override it. | [configuration.md](configuration.md), [runtime-state.md](runtime-state.md) |
 | `system.max_device_power` | Limits, clamping and redistribution | Default per-device output cap used when a device has no stronger configured cap. | [configuration.md](configuration.md) |
 | `system.deadband` | Final write suppression | Skips small per-device `outputLimit` changes compared with current `outputLimit`, or current output when `outputLimit` is missing. | [control-logic.md](control-logic.md) |
@@ -111,7 +117,7 @@ flowchart TD
 | `system.output_control.stale_telemetry_ramp_factor` | Total ramp / stale telemetry | Multiplies total ramp speed when telemetry is stale. Lower values make stale-telemetry changes more conservative. | [configuration.md](configuration.md), [troubleshooting.md](troubleshooting.md) |
 | `devices[].max_power` | Limits, clamping and redistribution | Sets the per-device output cap used during allocation, final target clamping, and effective target calculation. Runtime state can override it. | [configuration.md](configuration.md), [runtime-state.md](runtime-state.md) |
 | `devices[].pv_kwp` | PV-first weighting | Represents the configured PV size for this device and scales the PV-first allocation weight when `system.pv_kwp_weighting=true`. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
-| `devices[].pv_priority_factor` | PV-first weighting | Amplifies or reduces this device's PV-first allocation weight. It does not create real PV power. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
+| `devices[].pv_priority_factor` | PV-first weighting | Amplifies or reduces this device's PV-first allocation weight. Runtime state can override it. It does not create real PV power. | [configuration.md](configuration.md), [runtime-state.md](runtime-state.md), [control-logic.md](control-logic.md) |
 | `devices[].battery_kwh` | Battery top-up / battery weighting | Represents configured battery size and scales discharge/top-up allocation when `system.battery_kwh_weighting=true`. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
 | `devices[].min_soc` | SOC reconciliation / battery weighting / idle protection | Sets the discharge floor used for SOC reconciliation, usable battery weighting, top-up eligibility, and night/minSoc idle detection. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
 | `devices[].max_soc` | SOC reconciliation | Sets the upper SOC boundary used by reconciliation and remaining-time context. | [configuration.md](configuration.md), [safety.md](safety.md) |

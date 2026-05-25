@@ -18,11 +18,22 @@ tokens, Zendure serial numbers, or local IP addresses.
 ## Quick Start
 
 1. Copy `config.template.json` to `config.json`.
-2. Configure the Shelly IP.
-3. Configure one or more Zendure devices.
-4. Keep `dry_run=true` for the first test.
-5. Run simulation and preflight.
-6. Enable hardware writes only after validation.
+2. Configure the real Shelly IP.
+3. Configure one or more real Zendure device IPs and serial numbers.
+4. Review power, SOC, battery, and PV limits for the installation.
+5. Keep Home Assistant disabled unless you want HA integration.
+6. Optionally set `dry_run=true` for a no-write validation run.
+7. Run simulation, preflight, or dry-run if you want extra checks.
+8. Monitor the first bounded live run before unattended operation.
+
+The template default is standalone-first and live-control-ready after local
+configuration:
+`dry_run=false`, `allow_hardware_writes=true`, and
+`allow_state_reconciliation_writes=true`.
+
+This exposes the main regulation features with minimal setup. It is not a
+universal safety profile; review device limits, SOC limits, Shelly readings,
+and installation-specific constraints before normal operation.
 
 Safe first checks:
 
@@ -53,6 +64,7 @@ python3 -B ems-solarflow-api-control.py --dry-run --once
 - per-device enabled state
 - per-device runtime max power
 - per-device offgrid socket mode
+- per-device runtime PV priority factor
 - Home Assistant and winter runtime toggles
 
 The EMS creates `runtime-state.json` automatically on first start. Deleting it
@@ -61,10 +73,12 @@ resets runtime values from `config.json` defaults. Do not maintain
 
 ## Home Assistant Settings
 
-`ha.enabled` enables Home Assistant publishing and optional helper reads.
+`ha.enabled` enables Home Assistant publishing and optional helper reads. The
+template default is `false` for standalone operation.
 
 `ha.control_enabled` allows Home Assistant helpers to update runtime-state
-values. It does not grant Zendure hardware-write permission by itself.
+values. The template default is `false`. It does not grant Zendure
+hardware-write permission by itself.
 
 `ha.url` is the Home Assistant base URL, for example:
 
@@ -92,22 +106,26 @@ Standalone mode:
 `system.enabled` is the default EMS enabled state used when runtime-state is
 created.
 
-`system.dry_run` calculates targets but blocks Zendure hardware writes. Keep it
-`true` for first tests.
+`system.dry_run` calculates targets but blocks Zendure hardware writes. The
+template default is `false` for normal standalone control. Set it to `true` for
+a manual no-write validation run.
 
 `system.simulation_mode` runs without real hardware. Most users should keep it
 `false` and use `--simulate` from the command line when needed.
 
 `system.allow_hardware_writes` allows Zendure `/properties/write` calls when
-`dry_run=false`.
+`dry_run=false`. The template default is `true` so normal `outputLimit` control
+works after local device and Shelly configuration.
 
 `system.allow_state_reconciliation_writes` allows SOC and mode reconciliation
-writes. Leave it `false` until output control has been validated.
+writes. The template default is `true` because this is part of the default
+regulation profile after local device limits and SOC limits have been reviewed.
 
 `system.reconcile_ac_mode_on_start` allows one startup check for the expected
-AC mode.
+AC mode. It is not permanent cyclic forcing of `acMode`.
 
-`system.reconcile_smart_mode` allows smart mode reconciliation.
+`system.reconcile_smart_mode` allows smart mode reconciliation and is required
+for the intended Zendure runtime/RAM mode behavior.
 
 `system.log_level` controls log verbosity. Common values are `info` and
 `debug`.
@@ -139,6 +157,12 @@ When total PV can cover the requested output, devices with higher SOC receive
 more PV-first output weight so lower-SOC devices can keep more local PV for
 charging.
 
+In PV-first mode, devices that are full or charge-inhibited are prioritized for
+AC output up to their available PV and device limits. This helps Zendure systems
+use PV from a full battery directly in the house while batteries with charge
+headroom keep more PV for charging. Export capability, max power, SOC limits,
+and safety gates still apply.
+
 `system.pv_charge_balance_deadband_percent` defines the SOC gap where the bias
 starts. `system.pv_charge_balance_full_bias_percent` defines the gap where the
 configured bias reaches full strength.
@@ -152,14 +176,14 @@ capacity.
 `system.soc_reconcile_interval` controls how often SOC/mode reconciliation is
 checked, measured in EMS cycles. Use `0` to disable cyclic reconciliation.
 
-Safe development flags:
+Manual no-write validation flags:
 
 ```json
 {
   "system": {
     "dry_run": true,
-    "allow_hardware_writes": false,
-    "allow_state_reconciliation_writes": false
+    "allow_hardware_writes": true,
+    "allow_state_reconciliation_writes": true
   }
 }
 ```
@@ -273,7 +297,12 @@ commands.
 
 `pv_kwp` is the configured PV size used for PV-first weighting.
 
-`pv_priority_factor` adjusts PV-first priority for this device.
+`pv_priority_factor` is the default PV-first priority for this device. It can
+be overridden at runtime without editing `config.json` or restarting the EMS:
+
+```bash
+python3 emsctl.py device WR1 pv-priority-factor 1.3
+```
 
 `battery_kwh` is the configured battery capacity used for battery weighting.
 
@@ -281,6 +310,8 @@ commands.
 the corresponding value unmanaged.
 
 Static device metadata stays in `config.json`, not in runtime-state.
+`pv_priority_factor` is an exception: the config value remains the installation
+default, while runtime-state can override the active weighting.
 
 ## Shelly Settings
 
@@ -307,16 +338,30 @@ Live read-only preflight:
 python3 -B ems-solarflow-api-control.py --preflight --dry-run
 ```
 
-## Enabling Live Writes
+## Live Writes And Validation
 
-Use a staged path:
+The copied template is already configured for normal live standalone control
+after you enter real local values and review installation-specific limits:
 
-1. Start with `dry_run=true`.
-2. Validate telemetry with simulation, preflight, and dry-run.
+```json
+{
+  "system": {
+    "dry_run": false,
+    "allow_hardware_writes": true,
+    "allow_state_reconciliation_writes": true,
+    "reconcile_ac_mode_on_start": true,
+    "reconcile_smart_mode": true
+  }
+}
+```
+
+Use this optional staged validation path when you want extra caution:
+
+1. Set `dry_run=true`.
+2. Validate telemetry and Shelly readings with simulation, preflight, and
+   dry-run.
 3. Set `dry_run=false`.
-4. Set `allow_hardware_writes=true`.
-5. Keep `allow_state_reconciliation_writes=false` until output control has been validated.
-6. Use bounded live runs for first tests.
+4. Use bounded live runs for first tests and monitor the result.
 
 Example bounded live run:
 
@@ -324,8 +369,7 @@ Example bounded live run:
 python3 -B ems-solarflow-api-control.py --duration 120
 ```
 
-Only enable state reconciliation writes when you intentionally want SOC/mode
-reconciliation writes:
+State reconciliation writes are enabled in the default regulation profile:
 
 ```json
 {

@@ -1,9 +1,14 @@
 # Configuration Examples
 
-These examples are starting points for `config.json`. Keep `dry_run=true` and
-`allow_hardware_writes=false` for first tests.
+These examples are starting points for `config.json`. The primary example
+matches the template default: standalone-first, Home Assistant disabled, live
+Zendure output control enabled, and required state reconciliation enabled.
 
-Use example IP addresses and serial numbers as placeholders only.
+Set `dry_run=true` manually when you want a no-write validation run.
+
+Use example IP addresses and serial numbers as placeholders only. Before
+unattended operation, enter real Shelly and Zendure values, review power and SOC
+limits, confirm battery and PV metadata, and monitor the first bounded live run.
 
 ## Example 1: One Zendure Device Without Home Assistant
 
@@ -20,10 +25,10 @@ Use this for standalone EMS operation without Home Assistant.
 
   "system": {
     "enabled": true,
-    "dry_run": true,
+    "dry_run": false,
     "simulation_mode": false,
-    "allow_hardware_writes": false,
-    "allow_state_reconciliation_writes": false,
+    "allow_hardware_writes": true,
+    "allow_state_reconciliation_writes": true,
     "reconcile_ac_mode_on_start": true,
     "reconcile_smart_mode": true,
     "log_level": "info",
@@ -86,7 +91,7 @@ Run:
 
 ```bash
 python3 -B ems-solarflow-api-control.py --simulate --max-cycles 1
-python3 -B ems-solarflow-api-control.py --preflight --dry-run
+python3 -B ems-solarflow-api-control.py --preflight
 ```
 
 ## Example 2: Two Zendure Devices With Home Assistant
@@ -105,10 +110,12 @@ runtime helper controls.
 
   "system": {
     "enabled": true,
-    "dry_run": true,
+    "dry_run": false,
     "simulation_mode": false,
-    "allow_hardware_writes": false,
-    "allow_state_reconciliation_writes": false,
+    "allow_hardware_writes": true,
+    "allow_state_reconciliation_writes": true,
+    "reconcile_ac_mode_on_start": true,
+    "reconcile_smart_mode": true,
     "max_total_power": 1600,
     "max_device_power": 800,
     "runtime_state_path": "runtime-state.json",
@@ -160,8 +167,8 @@ Change:
 Run:
 
 ```bash
-python3 -B ems-solarflow-api-control.py --preflight --dry-run
-python3 -B ems-solarflow-api-control.py --dry-run --once
+python3 -B ems-solarflow-api-control.py --preflight
+python3 -B ems-solarflow-api-control.py --duration 120
 ```
 
 ## Example 3: Safe Dry-Run Setup
@@ -173,8 +180,8 @@ Zendure hardware writes.
 {
   "system": {
     "dry_run": true,
-    "allow_hardware_writes": false,
-    "allow_state_reconciliation_writes": false
+    "allow_hardware_writes": true,
+    "allow_state_reconciliation_writes": true
   }
 }
 ```
@@ -186,45 +193,56 @@ python3 -B ems-solarflow-api-control.py --preflight --dry-run
 python3 -B ems-solarflow-api-control.py --dry-run --once
 ```
 
-## Example 4: Live Control Enabled
+## Example 4: Conservative Manual Safety Startup
 
-Use this only after preflight and dry-run output control have been validated.
+Use this optional variant when you want to block all Zendure writes until after
+manual validation.
 
 ```json
 {
   "system": {
-    "dry_run": false,
-    "allow_hardware_writes": true,
+    "dry_run": true,
+    "allow_hardware_writes": false,
     "allow_state_reconciliation_writes": false
   }
 }
 ```
 
-This allows `outputLimit` writes only. SOC and mode reconciliation writes remain
-disabled.
+This is not the template default. It blocks both normal `outputLimit` writes and
+state reconciliation writes until you change the flags back.
 
-Start with a bounded run:
+Validate with:
 
 ```bash
-python3 -B ems-solarflow-api-control.py --duration 120
+python3 -B ems-solarflow-api-control.py --preflight --dry-run
+python3 -B ems-solarflow-api-control.py --dry-run --once
 ```
 
-## Example 5: State Reconciliation Enabled
+## Example 5: Default Live Control Profile
 
-Use this only after live output control has been validated.
+This is the normal default policy for live standalone operation after local
+configuration.
 
 ```json
 {
   "system": {
     "dry_run": false,
     "allow_hardware_writes": true,
-    "allow_state_reconciliation_writes": true
+    "allow_state_reconciliation_writes": true,
+    "reconcile_ac_mode_on_start": true,
+    "reconcile_smart_mode": true
   }
 }
 ```
 
-This allows SOC/mode reconciliation writes too. It should not be the first live
-test mode.
+This allows normal `outputLimit` writes and required regulation/state
+reconciliation. `reconcile_ac_mode_on_start` is a startup helper, not permanent
+cyclic forcing of `acMode`.
+
+The defaults are intended to expose the main regulation features with minimal
+setup. They are not a universal safety profile; review device limits, SOC
+limits, Shelly readings, and installation-specific constraints for each
+installation.
 
 ## Example 6: Runtime-State Explained
 
@@ -239,6 +257,7 @@ Runtime-state contains operator values like:
 - device enabled
 - device runtime max power
 - device offgrid socket mode
+- device runtime PV priority factor
 - winter runtime toggle
 
 Do not copy `runtime-state.json` into `config.json`. Do not maintain it as a
@@ -256,9 +275,13 @@ Use the CLI for safe runtime edits:
 ```bash
 python3 emsctl.py status
 python3 emsctl.py system min-output-limit 30
+python3 emsctl.py device WR1 pv-priority-factor 1.3
 python3 emsctl.py device WR1 offgrid eco
 python3 emsctl.py winter enable
 ```
+
+`pv-priority-factor` changes PV-first weighting only. It does not create
+additional PV power and does not override device power limits.
 
 ## Example 7: Winter Mode Enabled
 
@@ -279,8 +302,8 @@ control.
 }
 ```
 
-To allow winter SOC adjustments, state reconciliation writes must also be
-enabled after validation:
+Winter SOC adjustments use the same state reconciliation gates that are enabled
+in the default live profile:
 
 ```json
 {

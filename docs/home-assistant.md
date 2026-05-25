@@ -3,6 +3,8 @@
 Home Assistant is optional.
 
 The EMS can run standalone with `config.json` and `runtime-state.json`.
+The template default keeps Home Assistant disabled with `ha.enabled=false` and
+`ha.control_enabled=false`.
 
 ## Roles
 
@@ -19,7 +21,7 @@ the current local runtime-state values.
 change only the runtime fields documented below, and only when both static and
 runtime HA control are enabled.
 
-Status publishing is enabled with:
+Enable status publishing and optional helper controls manually with:
 
 ```json
 {

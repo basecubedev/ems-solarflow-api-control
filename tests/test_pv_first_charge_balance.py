@@ -107,7 +107,7 @@ class PvFirstChargeBalanceTest(unittest.TestCase):
         self.assertLessEqual(targets[0], states[0].solar - states[0].pack_in)
         self.assertLessEqual(targets[1], states[1].solar - states[1].pack_in)
 
-    def test_pv_first_redistribution_keeps_local_pv_limits(self):
+    def test_pv_first_topup_can_fill_after_device_cap_clamp(self):
         devices = [
             SimpleNamespace(
                 name="WR1",
@@ -143,8 +143,8 @@ class PvFirstChargeBalanceTest(unittest.TestCase):
                 requested_total=800
             )
 
-        self.assertLessEqual(targets[0], 800)
-        self.assertLessEqual(targets[1], 100)
+        self.assertEqual([600, 200], targets)
+        self.assertEqual(800, sum(targets))
 
     def test_disabling_feature_restores_previous_pv_first_allocation(self):
         targets = self.calculate(

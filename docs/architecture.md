@@ -16,6 +16,15 @@ one start script, one static config
 `runtime-state.json` is not a second static config. It is mutable local runtime
 state created and updated by the EMS and by `emsctl.py`.
 
+The release template is standalone-first: Home Assistant is disabled by
+default, normal Zendure `outputLimit` writes are enabled, and required
+regulation/state reconciliation is enabled after local configuration. This is a
+practical starting point for standalone operation, not a universal safety
+profile; operators still need to review device limits, SOC limits, Shelly
+readings, and installation-specific constraints. Home Assistant status
+publishing and helper reads can be enabled manually with `ha.enabled=true` and
+`ha.control_enabled=true`.
+
 ## Code Structure
 
 The entry script performs bootstrap and coordination only:

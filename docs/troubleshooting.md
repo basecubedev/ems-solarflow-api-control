@@ -6,9 +6,19 @@ The EMS uses structured logs:
 event=<name> key=value key=value
 ```
 
-Use these logs to validate behavior before enabling live writes. Change one
-setting at a time and run a short dry-run or bounded live test after each
-change.
+Use these logs to validate behavior during dry-run checks and live operation.
+Change one setting at a time and run a short dry-run or bounded live test after
+each change.
+
+The template default is standalone live control after local configuration:
+Home Assistant disabled, `dry_run=false`, `allow_hardware_writes=true`, and
+`allow_state_reconciliation_writes=true`. Use `--dry-run` or set
+`system.dry_run=true` when you want a no-write validation run.
+
+These defaults assume real Shelly and Zendure values have already been entered
+and installation-specific power, SOC, battery, and PV limits have been
+reviewed. They are a starting point for troubleshooting, not a universal safety
+profile.
 
 ## Basic Checks
 
@@ -77,14 +87,15 @@ Important runtime fields:
     "min_output_limit": 30
   },
   "ha": {
-    "enabled": true,
-    "control_enabled": true
+    "enabled": false,
+    "control_enabled": false
   },
   "devices": {
     "WR1": {
       "enabled": true,
       "max_power": 800,
-      "offgrid_socket_mode": "off"
+      "offgrid_socket_mode": "off",
+      "pv_priority_factor": 1.0
     }
   }
 }
@@ -95,7 +106,8 @@ Runtime-editable values are limited to the fields shown above:
 - system `enabled`, `max_total_power`, `loop_interval`, `min_output_limit`
 - HA runtime `enabled` and `control_enabled`
 - winter runtime `enabled`
-- per-device `enabled`, `max_power`, and `offgrid_socket_mode`
+- per-device `enabled`, `max_power`, `offgrid_socket_mode`, and
+  `pv_priority_factor`
 
 Other safety and tuning values are config-only and require editing
 `config.json` plus a restart. Examples: `dry_run`, `allow_hardware_writes`,
@@ -575,7 +587,8 @@ write_runtime_device_state
 ```
 
 Set `allow_state_reconciliation_writes=false` while validating normal output
-control.
+control only if you deliberately want a conservative troubleshooting variant.
+The template default keeps it enabled for the full regulation profile.
 
 Related docs: [configuration.md](configuration.md), [winter-mode.md](winter-mode.md),
 [safety.md](safety.md).
@@ -644,6 +657,16 @@ target_calculation
 
 Keep `pv_priority_factor=1.0` first. Adjust only after confirming realistic
 `pv_kwp`, `battery_kwh`, and SOC limits.
+
+Runtime tuning is available without editing `config.json`:
+
+```bash
+python3 emsctl.py device WR1 pv-priority-factor 1.3
+python3 emsctl.py device WR2 pv-priority-factor 0.7
+```
+
+This changes PV-first weighting only. It does not create additional PV power
+and does not override device power limits.
 
 ## Preflight Fails
 
