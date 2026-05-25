@@ -227,6 +227,7 @@ min_output_limit
 per-device enabled
 per-device max_power
 per-device offgrid_socket_mode
+per-device pv_priority_factor
 ```
 
 Safe runtime-state edits:
@@ -234,6 +235,7 @@ Safe runtime-state edits:
 ```bash
 python3 emsctl.py status
 python3 emsctl.py system min-output-limit 30
+python3 emsctl.py device WR1 pv-priority-factor 1.3
 python3 emsctl.py device WR1 offgrid eco
 python3 emsctl.py winter enable
 python3 emsctl.py ha disable

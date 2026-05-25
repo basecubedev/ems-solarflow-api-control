@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import math
 import os
 import sys
 
@@ -53,7 +54,13 @@ def parse_args():
     device.add_argument("name")
     device.add_argument(
         "action",
-        choices=["enable", "disable", "max-power", "offgrid"]
+        choices=[
+            "enable",
+            "disable",
+            "max-power",
+            "offgrid",
+            "pv-priority-factor"
+        ]
     )
     device.add_argument("value", nargs="?")
 
@@ -121,6 +128,24 @@ def int_value(value, field, minimum=0):
     return parsed
 
 
+def float_value(value, field, minimum=0.0):
+    if value is None:
+        raise ValueError(f"{field} requires a value")
+
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be numeric") from exc
+
+    if not math.isfinite(parsed):
+        raise ValueError(f"{field} must be finite")
+
+    if parsed < minimum:
+        raise ValueError(f"{field} must be >= {minimum}")
+
+    return parsed
+
+
 def config_device_defaults(config):
     devices = {}
     max_device_power = (
@@ -143,7 +168,12 @@ def config_device_defaults(config):
                 f"devices.{name}.max_power",
                 minimum=0
             ),
-            "offgrid_socket_mode": "off"
+            "offgrid_socket_mode": "off",
+            "pv_priority_factor": float_value(
+                item.get("pv_priority_factor", 1.0),
+                f"devices.{name}.pv_priority_factor",
+                minimum=0.01
+            )
         }
 
     return devices
@@ -162,7 +192,8 @@ def runtime_defaults(config, existing=None):
                 devices[name] = {
                     "enabled": True,
                     "max_power": 800,
-                    "offgrid_socket_mode": "off"
+                    "offgrid_socket_mode": "off",
+                    "pv_priority_factor": 1.0
                 }
 
     return {
@@ -346,6 +377,12 @@ def update_device(args, state):
                     "device offgrid value must be 'off', 'eco', or 'standard'"
                 )
             device["offgrid_socket_mode"] = value
+        case "pv-priority-factor":
+            device["pv_priority_factor"] = float_value(
+                args.value,
+                f"device {args.name} pv-priority-factor",
+                minimum=0.01
+            )
         case _:
             raise ValueError(f"unknown device action {args.action}")
 

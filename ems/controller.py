@@ -797,6 +797,16 @@ class EMSController:
             minimum=minimum
         )
 
+    def runtime_device_float(self, device_name, key, default, minimum=0.0):
+        if not self.runtime_state:
+            return default
+
+        return cfg.safe_float(
+            self.runtime_state.get_device(device_name, key, default),
+            default,
+            minimum=minimum
+        )
+
     def ha_update_runtime_field(
         self,
         entity_id,
@@ -2135,6 +2145,12 @@ class EMSController:
                 "max_power",
                 dev.max_power,
                 minimum=0
+            )
+            dev.pv_priority_factor = self.runtime_device_float(
+                dev.name,
+                "pv_priority_factor",
+                dev.pv_priority_factor,
+                minimum=0.01
             )
 
         # =====================

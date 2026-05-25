@@ -200,7 +200,12 @@ def build_runtime_defaults(devices):
                 cfg.MAX_DEVICE_POWER,
                 minimum=0
             ),
-            "offgrid_socket_mode": "off"
+            "offgrid_socket_mode": "off",
+            "pv_priority_factor": cfg.safe_float(
+                getattr(dev, "pv_priority_factor", 1.0),
+                1.0,
+                minimum=0.01
+            )
         }
 
     return {

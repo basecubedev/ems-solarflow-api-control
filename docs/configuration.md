@@ -64,6 +64,7 @@ python3 -B ems-solarflow-api-control.py --dry-run --once
 - per-device enabled state
 - per-device runtime max power
 - per-device offgrid socket mode
+- per-device runtime PV priority factor
 - Home Assistant and winter runtime toggles
 
 The EMS creates `runtime-state.json` automatically on first start. Deleting it
@@ -296,7 +297,12 @@ commands.
 
 `pv_kwp` is the configured PV size used for PV-first weighting.
 
-`pv_priority_factor` adjusts PV-first priority for this device.
+`pv_priority_factor` is the default PV-first priority for this device. It can
+be overridden at runtime without editing `config.json` or restarting the EMS:
+
+```bash
+python3 emsctl.py device WR1 pv-priority-factor 1.3
+```
 
 `battery_kwh` is the configured battery capacity used for battery weighting.
 
@@ -304,6 +310,8 @@ commands.
 the corresponding value unmanaged.
 
 Static device metadata stays in `config.json`, not in runtime-state.
+`pv_priority_factor` is an exception: the config value remains the installation
+default, while runtime-state can override the active weighting.
 
 ## Shelly Settings
 

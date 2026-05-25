@@ -257,6 +257,7 @@ Runtime-state contains operator values like:
 - device enabled
 - device runtime max power
 - device offgrid socket mode
+- device runtime PV priority factor
 - winter runtime toggle
 
 Do not copy `runtime-state.json` into `config.json`. Do not maintain it as a
@@ -274,9 +275,13 @@ Use the CLI for safe runtime edits:
 ```bash
 python3 emsctl.py status
 python3 emsctl.py system min-output-limit 30
+python3 emsctl.py device WR1 pv-priority-factor 1.3
 python3 emsctl.py device WR1 offgrid eco
 python3 emsctl.py winter enable
 ```
+
+`pv-priority-factor` changes PV-first weighting only. It does not create
+additional PV power and does not override device power limits.
 
 ## Example 7: Winter Mode Enabled
 

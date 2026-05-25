@@ -94,7 +94,8 @@ Important runtime fields:
     "WR1": {
       "enabled": true,
       "max_power": 800,
-      "offgrid_socket_mode": "off"
+      "offgrid_socket_mode": "off",
+      "pv_priority_factor": 1.0
     }
   }
 }
@@ -105,7 +106,8 @@ Runtime-editable values are limited to the fields shown above:
 - system `enabled`, `max_total_power`, `loop_interval`, `min_output_limit`
 - HA runtime `enabled` and `control_enabled`
 - winter runtime `enabled`
-- per-device `enabled`, `max_power`, and `offgrid_socket_mode`
+- per-device `enabled`, `max_power`, `offgrid_socket_mode`, and
+  `pv_priority_factor`
 
 Other safety and tuning values are config-only and require editing
 `config.json` plus a restart. Examples: `dry_run`, `allow_hardware_writes`,
@@ -655,6 +657,16 @@ target_calculation
 
 Keep `pv_priority_factor=1.0` first. Adjust only after confirming realistic
 `pv_kwp`, `battery_kwh`, and SOC limits.
+
+Runtime tuning is available without editing `config.json`:
+
+```bash
+python3 emsctl.py device WR1 pv-priority-factor 1.3
+python3 emsctl.py device WR2 pv-priority-factor 0.7
+```
+
+This changes PV-first weighting only. It does not create additional PV power
+and does not override device power limits.
 
 ## Preflight Fails
 
