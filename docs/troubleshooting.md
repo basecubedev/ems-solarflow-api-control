@@ -10,6 +10,16 @@ Use these logs to validate behavior before enabling live writes. Change one
 setting at a time and run a short dry-run or bounded live test after each
 change.
 
+The template default is standalone live control after local configuration:
+Home Assistant disabled, `dry_run=false`, `allow_hardware_writes=true`, and
+`allow_state_reconciliation_writes=true`. Use `--dry-run` or set
+`system.dry_run=true` when you want a no-write validation run.
+
+These defaults assume real Shelly and Zendure values have already been entered
+and installation-specific power, SOC, battery, and PV limits have been
+reviewed. They are a starting point for troubleshooting, not a universal safety
+profile.
+
 ## Basic Checks
 
 Compile:
@@ -77,8 +87,8 @@ Important runtime fields:
     "min_output_limit": 30
   },
   "ha": {
-    "enabled": true,
-    "control_enabled": true
+    "enabled": false,
+    "control_enabled": false
   },
   "devices": {
     "WR1": {
@@ -575,7 +585,8 @@ write_runtime_device_state
 ```
 
 Set `allow_state_reconciliation_writes=false` while validating normal output
-control.
+control only if you deliberately want a conservative troubleshooting variant.
+The template default keeps it enabled for the full regulation profile.
 
 Related docs: [configuration.md](configuration.md), [winter-mode.md](winter-mode.md),
 [safety.md](safety.md).

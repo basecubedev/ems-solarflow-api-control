@@ -59,6 +59,13 @@ Edit only your local `config.json`. Prefer `config.template.json` for shared
 examples. Do not commit real Home Assistant tokens, Zendure serial numbers, or
 local IP addresses if the repository is public.
 
+The template default is standalone-first: Home Assistant is disabled, live
+Zendure `outputLimit` control is enabled, and required state reconciliation is
+enabled for the normal regulation profile after local configuration. These
+defaults are a starting point, not a universal safety profile. Set
+`system.dry_run=true` if you want a no-write validation run before the first
+normal start.
+
 ## 3. Configure Devices And Shelly
 
 Set the Shelly IP:
@@ -89,9 +96,18 @@ Set each Zendure device:
 
 Use your real values only in local `config.json`.
 
-## 4. Optional: Disable Home Assistant For First Start
+Review the installation-specific limits before unattended operation:
 
-Home Assistant is optional. For the simplest standalone first start:
+- `max_power` and `system.max_total_power`
+- `min_soc` and `max_soc`
+- `pv_kwp` and `pv_priority_factor`
+- `battery_kwh`
+- Shelly direction and readings
+
+## 4. Home Assistant Default
+
+Home Assistant is optional and disabled by default. Keep this for standalone
+operation:
 
 ```json
 {
@@ -106,8 +122,15 @@ Home Assistant is optional. For the simplest standalone first start:
 
 ## 5. First Live Target Configuration
 
-Before the first live run, these checks are recommended but not strictly
-required. Run them while the template safety flags are still active:
+Before the first live run, make this path explicit:
+
+1. Copy the template to `config.json`.
+2. Enter real Shelly and Zendure IP addresses and serial numbers.
+3. Review power, SOC, battery, and PV limits for the installation.
+4. Optionally run simulation, preflight, and dry-run checks.
+5. Monitor the first bounded live run.
+
+These checks are optional but recommended:
 
 ```bash
 python3 -B ems-solarflow-api-control.py --self-test
@@ -115,7 +138,7 @@ python3 -B ems-solarflow-api-control.py --dry-run --no-ha --once
 python3 -B ems-solarflow-api-control.py --preflight
 ```
 
-Use this target configuration for the first live `outputLimit` run:
+The template already uses this live-control-ready system policy:
 
 ```json
 {
@@ -123,7 +146,9 @@ Use this target configuration for the first live `outputLimit` run:
     "enabled": true,
     "dry_run": false,
     "allow_hardware_writes": true,
-    "allow_state_reconciliation_writes": false,
+    "allow_state_reconciliation_writes": true,
+    "reconcile_ac_mode_on_start": true,
+    "reconcile_smart_mode": true,
     "max_total_power": 800,
     "loop_interval": 5,
     "min_output_limit": 0
@@ -131,12 +156,17 @@ Use this target configuration for the first live `outputLimit` run:
 }
 ```
 
+This means the main regulation features are enabled after local configuration.
+It does not remove the need to review device limits, SOC limits, Shelly
+readings, and installation-specific constraints.
+
 - `dry_run=false` enables real mode instead of calculation-only mode.
 - `allow_hardware_writes=true` allows runtime Zendure `outputLimit` writes.
-- `allow_state_reconciliation_writes=false` keeps SOC/mode reconciliation
-  disabled for the first live run.
-- Enable SOC/mode reconciliation later only if you want EMS to manage SOC and
-  mode state too.
+- `allow_state_reconciliation_writes=true` allows required SOC/mode/runtime
+  state reconciliation for normal regulation.
+- `reconcile_ac_mode_on_start=true` is a startup reconciliation helper, not
+  permanent cyclic forcing of `acMode`.
+- `reconcile_smart_mode=true` keeps Zendure runtime/RAM mode aligned.
 
 ## 6. Start EMS Live
 

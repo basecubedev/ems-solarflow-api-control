@@ -24,8 +24,8 @@ Example:
     "min_output_limit": 30
   },
   "ha": {
-    "enabled": true,
-    "control_enabled": true
+    "enabled": false,
+    "control_enabled": false
   },
   "winter": {
     "enabled": true
@@ -92,6 +92,9 @@ component that writes `gridOffMode` to hardware.
 
 These fields can only affect HA when HA is statically configured and the EMS has
 an HA client. They do not edit HA URL or token.
+
+The template default is standalone operation, so both HA runtime fields start as
+`false` unless Home Assistant is enabled in `config.json`.
 
 ## Winter Fields
 

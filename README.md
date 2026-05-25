@@ -13,25 +13,33 @@ inspectable, firmware-aware controller for Zendure SolarFlow devices.
 
 ## Status And Safety Warning
 
-This software interacts with real power hardware.
+This project is no longer considered experimental. It is intended for stable
+EMS control use and has been tested in real-world operation.
 
-It is:
+It still interacts with real power hardware. Every installation is different:
+battery size, PV layout, inverter limits, wiring, meter behavior, firmware
+versions, network stability, and local requirements can affect the result.
 
-- experimental
-- under active development
-- intended for testing and validation
-- designed for advanced users
-- not production-certified
-- not guaranteed safe for unattended operation
+The template defaults are intended as a practical starting point for standalone
+operation after local configuration, not as a guarantee that the configuration
+is suitable or safe for every setup.
 
-Live hardware writes are disabled by default in the template.
+Users are responsible for reviewing the configuration, validating their own
+hardware setup, setting appropriate power and SOC limits, and monitoring the
+system during operation. Use of this software is at the user's own
+responsibility and risk, within the limits permitted by applicable law.
 
-Start with dry-run, simulation, replay, or preflight mode. Inspect the logs.
-Only enable live writes after you understand the calculated targets and the
-current firmware state of your devices.
+The template is standalone-first: Home Assistant is disabled, live Zendure
+`outputLimit` control is enabled, and required state reconciliation is enabled
+after you fill in real device and Shelly values.
+
+For a no-write validation run, set `system.dry_run=true` or use `--dry-run`.
+Simulation, replay, and preflight remain available for inspection before normal
+operation.
 
 The EMS should not run in parallel with another controller that writes Zendure
-`outputLimit`.
+`outputLimit`. Monitor the first live run and every run after relevant
+configuration changes.
 
 Detailed safety model: [docs/safety.md](docs/safety.md).
 
@@ -164,10 +172,10 @@ Edit:
 - Zendure device IPs
 - Zendure serial numbers
 - Shelly IP
-- Home Assistant URL and token if used
+- Home Assistant URL, token, and enable flags if used
 - power limits
 - SOC limits
-- safety flags
+- optional safety flags such as `dry_run`
 
 Run preflight:
 
@@ -175,7 +183,7 @@ Run preflight:
 python3 -B ems-solarflow-api-control.py --preflight
 ```
 
-Run read-only dry-run:
+Optional read-only dry-run:
 
 ```bash
 python3 -B ems-solarflow-api-control.py --dry-run --no-ha --once

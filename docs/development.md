@@ -25,6 +25,13 @@ python3 ems-solarflow-api-control.py
 `config.json` remains the central static config. `runtime-state.json` remains
 mutable runtime state.
 
+Default startup policy for the release template:
+
+- Home Assistant disabled by default.
+- Normal Zendure `outputLimit` writes enabled after local configuration.
+- State reconciliation writes enabled for the full regulation profile.
+- `dry_run=true` remains available as a manual no-write validation mode.
+
 ## Validation
 
 Compile:

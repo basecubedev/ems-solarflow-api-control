@@ -763,17 +763,19 @@ class EMSController:
         )
 
     def runtime_ha_enabled(self):
+        ha_config = cfg.CONFIG.get("ha", {})
         return self.runtime_section_bool(
             "ha",
             "enabled",
-            cfg.CONFIG["ha"].get("enabled", True)
+            ha_config.get("enabled", False)
         )
 
     def runtime_ha_control_enabled(self):
+        ha_config = cfg.CONFIG.get("ha", {})
         return self.runtime_section_bool(
             "ha",
             "control_enabled",
-            cfg.CONFIG["ha"].get("control_enabled", True)
+            ha_config.get("control_enabled", False)
         )
 
     def runtime_device_bool(self, device_name, key, default):

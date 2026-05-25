@@ -190,6 +190,7 @@ def build_runtime_defaults(devices):
     """Build runtime defaults from current device configuration."""
 
     device_defaults = {}
+    ha_config = cfg.CONFIG.get("ha", {})
 
     for dev in devices:
         device_defaults[dev.name] = {
@@ -210,12 +211,11 @@ def build_runtime_defaults(devices):
             "min_output_limit": cfg.MIN_OUTPUT_LIMIT
         },
         "ha": {
-            "enabled": cfg.CONFIG["ha"].get("enabled", True),
-            "control_enabled": cfg.CONFIG["ha"].get("control_enabled", True)
+            "enabled": ha_config.get("enabled", False),
+            "control_enabled": ha_config.get("control_enabled", False)
         },
         "winter": {
             "enabled": cfg.winter_config_bool("enabled", False)
         },
         "devices": device_defaults
     }
-

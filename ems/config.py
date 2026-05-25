@@ -43,6 +43,7 @@ def default_safe_config():
     return {
         "ha": {
             "enabled": False,
+            "control_enabled": False,
             "url": "",
             "token": ""
         },
@@ -51,6 +52,7 @@ def default_safe_config():
             "dry_run": True,
             "simulation_mode": True,
             "allow_hardware_writes": False,
+            "allow_state_reconciliation_writes": False,
             "reconcile_ac_mode_on_start": True,
             "reconcile_smart_mode": True,
             "max_total_power": 800,
@@ -153,10 +155,11 @@ def initialize(args, base_dir):
     ARGS = args
     BASE_DIR = base_dir
     CONFIG = load_config(args, base_dir)
+    ha_config = CONFIG.get("ha", {})
 
     SYSTEM_ENABLED = CONFIG["system"].get("enabled", True)
-    HA_URL = CONFIG["ha"].get("url", "")
-    HA_TOKEN = CONFIG["ha"].get("token", "")
+    HA_URL = ha_config.get("url", "")
+    HA_TOKEN = ha_config.get("token", "")
     MAX_TOTAL_POWER = CONFIG["system"]["max_total_power"]
     MAX_DEVICE_POWER = CONFIG["system"]["max_device_power"]
     DEADBAND = CONFIG["system"]["deadband"]
@@ -194,14 +197,14 @@ def initialize(args, base_dir):
         True
     )
     HA_ENABLED = (
-        CONFIG["ha"].get("enabled", True)
+        ha_config.get("enabled", False)
         and not args.no_ha
         and not SIMULATION_MODE
         and not args.replay
     )
     HA_CONTROL_ENABLED = (
         HA_ENABLED
-        and CONFIG["ha"].get("control_enabled", True)
+        and ha_config.get("control_enabled", False)
     )
     LOG_LEVEL = CONFIG["system"].get("log_level", "info").lower()
 
