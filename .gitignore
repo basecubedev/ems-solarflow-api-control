@@ -30,6 +30,11 @@ runtime-state.json.*.tmp
 /develop/influxdb/*.sqlite
 /develop/influxdb/*.bolt
 
+# Grafana local development
+/develop/grafana/.env
+/develop/grafana/data/
+/develop/grafana/data/**
+
 # Python cache artifacts
 __pycache__/
 *.py[cod]
