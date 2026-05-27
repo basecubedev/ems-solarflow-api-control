@@ -70,6 +70,16 @@
     "ac_charge_power": 200
   },
 
+  "dashboard": {
+    "_comment": "Optional read-only live dashboard. It exposes telemetry only and stores short-term history locally in SQLite.",
+    "enabled": true,
+    "host": "0.0.0.0",
+    "port": 8080,
+    "database_path": "data/ems_dashboard.sqlite",
+    "history_hours": 48,
+    "write_interval_seconds": 5
+  },
+
   "_comment_devices": "One entry per Zendure device. IP and SN must match your local device.",
   "devices": [
     {

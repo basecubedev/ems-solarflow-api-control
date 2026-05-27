@@ -3,7 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from ems import config as cfg
-from ems.config import OUTPUT_CONTROL_DEFAULTS, WINTER_DEFAULTS
+from ems.config import DASHBOARD_DEFAULTS, OUTPUT_CONTROL_DEFAULTS, WINTER_DEFAULTS
 
 
 def without_comment_keys(values):
@@ -40,6 +40,12 @@ def test_config_template_winter_matches_code_defaults():
     template = json.loads(Path("config.template.json").read_text())
 
     assert without_comment_keys(template["winter"]) == WINTER_DEFAULTS
+
+
+def test_config_template_dashboard_matches_code_defaults():
+    template = json.loads(Path("config.template.json").read_text())
+
+    assert without_comment_keys(template["dashboard"]) == DASHBOARD_DEFAULTS
 
 
 def test_config_template_standalone_live_control_defaults():

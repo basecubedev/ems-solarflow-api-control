@@ -31,13 +31,15 @@ class EMSController:
         shelly,
         ha=None,
         sleep_enabled=True,
-        runtime_state=None
+        runtime_state=None,
+        dashboard_store=None
     ):
         self.devices = devices
         self.shelly = shelly
         self.ha = ha
         self.sleep_enabled = sleep_enabled
         self.runtime_state = runtime_state
+        self.dashboard_store = dashboard_store
         self.soc_reconcile_counter = cfg.SOC_RECONCILE_INTERVAL
 
         self.last_states = {}
@@ -61,6 +63,8 @@ class EMSController:
         self.winter_min_soc_targets = {}
         self.night_min_soc_idle_active = False
         self.night_min_soc_idle_parked = set()
+        self._dashboard_capabilities = []
+        self._last_dashboard_publish = 0
 
     def output_control_bool(self, key, default=False):
         return cfg.safe_bool(
@@ -2096,6 +2100,59 @@ class EMSController:
                 extra_attributes=device_extra()
             )
 
+    def publish_to_dashboard(
+        self,
+        load,
+        states,
+        targets,
+        effective_targets,
+        allocated_total,
+        effective_total,
+        enabled,
+        max_power,
+        min_output_limit,
+        night_min_soc_idle=False
+    ):
+        """Persist one read-only dashboard snapshot."""
+
+        if not self.dashboard_store:
+            return
+
+        interval = cfg.safe_float(
+            cfg.DASHBOARD_CONFIG.get("write_interval_seconds", 5),
+            5,
+            minimum=0
+        )
+        now = time.time()
+
+        if interval > 0 and now - self._last_dashboard_publish < interval:
+            return
+
+        try:
+            from dashboard.telemetry import build_dashboard_snapshot
+
+            snapshot = build_dashboard_snapshot(
+                self,
+                load,
+                states,
+                targets,
+                effective_targets,
+                allocated_total,
+                effective_total,
+                enabled=enabled,
+                max_total_power=max_power,
+                min_output_limit=min_output_limit,
+                night_min_soc_idle=night_min_soc_idle
+            )
+            self.dashboard_store.record(snapshot)
+            self._last_dashboard_publish = now
+        except Exception as e:
+            log_event(
+                logging.WARNING,
+                "dashboard_publish_error",
+                error=e
+            )
+
     def run_once(self):
         """Execute one EMS cycle."""
 
@@ -2222,6 +2279,7 @@ class EMSController:
             detect_capabilities(state)
             for state in states
         ]
+        self._dashboard_capabilities = capabilities
         active_indexes = self.active_online_device_indexes()
 
         for dev, state, cap in zip(
@@ -2377,6 +2435,19 @@ class EMSController:
                     new
                 )
 
+            self.publish_to_dashboard(
+                load,
+                states,
+                targets,
+                effective_targets,
+                sum(targets),
+                sum(effective_targets),
+                enabled,
+                max_power,
+                min_output_limit,
+                night_min_soc_idle=True
+            )
+
             self.apply_night_min_soc_idle_control(
                 states,
                 controllable_indexes,
@@ -2450,6 +2521,18 @@ class EMSController:
                 current,
                 new
             )
+
+        self.publish_to_dashboard(
+            load,
+            states,
+            targets,
+            effective_targets,
+            sum(targets),
+            sum(effective_targets),
+            enabled,
+            max_power,
+            min_output_limit
+        )
 
         # =====================
         # APPLY CONTROL
