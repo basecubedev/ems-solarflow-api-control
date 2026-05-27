@@ -1,9 +1,97 @@
 import json
 import logging
+from dataclasses import asdict, dataclass, field
 
 from ems import config as cfg
 from ems.logging_utils import log_event
 from ems.models import DeviceCapabilities
+
+
+@dataclass
+class ControlLimitExplanation:
+    name: str
+    active: bool
+    value: float | str | None = None
+    reason: str | None = None
+
+
+@dataclass
+class DeviceControlExplanation:
+    device: str
+    online: bool
+    pv_input_w: float
+    output_w: float
+    soc: float | None
+    min_soc: float | None
+    max_soc: float | None
+    max_output_w: float | None = None
+    can_export: bool | None = None
+    can_discharge: bool | None = None
+    capability_reason: str | None = None
+    pv_only_limit_w: float | None = None
+    pv_priority_factor: float | None = None
+    pv_weight: float | None = None
+    capacity_weight: float | None = None
+    charge_balance_multiplier: float | None = None
+    soc_gap_percent: float | None = None
+    raw_target_w: float | None = None
+    allocated_target_w: float | None = None
+    effective_target_w: float | None = None
+    adjustment_delta_w: float | None = None
+    output_limit_w: float | None = None
+    limiting_reason: str | None = None
+    decision_reason: str | None = None
+    write_decision: str | None = None
+    write_reason: str | None = None
+    command_target_w: float | None = None
+    deadband_reference_w: float | None = None
+    deadband_reference_source: str | None = None
+    deadband_w: float | None = None
+
+
+@dataclass
+class ControlExplanation:
+    mode: str
+    requested_total_w: float
+    effective_target_total_w: float
+    allocated_target_total_w: float
+    commanded_total_w: float | None
+    devices: dict[str, DeviceControlExplanation]
+    limits: list[ControlLimitExplanation] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+    current_total_w: float | None = None
+    raw_requested_total_w: float | None = None
+    max_total_power_w: float | None = None
+    load_w: float | None = None
+    filtered_load_w: float | None = None
+    min_output_limit_w: float | None = None
+    undistributed_target_w: float = 0
+
+    def to_dict(self):
+        return asdict(self)
+
+
+def _device_name(index, device_config):
+    name = getattr(device_config, "name", None)
+    return str(name) if name is not None else str(index)
+
+
+def _device_online(online_devices, index, device_name):
+    if online_devices is None:
+        return True
+
+    if isinstance(online_devices, dict):
+        return bool(online_devices.get(device_name, True))
+
+    try:
+        return bool(online_devices[index])
+    except (IndexError, KeyError, TypeError):
+        return True
+
+
+def _set_limiting_reason(explanation, reason):
+    if explanation and not explanation.limiting_reason:
+        explanation.limiting_reason = reason
 
 
 def detect_capabilities(state):
@@ -651,7 +739,9 @@ def calculate_targets(
     max_power,
     device_configs=None,
     capabilities=None,
-    requested_total=None
+    requested_total=None,
+    explain=False,
+    online_devices=None
 ):
     """
     Intelligent EMS target calculation.
@@ -676,10 +766,38 @@ def calculate_targets(
             load=load,
             max_power=max_power
         )
+        if explain:
+            explanation = ControlExplanation(
+                mode="no_devices",
+                requested_total_w=0,
+                effective_target_total_w=0,
+                allocated_target_total_w=0,
+                commanded_total_w=None,
+                devices={},
+                limits=[
+                    ControlLimitExplanation(
+                        "no_devices",
+                        True,
+                        0,
+                        "no device states were available"
+                    )
+                ],
+                notes=["no devices available for target calculation"],
+                current_total_w=0,
+                raw_requested_total_w=requested_total,
+                max_total_power_w=max_power,
+                load_w=load
+            )
+            return [], 0, 0, explanation
         return [], 0, 0
 
     current_total = sum(d.output for d in devices)
     solar_total = sum(d.solar for d in devices)
+    raw_requested_total = (
+        requested_total
+        if requested_total is not None
+        else current_total + load
+    )
 
     if requested_total is None:
         new_total = max(
@@ -695,6 +813,75 @@ def calculate_targets(
     targets = [0] * len(devices)
     final_target_limits = None
     battery_topup_used = False
+    mode = "pv_first" if solar_total >= new_total else "battery_discharge"
+    explanation_devices = []
+    explanation_device_map = {}
+    explanation_limits = []
+    explanation_notes = []
+
+    def add_limit(name, active, value=None, reason=None):
+        if explain:
+            explanation_limits.append(
+                ControlLimitExplanation(name, active, value, reason)
+            )
+
+    if explain:
+        add_limit(
+            "max_total_power",
+            raw_requested_total > max_power,
+            max_power,
+            (
+                "requested total was clamped to the configured maximum"
+                if raw_requested_total > max_power
+                else "configured maximum total output"
+            )
+        )
+        add_limit(
+            "zero_floor",
+            raw_requested_total < 0,
+            0,
+            (
+                "requested total was clamped to zero"
+                if raw_requested_total < 0
+                else "target calculation never requests negative output"
+            )
+        )
+
+        for i, d in enumerate(devices):
+            dev_config = device_configs[i] if device_configs else None
+            cap = capabilities[i] if capabilities else None
+            name = _device_name(i, dev_config)
+            entry = DeviceControlExplanation(
+                device=name,
+                online=_device_online(online_devices, i, name),
+                pv_input_w=d.solar,
+                output_w=d.output,
+                soc=d.soc,
+                min_soc=d.min_soc,
+                max_soc=d.max_soc,
+                max_output_w=get_device_max_power(dev_config),
+                can_export=cap.can_export if cap else None,
+                can_discharge=cap.can_discharge if cap else None,
+                capability_reason=cap.reason if cap else None,
+                capacity_weight=get_device_battery_kwh(dev_config),
+                output_limit_w=d.output_limit,
+                decision_reason=mode
+            )
+            if cap and not cap.can_export:
+                entry.limiting_reason = "cannot_export"
+            explanation_devices.append(entry)
+            explanation_device_map[name] = entry
+
+        add_limit(
+            "pv_surplus_available",
+            solar_total >= new_total,
+            solar_total,
+            (
+                "total PV can cover the requested output"
+                if solar_total >= new_total
+                else "battery discharge is needed beyond PV output"
+            )
+        )
     # =====================
     # CASE 1:
     # Enough solar available
@@ -739,6 +926,21 @@ def calculate_targets(
             )
             pv_weight = base_pv_weight * charge_balance_multiplier
             pv_weights.append(pv_weight)
+
+            if explain:
+                entry = explanation_devices[i]
+                entry.pv_only_limit_w = pv_only
+                entry.pv_priority_factor = get_device_pv_priority_factor(
+                    dev_config
+                )
+                entry.pv_weight = pv_weight
+                entry.charge_balance_multiplier = charge_balance_multiplier
+                entry.soc_gap_percent = balance_context["soc_gap"]
+                entry.decision_reason = "pv_first_allocation"
+                if cap and not cap.can_export:
+                    _set_limiting_reason(entry, "cannot_export")
+                elif pv_only <= 0:
+                    _set_limiting_reason(entry, "no_pv_only_available")
 
             log_event(
                 logging.DEBUG,
@@ -794,6 +996,17 @@ def calculate_targets(
             )
 
             if targets is not None:
+                if explain:
+                    add_limit(
+                        "full_soc_pv_priority",
+                        True,
+                        json.dumps(full_soc_indices),
+                        "full SOC devices receive PV-first export priority"
+                    )
+                    for index in full_soc_indices:
+                        explanation_devices[
+                            index
+                        ].decision_reason = "full_soc_pv_priority"
                 log_event(
                     logging.INFO,
                     "pv_first_full_soc_priority",
@@ -812,6 +1025,17 @@ def calculate_targets(
                 )
 
             pv_unmet = new_total - sum(targets)
+            if explain:
+                add_limit(
+                    "pv_only_target_limit",
+                    pv_unmet > 0,
+                    pv_unmet,
+                    (
+                        "PV-only contribution could not cover the target"
+                        if pv_unmet > 0
+                        else "PV-only allocation covered the target"
+                    )
+                )
 
             if pv_unmet > 0:
                 log_event(
@@ -822,6 +1046,7 @@ def calculate_targets(
                     unmet_w=round(pv_unmet)
                 )
 
+            before_topup_targets = targets[:]
             (
                 targets,
                 battery_topup_used
@@ -832,12 +1057,42 @@ def calculate_targets(
                 capabilities,
                 new_total
             )
+            if explain:
+                topup_w = sum(targets) - sum(before_topup_targets)
+                add_limit(
+                    "battery_topup_after_pv_first",
+                    battery_topup_used,
+                    topup_w,
+                    (
+                        "battery discharge topped up PV-first allocation"
+                        if battery_topup_used
+                        else "battery top-up was not needed or not possible"
+                    )
+                )
+                if battery_topup_used:
+                    explanation_notes.append(
+                        "battery top-up was applied after PV-first allocation"
+                    )
+                    for index, (before, after) in enumerate(
+                        zip(before_topup_targets, targets)
+                    ):
+                        if after > before:
+                            explanation_devices[
+                                index
+                            ].decision_reason = "pv_first_with_battery_topup"
             if pv_only_total >= new_total and not battery_topup_used:
                 final_target_limits = pv_only_limits[:]
 
         else:
 
             targets = [0] * len(devices)
+            if explain:
+                add_limit(
+                    "pv_only_target_limit",
+                    new_total > 0,
+                    new_total,
+                    "no PV-only contribution was available"
+                )
 
             if new_total > 0:
                 log_event(
@@ -848,6 +1103,7 @@ def calculate_targets(
                     unmet_w=round(new_total)
                 )
 
+                before_topup_targets = targets[:]
                 (
                     targets,
                     battery_topup_used
@@ -858,6 +1114,19 @@ def calculate_targets(
                     capabilities,
                     new_total
                 )
+                if explain:
+                    topup_w = sum(targets) - sum(before_topup_targets)
+                    add_limit(
+                        "battery_topup_after_pv_first",
+                        battery_topup_used,
+                        topup_w,
+                        (
+                            "battery discharge topped up zero PV-only "
+                            "allocation"
+                            if battery_topup_used
+                            else "battery top-up was not possible"
+                        )
+                    )
 
     # =====================
     # CASE 2:
@@ -870,14 +1139,28 @@ def calculate_targets(
 
         for i, d in enumerate(devices):
             cap = capabilities[i] if capabilities else None
-            targets.append(
-                d.solar
-                if not cap or cap.can_export
-                else 0
-            )
+            exportable_solar = d.solar if not cap or cap.can_export else 0
+            targets.append(exportable_solar)
+            if explain:
+                entry = explanation_devices[i]
+                entry.pv_only_limit_w = exportable_solar
+                entry.decision_reason = "solar_plus_battery_discharge"
+                if cap and not cap.can_export:
+                    _set_limiting_reason(entry, "cannot_export")
 
         exportable_solar_total = sum(targets)
         remaining = max(0, new_total - exportable_solar_total)
+        if explain:
+            add_limit(
+                "battery_discharge_required",
+                remaining > 0,
+                remaining,
+                (
+                    "requested target exceeds exportable PV"
+                    if remaining > 0
+                    else "exportable PV covers the requested target"
+                )
+            )
 
         weights = []
 
@@ -902,6 +1185,15 @@ def calculate_targets(
                 )
 
             weights.append(usable_soc)
+            if explain:
+                entry = explanation_devices[i]
+                entry.capacity_weight = usable_soc
+                if cap and not cap.can_discharge and remaining > 0:
+                    _set_limiting_reason(entry, "cannot_discharge")
+                elif d.max_soc <= 0 and remaining > 0:
+                    _set_limiting_reason(entry, "no_battery_available")
+                elif usable_soc <= 0 and remaining > 0:
+                    _set_limiting_reason(entry, "no_usable_battery")
 
             log_event(
                 logging.DEBUG,
@@ -928,6 +1220,13 @@ def calculate_targets(
 
                 targets[i] += remaining * share
         elif remaining > 0:
+            if explain:
+                add_limit(
+                    "discharge_capacity",
+                    True,
+                    0,
+                    "no usable discharge capacity was available"
+                )
             log_event(
                 logging.WARNING,
                 "no_discharge_capacity",
@@ -937,6 +1236,9 @@ def calculate_targets(
             )
 
     raw_targets = targets[:]
+    if explain:
+        for entry, target in zip(explanation_devices, raw_targets):
+            entry.raw_target_w = target
 
     if final_target_limits or battery_topup_used:
         log_event(
@@ -949,6 +1251,13 @@ def calculate_targets(
                 else "none"
             )
         )
+        if explain and final_target_limits:
+            add_limit(
+                "pv_only_final_limits",
+                True,
+                json.dumps([round(limit) for limit in final_target_limits]),
+                "final constraints preserve PV-only target limits"
+            )
 
     targets, undistributed = apply_constraints_and_redistribute(
         targets,
@@ -956,6 +1265,59 @@ def calculate_targets(
         capabilities=capabilities,
         target_limits=final_target_limits
     )
+    if explain:
+        rounded_raw_targets = [round(target) for target in raw_targets]
+        device_limit_active = False
+        for i, (entry, target) in enumerate(zip(explanation_devices, targets)):
+            dev_config = device_configs[i] if device_configs else None
+            cap = capabilities[i] if capabilities else None
+            max_device_power = get_device_max_power(dev_config)
+            final_limit = (
+                final_target_limits[i]
+                if final_target_limits
+                else max_device_power
+            )
+
+            entry.allocated_target_w = target
+            entry.effective_target_w = target
+
+            if cap and not cap.can_export:
+                _set_limiting_reason(entry, "cannot_export")
+
+            if rounded_raw_targets[i] > target:
+                device_limit_active = True
+                if final_target_limits and target <= round(final_limit):
+                    _set_limiting_reason(entry, "pv_only_limit")
+                elif target <= max_device_power:
+                    _set_limiting_reason(entry, "max_output_limit")
+
+            if new_total > 0 and target <= 0 and not entry.limiting_reason:
+                _set_limiting_reason(entry, "no_allocation")
+
+        add_limit(
+            "device_output_limits",
+            device_limit_active,
+            json.dumps(targets),
+            (
+                "one or more device targets were clamped"
+                if device_limit_active
+                else "device targets fit within capability limits"
+            )
+        )
+        add_limit(
+            "undistributed_target",
+            undistributed > 0,
+            undistributed,
+            (
+                "some target could not be distributed to devices"
+                if undistributed > 0
+                else "requested target was distributed within device limits"
+            )
+        )
+        if undistributed > 0:
+            explanation_notes.append(
+                f"{round(undistributed)} W could not be distributed"
+            )
 
     log_event(
         logging.DEBUG,
@@ -967,6 +1329,25 @@ def calculate_targets(
         final_targets=json.dumps(targets),
         undistributed=undistributed
     )
+
+    if explain:
+        allocated_total = sum(targets)
+        explanation = ControlExplanation(
+            mode=mode,
+            requested_total_w=new_total,
+            effective_target_total_w=allocated_total,
+            allocated_target_total_w=allocated_total,
+            commanded_total_w=new_total,
+            devices=explanation_device_map,
+            limits=explanation_limits,
+            notes=explanation_notes,
+            current_total_w=current_total,
+            raw_requested_total_w=raw_requested_total,
+            max_total_power_w=max_power,
+            load_w=load,
+            undistributed_target_w=undistributed
+        )
+        return targets, current_total, new_total, explanation
 
     return targets, current_total, new_total
 

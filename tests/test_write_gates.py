@@ -29,6 +29,14 @@ class ShellyStub:
         return self.power
 
 
+class DashboardStoreStub:
+    def __init__(self):
+        self.records = []
+
+    def record(self, snapshot):
+        self.records.append(snapshot)
+
+
 def device(name):
     return SimpleNamespace(
         name=name,
@@ -91,13 +99,15 @@ class WriteGateTest(unittest.TestCase):
         devices,
         states,
         runtime_state=None,
-        load=300
+        load=300,
+        dashboard_store=None
     ):
         controller = EMSController(
             devices=devices,
             shelly=ShellyStub(load),
             sleep_enabled=False,
-            runtime_state=runtime_state
+            runtime_state=runtime_state,
+            dashboard_store=dashboard_store
         )
         controller.run_startup_ac_mode_reconcile_once = Mock()
         controller.set_output_limit = Mock()
@@ -209,6 +219,96 @@ class WriteGateTest(unittest.TestCase):
         )
 
         controller.set_output_limit.assert_not_called()
+
+    def test_night_min_soc_idle_publishes_control_explanation_to_dashboard(self):
+        wr1 = device("WR1")
+        wr2 = device("WR2")
+        dashboard_store = DashboardStoreStub()
+        runtime_state = RuntimeStateStub(
+            system={
+                "min_output_limit": 30
+            }
+        )
+
+        controller = self.run_controller_once(
+            [wr1, wr2],
+            [
+                state(
+                    soc=15,
+                    min_soc=15,
+                    solar=0,
+                    output=0,
+                    output_limit=30,
+                    pack_in=0,
+                    pack_out=0,
+                    soc_limit=2,
+                    dc_status=0,
+                    ac_status=0,
+                    pack_state=0
+                ),
+                state(
+                    soc=14,
+                    min_soc=15,
+                    solar=0,
+                    output=0,
+                    output_limit=30,
+                    pack_in=0,
+                    pack_out=0,
+                    soc_limit=2,
+                    dc_status=0,
+                    ac_status=0,
+                    pack_state=0
+                ),
+            ],
+            runtime_state=runtime_state,
+            load=0,
+            dashboard_store=dashboard_store
+        )
+
+        controller.set_output_limit.assert_not_called()
+        self.assertIsNotNone(controller.last_control_explanation)
+        self.assertEqual(
+            controller.last_control_explanation.mode,
+            "night_min_soc_idle"
+        )
+        self.assertEqual(
+            set(controller.last_control_explanation.devices),
+            {"WR1", "WR2"}
+        )
+        self.assertEqual(len(dashboard_store.records), 1)
+
+        snapshot = dashboard_store.records[0]
+        self.assertTrue(snapshot["controller"]["night_min_soc_idle"])
+        self.assertEqual(snapshot["devices"]["WR1"]["target_w"], 30)
+        self.assertEqual(snapshot["devices"]["WR2"]["target_w"], 30)
+        self.assertEqual(snapshot["controller"]["allocated_target_total_w"], 60)
+        self.assertEqual(snapshot["controller"]["effective_target_total_w"], 60)
+
+        explanation = snapshot["control_explain"]
+        self.assertIsNotNone(explanation)
+        self.assertEqual(explanation["mode"], "night_min_soc_idle")
+        self.assertEqual(explanation["requested_total_w"], 60)
+        self.assertEqual(explanation["allocated_target_total_w"], 60)
+        self.assertEqual(explanation["effective_target_total_w"], 60)
+        self.assertEqual(explanation["min_output_limit_w"], 30)
+        self.assertEqual(explanation["max_total_power_w"], 800)
+        self.assertEqual(set(explanation["devices"]), {"WR1", "WR2"})
+        self.assertEqual(
+            explanation["devices"]["WR1"]["decision_reason"],
+            "night_min_soc_idle"
+        )
+        self.assertEqual(
+            explanation["devices"]["WR2"]["limiting_reason"],
+            "below_min_soc"
+        )
+        self.assertEqual(
+            explanation["devices"]["WR1"]["write_decision"],
+            "skip"
+        )
+        self.assertEqual(
+            explanation["devices"]["WR1"]["write_reason"],
+            "already_at_min_output_limit"
+        )
 
     def test_consecutive_eligible_writes_are_not_time_blocked(self):
         controlled = device("WR1")

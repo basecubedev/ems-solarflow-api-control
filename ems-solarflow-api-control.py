@@ -165,6 +165,40 @@ def main():
     )
     runtime_state.load_or_create()
 
+    dashboard_store = None
+
+    if cfg.safe_bool(
+        cfg.DASHBOARD_CONFIG.get("enabled", False),
+        False
+    ):
+        try:
+            from dashboard.server import start_dashboard_server
+            from dashboard.sqlite_store import DashboardStore
+
+            dashboard_store = DashboardStore(
+                cfg.dashboard_database_path(),
+                retention_hours=cfg.safe_int(
+                    cfg.DASHBOARD_CONFIG.get("history_hours", 48),
+                    48,
+                    minimum=1
+                )
+            )
+            start_dashboard_server(
+                dashboard_store,
+                host=str(cfg.DASHBOARD_CONFIG.get("host", "0.0.0.0")),
+                port=cfg.safe_int(
+                    cfg.DASHBOARD_CONFIG.get("port", 8080),
+                    8080,
+                    minimum=1
+                )
+            )
+        except Exception as e:
+            log_event(
+                logging.WARNING,
+                "dashboard_start_failed",
+                error=e
+            )
+
     if args.preflight:
         if run_live_preflight(devices, shelly, ha):
             sys.exit(0)
@@ -175,7 +209,8 @@ def main():
         devices,
         shelly,
         ha,
-        runtime_state=runtime_state
+        runtime_state=runtime_state,
+        dashboard_store=dashboard_store
     )
 
     log_event(logging.INFO, "ems_started")

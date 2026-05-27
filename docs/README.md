@@ -14,6 +14,7 @@ Start here:
 | Runtime state | [runtime-state.md](runtime-state.md) | Mutable operator state and the fields changed by CLI or Home Assistant helpers. |
 | CLI tool | [cli.md](cli.md) | Safe `emsctl.py` commands for runtime-state changes. |
 | Home Assistant integration | [home-assistant.md](home-assistant.md) | Optional HA publishing, helpers, sensors, dashboard files, and control relationship. |
+| Standalone dashboard | [dashboard.md](dashboard.md) | Read-only live dashboard, Control Explain view, local history, and telemetry endpoints. |
 | Winter mode | [winter-mode.md](winter-mode.md) | Optional winter minSoc ramp and reconciliation behavior. |
 | Safety model | [safety.md](safety.md) | Hardware-write gates, dry-run behavior, and staged validation. |
 | Troubleshooting | [troubleshooting.md](troubleshooting.md) | Common symptoms, relevant events, and links back to detail pages. |

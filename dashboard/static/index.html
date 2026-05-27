@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EMS SolarFlow API Control</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand-block">
+        <p class="eyebrow">ems-solarflow-api-control</p>
+        <h1>EMS SolarFlow Control</h1>
+        <p class="brand-subtitle">Read-only energy cockpit</p>
+      </div>
+      <div class="status-cluster">
+        <span id="connectionState" class="pill muted">Connecting</span>
+        <span id="lastUpdated" class="timestamp">--</span>
+      </div>
+    </header>
+
+    <section class="metrics-grid" aria-label="Live metrics">
+      <article class="metric metric-pv">
+        <span class="metric-icon" aria-hidden="true"><svg><use href="#icon-solar"></use></svg></span>
+        <div><span>PV</span><strong id="metricPv">0 W</strong></div>
+      </article>
+      <article class="metric metric-home">
+        <span class="metric-icon" aria-hidden="true"><svg><use href="#icon-home"></use></svg></span>
+        <div><span>Home</span><strong id="metricHome">0 W</strong></div>
+      </article>
+      <article class="metric metric-grid">
+        <span class="metric-icon" aria-hidden="true"><svg><use href="#icon-grid"></use></svg></span>
+        <div><span>Grid</span><strong id="metricGrid">0 W</strong></div>
+      </article>
+      <article class="metric metric-battery">
+        <span class="metric-icon" aria-hidden="true"><svg><use href="#icon-battery"></use></svg></span>
+        <div><span>Battery</span><strong id="metricBattery">0 W</strong></div>
+      </article>
+      <article class="metric metric-soc">
+        <span class="metric-icon" aria-hidden="true"><svg><use href="#icon-gauge"></use></svg></span>
+        <div><span>SOC</span><strong id="metricSoc">0%</strong></div>
+      </article>
+    </section>
+
+    <section class="main-grid">
+      <section class="flow-panel" aria-label="Energy flow">
+        <div class="section-heading">
+          <h2>Live Flow</h2>
+          <div class="flow-heading-controls">
+            <div class="flow-view-tabs" role="tablist" aria-label="Dashboard view">
+              <button type="button" class="active" data-flow-view="aggregated" role="tab" aria-selected="true">Aggregated</button>
+              <button type="button" data-flow-view="devices" role="tab" aria-selected="false">Devices</button>
+              <button type="button" data-flow-view="control" role="tab" aria-selected="false">Control</button>
+            </div>
+          </div>
+        </div>
+        <div class="flow-wrap view-aggregated">
+          <svg id="flowSvg" viewBox="0 0 900 330" role="img" aria-label="PV, battery, inverter, home and grid energy flow">
+            <defs>
+              <symbol id="icon-solar" viewBox="0 0 24 24">
+                <path d="M4 14.5 7.2 7h9.6l3.2 7.5H4Z"></path>
+                <path d="M6.1 12h11.8M8.2 7l-1.4 7.5M12 7v7.5M15.8 7l1.4 7.5M4.8 17.5h14.4"></path>
+                <path d="M18.3 4.2h.1M20.6 6.5h.1M15.9 2.7h.1"></path>
+              </symbol>
+              <symbol id="icon-battery" viewBox="0 0 24 24">
+                <path d="M4 8.5h14.2a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2Z"></path>
+                <path d="M20.2 10.7h1.6v2.6h-1.6M6 11.8h6"></path>
+              </symbol>
+              <symbol id="icon-inverter" viewBox="0 0 24 24">
+                <rect x="5" y="4" width="14" height="16" rx="3"></rect>
+                <path d="M8 8h8M8 12h3l2-2 3 4M8 16h8"></path>
+              </symbol>
+              <symbol id="icon-home" viewBox="0 0 24 24">
+                <path d="M4 11.4 12 5l8 6.4"></path>
+                <path d="M6.5 10.5V20h11v-9.5"></path>
+                <path d="M10 20v-5h4v5"></path>
+              </symbol>
+              <symbol id="icon-grid" viewBox="0 0 24 24">
+                <path d="M12 3v18M7 21h10M8 8h8M6 13h12M9 8l-4 13M15 8l4 13M9.5 5h5"></path>
+              </symbol>
+              <symbol id="icon-gauge" viewBox="0 0 24 24">
+                <path d="M4 15a8 8 0 0 1 16 0"></path>
+                <path d="M12 15l4-5M6.6 18h10.8"></path>
+              </symbol>
+              <symbol id="icon-rule" viewBox="0 0 24 24">
+                <path d="M5 5h14v14H5z"></path>
+                <path d="m8 12 2.4 2.4L16 9"></path>
+              </symbol>
+              <symbol id="icon-warning" viewBox="0 0 24 24">
+                <path d="M12 4 3.5 19h17L12 4Z"></path>
+                <path d="M12 9v4M12 16.5h.1"></path>
+              </symbol>
+              <symbol id="icon-charge" viewBox="0 0 24 24">
+                <path d="M13 2 5 13h6l-1 9 8-12h-6l1-8Z"></path>
+              </symbol>
+              <symbol id="icon-history" viewBox="0 0 24 24">
+                <path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.6"></path>
+                <path d="M4 4v4.6h4.6M12 8v4l3 2"></path>
+              </symbol>
+              <linearGradient id="solarGlass" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#ffffff" stop-opacity=".22"></stop>
+                <stop offset=".48" stop-color="#ffd166" stop-opacity=".10"></stop>
+                <stop offset="1" stop-color="#38d5ff" stop-opacity=".04"></stop>
+              </linearGradient>
+            </defs>
+
+            <g class="flow-layer" aria-hidden="true">
+              <!-- The central energy flow intentionally shows aggregated totals only. Per-device flow visualization may be added later in a separate layer. -->
+              <g id="pipePvInverter" class="energy-pipe pv idle">
+                <path class="pipe-base" d="M204 91 H292 V158 H372"></path>
+                <path class="pipe-glow" d="M204 91 H292 V158 H372"></path>
+                <path class="pipe-energy" d="M204 91 H292 V158 H372"></path>
+              </g>
+              <g id="pipeBatteryInverter" class="energy-pipe battery idle">
+                <path class="pipe-base" d="M205 239 H292 V186 H372"></path>
+                <path class="pipe-glow" d="M205 239 H292 V186 H372"></path>
+                <path class="pipe-energy" d="M205 239 H292 V186 H372"></path>
+              </g>
+              <g id="pipeInverterHome" class="energy-pipe output idle">
+                <path class="pipe-base" d="M530 166 H616 V86 H704"></path>
+                <path class="pipe-glow" d="M530 166 H616 V86 H704"></path>
+                <path class="pipe-energy" d="M530 166 H616 V86 H704"></path>
+              </g>
+              <g id="pipeGridHome" class="energy-pipe grid idle">
+                <path class="pipe-base" d="M778 218 H818 V106 H778"></path>
+                <path class="pipe-glow" d="M778 218 H818 V106 H778"></path>
+                <path class="pipe-energy" d="M778 218 H818 V106 H778"></path>
+              </g>
+            </g>
+
+            <g id="visualPv" class="device-visual solar-visual" transform="translate(44 38)">
+              <rect class="visual-shell" x="0" y="0" width="184" height="76" rx="38"></rect>
+              <rect class="visual-icon-bay" x="12" y="10" width="72" height="56" rx="24"></rect>
+              <circle class="solar-sun" cx="46" cy="27" r="8"></circle>
+              <g class="solar-panel" transform="translate(27 39) scale(.52)">
+                <path class="panel-face" d="M0 0h72l20 48H18Z"></path>
+                <path class="panel-grid" d="M17 0 24 48M36 0 46 48M55 0 68 48M8 16h72M14 32h72"></path>
+                <path class="panel-reflect" d="M7 3h32l8 16H14Z"></path>
+              </g>
+              <text class="visual-label" x="166" y="32" text-anchor="end">PV</text>
+              <text id="flowPv" class="visual-value" x="166" y="56" text-anchor="end">0 W</text>
+            </g>
+
+            <g id="visualBattery" class="device-visual battery-visual" transform="translate(44 202)">
+              <rect class="visual-shell" x="0" y="0" width="184" height="76" rx="38"></rect>
+              <rect class="visual-icon-bay" x="12" y="10" width="72" height="56" rx="24"></rect>
+              <rect class="battery-case" x="24" y="27" width="52" height="23" rx="7"></rect>
+              <rect class="battery-cap" x="76" y="35" width="5" height="8" rx="2"></rect>
+              <rect id="flowBatteryFill" class="battery-fill" x="29" y="32" width="0" height="13" rx="4"></rect>
+              <text id="flowBatterySoc" class="battery-soc" x="50" y="43" text-anchor="middle">0%</text>
+              <text id="flowBatteryState" class="visual-state" x="166" y="20" text-anchor="end">Idle</text>
+              <text class="visual-label" x="166" y="39" text-anchor="end">Battery</text>
+              <text id="flowBattery" class="visual-value" x="166" y="61" text-anchor="end">0 W</text>
+            </g>
+
+            <g id="visualInverter" class="device-visual inverter-visual" transform="translate(358 126)">
+              <rect class="visual-shell" x="0" y="8" width="196" height="80" rx="40"></rect>
+              <rect class="visual-icon-bay" x="14" y="18" width="76" height="60" rx="26"></rect>
+              <rect class="inverter-body" x="34" y="28" width="38" height="40" rx="10"></rect>
+              <path class="inverter-wave" d="M41 49c5-12 10 12 15 0s10 12 15 0"></path>
+              <circle class="inverter-led" cx="65" cy="37" r="3"></circle>
+              <text class="visual-label" x="174" y="43" text-anchor="end">Inverter</text>
+              <text id="flowInverter" class="visual-value" x="174" y="68" text-anchor="end">0 W</text>
+            </g>
+
+            <g id="visualHome" class="device-visual home-visual" transform="translate(690 42)">
+              <rect class="visual-shell" x="0" y="0" width="176" height="76" rx="38"></rect>
+              <rect class="visual-icon-bay" x="12" y="10" width="68" height="56" rx="24"></rect>
+              <path class="home-roof" d="M27 39 46 24l19 15"></path>
+              <path class="home-body" d="M32 38v18h28V38"></path>
+              <path class="home-door" d="M43 56V45h8v11"></path>
+              <text class="visual-label" x="158" y="32" text-anchor="end">Home</text>
+              <text id="flowHome" class="visual-value" x="158" y="56" text-anchor="end">0 W</text>
+            </g>
+
+            <g id="visualGrid" class="device-visual grid-visual" transform="translate(690 204)">
+              <rect class="visual-shell" x="0" y="0" width="176" height="76" rx="38"></rect>
+              <rect class="visual-icon-bay" x="12" y="10" width="68" height="56" rx="24"></rect>
+              <path class="grid-tower" d="M46 20v40M31 60h30M34 34h24M29 47h34M37 34 29 60M55 34l8 26M39 26h14"></path>
+              <text id="flowGridDirection" class="visual-state" x="158" y="20" text-anchor="end">Neutral</text>
+              <text class="visual-label" x="158" y="39" text-anchor="end">Grid</text>
+              <text id="flowGrid" class="visual-value" x="158" y="61" text-anchor="end">0 W</text>
+            </g>
+          </svg>
+          <div id="deviceFlowView" class="device-flow-view" hidden></div>
+          <div id="controlExplainView" class="control-explain-view" hidden></div>
+        </div>
+      </section>
+
+      <aside class="rules-panel" aria-label="EMS rule state">
+        <div class="section-heading">
+          <h2>Rules</h2>
+        </div>
+        <div id="rulesList" class="rules-list"></div>
+      </aside>
+    </section>
+
+    <section>
+      <div class="section-heading">
+        <h2>Devices</h2>
+      </div>
+      <div id="deviceGrid" class="device-grid"></div>
+    </section>
+
+    <section class="chart-panel">
+      <div class="section-heading">
+        <h2><svg class="heading-icon" aria-hidden="true"><use href="#icon-history"></use></svg>History</h2>
+        <div class="range-tabs" role="tablist" aria-label="History range">
+          <button data-range="1h">1h</button>
+          <button data-range="6h" class="active">6h</button>
+          <button data-range="12h">12h</button>
+          <button data-range="24h">24h</button>
+        </div>
+      </div>
+      <div class="charts">
+        <canvas id="chartPv" height="125"></canvas>
+        <canvas id="chartSoc" height="125"></canvas>
+        <canvas id="chartOutput" height="125"></canvas>
+        <canvas id="chartHome" height="125"></canvas>
+        <canvas id="chartBattery" height="125"></canvas>
+      </div>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

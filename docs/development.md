@@ -67,6 +67,12 @@ The GitHub Actions job `Simulated power-control regression tests` can be used
 as a required status check for `main` in branch protection or repository
 rulesets.
 
+## Third-Party Assets
+
+When adding new dashboard icon, font, image, chart, UI asset, or frontend
+package dependencies, update `THIRD_PARTY_LICENSES.md` and preserve the
+upstream copyright and license notice.
+
 Log event checks:
 
 ```bash

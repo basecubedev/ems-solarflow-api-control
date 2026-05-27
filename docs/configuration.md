@@ -188,6 +188,24 @@ Manual no-write validation flags:
 }
 ```
 
+## Dashboard
+
+`dashboard.enabled` starts the optional read-only web dashboard alongside the
+EMS loop. It does not expose control endpoints and does not write Zendure
+values.
+
+`dashboard.host` and `dashboard.port` define the listen address. The template
+uses `0.0.0.0:8080`.
+
+`dashboard.database_path` stores local SQLite history. Relative paths are
+resolved from the project directory.
+
+`dashboard.history_hours` controls automatic cleanup. Keep it short-term; the
+dashboard API supports `1h`, `6h`, `12h`, and `24h` ranges.
+
+`dashboard.write_interval_seconds` limits how often the EMS loop persists
+dashboard telemetry. The default is `5`.
+
 ## Output Control
 
 `system.output_control` is advanced tuning for fast control loops. Most users
