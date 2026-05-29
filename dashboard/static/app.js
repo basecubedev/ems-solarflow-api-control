@@ -3,6 +3,7 @@ const state = {
   range: "6h",
   history: [],
   flowView: "aggregated",
+  demoMode: isDemoMode(),
 };
 
 const charts = [
@@ -135,7 +136,7 @@ function setConnection(text, connected) {
 
 function updateSnapshot(snapshot) {
   state.snapshot = snapshot;
-  setConnection("Live", true);
+  setConnection(state.demoMode ? "Demo" : "Live", true);
   renderSnapshot(snapshot);
 }
 
@@ -188,6 +189,7 @@ function renderSnapshot(snapshot) {
   renderRules(snapshot.rules || {});
   renderDevices(snapshot.devices || {});
   renderDeviceFlow(snapshot);
+  renderControlExplain(snapshot);
   setFlowView(state.flowView, false);
 }
 
@@ -334,6 +336,817 @@ function renderDeviceFlow(snapshotOrDevices) {
       ${deviceSharedVisuals(layout.sharedX, homeY, gridY, homeLoad, gridPower)}
     </svg>
   `;
+}
+
+function renderControlExplain(snapshot) {
+  const container = $("controlExplainView");
+  if (!container) return;
+
+  const explain = snapshot?.control_explain;
+  if (!explain || typeof explain !== "object") {
+    container.innerHTML = `<div class="control-empty">No control explanation data available yet.</div>`;
+    return;
+  }
+
+  const notes = Array.isArray(explain.notes)
+    ? explain.notes.filter(hasExplainValue)
+    : [];
+  const devices = normalizeControlDeviceEntries(explain.devices);
+  const weightContext = controlWeightContext(devices);
+  const deviceFlows = devices.length
+    ? devices.map(([name, device]) => controlDeviceCard(name, device || {}, explain, weightContext)).join("")
+    : `<div class="control-empty compact">No device explanation data available.</div>`;
+
+  container.innerHTML = `
+    <div class="control-decision-board">
+      ${controlGlobalPipeline(explain, devices, snapshot)}
+      ${controlContextRail(explain, devices, notes)}
+      <div class="control-device-list">${deviceFlows}</div>
+    </div>
+  `;
+}
+
+function controlGlobalPipeline(explain, devices, snapshot) {
+  const writeSummary = controlGlobalWriteSummary(devices, explain);
+  const stages = [
+    {
+      title: "Measurements",
+      kind: "measurements",
+      subtitle: "Live values define the demand basis",
+      facts: [
+        controlPipelineFact("Filtered load", explain.filtered_load_w, "home", watts, "output"),
+        controlPipelineFact("PV total", snapshot?.pv_total_w, "solar", watts, "solar"),
+        controlPipelineFact("Output total", snapshot?.inverter_output_w, "inverter", watts, "output"),
+      ],
+      resultLabel: "Demand basis",
+      resultValue: explain.filtered_load_w,
+      resultFormatter: watts,
+    },
+    {
+      title: "Target",
+      kind: "target",
+      subtitle: "Request and limits become the effective target",
+      facts: [
+        controlPipelineFact("Requested", explain.requested_total_w, "gauge", watts, "output"),
+        controlPipelineFact("Strategy", explain.mode, "rule", controlReason, "context"),
+      ],
+      resultLabel: "Effective target",
+      resultValue: explain.effective_target_total_w,
+      resultFormatter: watts,
+    },
+    {
+      title: "Distribution",
+      kind: "distribution",
+      subtitle: "The target is allocated across devices",
+      facts: [
+        controlPipelineFact("Target split", controlDeviceTargetSummary(devices, (device) => device.allocated_target_w), "rule", controlText, "output"),
+        controlPipelineFact("Undistributed", explain.undistributed_target_w, "warning", watts, "neutral"),
+      ],
+      resultLabel: "Allocated total",
+      resultValue: explain.allocated_target_total_w,
+      resultFormatter: watts,
+    },
+    {
+      title: "Limits / Gates",
+      kind: "gates",
+      subtitle: "Limits and write gates shape commandable power",
+      facts: [
+        controlPipelineFact("Active limits", controlActiveLimitSummary(explain.limits), "warning", controlText, "neutral"),
+        controlPipelineFact("Write gate", writeSummary.label, writeSummary.icon, controlText, "neutral", writeSummary.tone),
+      ],
+      resultLabel: "Commandable total",
+      resultValue: controlCommandableTotal(explain),
+      resultFormatter: watts,
+    },
+    {
+      title: "Commands",
+      kind: "commands",
+      subtitle: "Command state decides whether writes are needed",
+      facts: [
+        controlPipelineFact("Commanded", explain.commanded_total_w, "rule", watts, "output"),
+        controlPipelineFact("Writes", controlWriteDecisionSummary(devices, explain), writeSummary.icon, controlText, "neutral", writeSummary.tone),
+      ],
+      resultLabel: "Command decision",
+      resultValue: writeSummary.label,
+      resultFormatter: controlText,
+      resultTone: writeSummary.tone === "blocked" ? "blocked" : "",
+    },
+    {
+      title: "Result",
+      kind: "result",
+      subtitle: "Final targets become the active control state",
+      facts: [
+        controlPipelineFact("Final split", controlDeviceTargetSummary(devices, controlFinalTarget), "charge", controlText, "output"),
+      ],
+      resultLabel: "Final total",
+      resultValue: controlFinalTotalTarget(explain),
+      resultFormatter: watts,
+    },
+  ];
+  const renderedStages = stages
+    .map((stage, index) => controlPipelineStage({ ...stage, step: index + 1 }))
+    .join("");
+
+  if (!renderedStages) return "";
+
+  return `
+    <section class="control-stage-row control-global-row" aria-label="Global control decision pipeline">
+      ${controlFlowRail(stages)}
+      <div class="control-global-pipeline">
+        ${renderedStages}
+      </div>
+    </section>
+  `;
+}
+
+function controlPipelineStage({ title, kind, subtitle, step, facts, resultLabel, resultValue, resultFormatter = controlText, resultTone = "" }) {
+  const content = facts.filter(Boolean).join("");
+
+  return `
+    <section class="control-pipeline-stage control-pipeline-${escapeHtml(kind)}">
+      <div class="control-stage-head control-stage-header">
+        ${controlStageStep(step)}
+        <span class="control-stage-dot" aria-hidden="true">${icon(controlStageIcon(kind))}</span>
+        <span class="control-stage-title-block">
+          <h3 class="control-stage-title">${escapeHtml(title)}</h3>
+          ${controlStageSubtitle(subtitle)}
+        </span>
+      </div>
+      <div class="control-stage-body control-pipeline-values">${content}</div>
+      ${controlResult(resultLabel, resultValue, "charge", resultFormatter, resultTone)}
+    </section>
+  `;
+}
+
+function controlFlowRail(stages) {
+  const nodes = stages.map((stage, index) => `
+    <span class="control-flow-node" style="--node-index:${index};" title="${escapeHtml(stage.title)}"></span>
+  `).join("");
+  return `
+    <div class="control-flow-rail" style="--stage-count:${stages.length};" aria-hidden="true">
+      <div class="control-flow-rail-line"></div>
+      <div class="control-flow-nodes">${nodes}</div>
+    </div>
+  `;
+}
+
+function controlStageSubtitle(subtitle) {
+  if (!hasExplainValue(subtitle)) return "";
+  return `<span class="control-stage-subtitle">${escapeHtml(subtitle)}</span>`;
+}
+
+function controlStageStep(step) {
+  if (!hasExplainValue(step)) return "";
+  return `<span class="control-stage-step">${String(step).padStart(2, "0")}</span>`;
+}
+
+function controlPipelineFact(label, value, iconName = "rule", formatter = controlText, role = "input", tone = "") {
+  if (!hasExplainValue(value)) return "";
+  return `
+    <span class="control-pipeline-fact role-${escapeHtml(role)} ${tone ? `tone-${escapeHtml(tone)}` : ""}">
+      <span class="value-icon" aria-hidden="true">${icon(iconName)}</span>
+      <span class="control-label">${escapeHtml(label)}</span>
+      <strong>${escapeHtml(formatter(value))}</strong>
+    </span>
+  `;
+}
+
+function controlContextRail(explain, devices, notes) {
+  const limits = Array.isArray(explain.limits) ? explain.limits : [];
+  const contextItems = [
+    controlContextItem("Mode", explain.mode, "rule", controlText),
+    controlContextItem("Max power", explain.max_total_power_w, "warning", watts),
+    controlContextItem("Min output", explain.min_output_limit_w, "warning", watts),
+    controlContextItem("Undistributed", explain.undistributed_target_w, "warning", watts),
+    controlContextItem("Devices", devices.length, "inverter", controlText),
+    controlContextItem("Active gates", controlLimitNames(limits, true), "charge", controlText),
+    controlContextItem("Inactive gates", controlLimitNames(limits, false), "rule", controlText),
+  ].filter(Boolean).join("");
+  const noteItems = notes
+    .map((note) => `<span class="control-note">${escapeHtml(controlText(note))}</span>`)
+    .join("");
+
+  if (!contextItems && !noteItems) return "";
+
+  return `
+    <aside class="control-context-rail" aria-label="Control configuration context">
+      <div class="control-context-title">Context</div>
+      <div class="control-context-items">${contextItems}${noteItems}</div>
+    </aside>
+  `;
+}
+
+function controlContextItem(label, value, iconName = "rule", formatter = controlText) {
+  if (!hasExplainValue(value)) return "";
+  return `
+    <span class="control-context-item role-config">
+      <span class="value-icon" aria-hidden="true">${icon(iconName)}</span>
+      <span class="control-label">${escapeHtml(label)}</span>
+      <strong>${escapeHtml(formatter(value))}</strong>
+    </span>
+  `;
+}
+
+function controlLimitNames(limits, active) {
+  const names = (Array.isArray(limits) ? limits : [])
+    .filter((limit) => limit && Boolean(limit.active) === active && hasExplainValue(limit.name))
+    .map((limit) => controlReason(limit.name));
+  return names.length ? names.join(", ") : null;
+}
+
+function controlActiveLimitSummary(limits) {
+  return controlLimitNames(limits, true) || "None";
+}
+
+function controlDeviceTargetSummary(devices, targetResolver) {
+  const parts = devices
+    .map(([name, device]) => {
+      const target = targetResolver(device || {});
+      if (!hasExplainValue(target)) return "";
+      return `${device?.device || name}: ${watts(target)}`;
+    })
+    .filter(Boolean);
+  return parts.length ? parts.join(" / ") : null;
+}
+
+function controlFinalTotalTarget(explain) {
+  return firstExplainValue(
+    explain.final_target_total_w,
+    explain.effective_target_total_w,
+    explain.allocated_target_total_w,
+    explain.commanded_total_w,
+    explain.requested_total_w
+  );
+}
+
+function controlCommandableTotal(explain) {
+  return firstExplainValue(
+    explain.commandable_total_w,
+    explain.adjusted_commandable_total_w,
+    explain.effective_command_total_w,
+    explain.commanded_total_w,
+    explain.allocated_target_total_w,
+    explain.effective_target_total_w
+  );
+}
+
+function controlWriteDecisionSummary(devices, explain) {
+  if (!devices.length) return null;
+  const counts = devices.reduce((result, [, device]) => {
+    const decision = controlDeviceWriteDecision(device || {}, explain);
+    result[decision.label] = (result[decision.label] || 0) + 1;
+    return result;
+  }, {});
+  return Object.entries(counts)
+    .map(([label, count]) => `${label} ${count}`)
+    .join(" / ");
+}
+
+function normalizeControlDeviceEntries(devices) {
+  if (Array.isArray(devices)) {
+    return devices.map((device, index) => [deviceName(device, index), device || {}]);
+  }
+  return Object.entries(devices || {}).map(([name, device]) => [name || deviceName(device, 0), device || {}]);
+}
+
+function controlDeviceCard(name, device, explain, weightContext) {
+  const safeName = escapeHtml(device.device || name || "Device");
+  const writeDecision = controlDeviceWriteDecision(device, explain);
+  const reasonNote = controlDeviceReasonNote(safeName, device, explain, writeDecision);
+  const online = device.online;
+  const onlinePill = hasExplainValue(online)
+    ? `<span class="pill ${online ? "" : "muted"}">${icon(online ? "live" : "warning")}${online ? "Online" : "Offline"}</span>`
+    : "";
+
+  return `
+    <article class="control-device-card" data-control-device="${safeName}">
+      <div class="control-device-head">
+        <div>
+          <span class="device-name">${safeName}</span>
+        </div>
+        <div class="control-device-status">
+          ${onlinePill}
+          <span class="control-write-pill tone-${escapeHtml(writeDecision.tone)}">${escapeHtml(writeDecision.label)}</span>
+        </div>
+      </div>
+      ${reasonNote}
+      <div class="control-device-panels">
+        ${controlDeviceMeasurementPanel(device)}
+        ${controlDeviceContextPanel(device)}
+      </div>
+      ${controlDeviceDecisionFlow(device, explain, weightContext, writeDecision)}
+    </article>
+  `;
+}
+
+function controlDeviceReasonNote(name, device, explain, writeDecision) {
+  const reason = controlDeviceDecisionReason(name, device, explain, writeDecision);
+  const tone = writeDecision.tone === "blocked"
+    ? "blocked"
+    : writeDecision.tone === "warn"
+      ? "warn"
+      : "neutral";
+
+  return `
+    <div class="control-device-reason tone-${escapeHtml(tone)}">
+      <span class="value-icon" aria-hidden="true">${icon(tone === "blocked" ? "warning" : "rule")}</span>
+      <span>${escapeHtml(reason)}</span>
+    </div>
+  `;
+}
+
+function controlDeviceDecisionReason(name, device, explain, writeDecision) {
+  const explicitReason = firstExplainValue(device.decision_reason, device.reason);
+  if (hasExplainValue(explicitReason)) {
+    return controlReadableDecisionReason(explicitReason, name);
+  }
+
+  const writeReason = controlReason(firstExplainValue(writeDecision.reason, device.write_reason, ""));
+  if (writeDecision.tone === "blocked") {
+    return `${name} is blocked because ${writeReason || "the device cannot be controlled"}.`;
+  }
+  if (writeDecision.tone === "skip" && writeReason.toLowerCase().includes("deadband")) {
+    return "Write skipped because the target change is inside the deadband.";
+  }
+
+  const limitingReason = firstExplainValue(device.limiting_reason, device.capability_reason);
+  if (hasExplainValue(limitingReason)) {
+    return `${name} target is limited by ${controlReason(limitingReason)}.`;
+  }
+
+  const pvPriority = numericOrNull(device.pv_priority_factor);
+  const chargeBalance = numericOrNull(device.charge_balance_multiplier);
+  const allocated = numericOrNull(firstExplainValue(device.allocated_target_w, device.effective_target_w));
+  const outputLimit = numericOrNull(device.output_limit_w);
+  const requestedTotal = numericOrNull(explain.requested_total_w);
+
+  if (pvPriority !== null && pvPriority > 1.05) {
+    return `${name} target is reduced because local PV priority keeps more PV available for battery charging.`;
+  }
+  if (chargeBalance !== null && chargeBalance > 1.05) {
+    return `${name} target is adjusted by charge balancing, SOC, PV availability, and configured limits.`;
+  }
+  if (allocated !== null && outputLimit !== null && allocated >= outputLimit && requestedTotal !== null) {
+    return `${name} carries its allocated share up to the configured output limit.`;
+  }
+
+  return "Target is distributed according to device weight, SOC, PV availability, and configured limits.";
+}
+
+function controlReadableDecisionReason(reason, name) {
+  const normalized = String(reason).trim().toLowerCase();
+  const map = {
+    pv_first_allocation: `${name} target is shaped by PV-first allocation and local solar availability.`,
+    pv_priority_applied: `${name} keeps more PV available for charging because local PV priority is active.`,
+    remaining_demand_assigned: `${name} carries the remaining house load after PV-priority allocation.`,
+    battery_discharge: `${name} supports the load from battery output according to the current target split.`,
+    deadband: "Write skipped because the target change is inside the deadband.",
+    output_limit_update: `${name} receives a write because the target differs from the current output limit.`,
+  };
+  return map[normalized] || controlReason(reason);
+}
+
+function controlDeviceMeasurementPanel(device) {
+  return controlDevicePanel("Measurements", "measurements", [
+    controlFact("PV", device.pv_input_w, "solar", watts, "solar"),
+    controlFact("SOC", device.soc, "battery", pct, "battery"),
+    controlFact("Output", device.output_w, "inverter", watts, "output"),
+  ]);
+}
+
+function controlDeviceContextPanel(device) {
+  return controlDevicePanel("Context", "context", [
+    controlSocRange(device),
+    controlFact("Output limit", device.output_limit_w, "rule", watts, "config"),
+    controlFact("Device max", device.max_output_w, "inverter", watts, "output"),
+    controlFact("Capacity", device.capacity_weight, "battery", decimal, "config"),
+    controlFact("PV priority", device.pv_priority_factor, "solar", factor, "config"),
+  ]);
+}
+
+function controlDevicePanel(title, kind, rows) {
+  const content = rows.filter(Boolean).join("");
+  if (!content) return "";
+
+  return `
+    <section class="control-device-panel control-device-panel-${escapeHtml(kind)}">
+      <div class="control-stage-head">
+        <span class="control-stage-dot" aria-hidden="true">${icon(controlStageIcon(kind))}</span>
+        <h3>${escapeHtml(title)}</h3>
+      </div>
+      <div class="control-stage-values">${content}</div>
+    </section>
+  `;
+}
+
+function controlDeviceDecisionFlow(device, explain, weightContext, writeDecision) {
+  const stages = [
+    {
+      title: "Inputs",
+      kind: "measurements",
+      subtitle: "Live values from this inverter",
+      facts: [
+        controlFact("PV", device.pv_input_w, "solar", watts, "solar"),
+        controlFact("SOC", device.soc, "battery", pct, "battery"),
+        controlFact("Output", device.output_w, "inverter", watts, "output"),
+      ],
+      resultLabel: "Input state",
+      resultValue: device.online === false ? "offline" : "ready",
+      resultTone: device.online === false ? "blocked" : "",
+    },
+    {
+      title: "Weighting",
+      kind: "weighting",
+      subtitle: "PV, SOC and balance produce the weight",
+      facts: [
+        controlFact("Base weight", controlBaseWeight(device), "rule", decimal, "config"),
+        controlFact("PV priority", device.pv_priority_factor, "solar", factor, "solar"),
+        controlFact("Charge balance", device.charge_balance_multiplier, "charge", factor, "battery"),
+      ],
+      resultLabel: "Effective weight",
+      resultValue: controlDeviceWeight(device),
+      resultFormatter: decimal,
+    },
+    {
+      title: "Raw Target",
+      kind: "raw",
+      subtitle: "Weight share is applied to the requested target",
+      facts: [
+        controlFact("Weight", controlDeviceWeight(device), "charge", decimal, "output"),
+        controlFact("Share", controlDeviceShare(device, explain, weightContext), "gauge", formatShare, "output"),
+        controlFact("Requested", explain.requested_total_w, "gauge", watts, "output"),
+        controlFact("Formula", controlRawFormula(device, explain, weightContext), "rule", controlText, "context"),
+      ],
+      resultLabel: "Raw target",
+      resultValue: controlRawTarget(device),
+      resultFormatter: watts,
+    },
+    {
+      title: "Adjustments / Limits",
+      kind: "limits",
+      subtitle: "Limits modify the raw device target",
+      facts: [
+        controlFact("PV-only limit", device.pv_only_limit_w, "solar", watts, "solar"),
+        controlFact("Output limit", device.output_limit_w, "rule", watts, "config"),
+        controlFact("Delta", controlAdjustmentDelta(device), "charge", signedWatts, "output"),
+        controlFact("Limited by", device.limiting_reason, "warning", controlReason, "warning"),
+        controlFact("Capability", device.capability_reason, "warning", controlReason, "warning"),
+      ],
+      resultLabel: "Adjusted target",
+      resultValue: controlAdjustedTarget(device),
+      resultFormatter: watts,
+      resultTone: device.capability_reason ? "blocked" : "",
+    },
+    {
+      title: "Final Target",
+      kind: "final",
+      subtitle: "Adjusted target and write gate finish the decision",
+      facts: [
+        controlFact("Adjusted", controlAdjustedTarget(device), "charge", watts, "output"),
+        controlFact("Final", controlFinalTarget(device), "inverter", watts, "output"),
+        controlFact("Delta output", controlOutputDelta(device), "charge", signedWatts, "output"),
+        controlFact("Write", writeDecision.label, writeDecision.icon, controlText, "neutral", writeDecision.tone),
+        controlFact("Reason", writeDecision.reason, writeDecision.icon, controlReason, "neutral", writeDecision.tone),
+      ],
+      resultLabel: "Final / write",
+      resultValue: controlWriteOutput(writeDecision),
+      resultFormatter: controlText,
+      resultTone: writeDecision.tone === "blocked" ? "blocked" : "",
+    },
+  ];
+  return `
+    <div class="control-stage-row control-device-stage-row">
+      <div class="control-flow control-device-decision-flow">
+        ${stages.map((stage, index) => controlStage({ ...stage, step: index + 1 })).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function controlStage({ title, kind, subtitle, step, facts, resultLabel, resultValue, resultFormatter = controlText, resultTone = "" }) {
+  const content = facts.filter(Boolean).join("");
+
+  return `
+    <section class="control-stage control-stage-${escapeHtml(kind)}" data-stage-title="${escapeHtml(title)}">
+      <div class="control-stage-head control-stage-header">
+        ${controlStageStep(step)}
+        <span class="control-stage-dot" aria-hidden="true">${icon(controlStageIcon(kind))}</span>
+        <span class="control-stage-title-block">
+          <h3 class="control-stage-title">${escapeHtml(title)}</h3>
+          ${controlStageSubtitle(subtitle)}
+        </span>
+      </div>
+      <div class="control-stage-body control-stage-values">${content}</div>
+      ${controlResult(resultLabel, resultValue, "charge", resultFormatter, resultTone)}
+    </section>
+  `;
+}
+
+function controlStageIcon(kind) {
+  const map = {
+    inputs: "solar",
+    measurements: "solar",
+    context: "rule",
+    target: "gauge",
+    distribution: "charge",
+    gates: "warning",
+    commands: "rule",
+    result: "inverter",
+    weighting: "charge",
+    share: "gauge",
+    raw: "rule",
+    limits: "warning",
+    final: "inverter",
+    write: "live",
+  };
+  return map[kind] || "rule";
+}
+
+function controlFact(label, value, iconName = "rule", formatter = controlText, role = "input", tone = "") {
+  if (!hasExplainValue(value)) return "";
+  const wideClass = ["Formula", "Reason"].includes(label) ? "control-fact-wide" : "";
+  return `
+    <span class="control-fact ${wideClass} role-${escapeHtml(role)} ${tone ? `tone-${escapeHtml(tone)}` : ""}">
+      <span class="value-icon" aria-hidden="true">${icon(iconName)}</span>
+      <span class="control-label">${escapeHtml(label)}</span>
+      <strong>${escapeHtml(formatter(value))}</strong>
+    </span>
+  `;
+}
+
+function controlResult(label, value, iconName = "charge", formatter = controlText, tone = "") {
+  const text = hasExplainValue(value) ? formatter(value) : "--";
+  return `
+    <div class="control-result control-stage-result ${tone ? `tone-${escapeHtml(tone)}` : ""}">
+      <span class="value-icon" aria-hidden="true">${icon(iconName)}</span>
+      <span class="control-label control-stage-result-label">Result / ${escapeHtml(label)}</span>
+      <strong class="control-stage-result-value">${escapeHtml(text)}</strong>
+    </div>
+  `;
+}
+
+function controlSocRange(device) {
+  if (!hasExplainValue(device.min_soc) && !hasExplainValue(device.max_soc)) {
+    return "";
+  }
+  const minSoc = hasExplainValue(device.min_soc) ? pct(device.min_soc) : "n/a";
+  const maxSoc = hasExplainValue(device.max_soc) ? pct(device.max_soc) : "n/a";
+  return controlFact("SOC range", `${minSoc} - ${maxSoc}`, "gauge", controlText, "config");
+}
+
+function controlWeightContext(deviceEntries) {
+  const weights = deviceEntries.map(([, device]) => numericOrNull(controlDeviceWeight(device)));
+  const totalWeight = weights.reduce((total, value) => total + (value || 0), 0);
+  return {
+    totalWeight: totalWeight > 0 ? totalWeight : null,
+    weights,
+  };
+}
+
+function controlBaseWeight(device) {
+  const explicit = firstExplainValue(device.base_weight, device.base_pv_weight);
+  if (hasExplainValue(explicit)) return explicit;
+
+  const pvWeight = numericOrNull(device.pv_weight);
+  if (pvWeight !== null) {
+    const priority = numericOrNull(device.pv_priority_factor) || 1;
+    const balance = numericOrNull(device.charge_balance_multiplier) || 1;
+    const denominator = priority * balance;
+    if (denominator > 0) return pvWeight / denominator;
+  }
+
+  return firstExplainValue(device.capacity_weight, device.pv_only_limit_w);
+}
+
+function controlDeviceWeight(device) {
+  return firstExplainValue(
+    device.effective_weight,
+    device.pv_weight,
+    device.capacity_weight
+  );
+}
+
+function controlDeviceShare(device, explain, weightContext) {
+  const explicit = numericOrNull(firstExplainValue(device.share, device.share_percent));
+  if (explicit !== null) {
+    return explicit > 1 ? explicit / 100 : explicit;
+  }
+
+  const rawTarget = numericOrNull(controlRawTarget(device));
+  const requestedTotal = numericOrNull(explain.requested_total_w);
+  if (rawTarget !== null && requestedTotal && requestedTotal > 0) {
+    return rawTarget / requestedTotal;
+  }
+
+  const weight = numericOrNull(controlDeviceWeight(device));
+  if (weight !== null && weightContext.totalWeight) {
+    return weight / weightContext.totalWeight;
+  }
+
+  return null;
+}
+
+function controlRawFormula(device, explain, weightContext) {
+  const share = controlDeviceShare(device, explain, weightContext);
+  const requestedTotal = numericOrNull(explain.requested_total_w);
+  const rawTarget = numericOrNull(controlRawTarget(device));
+  if (share === null || requestedTotal === null || rawTarget === null) {
+    return null;
+  }
+  return `${watts(requestedTotal)} x ${formatShare(share)} = ${watts(rawTarget)}`;
+}
+
+function controlRawTarget(device) {
+  return firstExplainValue(device.raw_target_w, device.raw_allocation_w);
+}
+
+function controlFinalTarget(device) {
+  return firstExplainValue(
+    device.final_target_w,
+    device.effective_target_w,
+    device.adjusted_target_w,
+    device.allocated_target_w,
+    device.raw_target_w
+  );
+}
+
+function controlAdjustedTarget(device) {
+  return firstExplainValue(
+    device.adjusted_target_w,
+    device.effective_target_w,
+    device.allocated_target_w,
+    controlFinalTarget(device)
+  );
+}
+
+function controlAdjustmentDelta(device) {
+  const explicit = firstExplainValue(device.adjustment_delta_w, device.adjustment_delta);
+  if (hasExplainValue(explicit)) return explicit;
+
+  const rawTarget = numericOrNull(controlRawTarget(device));
+  const finalTarget = numericOrNull(controlFinalTarget(device));
+  if (rawTarget === null || finalTarget === null) return null;
+  return finalTarget - rawTarget;
+}
+
+function controlOutputDelta(device) {
+  const finalTarget = numericOrNull(controlFinalTarget(device));
+  const currentOutput = numericOrNull(device.output_w);
+  if (finalTarget === null || currentOutput === null) return null;
+  return finalTarget - currentOutput;
+}
+
+function controlLimitDelta(device) {
+  const finalTarget = numericOrNull(controlFinalTarget(device));
+  const currentLimit = numericOrNull(device.output_limit_w);
+  if (finalTarget === null || currentLimit === null) return null;
+  return finalTarget - currentLimit;
+}
+
+function controlDeviceWriteDecision(device, explain) {
+  const explicit = firstExplainValue(device.write_decision, device.write_state, device.command_decision);
+  const finalTarget = firstExplainValue(device.command_target_w, controlFinalTarget(device));
+
+  if (hasExplainValue(explicit)) {
+    const normalized = String(explicit).toLowerCase();
+    const tone = normalized.includes("send")
+      ? "send"
+      : normalized.includes("block") || normalized.includes("error")
+        ? "blocked"
+        : normalized.includes("skip")
+          ? "skip"
+          : "warn";
+    return {
+      label: controlWriteLabel(normalized),
+      reason: firstExplainValue(device.write_reason, device.deadband_reason, device.decision_reason),
+      target: finalTarget,
+      icon: tone === "blocked" ? "warning" : tone === "send" ? "charge" : "rule",
+      tone,
+    };
+  }
+
+  if (device.online === false) {
+    return {
+      label: "Blocked",
+      reason: "offline",
+      target: finalTarget,
+      icon: "warning",
+      tone: "blocked",
+    };
+  }
+
+  const reference = numericOrNull(firstExplainValue(device.deadband_reference_w, device.output_limit_w, device.output_w));
+  const target = numericOrNull(finalTarget);
+  const deadband = numericOrNull(firstExplainValue(device.deadband_w, explain.deadband_w));
+
+  if (target === null) {
+    return {
+      label: "Unavailable",
+      reason: "missing target",
+      target: null,
+      icon: "warning",
+      tone: "warn",
+    };
+  }
+
+  if (reference !== null && deadband !== null && Math.abs(target - reference) < deadband) {
+    return {
+      label: "Skip",
+      reason: "deadband",
+      target,
+      icon: "rule",
+      tone: "skip",
+    };
+  }
+
+  if (reference !== null && Math.abs(target - reference) < 0.5) {
+    return {
+      label: "Skip",
+      reason: "already at target",
+      target,
+      icon: "rule",
+      tone: "skip",
+    };
+  }
+
+  return {
+    label: "Send",
+    reason: "target differs from current limit",
+    target,
+    icon: "charge",
+    tone: "send",
+  };
+}
+
+function controlWriteOutput(writeDecision) {
+  const target = hasExplainValue(writeDecision.target) ? watts(writeDecision.target) : "--";
+  return `${writeDecision.label} / ${target}`;
+}
+
+function controlGlobalWriteSummary(devices, explain) {
+  if (!devices.length) {
+    return { label: "No devices", icon: "warning", tone: "warn" };
+  }
+
+  const decisions = devices.map(([, device]) => controlDeviceWriteDecision(device || {}, explain));
+  if (decisions.some((decision) => decision.tone === "blocked")) {
+    return { label: "Blocked", icon: "warning", tone: "blocked" };
+  }
+  if (decisions.some((decision) => decision.tone === "send")) {
+    return { label: "Send", icon: "charge", tone: "send" };
+  }
+  if (decisions.every((decision) => decision.tone === "skip")) {
+    return { label: "Skip", icon: "rule", tone: "skip" };
+  }
+  return { label: "Inferred", icon: "rule", tone: "warn" };
+}
+
+function controlWriteLabel(value) {
+  if (value.includes("send")) return "Send";
+  if (value.includes("skip")) return "No write";
+  if (value.includes("block")) return "Blocked";
+  if (value.includes("error")) return "Blocked";
+  return controlText(value);
+}
+
+function hasExplainValue(value) {
+  return value !== undefined && value !== null && value !== "";
+}
+
+function controlText(value) {
+  return String(value);
+}
+
+function controlReason(value) {
+  return controlText(value).replaceAll("_", " ");
+}
+
+function decimal(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return controlText(value);
+  return number.toFixed(2).replace(/\.?0+$/, "");
+}
+
+function factor(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return controlText(value);
+  return `${number.toFixed(2)}x`;
+}
+
+function formatShare(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return controlText(value);
+  return `${(number * 100).toFixed(1).replace(/\.0$/, "")}%`;
+}
+
+function numericOrNull(value) {
+  if (!hasExplainValue(value)) return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function firstExplainValue(...values) {
+  return values.find(hasExplainValue);
 }
 
 function deviceFlowRow(name, device, y, layout, homeY) {
@@ -518,18 +1331,23 @@ function deviceSoc(device) {
 }
 
 function setFlowView(view, persist = true) {
-  const nextView = view === "devices" ? "devices" : "aggregated";
+  const nextView = ["aggregated", "devices", "control"].includes(view)
+    ? view
+    : "aggregated";
   state.flowView = nextView;
 
   const svg = $("flowSvg");
   const deviceView = $("deviceFlowView");
+  const controlView = $("controlExplainView");
   const wrap = document.querySelector ? document.querySelector(".flow-wrap") : null;
 
   if (svg) svg.hidden = nextView !== "aggregated";
   if (deviceView) deviceView.hidden = nextView !== "devices";
+  if (controlView) controlView.hidden = nextView !== "control";
   if (wrap?.classList) {
     wrap.classList.toggle("view-devices", nextView === "devices");
     wrap.classList.toggle("view-aggregated", nextView === "aggregated");
+    wrap.classList.toggle("view-control", nextView === "control");
   }
 
   document.querySelectorAll("[data-flow-view]").forEach((button) => {
@@ -603,7 +1421,190 @@ function initFlowViewSwitch() {
   });
 }
 
+function demoModeFromSearch(search) {
+  const params = String(search || "").replace(/^\?/, "").split("&");
+  return params.some((part) => {
+    const [rawKey, rawValue = ""] = part.split("=");
+    const key = decodeURIComponent(rawKey || "").toLowerCase();
+    const value = decodeURIComponent(rawValue || "").toLowerCase();
+    return key === "demo" && (value === "1" || value === "true");
+  });
+}
+
+function isDemoMode() {
+  if (typeof window === "undefined") return false;
+  return demoModeFromSearch(window.location?.search || "");
+}
+
+function demoSnapshot() {
+  const timestamp = new Date().toISOString();
+  return {
+    timestamp,
+    pv_total_w: 1850,
+    inverter_output_w: 800,
+    home_load_w: 800,
+    grid_power_w: 0,
+    battery_power_w: 1050,
+    average_soc: 59.5,
+    controller: {
+      enabled: true,
+      max_total_power_w: 800,
+      min_output_limit_w: 0,
+      allocated_target_total_w: 800,
+      effective_target_total_w: 800,
+      commanded_total_w: 800,
+      filtered_load_w: 800,
+    },
+    rules: {
+      ems_enabled: { active: true, reason: "demo mode static control preview" },
+      pv_priority_balancing: { active: true, reason: "WR1 keeps more PV available for charging" },
+      battery_balancing: { active: true, reason: "two devices share an 800 W system limit" },
+    },
+    devices: {
+      WR1: {
+        online: true,
+        enabled: true,
+        soc: 62,
+        battery_power_w: 880,
+        pack_input_w: 20,
+        pack_output_w: 900,
+        pv_input_w: 1200,
+        output_w: 320,
+        target_w: 320,
+        allocated_target_w: 320,
+        output_limit_w: 320,
+        mode: "solar",
+      },
+      WR2: {
+        online: true,
+        enabled: true,
+        soc: 57,
+        battery_power_w: 170,
+        pack_input_w: 30,
+        pack_output_w: 200,
+        pv_input_w: 650,
+        output_w: 480,
+        target_w: 480,
+        allocated_target_w: 480,
+        output_limit_w: 480,
+        mode: "solar",
+      },
+    },
+    control_explain: {
+      mode: "pv_first",
+      filtered_load_w: 800,
+      requested_total_w: 800,
+      effective_target_total_w: 800,
+      allocated_target_total_w: 800,
+      commanded_total_w: 800,
+      max_total_power_w: 800,
+      min_output_limit_w: 0,
+      deadband_w: 5,
+      devices: {
+        WR1: {
+          device: "WR1",
+          online: true,
+          pv_input_w: 1200,
+          output_w: 320,
+          output_limit_w: 320,
+          soc: 62,
+          min_soc: 15,
+          max_soc: 100,
+          max_output_w: 800,
+          pv_only_limit_w: 1180,
+          base_weight: 1,
+          effective_weight: 1.2,
+          pv_priority_factor: 1.2,
+          charge_balance_multiplier: 1.05,
+          raw_target_w: 330,
+          allocated_target_w: 320,
+          effective_target_w: 320,
+          adjustment_delta_w: -10,
+          decision_reason: "WR1 has stronger PV, so output is kept lower to leave more local PV available for battery charging.",
+          write_decision: "skip",
+          write_reason: "deadband",
+          deadband_reference_w: 320,
+          command_target_w: 320,
+        },
+        WR2: {
+          device: "WR2",
+          online: true,
+          pv_input_w: 650,
+          output_w: 480,
+          output_limit_w: 480,
+          soc: 57,
+          min_soc: 15,
+          max_soc: 100,
+          max_output_w: 800,
+          pv_only_limit_w: 640,
+          base_weight: 1,
+          effective_weight: 1.75,
+          pv_priority_factor: 1.0,
+          charge_balance_multiplier: 1.1,
+          raw_target_w: 470,
+          allocated_target_w: 480,
+          effective_target_w: 480,
+          adjustment_delta_w: 10,
+          decision_reason: "WR2 carries more house load while WR1 charges more from its stronger PV input.",
+          write_decision: "send",
+          write_reason: "output_limit_update",
+          deadband_reference_w: 460,
+          command_target_w: 480,
+        },
+      },
+      limits: [
+        {
+          name: "System output limit",
+          active: true,
+          value: "800 W",
+          reason: "demo output is capped at the configured 800 W system limit",
+        },
+      ],
+      notes: [
+        "Demo mode uses a 2 kWp PV example with an 800 W system output limit.",
+      ],
+    },
+  };
+}
+
+function demoHistory(snapshot) {
+  return Array.from({ length: 18 }, (_, index) => ({
+    ...snapshot,
+    timestamp: new Date(Date.now() - (17 - index) * 5 * 60 * 1000).toISOString(),
+    pv_total_w: Math.round(1200 + index * 38),
+    inverter_output_w: Math.min(800, 520 + index * 18),
+    home_load_w: Math.min(800, 540 + index * 16),
+    battery_power_w: Math.round(720 + index * 18),
+    average_soc: 56 + index * 0.22,
+  }));
+}
+
+function ensureDemoBadge() {
+  const cluster = document.querySelector ? document.querySelector(".status-cluster") : null;
+  if (!cluster || document.getElementById("demoModeBadge")) return;
+  const badge = document.createElement("span");
+  badge.id = "demoModeBadge";
+  badge.className = "pill demo-pill";
+  badge.textContent = "Demo mode";
+  cluster.appendChild(badge);
+}
+
+function initDemoMode() {
+  ensureDemoBadge();
+  const snapshot = demoSnapshot();
+  state.history = demoHistory(snapshot);
+  updateSnapshot(snapshot);
+  setConnection("Demo", true);
+  renderCharts();
+  setFlowView("control", false);
+}
+
 async function loadHistory() {
+  if (state.demoMode) {
+    state.history = demoHistory(state.snapshot || demoSnapshot());
+    renderCharts();
+    return;
+  }
   const response = await fetch(`/api/history?range=${encodeURIComponent(state.range)}`);
   const payload = await response.json();
   state.history = payload.items || [];
@@ -715,6 +1716,10 @@ document.querySelectorAll(".range-tabs button").forEach((button) => {
 window.addEventListener("resize", renderCharts);
 
 initFlowViewSwitch();
-startEvents();
-loadHistory();
-setInterval(loadHistory, 30000);
+if (state.demoMode) {
+  initDemoMode();
+} else {
+  startEvents();
+  loadHistory();
+  setInterval(loadHistory, 30000);
+}

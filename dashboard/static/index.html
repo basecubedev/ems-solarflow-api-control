@@ -48,9 +48,10 @@
         <div class="section-heading">
           <h2>Live Flow</h2>
           <div class="flow-heading-controls">
-            <div class="flow-view-tabs" role="tablist" aria-label="Energy flow view">
+            <div class="flow-view-tabs" role="tablist" aria-label="Dashboard view">
               <button type="button" class="active" data-flow-view="aggregated" role="tab" aria-selected="true">Aggregated</button>
               <button type="button" data-flow-view="devices" role="tab" aria-selected="false">Devices</button>
+              <button type="button" data-flow-view="control" role="tab" aria-selected="false">Control</button>
             </div>
           </div>
         </div>
@@ -183,6 +184,7 @@
             </g>
           </svg>
           <div id="deviceFlowView" class="device-flow-view" hidden></div>
+          <div id="controlExplainView" class="control-explain-view" hidden></div>
         </div>
       </section>
 

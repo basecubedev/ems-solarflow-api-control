@@ -9,6 +9,13 @@ http://<ems-host>:8080
 It is read-only. The dashboard exposes only telemetry endpoints and does not
 provide control, configuration, or Zendure write routes.
 
+## Control Explain View
+
+The Control view shows the detailed calculation flow from measurements to final
+handoff, so the control decision can be followed step by step.
+
+![Control Explain demo screenshot](assets/control-explain-demo.jpg)
+
 ## Configuration
 
 The dashboard section in `config.json` controls startup:

@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from dataclasses import asdict, is_dataclass
 
 
 def _rounded(value, digits=1):
@@ -20,6 +21,24 @@ def _device_runtime(controller, device_name, key, default):
         return default
 
     return controller.runtime_state.get_device(device_name, key, default)
+
+
+def _control_explain_payload(controller):
+    explanation = getattr(controller, "last_control_explanation", None)
+
+    if explanation is None:
+        return None
+
+    if hasattr(explanation, "to_dict"):
+        return explanation.to_dict()
+
+    if is_dataclass(explanation):
+        return asdict(explanation)
+
+    if isinstance(explanation, dict):
+        return explanation
+
+    return None
 
 
 def build_dashboard_snapshot(
@@ -190,4 +209,5 @@ def build_dashboard_snapshot(
             "night_min_soc_idle": bool(night_min_soc_idle),
         },
         "rules": rule_states,
+        "control_explain": _control_explain_payload(controller),
     }

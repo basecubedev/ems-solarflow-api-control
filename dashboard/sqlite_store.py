@@ -194,5 +194,5 @@ def empty_snapshot():
             "night_min_soc_idle": False,
         },
         "rules": {},
+        "control_explain": None,
     }
-

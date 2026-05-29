@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from dashboard.sqlite_store import DashboardStore
+from dashboard.sqlite_store import DashboardStore, empty_snapshot
 
 
 def snapshot(timestamp, pv=100):
@@ -38,6 +38,7 @@ def snapshot(timestamp, pv=100):
                 "reason": "active",
             }
         },
+        "control_explain": None,
     }
 
 
@@ -49,6 +50,7 @@ def test_store_records_latest_and_history(tmp_path):
 
     assert store.latest()["pv_total_w"] == 345
     assert store.history("1h")[0]["devices"]["WR1"]["soc"] == 61
+    assert store.latest()["control_explain"] is None
 
 
 def test_store_cleanup_uses_retention(tmp_path):
@@ -63,3 +65,6 @@ def test_store_cleanup_uses_retention(tmp_path):
 
     assert [item["pv_total_w"] for item in history] == [20]
 
+
+def test_empty_snapshot_exposes_null_control_explain():
+    assert empty_snapshot()["control_explain"] is None

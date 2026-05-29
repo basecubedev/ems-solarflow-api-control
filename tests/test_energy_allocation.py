@@ -1,3 +1,4 @@
+import json
 import unittest
 from contextlib import ExitStack
 from types import SimpleNamespace
@@ -84,7 +85,8 @@ class EnergyAllocationTest(unittest.TestCase):
         pv_charge_balance_enabled=False,
         pv_charge_balance_deadband_percent=5.0,
         pv_charge_balance_full_bias_percent=15.0,
-        pv_charge_balance_strength=1.0
+        pv_charge_balance_strength=1.0,
+        explain=False
     ):
         if device_configs is None:
             device_configs = [
@@ -118,7 +120,8 @@ class EnergyAllocationTest(unittest.TestCase):
                 max_power=max_power,
                 device_configs=device_configs,
                 capabilities=capabilities,
-                requested_total=requested_total
+                requested_total=requested_total,
+                explain=explain
             )
 
     def assert_total(self, targets, expected, delta=1):
@@ -208,6 +211,61 @@ class EnergyAllocationTest(unittest.TestCase):
         self.assertGreater(targets[0], targets[1])
         self.assert_pv_only_limits(targets, states)
         self.assert_total(targets, 600)
+
+    def test_control_explanation_contains_two_device_values(self):
+        states = [
+            state(soc=52, solar=600, output_limit=420),
+            state(soc=50, solar=300, output_limit=210)
+        ]
+        configs = [
+            device("WR1", pv_priority_factor=1.2, battery_kwh=2.0),
+            device("WR2", pv_priority_factor=1.0, battery_kwh=1.0)
+        ]
+
+        expected_targets, expected_current, expected_new = self.calculate(
+            states,
+            configs,
+            requested_total=600,
+            pv_charge_balance_enabled=True
+        )
+        targets, current_total, new_total, explanation = self.calculate(
+            states,
+            configs,
+            requested_total=600,
+            pv_charge_balance_enabled=True,
+            explain=True
+        )
+
+        self.assertEqual(expected_targets, targets)
+        self.assertEqual(expected_current, current_total)
+        self.assertEqual(expected_new, new_total)
+        self.assertGreater(targets[0], 0)
+        self.assertGreater(targets[1], 0)
+
+        payload = explanation.to_dict()
+        json.dumps(payload)
+
+        self.assertEqual("pv_first", payload["mode"])
+        self.assertEqual(600, payload["requested_total_w"])
+        self.assertEqual(sum(targets), payload["allocated_target_total_w"])
+        self.assertEqual(sum(targets), payload["effective_target_total_w"])
+        self.assertEqual(600, payload["commanded_total_w"])
+        self.assertIn("WR1", payload["devices"])
+        self.assertIn("WR2", payload["devices"])
+
+        wr1 = payload["devices"]["WR1"]
+        wr2 = payload["devices"]["WR2"]
+        self.assertEqual(600, wr1["pv_input_w"])
+        self.assertEqual(300, wr2["pv_input_w"])
+        self.assertEqual(52, wr1["soc"])
+        self.assertEqual(50, wr2["soc"])
+        self.assertEqual(1.2, wr1["pv_priority_factor"])
+        self.assertIsNotNone(wr1["pv_weight"])
+        self.assertIsNotNone(wr1["charge_balance_multiplier"])
+        self.assertIsNotNone(wr1["soc_gap_percent"])
+        self.assertEqual(targets[0], wr1["allocated_target_w"])
+        self.assertEqual(targets[1], wr2["effective_target_w"])
+        self.assertEqual(420, wr1["output_limit_w"])
 
     def test_pv_first_battery_topup_survives_final_constraints(self):
         states = [

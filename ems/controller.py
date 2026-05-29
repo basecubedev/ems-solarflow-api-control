@@ -12,6 +12,9 @@ from ems.clients import (
 )
 from ems.logging_utils import log_event
 from ems.target_control import (
+    ControlExplanation,
+    ControlLimitExplanation,
+    DeviceControlExplanation,
     apply_min_output_limit,
     calculate_remaining_time_hours,
     calculate_targets,
@@ -65,6 +68,7 @@ class EMSController:
         self.night_min_soc_idle_parked = set()
         self._dashboard_capabilities = []
         self._last_dashboard_publish = 0
+        self.last_control_explanation = None
 
     def output_control_bool(self, key, default=False):
         return cfg.safe_bool(
@@ -708,6 +712,123 @@ class EMSController:
             )
             self.set_output_limit(dev, min_output_limit)
             self.night_min_soc_idle_parked.add(dev.name)
+
+    def build_night_min_soc_idle_explanation(
+        self,
+        load,
+        states,
+        targets,
+        effective_targets,
+        enabled,
+        max_power,
+        min_output_limit,
+        controllable_indexes
+    ):
+        """Build a dashboard explanation for the night/min-SOC idle branch."""
+
+        devices = {}
+        controllable = set(controllable_indexes)
+
+        for i, dev in enumerate(self.devices):
+            state = states[i]
+            online = self.device_online.get(dev.name, True)
+            runtime_enabled = self.runtime_device_bool(dev.name, "enabled", True)
+            target = targets[i] if i < len(targets) else 0
+            effective = (
+                effective_targets[i]
+                if i < len(effective_targets)
+                else target
+            )
+
+            if not enabled:
+                write_decision = "blocked"
+                write_reason = "control_disabled"
+            elif not online:
+                write_decision = "blocked"
+                write_reason = "offline"
+            elif not runtime_enabled:
+                write_decision = "blocked"
+                write_reason = "device_disabled"
+            elif i not in controllable:
+                write_decision = "blocked"
+                write_reason = "not_controllable"
+            elif dev.name in self.night_min_soc_idle_parked:
+                write_decision = "skip"
+                write_reason = "already_parked"
+            elif state.output_limit == min_output_limit:
+                write_decision = "skip"
+                write_reason = "already_at_min_output_limit"
+            else:
+                write_decision = "send"
+                write_reason = "park_at_min_output_limit"
+
+            limiting_reason = (
+                "below_min_soc"
+                if state.soc <= state.min_soc
+                else "soc_protection"
+            )
+
+            devices[dev.name] = DeviceControlExplanation(
+                device=dev.name,
+                online=online,
+                pv_input_w=state.solar,
+                output_w=state.output,
+                soc=state.soc,
+                min_soc=state.min_soc,
+                max_soc=state.max_soc,
+                max_output_w=dev.max_power,
+                pv_priority_factor=dev.pv_priority_factor,
+                capacity_weight=dev.battery_kwh,
+                allocated_target_w=target,
+                effective_target_w=effective,
+                output_limit_w=state.output_limit,
+                limiting_reason=limiting_reason,
+                decision_reason="night_min_soc_idle",
+                write_decision=write_decision,
+                write_reason=write_reason,
+                command_target_w=effective,
+                deadband_reference_w=state.output_limit,
+                deadband_reference_source="output_limit",
+                deadband_w=cfg.DEADBAND,
+            )
+
+        allocated_total = sum(targets)
+        effective_total = sum(effective_targets)
+        current_total = sum(state.output for state in states)
+
+        return ControlExplanation(
+            mode="night_min_soc_idle",
+            requested_total_w=allocated_total,
+            effective_target_total_w=effective_total,
+            allocated_target_total_w=allocated_total,
+            commanded_total_w=effective_total,
+            devices=devices,
+            limits=[
+                ControlLimitExplanation(
+                    "night_min_soc_idle",
+                    True,
+                    effective_total,
+                    "battery/SOC protection idle mode is active"
+                ),
+                ControlLimitExplanation(
+                    "min_output_limit",
+                    min_output_limit > 0,
+                    min_output_limit,
+                    "devices are parked at the configured minimum output floor"
+                ),
+            ],
+            notes=[
+                "Battery/SOC protection idle mode is active; normal output allocation is intentionally bypassed."
+            ],
+            current_total_w=current_total,
+            raw_requested_total_w=allocated_total,
+            max_total_power_w=max_power,
+            load_w=load,
+            filtered_load_w=self.filtered_load_w,
+            min_output_limit_w=min_output_limit,
+            undistributed_target_w=0,
+        )
+
     def effective_control_targets(self, targets, enabled, min_output_limit):
         """Return the per-device output command intent after control gates."""
 
@@ -2157,6 +2278,7 @@ class EMSController:
         """Execute one EMS cycle."""
 
         start = time.time()
+        self.last_control_explanation = None
 
         if self.runtime_state:
             self.runtime_state.load_if_changed()
@@ -2435,6 +2557,19 @@ class EMSController:
                     new
                 )
 
+            self.last_control_explanation = (
+                self.build_night_min_soc_idle_explanation(
+                    load,
+                    states,
+                    targets,
+                    effective_targets,
+                    enabled,
+                    max_power,
+                    min_output_limit,
+                    controllable_indexes
+                )
+            )
+
             self.publish_to_dashboard(
                 load,
                 states,
@@ -2481,13 +2616,15 @@ class EMSController:
             active_device_count=len(active_indexes)
         )
 
-        targets, current, new = calculate_targets(
+        targets, current, new, control_explanation = calculate_targets(
             load,
             states,
             max_power,
             device_configs=self.devices,
             capabilities=capabilities,
-            requested_total=stabilized_total
+            requested_total=stabilized_total,
+            explain=True,
+            online_devices=self.device_online
         )
 
         targets = self.apply_device_ramp(
@@ -2499,6 +2636,56 @@ class EMSController:
             enabled,
             min_output_limit
         )
+        control_explanation.allocated_target_total_w = sum(targets)
+        control_explanation.effective_target_total_w = sum(effective_targets)
+        control_explanation.commanded_total_w = self.commanded_total_w
+        control_explanation.filtered_load_w = self.filtered_load_w
+        control_explanation.min_output_limit_w = min_output_limit
+        for i, dev in enumerate(self.devices):
+            device_explanation = control_explanation.devices.get(dev.name)
+            if not device_explanation:
+                continue
+            if i < len(targets):
+                device_explanation.allocated_target_w = targets[i]
+            if i < len(effective_targets):
+                device_explanation.effective_target_w = effective_targets[i]
+                device_explanation.command_target_w = effective_targets[i]
+                if device_explanation.raw_target_w is not None:
+                    device_explanation.adjustment_delta_w = (
+                        effective_targets[i] - device_explanation.raw_target_w
+                    )
+
+                if not enabled:
+                    device_explanation.write_decision = "blocked"
+                    device_explanation.write_reason = "control_disabled"
+                elif not self.device_online.get(dev.name, True):
+                    device_explanation.write_decision = "blocked"
+                    device_explanation.write_reason = "offline"
+                elif not self.runtime_device_bool(dev.name, "enabled", True):
+                    device_explanation.write_decision = "blocked"
+                    device_explanation.write_reason = "device_disabled"
+                else:
+                    state = states[i]
+                    reference = (
+                        state.output_limit
+                        if state.output_limit > 0
+                        else state.output
+                    )
+                    reference_source = (
+                        "output_limit"
+                        if state.output_limit > 0
+                        else "output"
+                    )
+                    device_explanation.deadband_reference_w = reference
+                    device_explanation.deadband_reference_source = reference_source
+                    device_explanation.deadband_w = cfg.DEADBAND
+                    if abs(effective_targets[i] - reference) < cfg.DEADBAND:
+                        device_explanation.write_decision = "skip"
+                        device_explanation.write_reason = "deadband"
+                    else:
+                        device_explanation.write_decision = "send"
+                        device_explanation.write_reason = "output_limit_update"
+        self.last_control_explanation = control_explanation
 
         logging.info(
             f"Load={load}W "
