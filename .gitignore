@@ -19,6 +19,12 @@ runtime-state.json.*.tmp
 *.influx.csv
 *.influx.jsonl
 
+# Dashboard local SQLite history
+/data/
+/data/**
+*.sqlite-wal
+*.sqlite-shm
+
 # InfluxDB local development
 /develop/influxdb/.env
 /develop/influxdb/data/
@@ -29,6 +35,11 @@ runtime-state.json.*.tmp
 /develop/influxdb/tmp/
 /develop/influxdb/*.sqlite
 /develop/influxdb/*.bolt
+
+# Grafana local development
+/develop/grafana/.env
+/develop/grafana/data/
+/develop/grafana/data/**
 
 # Python cache artifacts
 __pycache__/

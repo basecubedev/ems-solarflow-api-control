@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: Zendure Dev Dashboards
+    orgId: 1
+    folder: Zendure Dev
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards

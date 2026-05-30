@@ -36,6 +36,15 @@ WINTER_DEFAULTS = {
     "ac_charge_power": 200
 }
 
+DASHBOARD_DEFAULTS = {
+    "enabled": True,
+    "host": "0.0.0.0",
+    "port": 8080,
+    "database_path": "data/ems_dashboard.sqlite",
+    "history_hours": 48,
+    "write_interval_seconds": 5
+}
+
 
 def default_safe_config():
     """Return a minimal safe config for simulation and replay."""
@@ -73,6 +82,7 @@ def default_safe_config():
             "battery_kwh_weighting": True
         },
         "winter": WINTER_DEFAULTS,
+        "dashboard": DASHBOARD_DEFAULTS,
         "devices": [],
         "shelly": {
             "ip": ""
@@ -114,6 +124,7 @@ PV_CHARGE_BALANCE_STRENGTH = 1.0
 BATTERY_KWH_WEIGHTING = True
 SOC_RECONCILE_INTERVAL = 10
 WINTER_CONFIG = WINTER_DEFAULTS.copy()
+DASHBOARD_CONFIG = DASHBOARD_DEFAULTS.copy()
 OFFGRID_SOCKET_MODES = {
     "standard": 0,
     "eco": 1,
@@ -150,7 +161,8 @@ def initialize(args, base_dir):
     global PV_CHARGE_BALANCE_ENABLED, PV_CHARGE_BALANCE_DEADBAND_PERCENT
     global PV_CHARGE_BALANCE_FULL_BIAS_PERCENT, PV_CHARGE_BALANCE_STRENGTH
     global BATTERY_KWH_WEIGHTING
-    global SOC_RECONCILE_INTERVAL, WINTER_CONFIG, ZENDURE_CONFIG, SHELLY_IP
+    global SOC_RECONCILE_INTERVAL, WINTER_CONFIG, DASHBOARD_CONFIG
+    global ZENDURE_CONFIG, SHELLY_IP
 
     ARGS = args
     BASE_DIR = base_dir
@@ -253,6 +265,10 @@ def initialize(args, base_dir):
         **WINTER_DEFAULTS,
         **CONFIG.get("winter", {})
     }
+    DASHBOARD_CONFIG = {
+        **DASHBOARD_DEFAULTS,
+        **CONFIG.get("dashboard", {})
+    }
     ZENDURE_CONFIG = CONFIG["devices"]
     SHELLY_IP = CONFIG["shelly"]["ip"]
 
@@ -281,6 +297,22 @@ def runtime_state_path():
         return RUNTIME_STATE_PATH
 
     return os.path.join(BASE_DIR, RUNTIME_STATE_PATH)
+
+
+def dashboard_database_path():
+    """Return absolute path to the dashboard SQLite database."""
+
+    database_path = str(
+        DASHBOARD_CONFIG.get(
+            "database_path",
+            DASHBOARD_DEFAULTS["database_path"]
+        )
+    )
+
+    if os.path.isabs(database_path):
+        return database_path
+
+    return os.path.join(BASE_DIR, database_path)
 
 
 def safe_int(value, default=0, minimum=None):

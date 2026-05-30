@@ -1,5 +1,16 @@
 # ems-solarflow-api-control
 
+<table>
+  <tr>
+    <th>Aggregated Flow</th>
+    <th>Device Flow</th>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/assets/preview-aggregate.jpg" alt="EMS SolarFlow dashboard aggregated energy flow preview" width="100%"></td>
+    <td width="50%"><img src="docs/assets/preview-device.jpg" alt="EMS SolarFlow dashboard per-device energy flow preview" width="100%"></td>
+  </tr>
+</table>
+
 Local-first EMS (Energy Management System) control for Zendure SolarFlow systems.
 
 No YAML automation stack. No cloud dependency for control decisions. Just
@@ -67,6 +78,7 @@ Core goals:
 - PV-first allocation with battery top-up
 - stable fast output control for short loop intervals
 - runtime-state file for mutable operator state
+- read-only standalone live dashboard with local SQLite history
 - conservative SOC/mode reconciliation
 - winter minSoc ramp as state reconciliation
 - structured `event=...` logs for validation
@@ -246,6 +258,20 @@ More:
 - [docs/runtime-state.md](docs/runtime-state.md)
 - [docs/cli.md](docs/cli.md)
 
+## Read-Only Dashboard
+
+When `dashboard.enabled=true`, the EMS starts a local dashboard server:
+
+```text
+http://<ems-host>:8080
+```
+
+The dashboard shows live flow, device state, rule state, and short-term history
+from local SQLite storage. It is read-only and does not expose EMS control
+endpoints.
+
+More: [docs/dashboard.md](docs/dashboard.md).
+
 ---
 
 ## Home Assistant
@@ -366,4 +392,7 @@ Safety checks: [docs/safety.md](docs/safety.md).
 
 ## License
 
-See [LICENSE](LICENSE).
+This project is licensed under the Apache License 2.0. Third-party dependencies
+and dashboard assets remain under their respective upstream licenses.
+
+See [LICENSE](LICENSE) and [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).

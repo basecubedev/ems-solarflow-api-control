@@ -1,0 +1,17 @@
+apiVersion: 1
+
+datasources:
+  - name: Zendure Dev InfluxDB2
+    uid: zendure-dev-influxdb2
+    type: influxdb
+    access: proxy
+    url: ${GRAFANA_INFLUXDB_URL}
+    isDefault: true
+    editable: true
+    jsonData:
+      version: Flux
+      organization: ${GRAFANA_INFLUXDB_ORG}
+      defaultBucket: ${GRAFANA_INFLUXDB_BUCKET}
+      tlsSkipVerify: true
+    secureJsonData:
+      token: ${GRAFANA_INFLUXDB_TOKEN}
