@@ -1,0 +1,10 @@
+services:
+  ems-solarflow:
+    image: ghcr.io/basecubedev/ems-solarflow-api-control:latest
+    container_name: ems-solarflow
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config.json:/app/config/config.json:ro
+      - ./data:/app/data
