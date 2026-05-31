@@ -188,6 +188,7 @@ function renderSnapshot(snapshot) {
 
   renderRules(snapshot.rules || {});
   renderDevices(snapshot.devices || {});
+  renderEnergyStats(snapshot.energy_stats);
   renderDeviceFlow(snapshot);
   renderControlExplain(snapshot);
   setFlowView(state.flowView, false);
@@ -296,6 +297,279 @@ function renderDevices(devices) {
   if (!entries.length) {
     grid.innerHTML = `<article class="device-card"><span class="device-label">Waiting for EMS telemetry</span></article>`;
   }
+}
+
+function renderEnergyStats(stats) {
+  const container = $("energyStats");
+  if (!container) return;
+
+  if (!stats) {
+    container.innerHTML = `<div class="energy-empty control-empty compact">Energy statistics not available yet.</div>`;
+    return;
+  }
+
+  if (stats.enabled === false) {
+    container.innerHTML = `<div class="energy-empty control-empty compact">Energy statistics are disabled.</div>`;
+    return;
+  }
+
+  const currency = stats.currency || "EUR";
+  const monthly = normalizeMonthlyEnergy(stats.monthly_current_year);
+  const yearly = normalizeYearlyEnergy(stats.yearly);
+  const lifetime = stats.lifetime || {};
+  const hasEnergy = [
+    stats.today,
+    stats.last_7_days,
+    stats.last_4_weeks,
+    stats.last_12_months,
+    stats.best_day,
+    lifetime,
+    ...monthly,
+    ...yearly,
+  ].some((item) => energyKwh(item) > 0);
+
+  if (!hasEnergy) {
+    container.innerHTML = `<div class="energy-empty control-empty compact">Waiting for the first measured inverter output sample.</div>`;
+    return;
+  }
+
+  const periods = [
+    energyPeriodStage("Today", stats.today, currency, {
+      kind: "today",
+      subtitle: "Current day output",
+    }),
+    energyPeriodStage("Last 7 Days", stats.last_7_days, currency, {
+      kind: "week",
+      subtitle: "Rolling week total",
+    }),
+    energyPeriodStage("Last 4 Weeks", stats.last_4_weeks, currency, {
+      kind: "month",
+      subtitle: "Rolling 28-day output",
+    }),
+    energyPeriodStage("Last 12 Months", stats.last_12_months, currency, {
+      kind: "year",
+      subtitle: "Rolling annual total",
+    }),
+    energyPeriodStage("Best Day", stats.best_day, currency, {
+      kind: "best",
+      subtitle: "Highest measured day",
+      detailLabel: "Date",
+      detailValue: stats.best_day?.date ? formatEnergyDate(stats.best_day.date) : null,
+    }),
+  ].join("");
+
+  container.innerHTML = `
+    <div class="energy-report-board">
+      <section class="energy-stage-row energy-kpi-row" aria-label="Energy period overview">
+        <div class="energy-period-pipeline energy-kpi-grid">${periods}</div>
+      </section>
+      ${energyContextRail(stats, monthly, yearly, lifetime, currency)}
+      ${energyReportSection("Monthly Summary", "Current calendar year delivered output", `
+      <div class="energy-month-grid">
+        ${monthly.map((month) => energyMonthCard(month, currency)).join("")}
+      </div>
+      `)}
+      ${energyReportSection("Yearly Summary", "Calendar-year totals from daily aggregates", `
+      <div class="energy-year-grid">
+        ${yearly.map((year, index) => energyYearCard(year, currency, { latest: index === yearly.length - 1 })).join("")}
+      </div>
+      `)}
+      <section class="energy-report-section energy-lifetime-section">
+        ${energyLifetimeCard(lifetime, currency)}
+      </section>
+    </div>
+  `;
+}
+
+function energyKpiCard(label, values, currency, options = {}) {
+  return energyPeriodStage(label, values, currency, options);
+}
+
+function energyPeriodStage(label, values, currency, options = {}) {
+  const detail = options.detailValue
+    ? energyFact(options.detailLabel || "Detail", options.detailValue, "history", "neutral")
+    : "";
+
+  return `
+    <article class="energy-period-stage energy-kpi-card energy-period-${escapeHtml(options.kind || "period")}">
+      <div class="energy-stage-head">
+        <div class="energy-stage-title-block">
+          <h3 class="energy-stage-title">${escapeHtml(label)}</h3>
+          ${options.subtitle ? `<span class="energy-stage-subtitle">${escapeHtml(options.subtitle)}</span>` : ""}
+        </div>
+      </div>
+      <div class="energy-stage-values">
+        ${energyFact("Energy", formatEnergyKwh(values), "inverter", "output")}
+        ${energyFact("Savings", formatSavings(values, currency), "charge", "savings")}
+        ${detail}
+      </div>
+    </article>
+  `;
+}
+
+function energyMonthCard(month, currency) {
+  const isZero = energyKwh(month) <= 0;
+  const isCurrent = Number(month.month) === new Date().getMonth() + 1;
+
+  return energySummaryCard({
+    title: month.label || monthName(month.month),
+    subtitle: isCurrent ? "Current month" : "Month total",
+    values: month,
+    currency,
+    className: `energy-month-card ${isZero ? "energy-zero" : ""}`,
+    current: isCurrent,
+  });
+}
+
+function energyYearCard(year, currency, options = {}) {
+  const currentYear = new Date().getFullYear();
+  const isCurrent = Number(year.year) === currentYear;
+  const isLatest = Boolean(options.latest);
+
+  return energySummaryCard({
+    title: year.year || "--",
+    subtitle: isCurrent ? "Current year" : isLatest ? "Latest year" : "Calendar year",
+    values: year,
+    currency,
+    className: "energy-year-card",
+    current: isCurrent || isLatest,
+  });
+}
+
+function energyLifetimeCard(values, currency) {
+  return energySummaryCard({
+    title: "Result / Lifetime",
+    subtitle: "All stored daily totals",
+    values,
+    currency,
+    className: "energy-lifetime-card",
+  });
+}
+
+function energySummaryCard({ title, subtitle, values, currency, className = "", current = false }) {
+  return `
+    <article class="energy-summary-card ${escapeHtml(className)} ${current ? "energy-current" : ""}">
+      <div class="energy-summary-head">
+        <h4>${escapeHtml(title)}</h4>
+        ${subtitle ? `<span>${escapeHtml(subtitle)}</span>` : ""}
+      </div>
+      <div class="energy-summary-values">
+        ${energyFact("Energy", formatEnergyKwh(values), "inverter", "output")}
+        ${energyFact("Savings", formatSavings(values, currency), "charge", "savings")}
+      </div>
+    </article>
+  `;
+}
+
+function energyFact(label, value, iconName = "rule", tone = "") {
+  return `
+    <span class="energy-fact ${tone ? `role-${escapeHtml(tone)}` : ""}">
+      <span class="value-icon" aria-hidden="true">${icon(iconName)}</span>
+      <span class="energy-label">${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+    </span>
+  `;
+}
+
+function energyContextRail(stats, monthly, yearly, lifetime, currency) {
+  return `
+    <aside class="energy-context-rail" aria-label="Energy statistics context">
+      <div class="energy-context-title">Context</div>
+      <div class="energy-context-items">
+        ${energyContextItem("Currency", currency || "EUR", "rule")}
+        ${energyContextItem("Months", String(monthly.length), "history")}
+        ${energyContextItem("With data", String(monthly.filter((month) => energyKwh(month) > 0).length), "gauge")}
+        ${energyContextItem("Years", energyYearRange(yearly), "history")}
+        ${stats.best_day?.date ? energyContextItem("Best Day", formatEnergyDate(stats.best_day.date), "charge") : ""}
+        ${energyContextItem("Lifetime", formatEnergyKwh(lifetime), "inverter")}
+      </div>
+    </aside>
+  `;
+}
+
+function energyContextItem(label, value, iconName = "rule") {
+  if (value === undefined || value === null || value === "") return "";
+  return `
+    <span class="energy-context-item">
+      <span class="value-icon" aria-hidden="true">${icon(iconName)}</span>
+      <span class="energy-label">${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+    </span>
+  `;
+}
+
+function energyReportSection(title, subtitle, content) {
+  return `
+    <section class="energy-report-section energy-subsection">
+      <div class="energy-report-section-head">
+        <h3 class="energy-report-section-title energy-section-title">${escapeHtml(title)}</h3>
+        <span class="energy-report-section-subtitle">${escapeHtml(subtitle)}</span>
+      </div>
+      ${content}
+    </section>
+  `;
+}
+
+function energyYearRange(yearly) {
+  if (!yearly.length) return "None";
+  if (yearly.length === 1) return String(yearly[0].year);
+  return `${yearly[0].year}-${yearly[yearly.length - 1].year}`;
+}
+
+function normalizeMonthlyEnergy(months) {
+  const byMonth = new Map((Array.isArray(months) ? months : []).map((item) => [Number(item.month), item]));
+  return Array.from({ length: 12 }, (_, index) => {
+    const month = index + 1;
+    return {
+      month,
+      label: monthName(month),
+      ...(byMonth.get(month) || {}),
+    };
+  });
+}
+
+function normalizeYearlyEnergy(years) {
+  return (Array.isArray(years) ? years : [])
+    .filter((item) => item && item.year !== undefined && item.year !== null)
+    .sort((a, b) => Number(a.year) - Number(b.year))
+    .slice(-8);
+}
+
+function monthName(month) {
+  const labels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return labels[Number(month) - 1] || "--";
+}
+
+function energyKwh(values) {
+  const kwh = Number(values?.inverter_output_kwh);
+  if (Number.isFinite(kwh)) return kwh;
+  const wh = Number(values?.inverter_output_wh);
+  if (Number.isFinite(wh)) return wh / 1000;
+  return 0;
+}
+
+function formatEnergyKwh(values) {
+  const value = energyKwh(values);
+  const digits = Math.abs(value) >= 1000 ? 0 : 1;
+  return `${value.toLocaleString("en-US", {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  })} kWh`;
+}
+
+function formatSavings(values, currency) {
+  const value = Number(values?.savings_value);
+  if (!Number.isFinite(value)) return "--";
+  const code = String(currency || "EUR").toUpperCase();
+  if (code === "EUR") return `€${value.toFixed(2)}`;
+  return `${value.toFixed(2)} ${code}`;
+}
+
+function formatEnergyDate(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toISOString().slice(0, 10);
 }
 
 function renderDeviceFlow(snapshotOrDevices) {
@@ -1322,7 +1596,7 @@ function deviceSoc(device) {
 }
 
 function setFlowView(view, persist = true) {
-  const nextView = ["aggregated", "devices", "control"].includes(view)
+  const nextView = ["aggregated", "devices", "control", "energy"].includes(view)
     ? view
     : "aggregated";
   state.flowView = nextView;
@@ -1330,15 +1604,22 @@ function setFlowView(view, persist = true) {
   const svg = $("flowSvg");
   const deviceView = $("deviceFlowView");
   const controlView = $("controlExplainView");
+  const energyView = $("energyStatsView");
   const wrap = document.querySelector ? document.querySelector(".flow-wrap") : null;
+  const shell = document.querySelector ? document.querySelector(".shell") : null;
 
   if (svg) svg.hidden = nextView !== "aggregated";
   if (deviceView) deviceView.hidden = nextView !== "devices";
   if (controlView) controlView.hidden = nextView !== "control";
+  if (energyView) energyView.hidden = nextView !== "energy";
   if (wrap?.classList) {
     wrap.classList.toggle("view-devices", nextView === "devices");
     wrap.classList.toggle("view-aggregated", nextView === "aggregated");
     wrap.classList.toggle("view-control", nextView === "control");
+    wrap.classList.toggle("view-energy", nextView === "energy");
+  }
+  if (shell?.classList) {
+    shell.classList.toggle("view-energy", nextView === "energy");
   }
 
   document.querySelectorAll("[data-flow-view]").forEach((button) => {
@@ -1450,6 +1731,55 @@ function demoSnapshot() {
       ems_enabled: { active: true, reason: "demo mode static control preview" },
       pv_priority_balancing: { active: true, reason: "WR1 keeps more PV available for charging" },
       battery_balancing: { active: true, reason: "two devices share an 800 W system limit" },
+    },
+    energy_stats: {
+      enabled: true,
+      currency: "EUR",
+      price_per_kwh: 0.35,
+      today: {
+        inverter_output_kwh: 3.2,
+        savings_value: 1.12,
+      },
+      last_7_days: {
+        inverter_output_kwh: 18.4,
+        savings_value: 6.44,
+      },
+      last_4_weeks: {
+        inverter_output_kwh: 72.1,
+        savings_value: 25.24,
+      },
+      last_12_months: {
+        inverter_output_kwh: 520.0,
+        savings_value: 182.0,
+      },
+      best_day: {
+        date: "2026-06-14",
+        inverter_output_kwh: 8.4,
+        savings_value: 2.94,
+      },
+      monthly_current_year: [
+        { month: 1, label: "Jan", inverter_output_kwh: 22.4, savings_value: 7.84 },
+        { month: 2, label: "Feb", inverter_output_kwh: 31.2, savings_value: 10.92 },
+        { month: 3, label: "Mar", inverter_output_kwh: 43.8, savings_value: 15.33 },
+        { month: 4, label: "Apr", inverter_output_kwh: 58.5, savings_value: 20.48 },
+        { month: 5, label: "May", inverter_output_kwh: 76.6, savings_value: 26.81 },
+        { month: 6, label: "Jun", inverter_output_kwh: 84.2, savings_value: 29.47 },
+        { month: 7, label: "Jul", inverter_output_kwh: 91.8, savings_value: 32.13 },
+        { month: 8, label: "Aug", inverter_output_kwh: 88.4, savings_value: 30.94 },
+        { month: 9, label: "Sep", inverter_output_kwh: 66.9, savings_value: 23.42 },
+        { month: 10, label: "Oct", inverter_output_kwh: 44.5, savings_value: 15.58 },
+        { month: 11, label: "Nov", inverter_output_kwh: 18.6, savings_value: 6.51 },
+        { month: 12, label: "Dec", inverter_output_kwh: 11.2, savings_value: 3.92 },
+      ],
+      yearly: [
+        { year: 2025, inverter_output_kwh: 320.0, savings_value: 112.0 },
+        { year: 2026, inverter_output_kwh: 840.0, savings_value: 294.0 },
+        { year: 2027, inverter_output_kwh: 910.0, savings_value: 318.5 },
+      ],
+      lifetime: {
+        inverter_output_kwh: 2070.0,
+        savings_value: 724.5,
+      },
     },
     devices: {
       WR1: {
@@ -1587,7 +1917,7 @@ function initDemoMode() {
   updateSnapshot(snapshot);
   setConnection("Demo", true);
   renderCharts();
-  setFlowView("control", false);
+  setFlowView("energy", false);
 }
 
 async function loadHistory() {

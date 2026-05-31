@@ -45,6 +45,13 @@ DASHBOARD_DEFAULTS = {
     "write_interval_seconds": 5
 }
 
+ENERGY_SAVINGS_DEFAULTS = {
+    "enabled": True,
+    "price_per_kwh": 0.0,
+    "currency": "EUR",
+    "max_sample_delta_seconds": 60
+}
+
 
 def default_safe_config():
     """Return a minimal safe config for simulation and replay."""
@@ -83,6 +90,7 @@ def default_safe_config():
         },
         "winter": WINTER_DEFAULTS,
         "dashboard": DASHBOARD_DEFAULTS,
+        "energy_savings": ENERGY_SAVINGS_DEFAULTS,
         "devices": [],
         "shelly": {
             "ip": ""
@@ -125,6 +133,7 @@ BATTERY_KWH_WEIGHTING = True
 SOC_RECONCILE_INTERVAL = 10
 WINTER_CONFIG = WINTER_DEFAULTS.copy()
 DASHBOARD_CONFIG = DASHBOARD_DEFAULTS.copy()
+ENERGY_SAVINGS_CONFIG = ENERGY_SAVINGS_DEFAULTS.copy()
 OFFGRID_SOCKET_MODES = {
     "standard": 0,
     "eco": 1,
@@ -162,6 +171,7 @@ def initialize(args, base_dir):
     global PV_CHARGE_BALANCE_FULL_BIAS_PERCENT, PV_CHARGE_BALANCE_STRENGTH
     global BATTERY_KWH_WEIGHTING
     global SOC_RECONCILE_INTERVAL, WINTER_CONFIG, DASHBOARD_CONFIG
+    global ENERGY_SAVINGS_CONFIG
     global ZENDURE_CONFIG, SHELLY_IP
 
     ARGS = args
@@ -268,6 +278,10 @@ def initialize(args, base_dir):
     DASHBOARD_CONFIG = {
         **DASHBOARD_DEFAULTS,
         **CONFIG.get("dashboard", {})
+    }
+    ENERGY_SAVINGS_CONFIG = {
+        **ENERGY_SAVINGS_DEFAULTS,
+        **CONFIG.get("energy_savings", {})
     }
     ZENDURE_CONFIG = CONFIG["devices"]
     SHELLY_IP = CONFIG["shelly"]["ip"]

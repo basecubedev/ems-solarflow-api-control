@@ -206,6 +206,20 @@ dashboard API supports `1h`, `6h`, `12h`, and `24h` ranges.
 `dashboard.write_interval_seconds` limits how often the EMS loop persists
 dashboard telemetry. The default is `5`.
 
+## Energy Savings
+
+`energy_savings.enabled` controls lightweight daily SQLite energy statistics.
+The statistics use measured inverter AC output from the device telemetry, not
+control targets or requested output limits.
+
+`energy_savings.price_per_kwh` and `energy_savings.currency` are stored on each
+daily row when that row is created. Historical savings are summed from the
+stored daily values, so old days are not recalculated if the configured price
+changes later. A price of `0.0` still tracks kWh and reports zero savings.
+
+`energy_savings.max_sample_delta_seconds` protects the integration from large
+false jumps after restarts or downtime. Intervals above this value are skipped.
+
 ## Output Control
 
 `system.output_control` is advanced tuning for fast control loops. Most users

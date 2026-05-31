@@ -5,6 +5,13 @@ import threading
 from datetime import datetime, timedelta, timezone
 
 
+DEFAULT_ENERGY_SAVINGS = {
+    "enabled": True,
+    "price_per_kwh": 0.0,
+    "currency": "EUR",
+    "max_sample_delta_seconds": 60,
+}
+
 SUPPORTED_RANGES = {
     "1h": timedelta(hours=1),
     "6h": timedelta(hours=6),
@@ -12,17 +19,44 @@ SUPPORTED_RANGES = {
     "24h": timedelta(hours=24),
 }
 
+MONTH_LABELS = (
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+)
+
 
 class DashboardStore:
     """Small SQLite store for live dashboard snapshots."""
 
-    def __init__(self, path, retention_hours=48):
-        self.path = path
+    def __init__(self, path, retention_hours=48, energy_savings=None):
+        self.path = os.fspath(path)
         self.retention_hours = max(1, int(retention_hours or 48))
+        self.energy_savings = {
+            **DEFAULT_ENERGY_SAVINGS,
+            **(energy_savings or {}),
+        }
+        self.energy_enabled = _as_bool(self.energy_savings.get("enabled"), True)
+        self.energy_price_per_kwh = _as_float(
+            self.energy_savings.get("price_per_kwh"),
+            DEFAULT_ENERGY_SAVINGS["price_per_kwh"],
+            minimum=0,
+        )
+        self.energy_currency = str(
+            self.energy_savings.get(
+                "currency",
+                DEFAULT_ENERGY_SAVINGS["currency"],
+            )
+            or DEFAULT_ENERGY_SAVINGS["currency"]
+        )
+        self.max_energy_sample_delta_seconds = _as_float(
+            self.energy_savings.get("max_sample_delta_seconds"),
+            DEFAULT_ENERGY_SAVINGS["max_sample_delta_seconds"],
+            minimum=1,
+        )
         self._lock = threading.RLock()
         self._latest = None
 
-        parent = os.path.dirname(path)
+        parent = os.path.dirname(self.path)
         if parent:
             os.makedirs(parent, exist_ok=True)
 
@@ -69,10 +103,28 @@ class DashboardStore:
                     updated_at TEXT NOT NULL
                 )
             """)
+            con.execute("""
+                CREATE TABLE IF NOT EXISTS daily_energy_stats (
+                    date TEXT PRIMARY KEY,
+                    inverter_output_wh REAL NOT NULL DEFAULT 0,
+                    savings_value REAL NOT NULL DEFAULT 0,
+                    price_per_kwh REAL NOT NULL DEFAULT 0,
+                    currency TEXT NOT NULL DEFAULT 'EUR',
+                    peak_output_w REAL NOT NULL DEFAULT 0,
+                    sample_count INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            con.execute("""
+                CREATE TABLE IF NOT EXISTS energy_integration_state (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
 
     def record(self, snapshot):
         timestamp = snapshot["timestamp"]
-        payload = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
         rows = []
 
         for device_name, device in snapshot.get("devices", {}).items():
@@ -87,6 +139,15 @@ class DashboardStore:
                 rows.append((timestamp, device_name, field, float(device.get(field, 0) or 0)))
 
         with self._lock, self._connect() as con:
+            if self.energy_enabled:
+                self._record_energy_sample(con, snapshot)
+
+            snapshot = {
+                **snapshot,
+                "energy_stats": self._energy_summary(con, timestamp),
+            }
+            payload = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
+
             con.execute(
                 "INSERT OR REPLACE INTO snapshots(timestamp, payload) VALUES(?, ?)",
                 (timestamp, payload),
@@ -143,7 +204,9 @@ class DashboardStore:
             ).fetchone()
 
         if not row:
-            return empty_snapshot()
+            snapshot = empty_snapshot()
+            snapshot["energy_stats"] = self.energy_summary()
+            return snapshot
 
         self._latest = json.loads(row[0])
         return self._latest
@@ -163,6 +226,258 @@ class DashboardStore:
             ).fetchall()
 
         return [json.loads(row[0]) for row in rows]
+
+    def energy_summary(self, now=None):
+        with self._lock, self._connect() as con:
+            return self._energy_summary(con, now)
+
+    def _record_energy_sample(self, con, snapshot):
+        sample_time = _parse_timestamp(snapshot.get("timestamp"))
+        if sample_time is None:
+            return
+
+        inverter_output_w = max(
+            0.0,
+            _as_float(snapshot.get("inverter_output_w"), 0.0),
+        )
+        delta_wh = 0.0
+
+        row = con.execute(
+            """
+            SELECT value FROM energy_integration_state
+            WHERE key = 'last_sample_timestamp'
+            """
+        ).fetchone()
+
+        if row:
+            last_sample_time = _parse_timestamp(row[0])
+            if last_sample_time is not None:
+                delta_seconds = (sample_time - last_sample_time).total_seconds()
+                if 0 < delta_seconds <= self.max_energy_sample_delta_seconds:
+                    delta_wh = inverter_output_w * delta_seconds / 3600.0
+                # Larger, zero, or negative intervals are skipped and the
+                # baseline timestamp is advanced to avoid restart/downtime jumps.
+
+        date_key = sample_time.astimezone().date().isoformat()
+        updated_at = sample_time.astimezone(timezone.utc).isoformat()
+        self._upsert_daily_energy(
+            con,
+            date_key,
+            inverter_output_w,
+            delta_wh,
+            updated_at,
+        )
+        con.execute(
+            """
+            INSERT INTO energy_integration_state(key, value, updated_at)
+            VALUES('last_sample_timestamp', ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at
+            """,
+            (sample_time.astimezone(timezone.utc).isoformat(), updated_at),
+        )
+
+    def _upsert_daily_energy(self, con, date_key, output_w, delta_wh, updated_at):
+        row = con.execute(
+            """
+            SELECT price_per_kwh, currency
+            FROM daily_energy_stats
+            WHERE date = ?
+            """,
+            (date_key,),
+        ).fetchone()
+
+        if row:
+            price_per_kwh = _as_float(row[0], 0.0, minimum=0)
+            currency = row[1] or self.energy_currency
+        else:
+            price_per_kwh = self.energy_price_per_kwh
+            currency = self.energy_currency
+
+        savings_value = (delta_wh / 1000.0) * price_per_kwh
+        con.execute(
+            """
+            INSERT INTO daily_energy_stats(
+                date,
+                inverter_output_wh,
+                savings_value,
+                price_per_kwh,
+                currency,
+                peak_output_w,
+                sample_count,
+                updated_at
+            )
+            VALUES(?, ?, ?, ?, ?, ?, 1, ?)
+            ON CONFLICT(date) DO UPDATE SET
+                inverter_output_wh = daily_energy_stats.inverter_output_wh
+                    + excluded.inverter_output_wh,
+                savings_value = daily_energy_stats.savings_value
+                    + excluded.savings_value,
+                peak_output_w = MAX(
+                    daily_energy_stats.peak_output_w,
+                    excluded.peak_output_w
+                ),
+                sample_count = daily_energy_stats.sample_count + 1,
+                updated_at = excluded.updated_at
+            """,
+            (
+                date_key,
+                float(delta_wh),
+                float(savings_value),
+                float(price_per_kwh),
+                currency,
+                float(output_w),
+                updated_at,
+            ),
+        )
+
+    def _energy_summary(self, con, now=None):
+        current_time = _parse_timestamp(now) or datetime.now(timezone.utc)
+        today = current_time.astimezone().date()
+
+        summary = {
+            "enabled": bool(self.energy_enabled),
+            "currency": self.energy_currency,
+            "price_per_kwh": self.energy_price_per_kwh,
+            "today": self._range_summary(
+                con,
+                today.isoformat(),
+                today.isoformat(),
+                include_peak=True,
+            ),
+            "last_7_days": self._range_summary(
+                con,
+                (today - timedelta(days=6)).isoformat(),
+                today.isoformat(),
+            ),
+            "last_4_weeks": self._range_summary(
+                con,
+                (today - timedelta(days=27)).isoformat(),
+                today.isoformat(),
+            ),
+            "last_12_months": self._range_summary(
+                con,
+                (today - timedelta(days=364)).isoformat(),
+                today.isoformat(),
+            ),
+            "best_day": self._best_day(con),
+            "monthly_current_year": self._monthly_summary(con, today.year),
+            "yearly": self._yearly_summary(con),
+            "lifetime": self._lifetime_summary(con),
+        }
+
+        if not self.energy_enabled:
+            summary.update({
+                "today": _energy_payload(0, 0, peak_output_w=0),
+                "last_7_days": _energy_payload(0, 0),
+                "last_4_weeks": _energy_payload(0, 0),
+                "last_12_months": _energy_payload(0, 0),
+                "best_day": _energy_payload(0, 0, date=None),
+                "monthly_current_year": [
+                    {
+                        "month": month,
+                        "label": MONTH_LABELS[month - 1],
+                        **_energy_payload(0, 0),
+                    }
+                    for month in range(1, 13)
+                ],
+                "yearly": [],
+                "lifetime": _energy_payload(0, 0),
+            })
+
+        return summary
+
+    def _range_summary(self, con, start_date, end_date, include_peak=False):
+        row = con.execute(
+            """
+            SELECT
+                COALESCE(SUM(inverter_output_wh), 0),
+                COALESCE(SUM(savings_value), 0),
+                COALESCE(MAX(peak_output_w), 0)
+            FROM daily_energy_stats
+            WHERE date BETWEEN ? AND ?
+            """,
+            (start_date, end_date),
+        ).fetchone()
+
+        return _energy_payload(
+            row[0],
+            row[1],
+            peak_output_w=row[2] if include_peak else None,
+        )
+
+    def _best_day(self, con):
+        row = con.execute(
+            """
+            SELECT date, inverter_output_wh, savings_value, peak_output_w
+            FROM daily_energy_stats
+            ORDER BY inverter_output_wh DESC, date ASC
+            LIMIT 1
+            """
+        ).fetchone()
+
+        if not row:
+            return _energy_payload(0, 0, date=None)
+
+        return _energy_payload(row[1], row[2], date=row[0], peak_output_w=row[3])
+
+    def _monthly_summary(self, con, year):
+        rows = con.execute(
+            """
+            SELECT
+                CAST(substr(date, 6, 2) AS INTEGER) AS month,
+                COALESCE(SUM(inverter_output_wh), 0),
+                COALESCE(SUM(savings_value), 0)
+            FROM daily_energy_stats
+            WHERE substr(date, 1, 4) = ?
+            GROUP BY month
+            """,
+            (f"{year:04d}",),
+        ).fetchall()
+        values = {int(row[0]): (row[1], row[2]) for row in rows}
+
+        return [
+            {
+                "month": month,
+                "label": MONTH_LABELS[month - 1],
+                **_energy_payload(*values.get(month, (0, 0))),
+            }
+            for month in range(1, 13)
+        ]
+
+    def _yearly_summary(self, con):
+        rows = con.execute(
+            """
+            SELECT
+                CAST(substr(date, 1, 4) AS INTEGER) AS year,
+                COALESCE(SUM(inverter_output_wh), 0),
+                COALESCE(SUM(savings_value), 0)
+            FROM daily_energy_stats
+            GROUP BY year
+            ORDER BY year ASC
+            """
+        ).fetchall()
+
+        return [
+            {
+                "year": int(row[0]),
+                **_energy_payload(row[1], row[2]),
+            }
+            for row in rows
+        ]
+
+    def _lifetime_summary(self, con):
+        row = con.execute(
+            """
+            SELECT
+                COALESCE(SUM(inverter_output_wh), 0),
+                COALESCE(SUM(savings_value), 0)
+            FROM daily_energy_stats
+            """
+        ).fetchone()
+
+        return _energy_payload(row[0], row[1])
 
     def _cleanup(self, con):
         cutoff = (
@@ -195,4 +510,62 @@ def empty_snapshot():
         },
         "rules": {},
         "control_explain": None,
+        "energy_stats": {
+            "enabled": False,
+            "currency": "EUR",
+            "price_per_kwh": 0.0,
+        },
     }
+
+
+def _parse_timestamp(value):
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return None
+
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+
+    return parsed
+
+
+def _as_bool(value, default=False):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
+
+
+def _as_float(value, default=0.0, minimum=None):
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = default
+
+    if minimum is not None:
+        parsed = max(minimum, parsed)
+
+    return parsed
+
+
+def _energy_payload(wh, savings, date=None, peak_output_w=None):
+    payload = {
+        "inverter_output_wh": round(float(wh or 0), 9),
+        "inverter_output_kwh": round(float(wh or 0) / 1000.0, 9),
+        "savings_value": round(float(savings or 0), 9),
+    }
+
+    if date is not None:
+        payload["date"] = date
+
+    if peak_output_w is not None:
+        payload["peak_output_w"] = round(float(peak_output_w or 0), 9)
+
+    return payload

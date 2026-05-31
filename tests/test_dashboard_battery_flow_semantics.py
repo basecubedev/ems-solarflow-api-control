@@ -239,9 +239,19 @@ def test_frontend_uses_normalized_battery_display_semantics():
     assert "function aggregatedBatteryPowerW(snapshot)" in app_js
     assert "function renderControlExplain(snapshot)" in app_js
     assert "data-flow-view=\"control\"" in index_html
+    assert "data-flow-view=\"energy\"" in index_html
     assert "id=\"controlExplainView\"" in index_html
+    assert "id=\"energyStatsView\"" in index_html
     assert "const batteryFlow = normalizeBatteryPowerForDisplay(aggregatedBatteryPowerW(snapshot));" in app_js
     assert "function signedWatts(value)" in app_js
+    assert "function renderEnergyStats(stats)" in app_js
+    assert "id=\"energyStats\"" in index_html
+    assert "Energy Delivered" in index_html
+    assert "Based on measured inverter output." in index_html
+    assert "class=\"devices-section\"" in index_html
+    assert index_html.index('id="energyStats"') < index_html.index('id="deviceGrid"')
+    assert index_html.index('id="deviceGrid"') < index_html.index('class="chart-panel"')
+    assert index_html.count('id="energyStats"') == 1
     assert 'setText("metricBattery", signedWatts(batteryFlow.valueW));' in app_js
     assert 'setText("flowBattery", signedWatts(batteryFlow.valueW));' in app_js
     assert "function batteryPipeDirection(batteryFlow)" in app_js
@@ -255,6 +265,207 @@ def test_frontend_uses_normalized_battery_display_semantics():
     assert '{ id: "chartBattery", title: "Battery", field: "battery_power_w", color: "#f06d6d", unit: "W" }' in app_js
     assert "displayBatteryPower" not in app_js
     assert "invert: true" not in app_js
+
+
+def test_frontend_energy_statistics_executes_against_app_js():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is required for executable dashboard energy stats test")
+
+    script = textwrap.dedent(
+        """
+        const fs = require("fs");
+        const vm = require("vm");
+        const appPath = process.argv[2];
+        const source = fs.readFileSync(appPath, "utf8")
+          .split('document.querySelectorAll(".range-tabs button")')[0];
+
+        class FakeClassList {
+          constructor() { this.values = new Set(); }
+          toggle(name, force) {
+            if (force) this.values.add(name);
+            else this.values.delete(name);
+          }
+          contains(name) { return this.values.has(name); }
+        }
+
+        class FakeElement {
+          constructor(id = "") {
+            this.id = id;
+            this.textContent = "";
+            this.innerHTML = "";
+            this.hidden = false;
+            this.children = [];
+            this.attrs = {};
+            this.className = "";
+            this.classList = new FakeClassList();
+            this.style = { setProperty: () => {} };
+          }
+          setAttribute(key, value) { this.attrs[key] = value; }
+          appendChild(child) { this.children.push(child); }
+        }
+
+        const elements = new Map();
+        function element(id) {
+          if (!elements.has(id)) elements.set(id, new FakeElement(id));
+          return elements.get(id);
+        }
+
+        const flowWrap = new FakeElement("flowWrap");
+        const shell = new FakeElement("shell");
+        const context = {
+          console,
+          document: {
+            getElementById: element,
+            createElement: () => new FakeElement(),
+            querySelector: (selector) => {
+              if (selector === ".flow-wrap") return flowWrap;
+              if (selector === ".shell") return shell;
+              return null;
+            },
+            querySelectorAll: () => [],
+          },
+          window: { addEventListener: () => {}, localStorage: null },
+        };
+
+        vm.createContext(context);
+        vm.runInContext(source, context, { filename: appPath });
+
+        function assert(condition, message) {
+          if (!condition) throw new Error(message);
+        }
+
+        function render(energyStats) {
+          context.renderSnapshot({
+            timestamp: "2026-05-27T12:00:00Z",
+            pv_total_w: 1800,
+            inverter_output_w: 620,
+            home_load_w: 620,
+            grid_power_w: 0,
+            battery_power_w: 0,
+            average_soc: 61,
+            controller: { enabled: true },
+            rules: {},
+            devices: {},
+            control_explain: null,
+            energy_stats: energyStats,
+          });
+          return element("energyStats").innerHTML;
+        }
+
+        const stats = {
+          enabled: true,
+          currency: "EUR",
+          price_per_kwh: 0.35,
+          today: { inverter_output_kwh: 3.2, savings_value: 1.12 },
+          last_7_days: { inverter_output_kwh: 18.4, savings_value: 6.44 },
+          last_4_weeks: { inverter_output_kwh: 72.1, savings_value: 25.24 },
+          last_12_months: { inverter_output_kwh: 520.0, savings_value: 182.0 },
+          best_day: { date: "2026-06-14", inverter_output_kwh: 8.4, savings_value: 2.94 },
+          monthly_current_year: [
+            { month: 1, label: "Jan", inverter_output_kwh: 22.4, savings_value: 7.84 },
+            { month: 2, label: "Feb", inverter_output_kwh: 31.2, savings_value: 10.92 },
+          ],
+          yearly: [
+            { year: 2018, inverter_output_kwh: 10, savings_value: 3.5 },
+            { year: 2019, inverter_output_kwh: 20, savings_value: 7 },
+            { year: 2020, inverter_output_kwh: 30, savings_value: 10.5 },
+            { year: 2021, inverter_output_kwh: 40, savings_value: 14 },
+            { year: 2022, inverter_output_kwh: 50, savings_value: 17.5 },
+            { year: 2023, inverter_output_kwh: 60, savings_value: 21 },
+            { year: 2024, inverter_output_kwh: 70, savings_value: 24.5 },
+            { year: 2025, inverter_output_kwh: 320.0, savings_value: 112.0 },
+            { year: 2026, inverter_output_kwh: 840.0, savings_value: 294.0 },
+            { year: 2027, inverter_output_kwh: 910.0, savings_value: 318.5 },
+          ],
+          lifetime: { inverter_output_kwh: 2070.0, savings_value: 724.5 },
+        };
+
+        const html = render(stats);
+        assert(html.includes("energy-report-board"), "energy report board renders");
+        assert(html.includes("energy-period-pipeline"), "energy KPI pipeline renders");
+        assert(html.includes("energy-period-stage"), "KPI cards render as period stages");
+        assert(html.includes("energy-stage-head"), "KPI cards use stage headers");
+        assert(!html.includes("energy-stage-step"), "KPI cards do not render step numbers");
+        assert(!html.includes("energy-stage-dot"), "KPI cards do not render header icons");
+        assert(html.includes("energy-context-rail"), "energy context rail renders");
+        assert(html.includes("energy-context-item"), "energy context items render");
+        assert(html.includes("Currency"), "currency context renders");
+        assert(html.includes("With data"), "months-with-data context renders");
+        assert(html.includes("energy-report-section"), "energy report sections render");
+        assert(html.includes("energy-summary-card"), "summary cards render");
+        assert(!html.includes("energy-lifetime-result"), "lifetime no longer renders as hero result card");
+        assert(html.includes("energy-kpi-grid"), "primary KPI grid renders");
+        assert(html.includes("Today"), "Today card renders");
+        assert(html.includes("Last 7 Days"), "Last 7 Days card renders");
+        assert(html.includes("Last 4 Weeks"), "Last 4 Weeks card renders");
+        assert(html.includes("Last 12 Months"), "Last 12 Months card renders");
+        assert(html.includes("Best Day"), "Best Day card renders");
+        assert(html.includes("2026-06-14"), "Best Day date renders");
+        assert(html.includes("Monthly Summary"), "monthly section renders");
+        assert(html.includes("Yearly Summary"), "yearly section renders");
+        assert(html.includes("Result / Lifetime"), "Lifetime card renders as a normal result summary");
+        assert(html.includes("3.2 kWh"), "Today kWh renders");
+        assert(html.includes("18.4 kWh"), "Last 7 Days kWh renders");
+        assert(html.includes("72.1 kWh"), "Last 4 Weeks kWh renders");
+        assert(html.includes("520.0 kWh"), "Last 12 Months kWh renders");
+        assert(html.includes("2,070 kWh"), "Lifetime kWh renders");
+        assert(html.includes("€1.12"), "Today savings renders");
+        assert(html.includes("€724.50"), "Lifetime savings renders");
+        assert(html.includes("Jan"), "January renders");
+        assert(html.includes("Feb"), "February renders");
+        assert(html.includes("Mar"), "missing months are filled");
+        assert(html.includes("0.0 kWh"), "missing month zero value renders");
+        assert(html.includes("energy-zero"), "zero-data months are muted");
+        assert(html.includes("energy-current"), "current month or year is highlighted");
+        assert([...html.matchAll(/energy-month-card/g)].length === 12, "all 12 month cards render");
+        assert([...html.matchAll(/energy-year-card/g)].length === 8, "year cards are limited to latest 8 years");
+        assert(!html.includes(">2018<"), "oldest years beyond the limit are hidden");
+        assert(!html.includes(">2019<"), "second old year beyond the limit is hidden");
+        assert(html.includes(">2020<"), "latest 8 years start with 2020");
+        assert(html.includes(">2027<"), "latest year is visible");
+        assert(!html.includes("undefined"), "energy stats do not render undefined");
+        assert(!html.includes("null"), "energy stats do not render null");
+
+        assert(context.formatSavings({ savings_value: 12.4 }, "CHF") === "12.40 CHF", "non-EUR currency uses code fallback");
+        assert(context.formatSavings({}, "EUR") === "--", "missing savings has calm fallback");
+
+        assert(render(undefined).includes("Energy statistics not available yet."), "missing stats fallback renders");
+        assert(render({ enabled: false }).includes("Energy statistics are disabled."), "disabled fallback renders");
+        assert(render({ enabled: true, currency: "EUR", today: { inverter_output_kwh: 0 }, lifetime: { inverter_output_kwh: 0 } }).includes("Waiting for the first measured inverter output sample."), "first sample fallback renders");
+
+        const demo = context.demoSnapshot();
+        context.renderSnapshot(demo);
+        const demoHtml = element("energyStats").innerHTML;
+        assert(demo.energy_stats.enabled === true, "demo carries enabled energy stats");
+        assert(demoHtml.includes("energy-kpi-grid"), "demo renders energy board content");
+        assert(demoHtml.includes("Today"), "demo renders Today card");
+        assert(demoHtml.includes("Lifetime"), "demo renders Lifetime card");
+
+        context.setFlowView("energy");
+        assert(element("flowSvg").hidden === true, "aggregated SVG is hidden in Energy tab");
+        assert(element("deviceFlowView").hidden === true, "device view is hidden in Energy tab");
+        assert(element("controlExplainView").hidden === true, "control view is hidden in Energy tab");
+        assert(element("energyStatsView").hidden === false, "energy stats view is visible in Energy tab");
+        assert(flowWrap.classList.contains("view-energy"), "energy class is applied to the flow board");
+        assert(shell.classList.contains("view-energy"), "energy class is applied to the dashboard shell");
+
+        context.setFlowView("control");
+        assert(element("controlExplainView").hidden === false, "control view is visible after switching back");
+        assert(element("energyStatsView").hidden === true, "energy stats are hidden in Control tab");
+        assert(!shell.classList.contains("view-energy"), "dashboard shell leaves energy mode outside Energy tab");
+      """
+    )
+
+    result = subprocess.run(
+        [node, "-", str(ROOT / "dashboard/static/app.js")],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_frontend_battery_flow_scenarios_execute_against_app_js():
@@ -579,7 +790,8 @@ def test_frontend_control_explain_view_executes_against_app_js():
         }
 
         const flowWrap = new FakeElement("flowWrap");
-        const flowButtons = ["aggregated", "devices", "control"].map((view) => {
+        const shell = new FakeElement("shell");
+        const flowButtons = ["aggregated", "devices", "control", "energy"].map((view) => {
           const button = new FakeElement(`${view}Button`);
           button.dataset.flowView = view;
           return button;
@@ -590,7 +802,11 @@ def test_frontend_control_explain_view_executes_against_app_js():
           document: {
             getElementById: element,
             createElement: () => new FakeElement(),
-            querySelector: (selector) => selector === ".flow-wrap" ? flowWrap : null,
+            querySelector: (selector) => {
+              if (selector === ".flow-wrap") return flowWrap;
+              if (selector === ".shell") return shell;
+              return null;
+            },
             querySelectorAll: (selector) => selector === "[data-flow-view]" ? flowButtons : [],
           },
           window: {
@@ -632,8 +848,10 @@ def test_frontend_control_explain_view_executes_against_app_js():
         assert(element("flowSvg").hidden === true, "aggregated view is hidden after Control click");
         assert(element("deviceFlowView").hidden === true, "device flow view is hidden after Control click");
         assert(element("controlExplainView").hidden === false, "control view is visible after Control click");
+        assert(element("energyStatsView").hidden === true, "energy view is hidden after Control click");
         assert(flowWrap.classList.contains("view-control"), "control class is applied to the flow board");
         assert(flowButtons[2].attrs["aria-selected"] === "true", "Control tab is selected");
+        assert(flowButtons[3].attrs["aria-selected"] === "false", "Energy tab is not selected while Control is active");
 
         render({
           mode: "pv_first",
@@ -823,6 +1041,9 @@ def test_frontend_control_explain_view_executes_against_app_js():
         assert(!html.includes("null"), "null optional fields are hidden");
         assert(element("controlExplainView").hidden === false, "refresh keeps Control visible");
         assert(element("deviceFlowView").hidden === true, "device flow remains hidden");
+        assert(element("energyStatsView").hidden === true, "energy stats remain hidden from Control");
+        assert(!html.includes("Energy Delivered"), "Control tab does not render Energy Statistics heading");
+        assert(!html.includes("Monthly Summary"), "Control tab does not render Energy monthly summary");
 
         render({
           mode: "pv_first",
@@ -902,6 +1123,7 @@ def test_frontend_control_explain_view_executes_against_app_js():
         context.setFlowView("aggregated");
         assert(element("flowSvg").hidden === false, "aggregated view is visible after switching back");
         assert(element("controlExplainView").hidden === true, "control view hides after switching back");
+        assert(element("energyStatsView").hidden === true, "energy view hides after switching back");
       """
     )
 
@@ -935,7 +1157,22 @@ def test_device_flow_mobile_layout_does_not_force_horizontal_scroll():
     assert "max-width: 100%;" in styles
     assert ".device-flow-view { padding: 6px; overflow-x: hidden; }" in styles
     assert ".device-flow-svg { min-width: 0; width: 100%; }" in styles
-    assert ".flow-wrap.view-control { overflow: visible; }" in styles
+    assert ".flow-wrap.view-control,\n.flow-wrap.view-energy { overflow: visible; }" in styles
+    assert ".flow-wrap.view-energy .energy-stats-view { display: block !important; }" in styles
+    assert ".energy-stats-view" in styles
+    assert ".shell.view-energy > .devices-section,\n.shell.view-energy > .chart-panel { display: none; }" in styles
+    assert ".energy-report-board" in styles
+    assert ".energy-period-pipeline" in styles
+    assert ".energy-period-stage" in styles
+    assert ".energy-stage-head" in styles
+    assert ".energy-stage-step" not in styles
+    assert ".energy-stage-dot" not in styles
+    assert ".energy-context-rail" in styles
+    assert ".energy-report-section" in styles
+    assert ".energy-summary-card" in styles
+    assert ".energy-lifetime-result" not in styles
+    assert ".energy-zero" in styles
+    assert ".energy-current" in styles
     assert ".control-global-pipeline" in styles
     assert ".control-flow-rail" not in styles
     assert ".control-flow-node" not in styles
