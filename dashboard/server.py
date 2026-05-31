@@ -52,6 +52,10 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             })
             return
 
+        if parsed.path == "/api/energy-stats":
+            self._send_json(self.server.store.energy_summary())
+            return
+
         if parsed.path == "/api/events":
             self._send_events()
             return

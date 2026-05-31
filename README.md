@@ -1,15 +1,23 @@
 # ems-solarflow-api-control
 
+### Dashboard Preview
+
 <table>
   <tr>
     <th>Aggregated Flow</th>
     <th>Device Flow</th>
+    <th>Energy Statistics</th>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/assets/preview-aggregate.jpg" alt="EMS SolarFlow dashboard aggregated energy flow preview" width="100%"></td>
-    <td width="50%"><img src="docs/assets/preview-device.jpg" alt="EMS SolarFlow dashboard per-device energy flow preview" width="100%"></td>
+    <td width="33%"><img src="docs/assets/preview-aggregate.jpg" alt="EMS SolarFlow dashboard aggregated energy flow preview" width="100%"></td>
+    <td width="33%"><img src="docs/assets/preview-device.jpg" alt="EMS SolarFlow dashboard per-device energy flow preview" width="100%"></td>
+    <td width="33%"><img src="docs/assets/preview-energy.jpg" alt="EMS SolarFlow dashboard energy statistics preview" width="100%"></td>
   </tr>
 </table>
+
+#### Control Center
+
+<img src="docs/assets/control-explain-demo.jpg" alt="EMS SolarFlow dashboard control center preview" width="100%">
 
 Local-first EMS (Energy Management System) control for Zendure SolarFlow systems.
 

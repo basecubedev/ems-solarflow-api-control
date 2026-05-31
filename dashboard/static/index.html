@@ -52,6 +52,7 @@
               <button type="button" class="active" data-flow-view="aggregated" role="tab" aria-selected="true">Aggregated</button>
               <button type="button" data-flow-view="devices" role="tab" aria-selected="false">Devices</button>
               <button type="button" data-flow-view="control" role="tab" aria-selected="false">Control</button>
+              <button type="button" data-flow-view="energy" role="tab" aria-selected="false">Energy</button>
             </div>
           </div>
         </div>
@@ -185,6 +186,17 @@
           </svg>
           <div id="deviceFlowView" class="device-flow-view" hidden></div>
           <div id="controlExplainView" class="control-explain-view" hidden></div>
+          <div id="energyStatsView" class="energy-stats-view" hidden>
+            <section class="energy-stats-panel" aria-label="Energy statistics">
+              <div class="section-heading energy-stats-heading">
+                <div>
+                  <h2>Energy Delivered</h2>
+                  <p>Based on measured inverter output.</p>
+                </div>
+              </div>
+              <div id="energyStats" class="energy-stats-board"></div>
+            </section>
+          </div>
         </div>
       </section>
 
@@ -196,7 +208,7 @@
       </aside>
     </section>
 
-    <section>
+    <section class="devices-section">
       <div class="section-heading">
         <h2>Devices</h2>
       </div>

@@ -181,7 +181,8 @@ def main():
                     cfg.DASHBOARD_CONFIG.get("history_hours", 48),
                     48,
                     minimum=1
-                )
+                ),
+                energy_savings=cfg.ENERGY_SAVINGS_CONFIG
             )
             start_dashboard_server(
                 dashboard_store,
