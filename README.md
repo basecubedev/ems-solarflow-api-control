@@ -221,6 +221,69 @@ Copy/paste examples: [docs/configuration-examples.md](docs/configuration-example
 
 ---
 
+## Docker Quickstart
+
+Docker images are published to GHCR only for release tags. Normal pushes to
+`main` do not publish Docker images.
+
+Create the local config and persistent data directory:
+
+```bash
+mkdir -p data
+cp config.template.json config.json
+```
+
+For Docker, use container paths for mutable state in `config.json`:
+
+```json
+{
+  "system": {
+    "runtime_state_path": "/app/data/runtime-state.json"
+  },
+  "dashboard": {
+    "enabled": true,
+    "host": "0.0.0.0",
+    "port": 8080,
+    "database_path": "/app/data/ems_dashboard.sqlite"
+  }
+}
+```
+
+Start EMS and the built-in dashboard:
+
+```bash
+docker compose -f docker-compose.example.yml up -d
+```
+
+Dashboard:
+
+```text
+http://localhost:8080
+```
+
+The compose example persists `/app/data` through `./data`. Keep this directory
+across container updates because it stores runtime state and the dashboard
+SQLite database.
+
+For stable installations, prefer pinning a release image instead of using
+`latest`:
+
+```yaml
+image: ghcr.io/basecubedev/ems-solarflow-api-control:v0.5.3
+```
+
+Maintainers publish a new image by tagging a commit that is already on `main`:
+
+```bash
+git tag v0.5.3
+git push origin v0.5.3
+```
+
+Only `v*` tags trigger image publishing, and the release workflow refuses tags
+whose commit is not contained in `origin/main`.
+
+---
+
 ## Configuration
 
 Start with `config.template.json`.
