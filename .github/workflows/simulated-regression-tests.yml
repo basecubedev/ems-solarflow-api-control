@@ -8,8 +8,14 @@ on:
 
 jobs:
   full-test-suite:
-    name: Full Python test suite
+    name: Full Python test suite (${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.11"
+          - "3.14"
 
     steps:
       - name: Checkout repository
@@ -18,13 +24,27 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
           python -m pip install -r requirements-dev.txt
+
+      - name: Verify dependency imports
+        run: |
+          python - <<'PY'
+          import requests
+          import sqlite3
+          import urllib3
+          import zoneinfo
+
+          print("requests", requests.__version__)
+          print("urllib3", urllib3.__version__)
+          print("sqlite", sqlite3.sqlite_version)
+          print("zoneinfo ok", zoneinfo.ZoneInfo("Europe/Berlin"))
+          PY
 
       - name: Compile Python files
         run: |
@@ -33,6 +53,15 @@ jobs:
       - name: Run full test suite
         run: |
           pytest -q tests/
+
+      - name: Run strict deprecation warning check
+        run: |
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -W error::DeprecationWarning -m pytest -q tests/
+
+      - name: Run Python 3.14 runtime simulation smoke
+        if: matrix.python-version == '3.14'
+        run: |
+          python -B ems-solarflow-api-control.py --simulate --max-cycles 2
 
   simulated-regression-tests:
     name: Simulated power-control regression tests
@@ -56,3 +85,31 @@ jobs:
       - name: Run simulated regression tests
         run: |
           pytest -q tests/ -m "simulation and power_control"
+
+  docker-smoke-test:
+    name: Docker smoke test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Build runtime image
+        run: |
+          docker build -t ems-solarflow-api-control:ci-smoke .
+
+      - name: Verify Python runtime
+        run: |
+          docker run --rm ems-solarflow-api-control:ci-smoke python --version
+
+      - name: Compile packaged Python files
+        run: |
+          docker run --rm ems-solarflow-api-control:ci-smoke python -m compileall ems dashboard emsctl.py ems-solarflow-api-control.py
+
+      - name: Run packaged simulation smoke
+        run: |
+          docker run --rm ems-solarflow-api-control:ci-smoke python -B ems-solarflow-api-control.py --config /app/config/missing-ci-smoke.json --simulate --max-cycles 2
+
+      - name: Verify writable data volume path
+        run: |
+          docker run --rm ems-solarflow-api-control:ci-smoke python -c "from pathlib import Path; p=Path('/app/data/ci-smoke.txt'); p.write_text('ok'); assert p.read_text() == 'ok'"
