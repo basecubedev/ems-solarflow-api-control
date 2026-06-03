@@ -3,6 +3,7 @@ import os
 import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 DEFAULT_ENERGY_SAVINGS = {
@@ -10,6 +11,7 @@ DEFAULT_ENERGY_SAVINGS = {
     "price_per_kwh": 0.0,
     "currency": "EUR",
     "max_sample_delta_seconds": 60,
+    "timezone": "Europe/Berlin",
 }
 
 SUPPORTED_RANGES = {
@@ -53,6 +55,17 @@ class DashboardStore:
             DEFAULT_ENERGY_SAVINGS["max_sample_delta_seconds"],
             minimum=1,
         )
+        timezone_name = str(
+            self.energy_savings.get(
+                "timezone",
+                DEFAULT_ENERGY_SAVINGS["timezone"],
+            )
+            or DEFAULT_ENERGY_SAVINGS["timezone"]
+        )
+        try:
+            self.energy_timezone = ZoneInfo(timezone_name)
+        except ZoneInfoNotFoundError:
+            self.energy_timezone = ZoneInfo(DEFAULT_ENERGY_SAVINGS["timezone"])
         self._lock = threading.RLock()
         self._latest = None
 
@@ -260,7 +273,7 @@ class DashboardStore:
                 # Larger, zero, or negative intervals are skipped and the
                 # baseline timestamp is advanced to avoid restart/downtime jumps.
 
-        date_key = sample_time.astimezone().date().isoformat()
+        date_key = sample_time.astimezone(self.energy_timezone).date().isoformat()
         updated_at = sample_time.astimezone(timezone.utc).isoformat()
         self._upsert_daily_energy(
             con,
@@ -336,7 +349,7 @@ class DashboardStore:
 
     def _energy_summary(self, con, now=None):
         current_time = _parse_timestamp(now) or datetime.now(timezone.utc)
-        today = current_time.astimezone().date()
+        today = current_time.astimezone(self.energy_timezone).date()
 
         summary = {
             "enabled": bool(self.energy_enabled),
@@ -346,6 +359,12 @@ class DashboardStore:
                 con,
                 today.isoformat(),
                 today.isoformat(),
+                include_peak=True,
+            ),
+            "yesterday": self._range_summary(
+                con,
+                (today - timedelta(days=1)).isoformat(),
+                (today - timedelta(days=1)).isoformat(),
                 include_peak=True,
             ),
             "last_7_days": self._range_summary(
@@ -372,6 +391,7 @@ class DashboardStore:
         if not self.energy_enabled:
             summary.update({
                 "today": _energy_payload(0, 0, peak_output_w=0),
+                "yesterday": _energy_payload(0, 0, peak_output_w=0),
                 "last_7_days": _energy_payload(0, 0),
                 "last_4_weeks": _energy_payload(0, 0),
                 "last_12_months": _energy_payload(0, 0),

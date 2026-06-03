@@ -85,7 +85,8 @@
     "enabled": true,
     "price_per_kwh": 0.0,
     "currency": "EUR",
-    "max_sample_delta_seconds": 60
+    "max_sample_delta_seconds": 60,
+    "timezone": "Europe/Berlin"
   },
 
   "_comment_devices": "One entry per Zendure device. IP and SN must match your local device.",

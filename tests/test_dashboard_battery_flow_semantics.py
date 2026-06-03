@@ -358,6 +358,7 @@ def test_frontend_energy_statistics_executes_against_app_js():
           currency: "EUR",
           price_per_kwh: 0.35,
           today: { inverter_output_kwh: 3.2, savings_value: 1.12 },
+          yesterday: { inverter_output_kwh: 4.2, savings_value: 1.47, peak_output_w: 780 },
           last_7_days: { inverter_output_kwh: 18.4, savings_value: 6.44 },
           last_4_weeks: { inverter_output_kwh: 72.1, savings_value: 25.24 },
           last_12_months: { inverter_output_kwh: 520.0, savings_value: 182.0 },
@@ -397,6 +398,8 @@ def test_frontend_energy_statistics_executes_against_app_js():
         assert(!html.includes("energy-lifetime-result"), "lifetime no longer renders as hero result card");
         assert(html.includes("energy-kpi-grid"), "primary KPI grid renders");
         assert(html.includes("Today"), "Today card renders");
+        assert(html.includes("Yesterday"), "Yesterday card renders");
+        assert(html.includes("Previous day output"), "Yesterday subtitle renders");
         assert(html.includes("Last 7 Days"), "Last 7 Days card renders");
         assert(html.includes("Last 4 Weeks"), "Last 4 Weeks card renders");
         assert(html.includes("Last 12 Months"), "Last 12 Months card renders");
@@ -408,11 +411,13 @@ def test_frontend_energy_statistics_executes_against_app_js():
         assert(html.includes("All stored daily totals"), "Lifetime subtitle remains descriptive");
         assert(html.includes("Date") && html.includes("2026-05-31"), "Lifetime since date renders as a detail field");
         assert(html.includes("3.2 kWh"), "Today kWh renders");
+        assert(html.includes("4.2 kWh"), "Yesterday kWh renders");
         assert(html.includes("18.4 kWh"), "Last 7 Days kWh renders");
         assert(html.includes("72.1 kWh"), "Last 4 Weeks kWh renders");
         assert(html.includes("520.0 kWh"), "Last 12 Months kWh renders");
         assert(html.includes("2,070 kWh"), "Lifetime kWh renders");
         assert(html.includes("€1.12"), "Today savings renders");
+        assert(html.includes("€1.47"), "Yesterday savings renders");
         assert(html.includes("€724.50"), "Lifetime savings renders");
         assert(html.includes("Jan"), "January renders");
         assert(html.includes("Feb"), "February renders");
@@ -428,6 +433,11 @@ def test_frontend_energy_statistics_executes_against_app_js():
         assert(html.includes(">2027<"), "latest year is visible");
         assert(!html.includes("undefined"), "energy stats do not render undefined");
         assert(!html.includes("null"), "energy stats do not render null");
+        assert(
+          html.indexOf("Today") < html.indexOf("Yesterday")
+            && html.indexOf("Yesterday") < html.indexOf("Last 7 Days"),
+          "Yesterday renders directly after Today"
+        );
 
         assert(context.formatSavings({ savings_value: 12.4 }, "CHF") === "12.40 CHF", "non-EUR currency uses code fallback");
         assert(context.formatSavings({}, "EUR") === "--", "missing savings has calm fallback");
@@ -441,8 +451,10 @@ def test_frontend_energy_statistics_executes_against_app_js():
         context.renderSnapshot(demo);
         const demoHtml = element("energyStats").innerHTML;
         assert(demo.energy_stats.enabled === true, "demo carries enabled energy stats");
+        assert(demo.energy_stats.yesterday, "demo carries Yesterday energy stats");
         assert(demoHtml.includes("energy-kpi-grid"), "demo renders energy board content");
         assert(demoHtml.includes("Today"), "demo renders Today card");
+        assert(demoHtml.includes("Yesterday"), "demo renders Yesterday card");
         assert(demoHtml.includes("Lifetime"), "demo renders Lifetime card");
 
         context.setFlowView("energy");

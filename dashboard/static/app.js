@@ -319,6 +319,7 @@ function renderEnergyStats(stats) {
   const lifetime = stats.lifetime || {};
   const hasCollectedStats = Boolean(lifetime.since_date) || [
     stats.today,
+    stats.yesterday,
     stats.last_7_days,
     stats.last_4_weeks,
     stats.last_12_months,
@@ -337,6 +338,10 @@ function renderEnergyStats(stats) {
     energyPeriodStage("Today", stats.today, currency, {
       kind: "today",
       subtitle: "Current day output",
+    }),
+    energyPeriodStage("Yesterday", stats.yesterday, currency, {
+      kind: "yesterday",
+      subtitle: "Previous day output",
     }),
     energyPeriodStage("Last 7 Days", stats.last_7_days, currency, {
       kind: "week",
@@ -1751,6 +1756,11 @@ function demoSnapshot() {
       today: {
         inverter_output_kwh: 3.2,
         savings_value: 1.12,
+      },
+      yesterday: {
+        inverter_output_kwh: 4.2,
+        savings_value: 1.47,
+        peak_output_w: 780,
       },
       last_7_days: {
         inverter_output_kwh: 18.4,
