@@ -348,6 +348,39 @@ def test_energy_yesterday_is_zero_when_previous_day_is_missing(tmp_path):
     assert summary["yesterday"]["peak_output_w"] == 0
 
 
+def test_energy_periods_use_configured_timezone_instead_of_utc(tmp_path):
+    path = tmp_path / "dashboard.sqlite"
+    DashboardStore(path, energy_savings={"timezone": "Europe/Berlin"})
+    insert_daily(path, "2026-06-02", 2000, savings=2, peak=500)
+    insert_daily(path, "2026-06-03", 3000, savings=3, peak=600)
+
+    store = DashboardStore(path, energy_savings={"timezone": "Europe/Berlin"})
+    summary = store.energy_summary(
+        now=datetime(2026, 6, 2, 22, 30, tzinfo=timezone.utc)
+    )
+
+    assert summary["today"]["inverter_output_wh"] == 3000
+    assert summary["today"]["peak_output_w"] == 600
+    assert summary["yesterday"]["inverter_output_wh"] == 2000
+    assert summary["yesterday"]["peak_output_w"] == 500
+
+
+def test_energy_sample_date_key_uses_configured_timezone(tmp_path):
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(
+        path,
+        energy_savings={
+            "enabled": True,
+            "timezone": "Europe/Berlin",
+        },
+    )
+
+    store.record(snapshot("2026-06-02T22:30:00+00:00", output=400))
+
+    assert daily_row(path, "2026-06-03") is not None
+    assert daily_row(path, "2026-06-02") is None
+
+
 def test_energy_disabled_summary_includes_zero_yesterday(tmp_path):
     store = DashboardStore(
         tmp_path / "dashboard.sqlite",

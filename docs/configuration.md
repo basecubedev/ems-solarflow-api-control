@@ -220,6 +220,10 @@ changes later. A price of `0.0` still tracks kWh and reports zero savings.
 `energy_savings.max_sample_delta_seconds` protects the integration from large
 false jumps after restarts or downtime. Intervals above this value are skipped.
 
+`energy_savings.timezone` defines the calendar timezone used for daily
+statistics and period lookups such as Today and Yesterday. It defaults to
+`Europe/Berlin`.
+
 ## Output Control
 
 `system.output_control` is advanced tuning for fast control loops. Most users
