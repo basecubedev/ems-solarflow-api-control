@@ -6,6 +6,10 @@ The EMS can run standalone with `config.json` and `runtime-state.json`.
 The template default keeps Home Assistant disabled with `ha.enabled=false` and
 `ha.control_enabled=false`.
 
+This page documents the optional Home Assistant integration and the optional HA
+dashboard example. The built-in standalone read-only dashboard is documented in
+`docs/dashboard.md`.
+
 ## Roles
 
 Home Assistant has two independent roles:
@@ -155,22 +159,23 @@ sensor.ems_solarflow_wr1_winter_min_soc_target
 sensor.ems_solarflow_wr1_winter_estimated_ramp_days
 ```
 
-## Dashboard
+## Home Assistant Dashboard Example
 
-The repository contains a dashboard example:
+The repository contains an optional Home Assistant dashboard example:
 
 ```text
 homeassistant-dashboard/dashboard.yaml
 ```
 
-Dashboard preview:
+Home Assistant dashboard preview:
 
 ```text
 homeassistant-dashboard/dashboard-preview.jpg
 ```
 
 It includes EMS control, runtime device control, winter status, device state,
-battery status, PV details, and power-flow visualization.
+battery status, PV details, and power-flow visualization. This is separate from
+the built-in standalone dashboard documented in `docs/dashboard.md`.
 
 Troubleshooting stale, unavailable, or ignored HA values:
 [troubleshooting.md](troubleshooting.md).

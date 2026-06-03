@@ -118,8 +118,8 @@ The hold uses:
 standby_total_w = min_output_limit * active_online_device_count
 ```
 
-With two active devices and `min_output_limit=30`, the global target is held at
-`60W` instead of integrating toward `800W`. Once PV, discharge capability, or
+With two active devices and `min_output_limit=35`, the global target is held at
+`70W` instead of integrating toward `800W`. Once PV, discharge capability, or
 current output is observed again, the normal fast output controller resumes.
 
 ## PV-First Allocation

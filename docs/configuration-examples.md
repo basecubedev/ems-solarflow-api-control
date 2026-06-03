@@ -36,16 +36,33 @@ Use this for standalone EMS operation without Home Assistant.
     "max_device_power": 800,
     "deadband": 10,
     "runtime_state_path": "runtime-state.json",
-    "min_output_limit": 30,
-    "loop_interval": 5,
+    "min_output_limit": 35,
+    "loop_interval": 3,
     "redistribute_clamped_power": true,
     "pv_kwp_weighting": true,
     "pv_charge_balance_enabled": true,
-    "pv_charge_balance_deadband_percent": 5,
+    "pv_charge_balance_deadband_percent": 1,
     "pv_charge_balance_full_bias_percent": 15,
-    "pv_charge_balance_strength": 1.0,
+    "pv_charge_balance_strength": 0.7,
     "battery_kwh_weighting": true,
     "soc_reconcile_interval": 10
+  },
+
+  "dashboard": {
+    "enabled": true,
+    "host": "0.0.0.0",
+    "port": 8080,
+    "database_path": "data/ems_dashboard.sqlite",
+    "history_hours": 48,
+    "write_interval_seconds": 5
+  },
+
+  "energy_savings": {
+    "enabled": true,
+    "price_per_kwh": 0.0,
+    "currency": "EUR",
+    "max_sample_delta_seconds": 20,
+    "timezone": "Europe/Berlin"
   },
 
   "winter": {
@@ -86,6 +103,10 @@ Change:
 - `shelly.ip`
 - `pv_kwp`
 - `battery_kwh`
+- `dashboard.port` or `dashboard.database_path` only when needed
+- `energy_savings.price_per_kwh`
+- `energy_savings.currency`
+- `energy_savings.timezone` only when you do not want Europe/Berlin calendar days
 
 Run:
 
@@ -97,7 +118,8 @@ python3 -B ems-solarflow-api-control.py --preflight
 ## Example 2: Two Zendure Devices With Home Assistant
 
 Use this when Home Assistant should receive EMS sensors and optionally provide
-runtime helper controls.
+runtime helper controls. The values below intentionally override some
+single-device template values for a two-inverter installation.
 
 ```json
 {
@@ -119,8 +141,8 @@ runtime helper controls.
     "max_total_power": 1600,
     "max_device_power": 800,
     "runtime_state_path": "runtime-state.json",
-    "min_output_limit": 30,
-    "loop_interval": 5
+    "min_output_limit": 35,
+    "loop_interval": 3
   },
 
   "devices": [

@@ -10,7 +10,7 @@ DEFAULT_ENERGY_SAVINGS = {
     "enabled": True,
     "price_per_kwh": 0.0,
     "currency": "EUR",
-    "max_sample_delta_seconds": 60,
+    "max_sample_delta_seconds": 20,
     "timezone": "Europe/Berlin",
 }
 
