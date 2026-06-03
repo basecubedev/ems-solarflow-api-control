@@ -150,8 +150,8 @@ The template already uses this live-control-ready system policy:
     "reconcile_ac_mode_on_start": true,
     "reconcile_smart_mode": true,
     "max_total_power": 800,
-    "loop_interval": 5,
-    "min_output_limit": 0
+    "loop_interval": 3,
+    "min_output_limit": 35
   }
 }
 ```

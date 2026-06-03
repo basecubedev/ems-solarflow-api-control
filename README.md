@@ -337,9 +337,11 @@ When `dashboard.enabled=true`, the EMS starts a local dashboard server:
 http://<ems-host>:8080
 ```
 
-The dashboard shows live flow, device state, rule state, and short-term history
-from local SQLite storage. It is read-only and does not expose EMS control
-endpoints.
+The built-in standalone dashboard has Aggregated, Devices, Control, and Energy
+views. The Energy view includes Today, Yesterday, rolling periods,
+monthly/yearly totals, and Lifetime with since date.
+
+It is read-only and does not expose EMS control endpoints.
 
 More: [docs/dashboard.md](docs/dashboard.md).
 
@@ -351,15 +353,15 @@ Home Assistant can be used for:
 
 - monitoring
 - optional runtime-state helper controls
-- dashboard visualization
+- optional Home Assistant dashboard visualization
 
-Dashboard example:
+Home Assistant dashboard example:
 
 ```text
 homeassistant-dashboard/dashboard.yaml
 ```
 
-Dashboard preview:
+Home Assistant dashboard preview:
 
 ```text
 homeassistant-dashboard/dashboard-preview.jpg
@@ -454,7 +456,7 @@ Safety checks: [docs/safety.md](docs/safety.md).
 | `config.template.json` | Versioned config template |
 | `config.json` | Local config, ignored by Git |
 | `runtime-state.json` | Mutable runtime state, ignored by Git |
-| `homeassistant-dashboard/dashboard.yaml` | HA dashboard example |
+| `homeassistant-dashboard/dashboard.yaml` | Optional HA dashboard example |
 | `homeassistant-dashboard/dashboard-preview.jpg` | HA dashboard preview image |
 | `scripts/check_log_events.py` | Structured log validator |
 | `docs/` | Public documentation |

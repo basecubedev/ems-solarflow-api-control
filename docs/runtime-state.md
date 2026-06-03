@@ -20,8 +20,8 @@ Example:
   "system": {
     "enabled": true,
     "max_total_power": 800,
-    "loop_interval": 5,
-    "min_output_limit": 30
+    "loop_interval": 3,
+    "min_output_limit": 35
   },
   "ha": {
     "enabled": false,
@@ -56,9 +56,10 @@ Example:
 | `loop_interval` | Runtime loop interval |
 | `min_output_limit` | Runtime guard against very low enabled `outputLimit` writes |
 
-`min_output_limit=30` is useful on installations where `outputLimit=0` behaves
-like a stop, idle, or sleep state. The guard is applied before deadband handling
-and only while EMS control is enabled.
+`min_output_limit=35` is the current template default and is useful on
+installations where `outputLimit=0` behaves like a stop, idle, or sleep state.
+The guard is applied before deadband handling and only while EMS control is
+enabled.
 
 The same value is also used as the standby/wakeup `outputLimit` for strict
 night/minSoc idle. When all active online devices report exactly no PV, no

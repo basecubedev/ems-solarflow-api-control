@@ -84,7 +84,7 @@ Important runtime fields:
     "enabled": true,
     "max_total_power": 800,
     "loop_interval": 2,
-    "min_output_limit": 30
+    "min_output_limit": 35
   },
   "ha": {
     "enabled": false,
@@ -406,7 +406,7 @@ Check:
 ```json
 {
   "system": {
-    "min_output_limit": 30
+    "min_output_limit": 35
   }
 }
 ```
