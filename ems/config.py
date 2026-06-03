@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 import sys
@@ -78,7 +79,7 @@ def default_safe_config():
             "runtime_state_path": "runtime-state.json",
             "min_output_limit": 0,
             "loop_interval": 5,
-            "output_control": OUTPUT_CONTROL_DEFAULTS,
+            "output_control": copy.deepcopy(OUTPUT_CONTROL_DEFAULTS),
             "soc_reconcile_interval": 0,
             "log_level": "debug",
             "redistribute_clamped_power": True,
@@ -89,9 +90,9 @@ def default_safe_config():
             "pv_charge_balance_strength": 1.0,
             "battery_kwh_weighting": True
         },
-        "winter": WINTER_DEFAULTS,
-        "dashboard": DASHBOARD_DEFAULTS,
-        "energy_savings": ENERGY_SAVINGS_DEFAULTS,
+        "winter": copy.deepcopy(WINTER_DEFAULTS),
+        "dashboard": copy.deepcopy(DASHBOARD_DEFAULTS),
+        "energy_savings": copy.deepcopy(ENERGY_SAVINGS_DEFAULTS),
         "devices": [],
         "shelly": {
             "ip": ""
