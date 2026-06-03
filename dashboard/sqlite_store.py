@@ -348,6 +348,12 @@ class DashboardStore:
                 today.isoformat(),
                 include_peak=True,
             ),
+            "yesterday": self._range_summary(
+                con,
+                (today - timedelta(days=1)).isoformat(),
+                (today - timedelta(days=1)).isoformat(),
+                include_peak=True,
+            ),
             "last_7_days": self._range_summary(
                 con,
                 (today - timedelta(days=6)).isoformat(),
@@ -372,6 +378,7 @@ class DashboardStore:
         if not self.energy_enabled:
             summary.update({
                 "today": _energy_payload(0, 0, peak_output_w=0),
+                "yesterday": _energy_payload(0, 0, peak_output_w=0),
                 "last_7_days": _energy_payload(0, 0),
                 "last_4_weeks": _energy_payload(0, 0),
                 "last_12_months": _energy_payload(0, 0),

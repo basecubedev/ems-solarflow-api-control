@@ -320,6 +320,8 @@ def test_energy_rolling_summaries_and_best_day(tmp_path):
 
     assert summary["today"]["inverter_output_wh"] == 1000
     assert summary["today"]["peak_output_w"] == 400
+    assert summary["yesterday"]["inverter_output_wh"] == 2000
+    assert summary["yesterday"]["peak_output_w"] == 500
     assert summary["last_7_days"]["inverter_output_wh"] == 6000
     assert summary["last_4_weeks"]["inverter_output_wh"] == 10000
     assert summary["last_12_months"]["inverter_output_wh"] == 15000
@@ -327,6 +329,42 @@ def test_energy_rolling_summaries_and_best_day(tmp_path):
     assert summary["lifetime"]["since_date"] == "2025-06-29"
     assert summary["best_day"]["date"] == "2025-06-29"
     assert summary["best_day"]["inverter_output_wh"] == 6000
+
+
+def test_energy_yesterday_is_zero_when_previous_day_is_missing(tmp_path):
+    path = tmp_path / "dashboard.sqlite"
+    DashboardStore(path)
+    insert_daily(path, "2026-06-29", 1000, savings=1, peak=400)
+
+    store = DashboardStore(path)
+    summary = store.energy_summary(
+        now=datetime(2026, 6, 29, 12, 0, tzinfo=timezone.utc)
+    )
+
+    assert summary["today"]["inverter_output_wh"] == 1000
+    assert summary["yesterday"]["inverter_output_wh"] == 0
+    assert summary["yesterday"]["inverter_output_kwh"] == 0
+    assert summary["yesterday"]["savings_value"] == 0
+    assert summary["yesterday"]["peak_output_w"] == 0
+
+
+def test_energy_disabled_summary_includes_zero_yesterday(tmp_path):
+    store = DashboardStore(
+        tmp_path / "dashboard.sqlite",
+        energy_savings={"enabled": False},
+    )
+
+    summary = store.energy_summary(
+        now=datetime(2026, 6, 29, 12, 0, tzinfo=timezone.utc)
+    )
+
+    assert summary["enabled"] is False
+    assert summary["yesterday"] == {
+        "inverter_output_wh": 0.0,
+        "inverter_output_kwh": 0.0,
+        "savings_value": 0.0,
+        "peak_output_w": 0.0,
+    }
 
 
 def test_energy_lifetime_since_date_is_null_without_daily_stats(tmp_path):
