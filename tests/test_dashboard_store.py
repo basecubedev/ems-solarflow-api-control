@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -65,7 +66,7 @@ def daily_row(path, date_key):
         ).fetchone()
 
 
-def insert_daily(path, date_key, wh, savings=0, peak=0):
+def insert_daily(path, date_key, wh, savings=0, peak=0, sample_count=1):
     with sqlite3.connect(path) as con:
         con.execute(
             """
@@ -79,9 +80,16 @@ def insert_daily(path, date_key, wh, savings=0, peak=0):
                 sample_count,
                 updated_at
             )
-            VALUES(?, ?, ?, 0.35, 'EUR', ?, 1, ?)
+            VALUES(?, ?, ?, 0.35, 'EUR', ?, ?, ?)
             """,
-            (date_key, wh, savings, peak, f"{date_key}T12:00:00+00:00"),
+            (
+                date_key,
+                wh,
+                savings,
+                peak,
+                sample_count,
+                f"{date_key}T12:00:00+00:00",
+            ),
         )
 
 
@@ -94,6 +102,35 @@ def test_store_records_latest_and_history(tmp_path):
     assert store.latest()["pv_total_w"] == 345
     assert store.history("1h")[0]["devices"]["WR1"]["soc"] == 61
     assert store.latest()["control_explain"] is None
+
+
+def test_latest_refreshes_energy_stats_from_daily_aggregates(tmp_path):
+    path = tmp_path / "dashboard.sqlite"
+    DashboardStore(path)
+    insert_daily(path, "2026-05-31", 1000, savings=1)
+    timestamp = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc).isoformat()
+
+    with sqlite3.connect(path) as con:
+        stale_snapshot = snapshot(timestamp)
+        stale_snapshot["energy_stats"] = {
+            "enabled": True,
+            "currency": "EUR",
+            "lifetime": {
+                "inverter_output_wh": 0,
+                "inverter_output_kwh": 0,
+                "savings_value": 0,
+            },
+        }
+        con.execute(
+            "INSERT INTO snapshots(timestamp, payload) VALUES(?, ?)",
+            (timestamp, json.dumps(stale_snapshot)),
+        )
+
+    store = DashboardStore(path)
+    latest = store.latest()
+
+    assert latest["energy_stats"]["lifetime"]["inverter_output_wh"] == 1000
+    assert latest["energy_stats"]["lifetime"]["since_date"] == "2026-05-31"
 
 
 def test_store_cleanup_uses_retention(tmp_path):
@@ -287,8 +324,51 @@ def test_energy_rolling_summaries_and_best_day(tmp_path):
     assert summary["last_4_weeks"]["inverter_output_wh"] == 10000
     assert summary["last_12_months"]["inverter_output_wh"] == 15000
     assert summary["lifetime"]["inverter_output_wh"] == 21000
+    assert summary["lifetime"]["since_date"] == "2025-06-29"
     assert summary["best_day"]["date"] == "2025-06-29"
     assert summary["best_day"]["inverter_output_wh"] == 6000
+
+
+def test_energy_lifetime_since_date_is_null_without_daily_stats(tmp_path):
+    store = DashboardStore(tmp_path / "dashboard.sqlite")
+
+    summary = store.energy_summary(
+        now=datetime(2026, 6, 29, 12, 0, tzinfo=timezone.utc)
+    )
+
+    assert summary["lifetime"]["inverter_output_wh"] == 0
+    assert summary["lifetime"]["since_date"] is None
+
+
+def test_energy_lifetime_since_date_uses_first_collected_day_across_gaps(tmp_path):
+    path = tmp_path / "dashboard.sqlite"
+    DashboardStore(path)
+    insert_daily(path, "2026-06-01", 1000, savings=1)
+    insert_daily(path, "2026-06-08", 2000, savings=2)
+
+    store = DashboardStore(path)
+    summary = store.energy_summary(
+        now=datetime(2026, 6, 29, 12, 0, tzinfo=timezone.utc)
+    )
+
+    assert summary["lifetime"]["inverter_output_wh"] == 3000
+    assert summary["lifetime"]["since_date"] == "2026-06-01"
+
+
+def test_energy_lifetime_since_date_ignores_zero_sample_days(tmp_path):
+    path = tmp_path / "dashboard.sqlite"
+    DashboardStore(path)
+    insert_daily(path, "2026-05-31", 5000, savings=5, sample_count=0)
+    insert_daily(path, "2026-06-01", 1000, savings=1)
+    insert_daily(path, "2026-06-02", 2000, savings=2)
+
+    store = DashboardStore(path)
+    summary = store.energy_summary(
+        now=datetime(2026, 6, 29, 12, 0, tzinfo=timezone.utc)
+    )
+
+    assert summary["lifetime"]["inverter_output_wh"] == 3000
+    assert summary["lifetime"]["since_date"] == "2026-06-01"
 
 
 def test_energy_monthly_and_yearly_summaries(tmp_path):

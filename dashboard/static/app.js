@@ -317,7 +317,7 @@ function renderEnergyStats(stats) {
   const monthly = normalizeMonthlyEnergy(stats.monthly_current_year);
   const yearly = normalizeYearlyEnergy(stats.yearly);
   const lifetime = stats.lifetime || {};
-  const hasEnergy = [
+  const hasCollectedStats = Boolean(lifetime.since_date) || [
     stats.today,
     stats.last_7_days,
     stats.last_4_weeks,
@@ -328,7 +328,7 @@ function renderEnergyStats(stats) {
     ...yearly,
   ].some((item) => energyKwh(item) > 0);
 
-  if (!hasEnergy) {
+  if (!hasCollectedStats) {
     container.innerHTML = `<div class="energy-empty control-empty compact">Waiting for the first measured inverter output sample.</div>`;
     return;
   }
@@ -443,10 +443,18 @@ function energyLifetimeCard(values, currency) {
     values,
     currency,
     className: "energy-lifetime-card",
+    details: values?.since_date
+      ? [{ label: "Date", value: formatEnergyDate(values.since_date) }]
+      : [],
   });
 }
 
-function energySummaryCard({ title, subtitle, values, currency, className = "", current = false }) {
+function energySummaryCard({ title, subtitle, values, currency, className = "", current = false, details = [] }) {
+  const detailFacts = details
+    .filter((detail) => detail?.value)
+    .map((detail) => energyFact(detail.label || "Detail", detail.value, detail.iconName || "history", detail.tone || "neutral"))
+    .join("");
+
   return `
     <article class="energy-summary-card ${escapeHtml(className)} ${current ? "energy-current" : ""}">
       <div class="energy-summary-head">
@@ -456,6 +464,7 @@ function energySummaryCard({ title, subtitle, values, currency, className = "", 
       <div class="energy-summary-values">
         ${energyFact("Energy", formatEnergyKwh(values), "inverter", "output")}
         ${energyFact("Savings", formatSavings(values, currency), "charge", "savings")}
+        ${detailFacts}
       </div>
     </article>
   `;
@@ -567,8 +576,11 @@ function formatSavings(values, currency) {
 
 function formatEnergyDate(value) {
   if (!value) return "";
+  const raw = String(value);
+  const dateOnly = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (dateOnly) return `${dateOnly[1]}-${dateOnly[2]}-${dateOnly[3]}`;
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
+  if (Number.isNaN(date.getTime())) return raw;
   return date.toISOString().slice(0, 10);
 }
 

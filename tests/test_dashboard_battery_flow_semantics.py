@@ -378,7 +378,7 @@ def test_frontend_energy_statistics_executes_against_app_js():
             { year: 2026, inverter_output_kwh: 840.0, savings_value: 294.0 },
             { year: 2027, inverter_output_kwh: 910.0, savings_value: 318.5 },
           ],
-          lifetime: { inverter_output_kwh: 2070.0, savings_value: 724.5 },
+          lifetime: { inverter_output_kwh: 2070.0, savings_value: 724.5, since_date: "2026-05-31" },
         };
 
         const html = render(stats);
@@ -405,6 +405,8 @@ def test_frontend_energy_statistics_executes_against_app_js():
         assert(html.includes("Monthly Summary"), "monthly section renders");
         assert(html.includes("Yearly Summary"), "yearly section renders");
         assert(html.includes("Result / Lifetime"), "Lifetime card renders as a normal result summary");
+        assert(html.includes("All stored daily totals"), "Lifetime subtitle remains descriptive");
+        assert(html.includes("Date") && html.includes("2026-05-31"), "Lifetime since date renders as a detail field");
         assert(html.includes("3.2 kWh"), "Today kWh renders");
         assert(html.includes("18.4 kWh"), "Last 7 Days kWh renders");
         assert(html.includes("72.1 kWh"), "Last 4 Weeks kWh renders");
@@ -433,6 +435,7 @@ def test_frontend_energy_statistics_executes_against_app_js():
         assert(render(undefined).includes("Energy statistics not available yet."), "missing stats fallback renders");
         assert(render({ enabled: false }).includes("Energy statistics are disabled."), "disabled fallback renders");
         assert(render({ enabled: true, currency: "EUR", today: { inverter_output_kwh: 0 }, lifetime: { inverter_output_kwh: 0 } }).includes("Waiting for the first measured inverter output sample."), "first sample fallback renders");
+        assert(render({ enabled: true, currency: "EUR", today: { inverter_output_kwh: 0 }, lifetime: { inverter_output_kwh: 0, since_date: "2026-05-31" } }).includes("2026-05-31"), "lifetime since date renders before energy accumulates");
 
         const demo = context.demoSnapshot();
         context.renderSnapshot(demo);

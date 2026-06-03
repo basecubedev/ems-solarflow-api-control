@@ -196,6 +196,7 @@ class DashboardStore:
 
     def latest(self):
         if self._latest is not None:
+            self._latest["energy_stats"] = self.energy_summary()
             return self._latest
 
         with self._lock, self._connect() as con:
@@ -209,6 +210,7 @@ class DashboardStore:
             return snapshot
 
         self._latest = json.loads(row[0])
+        self._latest["energy_stats"] = self.energy_summary()
         return self._latest
 
     def history(self, range_name="6h"):
@@ -383,7 +385,10 @@ class DashboardStore:
                     for month in range(1, 13)
                 ],
                 "yearly": [],
-                "lifetime": _energy_payload(0, 0),
+                "lifetime": {
+                    **_energy_payload(0, 0),
+                    "since_date": None,
+                },
             })
 
         return summary
@@ -472,12 +477,16 @@ class DashboardStore:
             """
             SELECT
                 COALESCE(SUM(inverter_output_wh), 0),
-                COALESCE(SUM(savings_value), 0)
+                COALESCE(SUM(savings_value), 0),
+                MIN(date)
             FROM daily_energy_stats
+            WHERE sample_count > 0
             """
         ).fetchone()
 
-        return _energy_payload(row[0], row[1])
+        payload = _energy_payload(row[0], row[1])
+        payload["since_date"] = row[2]
+        return payload
 
     def _cleanup(self, con):
         cutoff = (
