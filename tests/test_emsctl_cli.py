@@ -35,7 +35,7 @@ def write_config(path):
     }))
 
 
-def run_emsctl(tmp_path, *args):
+def run_emsctl(tmp_path, *args, input_text=None):
     config_path = tmp_path / "config.json"
     runtime_path = tmp_path / "runtime-state.json"
     if not config_path.exists():
@@ -55,6 +55,17 @@ def run_emsctl(tmp_path, *args):
         ],
         cwd=ROOT,
         text=True,
+        input=input_text,
+        capture_output=True,
+        check=False,
+    )
+
+
+def run_emsctl_no_args(tmp_path):
+    return subprocess.run(
+        [sys.executable, str(EMSCTL)],
+        cwd=tmp_path,
+        text=True,
         capture_output=True,
         check=False,
     )
@@ -62,6 +73,135 @@ def run_emsctl(tmp_path, *args):
 
 def runtime_state(tmp_path):
     return json.loads((tmp_path / "runtime-state.json").read_text())
+
+
+def test_emsctl_no_args_prints_quick_help_without_runtime_write(tmp_path):
+    result = run_emsctl_no_args(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert "interactive" in result.stdout
+    assert "examples" in result.stdout
+    assert "runtime-state.json" in result.stdout
+    assert "Common commands" in result.stdout
+    assert not (tmp_path / "runtime-state.json").exists()
+
+
+def test_emsctl_help_contains_common_examples(tmp_path):
+    result = run_emsctl(tmp_path, "--help")
+
+    assert result.returncode == 0, result.stderr
+    assert "Common examples" in result.stdout
+    assert "python3 emsctl.py interactive" in result.stdout
+    assert "python3 emsctl.py examples" in result.stdout
+    assert "python3 emsctl.py completion bash" in result.stdout
+    assert "--password" not in result.stdout
+    assert not (tmp_path / "runtime-state.json").exists()
+
+
+def test_emsctl_system_help_contains_system_action(tmp_path):
+    result = run_emsctl(tmp_path, "system", "--help")
+
+    assert result.returncode == 0, result.stderr
+    assert "max-power" in result.stdout
+    assert "python3 emsctl.py system disable" in result.stdout
+    assert not (tmp_path / "runtime-state.json").exists()
+
+
+def test_emsctl_examples_prints_cookbook_without_runtime_write(tmp_path):
+    result = run_emsctl(tmp_path, "examples")
+
+    assert result.returncode == 0, result.stderr
+    assert "python3 emsctl.py interactive" in result.stdout
+    assert "System runtime control" in result.stdout
+    assert "python3 emsctl.py device WR1 offgrid eco" in result.stdout
+    assert "python3 emsctl.py dashboard auth-status" in result.stdout
+    assert not (tmp_path / "runtime-state.json").exists()
+
+
+def test_emsctl_completion_bash_contains_commands_and_configured_device(tmp_path):
+    result = run_emsctl(tmp_path, "completion", "bash")
+
+    assert result.returncode == 0, result.stderr
+    assert "status system device ha ha-control winter dashboard interactive menu examples completion help" in result.stdout
+    assert "set-password change-password disable-auth auth-status" in result.stdout
+    assert "off eco standard" in result.stdout
+    assert "WR1" in result.stdout
+    assert not (tmp_path / "runtime-state.json").exists()
+
+
+def test_emsctl_completion_zsh_contains_commands_and_configured_device(tmp_path):
+    result = run_emsctl(tmp_path, "completion", "zsh")
+
+    assert result.returncode == 0, result.stderr
+    assert "commands=(status system device ha ha-control winter dashboard interactive menu examples completion help)" in result.stdout
+    assert "dashboard_actions=(set-password change-password disable-auth auth-status)" in result.stdout
+    assert "offgrid_modes=(off eco standard)" in result.stdout
+    assert "devices=(WR1)" in result.stdout
+    assert not (tmp_path / "runtime-state.json").exists()
+
+
+def test_emsctl_examples_and_completion_do_not_modify_existing_runtime_state(tmp_path):
+    runtime_path = tmp_path / "runtime-state.json"
+    runtime_path.write_text('{"sentinel": true}\n')
+    before = runtime_path.read_text()
+
+    commands = [
+        ("examples",),
+        ("completion", "bash"),
+        ("completion", "zsh"),
+    ]
+
+    for command in commands:
+        result = run_emsctl(tmp_path, *command)
+        assert result.returncode == 0, result.stderr
+        assert runtime_path.read_text() == before
+
+
+def test_emsctl_interactive_status_path(tmp_path):
+    result = run_emsctl(tmp_path, "interactive", input_text="status\nquit\n")
+
+    assert result.returncode == 0, result.stderr
+    assert "EMS Control CLI interactive mode" in result.stdout
+    assert "runtime_state_path" in result.stdout
+    assert "WR1" in result.stdout
+    assert "Bye." in result.stdout
+
+
+def test_emsctl_interactive_device_offgrid_edit(tmp_path):
+    result = run_emsctl(
+        tmp_path,
+        "interactive",
+        input_text="device-offgrid\nWR1\neco\nquit\n",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "updated " in result.stdout
+    assert runtime_state(tmp_path)["devices"]["WR1"]["offgrid_socket_mode"] == "eco"
+
+
+def test_emsctl_interactive_invalid_choice_does_not_traceback(tmp_path):
+    result = run_emsctl(tmp_path, "interactive", input_text="not-a-choice\nquit\n")
+
+    assert result.returncode == 0, result.stderr
+    assert "ERROR: invalid choice" in result.stdout
+    assert "Traceback" not in result.stderr
+    assert not (tmp_path / "runtime-state.json").exists()
+
+
+def test_emsctl_interactive_invalid_numeric_does_not_modify_state(tmp_path):
+    assert run_emsctl(tmp_path, "status").returncode == 0
+    before = (tmp_path / "runtime-state.json").read_text()
+
+    result = run_emsctl(
+        tmp_path,
+        "interactive",
+        input_text="system-max-power\nnot-a-number\nquit\n",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "ERROR: system max-power must be numeric" in result.stdout
+    assert "Traceback" not in result.stderr
+    assert (tmp_path / "runtime-state.json").read_text() == before
 
 
 def test_emsctl_status_creates_runtime_state_from_config(tmp_path):

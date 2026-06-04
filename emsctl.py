@@ -6,6 +6,7 @@ import getpass
 import json
 import math
 import os
+import re
 import sys
 
 from dashboard import auth as dashboard_auth
@@ -15,6 +16,147 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 DEFAULT_RUNTIME_STATE_PATH = os.path.join(BASE_DIR, "runtime-state.json")
 OFFGRID_SOCKET_MODES = ("off", "eco", "standard")
+TOP_LEVEL_COMMANDS = (
+    "status",
+    "system",
+    "device",
+    "ha",
+    "ha-control",
+    "winter",
+    "dashboard",
+    "interactive",
+    "menu",
+    "examples",
+    "completion",
+    "help",
+)
+SYSTEM_ACTIONS = (
+    "enable",
+    "disable",
+    "max-power",
+    "loop-interval",
+    "min-output-limit",
+)
+DEVICE_ACTIONS = (
+    "enable",
+    "disable",
+    "max-power",
+    "offgrid",
+    "pv-priority-factor",
+)
+DASHBOARD_ACTIONS = (
+    "set-password",
+    "change-password",
+    "disable-auth",
+    "auth-status",
+)
+COMPLETION_SHELLS = ("bash", "zsh")
+
+TOP_LEVEL_EPILOG = """\
+Command overview:
+  status                         Show runtime-state.json
+  system <action> [value]         Enable/disable EMS and tune global limits
+  device <name> <action> [value]  Enable/disable devices and tune device values
+  ha enable|disable               Toggle Home Assistant publishing
+  ha-control enable|disable       Toggle Home Assistant helper control
+  winter enable|disable|status    Toggle or inspect winter mode
+  dashboard <command>             Manage dashboard write-mode authentication
+  interactive                     Open a menu for common runtime edits
+  examples                        Print a longer command cookbook
+  completion bash|zsh             Generate optional shell completion
+
+Common examples:
+  python3 emsctl.py interactive
+  python3 emsctl.py status
+  python3 emsctl.py system disable
+  python3 emsctl.py system max-power 1200
+  python3 emsctl.py device WR1 max-power 600
+  python3 emsctl.py device WR1 offgrid eco
+  python3 emsctl.py winter enable
+  python3 emsctl.py dashboard auth-status
+
+Tip:
+  Run `python3 emsctl.py` for a short start screen.
+  Use `python3 emsctl.py examples` for a longer command cookbook.
+  Use `python3 emsctl.py completion bash` to generate shell completion.
+"""
+
+QUICK_HELP_TEXT = """\
+EMS Control CLI
+
+Safely edits runtime-state.json only.
+Does not contact Zendure hardware or Home Assistant.
+
+Start here:
+  python3 emsctl.py interactive
+  python3 emsctl.py examples
+  python3 emsctl.py --help
+
+Common commands:
+  python3 emsctl.py status
+  python3 emsctl.py system disable
+  python3 emsctl.py system max-power 1200
+  python3 emsctl.py device WR1 max-power 600
+  python3 emsctl.py device WR1 offgrid eco
+  python3 emsctl.py dashboard auth-status
+"""
+
+EXAMPLES_TEXT = """\
+EMS runtime control CLI examples
+
+Interactive mode:
+  python3 emsctl.py interactive
+
+Status:
+  python3 emsctl.py status
+
+System runtime control:
+  python3 emsctl.py system enable
+  python3 emsctl.py system disable
+  python3 emsctl.py system max-power 1200
+  python3 emsctl.py system min-output-limit 35
+  python3 emsctl.py system loop-interval 5
+
+Device runtime control:
+  python3 emsctl.py device WR1 enable
+  python3 emsctl.py device WR1 disable
+  python3 emsctl.py device WR1 max-power 600
+  python3 emsctl.py device WR1 pv-priority-factor 1.2
+  python3 emsctl.py device WR1 offgrid off
+  python3 emsctl.py device WR1 offgrid eco
+  python3 emsctl.py device WR1 offgrid standard
+
+HA publishing / helper control:
+  python3 emsctl.py ha enable
+  python3 emsctl.py ha disable
+  python3 emsctl.py ha-control enable
+  python3 emsctl.py ha-control disable
+
+Winter mode:
+  python3 emsctl.py winter status
+  python3 emsctl.py winter enable
+  python3 emsctl.py winter disable
+
+Dashboard authentication:
+  python3 emsctl.py dashboard auth-status
+  python3 emsctl.py dashboard set-password
+  python3 emsctl.py dashboard change-password
+  python3 emsctl.py dashboard disable-auth
+
+Explicit config/runtime paths:
+  python3 emsctl.py --config /etc/ems/config.json status
+  python3 emsctl.py --runtime-state /var/lib/ems/runtime-state.json status
+  python3 emsctl.py --config config.json --runtime-state runtime-state.json device WR1 max-power 600
+  python3 emsctl.py --dashboard-auth config/dashboard-auth.json dashboard auth-status
+
+Shell completion:
+  source <(python3 emsctl.py completion bash)
+  source <(python3 emsctl.py completion zsh)
+"""
+
+
+class EMSHelpFormatter(argparse.RawDescriptionHelpFormatter):
+    pass
 
 
 def fail(message, code=1):
@@ -22,9 +164,11 @@ def fail(message, code=1):
     return code
 
 
-def parse_args():
+def build_parser():
     parser = argparse.ArgumentParser(
-        description="Edit EMS runtime-state.json without HA or hardware access."
+        description="EMS runtime control CLI",
+        epilog=TOP_LEVEL_EPILOG,
+        formatter_class=EMSHelpFormatter,
     )
     parser.add_argument(
         "--config",
@@ -42,53 +186,132 @@ def parse_args():
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("status", help="Print current runtime state.")
+    subparsers.add_parser(
+        "status",
+        help="Print current runtime state.",
+        description="Print the current runtime-state.json payload.",
+        epilog="""\
+Examples:
+  python3 emsctl.py status
+  python3 emsctl.py --config config.json status
+""",
+        formatter_class=EMSHelpFormatter,
+    )
 
-    system = subparsers.add_parser("system", help="Edit system runtime state.")
+    system = subparsers.add_parser(
+        "system",
+        help="Edit system runtime state.",
+        description="Edit global EMS runtime values.",
+        epilog="""\
+Actions:
+  enable             Enable EMS runtime control
+  disable            Disable EMS runtime control
+  max-power VALUE    Set max_total_power in watts
+  loop-interval SEC  Set loop_interval in seconds
+  min-output-limit W Set min_output_limit in watts
+
+Examples:
+  python3 emsctl.py system disable
+  python3 emsctl.py system max-power 1200
+  python3 emsctl.py system loop-interval 5
+""",
+        formatter_class=EMSHelpFormatter,
+    )
     system.add_argument(
         "action",
-        choices=[
-            "enable",
-            "disable",
-            "max-power",
-            "loop-interval",
-            "min-output-limit"
-        ]
+        choices=SYSTEM_ACTIONS,
+        metavar="action",
+        help="One of: " + ", ".join(SYSTEM_ACTIONS),
     )
-    system.add_argument("value", nargs="?")
+    system.add_argument("value", nargs="?", help="Required for numeric actions.")
 
-    device = subparsers.add_parser("device", help="Edit device runtime state.")
-    device.add_argument("name")
+    device = subparsers.add_parser(
+        "device",
+        help="Edit device runtime state.",
+        description="Edit per-device runtime values. Device names come from config.json.",
+        epilog="""\
+Actions:
+  enable                         Enable a device
+  disable                        Disable a device
+  max-power VALUE                Set device max_power in watts
+  offgrid off|eco|standard       Set offgrid socket mode
+  pv-priority-factor VALUE       Set PV-first allocation weight
+
+Examples:
+  python3 emsctl.py device WR1 disable
+  python3 emsctl.py device WR1 max-power 600
+  python3 emsctl.py device WR1 offgrid eco
+  python3 emsctl.py device WR1 pv-priority-factor 1.2
+""",
+        formatter_class=EMSHelpFormatter,
+    )
+    device.add_argument("name", help="Configured device name, for example WR1.")
     device.add_argument(
         "action",
-        choices=[
-            "enable",
-            "disable",
-            "max-power",
-            "offgrid",
-            "pv-priority-factor"
-        ]
+        choices=DEVICE_ACTIONS,
+        metavar="action",
+        help="One of: " + ", ".join(DEVICE_ACTIONS),
     )
-    device.add_argument("value", nargs="?")
+    device.add_argument("value", nargs="?", help="Required for max-power, offgrid, and pv-priority-factor.")
 
-    ha = subparsers.add_parser("ha", help="Edit HA runtime publishing state.")
-    ha.add_argument("action", choices=["enable", "disable"])
-    ha.add_argument("value", nargs="?")
+    ha = subparsers.add_parser(
+        "ha",
+        help="Edit HA runtime publishing state.",
+        description="Enable or disable runtime Home Assistant publishing.",
+        epilog="""\
+Examples:
+  python3 emsctl.py ha enable
+  python3 emsctl.py ha disable
+""",
+        formatter_class=EMSHelpFormatter,
+    )
+    ha.add_argument("action", choices=["enable", "disable"], help="One of: enable, disable.")
+    ha.add_argument("value", nargs="?", help=argparse.SUPPRESS)
 
     ha_control = subparsers.add_parser(
         "ha-control",
-        help="Edit HA runtime helper-control state."
+        help="Edit HA runtime helper-control state.",
+        description="Enable or disable runtime Home Assistant helper control.",
+        epilog="""\
+Examples:
+  python3 emsctl.py ha-control enable
+  python3 emsctl.py ha-control disable
+""",
+        formatter_class=EMSHelpFormatter,
     )
-    ha_control.add_argument("action", choices=["enable", "disable"])
-    ha_control.add_argument("value", nargs="?")
+    ha_control.add_argument("action", choices=["enable", "disable"], help="One of: enable, disable.")
+    ha_control.add_argument("value", nargs="?", help=argparse.SUPPRESS)
 
-    winter = subparsers.add_parser("winter", help="Edit winter runtime state.")
-    winter.add_argument("action", choices=["enable", "disable", "status"])
-    winter.add_argument("value", nargs="?")
+    winter = subparsers.add_parser(
+        "winter",
+        help="Edit winter runtime state.",
+        description="Enable, disable, or inspect winter runtime mode.",
+        epilog="""\
+Examples:
+  python3 emsctl.py winter status
+  python3 emsctl.py winter enable
+  python3 emsctl.py winter disable
+""",
+        formatter_class=EMSHelpFormatter,
+    )
+    winter.add_argument("action", choices=["enable", "disable", "status"], help="One of: enable, disable, status.")
+    winter.add_argument("value", nargs="?", help=argparse.SUPPRESS)
 
     dashboard = subparsers.add_parser(
         "dashboard",
-        help="Manage dashboard authentication."
+        help="Manage dashboard authentication.",
+        description="Manage local dashboard write-mode authentication.",
+        epilog="""\
+Examples:
+  python3 emsctl.py dashboard auth-status
+  python3 emsctl.py dashboard set-password
+  python3 emsctl.py dashboard change-password
+  python3 emsctl.py dashboard disable-auth
+
+Password prompts do not echo input. Hidden automation flags are intentionally
+omitted from normal help output.
+""",
+        formatter_class=EMSHelpFormatter,
     )
     dashboard_subparsers = dashboard.add_subparsers(
         dest="dashboard_command",
@@ -119,7 +342,56 @@ def parse_args():
         help="Show dashboard authentication status."
     )
 
-    return parser.parse_args()
+    subparsers.add_parser(
+        "interactive",
+        help="Open a menu for common runtime edits.",
+        description="Open a dependency-free interactive menu for common runtime edits.",
+        epilog="""\
+Examples:
+  python3 emsctl.py interactive
+  python3 emsctl.py --config config.json interactive
+""",
+        formatter_class=EMSHelpFormatter,
+    )
+    subparsers.add_parser(
+        "menu",
+        help="Alias for interactive.",
+        description="Alias for the interactive menu.",
+        formatter_class=EMSHelpFormatter,
+    )
+
+    subparsers.add_parser(
+        "examples",
+        help="Print a longer command cookbook.",
+        description="Print practical emsctl.py examples without reading or writing runtime-state.",
+        formatter_class=EMSHelpFormatter,
+    )
+
+    completion = subparsers.add_parser(
+        "completion",
+        help="Generate optional shell completion.",
+        description="Generate shell completion code. Completion is optional and dependency-free.",
+        epilog="""\
+Examples:
+  python3 emsctl.py completion bash
+  python3 emsctl.py completion zsh
+""",
+        formatter_class=EMSHelpFormatter,
+    )
+    completion.add_argument("shell", choices=COMPLETION_SHELLS, help="Shell completion format to print.")
+
+    subparsers.add_parser(
+        "help",
+        help="Show top-level help.",
+        description="Show the same top-level help as --help.",
+        formatter_class=EMSHelpFormatter,
+    )
+
+    return parser
+
+
+def parse_args(argv=None):
+    return build_parser().parse_args(argv)
 
 
 def load_config(path):
@@ -229,6 +501,195 @@ def config_device_defaults(config):
         }
 
     return devices
+
+
+def config_device_names(config):
+    names = []
+    for item in config.get("devices", []):
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if name:
+            names.append(str(name))
+    return names
+
+
+def safe_completion_words(words):
+    safe_word = re.compile(r"^[A-Za-z0-9._@%+=:,/-]+$")
+    return [str(word) for word in words if safe_word.fullmatch(str(word))]
+
+
+def completion_word_list(words):
+    return " ".join(safe_completion_words(words))
+
+
+def completion_script_bash(config):
+    commands = completion_word_list(TOP_LEVEL_COMMANDS)
+    system_actions = completion_word_list(SYSTEM_ACTIONS)
+    device_actions = completion_word_list(DEVICE_ACTIONS)
+    ha_actions = "enable disable"
+    winter_actions = "enable disable status"
+    dashboard_actions = completion_word_list(DASHBOARD_ACTIONS)
+    completion_shells = completion_word_list(COMPLETION_SHELLS)
+    offgrid_modes = completion_word_list(OFFGRID_SOCKET_MODES)
+    devices = completion_word_list(config_device_names(config))
+
+    return f"""\
+# Bash completion for emsctl.py
+# Current shell:
+#   source <(python3 emsctl.py completion bash)
+# Persistent user install:
+#   python3 emsctl.py completion bash > ~/.local/share/bash-completion/completions/emsctl
+
+_emsctl_py_completion()
+{{
+  local cur prev command action
+  COMPREPLY=()
+  cur="${{COMP_WORDS[COMP_CWORD]}}"
+  prev="${{COMP_WORDS[COMP_CWORD-1]}}"
+
+  local commands="{commands}"
+  local system_actions="{system_actions}"
+  local device_actions="{device_actions}"
+  local ha_actions="{ha_actions}"
+  local winter_actions="{winter_actions}"
+  local dashboard_actions="{dashboard_actions}"
+  local completion_shells="{completion_shells}"
+  local offgrid_modes="{offgrid_modes}"
+  local devices="{devices}"
+
+  if [[ "$cur" == --* ]]; then
+    COMPREPLY=( $(compgen -W "--config --runtime-state --dashboard-auth --help" -- "$cur") )
+    return 0
+  fi
+
+  command=""
+  for ((i = 1; i < COMP_CWORD; i++)); do
+    case "${{COMP_WORDS[i]}}" in
+      status|system|device|ha|ha-control|winter|dashboard|interactive|menu|examples|completion|help)
+        command="${{COMP_WORDS[i]}}"
+        break
+        ;;
+    esac
+  done
+
+  if [[ -z "$command" ]]; then
+    COMPREPLY=( $(compgen -W "$commands --config --runtime-state --dashboard-auth" -- "$cur") )
+    return 0
+  fi
+
+  case "$command" in
+    system)
+      COMPREPLY=( $(compgen -W "$system_actions" -- "$cur") )
+      ;;
+    device)
+      if [[ "$prev" == "device" ]]; then
+        COMPREPLY=( $(compgen -W "$devices" -- "$cur") )
+      elif [[ " $device_actions " == *" $prev "* ]]; then
+        if [[ "$prev" == "offgrid" ]]; then
+          COMPREPLY=( $(compgen -W "$offgrid_modes" -- "$cur") )
+        fi
+      else
+        COMPREPLY=( $(compgen -W "$device_actions" -- "$cur") )
+      fi
+      ;;
+    ha|ha-control)
+      COMPREPLY=( $(compgen -W "$ha_actions" -- "$cur") )
+      ;;
+    winter)
+      COMPREPLY=( $(compgen -W "$winter_actions" -- "$cur") )
+      ;;
+    dashboard)
+      COMPREPLY=( $(compgen -W "$dashboard_actions" -- "$cur") )
+      ;;
+    completion)
+      COMPREPLY=( $(compgen -W "$completion_shells" -- "$cur") )
+      ;;
+  esac
+}}
+
+complete -F _emsctl_py_completion emsctl.py
+complete -F _emsctl_py_completion emsctl
+"""
+
+
+def zsh_array(words):
+    return " ".join(safe_completion_words(words))
+
+
+def completion_script_zsh(config):
+    commands = zsh_array(TOP_LEVEL_COMMANDS)
+    system_actions = zsh_array(SYSTEM_ACTIONS)
+    device_actions = zsh_array(DEVICE_ACTIONS)
+    ha_actions = "enable disable"
+    winter_actions = "enable disable status"
+    dashboard_actions = zsh_array(DASHBOARD_ACTIONS)
+    completion_shells = zsh_array(COMPLETION_SHELLS)
+    offgrid_modes = zsh_array(OFFGRID_SOCKET_MODES)
+    devices = zsh_array(config_device_names(config))
+
+    return f"""\
+#compdef emsctl.py emsctl
+# Zsh completion for emsctl.py
+# Current shell:
+#   source <(python3 emsctl.py completion zsh)
+
+_emsctl_py()
+{{
+  local -a commands system_actions device_actions ha_actions winter_actions dashboard_actions completion_shells offgrid_modes devices
+  commands=({commands})
+  system_actions=({system_actions})
+  device_actions=({device_actions})
+  ha_actions=({ha_actions})
+  winter_actions=({winter_actions})
+  dashboard_actions=({dashboard_actions})
+  completion_shells=({completion_shells})
+  offgrid_modes=({offgrid_modes})
+  devices=({devices})
+
+  if (( CURRENT == 2 )); then
+    _describe 'command' commands
+    return
+  fi
+
+  case "$words[2]" in
+    system)
+      _describe 'system action' system_actions
+      ;;
+    device)
+      if (( CURRENT == 3 )); then
+        _describe 'device' devices
+      elif (( CURRENT == 4 )); then
+        _describe 'device action' device_actions
+      elif [[ "$words[4]" == "offgrid" ]]; then
+        _describe 'offgrid mode' offgrid_modes
+      fi
+      ;;
+    ha|ha-control)
+      _describe 'action' ha_actions
+      ;;
+    winter)
+      _describe 'winter action' winter_actions
+      ;;
+    dashboard)
+      _describe 'dashboard command' dashboard_actions
+      ;;
+    completion)
+      _describe 'shell' completion_shells
+      ;;
+  esac
+}}
+
+_emsctl_py "$@"
+"""
+
+
+def print_examples():
+    print(EXAMPLES_TEXT.rstrip())
+
+
+def print_quick_help():
+    print(QUICK_HELP_TEXT.rstrip())
 
 
 def runtime_defaults(config, existing=None):
@@ -527,11 +988,215 @@ def handle_dashboard_command(args, config):
     raise ValueError(f"unknown dashboard command {command}")
 
 
-def main():
-    args = parse_args()
+def make_args(**kwargs):
+    return argparse.Namespace(**kwargs)
+
+
+def prompt_text(label, default=None):
+    suffix = f" [{default}]" if default is not None else ""
+    try:
+        value = input(f"{label}{suffix}: ").strip()
+    except EOFError:
+        return None
+    if value == "" and default is not None:
+        return str(default)
+    return value
+
+
+def prompt_choice(title, options):
+    print()
+    print(title)
+    for index, (key, label) in enumerate(options, start=1):
+        print(f"  {index}. {label} ({key})")
+
+    keys = {key: key for key, _ in options}
+    while True:
+        raw = prompt_text("Choice")
+        if raw is None:
+            return "quit"
+        value = raw.strip().lower().replace(" ", "-")
+        if value in ("q", "quit", "exit"):
+            return "quit"
+        if value.isdigit():
+            index = int(value)
+            if 1 <= index <= len(options):
+                return options[index - 1][0]
+        if value in keys:
+            return keys[value]
+        print("ERROR: invalid choice; enter a number, command key, or quit.")
+
+
+def prompt_device_name(state):
+    devices = state.get("devices", {})
+    if not isinstance(devices, dict) or not devices:
+        print("ERROR: no configured devices found.")
+        return None
+
+    names = sorted(devices)
+    print("Known devices: " + ", ".join(names))
+    default = names[0] if len(names) == 1 else None
+    name = prompt_text("Device", default=default)
+    if name is None:
+        return None
+    if name not in devices:
+        print(f"ERROR: unknown device {name}; known devices: {', '.join(names)}")
+        return None
+    return name
+
+
+def save_interactive(runtime_path, state):
+    save_atomic(runtime_path, state)
+    print(f"updated {runtime_path}")
+
+
+def run_interactive(args, config):
+    runtime_path = resolve_runtime_path(args, config)
+    state, _ = load_runtime_state(runtime_path, config)
+
+    menu_items = [
+        ("status", "Show status"),
+        ("system-enable", "System enable"),
+        ("system-disable", "System disable"),
+        ("system-max-power", "System max-power"),
+        ("system-loop-interval", "System loop-interval"),
+        ("system-min-output-limit", "System min-output-limit"),
+        ("ha-enable", "HA publishing enable"),
+        ("ha-disable", "HA publishing disable"),
+        ("ha-control-enable", "HA helper-control enable"),
+        ("ha-control-disable", "HA helper-control disable"),
+        ("winter-status", "Winter status"),
+        ("winter-enable", "Winter enable"),
+        ("winter-disable", "Winter disable"),
+        ("device-enable", "Device enable"),
+        ("device-disable", "Device disable"),
+        ("device-max-power", "Device max-power"),
+        ("device-pv-priority-factor", "Device pv-priority-factor"),
+        ("device-offgrid", "Device offgrid mode"),
+        ("dashboard-auth-status", "Dashboard auth-status"),
+        ("dashboard-set-password", "Dashboard set-password"),
+        ("dashboard-change-password", "Dashboard change-password"),
+        ("dashboard-disable-auth", "Dashboard disable-auth"),
+        ("quit", "Quit"),
+    ]
+
+    print("EMS Control CLI interactive mode")
+    print("Safely edits runtime-state.json only.")
+    print("Does not contact Zendure hardware or Home Assistant.")
+
+    while True:
+        choice = prompt_choice("Select an action", menu_items)
+        if choice == "quit":
+            print("Bye.")
+            return 0
+
+        try:
+            if choice == "status":
+                print_status(runtime_path, state)
+                continue
+
+            if choice.startswith("system-"):
+                action = choice.removeprefix("system-")
+                value = None
+                if action in ("max-power", "loop-interval", "min-output-limit"):
+                    value = prompt_text(f"system {action}")
+                    if value is None:
+                        continue
+                update_system(make_args(action=action, value=value), state)
+                save_interactive(runtime_path, state)
+                continue
+
+            if choice.startswith("ha-control-"):
+                action = choice.removeprefix("ha-control-")
+                set_bool_section(make_args(action=action, value=None), state, "ha", "control_enabled")
+                save_interactive(runtime_path, state)
+                continue
+
+            if choice.startswith("ha-"):
+                action = choice.removeprefix("ha-")
+                set_bool_section(make_args(action=action, value=None), state, "ha", "enabled")
+                save_interactive(runtime_path, state)
+                continue
+
+            if choice == "winter-status":
+                print_status(runtime_path, {"winter": state.get("winter", {})})
+                continue
+
+            if choice.startswith("winter-"):
+                action = choice.removeprefix("winter-")
+                set_bool_section(make_args(action=action, value=None), state, "winter", "enabled")
+                save_interactive(runtime_path, state)
+                continue
+
+            if choice.startswith("device-"):
+                action = choice.removeprefix("device-")
+                name = prompt_device_name(state)
+                if name is None:
+                    continue
+                value = None
+                if action in ("max-power", "pv-priority-factor"):
+                    value = prompt_text(f"device {name} {action}")
+                    if value is None:
+                        continue
+                elif action == "offgrid":
+                    value = prompt_text("Offgrid mode (off, eco, standard)")
+                    if value is None:
+                        continue
+                update_device(make_args(name=name, action=action, value=value), state)
+                save_interactive(runtime_path, state)
+                continue
+
+            if choice.startswith("dashboard-"):
+                dashboard_command = choice.removeprefix("dashboard-")
+                handle_dashboard_command(
+                    make_args(
+                        dashboard_auth=args.dashboard_auth,
+                        dashboard_command=dashboard_command,
+                        password=None,
+                        confirm_password=None,
+                        current_password=None,
+                        new_password=None,
+                    ),
+                    config,
+                )
+                continue
+
+            print(f"ERROR: unsupported action {choice}")
+
+        except (OSError, ValueError) as exc:
+            print(f"ERROR: {exc}")
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if not argv:
+        print_quick_help()
+        return 0
+
+    parser = build_parser()
+    args = parser.parse_args(argv)
 
     try:
         config = load_config(args.config)
+
+        if args.command == "help":
+            parser.print_help()
+            return 0
+
+        if args.command == "examples":
+            print_examples()
+            return 0
+
+        if args.command in ("interactive", "menu"):
+            return run_interactive(args, config)
+
+        if args.command == "completion":
+            if args.shell == "bash":
+                print(completion_script_bash(config), end="")
+            elif args.shell == "zsh":
+                print(completion_script_zsh(config), end="")
+            else:
+                raise ValueError(f"unknown completion shell {args.shell}")
+            return 0
 
         if args.command == "dashboard":
             return handle_dashboard_command(args, config)
