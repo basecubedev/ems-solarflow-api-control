@@ -317,6 +317,8 @@ Safe runtime-state edits:
 
 ```bash
 python3 emsctl.py status
+python3 emsctl.py interactive
+python3 emsctl.py examples
 python3 emsctl.py system min-output-limit 30
 python3 emsctl.py device WR1 pv-priority-factor 1.3
 python3 emsctl.py device WR1 offgrid eco
@@ -327,7 +329,7 @@ python3 emsctl.py ha disable
 More:
 
 - [docs/runtime-state.md](docs/runtime-state.md)
-- [docs/cli.md](docs/cli.md)
+- [docs/cli.md](docs/cli.md) includes shell completion setup for Bash and Zsh.
 
 ## Dashboard
 
