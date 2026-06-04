@@ -329,7 +329,7 @@ More:
 - [docs/runtime-state.md](docs/runtime-state.md)
 - [docs/cli.md](docs/cli.md)
 
-## Read-Only Dashboard
+## Dashboard
 
 When `dashboard.enabled=true`, the EMS starts a local dashboard server:
 
@@ -341,7 +341,14 @@ The built-in standalone dashboard has Aggregated, Devices, Control, and Energy
 views. The Energy view includes Today, Yesterday, rolling periods,
 monthly/yearly totals, and Lifetime with since date.
 
-It is read-only and does not expose EMS control endpoints.
+It is read-only by default. Optional write mode for allowlisted runtime-state
+values is available only after setting a local dashboard password with
+`emsctl dashboard set-password`.
+
+Write mode is intended for trusted networks only. The built-in dashboard adds
+CSRF checks, browser security headers, request-size limits, SSE connection
+limits, and config-aware runtime power limits, but public exposure should still
+use a VPN or reverse proxy with strong TLS and external access control.
 
 More: [docs/dashboard.md](docs/dashboard.md).
 

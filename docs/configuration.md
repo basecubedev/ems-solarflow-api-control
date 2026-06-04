@@ -190,9 +190,9 @@ Manual no-write validation flags:
 
 ## Dashboard
 
-`dashboard.enabled` starts the optional read-only web dashboard alongside the
-EMS loop. It does not expose control endpoints and does not write Zendure
-values.
+`dashboard.enabled` starts the optional web dashboard alongside the EMS loop.
+It is read-only by default. Runtime write mode is unavailable until a local
+admin password is configured with `emsctl dashboard set-password`.
 
 `dashboard.host` and `dashboard.port` define the listen address. The template
 uses `0.0.0.0:8080`.
@@ -205,6 +205,24 @@ dashboard API supports `1h`, `6h`, `12h`, and `24h` ranges.
 
 `dashboard.write_interval_seconds` limits how often the EMS loop persists
 dashboard telemetry. The default is `5`.
+
+`dashboard.auth_file` stores dashboard password hash metadata. Missing file
+means dashboard auth is not configured and write mode is unavailable.
+
+`dashboard.ssl_enabled` switches the same dashboard port from HTTP to HTTPS.
+When enabled, `dashboard.ssl_cert_file` and `dashboard.ssl_key_file` are used.
+If either file is missing and `dashboard.ssl_auto_generate=true`, EMS creates a
+self-signed LAN certificate and restricts the private-key file permissions.
+
+Dashboard write requests are constrained by the configured system and device
+power limits. For example, a runtime `max_total_power` update cannot exceed the
+configured `system.max_total_power`, and a device runtime `max_power` update
+cannot exceed that device's configured `max_power`.
+
+The dashboard also sends browser security headers, caps JSON request bodies,
+and limits concurrent Server-Sent Events connections. These protections are for
+local hardening; public exposure should use a VPN, reverse proxy, strong TLS,
+and external access control.
 
 ## Energy Savings
 

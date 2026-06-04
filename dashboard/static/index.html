@@ -17,6 +17,8 @@
       <div class="status-cluster">
         <span id="connectionState" class="pill muted">Connecting</span>
         <span id="lastUpdated" class="timestamp">--</span>
+        <span id="writeModeState" class="pill muted">Read-only</span>
+        <button id="authButton" class="auth-button" type="button" hidden>Login</button>
       </div>
     </header>
 
@@ -234,6 +236,24 @@
       </div>
     </section>
   </main>
+
+  <div id="loginModal" class="modal-backdrop" hidden>
+    <form id="loginForm" class="login-modal">
+      <div class="login-modal-head">
+        <h2>Dashboard Login</h2>
+        <button id="loginCloseButton" class="icon-button" type="button" aria-label="Close">&times;</button>
+      </div>
+      <label class="login-field">
+        <span>Password</span>
+        <input id="loginPassword" type="password" autocomplete="current-password" required>
+      </label>
+      <div id="loginError" class="form-error" hidden></div>
+      <div class="login-actions">
+        <button class="secondary-button" id="loginCancelButton" type="button">Cancel</button>
+        <button class="primary-button" type="submit">Login</button>
+      </div>
+    </form>
+  </div>
   <script src="/app.js"></script>
 </body>
 </html>

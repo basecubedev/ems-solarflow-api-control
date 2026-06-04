@@ -1,4 +1,4 @@
-# Read-Only Live Dashboard
+# Live Dashboard
 
 The EMS includes an optional standalone dashboard at:
 
@@ -6,8 +6,9 @@ The EMS includes an optional standalone dashboard at:
 http://<ems-host>:8080
 ```
 
-It is read-only. The dashboard exposes only telemetry endpoints and does not
-provide control, configuration, or Zendure write routes.
+The dashboard is read-only by default. Runtime write mode is unavailable until
+a local dashboard admin password is configured with `emsctl`. There is no
+default password and password setup is not available from the web UI.
 
 ## Control Explain View
 
@@ -35,7 +36,12 @@ The dashboard section in `config.json` controls startup:
     "port": 8080,
     "database_path": "data/ems_dashboard.sqlite",
     "history_hours": 48,
-    "write_interval_seconds": 5
+    "write_interval_seconds": 5,
+    "auth_file": "config/dashboard-auth.json",
+    "ssl_enabled": false,
+    "ssl_cert_file": "config/dashboard.crt",
+    "ssl_key_file": "config/dashboard.key",
+    "ssl_auto_generate": true
   },
   "energy_savings": {
     "enabled": true,
@@ -64,6 +70,84 @@ restarts, downtime, or longer outages.
 
 `energy_savings.timezone` defines the calendar timezone used for daily
 statistics and period lookups such as Today and Yesterday.
+
+## Dashboard Write Mode
+
+Write mode is optional and only changes allowlisted runtime-state values from
+the Control tab. Live metric tiles remain read-only.
+
+Dashboard write mode can change live EMS behavior. Enable it only on trusted
+networks and only for operators who should be able to change runtime settings.
+
+Enable write mode by setting a local admin password:
+
+```bash
+python3 emsctl.py dashboard set-password
+```
+
+Change the password:
+
+```bash
+python3 emsctl.py dashboard change-password
+```
+
+Disable dashboard authentication and write mode:
+
+```bash
+python3 emsctl.py dashboard disable-auth
+```
+
+Check status:
+
+```bash
+python3 emsctl.py dashboard auth-status
+```
+
+The password file stores PBKDF2-SHA256 hash metadata only. Missing
+`config/dashboard-auth.json` means authentication is not configured and write
+mode is unavailable.
+
+Authenticated writes require the dashboard session cookie and a per-session
+CSRF token. The backend validates every writable field with explicit allowlists.
+Power limits are checked against the configured EMS and device limits, not only
+generic type ranges.
+
+## Security Hardening
+
+The dashboard applies several local hardening measures:
+
+- JSON API request bodies are capped at 16 KiB.
+- Authenticated write requests require a server-side session and CSRF token.
+- Login attempts are rate-limited in memory and old entries are pruned.
+- Runtime-state updates are locked in-process before saving atomically.
+- Browser responses include `no-store` caching, CSP, frame blocking, referrer
+  restrictions, and common feature-denial headers.
+- Server-Sent Events are limited globally and per client address, with a
+  maximum connection lifetime.
+
+These controls reduce accidental exposure and local abuse, but they are not a
+substitute for a real internet-facing access layer.
+
+## Optional HTTPS
+
+The built-in dashboard can serve HTTPS directly for LAN usage:
+
+```json
+{
+  "dashboard": {
+    "ssl_enabled": true
+  }
+}
+```
+
+When HTTPS is enabled and the configured certificate/key are missing, EMS
+auto-generates a self-signed certificate if `ssl_auto_generate=true`. Browsers
+will show a warning for self-signed certificates; this is expected unless you
+install or replace the certificate with one trusted by your clients.
+
+Direct HTTPS is intended for local LAN access. Public internet exposure should
+be handled with a VPN, reverse proxy, strong TLS, and external access control.
+Do not expose the built-in dashboard directly to the public internet.
 
 ## API
 
@@ -116,3 +200,18 @@ GET /api/events
 ```
 
 The event stream uses Server-Sent Events and emits `telemetry` events.
+
+Auth and runtime APIs:
+
+```text
+GET  /api/auth/status
+POST /api/auth/login
+POST /api/auth/logout
+GET  /api/runtime
+PATCH /api/runtime/system
+PATCH /api/runtime/ha
+PATCH /api/runtime/winter
+PATCH /api/runtime/device/<name>
+```
+
+The `PATCH` endpoints require a valid login session and `X-CSRF-Token`.
