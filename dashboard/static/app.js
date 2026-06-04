@@ -4,6 +4,12 @@ const state = {
   history: [],
   flowView: "aggregated",
   demoMode: isDemoMode(),
+  auth: {
+    configured: false,
+    authenticated: false,
+    csrfToken: null,
+  },
+  runtime: null,
 };
 
 const charts = [
@@ -635,7 +641,12 @@ function renderControlExplain(snapshot) {
 
   const explain = snapshot?.control_explain;
   if (!explain || typeof explain !== "object") {
-    container.innerHTML = `<div class="control-empty">No control explanation data available yet.</div>`;
+    container.innerHTML = `
+      <div class="control-decision-board">
+        <div class="control-empty">No control explanation data available yet.</div>
+        ${runtimeControlPanel()}
+      </div>
+    `;
     return;
   }
 
@@ -650,6 +661,7 @@ function renderControlExplain(snapshot) {
 
   container.innerHTML = `
     <div class="control-decision-board">
+      ${runtimeControlPanel()}
       ${controlGlobalPipeline(explain, devices, snapshot)}
       ${controlContextRail(explain, devices, notes)}
       <div class="control-device-list">${deviceFlows}</div>
@@ -1710,6 +1722,369 @@ function initFlowViewSwitch() {
   });
 }
 
+function runtimeControlPanel() {
+  const runtime = state.runtime || {};
+  if (!state.auth.configured) {
+    return `
+      <section class="runtime-editor-panel control-stage-row" aria-label="Runtime write controls">
+        <div class="control-empty compact">Read-only mode. Dashboard authentication is not configured.</div>
+      </section>
+    `;
+  }
+
+  if (!state.auth.authenticated) {
+    return `
+      <section class="runtime-editor-panel control-stage-row" aria-label="Runtime write controls">
+        <div class="control-empty compact">Read-only mode. Login required to change runtime values.</div>
+      </section>
+    `;
+  }
+
+  const system = runtime.system || {};
+  const ha = runtime.ha || {};
+  const winter = runtime.winter || {};
+  const devices = Object.entries(runtime.devices || {});
+  const limits = runtime._limits || {};
+  const systemLimits = limits.system || {};
+  const deviceLimits = limits.devices || {};
+  const fallbackDeviceMax = Number(limits.fallback_device_max_power || 5000);
+  const deviceForms = devices.map(([name, device], index) => runtimeDeviceForm(
+    name,
+    device || {},
+    Number(deviceLimits[name] || fallbackDeviceMax),
+    index + 2
+  )).join("");
+  const winterStep = devices.length + 2;
+  const haStep = devices.length + 3;
+
+  return `
+    <section class="runtime-editor-panel control-stage-row" aria-label="Runtime write controls">
+      <div class="runtime-editor-head control-context-rail">
+        <div class="control-context-title">Runtime Settings</div>
+        <span id="runtimeWriteFeedback" class="runtime-feedback"></span>
+      </div>
+      <div class="runtime-editor-grid control-global-pipeline">
+        ${runtimeStageCard({
+          endpoint: "/api/runtime/system",
+          title: "EMS / System",
+          subtitle: "Global runtime limits and loop control",
+          step: 1,
+          kind: "target",
+          iconName: "gauge",
+          fields: `
+          ${runtimeToggle("enabled", "EMS enabled", system.enabled)}
+          ${runtimeNumber("max_total_power", "Max total power", system.max_total_power, 0, Number(systemLimits.max_total_power || 5000), "W")}
+          ${runtimeNumber("min_output_limit", "Min output limit", system.min_output_limit, 0, Number(systemLimits.min_output_limit || 5000), "W")}
+          ${runtimeNumber("loop_interval", "Loop interval", system.loop_interval, 1, 3600, "s")}
+        `})}
+        ${deviceForms}
+        ${runtimeStageCard({
+          endpoint: "/api/runtime/winter",
+          title: "Winter Mode",
+          subtitle: "Seasonal charging behavior",
+          step: winterStep,
+          kind: "gates",
+          iconName: "battery",
+          fields: `
+          ${runtimeToggle("enabled", "Winter mode", winter.enabled)}
+        `})}
+        ${runtimeStageCard({
+          endpoint: "/api/runtime/ha",
+          title: "Home Assistant",
+          subtitle: "External publishing and helper control",
+          step: haStep,
+          kind: "write",
+          iconName: "live",
+          fields: `
+          ${runtimeToggle("enabled", "HA publishing", ha.enabled)}
+          ${runtimeToggle("control_enabled", "HA helper control", ha.control_enabled)}
+        `})}
+      </div>
+    </section>
+  `;
+}
+
+function runtimeStageCard({ endpoint, title, subtitle, step, kind, iconName, fields }) {
+  return `
+    <form class="runtime-form control-pipeline-stage runtime-stage-card runtime-stage-${escapeHtml(kind)}" data-runtime-endpoint="${escapeHtml(endpoint)}">
+      <div class="control-stage-head control-stage-header">
+        <div class="control-stage-kicker">
+          ${controlStageStep(step)}
+          <span class="control-stage-dot" aria-hidden="true">${icon(iconName)}</span>
+        </div>
+        <div class="control-stage-title-block">
+          <h3 class="control-stage-title">${escapeHtml(title)}</h3>
+          ${controlStageSubtitle(subtitle)}
+        </div>
+      </div>
+      <div class="control-stage-body runtime-stage-values control-pipeline-values">${fields}</div>
+      ${runtimeSubmit()}
+    </form>
+  `;
+}
+
+function runtimeDeviceForm(name, device, maxPower = 5000, step = 1) {
+  const endpoint = `/api/runtime/device/${encodeURIComponent(name)}`;
+  return runtimeStageCard({
+    endpoint,
+    title: name,
+    subtitle: "Device runtime write values",
+    step,
+    kind: "distribution",
+    iconName: "inverter",
+    fields: `
+      ${runtimeToggle("enabled", "Device enabled", device.enabled)}
+      ${runtimeNumber("max_power", "Max power", device.max_power, 0, maxPower, "W")}
+      ${runtimeNumber("pv_priority_factor", "PV priority", device.pv_priority_factor, 0.01, 100, "x", "0.01")}
+      ${runtimeSelect("offgrid_socket_mode", "Offgrid socket", device.offgrid_socket_mode, ["off", "eco", "standard"])}
+    `,
+  });
+}
+
+function runtimeToggle(name, label, value) {
+  return `
+    <label class="runtime-toggle control-pipeline-fact role-config">
+      <span class="value-icon" aria-hidden="true">${icon("rule")}</span>
+      <span class="control-label">${escapeHtml(label)}</span>
+      <input type="checkbox" name="${escapeHtml(name)}" ${value ? "checked" : ""}>
+    </label>
+  `;
+}
+
+function runtimeNumber(name, label, value, min, max, unit, step = "1") {
+  const rendered = value === undefined || value === null ? "" : escapeHtml(value);
+  return `
+    <label class="runtime-field control-pipeline-fact role-config">
+      <span class="value-icon" aria-hidden="true">${icon("gauge")}</span>
+      <span class="control-label">${escapeHtml(label)}</span>
+      <span class="runtime-number-wrap">
+        <input type="number" name="${escapeHtml(name)}" value="${rendered}" min="${min}" max="${max}" step="${step}">
+        <span>${escapeHtml(unit)}</span>
+      </span>
+    </label>
+  `;
+}
+
+function runtimeSelect(name, label, selectedValue, options) {
+  return `
+    <label class="runtime-field control-pipeline-fact role-config">
+      <span class="value-icon" aria-hidden="true">${icon("rule")}</span>
+      <span class="control-label">${escapeHtml(label)}</span>
+      <select name="${escapeHtml(name)}">
+        ${options.map((value) => `
+          <option value="${escapeHtml(value)}" ${selectedValue === value ? "selected" : ""}>${escapeHtml(value)}</option>
+        `).join("")}
+      </select>
+    </label>
+  `;
+}
+
+function runtimeSubmit() {
+  return `<button class="primary-button compact" type="submit">Apply</button>`;
+}
+
+function initRuntimeForms() {
+  const container = $("controlExplainView");
+  if (!container) return;
+  container.addEventListener("submit", async (event) => {
+    const form = event.target;
+    if (!form.matches(".runtime-form")) return;
+    event.preventDefault();
+    await submitRuntimeForm(form);
+  });
+}
+
+async function submitRuntimeForm(form) {
+  if (!state.auth.authenticated || !state.auth.csrfToken) {
+    setRuntimeFeedback("Login required.", true);
+    return;
+  }
+
+  const payload = {};
+  Array.from(form.elements).forEach((element) => {
+    if (!element.name) return;
+    if (element.type === "checkbox") {
+      payload[element.name] = element.checked;
+      return;
+    }
+    if (element.type === "number") {
+      payload[element.name] = element.value.includes(".")
+        ? Number.parseFloat(element.value)
+        : Number.parseInt(element.value, 10);
+      return;
+    }
+    payload[element.name] = element.value;
+  });
+
+  try {
+    const response = await fetch(form.dataset.runtimeEndpoint, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": state.auth.csrfToken,
+      },
+      body: JSON.stringify(payload),
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        await loadAuthStatus();
+      }
+      throw new Error(result.message || result.error || "Runtime update failed");
+    }
+    setRuntimeFeedback("Saved.", false);
+    await loadRuntimeState();
+  } catch (error) {
+    setRuntimeFeedback(error.message || "Runtime update failed.", true);
+  }
+}
+
+function setRuntimeFeedback(message, isError) {
+  const el = $("runtimeWriteFeedback");
+  if (!el) return;
+  el.textContent = message;
+  el.className = `runtime-feedback ${isError ? "error" : "ok"}`;
+}
+
+async function loadRuntimeState() {
+  if (state.demoMode) {
+    state.runtime = demoRuntimeState();
+    return;
+  }
+  try {
+    const response = await fetch("/api/runtime");
+    state.runtime = await response.json();
+    if (state.snapshot) renderControlExplain(state.snapshot);
+  } catch {
+    state.runtime = null;
+  }
+}
+
+async function loadAuthStatus() {
+  if (state.demoMode) {
+    state.auth = { configured: false, authenticated: false, csrfToken: null };
+    renderAuthState();
+    return;
+  }
+  try {
+    const response = await fetch("/api/auth/status");
+    const payload = await response.json();
+    state.auth.configured = Boolean(payload.auth_configured);
+    state.auth.authenticated = Boolean(payload.authenticated);
+    if (payload.csrf_token) {
+      state.auth.csrfToken = payload.csrf_token;
+    }
+    if (!state.auth.authenticated) {
+      state.auth.csrfToken = null;
+    }
+    renderAuthState();
+    if (state.snapshot) renderControlExplain(state.snapshot);
+  } catch {
+    state.auth = { configured: false, authenticated: false, csrfToken: null };
+    renderAuthState();
+  }
+}
+
+function renderAuthState() {
+  const statePill = $("writeModeState");
+  const button = $("authButton");
+  if (statePill) {
+    statePill.textContent = state.auth.authenticated ? "Write mode" : "Read-only";
+    statePill.className = state.auth.authenticated ? "pill" : "pill muted";
+  }
+  if (!button) return;
+  button.hidden = !state.auth.configured;
+  button.textContent = state.auth.authenticated ? "Logout" : "Login";
+}
+
+function initAuthControls() {
+  const button = $("authButton");
+  const modal = $("loginModal");
+  const form = $("loginForm");
+  const closeButton = $("loginCloseButton");
+  const cancelButton = $("loginCancelButton");
+
+  if (button) {
+    button.addEventListener("click", async () => {
+      if (state.auth.authenticated) {
+        await logout();
+      } else {
+        openLoginModal();
+      }
+    });
+  }
+
+  [closeButton, cancelButton].forEach((item) => {
+    if (item) item.addEventListener("click", closeLoginModal);
+  });
+
+  if (modal) {
+    modal.addEventListener("click", (event) => {
+      if (event.target === modal) closeLoginModal();
+    });
+  }
+
+  if (form) {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      await login();
+    });
+  }
+}
+
+function openLoginModal() {
+  const modal = $("loginModal");
+  const password = $("loginPassword");
+  const error = $("loginError");
+  if (error) error.hidden = true;
+  if (password) password.value = "";
+  if (modal) modal.hidden = false;
+  if (password) password.focus();
+}
+
+function closeLoginModal() {
+  const modal = $("loginModal");
+  if (modal) modal.hidden = true;
+}
+
+async function login() {
+  const password = $("loginPassword")?.value || "";
+  const error = $("loginError");
+  try {
+    const response = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.message || payload.error || "Login failed");
+    }
+    state.auth.configured = Boolean(payload.auth_configured);
+    state.auth.authenticated = true;
+    state.auth.csrfToken = payload.csrf_token;
+    closeLoginModal();
+    renderAuthState();
+    await loadRuntimeState();
+  } catch (err) {
+    if (error) {
+      error.textContent = err.message || "Login failed";
+      error.hidden = false;
+    }
+  }
+}
+
+async function logout() {
+  try {
+    await fetch("/api/auth/logout", { method: "POST" });
+  } finally {
+    state.auth.authenticated = false;
+    state.auth.csrfToken = null;
+    renderAuthState();
+    if (state.snapshot) renderControlExplain(state.snapshot);
+  }
+}
+
 function demoModeFromSearch(search) {
   const params = String(search || "").replace(/^\?/, "").split("&");
   return params.some((part) => {
@@ -1910,6 +2285,49 @@ function demoSnapshot() {
   };
 }
 
+function demoRuntimeState() {
+  return {
+    system: {
+      enabled: true,
+      max_total_power: 800,
+      loop_interval: 5,
+      min_output_limit: 0,
+    },
+    ha: {
+      enabled: false,
+      control_enabled: false,
+    },
+    winter: {
+      enabled: false,
+    },
+    devices: {
+      WR1: {
+        enabled: true,
+        max_power: 800,
+        offgrid_socket_mode: "off",
+        pv_priority_factor: 1.2,
+      },
+      WR2: {
+        enabled: true,
+        max_power: 800,
+        offgrid_socket_mode: "off",
+        pv_priority_factor: 1.0,
+      },
+    },
+    _limits: {
+      system: {
+        max_total_power: 800,
+        min_output_limit: 800,
+      },
+      devices: {
+        WR1: 800,
+        WR2: 800,
+      },
+      fallback_device_max_power: 800,
+    },
+  };
+}
+
 function demoHistory(snapshot) {
   return Array.from({ length: 18 }, (_, index) => ({
     ...snapshot,
@@ -1934,6 +2352,7 @@ function ensureDemoBadge() {
 
 function initDemoMode() {
   ensureDemoBadge();
+  state.runtime = demoRuntimeState();
   const snapshot = demoSnapshot();
   state.history = demoHistory(snapshot);
   updateSnapshot(snapshot);
@@ -2047,22 +2466,47 @@ function startPolling() {
   }, 2000);
 }
 
-document.querySelectorAll(".range-tabs button").forEach((button) => {
-  button.addEventListener("click", async () => {
-    document.querySelectorAll(".range-tabs button").forEach((item) => item.classList.remove("active"));
-    button.classList.add("active");
-    state.range = button.dataset.range;
-    await loadHistory();
+function initDashboardApp() {
+  const rangeTabSelector = ".range-tabs button";
+  document.querySelectorAll(rangeTabSelector).forEach((button) => {
+    button.addEventListener("click", async () => {
+      document.querySelectorAll(rangeTabSelector).forEach((item) => item.classList.remove("active"));
+      button.classList.add("active");
+      state.range = button.dataset.range;
+      await loadHistory();
+    });
   });
-});
 
-window.addEventListener("resize", renderCharts);
+  window.addEventListener("resize", renderCharts);
 
-initFlowViewSwitch();
-if (state.demoMode) {
-  initDemoMode();
-} else {
-  startEvents();
-  loadHistory();
-  setInterval(loadHistory, 30000);
+  initFlowViewSwitch();
+  initAuthControls();
+  initRuntimeForms();
+  if (state.demoMode) {
+    initDemoMode();
+  } else {
+    loadAuthStatus();
+    loadRuntimeState();
+    startEvents();
+    loadHistory();
+    setInterval(loadAuthStatus, 60000);
+    setInterval(loadHistory, 30000);
+  }
+}
+
+// document.querySelectorAll(".range-tabs button")
+if (typeof window !== "undefined" && typeof document !== "undefined") {
+  initDashboardApp();
+}
+
+if (typeof module !== "undefined") {
+  module.exports = {
+    state,
+    escapeHtml,
+    deviceValue,
+    runtimeControlPanel,
+    runtimeDeviceForm,
+    runtimeNumber,
+    setRuntimeFeedback,
+  };
 }

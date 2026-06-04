@@ -71,13 +71,18 @@
   },
 
   "dashboard": {
-    "_comment": "Optional read-only live dashboard. It exposes telemetry only and stores short-term history locally in SQLite.",
+    "_comment": "Optional live dashboard. Runtime write mode is unavailable until a local admin password is configured with emsctl dashboard set-password.",
     "enabled": true,
     "host": "0.0.0.0",
     "port": 8080,
     "database_path": "data/ems_dashboard.sqlite",
     "history_hours": 48,
-    "write_interval_seconds": 5
+    "write_interval_seconds": 5,
+    "auth_file": "config/dashboard-auth.json",
+    "ssl_enabled": false,
+    "ssl_cert_file": "config/dashboard.crt",
+    "ssl_key_file": "config/dashboard.key",
+    "ssl_auto_generate": true
   },
 
   "energy_savings": {

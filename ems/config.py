@@ -43,7 +43,12 @@ DASHBOARD_DEFAULTS = {
     "port": 8080,
     "database_path": "data/ems_dashboard.sqlite",
     "history_hours": 48,
-    "write_interval_seconds": 5
+    "write_interval_seconds": 5,
+    "auth_file": "config/dashboard-auth.json",
+    "ssl_enabled": False,
+    "ssl_cert_file": "config/dashboard.crt",
+    "ssl_key_file": "config/dashboard.key",
+    "ssl_auto_generate": True
 }
 
 ENERGY_SAVINGS_DEFAULTS = {
@@ -329,6 +334,17 @@ def dashboard_database_path():
         return database_path
 
     return os.path.join(BASE_DIR, database_path)
+
+
+def dashboard_file_path(key, default):
+    """Return an absolute path for dashboard-local files."""
+
+    path = str(DASHBOARD_CONFIG.get(key, default))
+
+    if os.path.isabs(path):
+        return path
+
+    return os.path.join(BASE_DIR, path)
 
 
 def safe_int(value, default=0, minimum=None):

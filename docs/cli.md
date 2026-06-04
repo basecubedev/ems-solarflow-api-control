@@ -68,6 +68,21 @@ runtime. Values above `1.0` increase the device's PV-first share, values below
 `1.0` reduce it. The value is still limited by real PV availability, device
 state, SOC logic, and configured power limits.
 
+## Dashboard Auth Commands
+
+Dashboard write mode is disabled until a local admin password is configured:
+
+```bash
+python3 emsctl.py dashboard set-password
+python3 emsctl.py dashboard change-password
+python3 emsctl.py dashboard disable-auth
+python3 emsctl.py dashboard auth-status
+```
+
+Passwords are prompted without echo. The password file contains only
+PBKDF2-SHA256 hash metadata and no plaintext password. `disable-auth` removes
+the password file and makes dashboard write mode unavailable again.
+
 ## Validation
 
 The CLI rejects invalid input without changing the file:
@@ -80,6 +95,8 @@ The CLI rejects invalid input without changing the file:
 - invalid offgrid value; allowed values are `off`, `eco`, and `standard`
 - invalid runtime-state JSON
 - unknown command
+- dashboard password confirmation mismatch
+- wrong dashboard current password
 
 Examples:
 

@@ -49,6 +49,8 @@ def run_emsctl(tmp_path, *args):
             str(config_path),
             "--runtime-state",
             str(runtime_path),
+            "--dashboard-auth",
+            str(tmp_path / "dashboard-auth.json"),
             *args,
         ],
         cwd=ROOT,
@@ -124,3 +126,78 @@ def test_emsctl_winter_status_prints_only_winter_state(tmp_path):
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
     assert payload["state"] == {"winter": {"enabled": False}}
+
+
+def test_emsctl_dashboard_set_status_change_and_disable_auth(tmp_path):
+    result = run_emsctl(
+        tmp_path,
+        "dashboard",
+        "set-password",
+        "--password",
+        "first-password",
+        "--confirm-password",
+        "first-password",
+    )
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "dashboard-auth.json").exists()
+    assert "first-password" not in (tmp_path / "dashboard-auth.json").read_text()
+
+    result = run_emsctl(tmp_path, "dashboard", "auth-status")
+    assert result.returncode == 0
+    assert "Dashboard auth: configured" in result.stdout
+
+    result = run_emsctl(
+        tmp_path,
+        "dashboard",
+        "change-password",
+        "--current-password",
+        "first-password",
+        "--new-password",
+        "second-password",
+        "--confirm-password",
+        "second-password",
+    )
+    assert result.returncode == 0, result.stderr
+
+    result = run_emsctl(tmp_path, "dashboard", "disable-auth")
+    assert result.returncode == 0, result.stderr
+    assert not (tmp_path / "dashboard-auth.json").exists()
+
+
+def test_emsctl_dashboard_rejects_mismatch_and_wrong_current_password(tmp_path):
+    result = run_emsctl(
+        tmp_path,
+        "dashboard",
+        "set-password",
+        "--password",
+        "first-password",
+        "--confirm-password",
+        "mismatch",
+    )
+    assert result.returncode != 0
+    assert "confirmation does not match" in result.stderr
+
+    result = run_emsctl(
+        tmp_path,
+        "dashboard",
+        "set-password",
+        "--password",
+        "first-password",
+        "--confirm-password",
+        "first-password",
+    )
+    assert result.returncode == 0, result.stderr
+
+    result = run_emsctl(
+        tmp_path,
+        "dashboard",
+        "change-password",
+        "--current-password",
+        "wrong",
+        "--new-password",
+        "second-password",
+        "--confirm-password",
+        "second-password",
+    )
+    assert result.returncode != 0
+    assert "current dashboard password is incorrect" in result.stderr

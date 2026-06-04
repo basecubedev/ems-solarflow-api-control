@@ -2,10 +2,13 @@
 """Safe runtime-state editor for ems-solarflow-api-control."""
 
 import argparse
+import getpass
 import json
 import math
 import os
 import sys
+
+from dashboard import auth as dashboard_auth
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -31,6 +34,10 @@ def parse_args():
     parser.add_argument(
         "--runtime-state",
         help="Path to runtime-state.json. Overrides config runtime_state_path."
+    )
+    parser.add_argument(
+        "--dashboard-auth",
+        help="Path to dashboard-auth.json. Overrides dashboard auth_file config."
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -79,6 +86,39 @@ def parse_args():
     winter.add_argument("action", choices=["enable", "disable", "status"])
     winter.add_argument("value", nargs="?")
 
+    dashboard = subparsers.add_parser(
+        "dashboard",
+        help="Manage dashboard authentication."
+    )
+    dashboard_subparsers = dashboard.add_subparsers(
+        dest="dashboard_command",
+        required=True
+    )
+
+    set_password = dashboard_subparsers.add_parser(
+        "set-password",
+        help="Set dashboard admin password."
+    )
+    set_password.add_argument("--password", help=argparse.SUPPRESS)
+    set_password.add_argument("--confirm-password", help=argparse.SUPPRESS)
+
+    change_password = dashboard_subparsers.add_parser(
+        "change-password",
+        help="Change dashboard admin password."
+    )
+    change_password.add_argument("--current-password", help=argparse.SUPPRESS)
+    change_password.add_argument("--new-password", help=argparse.SUPPRESS)
+    change_password.add_argument("--confirm-password", help=argparse.SUPPRESS)
+
+    dashboard_subparsers.add_parser(
+        "disable-auth",
+        help="Disable dashboard write-mode authentication."
+    )
+    dashboard_subparsers.add_parser(
+        "auth-status",
+        help="Show dashboard authentication status."
+    )
+
     return parser.parse_args()
 
 
@@ -106,6 +146,18 @@ def resolve_runtime_path(args, config):
             config.get("system", {})
             .get("runtime_state_path", "runtime-state.json")
         )
+
+    if not os.path.isabs(path):
+        path = os.path.join(BASE_DIR, path)
+
+    return path
+
+
+def resolve_dashboard_auth_path(args, config):
+    path = args.dashboard_auth or (
+        config.get("dashboard", {})
+        .get("auth_file", dashboard_auth.DEFAULT_AUTH_FILE)
+    )
 
     if not os.path.isabs(path):
         path = os.path.join(BASE_DIR, path)
@@ -408,11 +460,82 @@ def print_status(path, state):
     print(json.dumps(payload, indent=2, sort_keys=True))
 
 
+def prompt_new_password(args, password_attr="password"):
+    password = getattr(args, password_attr, None)
+    confirmation = getattr(args, "confirm_password", None)
+
+    if password is None:
+        password = getpass.getpass("New dashboard password: ")
+    if confirmation is None:
+        confirmation = getpass.getpass("Confirm dashboard password: ")
+
+    if not password:
+        raise ValueError("dashboard password must not be empty")
+    if password != confirmation:
+        raise ValueError("dashboard password confirmation does not match")
+    if len(password) < 8:
+        print(
+            "WARNING: dashboard password is shorter than 8 characters.",
+            file=sys.stderr,
+        )
+
+    return password
+
+
+def handle_dashboard_command(args, config):
+    auth_path = resolve_dashboard_auth_path(args, config)
+    command = args.dashboard_command
+
+    if command == "auth-status":
+        configured = dashboard_auth.auth_configured(auth_path)
+        if configured:
+            print("Dashboard auth: configured")
+            print("Dashboard write mode: available after login")
+        else:
+            print("Dashboard auth: not configured")
+            print("Dashboard write mode: unavailable")
+        return 0
+
+    if command == "disable-auth":
+        dashboard_auth.remove_auth_file(auth_path)
+        print("Dashboard auth: not configured")
+        print("Dashboard write mode: unavailable")
+        return 0
+
+    if command == "set-password":
+        password = prompt_new_password(args)
+        dashboard_auth.write_password_file(auth_path, password)
+        print(f"dashboard auth configured: {auth_path}")
+        return 0
+
+    if command == "change-password":
+        if not dashboard_auth.auth_configured(auth_path):
+            raise ValueError("dashboard auth is not configured")
+
+        current_password = args.current_password
+        if current_password is None:
+            current_password = getpass.getpass("Current dashboard password: ")
+
+        if not dashboard_auth.verify_password_file(auth_path, current_password):
+            raise ValueError("current dashboard password is incorrect")
+
+        password = prompt_new_password(args, password_attr="new_password")
+        dashboard_auth.write_password_file(auth_path, password)
+        print(f"dashboard auth updated: {auth_path}")
+        return 0
+
+    raise ValueError(f"unknown dashboard command {command}")
+
+
 def main():
     args = parse_args()
 
     try:
         config = load_config(args.config)
+
+        if args.command == "dashboard":
+            return handle_dashboard_command(args, config)
+
         runtime_path = resolve_runtime_path(args, config)
         state, created = load_runtime_state(runtime_path, config)
 

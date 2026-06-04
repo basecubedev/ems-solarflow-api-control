@@ -174,6 +174,7 @@ def main():
         try:
             from dashboard.server import start_dashboard_server
             from dashboard.sqlite_store import DashboardStore
+            from dashboard.runtime_write import build_validation_context
 
             dashboard_store = DashboardStore(
                 cfg.dashboard_database_path(),
@@ -191,6 +192,32 @@ def main():
                     cfg.DASHBOARD_CONFIG.get("port", 8080),
                     8080,
                     minimum=1
+                ),
+                runtime_state=runtime_state,
+                auth_file=cfg.dashboard_file_path(
+                    "auth_file",
+                    "config/dashboard-auth.json"
+                ),
+                ssl_enabled=cfg.safe_bool(
+                    cfg.DASHBOARD_CONFIG.get("ssl_enabled", False),
+                    False
+                ),
+                ssl_cert_file=cfg.dashboard_file_path(
+                    "ssl_cert_file",
+                    "config/dashboard.crt"
+                ),
+                ssl_key_file=cfg.dashboard_file_path(
+                    "ssl_key_file",
+                    "config/dashboard.key"
+                ),
+                ssl_auto_generate=cfg.safe_bool(
+                    cfg.DASHBOARD_CONFIG.get("ssl_auto_generate", True),
+                    True
+                ),
+                base_dir=base_dir,
+                runtime_validation=build_validation_context(
+                    cfg.CONFIG,
+                    runtime_state
                 )
             )
         except Exception as e:
