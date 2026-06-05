@@ -12,10 +12,10 @@ It does not require Home Assistant. For details and safety background, see
 ## Requirements
 
 - Python 3
-- Network access from the EMS host to the Shelly meter
+- Network access from the EMS host to the grid meter
 - Network access from the EMS host to each Zendure device
 - Zendure device IP address and serial number
-- Shelly IP address
+- Grid meter IP address
 
 The EMS should not run in parallel with another controller that writes Zendure
 `outputLimit`.
@@ -66,17 +66,35 @@ defaults are a starting point, not a universal safety profile. Set
 `system.dry_run=true` if you want a no-write validation run before the first
 normal start.
 
-## 3. Configure Devices And Shelly
+## 3. Configure Devices And Grid Meter
 
-Set the Shelly IP:
+Set the grid meter type and IP. Supported types are `shelly`, `ecotracker`,
+and `tasmota_http`:
 
 ```json
 {
-  "shelly": {
+  "grid_meter": {
+    "type": "shelly",
     "ip": "192.168.1.50"
   }
 }
 ```
+
+For everHome EcoTracker, use `"type": "ecotracker"` and the EcoTracker IP.
+For Tasmota HTTP smart meter readers, configure the Tasmota IP and the JSON
+field path that contains current power:
+
+```json
+{
+  "grid_meter": {
+    "type": "tasmota_http",
+    "ip": "192.168.1.70",
+    "power_path": "StatusSNS.SML.Power_curr"
+  }
+}
+```
+
+Legacy configs with only `shelly.ip` still work.
 
 Set each Zendure device:
 
@@ -102,7 +120,7 @@ Review the installation-specific limits before unattended operation:
 - `min_soc` and `max_soc`
 - `pv_kwp` and `pv_priority_factor`
 - `battery_kwh`
-- Shelly direction and readings
+- Grid meter direction and readings
 
 ## 4. Home Assistant Default
 
@@ -125,7 +143,7 @@ operation:
 Before the first live run, make this path explicit:
 
 1. Copy the template to `config.json`.
-2. Enter real Shelly and Zendure IP addresses and serial numbers.
+2. Enter real grid meter and Zendure IP addresses and serial numbers.
 3. Review power, SOC, battery, and PV limits for the installation.
 4. Optionally run simulation, preflight, and dry-run checks.
 5. Monitor the first bounded live run.
@@ -157,7 +175,7 @@ The template already uses this live-control-ready system policy:
 ```
 
 This means the main regulation features are enabled after local configuration.
-It does not remove the need to review device limits, SOC limits, Shelly
+It does not remove the need to review device limits, SOC limits, grid meter
 readings, and installation-specific constraints.
 
 - `dry_run=false` enables real mode instead of calculation-only mode.

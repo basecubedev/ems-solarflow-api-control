@@ -18,7 +18,7 @@ tokens, Zendure serial numbers, or local IP addresses.
 ## Quick Start
 
 1. Copy `config.template.json` to `config.json`.
-2. Configure the real Shelly IP.
+2. Configure the real grid meter IP.
 3. Configure one or more real Zendure device IPs and serial numbers.
 4. Review power, SOC, battery, and PV limits for the installation.
 5. Keep Home Assistant disabled unless you want HA integration.
@@ -32,7 +32,7 @@ configuration:
 `allow_state_reconciliation_writes=true`.
 
 This exposes the main regulation features with minimal setup. It is not a
-universal safety profile; review device limits, SOC limits, Shelly readings,
+universal safety profile; review device limits, SOC limits, grid meter readings,
 and installation-specific constraints before normal operation.
 
 Safe first checks:
@@ -48,7 +48,7 @@ python3 -B ems-solarflow-api-control.py --dry-run --once
 `config.json` contains static installation and safety settings:
 
 - Home Assistant URL and token
-- Shelly IP
+- grid meter type and IP
 - Zendure device IPs and serial numbers
 - static device metadata
 - safety flags
@@ -115,7 +115,7 @@ a manual no-write validation run.
 
 `system.allow_hardware_writes` allows Zendure `/properties/write` calls when
 `dry_run=false`. The template default is `true` so normal `outputLimit` control
-works after local device and Shelly configuration.
+works after local device and grid meter configuration.
 
 `system.allow_state_reconciliation_writes` allows SOC and mode reconciliation
 writes. The template default is `true` because this is part of the default
@@ -367,13 +367,97 @@ Static device metadata stays in `config.json`, not in runtime-state.
 `pv_priority_factor` is an exception: the config value remains the installation
 default, while runtime-state can override the active weighting.
 
-## Shelly Settings
+## Grid Meter Settings
 
-`shelly.ip` is the local Shelly device used for household power measurement.
-The EMS uses Shelly load data as the input for target calculation.
-Shelly Pro 3EM is supported in triphase mode via `em:0.total_act_power` and
-in monophase mode via the summed `em1:0`, `em1:1`, and `em1:2` `act_power`
-values.
+`grid_meter.type` selects the local household/grid power meter implementation.
+Supported values are `shelly`, `ecotracker`, and `tasmota_http`.
+
+`grid_meter.ip` is the local meter IP address. The EMS controller only uses the
+meter's current grid power value as the input for target calculation.
+
+Shelly Pro 3EM uses:
+
+```text
+http://<ip>/rpc/Shelly.GetStatus
+```
+
+It is supported in triphase mode via `em:0.total_act_power` and in monophase
+mode via the summed `em1:0`, `em1:1`, and `em1:2` `act_power` values.
+
+everHome EcoTracker uses:
+
+```text
+http://<ip>/v1/json
+```
+
+The EMS reads the required flat JSON `power` field. Positive values mean grid
+import, negative values mean grid export. Phase values and energy counters are
+optional and are not required for EMS control.
+
+Tasmota HTTP JSON uses the `Status 10` sensor endpoint:
+
+```text
+http://<ip>/cm?cmnd=Status%2010
+```
+
+Set `grid_meter.power_path` to the dot-separated path of your current power
+field inside the JSON response. Tasmota smart meter keys depend on the active
+meter script, so the EMS does not guess a default. Positive power means grid
+import; negative power means export/feed-in when your meter reports signed
+values that way.
+
+Shelly example:
+
+```json
+{
+  "grid_meter": {
+    "type": "shelly",
+    "ip": "192.168.1.50"
+  }
+}
+```
+
+EcoTracker example:
+
+```json
+{
+  "grid_meter": {
+    "type": "ecotracker",
+    "ip": "192.168.1.60"
+  }
+}
+```
+
+Tasmota SML example:
+
+```json
+{
+  "grid_meter": {
+    "type": "tasmota_http",
+    "ip": "192.168.1.70",
+    "power_path": "StatusSNS.SML.Power_curr"
+  }
+}
+```
+
+Tasmota OBIS-style key example:
+
+```json
+{
+  "grid_meter": {
+    "type": "tasmota_http",
+    "url": "http://192.168.1.70/cm?cmnd=Status%2010",
+    "power_path": "StatusSNS.SM.16_7_0"
+  }
+}
+```
+
+Legacy configs with only `shelly.ip` still work. New configs should use
+`grid_meter`.
+
+If your meter returns a different JSON structure, please open a GitHub issue
+and include the meter type, relevant config, logs, and an anonymized example
+payload if possible.
 
 ## First-Run Validation
 
@@ -415,7 +499,7 @@ after you enter real local values and review installation-specific limits:
 Use this optional staged validation path when you want extra caution:
 
 1. Set `dry_run=true`.
-2. Validate telemetry and Shelly readings with simulation, preflight, and
+2. Validate telemetry and grid meter readings with simulation, preflight, and
    dry-run.
 3. Set `dry_run=false`.
 4. Use bounded live runs for first tests and monitor the result.

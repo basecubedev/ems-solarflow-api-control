@@ -4,11 +4,16 @@ from types import SimpleNamespace
 import pytest
 
 from ems.clients import (
+    EcoTrackerClient,
     HAClient,
     ShellyClient,
+    TasmotaHttpClient,
     ZendureClient,
+    create_grid_meter_client,
     create_session,
+    _parse_ecotracker_power,
     _parse_shelly_power,
+    _parse_tasmota_http_power,
     zendure_write_succeeded,
 )
 
@@ -236,3 +241,166 @@ def test_shelly_client_logs_parse_errors_and_keeps_last_value(caplog):
     assert client.get_power() == 123.5
     assert "event=shelly_read_error" in caplog.text
     assert "stale_value=123.5" in caplog.text
+
+
+def test_parse_ecotracker_power_supports_minimal_payload():
+    assert _parse_ecotracker_power({"power": 830}) == 830.0
+
+
+def test_parse_ecotracker_power_supports_full_payload_with_optional_fields():
+    assert _parse_ecotracker_power(
+        {
+            "power": -125,
+            "powerAvg": -100,
+            "powerPhase1": -50,
+            "powerPhase2": -50,
+            "powerPhase3": -25,
+            "energyCounterIn": 145000,
+            "energyCounterOut": 4500,
+        }
+    ) == -125.0
+
+
+def test_parse_ecotracker_power_rejects_missing_numeric_power():
+    with pytest.raises(ValueError, match="Unsupported EcoTracker payload"):
+        _parse_ecotracker_power({"power": "125"})
+
+
+def test_ecotracker_client_reads_v1_json_and_preserves_last_value():
+    client = EcoTrackerClient(
+        "192.0.2.30",
+        SessionStub(get_response=ResponseStub(payload={"power": 123.456})),
+    )
+
+    assert client.get_power() == 123.5
+    assert client.session.calls[0][1] == "http://192.0.2.30/v1/json"
+
+    client.session = SessionStub(get_response=ValueError("offline"))
+    assert client.get_power() == 123.5
+
+
+def test_create_grid_meter_client_supports_shelly_and_ecotracker():
+    assert isinstance(
+        create_grid_meter_client(
+            {"type": "shelly", "ip": "192.0.2.1"},
+            SessionStub(),
+        ),
+        ShellyClient,
+    )
+    assert isinstance(
+        create_grid_meter_client(
+            {"type": "ecotracker", "ip": "192.0.2.2"},
+            SessionStub(),
+        ),
+        EcoTrackerClient,
+    )
+
+
+def test_parse_tasmota_http_power_sml():
+    data = {
+        "StatusSNS": {
+            "SML": {
+                "Power_curr": 538
+            }
+        }
+    }
+
+    assert _parse_tasmota_http_power(data, "StatusSNS.SML.Power_curr") == 538.0
+
+
+def test_parse_tasmota_http_power_obis_key():
+    data = {
+        "StatusSNS": {
+            "SM": {
+                "16_7_0": -99.43
+            }
+        }
+    }
+
+    assert _parse_tasmota_http_power(data, "StatusSNS.SM.16_7_0") == -99.43
+
+
+def test_parse_tasmota_http_power_missing_path():
+    data = {"StatusSNS": {"SML": {}}}
+
+    with pytest.raises(ValueError, match="Missing JSON path"):
+        _parse_tasmota_http_power(data, "StatusSNS.SML.Power_curr")
+
+
+def test_parse_tasmota_http_power_rejects_non_numeric():
+    data = {"StatusSNS": {"SML": {"Power_curr": "538"}}}
+
+    with pytest.raises(ValueError, match="Tasmota power path is not numeric"):
+        _parse_tasmota_http_power(data, "StatusSNS.SML.Power_curr")
+
+
+def test_parse_tasmota_http_power_rejects_boolean():
+    data = {"StatusSNS": {"SML": {"Power_curr": True}}}
+
+    with pytest.raises(ValueError, match="Tasmota power path is not numeric"):
+        _parse_tasmota_http_power(data, "StatusSNS.SML.Power_curr")
+
+
+def test_tasmota_http_client_reads_json_and_preserves_last_value():
+    client = TasmotaHttpClient(
+        "http://192.0.2.40/cm?cmnd=Status%2010",
+        "StatusSNS.SML.Power_curr",
+        SessionStub(
+            get_response=ResponseStub(
+                payload={"StatusSNS": {"SML": {"Power_curr": 538.44}}}
+            )
+        ),
+    )
+
+    assert client.get_power() == 538.4
+    assert client.session.calls[0][1] == "http://192.0.2.40/cm?cmnd=Status%2010"
+
+    client.session = SessionStub(
+        get_response=ResponseStub(payload={"StatusSNS": {"SML": {}}})
+    )
+    assert client.get_power() == 538.4
+
+
+def test_create_grid_meter_client_supports_tasmota_http_url_and_ip_shorthand():
+    from_url = create_grid_meter_client(
+        {
+            "type": "tasmota_http",
+            "url": "http://192.0.2.40/cm?cmnd=Status%2010",
+            "power_path": "StatusSNS.SML.Power_curr",
+        },
+        SessionStub(),
+    )
+    assert isinstance(from_url, TasmotaHttpClient)
+    assert from_url.url == "http://192.0.2.40/cm?cmnd=Status%2010"
+    assert from_url.power_path == "StatusSNS.SML.Power_curr"
+
+    from_ip = create_grid_meter_client(
+        {
+            "type": "tasmota_http",
+            "ip": "192.0.2.41",
+            "power_path": "StatusSNS.SM.16_7_0",
+        },
+        SessionStub(),
+    )
+    assert isinstance(from_ip, TasmotaHttpClient)
+    assert from_ip.url == "http://192.0.2.41/cm?cmnd=Status%2010"
+    assert from_ip.power_path == "StatusSNS.SM.16_7_0"
+
+
+def test_create_grid_meter_client_rejects_tasmota_http_missing_config():
+    with pytest.raises(ValueError, match="requires power_path"):
+        create_grid_meter_client(
+            {"type": "tasmota_http", "ip": "192.0.2.41"},
+            SessionStub(),
+        )
+
+    with pytest.raises(ValueError, match="requires url or ip"):
+        create_grid_meter_client(
+            {"type": "tasmota_http", "power_path": "StatusSNS.SML.Power_curr"},
+            SessionStub(),
+        )
+
+
+def test_create_grid_meter_client_rejects_unknown_type():
+    with pytest.raises(ValueError, match="Unsupported grid meter type"):
+        create_grid_meter_client({"type": "unknown", "ip": "192.0.2.3"}, SessionStub())

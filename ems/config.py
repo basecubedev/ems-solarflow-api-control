@@ -99,6 +99,10 @@ def default_safe_config():
         "dashboard": copy.deepcopy(DASHBOARD_DEFAULTS),
         "energy_savings": copy.deepcopy(ENERGY_SAVINGS_DEFAULTS),
         "devices": [],
+        "grid_meter": {
+            "type": "shelly",
+            "ip": ""
+        },
         "shelly": {
             "ip": ""
         }
@@ -148,6 +152,10 @@ OFFGRID_SOCKET_MODES = {
 }
 ZENDURE_CONFIG = []
 SHELLY_IP = ""
+GRID_METER_CONFIG = {
+    "type": "shelly",
+    "ip": ""
+}
 
 
 def load_config(args=None, base_dir=None):
@@ -179,7 +187,7 @@ def initialize(args, base_dir):
     global BATTERY_KWH_WEIGHTING
     global SOC_RECONCILE_INTERVAL, WINTER_CONFIG, DASHBOARD_CONFIG
     global ENERGY_SAVINGS_CONFIG
-    global ZENDURE_CONFIG, SHELLY_IP
+    global ZENDURE_CONFIG, SHELLY_IP, GRID_METER_CONFIG
 
     ARGS = args
     BASE_DIR = base_dir
@@ -291,7 +299,22 @@ def initialize(args, base_dir):
         **CONFIG.get("energy_savings", {})
     }
     ZENDURE_CONFIG = CONFIG["devices"]
-    SHELLY_IP = CONFIG["shelly"]["ip"]
+    legacy_shelly_config = CONFIG.get("shelly", {})
+    if not isinstance(legacy_shelly_config, dict):
+        legacy_shelly_config = {}
+    configured_grid_meter = CONFIG.get("grid_meter")
+    if isinstance(configured_grid_meter, dict):
+        GRID_METER_CONFIG = dict(configured_grid_meter)
+        GRID_METER_CONFIG["type"] = str(GRID_METER_CONFIG.get("type", "shelly"))
+        for key in ("ip", "url", "power_path"):
+            if key in GRID_METER_CONFIG and GRID_METER_CONFIG[key] is not None:
+                GRID_METER_CONFIG[key] = str(GRID_METER_CONFIG[key])
+    else:
+        GRID_METER_CONFIG = {
+            "type": "shelly",
+            "ip": str(legacy_shelly_config.get("ip", ""))
+        }
+    SHELLY_IP = str(legacy_shelly_config.get("ip", GRID_METER_CONFIG.get("ip", "")))
 
     return CONFIG
 

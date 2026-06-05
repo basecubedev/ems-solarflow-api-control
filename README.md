@@ -29,6 +29,15 @@ This project is designed for stable standalone EMS operation with a
 deterministic, inspectable, firmware-aware controller for Zendure SolarFlow
 devices.
 
+> **Hardware feedback welcome**
+>
+> This project cannot be tested by the maintainer with every possible hardware
+> and meter setup. Real-world feedback is very welcome.
+>
+> If you notice incorrect readings, unsupported payloads, or setup-specific
+> issues, please open a GitHub issue with your device type, relevant config,
+> logs, and, if possible, an anonymized example payload.
+
 ---
 
 ## Safety And Responsibility
@@ -51,7 +60,7 @@ responsibility and risk, within the limits permitted by applicable law.
 
 The template is standalone-first: Home Assistant is disabled, live Zendure
 `outputLimit` control is enabled, and required state reconciliation is enabled
-after you fill in real device and Shelly values.
+after you fill in real device and grid meter values.
 
 For a no-write validation run, set `system.dry_run=true` or use `--dry-run`.
 Simulation, replay, and preflight remain available for inspection before normal
@@ -80,7 +89,7 @@ simple > complex
 Core goals:
 
 - direct local Zendure API control
-- Shelly-based household load tracking
+- Shelly, everHome EcoTracker, or Tasmota HTTP household load tracking
 - standalone operation without Home Assistant
 - optional Home Assistant monitoring and runtime controls
 - PV-first allocation with battery top-up
@@ -98,13 +107,13 @@ Core goals:
 ```mermaid
 flowchart LR
 
-    Shelly["Shelly Power Meter"]
+    GridMeter["Shelly / EcoTracker / Tasmota Grid Meter"]
     EMS["EMS Controller\nPython"]
     WR1["Zendure WR1"]
     WR2["Zendure WR2"]
     HA["Home Assistant\noptional"]
 
-    Shelly -->|house load| EMS
+    GridMeter -->|house load| EMS
 
     WR1 -->|telemetry| EMS
     WR2 -->|telemetry| EMS
@@ -192,7 +201,7 @@ Edit:
 
 - Zendure device IPs
 - Zendure serial numbers
-- Shelly IP
+- grid meter type and IP
 - Home Assistant URL, token, and enable flags if used
 - power limits
 - SOC limits
@@ -429,6 +438,31 @@ python3 scripts/check_log_events.py /tmp/ems-sim.log \
 
 Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md).
 Safety checks: [docs/safety.md](docs/safety.md).
+
+---
+
+## Hardware Feedback And Issue Reports
+
+This project supports several grid meter and device configurations, but not
+every possible hardware setup can be tested directly by the maintainer.
+
+Real-world feedback is therefore very helpful. If you are using this project
+with your own hardware setup, please feel free to share your experience.
+
+Please open a GitHub issue if you notice:
+
+- incorrect readings
+- unsupported meter payloads
+- unexpected control behavior
+- setup-specific problems
+- documentation gaps
+
+When reporting an issue, please include your device type, relevant
+configuration, log output, and, if possible, an anonymized example of the meter
+JSON payload.
+
+User feedback helps make the project more robust for different real-world
+installations.
 
 ---
 

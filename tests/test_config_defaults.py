@@ -64,11 +64,124 @@ def test_config_template_standalone_live_control_defaults():
 
     assert template["ha"]["enabled"] is False
     assert template["ha"]["control_enabled"] is False
+    assert template["grid_meter"]["type"] == "shelly"
+    assert template["grid_meter"]["ip"] == template["shelly"]["ip"]
     assert template["system"]["dry_run"] is False
     assert template["system"]["allow_hardware_writes"] is True
     assert template["system"]["allow_state_reconciliation_writes"] is True
     assert template["system"]["reconcile_ac_mode_on_start"] is True
     assert template["system"]["reconcile_smart_mode"] is True
+
+
+def base_minimal_config():
+    return {
+        "ha": {
+            "enabled": False,
+            "control_enabled": False,
+            "url": "",
+            "token": "",
+        },
+        "system": {
+            "enabled": True,
+            "dry_run": False,
+            "simulation_mode": False,
+            "allow_hardware_writes": True,
+            "allow_state_reconciliation_writes": True,
+            "reconcile_ac_mode_on_start": True,
+            "reconcile_smart_mode": True,
+            "max_total_power": 800,
+            "max_device_power": 800,
+            "deadband": 10,
+            "loop_interval": 5,
+        },
+        "devices": [],
+        "shelly": {
+            "ip": "192.168.1.50",
+        },
+    }
+
+
+def initialize_config_from_dict(tmp_path, values):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(values))
+    args = SimpleNamespace(
+        config=str(config_path),
+        dry_run=False,
+        simulate=False,
+        replay=None,
+        self_test=False,
+        no_ha=False,
+    )
+    cfg.initialize(args, str(tmp_path))
+
+
+def test_grid_meter_defaults_to_shelly_compatible_safe_config():
+    safe_config = cfg.default_safe_config()
+
+    assert safe_config["grid_meter"] == {"type": "shelly", "ip": ""}
+    assert safe_config["shelly"] == {"ip": ""}
+
+
+def test_legacy_shelly_ip_fallback_populates_grid_meter(tmp_path):
+    snapshot = snapshot_config_module()
+    values = base_minimal_config()
+    values.pop("grid_meter", None)
+    values["shelly"]["ip"] = "192.168.1.51"
+
+    try:
+        initialize_config_from_dict(tmp_path, values)
+
+        assert cfg.GRID_METER_CONFIG == {
+            "type": "shelly",
+            "ip": "192.168.1.51",
+        }
+        assert cfg.SHELLY_IP == "192.168.1.51"
+    finally:
+        restore_config_module(snapshot)
+
+
+def test_explicit_grid_meter_overrides_legacy_shelly(tmp_path):
+    snapshot = snapshot_config_module()
+    values = base_minimal_config()
+    values["shelly"]["ip"] = "192.168.1.51"
+    values["grid_meter"] = {
+        "type": "ecotracker",
+        "ip": "192.168.1.60",
+    }
+
+    try:
+        initialize_config_from_dict(tmp_path, values)
+
+        assert cfg.GRID_METER_CONFIG == {
+            "type": "ecotracker",
+            "ip": "192.168.1.60",
+        }
+        assert cfg.SHELLY_IP == "192.168.1.51"
+    finally:
+        restore_config_module(snapshot)
+
+
+def test_tasmota_grid_meter_config_preserves_url_ip_and_power_path(tmp_path):
+    snapshot = snapshot_config_module()
+    values = base_minimal_config()
+    values["grid_meter"] = {
+        "type": "tasmota_http",
+        "url": "http://192.168.1.70/cm?cmnd=Status%2010",
+        "ip": "192.168.1.71",
+        "power_path": "StatusSNS.SM.16_7_0",
+    }
+
+    try:
+        initialize_config_from_dict(tmp_path, values)
+
+        assert cfg.GRID_METER_CONFIG == {
+            "type": "tasmota_http",
+            "url": "http://192.168.1.70/cm?cmnd=Status%2010",
+            "ip": "192.168.1.71",
+            "power_path": "StatusSNS.SM.16_7_0",
+        }
+    finally:
+        restore_config_module(snapshot)
 
 
 def test_omitted_ha_keys_default_to_disabled(tmp_path):
