@@ -237,7 +237,7 @@ def test_frontend_uses_normalized_battery_display_semantics():
 
     assert "function normalizeBatteryPowerForDisplay(rawBatteryPowerW)" in app_js
     assert "function aggregatedBatteryPowerW(snapshot)" in app_js
-    assert "function renderControlExplain(snapshot)" in app_js
+    assert "function renderControlExplain(snapshot, options = {})" in app_js
     assert "data-flow-view=\"control\"" in index_html
     assert "data-flow-view=\"energy\"" in index_html
     assert "id=\"controlExplainView\"" in index_html

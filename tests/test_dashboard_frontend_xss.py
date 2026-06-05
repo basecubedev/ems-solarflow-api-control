@@ -134,6 +134,397 @@ console.log(JSON.stringify({{
     assert output["wr3"] < output["winter"] < output["ha"]
 
 
+def test_runtime_editor_keeps_dirty_input_across_live_refresh():
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+
+const elements = new Map();
+let runtimeRenderCount = 0;
+
+class FakeElement {{
+  constructor(id = "", className = "") {{
+    this.id = id;
+    this.className = className;
+    this.parent = null;
+    this.dataset = {{}};
+    this.listeners = {{}};
+    this.elements = [];
+    this.name = "";
+    this.type = "";
+    this.value = "";
+    this._innerHTML = "";
+    this.textContent = "";
+  }}
+  set innerHTML(value) {{
+    this._innerHTML = value;
+    if (this.id === "controlExplainView" && value.includes('id="runtimeEditorMount"')) {{
+      const runtimeMount = new FakeElement("runtimeEditorMount");
+      runtimeMount.parent = this;
+      elements.set("runtimeEditorMount", runtimeMount);
+      const explainMount = new FakeElement("controlExplainMount");
+      explainMount.parent = this;
+      elements.set("controlExplainMount", explainMount);
+    }}
+    if (this.id === "runtimeEditorMount") {{
+      runtimeRenderCount += 1;
+      ["runtimePanel", "runtimeForm", "maxTotalPowerInput", "runtimeWriteFeedback"].forEach((id) => {{
+        const old = elements.get(id);
+        if (old) old.parent = null;
+      }});
+      elements.delete("runtimePanel");
+      elements.delete("runtimeForm");
+      elements.delete("maxTotalPowerInput");
+      elements.delete("runtimeWriteFeedback");
+      if (!value.includes("runtime-form")) return;
+      const panel = new FakeElement("runtimePanel", "runtime-editor-panel control-stage-row");
+      const form = new FakeElement("runtimeForm", "runtime-form control-pipeline-stage");
+      const feedback = new FakeElement("runtimeWriteFeedback", "runtime-feedback");
+      const input = new FakeElement("maxTotalPowerInput");
+      const match = value.match(/name="max_total_power" value="([^"]*)"/);
+      panel.parent = this;
+      form.parent = panel;
+      feedback.parent = panel;
+      input.parent = form;
+      input.name = "max_total_power";
+      input.type = "number";
+      input.value = match ? match[1] : "";
+      form.dataset.runtimeEndpoint = "/api/runtime/system";
+      form.elements = [input];
+      elements.set("runtimePanel", panel);
+      elements.set("runtimeForm", form);
+      elements.set("runtimeWriteFeedback", feedback);
+      elements.set("maxTotalPowerInput", input);
+    }}
+  }}
+  get innerHTML() {{ return this._innerHTML; }}
+  addEventListener(type, handler) {{ this.listeners[type] = handler; }}
+  matches(selector) {{
+    return selector === ".runtime-form" && this.className.split(" ").includes("runtime-form");
+  }}
+  closest(selector) {{
+    const selectors = selector.split(",").map((item) => item.trim());
+    let current = this;
+    while (current) {{
+      for (const item of selectors) {{
+        if (item.startsWith(".") && current.className.split(" ").includes(item.slice(1))) {{
+          return current;
+        }}
+      }}
+      current = current.parent;
+    }}
+    return null;
+  }}
+  contains(node) {{
+    let current = node;
+    while (current) {{
+      if (current === this) return true;
+      current = current.parent;
+    }}
+    return false;
+  }}
+  querySelector(selector) {{
+    if (selector === "#runtimeEditorMount") return elements.get("runtimeEditorMount") || null;
+    if (selector === "#controlExplainMount") return elements.get("controlExplainMount") || null;
+    if (selector === ".runtime-editor-panel") return elements.get("runtimePanel") || null;
+    if (selector === ".runtime-form") return elements.get("runtimeForm") || null;
+    if (selector === 'input[name="max_total_power"]') return elements.get("maxTotalPowerInput") || null;
+    return null;
+  }}
+}}
+
+const controlExplainView = new FakeElement("controlExplainView");
+elements.set("controlExplainView", controlExplainView);
+global.document = {{
+  activeElement: null,
+  getElementById(id) {{ return elements.get(id) || null; }}
+}};
+
+const snapshot = {{ control_explain: null }};
+app.state.auth = {{ configured: true, authenticated: true, csrfToken: "token" }};
+app.state.runtime = {{
+  system: {{ enabled: true, max_total_power: 1600, min_output_limit: 35, loop_interval: 5 }},
+  devices: {{}},
+  winter: {{ enabled: false }},
+  ha: {{ enabled: true, control_enabled: false }},
+  _limits: {{ system: {{ max_total_power: 5000, min_output_limit: 5000 }}, devices: {{}}, fallback_device_max_power: 800 }}
+}};
+app.renderControlExplain(snapshot, {{ forceRuntimeEditor: true }});
+app.initRuntimeForms();
+
+const firstInput = elements.get("maxTotalPowerInput");
+firstInput.value = "160";
+global.document.activeElement = firstInput;
+controlExplainView.listeners.input({{ target: firstInput }});
+const beforeRenderCount = runtimeRenderCount;
+const beforeMountHtml = elements.get("runtimeEditorMount").innerHTML;
+
+app.renderControlExplain({{ control_explain: null }});
+
+const afterInput = elements.get("maxTotalPowerInput");
+console.log(JSON.stringify({{
+  sameInput: afterInput === firstInput,
+  value: afterInput.value,
+  renderCountUnchanged: runtimeRenderCount === beforeRenderCount,
+  runtimeMountHtmlStable: elements.get("runtimeEditorMount").innerHTML === beforeMountHtml,
+  editing: app.isRuntimeEditorEditing(),
+  explainUpdated: elements.get("controlExplainMount").innerHTML.includes("No control explanation data available yet.")
+}}));
+"""
+    output = run_node(script)
+
+    assert output == {
+        "sameInput": True,
+        "value": "160",
+        "renderCountUnchanged": True,
+        "runtimeMountHtmlStable": True,
+        "editing": True,
+        "explainUpdated": True,
+    }
+
+
+def test_runtime_submit_forces_reload_and_keeps_saved_feedback():
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+
+const elements = new Map();
+
+class FakeElement {{
+  constructor(id = "", className = "") {{
+    this.id = id;
+    this.className = className;
+    this.parent = null;
+    this.dataset = {{}};
+    this.elements = [];
+    this.name = "";
+    this.type = "";
+    this.value = "";
+    this._innerHTML = "";
+    this.textContent = "";
+  }}
+  set innerHTML(value) {{
+    this._innerHTML = value;
+    if (this.id === "controlExplainView" && value.includes('id="runtimeEditorMount"')) {{
+      const runtimeMount = new FakeElement("runtimeEditorMount");
+      runtimeMount.parent = this;
+      elements.set("runtimeEditorMount", runtimeMount);
+      const explainMount = new FakeElement("controlExplainMount");
+      explainMount.parent = this;
+      elements.set("controlExplainMount", explainMount);
+    }}
+    if (this.id === "runtimeEditorMount") {{
+      ["runtimePanel", "runtimeForm", "maxTotalPowerInput", "runtimeWriteFeedback"].forEach((id) => {{
+        const old = elements.get(id);
+        if (old) old.parent = null;
+      }});
+      elements.delete("runtimePanel");
+      elements.delete("runtimeForm");
+      elements.delete("maxTotalPowerInput");
+      elements.delete("runtimeWriteFeedback");
+      if (!value.includes("runtime-form")) return;
+      const panel = new FakeElement("runtimePanel", "runtime-editor-panel control-stage-row");
+      const form = new FakeElement("runtimeForm", "runtime-form control-pipeline-stage");
+      const feedback = new FakeElement("runtimeWriteFeedback", "runtime-feedback");
+      const input = new FakeElement("maxTotalPowerInput");
+      const match = value.match(/name="max_total_power" value="([^"]*)"/);
+      panel.parent = this;
+      form.parent = panel;
+      feedback.parent = panel;
+      input.parent = form;
+      input.name = "max_total_power";
+      input.type = "number";
+      input.value = match ? match[1] : "";
+      form.dataset.runtimeEndpoint = "/api/runtime/system";
+      form.elements = [input];
+      elements.set("runtimePanel", panel);
+      elements.set("runtimeForm", form);
+      elements.set("runtimeWriteFeedback", feedback);
+      elements.set("maxTotalPowerInput", input);
+    }}
+  }}
+  get innerHTML() {{ return this._innerHTML; }}
+  matches(selector) {{
+    return selector === ".runtime-form" && this.className.split(" ").includes("runtime-form");
+  }}
+  closest(selector) {{
+    const selectors = selector.split(",").map((item) => item.trim());
+    let current = this;
+    while (current) {{
+      for (const item of selectors) {{
+        if (item.startsWith(".") && current.className.split(" ").includes(item.slice(1))) {{
+          return current;
+        }}
+      }}
+      current = current.parent;
+    }}
+    return null;
+  }}
+  contains(node) {{
+    let current = node;
+    while (current) {{
+      if (current === this) return true;
+      current = current.parent;
+    }}
+    return false;
+  }}
+  querySelector(selector) {{
+    if (selector === "#runtimeEditorMount") return elements.get("runtimeEditorMount") || null;
+    if (selector === "#controlExplainMount") return elements.get("controlExplainMount") || null;
+    if (selector === ".runtime-editor-panel") return elements.get("runtimePanel") || null;
+    return null;
+  }}
+}}
+
+elements.set("controlExplainView", new FakeElement("controlExplainView"));
+global.document = {{
+  activeElement: null,
+  getElementById(id) {{ return elements.get(id) || null; }}
+}};
+
+app.state.auth = {{ configured: true, authenticated: true, csrfToken: "token" }};
+app.state.snapshot = {{ control_explain: null }};
+app.state.runtime = {{
+  system: {{ enabled: true, max_total_power: 1600, min_output_limit: 35, loop_interval: 5 }},
+  devices: {{}},
+  winter: {{ enabled: false }},
+  ha: {{ enabled: true, control_enabled: false }},
+  _limits: {{ system: {{ max_total_power: 5000, min_output_limit: 5000 }}, devices: {{}}, fallback_device_max_power: 800 }}
+}};
+app.renderControlExplain(app.state.snapshot, {{ forceRuntimeEditor: true }});
+
+const form = elements.get("runtimeForm");
+const input = elements.get("maxTotalPowerInput");
+input.value = "160";
+global.document.activeElement = input;
+app.state.runtimeEditorDirty = true;
+
+const calls = [];
+global.fetch = async (url, options = {{}}) => {{
+  calls.push({{ url, method: options.method || "GET", body: options.body || null }});
+  if (url === "/api/runtime/system") {{
+    return {{ ok: true, status: 200, json: async () => ({{ ok: true }}) }};
+  }}
+  if (url === "/api/runtime") {{
+    return {{
+      ok: true,
+      status: 200,
+      json: async () => ({{
+        system: {{ enabled: true, max_total_power: 160, min_output_limit: 35, loop_interval: 5 }},
+        devices: {{}},
+        winter: {{ enabled: false }},
+        ha: {{ enabled: true, control_enabled: false }},
+        _limits: {{ system: {{ max_total_power: 5000, min_output_limit: 5000 }}, devices: {{}}, fallback_device_max_power: 800 }}
+      }})
+    }};
+  }}
+  throw new Error(`unexpected fetch ${{url}}`);
+}};
+
+(async () => {{
+  await app.submitRuntimeForm(form);
+  console.log(JSON.stringify({{
+    calls,
+    value: elements.get("maxTotalPowerInput").value,
+    dirty: app.state.runtimeEditorDirty,
+    editing: app.isRuntimeEditorEditing(),
+    feedback: elements.get("runtimeWriteFeedback").textContent,
+    feedbackClass: elements.get("runtimeWriteFeedback").className
+  }}));
+}})().catch((error) => {{
+  console.error(error);
+  process.exit(1);
+}});
+"""
+    output = run_node(script)
+
+    assert output["calls"] == [
+        {
+            "url": "/api/runtime/system",
+            "method": "PATCH",
+            "body": '{"max_total_power":160}',
+        },
+        {"url": "/api/runtime", "method": "GET", "body": None},
+    ]
+    assert output["value"] == "160"
+    assert output["dirty"] is False
+    assert output["editing"] is False
+    assert output["feedback"] == "Saved."
+    assert output["feedbackClass"] == "runtime-feedback ok"
+
+
+def test_runtime_editor_force_refresh_replaces_write_controls_after_logout():
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+
+const elements = new Map();
+class FakeElement {{
+  constructor(id = "") {{
+    this.id = id;
+    this.parent = null;
+    this._innerHTML = "";
+  }}
+  set innerHTML(value) {{
+    this._innerHTML = value;
+    if (this.id === "controlExplainView" && value.includes('id="runtimeEditorMount"')) {{
+      const runtimeMount = new FakeElement("runtimeEditorMount");
+      runtimeMount.parent = this;
+      elements.set("runtimeEditorMount", runtimeMount);
+      const explainMount = new FakeElement("controlExplainMount");
+      explainMount.parent = this;
+      elements.set("controlExplainMount", explainMount);
+    }}
+  }}
+  get innerHTML() {{ return this._innerHTML; }}
+  querySelector(selector) {{
+    if (selector === "#runtimeEditorMount") return elements.get("runtimeEditorMount") || null;
+    if (selector === "#controlExplainMount") return elements.get("controlExplainMount") || null;
+    return null;
+  }}
+  contains(node) {{
+    let current = node;
+    while (current) {{
+      if (current === this) return true;
+      current = current.parent;
+    }}
+    return false;
+  }}
+}}
+elements.set("controlExplainView", new FakeElement("controlExplainView"));
+global.document = {{
+  activeElement: {{ closest: () => ({{}}) }},
+  getElementById(id) {{ return elements.get(id) || null; }}
+}};
+
+app.state.auth = {{ configured: true, authenticated: true, csrfToken: "token" }};
+app.state.runtime = {{
+  system: {{ enabled: true, max_total_power: 1600, min_output_limit: 35, loop_interval: 5 }},
+  devices: {{}},
+  winter: {{ enabled: false }},
+  ha: {{ enabled: true, control_enabled: false }},
+  _limits: {{ system: {{ max_total_power: 5000, min_output_limit: 5000 }}, devices: {{}}, fallback_device_max_power: 800 }}
+}};
+app.renderControlExplain({{ control_explain: null }}, {{ forceRuntimeEditor: true }});
+const authenticatedHtml = elements.get("runtimeEditorMount").innerHTML;
+
+app.state.auth = {{ configured: true, authenticated: false, csrfToken: null }};
+app.state.runtimeEditorDirty = true;
+app.renderControlExplain({{ control_explain: null }}, {{ forceRuntimeEditor: true }});
+const loggedOutHtml = elements.get("runtimeEditorMount").innerHTML;
+
+console.log(JSON.stringify({{
+  hadForm: authenticatedHtml.includes("runtime-form"),
+  loginRequired: loggedOutHtml.includes("Login required"),
+  hasFormAfterLogout: loggedOutHtml.includes("runtime-form")
+}}));
+"""
+    output = run_node(script)
+
+    assert output == {
+        "hadForm": True,
+        "loginRequired": True,
+        "hasFormAfterLogout": False,
+    }
+
+
 def test_battery_fill_helper_clamps_and_sets_transform_scale():
     script = f"""
 const app = require({json.dumps(str(APP_JS))});

@@ -12,6 +12,8 @@ const state = {
     csrfToken: null,
   },
   runtime: null,
+  runtimeEditorDirty: false,
+  runtimeEditorFocused: false,
 };
 
 const SOC_ANIMATION_EPSILON = 0.1;
@@ -859,19 +861,63 @@ function applyDeviceFlowDynamicStyles(container) {
   });
 }
 
-function renderControlExplain(snapshot) {
+function renderControlExplain(snapshot, options = {}) {
   const container = $("controlExplainView");
   if (!container) return;
 
-  const explain = snapshot?.control_explain;
-  if (!explain || typeof explain !== "object") {
+  if (!ensureControlExplainShell(container)) {
     container.innerHTML = `
       <div class="control-decision-board">
-        <div class="control-empty">No control explanation data available yet.</div>
         ${runtimeControlPanel()}
+        ${controlExplainHtml(snapshot)}
       </div>
     `;
     return;
+  }
+
+  if (options.forceRuntimeEditor || !isRuntimeEditorEditing()) {
+    renderRuntimeEditorMount();
+  }
+  renderControlExplainMount(snapshot);
+}
+
+function ensureControlExplainShell(container) {
+  if (!container.querySelector) return false;
+  if (
+    container.querySelector("#runtimeEditorMount")
+    && container.querySelector("#controlExplainMount")
+  ) {
+    return true;
+  }
+
+  container.innerHTML = `
+    <div class="control-decision-board">
+      <div id="runtimeEditorMount"></div>
+      <div id="controlExplainMount"></div>
+    </div>
+  `;
+  return Boolean(
+    container.querySelector("#runtimeEditorMount")
+    && container.querySelector("#controlExplainMount")
+  );
+}
+
+function renderRuntimeEditorMount() {
+  const mount = $("runtimeEditorMount");
+  if (!mount) return;
+  mount.innerHTML = runtimeControlPanel();
+}
+
+function renderControlExplainMount(snapshot) {
+  const mount = $("controlExplainMount");
+  if (!mount) return;
+  mount.innerHTML = controlExplainHtml(snapshot);
+}
+
+function controlExplainHtml(snapshot) {
+  const explain = snapshot?.control_explain;
+  if (!explain || typeof explain !== "object") {
+    return `<div class="control-empty">No control explanation data available yet.</div>`;
   }
 
   const notes = Array.isArray(explain.notes)
@@ -883,13 +929,10 @@ function renderControlExplain(snapshot) {
     ? devices.map(([name, device]) => controlDeviceCard(name, device || {}, explain, weightContext)).join("")
     : `<div class="control-empty compact">No device explanation data available.</div>`;
 
-  container.innerHTML = `
-    <div class="control-decision-board">
-      ${runtimeControlPanel()}
-      ${controlGlobalPipeline(explain, devices, snapshot)}
-      ${controlContextRail(explain, devices, notes)}
-      <div class="control-device-list">${deviceFlows}</div>
-    </div>
+  return `
+    ${controlGlobalPipeline(explain, devices, snapshot)}
+    ${controlContextRail(explain, devices, notes)}
+    <div class="control-device-list">${deviceFlows}</div>
   `;
 }
 
@@ -2130,9 +2173,57 @@ function runtimeSubmit() {
   return `<button class="primary-button compact" type="submit">Apply</button>`;
 }
 
+function activeRuntimeEditorElement() {
+  const active = typeof document !== "undefined" ? document.activeElement : null;
+  if (!active || !active.closest) return null;
+  const editor = active.closest(".runtime-form, .runtime-editor-panel");
+  const container = $("controlExplainView");
+  if (editor && container?.contains && !container.contains(editor)) return null;
+  return editor;
+}
+
+function isRuntimeEditorEditing() {
+  return Boolean(activeRuntimeEditorElement())
+    || Boolean(state.runtimeEditorFocused)
+    || Boolean(state.runtimeEditorDirty);
+}
+
+function clearRuntimeEditorState() {
+  state.runtimeEditorDirty = false;
+  state.runtimeEditorFocused = false;
+}
+
 function initRuntimeForms() {
   const container = $("controlExplainView");
   if (!container) return;
+
+  container.addEventListener("input", (event) => {
+    if (event.target?.closest?.(".runtime-form")) {
+      state.runtimeEditorDirty = true;
+    }
+  });
+
+  container.addEventListener("change", (event) => {
+    if (event.target?.closest?.(".runtime-form")) {
+      state.runtimeEditorDirty = true;
+    }
+  });
+
+  container.addEventListener("focusin", (event) => {
+    if (event.target?.closest?.(".runtime-form, .runtime-editor-panel")) {
+      state.runtimeEditorFocused = true;
+    }
+  });
+
+  container.addEventListener("focusout", () => {
+    const defer = typeof window !== "undefined" && typeof window.setTimeout === "function"
+      ? window.setTimeout.bind(window)
+      : (callback) => callback();
+    defer(() => {
+      state.runtimeEditorFocused = Boolean(activeRuntimeEditorElement());
+    }, 0);
+  });
+
   container.addEventListener("submit", async (event) => {
     const form = event.target;
     if (!form.matches(".runtime-form")) return;
@@ -2179,8 +2270,8 @@ async function submitRuntimeForm(form) {
       }
       throw new Error(result.message || result.error || "Runtime update failed");
     }
+    await loadRuntimeState({ forceRuntimeEditor: true });
     setRuntimeFeedback("Saved.", false);
-    await loadRuntimeState();
   } catch (error) {
     setRuntimeFeedback(error.message || "Runtime update failed.", true);
   }
@@ -2193,15 +2284,19 @@ function setRuntimeFeedback(message, isError) {
   el.className = `runtime-feedback ${isError ? "error" : "ok"}`;
 }
 
-async function loadRuntimeState() {
+async function loadRuntimeState(options = {}) {
+  const forceRuntimeEditor = Boolean(options.forceRuntimeEditor) || !isRuntimeEditorEditing();
   if (state.demoMode) {
     state.runtime = demoRuntimeState();
+    if (forceRuntimeEditor) clearRuntimeEditorState();
+    if (state.snapshot) renderControlExplain(state.snapshot, { forceRuntimeEditor });
     return;
   }
   try {
     const response = await fetch("/api/runtime");
     state.runtime = await response.json();
-    if (state.snapshot) renderControlExplain(state.snapshot);
+    if (forceRuntimeEditor) clearRuntimeEditorState();
+    if (state.snapshot) renderControlExplain(state.snapshot, { forceRuntimeEditor });
   } catch {
     state.runtime = null;
   }
@@ -2210,9 +2305,13 @@ async function loadRuntimeState() {
 async function loadAuthStatus() {
   if (state.demoMode) {
     state.auth = { configured: false, authenticated: false, csrfToken: null };
+    clearRuntimeEditorState();
     renderAuthState();
+    if (state.snapshot) renderControlExplain(state.snapshot, { forceRuntimeEditor: true });
     return;
   }
+  const previousConfigured = state.auth.configured;
+  const previousAuthenticated = state.auth.authenticated;
   try {
     const response = await fetch("/api/auth/status");
     const payload = await response.json();
@@ -2225,10 +2324,19 @@ async function loadAuthStatus() {
       state.auth.csrfToken = null;
     }
     renderAuthState();
-    if (state.snapshot) renderControlExplain(state.snapshot);
+    const authChanged = previousConfigured !== state.auth.configured
+      || previousAuthenticated !== state.auth.authenticated;
+    if (authChanged) clearRuntimeEditorState();
+    if (state.snapshot) renderControlExplain(state.snapshot, { forceRuntimeEditor: authChanged });
   } catch {
     state.auth = { configured: false, authenticated: false, csrfToken: null };
+    if (previousConfigured || previousAuthenticated) clearRuntimeEditorState();
     renderAuthState();
+    if (state.snapshot) {
+      renderControlExplain(state.snapshot, {
+        forceRuntimeEditor: previousConfigured || previousAuthenticated,
+      });
+    }
   }
 }
 
@@ -2312,7 +2420,8 @@ async function login() {
     state.auth.csrfToken = payload.csrf_token;
     closeLoginModal();
     renderAuthState();
-    await loadRuntimeState();
+    clearRuntimeEditorState();
+    await loadRuntimeState({ forceRuntimeEditor: true });
   } catch (err) {
     if (error) {
       error.textContent = err.message || "Login failed";
@@ -2327,8 +2436,9 @@ async function logout() {
   } finally {
     state.auth.authenticated = false;
     state.auth.csrfToken = null;
+    clearRuntimeEditorState();
     renderAuthState();
-    if (state.snapshot) renderControlExplain(state.snapshot);
+    if (state.snapshot) renderControlExplain(state.snapshot, { forceRuntimeEditor: true });
   }
 }
 
@@ -2819,9 +2929,16 @@ if (typeof module !== "undefined") {
     deviceValue,
     deviceBatteryVisual,
     renderDevices,
+    renderControlExplain,
     runtimeControlPanel,
     runtimeDeviceForm,
     runtimeNumber,
+    initRuntimeForms,
+    submitRuntimeForm,
+    loadRuntimeState,
+    activeRuntimeEditorElement,
+    isRuntimeEditorEditing,
+    clearRuntimeEditorState,
     setRuntimeFeedback,
     setBatteryFill,
     startEvents,
