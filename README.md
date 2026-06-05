@@ -1,8 +1,8 @@
 # ems-solarflow-api-control
 
-[![CI](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/simulated-regression-tests.yml/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/simulated-regression-tests.yml)
+[![Continuous Integration](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/simulated-regression-tests.yml/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/simulated-regression-tests.yml)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.14-blue)
-![Tests](https://img.shields.io/badge/tests-212%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-%3E200-blue)
 
 ### Dashboard Preview
 
