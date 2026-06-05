@@ -69,13 +69,38 @@ normal start.
 ## 3. Configure Devices And Grid Meter
 
 Set the grid meter type and IP. Supported types are `shelly`, `ecotracker`,
-and `tasmota_http`:
+and `tasmota_http`. Shelly uses total power by default:
 
 ```json
 {
   "grid_meter": {
     "type": "shelly",
     "ip": "192.168.1.50"
+  }
+}
+```
+
+Use `channels` when selected Shelly clamps should be summed. A single item list
+such as `["c"]` reads only clamp C:
+
+```json
+{
+  "grid_meter": {
+    "type": "shelly",
+    "ip": "192.168.1.50",
+    "channels": ["c"]
+  }
+}
+```
+
+Multiple items such as `["a", "c"]` sum only those selected clamps:
+
+```json
+{
+  "grid_meter": {
+    "type": "shelly",
+    "ip": "192.168.1.50",
+    "channels": ["a", "c"]
   }
 }
 ```

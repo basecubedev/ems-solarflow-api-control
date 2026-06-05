@@ -381,8 +381,15 @@ Shelly Pro 3EM uses:
 http://<ip>/rpc/Shelly.GetStatus
 ```
 
-It is supported in triphase mode via `em:0.total_act_power` and in monophase
-mode via the summed `em1:0`, `em1:1`, and `em1:2` `act_power` values.
+Shelly uses the aggregate `em:0.total_act_power` value by default and falls
+back to summing all `em1:*` clamp values if the aggregate value is not
+available.
+
+Use `grid_meter.channels` when only selected Shelly clamps should be used. A
+single item list such as `["c"]` is valid and reads only clamp C. Multiple
+items such as `["a", "c"]` sum only those selected clamps. Valid entries are
+`a`, `b`, `c`, `em1:0`, `em1:1`, and `em1:2`; `total` and `sum` are not valid
+inside `channels`.
 
 everHome EcoTracker uses:
 
@@ -413,6 +420,30 @@ Shelly example:
   "grid_meter": {
     "type": "shelly",
     "ip": "192.168.1.50"
+  }
+}
+```
+
+Shelly selected clamp C example:
+
+```json
+{
+  "grid_meter": {
+    "type": "shelly",
+    "ip": "192.168.1.50",
+    "channels": ["c"]
+  }
+}
+```
+
+Shelly selected clamps A and C example:
+
+```json
+{
+  "grid_meter": {
+    "type": "shelly",
+    "ip": "192.168.1.50",
+    "channels": ["a", "c"]
   }
 }
 ```

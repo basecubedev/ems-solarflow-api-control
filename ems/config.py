@@ -309,6 +309,21 @@ def initialize(args, base_dir):
         for key in ("ip", "url", "power_path"):
             if key in GRID_METER_CONFIG and GRID_METER_CONFIG[key] is not None:
                 GRID_METER_CONFIG[key] = str(GRID_METER_CONFIG[key])
+        if (
+            "channels" in GRID_METER_CONFIG
+            and GRID_METER_CONFIG["channels"] is not None
+        ):
+            if not isinstance(GRID_METER_CONFIG["channels"], list):
+                raise ValueError("grid_meter.channels must be a list")
+            normalized_channels = []
+            for item in GRID_METER_CONFIG["channels"]:
+                value = str(item).strip().lower()
+                if not value:
+                    raise ValueError(
+                        "grid_meter.channels must not contain empty values"
+                    )
+                normalized_channels.append(value)
+            GRID_METER_CONFIG["channels"] = normalized_channels
     else:
         GRID_METER_CONFIG = {
             "type": "shelly",
