@@ -1,11 +1,14 @@
 import logging
 from types import SimpleNamespace
 
+import pytest
+
 from ems.clients import (
     HAClient,
     ShellyClient,
     ZendureClient,
     create_session,
+    _parse_shelly_power,
     zendure_write_succeeded,
 )
 
@@ -179,3 +182,57 @@ def test_zendure_and_shelly_clients_parse_and_preserve_http_values():
 
     shelly.session = SessionStub(get_response=ValueError("offline"))
     assert shelly.get_power() == 123.5
+
+
+def test_parse_shelly_power_supports_triphase_payload():
+    assert _parse_shelly_power({"em:0": {"total_act_power": 321.5}}) == 321.5
+
+
+def test_parse_shelly_power_supports_monophase_three_channels():
+    assert _parse_shelly_power(
+        {
+            "em1:0": {"act_power": 100.0},
+            "em1:1": {"act_power": 20.0},
+            "em1:2": {"act_power": -5.0},
+        }
+    ) == 115.0
+
+
+def test_parse_shelly_power_supports_monophase_single_channel():
+    assert _parse_shelly_power({"em1:0": {"act_power": 42.0}}) == 42.0
+
+
+def test_parse_shelly_power_rejects_unsupported_payload():
+    with pytest.raises(ValueError, match="Unsupported Shelly status payload"):
+        _parse_shelly_power({"wifi": {"sta_ip": "192.168.1.10"}})
+
+
+def test_parse_shelly_power_rejects_payload_without_numeric_power_values():
+    with pytest.raises(ValueError, match="Unsupported Shelly status payload"):
+        _parse_shelly_power(
+            {
+                "em1:0": {"act_power": "42.0"},
+                "em1:1": {"act_power": None},
+            }
+        )
+
+
+def test_shelly_client_logs_parse_errors_and_keeps_last_value(caplog):
+    client = ShellyClient(
+        "192.0.2.20",
+        SessionStub(
+            get_response=ResponseStub(
+                payload={"em:0": {"total_act_power": 123.456}}
+            )
+        ),
+    )
+    assert client.get_power() == 123.5
+
+    caplog.set_level(logging.WARNING)
+    client.session = SessionStub(
+        get_response=ResponseStub(payload={"wifi": {"sta_ip": "192.168.1.10"}})
+    )
+
+    assert client.get_power() == 123.5
+    assert "event=shelly_read_error" in caplog.text
+    assert "stale_value=123.5" in caplog.text

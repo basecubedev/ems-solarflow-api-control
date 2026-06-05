@@ -371,6 +371,9 @@ default, while runtime-state can override the active weighting.
 
 `shelly.ip` is the local Shelly device used for household power measurement.
 The EMS uses Shelly load data as the input for target calculation.
+Shelly Pro 3EM is supported in triphase mode via `em:0.total_act_power` and
+in monophase mode via the summed `em1:0`, `em1:1`, and `em1:2` `act_power`
+values.
 
 ## First-Run Validation
 

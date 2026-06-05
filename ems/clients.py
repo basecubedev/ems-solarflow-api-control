@@ -318,14 +318,60 @@ class ShellyClient:
             )
 
             self.last_value = round(
-                r.json()["em:0"]["total_act_power"],
+                _parse_shelly_power(r.json()),
                 1
             )
 
-        except:
-            pass
+        except Exception as e:
+            log_event(
+                logging.WARNING,
+                "shelly_read_error",
+                ip=self.ip,
+                error=e,
+                stale_value=self.last_value
+            )
 
         return self.last_value
+
+
+def _is_numeric(value):
+    """Return True for power values Shelly reports as JSON numbers."""
+
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _parse_shelly_power(data):
+    """Extract grid power from Shelly Pro 3EM status payloads."""
+
+    if not isinstance(data, dict):
+        raise ValueError("Unsupported Shelly status payload: expected object")
+
+    em = data.get("em:0")
+    if isinstance(em, dict):
+        value = em.get("total_act_power")
+        if _is_numeric(value):
+            return float(value)
+
+    total = 0.0
+    found = False
+    for key in ("em1:0", "em1:1", "em1:2"):
+        meter = data.get(key)
+        if not isinstance(meter, dict):
+            continue
+
+        value = meter.get("act_power")
+        if _is_numeric(value):
+            total += float(value)
+            found = True
+
+    if found:
+        return total
+
+    raise ValueError(
+        "Unsupported Shelly status payload: missing "
+        "em:0.total_act_power or em1:* act_power values"
+    )
+
 
 def fetch_all_devices(devices):
     """Fetch all device states in parallel."""
