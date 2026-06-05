@@ -5,6 +5,7 @@ const state = {
   flowView: "aggregated",
   demoMode: isDemoMode(),
   liveTransport: "sse",
+  deviceSocValues: new Map(),
   auth: {
     configured: false,
     authenticated: false,
@@ -13,9 +14,11 @@ const state = {
   runtime: null,
 };
 
+const SOC_ANIMATION_EPSILON = 0.1;
 const SSE_TELEMETRY_TIMEOUT_MS = 3000;
 let pollingStarted = false;
 let pollingIntervalId = null;
+let pendingDeviceFlowBatteryAnimation = false;
 
 const charts = [
   { id: "chartPv", title: "PV", field: "pv_total_w", color: "#f1c84b", unit: "W" },
@@ -234,12 +237,62 @@ function setVisualState(id, active, mode) {
   el.classList.toggle("exporting", Boolean(active) && mode === "exporting");
 }
 
+function afterNextPaint(callback) {
+  if (
+    typeof window !== "undefined"
+    && typeof window.requestAnimationFrame === "function"
+  ) {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(callback);
+    });
+    return;
+  }
+
+  callback();
+}
+
+function normalizeSoc(value) {
+  const numericSoc = Number(value);
+  return Number.isFinite(numericSoc) ? clamp(numericSoc, 0, 100) : 0;
+}
+
+function socValuesDiffer(previous, next) {
+  return !Number.isFinite(previous)
+    || Math.abs(previous - next) > SOC_ANIMATION_EPSILON;
+}
+
 function setBatteryFill(id, soc) {
   const el = $(id);
   if (!el) return;
-  el.setAttribute("width", String(42 * clamp(soc, 0, 100) / 100));
-  el.classList.toggle("low", soc < 20);
-  el.classList.toggle("full", soc >= 90);
+  const clampedSoc = normalizeSoc(soc);
+  const fillScale = clampedSoc / 100;
+  const previousSoc = Number(
+    typeof el.getAttribute === "function"
+      ? el.getAttribute("data-soc-current")
+      : undefined
+  );
+  const hasPreviousSoc = Number.isFinite(previousSoc);
+  const shouldAnimate = hasPreviousSoc && socValuesDiffer(previousSoc, clampedSoc);
+
+  el.setAttribute("width", "42");
+  el.setAttribute("data-soc-target", String(clampedSoc));
+  el.classList.toggle("low", clampedSoc < 20);
+  el.classList.toggle("full", clampedSoc >= 90);
+
+  if (!shouldAnimate) {
+    el.style.transition = "none";
+    el.style.transform = `scaleX(${fillScale})`;
+    el.setAttribute("data-soc-current", String(clampedSoc));
+    afterNextPaint(() => {
+      el.style.transition = "";
+    });
+    return;
+  }
+
+  afterNextPaint(() => {
+    el.style.transform = `scaleX(${fillScale})`;
+    el.setAttribute("data-soc-current", String(clampedSoc));
+  });
 }
 
 function renderRules(rules) {
@@ -273,13 +326,26 @@ function renderRules(rules) {
 
 function renderDevices(devices) {
   const grid = $("deviceGrid");
+  const previousSocWidths = readDeviceSocFillWidths(grid);
   grid.innerHTML = "";
   const entries = normalizeDeviceEntries(devices);
+  const activeDeviceNames = new Set(entries.map(([name]) => name));
 
   entries.forEach(([name, device]) => {
     const card = document.createElement("article");
     card.className = "device-card";
     const soc = clamp(deviceSoc(device), 0, 100);
+    const safeDeviceKey = escapeHtml(name || "Unknown");
+    const previousSocFromState = state.deviceSocValues.get(name);
+    const previousSocFromDom = previousSocWidths.has(name)
+      ? previousSocWidths.get(name)
+      : previousSocWidths.get(safeDeviceKey);
+    const previousKnownSoc = Number.isFinite(previousSocFromState)
+      ? previousSocFromState
+      : previousSocFromDom;
+    const shouldAnimateSoc = Number.isFinite(previousKnownSoc)
+      && socValuesDiffer(previousKnownSoc, soc);
+    const previousSoc = Number.isFinite(previousKnownSoc) ? previousKnownSoc : soc;
     const batteryFlow = normalizeBatteryPowerForDisplay(device.battery_power_w);
     const deviceBatteryState = batteryStateLabel(batteryFlow);
     const socClass = soc < 20 ? "low" : soc >= 90 ? "full" : "";
@@ -293,7 +359,7 @@ function renderDevices(devices) {
           <span class="soc-title">${icon("battery")} Battery SOC</span>
           <strong class="soc-percent">${pct(soc)}</strong>
         </div>
-        <div class="soc-bar"><div class="soc-fill" style="width:${soc}%"></div></div>
+        <div class="soc-bar"><div class="soc-fill" data-device-soc-fill="${safeDeviceKey}" data-soc-start="${previousSoc}" data-soc-target="${soc}" data-soc-animate="${shouldAnimateSoc ? "true" : "false"}"></div></div>
         <div class="soc-mode">${deviceBatteryState} ${signedWatts(batteryFlow.valueW)}</div>
       </div>
       <div class="device-values">
@@ -306,11 +372,70 @@ function renderDevices(devices) {
       </div>
     `;
     grid.appendChild(card);
+    state.deviceSocValues.set(name, soc);
+  });
+
+  state.deviceSocValues.forEach((_, name) => {
+    if (!activeDeviceNames.has(name)) {
+      state.deviceSocValues.delete(name);
+    }
   });
 
   if (!entries.length) {
     grid.innerHTML = `<article class="device-card"><span class="device-label">Waiting for EMS telemetry</span></article>`;
   }
+
+  applyDeviceSocFillStarts(grid);
+  animateDeviceSocFills(grid);
+}
+
+function readDeviceSocFillWidths(grid) {
+  const widths = new Map();
+  if (!grid || typeof grid.querySelectorAll !== "function") {
+    return widths;
+  }
+
+  grid.querySelectorAll("[data-device-soc-fill]").forEach((el) => {
+    const key = el.getAttribute("data-device-soc-fill");
+    const target = Number(el.getAttribute("data-soc-target"));
+    if (key && Number.isFinite(target)) {
+      widths.set(key, clamp(target, 0, 100));
+    }
+  });
+  return widths;
+}
+
+function applyDeviceSocFillStarts(grid) {
+  if (!grid || typeof grid.querySelectorAll !== "function") {
+    return;
+  }
+
+  grid.querySelectorAll("[data-device-soc-fill][data-soc-start]").forEach((el) => {
+    const start = Number(el.getAttribute("data-soc-start"));
+    if (Number.isFinite(start)) {
+      el.style.width = `${clamp(start, 0, 100)}%`;
+    }
+  });
+}
+
+function animateDeviceSocFills(grid) {
+  if (!grid || typeof grid.querySelectorAll !== "function") {
+    return;
+  }
+
+  const fills = Array.from(
+    grid.querySelectorAll('[data-device-soc-fill][data-soc-target][data-soc-animate="true"]')
+  );
+  if (!fills.length) return;
+
+  afterNextPaint(() => {
+    fills.forEach((el) => {
+      const target = Number(el.getAttribute("data-soc-target"));
+      if (Number.isFinite(target)) {
+        el.style.width = `${clamp(target, 0, 100)}%`;
+      }
+    });
+  });
 }
 
 function renderEnergyStats(stats) {
@@ -629,8 +754,23 @@ function renderDeviceFlow(snapshotOrDevices) {
   const viewHeight = Math.max(rowsBottomY, gridY + layout.sharedVisualHeight) + layout.rowBottomPadding;
   const homeLoad = Number(snapshot.home_load_w || 0);
   const gridPower = Number(snapshot.grid_power_w || 0);
+  const previousBatteryScales = readDeviceBatteryFillScales(container);
   const rows = entries
-    .map(([name, device], index) => deviceFlowRow(name, device || {}, layout.firstRowY + index * layout.rowHeight, layout, homeY))
+    .map(([name, device], index) => {
+      const key = String(index);
+      const previousScale = previousBatteryScales.has(key)
+        ? previousBatteryScales.get(key)
+        : null;
+      return deviceFlowRow(
+        name,
+        device || {},
+        layout.firstRowY + index * layout.rowHeight,
+        layout,
+        homeY,
+        index,
+        previousScale
+      );
+    })
     .join("");
 
   container.innerHTML = `
@@ -641,6 +781,82 @@ function renderDeviceFlow(snapshotOrDevices) {
       ${deviceSharedVisuals(layout.sharedX, homeY, gridY, homeLoad, gridPower)}
     </svg>
   `;
+  applyDeviceFlowDynamicStyles(container);
+  if (state.flowView === "devices" && !container.hidden) {
+    pendingDeviceFlowBatteryAnimation = false;
+    animateDeviceBatteryFills(container);
+  } else {
+    pendingDeviceFlowBatteryAnimation = true;
+  }
+}
+
+function readDeviceBatteryFillScales(container) {
+  const scales = new Map();
+  if (!container || typeof container.querySelectorAll !== "function") {
+    return scales;
+  }
+
+  container.querySelectorAll("[data-device-battery-fill]").forEach((el) => {
+    const key = el.getAttribute("data-device-battery-fill");
+    const target = Number(el.getAttribute("data-battery-fill-target"));
+    if (key !== null && Number.isFinite(target)) {
+      scales.set(key, clamp(target, 0, 1));
+    }
+  });
+  return scales;
+}
+
+function animateDeviceBatteryFills(container) {
+  if (!container || typeof container.querySelectorAll !== "function") {
+    return;
+  }
+
+  const fills = Array.from(container.querySelectorAll("[data-battery-fill-target]"));
+  if (!fills.length) return;
+
+  const applyTargets = () => {
+    fills.forEach((el) => {
+      const target = Number(el.getAttribute("data-battery-fill-target"));
+      if (Number.isFinite(target)) {
+        el.style.transform = `scaleX(${clamp(target, 0, 1)})`;
+      }
+    });
+  };
+
+  afterNextPaint(applyTargets);
+}
+
+function applyDeviceFlowDynamicStyles(container) {
+  if (!container || typeof container.querySelectorAll !== "function") {
+    return;
+  }
+
+  container.querySelectorAll("[data-pipe-alpha][data-pipe-width][data-pipe-glow][data-pipe-speed]").forEach((el) => {
+    const alpha = Number(el.getAttribute("data-pipe-alpha"));
+    const width = Number(el.getAttribute("data-pipe-width"));
+    const glow = Number(el.getAttribute("data-pipe-glow"));
+    const speed = Number(el.getAttribute("data-pipe-speed"));
+
+    if (Number.isFinite(alpha)) {
+      el.style.setProperty("--pipe-alpha", String(clamp(alpha, 0, 1)));
+    }
+    if (Number.isFinite(width)) {
+      el.style.setProperty("--pipe-width", `${clamp(width, 0, 12)}px`);
+    }
+    if (Number.isFinite(glow)) {
+      el.style.setProperty("--pipe-glow", String(clamp(glow, 0, 1)));
+    }
+    if (Number.isFinite(speed)) {
+      el.style.setProperty("--pipe-speed", `${Math.max(0.1, speed)}s`);
+    }
+  });
+
+  container.querySelectorAll("[data-battery-fill-start]").forEach((el) => {
+    const start = Number(el.getAttribute("data-battery-fill-start"));
+    if (Number.isFinite(start)) {
+      el.style.transform = `scaleX(${clamp(start, 0, 1)})`;
+    }
+  });
 }
 
 function renderControlExplain(snapshot) {
@@ -1451,7 +1667,7 @@ function firstExplainValue(...values) {
   return values.find(hasExplainValue);
 }
 
-function deviceFlowRow(name, device, y, layout, homeY) {
+function deviceFlowRow(name, device, y, layout, homeY, rowIndex = 0, previousBatteryScale = 0) {
   const safeName = escapeHtml(name || "Unknown");
   const pvPower = devicePvPower(device);
   const outputPower = deviceOutputPower(device);
@@ -1480,7 +1696,7 @@ function deviceFlowRow(name, device, y, layout, homeY) {
       ${devicePipeGroup("battery", batteryFlow.absW, `M${batteryX + 184} ${batteryMidY} H${leftJoinX} V${inverterBatteryPortY} H${inverterX}`, batteryPipeDirection(batteryFlow))}
       ${devicePipeGroup("output", outputPower, `M${inverterX + 196} ${inverterMidY} H${homeJoinX} V${homeMidY} H${sharedX}`)}
       ${deviceSolarVisual(pvX, pvY, `${safeName} PV`, watts(pvPower), pvPower > FLOW_THRESHOLD_W)}
-      ${deviceBatteryVisual(batteryX, batteryY, batteryStateText, signedWatts(batteryFlow.valueW), soc, batteryFlow.absW > FLOW_THRESHOLD_W, batteryFlow.state)}
+      ${deviceBatteryVisual(batteryX, batteryY, batteryStateText, signedWatts(batteryFlow.valueW), soc, batteryFlow.absW > FLOW_THRESHOLD_W, batteryFlow.state, rowIndex, previousBatteryScale)}
       ${deviceInverterVisual(inverterX, inverterY, safeName, watts(outputPower), outputPower > FLOW_THRESHOLD_W)}
     </g>
   `;
@@ -1496,15 +1712,13 @@ function devicePipeGroup(kind, value, path, direction = "forward") {
     active ? "active" : "idle",
     direction === "reverse" ? "reverse" : "",
   ].filter(Boolean).join(" ");
-  const style = [
-    `--pipe-alpha:${active ? 0.34 + intensity * 0.56 : 0.12}`,
-    `--pipe-width:${active ? 3 + intensity * 3 : 3}px`,
-    `--pipe-glow:${active ? 0.10 + intensity * 0.30 : 0.08}`,
-    `--pipe-speed:${1.85 - intensity * 0.72}s`,
-  ].join(";");
+  const pipeAlpha = active ? 0.34 + intensity * 0.56 : 0.12;
+  const pipeWidth = active ? 3 + intensity * 3 : 3;
+  const pipeGlow = active ? 0.10 + intensity * 0.30 : 0.08;
+  const pipeSpeed = 1.85 - intensity * 0.72;
 
   return `
-    <g class="${classes}" style="${style}">
+    <g class="${classes}" data-pipe-alpha="${pipeAlpha}" data-pipe-width="${pipeWidth}" data-pipe-glow="${pipeGlow}" data-pipe-speed="${pipeSpeed}">
       <path class="pipe-base" d="${path}"></path>
       <path class="pipe-glow" d="${path}"></path>
       <path class="pipe-energy" d="${path}"></path>
@@ -1551,16 +1765,36 @@ function deviceInverterVisual(x, y, label, value, active) {
   `;
 }
 
-function deviceBatteryVisual(x, y, stateText, value, soc, active, mode) {
-  const fillClass = soc < 20 ? " low" : soc >= 90 ? " full" : "";
+function deviceBatteryVisual(
+  x,
+  y,
+  stateText,
+  value,
+  soc,
+  active,
+  mode,
+  rowIndex = 0,
+  previousFillScale = null
+) {
+  const clampedSoc = normalizeSoc(soc);
+  const fillScale = clampedSoc / 100;
+  const numericPreviousScale = Number(previousFillScale);
+  const initialFillScale = previousFillScale !== null && Number.isFinite(numericPreviousScale)
+    ? clamp(numericPreviousScale, 0, 1)
+    : fillScale;
+  const numericRowIndex = Number(rowIndex);
+  const safeRowIndex = Number.isFinite(numericRowIndex)
+    ? String(Math.max(0, Math.floor(numericRowIndex)))
+    : "0";
+  const fillClass = clampedSoc < 20 ? " low" : clampedSoc >= 90 ? " full" : "";
   return `
     <g class="${deviceVisualClasses("battery-visual", active, mode)}" transform="translate(${x} ${y})">
       <rect class="visual-shell" x="0" y="0" width="184" height="76" rx="38"></rect>
       <rect class="visual-icon-bay" x="12" y="10" width="72" height="56" rx="24"></rect>
       <rect class="battery-case" x="24" y="27" width="52" height="23" rx="7"></rect>
       <rect class="battery-cap" x="76" y="35" width="5" height="8" rx="2"></rect>
-      <rect class="battery-fill${fillClass}" x="29" y="32" width="${42 * soc / 100}" height="13" rx="4"></rect>
-      <text class="battery-soc" x="50" y="43" text-anchor="middle">${pct(soc)}</text>
+      <rect class="battery-fill${fillClass}" x="29" y="32" width="42" height="13" rx="4" data-device-battery-fill="${safeRowIndex}" data-battery-fill-start="${initialFillScale}" data-battery-fill-target="${fillScale}"></rect>
+      <text class="battery-soc" x="50" y="43" text-anchor="middle">${pct(clampedSoc)}</text>
       <text class="visual-state" x="166" y="20" text-anchor="end">${stateText}</text>
       <text class="visual-label" x="166" y="39" text-anchor="end">Battery</text>
       <text class="visual-value" x="166" y="61" text-anchor="end">${value}</text>
@@ -1671,6 +1905,11 @@ function setFlowView(view, persist = true) {
     } catch {
       // Ignore unavailable storage; the default aggregated view remains intact.
     }
+  }
+
+  if (nextView === "devices" && pendingDeviceFlowBatteryAnimation && deviceView) {
+    pendingDeviceFlowBatteryAnimation = false;
+    animateDeviceBatteryFills(deviceView);
   }
 }
 
@@ -2578,10 +2817,13 @@ if (typeof module !== "undefined") {
     state,
     escapeHtml,
     deviceValue,
+    deviceBatteryVisual,
+    renderDevices,
     runtimeControlPanel,
     runtimeDeviceForm,
     runtimeNumber,
     setRuntimeFeedback,
+    setBatteryFill,
     startEvents,
     startPollingOnce,
     resetLiveTransportForTests,
