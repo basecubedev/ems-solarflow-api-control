@@ -77,6 +77,26 @@ def test_login_modal_is_hidden_initially():
     assert "[hidden] { display: none !important; }" in css
 
 
+def test_battery_fill_uses_transform_animation_basis():
+    html = INDEX_HTML.read_text()
+    css = STYLES_CSS.read_text()
+
+    assert (
+        '<rect id="flowBatteryFill" class="battery-fill" x="29" y="32" '
+        'width="42" height="13" rx="4"></rect>'
+    ) in html
+    assert "transition: transform .42s ease, fill .25s ease;" in css
+    assert "transform: scaleX(0);" in css
+    assert "transform-box: fill-box;" in css
+    assert "transform-origin: left center;" in css
+
+
+def test_dashboard_generated_templates_do_not_use_inline_style_attributes():
+    js = APP_JS.read_text()
+
+    assert 'style="' not in js
+
+
 def test_runtime_control_panel_orders_all_devices_before_winter_and_ha():
     script = f"""
 const app = require({json.dumps(str(APP_JS))});
@@ -112,6 +132,272 @@ console.log(JSON.stringify({{
     assert output["wr3Present"] is True
     assert output["ems"] < output["wr1"] < output["wr2"] < output["wr3"]
     assert output["wr3"] < output["winter"] < output["ha"]
+
+
+def test_battery_fill_helper_clamps_and_sets_transform_scale():
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const classes = new Set(["battery-fill"]);
+const element = {{
+  attributes: {{}},
+  style: {{}},
+  classList: {{
+    toggle(name, enabled) {{
+      if (enabled) classes.add(name);
+      else classes.delete(name);
+    }}
+  }},
+  setAttribute(name, value) {{
+    this.attributes[name] = value;
+  }},
+  getAttribute(name) {{
+    return this.attributes[name];
+  }}
+}};
+global.document = {{
+  getElementById(id) {{
+    return id === "battery" ? element : null;
+  }}
+}};
+
+app.setBatteryFill("battery", 125);
+const high = {{
+  width: element.attributes.width,
+  transform: element.style.transform,
+  low: classes.has("low"),
+  full: classes.has("full")
+}};
+
+app.setBatteryFill("battery", -5);
+const low = {{
+  width: element.attributes.width,
+  transform: element.style.transform,
+  low: classes.has("low"),
+  full: classes.has("full")
+}};
+
+console.log(JSON.stringify({{ high, low }}));
+"""
+    output = run_node(script)
+
+    assert output["high"] == {
+        "width": "42",
+        "transform": "scaleX(1)",
+        "low": False,
+        "full": True,
+    }
+    assert output["low"] == {
+        "width": "42",
+        "transform": "scaleX(0)",
+        "low": True,
+        "full": False,
+    }
+
+
+def test_battery_fill_helper_animates_only_real_soc_changes():
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const callbacks = [];
+const classes = new Set(["battery-fill"]);
+const element = {{
+  attributes: {{}},
+  style: {{}},
+  classList: {{
+    toggle(name, enabled) {{
+      if (enabled) classes.add(name);
+      else classes.delete(name);
+    }}
+  }},
+  setAttribute(name, value) {{
+    this.attributes[name] = value;
+  }},
+  getAttribute(name) {{
+    return this.attributes[name];
+  }}
+}};
+global.window = {{
+  requestAnimationFrame(callback) {{
+    callbacks.push(callback);
+  }}
+}};
+global.document = {{
+  getElementById(id) {{
+    return id === "battery" ? element : null;
+  }}
+}};
+
+app.setBatteryFill("battery", 60);
+const firstRender = element.style.transform || null;
+while (callbacks.length) callbacks.shift()();
+
+app.setBatteryFill("battery", 60);
+const unchanged = element.style.transform || null;
+while (callbacks.length) callbacks.shift()();
+
+app.setBatteryFill("battery", 80);
+const beforeChangeFrames = element.style.transform || null;
+callbacks.shift()();
+const afterFirstChangeFrame = element.style.transform || null;
+callbacks.shift()();
+const afterSecondChangeFrame = element.style.transform || null;
+
+console.log(JSON.stringify({{
+  firstRender,
+  unchanged,
+  beforeChangeFrames,
+  afterFirstChangeFrame,
+  afterSecondChangeFrame,
+  target: element.attributes["data-soc-target"]
+}}));
+"""
+    output = run_node(script)
+
+    assert output["firstRender"] == "scaleX(0.6)"
+    assert output["unchanged"] == "scaleX(0.6)"
+    assert output["beforeChangeFrames"] == "scaleX(0.6)"
+    assert output["afterFirstChangeFrame"] == "scaleX(0.6)"
+    assert output["afterSecondChangeFrame"] == "scaleX(0.8)"
+    assert output["target"] == "80"
+
+
+def test_device_cards_render_soc_fill_start_and_target_values():
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const cards = [];
+const grid = {{
+  innerHTML: "",
+  querySelectorAll() {{
+    return [];
+  }},
+  appendChild(card) {{
+    cards.push(card);
+  }}
+}};
+global.document = {{
+  getElementById(id) {{
+    return id === "deviceGrid" ? grid : null;
+  }},
+  createElement() {{
+    return {{}};
+  }}
+}};
+
+app.renderDevices({{
+  "WR<&1": {{
+    online: true,
+    soc: 72,
+    battery_power_w: 100,
+    pv_input_w: 500,
+    output_w: 300,
+    target_w: 300,
+    output_limit_w: 700,
+    mode: "solar"
+  }}
+}});
+const firstHtml = cards[0].innerHTML;
+
+app.renderDevices({{
+  "WR<&1": {{
+    online: true,
+    soc: 72,
+    battery_power_w: 100,
+    pv_input_w: 500,
+    output_w: 300,
+    target_w: 300,
+    output_limit_w: 700,
+    mode: "solar"
+  }}
+}});
+const unchangedFirstHtml = cards[1].innerHTML;
+
+app.renderDevices({{
+  "WR<&1": {{
+    online: true,
+    soc: 75,
+    battery_power_w: 100,
+    pv_input_w: 500,
+    output_w: 300,
+    target_w: 300,
+    output_limit_w: 700,
+    mode: "solar"
+  }}
+}});
+const changedHtml = cards[2].innerHTML;
+
+app.renderDevices({{
+  "WR<&1": {{
+    online: true,
+    soc: 75,
+    battery_power_w: 100,
+    pv_input_w: 500,
+    output_w: 300,
+    target_w: 300,
+    output_limit_w: 700,
+    mode: "solar"
+  }}
+}});
+const unchangedAfterChangeHtml = cards[3].innerHTML;
+
+console.log(JSON.stringify({{
+  firstHtml,
+  unchangedFirstHtml,
+  changedHtml,
+  unchangedAfterChangeHtml
+}}));
+"""
+    output = run_node(script)
+
+    assert 'data-device-soc-fill="WR&lt;&amp;1"' in output["firstHtml"]
+    assert 'data-soc-start="72"' in output["firstHtml"]
+    assert 'data-soc-target="72"' in output["firstHtml"]
+    assert 'data-soc-animate="false"' in output["firstHtml"]
+    assert 'style="' not in output["firstHtml"]
+    assert ">72%</strong>" in output["firstHtml"]
+
+    assert 'data-soc-start="72"' in output["unchangedFirstHtml"]
+    assert 'data-soc-target="72"' in output["unchangedFirstHtml"]
+    assert 'data-soc-animate="false"' in output["unchangedFirstHtml"]
+    assert 'style="' not in output["unchangedFirstHtml"]
+
+    assert 'data-soc-start="72"' in output["changedHtml"]
+    assert 'data-soc-target="75"' in output["changedHtml"]
+    assert 'data-soc-animate="true"' in output["changedHtml"]
+    assert 'style="' not in output["changedHtml"]
+    assert ">75%</strong>" in output["changedHtml"]
+
+    assert 'data-soc-start="75"' in output["unchangedAfterChangeHtml"]
+    assert 'data-soc-target="75"' in output["unchangedAfterChangeHtml"]
+    assert 'data-soc-animate="false"' in output["unchangedAfterChangeHtml"]
+    assert 'style="' not in output["unchangedAfterChangeHtml"]
+
+
+def test_device_battery_visual_clamps_soc_and_renders_transform_fill():
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const output = {{
+  low: app.deviceBatteryVisual(0, 0, "Idle", "0 W", -5, false, "idle"),
+  high: app.deviceBatteryVisual(0, 0, "Idle", "0 W", 125, false, "idle"),
+  unsafeIndex: app.deviceBatteryVisual(0, 0, "Idle", "0 W", 50, false, "idle", "1\\" onclick=\\"alert(1)")
+}};
+console.log(JSON.stringify(output));
+"""
+    output = run_node(script)
+
+    assert 'width="42"' in output["low"]
+    assert 'data-battery-fill-start="0"' in output["low"]
+    assert 'data-battery-fill-target="0"' in output["low"]
+    assert 'style="' not in output["low"]
+    assert ">0%</text>" in output["low"]
+    assert 'class="battery-fill low"' in output["low"]
+
+    assert 'width="42"' in output["high"]
+    assert 'data-battery-fill-start="1"' in output["high"]
+    assert 'data-battery-fill-target="1"' in output["high"]
+    assert 'style="' not in output["high"]
+    assert ">100%</text>" in output["high"]
+    assert 'class="battery-fill full"' in output["high"]
+    assert 'data-device-battery-fill="0"' in output["unsafeIndex"]
+    assert "onclick" not in output["unsafeIndex"]
 
 
 def test_dashboard_start_events_loads_live_once_and_prefers_sse():

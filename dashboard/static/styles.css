@@ -355,7 +355,12 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
 .panel-reflect { fill: url(#solarGlass); }
 .battery-case { fill: rgba(255,255,255,.05); stroke: currentColor; stroke-opacity: .62; stroke-width: 1.4; }
 .battery-cap { fill: currentColor; opacity: .52; }
-.battery-fill { fill: var(--battery); transition: width .42s ease, fill .25s ease; }
+.battery-fill { fill: var(--battery);
+  transform: scaleX(0);
+  transform-box: fill-box;
+  transform-origin: left center;
+  transition: transform .42s ease, fill .25s ease;
+}
 .battery-fill.low { fill: var(--danger); }
 .battery-fill.full { fill: var(--pv); }
 .battery-soc { fill: var(--text); font-size: 10px; font-weight: 950; letter-spacing: 0; }
