@@ -2063,9 +2063,9 @@ function runtimeControlPanel() {
           iconName: "gauge",
           fields: `
           ${runtimeToggle("enabled", "EMS enabled", system.enabled)}
-          ${runtimeNumber("max_total_power", "Max total power", system.max_total_power, 0, Number(systemLimits.max_total_power || 5000), "W")}
-          ${runtimeNumber("min_output_limit", "Min output limit", system.min_output_limit, 0, Number(systemLimits.min_output_limit || 5000), "W")}
-          ${runtimeNumber("loop_interval", "Loop interval", system.loop_interval, 1, 3600, "s")}
+          ${runtimeNumber("max_total_power", "Max total power", system.max_total_power, 0, Number(systemLimits.max_total_power || 5000), "W", "50")}
+          ${runtimeNumber("min_output_limit", "Min output limit", system.min_output_limit, 0, Number(systemLimits.min_output_limit || 5000), "W", "5")}
+          ${runtimeNumber("loop_interval", "Loop interval", system.loop_interval, 1, 3600, "s", "1")}
         `})}
         ${deviceForms}
         ${runtimeStageCard({
@@ -2124,7 +2124,7 @@ function runtimeDeviceForm(name, device, maxPower = 5000, step = 1) {
     iconName: "inverter",
     fields: `
       ${runtimeToggle("enabled", "Device enabled", device.enabled)}
-      ${runtimeNumber("max_power", "Max power", device.max_power, 0, maxPower, "W")}
+      ${runtimeNumber("max_power", "Max power", device.max_power, 0, maxPower, "W", "50")}
       ${runtimeNumber("pv_priority_factor", "PV priority", device.pv_priority_factor, 0.01, 100, "x", "0.01")}
       ${runtimeSelect("offgrid_socket_mode", "Offgrid socket", device.offgrid_socket_mode, ["off", "eco", "standard"])}
     `,

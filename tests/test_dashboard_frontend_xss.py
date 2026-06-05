@@ -164,13 +164,18 @@ console.log(JSON.stringify({{
 
     assert 'value="800"' in output["maxTotalPowerInput"]
     assert 'max="5000"' in output["maxTotalPowerInput"]
+    assert 'step="50"' in output["maxTotalPowerInput"]
     assert 'max="800"' not in output["maxTotalPowerInput"]
     assert 'max="5000"' in output["minOutputLimitInput"]
+    assert 'step="5"' in output["minOutputLimitInput"]
     assert 'max="3600"' in output["loopIntervalInput"]
+    assert 'step="1"' in output["loopIntervalInput"]
     assert 'value="400"' in output["deviceMaxPowerInput"]
     assert 'max="800"' in output["deviceMaxPowerInput"]
+    assert 'step="50"' in output["deviceMaxPowerInput"]
     assert 'max="400"' not in output["deviceMaxPowerInput"]
     assert 'max="100"' in output["pvPriorityInput"]
+    assert 'step="0.01"' in output["pvPriorityInput"]
 
 
 def test_runtime_editor_keeps_dirty_input_across_live_refresh():
