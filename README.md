@@ -51,7 +51,7 @@ responsibility and risk, within the limits permitted by applicable law.
 
 The template is standalone-first: Home Assistant is disabled, live Zendure
 `outputLimit` control is enabled, and required state reconciliation is enabled
-after you fill in real device and Shelly values.
+after you fill in real device and grid meter values.
 
 For a no-write validation run, set `system.dry_run=true` or use `--dry-run`.
 Simulation, replay, and preflight remain available for inspection before normal
@@ -80,7 +80,7 @@ simple > complex
 Core goals:
 
 - direct local Zendure API control
-- Shelly-based household load tracking
+- Shelly or everHome EcoTracker household load tracking
 - standalone operation without Home Assistant
 - optional Home Assistant monitoring and runtime controls
 - PV-first allocation with battery top-up
@@ -98,13 +98,13 @@ Core goals:
 ```mermaid
 flowchart LR
 
-    Shelly["Shelly Power Meter"]
+    GridMeter["Shelly / EcoTracker Grid Meter"]
     EMS["EMS Controller\nPython"]
     WR1["Zendure WR1"]
     WR2["Zendure WR2"]
     HA["Home Assistant\noptional"]
 
-    Shelly -->|house load| EMS
+    GridMeter -->|house load| EMS
 
     WR1 -->|telemetry| EMS
     WR2 -->|telemetry| EMS
@@ -192,7 +192,7 @@ Edit:
 
 - Zendure device IPs
 - Zendure serial numbers
-- Shelly IP
+- grid meter type and IP
 - Home Assistant URL, token, and enable flags if used
 - power limits
 - SOC limits

@@ -5,7 +5,7 @@ import sys
 import time
 
 from ems import config as cfg
-from ems.clients import HAClient, ShellyClient, ZendureClient, create_session
+from ems.clients import HAClient, ZendureClient, create_grid_meter_client, create_session
 from ems.controller import EMSController
 from ems.logging_utils import log_event, setup_logging
 from ems.runtime_state import RuntimeState, build_runtime_defaults
@@ -154,8 +154,8 @@ def main():
         log_event(logging.ERROR, "startup_abort", reason="no_devices")
         sys.exit(1)
 
-    shelly = ShellyClient(
-        cfg.SHELLY_IP,
+    shelly = create_grid_meter_client(
+        cfg.GRID_METER_CONFIG,
         session
     )
 

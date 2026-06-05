@@ -130,8 +130,14 @@
     }
   ],
 
+  "grid_meter": {
+    "_comment": "Household/grid power meter. Supported types: shelly, ecotracker. EcoTracker uses http://<ip>/v1/json and reads the power field.",
+    "type": "shelly",
+    "ip": "192.168.1.50"
+  },
+
   "shelly": {
-    "_comment": "Shelly device used for household power measurement.",
+    "_comment": "Legacy fallback for one release. Prefer grid_meter above for new configs.",
     "ip": "192.168.1.50"
   }
 }

@@ -4,10 +4,13 @@ from types import SimpleNamespace
 import pytest
 
 from ems.clients import (
+    EcoTrackerClient,
     HAClient,
     ShellyClient,
     ZendureClient,
+    create_grid_meter_client,
     create_session,
+    _parse_ecotracker_power,
     _parse_shelly_power,
     zendure_write_succeeded,
 )
@@ -236,3 +239,61 @@ def test_shelly_client_logs_parse_errors_and_keeps_last_value(caplog):
     assert client.get_power() == 123.5
     assert "event=shelly_read_error" in caplog.text
     assert "stale_value=123.5" in caplog.text
+
+
+def test_parse_ecotracker_power_supports_minimal_payload():
+    assert _parse_ecotracker_power({"power": 830}) == 830.0
+
+
+def test_parse_ecotracker_power_supports_full_payload_with_optional_fields():
+    assert _parse_ecotracker_power(
+        {
+            "power": -125,
+            "powerAvg": -100,
+            "powerPhase1": -50,
+            "powerPhase2": -50,
+            "powerPhase3": -25,
+            "energyCounterIn": 145000,
+            "energyCounterOut": 4500,
+        }
+    ) == -125.0
+
+
+def test_parse_ecotracker_power_rejects_missing_numeric_power():
+    with pytest.raises(ValueError, match="Unsupported EcoTracker payload"):
+        _parse_ecotracker_power({"power": "125"})
+
+
+def test_ecotracker_client_reads_v1_json_and_preserves_last_value():
+    client = EcoTrackerClient(
+        "192.0.2.30",
+        SessionStub(get_response=ResponseStub(payload={"power": 123.456})),
+    )
+
+    assert client.get_power() == 123.5
+    assert client.session.calls[0][1] == "http://192.0.2.30/v1/json"
+
+    client.session = SessionStub(get_response=ValueError("offline"))
+    assert client.get_power() == 123.5
+
+
+def test_create_grid_meter_client_supports_shelly_and_ecotracker():
+    assert isinstance(
+        create_grid_meter_client(
+            {"type": "shelly", "ip": "192.0.2.1"},
+            SessionStub(),
+        ),
+        ShellyClient,
+    )
+    assert isinstance(
+        create_grid_meter_client(
+            {"type": "ecotracker", "ip": "192.0.2.2"},
+            SessionStub(),
+        ),
+        EcoTrackerClient,
+    )
+
+
+def test_create_grid_meter_client_rejects_unknown_type():
+    with pytest.raises(ValueError, match="Unsupported grid meter type"):
+        create_grid_meter_client({"type": "unknown", "ip": "192.0.2.3"}, SessionStub())
