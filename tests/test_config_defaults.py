@@ -161,6 +161,29 @@ def test_explicit_grid_meter_overrides_legacy_shelly(tmp_path):
         restore_config_module(snapshot)
 
 
+def test_tasmota_grid_meter_config_preserves_url_ip_and_power_path(tmp_path):
+    snapshot = snapshot_config_module()
+    values = base_minimal_config()
+    values["grid_meter"] = {
+        "type": "tasmota_http",
+        "url": "http://192.168.1.70/cm?cmnd=Status%2010",
+        "ip": "192.168.1.71",
+        "power_path": "StatusSNS.SM.16_7_0",
+    }
+
+    try:
+        initialize_config_from_dict(tmp_path, values)
+
+        assert cfg.GRID_METER_CONFIG == {
+            "type": "tasmota_http",
+            "url": "http://192.168.1.70/cm?cmnd=Status%2010",
+            "ip": "192.168.1.71",
+            "power_path": "StatusSNS.SM.16_7_0",
+        }
+    finally:
+        restore_config_module(snapshot)
+
+
 def test_omitted_ha_keys_default_to_disabled(tmp_path):
     snapshot = snapshot_config_module()
     config_path = tmp_path / "config.json"

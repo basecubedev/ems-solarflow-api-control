@@ -131,7 +131,7 @@
   ],
 
   "grid_meter": {
-    "_comment": "Household/grid power meter. Supported types: shelly, ecotracker. EcoTracker uses http://<ip>/v1/json and reads the power field.",
+    "_comment": "Household/grid power meter. Supported types: shelly, ecotracker, tasmota_http. Tasmota needs url or ip plus power_path, for example StatusSNS.SML.Power_curr.",
     "type": "shelly",
     "ip": "192.168.1.50"
   },

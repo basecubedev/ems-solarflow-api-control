@@ -370,7 +370,7 @@ default, while runtime-state can override the active weighting.
 ## Grid Meter Settings
 
 `grid_meter.type` selects the local household/grid power meter implementation.
-Supported values are `shelly` and `ecotracker`.
+Supported values are `shelly`, `ecotracker`, and `tasmota_http`.
 
 `grid_meter.ip` is the local meter IP address. The EMS controller only uses the
 meter's current grid power value as the input for target calculation.
@@ -394,6 +394,18 @@ The EMS reads the required flat JSON `power` field. Positive values mean grid
 import, negative values mean grid export. Phase values and energy counters are
 optional and are not required for EMS control.
 
+Tasmota HTTP JSON uses the `Status 10` sensor endpoint:
+
+```text
+http://<ip>/cm?cmnd=Status%2010
+```
+
+Set `grid_meter.power_path` to the dot-separated path of your current power
+field inside the JSON response. Tasmota smart meter keys depend on the active
+meter script, so the EMS does not guess a default. Positive power means grid
+import; negative power means export/feed-in when your meter reports signed
+values that way.
+
 Shelly example:
 
 ```json
@@ -412,6 +424,30 @@ EcoTracker example:
   "grid_meter": {
     "type": "ecotracker",
     "ip": "192.168.1.60"
+  }
+}
+```
+
+Tasmota SML example:
+
+```json
+{
+  "grid_meter": {
+    "type": "tasmota_http",
+    "ip": "192.168.1.70",
+    "power_path": "StatusSNS.SML.Power_curr"
+  }
+}
+```
+
+Tasmota OBIS-style key example:
+
+```json
+{
+  "grid_meter": {
+    "type": "tasmota_http",
+    "url": "http://192.168.1.70/cm?cmnd=Status%2010",
+    "power_path": "StatusSNS.SM.16_7_0"
   }
 }
 ```

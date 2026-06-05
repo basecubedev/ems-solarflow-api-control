@@ -80,7 +80,7 @@ simple > complex
 Core goals:
 
 - direct local Zendure API control
-- Shelly or everHome EcoTracker household load tracking
+- Shelly, everHome EcoTracker, or Tasmota HTTP household load tracking
 - standalone operation without Home Assistant
 - optional Home Assistant monitoring and runtime controls
 - PV-first allocation with battery top-up
@@ -98,7 +98,7 @@ Core goals:
 ```mermaid
 flowchart LR
 
-    GridMeter["Shelly / EcoTracker Grid Meter"]
+    GridMeter["Shelly / EcoTracker / Tasmota Grid Meter"]
     EMS["EMS Controller\nPython"]
     WR1["Zendure WR1"]
     WR2["Zendure WR2"]

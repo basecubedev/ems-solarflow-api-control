@@ -304,10 +304,11 @@ def initialize(args, base_dir):
         legacy_shelly_config = {}
     configured_grid_meter = CONFIG.get("grid_meter")
     if isinstance(configured_grid_meter, dict):
-        GRID_METER_CONFIG = {
-            "type": str(configured_grid_meter.get("type", "shelly")),
-            "ip": str(configured_grid_meter.get("ip", ""))
-        }
+        GRID_METER_CONFIG = dict(configured_grid_meter)
+        GRID_METER_CONFIG["type"] = str(GRID_METER_CONFIG.get("type", "shelly"))
+        for key in ("ip", "url", "power_path"):
+            if key in GRID_METER_CONFIG and GRID_METER_CONFIG[key] is not None:
+                GRID_METER_CONFIG[key] = str(GRID_METER_CONFIG[key])
     else:
         GRID_METER_CONFIG = {
             "type": "shelly",

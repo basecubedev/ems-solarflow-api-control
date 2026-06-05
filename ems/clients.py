@@ -368,6 +368,42 @@ class EcoTrackerClient:
         return self.last_value
 
 
+class TasmotaHttpClient:
+    """Client for Tasmota HTTP JSON smart meter payloads."""
+
+    def __init__(self, url, power_path, session):
+        self.url = url
+        self.power_path = power_path
+        self.session = session
+        self.last_value = 0
+
+    def get_power(self):
+        """Return current household/grid power usage."""
+
+        try:
+            r = self.session.get(
+                self.url,
+                timeout=3
+            )
+
+            self.last_value = round(
+                _parse_tasmota_http_power(r.json(), self.power_path),
+                1
+            )
+
+        except Exception as e:
+            log_event(
+                logging.WARNING,
+                "tasmota_http_read_error",
+                url=self.url,
+                power_path=self.power_path,
+                error=e,
+                stale_value=self.last_value
+            )
+
+        return self.last_value
+
+
 def create_grid_meter_client(config, session):
     """Create the configured household/grid power meter client."""
 
@@ -380,6 +416,19 @@ def create_grid_meter_client(config, session):
 
     if meter_type == "ecotracker":
         return EcoTrackerClient(ip, session)
+
+    if meter_type == "tasmota_http":
+        power_path = config.get("power_path")
+        if not isinstance(power_path, str) or not power_path.strip():
+            raise ValueError("Tasmota HTTP grid meter requires power_path")
+
+        url = str(config.get("url") or "").strip()
+        if not url:
+            if not ip:
+                raise ValueError("Tasmota HTTP grid meter requires url or ip")
+            url = f"http://{ip}/cm?cmnd=Status%2010"
+
+        return TasmotaHttpClient(url, power_path.strip(), session)
 
     raise ValueError(f"Unsupported grid meter type: {meter_type}")
 
@@ -434,6 +483,34 @@ def _parse_ecotracker_power(data):
         return float(value)
 
     raise ValueError("Unsupported EcoTracker payload: missing numeric power")
+
+
+def _get_json_path(data, path):
+    """Return nested JSON value from a dot-separated object path."""
+
+    if not isinstance(path, str) or not path.strip():
+        raise ValueError("JSON path must be a non-empty string")
+
+    value = data
+    for part in path.split("."):
+        if not isinstance(value, dict) or part not in value:
+            raise ValueError(f"Missing JSON path: {path}")
+        value = value[part]
+
+    return value
+
+
+def _parse_tasmota_http_power(data, power_path):
+    """Extract grid power from a Tasmota HTTP JSON payload."""
+
+    if not isinstance(data, dict):
+        raise ValueError("Unsupported Tasmota payload: expected object")
+
+    value = _get_json_path(data, power_path)
+    if _is_numeric(value):
+        return float(value)
+
+    raise ValueError(f"Tasmota power path is not numeric: {power_path}")
 
 
 def fetch_all_devices(devices):

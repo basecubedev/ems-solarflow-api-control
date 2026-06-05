@@ -68,8 +68,8 @@ normal start.
 
 ## 3. Configure Devices And Grid Meter
 
-Set the grid meter type and IP. Supported types are `shelly` and
-`ecotracker`:
+Set the grid meter type and IP. Supported types are `shelly`, `ecotracker`,
+and `tasmota_http`:
 
 ```json
 {
@@ -81,6 +81,19 @@ Set the grid meter type and IP. Supported types are `shelly` and
 ```
 
 For everHome EcoTracker, use `"type": "ecotracker"` and the EcoTracker IP.
+For Tasmota HTTP smart meter readers, configure the Tasmota IP and the JSON
+field path that contains current power:
+
+```json
+{
+  "grid_meter": {
+    "type": "tasmota_http",
+    "ip": "192.168.1.70",
+    "power_path": "StatusSNS.SML.Power_curr"
+  }
+}
+```
+
 Legacy configs with only `shelly.ip` still work.
 
 Set each Zendure device:
