@@ -112,3 +112,148 @@ console.log(JSON.stringify({{
     assert output["wr3Present"] is True
     assert output["ems"] < output["wr1"] < output["wr2"] < output["wr3"]
     assert output["wr3"] < output["winter"] < output["ha"]
+
+
+def test_dashboard_start_events_loads_live_once_and_prefers_sse():
+    script = f"""
+(async () => {{
+const app = require({json.dumps(str(APP_JS))});
+const connection = {{}};
+const fetchCalls = [];
+const timers = [];
+const intervals = [];
+
+class FakeEventSource {{
+  static instances = [];
+
+  constructor(url) {{
+    this.url = url;
+    this.closed = false;
+    this.listeners = {{}};
+    FakeEventSource.instances.push(this);
+  }}
+
+  addEventListener(name, callback) {{
+    this.listeners[name] = callback;
+  }}
+
+  close() {{
+    this.closed = true;
+  }}
+}}
+
+global.document = {{
+  getElementById(id) {{
+    return id === "connectionState" ? connection : null;
+  }}
+}};
+global.window = {{
+  EventSource: FakeEventSource,
+  setTimeout(callback, ms) {{
+    timers.push({{ callback, ms }});
+    return timers.length;
+  }}
+}};
+global.EventSource = FakeEventSource;
+global.fetch = async (url) => {{
+  fetchCalls.push(url);
+  return {{
+    ok: false,
+    status: 503,
+    async json() {{
+      return {{}};
+    }}
+  }};
+}};
+global.setInterval = (callback, ms) => {{
+  intervals.push({{ callback, ms }});
+  return intervals.length;
+}};
+
+app.resetLiveTransportForTests();
+app.startEvents();
+await Promise.resolve();
+
+console.log(JSON.stringify({{
+  fetchCalls,
+  eventSourceUrl: FakeEventSource.instances[0].url,
+  timerMs: timers.map((timer) => timer.ms),
+  intervalCount: intervals.length
+}}));
+}})();
+"""
+    output = run_node(script)
+
+    assert output["fetchCalls"] == ["/api/live"]
+    assert output["eventSourceUrl"] == "/api/events"
+    assert output["timerMs"] == [3000]
+    assert output["intervalCount"] == 0
+
+
+def test_dashboard_sse_early_error_falls_back_to_one_polling_interval():
+    script = f"""
+(async () => {{
+const app = require({json.dumps(str(APP_JS))});
+const connection = {{}};
+const intervals = [];
+
+class FakeEventSource {{
+  static instances = [];
+
+  constructor(url) {{
+    this.url = url;
+    this.closed = false;
+    this.listeners = {{}};
+    FakeEventSource.instances.push(this);
+  }}
+
+  addEventListener(name, callback) {{
+    this.listeners[name] = callback;
+  }}
+
+  close() {{
+    this.closed = true;
+  }}
+}}
+
+global.document = {{
+  getElementById(id) {{
+    return id === "connectionState" ? connection : null;
+  }}
+}};
+global.window = {{
+  EventSource: FakeEventSource,
+  setTimeout() {{
+    return 1;
+  }}
+}};
+global.EventSource = FakeEventSource;
+global.fetch = async () => {{
+  throw new Error("offline");
+}};
+global.setInterval = (callback, ms) => {{
+  intervals.push({{ callback, ms }});
+  return intervals.length;
+}};
+
+app.resetLiveTransportForTests();
+app.startEvents();
+const source = FakeEventSource.instances[0];
+source.onerror();
+source.onerror();
+await Promise.resolve();
+
+console.log(JSON.stringify({{
+  closed: source.closed,
+  intervalCount: intervals.length,
+  intervalMs: intervals.map((interval) => interval.ms),
+  transport: app.state.liveTransport
+}}));
+}})();
+"""
+    output = run_node(script)
+
+    assert output["closed"] is True
+    assert output["intervalCount"] == 1
+    assert output["intervalMs"] == [2000]
+    assert output["transport"] == "polling"

@@ -4,6 +4,7 @@ const state = {
   history: [],
   flowView: "aggregated",
   demoMode: isDemoMode(),
+  liveTransport: "sse",
   auth: {
     configured: false,
     authenticated: false,
@@ -11,6 +12,10 @@ const state = {
   },
   runtime: null,
 };
+
+const SSE_TELEMETRY_TIMEOUT_MS = 3000;
+let pollingStarted = false;
+let pollingIntervalId = null;
 
 const charts = [
   { id: "chartPv", title: "PV", field: "pv_total_w", color: "#f1c84b", unit: "W" },
@@ -142,7 +147,10 @@ function setConnection(text, connected) {
 
 function updateSnapshot(snapshot) {
   state.snapshot = snapshot;
-  setConnection(state.demoMode ? "Demo" : "Live", true);
+  const status = state.demoMode
+    ? "Demo"
+    : state.liveTransport === "polling" ? "Polling" : "Live";
+  setConnection(status, true);
   renderSnapshot(snapshot);
 }
 
@@ -2441,29 +2449,95 @@ function drawChart(canvas, title, values, color, unit) {
 }
 
 function startEvents() {
+  state.liveTransport = "sse";
+  loadLiveOnce();
+
   if (!window.EventSource) {
-    startPolling();
+    startPollingOnce();
     return;
   }
 
   const source = new EventSource("/api/events");
+  let receivedTelemetry = false;
+  let telemetryVersion = 0;
+  let fallbackStarted = false;
+
+  function fallbackToPolling() {
+    if (fallbackStarted) return;
+    fallbackStarted = true;
+    source.close();
+    startPollingOnce();
+  }
+
+  function scheduleFallbackIfNoTelemetry(version) {
+    window.setTimeout(() => {
+      if (telemetryVersion === version) {
+        fallbackToPolling();
+      }
+    }, SSE_TELEMETRY_TIMEOUT_MS);
+  }
+
+  scheduleFallbackIfNoTelemetry(telemetryVersion);
+
   source.addEventListener("telemetry", (event) => {
+    receivedTelemetry = true;
+    telemetryVersion += 1;
+    state.liveTransport = "sse";
     updateSnapshot(JSON.parse(event.data));
   });
+
   source.onerror = () => {
     setConnection("Reconnecting", false);
+    if (!receivedTelemetry) {
+      fallbackToPolling();
+      return;
+    }
+
+    scheduleFallbackIfNoTelemetry(telemetryVersion);
   };
 }
 
+async function fetchLiveSnapshot() {
+  const response = await fetch("/api/live");
+  if (!response.ok) {
+    throw new Error(`live_status_${response.status}`);
+  }
+  return response.json();
+}
+
+async function loadLiveOnce() {
+  try {
+    updateSnapshot(await fetchLiveSnapshot());
+  } catch {
+    setConnection("Offline", false);
+  }
+}
+
+function startPollingOnce() {
+  if (pollingStarted) return;
+  pollingStarted = true;
+  state.liveTransport = "polling";
+  setConnection("Polling", true);
+  startPolling();
+}
+
 function startPolling() {
-  setInterval(async () => {
+  pollingIntervalId = setInterval(async () => {
     try {
-      const response = await fetch("/api/live");
-      updateSnapshot(await response.json());
+      updateSnapshot(await fetchLiveSnapshot());
     } catch {
       setConnection("Offline", false);
     }
   }, 2000);
+}
+
+function resetLiveTransportForTests() {
+  pollingStarted = false;
+  if (pollingIntervalId && typeof clearInterval === "function") {
+    clearInterval(pollingIntervalId);
+  }
+  pollingIntervalId = null;
+  state.liveTransport = "sse";
 }
 
 function initDashboardApp() {
@@ -2508,5 +2582,8 @@ if (typeof module !== "undefined") {
     runtimeDeviceForm,
     runtimeNumber,
     setRuntimeFeedback,
+    startEvents,
+    startPollingOnce,
+    resetLiveTransportForTests,
   };
 }
