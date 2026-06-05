@@ -134,6 +134,45 @@ console.log(JSON.stringify({{
     assert output["wr3"] < output["winter"] < output["ha"]
 
 
+def test_runtime_control_panel_uses_stable_number_limits_after_lowered_values():
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+app.state.auth = {{ configured: true, authenticated: true, csrfToken: "token" }};
+app.state.runtime = {{
+  system: {{ enabled: true, max_total_power: 800, min_output_limit: 35, loop_interval: 5 }},
+  devices: {{
+    WR1: {{ enabled: true, max_power: 400, offgrid_socket_mode: "off", pv_priority_factor: 0.5 }}
+  }},
+  winter: {{ enabled: false }},
+  ha: {{ enabled: true, control_enabled: false }},
+  _limits: {{
+    system: {{ max_total_power: 5000, min_output_limit: 5000 }},
+    devices: {{ WR1: 800 }},
+    fallback_device_max_power: 800
+  }}
+}};
+const html = app.runtimeControlPanel();
+console.log(JSON.stringify({{
+  maxTotalPowerInput: html.match(/name="max_total_power"[^>]+>/)[0],
+  minOutputLimitInput: html.match(/name="min_output_limit"[^>]+>/)[0],
+  loopIntervalInput: html.match(/name="loop_interval"[^>]+>/)[0],
+  deviceMaxPowerInput: html.match(/name="max_power"[^>]+>/)[0],
+  pvPriorityInput: html.match(/name="pv_priority_factor"[^>]+>/)[0]
+}}));
+"""
+    output = run_node(script)
+
+    assert 'value="800"' in output["maxTotalPowerInput"]
+    assert 'max="5000"' in output["maxTotalPowerInput"]
+    assert 'max="800"' not in output["maxTotalPowerInput"]
+    assert 'max="5000"' in output["minOutputLimitInput"]
+    assert 'max="3600"' in output["loopIntervalInput"]
+    assert 'value="400"' in output["deviceMaxPowerInput"]
+    assert 'max="800"' in output["deviceMaxPowerInput"]
+    assert 'max="400"' not in output["deviceMaxPowerInput"]
+    assert 'max="100"' in output["pvPriorityInput"]
+
+
 def test_runtime_editor_keeps_dirty_input_across_live_refresh():
     script = f"""
 const app = require({json.dumps(str(APP_JS))});

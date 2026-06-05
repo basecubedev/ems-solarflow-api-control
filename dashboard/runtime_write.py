@@ -81,17 +81,16 @@ def build_validation_context(config=None, runtime_state=None):
     devices = config.get("devices", []) if isinstance(config.get("devices"), list) else []
     defaults = getattr(runtime_state, "defaults", None)
     defaults = defaults if isinstance(defaults, dict) else {}
-    default_system = defaults.get("system", {}) if isinstance(defaults.get("system"), dict) else {}
     default_devices = defaults.get("devices", {}) if isinstance(defaults.get("devices"), dict) else {}
 
     system_max = _safe_int(
-        system.get("max_total_power", default_system.get("max_total_power")),
+        system.get("max_total_power_limit"),
         GENERIC_MAX_POWER_W,
         minimum=0,
         maximum=GENERIC_MAX_POWER_W,
     )
     min_output_max = _safe_int(
-        system.get("max_total_power", default_system.get("max_total_power")),
+        system.get("min_output_limit_max", system.get("max_total_power_limit")),
         system_max,
         minimum=0,
         maximum=GENERIC_MAX_POWER_W,
