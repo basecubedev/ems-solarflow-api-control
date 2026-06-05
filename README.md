@@ -29,6 +29,15 @@ This project is designed for stable standalone EMS operation with a
 deterministic, inspectable, firmware-aware controller for Zendure SolarFlow
 devices.
 
+> **Hardware feedback welcome**
+>
+> This project cannot be tested by the maintainer with every possible hardware
+> and meter setup. Real-world feedback is very welcome.
+>
+> If you notice incorrect readings, unsupported payloads, or setup-specific
+> issues, please open a GitHub issue with your device type, relevant config,
+> logs, and, if possible, an anonymized example payload.
+
 ---
 
 ## Safety And Responsibility
@@ -429,6 +438,31 @@ python3 scripts/check_log_events.py /tmp/ems-sim.log \
 
 Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md).
 Safety checks: [docs/safety.md](docs/safety.md).
+
+---
+
+## Hardware Feedback And Issue Reports
+
+This project supports several grid meter and device configurations, but not
+every possible hardware setup can be tested directly by the maintainer.
+
+Real-world feedback is therefore very helpful. If you are using this project
+with your own hardware setup, please feel free to share your experience.
+
+Please open a GitHub issue if you notice:
+
+- incorrect readings
+- unsupported meter payloads
+- unexpected control behavior
+- setup-specific problems
+- documentation gaps
+
+When reporting an issue, please include your device type, relevant
+configuration, log output, and, if possible, an anonymized example of the meter
+JSON payload.
+
+User feedback helps make the project more robust for different real-world
+installations.
 
 ---
 

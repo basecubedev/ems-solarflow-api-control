@@ -455,6 +455,10 @@ Tasmota OBIS-style key example:
 Legacy configs with only `shelly.ip` still work. New configs should use
 `grid_meter`.
 
+If your meter returns a different JSON structure, please open a GitHub issue
+and include the meter type, relevant config, logs, and an anonymized example
+payload if possible.
+
 ## First-Run Validation
 
 Compile:
