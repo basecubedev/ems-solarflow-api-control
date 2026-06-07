@@ -206,6 +206,7 @@ Edit:
 - Zendure device IPs
 - Zendure serial numbers
 - grid meter type and IP
+- optional Shelly `channels` list when only selected clamps should be used
 - Home Assistant URL, token, and enable flags if used
 - power limits
 - SOC limits

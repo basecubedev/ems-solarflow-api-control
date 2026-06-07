@@ -303,10 +303,15 @@ class ZendureClient:
 class ShellyClient:
     """Client for Shelly power meter."""
 
-    def __init__(self, ip, session):
+    def __init__(self, ip, session, channels=None):
         self.ip = ip
         self.session = session
+        self._channels = _normalize_shelly_channels(channels)
         self.last_value = 0
+
+    @property
+    def channels(self):
+        return self._channels
 
     def get_power(self):
         """Return current household power usage."""
@@ -318,7 +323,10 @@ class ShellyClient:
             )
 
             self.last_value = round(
-                _parse_shelly_power(r.json()),
+                _parse_shelly_power(
+                    r.json(),
+                    channels=self._channels,
+                ),
                 1
             )
 
@@ -327,6 +335,7 @@ class ShellyClient:
                 logging.WARNING,
                 "shelly_read_error",
                 ip=self.ip,
+                channels=self._channels,
                 error=e,
                 stale_value=self.last_value
             )
@@ -412,7 +421,11 @@ def create_grid_meter_client(config, session):
     ip = config.get("ip", "")
 
     if meter_type == "shelly":
-        return ShellyClient(ip, session)
+        return ShellyClient(
+            ip,
+            session,
+            channels=config.get("channels"),
+        )
 
     if meter_type == "ecotracker":
         return EcoTrackerClient(ip, session)
@@ -439,21 +452,41 @@ def _is_numeric(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
-def _parse_shelly_power(data):
-    """Extract grid power from Shelly Pro 3EM status payloads."""
+_SHELLY_PHASE_KEYS = ("em1:0", "em1:1", "em1:2")
+_SHELLY_CHANNEL_KEYS = {
+    "a": "em1:0",
+    "b": "em1:1",
+    "c": "em1:2",
+    "em1:0": "em1:0",
+    "em1:1": "em1:1",
+    "em1:2": "em1:2",
+}
 
-    if not isinstance(data, dict):
-        raise ValueError("Unsupported Shelly status payload: expected object")
 
-    em = data.get("em:0")
-    if isinstance(em, dict):
-        value = em.get("total_act_power")
-        if _is_numeric(value):
-            return float(value)
+def _normalize_shelly_channels(channels):
+    if channels is None:
+        return None
 
+    if not isinstance(channels, list):
+        raise ValueError("Shelly channels must be a list")
+
+    normalized = []
+    for item in channels:
+        value = str(item).strip().lower()
+        if not value:
+            raise ValueError("Shelly channels must not contain empty values")
+        normalized.append(value)
+
+    if not normalized:
+        return None
+
+    return normalized
+
+
+def _parse_shelly_phase_sum(data):
     total = 0.0
     found = False
-    for key in ("em1:0", "em1:1", "em1:2"):
+    for key in _SHELLY_PHASE_KEYS:
         meter = data.get(key)
         if not isinstance(meter, dict):
             continue
@@ -467,9 +500,53 @@ def _parse_shelly_power(data):
         return total
 
     raise ValueError(
-        "Unsupported Shelly status payload: missing "
-        "em:0.total_act_power or em1:* act_power values"
+        "Unsupported Shelly status payload: missing numeric em1:* act_power values"
     )
+
+
+def _parse_shelly_channel(data, channel, meter_key):
+    meter = data.get(meter_key)
+    if isinstance(meter, dict):
+        value = meter.get("act_power")
+        if _is_numeric(value):
+            return float(value)
+
+    raise ValueError(
+        "Unsupported Shelly status payload: missing numeric "
+        f"{meter_key}.act_power for channel {channel}"
+    )
+
+
+def _parse_shelly_power(data, channels=None):
+    """Extract grid power from Shelly Pro 3EM status payloads."""
+
+    if not isinstance(data, dict):
+        raise ValueError("Unsupported Shelly status payload: expected object")
+
+    channels = _normalize_shelly_channels(channels)
+    if channels:
+        for item in channels:
+            if item not in _SHELLY_CHANNEL_KEYS:
+                raise ValueError(f"Unsupported Shelly channel in channels: {item}")
+
+        return sum(
+            _parse_shelly_channel(data, item, _SHELLY_CHANNEL_KEYS[item])
+            for item in channels
+        )
+
+    em = data.get("em:0")
+    if isinstance(em, dict):
+        value = em.get("total_act_power")
+        if _is_numeric(value):
+            return float(value)
+
+    try:
+        return _parse_shelly_phase_sum(data)
+    except ValueError as e:
+        raise ValueError(
+            "Unsupported Shelly status payload: missing "
+            "em:0.total_act_power or em1:* act_power values"
+        ) from e
 
 
 def _parse_ecotracker_power(data):

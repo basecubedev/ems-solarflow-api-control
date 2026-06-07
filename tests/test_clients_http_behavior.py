@@ -193,7 +193,18 @@ def test_parse_shelly_power_supports_triphase_payload():
     assert _parse_shelly_power({"em:0": {"total_act_power": 321.5}}) == 321.5
 
 
-def test_parse_shelly_power_supports_monophase_three_channels():
+def test_parse_shelly_power_default_prefers_aggregate():
+    assert _parse_shelly_power(
+        {
+            "em:0": {"total_act_power": 321.5},
+            "em1:0": {"act_power": 100.0},
+            "em1:1": {"act_power": 20.0},
+            "em1:2": {"act_power": -5.0},
+        }
+    ) == 321.5
+
+
+def test_parse_shelly_power_default_falls_back_to_em1_sum():
     assert _parse_shelly_power(
         {
             "em1:0": {"act_power": 100.0},
@@ -205,6 +216,76 @@ def test_parse_shelly_power_supports_monophase_three_channels():
 
 def test_parse_shelly_power_supports_monophase_single_channel():
     assert _parse_shelly_power({"em1:0": {"act_power": 42.0}}) == 42.0
+
+
+def test_parse_shelly_power_supports_single_selected_channel_list():
+    assert _parse_shelly_power(
+        {
+            "em:0": {"total_act_power": 999.0},
+            "em1:0": {"act_power": 100.0},
+            "em1:1": {"act_power": 20.0},
+            "em1:2": {"act_power": -5.0},
+        },
+        channels=["c"],
+    ) == -5.0
+
+
+def test_parse_shelly_power_supports_selected_channels_list():
+    assert _parse_shelly_power(
+        {
+            "em:0": {"total_act_power": 999.0},
+            "em1:0": {"act_power": 100.0},
+            "em1:1": {"act_power": 20.0},
+            "em1:2": {"act_power": -5.0},
+        },
+        channels=["a", "c"],
+    ) == 95.0
+
+
+def test_parse_shelly_power_supports_direct_em1_channels_list():
+    assert _parse_shelly_power(
+        {
+            "em1:0": {"act_power": 100.0},
+            "em1:1": {"act_power": 20.0},
+            "em1:2": {"act_power": -5.0},
+        },
+        channels=["em1:0", "em1:2"],
+    ) == 95.0
+
+
+def test_parse_shelly_power_rejects_channels_string():
+    with pytest.raises(ValueError, match="Shelly channels must be a list"):
+        _parse_shelly_power({"em1:2": {"act_power": 42.0}}, channels="c")
+
+
+@pytest.mark.parametrize("entry", ["total", "sum", "phase_d"])
+def test_parse_shelly_power_rejects_unsupported_channels_entry(entry):
+    with pytest.raises(ValueError, match="Unsupported Shelly channel in channels"):
+        _parse_shelly_power({"em1:2": {"act_power": 42.0}}, channels=[entry])
+
+
+def test_parse_shelly_power_rejects_empty_channels_entry():
+    with pytest.raises(
+        ValueError,
+        match="Shelly channels must not contain empty values",
+    ):
+        _parse_shelly_power({"em1:2": {"act_power": 42.0}}, channels=[""])
+
+
+def test_parse_shelly_power_rejects_missing_selected_channel():
+    with pytest.raises(ValueError, match="Unsupported Shelly status payload"):
+        _parse_shelly_power(
+            {
+                "em1:0": {"act_power": 100.0},
+                "em1:1": {"act_power": 20.0},
+            },
+            channels=["c"],
+        )
+
+
+def test_parse_shelly_power_rejects_non_numeric_selected_channel():
+    with pytest.raises(ValueError, match="Unsupported Shelly status payload"):
+        _parse_shelly_power({"em1:2": {"act_power": "42.0"}}, channels=["c"])
 
 
 def test_parse_shelly_power_rejects_unsupported_payload():
@@ -241,6 +322,64 @@ def test_shelly_client_logs_parse_errors_and_keeps_last_value(caplog):
     assert client.get_power() == 123.5
     assert "event=shelly_read_error" in caplog.text
     assert "stale_value=123.5" in caplog.text
+
+
+def test_shelly_client_uses_configured_channels_single_item_and_keeps_last_value(
+    caplog,
+):
+    client = ShellyClient(
+        "192.0.2.20",
+        SessionStub(
+            get_response=ResponseStub(
+                payload={
+                    "em:0": {"total_act_power": 321.5},
+                    "em1:0": {"act_power": 100.0},
+                    "em1:1": {"act_power": 20.0},
+                    "em1:2": {"act_power": -5.0},
+                }
+            )
+        ),
+        channels=["c"],
+    )
+    assert client.get_power() == -5.0
+
+    caplog.set_level(logging.WARNING)
+    client.session = SessionStub(
+        get_response=ResponseStub(payload={"em1:0": {"act_power": 100.0}})
+    )
+
+    assert client.get_power() == -5.0
+    assert "event=shelly_read_error" in caplog.text
+    assert "channels=['c']" in caplog.text
+    assert "stale_value=-5.0" in caplog.text
+
+
+def test_shelly_client_uses_configured_channels_and_keeps_last_value(caplog):
+    client = ShellyClient(
+        "192.0.2.20",
+        SessionStub(
+            get_response=ResponseStub(
+                payload={
+                    "em:0": {"total_act_power": 321.5},
+                    "em1:0": {"act_power": 100.0},
+                    "em1:1": {"act_power": 20.0},
+                    "em1:2": {"act_power": -5.0},
+                }
+            )
+        ),
+        channels=["a", "c"],
+    )
+    assert client.get_power() == 95.0
+
+    caplog.set_level(logging.WARNING)
+    client.session = SessionStub(
+        get_response=ResponseStub(payload={"em1:0": {"act_power": 100.0}})
+    )
+
+    assert client.get_power() == 95.0
+    assert "event=shelly_read_error" in caplog.text
+    assert "channels=['a', 'c']" in caplog.text
+    assert "stale_value=95.0" in caplog.text
 
 
 def test_parse_ecotracker_power_supports_minimal_payload():
@@ -280,13 +419,13 @@ def test_ecotracker_client_reads_v1_json_and_preserves_last_value():
 
 
 def test_create_grid_meter_client_supports_shelly_and_ecotracker():
-    assert isinstance(
-        create_grid_meter_client(
-            {"type": "shelly", "ip": "192.0.2.1"},
-            SessionStub(),
-        ),
-        ShellyClient,
+    shelly = create_grid_meter_client(
+        {"type": "shelly", "ip": "192.0.2.1"},
+        SessionStub(),
     )
+    assert isinstance(shelly, ShellyClient)
+    assert shelly.channels is None
+
     assert isinstance(
         create_grid_meter_client(
             {"type": "ecotracker", "ip": "192.0.2.2"},
@@ -294,6 +433,15 @@ def test_create_grid_meter_client_supports_shelly_and_ecotracker():
         ),
         EcoTrackerClient,
     )
+
+
+def test_create_grid_meter_client_supports_shelly_channels_list():
+    shelly = create_grid_meter_client(
+        {"type": "shelly", "ip": "192.0.2.1", "channels": ["a", "c"]},
+        SessionStub(),
+    )
+    assert isinstance(shelly, ShellyClient)
+    assert shelly.channels == ["a", "c"]
 
 
 def test_parse_tasmota_http_power_sml():

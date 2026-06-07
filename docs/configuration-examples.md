@@ -101,7 +101,7 @@ Change:
 
 - `devices[0].ip`
 - `devices[0].sn`
-- `grid_meter.type` and `grid_meter.ip`
+- `grid_meter.type`, `grid_meter.ip`, and Shelly `grid_meter.channels` if needed
 - `pv_kwp`
 - `battery_kwh`
 - `dashboard.port` or `dashboard.database_path` only when needed
@@ -185,7 +185,7 @@ Change:
 - `ha.url`
 - `ha.token`
 - both device IPs and serial numbers
-- `grid_meter.type` and `grid_meter.ip`
+- `grid_meter.type`, `grid_meter.ip`, and Shelly `grid_meter.channels` if needed
 - PV and battery metadata
 
 Run:
@@ -301,7 +301,41 @@ OBIS-style key path:
 Positive power means grid import. Negative power means export/feed-in when the
 meter reports signed values that way.
 
-## Example 7: Runtime-State Explained
+## Example 7: Shelly Clamp/Phase Selection
+
+Shelly uses `em:0.total_act_power` by default and falls back to summing
+`em1:0`, `em1:1`, and `em1:2` `act_power` values when the aggregate is not
+available.
+
+Use `channels` when only selected clamps should be summed. A single item list
+such as `["c"]` is valid and reads only clamp C:
+
+```json
+{
+  "grid_meter": {
+    "type": "shelly",
+    "ip": "192.168.1.50",
+    "channels": ["c"]
+  }
+}
+```
+
+Multiple items such as `["a", "c"]` sum only those selected clamps:
+
+```json
+{
+  "grid_meter": {
+    "type": "shelly",
+    "ip": "192.168.1.50",
+    "channels": ["a", "c"]
+  }
+}
+```
+
+`channels` entries may be `a`, `b`, `c`, `em1:0`, `em1:1`, or `em1:2`. The
+values `total` and `sum` are not valid inside `channels`.
+
+## Example 8: Runtime-State Explained
 
 On first start, EMS creates `runtime-state.json` automatically.
 
@@ -340,7 +374,7 @@ python3 emsctl.py winter enable
 `pv-priority-factor` changes PV-first weighting only. It does not create
 additional PV power and does not override device power limits.
 
-## Example 8: Winter Mode Enabled
+## Example 9: Winter Mode Enabled
 
 Winter mode is optional and runs as SOC reconciliation, not as normal output
 control.
@@ -381,7 +415,7 @@ Run first:
 python3 -B ems-solarflow-api-control.py --dry-run --once
 ```
 
-## Example 9: Advanced Output Control Defaults
+## Example 10: Advanced Output Control Defaults
 
 Most installations should keep these defaults. Change them only when the live
 logs show target oscillation, stale telemetry, or excessive write frequency.

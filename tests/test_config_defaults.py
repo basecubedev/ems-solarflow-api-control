@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from ems import config as cfg
 from ems.config import (
     DASHBOARD_DEFAULTS,
@@ -66,6 +68,8 @@ def test_config_template_standalone_live_control_defaults():
     assert template["ha"]["control_enabled"] is False
     assert template["grid_meter"]["type"] == "shelly"
     assert template["grid_meter"]["ip"] == template["shelly"]["ip"]
+    removed_key = "chan" + "nel"
+    assert removed_key not in template["grid_meter"]
     assert template["system"]["dry_run"] is False
     assert template["system"]["allow_hardware_writes"] is True
     assert template["system"]["allow_state_reconciliation_writes"] is True
@@ -157,6 +161,62 @@ def test_explicit_grid_meter_overrides_legacy_shelly(tmp_path):
             "ip": "192.168.1.60",
         }
         assert cfg.SHELLY_IP == "192.168.1.51"
+    finally:
+        restore_config_module(snapshot)
+
+
+def test_shelly_grid_meter_config_preserves_channels(tmp_path):
+    snapshot = snapshot_config_module()
+    values = base_minimal_config()
+    values["grid_meter"] = {
+        "type": "shelly",
+        "ip": "192.168.1.50",
+        "channels": ["A", "C"],
+    }
+
+    try:
+        initialize_config_from_dict(tmp_path, values)
+
+        assert cfg.GRID_METER_CONFIG == {
+            "type": "shelly",
+            "ip": "192.168.1.50",
+            "channels": ["a", "c"],
+        }
+    finally:
+        restore_config_module(snapshot)
+
+
+def test_shelly_grid_meter_config_rejects_channels_string(tmp_path):
+    snapshot = snapshot_config_module()
+    values = base_minimal_config()
+    values["grid_meter"] = {
+        "type": "shelly",
+        "ip": "192.168.1.50",
+        "channels": "c",
+    }
+
+    try:
+        with pytest.raises(ValueError, match="grid_meter.channels must be a list"):
+            initialize_config_from_dict(tmp_path, values)
+    finally:
+        restore_config_module(snapshot)
+
+
+def test_shelly_grid_meter_config_rejects_empty_channel_entry(tmp_path):
+    snapshot = snapshot_config_module()
+    values = base_minimal_config()
+    values["grid_meter"] = {
+        "type": "shelly",
+        "ip": "192.168.1.50",
+        "channels": ["c", ""],
+    }
+
+    try:
+        with pytest.raises(
+            ValueError,
+            match="grid_meter.channels must not contain empty values",
+        ):
+            initialize_config_from_dict(tmp_path, values)
     finally:
         restore_config_module(snapshot)
 
