@@ -13,6 +13,8 @@ runtime-state.json.*.tmp
 
 # local config
 /config.json
+/config/
+/config/**
 
 # logs
 *.log

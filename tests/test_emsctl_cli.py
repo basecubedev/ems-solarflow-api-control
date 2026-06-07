@@ -3,7 +3,9 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
+import emsctl
 
 ROOT = Path(__file__).resolve().parents[1]
 EMSCTL = ROOT / "emsctl.py"
@@ -74,6 +76,272 @@ def run_emsctl_no_args(tmp_path):
 
 def runtime_state(tmp_path):
     return json.loads((tmp_path / "runtime-state.json").read_text())
+
+
+def write_discovery_config(path, runtime_state_path=None, auth_file=None):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "system": {},
+        "dashboard": {},
+        "devices": [],
+    }
+    if runtime_state_path is not None:
+        payload["system"]["runtime_state_path"] = runtime_state_path
+    if auth_file is not None:
+        payload["dashboard"]["auth_file"] = auth_file
+    path.write_text(json.dumps(payload))
+
+
+def patch_emsctl_base(monkeypatch, base_dir):
+    monkeypatch.setattr(emsctl, "BASE_DIR", str(base_dir))
+    monkeypatch.setattr(
+        emsctl,
+        "DEFAULT_CONFIG_PATH",
+        str(base_dir / "config.json"),
+    )
+    monkeypatch.setattr(
+        emsctl,
+        "DOCKER_CONFIG_PATH",
+        str(base_dir / "config" / "config.json"),
+    )
+
+
+def config_args(config=None, runtime_state=None, dashboard_auth=None):
+    return SimpleNamespace(
+        config=config,
+        runtime_state=runtime_state,
+        dashboard_auth=dashboard_auth,
+    )
+
+
+def test_emsctl_config_discovery_prefers_legacy_config(tmp_path, monkeypatch):
+    patch_emsctl_base(monkeypatch, tmp_path)
+    write_discovery_config(tmp_path / "config.json", "runtime-state.json")
+    write_discovery_config(
+        tmp_path / "config" / "config.json",
+        "data/runtime-state.json",
+    )
+
+    args = config_args()
+    selected = emsctl.resolve_config_path(args)
+    config = emsctl.load_config(selected)
+
+    assert selected == str(tmp_path / "config.json")
+    assert emsctl.resolve_runtime_path(args, config) == str(
+        tmp_path / "runtime-state.json"
+    )
+
+
+def test_emsctl_config_discovery_falls_back_to_docker_config(tmp_path, monkeypatch):
+    patch_emsctl_base(monkeypatch, tmp_path)
+    write_discovery_config(
+        tmp_path / "config" / "config.json",
+        "data/runtime-state.json",
+        auth_file="config/dashboard-auth.json",
+    )
+
+    args = config_args()
+    selected = emsctl.resolve_config_path(args)
+    config = emsctl.load_config(selected)
+
+    assert selected == str(tmp_path / "config" / "config.json")
+    assert emsctl.resolve_runtime_path(args, config) == str(
+        tmp_path / "data" / "runtime-state.json"
+    )
+    assert emsctl.resolve_dashboard_auth_path(args, config) == str(
+        tmp_path / "config" / "dashboard-auth.json"
+    )
+
+
+def test_emsctl_explicit_config_wins(tmp_path, monkeypatch):
+    patch_emsctl_base(monkeypatch, tmp_path)
+    write_discovery_config(tmp_path / "config.json", "runtime-state.json")
+    write_discovery_config(
+        tmp_path / "config" / "config.json",
+        "data/runtime-state.json",
+    )
+    custom_config = tmp_path / "custom.json"
+    write_discovery_config(custom_config, "custom/runtime-state.json")
+
+    args = config_args(config=str(custom_config))
+    selected = emsctl.resolve_config_path(args)
+    config = emsctl.load_config(selected)
+
+    assert selected == str(custom_config)
+    assert emsctl.resolve_runtime_path(args, config) == str(
+        tmp_path / "custom" / "runtime-state.json"
+    )
+
+
+def test_emsctl_config_env_var_wins_when_no_explicit_config(tmp_path, monkeypatch):
+    patch_emsctl_base(monkeypatch, tmp_path)
+    write_discovery_config(tmp_path / "config.json", "runtime-state.json")
+    env_config = tmp_path / "env.json"
+    write_discovery_config(env_config, "env/runtime-state.json")
+    monkeypatch.setenv("EMS_CONFIG_FILE", str(env_config))
+
+    args = config_args()
+    selected = emsctl.resolve_config_path(args)
+    config = emsctl.load_config(selected)
+
+    assert selected == str(env_config)
+    assert emsctl.resolve_runtime_path(args, config) == str(
+        tmp_path / "env" / "runtime-state.json"
+    )
+
+
+def test_emsctl_explicit_config_wins_over_env_var(tmp_path, monkeypatch):
+    patch_emsctl_base(monkeypatch, tmp_path)
+    env_config = tmp_path / "env.json"
+    custom_config = tmp_path / "custom.json"
+    write_discovery_config(env_config, "env/runtime-state.json")
+    write_discovery_config(custom_config, "custom/runtime-state.json")
+    monkeypatch.setenv("EMS_CONFIG_FILE", str(env_config))
+
+    args = config_args(config=str(custom_config))
+    selected = emsctl.resolve_config_path(args)
+    config = emsctl.load_config(selected)
+
+    assert selected == str(custom_config)
+    assert emsctl.resolve_runtime_path(args, config) == str(
+        tmp_path / "custom" / "runtime-state.json"
+    )
+
+
+def test_emsctl_runtime_state_comes_from_selected_config_not_existing_files(
+    tmp_path,
+    monkeypatch,
+):
+    patch_emsctl_base(monkeypatch, tmp_path)
+    write_discovery_config(
+        tmp_path / "config" / "config.json",
+        "data/runtime-state.json",
+    )
+    (tmp_path / "runtime-state.json").write_text('{"sentinel": "root"}')
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "runtime-state.json").write_text('{"sentinel": "data"}')
+
+    args = config_args()
+    selected = emsctl.resolve_config_path(args)
+    config = emsctl.load_config(selected)
+    runtime_path = emsctl.resolve_runtime_path(args, config)
+
+    assert runtime_path == str(data_dir / "runtime-state.json")
+
+
+def test_emsctl_runtime_state_legacy_config_wins_over_existing_data_file(
+    tmp_path,
+    monkeypatch,
+):
+    patch_emsctl_base(monkeypatch, tmp_path)
+    write_discovery_config(tmp_path / "config.json", "runtime-state.json")
+    (tmp_path / "runtime-state.json").write_text('{"sentinel": "root"}')
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "runtime-state.json").write_text('{"sentinel": "data"}')
+
+    args = config_args()
+    selected = emsctl.resolve_config_path(args)
+    config = emsctl.load_config(selected)
+    runtime_path = emsctl.resolve_runtime_path(args, config)
+
+    assert runtime_path == str(tmp_path / "runtime-state.json")
+
+
+def test_emsctl_runtime_state_override_wins(tmp_path, monkeypatch):
+    patch_emsctl_base(monkeypatch, tmp_path)
+    write_discovery_config(
+        tmp_path / "config" / "config.json",
+        "data/runtime-state.json",
+    )
+    override = tmp_path / "override.json"
+
+    args = config_args(runtime_state=str(override))
+    selected = emsctl.resolve_config_path(args)
+    config = emsctl.load_config(selected)
+
+    assert emsctl.resolve_runtime_path(args, config) == str(override)
+
+
+def test_emsctl_missing_runtime_state_path_falls_back_to_legacy_default(
+    tmp_path,
+    monkeypatch,
+):
+    patch_emsctl_base(monkeypatch, tmp_path)
+    write_discovery_config(tmp_path / "config.json")
+
+    args = config_args()
+    selected = emsctl.resolve_config_path(args)
+    config = emsctl.load_config(selected)
+
+    assert emsctl.resolve_runtime_path(args, config) == str(
+        tmp_path / "runtime-state.json"
+    )
+
+
+def test_emsctl_dashboard_auth_path_comes_from_selected_config(
+    tmp_path,
+    monkeypatch,
+):
+    patch_emsctl_base(monkeypatch, tmp_path)
+    write_discovery_config(
+        tmp_path / "config.json",
+        "runtime-state.json",
+        auth_file="dashboard-auth.json",
+    )
+    write_discovery_config(
+        tmp_path / "config" / "config.json",
+        "data/runtime-state.json",
+        auth_file="config/dashboard-auth.json",
+    )
+
+    args = config_args()
+    selected = emsctl.resolve_config_path(args)
+    config = emsctl.load_config(selected)
+
+    assert selected == str(tmp_path / "config.json")
+    assert emsctl.resolve_dashboard_auth_path(args, config) == str(
+        tmp_path / "dashboard-auth.json"
+    )
+
+
+def test_emsctl_dashboard_auth_override_wins(tmp_path, monkeypatch):
+    patch_emsctl_base(monkeypatch, tmp_path)
+    write_discovery_config(
+        tmp_path / "config" / "config.json",
+        "data/runtime-state.json",
+        auth_file="config/dashboard-auth.json",
+    )
+    override = tmp_path / "manual-auth.json"
+
+    args = config_args(dashboard_auth=str(override))
+    selected = emsctl.resolve_config_path(args)
+    config = emsctl.load_config(selected)
+
+    assert emsctl.resolve_dashboard_auth_path(args, config) == str(override)
+
+
+def test_emsctl_status_uses_docker_config_without_root_config(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    patch_emsctl_base(monkeypatch, tmp_path)
+    write_discovery_config(
+        tmp_path / "config" / "config.json",
+        "data/runtime-state.json",
+    )
+
+    assert emsctl.main(["status"]) == 0
+
+    output = capsys.readouterr()
+    payload = json.loads(output.out)
+    assert payload["runtime_state_path"] == str(
+        tmp_path / "data" / "runtime-state.json"
+    )
+    assert (tmp_path / "data" / "runtime-state.json").exists()
+    assert not (tmp_path / "runtime-state.json").exists()
 
 
 def test_emsctl_no_args_prints_quick_help_without_runtime_write(tmp_path):

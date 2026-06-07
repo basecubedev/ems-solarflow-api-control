@@ -73,8 +73,9 @@ python3 scripts/check_log_events.py /tmp/ems-sim.log \
 
 `config.json` contains static installation and safety settings.
 
-`runtime-state.json` contains mutable runtime/operator values and can override
-some defaults from `config.json` after the first start.
+The configured runtime-state file, `data/runtime-state.json` in new generated
+configs, contains temporary runtime/operator values and can override some
+defaults from `config.json` after the first start.
 
 Important runtime fields:
 
@@ -121,11 +122,13 @@ IP/SN.
 Reset runtime state:
 
 ```bash
-rm runtime-state.json
+rm data/runtime-state.json
 ```
 
-Do this only while the EMS is stopped. On next start, EMS recreates the file
-from `config.json` defaults.
+Do this only while the EMS is stopped. On next start, EMS recreates the
+configured runtime-state file from `config.json` defaults. Older root-level
+`runtime-state.json` files from previous setups are no longer required after
+switching to `data/runtime-state.json` and may be removed manually.
 
 Relevant events:
 

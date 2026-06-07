@@ -1,6 +1,6 @@
 # CLI Tool
 
-`emsctl.py` safely edits `runtime-state.json`.
+`emsctl.py` safely edits the configured runtime-state file.
 
 It does not contact Zendure hardware and does not contact Home Assistant.
 
@@ -30,6 +30,42 @@ python3 emsctl.py device WR1 max-power 600
 python3 emsctl.py device WR1 offgrid eco
 python3 emsctl.py winter enable
 python3 emsctl.py dashboard auth-status
+```
+
+## Config Discovery
+
+By default, `emsctl.py` uses this config lookup order:
+
+```text
+--config PATH
+EMS_CONFIG_FILE
+config.json
+config/config.json
+```
+
+This preserves legacy local setups that keep `config.json` next to
+`emsctl.py`, while allowing the recommended Docker setup to use
+`/app/config/config.json` automatically.
+
+Relative `runtime_state_path` and dashboard `auth_file` values are still
+resolved relative to the application directory. The runtime-state path always
+comes from the selected config unless `--runtime-state` is passed explicitly.
+
+## Docker Usage
+
+With the recommended Compose service name `ems`, common commands can be run
+without an explicit config path:
+
+```bash
+docker compose exec ems python emsctl.py status
+docker compose exec ems python emsctl.py interactive
+docker compose exec ems python emsctl.py dashboard auth-status
+```
+
+For unusual mounts or troubleshooting, an explicit config path still works:
+
+```bash
+docker compose exec ems python emsctl.py --config /app/config/config.json status
 ```
 
 Each command group also has focused help:
@@ -66,7 +102,7 @@ Interactive mode preserves the same safety rules as direct commands:
 - no dashboard server access
 - no plaintext password echo
 - same value validation
-- same atomic `runtime-state.json` writes
+- same atomic runtime-state writes
 
 ## Examples Command
 
@@ -76,7 +112,7 @@ Interactive mode preserves the same safety rules as direct commands:
 python3 emsctl.py examples
 ```
 
-This command does not create or modify `runtime-state.json`.
+This command does not create or modify the runtime-state file.
 
 ## Shell Completion
 
@@ -126,10 +162,11 @@ With explicit paths:
 ```bash
 python3 emsctl.py --config config.json status
 python3 emsctl.py --runtime-state runtime-state.json status
+python3 emsctl.py --runtime-state data/runtime-state.json status
 ```
 
-`status` creates `runtime-state.json` from config defaults when the file is
-missing.
+`status` creates the configured runtime-state file from config defaults when
+the file is missing.
 
 ## System Commands
 
@@ -231,7 +268,7 @@ python3 emsctl.py device WR1 offgrid maybe
 The CLI writes via a temporary file and atomic rename:
 
 ```text
-runtime-state.json.<pid>.tmp -> runtime-state.json
+data/runtime-state.json.<pid>.tmp -> data/runtime-state.json
 ```
 
 This keeps runtime-state edits robust even when the EMS is running.

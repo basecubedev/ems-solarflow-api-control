@@ -15,6 +15,7 @@ from dashboard import auth as dashboard_auth
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+DOCKER_CONFIG_PATH = os.path.join(BASE_DIR, "config", "config.json")
 DEFAULT_RUNTIME_STATE_PATH = os.path.join(BASE_DIR, "runtime-state.json")
 OFFGRID_SOCKET_MODES = ("off", "eco", "standard")
 TOP_LEVEL_COMMANDS = (
@@ -173,8 +174,10 @@ def build_parser():
     )
     parser.add_argument(
         "--config",
-        default=DEFAULT_CONFIG_PATH,
-        help="Path to config.json. Default: config.json next to emsctl.py."
+        help=(
+            "Path to config.json. Default discovery: EMS_CONFIG_FILE, "
+            "config.json next to emsctl.py, then config/config.json."
+        )
     )
     parser.add_argument(
         "--runtime-state",
@@ -409,6 +412,23 @@ def load_config(path):
         raise ValueError(f"config {path} must contain a JSON object")
 
     return data
+
+
+def resolve_config_path(args):
+    if args.config:
+        return args.config
+
+    env_path = os.environ.get("EMS_CONFIG_FILE")
+    if env_path:
+        return env_path
+
+    if os.path.exists(DEFAULT_CONFIG_PATH):
+        return DEFAULT_CONFIG_PATH
+
+    if os.path.exists(DOCKER_CONFIG_PATH):
+        return DOCKER_CONFIG_PATH
+
+    return DEFAULT_CONFIG_PATH
 
 
 def resolve_runtime_path(args, config):
@@ -1177,6 +1197,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     try:
+        args.config = resolve_config_path(args)
         config = load_config(args.config)
 
         if args.command == "help":

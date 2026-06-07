@@ -14,15 +14,16 @@ RUN pip install --no-cache-dir -r requirements.txt \
 COPY ems/ ./ems/
 COPY dashboard/ ./dashboard/
 COPY ems-solarflow-api-control.py emsctl.py config.template.json README.md ./
+COPY docker-entrypoint.sh ./
 COPY LICENSE THIRD_PARTY_LICENSES.md ./
 COPY docs/ ./docs/
 
 RUN mkdir -p /app/config /app/data \
+    && chmod +x /app/docker-entrypoint.sh \
     && chown -R ems:ems /app
-
-USER ems
 
 EXPOSE 8080
 VOLUME ["/app/config", "/app/data"]
 
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["python", "-B", "ems-solarflow-api-control.py", "--config", "/app/config/config.json"]

@@ -35,7 +35,7 @@ Use this for standalone EMS operation without Home Assistant.
     "max_total_power": 800,
     "max_device_power": 800,
     "deadband": 10,
-    "runtime_state_path": "runtime-state.json",
+    "runtime_state_path": "data/runtime-state.json",
     "min_output_limit": 35,
     "loop_interval": 3,
     "redistribute_clamped_power": true,
@@ -141,7 +141,7 @@ single-device template values for a two-inverter installation.
     "reconcile_smart_mode": true,
     "max_total_power": 1600,
     "max_device_power": 800,
-    "runtime_state_path": "runtime-state.json",
+    "runtime_state_path": "data/runtime-state.json",
     "min_output_limit": 35,
     "loop_interval": 3
   },
@@ -337,7 +337,8 @@ values `total` and `sum` are not valid inside `channels`.
 
 ## Example 8: Runtime-State Explained
 
-On first start, EMS creates `runtime-state.json` automatically.
+On first start, EMS creates the configured runtime-state file automatically.
+New generated configs use `data/runtime-state.json`.
 
 Runtime-state contains operator values like:
 
@@ -351,15 +352,19 @@ Runtime-state contains operator values like:
 - device runtime PV priority factor
 - winter runtime toggle
 
-Do not copy `runtime-state.json` into `config.json`. Do not maintain it as a
-second static config.
+Runtime state is temporary runtime data. Do not copy it into `config.json` or
+maintain it as a second static config.
 
 Reset runtime values from config defaults:
 
 ```bash
-rm runtime-state.json
+rm data/runtime-state.json
 python3 -B ems-solarflow-api-control.py --dry-run --once
 ```
+
+Older root-level `runtime-state.json` files from previous setups are no longer
+required after switching to `data/runtime-state.json` and may be removed
+manually.
 
 Use the CLI for safe runtime edits:
 

@@ -1,17 +1,21 @@
 # Runtime State
 
-`runtime-state.json` stores mutable operator state.
+`data/runtime-state.json` stores temporary mutable operator state in new
+generated configs.
 
 ```text
 config.json
 = static installation, safety flags, IPs, serial numbers, technical defaults
 
-runtime-state.json
-= mutable local runtime/operator state
+data/runtime-state.json
+= temporary local runtime/operator data
 ```
 
 The EMS creates the runtime state file on first start from config defaults. The
-file is ignored by Git.
+file is ignored by Git and is recreated automatically if missing. Older
+root-level `runtime-state.json` files from previous setups are no longer
+required after switching to `data/runtime-state.json` and may be removed
+manually.
 
 Example:
 

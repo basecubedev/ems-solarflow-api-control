@@ -55,7 +55,8 @@ python3 -B ems-solarflow-api-control.py --dry-run --once
 - output-control defaults
 - winter defaults
 
-`runtime-state.json` contains mutable operator/runtime values:
+`data/runtime-state.json` contains temporary mutable operator/runtime values in
+new generated configs:
 
 - EMS enabled state
 - runtime max total power
@@ -67,9 +68,9 @@ python3 -B ems-solarflow-api-control.py --dry-run --once
 - per-device runtime PV priority factor
 - Home Assistant and winter runtime toggles
 
-The EMS creates `runtime-state.json` automatically on first start. Deleting it
-resets runtime values from `config.json` defaults. Do not maintain
-`runtime-state.json` as a second static config.
+The EMS creates the runtime-state file automatically on first start. Deleting it
+resets runtime values from `config.json` defaults. Do not maintain runtime
+state as a second static config.
 
 ## Home Assistant Settings
 
@@ -136,8 +137,11 @@ for the intended Zendure runtime/RAM mode behavior.
 
 `system.deadband` is the general legacy target deadband in watts.
 
-`system.runtime_state_path` is the path to mutable runtime state. The default is
-`runtime-state.json`.
+`system.runtime_state_path` is the path to temporary mutable runtime state. The
+default for new generated configs is `data/runtime-state.json`. Older
+root-level `runtime-state.json` files from previous setups are no longer
+required after switching to `data/runtime-state.json` and may be removed
+manually.
 
 `system.min_output_limit` is the default runtime minimum `outputLimit` while EMS
 is enabled. It also defines the standby total used when positive house load is
