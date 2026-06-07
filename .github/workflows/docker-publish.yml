@@ -92,3 +92,5 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          annotations: |
+            index:org.opencontainers.image.description=Local EMS controller for Zendure SolarFlow. Docker images include automatic first-run config bootstrap. See README for Quick Start and docs/docker.md for full setup.
