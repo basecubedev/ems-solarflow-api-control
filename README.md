@@ -262,13 +262,14 @@ image: ghcr.io/basecubedev/ems-solarflow-api-control:latest
 last release notes. Pinned version tags are recommended for stable
 installations.
 
-## Docker Quickstart
+## Docker Quick Start
 
-The improved Docker first-run setup is available in `latest` and releases
+The simplified Docker first-run setup is available in `latest` and releases
 after `v0.5.6`. Older image tags, including `v0.5.6` and earlier, keep the
 previous manual setup behavior.
 
-New Docker users can start from the official Compose file:
+The recommended Docker setup uses Docker Compose and stores configuration and
+runtime data outside the container.
 
 ```bash
 mkdir ems-solarflow-api-control
@@ -277,95 +278,28 @@ curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/basecubedev/ems
 docker compose up -d
 ```
 
-On first start, the container creates `config/config.json` from the built-in
-`config.template.json` if it does not exist yet. The file is never overwritten
-after creation.
+On first start, the container creates:
 
-Edit the generated configuration for your installation and restart:
+```text
+config/config.json
+```
+
+Edit the generated configuration and restart:
 
 ```bash
 nano config/config.json
 docker compose restart
 ```
 
-Docker CLI commands can use the generated config automatically:
-
-```bash
-docker compose exec ems python emsctl.py status
-docker compose exec ems python emsctl.py interactive
-docker compose exec ems python emsctl.py dashboard auth-status
-```
-
-For unusual mounts or troubleshooting, pass the config path explicitly:
-
-```bash
-docker compose exec ems python emsctl.py --config /app/config/config.json status
-```
-
-Generated files:
+Persistent files are stored in:
 
 ```text
-./config/config.json                 user configuration
-./data/runtime-state.json            temporary runtime state
-./data/ems_dashboard.sqlite          dashboard statistics database
-./data/ems_dashboard.sqlite-wal      normal SQLite WAL file
-./data/ems_dashboard.sqlite-shm      normal SQLite SHM file
+config/config.json        user configuration
+data/runtime-state.json   temporary runtime state
+data/ems_dashboard.sqlite dashboard statistics database
 ```
 
-Dashboard:
-
-```text
-http://localhost:8080
-```
-
-The recommended Compose file mounts `./config` to `/app/config` and `./data` to
-`/app/data`. Runtime state and the dashboard SQLite database are created
-automatically when those paths are writable and persist across container
-updates. Do not store runtime state or database files inside the image.
-
-The container does not overwrite existing config files and does not
-recursively take ownership of the mounted `./config` and `./data` directories.
-If Docker or your host creates files with unexpected ownership, adjust the
-directory ownership on the host before starting the container:
-
-```bash
-mkdir -p config data
-chown "$(id -u):$(id -g)" config data
-```
-
-The runtime state file is created automatically on startup if it does not
-exist. Older setups may have used `runtime-state.json` in the project root. If
-you switch to `data/runtime-state.json`, the old root-level file is no longer
-required and may be removed manually. EMS will automatically create a new
-runtime-state file if the configured file does not exist.
-
-If `config/config.json` still matches the shipped template, the container logs
-a warning:
-
-```text
-WARNING: config.json still matches the shipped template.
-Please review ./config/config.json and configure your installation.
-Startup continues, but device settings may be incomplete.
-```
-
-Startup continues after this warning. Existing config validation and runtime
-errors still report missing IPs, serial numbers, or invalid device settings.
-The EMS will likely not control devices until the required values are
-configured.
-
-Existing Docker installations remain supported. A legacy bind mount such as
-`./config.json:/app/config/config.json:ro` can keep working, but the recommended
-setup for `latest` and releases after `v0.5.6` is the directory-based
-`./config:/app/config` mount.
-
-Docker setup has been simplified for images after `v0.5.6`: with the
-recommended `docker-compose.yml`, the container creates `./config/config.json`
-from the built-in `config.template.json` on first start, stores runtime state
-and dashboard database files in `./data`, and never overwrites existing config
-files. Older tags, including `v0.5.6` and earlier, still use the previous
-manual Docker setup.
-
-Detailed Docker notes: [docs/docker.md](docs/docker.md).
+Full Docker documentation: [docs/docker.md](docs/docker.md).
 
 Maintainers publish a new image by tagging a commit that is already on `main`:
 

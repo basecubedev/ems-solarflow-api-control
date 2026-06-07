@@ -92,6 +92,19 @@ errors still report missing IPs, serial numbers, or invalid device settings.
 The EMS will likely not control devices until the required values are
 configured.
 
+## Updating
+
+For `latest`, pull the current image and recreate the container:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+For stable deployments, pin a release tag in `docker-compose.yml`, then update
+that tag intentionally when you want to move to a newer release. Existing
+`./config` and `./data` files are preserved by the recommended bind mounts.
+
 ## Existing Installations
 
 Existing Docker installations continue to work. A legacy bind mount such as
