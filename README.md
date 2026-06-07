@@ -235,10 +235,34 @@ Copy/paste examples: [docs/configuration-examples.md](docs/configuration-example
 
 ---
 
-## Docker Quickstart
+## Docker image tags
 
-Docker images are published to GHCR only for release tags. Normal pushes to
-`main` do not publish Docker images.
+Docker images are published to GHCR from `main`, release tags, and a weekly
+scheduled rebuild of `main`.
+
+| Image tag | Meaning |
+|---|---|
+| `latest` | current `main` branch build. Rebuilt on every main push and once per week for base image and package security patch refreshes. |
+| `v0.5.x` | fixed release image. Recommended for stable deployments. |
+
+Use a fixed version tag for production-like setups if you want predictable
+updates:
+
+```yaml
+image: ghcr.io/basecubedev/ems-solarflow-api-control:v0.5.6
+```
+
+Use `latest` only when you intentionally want the newest build from `main`:
+
+```yaml
+image: ghcr.io/basecubedev/ems-solarflow-api-control:latest
+```
+
+`latest` is not a fixed release and may include changes that are newer than the
+last release notes. Pinned version tags are recommended for stable
+installations.
+
+## Docker Quickstart
 
 Create the local config and persistent data directory:
 
@@ -279,22 +303,17 @@ The compose example persists `/app/data` through `./data`. Keep this directory
 across container updates because it stores runtime state and the dashboard
 SQLite database.
 
-For stable installations, prefer pinning a release image instead of using
-`latest`:
-
-```yaml
-image: ghcr.io/basecubedev/ems-solarflow-api-control:v0.5.3
-```
-
 Maintainers publish a new image by tagging a commit that is already on `main`:
 
 ```bash
-git tag v0.5.3
-git push origin v0.5.3
+git tag v0.5.6
+git push origin v0.5.6
 ```
 
-Only `v*` tags trigger image publishing, and the release workflow refuses tags
-whose commit is not contained in `origin/main`.
+Pushes to `main` publish `:latest`; the weekly scheduled rebuild refreshes
+`:latest` from the current `main` branch. Only `v*` tags publish version tags,
+and the release workflow refuses tags whose commit is not contained in
+`origin/main`.
 
 ---
 
