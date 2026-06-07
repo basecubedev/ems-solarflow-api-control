@@ -237,14 +237,16 @@ Copy/paste examples: [docs/configuration-examples.md](docs/configuration-example
 
 ## Docker image tags
 
-Docker images are published to GHCR from `main` and from release tags.
+Docker images are published to GHCR from `main`, release tags, and a weekly
+scheduled rebuild of `main`.
 
 | Image tag | Meaning |
 |---|---|
-| `latest` | current `main` branch |
-| `v0.5.x` | fixed release version |
+| `latest` | current `main` branch build. Rebuilt on every main push and once per week for base image and package security patch refreshes. |
+| `v0.5.x` | fixed release image. Recommended for stable deployments. |
 
-Use a fixed version tag for stable deployments:
+Use a fixed version tag for production-like setups if you want predictable
+updates:
 
 ```yaml
 image: ghcr.io/basecubedev/ems-solarflow-api-control:v0.5.6
@@ -308,8 +310,9 @@ git tag v0.5.6
 git push origin v0.5.6
 ```
 
-Pushes to `main` publish `:latest`. Only `v*` tags publish version tags, and
-the release workflow refuses tags whose commit is not contained in
+Pushes to `main` publish `:latest`; the weekly scheduled rebuild refreshes
+`:latest` from the current `main` branch. Only `v*` tags publish version tags,
+and the release workflow refuses tags whose commit is not contained in
 `origin/main`.
 
 ---
