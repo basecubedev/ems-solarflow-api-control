@@ -24,6 +24,27 @@ nano config/config.json
 docker compose restart
 ```
 
+## CLI Inside Docker
+
+With the recommended Compose service name `ems`, `emsctl.py` automatically
+uses `/app/config/config.json` when no legacy `/app/config.json` exists:
+
+```bash
+docker compose exec ems python emsctl.py status
+docker compose exec ems python emsctl.py interactive
+docker compose exec ems python emsctl.py dashboard auth-status
+```
+
+The runtime-state path is still read from the selected config. With the
+generated Docker config, `data/runtime-state.json` resolves to
+`/app/data/runtime-state.json`.
+
+For unusual mounts or troubleshooting, pass the config path explicitly:
+
+```bash
+docker compose exec ems python emsctl.py --config /app/config/config.json status
+```
+
 ## Generated Files
 
 ```text

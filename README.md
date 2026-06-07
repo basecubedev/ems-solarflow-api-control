@@ -288,6 +288,20 @@ nano config/config.json
 docker compose restart
 ```
 
+Docker CLI commands can use the generated config automatically:
+
+```bash
+docker compose exec ems python emsctl.py status
+docker compose exec ems python emsctl.py interactive
+docker compose exec ems python emsctl.py dashboard auth-status
+```
+
+For unusual mounts or troubleshooting, pass the config path explicitly:
+
+```bash
+docker compose exec ems python emsctl.py --config /app/config/config.json status
+```
+
 Generated files:
 
 ```text
@@ -401,6 +415,8 @@ Safe runtime-state edits:
 
 ```bash
 python3 emsctl.py status
+python3 emsctl.py --config config.json status
+python3 emsctl.py --runtime-state runtime-state.json status
 python3 emsctl.py interactive
 python3 emsctl.py examples
 python3 emsctl.py system min-output-limit 30
@@ -409,6 +425,11 @@ python3 emsctl.py device WR1 offgrid eco
 python3 emsctl.py winter enable
 python3 emsctl.py ha disable
 ```
+
+By default, `emsctl.py` uses `--config`, then `EMS_CONFIG_FILE`, then legacy
+`config.json`, then `config/config.json`. This keeps existing local setups
+unchanged while letting Docker users run the Docker `emsctl.py status` command
+without an explicit `--config`.
 
 More:
 
