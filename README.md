@@ -274,10 +274,17 @@ runtime data outside the container.
 ```bash
 mkdir ems-solarflow-api-control
 cd ems-solarflow-api-control
-curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/main/docker-compose.example.yml
 mkdir -p config data
-PUID=$(id -u) PGID=$(id -g) docker compose up -d
+curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/main/docker-compose.example.yml
+docker compose pull
+docker compose up -d
 ```
+
+Docker does not automatically run containers as the same user that runs
+`docker compose`. Creating `config` and `data` as your normal user before the
+first start is usually enough: EMS detects the owner of these mounted
+directories and runs as that UID/GID. If you want to set the runtime UID/GID
+explicitly, start with `PUID=$(id -u) PGID=$(id -g) docker compose up -d`.
 
 On first start, the container creates:
 

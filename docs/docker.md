@@ -9,19 +9,22 @@ previous manual setup procedure.
 ```bash
 mkdir ems-solarflow-api-control
 cd ems-solarflow-api-control
-curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/main/docker-compose.example.yml
 mkdir -p config data
-PUID=$(id -u) PGID=$(id -g) docker compose up -d
+curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/main/docker-compose.example.yml
+docker compose pull
+docker compose up -d
 ```
 
-For repeated starts, store the UID/GID in `.env` instead:
+Docker does not automatically run a container as the same user that runs
+`docker compose`. Creating `config` and `data` before the first start as your
+normal host user is usually enough: EMS detects the owner of these mounted
+directories and runs as that UID/GID.
+
+`PUID` and `PGID` are optional for the standard flow. If you want to set the
+runtime UID/GID explicitly, start with:
 
 ```bash
-cat > .env <<EOF_ENV
-PUID=$(id -u)
-PGID=$(id -g)
-EOF_ENV
-docker compose up -d
+PUID=$(id -u) PGID=$(id -g) docker compose up -d
 ```
 
 On first start, the container creates `config/config.json` from the built-in
@@ -30,8 +33,8 @@ are never overwritten.
 
 The container starts as root only long enough to select the runtime UID/GID,
 then re-executes the entrypoint as that non-root user before creating
-`config/config.json` or writing runtime data. With the `.env` file above, files
-created under bind-mounted `./config` and `./data` use your host UID/GID.
+`config/config.json` or writing runtime data. Files created under bind-mounted
+`./config` and `./data` use the detected or explicit UID/GID.
 
 Edit the generated configuration and restart:
 
@@ -84,7 +87,7 @@ container and adjust the directory ownership on the host before starting it:
 ```bash
 mkdir -p config data
 sudo chown -R "$(id -u):$(id -g)" config data
-PUID=$(id -u) PGID=$(id -g) docker compose up -d
+docker compose up -d
 ```
 
 The runtime state file is created automatically on startup if it does not
