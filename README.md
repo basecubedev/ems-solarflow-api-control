@@ -275,7 +275,8 @@ runtime data outside the container.
 mkdir ems-solarflow-api-control
 cd ems-solarflow-api-control
 curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/main/docker-compose.example.yml
-docker compose up -d
+mkdir -p config data
+PUID=$(id -u) PGID=$(id -g) docker compose up -d
 ```
 
 On first start, the container creates:

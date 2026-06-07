@@ -10,12 +10,28 @@ previous manual setup procedure.
 mkdir ems-solarflow-api-control
 cd ems-solarflow-api-control
 curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/main/docker-compose.example.yml
+mkdir -p config data
+PUID=$(id -u) PGID=$(id -g) docker compose up -d
+```
+
+For repeated starts, store the UID/GID in `.env` instead:
+
+```bash
+cat > .env <<EOF_ENV
+PUID=$(id -u)
+PGID=$(id -g)
+EOF_ENV
 docker compose up -d
 ```
 
 On first start, the container creates `config/config.json` from the built-in
 `config.template.json` if the file does not exist yet. Existing config files
 are never overwritten.
+
+The container starts as root only long enough to select the runtime UID/GID,
+then re-executes the entrypoint as that non-root user before creating
+`config/config.json` or writing runtime data. With the `.env` file above, files
+created under bind-mounted `./config` and `./data` use your host UID/GID.
 
 Edit the generated configuration and restart:
 
@@ -62,12 +78,13 @@ Do not store runtime state or database files inside the image.
 
 The container does not overwrite existing config files and does not
 recursively take ownership of the mounted `./config` and `./data` directories.
-If Docker or your host creates files with unexpected ownership, adjust the
-directory ownership on the host before starting the container:
+If Docker or your host creates directories with unexpected ownership, stop the
+container and adjust the directory ownership on the host before starting it:
 
 ```bash
 mkdir -p config data
-chown "$(id -u):$(id -g)" config data
+sudo chown -R "$(id -u):$(id -g)" config data
+PUID=$(id -u) PGID=$(id -g) docker compose up -d
 ```
 
 The runtime state file is created automatically on startup if it does not
@@ -75,6 +92,43 @@ exist. Older setups may have used `runtime-state.json` in the project root. If
 you switch to `data/runtime-state.json`, the old root-level file is no longer
 required and may be removed manually. EMS will automatically create a new
 runtime-state file if the configured file does not exist.
+
+## Verify Non-Root Runtime
+
+Verify the real PID 1 user inside the running container:
+
+```bash
+docker compose exec ems sh -c 'cat /proc/1/status | grep -E "^(Name|Uid|Gid):"'
+```
+
+The `Uid:` and `Gid:` lines should show non-zero values matching your `.env`
+`PUID` and `PGID`.
+
+Verify host file ownership:
+
+```bash
+ls -ln config data
+find config data -maxdepth 1 -type f -printf '%u:%g %p\n'
+```
+
+The generated files should be owned by your host UID/GID, not `0:0`.
+
+You can also verify writes from inside the container:
+
+```bash
+docker compose exec ems sh -c 'touch /app/data/non-root-write-test && id && ls -ln /app/data/non-root-write-test'
+ls -ln data/non-root-write-test
+```
+
+For an end-to-end Docker validation from the repository checkout:
+
+```bash
+scripts/validate_docker_non_root.sh
+```
+
+The script builds a local image, verifies `/proc/1/status` reports non-zero
+UID/GID, checks file ownership in `/app/config` and `/app/data`, and confirms
+root-owned bind mounts fail startup instead of running as root.
 
 ## Template Warning
 

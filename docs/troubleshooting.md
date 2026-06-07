@@ -142,6 +142,46 @@ runtime_state_load_error
 
 More detail: [runtime-state.md](runtime-state.md), [configuration.md](configuration.md).
 
+## Docker Files Owned By Root
+
+### Symptoms
+
+- `docker compose exec ems id` shows `uid=0(root)`
+- files in `config/` or `data/` are owned by `0:0`
+- container logs show `EMS refuses to start as root.`
+- startup reports that `/app/data` or `/app/config` is not writable by the
+  non-root runtime user
+
+### Fix host directory ownership
+
+Stop the container, fix the bind-mounted host directories, and start again with
+your host UID/GID:
+
+```bash
+docker compose down
+mkdir -p config data
+sudo chown -R "$(id -u):$(id -g)" config data
+cat > .env <<EOF_ENV
+PUID=$(id -u)
+PGID=$(id -g)
+EOF_ENV
+docker compose up -d
+```
+
+Verify PID 1 inside the container:
+
+```bash
+docker compose exec ems sh -c 'cat /proc/1/status | grep -E "^(Name|Uid|Gid):"'
+```
+
+Verify host ownership:
+
+```bash
+find config data -maxdepth 1 -type f -printf '%u:%g %p\n'
+```
+
+Generated files should match your non-zero `id -u` and `id -g`, not `0:0`.
+
 ## No Power Changes
 
 ### Symptoms

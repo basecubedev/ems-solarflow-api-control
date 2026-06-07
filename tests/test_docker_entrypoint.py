@@ -9,6 +9,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 ENTRYPOINT = ROOT / "docker-entrypoint.sh"
+COMPOSE_EXAMPLE = ROOT / "docker-compose.example.yml"
+NON_ROOT_VALIDATION_SCRIPT = ROOT / "scripts" / "validate_docker_non_root.sh"
 ROOT_PERMISSION_SKIP = pytest.mark.skipif(
     os.geteuid() == 0,
     reason="Permission simulation is not reliable when tests run as root",
@@ -95,6 +97,103 @@ def test_docker_entrypoint_does_not_recursively_chown_bind_mounts():
     script = ENTRYPOINT.read_text()
 
     assert "chown -R" not in script
+    assert "chown -R /app/config" not in script
+    assert "chown -R /app/data" not in script
+
+
+def test_docker_entrypoint_supports_numeric_puid_pgid_selection():
+    script = ENTRYPOINT.read_text()
+
+    assert "PUID" in script
+    assert "PGID" in script
+    assert '[ -n "${PUID:-}" ] || [ -n "${PGID:-}" ]' in script
+    assert 'is_positive_id "${PUID:-}"' in script
+    assert 'is_positive_id "${PGID:-}"' in script
+    assert "--reuid=\"$RUNTIME_UID\"" in script
+    assert "--regid=\"$RUNTIME_GID\"" in script
+    assert "setpriv" in script
+
+
+def test_docker_entrypoint_has_no_unconditional_root_fallback():
+    script = ENTRYPOINT.read_text()
+    final_exec = 'exec "$@"'
+    final_exec_index = script.rfind(final_exec)
+    root_refusal_index = script.rfind("root_refusal")
+
+    assert final_exec_index != -1
+    assert root_refusal_index != -1
+    assert root_refusal_index < final_exec_index
+    assert "EMS_SKIP_PRIVILEGE_DROP" in script
+    assert 'if [ "$(id -u)" = "0" ] && [ "${EMS_SKIP_PRIVILEGE_DROP:-0}" != "1" ]; then\n    root_refusal\nfi' in script
+
+
+def test_docker_entrypoint_bootstrap_runs_after_privilege_drop_path():
+    script = ENTRYPOINT.read_text()
+
+    assert script.index('exec setpriv') < script.index('if [ ! -f "$CONFIG_FILE" ]; then')
+    assert 'EMS_PRIVILEGE_DROPPED=1 exec setpriv' in script
+    assert 'cp "$TEMPLATE_FILE" "$CONFIG_FILE"' in script
+
+
+def test_docker_entrypoint_checks_existing_config_writable_by_runtime_user():
+    script = ENTRYPOINT.read_text()
+
+    assert 'if [ -f "$CONFIG_FILE" ] && ! test_as_runtime_user test -w "$CONFIG_FILE"; then' in script
+    assert 'if [ -f "$CONFIG_FILE" ] && [ ! -w "$CONFIG_FILE" ]; then' in script
+    assert "Unable to write to /app/config/config.json." in script
+
+
+def test_docker_entrypoint_refuses_root_owned_mount_directories():
+    script = ENTRYPOINT.read_text()
+
+    assert 'DATA_UID="$(path_uid "$DATA_DIR")"' in script
+    assert 'CONFIG_UID="$(path_uid "$CONFIG_DIR")"' in script
+    assert 'if [ "$DATA_UID" = "0" ] || [ "$CONFIG_UID" = "0" ]; then\n        root_refusal\n    fi' in script
+
+
+def test_docker_entrypoint_validates_puid_pgid_before_root_owned_mount_refusal():
+    script = ENTRYPOINT.read_text()
+    explicit_env_index = script.index('if [ -n "${PUID:-}" ] || [ -n "${PGID:-}" ]; then')
+    invalid_index = script.index('invalid_uid_gid', explicit_env_index)
+    root_refusal_index = script.index('root_refusal', invalid_index)
+
+    assert invalid_index < root_refusal_index
+
+
+def test_docker_compose_example_does_not_hard_default_user_ids():
+    compose = COMPOSE_EXAMPLE.read_text()
+
+    assert 'PUID: "${PUID:-}"' in compose
+    assert 'PGID: "${PGID:-}"' in compose
+    assert "${PUID:-1000}" not in compose
+    assert "${PGID:-1000}" not in compose
+
+
+def test_docker_non_root_validation_script_covers_manual_checks():
+    script = NON_ROOT_VALIDATION_SCRIPT.read_text()
+
+    assert "/proc/1/status" in script
+    assert "test \"$uid\" != \"0\"" in script
+    assert "/app/config/non-root-config-write-test" in script
+    assert "/app/data/non-root-data-write-test" in script
+    assert "chown 0:0 /case/config /case/data" in script
+    assert "EMS refuses to start as root." in script
+
+
+def test_docker_entrypoint_root_escape_hatch_is_explicit_only():
+    script = ENTRYPOINT.read_text()
+
+    assert script.count("EMS_SKIP_PRIVILEGE_DROP") == 2
+    assert "RUN_AS_USER" in script
+    assert "root_refusal" in script
+
+
+def test_docker_entrypoint_has_clear_root_refusal_message():
+    script = ENTRYPOINT.read_text()
+
+    assert "EMS refuses to start as root." in script
+    assert "PUID=$(id -u) PGID=$(id -g) docker compose up -d" in script
+    assert "mounted /app/data or /app/config directory" in script
 
 
 def test_docker_entrypoint_uses_shared_config_template(tmp_path):
