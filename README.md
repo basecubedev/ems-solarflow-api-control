@@ -161,8 +161,8 @@ The `ems/` package contains internal implementation modules only. This keeps
 the main script small and makes future changes easier to review, while
 preserving the same operating model.
 
-`runtime-state.json` is not a second static config. It is local mutable runtime
-state created and updated by the EMS.
+`data/runtime-state.json` is not a second static config. It is temporary local
+runtime data created and updated by the EMS.
 
 More: [docs/architecture.md](docs/architecture.md).
 
@@ -264,33 +264,38 @@ installations.
 
 ## Docker Quickstart
 
-Create the local config and persistent data directory:
+The improved Docker first-run setup is available in `latest` and releases
+after `v0.5.6`. Older image tags, including `v0.5.6` and earlier, keep the
+previous manual setup behavior.
+
+New Docker users can start from the official Compose file:
 
 ```bash
-mkdir -p data
-cp config.template.json config.json
+mkdir ems-solarflow-api-control
+cd ems-solarflow-api-control
+curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/main/docker-compose.example.yml
+docker compose up -d
 ```
 
-For Docker, use container paths for mutable state in `config.json`:
+On first start, the container creates `config/config.json` from the built-in
+`config.template.json` if it does not exist yet. The file is never overwritten
+after creation.
 
-```json
-{
-  "system": {
-    "runtime_state_path": "/app/data/runtime-state.json"
-  },
-  "dashboard": {
-    "enabled": true,
-    "host": "0.0.0.0",
-    "port": 8080,
-    "database_path": "/app/data/ems_dashboard.sqlite"
-  }
-}
-```
-
-Start EMS and the built-in dashboard:
+Edit the generated configuration for your installation and restart:
 
 ```bash
-docker compose -f docker-compose.example.yml up -d
+nano config/config.json
+docker compose restart
+```
+
+Generated files:
+
+```text
+./config/config.json                 user configuration
+./data/runtime-state.json            temporary runtime state
+./data/ems_dashboard.sqlite          dashboard statistics database
+./data/ems_dashboard.sqlite-wal      normal SQLite WAL file
+./data/ems_dashboard.sqlite-shm      normal SQLite SHM file
 ```
 
 Dashboard:
@@ -299,9 +304,54 @@ Dashboard:
 http://localhost:8080
 ```
 
-The compose example persists `/app/data` through `./data`. Keep this directory
-across container updates because it stores runtime state and the dashboard
-SQLite database.
+The recommended Compose file mounts `./config` to `/app/config` and `./data` to
+`/app/data`. Runtime state and the dashboard SQLite database are created
+automatically when those paths are writable and persist across container
+updates. Do not store runtime state or database files inside the image.
+
+The container does not overwrite existing config files and does not
+recursively take ownership of the mounted `./config` and `./data` directories.
+If Docker or your host creates files with unexpected ownership, adjust the
+directory ownership on the host before starting the container:
+
+```bash
+mkdir -p config data
+chown "$(id -u):$(id -g)" config data
+```
+
+The runtime state file is created automatically on startup if it does not
+exist. Older setups may have used `runtime-state.json` in the project root. If
+you switch to `data/runtime-state.json`, the old root-level file is no longer
+required and may be removed manually. EMS will automatically create a new
+runtime-state file if the configured file does not exist.
+
+If `config/config.json` still matches the shipped template, the container logs
+a warning:
+
+```text
+WARNING: config.json still matches the shipped template.
+Please review ./config/config.json and configure your installation.
+Startup continues, but device settings may be incomplete.
+```
+
+Startup continues after this warning. Existing config validation and runtime
+errors still report missing IPs, serial numbers, or invalid device settings.
+The EMS will likely not control devices until the required values are
+configured.
+
+Existing Docker installations remain supported. A legacy bind mount such as
+`./config.json:/app/config/config.json:ro` can keep working, but the recommended
+setup for `latest` and releases after `v0.5.6` is the directory-based
+`./config:/app/config` mount.
+
+Docker setup has been simplified for images after `v0.5.6`: with the
+recommended `docker-compose.yml`, the container creates `./config/config.json`
+from the built-in `config.template.json` on first start, stores runtime state
+and dashboard database files in `./data`, and never overwrites existing config
+files. Older tags, including `v0.5.6` and earlier, still use the previous
+manual Docker setup.
+
+Detailed Docker notes: [docs/docker.md](docs/docker.md).
 
 Maintainers publish a new image by tagging a commit that is already on `main`:
 
@@ -333,7 +383,8 @@ explanations and copy/paste examples are in:
 
 Static installation data belongs in `config.json`.
 
-Mutable operator state belongs in `runtime-state.json`:
+Temporary runtime/operator state belongs in `data/runtime-state.json` for new
+generated configs:
 
 ```text
 enabled
@@ -522,7 +573,7 @@ installations.
 | `emsctl.py` | Safe runtime-state CLI |
 | `config.template.json` | Versioned config template |
 | `config.json` | Local config, ignored by Git |
-| `runtime-state.json` | Mutable runtime state, ignored by Git |
+| `data/runtime-state.json` | Temporary runtime state, ignored by Git |
 | `homeassistant-dashboard/dashboard.yaml` | Optional HA dashboard example |
 | `homeassistant-dashboard/dashboard-preview.jpg` | HA dashboard preview image |
 | `scripts/check_log_events.py` | Structured log validator |

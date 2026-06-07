@@ -23,7 +23,7 @@
     "max_total_power": 800,
     "max_device_power": 800,
     "deadband": 10,
-    "runtime_state_path": "runtime-state.json",
+    "runtime_state_path": "data/runtime-state.json",
     "min_output_limit": 35,
     "loop_interval": 3,
     "output_control": {

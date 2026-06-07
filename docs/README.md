@@ -7,6 +7,7 @@ Start here:
 | Topic | Document | Use |
 |---|---|---|
 | Quickstart live control | [quickstart.md](quickstart.md) | First setup path from config copy to dry-run and bounded live runs. |
+| Docker | [docker.md](docker.md) | Compose setup, first-run config bootstrap, persisted data, and version scope after v0.5.6. |
 | Configuration reference | [configuration.md](configuration.md) | Static `config.json` keys, safety flags, output control, devices, Shelly, HA, and winter settings. |
 | Configuration examples | [configuration-examples.md](configuration-examples.md) | Copy/paste starting points for standalone, HA, dry-run, live writes, runtime state, and winter mode. |
 | Power/control flow map | [control-flow.md](control-flow.md) | Visual map of where config values affect one EMS control cycle. |

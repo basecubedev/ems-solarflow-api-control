@@ -78,6 +78,15 @@ def test_config_template_standalone_live_control_defaults():
     assert template["system"]["reconcile_smart_mode"] is True
 
 
+def test_config_template_uses_persisted_data_paths():
+    template = json.loads(Path("config.template.json").read_text())
+
+    docker_only_flag = "_config" + "_initialized"
+    assert docker_only_flag not in json.dumps(template)
+    assert template["system"]["runtime_state_path"] == "data/runtime-state.json"
+    assert template["dashboard"]["database_path"] == "data/ems_dashboard.sqlite"
+
+
 def base_minimal_config():
     return {
         "ha": {

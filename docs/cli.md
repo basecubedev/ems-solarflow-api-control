@@ -125,11 +125,11 @@ With explicit paths:
 
 ```bash
 python3 emsctl.py --config config.json status
-python3 emsctl.py --runtime-state runtime-state.json status
+python3 emsctl.py --runtime-state data/runtime-state.json status
 ```
 
-`status` creates `runtime-state.json` from config defaults when the file is
-missing.
+`status` creates the configured runtime-state file from config defaults when
+the file is missing.
 
 ## System Commands
 
@@ -231,7 +231,7 @@ python3 emsctl.py device WR1 offgrid maybe
 The CLI writes via a temporary file and atomic rename:
 
 ```text
-runtime-state.json.<pid>.tmp -> runtime-state.json
+data/runtime-state.json.<pid>.tmp -> data/runtime-state.json
 ```
 
 This keeps runtime-state edits robust even when the EMS is running.

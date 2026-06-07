@@ -84,6 +84,27 @@ def test_runtime_state_creates_default_file_and_saves_atomically(tmp_path):
     assert saved["devices"]["WR1"]["max_power"] == 650
 
 
+def test_runtime_state_recreates_configured_data_path_without_root_migration(tmp_path):
+    data_path = tmp_path / "data" / "runtime-state.json"
+    old_root_path = tmp_path / "runtime-state.json"
+    old_root_payload = {
+        "system": {
+            "enabled": False,
+            "max_total_power": 123,
+        }
+    }
+    old_root_path.write_text(json.dumps(old_root_payload))
+
+    state = RuntimeState(str(data_path), DEFAULTS)
+    data = state.load_or_create()
+
+    assert data_path.exists()
+    assert json.loads(old_root_path.read_text()) == old_root_payload
+    assert data["system"]["enabled"] is True
+    assert data["system"]["max_total_power"] == 800
+    assert data["devices"]["WR1"]["enabled"] is True
+
+
 def test_runtime_state_load_if_changed_merges_external_updates(tmp_path):
     path = tmp_path / "runtime-state.json"
     path.write_text(json.dumps({

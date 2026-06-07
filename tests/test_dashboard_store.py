@@ -105,6 +105,25 @@ def test_store_records_latest_and_history(tmp_path):
     assert store.latest()["control_explain"] is None
 
 
+def test_dashboard_database_recreates_configured_data_path(tmp_path):
+    db_path = tmp_path / "data" / "ems_dashboard.sqlite"
+
+    DashboardStore(db_path)
+
+    assert db_path.exists()
+    sidecars = {
+        path.name
+        for path in db_path.parent.iterdir()
+        if path.name.startswith("ems_dashboard.sqlite")
+    }
+    assert "ems_dashboard.sqlite" in sidecars
+    assert sidecars <= {
+        "ems_dashboard.sqlite",
+        "ems_dashboard.sqlite-wal",
+        "ems_dashboard.sqlite-shm",
+    }
+
+
 def test_latest_refreshes_energy_stats_from_daily_aggregates(tmp_path):
     path = tmp_path / "dashboard.sqlite"
     DashboardStore(path)
