@@ -5,6 +5,9 @@ services:
     image: ghcr.io/basecubedev/ems-solarflow-api-control:latest
     container_name: ems-solarflow-api-control
     restart: unless-stopped
+    environment:
+      PUID: "${PUID:-}"
+      PGID: "${PGID:-}"
     ports:
       - "8080:8080"
     volumes:
