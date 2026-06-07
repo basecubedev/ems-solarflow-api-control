@@ -532,7 +532,13 @@ installations.
 
 ## License
 
-This project is licensed under the Apache License 2.0. Third-party dependencies
-and dashboard assets remain under their respective upstream licenses.
+This project is licensed under the GNU Affero General Public License v3.0 or
+later.
+
+The AGPLv3 ensures that modified versions of this software, including versions
+used to provide a network service, remain available to the community under the
+same license terms.
+
+Third-party dependencies remain under their respective upstream licenses.
 
 See [LICENSE](LICENSE) and [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).

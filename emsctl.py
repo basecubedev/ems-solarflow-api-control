@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Safe runtime-state editor for ems-solarflow-api-control."""
 
 import argparse

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 FROM python:3.14-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
