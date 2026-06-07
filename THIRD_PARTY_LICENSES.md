@@ -1,7 +1,8 @@
 # Third-Party Licenses
 
-This project source code is licensed under the Apache License 2.0. Third-party
-dependencies and assets remain under their original upstream licenses.
+This project source code is licensed under the GNU Affero General Public
+License v3.0 or later. Third-party dependencies and assets remain under their
+original upstream licenses.
 
 ## Dashboard Icons And Frontend Assets
 
@@ -15,10 +16,18 @@ Current status:
 The current SolarFlow dashboard does not import `@phosphor-icons/react`,
 `@tabler/icons-react`, `lucide-react`, or another third-party icon package.
 The inline SVG dashboard icons are part of this project and are covered by the
-project Apache-2.0 license. They are not copied from a third-party icon
+project AGPL-3.0-or-later license. They are not copied from a third-party icon
 library.
 
 No visible in-dashboard attribution is required for the current icon set.
+
+## Python Dependencies
+
+Direct Python dependencies keep their upstream licenses:
+
+- `requests`: Apache-2.0
+- `cryptography`: Apache-2.0 OR BSD-3-Clause
+- `pytest`: MIT
 
 ## Packaging
 

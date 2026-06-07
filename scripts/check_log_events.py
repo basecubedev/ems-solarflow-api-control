@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Check structured EMS logs for required or forbidden event names."""
 
 import argparse

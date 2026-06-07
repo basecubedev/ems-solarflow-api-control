@@ -43,5 +43,6 @@ runtime-state.json.*.tmp
 
 # Python cache artifacts
 __pycache__/
+.pytest_cache/
 *.py[cod]
 *$py.class
