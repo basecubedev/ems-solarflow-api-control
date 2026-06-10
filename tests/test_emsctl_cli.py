@@ -391,7 +391,7 @@ def test_emsctl_completion_bash_contains_commands_and_configured_device(tmp_path
     result = run_emsctl(tmp_path, "completion", "bash")
 
     assert result.returncode == 0, result.stderr
-    assert "status system device ha ha-control winter dashboard interactive menu examples completion help" in result.stdout
+    assert "status system device ha ha-control winter dashboard diagnose interactive menu examples completion help" in result.stdout
     assert "set-password change-password disable-auth auth-status" in result.stdout
     assert "off eco standard" in result.stdout
     assert "WR1" in result.stdout
@@ -402,7 +402,7 @@ def test_emsctl_completion_zsh_contains_commands_and_configured_device(tmp_path)
     result = run_emsctl(tmp_path, "completion", "zsh")
 
     assert result.returncode == 0, result.stderr
-    assert "commands=(status system device ha ha-control winter dashboard interactive menu examples completion help)" in result.stdout
+    assert "commands=(status system device ha ha-control winter dashboard diagnose interactive menu examples completion help)" in result.stdout
     assert "dashboard_actions=(set-password change-password disable-auth auth-status)" in result.stdout
     assert "offgrid_modes=(off eco standard)" in result.stdout
     assert "devices=(WR1)" in result.stdout
@@ -418,12 +418,67 @@ def test_emsctl_examples_and_completion_do_not_modify_existing_runtime_state(tmp
         ("examples",),
         ("completion", "bash"),
         ("completion", "zsh"),
+        ("diagnose",),
+        ("diagnose", "--json"),
     ]
 
     for command in commands:
         result = run_emsctl(tmp_path, *command)
         assert result.returncode == 0, result.stderr
         assert runtime_path.read_text() == before
+
+
+def test_emsctl_diagnose_text_is_read_only_and_human_readable(tmp_path):
+    result = run_emsctl(tmp_path, "diagnose")
+
+    assert result.returncode == 0, result.stderr
+    assert "EMS Diagnose" in result.stdout
+    assert "Mode:" in result.stdout
+    assert "[OK] Python version:" in result.stdout
+    assert "[OK] config.json is valid JSON" in result.stdout
+    assert "[WARN] Missing config key:" in result.stdout
+    assert "Result: warning" in result.stdout
+    assert not (tmp_path / "runtime-state.json").exists()
+
+
+def test_emsctl_diagnose_json_is_read_only_and_hides_sensitive_values(tmp_path):
+    secret = "secret-token-that-must-not-appear"
+    config_path = tmp_path / "config.json"
+    write_config(config_path)
+    config = json.loads(config_path.read_text())
+    config["ha"]["token"] = secret
+    config_path.write_text(json.dumps(config))
+
+    result = run_emsctl(tmp_path, "diagnose", "--json")
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "warning"
+    assert payload["mode"] in ("native", "container")
+    assert payload["summary"]["warning"] >= 1
+    assert any(
+        check["code"] == "missing_config_key"
+        for check in payload["checks"]
+    )
+    assert secret not in result.stdout
+    assert not (tmp_path / "runtime-state.json").exists()
+
+
+def test_emsctl_diagnose_reports_invalid_config_without_traceback(tmp_path):
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{invalid json")
+
+    result = run_emsctl(tmp_path, "diagnose", "--json")
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "error"
+    assert any(
+        check["code"] == "config_invalid_json"
+        for check in payload["checks"]
+    )
+    assert "Traceback" not in result.stderr
+    assert not (tmp_path / "runtime-state.json").exists()
 
 
 def test_emsctl_interactive_status_path(tmp_path):

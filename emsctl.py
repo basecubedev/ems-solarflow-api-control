@@ -7,6 +7,7 @@ import getpass
 import json
 import math
 import os
+import platform
 import re
 import sys
 
@@ -26,6 +27,7 @@ TOP_LEVEL_COMMANDS = (
     "ha-control",
     "winter",
     "dashboard",
+    "diagnose",
     "interactive",
     "menu",
     "examples",
@@ -63,6 +65,7 @@ Command overview:
   ha-control enable|disable       Toggle Home Assistant helper control
   winter enable|disable|status    Toggle or inspect winter mode
   dashboard <command>             Manage dashboard write-mode authentication
+  diagnose [--json]               Run read-only local diagnostics
   interactive                     Open a menu for common runtime edits
   examples                        Print a longer command cookbook
   completion bash|zsh             Generate optional shell completion
@@ -76,6 +79,7 @@ Common examples:
   python3 emsctl.py device WR1 offgrid eco
   python3 emsctl.py winter enable
   python3 emsctl.py dashboard auth-status
+  python3 emsctl.py diagnose
 
 Tip:
   Run `python3 emsctl.py` for a short start screen.
@@ -101,6 +105,7 @@ Common commands:
   python3 emsctl.py device WR1 max-power 600
   python3 emsctl.py device WR1 offgrid eco
   python3 emsctl.py dashboard auth-status
+  python3 emsctl.py diagnose
 """
 
 EXAMPLES_TEXT = """\
@@ -144,6 +149,10 @@ Dashboard authentication:
   python3 emsctl.py dashboard set-password
   python3 emsctl.py dashboard change-password
   python3 emsctl.py dashboard disable-auth
+
+Diagnostics:
+  python3 emsctl.py diagnose
+  python3 emsctl.py diagnose --json
 
 Explicit config/runtime paths:
   python3 emsctl.py --config /etc/ems/config.json status
@@ -346,6 +355,26 @@ omitted from normal help output.
         help="Show dashboard authentication status."
     )
 
+    diagnose = subparsers.add_parser(
+        "diagnose",
+        help="Run read-only local diagnostics.",
+        description=(
+            "Run read-only diagnostics for config, runtime-state, data paths, "
+            "and container mounts without contacting external services."
+        ),
+        epilog="""\
+Examples:
+  python3 emsctl.py diagnose
+  python3 emsctl.py diagnose --json
+""",
+        formatter_class=EMSHelpFormatter,
+    )
+    diagnose.add_argument(
+        "--json",
+        action="store_true",
+        help="Print machine-readable diagnostic output.",
+    )
+
     subparsers.add_parser(
         "interactive",
         help="Open a menu for common runtime edits.",
@@ -456,6 +485,581 @@ def resolve_dashboard_auth_path(args, config):
         path = os.path.join(BASE_DIR, path)
 
     return path
+
+
+def resolve_project_path(path):
+    if not path:
+        return path
+    if os.path.isabs(path):
+        return path
+    return os.path.join(BASE_DIR, path)
+
+
+def diagnose_add(checks, section, level, code, message, **details):
+    checks.append({
+        "section": section,
+        "level": level,
+        "code": code,
+        "message": message,
+        "details": details,
+    })
+
+
+def diagnose_json_file(path):
+    if not os.path.exists(path):
+        return None, "missing"
+    try:
+        with open(path) as f:
+            return json.load(f), None
+    except Exception as exc:
+        return None, str(exc)
+
+
+def diagnose_read_json_if_nonempty(path):
+    if not os.path.exists(path):
+        return None
+    try:
+        if os.path.getsize(path) == 0:
+            return None
+        with open(path) as f:
+            json.load(f)
+        return None
+    except Exception as exc:
+        return str(exc)
+
+
+def diagnose_check_path(checks, section, code_prefix, path, label, *,
+                        expect_file=False, expect_dir=False,
+                        require_exists=True, check_read=False,
+                        check_write=False, missing_level="error"):
+    if os.path.exists(path):
+        diagnose_add(
+            checks,
+            section,
+            "ok",
+            f"{code_prefix}_exists",
+            f"{label} exists: {path}",
+            path=path,
+        )
+    elif require_exists:
+        diagnose_add(
+            checks,
+            section,
+            missing_level,
+            f"{code_prefix}_missing",
+            f"{label} missing: {path}",
+            path=path,
+        )
+        return
+    else:
+        diagnose_add(
+            checks,
+            section,
+            "warning",
+            f"{code_prefix}_missing",
+            f"{label} does not exist: {path}",
+            path=path,
+        )
+        return
+
+    if expect_file and not os.path.isfile(path):
+        diagnose_add(
+            checks,
+            section,
+            "error",
+            f"{code_prefix}_not_file",
+            f"{label} is not a file: {path}",
+            path=path,
+        )
+    if expect_dir and not os.path.isdir(path):
+        diagnose_add(
+            checks,
+            section,
+            "error",
+            f"{code_prefix}_not_dir",
+            f"{label} is not a directory: {path}",
+            path=path,
+        )
+    if check_read:
+        level = "ok" if os.access(path, os.R_OK) else "error"
+        diagnose_add(
+            checks,
+            section,
+            level,
+            f"{code_prefix}_readable",
+            f"{label} readable: {path}" if level == "ok" else f"{label} not readable: {path}",
+            path=path,
+        )
+    if check_write:
+        level = "ok" if os.access(path, os.W_OK) else "error"
+        diagnose_add(
+            checks,
+            section,
+            level,
+            f"{code_prefix}_writable",
+            f"{label} writable: {path}" if level == "ok" else f"{label} not writable: {path}",
+            path=path,
+        )
+
+
+def diagnose_parent_path(checks, section, code_prefix, path, label,
+                         *, check_write=False, missing_level="error"):
+    parent = os.path.dirname(path) or "."
+    diagnose_check_path(
+        checks,
+        section,
+        f"{code_prefix}_parent",
+        parent,
+        f"{label} parent directory",
+        expect_dir=True,
+        check_write=check_write,
+        missing_level=missing_level,
+    )
+
+
+def diagnose_missing_template_keys(config_data, template_data):
+    missing = []
+
+    def walk(current, template, prefix):
+        if isinstance(template, dict):
+            current_dict = current if isinstance(current, dict) else {}
+            for key, value in template.items():
+                if str(key).startswith("_comment"):
+                    continue
+                path = f"{prefix}.{key}" if prefix else str(key)
+                if key not in current_dict:
+                    missing.append(path)
+                    continue
+                walk(current_dict[key], value, path)
+            return
+
+        if (
+            isinstance(template, list)
+            and template
+            and isinstance(template[0], dict)
+            and isinstance(current, list)
+        ):
+            for index, item in enumerate(current):
+                if isinstance(item, dict):
+                    walk(item, template[0], f"{prefix}.{index}")
+
+    walk(config_data, template_data, "")
+    return sorted(missing)
+
+
+def diagnose_container_mode():
+    signals = []
+
+    if os.path.exists("/.dockerenv"):
+        signals.append("/.dockerenv")
+
+    for cgroup_path in ("/proc/1/cgroup", "/proc/self/cgroup"):
+        try:
+            with open(cgroup_path) as f:
+                content = f.read()
+        except OSError:
+            continue
+        lowered = content.lower()
+        if any(token in lowered for token in ("docker", "containerd", "kubepods", "libpod", "podman")):
+            signals.append(cgroup_path)
+
+    for path in ("/app/config", "/app/data"):
+        if os.path.exists(path):
+            signals.append(path)
+
+    if signals:
+        return "container", signals
+    return "native", []
+
+
+def diagnose_path_within(path, parent):
+    try:
+        return os.path.commonpath([
+            os.path.abspath(path),
+            os.path.abspath(parent),
+        ]) == os.path.abspath(parent)
+    except ValueError:
+        return False
+
+
+def diagnose_uid_gid(path):
+    try:
+        stat_result = os.stat(path)
+    except OSError as exc:
+        return None, str(exc)
+    return {
+        "uid": stat_result.st_uid,
+        "gid": stat_result.st_gid,
+    }, None
+
+
+def diagnose_collect(args):
+    checks = []
+    mode, mode_sources = diagnose_container_mode()
+
+    uid = os.getuid() if hasattr(os, "getuid") else None
+    gid = os.getgid() if hasattr(os, "getgid") else None
+    diagnose_add(
+        checks,
+        "environment",
+        "ok",
+        "python_version",
+        f"Python version: {platform.python_version()}",
+        version=platform.python_version(),
+    )
+    diagnose_add(
+        checks,
+        "environment",
+        "ok",
+        "platform",
+        f"Platform: {platform.platform()}",
+        platform=platform.platform(),
+        system=platform.system(),
+        release=platform.release(),
+    )
+    diagnose_add(
+        checks,
+        "environment",
+        "ok",
+        "current_working_directory",
+        f"Current working directory: {os.getcwd()}",
+        cwd=os.getcwd(),
+    )
+    if uid is not None and gid is not None:
+        diagnose_add(
+            checks,
+            "environment",
+            "ok",
+            "current_user",
+            f"Current user: uid={uid} gid={gid}",
+            uid=uid,
+            gid=gid,
+        )
+        root_level = "warning" if uid == 0 else "ok"
+        diagnose_add(
+            checks,
+            "environment",
+            root_level,
+            "process_root",
+            "Process runs as root" if uid == 0 else "Process does not run as root",
+            uid=uid,
+        )
+
+    config_path = args.config
+    template_path = os.path.join(BASE_DIR, "config.template.json")
+    data_dir = os.path.join(BASE_DIR, "data")
+
+    diagnose_check_path(
+        checks,
+        "project",
+        "emsctl",
+        os.path.join(BASE_DIR, "emsctl.py"),
+        "emsctl.py",
+        expect_file=True,
+        check_read=True,
+    )
+    diagnose_check_path(
+        checks,
+        "project",
+        "config",
+        config_path,
+        "config.json",
+        expect_file=True,
+        check_read=True,
+    )
+    diagnose_check_path(
+        checks,
+        "project",
+        "config_template",
+        template_path,
+        "config.template.json",
+        expect_file=True,
+        check_read=True,
+    )
+    diagnose_check_path(
+        checks,
+        "project",
+        "data_dir",
+        data_dir,
+        "data directory",
+        expect_dir=True,
+        check_read=True,
+        check_write=True,
+        missing_level="warning",
+    )
+
+    config_data, config_error = diagnose_json_file(config_path)
+    template_data, template_error = diagnose_json_file(template_path)
+
+    if config_error is None:
+        if isinstance(config_data, dict):
+            diagnose_add(checks, "config", "ok", "config_valid_json", "config.json is valid JSON", path=config_path)
+        else:
+            diagnose_add(checks, "config", "error", "config_not_object", "config.json must contain a JSON object", path=config_path)
+            config_data = {}
+    elif config_error == "missing":
+        diagnose_add(checks, "config", "error", "config_missing", f"config.json missing: {config_path}", path=config_path)
+        config_data = {}
+    else:
+        diagnose_add(checks, "config", "error", "config_invalid_json", f"config.json is invalid JSON: {config_error}", path=config_path)
+        config_data = {}
+
+    if template_error is None:
+        if isinstance(template_data, dict):
+            diagnose_add(checks, "config", "ok", "template_valid_json", "config.template.json is valid JSON", path=template_path)
+        else:
+            diagnose_add(checks, "config", "error", "template_not_object", "config.template.json must contain a JSON object", path=template_path)
+            template_data = {}
+    elif template_error == "missing":
+        diagnose_add(checks, "config", "error", "template_missing", f"config.template.json missing: {template_path}", path=template_path)
+        template_data = {}
+    else:
+        diagnose_add(checks, "config", "error", "template_invalid_json", f"config.template.json is invalid JSON: {template_error}", path=template_path)
+        template_data = {}
+
+    if isinstance(config_data, dict) and isinstance(template_data, dict) and template_data:
+        missing_keys = diagnose_missing_template_keys(config_data, template_data)
+        if missing_keys:
+            for key in missing_keys:
+                diagnose_add(
+                    checks,
+                    "config",
+                    "warning",
+                    "missing_config_key",
+                    f"Missing config key: {key}",
+                    key=key,
+                )
+        else:
+            diagnose_add(checks, "config", "ok", "config_keys_complete", "config.json contains all template keys")
+
+    runtime_path = resolve_runtime_path(args, config_data)
+    diagnose_parent_path(
+        checks,
+        "project",
+        "runtime_state",
+        runtime_path,
+        "runtime-state path",
+        check_write=True,
+        missing_level="warning",
+    )
+
+    dashboard_config = config_data.get("dashboard", {}) if isinstance(config_data, dict) else {}
+    database_path = None
+    if isinstance(dashboard_config, dict):
+        database_path = dashboard_config.get("database_path")
+    if database_path:
+        database_path = resolve_project_path(str(database_path))
+        diagnose_parent_path(
+            checks,
+            "project",
+            "dashboard_database",
+            database_path,
+            "dashboard database path",
+            check_write=True,
+            missing_level="warning",
+        )
+
+    diagnose_parent_path(
+        checks,
+        "runtime_state",
+        "runtime_state",
+        runtime_path,
+        "runtime-state file",
+        check_write=True,
+        missing_level="warning",
+    )
+    diagnose_check_path(
+        checks,
+        "runtime_state",
+        "runtime_state_file",
+        runtime_path,
+        "runtime-state.json",
+        expect_file=True,
+        require_exists=False,
+        check_read=True,
+        check_write=True,
+    )
+    runtime_json_error = diagnose_read_json_if_nonempty(runtime_path)
+    if runtime_json_error is None and os.path.exists(runtime_path) and os.path.getsize(runtime_path) > 0:
+        diagnose_add(checks, "runtime_state", "ok", "runtime_state_valid_json", "runtime-state.json is valid JSON", path=runtime_path)
+    elif runtime_json_error:
+        diagnose_add(checks, "runtime_state", "error", "runtime_state_invalid_json", f"runtime-state.json is invalid JSON: {runtime_json_error}", path=runtime_path)
+
+    if database_path:
+        diagnose_parent_path(
+            checks,
+            "data",
+            "dashboard_database",
+            database_path,
+            "dashboard database",
+            check_write=True,
+            missing_level="warning",
+        )
+
+    system_config = config_data.get("system", {}) if isinstance(config_data, dict) else {}
+    if isinstance(system_config, dict):
+        for key in ("log_path", "log_file"):
+            log_path = system_config.get(key)
+            if log_path:
+                log_path = resolve_project_path(str(log_path))
+                diagnose_parent_path(
+                    checks,
+                    "logs",
+                    key,
+                    log_path,
+                    f"{key}",
+                    check_write=True,
+                    missing_level="warning",
+                )
+
+    if mode == "container":
+        for source in mode_sources:
+            diagnose_add(
+                checks,
+                "docker",
+                "ok",
+                "container_detected",
+                f"Container detected via {source}",
+                source=source,
+            )
+
+        pid1_identity, pid1_error = diagnose_uid_gid("/proc/1")
+        if pid1_identity:
+            diagnose_add(
+                checks,
+                "docker",
+                "ok",
+                "pid1_user",
+                f"PID 1 user: uid={pid1_identity['uid']} gid={pid1_identity['gid']}",
+                **pid1_identity,
+            )
+        else:
+            diagnose_add(checks, "docker", "warning", "pid1_user_unavailable", f"PID 1 UID/GID unavailable: {pid1_error}")
+
+        if uid is not None and gid is not None:
+            diagnose_add(
+                checks,
+                "docker",
+                "ok",
+                "container_process_user",
+                f"Current process user: uid={uid} gid={gid}",
+                uid=uid,
+                gid=gid,
+            )
+            if uid == 0:
+                diagnose_add(
+                    checks,
+                    "docker",
+                    "warning",
+                    "container_process_root",
+                    "Container process runs as root",
+                    uid=uid,
+                )
+
+        diagnose_check_path(
+            checks,
+            "docker",
+            "app_config",
+            "/app/config",
+            "/app/config",
+            expect_dir=True,
+            check_read=True,
+            missing_level="warning",
+        )
+        diagnose_check_path(
+            checks,
+            "docker",
+            "app_data",
+            "/app/data",
+            "/app/data",
+            expect_dir=True,
+            check_read=True,
+            check_write=True,
+            missing_level="warning",
+        )
+        diagnose_check_path(
+            checks,
+            "docker",
+            "app_config_config",
+            "/app/config/config.json",
+            "/app/config/config.json",
+            expect_file=True,
+            check_read=True,
+            missing_level="warning",
+        )
+
+        for label, path in (
+            ("runtime-state path", runtime_path),
+            ("dashboard database path", database_path),
+        ):
+            if not path:
+                continue
+            if diagnose_path_within(path, "/app/data"):
+                diagnose_add(checks, "docker", "ok", "container_data_path", f"{label} resolves below /app/data: {path}", path=path)
+            else:
+                diagnose_add(checks, "docker", "warning", "container_data_path_outside_app_data", f"{label} does not resolve below /app/data: {path}", path=path)
+
+    summary = {
+        "ok": sum(1 for check in checks if check["level"] == "ok"),
+        "warning": sum(1 for check in checks if check["level"] == "warning"),
+        "error": sum(1 for check in checks if check["level"] == "error"),
+    }
+    status = "error" if summary["error"] else "warning" if summary["warning"] else "ok"
+    return {
+        "status": status,
+        "mode": mode,
+        "mode_sources": mode_sources,
+        "summary": summary,
+        "checks": checks,
+    }
+
+
+def print_diagnose_text(report):
+    mode_labels = {
+        "native": "native installation",
+        "container": "container",
+        "unknown": "unknown",
+    }
+    section_labels = {
+        "environment": "Environment",
+        "project": "Project structure",
+        "config": "Config",
+        "runtime_state": "Runtime state",
+        "data": "Data/database",
+        "logs": "Logs",
+        "docker": "Docker",
+    }
+    order = ("environment", "project", "config", "runtime_state", "data", "logs", "docker")
+    level_labels = {
+        "ok": "OK",
+        "warning": "WARN",
+        "error": "ERROR",
+    }
+
+    print("EMS Diagnose")
+    print()
+    print(f"Mode: {mode_labels.get(report['mode'], report['mode'])}")
+
+    for section in order:
+        checks = [check for check in report["checks"] if check["section"] == section]
+        if not checks:
+            continue
+        print()
+        print(section_labels.get(section, section.title()))
+        for check in checks:
+            print(f"[{level_labels.get(check['level'], check['level'].upper())}] {check['message']}")
+
+    print()
+    print(f"Result: {report['status']}")
+
+
+def handle_diagnose_command(args):
+    report = diagnose_collect(args)
+    if args.json:
+        print(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        print_diagnose_text(report)
+    return 0
 
 
 def int_value(value, field, minimum=0):
@@ -587,7 +1191,7 @@ _emsctl_py_completion()
   command=""
   for ((i = 1; i < COMP_CWORD; i++)); do
     case "${{COMP_WORDS[i]}}" in
-      status|system|device|ha|ha-control|winter|dashboard|interactive|menu|examples|completion|help)
+      status|system|device|ha|ha-control|winter|dashboard|diagnose|interactive|menu|examples|completion|help)
         command="${{COMP_WORDS[i]}}"
         break
         ;;
@@ -1198,6 +1802,10 @@ def main(argv=None):
 
     try:
         args.config = resolve_config_path(args)
+
+        if args.command == "diagnose":
+            return handle_diagnose_command(args)
+
         config = load_config(args.config)
 
         if args.command == "help":
