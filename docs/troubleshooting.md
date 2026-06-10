@@ -22,11 +22,15 @@ profile.
 
 ## Basic Checks
 
-Run local diagnostics first:
+When you're not sure where to start, local diagnostics can give a quick
+overview:
 
 ```bash
 python3 emsctl.py diagnose
 python3 emsctl.py diagnose --deep
+python3 emsctl.py diagnose --control
+python3 emsctl.py diagnose --control --sample-seconds 30
+python3 emsctl.py diagnose --control-quality --sample-seconds 60
 python3 emsctl.py diagnose --json
 python3 emsctl.py diagnose --support-bundle
 ```
@@ -38,13 +42,168 @@ short-timeout read-only network probes only. `--support-bundle` writes a
 redacted ZIP for GitHub/support requests. Exit code `1` means at least one
 diagnostic error was found; warnings still exit `0`.
 
+Use control diagnostics when EMS output looks surprising:
+
+```bash
+python3 emsctl.py diagnose --control
+python3 emsctl.py diagnose --control --json
+python3 emsctl.py diagnose --control --sample-seconds 30
+```
+
+The control report explains the local regulation path: current grid power,
+filtered grid power, calculated target, final output, deadband state, control
+enabled/disabled state, dry-run state, device allocation, SOC protection, and
+likely root causes. Common findings:
+
+- `Control disabled`: runtime control is off.
+- `Dry run enabled`: EMS calculates targets but does not write hardware.
+- `Deadband active`: filtered meter power is inside the configured threshold.
+- `Grid meter signal appears noisy`: local samples oscillate or vary strongly.
+- `Grid meter values are stale`: confirmed meter timestamps stopped updating or
+  repeated read failures were reported. Repeated grid values alone do not mean
+  the meter is stale.
+- `Minimum SOC protection active`: one or more devices are protected by SOC.
+
+Use control quality diagnostics when the system regulates but the result looks
+poor over time:
+
+```bash
+python3 emsctl.py diagnose --control-quality --sample-seconds 60
+python3 emsctl.py diagnose --quality --json
+```
+
+Interpretation:
+
+- Export/import quality measures how close the sampled grid power is to the
+  zero-export target. Positive values are import; negative values are export.
+- Export peaks show the strongest negative grid-power samples. Small short
+  peaks can happen; large or long export periods mean EMS is not consistently
+  holding zero export.
+- The regulation quality score is a coarse diagnostic indicator. It penalizes
+  average deviation from zero, export duration, export peak size, and large
+  import peaks, then classifies the result as `excellent`, `good`,
+  `acceptable`, `poor`, or `critical`.
+- PV diagnostics can identify missing PV telemetry, likely system/device
+  output limits, or PV that appears unused. It cannot prove a hardware fault on
+  its own.
+- SOC balancing warnings highlight large SOC spread, lower-SOC devices doing
+  too much work, and devices protected by minimum SOC.
+
 Inside Docker:
 
 ```bash
 docker compose exec ems python3 emsctl.py diagnose
+docker compose exec ems python3 emsctl.py diagnose --control
+docker compose exec ems python3 emsctl.py diagnose --control-quality --sample-seconds 60
 docker compose exec ems python3 emsctl.py diagnose --deep
 docker compose exec ems python3 emsctl.py diagnose --support-bundle
 ```
+
+## EMS Not Regulating
+
+Run:
+
+```bash
+python3 emsctl.py diagnose --control
+```
+
+Review `Control Snapshot`, `Decision Explanation`, `Write Path`, and `Likely
+Causes`. Common findings include `Control disabled`, `Dry run enabled`,
+`Deadband active`, device offline state, and minimum SOC protection.
+
+Runtime-state file age is not used as proof of stale EMS control activity. If
+no live control timestamp is available, the control staleness check is skipped
+and shown as informational output.
+
+## Export Peaks
+
+Run:
+
+```bash
+python3 emsctl.py diagnose --control-quality --sample-seconds 60
+```
+
+Review `Export / Import Quality` and `Regulation Quality`. Positive grid power
+is import. Negative grid power is export. Short small export peaks can be
+normal; large peaks or long export duration mean EMS is not consistently
+holding the zero-export target.
+
+## Uneven Battery Usage
+
+Run:
+
+```bash
+python3 emsctl.py diagnose --control-quality --sample-seconds 60
+```
+
+Review `SOC Balancing`. A warning can indicate high SOC spread, a lower-SOC
+device contributing more than expected, a protected min-SOC device, or runtime
+max-power limits that prevent balanced distribution.
+
+## Hardware Communication Problems
+
+Run:
+
+```bash
+python3 emsctl.py diagnose --hardware
+```
+
+This runs short-timeout read-only checks for configured Shelly, EcoTracker, and
+Zendure endpoints. It does not write to devices. Use it when telemetry is
+missing, a grid meter cannot be parsed, or configured devices appear
+unreachable.
+
+## Docker Problems
+
+Run:
+
+```bash
+python3 emsctl.py diagnose
+```
+
+Inside Docker:
+
+```bash
+docker compose exec ems python3 emsctl.py diagnose
+```
+
+Review container detection, `/app/config`, `/app/data`, UID/GID ownership,
+runtime-state path location, and whether mutable files resolve below
+`/app/data`.
+
+## Opening a GitHub Issue
+
+Diagnostics are optional. You can open an issue even if you cannot run them or
+are not sure which command applies to your setup.
+
+If available, attach a support bundle to help identify issues faster.
+
+Native Python:
+
+```bash
+python3 emsctl.py diagnose
+python3 emsctl.py diagnose --support-bundle
+```
+
+Docker:
+
+```bash
+docker compose exec ems python3 emsctl.py diagnose
+docker compose exec ems python3 emsctl.py diagnose --support-bundle
+```
+
+The support bundle is redacted and helps identify common installation,
+runtime, hardware, control, and performance problems without exposing tokens,
+passwords, serial numbers, dashboard auth files, or database contents.
+
+Helpful links:
+
+- [README troubleshooting section](../README.md#troubleshooting--diagnostics)
+- [CLI documentation](cli.md)
+
+## Optional Local Validation
+
+If you want to collect more detail, these local checks can help.
 
 Compile:
 
@@ -766,7 +925,7 @@ Common causes:
 
 ## Safe Diagnostic Workflow
 
-Use this order before opening an issue:
+For deeper local validation, this order is a useful starting point:
 
 ```bash
 python3 -B ems-solarflow-api-control.py --simulate --max-cycles 1
@@ -787,7 +946,7 @@ at least one runtime device enabled=true
 
 ## Issue Report Checklist
 
-Include:
+Share any of these details that are easy to provide:
 
 ```text
 EMS version / commit:
@@ -806,7 +965,7 @@ min_output_limit:
 output_control settings changed from default: yes/no
 ```
 
-Include one complete EMS cycle with these events if available:
+If available, one complete EMS cycle with these events can help:
 
 ```text
 startup

@@ -42,6 +42,8 @@ or other external services.
 ```bash
 python3 emsctl.py diagnose
 python3 emsctl.py diagnose --deep
+python3 emsctl.py diagnose --control
+python3 emsctl.py diagnose --control --sample-seconds 30
 python3 emsctl.py diagnose --json
 python3 emsctl.py diagnose --support-bundle
 ```
@@ -55,9 +57,27 @@ Modes:
 - `--hardware` performs explicit short-timeout read-only network probes for
   configured grid meters and Zendure read endpoints. It never writes hardware
   state.
+- `--control` explains the current regulation path from local config and
+  runtime-state: grid power, filtered grid power, target output, final output,
+  deadband state, device allocation, SOC protection, write-path blockers, and
+  likely root causes.
+- `--sample-seconds N` can be combined with `--control` to collect local
+  runtime-state meter samples. The output reports average/min/max, standard
+  deviation, sign changes, and stale/noisy meter hints.
 - `--support-bundle` creates a redacted ZIP with `diagnose.txt`,
   `diagnose.json`, redacted config/runtime-state snapshots, recent redacted log
   lines, and project metadata.
+
+Control interpretation:
+
+- `Control disabled` means runtime control is explicitly off.
+- `Dry run enabled` means EMS calculates targets but skips hardware writes.
+- `Deadband active` means the filtered meter value is inside the configured
+  threshold and output may be held.
+- `Grid meter signal appears noisy` means frequent sign changes or high
+  variance were observed in local samples.
+- `Minimum SOC protection active` means at least one device is at or below its
+  minimum SOC.
 
 Exit codes:
 
@@ -96,6 +116,7 @@ docker compose exec ems python emsctl.py status
 docker compose exec ems python emsctl.py interactive
 docker compose exec ems python emsctl.py dashboard auth-status
 docker compose exec ems python emsctl.py diagnose
+docker compose exec ems python emsctl.py diagnose --control
 docker compose exec ems python emsctl.py diagnose --deep
 docker compose exec ems python emsctl.py diagnose --support-bundle
 ```

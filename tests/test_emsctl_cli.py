@@ -3,6 +3,7 @@ import json
 import subprocess
 import sys
 import zipfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -83,6 +84,47 @@ def run_emsctl_no_args(tmp_path):
 
 def runtime_state(tmp_path):
     return json.loads((tmp_path / "runtime-state.json").read_text())
+
+
+def write_control_runtime(tmp_path, **overrides):
+    payload = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "grid_power_w": 142,
+        "filtered_load_w": 131,
+        "inverter_output_w": 130,
+        "controller": {
+            "enabled": True,
+            "effective_target_total_w": 130,
+            "commanded_total_w": 130,
+            "filtered_load_w": 131,
+        },
+        "system": {
+            "enabled": True,
+            "max_total_power": 900,
+            "min_output_limit": 35,
+            "loop_interval": 5,
+        },
+        "winter": {
+            "enabled": False,
+        },
+        "devices": {
+            "WR1": {
+                "online": True,
+                "enabled": True,
+                "soc": 55,
+                "min_soc": 15,
+                "allocated_target_w": 130,
+                "target_w": 130,
+                "output_w": 130,
+                "max_power": 800,
+                "output_limit_w": 800,
+            }
+        },
+    }
+    for key, value in overrides.items():
+        payload[key] = value
+    (tmp_path / "runtime-state.json").write_text(json.dumps(payload))
+    return payload
 
 
 def write_discovery_config(path, runtime_state_path=None, auth_file=None):
@@ -480,11 +522,11 @@ def test_emsctl_diagnose_json_contains_v2_structure(tmp_path):
     assert payload["mode"] in ("native", "container")
     assert "mode_sources" in payload
     assert "summary" in payload
-    assert payload["options"] == {
-        "deep": False,
-        "hardware": False,
-        "support_bundle": False,
-    }
+    assert payload["options"]["deep"] is False
+    assert payload["options"]["hardware"] is False
+    assert payload["options"]["support_bundle"] is False
+    assert payload["options"]["control"] is False
+    assert payload["options"]["sample_seconds"] == 0
     assert "generated_at" in payload
     assert payload["project"]["base_dir"]
     assert payload["project"]["config_path"].endswith("config.json")
@@ -664,6 +706,293 @@ def test_emsctl_diagnose_support_bundle_redacts_secrets(tmp_path):
     assert secret not in combined
     assert serial not in combined
     assert "<redacted>" in combined
+
+
+def test_emsctl_diagnose_control_json_output(tmp_path):
+    write_control_runtime(tmp_path)
+
+    result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["options"]["control"] is True
+    assert payload["control"]["snapshot"]["grid_power_w"] == 142
+    assert payload["control"]["snapshot"]["filtered_grid_power_w"] == 131
+    assert payload["control"]["snapshot"]["target_output_w"] == 130
+    assert payload["control"]["control_path"]
+    assert "root_causes" in payload["control"]
+
+
+def test_emsctl_diagnose_control_text_explains_decision(tmp_path):
+    write_control_runtime(tmp_path)
+
+    result = run_emsctl(tmp_path, "diagnose", "--control")
+
+    assert result.returncode == 0, result.stderr
+    assert "Control Snapshot" in result.stdout
+    assert "Grid Power:" in result.stdout
+    assert "Decision Explanation" in result.stdout
+    assert "Target output calculated" in result.stdout
+
+
+def test_emsctl_diagnose_control_deadband_detection(tmp_path):
+    write_control_runtime(
+        tmp_path,
+        grid_power_w=4,
+        filtered_load_w=3,
+        controller={
+            "effective_target_total_w": 130,
+            "commanded_total_w": 130,
+            "filtered_load_w": 3,
+        },
+    )
+
+    result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["control"]["deadband"]["active"] is True
+    assert any(check["code"] == "deadband_active" for check in payload["checks"])
+
+
+def test_emsctl_diagnose_control_noisy_meter_detection(tmp_path):
+    write_control_runtime(
+        tmp_path,
+        control_samples=[-45, 52, -40, 49, -35, 45, -30, 41],
+    )
+
+    result = run_emsctl(
+        tmp_path,
+        "diagnose",
+        "--control",
+        "--sample-seconds",
+        "30",
+        "--json",
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["control"]["meter_quality"]["noisy"] is True
+    assert payload["control"]["meter_quality"]["sign_changes"] >= 7
+    assert any(check["code"] == "meter_signal_noisy" for check in payload["checks"])
+
+
+def test_emsctl_diagnose_control_repeated_meter_values_are_not_stale(tmp_path):
+    write_control_runtime(tmp_path, control_samples=[18, 18, 18, 18])
+
+    result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["control"]["meter_quality"]["stale"] is False
+    assert not any(check["code"] == "meter_signal_stale" for check in payload["checks"])
+    assert not any(
+        cause["code"] == "grid_meter_values_are_stale"
+        for cause in payload["control"]["root_causes"]
+    )
+
+
+def test_emsctl_diagnose_control_repeated_meter_values_with_changing_timestamps_are_not_stale(tmp_path):
+    now = datetime.now(timezone.utc)
+    write_control_runtime(
+        tmp_path,
+        control_samples=[
+            {"grid_power_w": 18, "timestamp": (now - timedelta(seconds=3)).isoformat()},
+            {"grid_power_w": 18, "timestamp": (now - timedelta(seconds=2)).isoformat()},
+            {"grid_power_w": 18, "timestamp": (now - timedelta(seconds=1)).isoformat()},
+        ],
+    )
+
+    result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["control"]["meter_quality"]["stale"] is False
+    assert not any(check["code"] == "meter_signal_stale" for check in payload["checks"])
+
+
+def test_emsctl_diagnose_control_repeated_meter_values_with_unchanged_timestamp_are_stale(tmp_path):
+    timestamp = datetime.now(timezone.utc).isoformat()
+    write_control_runtime(
+        tmp_path,
+        control_samples=[
+            {"grid_power_w": 18, "timestamp": timestamp},
+            {"grid_power_w": 18, "timestamp": timestamp},
+            {"grid_power_w": 18, "timestamp": timestamp},
+        ],
+    )
+
+    result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["control"]["meter_quality"]["stale"] is True
+    assert payload["control"]["meter_quality"]["stale_reason"] == "unchanged_value_and_timestamp"
+    assert any(check["code"] == "meter_signal_stale" for check in payload["checks"])
+    assert any(
+        cause["code"] == "grid_meter_values_are_stale"
+        for cause in payload["control"]["root_causes"]
+    )
+
+
+def test_emsctl_diagnose_control_meter_read_failures_are_stale(tmp_path):
+    runtime = write_control_runtime(tmp_path, control_samples=[18, 19, 18])
+    runtime["grid_meter"] = {"consecutive_read_failures": 3}
+    (tmp_path / "runtime-state.json").write_text(json.dumps(runtime))
+
+    result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["control"]["meter_quality"]["stale"] is True
+    assert payload["control"]["meter_quality"]["stale_reason"] == "read_failures"
+    assert any(check["code"] == "meter_signal_stale" for check in payload["checks"])
+
+
+def test_emsctl_diagnose_control_old_runtime_state_without_live_timestamp_is_info(tmp_path):
+    old_timestamp = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    write_control_runtime(tmp_path, timestamp=old_timestamp)
+
+    result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["control"]["runtime_state"]["stale"] is False
+    assert payload["control"]["runtime_state"]["checked"] is False
+    assert any(
+        check["code"] == "control_staleness_skipped"
+        for check in payload["checks"]
+    )
+    assert not any(
+        check["code"] == "control_runtime_state_stale"
+        for check in payload["checks"]
+    )
+
+
+def test_emsctl_diagnose_control_old_runtime_state_with_healthy_control_timestamp_is_not_stale(tmp_path):
+    old_timestamp = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    runtime = write_control_runtime(tmp_path, timestamp=old_timestamp)
+    runtime["controller"]["timestamp"] = datetime.now(timezone.utc).isoformat()
+    (tmp_path / "runtime-state.json").write_text(json.dumps(runtime))
+
+    result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["control"]["runtime_state"]["stale"] is False
+    assert payload["control"]["runtime_state"]["checked"] is True
+    assert not any(
+        check["code"] == "control_runtime_state_stale"
+        for check in payload["checks"]
+    )
+
+
+def test_emsctl_diagnose_control_stale_live_control_timestamp_is_warning(tmp_path):
+    old_timestamp = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    runtime = write_control_runtime(tmp_path)
+    runtime["controller"]["timestamp"] = old_timestamp
+    (tmp_path / "runtime-state.json").write_text(json.dumps(runtime))
+
+    result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["control"]["runtime_state"]["stale"] is True
+    assert payload["control"]["runtime_state"]["stale_source"] == "live_control_timestamp"
+    assert any(
+        check["code"] == "control_runtime_state_stale"
+        for check in payload["checks"]
+    )
+    assert not any(check["level"] == "error" for check in payload["checks"])
+
+
+def test_emsctl_diagnose_control_soc_imbalance_detection(tmp_path):
+    config_path = tmp_path / "config.json"
+    write_config(config_path)
+    config = json.loads(config_path.read_text())
+    config["devices"].append({
+        "name": "WR2",
+        "max_power": 800,
+        "pv_priority_factor": 1.0,
+        "min_soc": 15,
+    })
+    config_path.write_text(json.dumps(config))
+    runtime = write_control_runtime(tmp_path)
+    runtime["devices"]["WR1"]["soc"] = 92
+    runtime["devices"]["WR2"] = {
+        "online": True,
+        "enabled": True,
+        "soc": 55,
+        "min_soc": 15,
+        "allocated_target_w": 0,
+        "output_w": 0,
+        "max_power": 800,
+    }
+    (tmp_path / "runtime-state.json").write_text(json.dumps(runtime))
+
+    result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["control"]["soc_analysis"]["soc_imbalance_percent"] == 37
+    assert any(check["code"] == "soc_imbalance_high" for check in payload["checks"])
+
+
+def test_emsctl_diagnose_control_disabled_and_dry_run_detection(tmp_path):
+    config_path = tmp_path / "config.json"
+    write_config(config_path)
+    config = json.loads(config_path.read_text())
+    config["system"]["dry_run"] = True
+    config_path.write_text(json.dumps(config))
+    runtime = write_control_runtime(tmp_path)
+    runtime["system"]["enabled"] = False
+    (tmp_path / "runtime-state.json").write_text(json.dumps(runtime))
+
+    result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert "Control disabled" in payload["control"]["write_path"]
+    assert "Dry run enabled" in payload["control"]["write_path"]
+    assert any(check["code"] == "control_disabled" for check in payload["checks"])
+    assert any(check["code"] == "dry_run_enabled" for check in payload["checks"])
+    assert "Control disabled" in payload["control"]["root_causes"]
+    assert "Dry run enabled" in payload["control"]["root_causes"]
+
+
+def test_emsctl_diagnose_control_root_cause_min_soc(tmp_path):
+    runtime = write_control_runtime(tmp_path)
+    runtime["devices"]["WR1"]["soc"] = 14
+    runtime["devices"]["WR1"]["min_soc"] = 15
+    (tmp_path / "runtime-state.json").write_text(json.dumps(runtime))
+
+    result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert "Minimum SOC protection active" in payload["control"]["root_causes"]
+    assert payload["control"]["soc_analysis"]["min_soc_protected_devices"] == ["WR1"]
+
+
+def test_emsctl_diagnose_control_support_bundle_export(tmp_path):
+    write_control_runtime(tmp_path)
+    output_path = tmp_path / "control-support.zip"
+
+    result = run_emsctl(
+        tmp_path,
+        "diagnose",
+        "--control",
+        "--support-bundle",
+        "--output",
+        str(output_path),
+    )
+
+    assert result.returncode == 0, result.stderr
+    with zipfile.ZipFile(output_path) as bundle:
+        assert "control-diagnostics.txt" in bundle.namelist()
+        text = bundle.read("control-diagnostics.txt").decode()
+    assert "Control Snapshot" in text
+    assert "Decision Explanation" in text
 
 
 def test_emsctl_interactive_status_path(tmp_path):
