@@ -2,7 +2,7 @@
 
 [![Continuous Integration](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/simulated-regression-tests.yml/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/simulated-regression-tests.yml)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.14-blue)
-![Tests](https://img.shields.io/badge/tests-%3E200-blue)
+![Automated Tests](https://img.shields.io/badge/tests-%3E300-blue)
 
 ### Dashboard Preview
 
@@ -366,6 +366,16 @@ python3 emsctl.py device WR1 pv-priority-factor 1.3
 python3 emsctl.py device WR1 offgrid eco
 python3 emsctl.py winter enable
 python3 emsctl.py ha disable
+python3 emsctl.py diagnose
+python3 emsctl.py diagnose --deep
+python3 emsctl.py diagnose --hardware
+python3 emsctl.py diagnose --control
+python3 emsctl.py diagnose --control --sample-seconds 30
+python3 emsctl.py diagnose --control-quality --sample-seconds 60
+python3 emsctl.py diagnose --quality --json
+python3 emsctl.py diagnose --json
+python3 emsctl.py diagnose --support-bundle
+python3 emsctl.py diagnose --support-bundle --output /tmp/ems-support.zip
 ```
 
 By default, `emsctl.py` uses `--config`, then `EMS_CONFIG_FILE`, then legacy
@@ -373,10 +383,135 @@ By default, `emsctl.py` uses `--config`, then `EMS_CONFIG_FILE`, then legacy
 unchanged while letting Docker users run the Docker `emsctl.py status` command
 without an explicit `--config`.
 
+`diagnose` is local and read-only by default. `--deep` adds local operational
+checks such as SQLite, recent logs, and the dashboard loopback endpoint.
+`--hardware` performs explicit short-timeout read-only network probes.
+`--support-bundle` creates a redacted ZIP for GitHub/support requests. Exit
+code `1` means at least one diagnostic error was found; warnings still exit
+`0`.
+
+`diagnose --control` explains why EMS is currently regulating the way it is:
+grid and filtered power, calculated target, final output, deadband state,
+device distribution, SOC protection, write-path blockers such as disabled
+control or dry-run mode, and likely root causes. `--sample-seconds` adds local
+runtime-state meter samples for noise/staleness analysis.
+
+`diagnose --control-quality` evaluates higher-level operation: export/import
+quality around the zero-export target, a coarse regulation score, PV usage
+plausibility, and SOC balancing. Export peaks mean the measured grid power was
+negative during the sample window. PV diagnostics can identify missing
+telemetry, likely limits, or unused PV, but they do not prove hardware faults.
+SOC warnings point to large spreads, min-SOC protection, or lower-SOC devices
+contributing more than expected.
+
 More:
 
 - [docs/runtime-state.md](docs/runtime-state.md)
 - [docs/cli.md](docs/cli.md) includes shell completion setup for Bash and Zsh.
+
+---
+
+## Troubleshooting & Diagnostics
+
+A helpful first step is the built-in read-only diagnose command:
+
+```bash
+python3 emsctl.py diagnose
+```
+
+Docker:
+
+```bash
+docker compose exec ems python3 emsctl.py diagnose
+```
+
+This command performs a health check of the EMS installation and reports common
+configuration, runtime, Docker, dashboard, database, and hardware issues. It
+does not modify `config.json`, `runtime-state.json`, databases, Home Assistant,
+or Zendure devices.
+
+### Diagnose Levels
+
+| Command | Use When |
+| --- | --- |
+| `python3 emsctl.py diagnose` | Check installation, configuration, runtime-state paths, database/dashboard paths, and Docker/container environment. |
+| `python3 emsctl.py diagnose --deep` | Add database validation, recent log analysis, runtime validation, and additional local health checks. |
+| `python3 emsctl.py diagnose --hardware` | Run explicit short-timeout read-only checks for Shelly, EcoTracker, and Zendure connectivity. |
+| `python3 emsctl.py diagnose --control` | Explain why EMS is currently behaving the way it does. |
+| `python3 emsctl.py diagnose --control-quality --sample-seconds 60` | Evaluate how well EMS is performing: export/import quality, PV usage, and SOC balancing. |
+| `python3 emsctl.py diagnose --support-bundle` | Create a redacted ZIP for GitHub/support requests. |
+
+### What Problems Can Diagnose Find?
+
+Diagnose can find missing config keys, broken JSON files,
+permission issues, incorrect Docker mounts, container ownership problems,
+dashboard database problems, runtime-state problems, stale runtime data, grid
+meter communication issues, Shelly parsing issues, EcoTracker connectivity
+issues, Zendure connectivity issues, unexpected EMS behavior, dry-run mode
+still enabled, disabled control, export peaks, poor regulation quality, PV
+utilization issues, and SOC balancing issues.
+
+### Real Example Outputs
+
+Basic diagnose:
+
+```text
+[OK] config.json
+[OK] runtime-state.json
+[OK] dashboard database
+
+Result: OK
+```
+
+Control diagnose:
+
+```text
+Grid Power: 132 W
+Target Output: 130 W
+
+Reason:
+Grid import detected.
+Deadband inactive.
+System output adjusted.
+```
+
+Control quality diagnose:
+
+```text
+Quality Score: 92 / 100
+
+Result:
+Good regulation quality.
+
+Export Duration:
+4 %
+```
+
+### Optional Support Bundle
+
+If available, a support bundle can help identify issues faster:
+
+```bash
+python3 emsctl.py diagnose --support-bundle
+```
+
+Docker:
+
+```bash
+docker compose exec ems python3 emsctl.py diagnose --support-bundle
+```
+
+The support bundle is optional. It is redacted and helps identify common
+installation, runtime, hardware, control, and performance problems.
+
+### Diagnose Evolution
+
+- V1 Installation Diagnostics
+- V2 Deep, Hardware & Support Bundle Diagnostics
+- V3 Control Diagnostics
+- V4 Control Quality Diagnostics
+- V5 Diagnose Contract & Service Layer
+- V6 Issue Templates, Documentation Links & Pre-Merge Cleanup
 
 ## Dashboard
 
@@ -476,6 +611,30 @@ python3 scripts/check_log_events.py /tmp/ems-sim.log \
 
 Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md).
 Safety checks: [docs/safety.md](docs/safety.md).
+
+---
+
+## Getting Help
+
+If something does not work as expected:
+
+1. Check the troubleshooting guide: [docs/troubleshooting.md](docs/troubleshooting.md)
+2. Run the built-in diagnostics if convenient:
+
+   ```bash
+   python3 emsctl.py diagnose
+   ```
+
+3. Open a GitHub issue if the problem remains.
+
+For support requests, this optional command creates a redacted support bundle:
+
+```bash
+python3 emsctl.py diagnose --support-bundle
+```
+
+The support bundle is optional and contains redacted diagnostic information
+that can speed up troubleshooting.
 
 ---
 
