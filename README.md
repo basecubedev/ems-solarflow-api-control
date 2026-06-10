@@ -366,12 +366,23 @@ python3 emsctl.py device WR1 pv-priority-factor 1.3
 python3 emsctl.py device WR1 offgrid eco
 python3 emsctl.py winter enable
 python3 emsctl.py ha disable
+python3 emsctl.py diagnose
+python3 emsctl.py diagnose --deep
+python3 emsctl.py diagnose --json
+python3 emsctl.py diagnose --support-bundle
 ```
 
 By default, `emsctl.py` uses `--config`, then `EMS_CONFIG_FILE`, then legacy
 `config.json`, then `config/config.json`. This keeps existing local setups
 unchanged while letting Docker users run the Docker `emsctl.py status` command
 without an explicit `--config`.
+
+`diagnose` is local and read-only by default. `--deep` adds local operational
+checks such as SQLite, recent logs, and the dashboard loopback endpoint.
+`--hardware` performs explicit short-timeout read-only network probes.
+`--support-bundle` creates a redacted ZIP for GitHub/support requests. Exit
+code `1` means at least one diagnostic error was found; warnings still exit
+`0`.
 
 More:
 

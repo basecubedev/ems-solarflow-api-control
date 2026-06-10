@@ -2,6 +2,7 @@
 import json
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -24,6 +25,8 @@ def write_config(path):
         "ha": {
             "enabled": True,
             "control_enabled": True,
+            "url": "http://homeassistant.local:8123",
+            "token": "test-token",
         },
         "winter": {
             "enabled": False,
@@ -35,6 +38,10 @@ def write_config(path):
                 "pv_priority_factor": 1.1,
             }
         ],
+        "grid_meter": {
+            "type": "shelly",
+            "ip": "192.0.2.10",
+        },
     }))
 
 
@@ -464,13 +471,115 @@ def test_emsctl_diagnose_json_is_read_only_and_hides_sensitive_values(tmp_path):
     assert not (tmp_path / "runtime-state.json").exists()
 
 
+def test_emsctl_diagnose_json_contains_v2_structure(tmp_path):
+    result = run_emsctl(tmp_path, "diagnose", "--json")
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["status"] in ("ok", "warning", "error")
+    assert payload["mode"] in ("native", "container")
+    assert "mode_sources" in payload
+    assert "summary" in payload
+    assert payload["options"] == {
+        "deep": False,
+        "hardware": False,
+        "support_bundle": False,
+    }
+    assert "generated_at" in payload
+    assert payload["project"]["base_dir"]
+    assert payload["project"]["config_path"].endswith("config.json")
+    assert payload["project"]["runtime_state_path"].endswith("runtime-state.json")
+    assert isinstance(payload["checks"], list)
+
+
+def test_emsctl_diagnose_output_without_support_bundle_is_usage_error(tmp_path):
+    result = run_emsctl(tmp_path, "diagnose", "--output", str(tmp_path / "bundle.zip"))
+
+    assert result.returncode == 2
+    assert "--output is only valid together with --support-bundle" in result.stderr
+
+
+def test_emsctl_diagnose_duplicate_device_names_produce_error(tmp_path):
+    config_path = tmp_path / "config.json"
+    write_config(config_path)
+    config = json.loads(config_path.read_text())
+    config["devices"].append(dict(config["devices"][0]))
+    config_path.write_text(json.dumps(config))
+
+    result = run_emsctl(tmp_path, "diagnose", "--json")
+
+    assert result.returncode == 1, result.stderr
+    payload = json.loads(result.stdout)
+    assert any(
+        check["code"] == "device_name_duplicate"
+        for check in payload["checks"]
+    )
+
+
+def test_emsctl_diagnose_invalid_dashboard_port_produces_error(tmp_path):
+    config_path = tmp_path / "config.json"
+    write_config(config_path)
+    config = json.loads(config_path.read_text())
+    config["dashboard"] = {
+        "enabled": True,
+        "host": "127.0.0.1",
+        "port": 70000,
+    }
+    config_path.write_text(json.dumps(config))
+
+    result = run_emsctl(tmp_path, "diagnose", "--json")
+
+    assert result.returncode == 1, result.stderr
+    payload = json.loads(result.stdout)
+    assert any(
+        check["code"] == "dashboard_port_invalid"
+        for check in payload["checks"]
+    )
+
+
+def test_emsctl_diagnose_invalid_loop_interval_produces_error(tmp_path):
+    config_path = tmp_path / "config.json"
+    write_config(config_path)
+    config = json.loads(config_path.read_text())
+    config["system"]["loop_interval"] = 0
+    config_path.write_text(json.dumps(config))
+
+    result = run_emsctl(tmp_path, "diagnose", "--json")
+
+    assert result.returncode == 1, result.stderr
+    payload = json.loads(result.stdout)
+    assert any(
+        check["code"] == "system_loop_interval_invalid"
+        for check in payload["checks"]
+    )
+
+
+def test_emsctl_diagnose_ha_control_without_ha_is_warning(tmp_path):
+    config_path = tmp_path / "config.json"
+    write_config(config_path)
+    config = json.loads(config_path.read_text())
+    config["ha"]["enabled"] = False
+    config["ha"]["control_enabled"] = True
+    config_path.write_text(json.dumps(config))
+
+    result = run_emsctl(tmp_path, "diagnose", "--json")
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "warning"
+    assert any(
+        check["code"] == "ha_control_without_ha"
+        for check in payload["checks"]
+    )
+
+
 def test_emsctl_diagnose_reports_invalid_config_without_traceback(tmp_path):
     config_path = tmp_path / "config.json"
     config_path.write_text("{invalid json")
 
     result = run_emsctl(tmp_path, "diagnose", "--json")
 
-    assert result.returncode == 0, result.stderr
+    assert result.returncode == 1, result.stderr
     payload = json.loads(result.stdout)
     assert payload["status"] == "error"
     assert any(
@@ -479,6 +588,82 @@ def test_emsctl_diagnose_reports_invalid_config_without_traceback(tmp_path):
     )
     assert "Traceback" not in result.stderr
     assert not (tmp_path / "runtime-state.json").exists()
+
+
+def test_emsctl_diagnose_invalid_runtime_json_produces_error(tmp_path):
+    (tmp_path / "runtime-state.json").write_text("{invalid runtime")
+
+    result = run_emsctl(tmp_path, "diagnose", "--json")
+
+    assert result.returncode == 1, result.stderr
+    payload = json.loads(result.stdout)
+    assert any(
+        check["code"] == "runtime_state_invalid_json"
+        for check in payload["checks"]
+    )
+
+
+def test_emsctl_diagnose_runtime_unknown_device_produces_warning(tmp_path):
+    (tmp_path / "runtime-state.json").write_text(json.dumps({
+        "system": {"enabled": True},
+        "devices": {
+            "WR1": {"enabled": True, "max_power": 800},
+            "WRX": {"enabled": True, "max_power": 100},
+        },
+    }))
+
+    result = run_emsctl(tmp_path, "diagnose", "--json")
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "warning"
+    assert any(
+        check["code"] == "runtime_device_unknown"
+        for check in payload["checks"]
+    )
+
+
+def test_emsctl_diagnose_support_bundle_redacts_secrets(tmp_path):
+    secret = "bundle-super-secret-token"
+    serial = "SERIAL-SECRET-123456"
+    config_path = tmp_path / "config.json"
+    write_config(config_path)
+    config = json.loads(config_path.read_text())
+    config["ha"]["token"] = secret
+    config["devices"][0]["sn"] = serial
+    config_path.write_text(json.dumps(config))
+    output_path = tmp_path / "ems-support.zip"
+
+    result = run_emsctl(
+        tmp_path,
+        "diagnose",
+        "--support-bundle",
+        "--output",
+        str(output_path),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert output_path.exists()
+    assert str(output_path) in result.stdout
+
+    combined = ""
+    with zipfile.ZipFile(output_path) as bundle:
+        names = set(bundle.namelist())
+        assert {
+            "diagnose.txt",
+            "diagnose.json",
+            "redacted-config.json",
+            "runtime-state-redacted.json",
+            "last-log-lines.txt",
+            "project-info.txt",
+            "README-SUPPORT-BUNDLE.txt",
+        }.issubset(names)
+        for name in names:
+            combined += bundle.read(name).decode("utf-8", errors="replace")
+
+    assert secret not in combined
+    assert serial not in combined
+    assert "<redacted>" in combined
 
 
 def test_emsctl_interactive_status_path(tmp_path):

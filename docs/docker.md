@@ -52,11 +52,22 @@ uses `/app/config/config.json` when no legacy `/app/config.json` exists:
 docker compose exec ems python emsctl.py status
 docker compose exec ems python emsctl.py interactive
 docker compose exec ems python emsctl.py dashboard auth-status
+docker compose exec ems python emsctl.py diagnose
+docker compose exec ems python emsctl.py diagnose --deep
+docker compose exec ems python emsctl.py diagnose --support-bundle
 ```
 
 The runtime-state path is still read from the selected config. With the
 generated Docker config, `data/runtime-state.json` resolves to
 `/app/data/runtime-state.json`.
+
+`diagnose` is safe and read-only by default. In a container it also reports
+container detection sources, runtime UID/GID, `/app/config` and `/app/data`
+readability/writability, ownership, and whether mutable paths resolve below
+`/app/data`. `--deep` adds local SQLite/log/dashboard checks and host-side
+Docker Compose hints when Docker is available. `--support-bundle` creates a
+redacted ZIP suitable for GitHub/support issues. Exit code `1` means at least
+one diagnostic error was found; warnings still exit `0`.
 
 For unusual mounts or troubleshooting, pass the config path explicitly:
 

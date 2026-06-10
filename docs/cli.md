@@ -30,6 +30,41 @@ python3 emsctl.py device WR1 max-power 600
 python3 emsctl.py device WR1 offgrid eco
 python3 emsctl.py winter enable
 python3 emsctl.py dashboard auth-status
+python3 emsctl.py diagnose
+```
+
+## Diagnose
+
+`diagnose` is designed for local support/debug output. Normal diagnose is
+read-only and does not contact Zendure hardware, Home Assistant, MQTT, Shelly,
+or other external services.
+
+```bash
+python3 emsctl.py diagnose
+python3 emsctl.py diagnose --deep
+python3 emsctl.py diagnose --json
+python3 emsctl.py diagnose --support-bundle
+```
+
+Modes:
+
+- `--json` prints the same result structure as machine-readable JSON.
+- `--deep` adds local operational checks: runtime-state plausibility, SQLite
+  integrity/table summaries, recent configured log patterns, Docker host hints,
+  and a dashboard loopback check when enabled.
+- `--hardware` performs explicit short-timeout read-only network probes for
+  configured grid meters and Zendure read endpoints. It never writes hardware
+  state.
+- `--support-bundle` creates a redacted ZIP with `diagnose.txt`,
+  `diagnose.json`, redacted config/runtime-state snapshots, recent redacted log
+  lines, and project metadata.
+
+Exit codes:
+
+```text
+0  diagnose status is ok or warning
+1  at least one diagnostic error was found
+2  invalid CLI usage
 ```
 
 ## Config Discovery
@@ -60,6 +95,9 @@ without an explicit config path:
 docker compose exec ems python emsctl.py status
 docker compose exec ems python emsctl.py interactive
 docker compose exec ems python emsctl.py dashboard auth-status
+docker compose exec ems python emsctl.py diagnose
+docker compose exec ems python emsctl.py diagnose --deep
+docker compose exec ems python emsctl.py diagnose --support-bundle
 ```
 
 For unusual mounts or troubleshooting, an explicit config path still works:
