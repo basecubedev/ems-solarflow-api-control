@@ -3,8 +3,6 @@ import re
 from pathlib import Path
 from urllib.parse import urlparse
 
-import yaml
-
 
 ROOT = Path(__file__).resolve().parents[1]
 ISSUE_TEMPLATES = [
@@ -19,30 +17,27 @@ EXPECTED_DOCUMENTATION_PATHS = {
 }
 
 
-def extract_strings(value):
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, dict):
-        for item in value.values():
-            yield from extract_strings(item)
-    elif isinstance(value, list):
-        for item in value:
-            yield from extract_strings(item)
+def extract_markdown_links(text):
+    yield from re.findall(r"\[[^\]]+\]\(([^)]+)\)", text)
 
 
-def extract_markdown_links(value):
-    for text in extract_strings(value):
-        yield from re.findall(r"\[[^\]]+\]\(([^)]+)\)", text)
+def assert_issue_form_shape(text):
+    assert "\t" not in text
+    for key in ("name", "description", "title", "body"):
+        assert re.search(rf"^{key}:", text, re.MULTILINE)
+    assert re.search(r"^body:\n  - type:", text, re.MULTILINE)
+    assert re.search(r"^    attributes:", text, re.MULTILINE)
+    assert re.search(r"^    validations:", text, re.MULTILINE)
 
 
 def test_issue_template_documentation_links_are_valid_repo_urls():
     linked_paths = set()
 
     for template in ISSUE_TEMPLATES:
-        payload = yaml.safe_load(template.read_text())
+        text = template.read_text()
+        assert_issue_form_shape(text)
 
-        assert isinstance(payload, dict)
-        for link in extract_markdown_links(payload):
+        for link in extract_markdown_links(text):
             parsed = urlparse(link)
             assert parsed.scheme == "https"
             assert parsed.netloc == "github.com"
