@@ -30,6 +30,10 @@ Existing detailed sections such as `checks`, `control`, and
 `schema_version`, `diagnosis`, `sections`, `metrics`, `root_causes`,
 `warnings`, and `errors` fields for cross-mode handling.
 
+The diagnose API `schema_version` is the machine-readable JSON contract
+version. It is independent from the README Diagnose Evolution labels, which
+describe the feature rollout stages V1 through V6.
+
 ## Service Layer
 
 The CLI entry point calls `run_diagnosis(args)`, which finalizes the raw

@@ -507,9 +507,11 @@ installation, runtime, hardware, control, and performance problems.
 ### Diagnose Evolution
 
 - V1 Installation Diagnostics
-- V2 Runtime Diagnostics
+- V2 Deep, Hardware & Support Bundle Diagnostics
 - V3 Control Diagnostics
-- V4 Quality Diagnostics
+- V4 Control Quality Diagnostics
+- V5 Diagnose Contract & Service Layer
+- V6 Issue Templates, Documentation Links & Pre-Merge Cleanup
 
 ## Dashboard
 
