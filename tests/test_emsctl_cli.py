@@ -82,6 +82,26 @@ def run_emsctl_no_args(tmp_path):
     )
 
 
+def assert_diagnose_help_discovery(output):
+    for expected in (
+        "diagnose --deep",
+        "diagnose --hardware",
+        "diagnose --control",
+        "diagnose --control-quality",
+        "diagnose --support-bundle",
+    ):
+        assert expected in output
+
+
+def assert_diagnose_option_flags(output):
+    for expected in (
+        "--sample-seconds",
+        "--json",
+        "--output",
+    ):
+        assert expected in output
+
+
 def runtime_state(tmp_path):
     return json.loads((tmp_path / "runtime-state.json").read_text())
 
@@ -172,6 +192,53 @@ def config_args(config=None, runtime_state=None, dashboard_auth=None):
         runtime_state=runtime_state,
         dashboard_auth=dashboard_auth,
     )
+
+
+def diagnose_args(tmp_path, **overrides):
+    config_path = tmp_path / "config.json"
+    write_config(config_path)
+    config = json.loads(config_path.read_text())
+    config["grid_meter"] = {"type": "ha"}
+    config_path.write_text(json.dumps(config))
+    write_control_runtime(tmp_path)
+    values = {
+        "config": str(config_path),
+        "runtime_state": str(tmp_path / "runtime-state.json"),
+        "dashboard_auth": str(tmp_path / "dashboard-auth.json"),
+        "deep": False,
+        "hardware": False,
+        "support_bundle": False,
+        "control": False,
+        "control_quality": False,
+        "quality": False,
+        "sample_seconds": 0,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def test_emsctl_diagnose_service_entry_points(tmp_path):
+    args = diagnose_args(tmp_path)
+
+    service_functions = [
+        (emsctl.run_install_diagnosis, None),
+        (emsctl.run_deep_diagnosis, "deep"),
+        (emsctl.run_hardware_diagnosis, "hardware"),
+        (emsctl.run_control_diagnosis, "control"),
+        (emsctl.run_control_quality_diagnosis, "control_quality"),
+    ]
+
+    for service_function, enabled_option in service_functions:
+        report = service_function(args)
+
+        assert report["schema_version"] == 1
+        assert report["diagnosis"]["version"] == 1
+        if enabled_option:
+            assert report["options"][enabled_option] is True
+        if enabled_option == "control":
+            assert report["control"] is not None
+        if enabled_option == "control_quality":
+            assert report["control_quality"] is not None
 
 
 def test_emsctl_config_discovery_prefers_legacy_config(tmp_path, monkeypatch):
@@ -410,8 +477,14 @@ def test_emsctl_no_args_prints_quick_help_without_runtime_write(tmp_path):
     assert result.returncode == 0, result.stderr
     assert "interactive" in result.stdout
     assert "examples" in result.stdout
-    assert "runtime-state.json" in result.stdout
     assert "Common commands" in result.stdout
+    assert "Usage:" in result.stdout
+    assert "Diagnostics:" in result.stdout
+    assert "Runtime control:" in result.stdout
+    assert "Dashboard:" in result.stdout
+    assert "More help:" in result.stdout
+    assert_diagnose_help_discovery(result.stdout)
+    assert_diagnose_option_flags(result.stdout)
     assert not (tmp_path / "runtime-state.json").exists()
 
 
@@ -423,7 +496,28 @@ def test_emsctl_help_contains_common_examples(tmp_path):
     assert "python3 emsctl.py interactive" in result.stdout
     assert "python3 emsctl.py examples" in result.stdout
     assert "python3 emsctl.py completion bash" in result.stdout
+    assert_diagnose_help_discovery(result.stdout)
     assert "--password" not in result.stdout
+    assert not (tmp_path / "runtime-state.json").exists()
+
+
+def test_emsctl_diagnose_help_lists_all_diagnose_options(tmp_path):
+    result = run_emsctl(tmp_path, "diagnose", "--help")
+
+    assert result.returncode == 0, result.stderr
+    assert_diagnose_help_discovery(result.stdout)
+    for expected in (
+        "--deep",
+        "--hardware",
+        "--control",
+        "--control-quality",
+        "--quality",
+        "--sample-seconds",
+        "--support-bundle",
+        "--json",
+        "--output",
+    ):
+        assert expected in result.stdout
     assert not (tmp_path / "runtime-state.json").exists()
 
 
@@ -444,6 +538,14 @@ def test_emsctl_examples_prints_cookbook_without_runtime_write(tmp_path):
     assert "System runtime control" in result.stdout
     assert "python3 emsctl.py device WR1 offgrid eco" in result.stdout
     assert "python3 emsctl.py dashboard auth-status" in result.stdout
+    assert_diagnose_help_discovery(result.stdout)
+    assert "python3 emsctl.py diagnose --control-quality --sample-seconds 60" in result.stdout
+    assert "python3 emsctl.py diagnose --quality --json" in result.stdout
+    assert "python3 emsctl.py diagnose --support-bundle --output /tmp/ems-support.zip" in result.stdout
+    assert "docker compose exec ems python3 emsctl.py diagnose" in result.stdout
+    assert "docker compose exec ems python3 emsctl.py diagnose --control" in result.stdout
+    assert "docker compose exec ems python3 emsctl.py diagnose --control-quality --sample-seconds 60" in result.stdout
+    assert "docker compose exec ems python3 emsctl.py diagnose --support-bundle" in result.stdout
     assert not (tmp_path / "runtime-state.json").exists()
 
 
@@ -529,10 +631,17 @@ def test_emsctl_diagnose_json_contains_v2_structure(tmp_path):
 
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
+    assert payload["schema_version"] == 1
+    assert payload["diagnosis"]["version"] == 1
     assert payload["status"] in ("ok", "warning", "error")
     assert payload["mode"] in ("native", "container")
     assert "mode_sources" in payload
     assert "summary" in payload
+    assert isinstance(payload["sections"], list)
+    assert isinstance(payload["metrics"], dict)
+    assert isinstance(payload["root_causes"], list)
+    assert isinstance(payload["warnings"], list)
+    assert isinstance(payload["errors"], list)
     assert payload["options"]["deep"] is False
     assert payload["options"]["hardware"] is False
     assert payload["options"]["support_bundle"] is False
@@ -702,15 +811,17 @@ def test_emsctl_diagnose_support_bundle_redacts_secrets(tmp_path):
     combined = ""
     with zipfile.ZipFile(output_path) as bundle:
         names = set(bundle.namelist())
-        assert {
-            "diagnose.txt",
-            "diagnose.json",
+        assert names == {
+            "diagnosis.txt",
+            "diagnosis.json",
+            "control-diagnostics.json",
+            "control-diagnostics.txt",
+            "control-quality.json",
+            "control-quality.txt",
             "redacted-config.json",
-            "runtime-state-redacted.json",
-            "last-log-lines.txt",
-            "project-info.txt",
-            "README-SUPPORT-BUNDLE.txt",
-        }.issubset(names)
+            "runtime-state.json",
+            "bundle-metadata.json",
+        }
         for name in names:
             combined += bundle.read(name).decode("utf-8", errors="replace")
 
@@ -910,6 +1021,12 @@ def test_emsctl_diagnose_control_stale_live_control_timestamp_is_warning(tmp_pat
     payload = json.loads(result.stdout)
     assert payload["control"]["runtime_state"]["stale"] is True
     assert payload["control"]["runtime_state"]["stale_source"] == "live_control_timestamp"
+    stale_check = next(
+        check
+        for check in payload["checks"]
+        if check["code"] == "control_runtime_state_stale"
+    )
+    assert stale_check["message"] == "Live control timestamp older than expected"
     assert any(
         check["code"] == "control_runtime_state_stale"
         for check in payload["checks"]
@@ -967,8 +1084,8 @@ def test_emsctl_diagnose_control_disabled_and_dry_run_detection(tmp_path):
     assert "Dry run enabled" in payload["control"]["write_path"]
     assert any(check["code"] == "control_disabled" for check in payload["checks"])
     assert any(check["code"] == "dry_run_enabled" for check in payload["checks"])
-    assert "Control disabled" in payload["control"]["root_causes"]
-    assert "Dry run enabled" in payload["control"]["root_causes"]
+    assert any(cause["title"] == "Control disabled" for cause in payload["control"]["root_causes"])
+    assert any(cause["title"] == "Dry run enabled" for cause in payload["control"]["root_causes"])
 
 
 def test_emsctl_diagnose_control_root_cause_min_soc(tmp_path):
@@ -981,7 +1098,10 @@ def test_emsctl_diagnose_control_root_cause_min_soc(tmp_path):
 
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
-    assert "Minimum SOC protection active" in payload["control"]["root_causes"]
+    assert any(
+        cause["title"] == "Minimum SOC protection active"
+        for cause in payload["control"]["root_causes"]
+    )
     assert payload["control"]["soc_analysis"]["min_soc_protected_devices"] == ["WR1"]
 
 

@@ -16,6 +16,7 @@ import re
 import sys
 import time
 import zipfile
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
@@ -90,8 +91,11 @@ Common examples:
   python3 emsctl.py winter enable
   python3 emsctl.py dashboard auth-status
   python3 emsctl.py diagnose
+  python3 emsctl.py diagnose --deep
+  python3 emsctl.py diagnose --hardware
   python3 emsctl.py diagnose --control
-  python3 emsctl.py diagnose --control-quality
+  python3 emsctl.py diagnose --control-quality --sample-seconds 60
+  python3 emsctl.py diagnose --support-bundle
 
 Tip:
   Run `python3 emsctl.py` for a short start screen.
@@ -102,24 +106,50 @@ Tip:
 QUICK_HELP_TEXT = """\
 EMS Control CLI
 
-Safely edits runtime-state.json only.
-Does not contact Zendure hardware or Home Assistant.
+Usage:
+  python3 emsctl.py <command> [options]
 
 Start here:
-  python3 emsctl.py interactive
+  python3 emsctl.py status
+  python3 emsctl.py diagnose
   python3 emsctl.py examples
-  python3 emsctl.py --help
 
 Common commands:
   python3 emsctl.py status
+  python3 emsctl.py interactive
+  python3 emsctl.py examples
+
+Diagnostics:
+  python3 emsctl.py diagnose
+      Run basic installation and runtime checks.
+  python3 emsctl.py diagnose --deep
+      Run extended runtime, database, log, and dashboard checks.
+  python3 emsctl.py diagnose --hardware
+      Run read-only hardware connectivity checks.
+  python3 emsctl.py diagnose --control
+      Explain current EMS control decisions.
+  python3 emsctl.py diagnose --control-quality --sample-seconds 60
+      Measure export/import quality, PV usage, and SOC balancing.
+  python3 emsctl.py diagnose --support-bundle
+      Create a redacted support bundle for GitHub issues.
+
+  Use --json for machine-readable output.
+  Use --output <path> together with --support-bundle.
+
+Runtime control:
   python3 emsctl.py system disable
   python3 emsctl.py system max-power 1200
   python3 emsctl.py device WR1 max-power 600
   python3 emsctl.py device WR1 offgrid eco
+
+Dashboard:
   python3 emsctl.py dashboard auth-status
-  python3 emsctl.py diagnose
-  python3 emsctl.py diagnose --control
-  python3 emsctl.py diagnose --control-quality
+  python3 emsctl.py dashboard set-password
+
+More help:
+  python3 emsctl.py --help
+  python3 emsctl.py examples
+  python3 emsctl.py diagnose --help
 """
 
 EXAMPLES_TEXT = """\
@@ -166,7 +196,21 @@ Dashboard authentication:
 
 Diagnostics:
   python3 emsctl.py diagnose
+  python3 emsctl.py diagnose --deep
+  python3 emsctl.py diagnose --hardware
+  python3 emsctl.py diagnose --control
+  python3 emsctl.py diagnose --control --sample-seconds 30
+  python3 emsctl.py diagnose --control-quality --sample-seconds 60
+  python3 emsctl.py diagnose --quality --json
   python3 emsctl.py diagnose --json
+  python3 emsctl.py diagnose --support-bundle
+  python3 emsctl.py diagnose --support-bundle --output /tmp/ems-support.zip
+
+Docker diagnostics:
+  docker compose exec ems python3 emsctl.py diagnose
+  docker compose exec ems python3 emsctl.py diagnose --control
+  docker compose exec ems python3 emsctl.py diagnose --control-quality --sample-seconds 60
+  docker compose exec ems python3 emsctl.py diagnose --support-bundle
 
 Explicit config/runtime paths:
   python3 emsctl.py --config /etc/ems/config.json status
@@ -381,10 +425,13 @@ Examples:
   python3 emsctl.py diagnose
   python3 emsctl.py diagnose --json
   python3 emsctl.py diagnose --deep
+  python3 emsctl.py diagnose --hardware
   python3 emsctl.py diagnose --control
   python3 emsctl.py diagnose --control --sample-seconds 30
   python3 emsctl.py diagnose --control-quality --sample-seconds 60
+  python3 emsctl.py diagnose --quality --json
   python3 emsctl.py diagnose --support-bundle
+  python3 emsctl.py diagnose --support-bundle --output /tmp/ems-support.zip
 """,
         formatter_class=EMSHelpFormatter,
     )
@@ -557,11 +604,16 @@ def resolve_project_path(path):
 DIAGNOSE_REDACT_KEYWORDS = (
     "password",
     "passwd",
+    "password_hash",
     "token",
     "secret",
     "key",
     "auth",
     "credential",
+    "credentials",
+    "username",
+    "mqtt",
+    "hash",
     "serial",
     "sn",
     "device_id",
@@ -570,6 +622,33 @@ DIAGNOSE_REDACT_KEYWORDS = (
     "cookie",
     "session",
 )
+
+DIAGNOSE_SCHEMA_VERSION = 1
+SUPPORT_BUNDLE_VERSION = 1
+EMS_VERSION = "unknown"
+ROOT_CAUSE_SEVERITIES = ("info", "warning", "error")
+
+@dataclass
+class DiagnosisSection:
+    id: str
+    title: str
+    status: str
+    metrics: dict = field(default_factory=dict)
+    warnings: list = field(default_factory=list)
+    errors: list = field(default_factory=list)
+
+
+@dataclass
+class DiagnosisResult:
+    version: int
+    timestamp: str
+    status: str
+    sections: list = field(default_factory=list)
+    metrics: dict = field(default_factory=dict)
+    root_causes: list = field(default_factory=list)
+    warnings: list = field(default_factory=list)
+    errors: list = field(default_factory=list)
+
 
 DIAGNOSE_LOG_PATTERNS = (
     ("permission_denied", re.compile(r"permission denied", re.I)),
@@ -607,6 +686,158 @@ def diagnose_add(checks, section, level, code, message, hint=None, docs=None, **
     if docs:
         check["docs"] = docs
     checks.append(check)
+
+
+def diagnose_section_title(section_id):
+    labels = {
+        "environment": "Environment",
+        "project": "Project structure",
+        "config": "Config",
+        "runtime_state": "Runtime state",
+        "data": "Data/database",
+        "dashboard": "Dashboard",
+        "logs": "Logs",
+        "docker": "Docker",
+        "hardware": "Hardware",
+        "control": "Control diagnostics",
+        "control_quality": "Control quality",
+    }
+    return labels.get(section_id, section_id.replace("_", " ").title())
+
+
+def diagnose_status_from_checks(checks):
+    if any(check.get("level") == "error" for check in checks):
+        return "error"
+    if any(check.get("level") == "warning" for check in checks):
+        return "warning"
+    return "ok"
+
+
+def diagnose_slug(value):
+    slug = re.sub(r"[^a-z0-9]+", "_", str(value).lower()).strip("_")
+    return slug or "unknown_root_cause"
+
+
+def diagnose_standard_root_cause(value, source="diagnose"):
+    if isinstance(value, dict):
+        code = str(value.get("code") or diagnose_slug(value.get("title") or value.get("message") or source))
+        severity = str(value.get("severity") or "warning").lower()
+        if severity not in ROOT_CAUSE_SEVERITIES:
+            severity = "warning"
+        title = str(value.get("title") or code.replace("_", " ").title())
+        message = str(value.get("message") or title)
+        suggested = str(
+            value.get("suggested_next_check")
+            or "Review the related diagnose section for details."
+        )
+    else:
+        title = str(value)
+        code = diagnose_slug(title)
+        severity = "warning"
+        message = title
+        suggested = "Review the related diagnose section for details."
+    return {
+        "code": code,
+        "severity": severity,
+        "title": title,
+        "message": message,
+        "suggested_next_check": suggested,
+    }
+
+
+def diagnose_dedupe_root_causes(root_causes):
+    deduped = []
+    seen = set()
+    for cause in root_causes:
+        standard = diagnose_standard_root_cause(cause)
+        key = (
+            standard["code"],
+            standard["severity"],
+            standard["title"],
+            standard["message"],
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(standard)
+    return deduped
+
+
+def diagnose_build_sections(checks):
+    sections = []
+    for section_id in sorted({check.get("section", "unknown") for check in checks}):
+        section_checks = [check for check in checks if check.get("section") == section_id]
+        sections.append(asdict(DiagnosisSection(
+            id=section_id,
+            title=diagnose_section_title(section_id),
+            status=diagnose_status_from_checks(section_checks),
+            metrics={
+                "ok": sum(1 for check in section_checks if check.get("level") == "ok"),
+                "warning": sum(1 for check in section_checks if check.get("level") == "warning"),
+                "error": sum(1 for check in section_checks if check.get("level") == "error"),
+            },
+            warnings=[
+                check.get("message")
+                for check in section_checks
+                if check.get("level") == "warning"
+            ],
+            errors=[
+                check.get("message")
+                for check in section_checks
+                if check.get("level") == "error"
+            ],
+        )))
+    return sections
+
+
+def diagnose_finalize_report(report):
+    if report.get("control") and isinstance(report["control"].get("root_causes"), list):
+        report["control"]["root_causes"] = diagnose_dedupe_root_causes(
+            report["control"]["root_causes"]
+        )
+    if report.get("control_quality") and isinstance(report["control_quality"].get("root_causes"), list):
+        report["control_quality"]["root_causes"] = diagnose_dedupe_root_causes(
+            report["control_quality"]["root_causes"]
+        )
+
+    root_causes = []
+    if report.get("control"):
+        root_causes.extend(report["control"].get("root_causes", []))
+    if report.get("control_quality"):
+        root_causes.extend(report["control_quality"].get("root_causes", []))
+    root_causes = diagnose_dedupe_root_causes(root_causes)
+
+    warnings = [
+        check.get("message")
+        for check in report.get("checks", [])
+        if check.get("level") == "warning"
+    ]
+    errors = [
+        check.get("message")
+        for check in report.get("checks", [])
+        if check.get("level") == "error"
+    ]
+    sections = diagnose_build_sections(report.get("checks", []))
+    model = DiagnosisResult(
+        version=DIAGNOSE_SCHEMA_VERSION,
+        timestamp=report.get("generated_at"),
+        status=report.get("status", "unknown"),
+        sections=sections,
+        metrics=report.get("summary", {}),
+        root_causes=root_causes,
+        warnings=warnings,
+        errors=errors,
+    )
+
+    report["schema_version"] = DIAGNOSE_SCHEMA_VERSION
+    report["ems_version"] = EMS_VERSION
+    report["diagnosis"] = asdict(model)
+    report["sections"] = sections
+    report["metrics"] = report.get("summary", {})
+    report["root_causes"] = root_causes
+    report["warnings"] = warnings
+    report["errors"] = errors
+    return report
 
 
 def diagnose_json_file(path):
@@ -1975,7 +2206,7 @@ def diagnose_control_report(config_data, runtime_path, sample_seconds=0):
         root_causes.append("SOC imbalance exceeds 20%")
     if target is not None and snapshot.get("system_limit_w") is not None and target >= snapshot["system_limit_w"]:
         root_causes.append("System output limited by runtime max_power")
-    root_causes = list(dict.fromkeys(root_causes))
+    root_causes = diagnose_dedupe_root_causes(root_causes)
 
     return {
         "snapshot": snapshot,
@@ -1999,7 +2230,7 @@ def diagnose_control_add_checks(checks, control):
     if control["snapshot"].get("dry_run"):
         diagnose_add(checks, "control", "warning", "dry_run_enabled", "Dry run enabled")
     if control["runtime_state"].get("stale"):
-        diagnose_add(checks, "control", "warning", "control_runtime_state_stale", "Runtime state timestamp older than expected", **control["runtime_state"])
+        diagnose_add(checks, "control", "warning", "control_runtime_state_stale", "Live control timestamp older than expected", **control["runtime_state"])
     elif not control["runtime_state"].get("checked"):
         diagnose_add(checks, "control", "ok", "control_staleness_skipped", "INFO: No live control timestamp available. Staleness check skipped.", **control["runtime_state"])
     if control["deadband"].get("active"):
@@ -2015,7 +2246,17 @@ def diagnose_control_add_checks(checks, control):
     for device in control["soc_analysis"].get("min_soc_protected_devices", []):
         diagnose_add(checks, "control", "ok", "min_soc_protection_active", f"Device {device} protected by minimum SOC", device=device)
     for cause in control["root_causes"]:
-        diagnose_add(checks, "control", "warning", "control_root_cause", f"Likely Cause: {cause}", cause=cause)
+        cause = diagnose_standard_root_cause(cause)
+        diagnose_add(
+            checks,
+            "control",
+            "error" if cause["severity"] == "error" else "warning" if cause["severity"] == "warning" else "ok",
+            "control_root_cause",
+            f"Likely Cause: {cause['title']}",
+            cause=cause,
+            root_cause_code=cause["code"],
+            suggested_next_check=cause["suggested_next_check"],
+        )
 
 
 def diagnose_control_text(control):
@@ -2086,12 +2327,19 @@ def diagnose_control_text(control):
     if control["root_causes"]:
         lines.extend(["", "Likely Causes", ""])
         for cause in control["root_causes"]:
-            lines.append(f"- {cause}")
+            if isinstance(cause, dict):
+                lines.append(f"- {cause['title']}: {cause['message']}")
+                lines.append(f"  Next check: {cause['suggested_next_check']}")
+            else:
+                lines.append(f"- {cause}")
 
     return "\n".join(lines) + "\n"
 
 
 def diagnose_quality_root_cause(code, severity, title, message, suggested_next_check):
+    severity = str(severity).lower()
+    if severity not in ROOT_CAUSE_SEVERITIES:
+        severity = "warning"
     return {
         "code": code,
         "severity": severity,
@@ -2559,58 +2807,61 @@ def diagnose_write_support_bundle(report, args, config_data, runtime_path):
     if runtime_path and os.path.exists(runtime_path):
         runtime_data, _ = diagnose_json_file(runtime_path)
 
-    log_text = ""
-    for path in diagnose_log_paths(config_data):
-        lines = diagnose_tail_lines(path)
-        if lines:
-            log_text += f"== {path} ==\n"
-            log_text += "".join(lines)
-            if not log_text.endswith("\n"):
-                log_text += "\n"
-
-    docker_lines = [
-        check["message"]
-        for check in report["checks"]
-        if check["section"] == "docker"
-    ]
+    control_report = report.get("control") or {}
+    control_quality_report = report.get("control_quality") or {}
+    metadata = {
+        "bundle_version": SUPPORT_BUNDLE_VERSION,
+        "generated_at": report.get("generated_at"),
+        "ems_version": report.get("ems_version", EMS_VERSION),
+        "schema_version": report.get("schema_version", DIAGNOSE_SCHEMA_VERSION),
+    }
 
     with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
-        bundle.writestr("diagnose.txt", diagnose_redact_text(diagnose_text(report)))
-        bundle.writestr("diagnose.json", diagnose_redact_text(json.dumps(report, indent=2, sort_keys=True)))
-        if report.get("control"):
-            bundle.writestr(
-                "control-diagnostics.txt",
-                diagnose_redact_text(diagnose_control_text(report["control"])),
-            )
-        if report.get("control_quality"):
-            bundle.writestr(
-                "control-quality.txt",
-                diagnose_redact_text(diagnose_control_quality_text(report["control_quality"])),
-            )
-            bundle.writestr(
-                "control-quality.json",
-                diagnose_redact_text(json.dumps(report["control_quality"], indent=2, sort_keys=True)),
-            )
-        bundle.writestr("redacted-config.json", json.dumps(diagnose_redact_value(config_data if isinstance(config_data, dict) else {}), indent=2, sort_keys=True))
-        bundle.writestr("runtime-state-redacted.json", json.dumps(diagnose_redact_value(runtime_data if isinstance(runtime_data, dict) else {}), indent=2, sort_keys=True))
-        bundle.writestr("last-log-lines.txt", diagnose_redact_text(log_text))
+        bundle.writestr("diagnosis.txt", diagnose_redact_text(diagnose_text(report)))
+        bundle.writestr("diagnosis.json", diagnose_redact_text(json.dumps(report, indent=2, sort_keys=True)))
         bundle.writestr(
-            "project-info.txt",
-            "\n".join([
-                f"generated_at={report['generated_at']}",
-                f"mode={report['mode']}",
-                f"base_dir={report['project']['base_dir']}",
-                f"config_path={report['project']['config_path']}",
-                f"runtime_state_path={report['project']['runtime_state_path']}",
-                f"status={report['status']}",
-            ]) + "\n",
+            "control-diagnostics.json",
+            diagnose_redact_text(json.dumps(control_report, indent=2, sort_keys=True)),
         )
-        if docker_lines:
-            bundle.writestr("docker-info.txt", "\n".join(docker_lines) + "\n")
         bundle.writestr(
-            "README-SUPPORT-BUNDLE.txt",
-            "EMS diagnose support bundle. Files are generated from read-only diagnostics and redact common secret fields.\n"
-            "Do not add private keys, dashboard auth files, database files, or unredacted configs before sharing.\n",
+            "control-diagnostics.txt",
+            diagnose_redact_text(
+                diagnose_control_text(control_report)
+                if control_report
+                else "Control diagnostics not enabled.\n"
+            ),
+        )
+        bundle.writestr(
+            "control-quality.json",
+            diagnose_redact_text(json.dumps(control_quality_report, indent=2, sort_keys=True)),
+        )
+        bundle.writestr(
+            "control-quality.txt",
+            diagnose_redact_text(
+                diagnose_control_quality_text(control_quality_report)
+                if control_quality_report
+                else "Control quality diagnostics not enabled.\n"
+            ),
+        )
+        bundle.writestr(
+            "redacted-config.json",
+            json.dumps(
+                diagnose_redact_value(config_data if isinstance(config_data, dict) else {}),
+                indent=2,
+                sort_keys=True,
+            ),
+        )
+        bundle.writestr(
+            "runtime-state.json",
+            json.dumps(
+                diagnose_redact_value(runtime_data if isinstance(runtime_data, dict) else {}),
+                indent=2,
+                sort_keys=True,
+            ),
+        )
+        bundle.writestr(
+            "bundle-metadata.json",
+            json.dumps(metadata, indent=2, sort_keys=True),
         )
     return output_path
 
@@ -2834,6 +3085,53 @@ def diagnose_collect(args):
     }
 
 
+DIAGNOSE_SERVICE_DEFAULTS = {
+    "deep": False,
+    "hardware": False,
+    "support_bundle": False,
+    "control": False,
+    "control_quality": False,
+    "quality": False,
+    "sample_seconds": 0,
+}
+
+
+def diagnose_service_args(args, **overrides):
+    values = {
+        "config": getattr(args, "config", None),
+        "runtime_state": getattr(args, "runtime_state", None),
+        "dashboard_auth": getattr(args, "dashboard_auth", None),
+        **DIAGNOSE_SERVICE_DEFAULTS,
+    }
+    values.update(vars(args))
+    values.update(overrides)
+    return argparse.Namespace(**values)
+
+
+def run_diagnosis(args):
+    return diagnose_finalize_report(diagnose_collect(diagnose_service_args(args)))
+
+
+def run_install_diagnosis(args):
+    return run_diagnosis(args)
+
+
+def run_deep_diagnosis(args):
+    return run_diagnosis(diagnose_service_args(args, deep=True))
+
+
+def run_hardware_diagnosis(args):
+    return run_diagnosis(diagnose_service_args(args, hardware=True))
+
+
+def run_control_diagnosis(args):
+    return run_diagnosis(diagnose_service_args(args, control=True))
+
+
+def run_control_quality_diagnosis(args):
+    return run_diagnosis(diagnose_service_args(args, control_quality=True, quality=False))
+
+
 def diagnose_text(report):
     mode_labels = {
         "native": "native installation",
@@ -2898,7 +3196,7 @@ def handle_diagnose_command(args):
     if args.sample_seconds < 0:
         return fail("--sample-seconds must be >= 0", code=2)
 
-    report = diagnose_collect(args)
+    report = run_diagnosis(args)
     bundle_path = None
     if args.support_bundle:
         config_data, _ = diagnose_json_file(report["project"]["config_path"])
