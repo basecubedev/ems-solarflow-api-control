@@ -91,6 +91,7 @@ Common examples:
   python3 emsctl.py dashboard auth-status
   python3 emsctl.py diagnose
   python3 emsctl.py diagnose --control
+  python3 emsctl.py diagnose --control-quality
 
 Tip:
   Run `python3 emsctl.py` for a short start screen.
@@ -118,6 +119,7 @@ Common commands:
   python3 emsctl.py dashboard auth-status
   python3 emsctl.py diagnose
   python3 emsctl.py diagnose --control
+  python3 emsctl.py diagnose --control-quality
 """
 
 EXAMPLES_TEXT = """\
@@ -381,6 +383,7 @@ Examples:
   python3 emsctl.py diagnose --deep
   python3 emsctl.py diagnose --control
   python3 emsctl.py diagnose --control --sample-seconds 30
+  python3 emsctl.py diagnose --control-quality --sample-seconds 60
   python3 emsctl.py diagnose --support-bundle
 """,
         formatter_class=EMSHelpFormatter,
@@ -409,6 +412,16 @@ Examples:
         "--control",
         action="store_true",
         help="Explain current EMS control/regulation behavior from local state.",
+    )
+    diagnose.add_argument(
+        "--control-quality",
+        action="store_true",
+        help="Evaluate zero-export, PV usage, and SOC balancing quality.",
+    )
+    diagnose.add_argument(
+        "--quality",
+        action="store_true",
+        help="Alias for --control-quality.",
     )
     diagnose.add_argument(
         "--sample-seconds",
@@ -570,6 +583,15 @@ DIAGNOSE_LOG_PATTERNS = (
     ("device_unreachable", re.compile(r"device_unreachable", re.I)),
     ("traceback", re.compile(r"traceback", re.I)),
 )
+
+EXPORT_PEAK_WARNING_W = 100
+EXPORT_PEAK_ERROR_W = 250
+EXPORT_DURATION_WARNING_PERCENT = 20
+EXPORT_AVERAGE_WARNING_W = 40
+NEAR_ZERO_BAND_W = 30
+SOC_SPREAD_WARNING_PERCENT = 15
+SOC_SPREAD_ERROR_PERCENT = 30
+LOW_SOC_PROTECTION_MARGIN_PERCENT = 3
 
 
 def diagnose_add(checks, section, level, code, message, hint=None, docs=None, **details):
@@ -2069,6 +2091,464 @@ def diagnose_control_text(control):
     return "\n".join(lines) + "\n"
 
 
+def diagnose_quality_root_cause(code, severity, title, message, suggested_next_check):
+    return {
+        "code": code,
+        "severity": severity,
+        "title": title,
+        "message": message,
+        "suggested_next_check": suggested_next_check,
+    }
+
+
+def diagnose_export_import_quality(samples):
+    values = [
+        diagnose_float(sample.get("grid_power_w"))
+        for sample in samples
+        if diagnose_float(sample.get("grid_power_w")) is not None
+    ]
+    if not values:
+        return {
+            "status": "warning",
+            "samples": 0,
+            "message": "No grid power samples available",
+        }
+
+    imports = [value for value in values if value > NEAR_ZERO_BAND_W]
+    exports = [value for value in values if value < -NEAR_ZERO_BAND_W]
+    near_zero = [value for value in values if abs(value) <= NEAR_ZERO_BAND_W]
+    sample_count = len(values)
+    max_export = min(values)
+    average_export = sum(exports) / len(exports) if exports else 0
+    export_duration = round((len(exports) / sample_count) * 100, 2)
+    status = "ok"
+    warnings = []
+    if max_export <= -EXPORT_PEAK_ERROR_W:
+        status = "error"
+        warnings.append(f"Export peaks up to {round(max_export)} W detected.")
+    elif max_export <= -EXPORT_PEAK_WARNING_W:
+        status = "warning"
+        warnings.append(f"Export peaks up to {round(max_export)} W detected.")
+    if export_duration > EXPORT_DURATION_WARNING_PERCENT:
+        status = "warning" if status == "ok" else status
+        warnings.append(f"Export duration is {export_duration}%.")
+    if abs(average_export) > EXPORT_AVERAGE_WARNING_W:
+        status = "warning" if status == "ok" else status
+        warnings.append(f"Average export is {round(average_export)} W.")
+
+    return {
+        "status": status,
+        "samples": sample_count,
+        "average_grid_power_w": round(sum(values) / sample_count, 2),
+        "min_grid_power_w": min(values),
+        "max_grid_power_w": max(values),
+        "average_import_w": round(sum(imports) / len(imports), 2) if imports else 0,
+        "average_export_w": round(average_export, 2),
+        "max_import_peak_w": max(values),
+        "max_export_peak_w": max_export,
+        "export_duration_percent": export_duration,
+        "import_duration_percent": round((len(imports) / sample_count) * 100, 2),
+        "near_zero_duration_percent": round((len(near_zero) / sample_count) * 100, 2),
+        "warnings": warnings,
+    }
+
+
+def diagnose_quality_score(export_import):
+    if not export_import.get("samples"):
+        return {
+            "score": None,
+            "classification": "unknown",
+            "average_absolute_deviation_w": None,
+            "near_zero_percent": 0,
+            "export_penalty": "unknown",
+            "import_penalty": "unknown",
+        }
+
+    # Diagnostic score, not a certified measurement:
+    # start at 100 and subtract bounded penalties for average grid deviation,
+    # export duration, export peak severity, and import peaks. This keeps the
+    # score intentionally coarse while making the dominant problem visible.
+    avg_abs = abs(export_import["average_grid_power_w"])
+    near_zero = export_import["near_zero_duration_percent"]
+    export_peak = abs(min(0, export_import["max_export_peak_w"]))
+    import_peak = max(0, export_import["max_import_peak_w"])
+    export_duration = export_import["export_duration_percent"]
+    deviation_penalty = min(35, avg_abs / 2)
+    duration_penalty = min(25, export_duration * 0.4)
+    export_peak_penalty = min(25, max(0, export_peak - NEAR_ZERO_BAND_W) / 8)
+    import_peak_penalty = min(15, max(0, import_peak - 300) / 30)
+    score = int(round(max(
+        0,
+        100 - deviation_penalty - duration_penalty - export_peak_penalty - import_peak_penalty,
+    )))
+    if score >= 95:
+        classification = "excellent"
+    elif score >= 85:
+        classification = "good"
+    elif score >= 70:
+        classification = "acceptable"
+    elif score >= 50:
+        classification = "poor"
+    else:
+        classification = "critical"
+
+    def penalty_label(value):
+        if value < 5:
+            return "low"
+        if value < 15:
+            return "medium"
+        return "high"
+
+    return {
+        "score": score,
+        "classification": classification,
+        "average_absolute_deviation_w": round(avg_abs, 2),
+        "near_zero_percent": near_zero,
+        "export_penalty": penalty_label(duration_penalty + export_peak_penalty),
+        "import_penalty": penalty_label(import_peak_penalty),
+    }
+
+
+def diagnose_quality_pv(config_data, runtime_data):
+    devices = runtime_data.get("devices", {}) if isinstance(runtime_data.get("devices"), dict) else {}
+    pv_total = diagnose_number_from(runtime_data, [("pv_total_w",), ("pv_input_w",)])
+    if pv_total is None:
+        pv_total = diagnose_sum_devices(devices, ("pv_input_w", "solar", "pv_power"))
+    if pv_total is None:
+        return {
+            "status": "info",
+            "available": False,
+            "message": "PV diagnostics skipped because required PV telemetry is not available.",
+            "root_causes": [
+                diagnose_quality_root_cause(
+                    "missing_pv_telemetry",
+                    "info",
+                    "Missing PV telemetry",
+                    "PV diagnostics skipped because required PV telemetry is not available.",
+                    "Check whether device telemetry includes pv_input_w or pv_total_w.",
+                )
+            ],
+        }
+
+    home_output = diagnose_number_from(runtime_data, [("inverter_output_w",), ("home_output_w",), ("output_w",)])
+    if home_output is None:
+        home_output = diagnose_sum_devices(devices, ("output_w",))
+    battery_charge = diagnose_number_from(runtime_data, [("battery_charge_w",), ("pack_input_w",)])
+    if battery_charge is None:
+        charge_values = []
+        for device in devices.values():
+            if not isinstance(device, dict):
+                continue
+            value = diagnose_float(device.get("battery_power_w"))
+            if value is not None and value < 0:
+                charge_values.append(abs(value))
+            else:
+                pack_input = diagnose_float(device.get("pack_input_w"))
+                if pack_input is not None:
+                    charge_values.append(pack_input)
+        battery_charge = sum(charge_values) if charge_values else None
+    system_limit = diagnose_number_from(runtime_data, [("system", "max_total_power")])
+    if system_limit is None:
+        system_limit = diagnose_nested_get(config_data, [("system", "max_total_power")])
+        system_limit = diagnose_float(system_limit)
+    max_device_limit = 0
+    for item in config_data.get("devices", []) if isinstance(config_data, dict) else []:
+        if isinstance(item, dict):
+            max_device_limit += diagnose_float(item.get("max_power")) or 0
+
+    root_causes = []
+    notes = []
+    status = "ok"
+    output = home_output or 0
+    charge = battery_charge or 0
+    if pv_total > 100 and output < min(pv_total * 0.3, 100) and charge < min(pv_total * 0.3, 100):
+        status = "warning"
+        notes.append("PV input is available, but home output and battery charge remain low.")
+        root_causes.append(diagnose_quality_root_cause(
+            "pv_available_but_not_used",
+            "warning",
+            "PV available but not used",
+            "PV input is available, but home output and battery charge remain low.",
+            "Check device output limits, SOC protection, device online state, and telemetry freshness.",
+        ))
+    if system_limit and output >= system_limit * 0.95 and pv_total > system_limit:
+        notes.append("Output is limited by system max power.")
+        root_causes.append(diagnose_quality_root_cause(
+            "pv_limited_by_system_limit",
+            "info",
+            "PV limited by system limit",
+            "PV input exceeds the configured system output limit.",
+            "Check system.max_total_power and legal AC output limits.",
+        ))
+    if max_device_limit and output >= max_device_limit * 0.95 and pv_total > max_device_limit:
+        notes.append("Output is limited by device max power.")
+        root_causes.append(diagnose_quality_root_cause(
+            "pv_limited_by_device_limit",
+            "info",
+            "PV limited by device limit",
+            "PV input exceeds the sum of configured device max_power limits.",
+            "Check per-device max_power and runtime max_power overrides.",
+        ))
+    if not notes:
+        notes.append("PV usage looks plausible.")
+
+    return {
+        "status": status,
+        "available": True,
+        "pv_available_w": pv_total,
+        "home_output_w": home_output,
+        "battery_charge_w": battery_charge,
+        "system_limit_w": system_limit,
+        "device_limit_total_w": max_device_limit,
+        "messages": notes,
+        "root_causes": root_causes,
+    }
+
+
+def diagnose_quality_soc(config_data, runtime_data):
+    devices = runtime_data.get("devices", {}) if isinstance(runtime_data.get("devices"), dict) else {}
+    rows = []
+    soc_values = []
+    for name, device in devices.items():
+        if not isinstance(device, dict):
+            continue
+        soc = diagnose_float(device.get("soc"))
+        if soc is None:
+            continue
+        soc_values.append(soc)
+    if not soc_values:
+        return {
+            "status": "info",
+            "message": "SOC balancing skipped because SOC telemetry is not available.",
+            "devices": [],
+            "root_causes": [],
+        }
+    average_soc = sum(soc_values) / len(soc_values)
+    highest = max(soc_values)
+    lowest = min(soc_values)
+    spread = highest - lowest
+    root_causes = []
+    status = "ok"
+    if spread >= SOC_SPREAD_ERROR_PERCENT:
+        status = "error"
+        root_causes.append(diagnose_quality_root_cause(
+            "soc_imbalance_detected",
+            "error",
+            "SOC imbalance detected",
+            f"Battery SOC spread is {round(spread, 1)} %, above the error threshold.",
+            "Check device runtime limits and SOC balancing configuration.",
+        ))
+    elif spread >= SOC_SPREAD_WARNING_PERCENT:
+        status = "warning"
+        root_causes.append(diagnose_quality_root_cause(
+            "soc_imbalance_detected",
+            "warning",
+            "SOC imbalance detected",
+            f"Battery SOC spread is {round(spread, 1)} %, above the warning threshold.",
+            "Check device runtime limits and SOC balancing configuration.",
+        ))
+
+    for name, device in devices.items():
+        if not isinstance(device, dict):
+            continue
+        soc = diagnose_float(device.get("soc"))
+        if soc is None:
+            continue
+        output = diagnose_float(device.get("output_w")) or 0
+        charge = 0
+        battery_power = diagnose_float(device.get("battery_power_w"))
+        if battery_power is not None and battery_power < 0:
+            charge = abs(battery_power)
+        min_soc = diagnose_float(device.get("min_soc")) or 0
+        max_limit = diagnose_float(device.get("max_power", device.get("output_limit_w")))
+        protected = min_soc > 0 and soc <= min_soc + LOW_SOC_PROTECTION_MARGIN_PERCENT
+        rows.append({
+            "device": name,
+            "soc": soc,
+            "output_w": output,
+            "charge_w": charge,
+            "max_output_limit_w": max_limit,
+            "min_soc": min_soc,
+            "difference_to_average_soc": round(soc - average_soc, 2),
+            "min_soc_protected": protected,
+            "runtime_max_power_w": diagnose_float(device.get("max_power")),
+        })
+        if protected:
+            root_causes.append(diagnose_quality_root_cause(
+                "min_soc_protected_device",
+                "info",
+                "Device protected by minimum SOC",
+                f"Device {name} is close to its configured minimum SOC.",
+                "Check whether minimum SOC settings intentionally protect this battery.",
+            ))
+
+    if len(rows) >= 2:
+        lowest_row = min(rows, key=lambda row: row["soc"])
+        highest_row = max(rows, key=lambda row: row["soc"])
+        if (
+            spread >= SOC_SPREAD_WARNING_PERCENT
+            and lowest_row["output_w"] > highest_row["output_w"] + 50
+        ):
+            status = "warning" if status == "ok" else status
+            root_causes.append(diagnose_quality_root_cause(
+                "lower_soc_device_overused",
+                "warning",
+                "Lower SOC device overused",
+                "A lower-SOC device is contributing more output than a higher-SOC device.",
+                "Check runtime device limits, online state, and SOC balancing rules.",
+            ))
+
+    return {
+        "status": status,
+        "average_soc": round(average_soc, 2),
+        "highest_soc": highest,
+        "lowest_soc": lowest,
+        "soc_spread": round(spread, 2),
+        "devices": rows,
+        "root_causes": root_causes,
+    }
+
+
+def diagnose_control_quality_report(config_data, runtime_path, sample_seconds=0):
+    runtime_data, _ = diagnose_control_load_runtime(runtime_path)
+    samples = diagnose_control_samples(runtime_path, runtime_data, sample_seconds)
+    export_import = diagnose_export_import_quality(samples)
+    quality_score = diagnose_quality_score(export_import)
+    pv = diagnose_quality_pv(config_data, runtime_data)
+    soc = diagnose_quality_soc(config_data, runtime_data)
+    root_causes = []
+    if export_import.get("samples") and export_import.get("status") in ("warning", "error"):
+        root_causes.append(diagnose_quality_root_cause(
+            "export_peaks_detected",
+            export_import["status"],
+            "Export peaks detected",
+            "Grid export peaks were detected during the sample window.",
+            "Check grid meter freshness and current output/device limits.",
+        ))
+    if quality_score.get("classification") in ("poor", "critical"):
+        root_causes.append(diagnose_quality_root_cause(
+            "zero_export_quality_poor",
+            "warning" if quality_score["classification"] == "poor" else "error",
+            "Zero-export quality poor",
+            f"Regulation quality is classified as {quality_score['classification']}.",
+            "Review export/import metrics and meter quality before changing settings.",
+        ))
+    root_causes.extend(pv.get("root_causes", []))
+    root_causes.extend(soc.get("root_causes", []))
+    deduped = []
+    seen = set()
+    for cause in root_causes:
+        key = (cause["code"], cause["severity"], cause["message"])
+        if key not in seen:
+            seen.add(key)
+            deduped.append(cause)
+    status_order = {"ok": 0, "info": 0, "warning": 1, "error": 2}
+    status = "ok"
+    for item in (export_import, pv, soc):
+        if status_order.get(item.get("status"), 0) > status_order[status]:
+            status = "error" if item.get("status") == "error" else "warning"
+    for cause in deduped:
+        if cause["severity"] == "error":
+            status = "error"
+        elif cause["severity"] == "warning" and status == "ok":
+            status = "warning"
+    return {
+        "status": status,
+        "sample_seconds": int(sample_seconds or 0),
+        "export_import": export_import,
+        "quality_score": quality_score,
+        "pv_diagnostics": pv,
+        "soc_balancing": soc,
+        "root_causes": deduped,
+    }
+
+
+def diagnose_control_quality_add_checks(checks, report):
+    for cause in report.get("root_causes", []):
+        diagnose_add(
+            checks,
+            "control_quality",
+            "error" if cause["severity"] == "error" else "warning" if cause["severity"] == "warning" else "ok",
+            "control_quality_root_cause",
+            f"{cause['title']}: {cause['message']}",
+            root_cause_code=cause["code"],
+            suggested_next_check=cause["suggested_next_check"],
+        )
+
+
+def diagnose_control_quality_text(report):
+    export_import = report["export_import"]
+    score = report["quality_score"]
+    lines = ["Export / Import Quality", ""]
+    if export_import.get("samples"):
+        lines.extend([
+            f"Samples:              {export_import['samples']}",
+            f"Average Grid Power:   {diagnose_format_watts(export_import['average_grid_power_w'])}",
+            f"Max Import:           {diagnose_format_watts(export_import['max_import_peak_w'])}",
+            f"Max Export:           {diagnose_format_watts(export_import['max_export_peak_w'])}",
+            f"Export Duration:      {round(export_import['export_duration_percent'])} %",
+            f"Near Zero:            {round(export_import['near_zero_duration_percent'])} %",
+            "",
+            f"Result: {export_import['status'].upper()}",
+        ])
+        for warning in export_import.get("warnings", []):
+            lines.append(f"WARNING: {warning}")
+    else:
+        lines.append("INFO: No grid power samples available.")
+
+    lines.extend(["", "Regulation Quality", ""])
+    if score.get("score") is None:
+        lines.append("Quality Score:        unknown")
+    else:
+        lines.extend([
+            "Target:               0 W grid exchange",
+            f"Average Deviation:    {diagnose_format_watts(score['average_absolute_deviation_w'])}",
+            f"Near-Zero Share:      {round(score['near_zero_percent'])} %",
+            f"Export Penalty:       {score['export_penalty']}",
+            f"Quality Score:        {score['score']} / 100",
+            f"Classification:       {score['classification']}",
+        ])
+
+    pv = report["pv_diagnostics"]
+    lines.extend(["", "PV Diagnostics", ""])
+    if not pv.get("available"):
+        lines.append("INFO: PV diagnostics skipped because required PV telemetry is not available.")
+    else:
+        lines.extend([
+            f"PV Available:         {diagnose_format_watts(pv.get('pv_available_w'))}",
+            f"Home Output:          {diagnose_format_watts(pv.get('home_output_w'))}",
+            f"Battery Charge:       {diagnose_format_watts(pv.get('battery_charge_w'))}",
+            f"System Limit:         {diagnose_format_watts(pv.get('system_limit_w'))}",
+            "",
+            "Result:",
+        ])
+        lines.extend(pv.get("messages", []))
+
+    soc = report["soc_balancing"]
+    lines.extend(["", "SOC Balancing", ""])
+    if not soc.get("devices"):
+        lines.append("INFO: SOC balancing skipped because SOC telemetry is not available.")
+    else:
+        lines.extend([
+            f"Average SOC:          {round(soc['average_soc'])} %",
+            f"SOC Spread:           {round(soc['soc_spread'])} %",
+            "",
+        ])
+        for row in soc["devices"]:
+            lines.append(
+                f"{row['device']}:                  {round(row['soc'])} %, output {round(row['output_w'])} W"
+            )
+        lines.append("")
+        lines.append("Result:")
+        lines.append("SOC balancing looks healthy." if soc["status"] == "ok" else f"SOC balancing status: {soc['status']}.")
+
+    if report.get("root_causes"):
+        lines.extend(["", "Likely Causes", ""])
+        for cause in report["root_causes"]:
+            lines.append(f"- {cause['title']}: {cause['message']}")
+    return "\n".join(lines) + "\n"
+
+
 def diagnose_write_support_bundle(report, args, config_data, runtime_path):
     output_path = diagnose_support_bundle_path(args.output)
     parent = os.path.dirname(os.path.abspath(output_path))
@@ -2101,6 +2581,15 @@ def diagnose_write_support_bundle(report, args, config_data, runtime_path):
             bundle.writestr(
                 "control-diagnostics.txt",
                 diagnose_redact_text(diagnose_control_text(report["control"])),
+            )
+        if report.get("control_quality"):
+            bundle.writestr(
+                "control-quality.txt",
+                diagnose_redact_text(diagnose_control_quality_text(report["control_quality"])),
+            )
+            bundle.writestr(
+                "control-quality.json",
+                diagnose_redact_text(json.dumps(report["control_quality"], indent=2, sort_keys=True)),
             )
         bundle.writestr("redacted-config.json", json.dumps(diagnose_redact_value(config_data if isinstance(config_data, dict) else {}), indent=2, sort_keys=True))
         bundle.writestr("runtime-state-redacted.json", json.dumps(diagnose_redact_value(runtime_data if isinstance(runtime_data, dict) else {}), indent=2, sort_keys=True))
@@ -2305,6 +2794,15 @@ def diagnose_collect(args):
         )
         diagnose_control_add_checks(checks, control_report)
 
+    control_quality_report = None
+    if args.control_quality or args.quality:
+        control_quality_report = diagnose_control_quality_report(
+            config_data,
+            runtime_path,
+            sample_seconds=max(0, args.sample_seconds or 0),
+        )
+        diagnose_control_quality_add_checks(checks, control_quality_report)
+
     summary = {
         "ok": sum(1 for check in checks if check["level"] == "ok"),
         "warning": sum(1 for check in checks if check["level"] == "warning"),
@@ -2321,6 +2819,7 @@ def diagnose_collect(args):
             "hardware": bool(args.hardware),
             "support_bundle": bool(args.support_bundle),
             "control": bool(args.control),
+            "control_quality": bool(args.control_quality or args.quality),
             "sample_seconds": int(args.sample_seconds or 0),
         },
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -2331,6 +2830,7 @@ def diagnose_collect(args):
         },
         "checks": checks,
         "control": control_report,
+        "control_quality": control_quality_report,
     }
 
 
@@ -2351,8 +2851,9 @@ def diagnose_text(report):
         "docker": "Docker",
         "hardware": "Hardware",
         "control": "Control diagnostics",
+        "control_quality": "Control quality",
     }
-    order = ("environment", "project", "config", "runtime_state", "data", "dashboard", "logs", "docker", "hardware", "control")
+    order = ("environment", "project", "config", "runtime_state", "data", "dashboard", "logs", "docker", "hardware", "control", "control_quality")
     level_labels = {"ok": "OK", "warning": "WARN", "error": "ERROR"}
 
     lines = [
@@ -2362,12 +2863,16 @@ def diagnose_text(report):
         f"Deep checks: {'enabled' if report['options']['deep'] else 'disabled'}",
         f"Hardware checks: {'enabled' if report['options']['hardware'] else 'disabled'}",
         f"Control diagnostics: {'enabled' if report['options'].get('control') else 'disabled'}",
+        f"Control quality: {'enabled' if report['options'].get('control_quality') else 'disabled'}",
         f"Support bundle: {'enabled' if report['options']['support_bundle'] else 'disabled'}",
     ]
 
     if report.get("control"):
         lines.append("")
         lines.append(diagnose_control_text(report["control"]).rstrip())
+    if report.get("control_quality"):
+        lines.append("")
+        lines.append(diagnose_control_quality_text(report["control_quality"]).rstrip())
 
     for section in order:
         checks = [check for check in report["checks"] if check["section"] == section]

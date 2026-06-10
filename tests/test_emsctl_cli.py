@@ -127,6 +127,17 @@ def write_control_runtime(tmp_path, **overrides):
     return payload
 
 
+def write_two_device_config(path):
+    write_config(path)
+    config = json.loads(path.read_text())
+    config["devices"] = [
+        {"name": "WR1", "max_power": 800, "pv_priority_factor": 1.0, "min_soc": 15},
+        {"name": "WR2", "max_power": 800, "pv_priority_factor": 1.0, "min_soc": 15},
+    ]
+    path.write_text(json.dumps(config))
+    return config
+
+
 def write_discovery_config(path, runtime_state_path=None, auth_file=None):
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -993,6 +1004,291 @@ def test_emsctl_diagnose_control_support_bundle_export(tmp_path):
         text = bundle.read("control-diagnostics.txt").decode()
     assert "Control Snapshot" in text
     assert "Decision Explanation" in text
+
+
+def test_emsctl_diagnose_control_quality_json_structure(tmp_path):
+    write_control_runtime(tmp_path, control_samples=[0, 10, -10, 5])
+
+    result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    quality = payload["control_quality"]
+    assert payload["options"]["control_quality"] is True
+    assert set(quality) == {
+        "status",
+        "sample_seconds",
+        "export_import",
+        "quality_score",
+        "pv_diagnostics",
+        "soc_balancing",
+        "root_causes",
+    }
+
+
+def test_emsctl_diagnose_quality_alias(tmp_path):
+    write_control_runtime(tmp_path, control_samples=[0, 10, -10, 5])
+
+    result = run_emsctl(tmp_path, "diagnose", "--quality", "--json")
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["options"]["control_quality"] is True
+
+
+def test_emsctl_diagnose_control_quality_no_export_stable_import(tmp_path):
+    write_control_runtime(tmp_path, control_samples=[10, 20, 25, 15])
+
+    result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
+
+    assert result.returncode == 0, result.stderr
+    metrics = json.loads(result.stdout)["control_quality"]["export_import"]
+    assert metrics["status"] == "ok"
+    assert metrics["max_export_peak_w"] == 10
+    assert metrics["near_zero_duration_percent"] == 100
+
+
+def test_emsctl_diagnose_control_quality_small_export_peaks_only(tmp_path):
+    write_control_runtime(tmp_path, control_samples=[20, -50, 15, 10])
+
+    result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
+
+    assert result.returncode == 0, result.stderr
+    metrics = json.loads(result.stdout)["control_quality"]["export_import"]
+    assert metrics["status"] == "warning"
+    assert metrics["max_export_peak_w"] == -50
+
+
+def test_emsctl_diagnose_control_quality_large_export_peaks(tmp_path):
+    write_control_runtime(tmp_path, control_samples=[10, -300, -260, 20])
+
+    result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
+
+    assert result.returncode == 1, result.stderr
+    quality = json.loads(result.stdout)["control_quality"]
+    assert quality["export_import"]["status"] == "error"
+    assert any(cause["code"] == "export_peaks_detected" for cause in quality["root_causes"])
+
+
+def test_emsctl_diagnose_control_quality_long_export_duration(tmp_path):
+    write_control_runtime(tmp_path, control_samples=[-40, -45, -35, 10])
+
+    result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
+
+    assert result.returncode == 0, result.stderr
+    metrics = json.loads(result.stdout)["control_quality"]["export_import"]
+    assert metrics["status"] == "warning"
+    assert metrics["export_duration_percent"] == 75
+
+
+def test_emsctl_diagnose_control_quality_missing_samples(tmp_path):
+    write_control_runtime(tmp_path)
+    runtime = json.loads((tmp_path / "runtime-state.json").read_text())
+    runtime.pop("grid_power_w")
+    runtime.pop("control_samples", None)
+    (tmp_path / "runtime-state.json").write_text(json.dumps(runtime))
+
+    result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
+
+    assert result.returncode == 0, result.stderr
+    quality = json.loads(result.stdout)["control_quality"]
+    assert quality["export_import"]["samples"] == 0
+    assert quality["export_import"]["status"] == "warning"
+    assert not any(cause["code"] == "export_peaks_detected" for cause in quality["root_causes"])
+
+
+def test_emsctl_diagnose_control_quality_score_classes(tmp_path):
+    cases = [
+        ([0, 10, -10, 5], "excellent"),
+        ([25, 25, 25, 25], "good"),
+        ([55, 55, 55, 55], "acceptable"),
+        ([90, 90, 90, 90], "poor"),
+        ([-300, -300, -300, -300], "critical"),
+    ]
+
+    for index, (samples, expected) in enumerate(cases):
+        case_dir = tmp_path / str(index)
+        case_dir.mkdir()
+        write_control_runtime(case_dir, control_samples=samples)
+        result = run_emsctl(case_dir, "diagnose", "--control-quality", "--json")
+        payload = json.loads(result.stdout)
+        assert payload["control_quality"]["quality_score"]["classification"] == expected
+
+
+def test_emsctl_diagnose_control_quality_pv_available_and_used(tmp_path):
+    write_control_runtime(
+        tmp_path,
+        pv_total_w=920,
+        inverter_output_w=700,
+        battery_power_w=-180,
+    )
+
+    result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
+
+    assert result.returncode == 0, result.stderr
+    pv = json.loads(result.stdout)["control_quality"]["pv_diagnostics"]
+    assert pv["available"] is True
+    assert pv["status"] == "ok"
+    assert "PV usage looks plausible." in pv["messages"]
+
+
+def test_emsctl_diagnose_control_quality_pv_limited_by_system_limit(tmp_path):
+    write_control_runtime(tmp_path, pv_total_w=1200, inverter_output_w=880)
+
+    result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
+
+    assert result.returncode == 0, result.stderr
+    causes = json.loads(result.stdout)["control_quality"]["root_causes"]
+    assert any(cause["code"] == "pv_limited_by_system_limit" for cause in causes)
+
+
+def test_emsctl_diagnose_control_quality_pv_limited_by_device_limit(tmp_path):
+    config_path = tmp_path / "config.json"
+    write_config(config_path)
+    config = json.loads(config_path.read_text())
+    config["system"]["max_total_power"] = 2000
+    config["devices"][0]["max_power"] = 500
+    config_path.write_text(json.dumps(config))
+    write_control_runtime(tmp_path, pv_total_w=900, inverter_output_w=490)
+
+    result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
+
+    assert result.returncode == 0, result.stderr
+    causes = json.loads(result.stdout)["control_quality"]["root_causes"]
+    assert any(cause["code"] == "pv_limited_by_device_limit" for cause in causes)
+
+
+def test_emsctl_diagnose_control_quality_pv_available_but_unused(tmp_path):
+    write_control_runtime(tmp_path, pv_total_w=900, inverter_output_w=50, battery_power_w=-20)
+
+    result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
+
+    assert result.returncode == 0, result.stderr
+    pv = json.loads(result.stdout)["control_quality"]["pv_diagnostics"]
+    assert pv["status"] == "warning"
+    assert any(cause["code"] == "pv_available_but_not_used" for cause in pv["root_causes"])
+
+
+def test_emsctl_diagnose_control_quality_missing_pv_telemetry(tmp_path):
+    write_control_runtime(tmp_path)
+
+    result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
+
+    assert result.returncode == 0, result.stderr
+    pv = json.loads(result.stdout)["control_quality"]["pv_diagnostics"]
+    assert pv["available"] is False
+    assert pv["status"] == "info"
+
+
+def test_emsctl_diagnose_control_quality_soc_balanced_devices(tmp_path):
+    config_path = tmp_path / "config.json"
+    write_two_device_config(config_path)
+    runtime = write_control_runtime(tmp_path)
+    runtime["devices"]["WR2"] = dict(runtime["devices"]["WR1"], soc=64, output_w=120)
+    runtime["devices"]["WR1"]["soc"] = 62
+    (tmp_path / "runtime-state.json").write_text(json.dumps(runtime))
+
+    result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
+
+    assert result.returncode == 0, result.stderr
+    soc = json.loads(result.stdout)["control_quality"]["soc_balancing"]
+    assert soc["status"] == "ok"
+    assert soc["soc_spread"] == 2
+
+
+def test_emsctl_diagnose_control_quality_soc_warning_spread(tmp_path):
+    config_path = tmp_path / "config.json"
+    write_two_device_config(config_path)
+    runtime = write_control_runtime(tmp_path)
+    runtime["devices"]["WR1"]["soc"] = 80
+    runtime["devices"]["WR2"] = dict(runtime["devices"]["WR1"], soc=60, output_w=100)
+    (tmp_path / "runtime-state.json").write_text(json.dumps(runtime))
+
+    result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
+
+    assert result.returncode == 0, result.stderr
+    soc = json.loads(result.stdout)["control_quality"]["soc_balancing"]
+    assert soc["status"] == "warning"
+    assert soc["soc_spread"] == 20
+
+
+def test_emsctl_diagnose_control_quality_soc_error_spread(tmp_path):
+    config_path = tmp_path / "config.json"
+    write_two_device_config(config_path)
+    runtime = write_control_runtime(tmp_path)
+    runtime["devices"]["WR1"]["soc"] = 90
+    runtime["devices"]["WR2"] = dict(runtime["devices"]["WR1"], soc=55, output_w=100)
+    (tmp_path / "runtime-state.json").write_text(json.dumps(runtime))
+
+    result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
+
+    assert result.returncode == 1, result.stderr
+    soc = json.loads(result.stdout)["control_quality"]["soc_balancing"]
+    assert soc["status"] == "error"
+    assert soc["soc_spread"] == 35
+
+
+def test_emsctl_diagnose_control_quality_lower_soc_device_overused(tmp_path):
+    config_path = tmp_path / "config.json"
+    write_two_device_config(config_path)
+    runtime = write_control_runtime(tmp_path)
+    runtime["devices"]["WR1"]["soc"] = 80
+    runtime["devices"]["WR1"]["output_w"] = 100
+    runtime["devices"]["WR2"] = dict(runtime["devices"]["WR1"], soc=55, output_w=520)
+    (tmp_path / "runtime-state.json").write_text(json.dumps(runtime))
+
+    result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
+
+    assert result.returncode == 0, result.stderr
+    causes = json.loads(result.stdout)["control_quality"]["root_causes"]
+    assert any(cause["code"] == "lower_soc_device_overused" for cause in causes)
+
+
+def test_emsctl_diagnose_control_quality_min_soc_protected_device(tmp_path):
+    runtime = write_control_runtime(tmp_path)
+    runtime["devices"]["WR1"]["soc"] = 17
+    runtime["devices"]["WR1"]["min_soc"] = 15
+    (tmp_path / "runtime-state.json").write_text(json.dumps(runtime))
+
+    result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
+
+    assert result.returncode == 0, result.stderr
+    causes = json.loads(result.stdout)["control_quality"]["root_causes"]
+    assert any(cause["code"] == "min_soc_protected_device" for cause in causes)
+
+
+def test_emsctl_diagnose_control_quality_missing_soc_data(tmp_path):
+    runtime = write_control_runtime(tmp_path)
+    runtime["devices"]["WR1"].pop("soc")
+    (tmp_path / "runtime-state.json").write_text(json.dumps(runtime))
+
+    result = run_emsctl(tmp_path, "diagnose", "--control-quality", "--json")
+
+    assert result.returncode == 0, result.stderr
+    soc = json.loads(result.stdout)["control_quality"]["soc_balancing"]
+    assert soc["status"] == "info"
+    assert soc["devices"] == []
+
+
+def test_emsctl_diagnose_control_quality_support_bundle_export(tmp_path):
+    write_control_runtime(tmp_path, control_samples=[0, 10, -10, 5])
+    output_path = tmp_path / "quality-support.zip"
+
+    result = run_emsctl(
+        tmp_path,
+        "diagnose",
+        "--control-quality",
+        "--support-bundle",
+        "--output",
+        str(output_path),
+    )
+
+    assert result.returncode == 0, result.stderr
+    with zipfile.ZipFile(output_path) as bundle:
+        assert "control-quality.txt" in bundle.namelist()
+        assert "control-quality.json" in bundle.namelist()
+        text = bundle.read("control-quality.txt").decode()
+    assert "Export / Import Quality" in text
+    assert "Regulation Quality" in text
 
 
 def test_emsctl_interactive_status_path(tmp_path):
