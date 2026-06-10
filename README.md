@@ -370,6 +370,7 @@ python3 emsctl.py diagnose
 python3 emsctl.py diagnose --deep
 python3 emsctl.py diagnose --control
 python3 emsctl.py diagnose --control --sample-seconds 30
+python3 emsctl.py diagnose --control-quality --sample-seconds 60
 python3 emsctl.py diagnose --json
 python3 emsctl.py diagnose --support-bundle
 ```
@@ -391,6 +392,14 @@ grid and filtered power, calculated target, final output, deadband state,
 device distribution, SOC protection, write-path blockers such as disabled
 control or dry-run mode, and likely root causes. `--sample-seconds` adds local
 runtime-state meter samples for noise/staleness analysis.
+
+`diagnose --control-quality` evaluates higher-level operation: export/import
+quality around the zero-export target, a coarse regulation score, PV usage
+plausibility, and SOC balancing. Export peaks mean the measured grid power was
+negative during the sample window. PV diagnostics can identify missing
+telemetry, likely limits, or unused PV, but they do not prove hardware faults.
+SOC warnings point to large spreads, min-SOC protection, or lower-SOC devices
+contributing more than expected.
 
 More:
 

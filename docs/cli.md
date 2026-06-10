@@ -44,6 +44,7 @@ python3 emsctl.py diagnose
 python3 emsctl.py diagnose --deep
 python3 emsctl.py diagnose --control
 python3 emsctl.py diagnose --control --sample-seconds 30
+python3 emsctl.py diagnose --control-quality --sample-seconds 60
 python3 emsctl.py diagnose --json
 python3 emsctl.py diagnose --support-bundle
 ```
@@ -64,6 +65,9 @@ Modes:
 - `--sample-seconds N` can be combined with `--control` to collect local
   runtime-state meter samples. The output reports average/min/max, standard
   deviation, sign changes, and stale/noisy meter hints.
+- `--control-quality` or `--quality` evaluates real operation over local
+  samples: export/import quality, a coarse regulation quality score, PV usage
+  plausibility, SOC balancing, and higher-level root-cause hints.
 - `--support-bundle` creates a redacted ZIP with `diagnose.txt`,
   `diagnose.json`, redacted config/runtime-state snapshots, recent redacted log
   lines, and project metadata.
@@ -78,6 +82,23 @@ Control interpretation:
   variance were observed in local samples.
 - `Minimum SOC protection active` means at least one device is at or below its
   minimum SOC.
+
+Control quality interpretation:
+
+- The quality score is a coarse support indicator from 0 to 100, not a
+  certified measurement. It starts at 100 and subtracts bounded penalties for
+  average grid deviation, export duration, export peaks, and large import
+  peaks.
+- `excellent`, `good`, `acceptable`, `poor`, and `critical` are intended for
+  triage. Use the detailed export/import metrics to understand the cause.
+- Export peaks mean grid power went negative during the sample window. Short
+  small peaks can be normal; long or large peaks indicate the zero-export
+  target is not being held consistently.
+- PV diagnostics can show that PV telemetry is missing, PV is likely limited by
+  system/device limits, or PV is available but not used. It cannot prove a
+  hardware fault without additional read-only hardware checks.
+- SOC balancing warnings mean the SOC spread is high, a low-SOC device is
+  contributing more than expected, or a device is protected by minimum SOC.
 
 Exit codes:
 
@@ -117,6 +138,7 @@ docker compose exec ems python emsctl.py interactive
 docker compose exec ems python emsctl.py dashboard auth-status
 docker compose exec ems python emsctl.py diagnose
 docker compose exec ems python emsctl.py diagnose --control
+docker compose exec ems python emsctl.py diagnose --control-quality --sample-seconds 60
 docker compose exec ems python emsctl.py diagnose --deep
 docker compose exec ems python emsctl.py diagnose --support-bundle
 ```
