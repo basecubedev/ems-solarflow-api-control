@@ -3,6 +3,9 @@
 """Safe runtime-state editor for ems-solarflow-api-control."""
 
 import argparse
+import shutil
+import sqlite3
+import subprocess
 import getpass
 import json
 import math
@@ -10,6 +13,11 @@ import os
 import platform
 import re
 import sys
+import zipfile
+from datetime import datetime, timezone
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 from dashboard import auth as dashboard_auth
 
@@ -366,6 +374,8 @@ omitted from normal help output.
 Examples:
   python3 emsctl.py diagnose
   python3 emsctl.py diagnose --json
+  python3 emsctl.py diagnose --deep
+  python3 emsctl.py diagnose --support-bundle
 """,
         formatter_class=EMSHelpFormatter,
     )
@@ -373,6 +383,25 @@ Examples:
         "--json",
         action="store_true",
         help="Print machine-readable diagnostic output.",
+    )
+    diagnose.add_argument(
+        "--deep",
+        action="store_true",
+        help="Run deeper local read-only operational checks.",
+    )
+    diagnose.add_argument(
+        "--hardware",
+        action="store_true",
+        help="Run optional short-timeout read-only hardware/network probes.",
+    )
+    diagnose.add_argument(
+        "--support-bundle",
+        action="store_true",
+        help="Create a redacted ZIP support bundle.",
+    )
+    diagnose.add_argument(
+        "--output",
+        help="ZIP output path. Only valid with --support-bundle.",
     )
 
     subparsers.add_parser(
@@ -495,14 +524,50 @@ def resolve_project_path(path):
     return os.path.join(BASE_DIR, path)
 
 
-def diagnose_add(checks, section, level, code, message, **details):
-    checks.append({
+DIAGNOSE_REDACT_KEYWORDS = (
+    "password",
+    "passwd",
+    "token",
+    "secret",
+    "key",
+    "auth",
+    "credential",
+    "serial",
+    "sn",
+    "device_id",
+    "api",
+    "bearer",
+    "cookie",
+    "session",
+)
+
+DIAGNOSE_LOG_PATTERNS = (
+    ("permission_denied", re.compile(r"permission denied", re.I)),
+    ("json_decode", re.compile(r"json decode|jsondecode|invalid json", re.I)),
+    ("shelly_read_error", re.compile(r"shelly_read_error", re.I)),
+    ("runtime_state_write_error", re.compile(r"runtime_state_write_error", re.I)),
+    ("dashboard_auth", re.compile(r"dashboard auth|dashboard_auth", re.I)),
+    ("csrf", re.compile(r"csrf", re.I)),
+    ("preflight_failed", re.compile(r"preflight_failed", re.I)),
+    ("preflight_abort", re.compile(r"preflight_abort", re.I)),
+    ("device_unreachable", re.compile(r"device_unreachable", re.I)),
+    ("traceback", re.compile(r"traceback", re.I)),
+)
+
+
+def diagnose_add(checks, section, level, code, message, hint=None, docs=None, **details):
+    check = {
         "section": section,
         "level": level,
         "code": code,
         "message": message,
         "details": details,
-    })
+    }
+    if hint:
+        check["hint"] = hint
+    if docs:
+        check["docs"] = docs
+    checks.append(check)
 
 
 def diagnose_json_file(path):
@@ -648,10 +713,14 @@ def diagnose_missing_template_keys(config_data, template_data):
 
 
 def diagnose_container_mode():
-    signals = []
+    sources = []
 
     if os.path.exists("/.dockerenv"):
-        signals.append("/.dockerenv")
+        sources.append({
+            "source": "/.dockerenv",
+            "type": "file",
+            "reason": "Docker marker file exists",
+        })
 
     for cgroup_path in ("/proc/1/cgroup", "/proc/self/cgroup"):
         try:
@@ -660,19 +729,35 @@ def diagnose_container_mode():
         except OSError:
             continue
         lowered = content.lower()
-        if any(token in lowered for token in ("docker", "containerd", "kubepods", "libpod", "podman")):
-            signals.append(cgroup_path)
+        matches = [
+            token
+            for token in ("docker", "containerd", "kubepods", "libpod", "podman")
+            if token in lowered
+        ]
+        if matches:
+            sources.append({
+                "source": cgroup_path,
+                "type": "cgroup",
+                "reason": "Container cgroup token found",
+                "tokens": matches,
+            })
 
     for path in ("/app/config", "/app/data"):
         if os.path.exists(path):
-            signals.append(path)
+            sources.append({
+                "source": path,
+                "type": "path",
+                "reason": "Container-style EMS path exists",
+            })
 
-    if signals:
-        return "container", signals
+    if sources:
+        return "container", sources
     return "native", []
 
 
 def diagnose_path_within(path, parent):
+    if not path:
+        return False
     try:
         return os.path.commonpath([
             os.path.abspath(path),
@@ -693,20 +778,720 @@ def diagnose_uid_gid(path):
     }, None
 
 
+def diagnose_float(value):
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed):
+        return None
+    return parsed
+
+
+def diagnose_int(value):
+    parsed = diagnose_float(value)
+    if parsed is None or int(parsed) != parsed:
+        return None
+    return int(parsed)
+
+
+def diagnose_bool(value):
+    return isinstance(value, bool)
+
+
+def diagnose_config_device_names(config_data):
+    devices = config_data.get("devices", []) if isinstance(config_data, dict) else []
+    if not isinstance(devices, list):
+        return []
+    return [
+        str(item.get("name"))
+        for item in devices
+        if isinstance(item, dict) and item.get("name")
+    ]
+
+
+def diagnose_path_is_clean(path):
+    if not isinstance(path, str) or not path.strip():
+        return False
+    return "\x00" not in path and os.path.normpath(path)
+
+
+def diagnose_basic_url(value):
+    if not isinstance(value, str) or not value.strip():
+        return False
+    parsed = urlparse(value)
+    return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+
+
+def diagnose_git_info(checks):
+    git_dir = os.path.join(BASE_DIR, ".git")
+    if not os.path.exists(git_dir):
+        return
+
+    head_path = os.path.join(git_dir, "HEAD")
+    branch = None
+    commit = None
+    try:
+        with open(head_path) as f:
+            head = f.read().strip()
+        if head.startswith("ref: "):
+            ref = head.removeprefix("ref: ").strip()
+            branch = ref.rsplit("/", 1)[-1]
+            ref_path = os.path.join(git_dir, *ref.split("/"))
+            if os.path.exists(ref_path):
+                with open(ref_path) as f:
+                    commit = f.read().strip()
+        elif head:
+            commit = head
+    except OSError:
+        pass
+
+    if branch:
+        diagnose_add(checks, "project", "ok", "git_branch", f"Git branch: {branch}", branch=branch)
+    if commit:
+        diagnose_add(checks, "project", "ok", "git_commit", f"Git commit: {commit[:12]}", commit=commit[:40])
+
+    git_exe = shutil.which("git")
+    if not git_exe:
+        return
+    try:
+        result = subprocess.run(
+            [git_exe, "status", "--porcelain"],
+            cwd=BASE_DIR,
+            text=True,
+            capture_output=True,
+            timeout=2,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return
+    if result.returncode == 0 and result.stdout.strip():
+        diagnose_add(checks, "project", "warning", "git_dirty", "Git working tree has local changes")
+    elif result.returncode == 0:
+        diagnose_add(checks, "project", "ok", "git_clean", "Git working tree is clean")
+
+
+def diagnose_config_plausibility(checks, args, config_data):
+    if not isinstance(config_data, dict):
+        return
+
+    system = config_data.get("system", {})
+    if not isinstance(system, dict):
+        diagnose_add(checks, "config", "error", "system_not_object", "system config must be an object")
+        system = {}
+
+    max_total_power = diagnose_float(system.get("max_total_power"))
+    if max_total_power is None or max_total_power <= 0:
+        diagnose_add(checks, "config", "error", "system_max_total_power_invalid", "system.max_total_power must be numeric and positive")
+    else:
+        diagnose_add(checks, "config", "ok", "system_max_total_power_valid", "system.max_total_power is numeric and positive")
+        if max_total_power > 800:
+            diagnose_add(
+                checks,
+                "config",
+                "warning",
+                "system_max_total_power_high",
+                "system.max_total_power exceeds 800 W; BKW AC limits may be exceeded depending on setup",
+                value=max_total_power,
+            )
+
+    min_output_limit = diagnose_float(system.get("min_output_limit"))
+    if min_output_limit is None or min_output_limit < 0:
+        diagnose_add(checks, "config", "error", "system_min_output_limit_invalid", "system.min_output_limit must be numeric and non-negative")
+    else:
+        diagnose_add(checks, "config", "ok", "system_min_output_limit_valid", "system.min_output_limit is numeric and non-negative")
+
+    loop_interval = diagnose_float(system.get("loop_interval"))
+    if loop_interval is None or loop_interval <= 0:
+        diagnose_add(checks, "config", "error", "system_loop_interval_invalid", "system.loop_interval must be numeric and > 0")
+    else:
+        diagnose_add(checks, "config", "ok", "system_loop_interval_valid", "system.loop_interval is numeric and > 0")
+        if loop_interval < 1:
+            diagnose_add(checks, "config", "warning", "system_loop_interval_low", "system.loop_interval is below 1 second", value=loop_interval)
+        if loop_interval > 60:
+            diagnose_add(checks, "config", "warning", "system_loop_interval_high", "system.loop_interval is above 60 seconds", value=loop_interval)
+
+    runtime_path_value = system.get("runtime_state_path", "runtime-state.json")
+    if diagnose_path_is_clean(runtime_path_value):
+        diagnose_add(checks, "config", "ok", "runtime_state_path_valid", "system.runtime_state_path resolves cleanly")
+    else:
+        diagnose_add(checks, "config", "error", "runtime_state_path_invalid", "system.runtime_state_path must be a non-empty clean path")
+
+    devices = config_data.get("devices")
+    if not isinstance(devices, list):
+        diagnose_add(checks, "config", "error", "devices_not_list", "devices must be a list")
+        devices = []
+    elif not devices:
+        diagnose_add(checks, "config", "error", "devices_empty", "devices must contain at least one device")
+    else:
+        diagnose_add(checks, "config", "ok", "devices_non_empty", "devices contains at least one device")
+
+    seen = {}
+    for index, item in enumerate(devices):
+        if not isinstance(item, dict):
+            diagnose_add(checks, "config", "error", "device_not_object", f"devices.{index} must be an object", index=index)
+            continue
+        name = item.get("name")
+        path = f"devices.{index}"
+        if not isinstance(name, str) or not name.strip():
+            diagnose_add(checks, "config", "error", "device_name_missing", f"{path}.name must be non-empty", index=index)
+        elif name in seen:
+            diagnose_add(checks, "config", "error", "device_name_duplicate", f"Duplicate device name: {name}", name=name)
+        else:
+            seen[name] = index
+        max_power = diagnose_float(item.get("max_power", 0))
+        if max_power is None or max_power < 0:
+            diagnose_add(checks, "config", "error", "device_max_power_invalid", f"{path}.max_power must be numeric and non-negative", index=index)
+        elif max_power > 800:
+            diagnose_add(checks, "config", "warning", "device_max_power_high", f"{path}.max_power exceeds 800 W", index=index)
+        pv_priority_factor = item.get("pv_priority_factor")
+        if pv_priority_factor is not None:
+            parsed = diagnose_float(pv_priority_factor)
+            if parsed is None:
+                diagnose_add(checks, "config", "error", "device_pv_priority_factor_invalid", f"{path}.pv_priority_factor must be numeric", index=index)
+            elif parsed <= 0:
+                diagnose_add(checks, "config", "warning", "device_pv_priority_factor_non_positive", f"{path}.pv_priority_factor should be positive", index=index)
+
+    dashboard = config_data.get("dashboard", {})
+    if isinstance(dashboard, dict) and dashboard.get("enabled", False):
+        host = dashboard.get("host")
+        port = diagnose_int(dashboard.get("port"))
+        if not isinstance(host, str) or not host.strip():
+            diagnose_add(checks, "config", "error", "dashboard_host_missing", "dashboard.host must be configured when dashboard is enabled")
+        else:
+            diagnose_add(checks, "config", "ok", "dashboard_host_present", "dashboard.host is configured")
+        if port is None or not (1 <= port <= 65535):
+            diagnose_add(checks, "config", "error", "dashboard_port_invalid", "dashboard.port must be an integer from 1 to 65535")
+        else:
+            diagnose_add(checks, "config", "ok", "dashboard_port_valid", "dashboard.port is valid")
+        auth_path = resolve_dashboard_auth_path(args, config_data)
+        auth_configured = dashboard_auth.auth_configured(auth_path)
+        if host == "0.0.0.0" and not dashboard.get("ssl_enabled", False) and not auth_configured:
+            diagnose_add(
+                checks,
+                "config",
+                "warning",
+                "dashboard_open_without_https_auth",
+                "Dashboard binds to 0.0.0.0 without HTTPS and without configured auth",
+                docs="docs/dashboard.md",
+            )
+
+    ha = config_data.get("ha", {})
+    if isinstance(ha, dict):
+        ha_enabled = bool(ha.get("enabled", False))
+        ha_control_enabled = bool(ha.get("control_enabled", False))
+        if ha_enabled:
+            if diagnose_basic_url(ha.get("url", "")):
+                diagnose_add(checks, "config", "ok", "ha_url_valid", "ha.url has a valid basic URL shape")
+            else:
+                diagnose_add(checks, "config", "error", "ha_url_invalid", "ha.url must be configured as http(s) URL when HA is enabled")
+            diagnose_add(
+                checks,
+                "config",
+                "ok" if bool(ha.get("token")) else "warning",
+                "ha_token_configured",
+                "Home Assistant token configured: yes" if bool(ha.get("token")) else "Home Assistant token configured: no",
+                configured=bool(ha.get("token")),
+            )
+        if ha_control_enabled and not ha_enabled:
+            diagnose_add(checks, "config", "warning", "ha_control_without_ha", "ha.control_enabled=true while ha.enabled=false")
+
+    diagnose_grid_meter_config(checks, config_data)
+    diagnose_deprecated_keys(checks, config_data)
+
+
+def diagnose_grid_meter_config(checks, config_data):
+    grid_meter = config_data.get("grid_meter") if isinstance(config_data, dict) else None
+    if not isinstance(grid_meter, dict):
+        legacy_shelly = config_data.get("shelly") if isinstance(config_data, dict) else None
+        if isinstance(legacy_shelly, dict):
+            grid_meter = {"type": "shelly", "ip": legacy_shelly.get("ip")}
+        else:
+            diagnose_add(checks, "config", "warning", "grid_meter_missing", "grid_meter config is missing or not an object")
+            return
+
+    meter_type = str(grid_meter.get("type", "shelly")).strip().lower()
+    diagnose_add(checks, "config", "ok", "grid_meter_type", f"Grid meter type: {meter_type}", type=meter_type)
+    if meter_type in ("shelly", "ecotracker"):
+        if grid_meter.get("ip"):
+            diagnose_add(checks, "config", "ok", "grid_meter_ip_present", f"{meter_type} grid meter IP is configured")
+        else:
+            diagnose_add(checks, "config", "error", "grid_meter_ip_missing", f"{meter_type} grid meter requires grid_meter.ip")
+    elif meter_type == "tasmota_http":
+        if grid_meter.get("url") or grid_meter.get("ip"):
+            diagnose_add(checks, "config", "ok", "grid_meter_endpoint_present", "Tasmota HTTP grid meter endpoint is configured")
+        else:
+            diagnose_add(checks, "config", "error", "grid_meter_endpoint_missing", "Tasmota HTTP grid meter requires grid_meter.url or grid_meter.ip")
+        if grid_meter.get("power_path"):
+            diagnose_add(checks, "config", "ok", "grid_meter_power_path_present", "Tasmota HTTP grid_meter.power_path is configured")
+        else:
+            diagnose_add(checks, "config", "error", "grid_meter_power_path_missing", "Tasmota HTTP grid meter requires grid_meter.power_path")
+    elif meter_type in ("ha", "homeassistant", "home_assistant"):
+        diagnose_add(checks, "config", "ok", "grid_meter_ha_config", "Home Assistant grid meter type detected; only config completeness is checked by diagnose")
+    else:
+        diagnose_add(checks, "config", "warning", "grid_meter_type_unknown", f"Unknown grid meter type: {meter_type}", type=meter_type)
+
+
+def diagnose_deprecated_keys(checks, config_data):
+    if not isinstance(config_data, dict):
+        return
+    deprecated = {
+        "shelly": "grid_meter",
+        "system.runtime_state": "system.runtime_state_path",
+        "runtime_state_path": "system.runtime_state_path",
+    }
+    for key_path, replacement in deprecated.items():
+        current = config_data
+        found = True
+        for part in key_path.split("."):
+            if isinstance(current, dict) and part in current:
+                current = current[part]
+            else:
+                found = False
+                break
+        if found:
+            diagnose_add(
+                checks,
+                "config",
+                "warning",
+                "deprecated_config_key",
+                f"Deprecated config key: {key_path}; use {replacement}",
+                key=key_path,
+                replacement=replacement,
+            )
+
+
+def diagnose_runtime_state_plausibility(checks, runtime_path, config_data):
+    if not os.path.exists(runtime_path) or os.path.getsize(runtime_path) == 0:
+        return
+
+    runtime_data, runtime_error = diagnose_json_file(runtime_path)
+    if runtime_error:
+        return
+    if not isinstance(runtime_data, dict):
+        diagnose_add(checks, "runtime_state", "error", "runtime_state_not_object", "runtime-state.json root must be a JSON object")
+        return
+    diagnose_add(checks, "runtime_state", "ok", "runtime_state_object", "runtime-state.json root is a JSON object")
+
+    system = runtime_data.get("system")
+    if isinstance(system, dict):
+        if "enabled" in system and not diagnose_bool(system.get("enabled")):
+            diagnose_add(checks, "runtime_state", "error", "runtime_system_enabled_invalid", "runtime system.enabled must be boolean")
+        elif "enabled" in system:
+            diagnose_add(checks, "runtime_state", "ok", "runtime_system_enabled_valid", "runtime system.enabled is boolean")
+        max_total = diagnose_float(system.get("max_total_power")) if "max_total_power" in system else None
+        if "max_total_power" in system and (max_total is None or max_total < 0):
+            diagnose_add(checks, "runtime_state", "error", "runtime_system_max_total_power_invalid", "runtime system.max_total_power must be numeric and non-negative")
+        min_output = diagnose_float(system.get("min_output_limit")) if "min_output_limit" in system else None
+        if "min_output_limit" in system and (min_output is None or min_output < 0):
+            diagnose_add(checks, "runtime_state", "error", "runtime_system_min_output_limit_invalid", "runtime system.min_output_limit must be numeric and non-negative")
+
+    config_names = set(diagnose_config_device_names(config_data))
+    runtime_devices = runtime_data.get("devices")
+    if isinstance(runtime_devices, dict):
+        runtime_names = set(runtime_devices)
+        for name in sorted(runtime_names - config_names):
+            diagnose_add(checks, "runtime_state", "warning", "runtime_device_unknown", f"Runtime-state contains device not present in config: {name}", device=name)
+        for name in sorted(config_names - runtime_names):
+            diagnose_add(checks, "runtime_state", "warning", "runtime_device_missing", f"Config device missing from runtime-state: {name}", device=name)
+        config_limits = {}
+        for item in config_data.get("devices", []) if isinstance(config_data, dict) else []:
+            if isinstance(item, dict) and item.get("name"):
+                parsed = diagnose_float(item.get("max_power"))
+                if parsed is not None:
+                    config_limits[str(item["name"])] = parsed
+        for name, device in runtime_devices.items():
+            if not isinstance(device, dict):
+                diagnose_add(checks, "runtime_state", "error", "runtime_device_not_object", f"Runtime device {name} must be an object", device=name)
+                continue
+            if "enabled" in device and not diagnose_bool(device.get("enabled")):
+                diagnose_add(checks, "runtime_state", "error", "runtime_device_enabled_invalid", f"Runtime device {name}.enabled must be boolean", device=name)
+            max_power = diagnose_float(device.get("max_power")) if "max_power" in device else None
+            if "max_power" in device and (max_power is None or max_power < 0):
+                diagnose_add(checks, "runtime_state", "error", "runtime_device_max_power_invalid", f"Runtime device {name}.max_power must be numeric and non-negative", device=name)
+            if max_power is not None and name in config_limits and max_power > config_limits[name]:
+                diagnose_add(checks, "runtime_state", "warning", "runtime_device_max_power_above_config", f"Runtime device {name}.max_power exceeds configured max_power", device=name)
+    elif runtime_devices is not None:
+        diagnose_add(checks, "runtime_state", "error", "runtime_devices_not_object", "runtime devices must be an object")
+
+    timestamp = runtime_data.get("timestamp") or runtime_data.get("updated_at")
+    if isinstance(timestamp, str):
+        parsed = diagnose_parse_timestamp(timestamp)
+        if parsed:
+            age_seconds = (datetime.now(timezone.utc) - parsed).total_seconds()
+            if age_seconds > 3600:
+                diagnose_add(checks, "runtime_state", "warning", "runtime_state_stale", "runtime-state timestamp is older than 1 hour", age_seconds=round(age_seconds, 1))
+
+
+def diagnose_parse_timestamp(value):
+    try:
+        normalized = value.replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(normalized)
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def diagnose_database_deep(checks, database_path):
+    if not database_path:
+        return
+    diagnose_check_path(
+        checks,
+        "data",
+        "dashboard_database_file",
+        database_path,
+        "dashboard database",
+        expect_file=True,
+        require_exists=False,
+        check_read=True,
+    )
+    if not os.path.exists(database_path):
+        return
+
+    try:
+        uri = "file:" + os.path.abspath(database_path) + "?mode=ro"
+        with sqlite3.connect(uri, uri=True, timeout=2) as con:
+            result = con.execute("PRAGMA integrity_check").fetchone()
+            integrity = result[0] if result else ""
+            if integrity == "ok":
+                diagnose_add(checks, "data", "ok", "sqlite_integrity_ok", "SQLite integrity_check returned ok")
+            else:
+                diagnose_add(checks, "data", "error", "sqlite_integrity_failed", "SQLite integrity_check did not return ok", result=str(integrity)[:120])
+
+            rows = con.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+            tables = {row[0] for row in rows}
+            expected = {
+                "snapshots",
+                "telemetry",
+                "device_state",
+                "rule_state",
+                "daily_energy_stats",
+                "energy_integration_state",
+            }
+            for table in sorted(expected):
+                level = "ok" if table in tables else "warning"
+                diagnose_add(checks, "data", level, "sqlite_table_present" if level == "ok" else "sqlite_table_missing", f"SQLite table {table}: {'present' if level == 'ok' else 'missing'}", table=table)
+
+            interesting = {
+                "snapshots": "timestamp",
+                "telemetry": "timestamp",
+                "daily_energy_stats": "updated_at",
+                "device_state": "updated_at",
+            }
+            any_rows = False
+            for table, timestamp_col in interesting.items():
+                if table not in tables:
+                    continue
+                count = con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                any_rows = any_rows or count > 0
+                latest = None
+                try:
+                    latest_row = con.execute(f"SELECT MAX({timestamp_col}) FROM {table}").fetchone()
+                    latest = latest_row[0] if latest_row else None
+                except sqlite3.Error:
+                    latest = None
+                diagnose_add(checks, "data", "ok", "sqlite_table_rows", f"SQLite table {table} rows: {count}", table=table, rows=count, latest=latest)
+                parsed = diagnose_parse_timestamp(latest) if isinstance(latest, str) else None
+                if parsed and (datetime.now(timezone.utc) - parsed).total_seconds() > 3600:
+                    diagnose_add(checks, "data", "warning", "sqlite_table_stale", f"SQLite table {table} latest row is older than 1 hour", table=table)
+            if not any_rows:
+                diagnose_add(checks, "data", "warning", "sqlite_no_energy_rows", "Dashboard database exists but contains no snapshot/energy rows")
+    except sqlite3.Error as exc:
+        diagnose_add(checks, "data", "error", "sqlite_open_failed", f"Cannot open dashboard database read-only: {exc}")
+
+
+def diagnose_dashboard_deep(checks, config_data):
+    dashboard = config_data.get("dashboard", {}) if isinstance(config_data, dict) else {}
+    if not isinstance(dashboard, dict) or not dashboard.get("enabled", False):
+        return
+
+    ssl_enabled = bool(dashboard.get("ssl_enabled", False))
+    if ssl_enabled:
+        for key in ("ssl_cert_file", "ssl_key_file"):
+            path = resolve_project_path(str(dashboard.get(key, "")))
+            diagnose_check_path(checks, "dashboard", key, path, f"dashboard {key}", expect_file=True, check_read=True)
+
+    host = str(dashboard.get("host", "") or "")
+    port = diagnose_int(dashboard.get("port"))
+    if port is None or not (1 <= port <= 65535):
+        return
+    if host in ("0.0.0.0", "::", ""):
+        probe_host = "127.0.0.1"
+    elif host in ("127.0.0.1", "localhost", "::1"):
+        probe_host = host
+    else:
+        diagnose_add(checks, "dashboard", "warning", "dashboard_probe_skipped", "Dashboard host is not loopback; local endpoint check skipped", host=host)
+        return
+    scheme = "https" if ssl_enabled else "http"
+    url = f"{scheme}://{probe_host}:{port}/"
+    try:
+        with urlopen(Request(url, headers={"User-Agent": "emsctl-diagnose"}), timeout=2) as response:
+            diagnose_add(
+                checks,
+                "dashboard",
+                "ok",
+                "dashboard_endpoint_reachable",
+                f"Dashboard local endpoint reachable: HTTP {response.status}",
+                status_code=response.status,
+                content_type=response.headers.get("content-type"),
+            )
+    except HTTPError as exc:
+        diagnose_add(checks, "dashboard", "warning", "dashboard_endpoint_http_error", f"Dashboard local endpoint returned HTTP {exc.code}", status_code=exc.code)
+    except (OSError, URLError) as exc:
+        diagnose_add(checks, "dashboard", "warning", "dashboard_endpoint_unreachable", f"Dashboard local endpoint not reachable: {exc.__class__.__name__}")
+
+
+def diagnose_log_paths(config_data):
+    paths = []
+    system = config_data.get("system", {}) if isinstance(config_data, dict) else {}
+    if isinstance(system, dict):
+        for key in ("log_path", "log_file"):
+            value = system.get(key)
+            if value:
+                paths.append(resolve_project_path(str(value)))
+    return paths
+
+
+def diagnose_tail_lines(path, max_lines=300):
+    try:
+        with open(path, errors="replace") as f:
+            lines = f.readlines()
+    except OSError:
+        return []
+    return lines[-max_lines:]
+
+
+def diagnose_logs_deep(checks, config_data):
+    paths = diagnose_log_paths(config_data)
+    if not paths:
+        diagnose_add(checks, "logs", "warning", "log_path_not_configured", "No log path configured for deep log scan")
+        return
+    for path in paths:
+        diagnose_check_path(checks, "logs", "log_file", path, "log file", expect_file=True, require_exists=False, check_read=True)
+        if not os.path.exists(path):
+            continue
+        lines = diagnose_tail_lines(path)
+        counts = {}
+        last_seen = {}
+        for line in lines:
+            for name, pattern in DIAGNOSE_LOG_PATTERNS:
+                if pattern.search(line):
+                    counts[name] = counts.get(name, 0) + 1
+                    last_seen[name] = diagnose_extract_timestamp(line)
+        if counts:
+            for name, count in sorted(counts.items()):
+                diagnose_add(checks, "logs", "warning", "log_pattern_found", f"Log pattern {name}: {count} occurrence(s)", pattern=name, count=count, last_seen=last_seen.get(name))
+        else:
+            diagnose_add(checks, "logs", "ok", "log_scan_clean", "No common error patterns found in recent log lines", path=path, scanned_lines=len(lines))
+
+
+def diagnose_extract_timestamp(line):
+    match = re.search(r"\d{4}-\d{2}-\d{2}[T ][0-9:.+-]+", line)
+    return match.group(0) if match else None
+
+
+def diagnose_docker_deep(checks):
+    compose_files = [
+        name
+        for name in ("docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml", "docker-compose.example.yml")
+        if os.path.exists(os.path.join(BASE_DIR, name))
+    ]
+    docker_exe = shutil.which("docker")
+    if not docker_exe:
+        diagnose_add(checks, "docker", "warning", "docker_cli_missing", "Docker CLI not found; host Docker checks skipped")
+        return
+    diagnose_add(checks, "docker", "ok", "docker_cli_found", "Docker CLI found")
+    if not compose_files:
+        diagnose_add(checks, "docker", "warning", "compose_file_missing", "No Docker Compose file found in project directory")
+        return
+    diagnose_add(checks, "docker", "ok", "compose_file_found", f"Compose file found: {compose_files[0]}", file=compose_files[0])
+    try:
+        result = subprocess.run(
+            [docker_exe, "compose", "ps", "--format", "json"],
+            cwd=BASE_DIR,
+            text=True,
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        diagnose_add(checks, "docker", "warning", "docker_compose_ps_failed", f"docker compose ps failed: {exc.__class__.__name__}")
+        return
+    if result.returncode == 0:
+        output = result.stdout.strip()
+        diagnose_add(checks, "docker", "ok", "docker_compose_ps", "docker compose ps completed", output_preview=output[:500])
+    else:
+        diagnose_add(checks, "docker", "warning", "docker_compose_ps_failed", "docker compose ps returned non-zero", stderr_preview=result.stderr[:500])
+
+
+def diagnose_http_json(url, headers=None, timeout=2):
+    request = Request(url, headers=headers or {"User-Agent": "emsctl-diagnose"})
+    with urlopen(request, timeout=timeout) as response:
+        raw = response.read(1024 * 1024)
+        payload = json.loads(raw.decode("utf-8"))
+        return response.status, payload
+
+
+def diagnose_hardware(checks, config_data):
+    if not isinstance(config_data, dict):
+        return
+    grid_meter = config_data.get("grid_meter")
+    if not isinstance(grid_meter, dict):
+        grid_meter = config_data.get("shelly") if isinstance(config_data.get("shelly"), dict) else {}
+        if grid_meter:
+            grid_meter = {"type": "shelly", **grid_meter}
+    meter_type = str(grid_meter.get("type", "shelly")).strip().lower() if isinstance(grid_meter, dict) else "unknown"
+
+    if meter_type == "shelly" and grid_meter.get("ip"):
+        url = f"http://{grid_meter['ip']}/rpc/Shelly.GetStatus"
+        try:
+            status, payload = diagnose_http_json(url)
+            from ems.clients import _parse_shelly_power
+            power = _parse_shelly_power(payload, channels=grid_meter.get("channels"))
+            diagnose_add(checks, "hardware", "ok", "shelly_read_ok", "Shelly read-only status endpoint returned parseable power", status_code=status, power_w=power)
+        except Exception as exc:
+            diagnose_add(checks, "hardware", "warning", "shelly_read_failed", f"Shelly read-only probe failed: {exc.__class__.__name__}")
+    elif meter_type == "ecotracker" and grid_meter.get("ip"):
+        url = f"http://{grid_meter['ip']}/v1/json"
+        try:
+            status, payload = diagnose_http_json(url)
+            from ems.clients import _parse_ecotracker_power
+            power = _parse_ecotracker_power(payload)
+            diagnose_add(checks, "hardware", "ok", "ecotracker_read_ok", "EcoTracker read-only endpoint returned parseable power", status_code=status, power_w=power)
+        except Exception as exc:
+            diagnose_add(checks, "hardware", "warning", "ecotracker_read_failed", f"EcoTracker read-only probe failed: {exc.__class__.__name__}")
+    else:
+        diagnose_add(checks, "hardware", "warning", "grid_meter_probe_skipped", f"No read-only grid meter probe implemented for type: {meter_type}", type=meter_type)
+
+    for index, device in enumerate(config_data.get("devices", [])):
+        if not isinstance(device, dict):
+            continue
+        name = str(device.get("name") or f"device-{index}")
+        missing = [
+            key
+            for key in ("ip", "sn")
+            if not device.get(key)
+        ]
+        if missing:
+            diagnose_add(checks, "hardware", "warning", "zendure_device_config_incomplete", f"Zendure device {name} missing required config: {', '.join(missing)}", device=name, missing=missing)
+            continue
+        diagnose_add(checks, "hardware", "ok", "zendure_device_config_complete", f"Zendure device {name} has required read config", device=name, serial_configured=True)
+        url = f"http://{device['ip']}/properties/report"
+        try:
+            status, payload = diagnose_http_json(url)
+            from ems.clients import parse_device
+            parse_device(payload)
+            diagnose_add(checks, "hardware", "ok", "zendure_read_ok", f"Zendure device {name} read-only report endpoint returned parseable payload", device=name, status_code=status)
+        except Exception as exc:
+            diagnose_add(checks, "hardware", "warning", "zendure_read_failed", f"Zendure device {name} read-only probe failed: {exc.__class__.__name__}", device=name)
+
+
+def diagnose_redact_key(key):
+    lowered = str(key).lower()
+    return any(token in lowered for token in DIAGNOSE_REDACT_KEYWORDS)
+
+
+def diagnose_redact_value(value):
+    if isinstance(value, dict):
+        return {
+            key: "<redacted>" if diagnose_redact_key(key) else diagnose_redact_value(child)
+            for key, child in value.items()
+        }
+    if isinstance(value, list):
+        return [diagnose_redact_value(item) for item in value]
+    return value
+
+
+def diagnose_redact_text(text):
+    redacted = text
+    redacted = re.sub(r"(?i)(token|password|passwd|secret|authorization|bearer|cookie|session|auth)([\"'\s:=]+)([^\"'\s,}]+)", r"\1\2<redacted>", redacted)
+    redacted = re.sub(r"(?i)(sn|serial|device_id|api[_-]?key)([\"'\s:=]+)([^\"'\s,}]+)", r"\1\2<redacted>", redacted)
+    return redacted
+
+
+def diagnose_support_bundle_path(output):
+    if output:
+        return output
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return os.path.join(os.getcwd(), f"ems-diagnose-{timestamp}.zip")
+
+
+def diagnose_write_support_bundle(report, args, config_data, runtime_path):
+    output_path = diagnose_support_bundle_path(args.output)
+    parent = os.path.dirname(os.path.abspath(output_path))
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+    runtime_data = None
+    if runtime_path and os.path.exists(runtime_path):
+        runtime_data, _ = diagnose_json_file(runtime_path)
+
+    log_text = ""
+    for path in diagnose_log_paths(config_data):
+        lines = diagnose_tail_lines(path)
+        if lines:
+            log_text += f"== {path} ==\n"
+            log_text += "".join(lines)
+            if not log_text.endswith("\n"):
+                log_text += "\n"
+
+    docker_lines = [
+        check["message"]
+        for check in report["checks"]
+        if check["section"] == "docker"
+    ]
+
+    with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+        bundle.writestr("diagnose.txt", diagnose_redact_text(diagnose_text(report)))
+        bundle.writestr("diagnose.json", diagnose_redact_text(json.dumps(report, indent=2, sort_keys=True)))
+        bundle.writestr("redacted-config.json", json.dumps(diagnose_redact_value(config_data if isinstance(config_data, dict) else {}), indent=2, sort_keys=True))
+        bundle.writestr("runtime-state-redacted.json", json.dumps(diagnose_redact_value(runtime_data if isinstance(runtime_data, dict) else {}), indent=2, sort_keys=True))
+        bundle.writestr("last-log-lines.txt", diagnose_redact_text(log_text))
+        bundle.writestr(
+            "project-info.txt",
+            "\n".join([
+                f"generated_at={report['generated_at']}",
+                f"mode={report['mode']}",
+                f"base_dir={report['project']['base_dir']}",
+                f"config_path={report['project']['config_path']}",
+                f"runtime_state_path={report['project']['runtime_state_path']}",
+                f"status={report['status']}",
+            ]) + "\n",
+        )
+        if docker_lines:
+            bundle.writestr("docker-info.txt", "\n".join(docker_lines) + "\n")
+        bundle.writestr(
+            "README-SUPPORT-BUNDLE.txt",
+            "EMS diagnose support bundle. Files are generated from read-only diagnostics and redact common secret fields.\n"
+            "Do not add private keys, dashboard auth files, database files, or unredacted configs before sharing.\n",
+        )
+    return output_path
+
+
 def diagnose_collect(args):
     checks = []
     mode, mode_sources = diagnose_container_mode()
 
     uid = os.getuid() if hasattr(os, "getuid") else None
     gid = os.getgid() if hasattr(os, "getgid") else None
+    python_version = platform.python_version()
+    python_info = sys.version_info
     diagnose_add(
         checks,
         "environment",
         "ok",
         "python_version",
-        f"Python version: {platform.python_version()}",
-        version=platform.python_version(),
+        f"Python version: {python_version}",
+        version=python_version,
     )
+    if python_info >= (3, 10):
+        diagnose_add(checks, "environment", "ok", "python_version_supported", "Python version is supported", version=python_version)
+    else:
+        diagnose_add(checks, "environment", "warning", "python_version_unsupported", "Python version is older than the supported baseline", version=python_version)
     diagnose_add(
         checks,
         "environment",
@@ -717,76 +1502,33 @@ def diagnose_collect(args):
         system=platform.system(),
         release=platform.release(),
     )
-    diagnose_add(
-        checks,
-        "environment",
-        "ok",
-        "current_working_directory",
-        f"Current working directory: {os.getcwd()}",
-        cwd=os.getcwd(),
-    )
+    cwd = os.getcwd()
+    diagnose_add(checks, "environment", "ok", "current_working_directory", f"Current working directory: {cwd}", cwd=cwd)
+    if diagnose_path_within(cwd, BASE_DIR):
+        diagnose_add(checks, "environment", "ok", "cwd_inside_project", "Current working directory is inside project base")
+    else:
+        diagnose_add(checks, "environment", "warning", "cwd_outside_project", "Current working directory is outside project base")
     if uid is not None and gid is not None:
-        diagnose_add(
-            checks,
-            "environment",
-            "ok",
-            "current_user",
-            f"Current user: uid={uid} gid={gid}",
-            uid=uid,
-            gid=gid,
-        )
+        diagnose_add(checks, "environment", "ok", "current_user", f"Current user: uid={uid} gid={gid}", uid=uid, gid=gid)
         root_level = "warning" if uid == 0 else "ok"
-        diagnose_add(
-            checks,
-            "environment",
-            root_level,
-            "process_root",
-            "Process runs as root" if uid == 0 else "Process does not run as root",
-            uid=uid,
-        )
+        diagnose_add(checks, "environment", root_level, "process_root", "Process runs as root" if uid == 0 else "Process does not run as root", uid=uid)
 
     config_path = args.config
     template_path = os.path.join(BASE_DIR, "config.template.json")
     data_dir = os.path.join(BASE_DIR, "data")
 
-    diagnose_check_path(
-        checks,
-        "project",
-        "emsctl",
-        os.path.join(BASE_DIR, "emsctl.py"),
-        "emsctl.py",
-        expect_file=True,
-        check_read=True,
-    )
-    diagnose_check_path(
-        checks,
-        "project",
-        "config",
-        config_path,
-        "config.json",
-        expect_file=True,
-        check_read=True,
-    )
-    diagnose_check_path(
-        checks,
-        "project",
-        "config_template",
-        template_path,
-        "config.template.json",
-        expect_file=True,
-        check_read=True,
-    )
-    diagnose_check_path(
-        checks,
-        "project",
-        "data_dir",
-        data_dir,
-        "data directory",
-        expect_dir=True,
-        check_read=True,
-        check_write=True,
-        missing_level="warning",
-    )
+    for code, path, label, required in (
+        ("emsctl", os.path.join(BASE_DIR, "emsctl.py"), "emsctl.py", True),
+        ("main_script", os.path.join(BASE_DIR, "ems-solarflow-api-control.py"), "ems-solarflow-api-control.py", True),
+        ("requirements", os.path.join(BASE_DIR, "requirements.txt"), "requirements.txt", True),
+        ("requirements_dev", os.path.join(BASE_DIR, "requirements-dev.txt"), "requirements-dev.txt", False),
+        ("config", config_path, "config.json", True),
+        ("config_template", template_path, "config.template.json", True),
+    ):
+        diagnose_check_path(checks, "project", code, path, label, expect_file=True, check_read=True, missing_level="warning" if not required else "error")
+
+    diagnose_check_path(checks, "project", "data_dir", data_dir, "data directory", expect_dir=True, check_read=True, check_write=True, missing_level="warning")
+    diagnose_git_info(checks)
 
     config_data, config_error = diagnose_json_file(config_path)
     template_data, template_error = diagnose_json_file(template_path)
@@ -821,27 +1563,14 @@ def diagnose_collect(args):
         missing_keys = diagnose_missing_template_keys(config_data, template_data)
         if missing_keys:
             for key in missing_keys:
-                diagnose_add(
-                    checks,
-                    "config",
-                    "warning",
-                    "missing_config_key",
-                    f"Missing config key: {key}",
-                    key=key,
-                )
+                diagnose_add(checks, "config", "warning", "missing_config_key", f"Missing config key: {key}", key=key)
         else:
             diagnose_add(checks, "config", "ok", "config_keys_complete", "config.json contains all template keys")
 
+    diagnose_config_plausibility(checks, args, config_data)
+
     runtime_path = resolve_runtime_path(args, config_data)
-    diagnose_parent_path(
-        checks,
-        "project",
-        "runtime_state",
-        runtime_path,
-        "runtime-state path",
-        check_write=True,
-        missing_level="warning",
-    )
+    diagnose_parent_path(checks, "project", "runtime_state", runtime_path, "runtime-state path", check_write=True, missing_level="warning")
 
     dashboard_config = config_data.get("dashboard", {}) if isinstance(config_data, dict) else {}
     database_path = None
@@ -849,52 +1578,19 @@ def diagnose_collect(args):
         database_path = dashboard_config.get("database_path")
     if database_path:
         database_path = resolve_project_path(str(database_path))
-        diagnose_parent_path(
-            checks,
-            "project",
-            "dashboard_database",
-            database_path,
-            "dashboard database path",
-            check_write=True,
-            missing_level="warning",
-        )
+        diagnose_parent_path(checks, "project", "dashboard_database", database_path, "dashboard database path", check_write=True, missing_level="warning")
 
-    diagnose_parent_path(
-        checks,
-        "runtime_state",
-        "runtime_state",
-        runtime_path,
-        "runtime-state file",
-        check_write=True,
-        missing_level="warning",
-    )
-    diagnose_check_path(
-        checks,
-        "runtime_state",
-        "runtime_state_file",
-        runtime_path,
-        "runtime-state.json",
-        expect_file=True,
-        require_exists=False,
-        check_read=True,
-        check_write=True,
-    )
+    diagnose_parent_path(checks, "runtime_state", "runtime_state", runtime_path, "runtime-state file", check_write=True, missing_level="warning")
+    diagnose_check_path(checks, "runtime_state", "runtime_state_file", runtime_path, "runtime-state.json", expect_file=True, require_exists=False, check_read=True, check_write=True)
     runtime_json_error = diagnose_read_json_if_nonempty(runtime_path)
     if runtime_json_error is None and os.path.exists(runtime_path) and os.path.getsize(runtime_path) > 0:
         diagnose_add(checks, "runtime_state", "ok", "runtime_state_valid_json", "runtime-state.json is valid JSON", path=runtime_path)
     elif runtime_json_error:
         diagnose_add(checks, "runtime_state", "error", "runtime_state_invalid_json", f"runtime-state.json is invalid JSON: {runtime_json_error}", path=runtime_path)
+    diagnose_runtime_state_plausibility(checks, runtime_path, config_data)
 
     if database_path:
-        diagnose_parent_path(
-            checks,
-            "data",
-            "dashboard_database",
-            database_path,
-            "dashboard database",
-            check_write=True,
-            missing_level="warning",
-        )
+        diagnose_parent_path(checks, "data", "dashboard_database", database_path, "dashboard database", check_write=True, missing_level="warning")
 
     system_config = config_data.get("system", {}) if isinstance(config_data, dict) else {}
     if isinstance(system_config, dict):
@@ -902,102 +1598,49 @@ def diagnose_collect(args):
             log_path = system_config.get(key)
             if log_path:
                 log_path = resolve_project_path(str(log_path))
-                diagnose_parent_path(
-                    checks,
-                    "logs",
-                    key,
-                    log_path,
-                    f"{key}",
-                    check_write=True,
-                    missing_level="warning",
-                )
+                diagnose_parent_path(checks, "logs", key, log_path, f"{key}", check_write=True, missing_level="warning")
 
     if mode == "container":
         for source in mode_sources:
-            diagnose_add(
-                checks,
-                "docker",
-                "ok",
-                "container_detected",
-                f"Container detected via {source}",
-                source=source,
-            )
+            diagnose_add(checks, "docker", "ok", "container_detected", f"Container detected via {source['source']}", **source)
 
         pid1_identity, pid1_error = diagnose_uid_gid("/proc/1")
         if pid1_identity:
-            diagnose_add(
-                checks,
-                "docker",
-                "ok",
-                "pid1_user",
-                f"PID 1 user: uid={pid1_identity['uid']} gid={pid1_identity['gid']}",
-                **pid1_identity,
-            )
+            diagnose_add(checks, "docker", "ok", "pid1_user", f"PID 1 user: uid={pid1_identity['uid']} gid={pid1_identity['gid']}", **pid1_identity)
         else:
             diagnose_add(checks, "docker", "warning", "pid1_user_unavailable", f"PID 1 UID/GID unavailable: {pid1_error}")
 
         if uid is not None and gid is not None:
-            diagnose_add(
-                checks,
-                "docker",
-                "ok",
-                "container_process_user",
-                f"Current process user: uid={uid} gid={gid}",
-                uid=uid,
-                gid=gid,
-            )
+            diagnose_add(checks, "docker", "ok", "container_process_user", f"Current process user: uid={uid} gid={gid}", uid=uid, gid=gid)
             if uid == 0:
-                diagnose_add(
-                    checks,
-                    "docker",
-                    "warning",
-                    "container_process_root",
-                    "Container process runs as root",
-                    uid=uid,
-                )
+                diagnose_add(checks, "docker", "warning", "container_process_root", "Container process runs as root", uid=uid)
 
-        diagnose_check_path(
-            checks,
-            "docker",
-            "app_config",
-            "/app/config",
-            "/app/config",
-            expect_dir=True,
-            check_read=True,
-            missing_level="warning",
-        )
-        diagnose_check_path(
-            checks,
-            "docker",
-            "app_data",
-            "/app/data",
-            "/app/data",
-            expect_dir=True,
-            check_read=True,
-            check_write=True,
-            missing_level="warning",
-        )
-        diagnose_check_path(
-            checks,
-            "docker",
-            "app_config_config",
-            "/app/config/config.json",
-            "/app/config/config.json",
-            expect_file=True,
-            check_read=True,
-            missing_level="warning",
-        )
+        for path, code in (("/app/config", "app_config"), ("/app/data", "app_data")):
+            diagnose_check_path(checks, "docker", code, path, path, expect_dir=True, check_read=True, check_write=(path == "/app/data"), missing_level="warning")
+            identity, error = diagnose_uid_gid(path)
+            if identity:
+                diagnose_add(checks, "docker", "ok", f"{code}_owner", f"{path} owner: uid={identity['uid']} gid={identity['gid']}", **identity)
+            elif os.path.exists(path):
+                diagnose_add(checks, "docker", "warning", f"{code}_owner_unavailable", f"{path} owner unavailable: {error}")
 
-        for label, path in (
-            ("runtime-state path", runtime_path),
-            ("dashboard database path", database_path),
-        ):
+        diagnose_check_path(checks, "docker", "app_config_config", "/app/config/config.json", "/app/config/config.json", expect_file=True, check_read=True, missing_level="warning")
+
+        for label, path in (("runtime-state path", runtime_path), ("dashboard database path", database_path)):
             if not path:
                 continue
             if diagnose_path_within(path, "/app/data"):
                 diagnose_add(checks, "docker", "ok", "container_data_path", f"{label} resolves below /app/data: {path}", path=path)
             else:
                 diagnose_add(checks, "docker", "warning", "container_data_path_outside_app_data", f"{label} does not resolve below /app/data: {path}", path=path)
+
+    if args.deep:
+        diagnose_database_deep(checks, database_path)
+        diagnose_dashboard_deep(checks, config_data)
+        diagnose_logs_deep(checks, config_data)
+        diagnose_docker_deep(checks)
+
+    if args.hardware:
+        diagnose_hardware(checks, config_data)
 
     summary = {
         "ok": sum(1 for check in checks if check["level"] == "ok"),
@@ -1010,11 +1653,22 @@ def diagnose_collect(args):
         "mode": mode,
         "mode_sources": mode_sources,
         "summary": summary,
+        "options": {
+            "deep": bool(args.deep),
+            "hardware": bool(args.hardware),
+            "support_bundle": bool(args.support_bundle),
+        },
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "project": {
+            "base_dir": BASE_DIR,
+            "config_path": config_path,
+            "runtime_state_path": runtime_path,
+        },
         "checks": checks,
     }
 
 
-def print_diagnose_text(report):
+def diagnose_text(report):
     mode_labels = {
         "native": "native installation",
         "container": "container",
@@ -1026,40 +1680,64 @@ def print_diagnose_text(report):
         "config": "Config",
         "runtime_state": "Runtime state",
         "data": "Data/database",
+        "dashboard": "Dashboard",
         "logs": "Logs",
         "docker": "Docker",
+        "hardware": "Hardware",
     }
-    order = ("environment", "project", "config", "runtime_state", "data", "logs", "docker")
-    level_labels = {
-        "ok": "OK",
-        "warning": "WARN",
-        "error": "ERROR",
-    }
+    order = ("environment", "project", "config", "runtime_state", "data", "dashboard", "logs", "docker", "hardware")
+    level_labels = {"ok": "OK", "warning": "WARN", "error": "ERROR"}
 
-    print("EMS Diagnose")
-    print()
-    print(f"Mode: {mode_labels.get(report['mode'], report['mode'])}")
+    lines = [
+        "EMS Diagnose",
+        "",
+        f"Mode: {mode_labels.get(report['mode'], report['mode'])}",
+        f"Deep checks: {'enabled' if report['options']['deep'] else 'disabled'}",
+        f"Hardware checks: {'enabled' if report['options']['hardware'] else 'disabled'}",
+        f"Support bundle: {'enabled' if report['options']['support_bundle'] else 'disabled'}",
+    ]
 
     for section in order:
         checks = [check for check in report["checks"] if check["section"] == section]
         if not checks:
             continue
-        print()
-        print(section_labels.get(section, section.title()))
+        lines.append("")
+        lines.append(section_labels.get(section, section.title()))
         for check in checks:
-            print(f"[{level_labels.get(check['level'], check['level'].upper())}] {check['message']}")
+            lines.append(f"[{level_labels.get(check['level'], check['level'].upper())}] {check['message']}")
 
-    print()
-    print(f"Result: {report['status']}")
+    lines.append("")
+    lines.append(f"Result: {report['status']}")
+    return "\n".join(lines) + "\n"
+
+
+def print_diagnose_text(report):
+    print(diagnose_text(report), end="")
 
 
 def handle_diagnose_command(args):
+    if args.output and not args.support_bundle:
+        return fail("--output is only valid together with --support-bundle", code=2)
+
     report = diagnose_collect(args)
+    bundle_path = None
+    if args.support_bundle:
+        config_data, _ = diagnose_json_file(report["project"]["config_path"])
+        bundle_path = diagnose_write_support_bundle(
+            report,
+            args,
+            config_data if isinstance(config_data, dict) else {},
+            report["project"]["runtime_state_path"],
+        )
+        report["support_bundle_path"] = bundle_path
+
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
         print_diagnose_text(report)
-    return 0
+        if bundle_path:
+            print(f"Support bundle: {bundle_path}")
+    return 1 if report["status"] == "error" else 0
 
 
 def int_value(value, field, minimum=0):

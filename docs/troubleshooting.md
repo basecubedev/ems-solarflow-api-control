@@ -22,6 +22,30 @@ profile.
 
 ## Basic Checks
 
+Run local diagnostics first:
+
+```bash
+python3 emsctl.py diagnose
+python3 emsctl.py diagnose --deep
+python3 emsctl.py diagnose --json
+python3 emsctl.py diagnose --support-bundle
+```
+
+Normal diagnose is local/read-only. `--deep` adds local operational checks such
+as SQLite integrity, table summaries, recent configured log patterns, Docker
+hints, and dashboard loopback reachability. `--hardware` is opt-in and performs
+short-timeout read-only network probes only. `--support-bundle` writes a
+redacted ZIP for GitHub/support requests. Exit code `1` means at least one
+diagnostic error was found; warnings still exit `0`.
+
+Inside Docker:
+
+```bash
+docker compose exec ems python3 emsctl.py diagnose
+docker compose exec ems python3 emsctl.py diagnose --deep
+docker compose exec ems python3 emsctl.py diagnose --support-bundle
+```
+
 Compile:
 
 ```bash
