@@ -368,6 +368,8 @@ python3 emsctl.py winter enable
 python3 emsctl.py ha disable
 python3 emsctl.py diagnose
 python3 emsctl.py diagnose --deep
+python3 emsctl.py diagnose --control
+python3 emsctl.py diagnose --control --sample-seconds 30
 python3 emsctl.py diagnose --json
 python3 emsctl.py diagnose --support-bundle
 ```
@@ -383,6 +385,12 @@ checks such as SQLite, recent logs, and the dashboard loopback endpoint.
 `--support-bundle` creates a redacted ZIP for GitHub/support requests. Exit
 code `1` means at least one diagnostic error was found; warnings still exit
 `0`.
+
+`diagnose --control` explains why EMS is currently regulating the way it is:
+grid and filtered power, calculated target, final output, deadband state,
+device distribution, SOC protection, write-path blockers such as disabled
+control or dry-run mode, and likely root causes. `--sample-seconds` adds local
+runtime-state meter samples for noise/staleness analysis.
 
 More:
 
