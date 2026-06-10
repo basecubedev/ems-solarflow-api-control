@@ -42,16 +42,37 @@ or other external services.
 ```bash
 python3 emsctl.py diagnose
 python3 emsctl.py diagnose --deep
+python3 emsctl.py diagnose --hardware
 python3 emsctl.py diagnose --control
 python3 emsctl.py diagnose --control --sample-seconds 30
 python3 emsctl.py diagnose --control-quality --sample-seconds 60
+python3 emsctl.py diagnose --quality --json
 python3 emsctl.py diagnose --json
 python3 emsctl.py diagnose --support-bundle
+python3 emsctl.py diagnose --support-bundle --output /tmp/ems-support.zip
 ```
+
+## Diagnose Command Matrix
+
+| Command | Purpose |
+| --- | --- |
+| `diagnose` | Installation health |
+| `diagnose --deep` | Advanced health checks |
+| `diagnose --hardware` | Hardware connectivity |
+| `diagnose --control` | Explain EMS decisions |
+| `diagnose --control-quality` | Evaluate EMS quality |
+| `diagnose --support-bundle` | Generate support bundle |
+
+Use `diagnose` first when something is unclear. Use `--control` when EMS is
+running but the current output looks surprising. Use `--control-quality` when
+the system regulates but export/import, PV usage, or SOC balancing looks poor
+over time. Use `--support-bundle` before opening a GitHub issue or forum
+support request.
 
 Modes:
 
-- `--json` prints the same result structure as machine-readable JSON.
+- `--json` prints the same result structure as machine-readable JSON. The
+  diagnose API contract is versioned with top-level `schema_version: 1`.
 - `--deep` adds local operational checks: runtime-state plausibility, SQLite
   integrity/table summaries, recent configured log patterns, Docker host hints,
   and a dashboard loopback check when enabled.
@@ -68,9 +89,10 @@ Modes:
 - `--control-quality` or `--quality` evaluates real operation over local
   samples: export/import quality, a coarse regulation quality score, PV usage
   plausibility, SOC balancing, and higher-level root-cause hints.
-- `--support-bundle` creates a redacted ZIP with `diagnose.txt`,
-  `diagnose.json`, redacted config/runtime-state snapshots, recent redacted log
-  lines, and project metadata.
+- `--support-bundle` creates a redacted ZIP with a stable file layout:
+  `diagnosis.json`, `diagnosis.txt`, `control-diagnostics.json`,
+  `control-diagnostics.txt`, `control-quality.json`, `control-quality.txt`,
+  `redacted-config.json`, `runtime-state.json`, and `bundle-metadata.json`.
 
 Control interpretation:
 
@@ -108,6 +130,30 @@ Exit codes:
 2  invalid CLI usage
 ```
 
+Before opening an issue:
+
+```bash
+python3 emsctl.py diagnose --support-bundle
+```
+
+Attach the generated ZIP. The bundle is redacted and includes the diagnostic
+summary, redacted config/runtime-state snapshots, bundle metadata, and
+control/quality diagnostics. Control files are present even when the
+corresponding mode was not enabled so automated tooling can rely on the same
+file names.
+
+Machine-readable root causes always use this shape:
+
+```json
+{
+  "code": "control_disabled",
+  "severity": "warning",
+  "title": "Control disabled",
+  "message": "Control disabled",
+  "suggested_next_check": "Review the related diagnose section for details."
+}
+```
+
 ## Config Discovery
 
 By default, `emsctl.py` uses this config lookup order:
@@ -133,14 +179,14 @@ With the recommended Compose service name `ems`, common commands can be run
 without an explicit config path:
 
 ```bash
-docker compose exec ems python emsctl.py status
-docker compose exec ems python emsctl.py interactive
-docker compose exec ems python emsctl.py dashboard auth-status
-docker compose exec ems python emsctl.py diagnose
-docker compose exec ems python emsctl.py diagnose --control
-docker compose exec ems python emsctl.py diagnose --control-quality --sample-seconds 60
-docker compose exec ems python emsctl.py diagnose --deep
-docker compose exec ems python emsctl.py diagnose --support-bundle
+docker compose exec ems python3 emsctl.py status
+docker compose exec ems python3 emsctl.py interactive
+docker compose exec ems python3 emsctl.py dashboard auth-status
+docker compose exec ems python3 emsctl.py diagnose
+docker compose exec ems python3 emsctl.py diagnose --control
+docker compose exec ems python3 emsctl.py diagnose --control-quality --sample-seconds 60
+docker compose exec ems python3 emsctl.py diagnose --deep
+docker compose exec ems python3 emsctl.py diagnose --support-bundle
 ```
 
 For unusual mounts or troubleshooting, an explicit config path still works:
