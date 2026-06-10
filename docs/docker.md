@@ -49,12 +49,14 @@ With the recommended Compose service name `ems`, `emsctl.py` automatically
 uses `/app/config/config.json` when no legacy `/app/config.json` exists:
 
 ```bash
-docker compose exec ems python emsctl.py status
-docker compose exec ems python emsctl.py interactive
-docker compose exec ems python emsctl.py dashboard auth-status
-docker compose exec ems python emsctl.py diagnose
-docker compose exec ems python emsctl.py diagnose --deep
-docker compose exec ems python emsctl.py diagnose --support-bundle
+docker compose exec ems python3 emsctl.py status
+docker compose exec ems python3 emsctl.py interactive
+docker compose exec ems python3 emsctl.py dashboard auth-status
+docker compose exec ems python3 emsctl.py diagnose
+docker compose exec ems python3 emsctl.py diagnose --deep
+docker compose exec ems python3 emsctl.py diagnose --control
+docker compose exec ems python3 emsctl.py diagnose --control-quality --sample-seconds 60
+docker compose exec ems python3 emsctl.py diagnose --support-bundle
 ```
 
 The runtime-state path is still read from the selected config. With the
@@ -68,6 +70,12 @@ readability/writability, ownership, and whether mutable paths resolve below
 Docker Compose hints when Docker is available. `--support-bundle` creates a
 redacted ZIP suitable for GitHub/support issues. Exit code `1` means at least
 one diagnostic error was found; warnings still exit `0`.
+
+Use `diagnose --control` when EMS is running but current output looks
+unexpected. Use `diagnose --control-quality --sample-seconds 60` when export
+peaks, PV utilization, or SOC balancing need to be evaluated over a short
+sample window. Use `diagnose --support-bundle` before opening an issue; the ZIP
+is redacted and contains safe diagnostic material for maintainers.
 
 For unusual mounts or troubleshooting, pass the config path explicitly:
 

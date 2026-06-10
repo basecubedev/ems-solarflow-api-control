@@ -1,0 +1,80 @@
+name: Bug Report
+description: Report something that is not working as expected.
+title: "[Bug]: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Describe the Problem
+      description: What happened?
+      placeholder: Tell us what you noticed and what you were doing at the time.
+    validations:
+      required: false
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+      placeholder: Describe the result you expected.
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: EMS Version
+      description: Version used
+      placeholder: Version, tag, commit, or "not sure"
+    validations:
+      required: false
+  - type: dropdown
+    id: installation-type
+    attributes:
+      label: Installation Type
+      options:
+        - Native Python
+        - Docker
+        - Not sure
+    validations:
+      required: false
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Optional Diagnostics
+      description: Diagnostics are optional, but they can help identify issues much faster.
+      value: |
+        If available, diagnostics can help identify issues faster.
+
+        Native Python:
+
+        ```bash
+        python3 emsctl.py diagnose
+        ```
+
+        ```bash
+        python3 emsctl.py diagnose --support-bundle
+        ```
+
+        Docker:
+
+        ```bash
+        docker compose exec ems python3 emsctl.py diagnose
+        ```
+
+        ```bash
+        docker compose exec ems python3 emsctl.py diagnose --support-bundle
+        ```
+
+        You may find additional troubleshooting information here:
+
+        - [General project documentation](https://github.com/basecubedev/ems-solarflow-api-control/blob/main/README.md)
+        - [Troubleshooting guide](https://github.com/basecubedev/ems-solarflow-api-control/blob/main/docs/troubleshooting.md)
+        - [CLI documentation](https://github.com/basecubedev/ems-solarflow-api-control/blob/main/docs/cli.md)
+    validations:
+      required: false
+  - type: textarea
+    id: additional-information
+    attributes:
+      label: Additional Information
+      placeholder: Add anything else that might help, such as logs, screenshots, config snippets, or observations.
+    validations:
+      required: false

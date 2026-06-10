@@ -1,0 +1,41 @@
+name: Feature Request
+description: Suggest an improvement or new capability.
+title: "[Feature]: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem are you trying to solve?
+      placeholder: Describe the use case or limitation.
+    validations:
+      required: false
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Proposed Solution
+      description: Describe your idea.
+      placeholder: Explain what you would like EMS to do.
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Have you considered any alternatives?
+      placeholder: Mention workarounds or other approaches, if any.
+    validations:
+      required: false
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional Context
+      placeholder: Add any extra context, examples, or screenshots.
+      value: |
+        Useful documentation:
+
+        - [General project documentation](https://github.com/basecubedev/ems-solarflow-api-control/blob/main/README.md)
+        - [Troubleshooting guide](https://github.com/basecubedev/ems-solarflow-api-control/blob/main/docs/troubleshooting.md)
+        - [CLI documentation](https://github.com/basecubedev/ems-solarflow-api-control/blob/main/docs/cli.md)
+    validations:
+      required: false
