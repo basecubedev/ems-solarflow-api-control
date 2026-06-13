@@ -73,6 +73,9 @@ Modes:
 
 - `--json` prints the same result structure as machine-readable JSON. The
   diagnose API contract is versioned with top-level `schema_version: 1`.
+- Normal diagnose includes the optional topology model. Disabled topology is
+  reported as disabled; enabled topology is validated and printed with its
+  resolved tree and branch membership.
 - `--deep` adds local operational checks: runtime-state plausibility, SQLite
   integrity/table summaries, recent configured log patterns, Docker host hints,
   and a dashboard loopback check when enabled.

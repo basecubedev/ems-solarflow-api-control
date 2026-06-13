@@ -23,6 +23,13 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from dashboard import auth as dashboard_auth
+from ems.config import TOPOLOGY_DEFAULTS
+from ems.topology import (
+    TopologyValidationError,
+    resolve_topology,
+    topology_text,
+    topology_to_dict,
+)
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -699,6 +706,7 @@ def diagnose_section_title(section_id):
         "logs": "Logs",
         "docker": "Docker",
         "hardware": "Hardware",
+        "topology": "Topology",
         "control": "Control diagnostics",
         "control_quality": "Control quality",
     }
@@ -1080,6 +1088,113 @@ def diagnose_config_device_names(config_data):
         for item in devices
         if isinstance(item, dict) and item.get("name")
     ]
+
+
+def diagnose_topology_report(config_data):
+    topology_present = isinstance(config_data, dict) and "topology" in config_data
+    raw_topology = config_data.get("topology", {}) if isinstance(config_data, dict) else {}
+    if topology_present and not isinstance(raw_topology, dict):
+        warning = "topology section is not an object and was ignored"
+        return {
+            "enabled": False,
+            "valid": True,
+            "issues": [],
+            "warnings": [warning],
+            "root_mode": TOPOLOGY_DEFAULTS["root_mode"],
+            "root_devices": [],
+            "links": [],
+            "resolved_tree": [],
+            "branch_members": {},
+            "text": f"Topology: disabled\nWarning: {warning}\n",
+        }
+
+    enabled = (
+        bool(raw_topology.get("enabled", False))
+        if isinstance(raw_topology, dict)
+        else False
+    )
+    try:
+        resolved = resolve_topology(
+            raw_topology,
+            diagnose_config_device_names(config_data),
+            TOPOLOGY_DEFAULTS,
+        )
+    except TopologyValidationError as exc:
+        return {
+            "enabled": enabled,
+            "valid": False,
+            "issues": [str(exc)],
+            "root_mode": (
+                raw_topology.get("root_mode")
+                if isinstance(raw_topology, dict)
+                else None
+            ),
+            "root_devices": (
+                raw_topology.get("root_devices", [])
+                if isinstance(raw_topology, dict)
+                else []
+            ),
+            "links": (
+                raw_topology.get("links", [])
+                if isinstance(raw_topology, dict)
+                else []
+            ),
+            "resolved_tree": [],
+            "branch_members": {},
+            "warnings": [],
+            "text": f"Topology: invalid\n- {exc}\n",
+        }
+
+    data = topology_to_dict(resolved)
+    data["valid"] = True
+    data["issues"] = []
+    data["text"] = topology_text(resolved)
+    return data
+
+
+def diagnose_topology_add_checks(checks, topology_report):
+    for warning in topology_report.get("warnings", []):
+        diagnose_add(
+            checks,
+            "topology",
+            "warning",
+            "topology_ignored_non_object",
+            f"Topology warning: {warning}",
+            enabled=False,
+        )
+
+    if not topology_report.get("enabled"):
+        diagnose_add(
+            checks,
+            "topology",
+            "ok",
+            "topology_disabled",
+            "Topology: disabled",
+            enabled=False,
+        )
+        return
+
+    if topology_report.get("valid"):
+        diagnose_add(
+            checks,
+            "topology",
+            "ok",
+            "topology_valid",
+            "Topology config is valid",
+            enabled=True,
+            root_devices=topology_report.get("root_devices", []),
+        )
+        return
+
+    for issue in topology_report.get("issues", []):
+        diagnose_add(
+            checks,
+            "topology",
+            "error",
+            "topology_invalid",
+            f"Topology config invalid: {issue}",
+            enabled=True,
+        )
 
 
 def diagnose_path_is_clean(path):
@@ -2962,6 +3077,8 @@ def diagnose_collect(args):
             diagnose_add(checks, "config", "ok", "config_keys_complete", "config.json contains all template keys")
 
     diagnose_config_plausibility(checks, args, config_data)
+    topology_report = diagnose_topology_report(config_data)
+    diagnose_topology_add_checks(checks, topology_report)
 
     runtime_path = resolve_runtime_path(args, config_data)
     diagnose_parent_path(checks, "project", "runtime_state", runtime_path, "runtime-state path", check_write=True, missing_level="warning")
@@ -3080,6 +3197,7 @@ def diagnose_collect(args):
             "runtime_state_path": runtime_path,
         },
         "checks": checks,
+        "topology": topology_report,
         "control": control_report,
         "control_quality": control_quality_report,
     }
@@ -3148,10 +3266,11 @@ def diagnose_text(report):
         "logs": "Logs",
         "docker": "Docker",
         "hardware": "Hardware",
+        "topology": "Topology",
         "control": "Control diagnostics",
         "control_quality": "Control quality",
     }
-    order = ("environment", "project", "config", "runtime_state", "data", "dashboard", "logs", "docker", "hardware", "control", "control_quality")
+    order = ("environment", "project", "config", "topology", "runtime_state", "data", "dashboard", "logs", "docker", "hardware", "control", "control_quality")
     level_labels = {"ok": "OK", "warning": "WARN", "error": "ERROR"}
 
     lines = [
@@ -3171,6 +3290,9 @@ def diagnose_text(report):
     if report.get("control_quality"):
         lines.append("")
         lines.append(diagnose_control_quality_text(report["control_quality"]).rstrip())
+    if report.get("topology"):
+        lines.append("")
+        lines.append(report["topology"].get("text", "Topology: disabled").rstrip())
 
     for section in order:
         checks = [check for check in report["checks"] if check["section"] == section]

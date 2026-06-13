@@ -94,6 +94,14 @@
     "timezone": "Europe/Berlin"
   },
 
+  "topology": {
+    "_comment": "Optional logical inverter topology. This is structure only and does not change control behavior yet.",
+    "enabled": false,
+    "root_mode": "parallel",
+    "root_devices": [],
+    "links": []
+  },
+
   "_comment_devices": "One entry per Zendure device. IP and SN must match your local device.",
   "devices": [
     {

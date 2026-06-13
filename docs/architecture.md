@@ -41,3 +41,9 @@ The implementation lives in internal modules under `ems/`.
 
 This preserves the operational model of one start script and one static config
 while avoiding a large monolithic source file.
+
+`ems.topology` contains the optional logical inverter topology foundation. It
+parses the flat `topology.links` config, validates references against
+configured device names, resolves root trees and branch membership, and exposes
+JSON/text diagnostics. It is read-only structure today and is not used for
+runtime power allocation or hardware writes.

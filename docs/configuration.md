@@ -54,6 +54,7 @@ python3 -B ems-solarflow-api-control.py --dry-run --once
 - safety flags
 - output-control defaults
 - winter defaults
+- optional logical topology metadata
 
 `data/runtime-state.json` contains temporary mutable operator/runtime values in
 new generated configs:
@@ -71,6 +72,73 @@ new generated configs:
 The EMS creates the runtime-state file automatically on first start. Deleting it
 resets runtime values from `config.json` defaults. Do not maintain runtime
 state as a second static config.
+
+## Topology
+
+`topology` is optional. When omitted or disabled, the EMS keeps the current
+parallel fleet behavior. Enabling topology currently adds validation,
+diagnostics, and an internal branch model only; it does not change power
+allocation, serial control, bypass behavior, AC charging, or idle/wake logic.
+
+Topology describes logical structure only. Keep power limits, names, API
+identity, PV size, battery capacity, and SOC settings on the device entries.
+
+Disabled default:
+
+```json
+{
+  "topology": {
+    "enabled": false,
+    "root_mode": "parallel",
+    "root_devices": [],
+    "links": []
+  }
+}
+```
+
+Simple root-only topology:
+
+```json
+{
+  "topology": {
+    "enabled": true,
+    "root_mode": "parallel",
+    "root_devices": ["WR1", "WR2"],
+    "links": []
+  }
+}
+```
+
+Nested topology:
+
+```json
+{
+  "topology": {
+    "enabled": true,
+    "root_mode": "parallel",
+    "root_devices": ["inverter_1", "inverter_5", "inverter_6"],
+    "links": [
+      {
+        "sources": ["inverter_2", "inverter_3"],
+        "target": "inverter_1",
+        "mode": "parallel"
+      },
+      {
+        "sources": ["inverter_4"],
+        "target": "inverter_2",
+        "mode": "single"
+      }
+    ]
+  }
+}
+```
+
+`root_devices` are devices operating directly at the house/grid level.
+`links[].sources` logically feed into `links[].target`. `mode` describes the
+relationship between the listed sources and is currently `single` or
+`parallel`. No AC/DC/offgrid path needs to be configured for this foundation.
+
+See [Topology](topology.md) for validation rules and diagnostics.
 
 ## Home Assistant Settings
 

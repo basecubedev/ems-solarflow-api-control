@@ -10,6 +10,7 @@ from ems.config import (
     DASHBOARD_DEFAULTS,
     ENERGY_SAVINGS_DEFAULTS,
     OUTPUT_CONTROL_DEFAULTS,
+    TOPOLOGY_DEFAULTS,
     WINTER_DEFAULTS,
 )
 
@@ -60,6 +61,12 @@ def test_config_template_energy_savings_matches_code_defaults():
     template = json.loads(Path("config.template.json").read_text())
 
     assert without_comment_keys(template["energy_savings"]) == ENERGY_SAVINGS_DEFAULTS
+
+
+def test_config_template_topology_matches_code_defaults():
+    template = json.loads(Path("config.template.json").read_text())
+
+    assert without_comment_keys(template["topology"]) == TOPOLOGY_DEFAULTS
 
 
 def test_config_template_standalone_live_control_defaults():
@@ -134,6 +141,19 @@ def test_grid_meter_defaults_to_shelly_compatible_safe_config():
 
     assert safe_config["grid_meter"] == {"type": "shelly", "ip": ""}
     assert safe_config["shelly"] == {"ip": ""}
+    assert safe_config["topology"] == TOPOLOGY_DEFAULTS
+
+
+def test_missing_topology_uses_backward_compatible_defaults(tmp_path):
+    snapshot = snapshot_config_module()
+    values = base_minimal_config()
+
+    try:
+        initialize_config_from_dict(tmp_path, values)
+
+        assert cfg.TOPOLOGY_CONFIG == TOPOLOGY_DEFAULTS
+    finally:
+        restore_config_module(snapshot)
 
 
 def test_legacy_shelly_ip_fallback_populates_grid_meter(tmp_path):

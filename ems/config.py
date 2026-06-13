@@ -60,6 +60,13 @@ ENERGY_SAVINGS_DEFAULTS = {
     "timezone": "Europe/Berlin"
 }
 
+TOPOLOGY_DEFAULTS = {
+    "enabled": False,
+    "root_mode": "parallel",
+    "root_devices": [],
+    "links": []
+}
+
 
 def default_safe_config():
     """Return a minimal safe config for simulation and replay."""
@@ -99,6 +106,7 @@ def default_safe_config():
         "winter": copy.deepcopy(WINTER_DEFAULTS),
         "dashboard": copy.deepcopy(DASHBOARD_DEFAULTS),
         "energy_savings": copy.deepcopy(ENERGY_SAVINGS_DEFAULTS),
+        "topology": copy.deepcopy(TOPOLOGY_DEFAULTS),
         "devices": [],
         "grid_meter": {
             "type": "shelly",
@@ -146,6 +154,7 @@ SOC_RECONCILE_INTERVAL = 10
 WINTER_CONFIG = WINTER_DEFAULTS.copy()
 DASHBOARD_CONFIG = DASHBOARD_DEFAULTS.copy()
 ENERGY_SAVINGS_CONFIG = ENERGY_SAVINGS_DEFAULTS.copy()
+TOPOLOGY_CONFIG = TOPOLOGY_DEFAULTS.copy()
 OFFGRID_SOCKET_MODES = {
     "standard": 0,
     "eco": 1,
@@ -187,7 +196,7 @@ def initialize(args, base_dir):
     global PV_CHARGE_BALANCE_FULL_BIAS_PERCENT, PV_CHARGE_BALANCE_STRENGTH
     global BATTERY_KWH_WEIGHTING
     global SOC_RECONCILE_INTERVAL, WINTER_CONFIG, DASHBOARD_CONFIG
-    global ENERGY_SAVINGS_CONFIG
+    global ENERGY_SAVINGS_CONFIG, TOPOLOGY_CONFIG
     global ZENDURE_CONFIG, SHELLY_IP, GRID_METER_CONFIG
 
     ARGS = args
@@ -299,6 +308,22 @@ def initialize(args, base_dir):
         **ENERGY_SAVINGS_DEFAULTS,
         **CONFIG.get("energy_savings", {})
     }
+    from ems.topology import normalize_topology_config, resolve_topology
+
+    TOPOLOGY_CONFIG = normalize_topology_config(
+        CONFIG.get("topology", {}),
+        TOPOLOGY_DEFAULTS
+    )
+    if TOPOLOGY_CONFIG.get("enabled", False):
+        resolve_topology(
+            TOPOLOGY_CONFIG,
+            [
+                item.get("name")
+                for item in CONFIG.get("devices", [])
+                if isinstance(item, dict) and item.get("name")
+            ],
+            TOPOLOGY_DEFAULTS,
+        )
     ZENDURE_CONFIG = CONFIG["devices"]
     legacy_shelly_config = CONFIG.get("shelly", {})
     if not isinstance(legacy_shelly_config, dict):
