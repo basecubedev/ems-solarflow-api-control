@@ -27,6 +27,9 @@ python3 emsctl.py status
 python3 emsctl.py system disable
 python3 emsctl.py system max-power 1200
 python3 emsctl.py device WR1 max-power 600
+python3 emsctl.py device WR1 ac-mode output
+python3 emsctl.py device WR1 ac-mode input
+python3 emsctl.py device WR1 ac-charge-power 200
 python3 emsctl.py device WR1 offgrid eco
 python3 emsctl.py winter enable
 python3 emsctl.py dashboard auth-status
@@ -104,6 +107,42 @@ Control interpretation:
   variance were observed in local samples.
 - `Minimum SOC protection active` means at least one device is at or below its
   minimum SOC.
+- Runtime AC input mode is shown as blocked device writes in control
+  explanation data. AC input devices are excluded from normal output allocation
+  until their runtime intent returns to output mode and `acMode=2` has been
+  reconciled.
+
+AC mode runtime role:
+
+```bash
+python3 emsctl.py device WR1 ac-mode output
+python3 emsctl.py device WR1 ac-mode input
+python3 emsctl.py device WR1 ac-charge-power 200
+```
+
+`ac-mode output` writes `runtime_role=ac_output` to runtime-state. The
+controller reconciles the inverter to `acMode=2` during the normal control loop
+and allows normal EMS output allocation. `ac-mode input` writes
+`runtime_role=ac_input`, targets `acMode=1`, and excludes the device from
+normal EMS output allocation. `emsctl` changes runtime-state only and does not
+write raw `acMode` numbers or contact inverter hardware.
+
+AC charge power is runtime-only:
+
+```bash
+python3 emsctl.py device WR1 ac-charge-power 200
+python3 emsctl.py device WR1 ac-mode input
+
+# Later return to normal EMS output regulation
+python3 emsctl.py device WR1 ac-mode output
+```
+
+`ac-charge-power` writes `ac_charge_power_w` to runtime-state and preserves
+the current runtime role. The controller applies it as Zendure `inputLimit` on
+the next EMS loop only while the device role is `ac_input`, and only when
+telemetry reports a different current `inputLimit`. While the role is
+`ac_output`, the stored charge power is ignored for hardware writes so it can
+be prepared before switching to input mode.
 
 Control quality interpretation:
 

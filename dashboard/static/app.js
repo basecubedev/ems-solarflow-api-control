@@ -371,7 +371,7 @@ function renderDevices(devices) {
         ${deviceValue("Battery", signedWatts(batteryFlow.valueW), batteryFlow.isCharging ? "charge" : "battery")}
         ${deviceValue("Target", watts(device.target_w), "gauge")}
         ${deviceValue("Limit", watts(device.output_limit_w), "warning")}
-        ${deviceValue("Mode", device.mode || device.ac_mode || "--", "rule")}
+        ${deviceValue("AC", acStateLabel(device), acStateIcon(device))}
       </div>
     `;
     grid.appendChild(card);
@@ -1910,6 +1910,28 @@ function deviceSoc(device) {
   return Number(device?.soc ?? device?.soc_percent ?? 0);
 }
 
+function acStateLabel(device) {
+  const acMode = Number(device?.ac_mode ?? 0);
+  const acStatus = Number(device?.ac_status ?? 0);
+
+  if (acStatus === 2) return "Charge";
+  if (acStatus === 1) return "Output";
+  if (acStatus === 0) {
+    if (acMode === 1) return "Charge standby";
+    if (acMode === 2) return "Output standby";
+    return "Standby";
+  }
+
+  return "Unknown";
+}
+
+function acStateIcon(device) {
+  const acStatus = Number(device?.ac_status ?? 0);
+  if (acStatus === 2) return "charge";
+  if (acStatus === 1) return "inverter";
+  return "rule";
+}
+
 function setFlowView(view, persist = true) {
   const nextView = ["aggregated", "devices", "control", "energy"].includes(view)
     ? view
@@ -2928,6 +2950,8 @@ if (typeof module !== "undefined") {
     state,
     escapeHtml,
     deviceValue,
+    acStateLabel,
+    acStateIcon,
     deviceBatteryVisual,
     renderDevices,
     renderControlExplain,

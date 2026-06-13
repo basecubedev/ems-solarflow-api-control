@@ -58,7 +58,21 @@ DEVICE_ACTIONS = (
     "max-power",
     "offgrid",
     "pv-priority-factor",
+    "ac-mode",
+    "ac-charge-power",
 )
+DEVICE_AC_MODE_VALUES = ("output", "input")
+DEVICE_AC_MODE_RUNTIME_ROLES = {
+    "output": "ac_output",
+    "input": "ac_input",
+}
+DEVICE_AC_MODE_ROLE_ALIASES = {
+    "normal_output": "ac_output",
+    "ac_output": "ac_output",
+    "ac_input_charge": "ac_input",
+    "reserved": "ac_input",
+    "ac_input": "ac_input",
+}
 DASHBOARD_ACTIONS = (
     "set-password",
     "change-password",
@@ -88,6 +102,8 @@ Common examples:
   python3 emsctl.py system max-power 1200
   python3 emsctl.py device WR1 max-power 600
   python3 emsctl.py device WR1 offgrid eco
+  python3 emsctl.py device WR1 ac-mode output
+  python3 emsctl.py device WR1 ac-charge-power 200
   python3 emsctl.py winter enable
   python3 emsctl.py dashboard auth-status
   python3 emsctl.py diagnose
@@ -140,6 +156,8 @@ Runtime control:
   python3 emsctl.py system disable
   python3 emsctl.py system max-power 1200
   python3 emsctl.py device WR1 max-power 600
+  python3 emsctl.py device WR1 ac-mode input
+  python3 emsctl.py device WR1 ac-charge-power 200
   python3 emsctl.py device WR1 offgrid eco
 
 Dashboard:
@@ -172,6 +190,10 @@ Device runtime control:
   python3 emsctl.py device WR1 enable
   python3 emsctl.py device WR1 disable
   python3 emsctl.py device WR1 max-power 600
+  python3 emsctl.py device WR1 ac-mode output
+  python3 emsctl.py device WR1 ac-mode input
+  python3 emsctl.py device WR1 ac-charge-power 200
+  python3 emsctl.py device WR1 ac-charge-power 0
   python3 emsctl.py device WR1 pv-priority-factor 1.2
   python3 emsctl.py device WR1 offgrid off
   python3 emsctl.py device WR1 offgrid eco
@@ -307,10 +329,15 @@ Actions:
   max-power VALUE                Set device max_power in watts
   offgrid off|eco|standard       Set offgrid socket mode
   pv-priority-factor VALUE       Set PV-first allocation weight
+  ac-mode [output|input]         Set or show runtime AC mode role
+  ac-charge-power WATTS          Set runtime AC charge inputLimit in watts
 
 Examples:
   python3 emsctl.py device WR1 disable
   python3 emsctl.py device WR1 max-power 600
+  python3 emsctl.py device WR1 ac-mode output
+  python3 emsctl.py device WR1 ac-mode input
+  python3 emsctl.py device WR1 ac-charge-power 200
   python3 emsctl.py device WR1 offgrid eco
   python3 emsctl.py device WR1 pv-priority-factor 1.2
 """,
@@ -323,7 +350,7 @@ Examples:
         metavar="action",
         help="One of: " + ", ".join(DEVICE_ACTIONS),
     )
-    device.add_argument("value", nargs="?", help="Required for max-power, offgrid, and pv-priority-factor.")
+    device.add_argument("value", nargs="?", help="Required for max-power, offgrid, pv-priority-factor, ac-mode writes, and ac-charge-power.")
 
     ha = subparsers.add_parser(
         "ha",
@@ -3232,6 +3259,23 @@ def int_value(value, field, minimum=0):
     return parsed
 
 
+def strict_int_value(value, field, minimum=0):
+    if value is None:
+        raise ValueError(f"{field} requires a value")
+
+    text = str(value).strip()
+
+    try:
+        parsed = int(text, 10)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be an integer") from exc
+
+    if parsed < minimum:
+        raise ValueError(f"{field} must be >= {minimum}")
+
+    return parsed
+
+
 def float_value(value, field, minimum=0.0):
     if value is None:
         raise ValueError(f"{field} requires a value")
@@ -3312,6 +3356,7 @@ def completion_script_bash(config):
     dashboard_actions = completion_word_list(DASHBOARD_ACTIONS)
     completion_shells = completion_word_list(COMPLETION_SHELLS)
     offgrid_modes = completion_word_list(OFFGRID_SOCKET_MODES)
+    ac_modes = completion_word_list(DEVICE_AC_MODE_VALUES)
     devices = completion_word_list(config_device_names(config))
 
     return f"""\
@@ -3336,6 +3381,7 @@ _emsctl_py_completion()
   local dashboard_actions="{dashboard_actions}"
   local completion_shells="{completion_shells}"
   local offgrid_modes="{offgrid_modes}"
+  local ac_modes="{ac_modes}"
   local devices="{devices}"
 
   if [[ "$cur" == --* ]]; then
@@ -3368,6 +3414,8 @@ _emsctl_py_completion()
       elif [[ " $device_actions " == *" $prev "* ]]; then
         if [[ "$prev" == "offgrid" ]]; then
           COMPREPLY=( $(compgen -W "$offgrid_modes" -- "$cur") )
+        elif [[ "$prev" == "ac-mode" ]]; then
+          COMPREPLY=( $(compgen -W "$ac_modes" -- "$cur") )
         fi
       else
         COMPREPLY=( $(compgen -W "$device_actions" -- "$cur") )
@@ -3406,6 +3454,7 @@ def completion_script_zsh(config):
     dashboard_actions = zsh_array(DASHBOARD_ACTIONS)
     completion_shells = zsh_array(COMPLETION_SHELLS)
     offgrid_modes = zsh_array(OFFGRID_SOCKET_MODES)
+    ac_modes = zsh_array(DEVICE_AC_MODE_VALUES)
     devices = zsh_array(config_device_names(config))
 
     return f"""\
@@ -3416,7 +3465,7 @@ def completion_script_zsh(config):
 
 _emsctl_py()
 {{
-  local -a commands system_actions device_actions ha_actions winter_actions dashboard_actions completion_shells offgrid_modes devices
+  local -a commands system_actions device_actions ha_actions winter_actions dashboard_actions completion_shells offgrid_modes ac_modes devices
   commands=({commands})
   system_actions=({system_actions})
   device_actions=({device_actions})
@@ -3425,6 +3474,7 @@ _emsctl_py()
   dashboard_actions=({dashboard_actions})
   completion_shells=({completion_shells})
   offgrid_modes=({offgrid_modes})
+  ac_modes=({ac_modes})
   devices=({devices})
 
   if (( CURRENT == 2 )); then
@@ -3443,6 +3493,8 @@ _emsctl_py()
         _describe 'device action' device_actions
       elif [[ "$words[4]" == "offgrid" ]]; then
         _describe 'offgrid mode' offgrid_modes
+      elif [[ "$words[4]" == "ac-mode" ]]; then
+        _describe 'AC mode' ac_modes
       fi
       ;;
     ha|ha-control)
@@ -3608,6 +3660,51 @@ def ensure_no_value(args):
         raise ValueError(f"{args.action} does not take a value")
 
 
+def normalize_runtime_role(value):
+    role = str(value or "ac_output").strip().lower()
+    return DEVICE_AC_MODE_ROLE_ALIASES.get(role)
+
+
+def runtime_role_ac_mode_summary(role):
+    if role == "ac_input":
+        return {
+            "role": "ac_input",
+            "command": "input",
+            "desired_ac_mode": 1,
+            "output_control_allowed": False,
+            "description": (
+                "AC input/charge runtime role; normal EMS output allocation "
+                "is blocked"
+            ),
+        }
+
+    return {
+        "role": "ac_output",
+        "command": "output",
+        "desired_ac_mode": 2,
+        "output_control_allowed": True,
+        "description": (
+            "AC output/home-output runtime role; normal EMS output allocation "
+            "is allowed"
+        ),
+    }
+
+
+def print_device_ac_mode_status(device_name, device):
+    role = normalize_runtime_role(device.get("runtime_role"))
+    if role is None:
+        role = "ac_output"
+    summary = runtime_role_ac_mode_summary(role)
+    print(json.dumps({
+        "device": device_name,
+        "runtime_role": summary["role"],
+        "command": summary["command"],
+        "desired_ac_mode": summary["desired_ac_mode"],
+        "output_control_allowed": summary["output_control_allowed"],
+        "description": summary["description"],
+    }, indent=2, sort_keys=True))
+
+
 def update_system(args, state):
     system = state.setdefault("system", {})
 
@@ -3675,6 +3772,18 @@ def update_device(args, state):
                 args.value,
                 f"device {args.name} pv-priority-factor",
                 minimum=0.01
+            )
+        case "ac-mode":
+            value = str(args.value or "").strip().lower()
+            if value not in DEVICE_AC_MODE_RUNTIME_ROLES:
+                raise ValueError("device ac-mode value must be 'output' or 'input'")
+            device["runtime_role"] = DEVICE_AC_MODE_RUNTIME_ROLES[value]
+            device["runtime_role_reason"] = "emsctl"
+        case "ac-charge-power":
+            device["ac_charge_power_w"] = strict_int_value(
+                args.value,
+                f"device {args.name} ac-charge-power",
+                minimum=0
             )
         case _:
             raise ValueError(f"unknown device action {args.action}")
@@ -4007,6 +4116,21 @@ def main(argv=None):
         if args.command == "system":
             update_system(args, state)
         elif args.command == "device":
+            devices = state.get("devices", {})
+            if args.action == "ac-mode" and args.value is None:
+                if not isinstance(devices, dict) or args.name not in devices:
+                    known = (
+                        ", ".join(sorted(devices))
+                        if isinstance(devices, dict)
+                        else ""
+                    )
+                    raise ValueError(
+                        f"unknown device {args.name}; known devices: {known or '(none)'}"
+                    )
+                if created:
+                    save_atomic(runtime_path, state)
+                print_device_ac_mode_status(args.name, devices[args.name])
+                return 0
             update_device(args, state)
         elif args.command == "ha":
             set_bool_section(args, state, "ha", "enabled")
@@ -4018,7 +4142,11 @@ def main(argv=None):
             raise ValueError(f"unknown command {args.command}")
 
         save_atomic(runtime_path, state)
-        print(f"updated {runtime_path}")
+        if args.command == "device" and args.action == "ac-charge-power":
+            watts = state["devices"][args.name]["ac_charge_power_w"]
+            print(f"Set {args.name} AC charge power to {watts} W.")
+        else:
+            print(f"updated {runtime_path}")
         return 0
 
     except ValueError as exc:

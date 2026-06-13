@@ -207,8 +207,10 @@ readings, and installation-specific constraints.
 - `allow_hardware_writes=true` allows runtime Zendure `outputLimit` writes.
 - `allow_state_reconciliation_writes=true` allows required SOC/mode/runtime
   state reconciliation for normal regulation.
-- `reconcile_ac_mode_on_start=true` is a startup reconciliation helper, not
-  permanent cyclic forcing of `acMode`.
+- Runtime AC mode intent is checked during the control loop. The EMS writes
+  `acMode` only when reported known telemetry differs from the desired runtime
+  mode, so normal output devices stay aligned to `acMode=2` without blind
+  repeated writes.
 - `reconcile_smart_mode=true` keeps Zendure runtime/RAM mode aligned.
 
 ## 6. Start EMS Live

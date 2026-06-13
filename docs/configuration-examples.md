@@ -260,8 +260,23 @@ configuration.
 ```
 
 This allows normal `outputLimit` writes and required regulation/state
-reconciliation. `reconcile_ac_mode_on_start` is a startup helper, not permanent
-cyclic forcing of `acMode`.
+reconciliation. Runtime AC mode intent is evaluated during the control loop,
+but startup `acMode` reconciliation is conservative when telemetry is unknown.
+`ac_output` maps to `acMode=2`; `ac_input` maps to `acMode=1` and blocks normal
+output regulation. An explicit runtime `ac-mode output` command can still write
+`acMode=2` when the reported mode is `0`.
+
+Manual runtime AC charging uses the same loop-owned reconciliation path:
+
+```bash
+python3 emsctl.py device WR1 ac-charge-power 200
+python3 emsctl.py device WR1 ac-mode input
+python3 emsctl.py device WR1 ac-mode output
+```
+
+`ac-charge-power` stores `ac_charge_power_w` in runtime-state only. The
+controller applies it as `inputLimit` on the next EMS loop while the role is
+`ac_input`, and ignores it for hardware writes while the role is `ac_output`.
 
 The defaults are intended to expose the main regulation features with minimal
 setup. They are not a universal safety profile; review device limits, SOC

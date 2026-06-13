@@ -38,6 +38,7 @@ class DeviceState:
     ac_status: int
     dc_status: int
     grid_state: int
+    input_limit_w: int = 0
 
 
 @dataclass

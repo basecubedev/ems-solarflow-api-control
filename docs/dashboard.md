@@ -17,6 +17,16 @@ handoff, so the control decision can be followed step by step.
 
 ![Control Explain demo screenshot](assets/control-explain-demo.jpg)
 
+## Devices View
+
+The Devices view includes a compact AC tile on each device card. It shows the
+reported AC path state from `acStatus` and uses `acMode` to clarify standby
+direction:
+
+- `Output` when the AC output path is active.
+- `Charge` when the AC input/charge path is active.
+- `Output standby`, `Charge standby`, or `Standby` when the AC path is idle.
+
 ## Energy Statistics View
 
 The Energy tab shows historical inverter output totals and savings estimates
