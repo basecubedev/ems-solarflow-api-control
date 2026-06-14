@@ -94,6 +94,18 @@
     "timezone": "Europe/Berlin"
   },
 
+  "battery_full_charge_assist": {
+    "_comment": "Optional EMS full-charge assist. Temporarily raises device Max-SoC to 100% so battery-backed devices reach firmware Max-SoC at least once within the configured interval.",
+    "enabled": false,
+    "interval_days": 28,
+    "assist_window_days": 7,
+    "assist_start_soc": 80,
+    "force_time": "14:00",
+    "ac_charge_power": 600,
+    "enable_ac_charge_mode": true,
+    "state_database_path": "data/ems_state.sqlite"
+  },
+
   "_comment_devices": "One entry per Zendure device. IP and SN must match your local device.",
   "devices": [
     {

@@ -9,6 +9,9 @@ config.json
 
 data/runtime-state.json
 = temporary local runtime/operator data
+
+data/ems_state.sqlite
+= durable core EMS lifecycle state such as battery full-charge assist tracking
 ```
 
 The EMS creates the runtime state file on first start from config defaults. The
@@ -16,6 +19,12 @@ file is ignored by Git and is recreated automatically if missing. Older
 root-level `runtime-state.json` files from previous setups are no longer
 required after switching to `data/runtime-state.json` and may be removed
 manually.
+
+Battery full-charge assist does not store lifecycle state in
+`runtime-state.json`. It uses the core SQLite database configured by
+`battery_full_charge_assist.state_database_path`, so it can recover active
+assist and restore state after restart without overwriting operator runtime
+intent.
 
 Example:
 

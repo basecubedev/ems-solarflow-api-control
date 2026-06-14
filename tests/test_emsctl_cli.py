@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import emsctl
+from ems.state_store import BatteryFullChargeStateStore
 
 ROOT = Path(__file__).resolve().parents[1]
 EMSCTL = ROOT / "emsctl.py"
@@ -638,6 +639,64 @@ def test_emsctl_diagnose_json_contains_v2_structure(tmp_path):
     assert payload["status"] in ("ok", "warning", "error")
     assert payload["mode"] in ("native", "container")
     assert "mode_sources" in payload
+    assert payload["battery_full_charge_assist"]["enabled"] is False
+    assert payload["battery_full_charge_assist"]["interval_days"] == 28
+    assert not (tmp_path / "ems_state.sqlite").exists()
+
+
+def test_emsctl_diagnose_reports_battery_full_charge_assist_state(tmp_path):
+    config_path = tmp_path / "config.json"
+    write_config(config_path)
+    config = json.loads(config_path.read_text())
+    database_path = tmp_path / "ems_state.sqlite"
+    config["battery_full_charge_assist"] = {
+        "enabled": True,
+        "interval_days": 28,
+        "assist_window_days": 7,
+        "assist_start_soc": 80,
+        "force_time": "14:00",
+        "ac_charge_power": 200,
+        "enable_ac_charge_mode": True,
+        "state_database_path": str(database_path),
+    }
+    config_path.write_text(json.dumps(config))
+
+    store = BatteryFullChargeStateStore(str(database_path))
+    now = datetime.now(timezone.utc)
+    store.record_observation(
+        "WR1",
+        SimpleNamespace(
+            soc=85,
+            max_soc=90,
+            soc_limit=0,
+            ac_mode=2,
+            ac_status=1,
+            pack_num=1,
+            soc_status=0,
+            battery_calibration_time=1234,
+        ),
+        True,
+        now,
+        interval_days=28,
+    )
+    store.update_device_state(
+        "WR1",
+        now,
+        next_due_at=(now + timedelta(days=3)).isoformat(),
+    )
+
+    result = run_emsctl(tmp_path, "diagnose", "--json")
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assist = payload["battery_full_charge_assist"]
+    assert assist["enabled"] is True
+    assert assist["state_database_path"] == str(database_path)
+    assert assist["devices"][0]["device"] == "WR1"
+    assert assist["devices"][0]["battery"] is True
+    assert assist["devices"][0]["packNum"] == 1
+    assert assist["devices"][0]["batCalTime"] == 1234
+    assert assist["devices"][0]["status"] == "due soon"
     assert "summary" in payload
     assert isinstance(payload["sections"], list)
     assert isinstance(payload["metrics"], dict)

@@ -17,7 +17,7 @@ import sys
 import time
 import zipfile
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -72,6 +72,16 @@ DEVICE_AC_MODE_ROLE_ALIASES = {
     "ac_input_charge": "ac_input",
     "reserved": "ac_input",
     "ac_input": "ac_input",
+}
+BATTERY_FULL_CHARGE_ASSIST_DEFAULTS = {
+    "enabled": False,
+    "interval_days": 28,
+    "assist_window_days": 7,
+    "assist_start_soc": 80,
+    "force_time": "14:00",
+    "ac_charge_power": 200,
+    "enable_ac_charge_mode": True,
+    "state_database_path": "data/ems_state.sqlite",
 }
 DASHBOARD_ACTIONS = (
     "set-password",
@@ -1098,6 +1108,77 @@ def diagnose_bool(value):
     return isinstance(value, bool)
 
 
+def diagnose_clamped_int(value, default, minimum=None, maximum=None):
+    parsed = diagnose_int(value)
+    if parsed is None:
+        parsed = default
+    if minimum is not None:
+        parsed = max(minimum, parsed)
+    if maximum is not None:
+        parsed = min(maximum, parsed)
+    return parsed
+
+
+def diagnose_normalize_force_time(value):
+    text = str(value or BATTERY_FULL_CHARGE_ASSIST_DEFAULTS["force_time"]).strip()
+    parts = text.split(":")
+    if len(parts) != 2:
+        return None
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1])
+    except ValueError:
+        return None
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return f"{hour:02d}:{minute:02d}"
+
+
+def diagnose_battery_full_charge_assist_config(config_data):
+    raw = {}
+    if isinstance(config_data, dict) and isinstance(
+        config_data.get("battery_full_charge_assist"),
+        dict
+    ):
+        raw = config_data.get("battery_full_charge_assist")
+    merged = {
+        **BATTERY_FULL_CHARGE_ASSIST_DEFAULTS,
+        **raw,
+    }
+    return {
+        "enabled": bool(merged.get("enabled", False)),
+        "interval_days": diagnose_clamped_int(
+            merged.get("interval_days"),
+            BATTERY_FULL_CHARGE_ASSIST_DEFAULTS["interval_days"],
+            minimum=1,
+        ),
+        "assist_window_days": diagnose_clamped_int(
+            merged.get("assist_window_days"),
+            BATTERY_FULL_CHARGE_ASSIST_DEFAULTS["assist_window_days"],
+            minimum=0,
+        ),
+        "assist_start_soc": diagnose_clamped_int(
+            merged.get("assist_start_soc"),
+            BATTERY_FULL_CHARGE_ASSIST_DEFAULTS["assist_start_soc"],
+            minimum=0,
+            maximum=100,
+        ),
+        "force_time": diagnose_normalize_force_time(merged.get("force_time")),
+        "ac_charge_power": diagnose_clamped_int(
+            merged.get("ac_charge_power"),
+            BATTERY_FULL_CHARGE_ASSIST_DEFAULTS["ac_charge_power"],
+            minimum=0,
+        ),
+        "enable_ac_charge_mode": bool(merged.get("enable_ac_charge_mode", True)),
+        "state_database_path": str(
+            merged.get(
+                "state_database_path",
+                BATTERY_FULL_CHARGE_ASSIST_DEFAULTS["state_database_path"],
+            )
+        ),
+    }
+
+
 def diagnose_config_device_names(config_data):
     devices = config_data.get("devices", []) if isinstance(config_data, dict) else []
     if not isinstance(devices, list):
@@ -1215,6 +1296,41 @@ def diagnose_config_plausibility(checks, args, config_data):
         diagnose_add(checks, "config", "ok", "runtime_state_path_valid", "system.runtime_state_path resolves cleanly")
     else:
         diagnose_add(checks, "config", "error", "runtime_state_path_invalid", "system.runtime_state_path must be a non-empty clean path")
+
+    assist = config_data.get("battery_full_charge_assist", {})
+    if not isinstance(assist, dict):
+        diagnose_add(checks, "config", "error", "battery_full_charge_assist_not_object", "battery_full_charge_assist must be an object")
+        assist = {}
+    else:
+        diagnose_add(checks, "config", "ok", "battery_full_charge_assist_object", "battery_full_charge_assist config is an object")
+
+    if "enabled" in assist and not diagnose_bool(assist.get("enabled")):
+        diagnose_add(checks, "config", "error", "battery_full_charge_assist_enabled_invalid", "battery_full_charge_assist.enabled must be boolean")
+
+    interval_days = diagnose_int(assist.get("interval_days", BATTERY_FULL_CHARGE_ASSIST_DEFAULTS["interval_days"]))
+    if interval_days is None or interval_days < 1:
+        diagnose_add(checks, "config", "error", "battery_full_charge_assist_interval_invalid", "battery_full_charge_assist.interval_days must be an integer >= 1")
+
+    window_days = diagnose_int(assist.get("assist_window_days", BATTERY_FULL_CHARGE_ASSIST_DEFAULTS["assist_window_days"]))
+    if window_days is None or window_days < 0:
+        diagnose_add(checks, "config", "error", "battery_full_charge_assist_window_invalid", "battery_full_charge_assist.assist_window_days must be an integer >= 0")
+
+    assist_start_soc = diagnose_int(assist.get("assist_start_soc", BATTERY_FULL_CHARGE_ASSIST_DEFAULTS["assist_start_soc"]))
+    if assist_start_soc is None or not (0 <= assist_start_soc <= 100):
+        diagnose_add(checks, "config", "error", "battery_full_charge_assist_start_soc_invalid", "battery_full_charge_assist.assist_start_soc must be an integer from 0 to 100")
+
+    if diagnose_normalize_force_time(assist.get("force_time", BATTERY_FULL_CHARGE_ASSIST_DEFAULTS["force_time"])) is None:
+        diagnose_add(checks, "config", "error", "battery_full_charge_assist_force_time_invalid", "battery_full_charge_assist.force_time must use HH:MM format")
+
+    ac_charge_power = diagnose_int(assist.get("ac_charge_power", BATTERY_FULL_CHARGE_ASSIST_DEFAULTS["ac_charge_power"]))
+    if ac_charge_power is None or ac_charge_power < 0:
+        diagnose_add(checks, "config", "error", "battery_full_charge_assist_ac_charge_power_invalid", "battery_full_charge_assist.ac_charge_power must be an integer >= 0")
+
+    state_database_path = assist.get("state_database_path", BATTERY_FULL_CHARGE_ASSIST_DEFAULTS["state_database_path"])
+    if diagnose_path_is_clean(state_database_path):
+        diagnose_add(checks, "config", "ok", "battery_full_charge_assist_state_database_path_valid", "battery_full_charge_assist.state_database_path resolves cleanly")
+    else:
+        diagnose_add(checks, "config", "error", "battery_full_charge_assist_state_database_path_invalid", "battery_full_charge_assist.state_database_path must be a non-empty clean path")
 
     devices = config_data.get("devices")
     if not isinstance(devices, list):
@@ -1431,6 +1547,123 @@ def diagnose_parse_timestamp(value):
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def diagnose_battery_state_database_path(config_data):
+    assist = diagnose_battery_full_charge_assist_config(config_data)
+    return resolve_project_path(assist["state_database_path"])
+
+
+def diagnose_read_battery_full_charge_rows(database_path):
+    if not database_path or not os.path.exists(database_path):
+        return {}, "missing"
+
+    try:
+        uri = "file:" + os.path.abspath(database_path) + "?mode=ro"
+        with sqlite3.connect(uri, uri=True, timeout=2) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM battery_full_charge_state
+                ORDER BY device
+                """
+            ).fetchall()
+    except sqlite3.Error as exc:
+        return {}, str(exc)
+
+    result = {}
+    for row in rows:
+        item = dict(row)
+        for key in (
+            "has_battery",
+            "full_charge_assist_active",
+            "restore_pending",
+            "ac_mode_restore_pending",
+            "max_soc_request_pending",
+            "ac_input_request_pending",
+        ):
+            item[key] = bool(item.get(key))
+        result[item["device"]] = item
+    return result, None
+
+
+def diagnose_battery_full_charge_status(device_state, assist_config, now):
+    if not device_state:
+        return "unknown"
+    if not device_state.get("has_battery"):
+        return "ignored"
+    if device_state.get("full_charge_assist_active"):
+        if not assist_config.get("enabled"):
+            return "disabled, abort pending"
+        return "active"
+    if device_state.get("ac_mode_restore_pending"):
+        if not assist_config.get("enabled"):
+            return "disabled, restore pending"
+        return "restoring output mode"
+    if device_state.get("restore_pending"):
+        if not assist_config.get("enabled"):
+            return "disabled, restore pending"
+        return "restore pending"
+
+    next_due_at = diagnose_parse_timestamp(device_state.get("next_due_at"))
+    if not next_due_at:
+        return "due"
+    if next_due_at <= now:
+        return "overdue"
+    if next_due_at <= now + timedelta(
+        days=assist_config.get("assist_window_days", 7)
+    ):
+        return "due soon"
+    return "ok"
+
+
+def diagnose_battery_full_charge_assist_report(config_data):
+    assist_config = diagnose_battery_full_charge_assist_config(config_data)
+    database_path = diagnose_battery_state_database_path(config_data)
+    rows, error = diagnose_read_battery_full_charge_rows(database_path)
+    devices = []
+    now = datetime.now(timezone.utc)
+
+    for name in diagnose_config_device_names(config_data):
+        state = rows.get(name, {})
+        devices.append({
+            "device": name,
+            "battery": bool(state.get("has_battery", False)),
+            "packNum": state.get("last_seen_pack_num"),
+            "last_full_charge": state.get("last_full_charge_at"),
+            "next_due": state.get("next_due_at"),
+            "firmware_socLimit": state.get("last_seen_soc_limit"),
+            "socStatus": state.get("last_seen_soc_status"),
+            "batCalTime": state.get("last_seen_battery_calibration_time"),
+            "soc": state.get("last_seen_soc"),
+            "max_soc": state.get("last_seen_max_soc"),
+            "acMode": state.get("last_seen_ac_mode"),
+            "acStatus": state.get("last_seen_ac_status"),
+            "assist_active": bool(state.get("full_charge_assist_active", False)),
+            "restore_pending": bool(state.get("restore_pending", False)),
+            "ac_mode_restore_pending": bool(state.get("ac_mode_restore_pending", False)),
+            "max_soc_request_pending": bool(state.get("max_soc_request_pending", False)),
+            "ac_input_request_pending": bool(state.get("ac_input_request_pending", False)),
+            "status": diagnose_battery_full_charge_status(
+                state,
+                assist_config,
+                now
+            ),
+        })
+
+    return {
+        "enabled": assist_config["enabled"],
+        "interval_days": assist_config["interval_days"],
+        "assist_window_days": assist_config["assist_window_days"],
+        "assist_start_soc": assist_config["assist_start_soc"],
+        "force_time": assist_config["force_time"],
+        "ac_charge_power": assist_config["ac_charge_power"],
+        "enable_ac_charge_mode": assist_config["enable_ac_charge_mode"],
+        "state_database_path": database_path,
+        "state_database_error": error,
+        "devices": devices,
+    }
 
 
 def diagnose_database_deep(checks, database_path):
@@ -2363,6 +2596,47 @@ def diagnose_control_text(control):
     return "\n".join(lines) + "\n"
 
 
+def diagnose_battery_full_charge_assist_text(report):
+    assist = report.get("battery_full_charge_assist") or {}
+    lines = [
+        "Battery full-charge assist:",
+        f"  enabled: {str(bool(assist.get('enabled'))).lower()}",
+        f"  interval: {assist.get('interval_days')} days",
+        f"  assist window: {assist.get('assist_window_days')} days",
+        f"  assist start SOC: {assist.get('assist_start_soc')} %",
+        f"  force time: {assist.get('force_time') or 'invalid'}",
+        f"  AC charge mode: {'enabled' if assist.get('enable_ac_charge_mode') else 'disabled'}",
+        f"  AC charge power: {assist.get('ac_charge_power')} W",
+        f"  state database: {assist.get('state_database_path')}",
+        "",
+        "Devices:",
+    ]
+    if assist.get("state_database_error") == "missing":
+        lines.append("  state database: not initialized yet")
+    elif assist.get("state_database_error"):
+        lines.append(f"  state database error: {assist.get('state_database_error')}")
+
+    for item in assist.get("devices", []):
+        lines.extend([
+            f"  {item['device']}:",
+            f"    battery: {'yes' if item.get('battery') else 'no'}",
+            f"    packNum: {item.get('packNum') if item.get('packNum') is not None else 'unknown'}",
+            f"    last full charge: {item.get('last_full_charge') or 'unknown'}",
+            f"    next due: {item.get('next_due') or 'unknown'}",
+            f"    firmware socLimit: {item.get('firmware_socLimit') if item.get('firmware_socLimit') is not None else 'unknown'}",
+            f"    socStatus: {item.get('socStatus') if item.get('socStatus') is not None else 'unknown'}",
+            f"    batCalTime: {item.get('batCalTime') if item.get('batCalTime') is not None else 'unknown'}",
+            f"    acMode: {item.get('acMode') if item.get('acMode') is not None else 'unknown'}",
+            f"    acStatus: {item.get('acStatus') if item.get('acStatus') is not None else 'unknown'}",
+            f"    assist active: {'yes' if item.get('assist_active') else 'no'}",
+            f"    restore pending: {'yes' if item.get('restore_pending') else 'no'}",
+            f"    ac mode restore pending: {'yes' if item.get('ac_mode_restore_pending') else 'no'}",
+            f"    status: {item.get('status')}",
+        ])
+
+    return "\n".join(lines)
+
+
 def diagnose_quality_root_cause(code, severity, title, message, suggested_next_check):
     severity = str(severity).lower()
     if severity not in ROOT_CAUSE_SEVERITIES:
@@ -2992,6 +3266,21 @@ def diagnose_collect(args):
 
     runtime_path = resolve_runtime_path(args, config_data)
     diagnose_parent_path(checks, "project", "runtime_state", runtime_path, "runtime-state path", check_write=True, missing_level="warning")
+    battery_full_charge_report = diagnose_battery_full_charge_assist_report(
+        config_data
+    )
+    battery_state_database_path = battery_full_charge_report[
+        "state_database_path"
+    ]
+    diagnose_parent_path(
+        checks,
+        "project",
+        "battery_full_charge_state_database",
+        battery_state_database_path,
+        "battery full-charge assist state database",
+        check_write=True,
+        missing_level="warning"
+    )
 
     dashboard_config = config_data.get("dashboard", {}) if isinstance(config_data, dict) else {}
     database_path = None
@@ -3012,6 +3301,8 @@ def diagnose_collect(args):
 
     if database_path:
         diagnose_parent_path(checks, "data", "dashboard_database", database_path, "dashboard database", check_write=True, missing_level="warning")
+    if battery_state_database_path:
+        diagnose_parent_path(checks, "data", "battery_full_charge_state_database", battery_state_database_path, "battery full-charge assist state database", check_write=True, missing_level="warning")
 
     system_config = config_data.get("system", {}) if isinstance(config_data, dict) else {}
     if isinstance(system_config, dict):
@@ -3046,7 +3337,11 @@ def diagnose_collect(args):
 
         diagnose_check_path(checks, "docker", "app_config_config", "/app/config/config.json", "/app/config/config.json", expect_file=True, check_read=True, missing_level="warning")
 
-        for label, path in (("runtime-state path", runtime_path), ("dashboard database path", database_path)):
+        for label, path in (
+            ("runtime-state path", runtime_path),
+            ("dashboard database path", database_path),
+            ("battery full-charge state database path", battery_state_database_path),
+        ):
             if not path:
                 continue
             if diagnose_path_within(path, "/app/data"):
@@ -3105,10 +3400,12 @@ def diagnose_collect(args):
             "base_dir": BASE_DIR,
             "config_path": config_path,
             "runtime_state_path": runtime_path,
+            "battery_full_charge_state_database_path": battery_state_database_path,
         },
         "checks": checks,
         "control": control_report,
         "control_quality": control_quality_report,
+        "battery_full_charge_assist": battery_full_charge_report,
     }
 
 
@@ -3198,6 +3495,11 @@ def diagnose_text(report):
     if report.get("control_quality"):
         lines.append("")
         lines.append(diagnose_control_quality_text(report["control_quality"]).rstrip())
+    if report.get("battery_full_charge_assist"):
+        lines.append("")
+        lines.append(
+            diagnose_battery_full_charge_assist_text(report).rstrip()
+        )
 
     for section in order:
         checks = [check for check in report["checks"] if check["section"] == section]

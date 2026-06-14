@@ -69,3 +69,21 @@ providers silently.
 
 `ac_charge_power_w` may remain in runtime-state while the role is `ac_output`;
 it does not drive charging until the role becomes `ac_input`.
+
+## Battery Full-Charge Assist
+
+Battery full-charge assist is an optional controller lifecycle feature. It uses
+`ems/state_store.py` and the core SQLite database configured by
+`battery_full_charge_assist.state_database_path`; it does not depend on the
+dashboard database.
+
+The controller processes fresh device telemetry before capability filtering and
+target calculation. Passive tracking records battery devices, last seen
+firmware state, and `socLimit == 1` Max-SoC events. Active assist and restore
+use the same safe write helpers as normal reconciliation: `socSet=1000` during
+assist, current config `devices[].max_soc` during restore, and the existing
+runtime AC intent reconciler for AC input/output mode transitions.
+
+Completion is intentionally narrow: an active assist completes only when
+firmware reports `socLimit == 1`. SOC percentage and configured `max_soc` are
+not completion thresholds.

@@ -60,6 +60,17 @@ ENERGY_SAVINGS_DEFAULTS = {
     "timezone": "Europe/Berlin"
 }
 
+BATTERY_FULL_CHARGE_ASSIST_DEFAULTS = {
+    "enabled": False,
+    "interval_days": 28,
+    "assist_window_days": 7,
+    "assist_start_soc": 80,
+    "force_time": "14:00",
+    "ac_charge_power": 200,
+    "enable_ac_charge_mode": True,
+    "state_database_path": "data/ems_state.sqlite"
+}
+
 
 def default_safe_config():
     """Return a minimal safe config for simulation and replay."""
@@ -99,6 +110,9 @@ def default_safe_config():
         "winter": copy.deepcopy(WINTER_DEFAULTS),
         "dashboard": copy.deepcopy(DASHBOARD_DEFAULTS),
         "energy_savings": copy.deepcopy(ENERGY_SAVINGS_DEFAULTS),
+        "battery_full_charge_assist": copy.deepcopy(
+            BATTERY_FULL_CHARGE_ASSIST_DEFAULTS
+        ),
         "devices": [],
         "grid_meter": {
             "type": "shelly",
@@ -146,6 +160,7 @@ SOC_RECONCILE_INTERVAL = 10
 WINTER_CONFIG = WINTER_DEFAULTS.copy()
 DASHBOARD_CONFIG = DASHBOARD_DEFAULTS.copy()
 ENERGY_SAVINGS_CONFIG = ENERGY_SAVINGS_DEFAULTS.copy()
+BATTERY_FULL_CHARGE_ASSIST_CONFIG = BATTERY_FULL_CHARGE_ASSIST_DEFAULTS.copy()
 OFFGRID_SOCKET_MODES = {
     "standard": 0,
     "eco": 1,
@@ -187,7 +202,7 @@ def initialize(args, base_dir):
     global PV_CHARGE_BALANCE_FULL_BIAS_PERCENT, PV_CHARGE_BALANCE_STRENGTH
     global BATTERY_KWH_WEIGHTING
     global SOC_RECONCILE_INTERVAL, WINTER_CONFIG, DASHBOARD_CONFIG
-    global ENERGY_SAVINGS_CONFIG
+    global ENERGY_SAVINGS_CONFIG, BATTERY_FULL_CHARGE_ASSIST_CONFIG
     global ZENDURE_CONFIG, SHELLY_IP, GRID_METER_CONFIG
 
     ARGS = args
@@ -299,6 +314,9 @@ def initialize(args, base_dir):
         **ENERGY_SAVINGS_DEFAULTS,
         **CONFIG.get("energy_savings", {})
     }
+    BATTERY_FULL_CHARGE_ASSIST_CONFIG = normalize_battery_full_charge_assist_config(
+        CONFIG.get("battery_full_charge_assist", {})
+    )
     ZENDURE_CONFIG = CONFIG["devices"]
     legacy_shelly_config = CONFIG.get("shelly", {})
     if not isinstance(legacy_shelly_config, dict):
@@ -375,6 +393,22 @@ def dashboard_database_path():
     return os.path.join(BASE_DIR, database_path)
 
 
+def battery_full_charge_state_database_path():
+    """Return absolute path to the core EMS state SQLite database."""
+
+    database_path = str(
+        BATTERY_FULL_CHARGE_ASSIST_CONFIG.get(
+            "state_database_path",
+            BATTERY_FULL_CHARGE_ASSIST_DEFAULTS["state_database_path"]
+        )
+    )
+
+    if os.path.isabs(database_path):
+        return database_path
+
+    return os.path.join(BASE_DIR, database_path)
+
+
 def dashboard_file_path(key, default):
     """Return an absolute path for dashboard-local files."""
 
@@ -426,6 +460,78 @@ def safe_bool(value, default=False):
         return False
 
     return default
+
+
+def safe_percent(value, default=0):
+    return max(0, min(100, safe_int(value, default, minimum=0)))
+
+
+def normalize_force_time(value):
+    text = str(value or BATTERY_FULL_CHARGE_ASSIST_DEFAULTS["force_time"]).strip()
+    parts = text.split(":")
+    if len(parts) != 2:
+        raise ValueError(
+            "battery_full_charge_assist.force_time must use HH:MM format"
+        )
+
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1])
+    except ValueError as exc:
+        raise ValueError(
+            "battery_full_charge_assist.force_time must use HH:MM format"
+        ) from exc
+
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        raise ValueError(
+            "battery_full_charge_assist.force_time must use HH:MM format"
+        )
+
+    return f"{hour:02d}:{minute:02d}"
+
+
+def normalize_battery_full_charge_assist_config(config):
+    if not isinstance(config, dict):
+        config = {}
+
+    merged = {
+        **BATTERY_FULL_CHARGE_ASSIST_DEFAULTS,
+        **config
+    }
+
+    return {
+        "enabled": safe_bool(merged.get("enabled"), False),
+        "interval_days": safe_int(
+            merged.get("interval_days"),
+            BATTERY_FULL_CHARGE_ASSIST_DEFAULTS["interval_days"],
+            minimum=1
+        ),
+        "assist_window_days": safe_int(
+            merged.get("assist_window_days"),
+            BATTERY_FULL_CHARGE_ASSIST_DEFAULTS["assist_window_days"],
+            minimum=0
+        ),
+        "assist_start_soc": safe_percent(
+            merged.get("assist_start_soc"),
+            BATTERY_FULL_CHARGE_ASSIST_DEFAULTS["assist_start_soc"]
+        ),
+        "force_time": normalize_force_time(merged.get("force_time")),
+        "ac_charge_power": safe_int(
+            merged.get("ac_charge_power"),
+            BATTERY_FULL_CHARGE_ASSIST_DEFAULTS["ac_charge_power"],
+            minimum=0
+        ),
+        "enable_ac_charge_mode": safe_bool(
+            merged.get("enable_ac_charge_mode"),
+            True
+        ),
+        "state_database_path": str(
+            merged.get(
+                "state_database_path",
+                BATTERY_FULL_CHARGE_ASSIST_DEFAULTS["state_database_path"]
+            )
+        ),
+    }
 
 
 def winter_config_bool(key, default=False):
