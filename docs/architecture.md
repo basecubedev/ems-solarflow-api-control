@@ -41,3 +41,31 @@ The implementation lives in internal modules under `ems/`.
 
 This preserves the operational model of one start script and one static config
 while avoiding a large monolithic source file.
+
+## Runtime AC Mode Intent
+
+The controller derives a runtime AC mode intent for each device before normal
+output allocation. `ac_output` maps to Zendure `acMode=2` and allows normal
+output regulation. `ac_input` maps to `acMode=1` and excludes the device from
+normal `outputLimit` regulation.
+
+`acMode` writes are owned by the runtime intent reconciler. Optional runtime AC
+charge power is stored per device as `ac_charge_power_w` and is reconciled as
+Zendure `inputLimit` only while the runtime role is `ac_input`. Both values are
+compared against current telemetry and written only when they differ, using the
+existing runtime `/properties/write` path and the normal write gates. The
+startup AC mode reconcile path delegates to this same owner so there is not a
+second blind writer.
+
+When startup reconciliation targets normal output and the reported `acMode` is
+not a known value (`1` or `2`), the controller logs `unknown_ac_mode` and skips
+the write instead of forcing output mode from unsupported or missing telemetry.
+Explicit runtime output intent, for example `emsctl device WR1 ac-mode output`,
+may write `acMode=2` from reported `acMode=0`.
+Legacy runtime role names from the development branch are accepted defensively:
+`normal_output` is treated as `ac_output`, while `ac_input_charge` and
+`reserved` are treated as `ac_input` so older blocked states never become output
+providers silently.
+
+`ac_charge_power_w` may remain in runtime-state while the role is `ac_output`;
+it does not drive charging until the role becomes `ac_input`.

@@ -64,11 +64,17 @@ eco      -> 1
 standard -> 0
 ```
 
-Startup may initialize `acMode=2` once when the device appears idle and no
-firmware recovery/charge condition is active.
+Runtime AC mode intent is evaluated during the control loop. Normal output
+devices target `acMode=2`; runtime AC input/charge reservations target
+`acMode=1` and are excluded from normal output regulation.
 
-`reconcile_ac_mode_on_start` is a startup reconciliation helper, not permanent
-cyclic forcing of `acMode`.
+The controller writes `acMode` only when telemetry differs from the desired
+runtime target. Automatic startup reconciliation remains conservative: unknown
+`acMode` values are not forced back to normal output automatically, and
+firmware recovery/charge blockers are still honored before startup returns a
+device to `acMode=2`. An explicit runtime output command, such as
+`emsctl device WR1 ac-mode output`, may still write `acMode=2` from reported
+`acMode=0` or from `acMode=1` with active AC charge telemetry.
 
 ## Preflight
 

@@ -153,6 +153,7 @@ def test_zendure_and_shelly_clients_parse_and_preserve_http_values():
                     "outputHomePower": 450,
                     "packInputPower": 120,
                     "outputLimit": 800,
+                    "inputLimit": 200,
                 }
             }
         )
@@ -175,6 +176,7 @@ def test_zendure_and_shelly_clients_parse_and_preserve_http_values():
     assert state.output == 450
     assert state.pack_in == 120
     assert state.output_limit == 800
+    assert state.input_limit_w == 200
 
     shelly = ShellyClient(
         "192.0.2.20",
@@ -188,6 +190,27 @@ def test_zendure_and_shelly_clients_parse_and_preserve_http_values():
 
     shelly.session = SessionStub(get_response=ValueError("offline"))
     assert shelly.get_power() == 123.5
+
+
+def test_zendure_client_defaults_missing_input_limit_to_zero():
+    zendure = ZendureClient(
+        "WR1",
+        "192.0.2.10",
+        "SN",
+        SessionStub(
+            get_response=ResponseStub(
+                payload={"properties": {"electricLevel": 65}}
+            )
+        ),
+        min_soc=10,
+        max_soc=100,
+        smart_mode=1,
+        grid_off_mode=None,
+    )
+
+    state = zendure.fetch()
+
+    assert state.input_limit_w == 0
 
 
 def test_parse_shelly_power_supports_triphase_payload():

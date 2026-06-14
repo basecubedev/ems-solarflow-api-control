@@ -12,6 +12,12 @@ from ems.clients import (
     zero_device_state,
 )
 from ems.logging_utils import log_event
+from ems.models import DeviceCapabilities
+from ems.runtime_intents import (
+    DeviceRuntimeRole,
+    ac_output_intent,
+    runtime_intent_from_role,
+)
 from ems.target_control import (
     ControlExplanation,
     ControlLimitExplanation,
@@ -24,6 +30,9 @@ from ems.target_control import (
     firmware_recovery_or_ac_charge_active,
     startup_ac_mode_initialization_blocker,
 )
+
+
+STARTUP_AC_MODE_RECONCILE_REASON = "startup_ac_mode_reconcile"
 
 
 class EMSController:
@@ -70,6 +79,7 @@ class EMSController:
         self._dashboard_capabilities = []
         self._last_dashboard_publish = 0
         self.last_control_explanation = None
+        self.runtime_intents = {}
 
     def output_control_bool(self, key, default=False):
         return cfg.safe_bool(
@@ -278,6 +288,9 @@ class EMSController:
             if not self.runtime_device_bool(dev.name, "enabled", True):
                 continue
 
+            if not self.device_output_control_allowed_by_intent(dev.name):
+                continue
+
             indexes.append(i)
 
         return indexes
@@ -315,6 +328,26 @@ class EMSController:
                 return True
 
         return False
+
+    def intent_filtered_capabilities(self, capabilities):
+        """Return capabilities with reserved devices blocked from output control."""
+
+        filtered = []
+
+        for dev, capability in zip(self.devices, capabilities):
+            if self.device_output_control_allowed_by_intent(dev.name):
+                filtered.append(capability)
+                continue
+
+            filtered.append(DeviceCapabilities(
+                can_charge=capability.can_charge,
+                can_discharge=False,
+                can_export=False,
+                can_ac_charge=capability.can_ac_charge,
+                reason=f"runtime_role_{self.runtime_intents[dev.name].role.value}"
+            ))
+
+        return filtered
 
     def stabilized_total_target(
         self,
@@ -475,9 +508,13 @@ class EMSController:
 
     def apply_device_ramp(self, targets, raw_load):
         if not self.output_control_bool("device_ramp_enabled", True):
+            adjusted_targets = []
             for dev, target in zip(self.devices, targets):
+                if not self.device_output_control_allowed_by_intent(dev.name):
+                    target = 0
                 self.commanded_device_targets[dev.name] = target
-            return targets
+                adjusted_targets.append(target)
+            return adjusted_targets
 
         bypass = self.output_control_bypass_active(raw_load)
         multiplier = (
@@ -508,6 +545,11 @@ class EMSController:
         ramped_targets = []
 
         for dev, target in zip(self.devices, targets):
+            if not self.device_output_control_allowed_by_intent(dev.name):
+                self.commanded_device_targets[dev.name] = 0
+                ramped_targets.append(0)
+                continue
+
             previous = self.commanded_device_targets.get(dev.name)
 
             if previous is None:
@@ -555,6 +597,9 @@ class EMSController:
                 continue
 
             if not self.runtime_device_bool(dev.name, "enabled", True):
+                continue
+
+            if not self.device_output_control_allowed_by_intent(dev.name):
                 continue
 
             indexes.append(i)
@@ -750,6 +795,14 @@ class EMSController:
             elif not runtime_enabled:
                 write_decision = "blocked"
                 write_reason = "device_disabled"
+            elif not self.device_output_control_allowed_by_intent(dev.name):
+                intent = self.runtime_intents.get(dev.name)
+                write_decision = "blocked"
+                write_reason = (
+                    f"runtime_role_{intent.role.value}"
+                    if intent
+                    else "runtime_role_blocked"
+                )
             elif i not in controllable:
                 write_decision = "blocked"
                 write_reason = "not_controllable"
@@ -848,6 +901,10 @@ class EMSController:
                 effective_targets.append(0)
                 continue
 
+            if not self.device_output_control_allowed_by_intent(dev.name):
+                effective_targets.append(0)
+                continue
+
             if min_output_limit > 0:
                 target = max(target, min_output_limit)
 
@@ -932,6 +989,299 @@ class EMSController:
             default,
             minimum=minimum
         )
+
+    def runtime_device_str(self, device_name, key, default):
+        if not self.runtime_state:
+            return default
+
+        value = self.runtime_state.get_device(device_name, key, default)
+        if value is None:
+            return default
+
+        return str(value)
+
+    def get_device_runtime_intent(self, dev, state):
+        """Return the current runtime reservation intent for a device."""
+
+        role = self.runtime_device_str(
+            dev.name,
+            "runtime_role",
+            DeviceRuntimeRole.AC_OUTPUT.value
+        )
+        reason = self.runtime_device_str(
+            dev.name,
+            "runtime_role_reason",
+            "ac_output"
+        )
+        intent = runtime_intent_from_role(dev.name, role, reason)
+
+        if intent:
+            return intent
+
+        log_event(
+            logging.WARNING,
+            "runtime_role_invalid",
+            device=dev.name,
+            runtime_role=role,
+            reason="unknown_runtime_role"
+        )
+        return ac_output_intent(dev.name, "invalid_runtime_role_fallback")
+
+    def device_output_control_allowed_by_intent(self, dev_name):
+        intent = self.runtime_intents.get(dev_name)
+        if intent is None:
+            return True
+
+        return intent.output_control_allowed
+
+    def ac_mode_intent_log_fields(self, dev, state, intent):
+        return {
+            "device": dev.name,
+            "current_ac_mode": state.ac_mode,
+            "desired_ac_mode": intent.desired_ac_mode,
+            "runtime_role": intent.role.value,
+            "reason": intent.reason,
+            "ac_status": state.ac_status,
+            "soc": state.soc,
+            "soc_limit": state.soc_limit,
+            "output_w": state.output,
+            "pack_input_w": state.pack_in,
+            "output_pack_w": state.pack_out,
+        }
+
+    def is_startup_ac_mode_reconcile_intent(self, intent):
+        return intent.reason == STARTUP_AC_MODE_RECONCILE_REASON
+
+    def reconcile_ac_mode_intent(self, dev, state, intent):
+        """Write acMode only when telemetry differs from desired runtime intent."""
+
+        if intent.desired_ac_mode is None:
+            return
+
+        fields = self.ac_mode_intent_log_fields(dev, state, intent)
+        current_ac_mode = int(state.ac_mode)
+        desired_ac_mode = int(intent.desired_ac_mode)
+        startup_reconcile = self.is_startup_ac_mode_reconcile_intent(intent)
+
+        if current_ac_mode == desired_ac_mode:
+            log_event(
+                logging.DEBUG,
+                "ac_mode_intent_unchanged",
+                **fields
+            )
+            return
+
+        if (
+            desired_ac_mode == 2
+            and current_ac_mode not in (1, 2)
+            and (current_ac_mode != 0 or startup_reconcile)
+        ):
+            log_event(
+                logging.WARNING,
+                "unknown_ac_mode",
+                **fields
+            )
+            return
+
+        if current_ac_mode == 1 and desired_ac_mode == 2 and startup_reconcile:
+            skip_reason = startup_ac_mode_initialization_blocker(state)
+            if skip_reason:
+                log_event(
+                    logging.INFO,
+                    "ac_mode_intent_skip",
+                    **{
+                        **fields,
+                        "reason": skip_reason,
+                        "runtime_role_reason": intent.reason,
+                    }
+                )
+                return
+
+        if not cfg.state_reconciliation_writes_allowed():
+            log_event(
+                logging.INFO,
+                "dry_run_ac_mode_intent_write",
+                **{
+                    **fields,
+                    "dry_run": cfg.DRY_RUN,
+                    "simulation": cfg.SIMULATION_MODE,
+                    "allow_hardware_writes": cfg.ALLOW_HARDWARE_WRITES,
+                    "allow_state_reconciliation_writes": (
+                        cfg.ALLOW_STATE_RECONCILIATION_WRITES
+                    ),
+                }
+            )
+            return
+
+        try:
+            response = dev.session.post(
+                f"http://{dev.ip}/properties/write",
+                json={
+                    "sn": dev.sn,
+                    "properties": {
+                        "acMode": desired_ac_mode
+                    }
+                },
+                timeout=2
+            )
+
+            if not zendure_write_succeeded(
+                "write_ac_mode_intent_error",
+                dev,
+                response,
+                **fields
+            ):
+                return
+
+            log_event(
+                logging.INFO,
+                "write_ac_mode_intent",
+                **fields
+            )
+
+        except Exception as e:
+            log_event(
+                logging.WARNING,
+                "write_ac_mode_intent_error",
+                **{
+                    **fields,
+                    "error": e,
+                }
+            )
+
+    def desired_runtime_input_limit(self, dev, intent):
+        """Return desired runtime AC charge inputLimit, or None."""
+
+        if intent.role is not DeviceRuntimeRole.AC_INPUT:
+            return None
+
+        if not self.runtime_state:
+            return None
+
+        raw_value = self.runtime_state.get_device(
+            dev.name,
+            "ac_charge_power_w",
+            None
+        )
+
+        if raw_value is None or raw_value == "":
+            return None
+
+        if isinstance(raw_value, bool):
+            log_event(
+                logging.WARNING,
+                "runtime_ac_charge_power_invalid",
+                device=dev.name,
+                value=raw_value,
+                reason="not_integer"
+            )
+            return None
+
+        try:
+            desired = int(str(raw_value).strip(), 10)
+        except (TypeError, ValueError):
+            log_event(
+                logging.WARNING,
+                "runtime_ac_charge_power_invalid",
+                device=dev.name,
+                value=raw_value,
+                reason="not_integer"
+            )
+            return None
+
+        if desired < 0:
+            log_event(
+                logging.WARNING,
+                "runtime_ac_charge_power_invalid",
+                device=dev.name,
+                value=raw_value,
+                reason="negative"
+            )
+            return None
+
+        return desired
+
+    def reconcile_runtime_ac_charge_power(self, dev, state, intent):
+        """Write inputLimit when runtime AC input intent requests a new value."""
+
+        desired_input_limit = self.desired_runtime_input_limit(dev, intent)
+        if desired_input_limit is None:
+            return
+
+        current_input_limit = cfg.safe_int(
+            getattr(state, "input_limit_w", 0),
+            0,
+            minimum=0
+        )
+        fields = {
+            "device": dev.name,
+            "current_input_limit_w": current_input_limit,
+            "desired_input_limit_w": desired_input_limit,
+            "runtime_role": intent.role.value,
+            "reason": intent.reason,
+            "ac_mode": state.ac_mode,
+            "ac_status": state.ac_status,
+        }
+
+        if current_input_limit == desired_input_limit:
+            log_event(
+                logging.DEBUG,
+                "runtime_ac_charge_power_unchanged",
+                **fields
+            )
+            return
+
+        if not cfg.state_reconciliation_writes_allowed():
+            log_event(
+                logging.INFO,
+                "runtime_ac_charge_power_write_skipped",
+                **{
+                    **fields,
+                    "dry_run": cfg.DRY_RUN,
+                    "simulation": cfg.SIMULATION_MODE,
+                    "allow_hardware_writes": cfg.ALLOW_HARDWARE_WRITES,
+                    "allow_state_reconciliation_writes": (
+                        cfg.ALLOW_STATE_RECONCILIATION_WRITES
+                    ),
+                }
+            )
+            return
+
+        try:
+            response = dev.session.post(
+                f"http://{dev.ip}/properties/write",
+                json={
+                    "sn": dev.sn,
+                    "properties": {
+                        "inputLimit": desired_input_limit
+                    }
+                },
+                timeout=2
+            )
+
+            if not zendure_write_succeeded(
+                "runtime_ac_charge_power_write_error",
+                dev,
+                response,
+                **fields
+            ):
+                return
+
+            log_event(
+                logging.INFO,
+                "runtime_ac_charge_power_changed",
+                **fields
+            )
+
+        except Exception as e:
+            log_event(
+                logging.WARNING,
+                "runtime_ac_charge_power_write_error",
+                **{
+                    **fields,
+                    "error": e,
+                }
+            )
 
     def ha_update_runtime_field(
         self,
@@ -1432,7 +1782,7 @@ class EMSController:
             )
 
     def run_startup_ac_mode_reconcile_once(self, dev, state):
-        """Initialize acMode=2 at most once after first valid telemetry."""
+        """Compatibility wrapper for legacy startup acMode reconciliation."""
 
         if self.initial_ac_mode_reconciled.get(dev.name, False):
             return
@@ -1447,84 +1797,11 @@ class EMSController:
             )
             return
 
-        if int(state.ac_mode) == 2:
-            log_event(
-                logging.INFO,
-                "startup_ac_mode_already_ok",
-                device=dev.name,
-                ac_mode=state.ac_mode,
-                ac_status=state.ac_status
-            )
-            return
-
-        skip_reason = startup_ac_mode_initialization_blocker(state)
-
-        if skip_reason:
-            log_event(
-                logging.INFO,
-                "startup_ac_mode_skip",
-                device=dev.name,
-                ac_mode=state.ac_mode,
-                ac_status=state.ac_status,
-                soc=state.soc,
-                min_soc=state.min_soc,
-                soc_limit=state.soc_limit,
-                output_w=state.output,
-                pack_input_w=state.pack_in,
-                output_pack_w=state.pack_out,
-                reason=skip_reason
-            )
-            return
-
-        if not cfg.state_reconciliation_writes_allowed():
-            log_event(
-                logging.INFO,
-                "dry_run_startup_ac_mode_write",
-                device=dev.name,
-                ac_mode=2,
-                dry_run=cfg.DRY_RUN,
-                simulation=cfg.SIMULATION_MODE,
-                allow_hardware_writes=cfg.ALLOW_HARDWARE_WRITES,
-                allow_state_reconciliation_writes=(
-                    cfg.ALLOW_STATE_RECONCILIATION_WRITES
-                )
-            )
-            return
-
-        try:
-            response = dev.session.post(
-                f"http://{dev.ip}/properties/write",
-                json={
-                    "sn": dev.sn,
-                    "properties": {
-                        "acMode": 2
-                    }
-                },
-                timeout=2
-            )
-
-            if not zendure_write_succeeded(
-                "startup_ac_mode_write_error",
-                dev,
-                response,
-                ac_mode=2
-            ):
-                return
-
-            log_event(
-                logging.INFO,
-                "startup_ac_mode_write",
-                device=dev.name,
-                ac_mode=2
-            )
-
-        except Exception as e:
-            log_event(
-                logging.WARNING,
-                "startup_ac_mode_write_error",
-                device=dev.name,
-                error=e
-            )
+        self.reconcile_ac_mode_intent(
+            dev,
+            state,
+            ac_output_intent(dev.name, STARTUP_AC_MODE_RECONCILE_REASON)
+        )
 
     def apply_device_modes(self, dev, state):
         """Apply device operating modes if required."""
@@ -2353,8 +2630,6 @@ class EMSController:
                 self.last_seen[dev.name] = time.time()
                 self.device_online[dev.name] = True
 
-                self.run_startup_ac_mode_reconcile_once(dev, state)
-
                 states.append(state)
 
                 continue
@@ -2402,6 +2677,23 @@ class EMSController:
             detect_capabilities(state)
             for state in states
         ]
+        self.runtime_intents = {}
+        for dev, state in zip(self.devices, states):
+            self.runtime_intents[dev.name] = ac_output_intent(dev.name)
+
+        for dev, state in zip(
+            self.devices,
+            raw_states
+        ):
+            if not state:
+                continue
+
+            intent = self.get_device_runtime_intent(dev, state)
+            self.runtime_intents[dev.name] = intent
+            self.reconcile_ac_mode_intent(dev, state, intent)
+            self.reconcile_runtime_ac_charge_power(dev, state, intent)
+
+        capabilities = self.intent_filtered_capabilities(capabilities)
         self._dashboard_capabilities = capabilities
         active_indexes = self.active_online_device_indexes()
 
@@ -2665,6 +2957,19 @@ class EMSController:
                 elif not self.runtime_device_bool(dev.name, "enabled", True):
                     device_explanation.write_decision = "blocked"
                     device_explanation.write_reason = "device_disabled"
+                elif not self.device_output_control_allowed_by_intent(dev.name):
+                    intent = self.runtime_intents.get(dev.name)
+                    device_explanation.write_decision = "blocked"
+                    device_explanation.write_reason = (
+                        f"runtime_role_{intent.role.value}"
+                        if intent
+                        else "runtime_role_blocked"
+                    )
+                    device_explanation.limiting_reason = (
+                        f"runtime_role_{intent.role.value}"
+                        if intent
+                        else "runtime_role_blocked"
+                    )
                 else:
                     state = states[i]
                     reference = (
@@ -2753,6 +3058,26 @@ class EMSController:
                     "device_disabled_skip_write",
                     device=dev.name,
                     target_w=targets[i]
+                )
+                continue
+
+            if not self.device_output_control_allowed_by_intent(dev.name):
+                intent = self.runtime_intents.get(dev.name)
+                log_event(
+                    logging.INFO,
+                    "runtime_role_skip_output_limit",
+                    device=dev.name,
+                    target_w=targets[i],
+                    runtime_role=(
+                        intent.role.value
+                        if intent
+                        else "blocked"
+                    ),
+                    reason=(
+                        intent.reason
+                        if intent
+                        else "runtime_role_blocked"
+                    )
                 )
                 continue
 

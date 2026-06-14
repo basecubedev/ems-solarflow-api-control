@@ -556,6 +556,7 @@ def test_emsctl_completion_bash_contains_commands_and_configured_device(tmp_path
     assert "status system device ha ha-control winter dashboard diagnose interactive menu examples completion help" in result.stdout
     assert "set-password change-password disable-auth auth-status" in result.stdout
     assert "off eco standard" in result.stdout
+    assert "output input" in result.stdout
     assert "WR1" in result.stdout
     assert not (tmp_path / "runtime-state.json").exists()
 
@@ -567,6 +568,7 @@ def test_emsctl_completion_zsh_contains_commands_and_configured_device(tmp_path)
     assert "commands=(status system device ha ha-control winter dashboard diagnose interactive menu examples completion help)" in result.stdout
     assert "dashboard_actions=(set-password change-password disable-auth auth-status)" in result.stdout
     assert "offgrid_modes=(off eco standard)" in result.stdout
+    assert "ac_modes=(output input)" in result.stdout
     assert "devices=(WR1)" in result.stdout
     assert not (tmp_path / "runtime-state.json").exists()
 
@@ -1469,12 +1471,25 @@ def test_emsctl_status_creates_runtime_state_from_config(tmp_path):
     assert (tmp_path / "runtime-state.json").exists()
 
 
+def test_emsctl_device_help_contains_ac_mode(tmp_path):
+    result = run_emsctl(tmp_path, "device", "--help")
+
+    assert result.returncode == 0, result.stderr
+    assert "ac-mode [output|input]" in result.stdout
+    assert "ac-charge-power WATTS" in result.stdout
+    assert "python3 emsctl.py device WR1 ac-mode output" in result.stdout
+    assert "python3 emsctl.py device WR1 ac-charge-power 200" in result.stdout
+    assert not (tmp_path / "runtime-state.json").exists()
+
+
 def test_emsctl_updates_system_device_and_sections(tmp_path):
     commands = [
         ("system", "disable"),
         ("system", "max-power", "650"),
         ("device", "WR1", "max-power", "500"),
         ("device", "WR1", "offgrid", "eco"),
+        ("device", "WR1", "ac-mode", "input"),
+        ("device", "WR1", "ac-charge-power", "200"),
         ("ha", "disable"),
         ("ha-control", "disable"),
         ("winter", "enable"),
@@ -1483,13 +1498,19 @@ def test_emsctl_updates_system_device_and_sections(tmp_path):
     for command in commands:
         result = run_emsctl(tmp_path, *command)
         assert result.returncode == 0, result.stderr
-        assert result.stdout.startswith("updated ")
+        if len(command) > 2 and command[2] == "ac-charge-power":
+            assert result.stdout == "Set WR1 AC charge power to 200 W.\n"
+        else:
+            assert result.stdout.startswith("updated ")
 
     state = runtime_state(tmp_path)
     assert state["system"]["enabled"] is False
     assert state["system"]["max_total_power"] == 650
     assert state["devices"]["WR1"]["max_power"] == 500
     assert state["devices"]["WR1"]["offgrid_socket_mode"] == "eco"
+    assert state["devices"]["WR1"]["runtime_role"] == "ac_input"
+    assert state["devices"]["WR1"]["runtime_role_reason"] == "emsctl"
+    assert state["devices"]["WR1"]["ac_charge_power_w"] == 200
     assert state["ha"]["enabled"] is False
     assert state["ha"]["control_enabled"] is False
     assert state["winter"]["enabled"] is True
@@ -1503,7 +1524,11 @@ def test_emsctl_rejects_invalid_values_without_modifying_state(tmp_path):
         ("system", "loop-interval", "0"),
         ("system", "max-power", "-1"),
         ("device", "WR1", "offgrid", "invalid"),
+        ("device", "WR1", "ac-mode", "invalid"),
+        ("device", "WR1", "ac-charge-power", "-1"),
+        ("device", "WR1", "ac-charge-power", "200.5"),
         ("device", "UNKNOWN", "disable"),
+        ("device", "UNKNOWN", "ac-charge-power", "200"),
         ("device", "WR1", "max-power", "nan"),
     ]
 
@@ -1512,6 +1537,62 @@ def test_emsctl_rejects_invalid_values_without_modifying_state(tmp_path):
         assert result.returncode != 0
         assert "ERROR:" in result.stderr
         assert (tmp_path / "runtime-state.json").read_text() == before
+
+
+def test_emsctl_device_ac_mode_output_and_status(tmp_path):
+    result = run_emsctl(tmp_path, "device", "WR1", "ac-mode", "output")
+
+    assert result.returncode == 0, result.stderr
+    state = runtime_state(tmp_path)
+    assert state["devices"]["WR1"]["runtime_role"] == "ac_output"
+    assert state["devices"]["WR1"]["runtime_role_reason"] == "emsctl"
+
+    result = run_emsctl(tmp_path, "device", "WR1", "ac-mode")
+    payload = json.loads(result.stdout)
+
+    assert result.returncode == 0, result.stderr
+    assert payload["device"] == "WR1"
+    assert payload["runtime_role"] == "ac_output"
+    assert payload["command"] == "output"
+    assert payload["desired_ac_mode"] == 2
+    assert payload["output_control_allowed"] is True
+
+
+def test_emsctl_device_ac_mode_input_writes_runtime_state_only(tmp_path):
+    result = run_emsctl(tmp_path, "device", "WR1", "ac-mode", "input")
+
+    assert result.returncode == 0, result.stderr
+    state = runtime_state(tmp_path)
+    assert state["devices"]["WR1"]["runtime_role"] == "ac_input"
+    assert state["devices"]["WR1"]["runtime_role_reason"] == "emsctl"
+
+
+def test_emsctl_device_ac_charge_power_writes_runtime_state(tmp_path):
+    result = run_emsctl(tmp_path, "device", "WR1", "ac-charge-power", "200")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "Set WR1 AC charge power to 200 W.\n"
+    state = runtime_state(tmp_path)
+    assert state["devices"]["WR1"]["ac_charge_power_w"] == 200
+
+    result = run_emsctl(tmp_path, "device", "WR1", "ac-charge-power", "0")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "Set WR1 AC charge power to 0 W.\n"
+    state = runtime_state(tmp_path)
+    assert state["devices"]["WR1"]["ac_charge_power_w"] == 0
+
+
+def test_emsctl_ac_charge_power_preserves_runtime_role(tmp_path):
+    assert run_emsctl(tmp_path, "device", "WR1", "ac-mode", "input").returncode == 0
+
+    result = run_emsctl(tmp_path, "device", "WR1", "ac-charge-power", "200")
+
+    assert result.returncode == 0, result.stderr
+    state = runtime_state(tmp_path)
+    assert state["devices"]["WR1"]["runtime_role"] == "ac_input"
+    assert state["devices"]["WR1"]["runtime_role_reason"] == "emsctl"
+    assert state["devices"]["WR1"]["ac_charge_power_w"] == 200
 
 
 def test_emsctl_winter_status_prints_only_winter_state(tmp_path):

@@ -40,6 +40,7 @@ def test_merge_runtime_defaults_preserves_unknown_keys_and_removes_legacy_socket
             "devices": {
                 "WR1": {
                     "max_power": 600,
+                    "ac_charge_power_w": 200,
                     "offgrid_socket": True,
                 },
                 "WR2": {
@@ -56,6 +57,7 @@ def test_merge_runtime_defaults_preserves_unknown_keys_and_removes_legacy_socket
     assert merged["system"]["loop_interval"] == 5
     assert merged["system"]["extra"] == "preserved"
     assert merged["devices"]["WR1"]["max_power"] == 600
+    assert merged["devices"]["WR1"]["ac_charge_power_w"] == 200
     assert "offgrid_socket" not in merged["devices"]["WR1"]
     assert "offgrid_socket" not in merged["devices"]["WR2"]
     assert merged["devices"]["WR2"]["enabled"] is False

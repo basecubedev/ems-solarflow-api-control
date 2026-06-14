@@ -122,8 +122,18 @@ works after local device and grid meter configuration.
 writes. The template default is `true` because this is part of the default
 regulation profile after local device limits and SOC limits have been reviewed.
 
-`system.reconcile_ac_mode_on_start` allows one startup check for the expected
-AC mode. It is not permanent cyclic forcing of `acMode`.
+`system.reconcile_ac_mode_on_start` keeps the legacy startup compatibility gate
+enabled. Runtime AC mode intent is evaluated during the control loop, but
+startup reconciliation writes happen only when the reported `acMode` is a known
+value and differs from the desired runtime target. This prevents blind repeated
+startup writes while still keeping normal output devices aligned to `acMode=2`;
+explicit runtime output intent can still return a device to `acMode=2`.
+
+Runtime AC charge power is not a static device config value. Set it through
+runtime-state, for example with `python3 emsctl.py device WR1 ac-charge-power
+200`. The controller applies it as `inputLimit` on the next loop only while the
+device runtime role is `ac_input`; in `ac_output` mode the stored value is
+ignored for hardware writes.
 
 `system.reconcile_smart_mode` allows smart mode reconciliation and is required
 for the intended Zendure runtime/RAM mode behavior.

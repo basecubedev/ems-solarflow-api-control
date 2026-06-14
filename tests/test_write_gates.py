@@ -1,10 +1,16 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
+import logging
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from ems.controller import EMSController
 from ems.models import DeviceState
+from ems.runtime_intents import (
+    DeviceRuntimeRole,
+    ac_input_intent,
+    ac_output_intent,
+)
 
 
 class RuntimeStateStub:
@@ -41,6 +47,9 @@ class DashboardStoreStub:
 def device(name):
     return SimpleNamespace(
         name=name,
+        ip="127.0.0.1",
+        sn=f"{name}-SN",
+        session=Mock(),
         max_power=800,
         pv_kwp=1.0,
         pv_priority_factor=1.0,
@@ -63,7 +72,9 @@ def state(
     soc_limit=0,
     dc_status=1,
     ac_status=1,
-    pack_state=2
+    pack_state=2,
+    ac_mode=2,
+    input_limit_w=0
 ):
     return DeviceState(
         soc=soc,
@@ -87,10 +98,11 @@ def state(
         fault_level=0,
         smart_mode=1,
         grid_off_mode=0,
-        ac_mode=2,
+        ac_mode=ac_mode,
         ac_status=ac_status,
         dc_status=dc_status,
         grid_state=1,
+        input_limit_w=input_limit_w,
     )
 
 
@@ -363,6 +375,637 @@ class WriteGateTest(unittest.TestCase):
             controller.run_once()
 
         self.assertEqual(controller.set_output_limit.call_count, 2)
+
+    def test_default_runtime_intent_does_not_write_ac_mode_when_already_output(self):
+        controlled = device("WR1")
+        controller = self.run_controller_once(
+            [controlled],
+            [state(ac_mode=2)],
+            load=300
+        )
+
+        controlled.session.post.assert_not_called()
+        self.assertEqual(controller.set_output_limit.call_count, 1)
+
+    def test_default_runtime_intent_restores_output_mode_once(self):
+        controlled = device("WR1")
+        controlled.session.post.return_value = SimpleNamespace(status_code=200)
+        controller = EMSController(
+            devices=[controlled],
+            shelly=ShellyStub(0),
+            sleep_enabled=False,
+            runtime_state=RuntimeStateStub()
+        )
+
+        with patch(
+            "ems.controller.cfg.state_reconciliation_writes_allowed",
+            return_value=True
+        ):
+            controller.reconcile_ac_mode_intent(
+                controlled,
+                state(ac_mode=1, solar=0, output=0, pack_in=0, pack_out=0),
+                ac_output_intent("WR1")
+            )
+            controller.reconcile_ac_mode_intent(
+                controlled,
+                state(ac_mode=2, solar=0, output=0, pack_in=0, pack_out=0),
+                ac_output_intent("WR1")
+            )
+
+        self.assertEqual(controlled.session.post.call_count, 1)
+        self.assertEqual(
+            controlled.session.post.call_args.kwargs["json"]["properties"],
+            {"acMode": 2}
+        )
+
+    def test_default_runtime_intent_does_not_spam_ac_mode_writes(self):
+        controlled = device("WR1")
+        controller = EMSController(
+            devices=[controlled],
+            shelly=ShellyStub(0),
+            sleep_enabled=False,
+            runtime_state=RuntimeStateStub()
+        )
+
+        with patch(
+            "ems.controller.cfg.state_reconciliation_writes_allowed",
+            return_value=True
+        ):
+            controller.reconcile_ac_mode_intent(
+                controlled,
+                state(ac_mode=2),
+                ac_output_intent("WR1")
+            )
+            controller.reconcile_ac_mode_intent(
+                controlled,
+                state(ac_mode=2),
+                ac_output_intent("WR1")
+            )
+
+        controlled.session.post.assert_not_called()
+
+    def test_unchanged_ac_mode_intent_logs_debug_not_info(self):
+        controlled = device("WR1")
+        controller = EMSController(
+            devices=[controlled],
+            shelly=ShellyStub(0),
+            sleep_enabled=False,
+            runtime_state=RuntimeStateStub()
+        )
+
+        with patch("ems.controller.log_event") as log_event:
+            controller.reconcile_ac_mode_intent(
+                controlled,
+                state(ac_mode=2),
+                ac_output_intent("WR1")
+            )
+
+        controlled.session.post.assert_not_called()
+        self.assertTrue(
+            any(
+                call.args[0] == logging.DEBUG
+                and call.args[1] == "ac_mode_intent_unchanged"
+                for call in log_event.call_args_list
+            )
+        )
+
+    def test_ac_input_runtime_intent_writes_ac_mode_1(self):
+        controlled = device("WR1")
+        controlled.session.post.return_value = SimpleNamespace(status_code=200)
+        runtime_state = RuntimeStateStub(
+            devices={
+                "WR1": {
+                    "runtime_role": "ac_input",
+                    "runtime_role_reason": "test_charge"
+                }
+            }
+        )
+        controller = EMSController(
+            devices=[controlled],
+            shelly=ShellyStub(0),
+            sleep_enabled=False,
+            runtime_state=runtime_state
+        )
+        intent = controller.get_device_runtime_intent(controlled, state(ac_mode=2))
+
+        with patch(
+            "ems.controller.cfg.state_reconciliation_writes_allowed",
+            return_value=True
+        ):
+            controller.reconcile_ac_mode_intent(
+                controlled,
+                state(ac_mode=2),
+                intent
+            )
+
+        controlled.session.post.assert_called_once()
+        self.assertEqual(
+            controlled.session.post.call_args.kwargs["json"]["properties"],
+            {"acMode": 1}
+        )
+
+    def test_ac_input_runtime_intent_skips_when_already_correct(self):
+        controlled = device("WR1")
+        controller = EMSController(
+            devices=[controlled],
+            shelly=ShellyStub(0),
+            sleep_enabled=False,
+            runtime_state=RuntimeStateStub()
+        )
+
+        controller.reconcile_ac_mode_intent(
+            controlled,
+            state(ac_mode=1),
+            ac_input_intent("WR1", "test_charge")
+        )
+
+        controlled.session.post.assert_not_called()
+
+    def test_legacy_reserved_runtime_role_maps_to_ac_input_intent(self):
+        controlled = device("WR1")
+        runtime_state = RuntimeStateStub(
+            devices={
+                "WR1": {
+                    "runtime_role": "reserved",
+                    "runtime_role_reason": "manual_reservation"
+                }
+            }
+        )
+        controller = EMSController(
+            devices=[controlled],
+            shelly=ShellyStub(0),
+            sleep_enabled=False,
+            runtime_state=runtime_state
+        )
+
+        intent = controller.get_device_runtime_intent(controlled, state(ac_mode=2))
+
+        self.assertEqual(intent.role, DeviceRuntimeRole.AC_INPUT)
+        self.assertEqual(intent.reason, "manual_reservation")
+        self.assertEqual(intent.desired_ac_mode, 1)
+        self.assertFalse(intent.output_control_allowed)
+
+    def test_ac_input_intent_does_not_write_when_already_correct(self):
+        controlled = device("WR1")
+        controller = EMSController(
+            devices=[controlled],
+            shelly=ShellyStub(0),
+            sleep_enabled=False,
+            runtime_state=RuntimeStateStub()
+        )
+
+        with patch(
+            "ems.controller.cfg.state_reconciliation_writes_allowed",
+            return_value=True
+        ):
+            controller.reconcile_ac_mode_intent(
+                controlled,
+                state(ac_mode=1),
+                ac_input_intent("WR1", "manual_reservation")
+            )
+
+        controlled.session.post.assert_not_called()
+
+    def test_ac_input_runtime_role_blocks_output_control(self):
+        controlled = device("WR1")
+        runtime_state = RuntimeStateStub(
+            devices={
+                "WR1": {
+                    "runtime_role": "ac_input",
+                    "runtime_role_reason": "manual_reservation"
+                }
+            }
+        )
+        controller = self.run_controller_once(
+            [controlled],
+            [state(ac_mode=2, solar=500, output=0, output_limit=0)],
+            runtime_state=runtime_state,
+            load=700
+        )
+
+        controller.set_output_limit.assert_not_called()
+        self.assertIsNotNone(controller.last_control_explanation)
+        device_explanation = controller.last_control_explanation.devices["WR1"]
+        self.assertEqual(device_explanation.allocated_target_w, 0)
+        self.assertEqual(device_explanation.effective_target_w, 0)
+        self.assertEqual(device_explanation.write_decision, "blocked")
+        self.assertEqual(device_explanation.write_reason, "runtime_role_ac_input")
+        self.assertEqual(device_explanation.limiting_reason, "runtime_role_ac_input")
+        self.assertFalse(controller._dashboard_capabilities[0].can_export)
+        self.assertFalse(controller._dashboard_capabilities[0].can_discharge)
+
+    def test_ac_input_legacy_role_receives_no_output_limit_write(self):
+        controlled = device("WR1")
+        runtime_state = RuntimeStateStub(
+            devices={
+                "WR1": {
+                    "runtime_role": "ac_input_charge",
+                    "runtime_role_reason": "test_charge"
+                }
+            }
+        )
+        controller = self.run_controller_once(
+            [controlled],
+            [state(ac_mode=1, solar=500, output=0, output_limit=0)],
+            runtime_state=runtime_state,
+            load=700
+        )
+
+        controller.set_output_limit.assert_not_called()
+        self.assertIsNotNone(controller.last_control_explanation)
+        device_explanation = controller.last_control_explanation.devices["WR1"]
+        self.assertEqual(device_explanation.allocated_target_w, 0)
+        self.assertEqual(device_explanation.effective_target_w, 0)
+        self.assertEqual(device_explanation.write_decision, "blocked")
+        self.assertEqual(
+            device_explanation.write_reason,
+            "runtime_role_ac_input"
+        )
+        self.assertEqual(device_explanation.limiting_reason, "runtime_role_ac_input")
+        self.assertFalse(
+            controller._dashboard_capabilities[0].can_export
+        )
+        self.assertFalse(
+            controller._dashboard_capabilities[0].can_discharge
+        )
+
+    def test_ac_input_device_is_not_parked_by_night_min_soc_idle(self):
+        controlled = device("WR1")
+        runtime_state = RuntimeStateStub(
+            system={
+                "min_output_limit": 30
+            },
+            devices={
+                "WR1": {
+                    "runtime_role": "ac_input",
+                    "runtime_role_reason": "test_charge"
+                }
+            }
+        )
+        controller = self.run_controller_once(
+            [controlled],
+            [
+                state(
+                    soc=15,
+                    min_soc=15,
+                    solar=0,
+                    output=0,
+                    output_limit=0,
+                    pack_in=0,
+                    pack_out=0,
+                    soc_limit=2,
+                    dc_status=0,
+                    ac_status=0,
+                    pack_state=0,
+                    ac_mode=1
+                )
+            ],
+            runtime_state=runtime_state,
+            load=0
+        )
+
+        controller.set_output_limit.assert_not_called()
+        self.assertFalse(controller.night_min_soc_idle_active)
+
+    def test_safety_blocker_prevents_returning_to_output_mode(self):
+        controlled = device("WR1")
+        controller = EMSController(
+            devices=[controlled],
+            shelly=ShellyStub(0),
+            sleep_enabled=False,
+            runtime_state=RuntimeStateStub()
+        )
+
+        with patch("ems.controller.log_event") as log_event:
+            controller.reconcile_ac_mode_intent(
+                controlled,
+                state(ac_mode=1, ac_status=2, solar=0, output=0),
+                ac_output_intent("WR1", "startup_ac_mode_reconcile")
+            )
+
+        controlled.session.post.assert_not_called()
+        self.assertTrue(
+            any(
+                call.args[1] == "ac_mode_intent_skip"
+                and call.kwargs["reason"] == "ac_charge_active"
+                for call in log_event.call_args_list
+            )
+        )
+
+    def test_explicit_ac_output_runtime_intent_bypasses_startup_blocker(self):
+        controlled = device("WR1")
+        controlled.session.post.return_value = SimpleNamespace(status_code=200)
+        runtime_state = RuntimeStateStub(
+            devices={
+                "WR1": {
+                    "runtime_role": "ac_output",
+                    "runtime_role_reason": "emsctl"
+                }
+            }
+        )
+        controller = EMSController(
+            devices=[controlled],
+            shelly=ShellyStub(0),
+            sleep_enabled=False,
+            runtime_state=runtime_state
+        )
+        intent = controller.get_device_runtime_intent(
+            controlled,
+            state(ac_mode=1, ac_status=2)
+        )
+
+        with patch(
+            "ems.controller.cfg.state_reconciliation_writes_allowed",
+            return_value=True
+        ):
+            controller.reconcile_ac_mode_intent(
+                controlled,
+                state(ac_mode=1, ac_status=2, solar=0, output=0),
+                intent
+            )
+
+        controlled.session.post.assert_called_once()
+        self.assertEqual(intent.role, DeviceRuntimeRole.AC_OUTPUT)
+        self.assertEqual(intent.reason, "emsctl")
+        self.assertTrue(intent.output_control_allowed)
+        self.assertEqual(
+            controlled.session.post.call_args.kwargs["json"]["properties"],
+            {"acMode": 2}
+        )
+
+    def test_unknown_ac_mode_does_not_restore_output_mode_blindly(self):
+        controlled = device("WR1")
+        controller = EMSController(
+            devices=[controlled],
+            shelly=ShellyStub(0),
+            sleep_enabled=False,
+            runtime_state=RuntimeStateStub()
+        )
+
+        with patch(
+            "ems.controller.cfg.state_reconciliation_writes_allowed",
+            return_value=True
+        ), patch("ems.controller.log_event") as log_event:
+            controller.reconcile_ac_mode_intent(
+                controlled,
+                state(ac_mode=0),
+                ac_output_intent("WR1", "startup_ac_mode_reconcile")
+            )
+
+        controlled.session.post.assert_not_called()
+        self.assertTrue(
+            any(
+                call.args[0] == logging.WARNING
+                and call.args[1] == "unknown_ac_mode"
+                and call.kwargs["current_ac_mode"] == 0
+                and call.kwargs["desired_ac_mode"] == 2
+                for call in log_event.call_args_list
+            )
+        )
+
+    def test_explicit_ac_output_runtime_intent_writes_from_unknown_ac_mode_zero(self):
+        controlled = device("WR1")
+        controlled.session.post.return_value = SimpleNamespace(status_code=200)
+        runtime_state = RuntimeStateStub(
+            devices={
+                "WR1": {
+                    "runtime_role": "ac_output",
+                    "runtime_role_reason": "emsctl"
+                }
+            }
+        )
+        controller = EMSController(
+            devices=[controlled],
+            shelly=ShellyStub(0),
+            sleep_enabled=False,
+            runtime_state=runtime_state
+        )
+        intent = controller.get_device_runtime_intent(controlled, state(ac_mode=0))
+
+        with patch(
+            "ems.controller.cfg.state_reconciliation_writes_allowed",
+            return_value=True
+        ):
+            controller.reconcile_ac_mode_intent(
+                controlled,
+                state(ac_mode=0),
+                intent
+            )
+
+        controlled.session.post.assert_called_once()
+        self.assertEqual(
+            controlled.session.post.call_args.kwargs["json"]["properties"],
+            {"acMode": 2}
+        )
+
+    def test_ac_mode_intent_write_gates_respected(self):
+        controlled = device("WR1")
+        controller = EMSController(
+            devices=[controlled],
+            shelly=ShellyStub(0),
+            sleep_enabled=False,
+            runtime_state=RuntimeStateStub()
+        )
+
+        with patch(
+            "ems.controller.cfg.state_reconciliation_writes_allowed",
+            return_value=False
+        ), patch("ems.controller.log_event") as log_event:
+            controller.reconcile_ac_mode_intent(
+                controlled,
+                state(ac_mode=2),
+                ac_input_intent("WR1", "test_charge")
+            )
+
+        controlled.session.post.assert_not_called()
+        self.assertTrue(
+            any(
+                call.args[1] == "dry_run_ac_mode_intent_write"
+                for call in log_event.call_args_list
+            )
+        )
+
+    def test_ac_input_runtime_charge_power_writes_input_limit_on_next_loop(self):
+        controlled = device("WR1")
+        controlled.session.post.return_value = SimpleNamespace(status_code=200)
+        runtime_state = RuntimeStateStub(
+            devices={
+                "WR1": {
+                    "runtime_role": "ac_input",
+                    "runtime_role_reason": "test_charge",
+                    "ac_charge_power_w": 200,
+                }
+            }
+        )
+
+        with patch(
+            "ems.controller.cfg.state_reconciliation_writes_allowed",
+            return_value=True
+        ):
+            controller = self.run_controller_once(
+                [controlled],
+                [state(ac_mode=1, input_limit_w=0)],
+                runtime_state=runtime_state,
+                load=700
+            )
+
+        controlled.session.post.assert_called_once()
+        self.assertEqual(
+            controlled.session.post.call_args.kwargs["json"]["properties"],
+            {"inputLimit": 200}
+        )
+        controller.set_output_limit.assert_not_called()
+
+    def test_ac_input_runtime_charge_power_skips_when_unchanged(self):
+        controlled = device("WR1")
+        controller = EMSController(
+            devices=[controlled],
+            shelly=ShellyStub(0),
+            sleep_enabled=False,
+            runtime_state=RuntimeStateStub(
+                devices={
+                    "WR1": {
+                        "runtime_role": "ac_input",
+                        "ac_charge_power_w": 200,
+                    }
+                }
+            )
+        )
+
+        with patch(
+            "ems.controller.cfg.state_reconciliation_writes_allowed",
+            return_value=True
+        ), patch("ems.controller.log_event") as log_event:
+            controller.reconcile_runtime_ac_charge_power(
+                controlled,
+                state(ac_mode=1, input_limit_w=200),
+                ac_input_intent("WR1", "test_charge")
+            )
+
+        controlled.session.post.assert_not_called()
+        self.assertTrue(
+            any(
+                call.args[0] == logging.DEBUG
+                and call.args[1] == "runtime_ac_charge_power_unchanged"
+                for call in log_event.call_args_list
+            )
+        )
+
+    def test_ac_output_ignores_runtime_charge_power(self):
+        controlled = device("WR1")
+        runtime_state = RuntimeStateStub(
+            devices={
+                "WR1": {
+                    "runtime_role": "ac_output",
+                    "ac_charge_power_w": 200,
+                }
+            }
+        )
+
+        with patch(
+            "ems.controller.cfg.state_reconciliation_writes_allowed",
+            return_value=True
+        ):
+            self.run_controller_once(
+                [controlled],
+                [state(ac_mode=2, input_limit_w=0)],
+                runtime_state=runtime_state,
+                load=700
+            )
+
+        controlled.session.post.assert_not_called()
+
+    def test_ac_input_without_charge_power_does_not_write_input_limit(self):
+        controlled = device("WR1")
+        runtime_state = RuntimeStateStub(
+            devices={
+                "WR1": {
+                    "runtime_role": "ac_input",
+                    "runtime_role_reason": "test_charge",
+                }
+            }
+        )
+
+        with patch(
+            "ems.controller.cfg.state_reconciliation_writes_allowed",
+            return_value=True
+        ):
+            self.run_controller_once(
+                [controlled],
+                [state(ac_mode=1, input_limit_w=0)],
+                runtime_state=runtime_state,
+                load=700
+            )
+
+        controlled.session.post.assert_not_called()
+
+    def test_runtime_charge_power_write_gates_respected(self):
+        controlled = device("WR1")
+        controller = EMSController(
+            devices=[controlled],
+            shelly=ShellyStub(0),
+            sleep_enabled=False,
+            runtime_state=RuntimeStateStub(
+                devices={
+                    "WR1": {
+                        "runtime_role": "ac_input",
+                        "ac_charge_power_w": 200,
+                    }
+                }
+            )
+        )
+
+        with patch(
+            "ems.controller.cfg.state_reconciliation_writes_allowed",
+            return_value=False
+        ), patch("ems.controller.log_event") as log_event:
+            controller.reconcile_runtime_ac_charge_power(
+                controlled,
+                state(ac_mode=1, input_limit_w=0),
+                ac_input_intent("WR1", "test_charge")
+            )
+
+        controlled.session.post.assert_not_called()
+        self.assertTrue(
+            any(
+                call.args[1] == "runtime_ac_charge_power_write_skipped"
+                for call in log_event.call_args_list
+            )
+        )
+
+    def test_invalid_runtime_charge_power_is_ignored(self):
+        controlled = device("WR1")
+        controller = EMSController(
+            devices=[controlled],
+            shelly=ShellyStub(0),
+            sleep_enabled=False,
+            runtime_state=RuntimeStateStub(
+                devices={
+                    "WR1": {
+                        "runtime_role": "ac_input",
+                        "ac_charge_power_w": "not-an-int",
+                    }
+                }
+            )
+        )
+
+        with patch(
+            "ems.controller.cfg.state_reconciliation_writes_allowed",
+            return_value=True
+        ), patch("ems.controller.log_event") as log_event:
+            controller.reconcile_runtime_ac_charge_power(
+                controlled,
+                state(ac_mode=1, input_limit_w=0),
+                ac_input_intent("WR1", "test_charge")
+            )
+
+        controlled.session.post.assert_not_called()
+        self.assertTrue(
+            any(
+                call.args[1] == "runtime_ac_charge_power_invalid"
+                for call in log_event.call_args_list
+            )
+        )
 
 
 if __name__ == "__main__":

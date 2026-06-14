@@ -71,6 +71,94 @@ console.log(JSON.stringify({{
     assert output["className"] == "runtime-feedback error"
 
 
+def test_ac_state_label_and_icon_helpers():
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const cases = [
+  [{{ ac_mode: 2, ac_status: 1 }}, "Output", "inverter"],
+  [{{ ac_mode: 1, ac_status: 2 }}, "Charge", "charge"],
+  [{{ ac_mode: 2, ac_status: 0 }}, "Output standby", "rule"],
+  [{{ ac_mode: 1, ac_status: 0 }}, "Charge standby", "rule"],
+  [{{ ac_mode: 0, ac_status: 0 }}, "Standby", "rule"],
+  [{{ ac_mode: 9, ac_status: 9 }}, "Unknown", "rule"],
+];
+console.log(JSON.stringify(cases.map(([device, label, icon]) => ({{
+  expectedLabel: label,
+  actualLabel: app.acStateLabel(device),
+  expectedIcon: icon,
+  actualIcon: app.acStateIcon(device)
+}}))));
+"""
+    output = run_node(script)
+
+    for item in output:
+        assert item["actualLabel"] == item["expectedLabel"]
+        assert item["actualIcon"] == item["expectedIcon"]
+
+
+def test_render_devices_uses_ac_tile():
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const grid = {{
+  innerHTML: "",
+  children: [],
+  querySelectorAll() {{ return []; }},
+  appendChild(element) {{
+    this.children.push(element);
+    this.innerHTML += element.innerHTML;
+  }}
+}};
+global.document = {{
+  getElementById(id) {{ return id === "deviceGrid" ? grid : null; }},
+  createElement(tag) {{ return {{ tagName: tag, className: "", innerHTML: "" }}; }}
+}};
+app.renderDevices({{
+  WR1: {{
+    online: true,
+    soc: 55,
+    pv_input_w: 100,
+    output_w: 200,
+    battery_power_w: 0,
+    target_w: 200,
+    output_limit_w: 300,
+    ac_mode: 2,
+    ac_status: 1
+  }},
+  WR2: {{
+    online: true,
+    soc: 70,
+    pv_input_w: 0,
+    output_w: 0,
+    battery_power_w: 120,
+    target_w: 0,
+    output_limit_w: 0,
+    ac_mode: 1,
+    ac_status: 2
+  }},
+  WR3: {{
+    online: true,
+    soc: 80,
+    pv_input_w: 0,
+    output_w: 0,
+    battery_power_w: 0,
+    target_w: 0,
+    output_limit_w: 0,
+    ac_mode: 2,
+    ac_status: 0
+  }}
+}});
+console.log(JSON.stringify({{ html: grid.innerHTML }}));
+"""
+    output = run_node(script)
+
+    html = output["html"]
+    assert '<span class="device-label">AC</span>' in html
+    assert "<strong>Output</strong>" in html
+    assert "<strong>Charge</strong>" in html
+    assert "<strong>Output standby</strong>" in html
+    assert '<span class="device-label">Mode</span>' not in html
+
+
 def test_login_modal_is_hidden_initially():
     html = INDEX_HTML.read_text()
     css = STYLES_CSS.read_text()

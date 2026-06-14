@@ -220,6 +220,7 @@ def parse_device(data):
         ac_status=props.get("acStatus") or 0,
         dc_status=props.get("dcStatus") or 0,
         grid_state=props.get("gridState") or 0,
+        input_limit_w=props.get("inputLimit") or 0,
     )
 
 
@@ -252,6 +253,7 @@ def zero_device_state():
         ac_status=0,
         dc_status=0,
         grid_state=0,
+        input_limit_w=0,
     )
 
 class ZendureClient:
