@@ -54,6 +54,8 @@ socSet
 smartMode
 gridOffMode for explicit offgrid socket intent
 inputLimit only during winter recovery reconciliation
+socSet=1000 / configured socSet restore during battery full-charge assist
+acMode/inputLimit during battery full-charge assist only through runtime intent
 ```
 
 Offgrid socket intent uses the Zendure `gridOffMode` tri-state mapping:

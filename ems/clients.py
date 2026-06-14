@@ -221,6 +221,9 @@ def parse_device(data):
         dc_status=props.get("dcStatus") or 0,
         grid_state=props.get("gridState") or 0,
         input_limit_w=props.get("inputLimit") or 0,
+        pack_num=props.get("packNum") or 0,
+        soc_status=props.get("socStatus") or 0,
+        battery_calibration_time=props.get("batCalTime"),
     )
 
 
@@ -254,6 +257,9 @@ def zero_device_state():
         dc_status=0,
         grid_state=0,
         input_limit_w=0,
+        pack_num=0,
+        soc_status=0,
+        battery_calibration_time=None,
     )
 
 class ZendureClient:

@@ -72,6 +72,11 @@ the system regulates but export/import, PV usage, or SOC balancing looks poor
 over time. Use `--support-bundle` before opening a GitHub issue or forum
 support request.
 
+Normal `diagnose` also includes the optional battery full-charge assist section.
+It reads the core EMS state database when present and reports per-device
+`last_full_charge_at`, `next_due_at`, pending restore flags, and read-only
+firmware diagnostics. Diagnose does not create the assist database.
+
 Modes:
 
 - `--json` prints the same result structure as machine-readable JSON. The

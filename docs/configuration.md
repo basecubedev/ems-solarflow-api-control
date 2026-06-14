@@ -202,6 +202,38 @@ Manual no-write validation flags:
 }
 ```
 
+## Battery Full-Charge Assist
+
+`battery_full_charge_assist.enabled` defaults to `false`. When enabled, EMS
+tracks battery-backed devices in the core state database and can temporarily
+request `socSet=1000` so firmware reaches its Max-SoC state within
+`interval_days`.
+
+On first enable with an empty EMS state database, EMS assumes the battery was
+recently full and schedules the first assist for `now + interval_days`. It does
+not immediately start AC charging only because the feature was enabled. If the
+feature is disabled and later enabled again, EMS treats that as a new tracking
+start and seeds the schedule from the current time, unless an assist or restore
+is already active.
+
+`battery_full_charge_assist.assist_window_days` allows an early start when the
+device is due soon and current SOC is at or above
+`battery_full_charge_assist.assist_start_soc`. On the due day,
+`battery_full_charge_assist.force_time` starts assist at or after the configured
+local `HH:MM` time regardless of current SOC, unless firmware already reports
+`socLimit == 1`.
+
+`battery_full_charge_assist.enable_ac_charge_mode` controls whether active
+assist requests AC input mode through the existing runtime AC mode intent
+foundation. There is no separate assist-owned `acMode` writer.
+
+`battery_full_charge_assist.state_database_path` defaults to
+`data/ems_state.sqlite`. This is a core EMS database and is independent of the
+dashboard database. Deleting it resets full-charge assist history and the
+remembered enabled/disabled state.
+
+More detail: [battery-full-charge-assist.md](battery-full-charge-assist.md).
+
 ## Dashboard
 
 `dashboard.enabled` starts the optional web dashboard alongside the EMS loop.

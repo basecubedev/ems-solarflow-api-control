@@ -283,6 +283,29 @@ setup. They are not a universal safety profile; review device limits, SOC
 limits, grid meter readings, and installation-specific constraints for each
 installation.
 
+## Optional Battery Full-Charge Assist
+
+The template keeps EMS full-charge assist disabled by default:
+
+```json
+{
+  "battery_full_charge_assist": {
+    "enabled": false,
+    "interval_days": 28,
+    "assist_window_days": 7,
+    "assist_start_soc": 80,
+    "force_time": "14:00",
+    "ac_charge_power": 200,
+    "enable_ac_charge_mode": true,
+    "state_database_path": "data/ems_state.sqlite"
+  }
+}
+```
+
+When enabled, EMS temporarily requests `socSet=1000` and waits for firmware
+`socLimit == 1`. AC-assisted charging reuses the runtime AC intent path; EMS
+does not write firmware calibration properties.
+
 ## Example 6: Tasmota HTTP Grid Meter
 
 Use Tasmota HTTP when a Tasmota smart meter reader exposes current power in

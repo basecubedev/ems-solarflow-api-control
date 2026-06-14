@@ -3,7 +3,7 @@ import json
 import logging
 import time
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from ems import config as cfg
 from ems.clients import (
@@ -14,10 +14,13 @@ from ems.clients import (
 from ems.logging_utils import log_event
 from ems.models import DeviceCapabilities
 from ems.runtime_intents import (
+    DeviceRuntimeIntent,
     DeviceRuntimeRole,
+    ac_input_intent,
     ac_output_intent,
     runtime_intent_from_role,
 )
+from ems.state_store import BatteryFullChargeStateStore
 from ems.target_control import (
     ControlExplanation,
     ControlLimitExplanation,
@@ -33,6 +36,8 @@ from ems.target_control import (
 
 
 STARTUP_AC_MODE_RECONCILE_REASON = "startup_ac_mode_reconcile"
+FULL_CHARGE_ASSIST_REASON = "battery_full_charge_assist"
+FULL_CHARGE_ASSIST_RESTORE_REASON = "battery_full_charge_assist_restore"
 
 
 class EMSController:
@@ -45,7 +50,8 @@ class EMSController:
         ha=None,
         sleep_enabled=True,
         runtime_state=None,
-        dashboard_store=None
+        dashboard_store=None,
+        battery_full_charge_store=None
     ):
         self.devices = devices
         self.shelly = shelly
@@ -53,6 +59,11 @@ class EMSController:
         self.sleep_enabled = sleep_enabled
         self.runtime_state = runtime_state
         self.dashboard_store = dashboard_store
+        self.battery_full_charge_store = (
+            battery_full_charge_store
+            if battery_full_charge_store is not None
+            else self.build_battery_full_charge_store()
+        )
         self.soc_reconcile_counter = cfg.SOC_RECONCILE_INTERVAL
 
         self.last_states = {}
@@ -80,6 +91,22 @@ class EMSController:
         self._last_dashboard_publish = 0
         self.last_control_explanation = None
         self.runtime_intents = {}
+
+    def build_battery_full_charge_store(self):
+        if not cfg.BASE_DIR:
+            return None
+
+        try:
+            return BatteryFullChargeStateStore(
+                cfg.battery_full_charge_state_database_path()
+            )
+        except Exception as e:
+            log_event(
+                logging.WARNING,
+                "battery_full_charge_state_store_unavailable",
+                error=e
+            )
+            return None
 
     def output_control_bool(self, key, default=False):
         return cfg.safe_bool(
@@ -1056,7 +1083,7 @@ class EMSController:
         """Write acMode only when telemetry differs from desired runtime intent."""
 
         if intent.desired_ac_mode is None:
-            return
+            return True
 
         fields = self.ac_mode_intent_log_fields(dev, state, intent)
         current_ac_mode = int(state.ac_mode)
@@ -1069,7 +1096,7 @@ class EMSController:
                 "ac_mode_intent_unchanged",
                 **fields
             )
-            return
+            return True
 
         if (
             desired_ac_mode == 2
@@ -1081,7 +1108,7 @@ class EMSController:
                 "unknown_ac_mode",
                 **fields
             )
-            return
+            return False
 
         if current_ac_mode == 1 and desired_ac_mode == 2 and startup_reconcile:
             skip_reason = startup_ac_mode_initialization_blocker(state)
@@ -1095,7 +1122,7 @@ class EMSController:
                         "runtime_role_reason": intent.reason,
                     }
                 )
-                return
+                return False
 
         if not cfg.state_reconciliation_writes_allowed():
             log_event(
@@ -1111,7 +1138,7 @@ class EMSController:
                     ),
                 }
             )
-            return
+            return False
 
         try:
             response = dev.session.post(
@@ -1131,13 +1158,14 @@ class EMSController:
                 response,
                 **fields
             ):
-                return
+                return False
 
             log_event(
                 logging.INFO,
                 "write_ac_mode_intent",
                 **fields
             )
+            return True
 
         except Exception as e:
             log_event(
@@ -1148,12 +1176,23 @@ class EMSController:
                     "error": e,
                 }
             )
+            return False
 
     def desired_runtime_input_limit(self, dev, intent):
         """Return desired runtime AC charge inputLimit, or None."""
 
         if intent.role is not DeviceRuntimeRole.AC_INPUT:
             return None
+
+        if intent.reason == FULL_CHARGE_ASSIST_REASON:
+            return cfg.safe_int(
+                cfg.BATTERY_FULL_CHARGE_ASSIST_CONFIG.get(
+                    "ac_charge_power",
+                    200
+                ),
+                200,
+                minimum=0
+            )
 
         if not self.runtime_state:
             return None
@@ -1206,7 +1245,7 @@ class EMSController:
 
         desired_input_limit = self.desired_runtime_input_limit(dev, intent)
         if desired_input_limit is None:
-            return
+            return True
 
         current_input_limit = cfg.safe_int(
             getattr(state, "input_limit_w", 0),
@@ -1229,7 +1268,7 @@ class EMSController:
                 "runtime_ac_charge_power_unchanged",
                 **fields
             )
-            return
+            return True
 
         if not cfg.state_reconciliation_writes_allowed():
             log_event(
@@ -1245,7 +1284,7 @@ class EMSController:
                     ),
                 }
             )
-            return
+            return False
 
         try:
             response = dev.session.post(
@@ -1265,13 +1304,14 @@ class EMSController:
                 response,
                 **fields
             ):
-                return
+                return False
 
             log_event(
                 logging.INFO,
                 "runtime_ac_charge_power_changed",
                 **fields
             )
+            return True
 
         except Exception as e:
             log_event(
@@ -1281,6 +1321,414 @@ class EMSController:
                     **fields,
                     "error": e,
                 }
+            )
+            return False
+
+    def full_charge_assist_config(self):
+        return cfg.BATTERY_FULL_CHARGE_ASSIST_CONFIG
+
+    def full_charge_assist_enabled(self):
+        return bool(self.full_charge_assist_config().get("enabled", False))
+
+    def full_charge_assist_has_battery(self, dev, state):
+        """Return True only for telemetry-confirmed battery-backed devices."""
+
+        return cfg.safe_int(getattr(state, "pack_num", 0), 0, minimum=0) > 0
+
+    def parse_assist_timestamp(self, value):
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value)
+        except (TypeError, ValueError):
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=datetime.now().astimezone().tzinfo)
+        return parsed.astimezone(datetime.now().astimezone().tzinfo)
+
+    def force_time_reached(self, now, next_due_at):
+        if not next_due_at or now.date() < next_due_at.date():
+            return False
+
+        hour_text, minute_text = self.full_charge_assist_config()[
+            "force_time"
+        ].split(":")
+        force_time = now.replace(
+            hour=int(hour_text),
+            minute=int(minute_text),
+            second=0,
+            microsecond=0
+        )
+        return now >= force_time
+
+    def should_start_full_charge_assist(self, record, state, now):
+        if record.get("full_charge_assist_active"):
+            return False, None
+        if record.get("restore_pending"):
+            return False, None
+        if record.get("ac_mode_restore_pending"):
+            return False, None
+        if int(state.soc_limit) == 1:
+            return False, None
+
+        config = self.full_charge_assist_config()
+        next_due_at = self.parse_assist_timestamp(record.get("next_due_at"))
+        if next_due_at is None:
+            return False, None
+
+        if self.force_time_reached(now, next_due_at):
+            return True, "full_charge_assist_forced"
+
+        window = timedelta(
+            days=cfg.safe_int(config.get("assist_window_days"), 7, minimum=0)
+        )
+        due_soon = next_due_at is None or next_due_at <= now + window
+        if (
+            due_soon
+            and float(state.soc) >= cfg.safe_int(
+                config.get("assist_start_soc"),
+                80,
+                minimum=0
+            )
+        ):
+            return True, "full_charge_assist_started"
+
+        return False, None
+
+    def full_charge_assist_feature_transition(self, now):
+        store = self.battery_full_charge_store
+        if not store:
+            return {
+                "current_enabled": self.full_charge_assist_enabled(),
+                "first_enable": False,
+                "reenabled": False,
+            }
+
+        current_enabled = self.full_charge_assist_enabled()
+        previous_enabled = store.get_full_charge_feature_enabled_state()
+        transition = {
+            "current_enabled": current_enabled,
+            "first_enable": previous_enabled is None and current_enabled,
+            "reenabled": previous_enabled is False and current_enabled,
+        }
+        store.set_full_charge_feature_enabled_state(current_enabled, now)
+        return transition
+
+    def maybe_seed_full_charge_schedule(
+        self,
+        dev,
+        state,
+        record,
+        now,
+        interval_days,
+        feature_transition
+    ):
+        store = self.battery_full_charge_store
+        if not store or not feature_transition.get("current_enabled"):
+            return record, False
+        if store.full_charge_has_pending_state(record):
+            return record, False
+
+        first_enable = feature_transition.get("first_enable")
+        reenabled = feature_transition.get("reenabled")
+
+        if (
+            first_enable
+            and not record.get("last_full_charge_at")
+            and not record.get("next_due_at")
+        ):
+            record = store.seed_full_charge_schedule(
+                dev.name,
+                now,
+                interval_days,
+                event_type="full_charge_assist_initial_state_seeded",
+                message=(
+                    "Initial full-charge assist schedule seeded from first "
+                    "enable; assuming battery was recently full."
+                ),
+                state=state
+            )
+            log_event(
+                logging.INFO,
+                "full_charge_assist_initial_state_seeded",
+                device=dev.name,
+                next_due_at=record.get("next_due_at")
+            )
+            return record, True
+
+        if reenabled:
+            record = store.seed_full_charge_schedule(
+                dev.name,
+                now,
+                interval_days,
+                event_type="full_charge_assist_reenabled_schedule_seeded",
+                message=(
+                    "Full-charge assist schedule seeded from re-enable; "
+                    "assuming battery was recently full."
+                ),
+                state=state
+            )
+            log_event(
+                logging.INFO,
+                "full_charge_assist_reenabled_schedule_seeded",
+                device=dev.name,
+                next_due_at=record.get("next_due_at")
+            )
+            return record, True
+
+        return record, False
+
+    def abort_full_charge_assist_disabled(self, dev, state, record, now):
+        if not record.get("full_charge_assist_active"):
+            return record
+        if self.full_charge_assist_enabled():
+            return record
+
+        ac_restore_pending = (
+            bool(record.get("ac_mode_restore_pending"))
+            or bool(record.get("ac_input_request_pending"))
+        )
+        record = self.battery_full_charge_store.update_device_state(
+            dev.name,
+            now,
+            full_charge_assist_active=False,
+            restore_pending=True,
+            max_soc_request_pending=True,
+            ac_input_request_pending=False,
+            ac_mode_restore_pending=ac_restore_pending,
+        )
+        self.battery_full_charge_store.log_event(
+            dev.name,
+            "full_charge_assist_aborted_disabled",
+            now,
+            state=state
+        )
+        log_event(
+            logging.INFO,
+            "full_charge_assist_aborted_disabled",
+            device=dev.name,
+            ac_mode_restore_pending=ac_restore_pending
+        )
+        return record
+
+    def process_battery_full_charge_assist(
+        self,
+        dev,
+        state,
+        now,
+        feature_transition
+    ):
+        """Track and advance EMS full-charge assist for fresh telemetry."""
+
+        store = self.battery_full_charge_store
+        if not store:
+            return
+
+        config = self.full_charge_assist_config()
+        interval_days = cfg.safe_int(
+            config.get("interval_days"),
+            28,
+            minimum=1
+        )
+        has_battery = self.full_charge_assist_has_battery(dev, state)
+        record = store.record_observation(
+            dev.name,
+            state,
+            has_battery,
+            now,
+            interval_days
+        )
+
+        if not has_battery:
+            return
+
+        if record.get("full_charge_assist_active") and int(state.soc_limit) == 1:
+            record = store.mark_assist_completed(
+                dev.name,
+                now,
+                interval_days
+            )
+            store.log_event(
+                dev.name,
+                "full_charge_assist_completed",
+                now,
+                state=state
+            )
+            log_event(
+                logging.INFO,
+                "full_charge_assist_completed",
+                device=dev.name,
+                soc=state.soc,
+                soc_limit=state.soc_limit
+            )
+
+        record = self.abort_full_charge_assist_disabled(dev, state, record, now)
+
+        record = store.get_device_state(dev.name, now)
+        record, seeded = self.maybe_seed_full_charge_schedule(
+            dev,
+            state,
+            record,
+            now,
+            interval_days,
+            feature_transition
+        )
+        if seeded:
+            return
+
+        if record.get("full_charge_assist_active"):
+            write_ok = self.apply_soc_limits(
+                dev,
+                state,
+                desired_max_soc=100,
+                reason=FULL_CHARGE_ASSIST_REASON
+            )
+            if write_ok:
+                store.update_device_state(
+                    dev.name,
+                    now,
+                    max_soc_request_pending=False
+                )
+            return
+
+        if record.get("restore_pending"):
+            write_ok = self.apply_soc_limits(
+                dev,
+                state,
+                desired_max_soc=dev.max_soc,
+                reason=FULL_CHARGE_ASSIST_RESTORE_REASON
+            )
+            if write_ok:
+                store.update_device_state(
+                    dev.name,
+                    now,
+                    restore_pending=False,
+                    max_soc_request_pending=False
+                )
+                store.log_event(
+                    dev.name,
+                    "full_charge_assist_soc_restored",
+                    now,
+                    state=state
+                )
+            record = store.get_device_state(dev.name, now)
+
+        if feature_transition.get("current_enabled"):
+            start, event_type = self.should_start_full_charge_assist(
+                record,
+                state,
+                now
+            )
+            if start:
+                ac_charge_mode = bool(config.get("enable_ac_charge_mode", True))
+                record = store.mark_assist_started(
+                    dev.name,
+                    now,
+                    ac_charge_mode
+                )
+                store.log_event(dev.name, event_type, now, state=state)
+                log_event(
+                    logging.INFO,
+                    event_type,
+                    device=dev.name,
+                    soc=state.soc,
+                    next_due_at=record.get("next_due_at"),
+                    ac_charge_mode=ac_charge_mode
+                )
+
+                write_ok = self.apply_soc_limits(
+                    dev,
+                    state,
+                    desired_max_soc=100,
+                    reason=FULL_CHARGE_ASSIST_REASON
+                )
+                if write_ok:
+                    store.update_device_state(
+                        dev.name,
+                        now,
+                        max_soc_request_pending=False
+                    )
+
+    def confirm_full_charge_assist_ac_restore(self, dev, state, intent, now):
+        if not self.battery_full_charge_store:
+            return
+        if intent.reason != FULL_CHARGE_ASSIST_RESTORE_REASON:
+            return
+
+        record = self.battery_full_charge_store.get_device_state(dev.name, now)
+        if not record or not record.get("ac_mode_restore_pending"):
+            return
+
+        if int(getattr(state, "ac_mode", 0) or 0) != 2:
+            return
+
+        self.battery_full_charge_store.update_device_state(
+            dev.name,
+            now,
+            ac_mode_restore_pending=False
+        )
+        self.battery_full_charge_store.log_event(
+            dev.name,
+            "full_charge_assist_ac_mode_restored",
+            now,
+            state=state
+        )
+
+    def full_charge_assist_intent(self, dev, base_intent):
+        store = self.battery_full_charge_store
+        if not store:
+            return base_intent
+
+        record = store.get_device_state(dev.name)
+        if not record or not record.get("has_battery"):
+            return base_intent
+
+        if record.get("full_charge_assist_active"):
+            if self.full_charge_assist_config().get("enable_ac_charge_mode", True):
+                return ac_input_intent(dev.name, FULL_CHARGE_ASSIST_REASON)
+
+            return DeviceRuntimeIntent(
+                device=dev.name,
+                role=DeviceRuntimeRole.AC_OUTPUT,
+                reason=FULL_CHARGE_ASSIST_REASON,
+                desired_ac_mode=None,
+                output_control_allowed=False,
+                priority=100
+            )
+
+        if (
+            record.get("restore_pending")
+            or record.get("ac_mode_restore_pending")
+        ):
+            return DeviceRuntimeIntent(
+                device=dev.name,
+                role=DeviceRuntimeRole.AC_OUTPUT,
+                reason=FULL_CHARGE_ASSIST_RESTORE_REASON,
+                desired_ac_mode=(
+                    2 if record.get("ac_mode_restore_pending") else None
+                ),
+                output_control_allowed=False,
+                priority=100
+            )
+
+        return base_intent
+
+    def update_full_charge_assist_ac_pending(self, dev, intent, write_ok, now):
+        if not write_ok or not self.battery_full_charge_store:
+            return
+
+        record = self.battery_full_charge_store.get_device_state(dev.name, now)
+        if not record:
+            return
+
+        if (
+            intent.reason == FULL_CHARGE_ASSIST_REASON
+            and record.get("ac_input_request_pending")
+        ):
+            self.battery_full_charge_store.update_device_state(
+                dev.name,
+                now,
+                ac_input_request_pending=False
             )
 
     def ha_update_runtime_field(
@@ -1572,7 +2020,14 @@ class EMSController:
                 error=e
             )
 
-    def apply_soc_limits(self, dev, state, desired_min_soc=None):
+    def apply_soc_limits(
+        self,
+        dev,
+        state,
+        desired_min_soc=None,
+        desired_max_soc=None,
+        reason="soc_reconcile"
+    ):
         """Apply configured SOC limits if required."""
 
         effective_min_soc = (
@@ -1580,13 +2035,18 @@ class EMSController:
             if desired_min_soc is not None
             else dev.min_soc
         )
+        effective_max_soc = (
+            cfg.safe_int(desired_max_soc, dev.max_soc, minimum=0)
+            if desired_max_soc is not None
+            else dev.max_soc
+        )
 
         #
         # 0 = unmanaged
         #
 
-        if effective_min_soc <= 0 and dev.max_soc <= 0:
-            return
+        if effective_min_soc <= 0 and effective_max_soc <= 0:
+            return True
 
         #
         # Already configured
@@ -1595,16 +2055,17 @@ class EMSController:
         if (
             int(state.min_soc) == int(effective_min_soc)
             and
-            int(state.max_soc) == int(dev.max_soc)
+            int(state.max_soc) == int(effective_max_soc)
         ):
 
             log_event(
                 logging.INFO,
                 "soc_limits_unchanged",
-                device=dev.name
+                device=dev.name,
+                reason=reason
             )
 
-            return
+            return True
 
         if not cfg.state_reconciliation_writes_allowed():
             log_event(
@@ -1612,8 +2073,9 @@ class EMSController:
                 "dry_run_soc_limits",
                 device=dev.name,
                 min_soc=effective_min_soc,
-                max_soc=dev.max_soc,
+                max_soc=effective_max_soc,
                 max_soc_property="socSet",
+                reason=reason,
                 dry_run=cfg.DRY_RUN,
                 simulation=cfg.SIMULATION_MODE,
                 allow_hardware_writes=cfg.ALLOW_HARDWARE_WRITES,
@@ -1621,7 +2083,7 @@ class EMSController:
                     cfg.ALLOW_STATE_RECONCILIATION_WRITES
                 )
             )
-            return
+            return False
 
         try:
 
@@ -1631,7 +2093,7 @@ class EMSController:
                     "sn": dev.sn,
                     "properties": {
                         "minSoc": int(effective_min_soc * 10),
-                        "socSet": int(dev.max_soc * 10)
+                        "socSet": int(effective_max_soc * 10)
                     }
                 },
                 timeout=2
@@ -1642,19 +2104,22 @@ class EMSController:
                 dev,
                 response,
                 min_soc=effective_min_soc,
-                max_soc=dev.max_soc,
-                max_soc_property="socSet"
+                max_soc=effective_max_soc,
+                max_soc_property="socSet",
+                reason=reason
             ):
-                return
+                return False
 
             log_event(
                 logging.INFO,
                 "write_soc_limits",
                 device=dev.name,
                 min_soc=effective_min_soc,
-                max_soc=dev.max_soc,
-                max_soc_property="socSet"
+                max_soc=effective_max_soc,
+                max_soc_property="socSet",
+                reason=reason
             )
+            return True
 
         except Exception as e:
 
@@ -1663,10 +2128,12 @@ class EMSController:
                 "write_soc_limits_error",
                 device=dev.name,
                 min_soc=effective_min_soc,
-                max_soc=dev.max_soc,
+                max_soc=effective_max_soc,
                 max_soc_property="socSet",
+                reason=reason,
                 error=e
             )
+            return False
 
     def winter_reconciliation_target(self, dev, state, winter_active, adjust_today):
         """Return desired winter/summer minSoc target and adjustment context."""
@@ -2673,6 +3140,20 @@ class EMSController:
 
             states.append(zero_device_state())
 
+        now = datetime.now().astimezone()
+        full_charge_feature_transition = (
+            self.full_charge_assist_feature_transition(now)
+        )
+
+        for dev, state in zip(self.devices, raw_states):
+            if state:
+                self.process_battery_full_charge_assist(
+                    dev,
+                    state,
+                    now,
+                    full_charge_feature_transition
+                )
+
         capabilities = [
             detect_capabilities(state)
             for state in states
@@ -2688,9 +3169,24 @@ class EMSController:
             if not state:
                 continue
 
-            intent = self.get_device_runtime_intent(dev, state)
+            intent = self.full_charge_assist_intent(
+                dev,
+                self.get_device_runtime_intent(dev, state)
+            )
             self.runtime_intents[dev.name] = intent
-            self.reconcile_ac_mode_intent(dev, state, intent)
+            ac_mode_write_ok = self.reconcile_ac_mode_intent(dev, state, intent)
+            self.update_full_charge_assist_ac_pending(
+                dev,
+                intent,
+                ac_mode_write_ok,
+                now
+            )
+            self.confirm_full_charge_assist_ac_restore(
+                dev,
+                state,
+                intent,
+                now
+            )
             self.reconcile_runtime_ac_charge_power(dev, state, intent)
 
         capabilities = self.intent_filtered_capabilities(capabilities)
