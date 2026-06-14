@@ -7,7 +7,7 @@ features keep working when the dashboard is disabled.
 
 import os
 import sqlite3
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 
 BATTERY_FULL_CHARGE_STATE_COLUMNS = (
@@ -417,3 +417,98 @@ class BatteryFullChargeStateStore:
                     self._timestamp(now),
                 ),
             )
+
+
+def parse_iso_timestamp(value):
+    """Parse an ISO-8601 timestamp stored by BatteryFullChargeStateStore.
+
+    Naive timestamps are assumed to be in the local timezone, matching how
+    the controller writes them.
+    """
+
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.now().astimezone().tzinfo)
+    return parsed
+
+
+def describe_full_charge_assist_status(config, enabled, has_battery, record, now):
+    """Derive a normalized battery full-charge assist status for the API.
+
+    This is the single place that decides the dashboard-facing ``status``
+    and related derived fields, so the browser does not need to duplicate
+    assist window/overdue/restore logic.
+    """
+
+    config = config or {}
+    assist_window_days = int(config.get("assist_window_days") or 0)
+
+    if not enabled:
+        return {
+            "status": "disabled",
+            "inside_assist_window": False,
+            "days_until_due": None,
+            "window_starts_at": None,
+            "message": "Battery full-charge assist disabled",
+        }
+
+    if not has_battery:
+        return {
+            "status": "ignored_no_battery",
+            "inside_assist_window": False,
+            "days_until_due": None,
+            "window_starts_at": None,
+            "message": "No battery detected",
+        }
+
+    if record is None:
+        return {
+            "status": "unknown",
+            "inside_assist_window": False,
+            "days_until_due": None,
+            "window_starts_at": None,
+            "message": "Full-charge assist state unavailable",
+        }
+
+    next_due_at = parse_iso_timestamp(record.get("next_due_at"))
+    window_starts_at = None
+    inside_assist_window = False
+    days_until_due = None
+    if next_due_at is not None:
+        days_until_due = (next_due_at - now).days
+        window_starts_at = next_due_at - timedelta(days=assist_window_days)
+        inside_assist_window = window_starts_at <= now <= next_due_at
+
+    if record.get("full_charge_assist_active"):
+        status = "active"
+        message = "Full-charge assist active"
+    elif record.get("restore_pending") or record.get("ac_mode_restore_pending"):
+        status = "restore_pending"
+        message = "Restore pending"
+    elif int(record.get("last_seen_soc_limit") or 0) == 1:
+        status = "completed"
+        message = "Full-charge assist completed"
+    elif next_due_at is not None and now > next_due_at:
+        status = "overdue"
+        message = "Full-charge assist overdue"
+    elif inside_assist_window:
+        status = "window"
+        message = "Assist window active"
+    else:
+        status = "ok"
+        message = "Full-charge assist scheduled"
+
+    return {
+        "status": status,
+        "inside_assist_window": inside_assist_window,
+        "days_until_due": days_until_due,
+        "window_starts_at": (
+            window_starts_at.isoformat() if window_starts_at is not None else None
+        ),
+        "message": message,
+    }

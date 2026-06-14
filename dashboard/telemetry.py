@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
+import logging
 from datetime import datetime, timezone
 from dataclasses import asdict, is_dataclass
+
+from ems.state_store import describe_full_charge_assist_status
 
 
 def _rounded(value, digits=1):
@@ -42,6 +45,72 @@ def _control_explain_payload(controller):
     return None
 
 
+def _battery_full_charge_assist_payload(controller, dev, state, now):
+    """Build the normalized battery_full_charge_assist status for one device.
+
+    Falls back to a minimal "unknown" payload if the controller does not
+    expose the full-charge assist feature (older deployments, test doubles),
+    so the dashboard API and GUI never crash on missing assist state.
+    """
+
+    unknown = {
+        "enabled": False,
+        "has_battery": False,
+        "status": "unknown",
+        "inside_assist_window": False,
+        "days_until_due": None,
+        "assist_window_days": 0,
+        "last_full_charge_at": None,
+        "next_due_at": None,
+        "window_starts_at": None,
+        "assist_started_at": None,
+        "restore_pending": False,
+        "ac_mode_restore_pending": False,
+        "soc_limit": 0,
+        "ac_mode": 0,
+        "ac_status": 0,
+        "message": "Full-charge assist state unavailable",
+    }
+
+    try:
+        config = controller.full_charge_assist_config()
+        enabled = controller.full_charge_assist_enabled()
+        has_battery = bool(controller.full_charge_assist_has_battery(dev, state))
+        store = getattr(controller, "battery_full_charge_store", None)
+        record = store.get_device_state(dev.name) if store else None
+    except Exception:
+        # Keep the dashboard stable on legacy deployments / test doubles that
+        # do not expose the assist feature, but record the real cause at DEBUG
+        # so genuine failures don't vanish silently behind "state unavailable".
+        logging.debug(
+            "event=dashboard_assist_payload_unavailable device=%s",
+            getattr(dev, "name", "?"),
+            exc_info=True,
+        )
+        return unknown
+
+    derived = describe_full_charge_assist_status(
+        config, enabled, has_battery, record, now
+    )
+
+    return {
+        "enabled": enabled,
+        "has_battery": has_battery,
+        **derived,
+        "assist_window_days": int(config.get("assist_window_days") or 0),
+        "last_full_charge_at": record.get("last_full_charge_at") if record else None,
+        "next_due_at": record.get("next_due_at") if record else None,
+        "assist_started_at": record.get("assist_started_at") if record else None,
+        "restore_pending": bool(record.get("restore_pending")) if record else False,
+        "ac_mode_restore_pending": (
+            bool(record.get("ac_mode_restore_pending")) if record else False
+        ),
+        "soc_limit": int(getattr(state, "soc_limit", 0) or 0),
+        "ac_mode": int(getattr(state, "ac_mode", 0) or 0),
+        "ac_status": int(getattr(state, "ac_status", 0) or 0),
+    }
+
+
 def build_dashboard_snapshot(
     controller,
     load_w,
@@ -58,7 +127,8 @@ def build_dashboard_snapshot(
 ):
     """Build a read-only telemetry snapshot from current EMS runtime data."""
 
-    now = datetime.now(timezone.utc).isoformat()
+    now_dt = datetime.now().astimezone()
+    now = now_dt.astimezone(timezone.utc).isoformat()
     devices = {}
     pv_total_w = 0
     inverter_total_w = 0
@@ -134,6 +204,9 @@ def build_dashboard_snapshot(
                 if capability
                 else None
             ),
+            "battery_full_charge_assist": _battery_full_charge_assist_payload(
+                controller, dev, state, now_dt
+            ),
         }
 
     grid_power_w = _rounded(load_w)
@@ -151,6 +224,12 @@ def build_dashboard_snapshot(
     except Exception:
         winter_active = False
 
+    full_charge_assist_active_devices = [
+        name
+        for name, device in devices.items()
+        if device["battery_full_charge_assist"]["status"] == "active"
+    ]
+
     rule_states = {
         "ems_enabled": _bool_rule(enabled),
         "soc_limit_active": _bool_rule(
@@ -164,6 +243,12 @@ def build_dashboard_snapshot(
         "winter_soc_mode": _bool_rule(
             winter_active,
             "configured winter month and runtime winter toggle"
+        ),
+        "full_charge_assist_active": _bool_rule(
+            bool(full_charge_assist_active_devices),
+            ", ".join(full_charge_assist_active_devices)
+            if full_charge_assist_active_devices
+            else "no device currently in full-charge assist"
         ),
         "pv_priority_balancing": _bool_rule(
             any(
