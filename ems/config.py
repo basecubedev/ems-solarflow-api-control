@@ -377,6 +377,15 @@ def runtime_state_path():
     return os.path.join(BASE_DIR, RUNTIME_STATE_PATH)
 
 
+def config_path():
+    """Return the path to the static config file the EMS was started with."""
+
+    path = (ARGS.config if ARGS else None) or os.path.join(
+        BASE_DIR or os.getcwd(), "config.json"
+    )
+    return path
+
+
 def dashboard_database_path():
     """Return absolute path to the dashboard SQLite database."""
 

@@ -3,10 +3,12 @@ import json
 import logging
 import mimetypes
 import os
+import tempfile
 import threading
 import time
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from types import SimpleNamespace
 from urllib.parse import parse_qs, unquote, urlparse
 
 from dashboard.auth import (
@@ -109,6 +111,8 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         session_timeout_seconds=1800,
         session_absolute_max_seconds=43200,
         runtime_validation=None,
+        config_path=None,
+        runtime_state_path=None,
         sse_max_connections=MAX_SSE_CONNECTIONS,
         sse_max_connections_per_ip=MAX_SSE_CONNECTIONS_PER_IP,
         sse_max_connection_seconds=SSE_MAX_CONNECTION_SECONDS,
@@ -118,6 +122,15 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         self.runtime_state = runtime_state
         self.auth_file = auth_file or resolve_auth_path(BASE_DIR)
         self.https_active = bool(https_active)
+        # Paths the diagnose endpoints use to build service args. runtime_state_path
+        # falls back to the RuntimeState object's own path when not supplied.
+        self.config_path = config_path
+        self.runtime_state_path = runtime_state_path or getattr(
+            runtime_state, "path", None
+        )
+        # Single-flight guard so diagnose runs (esp. the hardware profile, which
+        # makes network probes) cannot be hammered concurrently.
+        self.diagnose_lock = threading.Lock()
         self.sessions = SessionStore(
             timeout_seconds=session_timeout_seconds,
             absolute_max_seconds=session_absolute_max_seconds,
@@ -187,6 +200,14 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/events":
             self._send_events()
+            return
+
+        if parsed.path == "/api/diagnose":
+            self._handle_diagnose(parse_qs(parsed.query))
+            return
+
+        if parsed.path == "/api/diagnose/support-bundle":
+            self._handle_support_bundle()
             return
 
         self._send_static(parsed.path)
@@ -368,6 +389,134 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         self.server.sessions.touch(self._session_cookie_value())
         self._send_json(self._auth_status_payload())
 
+    DIAGNOSE_PROFILES = (
+        "install",
+        "deep",
+        "hardware",
+        "control",
+        "control_quality",
+    )
+
+    def _diagnose_args(self):
+        # The browser never supplies paths or sampling: paths come from the
+        # server's known config/runtime locations and sample_seconds is forced
+        # to 0 so the handler can never block on diagnose_control_samples().
+        return SimpleNamespace(
+            config=self.server.config_path,
+            runtime_state=self.server.runtime_state_path,
+            dashboard_auth=self.server.auth_file,
+            sample_seconds=0,
+            output=None,
+        )
+
+    def _handle_diagnose(self, query):
+        auth_error = self._require_read_auth()
+        if auth_error:
+            self._send_json(auth_error[0], status=auth_error[1])
+            return
+
+        profile = (query.get("profile", ["install"]) or ["install"])[0]
+        if profile not in self.DIAGNOSE_PROFILES:
+            self._send_json(
+                {"error": "unknown_profile", "supported": list(self.DIAGNOSE_PROFILES)},
+                status=400,
+            )
+            return
+
+        if not self.server.diagnose_lock.acquire(blocking=False):
+            self._send_json({"error": "diagnose_busy"}, status=429)
+            return
+
+        try:
+            from ems import diagnostics
+
+            runner = {
+                "install": diagnostics.run_install_diagnosis,
+                "deep": diagnostics.run_deep_diagnosis,
+                "hardware": diagnostics.run_hardware_diagnosis,
+                "control": diagnostics.run_control_diagnosis,
+                "control_quality": diagnostics.run_control_quality_diagnosis,
+            }[profile]
+            report = runner(self._diagnose_args())
+            report["profile"] = profile
+            # Defense-in-depth: even though the caller is authenticated, scrub
+            # values under secret-named keys (token, password, secret, ...). This
+            # key-based pass returns valid JSON and, unlike text redaction, leaves
+            # benign messages intact (e.g. "Missing config key: foo").
+            redacted = diagnostics.diagnose_redact_value(report)
+        except Exception:
+            logging.exception("dashboard_diagnose_failed profile=%s", profile)
+            self._send_json({"error": "diagnose_failed"}, status=500)
+            return
+        finally:
+            self.server.diagnose_lock.release()
+
+        self._send_json(redacted)
+
+    def _handle_support_bundle(self):
+        auth_error = self._require_read_auth()
+        if auth_error:
+            self._send_json(auth_error[0], status=auth_error[1])
+            return
+
+        if not self.server.diagnose_lock.acquire(blocking=False):
+            self._send_json({"error": "diagnose_busy"}, status=429)
+            return
+
+        tmp_path = None
+        try:
+            from ems import diagnostics
+
+            args = self._diagnose_args()
+            # Build a complete read-only report (all profiles) for the bundle.
+            args.deep = True
+            args.control = True
+            args.control_quality = True
+            args.hardware = True
+            args.support_bundle = True
+            report = diagnostics.run_diagnosis(args)
+
+            config_data, _ = diagnostics.diagnose_json_file(
+                report["project"]["config_path"]
+            )
+            # Server-chosen tempfile only — never an output path from the browser.
+            fd, tmp_path = tempfile.mkstemp(prefix="ems-support-", suffix=".zip")
+            os.close(fd)
+            args.output = tmp_path
+            diagnostics.diagnose_write_support_bundle(
+                report,
+                args,
+                config_data if isinstance(config_data, dict) else {},
+                report["project"]["runtime_state_path"],
+            )
+            with open(tmp_path, "rb") as f:
+                body = f.read()
+        except Exception:
+            logging.exception("dashboard_support_bundle_failed")
+            self._send_json({"error": "support_bundle_failed"}, status=500)
+            return
+        finally:
+            self.server.diagnose_lock.release()
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
+        timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+        filename = f"ems-support-{timestamp}.zip"
+        self.send_response(200)
+        self._send_security_headers()
+        self.send_header("Content-Type", "application/zip")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Pragma", "no-cache")
+        self.send_header(
+            "Content-Disposition", f'attachment; filename="{filename}"'
+        )
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _handle_runtime_patch(self, path):
         body_error = self._json_body_preflight()
         if body_error:
@@ -455,6 +604,19 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         csrf_token = self.headers.get("X-CSRF-Token", "")
         if not csrf_token or not hmac_compare(csrf_token, session.csrf_token):
             return {"error": "csrf_failed"}, 403
+
+        return None
+
+    def _require_read_auth(self):
+        # For side-effect-free GET endpoints (diagnostics, logs). A valid session
+        # is required, but NOT a CSRF token: GET changes no state, SameSite=Strict
+        # already blocks cross-site cookie use, and CSP frame-ancestors 'none'
+        # blocks framing. This omission is deliberate, not an oversight.
+        if not self._auth_configured():
+            return {"error": "auth_not_configured"}, 403
+
+        if self._current_session() is None:
+            return {"error": "not_authenticated"}, 401
 
         return None
 
@@ -579,6 +741,8 @@ def start_dashboard_server(
     session_timeout_seconds=1800,
     session_absolute_max_seconds=43200,
     runtime_validation=None,
+    config_path=None,
+    runtime_state_path=None,
     sse_max_connections=MAX_SSE_CONNECTIONS,
     sse_max_connections_per_ip=MAX_SSE_CONNECTIONS_PER_IP,
     sse_max_connection_seconds=SSE_MAX_CONNECTION_SECONDS,
@@ -593,6 +757,8 @@ def start_dashboard_server(
         session_timeout_seconds=session_timeout_seconds,
         session_absolute_max_seconds=session_absolute_max_seconds,
         runtime_validation=runtime_validation,
+        config_path=config_path,
+        runtime_state_path=runtime_state_path,
         sse_max_connections=sse_max_connections,
         sse_max_connections_per_ip=sse_max_connections_per_ip,
         sse_max_connection_seconds=sse_max_connection_seconds,

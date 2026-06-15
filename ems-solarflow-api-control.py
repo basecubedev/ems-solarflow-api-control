@@ -216,6 +216,8 @@ def main():
                     True
                 ),
                 base_dir=base_dir,
+                config_path=cfg.config_path(),
+                runtime_state_path=cfg.runtime_state_path(),
                 session_timeout_seconds=cfg.safe_session_timeout(
                     cfg.DASHBOARD_CONFIG.get(
                         "session_idle_timeout_seconds", 1800
