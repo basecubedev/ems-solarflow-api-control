@@ -113,6 +113,8 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         runtime_validation=None,
         config_path=None,
         runtime_state_path=None,
+        log_buffer=None,
+        log_redaction=False,
         sse_max_connections=MAX_SSE_CONNECTIONS,
         sse_max_connections_per_ip=MAX_SSE_CONNECTIONS_PER_IP,
         sse_max_connection_seconds=SSE_MAX_CONNECTION_SECONDS,
@@ -120,6 +122,8 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         super().__init__(address, handler)
         self.store = store
         self.runtime_state = runtime_state
+        self.log_buffer = log_buffer
+        self.log_redaction = bool(log_redaction)
         self.auth_file = auth_file or resolve_auth_path(BASE_DIR)
         self.https_active = bool(https_active)
         # Paths the diagnose endpoints use to build service args. runtime_state_path
@@ -208,6 +212,10 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/diagnose/support-bundle":
             self._handle_support_bundle()
+            return
+
+        if parsed.path == "/api/logs":
+            self._handle_logs(parse_qs(parsed.query))
             return
 
         self._send_static(parsed.path)
@@ -517,6 +525,68 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    LOG_LEVELS = {
+        "DEBUG": 10,
+        "INFO": 20,
+        "WARNING": 30,
+        "ERROR": 40,
+        "CRITICAL": 50,
+    }
+    MAX_LOG_LINES = 1000
+
+    def _handle_logs(self, query):
+        auth_error = self._require_read_auth()
+        if auth_error:
+            self._send_json(auth_error[0], status=auth_error[1])
+            return
+
+        try:
+            after = self._log_int_param(query, "after", minimum=0)
+            limit = self._log_int_param(
+                query, "limit", default=self.MAX_LOG_LINES, minimum=0
+            )
+        except ValueError as exc:
+            self._send_json({"error": "bad_request", "message": str(exc)}, status=400)
+            return
+        if limit is None or limit > self.MAX_LOG_LINES:
+            limit = self.MAX_LOG_LINES
+
+        min_levelno = None
+        level = (query.get("level", [None]) or [None])[0]
+        if level:
+            min_levelno = self.LOG_LEVELS.get(str(level).upper())
+            if min_levelno is None:
+                self._send_json(
+                    {"error": "bad_request", "message": "unknown level"},
+                    status=400,
+                )
+                return
+
+        buffer = self.server.log_buffer
+        if buffer is None:
+            self._send_json({"lines": [], "cursor": 0, "dropped": False})
+            return
+
+        result = buffer.get_lines(after=after, limit=limit, min_levelno=min_levelno)
+        if self.server.log_redaction:
+            from ems import diagnostics
+
+            for line in result["lines"]:
+                line["message"] = diagnostics.diagnose_redact_text(line["message"])
+        self._send_json(result)
+
+    def _log_int_param(self, query, name, default=None, minimum=None):
+        raw = (query.get(name, [None]) or [None])[0]
+        if raw is None or raw == "":
+            return default
+        try:
+            value = int(raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{name} must be an integer") from exc
+        if minimum is not None and value < minimum:
+            raise ValueError(f"{name} must be >= {minimum}")
+        return value
+
     def _handle_runtime_patch(self, path):
         body_error = self._json_body_preflight()
         if body_error:
@@ -743,6 +813,8 @@ def start_dashboard_server(
     runtime_validation=None,
     config_path=None,
     runtime_state_path=None,
+    log_buffer=None,
+    log_redaction=False,
     sse_max_connections=MAX_SSE_CONNECTIONS,
     sse_max_connections_per_ip=MAX_SSE_CONNECTIONS_PER_IP,
     sse_max_connection_seconds=SSE_MAX_CONNECTION_SECONDS,
@@ -759,6 +831,8 @@ def start_dashboard_server(
         runtime_validation=runtime_validation,
         config_path=config_path,
         runtime_state_path=runtime_state_path,
+        log_buffer=log_buffer,
+        log_redaction=log_redaction,
         sse_max_connections=sse_max_connections,
         sse_max_connections_per_ip=sse_max_connections_per_ip,
         sse_max_connection_seconds=sse_max_connection_seconds,
