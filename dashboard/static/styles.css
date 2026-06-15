@@ -1861,6 +1861,23 @@ canvas { width: 100%; min-height: 94px; border: 1px solid rgba(148,163,184,.13);
   text-transform: uppercase;
 }
 .diagnose-sections { display: flex; flex-direction: column; gap: 8px; }
+.diagnose-metrics {
+  margin: 0 0 8px;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+}
+.diagnose-metric span {
+  text-transform: uppercase;
+}
+.diagnose-global-list {
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+.diagnose-global-error {
+  border-color: rgba(248,113,113,.32);
+}
+.diagnose-global-warning {
+  border-color: rgba(251,191,36,.28);
+}
 .diagnose-lines { margin: 6px 0 0; padding-left: 16px; color: var(--muted); font-size: 12px; }
 .diagnose-lines li { margin: 2px 0; }
 .diagnose-line-ok { color: var(--muted2); list-style: none; margin-left: -16px; }

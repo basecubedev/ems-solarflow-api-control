@@ -2246,6 +2246,36 @@ function renderDiagnoseSection(section) {
     </div>`;
 }
 
+function renderDiagnoseMetrics(metrics) {
+  if (!metrics || typeof metrics !== "object" || Array.isArray(metrics)) return "";
+  const entries = Object.entries(metrics);
+  if (!entries.length) return "";
+  const items = entries
+    .map(([key, value]) => `
+      <span class="diagnose-metric control-fact role-input">
+        <span class="value-icon" aria-hidden="true">${icon("rule")}</span>
+        <span class="control-label">${escapeHtml(String(key).replaceAll("_", " "))}</span>
+        <strong>${escapeHtml(String(value))}</strong>
+      </span>`)
+    .join("");
+  return `<div class="diagnose-metrics control-stage-values">${items}</div>`;
+}
+
+function renderDiagnoseGlobalList(title, items, tone) {
+  if (!Array.isArray(items) || !items.length) return "";
+  const lines = items
+    .map((item) => `<li>${escapeHtml(String(item))}</li>`)
+    .join("");
+  return `
+    <div class="diagnose-global-list diagnose-global-${tone} control-pipeline-stage">
+      <div class="diagnose-section-head">
+        <span class="diagnose-section-title">${escapeHtml(title)}</span>
+        <span class="pill ${diagnoseStatusTone(tone)}">${escapeHtml(tone.toUpperCase())}</span>
+      </div>
+      <ul class="diagnose-lines">${lines}</ul>
+    </div>`;
+}
+
 function renderDiagnoseRootCauses(rootCauses) {
   if (!Array.isArray(rootCauses) || !rootCauses.length) return "";
   const items = rootCauses
@@ -2280,11 +2310,14 @@ function renderDiagnoseReport(report) {
       <span class="pill ${diagnoseStatusTone(status)}">${escapeHtml(status.toUpperCase())}</span>
     </div>`;
   const rootCauses = renderDiagnoseRootCauses(diagnosis.root_causes);
+  const metrics = renderDiagnoseMetrics(diagnosis.metrics);
+  const warnings = renderDiagnoseGlobalList("Global warnings", diagnosis.warnings, "warning");
+  const errors = renderDiagnoseGlobalList("Global errors", diagnosis.errors, "error");
   const body = sections.length
     ? sections.map(renderDiagnoseSection).join("")
     : `<div class="diagnose-empty">No sections reported.</div>`;
 
-  return `${header}${rootCauses}<div class="diagnose-sections">${body}</div>`;
+  return `${header}${metrics}${errors}${warnings}${rootCauses}<div class="diagnose-sections">${body}</div>`;
 }
 
 function renderDiagnoseView() {

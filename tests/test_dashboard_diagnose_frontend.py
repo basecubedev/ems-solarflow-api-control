@@ -69,6 +69,41 @@ console.log(JSON.stringify({{
     assert "tone-send" in output["empty"]  # ok status pill
 
 
+def test_render_diagnose_report_shows_global_metrics_warnings_and_errors():
+    malicious = "<svg onload=alert(1)>"
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const report = {{
+  profile: "deep",
+  diagnosis: {{
+    status: "error",
+    metrics: {{
+      total_checks: 7,
+      {json.dumps(malicious)}: {json.dumps(malicious)}
+    }},
+    warnings: ["global warning", {json.dumps(malicious)}],
+    errors: ["global error", {json.dumps(malicious)}],
+    sections: [],
+    root_causes: []
+  }}
+}};
+console.log(JSON.stringify({{ html: app.renderDiagnoseReport(report) }}));
+"""
+    output = run_node(script)
+    html = output["html"]
+    assert "total checks" in html
+    assert "7" in html
+    assert "Global warnings" in html
+    assert "global warning" in html
+    assert "Global errors" in html
+    assert "global error" in html
+    assert malicious not in html
+    assert "&lt;svg onload=alert(1)&gt;" in html
+    assert "diagnose-metrics" in html
+    assert "diagnose-global-warning" in html
+    assert "diagnose-global-error" in html
+
+
 def test_diagnose_auth_state_messages():
     script = f"""
 const app = require({json.dumps(str(APP_JS))});
