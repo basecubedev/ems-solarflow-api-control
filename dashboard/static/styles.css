@@ -1852,3 +1852,55 @@ canvas { width: 100%; min-height: 94px; border: 1px solid rgba(148,163,184,.13);
 .diagnose-root-title { font-size: 12px; font-weight: 800; color: var(--text); }
 .diagnose-root-message { font-size: 12px; color: var(--muted); }
 .diagnose-root-hint { font-size: 11px; color: var(--muted2); margin-top: 2px; }
+
+/* Logs tab — Control / Energy stage style (see docs/dashboard-style-guide.md) */
+.logs-view { padding: 4px 2px; }
+.logs-heading h2 { margin: 0; }
+.logs-heading p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+.logs-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin: 12px 0 8px;
+}
+.logs-level,
+.logs-follow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.logs-level select {
+  background: rgba(148,163,184,.06);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 3px 8px;
+  font-size: 12px;
+}
+.logs-status { margin: 4px 0; color: var(--muted); font-size: 12px; min-height: 16px; }
+.logs-output {
+  max-height: 360px;
+  overflow-y: scroll;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(15,23,42,.45);
+  padding: 8px 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.logs-empty { color: var(--muted); font-size: 13px; padding: 8px 2px; }
+.logs-row { display: flex; gap: 8px; white-space: pre-wrap; word-break: break-word; }
+.logs-time { color: var(--muted2); flex: 0 0 auto; }
+.logs-row .logs-level { flex: 0 0 64px; }
+.logs-message { color: var(--text); flex: 1 1 auto; }
+.logs-row.log-debug .logs-level { color: var(--muted2); }
+.logs-row.log-info .logs-level { color: var(--accent2); }
+.logs-row.log-warning .logs-level { color: #ffd166; }
+.logs-row.log-error .logs-level { color: var(--danger); }

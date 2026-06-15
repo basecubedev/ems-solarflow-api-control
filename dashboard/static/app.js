@@ -20,7 +20,17 @@ const state = {
     report: null,
     running: false,
   },
+  logs: {
+    cursor: 0,
+    lines: [],
+    follow: true,
+    level: "INFO",
+    timerId: null,
+  },
 };
+
+const MAX_LOG_ROWS = 1000;
+const LOG_POLL_INTERVAL_MS = 2000;
 
 const SOC_ANIMATION_EPSILON = 0.1;
 const SSE_TELEMETRY_TIMEOUT_MS = 3000;
@@ -1940,7 +1950,7 @@ function acStateIcon(device) {
 }
 
 function setFlowView(view, persist = true) {
-  const nextView = ["aggregated", "devices", "control", "energy", "diagnose"].includes(view)
+  const nextView = ["aggregated", "devices", "control", "energy", "diagnose", "logs"].includes(view)
     ? view
     : "aggregated";
   state.flowView = nextView;
@@ -1950,6 +1960,7 @@ function setFlowView(view, persist = true) {
   const controlView = $("controlExplainView");
   const energyView = $("energyStatsView");
   const diagnoseView = $("diagnoseView");
+  const logsView = $("logsView");
   const wrap = document.querySelector ? document.querySelector(".flow-wrap") : null;
   const shell = document.querySelector ? document.querySelector(".shell") : null;
 
@@ -1958,12 +1969,14 @@ function setFlowView(view, persist = true) {
   if (controlView) controlView.hidden = nextView !== "control";
   if (energyView) energyView.hidden = nextView !== "energy";
   if (diagnoseView) diagnoseView.hidden = nextView !== "diagnose";
+  if (logsView) logsView.hidden = nextView !== "logs";
   if (wrap?.classList) {
     wrap.classList.toggle("view-devices", nextView === "devices");
     wrap.classList.toggle("view-aggregated", nextView === "aggregated");
     wrap.classList.toggle("view-control", nextView === "control");
     wrap.classList.toggle("view-energy", nextView === "energy");
     wrap.classList.toggle("view-diagnose", nextView === "diagnose");
+    wrap.classList.toggle("view-logs", nextView === "logs");
   }
   if (shell?.classList) {
     shell.classList.toggle("view-energy", nextView === "energy");
@@ -1990,6 +2003,12 @@ function setFlowView(view, persist = true) {
 
   if (nextView === "diagnose") {
     renderDiagnoseView();
+  }
+
+  if (nextView === "logs") {
+    startLogsPolling();
+  } else {
+    stopLogsPolling();
   }
 }
 
@@ -2388,6 +2407,151 @@ function initDiagnose() {
   }
 }
 
+const LOG_LEVEL_TONE = {
+  DEBUG: "log-debug",
+  INFO: "log-info",
+  WARNING: "log-warning",
+  ERROR: "log-error",
+  CRITICAL: "log-error",
+};
+
+function logsAuthState() {
+  if (!state.auth.configured) {
+    return `<div class="logs-empty">Configure a dashboard password to view logs.</div>`;
+  }
+  if (!state.auth.authenticated) {
+    return `<div class="logs-empty">Login required to view logs.</div>`;
+  }
+  return "";
+}
+
+function formatLogTimestamp(ts) {
+  if (typeof ts !== "number") return "";
+  const date = new Date(ts * 1000);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toISOString().slice(11, 19);
+}
+
+function renderLogRows(lines) {
+  return lines
+    .map((line) => {
+      const level = String(line.level || "INFO");
+      const tone = LOG_LEVEL_TONE[level] || "log-info";
+      return `<div class="logs-row ${tone}">`
+        + `<span class="logs-time">${escapeHtml(formatLogTimestamp(line.ts))}</span>`
+        + `<span class="logs-level">${escapeHtml(level)}</span>`
+        + `<span class="logs-message">${escapeHtml(line.message)}</span>`
+        + `</div>`;
+    })
+    .join("");
+}
+
+function trimLogRows(existing, incoming, max = MAX_LOG_ROWS) {
+  const combined = existing.concat(incoming);
+  return combined.length > max ? combined.slice(combined.length - max) : combined;
+}
+
+function applyLogs() {
+  const output = $("logsOutput");
+  if (!output) return;
+
+  const authState = logsAuthState();
+  if (authState) {
+    output.innerHTML = authState;
+    return;
+  }
+
+  output.innerHTML = renderLogRows(state.logs.lines);
+  if (state.logs.follow && typeof output.scrollTop === "number") {
+    output.scrollTop = output.scrollHeight;
+  }
+}
+
+function ingestLogLines(lines) {
+  if (!Array.isArray(lines) || !lines.length) return;
+  state.logs.lines = trimLogRows(state.logs.lines, lines);
+  applyLogs();
+}
+
+function setLogsStatus(message) {
+  const status = $("logsStatus");
+  if (status) status.textContent = message;
+}
+
+async function pollLogs() {
+  if (!state.auth.authenticated) {
+    applyLogs();
+    return;
+  }
+  try {
+    const params = new URLSearchParams({ after: String(state.logs.cursor) });
+    if (state.logs.level) params.set("level", state.logs.level);
+    const response = await fetch(`/api/logs?${params.toString()}`, {
+      credentials: "same-origin",
+    });
+    if (!response.ok) {
+      setLogsStatus(`Logs unavailable (${response.status}).`);
+      return;
+    }
+    const payload = await response.json();
+    state.logs.cursor = payload.cursor || state.logs.cursor;
+    ingestLogLines(payload.lines || []);
+    setLogsStatus(payload.dropped ? "Some older lines were dropped." : "");
+  } catch {
+    setLogsStatus("Log request failed.");
+  }
+}
+
+function resetLogs() {
+  state.logs.cursor = 0;
+  state.logs.lines = [];
+  applyLogs();
+}
+
+function startLogsPolling() {
+  stopLogsPolling();
+  applyLogs();
+  if (!state.auth.authenticated) return;
+  pollLogs();
+  if (typeof setInterval === "function") {
+    state.logs.timerId = setInterval(pollLogs, LOG_POLL_INTERVAL_MS);
+  }
+}
+
+function stopLogsPolling() {
+  if (state.logs.timerId && typeof clearInterval === "function") {
+    clearInterval(state.logs.timerId);
+  }
+  state.logs.timerId = null;
+}
+
+function initLogs() {
+  const levelSelect = $("logsLevel");
+  if (levelSelect) {
+    state.logs.level = levelSelect.value;
+    levelSelect.addEventListener("change", () => {
+      state.logs.level = levelSelect.value;
+      resetLogs();
+      if (state.flowView === "logs") pollLogs();
+    });
+  }
+  const follow = $("logsFollow");
+  if (follow) {
+    state.logs.follow = Boolean(follow.checked);
+    follow.addEventListener("change", () => {
+      state.logs.follow = Boolean(follow.checked);
+      if (state.logs.follow) applyLogs();
+    });
+  }
+  const clear = $("logsClear");
+  if (clear) {
+    clear.addEventListener("click", () => {
+      state.logs.lines = [];
+      applyLogs();
+    });
+  }
+}
+
 function runtimeControlPanel() {
   const runtime = state.runtime || {};
   if (!state.auth.configured) {
@@ -2731,6 +2895,15 @@ function renderAuthState() {
   if (state.flowView === "diagnose") {
     if (!state.auth.authenticated) state.diagnose.report = null;
     renderDiagnoseView();
+  }
+  // Keep the Logs tab in sync: start/stop the poll loop on login/logout.
+  if (state.flowView === "logs") {
+    if (!state.auth.authenticated) {
+      stopLogsPolling();
+      resetLogs();
+    } else if (!state.logs.timerId) {
+      startLogsPolling();
+    }
   }
 }
 
@@ -3288,6 +3461,7 @@ function initDashboardApp() {
   initAuthControls();
   initRuntimeForms();
   initDiagnose();
+  initLogs();
   if (state.demoMode) {
     initDemoMode();
   } else {
@@ -3320,6 +3494,9 @@ if (typeof module !== "undefined") {
     renderDiagnoseView,
     diagnoseAuthState,
     diagnoseStatusTone,
+    renderLogRows,
+    trimLogRows,
+    logsAuthState,
     runtimeControlPanel,
     runtimeDeviceForm,
     runtimeNumber,
