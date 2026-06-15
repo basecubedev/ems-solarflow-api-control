@@ -1909,6 +1909,15 @@ canvas { width: 100%; min-height: 94px; border: 1px solid rgba(148,163,184,.13);
   padding: 3px 8px;
   font-size: 12px;
 }
+.logs-level select:disabled { opacity: .5; cursor: not-allowed; }
+/* The native dropdown popup defaults to a light background; give options the
+   dark theme colors so text is readable (not white-on-white). Applies to all
+   dashboard selects for consistency. */
+select option,
+select optgroup {
+  background-color: var(--bg2);
+  color: var(--text);
+}
 .logs-status { margin: 4px 0; color: var(--muted); font-size: 12px; min-height: 16px; }
 .logs-output {
   max-height: 360px;
