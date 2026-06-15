@@ -3444,6 +3444,51 @@ function resetLiveTransportForTests() {
   state.liveTransport = "sse";
 }
 
+const HEARTBEAT_MIN_INTERVAL_MS = 60000;
+let lastHeartbeatAt = 0;
+
+function shouldSendHeartbeat(now, lastSent) {
+  return now - lastSent >= HEARTBEAT_MIN_INTERVAL_MS;
+}
+
+async function sendSessionHeartbeat() {
+  if (state.demoMode) return;
+  // Only a genuine, authenticated session slides; background polling never calls
+  // this, and without a CSRF token the server would reject it anyway.
+  if (!state.auth.authenticated || !state.auth.csrfToken) return;
+  const now = typeof Date !== "undefined" ? Date.now() : 0;
+  if (!shouldSendHeartbeat(now, lastHeartbeatAt)) return;
+  lastHeartbeatAt = now;
+  try {
+    const response = await fetch("/api/auth/refresh", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": state.auth.csrfToken },
+    });
+    if (response.status === 401 || response.status === 403) {
+      // Session expired or hit the absolute cap; refresh auth so the UI flips.
+      await loadAuthStatus();
+    }
+  } catch {
+    // Ignore transient failures; the next genuine interaction retries.
+  }
+}
+
+function handleSessionActivity() {
+  if (typeof document !== "undefined" && document.hidden) return;
+  sendSessionHeartbeat();
+}
+
+function initSessionHeartbeat() {
+  if (typeof document === "undefined" || !document.addEventListener) return;
+  ["mousemove", "keydown", "click"].forEach((eventName) => {
+    document.addEventListener(eventName, handleSessionActivity, { passive: true });
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) handleSessionActivity();
+  });
+}
+
 function initDashboardApp() {
   const rangeTabSelector = ".range-tabs button";
   document.querySelectorAll(rangeTabSelector).forEach((button) => {
@@ -3462,6 +3507,7 @@ function initDashboardApp() {
   initRuntimeForms();
   initDiagnose();
   initLogs();
+  initSessionHeartbeat();
   if (state.demoMode) {
     initDemoMode();
   } else {
@@ -3497,6 +3543,8 @@ if (typeof module !== "undefined") {
     renderLogRows,
     trimLogRows,
     logsAuthState,
+    shouldSendHeartbeat,
+    sendSessionHeartbeat,
     runtimeControlPanel,
     runtimeDeviceForm,
     runtimeNumber,
