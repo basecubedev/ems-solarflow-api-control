@@ -128,3 +128,39 @@ console.log(JSON.stringify({{ r1, r2 }}));
     assert "Login required" in output["r1"]["output"]
     assert output["r1"]["timer"] is None  # no poll loop while unauthenticated
     assert output["r2"]["logsHidden"] is True
+
+
+def test_set_service_log_level_posts_with_csrf():
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const calls = [];
+global.fetch = async (url, opts) => {{ calls.push({{ url, opts }});
+  return {{ ok: true, status: 200, json: async () => ({{ service_level: "DEBUG" }}) }}; }};
+global.document = {{ getElementById() {{ return null; }} }};
+
+(async () => {{
+  // unauthenticated -> no request
+  app.state.auth = {{ configured: true, authenticated: false, csrfToken: null }};
+  await app.setServiceLogLevel("DEBUG");
+  const afterUnauth = calls.length;
+
+  app.state.auth = {{ configured: true, authenticated: true, csrfToken: "tok-9" }};
+  await app.setServiceLogLevel("DEBUG");
+  const c = calls[calls.length - 1];
+  console.log(JSON.stringify({{
+    afterUnauth,
+    url: c ? c.url : null,
+    method: c ? c.opts.method : null,
+    csrf: c ? c.opts.headers["X-CSRF-Token"] : null,
+    body: c ? JSON.parse(c.opts.body) : null,
+    serviceLevel: app.state.logs.serviceLevel,
+  }}));
+}})();
+"""
+    output = run_node(script)
+    assert output["afterUnauth"] == 0
+    assert output["url"] == "/api/logs/level"
+    assert output["method"] == "POST"
+    assert output["csrf"] == "tok-9"
+    assert output["body"] == {"level": "DEBUG"}
+    assert output["serviceLevel"] == "DEBUG"

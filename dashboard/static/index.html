@@ -237,11 +237,19 @@
                 </div>
               </div>
               <div class="logs-controls">
-                <label class="logs-level">Level
+                <label class="logs-level">Filter
                   <select id="logsLevel">
                     <option value="">All</option>
                     <option value="DEBUG">Debug</option>
                     <option value="INFO" selected>Info</option>
+                    <option value="WARNING">Warning</option>
+                    <option value="ERROR">Error</option>
+                  </select>
+                </label>
+                <label class="logs-level">Service
+                  <select id="logsServiceLevel" disabled>
+                    <option value="DEBUG">Debug</option>
+                    <option value="INFO">Info</option>
                     <option value="WARNING">Warning</option>
                     <option value="ERROR">Error</option>
                   </select>

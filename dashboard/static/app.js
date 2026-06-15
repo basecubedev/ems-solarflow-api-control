@@ -25,6 +25,7 @@ const state = {
     lines: [],
     follow: true,
     level: "INFO",
+    serviceLevel: "INFO",
     timerId: null,
   },
 };
@@ -2457,6 +2458,8 @@ function applyLogs() {
   const output = $("logsOutput");
   if (!output) return;
 
+  updateServiceLevelControl();
+
   const authState = logsAuthState();
   if (authState) {
     output.innerHTML = authState;
@@ -2498,9 +2501,46 @@ async function pollLogs() {
     const payload = await response.json();
     state.logs.cursor = payload.cursor || state.logs.cursor;
     ingestLogLines(payload.lines || []);
+    updateServiceLevelControl(payload.service_level);
     setLogsStatus(payload.dropped ? "Some older lines were dropped." : "");
   } catch {
     setLogsStatus("Log request failed.");
+  }
+}
+
+function updateServiceLevelControl(serviceLevel) {
+  const select = $("logsServiceLevel");
+  if (!select) return;
+  // Changing the service verbosity is a write action -> only when authenticated.
+  select.disabled = !state.auth.authenticated;
+  if (serviceLevel) {
+    state.logs.serviceLevel = serviceLevel;
+    select.value = serviceLevel;
+  }
+}
+
+async function setServiceLogLevel(level) {
+  if (!state.auth.authenticated || !state.auth.csrfToken) return;
+  setLogsStatus(`Setting service log level to ${level}…`);
+  try {
+    const response = await fetch("/api/logs/level", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": state.auth.csrfToken,
+      },
+      body: JSON.stringify({ level }),
+    });
+    if (!response.ok) {
+      setLogsStatus(`Could not set level (${response.status}).`);
+      return;
+    }
+    const payload = await response.json();
+    state.logs.serviceLevel = payload.service_level;
+    setLogsStatus(`Service log level set to ${payload.service_level}.`);
+  } catch {
+    setLogsStatus("Set level request failed.");
   }
 }
 
@@ -2543,6 +2583,12 @@ function initLogs() {
     follow.addEventListener("change", () => {
       state.logs.follow = Boolean(follow.checked);
       if (state.logs.follow) applyLogs();
+    });
+  }
+  const serviceSelect = $("logsServiceLevel");
+  if (serviceSelect) {
+    serviceSelect.addEventListener("change", () => {
+      setServiceLogLevel(serviceSelect.value);
     });
   }
   const clear = $("logsClear");
@@ -3545,6 +3591,7 @@ if (typeof module !== "undefined") {
     renderLogRows,
     trimLogRows,
     logsAuthState,
+    setServiceLogLevel,
     shouldSendHeartbeat,
     sendSessionHeartbeat,
     runtimeControlPanel,

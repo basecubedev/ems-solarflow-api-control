@@ -59,8 +59,13 @@ defense-in-depth.
 ## Logs View
 
 The Logs tab tails the EMS service log from an in-memory ring buffer (the stock
-service writes no log file). It polls incrementally, supports a level filter and
-a follow/auto-scroll toggle, and bounds the rendered rows. Like Diagnose it is
+service writes no log file). It polls incrementally, supports a display **Filter**
+(severity), a follow/auto-scroll toggle, and bounds the rendered rows. A separate
+**Service** level selector changes the running service's log verbosity live
+(e.g. switch to Debug to surface debug lines that are otherwise not emitted); the
+display Filter only hides what is already in the buffer, so raising the Service
+level is what actually produces more lines. The Service selector is a write
+action (session + CSRF) and is disabled until authenticated. Like Diagnose it is
 **operator-only** behind an authenticated session. Lines are control-character
 sanitized server-side and HTML-escaped in the browser; an optional redaction
 toggle (`dashboard.log_redaction`) masks secret-looking values for shared/remote
@@ -267,6 +272,13 @@ no CSRF since they are side-effect-free):
 GET /api/diagnose?profile=install|deep|hardware|control|control_quality
 GET /api/diagnose/support-bundle
 GET /api/logs?after=<seq>&limit=<n>&level=<min-level>
+```
+
+Changing the service's runtime log verbosity is a state change and uses the
+write-auth path (session + `X-CSRF-Token`):
+
+```text
+POST /api/logs/level   body {"level": "DEBUG|INFO|WARNING|ERROR|CRITICAL"}
 ```
 
 `/api/logs` returns `{lines, cursor, dropped}`; pass the returned `cursor` as the

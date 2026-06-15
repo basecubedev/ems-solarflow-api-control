@@ -235,6 +235,10 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self._handle_refresh()
             return
 
+        if parsed.path == "/api/logs/level":
+            self._handle_set_log_level()
+            return
+
         self._send_json({"error": "read_only"}, status=405)
 
     def do_PUT(self):
@@ -573,7 +577,46 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
 
             for line in result["lines"]:
                 line["message"] = diagnostics.diagnose_redact_text(line["message"])
+        # Current runtime verbosity of the service so the UI can reflect it.
+        result["service_level"] = logging.getLevelName(
+            logging.getLogger().getEffectiveLevel()
+        )
         self._send_json(result)
+
+    def _handle_set_log_level(self):
+        # Changing the service's runtime log verbosity is a state change, so it
+        # needs the full write-auth path (valid session + CSRF). It sets the root
+        # logger level, affecting every handler (the ring buffer and stderr).
+        body_error = self._json_body_preflight()
+        if body_error:
+            self._send_json(body_error[0], status=body_error[1])
+            return
+
+        auth_error = self._require_write_auth()
+        if auth_error:
+            self._send_json(auth_error[0], status=auth_error[1])
+            return
+
+        try:
+            payload = self._read_json_body()
+        except JsonBodyTooLarge as exc:
+            self._send_json({"error": "request_too_large", "message": str(exc)}, status=413)
+            return
+        except (JsonBodyLengthError, ValueError) as exc:
+            self._send_json({"error": "bad_request", "message": str(exc)}, status=400)
+            return
+
+        level = payload.get("level")
+        levelno = self.LOG_LEVELS.get(str(level).upper()) if level else None
+        if levelno is None:
+            self._send_json(
+                {"error": "bad_request", "message": "unknown level"}, status=400
+            )
+            return
+
+        logging.getLogger().setLevel(levelno)
+        logging.info("event=dashboard_log_level_changed level=%s", logging.getLevelName(levelno))
+        self._send_json({"service_level": logging.getLevelName(levelno)})
 
     def _log_int_param(self, query, name, default=None, minimum=None):
         raw = (query.get(name, [None]) or [None])[0]

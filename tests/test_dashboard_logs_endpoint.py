@@ -198,3 +198,98 @@ def test_logs_neutralize_injection_and_optional_redaction(tmp_path):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def login_with_csrf(base_url):
+    _, headers, payload = json_response(
+        f"{base_url}/api/auth/login",
+        method="POST",
+        payload={"password": "secret-password"},
+    )
+    return headers["Set-Cookie"], payload["csrf_token"]
+
+
+def test_set_log_level_requires_session_and_csrf(tmp_path):
+    buffer = make_buffer("logs.level.auth", [(logging.INFO, "x")])
+    server, base_url = logs_server(tmp_path, buffer)
+    try:
+        # no session
+        status, _, payload = json_response(
+            f"{base_url}/api/logs/level", method="POST", payload={"level": "DEBUG"}
+        )
+        assert status == 401
+        assert payload["error"] == "not_authenticated"
+
+        # session but no CSRF (background-style request) is rejected
+        cookie, _ = login_with_csrf(base_url)
+        status, _, payload = json_response(
+            f"{base_url}/api/logs/level",
+            method="POST",
+            payload={"level": "DEBUG"},
+            headers={"Cookie": cookie},
+        )
+        assert status == 403
+        assert payload["error"] == "csrf_failed"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_set_log_level_auth_not_configured(tmp_path):
+    server, base_url = logs_server(tmp_path, make_buffer("logs.level.cfg", []), configured=False)
+    try:
+        status, _, payload = json_response(
+            f"{base_url}/api/logs/level", method="POST", payload={"level": "DEBUG"}
+        )
+        assert status == 403
+        assert payload["error"] == "auth_not_configured"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_set_log_level_changes_root_logger_and_validates(tmp_path):
+    buffer = make_buffer("logs.level.set", [(logging.INFO, "x")])
+    server, base_url = logs_server(tmp_path, buffer)
+    original_level = logging.getLogger().level
+    try:
+        cookie, csrf = login_with_csrf(base_url)
+
+        status, _, payload = json_response(
+            f"{base_url}/api/logs/level",
+            method="POST",
+            payload={"level": "DEBUG"},
+            headers={"Cookie": cookie, "X-CSRF-Token": csrf},
+        )
+        assert status == 200
+        assert payload["service_level"] == "DEBUG"
+        assert logging.getLogger().level == logging.DEBUG
+
+        # unknown level is rejected
+        status, _, payload = json_response(
+            f"{base_url}/api/logs/level",
+            method="POST",
+            payload={"level": "LOUD"},
+            headers={"Cookie": cookie, "X-CSRF-Token": csrf},
+        )
+        assert status == 400
+        assert payload["error"] == "bad_request"
+    finally:
+        logging.getLogger().setLevel(original_level)
+        server.shutdown()
+        server.server_close()
+
+
+def test_logs_response_includes_service_level(tmp_path):
+    buffer = make_buffer("logs.level.report", [(logging.INFO, "x")])
+    server, base_url = logs_server(tmp_path, buffer)
+    try:
+        cookie = login(base_url)
+        status, _, payload = json_response(
+            f"{base_url}/api/logs", headers={"Cookie": cookie}
+        )
+        assert status == 200
+        assert "service_level" in payload
+    finally:
+        server.shutdown()
+        server.server_close()
