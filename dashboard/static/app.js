@@ -15,6 +15,11 @@ const state = {
   runtime: null,
   runtimeEditorDirty: false,
   runtimeEditorFocused: false,
+  diagnose: {
+    profile: "install",
+    report: null,
+    running: false,
+  },
 };
 
 const SOC_ANIMATION_EPSILON = 0.1;
@@ -1935,7 +1940,7 @@ function acStateIcon(device) {
 }
 
 function setFlowView(view, persist = true) {
-  const nextView = ["aggregated", "devices", "control", "energy"].includes(view)
+  const nextView = ["aggregated", "devices", "control", "energy", "diagnose"].includes(view)
     ? view
     : "aggregated";
   state.flowView = nextView;
@@ -1944,6 +1949,7 @@ function setFlowView(view, persist = true) {
   const deviceView = $("deviceFlowView");
   const controlView = $("controlExplainView");
   const energyView = $("energyStatsView");
+  const diagnoseView = $("diagnoseView");
   const wrap = document.querySelector ? document.querySelector(".flow-wrap") : null;
   const shell = document.querySelector ? document.querySelector(".shell") : null;
 
@@ -1951,11 +1957,13 @@ function setFlowView(view, persist = true) {
   if (deviceView) deviceView.hidden = nextView !== "devices";
   if (controlView) controlView.hidden = nextView !== "control";
   if (energyView) energyView.hidden = nextView !== "energy";
+  if (diagnoseView) diagnoseView.hidden = nextView !== "diagnose";
   if (wrap?.classList) {
     wrap.classList.toggle("view-devices", nextView === "devices");
     wrap.classList.toggle("view-aggregated", nextView === "aggregated");
     wrap.classList.toggle("view-control", nextView === "control");
     wrap.classList.toggle("view-energy", nextView === "energy");
+    wrap.classList.toggle("view-diagnose", nextView === "diagnose");
   }
   if (shell?.classList) {
     shell.classList.toggle("view-energy", nextView === "energy");
@@ -1978,6 +1986,10 @@ function setFlowView(view, persist = true) {
   if (nextView === "devices" && pendingDeviceFlowBatteryAnimation && deviceView) {
     pendingDeviceFlowBatteryAnimation = false;
     animateDeviceBatteryFills(deviceView);
+  }
+
+  if (nextView === "diagnose") {
+    renderDiagnoseView();
   }
 }
 
@@ -2163,6 +2175,217 @@ function initFlowViewSwitch() {
   document.querySelectorAll("[data-flow-view]").forEach((button) => {
     button.addEventListener("click", () => setFlowView(button.dataset.flowView));
   });
+}
+
+const DIAGNOSE_STATUS_TONE = {
+  ok: "tone-send",
+  warning: "tone-warn",
+  error: "tone-blocked",
+  unknown: "tone-skip",
+};
+
+function diagnoseStatusTone(status) {
+  return DIAGNOSE_STATUS_TONE[status] || "tone-skip";
+}
+
+function diagnoseAuthState() {
+  if (!state.auth.configured) {
+    return `
+      <div class="diagnose-empty">
+        Configure a dashboard password to enable diagnostics.
+      </div>`;
+  }
+  if (!state.auth.authenticated) {
+    return `
+      <div class="diagnose-empty">
+        Login required to run diagnostics.
+      </div>`;
+  }
+  return "";
+}
+
+function renderDiagnoseSection(section) {
+  const status = String(section.status || "unknown");
+  const messages = []
+    .concat(section.errors || [])
+    .concat(section.warnings || []);
+  const lines = messages.length
+    ? messages
+        .map((message) => `<li>${escapeHtml(message)}</li>`)
+        .join("")
+    : "<li class=\"diagnose-line-ok\">No issues reported.</li>";
+  return `
+    <div class="diagnose-section control-pipeline-stage">
+      <div class="diagnose-section-head">
+        <span class="diagnose-section-title">${escapeHtml(section.title || section.id || "Section")}</span>
+        <span class="pill ${diagnoseStatusTone(status)}">${escapeHtml(status.toUpperCase())}</span>
+      </div>
+      <ul class="diagnose-lines">${lines}</ul>
+    </div>`;
+}
+
+function renderDiagnoseRootCauses(rootCauses) {
+  if (!Array.isArray(rootCauses) || !rootCauses.length) return "";
+  const items = rootCauses
+    .map((cause) => {
+      const severity = String(cause.severity || "info");
+      return `
+        <div class="diagnose-root-cause">
+          <span class="pill ${diagnoseStatusTone(severity === "info" ? "ok" : severity)}">${escapeHtml(severity.toUpperCase())}</span>
+          <div>
+            <div class="diagnose-root-title">${escapeHtml(cause.title || cause.code || "")}</div>
+            <div class="diagnose-root-message">${escapeHtml(cause.message || "")}</div>
+            ${cause.suggested_next_check ? `<div class="diagnose-root-hint">${escapeHtml(cause.suggested_next_check)}</div>` : ""}
+          </div>
+        </div>`;
+    })
+    .join("");
+  return `<div class="diagnose-root-causes">${items}</div>`;
+}
+
+function renderDiagnoseReport(report) {
+  if (!report || typeof report !== "object") {
+    return `<div class="diagnose-empty">No diagnosis available.</div>`;
+  }
+  const diagnosis = report.diagnosis || {};
+  const status = String(diagnosis.status || report.status || "unknown");
+  const sections = Array.isArray(diagnosis.sections) ? diagnosis.sections : [];
+  const profile = String(report.profile || state.diagnose.profile || "install");
+
+  const header = `
+    <div class="diagnose-report-head">
+      <span class="diagnose-section-title">${escapeHtml(profile.toUpperCase())}</span>
+      <span class="pill ${diagnoseStatusTone(status)}">${escapeHtml(status.toUpperCase())}</span>
+    </div>`;
+  const rootCauses = renderDiagnoseRootCauses(diagnosis.root_causes);
+  const body = sections.length
+    ? sections.map(renderDiagnoseSection).join("")
+    : `<div class="diagnose-empty">No sections reported.</div>`;
+
+  return `${header}${rootCauses}<div class="diagnose-sections">${body}</div>`;
+}
+
+function renderDiagnoseView() {
+  const results = $("diagnoseResults");
+  const status = $("diagnoseStatus");
+  const copyButton = $("diagnoseCopy");
+  if (!results) return;
+
+  const authState = diagnoseAuthState();
+  if (authState) {
+    results.innerHTML = authState;
+    if (status) status.textContent = "";
+    if (copyButton) copyButton.hidden = true;
+    return;
+  }
+
+  if (state.diagnose.report) {
+    results.innerHTML = renderDiagnoseReport(state.diagnose.report);
+    if (copyButton) copyButton.hidden = false;
+  } else {
+    results.innerHTML = `<div class="diagnose-empty">Select a profile and press Run.</div>`;
+    if (copyButton) copyButton.hidden = true;
+  }
+}
+
+function setDiagnoseStatus(message) {
+  const status = $("diagnoseStatus");
+  if (status) status.textContent = message;
+}
+
+async function runDiagnose(profile) {
+  if (state.diagnose.running) return;
+  if (!state.auth.authenticated) {
+    renderDiagnoseView();
+    return;
+  }
+  state.diagnose.running = true;
+  setDiagnoseStatus(`Running ${profile}…`);
+  try {
+    const response = await fetch(
+      `/api/diagnose?profile=${encodeURIComponent(profile)}`,
+      { credentials: "same-origin" }
+    );
+    if (!response.ok) {
+      const detail = await response.json().catch(() => ({}));
+      setDiagnoseStatus(`Diagnose failed (${response.status}${detail.error ? `: ${detail.error}` : ""}).`);
+      return;
+    }
+    state.diagnose.report = await response.json();
+    renderDiagnoseView();
+    setDiagnoseStatus("");
+  } catch {
+    setDiagnoseStatus("Diagnose request failed.");
+  } finally {
+    state.diagnose.running = false;
+  }
+}
+
+async function downloadSupportBundle() {
+  if (!state.auth.authenticated) {
+    renderDiagnoseView();
+    return;
+  }
+  setDiagnoseStatus("Building support bundle…");
+  try {
+    const response = await fetch("/api/diagnose/support-bundle", {
+      credentials: "same-origin",
+    });
+    if (!response.ok) {
+      setDiagnoseStatus(`Support bundle failed (${response.status}).`);
+      return;
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "ems-support-bundle.zip";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    setDiagnoseStatus("");
+  } catch {
+    setDiagnoseStatus("Support bundle request failed.");
+  }
+}
+
+function copyDiagnoseJson() {
+  if (!state.diagnose.report) return;
+  const text = JSON.stringify(state.diagnose.report, null, 2);
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(
+      () => setDiagnoseStatus("Copied report JSON to clipboard."),
+      () => setDiagnoseStatus("Could not copy to clipboard.")
+    );
+  }
+}
+
+function initDiagnose() {
+  document.querySelectorAll("[data-diagnose-profile]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const profile = button.dataset.diagnoseProfile;
+      state.diagnose.profile = profile;
+      document.querySelectorAll("[data-diagnose-profile]").forEach((other) => {
+        const active = other === button;
+        other.classList.toggle("active", active);
+        other.setAttribute("aria-selected", active ? "true" : "false");
+      });
+    });
+  });
+
+  const runButton = $("diagnoseRun");
+  if (runButton) {
+    runButton.addEventListener("click", () => runDiagnose(state.diagnose.profile));
+  }
+  const bundleButton = $("diagnoseBundle");
+  if (bundleButton) {
+    bundleButton.addEventListener("click", () => downloadSupportBundle());
+  }
+  const copyButton = $("diagnoseCopy");
+  if (copyButton) {
+    copyButton.addEventListener("click", () => copyDiagnoseJson());
+  }
 }
 
 function runtimeControlPanel() {
@@ -2500,9 +2723,15 @@ function renderAuthState() {
     statePill.textContent = state.auth.authenticated ? "Write mode" : "Read-only";
     statePill.className = state.auth.authenticated ? "pill" : "pill muted";
   }
-  if (!button) return;
-  button.hidden = !state.auth.configured;
-  button.textContent = state.auth.authenticated ? "Logout" : "Login";
+  if (button) {
+    button.hidden = !state.auth.configured;
+    button.textContent = state.auth.authenticated ? "Logout" : "Login";
+  }
+  // Keep the Diagnose tab's auth-gated empty state in sync with login/logout.
+  if (state.flowView === "diagnose") {
+    if (!state.auth.authenticated) state.diagnose.report = null;
+    renderDiagnoseView();
+  }
 }
 
 function initAuthControls() {
@@ -3058,6 +3287,7 @@ function initDashboardApp() {
   initFlowViewSwitch();
   initAuthControls();
   initRuntimeForms();
+  initDiagnose();
   if (state.demoMode) {
     initDemoMode();
   } else {
@@ -3085,6 +3315,11 @@ if (typeof module !== "undefined") {
     deviceBatteryVisual,
     renderDevices,
     renderControlExplain,
+    setFlowView,
+    renderDiagnoseReport,
+    renderDiagnoseView,
+    diagnoseAuthState,
+    diagnoseStatusTone,
     runtimeControlPanel,
     runtimeDeviceForm,
     runtimeNumber,
