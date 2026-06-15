@@ -107,6 +107,7 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         auth_file=None,
         https_active=False,
         session_timeout_seconds=1800,
+        session_absolute_max_seconds=43200,
         runtime_validation=None,
         sse_max_connections=MAX_SSE_CONNECTIONS,
         sse_max_connections_per_ip=MAX_SSE_CONNECTIONS_PER_IP,
@@ -117,7 +118,10 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         self.runtime_state = runtime_state
         self.auth_file = auth_file or resolve_auth_path(BASE_DIR)
         self.https_active = bool(https_active)
-        self.sessions = SessionStore(timeout_seconds=session_timeout_seconds)
+        self.sessions = SessionStore(
+            timeout_seconds=session_timeout_seconds,
+            absolute_max_seconds=session_absolute_max_seconds,
+        )
         self.login_limiter = LoginRateLimiter()
         self.runtime_validation = runtime_validation or build_validation_context(
             runtime_state=runtime_state
@@ -198,6 +202,10 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self._handle_logout()
             return
 
+        if parsed.path == "/api/auth/refresh":
+            self._handle_refresh()
+            return
+
         self._send_json({"error": "read_only"}, status=405)
 
     def do_PUT(self):
@@ -264,6 +272,11 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         }
         if authenticated:
             payload["csrf_token"] = session.csrf_token
+            if session.expires_at is None:
+                payload["session_expires_in_seconds"] = None
+            else:
+                remaining = session.expires_at - self.server.sessions.time_fn()
+                payload["session_expires_in_seconds"] = max(0, int(remaining))
         return payload
 
     def _auth_configured(self):
@@ -336,6 +349,24 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 "Set-Cookie": self._expired_session_cookie(),
             },
         )
+
+    def _handle_refresh(self):
+        # Genuine-activity heartbeat: slide the idle timeout (bounded by the
+        # absolute cap). Treated as a state change, so it needs the full
+        # write-auth path (valid session + matching CSRF token); background
+        # polling, which carries no CSRF token, can never renew a session.
+        body_error = self._json_body_preflight()
+        if body_error:
+            self._send_json(body_error[0], status=body_error[1])
+            return
+
+        auth_error = self._require_write_auth()
+        if auth_error:
+            self._send_json(auth_error[0], status=auth_error[1])
+            return
+
+        self.server.sessions.touch(self._session_cookie_value())
+        self._send_json(self._auth_status_payload())
 
     def _handle_runtime_patch(self, path):
         body_error = self._json_body_preflight()
@@ -546,6 +577,7 @@ def start_dashboard_server(
     ssl_auto_generate=True,
     base_dir=None,
     session_timeout_seconds=1800,
+    session_absolute_max_seconds=43200,
     runtime_validation=None,
     sse_max_connections=MAX_SSE_CONNECTIONS,
     sse_max_connections_per_ip=MAX_SSE_CONNECTIONS_PER_IP,
@@ -559,6 +591,7 @@ def start_dashboard_server(
         auth_file=auth_file,
         https_active=ssl_enabled,
         session_timeout_seconds=session_timeout_seconds,
+        session_absolute_max_seconds=session_absolute_max_seconds,
         runtime_validation=runtime_validation,
         sse_max_connections=sse_max_connections,
         sse_max_connections_per_ip=sse_max_connections_per_ip,

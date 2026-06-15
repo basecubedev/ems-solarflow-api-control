@@ -340,3 +340,16 @@ def test_omitted_ha_section_defaults_to_disabled(tmp_path):
         assert cfg.HA_TOKEN == ""
     finally:
         restore_config_module(snapshot)
+
+
+def test_safe_session_timeout_parsing():
+    # explicit positive value preserved
+    assert cfg.safe_session_timeout(900, 1800) == 900
+    assert cfg.safe_session_timeout("600", 1800) == 600
+    # 0 is a deliberate "disabled / infinite" opt-in and is preserved
+    assert cfg.safe_session_timeout(0, 1800) == 0
+    # negative typo must fall back to the secure default, never silently disable
+    assert cfg.safe_session_timeout(-5, 1800) == 1800
+    # invalid / missing values fall back to the default
+    assert cfg.safe_session_timeout("nope", 1800) == 1800
+    assert cfg.safe_session_timeout(None, 43200) == 43200

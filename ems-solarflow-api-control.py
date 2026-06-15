@@ -216,6 +216,18 @@ def main():
                     True
                 ),
                 base_dir=base_dir,
+                session_timeout_seconds=cfg.safe_session_timeout(
+                    cfg.DASHBOARD_CONFIG.get(
+                        "session_idle_timeout_seconds", 1800
+                    ),
+                    1800
+                ),
+                session_absolute_max_seconds=cfg.safe_session_timeout(
+                    cfg.DASHBOARD_CONFIG.get(
+                        "session_absolute_max_seconds", 43200
+                    ),
+                    43200
+                ),
                 runtime_validation=build_validation_context(
                     cfg.CONFIG,
                     runtime_state

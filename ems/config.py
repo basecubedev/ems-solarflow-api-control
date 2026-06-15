@@ -432,6 +432,25 @@ def safe_int(value, default=0, minimum=None):
     return parsed
 
 
+def safe_session_timeout(value, default):
+    """Parse a session-timeout config value.
+
+    ``0`` is a deliberate "disabled / infinite" opt-in and is preserved.
+    Invalid or negative values fall back to the (secure) default rather than
+    being clamped to ``0`` — a negative typo must never silently disable a
+    timeout.
+    """
+    try:
+        parsed = int(float(value))
+    except (TypeError, ValueError):
+        return int(default)
+
+    if parsed < 0:
+        return int(default)
+
+    return parsed
+
+
 def safe_float(value, default=0.0, minimum=None):
     try:
         parsed = float(value)

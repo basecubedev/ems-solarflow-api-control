@@ -594,3 +594,65 @@ def test_dashboard_server_serves_static_index_and_blocks_missing_paths():
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_auth_refresh_requires_session_and_csrf_and_slides(tmp_path):
+    auth_file = tmp_path / "dashboard-auth.json"
+    write_password_file(auth_file, "secret-password")
+    server, base_url = with_server(StoreStub(), auth_file=str(auth_file))
+
+    try:
+        # No session at all -> not authenticated.
+        status, _, payload = json_response(
+            f"{base_url}/api/auth/refresh", method="POST"
+        )
+        assert status == 401
+        assert payload["error"] == "not_authenticated"
+
+        _, login_headers, login = json_response(
+            f"{base_url}/api/auth/login",
+            method="POST",
+            payload={"password": "secret-password"},
+        )
+        cookie = login_headers["Set-Cookie"]
+        csrf = login["csrf_token"]
+
+        # Valid session but no CSRF token (as a background poll would send) must
+        # NOT be able to renew the session.
+        status, _, payload = json_response(
+            f"{base_url}/api/auth/refresh",
+            method="POST",
+            headers={"Cookie": cookie},
+        )
+        assert status == 403
+        assert payload["error"] == "csrf_failed"
+
+        # Session + CSRF (a genuine-activity heartbeat) renews and reports
+        # remaining lifetime.
+        status, _, payload = json_response(
+            f"{base_url}/api/auth/refresh",
+            method="POST",
+            headers={"Cookie": cookie, "X-CSRF-Token": csrf},
+        )
+        assert status == 200
+        assert payload["authenticated"] is True
+        assert payload["session_expires_in_seconds"] >= 0
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_auth_refresh_when_auth_not_configured_is_forbidden(tmp_path):
+    server, base_url = with_server(
+        StoreStub(), auth_file=str(tmp_path / "missing.json")
+    )
+
+    try:
+        status, _, payload = json_response(
+            f"{base_url}/api/auth/refresh", method="POST"
+        )
+        assert status == 403
+        assert payload["error"] == "auth_not_configured"
+    finally:
+        server.shutdown()
+        server.server_close()

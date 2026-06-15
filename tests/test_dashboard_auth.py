@@ -50,6 +50,122 @@ def test_session_expiry_removes_session():
     assert session.session_id not in store.sessions
 
 
+def test_session_touch_slides_idle_timeout():
+    now = [100.0]
+    store = auth.SessionStore(
+        timeout_seconds=30,
+        absolute_max_seconds=1000,
+        time_fn=lambda: now[0],
+    )
+    session = store.create()
+    assert session.expires_at == 130.0
+
+    now[0] = 120.0
+    store.touch(session.session_id)
+    assert session.expires_at == 150.0
+
+    # Without the touch the session would have expired at 130.
+    now[0] = 145.0
+    assert store.get(session.session_id) is session
+
+    now[0] = 151.0
+    assert store.get(session.session_id) is None
+
+
+def test_session_touch_cannot_exceed_absolute_max():
+    now = [0.0]
+    store = auth.SessionStore(
+        timeout_seconds=100,
+        absolute_max_seconds=150,
+        time_fn=lambda: now[0],
+    )
+    session = store.create()
+    assert session.expires_at == 100.0  # min(now+100, created+150)
+
+    now[0] = 90.0
+    store.touch(session.session_id)
+    assert session.expires_at == 150.0  # capped by absolute max
+
+    now[0] = 140.0
+    store.touch(session.session_id)
+    assert session.expires_at == 150.0  # still capped, sliding stops
+
+    now[0] = 151.0
+    assert store.get(session.session_id) is None  # re-login forced past cap
+
+
+def test_session_get_is_read_only_and_does_not_slide():
+    now = [0.0]
+    store = auth.SessionStore(
+        timeout_seconds=50,
+        absolute_max_seconds=1000,
+        time_fn=lambda: now[0],
+    )
+    session = store.create()
+    assert session.expires_at == 50.0
+
+    now[0] = 40.0
+    store.get(session.session_id)
+    assert session.expires_at == 50.0  # get must not extend the session
+
+    now[0] = 51.0
+    assert store.get(session.session_id) is None
+
+
+def test_disabled_timeouts_never_expire():
+    now = [0.0]
+    store = auth.SessionStore(
+        timeout_seconds=0,
+        absolute_max_seconds=0,
+        time_fn=lambda: now[0],
+    )
+    session = store.create()
+    assert session.expires_at is None
+    assert store.timeout_seconds is None
+    assert store.absolute_max_seconds is None
+
+    now[0] = 10**9
+    assert store.get(session.session_id) is session
+    # touch keeps it non-expiring
+    store.touch(session.session_id)
+    assert session.expires_at is None
+
+
+def test_disabled_idle_still_bounded_by_absolute_cap():
+    now = [0.0]
+    store = auth.SessionStore(
+        timeout_seconds=0,
+        absolute_max_seconds=100,
+        time_fn=lambda: now[0],
+    )
+    session = store.create()
+    assert session.expires_at == 100.0
+
+    now[0] = 50.0
+    store.touch(session.session_id)
+    assert session.expires_at == 100.0  # idle disabled -> only the cap applies
+
+    now[0] = 101.0
+    assert store.get(session.session_id) is None
+
+
+def test_negative_timeouts_are_treated_as_disabled():
+    store = auth.SessionStore(timeout_seconds=-5, absolute_max_seconds=-1)
+    assert store.timeout_seconds is None
+    assert store.absolute_max_seconds is None
+
+
+def test_touch_unknown_or_expired_session_returns_none():
+    now = [0.0]
+    store = auth.SessionStore(timeout_seconds=10, time_fn=lambda: now[0])
+    assert store.touch("does-not-exist") is None
+
+    session = store.create()
+    now[0] = 11.0
+    assert store.touch(session.session_id) is None
+    assert session.session_id not in store.sessions
+
+
 def test_login_rate_limiter_prunes_stale_entries_and_caps_size():
     now = [100.0]
     limiter = auth.LoginRateLimiter(
