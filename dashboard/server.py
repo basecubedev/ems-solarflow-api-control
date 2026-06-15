@@ -207,7 +207,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/api/diagnose":
-            self._handle_diagnose(parse_qs(parsed.query))
+            self._handle_diagnose(parse_qs(parsed.query, keep_blank_values=True))
             return
 
         if parsed.path == "/api/diagnose/support-bundle":
@@ -427,10 +427,11 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self._send_json(auth_error[0], status=auth_error[1])
             return
 
-        profile = (query.get("profile", ["install"]) or ["install"])[0]
+        profile_values = query.get("profile")
+        profile = profile_values[0] if profile_values else None
         if profile not in self.DIAGNOSE_PROFILES:
             self._send_json(
-                {"error": "unknown_profile", "supported": list(self.DIAGNOSE_PROFILES)},
+                {"error": "invalid_profile", "supported": list(self.DIAGNOSE_PROFILES)},
                 status=400,
             )
             return
@@ -451,11 +452,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             }[profile]
             report = runner(self._diagnose_args())
             report["profile"] = profile
-            # Defense-in-depth: even though the caller is authenticated, scrub
-            # values under secret-named keys (token, password, secret, ...). This
-            # key-based pass returns valid JSON and, unlike text redaction, leaves
-            # benign messages intact (e.g. "Missing config key: foo").
-            redacted = diagnostics.diagnose_redact_value(report)
+            redacted = diagnostics.diagnose_redact_report_for_http(report)
         except Exception:
             logging.exception("dashboard_diagnose_failed profile=%s", profile)
             self._send_json({"error": "diagnose_failed"}, status=500)

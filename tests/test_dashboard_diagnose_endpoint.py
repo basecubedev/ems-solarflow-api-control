@@ -187,7 +187,40 @@ def test_diagnose_unknown_profile_is_bad_request(tmp_path):
             headers={"Cookie": cookie},
         )
         assert status == 400
-        assert payload["error"] == "unknown_profile"
+        assert payload["error"] == "invalid_profile"
+        assert "install" in payload["supported"]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_diagnose_missing_profile_is_bad_request(tmp_path):
+    server, base_url = diag_server(tmp_path)
+    try:
+        cookie, _ = login(base_url)
+        status, _, payload = json_response(
+            f"{base_url}/api/diagnose",
+            headers={"Cookie": cookie},
+        )
+        assert status == 400
+        assert payload["error"] == "invalid_profile"
+        assert "install" in payload["supported"]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_diagnose_empty_profile_is_bad_request(tmp_path):
+    server, base_url = diag_server(tmp_path)
+    try:
+        cookie, _ = login(base_url)
+        status, _, payload = json_response(
+            f"{base_url}/api/diagnose?profile=",
+            headers={"Cookie": cookie},
+        )
+        assert status == 400
+        assert payload["error"] == "invalid_profile"
+        assert "install" in payload["supported"]
     finally:
         server.shutdown()
         server.server_close()
@@ -238,6 +271,44 @@ def test_diagnose_does_not_leak_secrets(tmp_path):
         )
         assert status == 200
         assert SECRET_TOKEN.encode() not in body
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_diagnose_redacts_free_form_messages(tmp_path, monkeypatch):
+    from ems import diagnostics
+
+    def fake_install(_args):
+        return {
+            "schema_version": 1,
+            "status": "warning",
+            "diagnosis": {
+                "status": "warning",
+                "metrics": {"checks": 2, "token": SECRET_TOKEN},
+                "warnings": [f"token={SECRET_TOKEN}"],
+                "errors": [f"probe URL http://user:{SECRET_TOKEN}@example.test/path failed"],
+                "sections": [],
+                "root_causes": [],
+            },
+        }
+
+    monkeypatch.setattr(diagnostics, "run_install_diagnosis", fake_install)
+    server, base_url = diag_server(tmp_path)
+    try:
+        cookie, _ = login(base_url)
+        status, _, body = read_response(
+            f"{base_url}/api/diagnose?profile=install",
+            headers={"Cookie": cookie},
+        )
+        assert status == 200
+        assert SECRET_TOKEN.encode() not in body
+        payload = json.loads(body.decode("utf-8"))
+        assert payload["profile"] == "install"
+        assert payload["diagnosis"]["status"] == "warning"
+        assert payload["diagnosis"]["metrics"]["token"] == "<redacted>"
+        assert "<redacted>" in payload["diagnosis"]["warnings"][0]
+        assert "http://<redacted>:<redacted>@example.test" in payload["diagnosis"]["errors"][0]
     finally:
         server.shutdown()
         server.server_close()
