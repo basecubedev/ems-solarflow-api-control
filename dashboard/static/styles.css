@@ -235,6 +235,10 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
 .shell.view-logs > .chart-panel { display: none; }
 .shell.view-diagnose .flow-panel > .section-heading > h2,
 .shell.view-logs .flow-panel > .section-heading > h2 { display: none; }
+/* With the heading hidden the flex row loses its space-between anchor, so keep
+   the tab bar right-aligned. */
+.shell.view-diagnose .flow-panel > .section-heading,
+.shell.view-logs .flow-panel > .section-heading { justify-content: flex-end; }
 .section-heading { position: relative; justify-content: space-between; gap: 10px; margin-bottom: 7px; }
 .flow-wrap {
   position: relative; overflow: hidden; min-height: 242px; border: 1px solid rgba(148,163,184,.12); border-radius: 18px;
@@ -814,6 +818,16 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
 .flow-wrap.view-aggregated .device-flow-view,
 .flow-wrap.view-aggregated .control-explain-view,
 .flow-wrap.view-aggregated .energy-stats-view { display: none !important; }
+/* Diagnose/Logs show only their own panel: force-hide the flow chart and the
+   other views (the hidden attribute alone loses to the base display rules). */
+.flow-wrap.view-diagnose #flowSvg,
+.flow-wrap.view-diagnose .device-flow-view,
+.flow-wrap.view-diagnose .control-explain-view,
+.flow-wrap.view-diagnose .energy-stats-view,
+.flow-wrap.view-logs #flowSvg,
+.flow-wrap.view-logs .device-flow-view,
+.flow-wrap.view-logs .control-explain-view,
+.flow-wrap.view-logs .energy-stats-view { display: none !important; }
 .flow-wrap.view-devices .device-flow-view { display: block !important; }
 .flow-wrap.view-control .control-explain-view { display: block !important; }
 .flow-wrap.view-energy .energy-stats-view { display: block !important; }
