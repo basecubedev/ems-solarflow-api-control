@@ -226,6 +226,15 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
 .flow-panel, .rules-panel, .chart-panel { padding: 10px; }
 .shell.view-energy > .devices-section,
 .shell.view-energy > .chart-panel { display: none; }
+/* Diagnose and Logs are full-width operator views: hide the devices list, the
+   history chart and the redundant outer "Live Flow" heading (their own panels
+   carry the heading). The tab bar in .flow-heading-controls stays visible. */
+.shell.view-diagnose > .devices-section,
+.shell.view-diagnose > .chart-panel,
+.shell.view-logs > .devices-section,
+.shell.view-logs > .chart-panel { display: none; }
+.shell.view-diagnose .flow-panel > .section-heading > h2,
+.shell.view-logs .flow-panel > .section-heading > h2 { display: none; }
 .section-heading { position: relative; justify-content: space-between; gap: 10px; margin-bottom: 7px; }
 .flow-wrap {
   position: relative; overflow: hidden; min-height: 242px; border: 1px solid rgba(148,163,184,.12); border-radius: 18px;

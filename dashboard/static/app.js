@@ -1980,6 +1980,8 @@ function setFlowView(view, persist = true) {
   }
   if (shell?.classList) {
     shell.classList.toggle("view-energy", nextView === "energy");
+    shell.classList.toggle("view-diagnose", nextView === "diagnose");
+    shell.classList.toggle("view-logs", nextView === "logs");
   }
 
   document.querySelectorAll("[data-flow-view]").forEach((button) => {
