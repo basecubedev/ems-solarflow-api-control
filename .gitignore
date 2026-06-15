@@ -3,6 +3,11 @@
 /CODEX_AGENT_GUIDE.md
 /tasks/
 
+# local Claude Code project files
+/CLAUDE.md
+/CLAUDE.local.md
+/.claude/
+
 
 
 # runtime traces

@@ -27,6 +27,14 @@ direction:
 - `Charge` when the AC input/charge path is active.
 - `Output standby`, `Charge standby`, or `Standby` when the AC path is idle.
 
+When [battery full-charge assist](battery-full-charge-assist.md) is enabled
+and a battery-backed device has known assist state, the device card also shows
+a compact "Full-charge assist" section with the current status (active,
+assist window active, restore pending, or scheduled), last full-charge and
+next due timestamps, and pending restore flags. Devices without a detected
+battery, and devices when the feature is globally disabled, do not show this
+section.
+
 ## Energy Statistics View
 
 The Energy tab shows historical inverter output totals and savings estimates

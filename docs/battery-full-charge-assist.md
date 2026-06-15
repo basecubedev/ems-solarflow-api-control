@@ -100,3 +100,35 @@ Diagnose reports whether the feature is enabled, the core state database path,
 per-device last full-charge timestamps, next due timestamps, pending restore
 flags, and read-only firmware diagnostics such as `socLimit`, `socStatus`, and
 `batCalTime` when seen in telemetry.
+
+## Dashboard
+
+When enabled, the Devices view shows a compact "Full-charge assist" section on
+each battery-backed device card. It reflects the same state as `diagnose`:
+
+- **Assist active** — EMS is helping the device reach firmware Max-SoC. This
+  is normal and can take several hours to days; it is not an error state.
+  - **AC charge running** is shown only when telemetry confirms `acMode=1`
+    and `acStatus=2`. Assist can also run without AC charge mode
+    (`enable_ac_charge_mode=false`).
+  - While active, EMS internally marks Max-SoC and (if AC charge mode is
+    used) AC output mode restore as pending for *after* charging finishes.
+    The dashboard shows this as **"Restore planned"** — it does not mean a
+    restore is currently stuck or failed.
+- **Assist window active** — the device is inside the configured
+  `assist_window_days` before its next due date. EMS may start an assist
+  charge soon if SOC is already high enough.
+- **Restore pending** — assist has finished (no longer active) and EMS is
+  still waiting for write gates to restore the configured Max-SoC
+  (**Max-SoC restore pending**) and, if AC charge mode was used, normal
+  output mode `acMode=2` (**AC output mode restore pending**). These details
+  are only shown once assist is no longer active.
+- **Assist overdue** — the device passed its due date without a completed
+  assist. The dashboard shows how many days overdue.
+- Otherwise the card quietly shows the last full-charge timestamp and the next
+  due date.
+
+This is EMS support for reaching the firmware-reported Max-SoC state in time,
+not direct firmware calibration control. Devices without a detected battery
+(`packNum == 0`), or when the feature is globally disabled, do not show this
+section.

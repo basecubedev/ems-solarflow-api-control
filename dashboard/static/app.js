@@ -305,6 +305,7 @@ function renderRules(rules) {
     ["soc_limit_active", "SOC limit", "warning"],
     ["output_limit_active", "Output limit", "charge"],
     ["winter_soc_mode", "Winter mode", "battery"],
+    ["full_charge_assist_active", "Full-charge assist", "charge"],
     ["pv_priority_balancing", "PV priority", "solar"],
     ["battery_balancing", "Battery balance", "battery"],
     ["night_min_soc_idle", "Night idle", "gauge"],
@@ -373,6 +374,7 @@ function renderDevices(devices) {
         ${deviceValue("Limit", watts(device.output_limit_w), "warning")}
         ${deviceValue("AC", acStateLabel(device), acStateIcon(device))}
       </div>
+      ${renderFullChargeAssist(device)}
     `;
     grid.appendChild(card);
     state.deviceSocValues.set(name, soc);
@@ -1977,6 +1979,134 @@ function setFlowView(view, persist = true) {
     pendingDeviceFlowBatteryAnimation = false;
     animateDeviceBatteryFills(deviceView);
   }
+}
+
+function fullChargeAssistMeta(status) {
+  const meta = {
+    active: { label: "Assist active", tone: "tone-send", icon: "charge" },
+    window: { label: "Assist window active", tone: "tone-warn", icon: "history" },
+    restore_pending: { label: "Restore pending", tone: "tone-warn", icon: "warning" },
+    overdue: { label: "Assist overdue", tone: "tone-warn", icon: "warning" },
+    completed: { label: "Assist completed", tone: "tone-send", icon: "rule" },
+    ok: { label: "Assist scheduled", tone: "tone-skip", icon: "history" },
+    unknown: { label: "Assist pending", tone: "tone-skip", icon: "rule" },
+  };
+  return meta[status] || meta.unknown;
+}
+
+function isAssistAcChargeActive(assist) {
+  return assist.ac_mode === 1 && assist.ac_status === 2;
+}
+
+function fullChargeAssistDescription(assist) {
+  switch (assist.status) {
+    case "active":
+      return isAssistAcChargeActive(assist)
+        ? "EMS is helping this device reach firmware Max-SoC and is currently AC-charging for monthly battery calibration support."
+        : "EMS is helping this device reach firmware Max-SoC.";
+    case "window":
+      return "EMS may start a short assist charge before the due date to reach firmware Max-SoC.";
+    case "overdue":
+      return "Assist is overdue. EMS will start an assist charge as soon as conditions allow.";
+    case "restore_pending":
+      return assist.ac_mode_restore_pending
+        ? "EMS will restore configured Max-SoC and normal EMS output mode (acMode=2) when writes are available."
+        : "EMS will restore the configured Max-SoC when writes are available.";
+    default:
+      return "";
+  }
+}
+
+function formatAssistTimestamp(value) {
+  if (!value) return "--";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "--";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function socLimitLabel(socLimit) {
+  switch (Number(socLimit ?? 0)) {
+    case 1: return "Max-SoC reached";
+    case 2: return "Min-SoC protection";
+    default: return "No limit";
+  }
+}
+
+function fullChargeAssistFirmwareSummary(assist) {
+  return `${socLimitLabel(assist.soc_limit)} · AC ${acStateLabel(assist)}`;
+}
+
+function renderFullChargeAssist(device) {
+  const assist = device?.battery_full_charge_assist;
+  if (!assist || !assist.enabled || !assist.has_battery) return "";
+
+  const meta = fullChargeAssistMeta(assist.status);
+  const rows = [];
+
+  if (assist.status === "active") {
+    rows.push(deviceValue("Started", formatAssistTimestamp(assist.assist_started_at), "history"));
+    if (isAssistAcChargeActive(assist)) {
+      rows.push(deviceValue("AC charge", "Running", "charge"));
+    }
+    rows.push(deviceValue("Firmware", fullChargeAssistFirmwareSummary(assist), "gauge"));
+    // restore_pending / ac_mode_restore_pending while assist is active are
+    // planned follow-up actions for after charging finishes, not a current
+    // restore problem.
+    if (assist.restore_pending || assist.ac_mode_restore_pending) {
+      rows.push(deviceValue("After charge", "Restore planned", "history"));
+    }
+  } else if (assist.status === "overdue") {
+    const overdueDays = Number.isFinite(assist.days_until_due) ? Math.abs(assist.days_until_due) : null;
+    rows.push(deviceValue(
+      "Overdue by",
+      overdueDays !== null ? `${overdueDays} d` : "--",
+      "warning"
+    ));
+    rows.push(deviceValue("Next due", formatAssistTimestamp(assist.next_due_at), "history"));
+  } else if (assist.status === "window") {
+    rows.push(deviceValue(
+      "Due in",
+      Number.isFinite(assist.days_until_due) ? `${assist.days_until_due} d` : "--",
+      "history"
+    ));
+    rows.push(deviceValue("Window starts", formatAssistTimestamp(assist.window_starts_at), "history"));
+  } else {
+    rows.push(deviceValue("Last full charge", formatAssistTimestamp(assist.last_full_charge_at), "history"));
+    rows.push(deviceValue("Next due", formatAssistTimestamp(assist.next_due_at), "history"));
+  }
+
+  // restore_pending / ac_mode_restore_pending are also set while assist is
+  // still active (pending confirmation of the initial socSet/acMode write),
+  // so only surface them as restore facts once assist has finished and a
+  // restore-to-config is actually pending.
+  if (assist.status === "restore_pending") {
+    if (assist.restore_pending) {
+      rows.push(deviceValue("Max-SoC restore", "Pending", "warning"));
+    }
+    if (assist.ac_mode_restore_pending) {
+      rows.push(deviceValue("AC output mode", "Restore pending", "warning"));
+    }
+  }
+
+  const description = fullChargeAssistDescription(assist);
+  const message = assist.message || "";
+  const messageText = description
+    ? `${message}${message && !/[.!?]$/.test(message) ? "." : ""} ${description}`
+    : message;
+
+  return `
+    <div class="device-assist" data-assist-status="${escapeHtml(assist.status)}">
+      <div class="device-assist-head">
+        <span class="device-assist-title">${icon("battery")} Full-charge assist</span>
+        <span class="pill ${meta.tone}">${icon(meta.icon)}${escapeHtml(meta.label)}</span>
+      </div>
+      <div class="control-note device-assist-message">${escapeHtml(messageText)}</div>
+      <div class="device-values device-assist-values">
+        ${rows.join("")}
+      </div>
+    </div>
+  `;
 }
 
 function deviceValue(label, value, iconName = "rule") {
