@@ -25,7 +25,13 @@ from urllib.request import Request, urlopen
 from dashboard import auth as dashboard_auth
 
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+from ems.paths import (
+    BASE_DIR,
+    resolve_project_path,
+    resolve_runtime_path,
+    resolve_dashboard_auth_path,
+)
+
 DEFAULT_CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 DOCKER_CONFIG_PATH = os.path.join(BASE_DIR, "config", "config.json")
 DEFAULT_RUNTIME_STATE_PATH = os.path.join(BASE_DIR, "runtime-state.json")
@@ -601,41 +607,6 @@ def resolve_config_path(args):
         return DOCKER_CONFIG_PATH
 
     return DEFAULT_CONFIG_PATH
-
-
-def resolve_runtime_path(args, config):
-    if args.runtime_state:
-        path = args.runtime_state
-    else:
-        path = (
-            config.get("system", {})
-            .get("runtime_state_path", "runtime-state.json")
-        )
-
-    if not os.path.isabs(path):
-        path = os.path.join(BASE_DIR, path)
-
-    return path
-
-
-def resolve_dashboard_auth_path(args, config):
-    path = args.dashboard_auth or (
-        config.get("dashboard", {})
-        .get("auth_file", dashboard_auth.DEFAULT_AUTH_FILE)
-    )
-
-    if not os.path.isabs(path):
-        path = os.path.join(BASE_DIR, path)
-
-    return path
-
-
-def resolve_project_path(path):
-    if not path:
-        return path
-    if os.path.isabs(path):
-        return path
-    return os.path.join(BASE_DIR, path)
 
 
 DIAGNOSE_REDACT_KEYWORDS = (

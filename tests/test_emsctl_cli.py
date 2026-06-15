@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import emsctl
+from ems import paths as ems_paths
 from ems.state_store import BatteryFullChargeStateStore
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -175,6 +176,9 @@ def write_discovery_config(path, runtime_state_path=None, auth_file=None):
 
 def patch_emsctl_base(monkeypatch, base_dir):
     monkeypatch.setattr(emsctl, "BASE_DIR", str(base_dir))
+    # resolve_runtime_path / resolve_dashboard_auth_path now live in ems.paths
+    # and read its module-level BASE_DIR.
+    monkeypatch.setattr(ems_paths, "BASE_DIR", str(base_dir))
     monkeypatch.setattr(
         emsctl,
         "DEFAULT_CONFIG_PATH",
