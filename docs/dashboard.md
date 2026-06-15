@@ -49,6 +49,8 @@ The Diagnose tab runs the read-only `emsctl diagnose` profiles
 versioned report contract (status pills, sections, root causes). It can also
 download a redacted support bundle as a ZIP.
 
+![Dashboard Diagnose tab screenshot](assets/preview-diagnose.jpg)
+
 This tab is **operator-only**: it requires a configured dashboard password and an
 authenticated session. With no password configured it shows a "configure a
 password" empty state; logged out it shows "login required". Runs are
@@ -71,6 +73,8 @@ sanitized server-side and HTML-escaped in the browser; an optional redaction
 toggle (`dashboard.log_redaction`) masks secret-looking values for shared/remote
 deployments (raw by default for authenticated operators).
 
+![Dashboard Logs tab screenshot](assets/preview-logs.jpg)
+
 ## Configuration
 
 The dashboard section in `config.json` controls startup:
@@ -88,7 +92,11 @@ The dashboard section in `config.json` controls startup:
     "ssl_enabled": false,
     "ssl_cert_file": "config/dashboard.crt",
     "ssl_key_file": "config/dashboard.key",
-    "ssl_auto_generate": true
+    "ssl_auto_generate": true,
+    "session_idle_timeout_seconds": 1800,
+    "session_absolute_max_seconds": 43200,
+    "log_buffer_lines": 5000,
+    "log_redaction": false
   },
   "energy_savings": {
     "enabled": true,
