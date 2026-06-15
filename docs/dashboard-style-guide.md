@@ -53,6 +53,16 @@ pipeline below them.
 - Apply actions use `.primary-button.compact` at the bottom of each card.
 - Feedback must be written with `textContent`, never by injecting untrusted HTML.
 
+## Diagnose And Logs Tabs
+
+The Diagnose and Logs tabs use the **Control / Energy stage style**. Diagnose
+sections reuse `.control-pipeline-stage` cards and the existing tone pills
+(`tone-send` / `tone-warn` / `tone-blocked`) for status; the Logs view is a
+compact monospace region using the existing color tokens for level accents. They
+do not introduce a new visual system. Both are operator-only and render the
+configure-password / login-required empty states the same way the runtime panel
+does.
+
 ## Security And Data Handling
 
 - Do not bypass the existing authentication, session, CSRF, or runtime write

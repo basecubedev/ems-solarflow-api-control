@@ -260,6 +260,20 @@ When enabled, `dashboard.ssl_cert_file` and `dashboard.ssl_key_file` are used.
 If either file is missing and `dashboard.ssl_auto_generate=true`, EMS creates a
 self-signed LAN certificate and restricts the private-key file permissions.
 
+`dashboard.session_idle_timeout_seconds` (default `1800`) is the login idle
+timeout that slides on genuine user activity. `dashboard.session_absolute_max_seconds`
+(default `43200`) is the hard cap on a session's lifetime measured from login.
+For both, `0` disables the bound (an explicit "infinite" opt-in) and negative
+values are rejected back to the default. The secure defaults are 30 min / 12 h;
+disabling a bound weakens the "walk away → logged out" and stolen-cookie
+protections.
+
+`dashboard.log_buffer_lines` (default `5000`) sizes the in-memory log ring buffer
+that backs the Logs tab. It is count-based, so quieter systems retain a longer
+window; ~5000 lines covers well over 15 minutes at typical settings and costs a
+few MB of RAM. `dashboard.log_redaction` (default `false`) masks secret-looking
+values in served log lines; enable it for shared/remote deployments.
+
 Dashboard write requests are constrained by the configured system and device
 power limits. For example, a runtime `max_total_power` update cannot exceed the
 configured `system.max_total_power`, and a device runtime `max_power` update
