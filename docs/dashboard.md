@@ -42,6 +42,39 @@ from the local SQLite aggregates.
 
 ![Energy statistics demo screenshot](assets/preview-energy.jpg)
 
+## Diagnose View
+
+The Diagnose tab runs the read-only `emsctl diagnose` profiles
+(Install / Deep / Hardware / Control / Quality) from the browser and renders the
+versioned report contract (status pills, sections, root causes). It can also
+download a redacted support bundle as a ZIP.
+
+![Dashboard Diagnose tab screenshot](assets/preview-diagnose.jpg)
+
+This tab is **operator-only**: it requires a configured dashboard password and an
+authenticated session. With no password configured it shows a "configure a
+password" empty state; logged out it shows "login required". Runs are
+snapshot-only (no `--sample-seconds` sleeping over HTTP), single-flighted so they
+cannot be hammered, and the served report is passed through secret redaction as
+defense-in-depth.
+
+## Logs View
+
+The Logs tab tails the EMS service log from an in-memory ring buffer (the stock
+service writes no log file). It polls incrementally, supports a display **Filter**
+(severity), a follow/auto-scroll toggle, and bounds the rendered rows. A separate
+**Service** level selector changes the running service's log verbosity live
+(e.g. switch to Debug to surface debug lines that are otherwise not emitted); the
+display Filter only hides what is already in the buffer, so raising the Service
+level is what actually produces more lines. The Service selector is a write
+action (session + CSRF) and is disabled until authenticated. Like Diagnose it is
+**operator-only** behind an authenticated session. Lines are control-character
+sanitized server-side and HTML-escaped in the browser; an optional redaction
+toggle (`dashboard.log_redaction`) masks secret-looking values for shared/remote
+deployments (raw by default for authenticated operators).
+
+![Dashboard Logs tab screenshot](assets/preview-logs.jpg)
+
 ## Configuration
 
 The dashboard section in `config.json` controls startup:
@@ -59,7 +92,11 @@ The dashboard section in `config.json` controls startup:
     "ssl_enabled": false,
     "ssl_cert_file": "config/dashboard.crt",
     "ssl_key_file": "config/dashboard.key",
-    "ssl_auto_generate": true
+    "ssl_auto_generate": true,
+    "session_idle_timeout_seconds": 1800,
+    "session_absolute_max_seconds": 43200,
+    "log_buffer_lines": 5000,
+    "log_redaction": false
   },
   "energy_savings": {
     "enabled": true,
@@ -225,6 +262,7 @@ Auth and runtime APIs:
 GET  /api/auth/status
 POST /api/auth/login
 POST /api/auth/logout
+POST /api/auth/refresh
 GET  /api/runtime
 PATCH /api/runtime/system
 PATCH /api/runtime/ha
@@ -232,4 +270,43 @@ PATCH /api/runtime/winter
 PATCH /api/runtime/device/<name>
 ```
 
-The `PATCH` endpoints require a valid login session and `X-CSRF-Token`.
+The `PATCH` endpoints and `POST /api/auth/refresh` require a valid login session
+and `X-CSRF-Token`.
+
+Operator-only diagnostics and logs (require an authenticated session; GET-only,
+no CSRF since they are side-effect-free):
+
+```text
+GET /api/diagnose?profile=install|deep|hardware|control|control_quality
+GET /api/diagnose/support-bundle
+GET /api/logs?after=<seq>&limit=<n>&level=<min-level>
+```
+
+Changing the service's runtime log verbosity is a state change and uses the
+write-auth path (session + `X-CSRF-Token`):
+
+```text
+POST /api/logs/level   body {"level": "DEBUG|INFO|WARNING|ERROR|CRITICAL"}
+```
+
+`/api/logs` returns `{lines, cursor, dropped}`; pass the returned `cursor` as the
+next `after` for incremental polling. `dropped` is `true` when the ring buffer
+rolled past the caller's cursor.
+
+## Session Lifetime
+
+A login session's idle timeout slides on genuine user interaction (a throttled
+`POST /api/auth/refresh` heartbeat; background polling does not count), bounded
+by an absolute maximum lifetime measured from login. Closing the browser logs
+out immediately (the session cookie has no `Max-Age`); walking away with the tab
+open logs out within the idle timeout.
+
+Both timeouts are configurable; `0` disables a bound (an explicit "infinite"
+opt-in) and negative values are rejected back to the secure default:
+
+- `dashboard.session_idle_timeout_seconds` — default `1800` (30 min)
+- `dashboard.session_absolute_max_seconds` — default `43200` (12 h)
+
+The secure defaults are 30 min / 12 h. Setting either to `0` weakens the
+"walk away → logged out" property and the stolen-cookie bound; it is an explicit
+per-deployment operator choice.

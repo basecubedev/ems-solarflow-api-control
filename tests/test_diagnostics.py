@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import emsctl
+from ems import diagnostics
 from ems import paths as ems_paths
 from ems.state_store import BatteryFullChargeStateStore
 
@@ -107,6 +108,48 @@ def test_emsctl_diagnose_json_is_read_only_and_hides_sensitive_values(tmp_path):
     )
     assert secret not in result.stdout
     assert not (tmp_path / "runtime-state.json").exists()
+
+
+def test_diagnose_redact_report_for_http_masks_structured_and_text_secrets():
+    secret = "super-secret-token"
+    report = {
+        "schema_version": 1,
+        "diagnosis": {
+            "status": "warning",
+            "metrics": {
+                "token": secret,
+                "ok_count": 1,
+            },
+            "warnings": [f"request failed with token={secret}"],
+            "errors": [f"http://user:{secret}@example.test/properties/report"],
+            "sections": [
+                {
+                    "id": "hardware",
+                    "checks": [
+                        {
+                            "code": "zendure_device_config_incomplete",
+                            "missing": ["ip", "sn"],
+                            "message": f"URL contains token={secret}",
+                        }
+                    ],
+                }
+            ],
+            "root_causes": [],
+        },
+    }
+
+    redacted = diagnostics.diagnose_redact_report_for_http(report)
+    encoded = json.dumps(redacted, sort_keys=True)
+
+    assert secret not in encoded
+    assert redacted["diagnosis"]["metrics"]["token"] == "<redacted>"
+    assert redacted["diagnosis"]["metrics"]["ok_count"] == 1
+    assert "<redacted>" in redacted["diagnosis"]["warnings"][0]
+    assert "http://<redacted>:<redacted>@example.test" in redacted["diagnosis"]["errors"][0]
+    check = redacted["diagnosis"]["sections"][0]["checks"][0]
+    assert check["missing"] == ["ip", "sn"]
+    assert secret not in check["message"]
+    json.dumps(redacted, sort_keys=True)
 
 
 def test_emsctl_diagnose_json_contains_v2_structure(tmp_path):

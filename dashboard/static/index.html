@@ -56,6 +56,8 @@
               <button type="button" data-flow-view="devices" role="tab" aria-selected="false">Devices</button>
               <button type="button" data-flow-view="control" role="tab" aria-selected="false">Control</button>
               <button type="button" data-flow-view="energy" role="tab" aria-selected="false">Energy</button>
+              <button type="button" data-flow-view="diagnose" role="tab" aria-selected="false">Diagnose</button>
+              <button type="button" data-flow-view="logs" role="tab" aria-selected="false">Logs</button>
             </div>
           </div>
         </div>
@@ -198,6 +200,67 @@
                 </div>
               </div>
               <div id="energyStats" class="energy-stats-board"></div>
+            </section>
+          </div>
+          <div id="diagnoseView" class="diagnose-view" hidden>
+            <section class="diagnose-panel" aria-label="Diagnostics">
+              <div class="section-heading diagnose-heading">
+                <div>
+                  <h2>Diagnose</h2>
+                  <p>Run read-only EMS diagnostics from the browser.</p>
+                </div>
+              </div>
+              <div class="diagnose-controls">
+                <div class="diagnose-profiles" role="tablist" aria-label="Diagnose profile">
+                  <button type="button" class="diagnose-profile active" data-diagnose-profile="install" aria-selected="true">Install</button>
+                  <button type="button" class="diagnose-profile" data-diagnose-profile="deep" aria-selected="false">Deep</button>
+                  <button type="button" class="diagnose-profile" data-diagnose-profile="hardware" aria-selected="false">Hardware</button>
+                  <button type="button" class="diagnose-profile" data-diagnose-profile="control" aria-selected="false">Control</button>
+                  <button type="button" class="diagnose-profile" data-diagnose-profile="control_quality" aria-selected="false">Quality</button>
+                </div>
+                <div class="diagnose-actions">
+                  <button type="button" id="diagnoseRun" class="primary-button compact">Run</button>
+                  <button type="button" id="diagnoseCopy" class="primary-button compact" hidden>Copy JSON</button>
+                  <button type="button" id="diagnoseBundle" class="primary-button compact">Download support bundle</button>
+                </div>
+              </div>
+              <p id="diagnoseStatus" class="diagnose-status" role="status"></p>
+              <div id="diagnoseResults" class="diagnose-results"></div>
+            </section>
+          </div>
+          <div id="logsView" class="logs-view" hidden>
+            <section class="logs-panel" aria-label="Service logs">
+              <div class="section-heading logs-heading">
+                <div>
+                  <h2>Logs</h2>
+                  <p>Recent EMS service log output (in-memory).</p>
+                </div>
+              </div>
+              <div class="logs-controls">
+                <label class="logs-level">Filter
+                  <select id="logsLevel">
+                    <option value="">All</option>
+                    <option value="DEBUG">Debug</option>
+                    <option value="INFO" selected>Info</option>
+                    <option value="WARNING">Warning</option>
+                    <option value="ERROR">Error</option>
+                  </select>
+                </label>
+                <label class="logs-level">Service
+                  <select id="logsServiceLevel" disabled>
+                    <option value="DEBUG">Debug</option>
+                    <option value="INFO">Info</option>
+                    <option value="WARNING">Warning</option>
+                    <option value="ERROR">Error</option>
+                  </select>
+                </label>
+                <label class="logs-follow">
+                  <input type="checkbox" id="logsFollow" checked> Follow
+                </label>
+                <button type="button" id="logsClear" class="primary-button compact">Clear</button>
+              </div>
+              <p id="logsStatus" class="logs-status" role="status"></p>
+              <div id="logsOutput" class="logs-output" role="log" aria-live="polite"></div>
             </section>
           </div>
         </div>

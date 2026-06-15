@@ -226,6 +226,19 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
 .flow-panel, .rules-panel, .chart-panel { padding: 10px; }
 .shell.view-energy > .devices-section,
 .shell.view-energy > .chart-panel { display: none; }
+/* Diagnose and Logs are full-width operator views: hide the devices list, the
+   history chart and the redundant outer "Live Flow" heading (their own panels
+   carry the heading). The tab bar in .flow-heading-controls stays visible. */
+.shell.view-diagnose > .devices-section,
+.shell.view-diagnose > .chart-panel,
+.shell.view-logs > .devices-section,
+.shell.view-logs > .chart-panel { display: none; }
+.shell.view-diagnose .flow-panel > .section-heading > h2,
+.shell.view-logs .flow-panel > .section-heading > h2 { display: none; }
+/* With the heading hidden the flex row loses its space-between anchor, so keep
+   the tab bar right-aligned. */
+.shell.view-diagnose .flow-panel > .section-heading,
+.shell.view-logs .flow-panel > .section-heading { justify-content: flex-end; }
 .section-heading { position: relative; justify-content: space-between; gap: 10px; margin-bottom: 7px; }
 .flow-wrap {
   position: relative; overflow: hidden; min-height: 242px; border: 1px solid rgba(148,163,184,.12); border-radius: 18px;
@@ -805,6 +818,16 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
 .flow-wrap.view-aggregated .device-flow-view,
 .flow-wrap.view-aggregated .control-explain-view,
 .flow-wrap.view-aggregated .energy-stats-view { display: none !important; }
+/* Diagnose/Logs show only their own panel: force-hide the flow chart and the
+   other views (the hidden attribute alone loses to the base display rules). */
+.flow-wrap.view-diagnose #flowSvg,
+.flow-wrap.view-diagnose .device-flow-view,
+.flow-wrap.view-diagnose .control-explain-view,
+.flow-wrap.view-diagnose .energy-stats-view,
+.flow-wrap.view-logs #flowSvg,
+.flow-wrap.view-logs .device-flow-view,
+.flow-wrap.view-logs .control-explain-view,
+.flow-wrap.view-logs .energy-stats-view { display: none !important; }
 .flow-wrap.view-devices .device-flow-view { display: block !important; }
 .flow-wrap.view-control .control-explain-view { display: block !important; }
 .flow-wrap.view-energy .energy-stats-view { display: block !important; }
@@ -1777,3 +1800,159 @@ canvas { width: 100%; min-height: 94px; border: 1px solid rgba(148,163,184,.13);
   .charts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   canvas { min-height: 72px; }
 }
+
+/* Diagnose tab — Control / Energy stage style (see docs/dashboard-style-guide.md) */
+/* position/z-index lift the panel above the decorative .flow-wrap::before grid
+   overlay so its (statically positioned) profile buttons remain clickable. */
+.diagnose-view { position: relative; z-index: 1; padding: 4px 2px; }
+.diagnose-heading h2 { margin: 0; }
+.diagnose-heading p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+.diagnose-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  margin: 12px 0 8px;
+}
+.diagnose-profiles { display: flex; flex-wrap: wrap; gap: 6px; }
+.diagnose-profile {
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(148,163,184,.05);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.diagnose-profile.active {
+  color: var(--text);
+  border-color: rgba(34,211,238,.32);
+  background: rgba(34,211,238,.08);
+}
+.diagnose-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.diagnose-status { margin: 4px 0; color: var(--muted); font-size: 12px; min-height: 16px; }
+.diagnose-results { display: flex; flex-direction: column; gap: 8px; }
+.diagnose-empty {
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(148,163,184,.04);
+  color: var(--muted);
+  font-size: 13px;
+}
+.diagnose-report-head,
+.diagnose-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.diagnose-report-head { margin-bottom: 4px; }
+.diagnose-section { padding: 10px 12px; }
+.diagnose-section-title {
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.diagnose-sections { display: flex; flex-direction: column; gap: 8px; }
+.diagnose-metrics {
+  margin: 0 0 8px;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+}
+.diagnose-metric span {
+  text-transform: uppercase;
+}
+.diagnose-global-list {
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+.diagnose-global-error {
+  border-color: rgba(248,113,113,.32);
+}
+.diagnose-global-warning {
+  border-color: rgba(251,191,36,.28);
+}
+.diagnose-lines { margin: 6px 0 0; padding-left: 16px; color: var(--muted); font-size: 12px; }
+.diagnose-lines li { margin: 2px 0; }
+.diagnose-line-ok { color: var(--muted2); list-style: none; margin-left: -16px; }
+.diagnose-root-causes { display: flex; flex-direction: column; gap: 6px; }
+.diagnose-root-cause {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(148,163,184,.04);
+}
+.diagnose-root-title { font-size: 12px; font-weight: 800; color: var(--text); }
+.diagnose-root-message { font-size: 12px; color: var(--muted); }
+.diagnose-root-hint { font-size: 11px; color: var(--muted2); margin-top: 2px; }
+
+/* Logs tab — Control / Energy stage style (see docs/dashboard-style-guide.md) */
+/* Lift above the decorative .flow-wrap::before grid overlay (see diagnose-view). */
+.logs-view { position: relative; z-index: 1; padding: 4px 2px; }
+.logs-heading h2 { margin: 0; }
+.logs-heading p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+.logs-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin: 12px 0 8px;
+}
+.logs-level,
+.logs-follow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.logs-level select {
+  background: rgba(148,163,184,.06);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 3px 8px;
+  font-size: 12px;
+}
+.logs-level select:disabled { opacity: .5; cursor: not-allowed; }
+/* The native dropdown popup defaults to a light background; give options the
+   dark theme colors so text is readable (not white-on-white). Applies to all
+   dashboard selects for consistency. */
+select option,
+select optgroup {
+  background-color: var(--bg2);
+  color: var(--text);
+}
+.logs-status { margin: 4px 0; color: var(--muted); font-size: 12px; min-height: 16px; }
+.logs-output {
+  max-height: 360px;
+  overflow-y: scroll;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(15,23,42,.45);
+  padding: 8px 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.logs-empty { color: var(--muted); font-size: 13px; padding: 8px 2px; }
+.logs-row { display: flex; gap: 8px; white-space: pre-wrap; word-break: break-word; }
+.logs-time { color: var(--muted2); flex: 0 0 auto; }
+.logs-row .logs-level { flex: 0 0 64px; }
+.logs-message { color: var(--text); flex: 1 1 auto; }
+.logs-row.log-debug .logs-level { color: var(--muted2); }
+.logs-row.log-info .logs-level { color: var(--accent2); }
+.logs-row.log-warning .logs-level { color: #ffd166; }
+.logs-row.log-error .logs-level { color: var(--danger); }

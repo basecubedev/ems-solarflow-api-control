@@ -82,7 +82,11 @@
     "ssl_enabled": false,
     "ssl_cert_file": "config/dashboard.crt",
     "ssl_key_file": "config/dashboard.key",
-    "ssl_auto_generate": true
+    "ssl_auto_generate": true,
+    "session_idle_timeout_seconds": 1800,
+    "session_absolute_max_seconds": 43200,
+    "log_buffer_lines": 5000,
+    "log_redaction": false
   },
 
   "energy_savings": {

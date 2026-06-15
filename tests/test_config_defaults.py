@@ -56,6 +56,13 @@ def test_config_template_dashboard_matches_code_defaults():
     assert without_comment_keys(template["dashboard"]) == DASHBOARD_DEFAULTS
 
 
+def test_dashboard_defaults_include_session_and_log_settings():
+    assert DASHBOARD_DEFAULTS["session_idle_timeout_seconds"] == 1800
+    assert DASHBOARD_DEFAULTS["session_absolute_max_seconds"] == 43200
+    assert DASHBOARD_DEFAULTS["log_buffer_lines"] == 5000
+    assert DASHBOARD_DEFAULTS["log_redaction"] is False
+
+
 def test_config_template_energy_savings_matches_code_defaults():
     template = json.loads(Path("config.template.json").read_text())
 
@@ -338,5 +345,72 @@ def test_omitted_ha_section_defaults_to_disabled(tmp_path):
         assert cfg.HA_CONTROL_ENABLED is False
         assert cfg.HA_URL == ""
         assert cfg.HA_TOKEN == ""
+    finally:
+        restore_config_module(snapshot)
+
+
+def test_safe_session_timeout_parsing():
+    # explicit positive value preserved
+    assert cfg.safe_session_timeout(900, 1800) == 900
+    assert cfg.safe_session_timeout("600", 1800) == 600
+    # 0 is a deliberate "disabled / infinite" opt-in and is preserved
+    assert cfg.safe_session_timeout(0, 1800) == 0
+    # negative typo must fall back to the secure default, never silently disable
+    assert cfg.safe_session_timeout(-5, 1800) == 1800
+    # invalid / missing values fall back to the default
+    assert cfg.safe_session_timeout("nope", 1800) == 1800
+    assert cfg.safe_session_timeout(None, 43200) == 43200
+
+
+def test_dashboard_config_missing_keys_fall_back_to_defaults(tmp_path):
+    snapshot = snapshot_config_module()
+    values = base_minimal_config()
+    values["dashboard"] = {
+        "enabled": True,
+        "host": "127.0.0.1",
+    }
+
+    try:
+        initialize_config_from_dict(tmp_path, values)
+
+        assert cfg.DASHBOARD_CONFIG["host"] == "127.0.0.1"
+        assert cfg.DASHBOARD_CONFIG["session_idle_timeout_seconds"] == 1800
+        assert cfg.DASHBOARD_CONFIG["session_absolute_max_seconds"] == 43200
+        assert cfg.DASHBOARD_CONFIG["log_buffer_lines"] == 5000
+        assert cfg.DASHBOARD_CONFIG["log_redaction"] is False
+    finally:
+        restore_config_module(snapshot)
+
+
+def test_dashboard_session_timeout_zero_is_accepted(tmp_path):
+    snapshot = snapshot_config_module()
+    values = base_minimal_config()
+    values["dashboard"] = {
+        "session_idle_timeout_seconds": 0,
+        "session_absolute_max_seconds": 0,
+    }
+
+    try:
+        initialize_config_from_dict(tmp_path, values)
+
+        assert cfg.DASHBOARD_CONFIG["session_idle_timeout_seconds"] == 0
+        assert cfg.DASHBOARD_CONFIG["session_absolute_max_seconds"] == 0
+    finally:
+        restore_config_module(snapshot)
+
+
+def test_dashboard_negative_session_timeout_falls_back_to_defaults(tmp_path):
+    snapshot = snapshot_config_module()
+    values = base_minimal_config()
+    values["dashboard"] = {
+        "session_idle_timeout_seconds": -1,
+        "session_absolute_max_seconds": -20,
+    }
+
+    try:
+        initialize_config_from_dict(tmp_path, values)
+
+        assert cfg.DASHBOARD_CONFIG["session_idle_timeout_seconds"] == 1800
+        assert cfg.DASHBOARD_CONFIG["session_absolute_max_seconds"] == 43200
     finally:
         restore_config_module(snapshot)

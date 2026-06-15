@@ -1350,9 +1350,27 @@ def diagnose_redact_value(value):
 
 def diagnose_redact_text(text):
     redacted = text
+    redacted = re.sub(r"(?i)(https?://)([^/\s:@\"]+):([^@\s/\"]+)@", r"\1<redacted>:<redacted>@", redacted)
     redacted = re.sub(r"(?i)(token|password|passwd|secret|authorization|bearer|cookie|session|auth)([\"'\s:=]+)([^\"'\s,}]+)", r"\1\2<redacted>", redacted)
     redacted = re.sub(r"(?i)(sn|serial|device_id|api[_-]?key)([\"'\s:=]+)([^\"'\s,}]+)", r"\1\2<redacted>", redacted)
     return redacted
+
+
+def diagnose_redact_report_for_http(report):
+    return diagnose_redact_text_values(diagnose_redact_value(report))
+
+
+def diagnose_redact_text_values(value):
+    if isinstance(value, dict):
+        return {
+            key: diagnose_redact_text_values(child)
+            for key, child in value.items()
+        }
+    if isinstance(value, list):
+        return [diagnose_redact_text_values(item) for item in value]
+    if isinstance(value, str):
+        return diagnose_redact_text(value)
+    return value
 
 
 def diagnose_support_bundle_path(output):

@@ -15,7 +15,23 @@ const state = {
   runtime: null,
   runtimeEditorDirty: false,
   runtimeEditorFocused: false,
+  diagnose: {
+    profile: "install",
+    report: null,
+    running: false,
+  },
+  logs: {
+    cursor: 0,
+    lines: [],
+    follow: true,
+    level: "INFO",
+    serviceLevel: "INFO",
+    timerId: null,
+  },
 };
+
+const MAX_LOG_ROWS = 1000;
+const LOG_POLL_INTERVAL_MS = 2000;
 
 const SOC_ANIMATION_EPSILON = 0.1;
 const SSE_TELEMETRY_TIMEOUT_MS = 3000;
@@ -1935,7 +1951,7 @@ function acStateIcon(device) {
 }
 
 function setFlowView(view, persist = true) {
-  const nextView = ["aggregated", "devices", "control", "energy"].includes(view)
+  const nextView = ["aggregated", "devices", "control", "energy", "diagnose", "logs"].includes(view)
     ? view
     : "aggregated";
   state.flowView = nextView;
@@ -1944,6 +1960,8 @@ function setFlowView(view, persist = true) {
   const deviceView = $("deviceFlowView");
   const controlView = $("controlExplainView");
   const energyView = $("energyStatsView");
+  const diagnoseView = $("diagnoseView");
+  const logsView = $("logsView");
   const wrap = document.querySelector ? document.querySelector(".flow-wrap") : null;
   const shell = document.querySelector ? document.querySelector(".shell") : null;
 
@@ -1951,14 +1969,20 @@ function setFlowView(view, persist = true) {
   if (deviceView) deviceView.hidden = nextView !== "devices";
   if (controlView) controlView.hidden = nextView !== "control";
   if (energyView) energyView.hidden = nextView !== "energy";
+  if (diagnoseView) diagnoseView.hidden = nextView !== "diagnose";
+  if (logsView) logsView.hidden = nextView !== "logs";
   if (wrap?.classList) {
     wrap.classList.toggle("view-devices", nextView === "devices");
     wrap.classList.toggle("view-aggregated", nextView === "aggregated");
     wrap.classList.toggle("view-control", nextView === "control");
     wrap.classList.toggle("view-energy", nextView === "energy");
+    wrap.classList.toggle("view-diagnose", nextView === "diagnose");
+    wrap.classList.toggle("view-logs", nextView === "logs");
   }
   if (shell?.classList) {
     shell.classList.toggle("view-energy", nextView === "energy");
+    shell.classList.toggle("view-diagnose", nextView === "diagnose");
+    shell.classList.toggle("view-logs", nextView === "logs");
   }
 
   document.querySelectorAll("[data-flow-view]").forEach((button) => {
@@ -1978,6 +2002,16 @@ function setFlowView(view, persist = true) {
   if (nextView === "devices" && pendingDeviceFlowBatteryAnimation && deviceView) {
     pendingDeviceFlowBatteryAnimation = false;
     animateDeviceBatteryFills(deviceView);
+  }
+
+  if (nextView === "diagnose") {
+    renderDiagnoseView();
+  }
+
+  if (nextView === "logs") {
+    startLogsPolling();
+  } else {
+    stopLogsPolling();
   }
 }
 
@@ -2163,6 +2197,440 @@ function initFlowViewSwitch() {
   document.querySelectorAll("[data-flow-view]").forEach((button) => {
     button.addEventListener("click", () => setFlowView(button.dataset.flowView));
   });
+}
+
+const DIAGNOSE_STATUS_TONE = {
+  ok: "tone-send",
+  warning: "tone-warn",
+  error: "tone-blocked",
+  unknown: "tone-skip",
+};
+
+function diagnoseStatusTone(status) {
+  return DIAGNOSE_STATUS_TONE[status] || "tone-skip";
+}
+
+function diagnoseAuthState() {
+  if (!state.auth.configured) {
+    return `
+      <div class="diagnose-empty">
+        Configure a dashboard password to enable diagnostics.
+      </div>`;
+  }
+  if (!state.auth.authenticated) {
+    return `
+      <div class="diagnose-empty">
+        Login required to run diagnostics.
+      </div>`;
+  }
+  return "";
+}
+
+function renderDiagnoseSection(section) {
+  const status = String(section.status || "unknown");
+  const messages = []
+    .concat(section.errors || [])
+    .concat(section.warnings || []);
+  const lines = messages.length
+    ? messages
+        .map((message) => `<li>${escapeHtml(message)}</li>`)
+        .join("")
+    : "<li class=\"diagnose-line-ok\">No issues reported.</li>";
+  return `
+    <div class="diagnose-section control-pipeline-stage">
+      <div class="diagnose-section-head">
+        <span class="diagnose-section-title">${escapeHtml(section.title || section.id || "Section")}</span>
+        <span class="pill ${diagnoseStatusTone(status)}">${escapeHtml(status.toUpperCase())}</span>
+      </div>
+      <ul class="diagnose-lines">${lines}</ul>
+    </div>`;
+}
+
+function renderDiagnoseMetrics(metrics) {
+  if (!metrics || typeof metrics !== "object" || Array.isArray(metrics)) return "";
+  const entries = Object.entries(metrics);
+  if (!entries.length) return "";
+  const items = entries
+    .map(([key, value]) => `
+      <span class="diagnose-metric control-fact role-input">
+        <span class="value-icon" aria-hidden="true">${icon("rule")}</span>
+        <span class="control-label">${escapeHtml(String(key).replaceAll("_", " "))}</span>
+        <strong>${escapeHtml(String(value))}</strong>
+      </span>`)
+    .join("");
+  return `<div class="diagnose-metrics control-stage-values">${items}</div>`;
+}
+
+function renderDiagnoseGlobalList(title, items, tone) {
+  if (!Array.isArray(items) || !items.length) return "";
+  const lines = items
+    .map((item) => `<li>${escapeHtml(String(item))}</li>`)
+    .join("");
+  return `
+    <div class="diagnose-global-list diagnose-global-${tone} control-pipeline-stage">
+      <div class="diagnose-section-head">
+        <span class="diagnose-section-title">${escapeHtml(title)}</span>
+        <span class="pill ${diagnoseStatusTone(tone)}">${escapeHtml(tone.toUpperCase())}</span>
+      </div>
+      <ul class="diagnose-lines">${lines}</ul>
+    </div>`;
+}
+
+function renderDiagnoseRootCauses(rootCauses) {
+  if (!Array.isArray(rootCauses) || !rootCauses.length) return "";
+  const items = rootCauses
+    .map((cause) => {
+      const severity = String(cause.severity || "info");
+      return `
+        <div class="diagnose-root-cause">
+          <span class="pill ${diagnoseStatusTone(severity === "info" ? "ok" : severity)}">${escapeHtml(severity.toUpperCase())}</span>
+          <div>
+            <div class="diagnose-root-title">${escapeHtml(cause.title || cause.code || "")}</div>
+            <div class="diagnose-root-message">${escapeHtml(cause.message || "")}</div>
+            ${cause.suggested_next_check ? `<div class="diagnose-root-hint">${escapeHtml(cause.suggested_next_check)}</div>` : ""}
+          </div>
+        </div>`;
+    })
+    .join("");
+  return `<div class="diagnose-root-causes">${items}</div>`;
+}
+
+function renderDiagnoseReport(report) {
+  if (!report || typeof report !== "object") {
+    return `<div class="diagnose-empty">No diagnosis available.</div>`;
+  }
+  const diagnosis = report.diagnosis || {};
+  const status = String(diagnosis.status || report.status || "unknown");
+  const sections = Array.isArray(diagnosis.sections) ? diagnosis.sections : [];
+  const profile = String(report.profile || state.diagnose.profile || "install");
+
+  const header = `
+    <div class="diagnose-report-head">
+      <span class="diagnose-section-title">${escapeHtml(profile.toUpperCase())}</span>
+      <span class="pill ${diagnoseStatusTone(status)}">${escapeHtml(status.toUpperCase())}</span>
+    </div>`;
+  const rootCauses = renderDiagnoseRootCauses(diagnosis.root_causes);
+  const metrics = renderDiagnoseMetrics(diagnosis.metrics);
+  const warnings = renderDiagnoseGlobalList("Global warnings", diagnosis.warnings, "warning");
+  const errors = renderDiagnoseGlobalList("Global errors", diagnosis.errors, "error");
+  const body = sections.length
+    ? sections.map(renderDiagnoseSection).join("")
+    : `<div class="diagnose-empty">No sections reported.</div>`;
+
+  return `${header}${metrics}${errors}${warnings}${rootCauses}<div class="diagnose-sections">${body}</div>`;
+}
+
+function renderDiagnoseView() {
+  const results = $("diagnoseResults");
+  const status = $("diagnoseStatus");
+  const copyButton = $("diagnoseCopy");
+  if (!results) return;
+
+  const authState = diagnoseAuthState();
+  if (authState) {
+    results.innerHTML = authState;
+    if (status) status.textContent = "";
+    if (copyButton) copyButton.hidden = true;
+    return;
+  }
+
+  if (state.diagnose.report) {
+    results.innerHTML = renderDiagnoseReport(state.diagnose.report);
+    if (copyButton) copyButton.hidden = false;
+  } else {
+    results.innerHTML = `<div class="diagnose-empty">Select a profile and press Run.</div>`;
+    if (copyButton) copyButton.hidden = true;
+  }
+}
+
+function setDiagnoseStatus(message) {
+  const status = $("diagnoseStatus");
+  if (status) status.textContent = message;
+}
+
+async function runDiagnose(profile) {
+  if (state.diagnose.running) return;
+  if (!state.auth.authenticated) {
+    renderDiagnoseView();
+    return;
+  }
+  state.diagnose.running = true;
+  setDiagnoseStatus(`Running ${profile}…`);
+  try {
+    const response = await fetch(
+      `/api/diagnose?profile=${encodeURIComponent(profile)}`,
+      { credentials: "same-origin" }
+    );
+    if (!response.ok) {
+      const detail = await response.json().catch(() => ({}));
+      setDiagnoseStatus(`Diagnose failed (${response.status}${detail.error ? `: ${detail.error}` : ""}).`);
+      return;
+    }
+    state.diagnose.report = await response.json();
+    renderDiagnoseView();
+    setDiagnoseStatus("");
+  } catch {
+    setDiagnoseStatus("Diagnose request failed.");
+  } finally {
+    state.diagnose.running = false;
+  }
+}
+
+async function downloadSupportBundle() {
+  if (!state.auth.authenticated) {
+    renderDiagnoseView();
+    return;
+  }
+  setDiagnoseStatus("Building support bundle…");
+  try {
+    const response = await fetch("/api/diagnose/support-bundle", {
+      credentials: "same-origin",
+    });
+    if (!response.ok) {
+      setDiagnoseStatus(`Support bundle failed (${response.status}).`);
+      return;
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "ems-support-bundle.zip";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    setDiagnoseStatus("");
+  } catch {
+    setDiagnoseStatus("Support bundle request failed.");
+  }
+}
+
+function copyDiagnoseJson() {
+  if (!state.diagnose.report) return;
+  const text = JSON.stringify(state.diagnose.report, null, 2);
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(
+      () => setDiagnoseStatus("Copied report JSON to clipboard."),
+      () => setDiagnoseStatus("Could not copy to clipboard.")
+    );
+  }
+}
+
+function initDiagnose() {
+  document.querySelectorAll("[data-diagnose-profile]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const profile = button.dataset.diagnoseProfile;
+      state.diagnose.profile = profile;
+      document.querySelectorAll("[data-diagnose-profile]").forEach((other) => {
+        const active = other === button;
+        other.classList.toggle("active", active);
+        other.setAttribute("aria-selected", active ? "true" : "false");
+      });
+    });
+  });
+
+  const runButton = $("diagnoseRun");
+  if (runButton) {
+    runButton.addEventListener("click", () => runDiagnose(state.diagnose.profile));
+  }
+  const bundleButton = $("diagnoseBundle");
+  if (bundleButton) {
+    bundleButton.addEventListener("click", () => downloadSupportBundle());
+  }
+  const copyButton = $("diagnoseCopy");
+  if (copyButton) {
+    copyButton.addEventListener("click", () => copyDiagnoseJson());
+  }
+}
+
+const LOG_LEVEL_TONE = {
+  DEBUG: "log-debug",
+  INFO: "log-info",
+  WARNING: "log-warning",
+  ERROR: "log-error",
+  CRITICAL: "log-error",
+};
+
+function logsAuthState() {
+  if (!state.auth.configured) {
+    return `<div class="logs-empty">Configure a dashboard password to view logs.</div>`;
+  }
+  if (!state.auth.authenticated) {
+    return `<div class="logs-empty">Login required to view logs.</div>`;
+  }
+  return "";
+}
+
+function formatLogTimestamp(ts) {
+  if (typeof ts !== "number") return "";
+  const date = new Date(ts * 1000);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toISOString().slice(11, 19);
+}
+
+function renderLogRows(lines) {
+  return lines
+    .map((line) => {
+      const level = String(line.level || "INFO");
+      const tone = LOG_LEVEL_TONE[level] || "log-info";
+      return `<div class="logs-row ${tone}">`
+        + `<span class="logs-time">${escapeHtml(formatLogTimestamp(line.ts))}</span>`
+        + `<span class="logs-level">${escapeHtml(level)}</span>`
+        + `<span class="logs-message">${escapeHtml(line.message)}</span>`
+        + `</div>`;
+    })
+    .join("");
+}
+
+function trimLogRows(existing, incoming, max = MAX_LOG_ROWS) {
+  const combined = existing.concat(incoming);
+  return combined.length > max ? combined.slice(combined.length - max) : combined;
+}
+
+function applyLogs() {
+  const output = $("logsOutput");
+  if (!output) return;
+
+  updateServiceLevelControl();
+
+  const authState = logsAuthState();
+  if (authState) {
+    output.innerHTML = authState;
+    return;
+  }
+
+  output.innerHTML = renderLogRows(state.logs.lines);
+  if (state.logs.follow && typeof output.scrollTop === "number") {
+    output.scrollTop = output.scrollHeight;
+  }
+}
+
+function ingestLogLines(lines) {
+  if (!Array.isArray(lines) || !lines.length) return;
+  state.logs.lines = trimLogRows(state.logs.lines, lines);
+  applyLogs();
+}
+
+function setLogsStatus(message) {
+  const status = $("logsStatus");
+  if (status) status.textContent = message;
+}
+
+async function pollLogs() {
+  if (!state.auth.authenticated) {
+    applyLogs();
+    return;
+  }
+  try {
+    const params = new URLSearchParams({ after: String(state.logs.cursor) });
+    if (state.logs.level) params.set("level", state.logs.level);
+    const response = await fetch(`/api/logs?${params.toString()}`, {
+      credentials: "same-origin",
+    });
+    if (!response.ok) {
+      setLogsStatus(`Logs unavailable (${response.status}).`);
+      return;
+    }
+    const payload = await response.json();
+    state.logs.cursor = payload.cursor || state.logs.cursor;
+    ingestLogLines(payload.lines || []);
+    updateServiceLevelControl(payload.service_level);
+    setLogsStatus(payload.dropped ? "Some older lines were dropped." : "");
+  } catch {
+    setLogsStatus("Log request failed.");
+  }
+}
+
+function updateServiceLevelControl(serviceLevel) {
+  const select = $("logsServiceLevel");
+  if (!select) return;
+  // Changing the service verbosity is a write action -> only when authenticated.
+  select.disabled = !state.auth.authenticated;
+  if (serviceLevel) {
+    state.logs.serviceLevel = serviceLevel;
+    select.value = serviceLevel;
+  }
+}
+
+async function setServiceLogLevel(level) {
+  if (!state.auth.authenticated || !state.auth.csrfToken) return;
+  setLogsStatus(`Setting service log level to ${level}…`);
+  try {
+    const response = await fetch("/api/logs/level", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": state.auth.csrfToken,
+      },
+      body: JSON.stringify({ level }),
+    });
+    if (!response.ok) {
+      setLogsStatus(`Could not set level (${response.status}).`);
+      return;
+    }
+    const payload = await response.json();
+    state.logs.serviceLevel = payload.service_level;
+    setLogsStatus(`Service log level set to ${payload.service_level}.`);
+  } catch {
+    setLogsStatus("Set level request failed.");
+  }
+}
+
+function resetLogs() {
+  state.logs.cursor = 0;
+  state.logs.lines = [];
+  applyLogs();
+}
+
+function startLogsPolling() {
+  stopLogsPolling();
+  applyLogs();
+  if (!state.auth.authenticated) return;
+  pollLogs();
+  if (typeof setInterval === "function") {
+    state.logs.timerId = setInterval(pollLogs, LOG_POLL_INTERVAL_MS);
+  }
+}
+
+function stopLogsPolling() {
+  if (state.logs.timerId && typeof clearInterval === "function") {
+    clearInterval(state.logs.timerId);
+  }
+  state.logs.timerId = null;
+}
+
+function initLogs() {
+  const levelSelect = $("logsLevel");
+  if (levelSelect) {
+    state.logs.level = levelSelect.value;
+    levelSelect.addEventListener("change", () => {
+      state.logs.level = levelSelect.value;
+      resetLogs();
+      if (state.flowView === "logs") pollLogs();
+    });
+  }
+  const follow = $("logsFollow");
+  if (follow) {
+    state.logs.follow = Boolean(follow.checked);
+    follow.addEventListener("change", () => {
+      state.logs.follow = Boolean(follow.checked);
+      if (state.logs.follow) applyLogs();
+    });
+  }
+  const serviceSelect = $("logsServiceLevel");
+  if (serviceSelect) {
+    serviceSelect.addEventListener("change", () => {
+      setServiceLogLevel(serviceSelect.value);
+    });
+  }
+  const clear = $("logsClear");
+  if (clear) {
+    clear.addEventListener("click", () => {
+      state.logs.lines = [];
+      applyLogs();
+    });
+  }
 }
 
 function runtimeControlPanel() {
@@ -2500,9 +2968,24 @@ function renderAuthState() {
     statePill.textContent = state.auth.authenticated ? "Write mode" : "Read-only";
     statePill.className = state.auth.authenticated ? "pill" : "pill muted";
   }
-  if (!button) return;
-  button.hidden = !state.auth.configured;
-  button.textContent = state.auth.authenticated ? "Logout" : "Login";
+  if (button) {
+    button.hidden = !state.auth.configured;
+    button.textContent = state.auth.authenticated ? "Logout" : "Login";
+  }
+  // Keep the Diagnose tab's auth-gated empty state in sync with login/logout.
+  if (state.flowView === "diagnose") {
+    if (!state.auth.authenticated) state.diagnose.report = null;
+    renderDiagnoseView();
+  }
+  // Keep the Logs tab in sync: start/stop the poll loop on login/logout.
+  if (state.flowView === "logs") {
+    if (!state.auth.authenticated) {
+      stopLogsPolling();
+      resetLogs();
+    } else if (!state.logs.timerId) {
+      startLogsPolling();
+    }
+  }
 }
 
 function initAuthControls() {
@@ -3042,6 +3525,51 @@ function resetLiveTransportForTests() {
   state.liveTransport = "sse";
 }
 
+const HEARTBEAT_MIN_INTERVAL_MS = 60000;
+let lastHeartbeatAt = 0;
+
+function shouldSendHeartbeat(now, lastSent) {
+  return now - lastSent >= HEARTBEAT_MIN_INTERVAL_MS;
+}
+
+async function sendSessionHeartbeat() {
+  if (state.demoMode) return;
+  // Only a genuine, authenticated session slides; background polling never calls
+  // this, and without a CSRF token the server would reject it anyway.
+  if (!state.auth.authenticated || !state.auth.csrfToken) return;
+  const now = typeof Date !== "undefined" ? Date.now() : 0;
+  if (!shouldSendHeartbeat(now, lastHeartbeatAt)) return;
+  lastHeartbeatAt = now;
+  try {
+    const response = await fetch("/api/auth/refresh", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": state.auth.csrfToken },
+    });
+    if (response.status === 401 || response.status === 403) {
+      // Session expired or hit the absolute cap; refresh auth so the UI flips.
+      await loadAuthStatus();
+    }
+  } catch {
+    // Ignore transient failures; the next genuine interaction retries.
+  }
+}
+
+function handleSessionActivity() {
+  if (typeof document !== "undefined" && document.hidden) return;
+  sendSessionHeartbeat();
+}
+
+function initSessionHeartbeat() {
+  if (typeof document === "undefined" || !document.addEventListener) return;
+  ["mousemove", "keydown", "click"].forEach((eventName) => {
+    document.addEventListener(eventName, handleSessionActivity, { passive: true });
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) handleSessionActivity();
+  });
+}
+
 function initDashboardApp() {
   const rangeTabSelector = ".range-tabs button";
   document.querySelectorAll(rangeTabSelector).forEach((button) => {
@@ -3058,6 +3586,9 @@ function initDashboardApp() {
   initFlowViewSwitch();
   initAuthControls();
   initRuntimeForms();
+  initDiagnose();
+  initLogs();
+  initSessionHeartbeat();
   if (state.demoMode) {
     initDemoMode();
   } else {
@@ -3085,6 +3616,17 @@ if (typeof module !== "undefined") {
     deviceBatteryVisual,
     renderDevices,
     renderControlExplain,
+    setFlowView,
+    renderDiagnoseReport,
+    renderDiagnoseView,
+    diagnoseAuthState,
+    diagnoseStatusTone,
+    renderLogRows,
+    trimLogRows,
+    logsAuthState,
+    setServiceLogLevel,
+    shouldSendHeartbeat,
+    sendSessionHeartbeat,
     runtimeControlPanel,
     runtimeDeviceForm,
     runtimeNumber,

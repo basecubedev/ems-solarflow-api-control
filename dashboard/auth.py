@@ -142,25 +142,54 @@ def remove_auth_file(path):
 class Session:
     session_id: str
     csrf_token: str
-    expires_at: float
+    created_at: float
+    # None means "never expires" (a disabled timeout). Otherwise the wall-clock
+    # time at which the session becomes invalid.
+    expires_at: float = None
 
 
 class SessionStore:
-    def __init__(self, timeout_seconds=1800, time_fn=None):
-        self.timeout_seconds = int(timeout_seconds)
+    """Session store with idle-sliding bounded by an absolute lifetime.
+
+    ``timeout_seconds`` is the idle timeout that slides on genuine activity (via
+    :meth:`touch`); ``absolute_max_seconds`` is the hard cap measured from
+    session creation that sliding can never exceed. A value of ``0`` or ``None``
+    for either disables that bound (an explicit "infinite" opt-in). Negative
+    values are not expected here — they are rejected at config load — but are
+    treated as disabled defensively.
+    """
+
+    def __init__(self, timeout_seconds=1800, absolute_max_seconds=43200, time_fn=None):
+        self.timeout_seconds = self._normalize_timeout(timeout_seconds)
+        self.absolute_max_seconds = self._normalize_timeout(absolute_max_seconds)
         self.time_fn = time_fn or time.time
         self.sessions = {}
 
+    @staticmethod
+    def _normalize_timeout(value):
+        if value is None:
+            return None
+        value = int(value)
+        return None if value <= 0 else value
+
+    def _expiry(self, created_at, now):
+        bounds = []
+        if self.timeout_seconds is not None:
+            bounds.append(now + self.timeout_seconds)
+        if self.absolute_max_seconds is not None:
+            bounds.append(created_at + self.absolute_max_seconds)
+        return min(bounds) if bounds else None
+
     def create(self):
         self.cleanup()
-        session_id = secrets.token_urlsafe(32)
-        csrf_token = secrets.token_urlsafe(32)
+        now = self.time_fn()
         session = Session(
-            session_id=session_id,
-            csrf_token=csrf_token,
-            expires_at=self.time_fn() + self.timeout_seconds,
+            session_id=secrets.token_urlsafe(32),
+            csrf_token=secrets.token_urlsafe(32),
+            created_at=now,
+            expires_at=self._expiry(now, now),
         )
-        self.sessions[session_id] = session
+        self.sessions[session.session_id] = session
         return session
 
     def get(self, session_id):
@@ -171,10 +200,23 @@ class SessionStore:
         if session is None:
             return None
 
-        if session.expires_at <= self.time_fn():
+        if session.expires_at is not None and session.expires_at <= self.time_fn():
             self.sessions.pop(session_id, None)
             return None
 
+        return session
+
+    def touch(self, session_id):
+        """Slide the idle timeout on genuine activity, capped at the absolute max.
+
+        Renewal is explicit (never inside :meth:`get`, which stays read-only).
+        Once the absolute cap is reached ``expires_at`` stops moving, so a session
+        can never be extended past ``created_at + absolute_max_seconds``.
+        """
+        session = self.get(session_id)
+        if session is None:
+            return None
+        session.expires_at = self._expiry(session.created_at, self.time_fn())
         return session
 
     def destroy(self, session_id):
@@ -186,7 +228,7 @@ class SessionStore:
         expired = [
             session_id
             for session_id, session in self.sessions.items()
-            if session.expires_at <= now
+            if session.expires_at is not None and session.expires_at <= now
         ]
         for session_id in expired:
             self.sessions.pop(session_id, None)

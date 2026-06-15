@@ -2,7 +2,7 @@
 
 [![Continuous Integration](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/simulated-regression-tests.yml/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/simulated-regression-tests.yml)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.14-blue)
-![Automated Tests](https://img.shields.io/badge/tests-%3E300-blue)
+![Automated Tests](https://img.shields.io/badge/tests-%3E450-blue)
 
 ### Dashboard Preview
 
@@ -16,6 +16,17 @@
     <td width="33%"><img src="docs/assets/preview-aggregate.jpg" alt="EMS SolarFlow dashboard aggregated energy flow preview" width="100%"></td>
     <td width="33%"><img src="docs/assets/preview-device.jpg" alt="EMS SolarFlow dashboard per-device energy flow preview" width="100%"></td>
     <td width="33%"><img src="docs/assets/preview-energy.jpg" alt="EMS SolarFlow dashboard energy statistics preview" width="100%"></td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <th>Diagnose</th>
+    <th>Logs</th>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/assets/preview-diagnose.jpg" alt="Dashboard Diagnose tab" width="100%"></td>
+    <td width="50%"><img src="docs/assets/preview-logs.jpg" alt="Dashboard Logs tab" width="100%"></td>
   </tr>
 </table>
 

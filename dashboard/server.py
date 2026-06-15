@@ -3,10 +3,12 @@ import json
 import logging
 import mimetypes
 import os
+import tempfile
 import threading
 import time
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from types import SimpleNamespace
 from urllib.parse import parse_qs, unquote, urlparse
 
 from dashboard.auth import (
@@ -107,7 +109,12 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         auth_file=None,
         https_active=False,
         session_timeout_seconds=1800,
+        session_absolute_max_seconds=43200,
         runtime_validation=None,
+        config_path=None,
+        runtime_state_path=None,
+        log_buffer=None,
+        log_redaction=False,
         sse_max_connections=MAX_SSE_CONNECTIONS,
         sse_max_connections_per_ip=MAX_SSE_CONNECTIONS_PER_IP,
         sse_max_connection_seconds=SSE_MAX_CONNECTION_SECONDS,
@@ -115,9 +122,23 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         super().__init__(address, handler)
         self.store = store
         self.runtime_state = runtime_state
+        self.log_buffer = log_buffer
+        self.log_redaction = bool(log_redaction)
         self.auth_file = auth_file or resolve_auth_path(BASE_DIR)
         self.https_active = bool(https_active)
-        self.sessions = SessionStore(timeout_seconds=session_timeout_seconds)
+        # Paths the diagnose endpoints use to build service args. runtime_state_path
+        # falls back to the RuntimeState object's own path when not supplied.
+        self.config_path = config_path
+        self.runtime_state_path = runtime_state_path or getattr(
+            runtime_state, "path", None
+        )
+        # Single-flight guard so diagnose runs (esp. the hardware profile, which
+        # makes network probes) cannot be hammered concurrently.
+        self.diagnose_lock = threading.Lock()
+        self.sessions = SessionStore(
+            timeout_seconds=session_timeout_seconds,
+            absolute_max_seconds=session_absolute_max_seconds,
+        )
         self.login_limiter = LoginRateLimiter()
         self.runtime_validation = runtime_validation or build_validation_context(
             runtime_state=runtime_state
@@ -185,6 +206,18 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self._send_events()
             return
 
+        if parsed.path == "/api/diagnose":
+            self._handle_diagnose(parse_qs(parsed.query, keep_blank_values=True))
+            return
+
+        if parsed.path == "/api/diagnose/support-bundle":
+            self._handle_support_bundle()
+            return
+
+        if parsed.path == "/api/logs":
+            self._handle_logs(parse_qs(parsed.query))
+            return
+
         self._send_static(parsed.path)
 
     def do_POST(self):
@@ -196,6 +229,14 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/auth/logout":
             self._handle_logout()
+            return
+
+        if parsed.path == "/api/auth/refresh":
+            self._handle_refresh()
+            return
+
+        if parsed.path == "/api/logs/level":
+            self._handle_set_log_level()
             return
 
         self._send_json({"error": "read_only"}, status=405)
@@ -264,6 +305,11 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         }
         if authenticated:
             payload["csrf_token"] = session.csrf_token
+            if session.expires_at is None:
+                payload["session_expires_in_seconds"] = None
+            else:
+                remaining = session.expires_at - self.server.sessions.time_fn()
+                payload["session_expires_in_seconds"] = max(0, int(remaining))
         return payload
 
     def _auth_configured(self):
@@ -336,6 +382,250 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 "Set-Cookie": self._expired_session_cookie(),
             },
         )
+
+    def _handle_refresh(self):
+        # Genuine-activity heartbeat: slide the idle timeout (bounded by the
+        # absolute cap). Treated as a state change, so it needs the full
+        # write-auth path (valid session + matching CSRF token); background
+        # polling, which carries no CSRF token, can never renew a session.
+        body_error = self._json_body_preflight()
+        if body_error:
+            self._send_json(body_error[0], status=body_error[1])
+            return
+
+        auth_error = self._require_write_auth()
+        if auth_error:
+            self._send_json(auth_error[0], status=auth_error[1])
+            return
+
+        self.server.sessions.touch(self._session_cookie_value())
+        self._send_json(self._auth_status_payload())
+
+    DIAGNOSE_PROFILES = (
+        "install",
+        "deep",
+        "hardware",
+        "control",
+        "control_quality",
+    )
+
+    def _diagnose_args(self):
+        # The browser never supplies paths or sampling: paths come from the
+        # server's known config/runtime locations and sample_seconds is forced
+        # to 0 so the handler can never block on diagnose_control_samples().
+        return SimpleNamespace(
+            config=self.server.config_path,
+            runtime_state=self.server.runtime_state_path,
+            dashboard_auth=self.server.auth_file,
+            sample_seconds=0,
+            output=None,
+        )
+
+    def _handle_diagnose(self, query):
+        auth_error = self._require_read_auth()
+        if auth_error:
+            self._send_json(auth_error[0], status=auth_error[1])
+            return
+
+        profile_values = query.get("profile")
+        profile = profile_values[0] if profile_values else None
+        if profile not in self.DIAGNOSE_PROFILES:
+            self._send_json(
+                {"error": "invalid_profile", "supported": list(self.DIAGNOSE_PROFILES)},
+                status=400,
+            )
+            return
+
+        if not self.server.diagnose_lock.acquire(blocking=False):
+            self._send_json({"error": "diagnose_busy"}, status=429)
+            return
+
+        try:
+            from ems import diagnostics
+
+            runner = {
+                "install": diagnostics.run_install_diagnosis,
+                "deep": diagnostics.run_deep_diagnosis,
+                "hardware": diagnostics.run_hardware_diagnosis,
+                "control": diagnostics.run_control_diagnosis,
+                "control_quality": diagnostics.run_control_quality_diagnosis,
+            }[profile]
+            report = runner(self._diagnose_args())
+            report["profile"] = profile
+            redacted = diagnostics.diagnose_redact_report_for_http(report)
+        except Exception:
+            logging.exception("dashboard_diagnose_failed profile=%s", profile)
+            self._send_json({"error": "diagnose_failed"}, status=500)
+            return
+        finally:
+            self.server.diagnose_lock.release()
+
+        self._send_json(redacted)
+
+    def _handle_support_bundle(self):
+        auth_error = self._require_read_auth()
+        if auth_error:
+            self._send_json(auth_error[0], status=auth_error[1])
+            return
+
+        if not self.server.diagnose_lock.acquire(blocking=False):
+            self._send_json({"error": "diagnose_busy"}, status=429)
+            return
+
+        tmp_path = None
+        try:
+            from ems import diagnostics
+
+            args = self._diagnose_args()
+            # Build a complete read-only report (all profiles) for the bundle.
+            args.deep = True
+            args.control = True
+            args.control_quality = True
+            args.hardware = True
+            args.support_bundle = True
+            report = diagnostics.run_diagnosis(args)
+
+            config_data, _ = diagnostics.diagnose_json_file(
+                report["project"]["config_path"]
+            )
+            # Server-chosen tempfile only — never an output path from the browser.
+            fd, tmp_path = tempfile.mkstemp(prefix="ems-support-", suffix=".zip")
+            os.close(fd)
+            args.output = tmp_path
+            diagnostics.diagnose_write_support_bundle(
+                report,
+                args,
+                config_data if isinstance(config_data, dict) else {},
+                report["project"]["runtime_state_path"],
+            )
+            with open(tmp_path, "rb") as f:
+                body = f.read()
+        except Exception:
+            logging.exception("dashboard_support_bundle_failed")
+            self._send_json({"error": "support_bundle_failed"}, status=500)
+            return
+        finally:
+            self.server.diagnose_lock.release()
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
+        timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+        filename = f"ems-support-{timestamp}.zip"
+        self.send_response(200)
+        self._send_security_headers()
+        self.send_header("Content-Type", "application/zip")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Pragma", "no-cache")
+        self.send_header(
+            "Content-Disposition", f'attachment; filename="{filename}"'
+        )
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    LOG_LEVELS = {
+        "DEBUG": 10,
+        "INFO": 20,
+        "WARNING": 30,
+        "ERROR": 40,
+        "CRITICAL": 50,
+    }
+    MAX_LOG_LINES = 1000
+
+    def _handle_logs(self, query):
+        auth_error = self._require_read_auth()
+        if auth_error:
+            self._send_json(auth_error[0], status=auth_error[1])
+            return
+
+        try:
+            after = self._log_int_param(query, "after", minimum=0)
+            limit = self._log_int_param(
+                query, "limit", default=self.MAX_LOG_LINES, minimum=0
+            )
+        except ValueError as exc:
+            self._send_json({"error": "bad_request", "message": str(exc)}, status=400)
+            return
+        if limit is None or limit > self.MAX_LOG_LINES:
+            limit = self.MAX_LOG_LINES
+
+        min_levelno = None
+        level = (query.get("level", [None]) or [None])[0]
+        if level:
+            min_levelno = self.LOG_LEVELS.get(str(level).upper())
+            if min_levelno is None:
+                self._send_json(
+                    {"error": "bad_request", "message": "unknown level"},
+                    status=400,
+                )
+                return
+
+        buffer = self.server.log_buffer
+        if buffer is None:
+            self._send_json({"lines": [], "cursor": 0, "dropped": False})
+            return
+
+        result = buffer.get_lines(after=after, limit=limit, min_levelno=min_levelno)
+        if self.server.log_redaction:
+            from ems import diagnostics
+
+            for line in result["lines"]:
+                line["message"] = diagnostics.diagnose_redact_text(line["message"])
+        # Current runtime verbosity of the service so the UI can reflect it.
+        result["service_level"] = logging.getLevelName(
+            logging.getLogger().getEffectiveLevel()
+        )
+        self._send_json(result)
+
+    def _handle_set_log_level(self):
+        # Changing the service's runtime log verbosity is a state change, so it
+        # needs the full write-auth path (valid session + CSRF). It sets the root
+        # logger level, affecting every handler (the ring buffer and stderr).
+        body_error = self._json_body_preflight()
+        if body_error:
+            self._send_json(body_error[0], status=body_error[1])
+            return
+
+        auth_error = self._require_write_auth()
+        if auth_error:
+            self._send_json(auth_error[0], status=auth_error[1])
+            return
+
+        try:
+            payload = self._read_json_body()
+        except JsonBodyTooLarge as exc:
+            self._send_json({"error": "request_too_large", "message": str(exc)}, status=413)
+            return
+        except (JsonBodyLengthError, ValueError) as exc:
+            self._send_json({"error": "bad_request", "message": str(exc)}, status=400)
+            return
+
+        level = payload.get("level")
+        levelno = self.LOG_LEVELS.get(str(level).upper()) if level else None
+        if levelno is None:
+            self._send_json(
+                {"error": "bad_request", "message": "unknown level"}, status=400
+            )
+            return
+
+        logging.getLogger().setLevel(levelno)
+        logging.info("event=dashboard_log_level_changed level=%s", logging.getLevelName(levelno))
+        self._send_json({"service_level": logging.getLevelName(levelno)})
+
+    def _log_int_param(self, query, name, default=None, minimum=None):
+        raw = (query.get(name, [None]) or [None])[0]
+        if raw is None or raw == "":
+            return default
+        try:
+            value = int(raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{name} must be an integer") from exc
+        if minimum is not None and value < minimum:
+            raise ValueError(f"{name} must be >= {minimum}")
+        return value
 
     def _handle_runtime_patch(self, path):
         body_error = self._json_body_preflight()
@@ -424,6 +714,19 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         csrf_token = self.headers.get("X-CSRF-Token", "")
         if not csrf_token or not hmac_compare(csrf_token, session.csrf_token):
             return {"error": "csrf_failed"}, 403
+
+        return None
+
+    def _require_read_auth(self):
+        # For side-effect-free GET endpoints (diagnostics, logs). A valid session
+        # is required, but NOT a CSRF token: GET changes no state, SameSite=Strict
+        # already blocks cross-site cookie use, and CSP frame-ancestors 'none'
+        # blocks framing. This omission is deliberate, not an oversight.
+        if not self._auth_configured():
+            return {"error": "auth_not_configured"}, 403
+
+        if self._current_session() is None:
+            return {"error": "not_authenticated"}, 401
 
         return None
 
@@ -546,7 +849,12 @@ def start_dashboard_server(
     ssl_auto_generate=True,
     base_dir=None,
     session_timeout_seconds=1800,
+    session_absolute_max_seconds=43200,
     runtime_validation=None,
+    config_path=None,
+    runtime_state_path=None,
+    log_buffer=None,
+    log_redaction=False,
     sse_max_connections=MAX_SSE_CONNECTIONS,
     sse_max_connections_per_ip=MAX_SSE_CONNECTIONS_PER_IP,
     sse_max_connection_seconds=SSE_MAX_CONNECTION_SECONDS,
@@ -559,7 +867,12 @@ def start_dashboard_server(
         auth_file=auth_file,
         https_active=ssl_enabled,
         session_timeout_seconds=session_timeout_seconds,
+        session_absolute_max_seconds=session_absolute_max_seconds,
         runtime_validation=runtime_validation,
+        config_path=config_path,
+        runtime_state_path=runtime_state_path,
+        log_buffer=log_buffer,
+        log_redaction=log_redaction,
         sse_max_connections=sse_max_connections,
         sse_max_connections_per_ip=sse_max_connections_per_ip,
         sse_max_connection_seconds=sse_max_connection_seconds,

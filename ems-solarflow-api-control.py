@@ -88,6 +88,20 @@ def main():
     cfg.initialize(args, base_dir)
     setup_logging(cfg.LOG_LEVEL)
 
+    dashboard_enabled = cfg.safe_bool(cfg.DASHBOARD_CONFIG.get("enabled", False), False)
+    if dashboard_enabled:
+        # Install the in-memory log ring buffer right after logging is set up so
+        # the dashboard log viewer captures output from startup onward.
+        from ems.log_buffer import install_log_buffer
+
+        install_log_buffer(
+            capacity=cfg.safe_int(
+                cfg.DASHBOARD_CONFIG.get("log_buffer_lines", 5000),
+                5000,
+                minimum=1,
+            )
+        )
+
     log_event(
         logging.INFO,
         "startup",
@@ -176,6 +190,7 @@ def main():
             from dashboard.server import start_dashboard_server
             from dashboard.sqlite_store import DashboardStore
             from dashboard.runtime_write import build_validation_context
+            from ems.log_buffer import get_log_buffer
 
             dashboard_store = DashboardStore(
                 cfg.dashboard_database_path(),
@@ -216,6 +231,25 @@ def main():
                     True
                 ),
                 base_dir=base_dir,
+                config_path=cfg.config_path(),
+                runtime_state_path=cfg.runtime_state_path(),
+                log_buffer=get_log_buffer(),
+                log_redaction=cfg.safe_bool(
+                    cfg.DASHBOARD_CONFIG.get("log_redaction", False),
+                    False
+                ),
+                session_timeout_seconds=cfg.safe_session_timeout(
+                    cfg.DASHBOARD_CONFIG.get(
+                        "session_idle_timeout_seconds", 1800
+                    ),
+                    1800
+                ),
+                session_absolute_max_seconds=cfg.safe_session_timeout(
+                    cfg.DASHBOARD_CONFIG.get(
+                        "session_absolute_max_seconds", 43200
+                    ),
+                    43200
+                ),
                 runtime_validation=build_validation_context(
                     cfg.CONFIG,
                     runtime_state

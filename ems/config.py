@@ -49,7 +49,11 @@ DASHBOARD_DEFAULTS = {
     "ssl_enabled": False,
     "ssl_cert_file": "config/dashboard.crt",
     "ssl_key_file": "config/dashboard.key",
-    "ssl_auto_generate": True
+    "ssl_auto_generate": True,
+    "session_idle_timeout_seconds": 1800,
+    "session_absolute_max_seconds": 43200,
+    "log_buffer_lines": 5000,
+    "log_redaction": False
 }
 
 ENERGY_SAVINGS_DEFAULTS = {
@@ -306,10 +310,7 @@ def initialize(args, base_dir):
         **WINTER_DEFAULTS,
         **CONFIG.get("winter", {})
     }
-    DASHBOARD_CONFIG = {
-        **DASHBOARD_DEFAULTS,
-        **CONFIG.get("dashboard", {})
-    }
+    DASHBOARD_CONFIG = normalize_dashboard_config(CONFIG.get("dashboard", {}))
     ENERGY_SAVINGS_CONFIG = {
         **ENERGY_SAVINGS_DEFAULTS,
         **CONFIG.get("energy_savings", {})
@@ -377,6 +378,15 @@ def runtime_state_path():
     return os.path.join(BASE_DIR, RUNTIME_STATE_PATH)
 
 
+def config_path():
+    """Return the path to the static config file the EMS was started with."""
+
+    path = (ARGS.config if ARGS else None) or os.path.join(
+        BASE_DIR or os.getcwd(), "config.json"
+    )
+    return path
+
+
 def dashboard_database_path():
     """Return absolute path to the dashboard SQLite database."""
 
@@ -430,6 +440,54 @@ def safe_int(value, default=0, minimum=None):
         parsed = max(minimum, parsed)
 
     return parsed
+
+
+def safe_session_timeout(value, default):
+    """Parse a session-timeout config value.
+
+    ``0`` is a deliberate "disabled / infinite" opt-in and is preserved.
+    Invalid or negative values fall back to the (secure) default rather than
+    being clamped to ``0`` — a negative typo must never silently disable a
+    timeout.
+    """
+    try:
+        parsed = int(float(value))
+    except (TypeError, ValueError):
+        return int(default)
+
+    if parsed < 0:
+        return int(default)
+
+    return parsed
+
+
+def normalize_dashboard_config(config):
+    if not isinstance(config, dict):
+        config = {}
+
+    merged = {
+        **DASHBOARD_DEFAULTS,
+        **config,
+    }
+
+    merged["session_idle_timeout_seconds"] = safe_session_timeout(
+        merged.get("session_idle_timeout_seconds"),
+        DASHBOARD_DEFAULTS["session_idle_timeout_seconds"],
+    )
+    merged["session_absolute_max_seconds"] = safe_session_timeout(
+        merged.get("session_absolute_max_seconds"),
+        DASHBOARD_DEFAULTS["session_absolute_max_seconds"],
+    )
+    merged["log_buffer_lines"] = safe_int(
+        merged.get("log_buffer_lines"),
+        DASHBOARD_DEFAULTS["log_buffer_lines"],
+        minimum=1,
+    )
+    merged["log_redaction"] = safe_bool(
+        merged.get("log_redaction"),
+        DASHBOARD_DEFAULTS["log_redaction"],
+    )
+    return merged
 
 
 def safe_float(value, default=0.0, minimum=None):
