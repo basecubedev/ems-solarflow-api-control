@@ -56,19 +56,40 @@ def test_after_cursor_returns_only_newer_and_flags_dropped():
     assert result["cursor"] == 5
 
 
-def test_limit_truncates_and_cursor_advances_without_skips():
+def test_initial_fetch_with_limit_returns_newest_lines():
     handler = RingBufferLogHandler(capacity=50)
     logger = make_logger(handler, "ring.limit")
     for i in range(5):
         logger.info("line%d", i)
 
     first = handler.get_lines(after=0, limit=2)
-    assert [line["seq"] for line in first["lines"]] == [1, 2]
-    assert first["cursor"] == 2
+    assert [line["seq"] for line in first["lines"]] == [4, 5]
+    assert first["cursor"] == 5
+
+
+def test_incremental_fetch_after_cursor_returns_only_newer():
+    handler = RingBufferLogHandler(capacity=50)
+    logger = make_logger(handler, "ring.incremental")
+    for i in range(5):
+        logger.info("line%d", i)
+
+    first = handler.get_lines(after=0, limit=2)
+    logger.info("line5")
 
     second = handler.get_lines(after=first["cursor"], limit=2)
-    assert [line["seq"] for line in second["lines"]] == [3, 4]
-    assert second["cursor"] == 4
+    assert [line["seq"] for line in second["lines"]] == [6]
+    assert second["cursor"] == 6
+
+
+def test_incremental_limit_truncates_without_skips():
+    handler = RingBufferLogHandler(capacity=50)
+    logger = make_logger(handler, "ring.limit.incremental")
+    for i in range(5):
+        logger.info("line%d", i)
+
+    result = handler.get_lines(after=2, limit=2)
+    assert [line["seq"] for line in result["lines"]] == [3, 4]
+    assert result["cursor"] == 4
 
 
 def test_level_filtering():

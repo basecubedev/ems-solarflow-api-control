@@ -125,6 +125,39 @@ def test_logs_limit_is_clamped(tmp_path):
         server.server_close()
 
 
+def test_logs_initial_fetch_returns_newest_limited_lines(tmp_path):
+    buffer = make_buffer("logs.initial", [(logging.INFO, f"l{i}") for i in range(5)])
+    server, base_url = logs_server(tmp_path, buffer)
+    try:
+        cookie = login(base_url)
+        status, _, payload = json_response(
+            f"{base_url}/api/logs?after=0&limit=2", headers={"Cookie": cookie}
+        )
+        assert status == 200
+        assert [line["message"] for line in payload["lines"]] == ["l3", "l4"]
+        assert payload["cursor"] == 5
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_logs_endpoint_limit_cap_keeps_newest_window(tmp_path):
+    buffer = make_buffer("logs.limit.cap", [(logging.INFO, f"l{i}") for i in range(1205)])
+    server, base_url = logs_server(tmp_path, buffer)
+    try:
+        cookie = login(base_url)
+        status, _, payload = json_response(
+            f"{base_url}/api/logs?after=0&limit=99999", headers={"Cookie": cookie}
+        )
+        assert status == 200
+        assert len(payload["lines"]) == 1000
+        assert payload["lines"][0]["message"] == "l205"
+        assert payload["lines"][-1]["message"] == "l1204"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_logs_invalid_params_are_bad_request(tmp_path):
     buffer = make_buffer("logs.invalid", [(logging.INFO, "x")])
     server, base_url = logs_server(tmp_path, buffer)

@@ -64,8 +64,11 @@ class RingBufferLogHandler(logging.Handler):
             self._buffer.append(entry)
 
     def get_lines(self, after=None, limit=None, min_levelno=None):
-        """Return log lines newer than ``after`` (oldest first).
+        """Return retained log lines in ascending sequence order.
 
+        When ``after`` is missing or ``0``, this is an initial dashboard fetch
+        and returns the newest ``limit`` retained lines. When ``after`` is
+        positive, only newer lines are returned.
         ``dropped`` is True when ``after`` points before the oldest retained
         line, i.e. the buffer rolled over and the caller missed some lines.
         ``cursor`` is the seq the caller should pass as ``after`` next time.
@@ -81,23 +84,25 @@ class RingBufferLogHandler(logging.Handler):
             and after + 1 < oldest_seq
         )
 
+        initial_fetch = after is None or after == 0
         selected = []
         for entry in entries:
-            if after is not None and entry["seq"] <= after:
+            if not initial_fetch and entry["seq"] <= after:
                 continue
             if min_levelno is not None and entry["levelno"] < min_levelno:
                 continue
             selected.append(entry)
 
-        truncated = False
         if limit is not None and limit >= 0 and len(selected) > limit:
-            selected = selected[:limit]
-            truncated = True
+            if initial_fetch:
+                selected = [] if limit == 0 else selected[-limit:]
+            else:
+                selected = selected[:limit]
 
         if selected:
             cursor = selected[-1]["seq"]
-        elif after is not None and not truncated:
-            cursor = max(after, max_seq)
+        elif after is not None:
+            cursor = after
         else:
             cursor = max_seq
 
