@@ -49,7 +49,11 @@ DASHBOARD_DEFAULTS = {
     "ssl_enabled": False,
     "ssl_cert_file": "config/dashboard.crt",
     "ssl_key_file": "config/dashboard.key",
-    "ssl_auto_generate": True
+    "ssl_auto_generate": True,
+    "session_idle_timeout_seconds": 1800,
+    "session_absolute_max_seconds": 43200,
+    "log_buffer_lines": 5000,
+    "log_redaction": False
 }
 
 ENERGY_SAVINGS_DEFAULTS = {
@@ -306,10 +310,7 @@ def initialize(args, base_dir):
         **WINTER_DEFAULTS,
         **CONFIG.get("winter", {})
     }
-    DASHBOARD_CONFIG = {
-        **DASHBOARD_DEFAULTS,
-        **CONFIG.get("dashboard", {})
-    }
+    DASHBOARD_CONFIG = normalize_dashboard_config(CONFIG.get("dashboard", {}))
     ENERGY_SAVINGS_CONFIG = {
         **ENERGY_SAVINGS_DEFAULTS,
         **CONFIG.get("energy_savings", {})
@@ -458,6 +459,35 @@ def safe_session_timeout(value, default):
         return int(default)
 
     return parsed
+
+
+def normalize_dashboard_config(config):
+    if not isinstance(config, dict):
+        config = {}
+
+    merged = {
+        **DASHBOARD_DEFAULTS,
+        **config,
+    }
+
+    merged["session_idle_timeout_seconds"] = safe_session_timeout(
+        merged.get("session_idle_timeout_seconds"),
+        DASHBOARD_DEFAULTS["session_idle_timeout_seconds"],
+    )
+    merged["session_absolute_max_seconds"] = safe_session_timeout(
+        merged.get("session_absolute_max_seconds"),
+        DASHBOARD_DEFAULTS["session_absolute_max_seconds"],
+    )
+    merged["log_buffer_lines"] = safe_int(
+        merged.get("log_buffer_lines"),
+        DASHBOARD_DEFAULTS["log_buffer_lines"],
+        minimum=1,
+    )
+    merged["log_redaction"] = safe_bool(
+        merged.get("log_redaction"),
+        DASHBOARD_DEFAULTS["log_redaction"],
+    )
+    return merged
 
 
 def safe_float(value, default=0.0, minimum=None):
