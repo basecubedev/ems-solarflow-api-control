@@ -388,8 +388,8 @@ function renderDevices(devices) {
         ${deviceValue("Battery", signedWatts(batteryFlow.valueW), batteryFlow.isCharging ? "charge" : "battery")}
         ${deviceValue("Target", watts(device.target_w), "gauge")}
         ${deviceValue("Limit", watts(device.output_limit_w), "warning")}
-        ${deviceValue("AC", acStateLabel(device), acStateIcon(device))}
       </div>
+      ${renderDeviceFirmwareStatus(device)}
       ${renderFullChargeAssist(device)}
     `;
     grid.appendChild(card);
@@ -1697,8 +1697,27 @@ function controlText(value) {
   return String(value);
 }
 
+// Known firmware/EMS reason codes get an explicit readable phrase. Anything
+// not in the map falls back to the previous underscore-to-space behavior, so
+// unknown reasons stay legible without a localization framework.
+const CONTROL_REASON_LABELS = {
+  ac_input_runtime_role: "AC input mode is active; normal output writes are blocked",
+  charge_inhibit: "Firmware reports Max-SoC / charge cutoff",
+  discharge_inhibit: "Firmware reports Min-SoC / discharge protection",
+  dc_inactive: "DC path is inactive",
+  ac_inactive: "AC path is inactive",
+  pack_standby: "Battery pack is in standby",
+  fault_observed: "Firmware reports a fault signal",
+  pv_evidence: "PV input detected",
+};
+
 function controlReason(value) {
-  return controlText(value).replaceAll("_", " ");
+  const text = controlText(value);
+  const normalized = text.trim().toLowerCase();
+  if (Object.prototype.hasOwnProperty.call(CONTROL_REASON_LABELS, normalized)) {
+    return CONTROL_REASON_LABELS[normalized];
+  }
+  return text.replaceAll("_", " ");
 }
 
 function decimal(value) {
@@ -1928,26 +1947,146 @@ function deviceSoc(device) {
   return Number(device?.soc ?? device?.soc_percent ?? 0);
 }
 
-function acStateLabel(device) {
+// Translate a raw firmware enum value into a readable label. Unknown values
+// never collapse to a bare "Unknown" — the raw value is preserved as secondary
+// debug detail, e.g. "Unknown AC state (value 9)".
+function firmwareEnumLabel(value, labels, fallbackPrefix = "Unknown") {
+  if (value === undefined || value === null || value === "") {
+    return `${fallbackPrefix} (value unknown)`;
+  }
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && Object.prototype.hasOwnProperty.call(labels, numeric)) {
+    return labels[numeric];
+  }
+  return `${fallbackPrefix} (value ${value})`;
+}
+
+function socLimitStatusLabel(value) {
+  return firmwareEnumLabel(value, {
+    0: "Normal",
+    1: "Max-SoC reached",
+    2: "Min-SoC protection",
+  }, "Unknown");
+}
+
+function packStateLabel(value) {
+  return firmwareEnumLabel(value, {
+    0: "Standby",
+    1: "Charging",
+    2: "Discharging",
+  }, "Unknown battery state");
+}
+
+function acModeLabel(value) {
+  return firmwareEnumLabel(value, {
+    1: "AC input / charge mode",
+    2: "AC output mode",
+  }, "Unknown AC mode");
+}
+
+function acStatusLabel(value) {
+  return firmwareEnumLabel(value, {
+    0: "AC standby",
+    1: "AC output active",
+    2: "AC charge active",
+  }, "Unknown AC state");
+}
+
+function dcStatusLabel(value) {
+  return firmwareEnumLabel(value, {
+    0: "DC standby",
+    1: "DC battery input path",
+    2: "DC battery output path",
+  }, "Unknown DC state");
+}
+
+function gridStateLabel(value) {
+  return firmwareEnumLabel(value, {
+    0: "Grid disconnected",
+    1: "Grid connected",
+  }, "Unknown grid state");
+}
+
+function socStatusLabel(value) {
+  return firmwareEnumLabel(value, {
+    0: "No calibration",
+    1: "Calibration running",
+  }, "Unknown calibration state");
+}
+
+function gridOffModeOptionLabel(value) {
+  const labels = {
+    standard: "Standard",
+    eco: "Eco",
+    off: "Off / closed",
+  };
+  return Object.prototype.hasOwnProperty.call(labels, value)
+    ? labels[value]
+    : String(value);
+}
+
+// Combined AC-path label for a device card. Uses acStatus as the source of
+// truth for "active" states and only falls back to acMode to clarify the
+// standby direction, so the card never claims charging/output that firmware
+// does not report as running.
+function acPathLabel(device) {
   const acMode = Number(device?.ac_mode ?? 0);
   const acStatus = Number(device?.ac_status ?? 0);
 
-  if (acStatus === 2) return "Charge";
-  if (acStatus === 1) return "Output";
+  if (acStatus === 2) return "AC charge active";
+  if (acStatus === 1) return "AC output active";
   if (acStatus === 0) {
-    if (acMode === 1) return "Charge standby";
-    if (acMode === 2) return "Output standby";
-    return "Standby";
+    if (acMode === 1) return "AC charge standby";
+    if (acMode === 2) return "AC output standby";
+    return "AC standby";
   }
 
-  return "Unknown";
+  return acStatusLabel(device?.ac_status);
 }
 
-function acStateIcon(device) {
+function acPathIcon(device) {
   const acStatus = Number(device?.ac_status ?? 0);
   if (acStatus === 2) return "charge";
   if (acStatus === 1) return "inverter";
   return "rule";
+}
+
+// Compact "Firmware status" block below the main power tiles. Translates the
+// selected Zendure firmware status enums into readable labels while keeping the
+// raw value visible (via the *_label helpers) for unknown codes.
+function deviceFirmwareStatusFacts(device) {
+  const facts = [
+    deviceValue("AC path", acPathLabel(device), acPathIcon(device)),
+    deviceValue("SOC guard", socLimitStatusLabel(device?.soc_limit), "gauge"),
+    deviceValue("Battery state", packStateLabel(device?.pack_state), "battery"),
+    deviceValue("DC path", dcStatusLabel(device?.dc_status), "rule"),
+    deviceValue("Grid", gridStateLabel(device?.grid_state), "grid"),
+  ];
+
+  if (device?.soc_status !== undefined && device?.soc_status !== null) {
+    facts.push(deviceValue("SOC calibration", socStatusLabel(device.soc_status), "history"));
+  }
+  if (Number.isFinite(Number(device?.pack_num)) && Number(device?.pack_num) > 0) {
+    facts.push(deviceValue("Packs", String(Number(device.pack_num)), "battery"));
+  }
+  if (Number.isFinite(Number(device?.input_limit_w)) && Number(device?.input_limit_w) > 0) {
+    facts.push(deviceValue("AC input limit", watts(device.input_limit_w), "charge"));
+  }
+
+  return facts;
+}
+
+function renderDeviceFirmwareStatus(device) {
+  return `
+    <div class="device-firmware">
+      <div class="device-firmware-head">
+        <span class="device-firmware-title">${icon("rule")} Firmware status</span>
+      </div>
+      <div class="device-values device-firmware-values">
+        ${deviceFirmwareStatusFacts(device).join("")}
+      </div>
+    </div>
+  `;
 }
 
 function setFlowView(view, persist = true) {
@@ -2044,7 +2183,7 @@ function fullChargeAssistDescription(assist) {
       return "Assist is overdue. EMS will start an assist charge as soon as conditions allow.";
     case "restore_pending":
       return assist.ac_mode_restore_pending
-        ? "EMS will restore configured Max-SoC and normal EMS output mode (acMode=2) when writes are available."
+        ? "EMS will restore the configured Max-SoC and normal AC output mode (firmware acMode=2) when writes are available."
         : "EMS will restore the configured Max-SoC when writes are available.";
     default:
       return "";
@@ -2059,16 +2198,8 @@ function formatAssistTimestamp(value) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-function socLimitLabel(socLimit) {
-  switch (Number(socLimit ?? 0)) {
-    case 1: return "Max-SoC reached";
-    case 2: return "Min-SoC protection";
-    default: return "No limit";
-  }
-}
-
 function fullChargeAssistFirmwareSummary(assist) {
-  return `${socLimitLabel(assist.soc_limit)} · AC ${acStateLabel(assist)}`;
+  return `SOC guard: ${socLimitStatusLabel(assist.soc_limit)} · AC path: ${acPathLabel(assist)}`;
 }
 
 function renderFullChargeAssist(device) {
@@ -2682,6 +2813,7 @@ function runtimeControlPanel() {
           step: 1,
           kind: "target",
           iconName: "gauge",
+          submitLabel: "Save EMS settings",
           fields: `
           ${runtimeToggle("enabled", "EMS enabled", system.enabled)}
           ${runtimeNumber("max_total_power", "Max total power", system.max_total_power, 0, Number(systemLimits.max_total_power || 5000), "W", "50")}
@@ -2696,6 +2828,7 @@ function runtimeControlPanel() {
           step: winterStep,
           kind: "gates",
           iconName: "battery",
+          submitLabel: "Save winter mode",
           fields: `
           ${runtimeToggle("enabled", "Winter mode", winter.enabled)}
         `})}
@@ -2706,6 +2839,7 @@ function runtimeControlPanel() {
           step: haStep,
           kind: "write",
           iconName: "live",
+          submitLabel: "Save HA settings",
           fields: `
           ${runtimeToggle("enabled", "HA publishing", ha.enabled)}
           ${runtimeToggle("control_enabled", "HA helper control", ha.control_enabled)}
@@ -2715,7 +2849,7 @@ function runtimeControlPanel() {
   `;
 }
 
-function runtimeStageCard({ endpoint, title, subtitle, step, kind, iconName, fields }) {
+function runtimeStageCard({ endpoint, title, subtitle, step, kind, iconName, fields, submitLabel }) {
   return `
     <form class="runtime-form control-pipeline-stage runtime-stage-card runtime-stage-${escapeHtml(kind)}" data-runtime-endpoint="${escapeHtml(endpoint)}">
       <div class="control-stage-head control-stage-header">
@@ -2729,7 +2863,7 @@ function runtimeStageCard({ endpoint, title, subtitle, step, kind, iconName, fie
         </div>
       </div>
       <div class="control-stage-body runtime-stage-values control-pipeline-values">${fields}</div>
-      ${runtimeSubmit()}
+      ${runtimeSubmit(submitLabel)}
     </form>
   `;
 }
@@ -2743,11 +2877,16 @@ function runtimeDeviceForm(name, device, maxPower = 5000, step = 1) {
     step,
     kind: "distribution",
     iconName: "inverter",
+    submitLabel: `Save ${name} settings`,
     fields: `
       ${runtimeToggle("enabled", "Device enabled", device.enabled)}
       ${runtimeNumber("max_power", "Max power", device.max_power, 0, maxPower, "W", "50")}
       ${runtimeNumber("pv_priority_factor", "PV priority", device.pv_priority_factor, 0.01, 100, "x", "0.01")}
-      ${runtimeSelect("offgrid_socket_mode", "Offgrid socket", device.offgrid_socket_mode, ["off", "eco", "standard"])}
+      ${runtimeSelect("offgrid_socket_mode", "Offgrid socket", device.offgrid_socket_mode, [
+        { value: "off", label: gridOffModeOptionLabel("off") },
+        { value: "eco", label: gridOffModeOptionLabel("eco") },
+        { value: "standard", label: gridOffModeOptionLabel("standard") },
+      ])}
     `,
   });
 }
@@ -2776,22 +2915,35 @@ function runtimeNumber(name, label, value, min, max, unit, step = "1") {
   `;
 }
 
-function runtimeSelect(name, label, selectedValue, options) {
+// `options` may be plain string values or {value, label} objects. The
+// submitted/stored `value` is always preserved exactly; only the visible
+// option text is made readable (via the object label or `optionLabelFormatter`).
+function runtimeSelect(name, label, selectedValue, options, optionLabelFormatter) {
+  const normalized = options.map((option) => {
+    if (option && typeof option === "object") {
+      return { value: option.value, label: option.label ?? String(option.value) };
+    }
+    const optionLabel = typeof optionLabelFormatter === "function"
+      ? optionLabelFormatter(option)
+      : String(option);
+    return { value: option, label: optionLabel };
+  });
+
   return `
     <label class="runtime-field control-pipeline-fact role-config">
       <span class="value-icon" aria-hidden="true">${icon("rule")}</span>
       <span class="control-label">${escapeHtml(label)}</span>
       <select name="${escapeHtml(name)}">
-        ${options.map((value) => `
-          <option value="${escapeHtml(value)}" ${selectedValue === value ? "selected" : ""}>${escapeHtml(value)}</option>
+        ${normalized.map(({ value, label: optionLabel }) => `
+          <option value="${escapeHtml(value)}" ${selectedValue === value ? "selected" : ""}>${escapeHtml(optionLabel)}</option>
         `).join("")}
       </select>
     </label>
   `;
 }
 
-function runtimeSubmit() {
-  return `<button class="primary-button compact" type="submit">Apply</button>`;
+function runtimeSubmit(label = "Apply") {
+  return `<button class="primary-button compact" type="submit">${escapeHtml(label)}</button>`;
 }
 
 function activeRuntimeEditorElement() {
@@ -3611,8 +3763,19 @@ if (typeof module !== "undefined") {
     state,
     escapeHtml,
     deviceValue,
-    acStateLabel,
-    acStateIcon,
+    firmwareEnumLabel,
+    socLimitStatusLabel,
+    packStateLabel,
+    acModeLabel,
+    acStatusLabel,
+    dcStatusLabel,
+    gridStateLabel,
+    socStatusLabel,
+    gridOffModeOptionLabel,
+    acPathLabel,
+    acPathIcon,
+    renderDeviceFirmwareStatus,
+    deviceFirmwareStatusFacts,
     deviceBatteryVisual,
     renderDevices,
     renderControlExplain,

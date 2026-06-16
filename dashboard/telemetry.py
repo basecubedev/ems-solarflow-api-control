@@ -193,6 +193,9 @@ def build_dashboard_snapshot(
             "ac_status": int(getattr(state, "ac_status", 0) or 0),
             "dc_status": int(getattr(state, "dc_status", 0) or 0),
             "grid_state": int(getattr(state, "grid_state", 0) or 0),
+            "soc_status": int(getattr(state, "soc_status", 0) or 0),
+            "pack_num": int(getattr(state, "pack_num", 0) or 0),
+            "input_limit_w": _rounded(getattr(state, "input_limit_w", 0)),
             "capability": (
                 {
                     "can_charge": capability.can_charge,

@@ -463,6 +463,12 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
 .device-assist[data-assist-status="overdue"],
 .device-assist[data-assist-status="restore_pending"] { border-color: rgba(255,107,122,.22); }
 
+.device-firmware { margin-top: 7px; padding: 8px; border: 1px solid rgba(148,163,184,.10); border-radius: 14px; background: rgba(255,255,255,.045); }
+.device-firmware-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom: 6px; }
+.device-firmware-title { display:flex; align-items:center; gap:7px; color: var(--muted); font-size: 11px; font-weight: 850; letter-spacing:.12em; text-transform: uppercase; }
+.device-firmware-title svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.device-firmware-values.device-values { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
 .energy-stats-panel {
   padding: 10px;
   margin-bottom: 8px;
@@ -1740,6 +1746,8 @@ canvas { width: 100%; min-height: 94px; border: 1px solid rgba(148,163,184,.13);
   .device-value strong { font-size: 13px; }
   .device-assist { padding: 7px; margin-top: 6px; }
   .device-assist-values.device-values { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
+  .device-firmware { padding: 7px; margin-top: 6px; }
+  .device-firmware-values.device-values { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
   .energy-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
   .energy-period-stage,
   .energy-kpi-card { min-height: 132px; padding: 7px; }

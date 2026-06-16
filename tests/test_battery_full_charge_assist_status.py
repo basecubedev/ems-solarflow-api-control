@@ -301,6 +301,19 @@ def _idle_assist_record():
     }
 
 
+def test_snapshot_exposes_firmware_status_fields():
+    controller = _multi_controller({"WR1": _idle_assist_record()})
+    snapshot = _full_snapshot(
+        controller,
+        [_state(soc_status=1, pack_num=2, input_limit_w=300)],
+    )
+
+    device = snapshot["devices"]["WR1"]
+    assert device["soc_status"] == 1
+    assert device["pack_num"] == 2
+    assert device["input_limit_w"] == 300
+
+
 def test_full_charge_assist_rule_active_when_device_assisting():
     controller = _multi_controller({"WR1": _active_assist_record()})
     snapshot = _full_snapshot(controller, [_state()])
@@ -513,7 +526,9 @@ def test_frontend_renders_full_charge_assist_states_via_app_js():
         });
         assert(html.includes("Assist active"), "active status (AC charge not yet running) renders a visible pill label");
         assert(html.includes("Restore planned"), "active status with pending restore flags shows restore as planned, even before AC charge starts");
-        assert(!html.includes("AC charge"), "AC charge running is not shown unless acStatus == 2");
+        assert(!html.includes("AC charge active"), "AC charge active is not claimed unless acStatus == 2");
+        assert(!html.includes("Running"), "AC charge running fact row is not shown unless acStatus == 2");
+        assert(html.includes("AC charge standby"), "firmware status shows AC charge standby while charge is requested but not running");
         assert(!html.includes("AC-charging"), "active status description does not claim AC charging unless acStatus == 2");
 
         // Overdue renders positive wording, never a negative "Due in" value.
