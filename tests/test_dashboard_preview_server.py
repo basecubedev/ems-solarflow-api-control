@@ -13,8 +13,14 @@ SCRIPTS_DIR = os.path.join(
 if SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, SCRIPTS_DIR)
 
+import serve_dashboard_preview  # noqa: E402
 from dashboard_preview_data import FLOW_VIEWS, SCENARIOS, build_scenario  # noqa: E402
-from serve_dashboard_preview import start_server  # noqa: E402
+from serve_dashboard_preview import (  # noqa: E402
+    normalize_views,
+    parse_args,
+    resolve_scenario,
+    start_server,
+)
 
 
 @pytest.fixture
@@ -187,3 +193,109 @@ def test_all_scenarios_build():
         assert data["snapshot"]["devices"]
         assert "auth" in data
         assert "diagnose" in data
+
+
+@pytest.mark.parametrize("path", ["/preview", "/preview/"])
+def test_landing_page_lists_all_views(preview_server, path):
+    _, base = preview_server("firmware-status")
+    with _get(base, path) as response:
+        assert response.status == 200
+        assert response.headers.get("Content-Type", "").startswith("text/html")
+        body = response.read().decode("utf-8")
+    # Names the current scenario and links every flow view.
+    assert "firmware-status" in body
+    for view in FLOW_VIEWS:
+        assert f'href="/preview/{view}"' in body
+    # Makes the safety guarantee explicit.
+    assert "Synthetic data only" in body
+
+
+def test_landing_page_is_not_the_real_dashboard(preview_server):
+    _, base = preview_server()
+    with _get(base, "/preview") as response:
+        landing = response.read().decode("utf-8")
+    with _get(base, "/") as response:
+        index = response.read().decode("utf-8")
+    # The landing page must not replace the real dashboard index.html.
+    assert '<script src="/app.js"></script>' not in landing
+    assert '<script src="/app.js"></script>' in index
+
+
+def test_normalize_views_expands_all():
+    assert normalize_views(["all"]) == list(FLOW_VIEWS)
+
+
+def test_normalize_views_keeps_explicit_lists():
+    assert normalize_views(["devices", "control"]) == ["devices", "control"]
+
+
+def test_normalize_views_none_is_none():
+    assert normalize_views(None) is None
+
+
+def test_normalize_views_rejects_unknown():
+    with pytest.raises(ValueError):
+        normalize_views(["nope"])
+
+
+def test_interactive_default_scenario_is_normal():
+    assert resolve_scenario(parse_args([])) == "normal"
+
+
+def test_capture_default_scenario_is_write_mode():
+    assert resolve_scenario(parse_args(["--capture"])) == "write-mode"
+
+
+def test_explicit_scenario_wins_in_capture_mode():
+    assert resolve_scenario(parse_args(["--capture", "--scenario", "firmware-status"])) == "firmware-status"
+
+
+def test_explicit_scenario_wins_in_interactive_mode():
+    assert resolve_scenario(parse_args(["--scenario", "write-mode"])) == "write-mode"
+
+
+def test_capture_assets_returns_written_paths(tmp_path, monkeypatch):
+    import capture_dashboard_previews as capture
+
+    monkeypatch.setattr(capture, "require_executable", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(capture.subprocess, "run", lambda *a, **k: None)
+
+    written = capture.capture_assets(
+        "127.0.0.1", 8767, str(tmp_path), "write-mode", ["diagnose", "logs"]
+    )
+    assert written == [
+        os.path.join(str(tmp_path), "preview-diagnose.jpg"),
+        os.path.join(str(tmp_path), "preview-logs.jpg"),
+    ]
+
+
+def test_capture_mode_uses_write_mode_by_default(tmp_path, monkeypatch, capsys):
+    captured = {}
+
+    def fake_capture_assets(host, port, output_dir, scenario, views):
+        captured["scenario"] = scenario
+        captured["views"] = views
+        return [os.path.join(output_dir, "preview-diagnose.jpg")]
+
+    import capture_dashboard_previews as capture
+
+    monkeypatch.setattr(capture, "capture_assets", fake_capture_assets)
+    serve_dashboard_preview.main(["--capture", "--output-dir", str(tmp_path)])
+
+    assert captured["scenario"] == "write-mode"
+    assert captured["views"] is None  # default capture views resolved downstream
+    assert "Captured preview screenshots:" in capsys.readouterr().out
+
+
+def test_list_flags_exit_without_serving(capsys):
+    serve_dashboard_preview.main(["--list-scenarios"])
+    out = capsys.readouterr().out
+    assert "Scenarios:" in out
+    for name in SCENARIOS:
+        assert name in out
+
+    serve_dashboard_preview.main(["--list-views"])
+    out = capsys.readouterr().out
+    assert "Views:" in out
+    for view in FLOW_VIEWS:
+        assert view in out
