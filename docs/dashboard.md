@@ -86,6 +86,25 @@ deployments (raw by default for authenticated operators).
 
 ![Dashboard Logs tab screenshot](assets/preview-logs.jpg)
 
+## Local Preview (No Hardware)
+
+For local UI development you can run the dashboard with deterministic, synthetic,
+non-secret data — no hardware, MQTT, cloud access, SQLite history, passwords, or
+running EMS loop required:
+
+```bash
+python3 scripts/serve_dashboard_preview.py
+python3 scripts/serve_dashboard_preview.py --scenario firmware-status
+python3 scripts/serve_dashboard_preview.py --scenario write-mode
+```
+
+It serves the real dashboard assets on `http://127.0.0.1:8767` and provides a
+stable URL per view (`/preview/aggregated`, `/preview/devices`, `/preview/control`,
+`/preview/energy`, `/preview/diagnose`, `/preview/logs`). Scenarios cover a healthy
+system, mixed firmware-status values (including unknown values), an offline device,
+and read-only/write-mode authentication states. See
+[developer.md](developer.md#local-dashboard-preview) for details.
+
 ## Configuration
 
 The dashboard section in `config.json` controls startup:

@@ -109,3 +109,55 @@ Future incompatible JSON or bundle changes must increment the relevant version:
 
 Add or update contract tests whenever a public field, root-cause shape, bundle
 file name, or CLI diagnose variant changes.
+
+## Local Dashboard Preview
+
+`scripts/serve_dashboard_preview.py` starts a local preview server for the
+dashboard with deterministic, synthetic, non-secret data. It serves the **real**
+`dashboard/static/` assets (no parallel mock UI), so any dashboard change can be
+inspected visually without real hardware, MQTT, Zendure/Shelly access, SQLite
+history, passwords, or a running EMS loop.
+
+```bash
+python3 scripts/serve_dashboard_preview.py
+python3 scripts/serve_dashboard_preview.py --scenario firmware-status
+python3 scripts/serve_dashboard_preview.py --scenario write-mode
+python3 scripts/serve_dashboard_preview.py --host 127.0.0.1 --port 8767
+```
+
+It binds to `127.0.0.1:8767` by default and prints the preview URLs. Each flow
+view has a stable URL that opens the dashboard directly in that view:
+
+```text
+http://127.0.0.1:8767/preview/aggregated
+http://127.0.0.1:8767/preview/devices
+http://127.0.0.1:8767/preview/control
+http://127.0.0.1:8767/preview/energy
+http://127.0.0.1:8767/preview/diagnose
+http://127.0.0.1:8767/preview/logs
+```
+
+Scenarios:
+
+- `normal` — healthy two-device system (read-only).
+- `firmware-status` — mixed `ac_mode` / `ac_status` / `soc_limit` / `pack_state`
+  / `dc_status` / `grid_state` / `grid_off_mode` values across devices, including
+  an unknown-value device, to visually test readable firmware-status labels.
+- `offline-device` — one healthy device and one offline device with missing
+  telemetry and warning states.
+- `auth-readonly` — dashboard authentication configured but not logged in
+  (login button visible, write controls locked).
+- `write-mode` — authenticated operator preview; the runtime write UI renders.
+  Write requests are preview-only and never touch disk, config, runtime state,
+  devices, or the network. The Diagnose and Logs tabs only show content in this
+  scenario because they are auth-gated.
+
+The shared synthetic payloads live in `scripts/dashboard_preview_data.py` and are
+reused by the screenshot helper so previews and screenshots stay in sync:
+
+```bash
+# Screenshot helper (needs Firefox headless + ImageMagick `convert`):
+python3 scripts/serve_dashboard_preview.py --capture --scenario write-mode --output-dir docs/assets
+python3 scripts/capture_dashboard_previews.py            # diagnose + logs JPGs
+python3 scripts/capture_dashboard_previews.py --serve-only
+```

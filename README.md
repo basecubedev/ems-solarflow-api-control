@@ -620,6 +620,12 @@ python3 scripts/check_log_events.py /tmp/ems-sim.log \
   --require target_calculation
 ```
 
+Dashboard UI preview (synthetic data, no hardware/secrets):
+
+```bash
+python3 scripts/serve_dashboard_preview.py --scenario firmware-status
+```
+
 Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md).
 Safety checks: [docs/safety.md](docs/safety.md).
 
