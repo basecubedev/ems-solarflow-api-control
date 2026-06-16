@@ -71,22 +71,22 @@ console.log(JSON.stringify({{
     assert output["className"] == "runtime-feedback error"
 
 
-def test_ac_state_label_and_icon_helpers():
+def test_ac_path_label_and_icon_helpers():
     script = f"""
 const app = require({json.dumps(str(APP_JS))});
 const cases = [
-  [{{ ac_mode: 2, ac_status: 1 }}, "Output", "inverter"],
-  [{{ ac_mode: 1, ac_status: 2 }}, "Charge", "charge"],
-  [{{ ac_mode: 2, ac_status: 0 }}, "Output standby", "rule"],
-  [{{ ac_mode: 1, ac_status: 0 }}, "Charge standby", "rule"],
-  [{{ ac_mode: 0, ac_status: 0 }}, "Standby", "rule"],
-  [{{ ac_mode: 9, ac_status: 9 }}, "Unknown", "rule"],
+  [{{ ac_mode: 2, ac_status: 1 }}, "AC output active", "inverter"],
+  [{{ ac_mode: 1, ac_status: 2 }}, "AC charge active", "charge"],
+  [{{ ac_mode: 2, ac_status: 0 }}, "AC output standby", "rule"],
+  [{{ ac_mode: 1, ac_status: 0 }}, "AC charge standby", "rule"],
+  [{{ ac_mode: 0, ac_status: 0 }}, "AC standby", "rule"],
+  [{{ ac_mode: 9, ac_status: 9 }}, "Unknown AC state (value 9)", "rule"],
 ];
 console.log(JSON.stringify(cases.map(([device, label, icon]) => ({{
   expectedLabel: label,
-  actualLabel: app.acStateLabel(device),
+  actualLabel: app.acPathLabel(device),
   expectedIcon: icon,
-  actualIcon: app.acStateIcon(device)
+  actualIcon: app.acPathIcon(device)
 }}))));
 """
     output = run_node(script)
@@ -96,7 +96,48 @@ console.log(JSON.stringify(cases.map(([device, label, icon]) => ({{
         assert item["actualIcon"] == item["expectedIcon"]
 
 
-def test_render_devices_uses_ac_tile():
+def test_firmware_enum_label_helpers():
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+console.log(JSON.stringify({{
+  socLimit: [0, 1, 2, 9].map((v) => app.socLimitStatusLabel(v)),
+  packState: [0, 1, 2, 9].map((v) => app.packStateLabel(v)),
+  acMode: [1, 2, 9].map((v) => app.acModeLabel(v)),
+  acStatus: [0, 1, 2, 9].map((v) => app.acStatusLabel(v)),
+  dcStatus: [0, 1, 2, 9].map((v) => app.dcStatusLabel(v)),
+  gridState: [0, 1, 9].map((v) => app.gridStateLabel(v)),
+  socStatus: [0, 1, 9].map((v) => app.socStatusLabel(v)),
+  gridOffMode: ["off", "eco", "standard", "weird"].map((v) => app.gridOffModeOptionLabel(v)),
+}}));
+"""
+    output = run_node(script)
+
+    assert output["socLimit"] == [
+        "Normal", "Max-SoC reached", "Min-SoC protection", "Unknown (value 9)"
+    ]
+    assert output["packState"] == [
+        "Standby", "Charging", "Discharging", "Unknown battery state (value 9)"
+    ]
+    assert output["acMode"] == [
+        "AC input / charge mode", "AC output mode", "Unknown AC mode (value 9)"
+    ]
+    assert output["acStatus"] == [
+        "AC standby", "AC output active", "AC charge active", "Unknown AC state (value 9)"
+    ]
+    assert output["dcStatus"] == [
+        "DC standby", "DC battery input path", "DC battery output path",
+        "Unknown DC state (value 9)"
+    ]
+    assert output["gridState"] == [
+        "Grid disconnected", "Grid connected", "Unknown grid state (value 9)"
+    ]
+    assert output["socStatus"] == [
+        "No calibration", "Calibration running", "Unknown calibration state (value 9)"
+    ]
+    assert output["gridOffMode"] == ["Off / closed", "Eco", "Standard", "weird"]
+
+
+def test_render_devices_uses_firmware_status_block():
     script = f"""
 const app = require({json.dumps(str(APP_JS))});
 const grid = {{
@@ -122,7 +163,11 @@ app.renderDevices({{
     target_w: 200,
     output_limit_w: 300,
     ac_mode: 2,
-    ac_status: 1
+    ac_status: 1,
+    soc_limit: 0,
+    pack_state: 2,
+    dc_status: 2,
+    grid_state: 1
   }},
   WR2: {{
     online: true,
@@ -133,7 +178,11 @@ app.renderDevices({{
     target_w: 0,
     output_limit_w: 0,
     ac_mode: 1,
-    ac_status: 2
+    ac_status: 2,
+    soc_limit: 1,
+    pack_state: 1,
+    dc_status: 1,
+    grid_state: 0
   }},
   WR3: {{
     online: true,
@@ -144,7 +193,11 @@ app.renderDevices({{
     target_w: 0,
     output_limit_w: 0,
     ac_mode: 2,
-    ac_status: 0
+    ac_status: 9,
+    soc_limit: 2,
+    pack_state: 0,
+    dc_status: 0,
+    grid_state: 1
   }}
 }});
 console.log(JSON.stringify({{ html: grid.innerHTML }}));
@@ -152,10 +205,24 @@ console.log(JSON.stringify({{ html: grid.innerHTML }}));
     output = run_node(script)
 
     html = output["html"]
-    assert '<span class="device-label">AC</span>' in html
-    assert "<strong>Output</strong>" in html
-    assert "<strong>Charge</strong>" in html
-    assert "<strong>Output standby</strong>" in html
+    # Firmware status block with readable labels, not raw numbers.
+    assert "Firmware status" in html
+    assert '<span class="device-label">AC path</span>' in html
+    assert '<span class="device-label">SOC guard</span>' in html
+    assert '<span class="device-label">Battery state</span>' in html
+    assert '<span class="device-label">DC path</span>' in html
+    assert '<span class="device-label">Grid</span>' in html
+    assert "<strong>AC output active</strong>" in html
+    assert "<strong>AC charge active</strong>" in html
+    assert "<strong>Max-SoC reached</strong>" in html
+    assert "<strong>Min-SoC protection</strong>" in html
+    assert "<strong>Discharging</strong>" in html
+    assert "<strong>Grid connected</strong>" in html
+    assert "<strong>Grid disconnected</strong>" in html
+    # Unknown values keep the raw number as secondary debug info.
+    assert "<strong>Unknown AC state (value 9)</strong>" in html
+    # No naked firmware status numbers as primary values.
+    assert '<span class="device-label">AC</span>' not in html
     assert '<span class="device-label">Mode</span>' not in html
 
 
@@ -221,6 +288,54 @@ console.log(JSON.stringify({{
     assert output["wr3Present"] is True
     assert output["ems"] < output["wr1"] < output["wr2"] < output["wr3"]
     assert output["wr3"] < output["winter"] < output["ha"]
+
+
+def test_runtime_offgrid_select_uses_readable_labels_but_keeps_values():
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const html = app.runtimeDeviceForm("WR1", {{
+  enabled: true,
+  max_power: 800,
+  offgrid_socket_mode: "eco",
+  pv_priority_factor: 1.0
+}}, 800);
+console.log(JSON.stringify({{ html }}));
+"""
+    output = run_node(script)
+    html = output["html"]
+
+    assert '<option value="off" >Off / closed</option>' in html
+    assert '<option value="eco" selected>Eco</option>' in html
+    assert '<option value="standard" >Standard</option>' in html
+    # Submitted button label is per-form and readable.
+    assert ">Save WR1 settings</button>" in html
+
+
+def test_runtime_stage_cards_use_readable_submit_labels():
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+app.state.auth = {{ configured: true, authenticated: true, csrfToken: "token" }};
+app.state.runtime = {{
+  system: {{ enabled: true, max_total_power: 1200, min_output_limit: 35, loop_interval: 5 }},
+  devices: {{ WR1: {{ enabled: true, max_power: 800, offgrid_socket_mode: "off", pv_priority_factor: 1.0 }} }},
+  winter: {{ enabled: false }},
+  ha: {{ enabled: true, control_enabled: false }},
+  _limits: {{
+    system: {{ max_total_power: 1200, min_output_limit: 1200 }},
+    devices: {{ WR1: 800 }},
+    fallback_device_max_power: 800
+  }}
+}};
+console.log(JSON.stringify({{ html: app.runtimeControlPanel() }}));
+"""
+    output = run_node(script)
+    html = output["html"]
+
+    assert ">Save EMS settings</button>" in html
+    assert ">Save WR1 settings</button>" in html
+    assert ">Save winter mode</button>" in html
+    assert ">Save HA settings</button>" in html
+    assert ">Apply</button>" not in html
 
 
 def test_runtime_control_panel_uses_stable_number_limits_after_lowered_values():
