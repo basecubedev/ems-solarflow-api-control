@@ -620,7 +620,8 @@ python3 scripts/check_log_events.py /tmp/ems-sim.log \
   --require target_calculation
 ```
 
-Dashboard UI preview (synthetic data, no hardware/secrets):
+Dashboard UI preview (synthetic data, no hardware/secrets), then open
+`http://127.0.0.1:8767/preview`:
 
 ```bash
 python3 scripts/serve_dashboard_preview.py --scenario firmware-status

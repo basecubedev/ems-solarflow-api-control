@@ -98,8 +98,9 @@ python3 scripts/serve_dashboard_preview.py --scenario firmware-status
 python3 scripts/serve_dashboard_preview.py --scenario write-mode
 ```
 
-It serves the real dashboard assets on `http://127.0.0.1:8767` and provides a
-stable URL per view (`/preview/aggregated`, `/preview/devices`, `/preview/control`,
+It serves the real dashboard assets on `http://127.0.0.1:8767`. Open the landing
+page at `http://127.0.0.1:8767/preview` for links to every view, or go straight to
+a view (`/preview/aggregated`, `/preview/devices`, `/preview/control`,
 `/preview/energy`, `/preview/diagnose`, `/preview/logs`). Scenarios cover a healthy
 system, mixed firmware-status values (including unknown values), an offline device,
 and read-only/write-mode authentication states. See

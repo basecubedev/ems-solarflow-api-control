@@ -125,16 +125,22 @@ python3 scripts/serve_dashboard_preview.py --scenario write-mode
 python3 scripts/serve_dashboard_preview.py --host 127.0.0.1 --port 8767
 ```
 
-It binds to `127.0.0.1:8767` by default and prints the preview URLs. Each flow
-view has a stable URL that opens the dashboard directly in that view:
+It binds to `127.0.0.1:8767` by default and prints the preview URLs. Start at the
+landing page, which links every view for the current scenario:
 
 ```text
-http://127.0.0.1:8767/preview/aggregated
-http://127.0.0.1:8767/preview/devices
-http://127.0.0.1:8767/preview/control
-http://127.0.0.1:8767/preview/energy
-http://127.0.0.1:8767/preview/diagnose
-http://127.0.0.1:8767/preview/logs
+http://127.0.0.1:8767/preview
+```
+
+Each flow view also has a stable URL that opens the dashboard directly in that
+view: `/preview/aggregated`, `/preview/devices`, `/preview/control`,
+`/preview/energy`, `/preview/diagnose`, `/preview/logs`.
+
+List the available scenarios or views without starting a server:
+
+```bash
+python3 scripts/serve_dashboard_preview.py --list-scenarios
+python3 scripts/serve_dashboard_preview.py --list-views
 ```
 
 Scenarios:
@@ -153,11 +159,16 @@ Scenarios:
   scenario because they are auth-gated.
 
 The shared synthetic payloads live in `scripts/dashboard_preview_data.py` and are
-reused by the screenshot helper so previews and screenshots stay in sync:
+reused by the screenshot helper so previews and screenshots stay in sync. Capture
+mode defaults to the authenticated `write-mode` scenario (so the operator-only
+Diagnose and Logs tabs render) unless you pass `--scenario` explicitly, and
+`--views all` expands to every flow view:
 
 ```bash
 # Screenshot helper (needs Firefox headless + ImageMagick `convert`):
-python3 scripts/serve_dashboard_preview.py --capture --scenario write-mode --output-dir docs/assets
-python3 scripts/capture_dashboard_previews.py            # diagnose + logs JPGs
+python3 scripts/serve_dashboard_preview.py --capture                       # diagnose + logs, write-mode
+python3 scripts/serve_dashboard_preview.py --capture --views all           # every view
+python3 scripts/serve_dashboard_preview.py --capture --scenario firmware-status --views devices control
+python3 scripts/capture_dashboard_previews.py                              # legacy helper (diagnose + logs JPGs)
 python3 scripts/capture_dashboard_previews.py --serve-only
 ```
