@@ -32,6 +32,7 @@ import json
 import mimetypes
 import os
 import time
+from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -50,6 +51,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATIC_DIR = os.path.join(ROOT, "dashboard", "static")
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8767
+# Capture mode is operator-oriented (Diagnose/Logs), so it defaults to the
+# authenticated scenario unless the user explicitly selects one.
+CAPTURE_DEFAULT_SCENARIO = "write-mode"
+DEFAULT_CAPTURE_VIEWS = ("diagnose", "logs")
 
 
 def _preview_injection(view):
@@ -95,6 +100,85 @@ def _preview_injection(view):
     return before, after
 
 
+def normalize_views(raw_views):
+    """Normalize a --views list, expanding the ``all`` alias.
+
+    Returns ``None`` when no views were given (caller uses its own default),
+    a list of concrete flow views otherwise. Raises ValueError on unknown views.
+    """
+
+    if not raw_views:
+        return None
+    if any(view == "all" for view in raw_views):
+        return list(FLOW_VIEWS)
+    invalid = [view for view in raw_views if view not in FLOW_VIEWS]
+    if invalid:
+        raise ValueError(
+            f"unknown view(s): {', '.join(invalid)}; "
+            f"choose from: {', '.join(FLOW_VIEWS)}, all"
+        )
+    return list(raw_views)
+
+
+def resolve_scenario(args):
+    """Pick the scenario, defaulting capture mode to the authenticated scenario."""
+
+    if args.scenario:
+        return args.scenario
+    return CAPTURE_DEFAULT_SCENARIO if args.capture else DEFAULT_SCENARIO
+
+
+def _landing_page(scenario):
+    """Developer-only landing page listing preview views and scenarios.
+
+    All interpolated values are HTML-escaped even though they are constants.
+    """
+
+    view_items = "\n".join(
+        f'      <li><a href="/preview/{escape(view)}">/preview/{escape(view)}</a></li>'
+        for view in FLOW_VIEWS
+    )
+    scenario_items = "\n".join(
+        f"      <li><code>--scenario {escape(name)}</code></li>" for name in SCENARIOS
+    )
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard preview</title>
+  <style>
+    body {{ font-family: system-ui, sans-serif; background: #0f1115; color: #e6e9ee;
+           margin: 0; padding: 2rem; line-height: 1.5; }}
+    h1 {{ font-size: 1.25rem; }}
+    h2 {{ font-size: 0.95rem; text-transform: uppercase; letter-spacing: .08em;
+          color: #9aa4b2; margin-top: 1.75rem; }}
+    a {{ color: #6ea8fe; }}
+    ul {{ list-style: none; padding-left: 0; }}
+    li {{ margin: .25rem 0; }}
+    code {{ background: #1b1f27; padding: .1rem .35rem; border-radius: .25rem; }}
+    .note {{ margin-top: 1.75rem; color: #9aa4b2; font-size: .9rem; }}
+  </style>
+</head>
+<body>
+  <h1>Dashboard preview</h1>
+  <p>Current scenario: <code>{escape(scenario)}</code></p>
+  <h2>Views</h2>
+  <ul>
+{view_items}
+  </ul>
+  <h2>Scenarios</h2>
+  <p>Restart the server with one of:</p>
+  <ul>
+{scenario_items}
+  </ul>
+  <p class="note">Synthetic data only — no real hardware, secrets, runtime state,
+  or device writes. For trusted local use only.</p>
+</body>
+</html>
+"""
+
+
 class PreviewServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -113,6 +197,9 @@ class PreviewHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
 
+        if path in ("/preview", "/preview/"):
+            self._send_landing()
+            return
         if path.startswith("/preview/"):
             self._send_preview(path[len("/preview/"):])
             return
@@ -195,6 +282,10 @@ class PreviewHandler(BaseHTTPRequestHandler):
             "applied": False,
             "message": "Preview server does not apply changes.",
         })
+
+    def _send_landing(self):
+        body = _landing_page(self.server.scenario_name).encode("utf-8")
+        self._send_bytes(body, "text/html; charset=utf-8")
 
     def _send_preview(self, raw_view):
         view = raw_view.strip("/").lower()
@@ -319,11 +410,25 @@ def start_server(host=DEFAULT_HOST, port=DEFAULT_PORT, scenario=DEFAULT_SCENARIO
 def _print_urls(host, port, scenario):
     display_host = "127.0.0.1" if host in ("0.0.0.0", "::") else host
     print(f"Dashboard preview server: scenario={scenario}")
-    print(f"  http://{display_host}:{port}/")
+    print("Landing page:")
+    print(f"  http://{display_host}:{port}/preview")
+    print("Views:")
     for view in FLOW_VIEWS:
         print(f"  http://{display_host}:{port}/preview/{view}")
     print("Synthetic data only — no real hardware, secrets, or runtime state.")
     print("Press Ctrl+C to stop.")
+
+
+def _print_scenarios():
+    print("Scenarios:")
+    for name in SCENARIOS:
+        print(f"  {name}")
+
+
+def _print_views():
+    print("Views:")
+    for view in FLOW_VIEWS:
+        print(f"  {view}")
 
 
 def parse_args(argv=None):
@@ -332,9 +437,9 @@ def parse_args(argv=None):
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument(
         "--scenario",
-        default=DEFAULT_SCENARIO,
+        default=None,
         choices=SCENARIOS,
-        help="synthetic data scenario to serve",
+        help="synthetic data scenario (default: normal; capture default: write-mode)",
     )
     parser.add_argument(
         "--capture",
@@ -344,12 +449,22 @@ def parse_args(argv=None):
     parser.add_argument(
         "--views",
         nargs="+",
-        choices=FLOW_VIEWS,
-        help="views to capture (default: diagnose logs)",
+        metavar="VIEW",
+        help="views to capture: flow view names or 'all' (default: diagnose logs)",
     )
     parser.add_argument(
         "--output-dir",
         default=os.path.join(ROOT, "docs", "assets"),
+    )
+    parser.add_argument(
+        "--list-scenarios",
+        action="store_true",
+        help="print available scenarios and exit",
+    )
+    parser.add_argument(
+        "--list-views",
+        action="store_true",
+        help="print available views and exit",
     )
     return parser.parse_args(argv)
 
@@ -357,21 +472,38 @@ def parse_args(argv=None):
 def main(argv=None):
     args = parse_args(argv)
 
+    if args.list_scenarios:
+        _print_scenarios()
+        return
+    if args.list_views:
+        _print_views()
+        return
+
+    scenario = resolve_scenario(args)
+    try:
+        views = normalize_views(args.views)
+    except ValueError as exc:
+        raise SystemExit(str(exc))
+
     if args.host not in ("127.0.0.1", "localhost", "::1"):
         print(
             f"WARNING: binding preview server to {args.host}. The preview is "
             "intended for trusted local networks only."
         )
 
-    server = start_server(args.host, args.port, args.scenario)
+    server = start_server(args.host, args.port, scenario)
     try:
         if args.capture:
             from capture_dashboard_previews import capture_assets
 
-            capture_assets(args.host, args.port, args.output_dir, args.scenario, args.views)
-            print(f"Captured preview screenshots into {args.output_dir}")
+            written = capture_assets(
+                args.host, args.port, args.output_dir, scenario, views
+            )
+            print("Captured preview screenshots:")
+            for path in written:
+                print(f"  {os.path.relpath(path, ROOT)}")
             return
-        _print_urls(args.host, args.port, args.scenario)
+        _print_urls(args.host, args.port, scenario)
         while True:
             time.sleep(3600)
     except KeyboardInterrupt:

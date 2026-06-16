@@ -27,18 +27,20 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from dashboard_preview_data import FLOW_VIEWS  # noqa: E402
 from serve_dashboard_preview import (  # noqa: E402
+    CAPTURE_DEFAULT_SCENARIO,
+    DEFAULT_CAPTURE_VIEWS,
     DEFAULT_HOST,
     DEFAULT_PORT,
     ROOT,
+    normalize_views,
     start_server,
 )
 
 # Screenshots default to the authenticated scenario so the operator-only
 # Diagnose and Logs tabs render their content.
-CAPTURE_SCENARIO = "write-mode"
-DEFAULT_VIEWS = ("diagnose", "logs")
+CAPTURE_SCENARIO = CAPTURE_DEFAULT_SCENARIO
+DEFAULT_VIEWS = DEFAULT_CAPTURE_VIEWS
 
 
 def require_executable(name):
@@ -49,7 +51,10 @@ def require_executable(name):
 
 
 def capture_assets(host, port, output_dir, scenario=CAPTURE_SCENARIO, views=None):
-    """Screenshot each requested preview view into <output_dir>/preview-<view>.jpg."""
+    """Screenshot each requested preview view into <output_dir>/preview-<view>.jpg.
+
+    Returns the list of written file paths.
+    """
 
     views = list(views) if views else list(DEFAULT_VIEWS)
     firefox = require_executable("firefox")
@@ -57,6 +62,7 @@ def capture_assets(host, port, output_dir, scenario=CAPTURE_SCENARIO, views=None
     os.makedirs(output_dir, exist_ok=True)
     display_host = "127.0.0.1" if host in ("0.0.0.0", "::") else host
 
+    written = []
     with tempfile.TemporaryDirectory() as tmpdir:
         for view in views:
             png_path = os.path.join(tmpdir, f"{view}.png")
@@ -73,17 +79,14 @@ def capture_assets(host, port, output_dir, scenario=CAPTURE_SCENARIO, views=None
                 check=True,
                 cwd=ROOT,
             )
+            jpg_path = os.path.join(output_dir, f"preview-{view}.jpg")
             subprocess.run(
-                [
-                    convert,
-                    png_path,
-                    "-quality",
-                    "88",
-                    os.path.join(output_dir, f"preview-{view}.jpg"),
-                ],
+                [convert, png_path, "-quality", "88", jpg_path],
                 check=True,
                 cwd=ROOT,
             )
+            written.append(jpg_path)
+    return written
 
 
 def parse_args(argv=None):
@@ -97,8 +100,8 @@ def parse_args(argv=None):
     parser.add_argument(
         "--views",
         nargs="+",
-        choices=FLOW_VIEWS,
-        help="views to capture (default: diagnose logs)",
+        metavar="VIEW",
+        help="views to capture: flow view names or 'all' (default: diagnose logs)",
     )
     parser.add_argument("--serve-only", action="store_true")
     return parser.parse_args(argv)
@@ -106,11 +109,14 @@ def parse_args(argv=None):
 
 def main(argv=None):
     args = parse_args(argv)
+    try:
+        views = normalize_views(args.views)
+    except ValueError as exc:
+        raise SystemExit(str(exc))
+
     server = start_server(args.host, args.port, CAPTURE_SCENARIO)
     if args.serve_only:
-        print(f"Serving preview pages on http://{args.host}:{args.port}")
-        print(f"  http://{args.host}:{args.port}/preview/diagnose")
-        print(f"  http://{args.host}:{args.port}/preview/logs")
+        print(f"Serving preview pages on http://{args.host}:{args.port}/preview")
         try:
             while True:
                 time.sleep(3600)
@@ -121,7 +127,12 @@ def main(argv=None):
             server.server_close()
         return
     try:
-        capture_assets(args.host, args.port, args.output_dir, CAPTURE_SCENARIO, args.views)
+        written = capture_assets(
+            args.host, args.port, args.output_dir, CAPTURE_SCENARIO, views
+        )
+        print("Captured preview screenshots:")
+        for path in written:
+            print(f"  {os.path.relpath(path, ROOT)}")
     finally:
         server.shutdown()
         server.server_close()
