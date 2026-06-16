@@ -19,13 +19,24 @@ handoff, so the control decision can be followed step by step.
 
 ## Devices View
 
-The Devices view includes a compact AC tile on each device card. It shows the
-reported AC path state from `acStatus` and uses `acMode` to clarify standby
-direction:
+Each device card carries a compact **Firmware status** block below the main
+power tiles. It translates selected Zendure firmware status values into readable
+labels instead of raw numbers:
 
-- `Output` when the AC output path is active.
-- `Charge` when the AC input/charge path is active.
-- `Output standby`, `Charge standby`, or `Standby` when the AC path is idle.
+- **AC path** — reported from `acStatus`, using `acMode` to clarify the standby
+  direction: `AC output active`, `AC charge active`, `AC output standby`,
+  `AC charge standby`, or `AC standby`.
+- **SOC guard** — from `socLimit`: `Normal`, `Max-SoC reached`, or
+  `Min-SoC protection`.
+- **Battery state** — from `packState`: `Standby`, `Charging`, or
+  `Discharging`.
+- **DC path** — from `dcStatus`: `DC standby`, `DC battery input path`, or
+  `DC battery output path`.
+- **Grid** — from `gridState`: `Grid connected` or `Grid disconnected`.
+
+When present, SOC calibration state, battery pack count, and the AC input limit
+are shown as additional facts. Unknown firmware values are still shown with
+their raw value for debugging, for example `Unknown AC state (value 9)`.
 
 When [battery full-charge assist](battery-full-charge-assist.md) is enabled
 and a battery-backed device has known assist state, the device card also shows
