@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
+import copy
 import unittest
 
 from ems.config import (
     INFLUXDB_DEFAULTS,
     influx_duration_seconds,
     is_influx_duration,
+    is_valid_influx_name,
     normalize_influxdb_config,
     resolve_influx_token,
     sanitize_bucket_prefix,
@@ -96,6 +98,69 @@ class NormalizeInfluxConfigTest(unittest.TestCase):
     def test_bucket_prefix_sanitized(self):
         cfg = normalize_influxdb_config({"bucket_prefix": "my prefix!"})
         self.assertEqual(cfg["bucket_prefix"], "myprefix")
+
+
+class ValidInfluxNameTest(unittest.TestCase):
+    def test_accepts_normal_names(self):
+        for value in ("raw", "1m", "5m", "1h", "ems_home-1", "bucket.v2"):
+            self.assertTrue(is_valid_influx_name(value), value)
+
+    def test_rejects_unsafe_names(self):
+        for value in (
+            "",
+            None,
+            "raw bucket",
+            'raw"',
+            "raw\nbucket",
+            'raw") |> drop(',
+            "../raw",
+            "raw/1m",
+            "raw;rm -rf",
+            "raw|cat",
+            "$(whoami)",
+            ".",
+            "..",
+        ):
+            self.assertFalse(is_valid_influx_name(value), value)
+
+
+class NormalizeInfluxNameValidationTest(unittest.TestCase):
+    def test_default_config_remains_valid(self):
+        cfg = normalize_influxdb_config(copy.deepcopy(INFLUXDB_DEFAULTS))
+        self.assertEqual(len(cfg["downsampling"]), 3)
+        self.assertEqual(len(cfg["query_profiles"]), 4)
+
+    def test_drops_downsampling_with_unsafe_source(self):
+        cfg = normalize_influxdb_config(
+            {
+                "downsampling": [
+                    {"source": "raw", "target": "1m", "window": "1m"},
+                    {"source": "raw bucket", "target": "5m", "window": "5m"},
+                    {"source": "raw", "target": 'x" |> yield(', "window": "1h"},
+                    {"source": "raw\nx", "target": "1h", "window": "1h"},
+                ]
+            }
+        )
+        self.assertEqual(
+            cfg["downsampling"],
+            [{"source": "raw", "target": "1m", "window": "1m"}],
+        )
+
+    def test_drops_query_profile_with_unsafe_bucket(self):
+        cfg = normalize_influxdb_config(
+            {
+                "query_profiles": [
+                    {"max_range": "6h", "bucket": "raw", "window": "10s"},
+                    {"max_range": "24h", "bucket": "bad bucket", "window": "1m"},
+                    {"max_range": "30d", "bucket": 'raw"', "window": "5m"},
+                    {"max_range": "365d", "bucket": "raw\nx", "window": "1h"},
+                ]
+            }
+        )
+        self.assertEqual(
+            [p["bucket"] for p in cfg["query_profiles"]],
+            ["raw"],
+        )
 
 
 class ResolveTokenTest(unittest.TestCase):

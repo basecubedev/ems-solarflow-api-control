@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import copy
 import json
+import logging
 import os
+import re
 import sys
 from datetime import datetime
 
@@ -656,6 +658,28 @@ def sanitize_bucket_prefix(value, default="ems"):
     return cleaned or default
 
 
+# Bucket/config names are interpolated into Flux query strings and bucket
+# paths, so keep them to a conservative character set. Anything outside this
+# (spaces, quotes, newlines, Flux fragments, path separators, shell
+# metacharacters) is rejected rather than passed through.
+INFLUX_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
+def is_valid_influx_name(value):
+    """True when value is a safe InfluxDB bucket/config name.
+
+    Allows only ``[A-Za-z0-9_.-]`` so spaces, quotes, newlines, Flux syntax
+    fragments, path separators and shell metacharacters are rejected. Bare dot
+    sequences (``.``/``..``) are also rejected to avoid path-style values.
+    """
+    text = str(value or "")
+    if not INFLUX_NAME_PATTERN.match(text):
+        return False
+    if set(text) <= {"."}:
+        return False
+    return True
+
+
 def normalize_influxdb_config(config):
     """Validate and normalize the optional influxdb config block.
 
@@ -689,6 +713,14 @@ def normalize_influxdb_config(config):
         window = str(entry.get("window", "")).strip()
         if not source or not target or not is_influx_duration(window):
             continue
+        if not is_valid_influx_name(source) or not is_valid_influx_name(target):
+            logging.warning(
+                "Dropping influxdb downsampling entry with unsafe bucket "
+                "name (allowed: A-Za-z0-9_.-): source=%r target=%r",
+                source,
+                target,
+            )
+            continue
         downsampling.append(
             {"source": source, "target": target, "window": window}
         )
@@ -705,6 +737,13 @@ def normalize_influxdb_config(config):
         bucket = str(entry.get("bucket", "")).strip()
         window = str(entry.get("window", "")).strip()
         if not is_influx_duration(max_range) or not bucket:
+            continue
+        if not is_valid_influx_name(bucket):
+            logging.warning(
+                "Dropping influxdb query profile with unsafe bucket name "
+                "(allowed: A-Za-z0-9_.-): bucket=%r",
+                bucket,
+            )
             continue
         if not is_influx_duration(window):
             continue
