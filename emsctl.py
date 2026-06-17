@@ -555,7 +555,8 @@ Examples:
         "action",
         choices=("init", "status", "sync"),
         help=(
-            "init: set up bundled InfluxDB (secrets, start, sync). "
+            "init: complete Analytics setup (bundled: secrets, start, wait, "
+            "sync; external: validate, check connectivity, sync). "
             "status: read live schema. sync: reconcile schema to config."
         ),
     )
@@ -1489,50 +1490,99 @@ def handle_influx_command(args, config):
     return run_influx_schema_command(influx_config, args.action, args.json)
 
 
-def handle_influx_init(args, influx_config):
-    """Set up the bundled InfluxDB backend zero-config (secrets + start + sync)."""
-    from ems import influx_setup
-    from ems.paths import BASE_DIR
+# Shown when 'influx init' runs against a disabled config. Matches the dashboard
+# hint so the operator sees one consistent instruction everywhere.
+INFLUX_DISABLED_MESSAGE = (
+    "InfluxDB is disabled in config.json. "
+    "Enable influxdb.enabled to use Analytics history."
+)
 
-    # Disabled config: compose file selection returns only the base file (which
-    # has no influxdb service), so starting cannot work. Only the
-    # secret-file-only path (--force-disabled --no-start) is meaningful.
+
+def handle_influx_init(args, influx_config):
+    """Complete end-to-end setup for the configured InfluxDB backend.
+
+    This is the one command an operator runs to make Analytics history work:
+
+    - **bundled** mode generates local secrets, starts the container, waits for
+      readiness and (when ``auto_sync``) reconciles the schema;
+    - **external** mode never touches Docker — it validates the connection
+      settings, checks connectivity and reconciles the schema when ``auto_sync``;
+    - **disabled** config exits with a clear, actionable message.
+    """
     if not influx_config["enabled"]:
-        if not args.force_disabled:
-            return fail(
-                "influxdb is disabled in config (set influxdb.enabled = true, "
-                "or pass --force-disabled --no-start to create the secret file "
-                "only)",
-                code=2,
-            )
+        return handle_influx_init_disabled(args, influx_config)
+
+    if influx_config["mode"] == "bundled":
+        return handle_influx_init_bundled(args, influx_config)
+
+    return handle_influx_init_external(args, influx_config)
+
+
+def _influx_init_fail(args, influx_config, message, code=2):
+    """Emit an ``influx init`` failure as text (stderr) or a single JSON object.
+
+    Keeping the JSON-mode error inside one object preserves the "exactly one
+    JSON document on stdout" contract for ``influx init --json``.
+    """
+    if args.json:
+        print(json.dumps(
+            {
+                "ok": False,
+                "command": "influx init",
+                "enabled": influx_config["enabled"],
+                "mode": influx_config["mode"],
+                "started": False,
+                "ready": False,
+                "synced": False,
+                "errors": [message],
+            },
+            indent=2,
+            sort_keys=True,
+        ))
+        return code
+    return fail(message, code=code)
+
+
+def handle_influx_init_disabled(args, influx_config):
+    """Disabled InfluxDB: print a helpful message; do not start Docker or sync.
+
+    The only meaningful action while disabled is the secret-file-only bootstrap
+    (``--force-disabled --no-start``) so an operator can pre-stage bundled
+    secrets before flipping ``influxdb.enabled`` to true.
+    """
+    if args.force_disabled and influx_config["mode"] == "bundled":
         if not args.no_start:
-            return fail(
+            return _influx_init_fail(
+                args,
+                influx_config,
                 "InfluxDB is disabled. Use --force-disabled --no-start to only "
                 "create the secret file, or enable influxdb.enabled=true before "
                 "starting bundled InfluxDB.",
-                code=2,
             )
+        # Secret-file-only path: reuse the bundled flow, which honours
+        # --no-start and therefore never starts Docker or runs a sync.
+        return handle_influx_init_bundled(args, influx_config)
 
-    if influx_config["mode"] != "bundled":
-        return fail(
-            "influx init manages the bundled docker-compose InfluxDB only "
-            f"(influxdb.mode is '{influx_config['mode']}'). For external mode, "
-            "provide a token (influxdb.token or the influxdb.token_env env "
-            "var) and run 'emsctl.py influx sync'.",
-            code=2,
-        )
+    return _influx_init_fail(args, influx_config, INFLUX_DISABLED_MESSAGE)
+
+
+def handle_influx_init_bundled(args, influx_config):
+    """Bundled docker-compose InfluxDB: secrets -> start -> wait -> sync."""
+    from ems import influx_setup
+    from ems.paths import BASE_DIR
 
     # The bundled Compose overlays read a fixed env_file path, so a custom
     # secret_file would write secrets the container never sees. Refuse to start
     # in that case; --no-start (secret file only) is still allowed.
     if not args.no_start and not influx_setup.uses_default_secret_file(influx_config):
-        return fail(
+        return _influx_init_fail(
+            args,
+            influx_config,
             "influxdb.secret_file is not the default "
             f"'{influx_setup.DEFAULT_SECRET_FILE}'. The bundled Docker Compose "
             "overlays currently only read that path, so a custom secret_file "
             "would not reach the containers. Use --no-start to only write the "
             f"secret file, or set secret_file to '{influx_setup.DEFAULT_SECRET_FILE}'.",
-            code=2,
         )
 
     # 1. Create/merge the local secret env file (idempotent, never overwrites).
@@ -1551,12 +1601,20 @@ def handle_influx_init(args, influx_config):
             command, cwd=BASE_DIR, stdout_to_stderr=args.json
         )
         if code != 0:
-            return fail("failed to start bundled InfluxDB via docker compose")
+            return _influx_init_fail(
+                args,
+                influx_config,
+                "failed to start bundled InfluxDB via docker compose",
+                code=1,
+            )
         started = True
 
-    # 3 + 4. Wait for readiness and sync schema unless skipped. The nested op
-    # returns its data so it stays inside this command's single JSON object.
+    # 3 + 4. Wait for readiness and reconcile the schema (when auto_sync). When
+    # the schema is not synced we still run a readiness probe so 'ready' is
+    # truthful and the operator gets a final status check. The nested op returns
+    # its data so it stays inside this command's single JSON object.
     sync_ran = False
+    ready = False
     sync_result = None
     errors = []
     do_sync = started and not args.no_sync and influx_config["auto_sync"]
@@ -1564,8 +1622,15 @@ def handle_influx_init(args, influx_config):
         rc, sync_result = execute_influx_schema_op(influx_config, "sync")
         if rc == 0:
             sync_ran = True
+            ready = True
         else:
             errors.append(sync_result["error"])
+    elif started:
+        # Final readiness check without changing the schema (auto_sync off or
+        # --no-sync). A failed probe is not fatal: the container may still be
+        # coming up and the operator is told to run 'influx sync' next.
+        rc, _ = execute_influx_schema_op(influx_config, "status")
+        ready = rc == 0
 
     ok = not errors
     payload = {
@@ -1580,6 +1645,7 @@ def handle_influx_init(args, influx_config):
         "compose_files": files,
         "started": started,
         "start_skipped": args.no_start,
+        "ready": ready,
         "synced": sync_ran,
         "sync_skipped": not do_sync,
         "token": describe_token_status(influx_config),
@@ -1595,11 +1661,83 @@ def handle_influx_init(args, influx_config):
     if not ok:
         return fail(errors[0])
 
-    print_influx_init(secret_report, started, sync_ran, args)
+    print_influx_init(secret_report, started, sync_ran, ready, args)
     return 0
 
 
-def print_influx_init(secret_report, started, sync_ran, args):
+def handle_influx_init_external(args, influx_config):
+    """External InfluxDB: validate settings, check connectivity, sync if enabled.
+
+    External InfluxDB is user-managed, so this never starts or stops Docker. It
+    confirms the connection settings are present, verifies the server is
+    reachable and (when ``auto_sync``) reconciles buckets/retention/tasks.
+    """
+    from ems import influx_setup
+
+    token_status = describe_token_status(influx_config)
+    missing = []
+    if not influx_config["url"]:
+        missing.append("influxdb.url")
+    if not influx_config["org"]:
+        missing.append("influxdb.org")
+    if not influx_config["bucket_prefix"]:
+        missing.append("influxdb.bucket_prefix")
+    if not token_status["present"]:
+        missing.append("influxdb.token or the influxdb.token_env env var")
+
+    errors = []
+    ready = False
+    synced = False
+    sync_result = None
+    do_sync = not args.no_sync and influx_config["auto_sync"]
+
+    if missing:
+        errors.append(
+            "external InfluxDB is not fully configured; set: " + ", ".join(missing)
+        )
+    else:
+        # 'sync' reconciles the schema; 'status' is a connectivity check only.
+        # Both wait for readiness first, so either confirms reachability.
+        action = "sync" if do_sync else "status"
+        rc, result = execute_influx_schema_op(influx_config, action)
+        if rc == 0:
+            ready = True
+            sync_result = result
+            synced = do_sync
+        else:
+            errors.append(result["error"])
+
+    ok = not errors
+    payload = {
+        "ok": ok,
+        "command": "influx init",
+        "enabled": influx_config["enabled"],
+        "mode": "external",
+        "user_managed": True,
+        "url": influx_setup.host_cli_url(influx_config),
+        "started": False,
+        "start_skipped": True,
+        "ready": ready,
+        "synced": synced,
+        "sync_skipped": not do_sync,
+        "token": token_status,
+        "errors": errors,
+    }
+    if do_sync and sync_result is not None and sync_result.get("ok"):
+        payload["sync_result"] = sync_result["report"]
+
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0 if ok else 1
+
+    if not ok:
+        return fail(errors[0])
+
+    print_influx_init_external(influx_config, ready, synced, do_sync)
+    return 0
+
+
+def print_influx_init(secret_report, started, sync_ran, ready, args):
     print("InfluxDB bundled setup")
     verb = "created" if secret_report["created"] else "updated"
     print(f"  secret file: {secret_report['relative_path']} ({verb}, gitignored)")
@@ -1617,6 +1755,7 @@ def print_influx_init(secret_report, started, sync_ran, args):
 
     if started:
         print("  bundled InfluxDB: started (docker compose up -d influxdb)")
+        print(f"  reachable: {'yes' if ready else 'not yet'}")
     else:
         print("  bundled InfluxDB: not started (--no-start)")
 
@@ -1629,6 +1768,27 @@ def print_influx_init(secret_report, started, sync_ran, args):
     if not started:
         print("  - start the stack:   python3 emsctl.py stack up")
     elif not sync_ran:
+        print("  - reconcile schema:  python3 emsctl.py influx sync")
+    print("  - check status:      python3 emsctl.py influx status")
+    if started and sync_ran:
+        print("\nAnalytics history is ready in the dashboard.")
+
+
+def print_influx_init_external(influx_config, ready, synced, do_sync):
+    print("InfluxDB external setup")
+    print(f"  url: {influx_config['url']}")
+    print(f"  reachable: {'yes' if ready else 'no'}")
+    if synced:
+        print("  schema sync: done")
+    elif do_sync:
+        print("  schema sync: skipped")
+    else:
+        print("  schema sync: skipped (auto_sync=false)")
+    print(
+        "\nExternal InfluxDB is user-managed: emsctl does not start or stop it."
+    )
+    print("Next steps:")
+    if not synced:
         print("  - reconcile schema:  python3 emsctl.py influx sync")
     print("  - check status:      python3 emsctl.py influx status")
 

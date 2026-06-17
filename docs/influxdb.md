@@ -58,21 +58,35 @@ to understand InfluxDB tokens, create env files, or pick passwords.
    }
    ```
 
-2. Start the whole stack with one command:
+2. Run the complete, one-command setup for Analytics history:
+
+   ```bash
+   python3 emsctl.py influx init
+   ```
+
+   This is the full end-to-end bootstrap. It generates
+   `deploy/docker/influxdb.env` with secure random secrets (if missing), starts
+   the bundled InfluxDB container, waits until it is reachable, and (when
+   `auto_sync` is true) reconciles buckets/retention/downsampling tasks from
+   `config.json`. After it prints success, the dashboard Analytics tab can
+   connect — **no manual Docker Compose, `.env`, bucket, retention or task setup
+   is required.**
+
+   To start the whole stack (bundled InfluxDB **and** the EMS container) in one
+   go, use:
 
    ```bash
    python3 emsctl.py stack up
    ```
 
-   This generates `deploy/docker/influxdb.env` with secure random secrets (if
-   missing), starts the bundled InfluxDB and the EMS with the **same**
-   `INFLUXDB_TOKEN`, waits for readiness, and reconciles buckets/retention/tasks
-   from `config.json`. Analytics is then available — no manual token handling.
+   With bundled mode and `auto_init: true`, `stack up` runs the same bundled
+   bootstrap automatically before starting the EMS, so you never need to call
+   Docker or the Influx CLI by hand.
 
-If you only want to set up InfluxDB (without starting the EMS container yet):
+Useful `influx init` variants:
 
 ```bash
-python3 emsctl.py influx init      # generate secrets, start InfluxDB, sync schema
+python3 emsctl.py influx init              # full setup: secrets, start, sync
 python3 emsctl.py influx init --no-start   # only create/merge the secret file
 python3 emsctl.py influx init --no-sync    # start, but skip the schema sync
 python3 emsctl.py influx status
@@ -82,6 +96,23 @@ python3 emsctl.py influx status
 existing token or password, only fills in missing values, and prints a redacted
 summary (never raw secrets). The generated file uses `0600` permissions where
 the filesystem supports it.
+
+### What `enabled`, `auto_init` and `auto_sync` mean
+
+- **`enabled: true`** turns on InfluxDB/Analytics usage. While disabled,
+  `influx init` exits with a clear message and does nothing else.
+- **`auto_init: true`** lets the `emsctl` **setup commands** bootstrap the
+  bundled InfluxDB backend automatically (this is what makes `stack up` prepare
+  secrets and start InfluxDB for you). It does **not** mean the EMS controller
+  starts Docker containers during the normal control loop — it never does.
+- **`auto_sync: true`** tells the setup commands to apply the bucket, retention
+  and task schema automatically once InfluxDB is reachable. With
+  `auto_sync: false`, `influx init` still prepares and starts bundled InfluxDB,
+  then prints the next step to run manually:
+
+  ```bash
+  python3 emsctl.py influx sync
+  ```
 
 > Leave `influxdb.token` empty: bundled mode reads the token from the generated
 > secret file (the variable named by `token_env`, default `INFLUXDB_TOKEN`), so
@@ -117,15 +148,15 @@ positive number of seconds; `0` (the default) or `null` writes every loop.
 ## Advanced / external path
 
 To point the EMS at an InfluxDB you run yourself, use `mode: "external"` and
-provide a token. The setup helpers do not create secrets or manage containers
-for external mode.
+provide a token. External InfluxDB is **user-managed**: the setup helpers never
+create secrets or start/stop containers for it.
 
 ```json
 "influxdb": {
   "enabled": true,
   "mode": "external",
   "auto_init": false,
-  "auto_sync": false,
+  "auto_sync": true,
   "url": "http://192.168.1.50:8086",
   "org": "ems",
   "token": "",
@@ -135,9 +166,15 @@ for external mode.
 
 ```bash
 export INFLUXDB_TOKEN=...        # or set influxdb.token directly
-python3 emsctl.py influx sync
+python3 emsctl.py influx init    # validate settings, check connectivity, sync
 python3 emsctl.py influx status
 ```
+
+For external mode, `influx init` does **not** touch Docker. It validates the
+`url`/`org`/`token`/`bucket_prefix` settings, checks that the server is
+reachable, and — when `auto_sync` is true — reconciles the schema. With
+`auto_sync: false` it only validates and checks connectivity; run
+`python3 emsctl.py influx sync` to apply the schema.
 
 If the EMS runs outside the Docker network, set `url` to the reachable address
 (e.g. `http://localhost:8086`).
@@ -184,6 +221,30 @@ mode the token is read automatically from the generated secret file, so no
 manual `export` is needed; in external mode provide it via `influxdb.token` or
 the `token_env` variable. Running `sync` twice with unchanged config performs no
 writes the second time.
+
+## Runtime behavior and troubleshooting
+
+The EMS controller **never starts or manages Docker containers**. When InfluxDB
+is enabled but not reachable, the controller keeps running (telemetry writes are
+failure-isolated and retried) and logs an actionable hint rather than failing
+silently:
+
+```text
+InfluxDB is enabled but not reachable. For bundled mode run:
+python3 emsctl.py influx init or start the full stack with:
+python3 emsctl.py stack up
+```
+
+The dashboard Analytics tab shows the same guidance when it cannot reach
+InfluxDB:
+
+```text
+Analytics history is enabled, but InfluxDB is not reachable.
+Run: python3 emsctl.py influx init
+```
+
+If you see these, run `python3 emsctl.py influx init` (bundled) or check the
+`url`/`token` and reachability of your external InfluxDB.
 
 ## Migration from `develop/influxdb/`
 

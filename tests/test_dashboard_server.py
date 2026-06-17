@@ -388,6 +388,39 @@ def test_analytics_unavailable_without_influx(tmp_path):
         server.server_close()
 
 
+def test_analytics_unreachable_hint(tmp_path):
+    # InfluxDB configured but unreachable: both endpoints must return a clean
+    # unavailable payload with an actionable hint pointing at 'influx init'.
+    store = SeriesStoreStub(str(tmp_path / "dashboard.sqlite"))
+    server, base_url = with_server(store)
+
+    class _UnreachableProvider:
+        def available(self):
+            return False
+
+    # Inject a configured-but-unreachable analytics provider.
+    server._analytics_provider = _UnreachableProvider()
+    server._analytics_built = True
+
+    try:
+        status, _, advertised = json_response(f"{base_url}/api/analytics/status")
+        assert status == 200
+        assert advertised["available"] is False
+        assert advertised["reason"] == "unreachable"
+        assert "influx init" in advertised["hint"]
+
+        status, _, series = json_response(
+            f"{base_url}/api/analytics/series?range=24h&series=pv"
+        )
+        assert status == 200
+        assert series["available"] is False
+        assert series["reason"] == "unreachable"
+        assert "influx init" in series["hint"]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_history_series_stays_sqlite_when_influx_enabled(tmp_path):
     # Enabling InfluxDB must never silently replace the operational SQLite
     # history: /api/history/series stays SQLite-backed, while /api/analytics/*

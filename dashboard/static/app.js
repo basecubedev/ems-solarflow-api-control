@@ -3778,11 +3778,30 @@ function analyticsShouldAutoRefresh() {
 
 // Toggle the Analytics tab between its "InfluxDB not configured" info state and
 // the live chart body. Returns whether analytics is available.
-function setAnalyticsAvailable(available) {
+function setAnalyticsAvailable(available, info) {
   state.analytics.available = available;
   const unavailable = $("analyticsUnavailable");
   const body = $("analyticsBody");
-  if (unavailable) unavailable.hidden = available;
+  if (unavailable) {
+    unavailable.hidden = available;
+    // When InfluxDB is configured but unreachable the API sends an actionable
+    // hint; show it (with a matching heading) instead of the default
+    // "not configured" copy so the operator knows how to fix it.
+    const heading = unavailable.querySelector ? unavailable.querySelector("h3") : null;
+    const detail = unavailable.querySelector ? unavailable.querySelector("p") : null;
+    const hint = info && info.reason === "unreachable" ? info.hint : null;
+    if (heading) heading.textContent = hint
+      ? "InfluxDB analytics is not reachable"
+      : "InfluxDB analytics is not configured";
+    if (detail && hint) {
+      detail.textContent = hint;
+    } else if (detail) {
+      detail.textContent =
+        "Enable the optional InfluxDB service to use long-term analytics, " +
+        "zooming, and custom date ranges. The Aggregate and Devices views " +
+        "keep working without it.";
+    }
+  }
   if (body) body.hidden = !available;
   return available;
 }
@@ -3807,7 +3826,7 @@ async function loadAnalytics(showLoading = true) {
   // A 200 payload with available:false means InfluxDB is not configured; show
   // the clean info state instead of an empty/broken chart.
   if (payload && payload.available === false) {
-    setAnalyticsAvailable(false);
+    setAnalyticsAvailable(false, payload);
     state.analytics.data = null;
     return;
   }
