@@ -56,6 +56,7 @@ TOP_LEVEL_COMMANDS = (
     "ha-control",
     "winter",
     "dashboard",
+    "influx",
     "diagnose",
     "interactive",
     "menu",
@@ -524,6 +525,35 @@ Examples:
     diagnose.add_argument(
         "--output",
         help="ZIP output path. Only valid with --support-bundle.",
+    )
+
+    influx = subparsers.add_parser(
+        "influx",
+        help="Inspect or reconcile the InfluxDB history schema.",
+        description=(
+            "Manage the optional InfluxDB 2.x history backend. Config is the "
+            "source of truth: 'sync' reconciles buckets, retention and "
+            "downsampling tasks to match config.json; 'status' reports the live "
+            "buckets, tasks and task health."
+        ),
+        epilog="""\
+Examples:
+  python3 emsctl.py influx status
+  python3 emsctl.py influx status --json
+  python3 emsctl.py influx sync
+  python3 emsctl.py influx sync --json
+""",
+        formatter_class=EMSHelpFormatter,
+    )
+    influx.add_argument(
+        "action",
+        choices=("status", "sync"),
+        help="status: read live schema. sync: reconcile schema to config.",
+    )
+    influx.add_argument(
+        "--json",
+        action="store_true",
+        help="Print machine-readable output.",
     )
 
     subparsers.add_parser(
@@ -1230,6 +1260,93 @@ def prompt_new_password(args, password_attr="password"):
     return password
 
 
+def handle_influx_command(args, config):
+    from ems.config import normalize_influxdb_config, resolve_influx_token
+    from ems.history import schema
+    from ems.history.influx_client import HistoryInfluxClient, wait_for_influx_ready
+
+    influx_config = normalize_influxdb_config(config.get("influxdb"))
+
+    if not influx_config["enabled"]:
+        return fail(
+            "influxdb is disabled in config (set influxdb.enabled = true)",
+            code=2,
+        )
+
+    token = resolve_influx_token(influx_config)
+    if not token:
+        return fail(
+            "no InfluxDB token: set influxdb.token or the env var named by "
+            f"influxdb.token_env ({influx_config['token_env']})",
+            code=2,
+        )
+
+    client = HistoryInfluxClient(
+        influx_config["url"], influx_config["org"], token
+    )
+
+    try:
+        wait_for_influx_ready(client, timeout_s=15)
+    except TimeoutError as exc:
+        return fail(str(exc))
+
+    try:
+        if args.action == "sync":
+            report = schema.sync(client, influx_config)
+        else:
+            report = schema.status(client, influx_config)
+    except Exception as exc:  # network/HTTP errors surface as a clean failure
+        return fail(f"influx {args.action} failed: {exc}")
+
+    if args.json:
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0
+
+    if args.action == "sync":
+        print_influx_sync(report)
+    else:
+        print_influx_status(report)
+    return 0
+
+
+def print_influx_sync(report):
+    print("InfluxDB schema sync")
+    for bucket in report["buckets"]:
+        retention = bucket["retention_seconds"]
+        retention_label = (
+            f"{retention // 86400}d" if retention else "infinite"
+        )
+        print(f"  bucket {bucket['name']}: {bucket['action']} (retention {retention_label})")
+    for task in report["tasks"]:
+        print(f"  task {task['name']}: {task['action']}")
+    for task in report["disabled_tasks"]:
+        print(f"  task {task['name']}: {task['action']}")
+    if not report["tasks"] and not report["disabled_tasks"]:
+        print("  no downsampling tasks configured")
+
+
+def print_influx_status(report):
+    print(f"InfluxDB schema status (prefix '{report['bucket_prefix']}')")
+    print(f"  healthy: {'yes' if report['healthy'] else 'no'}")
+    print("  buckets:")
+    for bucket in report["buckets"]:
+        if not bucket["exists"]:
+            print(f"    {bucket['name']}: MISSING")
+            continue
+        retention = bucket["retention_seconds"] or 0
+        retention_label = f"{retention // 86400}d" if retention else "infinite"
+        print(f"    {bucket['name']}: ok (retention {retention_label})")
+    print("  tasks:")
+    if not report["tasks"]:
+        print("    (none)")
+    for task in report["tasks"]:
+        print(
+            f"    {task['name']}: status={task['status']} "
+            f"last_run={task['last_run_status']} "
+            f"latest_completed={task['latest_completed']}"
+        )
+
+
 def handle_dashboard_command(args, config):
     auth_path = resolve_dashboard_auth_path(args, config)
     command = args.dashboard_command
@@ -1492,6 +1609,9 @@ def main(argv=None):
 
         if args.command == "dashboard":
             return handle_dashboard_command(args, config)
+
+        if args.command == "influx":
+            return handle_influx_command(args, config)
 
         runtime_path = resolve_runtime_path(args, config)
         state, created = load_runtime_state(runtime_path, config)

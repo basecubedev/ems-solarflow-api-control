@@ -89,6 +89,34 @@
     "log_redaction": false
   },
 
+  "influxdb": {
+    "_comment": "Optional InfluxDB 2.x history/analytics backend. When disabled, the dashboard keeps using local SQLite history. The bundled docker-compose InfluxDB is the primary supported target. Config is the source of truth: bucket prefix, retention, downsampling tasks and query profiles are reconciled into InfluxDB by 'emsctl.py influx sync'.",
+    "enabled": false,
+    "url": "http://influxdb:8086",
+    "org": "ems",
+    "_comment_token": "Leave token empty to read it from the env var named by token_env (recommended; do not commit secrets).",
+    "token": "",
+    "token_env": "INFLUXDB_TOKEN",
+    "bucket_prefix": "ems",
+    "retention": {
+      "raw_days": 14,
+      "one_minute_days": 90,
+      "five_minute_days": 365,
+      "one_hour_days": 1825
+    },
+    "downsampling": [
+      { "source": "raw", "target": "1m", "window": "1m" },
+      { "source": "1m", "target": "5m", "window": "5m" },
+      { "source": "5m", "target": "1h", "window": "1h" }
+    ],
+    "query_profiles": [
+      { "max_range": "6h", "bucket": "raw", "window": "10s" },
+      { "max_range": "24h", "bucket": "1m", "window": "1m" },
+      { "max_range": "30d", "bucket": "5m", "window": "5m" },
+      { "max_range": "365d", "bucket": "1h", "window": "1h" }
+    ]
+  },
+
   "energy_savings": {
     "_comment": "Lightweight SQLite daily energy statistics based on measured inverter AC output. Set price_per_kwh to estimate savings.",
     "enabled": true,

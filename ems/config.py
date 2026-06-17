@@ -75,6 +75,40 @@ BATTERY_FULL_CHARGE_ASSIST_DEFAULTS = {
     "state_database_path": "data/ems_state.sqlite"
 }
 
+INFLUXDB_DEFAULTS = {
+    "enabled": False,
+    "url": "http://influxdb:8086",
+    "org": "ems",
+    "token": "",
+    "token_env": "INFLUXDB_TOKEN",
+    "bucket_prefix": "ems",
+    "retention": {
+        "raw_days": 14,
+        "one_minute_days": 90,
+        "five_minute_days": 365,
+        "one_hour_days": 1825,
+    },
+    "downsampling": [
+        {"source": "raw", "target": "1m", "window": "1m"},
+        {"source": "1m", "target": "5m", "window": "5m"},
+        {"source": "5m", "target": "1h", "window": "1h"},
+    ],
+    "query_profiles": [
+        {"max_range": "6h", "bucket": "raw", "window": "10s"},
+        {"max_range": "24h", "bucket": "1m", "window": "1m"},
+        {"max_range": "30d", "bucket": "5m", "window": "5m"},
+        {"max_range": "365d", "bucket": "1h", "window": "1h"},
+    ],
+}
+
+# Maps the retention.*_days config keys to the bucket suffix they govern.
+INFLUXDB_RETENTION_KEY_BY_BUCKET = {
+    "raw": "raw_days",
+    "1m": "one_minute_days",
+    "5m": "five_minute_days",
+    "1h": "one_hour_days",
+}
+
 
 def default_safe_config():
     """Return a minimal safe config for simulation and replay."""
@@ -117,6 +151,7 @@ def default_safe_config():
         "battery_full_charge_assist": copy.deepcopy(
             BATTERY_FULL_CHARGE_ASSIST_DEFAULTS
         ),
+        "influxdb": copy.deepcopy(INFLUXDB_DEFAULTS),
         "devices": [],
         "grid_meter": {
             "type": "shelly",
@@ -590,6 +625,143 @@ def normalize_battery_full_charge_assist_config(config):
             )
         ),
     }
+
+
+def is_influx_duration(value):
+    """True when value looks like an InfluxDB/Flux duration such as 10s/1m/2h/7d."""
+    text = str(value or "").strip()
+    if len(text) < 2:
+        return False
+
+    unit = text[-1]
+    if unit not in ("s", "m", "h", "d", "w"):
+        return False
+
+    try:
+        amount = float(text[:-1])
+    except (TypeError, ValueError):
+        return False
+
+    return amount > 0
+
+
+def sanitize_bucket_prefix(value, default="ems"):
+    text = str(value or "").strip()
+    cleaned = "".join(
+        char for char in text if char.isalnum() or char in ("_", "-")
+    ).strip("_-")
+    return cleaned or default
+
+
+def normalize_influxdb_config(config):
+    """Validate and normalize the optional influxdb config block.
+
+    Config is the source of truth for the history schema, so this drops
+    malformed downsampling/query-profile entries rather than passing them on
+    to the InfluxDB schema reconciler.
+    """
+    if not isinstance(config, dict):
+        config = {}
+
+    retention_input = config.get("retention")
+    if not isinstance(retention_input, dict):
+        retention_input = {}
+
+    retention = {}
+    for key, default in INFLUXDB_DEFAULTS["retention"].items():
+        retention[key] = safe_int(
+            retention_input.get(key, default), default, minimum=0
+        )
+
+    downsampling = []
+    raw_downsampling = config.get("downsampling")
+    if not isinstance(raw_downsampling, list):
+        raw_downsampling = INFLUXDB_DEFAULTS["downsampling"]
+
+    for entry in raw_downsampling:
+        if not isinstance(entry, dict):
+            continue
+        source = str(entry.get("source", "")).strip()
+        target = str(entry.get("target", "")).strip()
+        window = str(entry.get("window", "")).strip()
+        if not source or not target or not is_influx_duration(window):
+            continue
+        downsampling.append(
+            {"source": source, "target": target, "window": window}
+        )
+
+    query_profiles = []
+    raw_profiles = config.get("query_profiles")
+    if not isinstance(raw_profiles, list):
+        raw_profiles = INFLUXDB_DEFAULTS["query_profiles"]
+
+    for entry in raw_profiles:
+        if not isinstance(entry, dict):
+            continue
+        max_range = str(entry.get("max_range", "")).strip()
+        bucket = str(entry.get("bucket", "")).strip()
+        window = str(entry.get("window", "")).strip()
+        if not is_influx_duration(max_range) or not bucket:
+            continue
+        if not is_influx_duration(window):
+            continue
+        query_profiles.append(
+            {"max_range": max_range, "bucket": bucket, "window": window}
+        )
+
+    # Profiles are matched smallest-range-first when selecting a bucket.
+    query_profiles.sort(key=lambda profile: influx_duration_seconds(profile["max_range"]))
+
+    return {
+        "enabled": safe_bool(config.get("enabled"), False),
+        "url": str(config.get("url", INFLUXDB_DEFAULTS["url"])).strip(),
+        "org": str(config.get("org", INFLUXDB_DEFAULTS["org"])).strip(),
+        "token": str(config.get("token", "")),
+        "token_env": str(
+            config.get("token_env", INFLUXDB_DEFAULTS["token_env"])
+        ).strip(),
+        "bucket_prefix": sanitize_bucket_prefix(
+            config.get("bucket_prefix", INFLUXDB_DEFAULTS["bucket_prefix"])
+        ),
+        "retention": retention,
+        "downsampling": downsampling,
+        "query_profiles": query_profiles,
+    }
+
+
+def influx_duration_seconds(value):
+    """Convert a Flux duration (10s/1m/2h/7d/4w) to seconds; 0 on parse failure."""
+    text = str(value or "").strip()
+    if len(text) < 2:
+        return 0
+
+    units = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
+    unit = text[-1]
+    if unit not in units:
+        return 0
+
+    try:
+        amount = float(text[:-1])
+    except (TypeError, ValueError):
+        return 0
+
+    return int(amount * units[unit])
+
+
+def resolve_influx_token(influxdb_config, environ=None):
+    """Resolve the InfluxDB token: explicit config value wins, else token_env."""
+    if environ is None:
+        environ = os.environ
+
+    token = str(influxdb_config.get("token", "")).strip()
+    if token:
+        return token
+
+    env_name = str(influxdb_config.get("token_env", "")).strip()
+    if env_name:
+        return str(environ.get(env_name, "")).strip()
+
+    return ""
 
 
 def winter_config_bool(key, default=False):
