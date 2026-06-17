@@ -325,7 +325,7 @@ def test_influx_init_non_default_secret_file_allowed_with_no_start(patch_base, m
 def test_influx_init_starts_and_syncs(patch_base, monkeypatch):
     calls = {}
 
-    def fake_docker(command, cwd, dry_run=False):
+    def fake_docker(command, cwd, dry_run=False, stdout_to_stderr=False):
         calls["docker"] = command
         return 0
 
@@ -348,7 +348,7 @@ def test_influx_init_starts_and_syncs(patch_base, monkeypatch):
 def test_influx_init_uses_host_url_for_sync(patch_base, monkeypatch):
     captured = {}
 
-    def fake_docker(command, cwd, dry_run=False):
+    def fake_docker(command, cwd, dry_run=False, stdout_to_stderr=False):
         return 0
 
     def fake_execute(influx_config, action):
@@ -469,10 +469,117 @@ def test_run_docker_compose_trace_goes_to_stderr(capsys):
     assert "+ docker compose up -d" in captured.err
 
 
+def test_run_docker_compose_stdout_to_stderr_redirects_child_streams(monkeypatch):
+    # In JSON mode the child's stdout (docker compose status lines) must be
+    # routed to this process's stderr so it cannot corrupt the JSON document.
+    captured = {}
+
+    def fake_run(command, cwd=None, stdout=None, stderr=None):
+        captured["stdout"] = stdout
+        captured["stderr"] = stderr
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    code = emsctl.run_docker_compose(
+        ["docker", "compose", "up", "-d"], cwd=".", stdout_to_stderr=True
+    )
+    assert code == 0
+    assert captured["stdout"] is sys.stderr
+    assert captured["stderr"] is sys.stderr
+
+
+def test_run_docker_compose_default_inherits_child_streams(monkeypatch):
+    # Non-JSON mode keeps Docker output on stdout for humans (stdout=None means
+    # the child inherits this process's stdout/stderr).
+    captured = {}
+
+    def fake_run(command, cwd=None, stdout=None, stderr=None):
+        captured["stdout"] = stdout
+        captured["stderr"] = stderr
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    code = emsctl.run_docker_compose(["docker", "compose", "up", "-d"], cwd=".")
+    assert code == 0
+    assert captured["stdout"] is None
+    assert captured["stderr"] is None
+
+
+def _fake_docker_run_emitting_status():
+    """Fake subprocess.run that mimics docker compose printing a status line.
+
+    Writes to whatever stdout stream run_docker_compose hands it, so in JSON
+    mode (stdout=sys.stderr) the noise lands on stderr, never on stdout.
+    """
+
+    def fake_run(command, cwd=None, stdout=None, stderr=None):
+        (stdout or sys.stdout).write("Container ems-influxdb Running\n")
+        return SimpleNamespace(returncode=0)
+
+    return fake_run
+
+
+def test_stack_up_json_keeps_docker_text_off_stdout(patch_base, monkeypatch, capsys):
+    # End-to-end: docker emits a status line, yet stdout stays exactly one JSON
+    # object and the docker noise is diverted to stderr.
+    monkeypatch.setattr(subprocess, "run", _fake_docker_run_emitting_status())
+    monkeypatch.setattr(
+        emsctl, "execute_influx_schema_op", fake_schema_op({"buckets": [], "tasks": []})
+    )
+    rc = emsctl.handle_stack_command(
+        stack_args(json=True),
+        {"influxdb": {"enabled": True, "mode": "bundled"}},
+    )
+    assert rc == 0
+    out = capsys.readouterr()
+    payload = json.loads(out.out)  # raises if docker text leaked onto stdout
+    assert payload["command"] == "stack up"
+    assert "Container ems-influxdb Running" not in out.out
+    assert "Container ems-influxdb Running" in out.err
+
+
+def test_influx_init_json_keeps_docker_text_off_stdout(patch_base, monkeypatch, capsys):
+    monkeypatch.setattr(subprocess, "run", _fake_docker_run_emitting_status())
+    report = {"buckets": [{"name": "ems_raw"}], "tasks": []}
+    monkeypatch.setattr(emsctl, "execute_influx_schema_op", fake_schema_op(report))
+    rc = emsctl.handle_influx_command(
+        init_args(json=True),
+        {"influxdb": {"enabled": True, "mode": "bundled"}},
+    )
+    assert rc == 0
+    out = capsys.readouterr()
+    payload = json.loads(out.out)  # single JSON object, no docker noise
+    assert payload["command"] == "influx init"
+    assert payload["started"] is True
+    # The nested sync report stays embedded in the single JSON object.
+    assert payload["sync_result"] == report
+    assert "Container ems-influxdb Running" not in out.out
+    assert "Container ems-influxdb Running" in out.err
+
+
+def test_stack_up_non_json_passes_through_docker_output(patch_base, monkeypatch):
+    # Human (non-JSON) mode must not redirect: run_docker_compose receives
+    # stdout_to_stderr=False so docker output stays on stdout for the operator.
+    captured = {}
+
+    def fake_docker(command, cwd, dry_run=False, stdout_to_stderr=False):
+        captured["stdout_to_stderr"] = stdout_to_stderr
+        return 0
+
+    monkeypatch.setattr(emsctl, "run_docker_compose", fake_docker)
+    monkeypatch.setattr(emsctl, "execute_influx_schema_op", fake_schema_op())
+    rc = emsctl.handle_stack_command(
+        stack_args(json=False),
+        {"influxdb": {"enabled": True, "mode": "bundled"}},
+    )
+    assert rc == 0
+    assert captured["stdout_to_stderr"] is False
+
+
 def test_stack_up_disabled_uses_base_file_only(patch_base, monkeypatch):
     captured = {}
 
-    def fake_docker(command, cwd, dry_run=False):
+    def fake_docker(command, cwd, dry_run=False, stdout_to_stderr=False):
         captured["command"] = command
         return 0
 
@@ -489,7 +596,7 @@ def test_stack_up_disabled_uses_base_file_only(patch_base, monkeypatch):
 def test_stack_up_bundled_includes_overlays_and_syncs(patch_base, monkeypatch):
     captured = {}
 
-    def fake_docker(command, cwd, dry_run=False):
+    def fake_docker(command, cwd, dry_run=False, stdout_to_stderr=False):
         captured["command"] = command
         return 0
 
@@ -514,7 +621,7 @@ def test_stack_up_bundled_includes_overlays_and_syncs(patch_base, monkeypatch):
 def test_stack_up_external_mode_no_overlays(patch_base, monkeypatch):
     captured = {}
 
-    def fake_docker(command, cwd, dry_run=False):
+    def fake_docker(command, cwd, dry_run=False, stdout_to_stderr=False):
         captured["command"] = command
         return 0
 

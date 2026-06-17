@@ -1341,11 +1341,18 @@ def resolve_influx_token_with_secret_file(influx_config):
     return ""
 
 
-def run_docker_compose(command, cwd, dry_run=False):
+def run_docker_compose(command, cwd, dry_run=False, stdout_to_stderr=False):
     """Run a docker compose command on the host. Returns the exit code.
 
     Kept thin and side-effect-only so it is easy to mock in unit tests, which
     never execute Docker.
+
+    ``stdout_to_stderr`` redirects the child's stdout (and stderr) to this
+    process's stderr. Docker Compose prints progress/status lines like
+    ``Container ems-influxdb Running`` to stdout; in ``--json`` mode those would
+    corrupt the single JSON document we emit, so callers pass
+    ``stdout_to_stderr=args.json`` to keep stdout a clean JSON channel while the
+    human-readable Docker output is still shown (on stderr).
     """
     import subprocess
 
@@ -1354,8 +1361,12 @@ def run_docker_compose(command, cwd, dry_run=False):
     print("+ " + " ".join(command), file=sys.stderr)
     if dry_run:
         return 0
+    stdout_target = sys.stderr if stdout_to_stderr else None
+    stderr_target = sys.stderr if stdout_to_stderr else None
     try:
-        completed = subprocess.run(command, cwd=cwd)
+        completed = subprocess.run(
+            command, cwd=cwd, stdout=stdout_target, stderr=stderr_target
+        )
     except FileNotFoundError:
         print(
             "ERROR: 'docker' not found. Install Docker (with the compose "
@@ -1536,7 +1547,9 @@ def handle_influx_init(args, influx_config):
         command = influx_setup.build_compose_command(
             files, action=("up", "-d", "influxdb")
         )
-        code = run_docker_compose(command, cwd=BASE_DIR)
+        code = run_docker_compose(
+            command, cwd=BASE_DIR, stdout_to_stderr=args.json
+        )
         if code != 0:
             return fail("failed to start bundled InfluxDB via docker compose")
         started = True
@@ -1650,7 +1663,9 @@ def handle_stack_command(args, config):
     # 3 + 4. Build and run the compose command with the right files.
     files = influx_setup.compose_files(influx_config)
     command = influx_setup.build_compose_command(files, action=("up", "-d"))
-    code = run_docker_compose(command, cwd=BASE_DIR, dry_run=args.dry_run)
+    code = run_docker_compose(
+        command, cwd=BASE_DIR, dry_run=args.dry_run, stdout_to_stderr=args.json
+    )
     if code != 0:
         return fail("docker compose up failed")
     if args.dry_run:
