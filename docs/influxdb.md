@@ -68,6 +68,13 @@ That setup is development-only and independent of this production path.
    EMS runs outside the Docker network, set `url` to the reachable address
    (e.g. `http://localhost:8086`).
 
+   The native writer enqueues one raw sample **every EMS control loop**, so the
+   raw bucket keeps the highest available sampling resolution. This is
+   independent of `dashboard.write_interval_seconds` (which only governs the
+   SQLite dashboard history). To throttle raw writes, set
+   `influxdb.raw_write_interval_seconds` to a positive number of seconds; `0`
+   (the default) or `null` writes every loop.
+
 4. Reconcile buckets, retention and downsampling tasks from config (see below).
 
 ## Bucket and task sync (`emsctl influx`)

@@ -154,8 +154,10 @@ The dashboard section in `config.json` controls startup:
 `database_path` is relative to the project directory unless an absolute path is
 used. The SQLite database stores short-term live dashboard snapshots and
 telemetry. Those short-term rows are cleaned according to
-`dashboard.history_hours`. `write_interval_seconds` keeps database writes low
-even when the EMS loop runs with a short interval.
+`dashboard.history_hours`. `write_interval_seconds` keeps SQLite database writes
+low even when the EMS loop runs with a short interval. It applies **only** to the
+SQLite dashboard history; the optional InfluxDB raw writer is independent and
+writes every EMS loop (see the InfluxDB ingestion section below).
 
 Daily energy statistics are stored in `daily_energy_stats` in the same database.
 They are persistent daily aggregates and are not removed by the short-term
@@ -337,6 +339,32 @@ errors are logged as rate-limited warnings and the writer reconnects
 automatically. It writes only to the raw bucket — the downsampling tasks
 reconciled by `emsctl.py influx sync` handle raw -> 1m -> 5m -> 1h. The hardware
 is never polled a second time.
+
+**Write cadence — InfluxDB raw vs SQLite history are decoupled:**
+
+```text
+InfluxDB raw write cadence  = EMS loop cadence (system.loop_interval)
+SQLite dashboard history    = dashboard.write_interval_seconds
+```
+
+The native writer enqueues one raw sample **every EMS control loop**, so the raw
+bucket represents the highest available EMS sampling resolution (with a 3s loop,
+~3s resolution). The SQLite dashboard history keeps its own, typically lower,
+cadence from `dashboard.write_interval_seconds` and is unchanged — you do **not**
+need to set `write_interval_seconds = 0` to get full-resolution InfluxDB data.
+
+The raw cadence can optionally be throttled with
+`influxdb.raw_write_interval_seconds`:
+
+```text
+0 or null = write one raw sample every EMS loop (default)
+N > 0     = write at most one raw sample every N seconds
+```
+
+Spike visibility is ultimately bounded by this sampling cadence:
+**InfluxDB can only show spikes that were actually sampled by the EMS loop.**
+A spike shorter than the EMS loop interval can still be missed if it occurs
+between two samples.
 
 **Advanced usage — the standalone collector.** The collector
 (`scripts/capture_runtime_to_influx.py`, see

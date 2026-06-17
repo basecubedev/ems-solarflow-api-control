@@ -229,3 +229,133 @@ def test_controller_publish_to_influx_enqueues_built_lines():
     assert any("grid_power=748" in line for line in captured[0])
     assert any("house_load=" in line for line in captured[0])
     assert any("target_output=900" in line for line in captured[0])
+
+
+# -- write cadence: Influx every loop, SQLite at write_interval ------------
+
+
+class _CountingSink:
+    def __init__(self):
+        self.batches = []
+
+    def enqueue(self, lines):
+        self.batches.append(list(lines))
+
+
+class _CountingStore:
+    def __init__(self):
+        self.records = []
+
+    def record(self, snapshot):
+        self.records.append(snapshot)
+
+
+def _dashboard_fake(store, writer):
+    import types
+
+    from ems.controller import EMSController
+
+    fake = SimpleNamespace(
+        dashboard_store=store,
+        influx_writer=writer,
+        devices=[_Dev("WR1")],
+        device_online={"WR1": True},
+        _last_dashboard_publish=0,
+        _last_influx_publish=0,
+    )
+    # Bind the real publish_to_influx so publish_to_dashboard can call it.
+    fake.publish_to_influx = types.MethodType(
+        EMSController.publish_to_influx, fake
+    )
+    return fake
+
+
+def _publish_dashboard(fake):
+    from ems.controller import EMSController
+
+    EMSController.publish_to_dashboard(
+        fake,
+        200.0,  # load
+        [_state()],  # states
+        [400],  # targets
+        [400],  # effective_targets
+        400,  # allocated_total
+        400,  # effective_total
+        True,  # enabled
+        1800,  # max_power
+        50,  # min_output_limit
+    )
+
+
+def test_influx_writes_every_loop_while_sqlite_throttled(monkeypatch):
+    """Influx is enqueued every loop even when the SQLite write is throttled."""
+    import dashboard.telemetry as telemetry
+    from ems import config as cfg
+
+    monkeypatch.setattr(
+        telemetry, "build_dashboard_snapshot", lambda *a, **k: {"snap": True}
+    )
+    # Long SQLite interval, default (every-loop) Influx cadence.
+    monkeypatch.setattr(cfg, "DASHBOARD_CONFIG", {"write_interval_seconds": 100})
+    monkeypatch.setattr(cfg, "INFLUXDB_CONFIG", {"raw_write_interval_seconds": 0})
+
+    store = _CountingStore()
+    writer = _CountingSink()
+    fake = _dashboard_fake(store, writer)
+
+    _publish_dashboard(fake)
+    _publish_dashboard(fake)
+    _publish_dashboard(fake)
+
+    # Influx enqueued on every loop; SQLite only once (within the 100s window).
+    assert len(writer.batches) == 3
+    assert len(store.records) == 1
+
+
+def test_raw_write_interval_throttles_influx(monkeypatch):
+    """A positive raw_write_interval_seconds throttles raw writes."""
+    import dashboard.telemetry as telemetry
+    from ems import config as cfg
+
+    monkeypatch.setattr(
+        telemetry, "build_dashboard_snapshot", lambda *a, **k: {"snap": True}
+    )
+    monkeypatch.setattr(cfg, "DASHBOARD_CONFIG", {"write_interval_seconds": 0})
+    monkeypatch.setattr(
+        cfg, "INFLUXDB_CONFIG", {"raw_write_interval_seconds": 100}
+    )
+
+    store = _CountingStore()
+    writer = _CountingSink()
+    fake = _dashboard_fake(store, writer)
+
+    _publish_dashboard(fake)
+    _publish_dashboard(fake)
+    _publish_dashboard(fake)
+
+    # SQLite writes every loop (interval 0) but Influx is throttled to once.
+    assert len(writer.batches) == 1
+    assert len(store.records) == 3
+
+
+def test_influx_failure_does_not_stop_publish(monkeypatch):
+    """An Influx enqueue error is contained and never reaches the loop."""
+    import dashboard.telemetry as telemetry
+    from ems import config as cfg
+
+    monkeypatch.setattr(
+        telemetry, "build_dashboard_snapshot", lambda *a, **k: {"snap": True}
+    )
+    monkeypatch.setattr(cfg, "DASHBOARD_CONFIG", {"write_interval_seconds": 0})
+    monkeypatch.setattr(cfg, "INFLUXDB_CONFIG", {"raw_write_interval_seconds": 0})
+
+    class _BoomSink:
+        def enqueue(self, lines):
+            raise RuntimeError("influx boom")
+
+    store = _CountingStore()
+    fake = _dashboard_fake(store, _BoomSink())
+
+    # Must not raise; SQLite still records.
+    _publish_dashboard(fake)
+    assert len(store.records) == 1

@@ -84,6 +84,10 @@ INFLUXDB_DEFAULTS = {
     "token": "",
     "token_env": "INFLUXDB_TOKEN",
     "bucket_prefix": "ems",
+    # Raw telemetry write cadence. 0 (or null) writes once per EMS control loop
+    # for full-resolution spike visibility; a positive value throttles raw
+    # writes to at most once every N seconds (SQLite history is unaffected).
+    "raw_write_interval_seconds": 0,
     "retention": {
         "raw_days": 14,
         "one_minute_days": 90,
@@ -765,6 +769,14 @@ def normalize_influxdb_config(config):
         ).strip(),
         "bucket_prefix": sanitize_bucket_prefix(
             config.get("bucket_prefix", INFLUXDB_DEFAULTS["bucket_prefix"])
+        ),
+        "raw_write_interval_seconds": safe_float(
+            config.get(
+                "raw_write_interval_seconds",
+                INFLUXDB_DEFAULTS["raw_write_interval_seconds"],
+            ),
+            INFLUXDB_DEFAULTS["raw_write_interval_seconds"],
+            minimum=0,
         ),
         "retention": retention,
         "downsampling": downsampling,

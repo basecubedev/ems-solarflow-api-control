@@ -93,6 +93,7 @@ class EMSController:
         self.night_min_soc_idle_parked = set()
         self._dashboard_capabilities = []
         self._last_dashboard_publish = 0
+        self._last_influx_publish = 0
         self.last_control_explanation = None
         self.runtime_intents = {}
 
@@ -2993,45 +2994,53 @@ class EMSController:
         if not self.dashboard_store and not self.influx_writer:
             return
 
+        now = time.time()
+
+        # InfluxDB raw telemetry is written every EMS loop (or at the optional
+        # influxdb.raw_write_interval_seconds cadence), decoupled from the
+        # lower-frequency SQLite dashboard history below. This keeps the raw
+        # bucket at the highest available EMS sampling resolution for spike
+        # visibility without forcing SQLite to write every loop.
+        self.publish_to_influx(load, states, effective_total, now=now)
+
+        if not self.dashboard_store:
+            return
+
         interval = cfg.safe_float(
             cfg.DASHBOARD_CONFIG.get("write_interval_seconds", 5),
             5,
             minimum=0
         )
-        now = time.time()
 
         if interval > 0 and now - self._last_dashboard_publish < interval:
             return
         self._last_dashboard_publish = now
 
-        if self.dashboard_store:
-            try:
-                from dashboard.telemetry import build_dashboard_snapshot
+        try:
+            from dashboard.telemetry import build_dashboard_snapshot
 
-                snapshot = build_dashboard_snapshot(
-                    self,
-                    load,
-                    states,
-                    targets,
-                    effective_targets,
-                    allocated_total,
-                    effective_total,
-                    enabled=enabled,
-                    max_total_power=max_power,
-                    min_output_limit=min_output_limit,
-                    night_min_soc_idle=night_min_soc_idle
-                )
-                self.dashboard_store.record(snapshot)
-            except Exception as e:
-                log_event(
-                    logging.WARNING,
-                    "dashboard_publish_error",
-                    error=e
-                )
+            snapshot = build_dashboard_snapshot(
+                self,
+                load,
+                states,
+                targets,
+                effective_targets,
+                allocated_total,
+                effective_total,
+                enabled=enabled,
+                max_total_power=max_power,
+                min_output_limit=min_output_limit,
+                night_min_soc_idle=night_min_soc_idle
+            )
+            self.dashboard_store.record(snapshot)
+        except Exception as e:
+            log_event(
+                logging.WARNING,
+                "dashboard_publish_error",
+                error=e
+            )
 
-        self.publish_to_influx(load, states, effective_total)
-
-    def publish_to_influx(self, load, states, target=None):
+    def publish_to_influx(self, load, states, target=None, now=None):
         """Enqueue this cycle's telemetry for the native InfluxDB writer.
 
         ``load`` is the grid/meter exchange power (positive import) and
@@ -3046,6 +3055,23 @@ class EMSController:
         writer = self.influx_writer
         if not writer:
             return
+
+        if now is None:
+            now = time.time()
+
+        # Default cadence is every EMS loop (0/null). A positive
+        # raw_write_interval_seconds throttles raw writes to at most once per N
+        # seconds without affecting the SQLite dashboard cadence.
+        influx_config = cfg.INFLUXDB_CONFIG or {}
+        raw_interval = cfg.safe_float(
+            influx_config.get("raw_write_interval_seconds", 0),
+            0,
+            minimum=0
+        )
+        if raw_interval > 0 and now - self._last_influx_publish < raw_interval:
+            return
+        self._last_influx_publish = now
+
         try:
             from ems.history.influx_writer import build_telemetry_lines
 

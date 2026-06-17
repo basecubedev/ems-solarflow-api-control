@@ -55,6 +55,22 @@ class NormalizeInfluxConfigTest(unittest.TestCase):
         cfg = normalize_influxdb_config(None)
         self.assertFalse(cfg["enabled"])
 
+    def test_raw_write_interval_defaults_to_every_loop(self):
+        cfg = normalize_influxdb_config({})
+        self.assertEqual(cfg["raw_write_interval_seconds"], 0)
+
+    def test_raw_write_interval_null_means_every_loop(self):
+        cfg = normalize_influxdb_config({"raw_write_interval_seconds": None})
+        self.assertEqual(cfg["raw_write_interval_seconds"], 0)
+
+    def test_raw_write_interval_explicit_value(self):
+        cfg = normalize_influxdb_config({"raw_write_interval_seconds": 10})
+        self.assertEqual(cfg["raw_write_interval_seconds"], 10)
+
+    def test_raw_write_interval_negative_clamped(self):
+        cfg = normalize_influxdb_config({"raw_write_interval_seconds": -5})
+        self.assertEqual(cfg["raw_write_interval_seconds"], 0)
+
     def test_drops_invalid_downsampling_entries(self):
         cfg = normalize_influxdb_config(
             {

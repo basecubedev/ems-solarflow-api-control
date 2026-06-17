@@ -98,6 +98,8 @@
     "token": "",
     "token_env": "INFLUXDB_TOKEN",
     "bucket_prefix": "ems",
+    "_comment_raw_write_interval": "Raw telemetry write cadence. 0 (or null) writes one raw sample per EMS control loop (highest available resolution for spike visibility). A positive value throttles raw writes to at most once every N seconds. This is independent of dashboard.write_interval_seconds, which only controls the SQLite dashboard history cadence.",
+    "raw_write_interval_seconds": 0,
     "retention": {
       "raw_days": 14,
       "one_minute_days": 90,
