@@ -307,6 +307,45 @@ InfluxDB never silently replaces the SQLite history: `/api/history/series` is
 external dependencies and remain the default experience. Enabling InfluxDB only
 adds the Analytics tab; it does not change the operational charts.
 
+#### How analytics data gets into InfluxDB (ingestion)
+
+The recommended, out-of-the-box setup needs **no separate collector process**:
+
+```text
+config.json (influxdb.enabled = true)
+docker compose up -d        # InfluxDB
+# Analytics works
+```
+
+When `influxdb.enabled` is true and the EMS is reading real hardware (not
+simulation/replay), the control loop writes the telemetry it already collects
+each cycle directly into the `{prefix}_raw` bucket via the native writer
+(`ems/history/influx_writer.py`). There is **one** telemetry collection per
+cycle, fanned out to multiple storage targets:
+
+```text
+Telemetry snapshot ── runtime state
+                   ├─ SQLite history
+                   ├─ dashboard data
+                   └─ InfluxDB writer ─> {prefix}_raw ─> 1m ─> 5m ─> 1h
+```
+
+The native writer is **non-blocking and failure-isolated**: it only enqueues
+line protocol onto a bounded queue that a background daemon thread drains, so a
+slow, offline or misconfigured InfluxDB never blocks or stops the control loop;
+errors are logged as rate-limited warnings and the writer reconnects
+automatically. It writes only to the raw bucket — the downsampling tasks
+reconciled by `emsctl.py influx sync` handle raw -> 1m -> 5m -> 1h. The hardware
+is never polled a second time.
+
+**Advanced usage — the standalone collector.** The collector
+(`scripts/capture_runtime_to_influx.py`, see
+[develop-tool-influxdb-telemetry.md](develop-tool-influxdb-telemetry.md)) is no
+longer required for normal operation. It remains available for development,
+diagnostics, experiments and backfill. It writes the same measurement/field
+schema (`zendure_device` / `shelly_meter`, numeric fields as float), so it is
+interchangeable with the native writer.
+
 #### `/api/history/series` — operational history (SQLite)
 
 ```text

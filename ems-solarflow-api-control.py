@@ -268,12 +268,32 @@ def main():
 
         sys.exit(2)
 
+    # Native InfluxDB telemetry writer: active only when influxdb is enabled and
+    # we are reading real hardware (not simulation/replay). Started lazily and
+    # non-blocking; InfluxDB being unavailable never blocks or stops the EMS.
+    influx_writer = None
+    if (
+        cfg.INFLUXDB_CONFIG
+        and cfg.INFLUXDB_CONFIG.get("enabled")
+        and not cfg.SIMULATION_MODE
+        and not getattr(args, "replay", None)
+    ):
+        try:
+            from ems.history.influx_writer import InfluxTelemetryWriter
+
+            influx_writer = InfluxTelemetryWriter(cfg.INFLUXDB_CONFIG)
+            influx_writer.start()
+        except Exception as e:
+            log_event(logging.WARNING, "influx_writer_start_failed", error=e)
+            influx_writer = None
+
     ems = EMSController(
         devices,
         shelly,
         ha,
         runtime_state=runtime_state,
-        dashboard_store=dashboard_store
+        dashboard_store=dashboard_store,
+        influx_writer=influx_writer
     )
 
     log_event(logging.INFO, "ems_started")
@@ -281,37 +301,41 @@ def main():
     start_time = time.time()
     cycles = 0
 
-    while True:
-        ems.run_once()
-        cycles += 1
+    try:
+        while True:
+            ems.run_once()
+            cycles += 1
 
-        if args.once:
-            log_event(
-                logging.INFO,
-                "ems_stopped",
-                reason="once",
-                cycles=cycles
-            )
-            break
+            if args.once:
+                log_event(
+                    logging.INFO,
+                    "ems_stopped",
+                    reason="once",
+                    cycles=cycles
+                )
+                break
 
-        if args.max_cycles and cycles >= args.max_cycles:
-            log_event(
-                logging.INFO,
-                "ems_stopped",
-                reason="max_cycles",
-                cycles=cycles
-            )
-            break
+            if args.max_cycles and cycles >= args.max_cycles:
+                log_event(
+                    logging.INFO,
+                    "ems_stopped",
+                    reason="max_cycles",
+                    cycles=cycles
+                )
+                break
 
-        if args.duration and time.time() - start_time >= args.duration:
-            log_event(
-                logging.INFO,
-                "ems_stopped",
-                reason="duration",
-                cycles=cycles,
-                duration_s=round(time.time() - start_time, 1)
-            )
-            break
+            if args.duration and time.time() - start_time >= args.duration:
+                log_event(
+                    logging.INFO,
+                    "ems_stopped",
+                    reason="duration",
+                    cycles=cycles,
+                    duration_s=round(time.time() - start_time, 1)
+                )
+                break
+    finally:
+        if influx_writer:
+            influx_writer.stop()
 
 
 if __name__ == "__main__":

@@ -51,7 +51,8 @@ class EMSController:
         sleep_enabled=True,
         runtime_state=None,
         dashboard_store=None,
-        battery_full_charge_store=None
+        battery_full_charge_store=None,
+        influx_writer=None
     ):
         self.devices = devices
         self.shelly = shelly
@@ -59,6 +60,9 @@ class EMSController:
         self.sleep_enabled = sleep_enabled
         self.runtime_state = runtime_state
         self.dashboard_store = dashboard_store
+        # Optional native InfluxDB telemetry writer (None unless influxdb is
+        # enabled). Failure-isolated and non-blocking; see ems.history.influx_writer.
+        self.influx_writer = influx_writer
         self.battery_full_charge_store = (
             battery_full_charge_store
             if battery_full_charge_store is not None
@@ -2979,9 +2983,14 @@ class EMSController:
         min_output_limit,
         night_min_soc_idle=False
     ):
-        """Persist one read-only dashboard snapshot."""
+        """Persist one read-only dashboard snapshot.
 
-        if not self.dashboard_store:
+        Reuses the single telemetry collection of this cycle for both storage
+        targets: the SQLite dashboard store and (when enabled) the native
+        InfluxDB writer. The hardware is never polled a second time.
+        """
+
+        if not self.dashboard_store and not self.influx_writer:
             return
 
         interval = cfg.safe_float(
@@ -2993,31 +3002,55 @@ class EMSController:
 
         if interval > 0 and now - self._last_dashboard_publish < interval:
             return
+        self._last_dashboard_publish = now
 
+        if self.dashboard_store:
+            try:
+                from dashboard.telemetry import build_dashboard_snapshot
+
+                snapshot = build_dashboard_snapshot(
+                    self,
+                    load,
+                    states,
+                    targets,
+                    effective_targets,
+                    allocated_total,
+                    effective_total,
+                    enabled=enabled,
+                    max_total_power=max_power,
+                    min_output_limit=min_output_limit,
+                    night_min_soc_idle=night_min_soc_idle
+                )
+                self.dashboard_store.record(snapshot)
+            except Exception as e:
+                log_event(
+                    logging.WARNING,
+                    "dashboard_publish_error",
+                    error=e
+                )
+
+        self.publish_to_influx(load, states)
+
+    def publish_to_influx(self, load, states):
+        """Enqueue this cycle's telemetry for the native InfluxDB writer.
+
+        Non-blocking and failure-isolated: building line protocol is cheap and
+        any writer error is contained inside the background worker, so the
+        control loop is never slowed or stopped by InfluxDB.
+        """
+
+        writer = self.influx_writer
+        if not writer:
+            return
         try:
-            from dashboard.telemetry import build_dashboard_snapshot
+            from ems.history.influx_writer import build_telemetry_lines
 
-            snapshot = build_dashboard_snapshot(
-                self,
-                load,
-                states,
-                targets,
-                effective_targets,
-                allocated_total,
-                effective_total,
-                enabled=enabled,
-                max_total_power=max_power,
-                min_output_limit=min_output_limit,
-                night_min_soc_idle=night_min_soc_idle
+            lines = build_telemetry_lines(
+                self.devices, states, self.device_online, load
             )
-            self.dashboard_store.record(snapshot)
-            self._last_dashboard_publish = now
+            writer.enqueue(lines)
         except Exception as e:
-            log_event(
-                logging.WARNING,
-                "dashboard_publish_error",
-                error=e
-            )
+            log_event(logging.WARNING, "influx_publish_error", error=e)
 
     def run_once(self):
         """Execute one EMS cycle."""

@@ -1,5 +1,26 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: AGPL-3.0-or-later
+"""Read-only standalone Zendure -> InfluxDB telemetry collector.
+
+Kept for development, diagnostics, experiments and backfill; the native writer
+(``ems.history.influx_writer``) is the primary ingestion path during normal
+operation.
+
+Schema parity with the native writer:
+
+- ``zendure_device`` device telemetry fields match the native writer (plus a few
+  derived booleans).
+- ``shelly_meter`` carries ``grid_power`` (meter exchange power, positive import
+  / negative export) and the derived ``house_load`` (``max(0, inverter_total +
+  grid_power)``) with identical semantics, so the Analytics grid/home series are
+  the same regardless of which writer produced the data.
+
+Limitation: the collector is read-only and never instantiates the controller, so
+it cannot know the EMS effective output target. It does **not** write
+``ems_runtime.target_output``; the Analytics ``target`` series is therefore empty
+for data captured by this collector. (The ``--include-runtime-state`` flag writes
+separate ``ems_runtime`` config snapshots, not ``target_output``.)
+"""
 
 import argparse
 import json
@@ -87,33 +108,39 @@ def read_runtime_state(path):
 
 
 def build_device_fields(device_state):
+    # Numeric telemetry is written as float so the type matches the native EMS
+    # writer (ems.history.influx_writer); mixing int/float for the same field
+    # would make InfluxDB reject writes with a field type conflict.
+    def f(value):
+        return float(value) if isinstance(value, (int, float)) else value
+
     return {
         "available": True,
-        "soc": device_state.soc,
-        "min_soc": device_state.min_soc,
-        "max_soc": device_state.max_soc,
-        "solar": device_state.solar,
-        "solar1": device_state.solar1,
-        "solar2": device_state.solar2,
-        "solar3": device_state.solar3,
-        "solar4": device_state.solar4,
-        "output": device_state.output,
-        "output_limit": device_state.output_limit,
-        "pack_in": device_state.pack_in,
-        "pack_out": device_state.pack_out,
-        "soc_limit": device_state.soc_limit,
-        "pack_state": device_state.pack_state,
-        "fault_level": device_state.fault_level,
-        "smart_mode": device_state.smart_mode,
-        "grid_off_mode": device_state.grid_off_mode,
-        "ac_mode": device_state.ac_mode,
-        "ac_status": device_state.ac_status,
-        "dc_status": device_state.dc_status,
-        "grid_state": device_state.grid_state,
-        "rssi": device_state.rssi,
-        "voltage": device_state.voltage,
-        "temp": device_state.temp,
-        "remain_minutes": device_state.remain_minutes,
+        "soc": f(device_state.soc),
+        "min_soc": f(device_state.min_soc),
+        "max_soc": f(device_state.max_soc),
+        "solar": f(device_state.solar),
+        "solar1": f(device_state.solar1),
+        "solar2": f(device_state.solar2),
+        "solar3": f(device_state.solar3),
+        "solar4": f(device_state.solar4),
+        "output": f(device_state.output),
+        "output_limit": f(device_state.output_limit),
+        "pack_in": f(device_state.pack_in),
+        "pack_out": f(device_state.pack_out),
+        "soc_limit": f(device_state.soc_limit),
+        "pack_state": f(device_state.pack_state),
+        "fault_level": f(device_state.fault_level),
+        "smart_mode": f(device_state.smart_mode),
+        "grid_off_mode": f(device_state.grid_off_mode),
+        "ac_mode": f(device_state.ac_mode),
+        "ac_status": f(device_state.ac_status),
+        "dc_status": f(device_state.dc_status),
+        "grid_state": f(device_state.grid_state),
+        "rssi": f(device_state.rssi),
+        "voltage": f(device_state.voltage),
+        "temp": f(device_state.temp),
+        "remain_minutes": f(device_state.remain_minutes),
         "pv_present": device_state.solar > 0 or any(
             panel > 0
             for panel in (
@@ -263,6 +290,7 @@ def main():
         timestamp_ns = time.time_ns()
         lines = []
         states = fetch_all_devices(devices)
+        inverter_total = 0.0
 
         for device, state in zip(devices, states):
             if state is None:
@@ -285,6 +313,9 @@ def main():
                     lines.append(line)
                 continue
 
+            if isinstance(state.output, (int, float)):
+                inverter_total += float(state.output)
+
             line = build_line_protocol(
                 "zendure_device",
                 {
@@ -299,11 +330,21 @@ def main():
                 lines.append(line)
 
         if shelly:
-            house_load = shelly.get_power()
+            # The meter read is grid/meter exchange power (positive import,
+            # negative export); store it as ``grid_power`` and derive
+            # ``house_load`` exactly like the native writer
+            # (ems.history.influx_writer.build_telemetry_lines) so both writers
+            # feed the Analytics grid/home series identically.
+            grid_power = shelly.get_power()
+            fields = {}
+            if isinstance(grid_power, (int, float)):
+                grid_power = float(grid_power)
+                fields["grid_power"] = grid_power
+                fields["house_load"] = max(0.0, inverter_total + grid_power)
             line = build_line_protocol(
                 "shelly_meter",
                 {"source": "shelly", "run_id": args.run_id},
-                {"house_load": house_load},
+                fields,
                 timestamp_ns
             )
             if line:
