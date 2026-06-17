@@ -342,9 +342,11 @@ is never polled a second time.
 (`scripts/capture_runtime_to_influx.py`, see
 [develop-tool-influxdb-telemetry.md](develop-tool-influxdb-telemetry.md)) is no
 longer required for normal operation. It remains available for development,
-diagnostics, experiments and backfill. It writes the same measurement/field
-schema (`zendure_device` / `shelly_meter`, numeric fields as float), so it is
-interchangeable with the native writer.
+diagnostics, experiments and backfill. It writes the same device and Shelly
+meter schema as the native writer (`zendure_device` / `shelly_meter`, numeric
+fields as float), but it cannot write `ems_runtime.target_output` because it does
+not run the EMS controller — so the EMS Target series stays empty for
+collector-captured data.
 
 #### `/api/history/series` — operational history (SQLite)
 
@@ -413,11 +415,12 @@ Apply) replaces the period selector when set.
 Analytics series definitions (consistent across the native writer, the InfluxDB
 schema/provider and the frontend):
 
-- **Grid Power** (`grid`) — meter exchange power at the grid connection,
-  positive = import from grid, negative = export to grid. Source:
+- **Grid Power** (`grid`) — meter exchange power measured by the Shelly / grid
+  meter, positive = import from grid, negative = export to grid. Source:
   `shelly_meter.grid_power`.
-- **Home Load** (`home`) — calculated household load,
-  `max(0, inverter_output_total + grid_power)`. Source:
+- **Home Load** (`home`) — calculated household load (the Shelly / grid meter
+  does not measure household load directly; it is derived from inverter output
+  and grid power), `max(0, inverter_output_total + grid_power)`. Stored as
   `shelly_meter.house_load`.
 - **EMS Target** (`target`) — the EMS effective output target actually used by
   the controller after limits and safety logic (`effective_target_total_w`).
@@ -429,6 +432,30 @@ Performance and refresh behavior:
   long ranges stay fast (a 365d query over 100k+ raw snapshots returns in well
   under a second). Zoom/custom ranges request a narrower window and so return
   finer detail.
+- The bucket and aggregation window are picked from `influxdb.query_profiles`
+  by the **effective requested range** (`end - start`), not by the dashboard
+  period button. The default profiles are:
+
+  | requested range | bucket | aggregation window |
+  | --------------- | ------ | ------------------ |
+  | ≤ 1h            | `raw`  | `1s`               |
+  | ≤ 6h            | `raw`  | `10s`              |
+  | ≤ 24h           | `1m`   | `1m`               |
+  | ≤ 30d           | `5m`   | `5m`               |
+  | longer          | `1h`   | `1h`               |
+
+  The `raw` bucket holds every stored snapshot; the **aggregation window** is a
+  separate `aggregateWindow(every: …, fn: mean)` step that smooths the raw
+  series before plotting. A short window (`1s` for ≤ 1h) keeps short power
+  spikes visible instead of averaging them into a 10s mean. Because profile
+  selection uses `end - start`, **zooming** into a sub-1h slice of a 24h / 7d /
+  30d view re-queries with the raw / `1s` detail profile, while a ~2h zoom uses
+  the raw / `10s` profile. Profiles are user-configurable; custom
+  `query_profiles` override these defaults.
+- Spike visibility is ultimately bounded by the actual sampling/write interval,
+  not by the chart window. With the EMS writing roughly every 3s, a 1h chart can
+  show ~3s-level detail, but a spike shorter than the write interval can still be
+  missed because it was never sampled.
 - The Analytics tab auto-refreshes every 30s, but only while it is the active
   view; other views and a backgrounded browser tab do not trigger analytics
   fetches. Each sub-tab loads only its own series. The lightweight History panel

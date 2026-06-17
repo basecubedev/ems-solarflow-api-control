@@ -96,6 +96,7 @@ INFLUXDB_DEFAULTS = {
         {"source": "5m", "target": "1h", "window": "1h"},
     ],
     "query_profiles": [
+        {"max_range": "1h", "bucket": "raw", "window": "1s"},
         {"max_range": "6h", "bucket": "raw", "window": "10s"},
         {"max_range": "24h", "bucket": "1m", "window": "1m"},
         {"max_range": "30d", "bucket": "5m", "window": "5m"},

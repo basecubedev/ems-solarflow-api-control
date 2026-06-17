@@ -138,9 +138,15 @@ class QueryProfileTest(unittest.TestCase):
 
     def test_select_profile_picks_smallest_covering(self):
         profiles = self.cfg["query_profiles"]
+        profile_1h = select_query_profile(profiles, 3600)
+        self.assertEqual(profile_1h["bucket"], "raw")  # 1h -> 1h profile
+        self.assertEqual(profile_1h["window"], "1s")
         self.assertEqual(
-            select_query_profile(profiles, 3600)["bucket"], "raw"
-        )  # 1h -> 6h profile
+            select_query_profile(profiles, 4 * 3600)["bucket"], "raw"
+        )  # 4h -> 6h profile
+        self.assertEqual(
+            select_query_profile(profiles, 4 * 3600)["window"], "10s"
+        )
         self.assertEqual(
             select_query_profile(profiles, 20 * 3600)["bucket"], "1m"
         )  # 20h -> 24h profile
@@ -159,16 +165,25 @@ class QueryProfileTest(unittest.TestCase):
 
     def test_resolve_query_bucket(self):
         bucket_key, window = resolve_query_bucket(self.cfg, 3600)
+        self.assertEqual((bucket_key, window), ("raw", "1s"))
+
+    def test_resolve_query_bucket_6h_uses_coarser_window(self):
+        bucket_key, window = resolve_query_bucket(self.cfg, 6 * 3600)
         self.assertEqual((bucket_key, window), ("raw", "10s"))
 
     def test_zoom_style_small_range_selects_finer_bucket_than_wide_range(self):
-        # A wide 30d view uses a coarse bucket; zooming into a 2h window must
-        # resolve to the fine raw bucket (the backend stays the source of truth
-        # for bucket selection when the frontend re-queries the zoomed range).
+        # A wide 30d view uses a coarse bucket; zooming into a sub-1h window must
+        # resolve to the fine raw bucket with the small 1s window (the backend
+        # stays the source of truth for bucket selection when the frontend
+        # re-queries the zoomed range from end - start).
         wide_bucket, _ = resolve_query_bucket(self.cfg, 30 * 86400)
-        zoom_bucket, zoom_window = resolve_query_bucket(self.cfg, 2 * 3600)
         self.assertEqual(wide_bucket, "5m")
-        self.assertEqual((zoom_bucket, zoom_window), ("raw", "10s"))
+        # Zoom into 45 minutes -> 1h raw/1s detail profile.
+        zoom_bucket, zoom_window = resolve_query_bucket(self.cfg, 45 * 60)
+        self.assertEqual((zoom_bucket, zoom_window), ("raw", "1s"))
+        # Zoom into 2 hours -> 6h raw/10s profile.
+        zoom2_bucket, zoom2_window = resolve_query_bucket(self.cfg, 2 * 3600)
+        self.assertEqual((zoom2_bucket, zoom2_window), ("raw", "10s"))
 
 
 class DeviceFilterTest(unittest.TestCase):

@@ -49,7 +49,7 @@ class NormalizeInfluxConfigTest(unittest.TestCase):
             cfg["retention"], INFLUXDB_DEFAULTS["retention"]
         )
         self.assertEqual(len(cfg["downsampling"]), 3)
-        self.assertEqual(len(cfg["query_profiles"]), 4)
+        self.assertEqual(len(cfg["query_profiles"]), 5)
 
     def test_none_is_handled(self):
         cfg = normalize_influxdb_config(None)
@@ -128,7 +128,7 @@ class NormalizeInfluxNameValidationTest(unittest.TestCase):
     def test_default_config_remains_valid(self):
         cfg = normalize_influxdb_config(copy.deepcopy(INFLUXDB_DEFAULTS))
         self.assertEqual(len(cfg["downsampling"]), 3)
-        self.assertEqual(len(cfg["query_profiles"]), 4)
+        self.assertEqual(len(cfg["query_profiles"]), 5)
 
     def test_drops_downsampling_with_unsafe_source(self):
         cfg = normalize_influxdb_config(
