@@ -349,3 +349,74 @@ def test_animation_mode_css_classes_present():
     assert ".dashboard-animation-off .pipe-energy" in css
     # Browser-level reduced motion is still honored.
     assert "@media (prefers-reduced-motion: reduce)" in css
+
+
+# The lightweight SQLite History panel belongs only to the operational
+# aggregated/devices views. setFlowView() must reload it exactly for those
+# transitions and never when switching to analytics/control/energy/diagnose/logs
+# (a hidden reload was an unnecessary fetch + render every tab switch). A past
+# bug tested the historyVisible *function object* (always truthy) instead of the
+# per-view boolean, so this guards the behavior, not just the variable name.
+def test_history_reload_only_for_aggregated_and_devices_views():
+    script = PRELUDE + """
+const doc = makeDoc();
+global.document = doc;
+global.window = {
+  localStorage: { getItem: () => null, setItem: () => {} },
+  innerWidth: 1200,
+};
+
+// Record which fetches loadHistory() issues. loadHistory() synchronously calls
+// fetch(historyFetchUrl()) (the first await), so a history reload is observable
+// as a fetch to /api/history/series during the setFlowView() call.
+const historyCalls = [];
+global.fetch = (url) => {
+  if (String(url).startsWith("/api/history/series")) {
+    historyCalls.push(String(url));
+  }
+  return Promise.resolve({ ok: false, json: async () => ({}) });
+};
+
+// Live data path (not demo) so loadHistory() actually fetches; unauthenticated
+// so switching to logs does not start a polling interval and hang node.
+app.state.demoMode = false;
+app.state.auth = app.state.auth || {};
+app.state.auth.authenticated = false;
+app.state.snapshot = null;
+
+function transition(from, to) {
+  app.state.flowView = from;
+  const before = historyCalls.length;
+  app.setFlowView(to, false);
+  return historyCalls.length > before;
+}
+
+console.log(JSON.stringify({
+  aggregated_to_devices: transition("aggregated", "devices"),
+  devices_to_aggregated: transition("devices", "aggregated"),
+  aggregated_to_analytics: transition("aggregated", "analytics"),
+  devices_to_control: transition("devices", "control"),
+  analytics_to_logs: transition("analytics", "logs"),
+  aggregated_to_energy: transition("aggregated", "energy"),
+  devices_to_diagnose: transition("devices", "diagnose"),
+}));
+"""
+    out = run_node(script)
+    # Operational views reload history.
+    assert out["aggregated_to_devices"] is True
+    assert out["devices_to_aggregated"] is True
+    # Every non-history view must NOT reload history.
+    assert out["aggregated_to_analytics"] is False
+    assert out["devices_to_control"] is False
+    assert out["analytics_to_logs"] is False
+    assert out["aggregated_to_energy"] is False
+    assert out["devices_to_diagnose"] is False
+
+
+def test_setflowview_history_guard_uses_local_boolean_not_function():
+    # Static guard: the reload condition must test the per-view boolean, not the
+    # historyVisible() function object (which is always truthy). Keep the fragile
+    # `if (historyVisible && previousView` pattern from coming back.
+    source = APP_JS.read_text(encoding="utf-8")
+    assert "if (isHistoryPanelVisible && previousView !== nextView)" in source
+    assert "if (historyVisible && previousView" not in source

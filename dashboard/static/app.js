@@ -2261,11 +2261,14 @@ function setFlowView(view, persist = true) {
   }
 
   // The lightweight SQLite History panel only belongs to the operational views.
+  // Use a distinct local name so this boolean is never confused with the
+  // module-level historyVisible() helper (a function object is always truthy).
   const historyPanel = document.querySelector
     ? document.querySelector(".history-panel")
     : null;
-  const historyVisible = nextView === "aggregated" || nextView === "devices";
-  if (historyPanel) historyPanel.hidden = !historyVisible;
+  const isHistoryPanelVisible =
+    nextView === "aggregated" || nextView === "devices";
+  if (historyPanel) historyPanel.hidden = !isHistoryPanelVisible;
 
   document.querySelectorAll("[data-flow-view]").forEach((button) => {
     const active = button.dataset.flowView === nextView;
@@ -2298,7 +2301,7 @@ function setFlowView(view, persist = true) {
   }
 
   // Lazy-load each data source only when its view becomes visible.
-  if (historyVisible && previousView !== nextView) {
+  if (isHistoryPanelVisible && previousView !== nextView) {
     loadHistory();
   }
   if (nextView === "analytics" && previousView !== nextView) {

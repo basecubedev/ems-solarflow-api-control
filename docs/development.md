@@ -80,3 +80,17 @@ python3 scripts/check_log_events.py /tmp/ems-sim.log \
   --require startup \
   --require target_calculation
 ```
+
+## Release / Review Archives
+
+Build source archives with `git archive` so only tracked files are included.
+This excludes local runtime data and secrets (`.venv/`, `__pycache__/`,
+`data/*.sqlite`, `deploy/docker/influxdb.env`, `develop/influxdb/.env`,
+`develop/influxdb/data/`, …), which are all gitignored:
+
+```bash
+git archive --format=tar.gz -o ../ems-solarflow-api-control-clean.tar.gz HEAD
+```
+
+Do not hand-roll archives with `tar`/`zip` from the working tree — those pull in
+ignored runtime/build artifacts and may leak local InfluxDB tokens.
