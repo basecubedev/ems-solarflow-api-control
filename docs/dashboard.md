@@ -333,6 +333,24 @@ Performance and refresh behavior:
   reflow; the chart uses a reduced height on small screens) and shows explicit
   loading and empty/unavailable states.
 
+End-to-end tests (`tests/test_history_analytics_e2e.py`) cover the whole path.
+The SQLite variant always runs (records snapshots through the real
+`DashboardStore`, serves the real dashboard, and asserts the
+`/api/history/series` payload). The InfluxDB variant is opt-in and runs against a
+live InfluxDB 2.x when these are set (e.g. with the bundled Docker InfluxDB from
+`develop/influxdb/`):
+
+```bash
+EMS_INFLUX_E2E_URL=http://localhost:8086 \
+EMS_INFLUX_E2E_TOKEN=<token> \
+EMS_INFLUX_E2E_ORG=ems-e2e \
+pytest tests/test_history_analytics_e2e.py
+```
+
+It reconciles the schema, writes telemetry line protocol, and reads it back
+through the HTTP endpoint with InfluxDB as the active provider (test-scoped
+`emse2e_*` buckets).
+
 Live updates:
 
 ```text
