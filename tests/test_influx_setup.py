@@ -305,11 +305,101 @@ def test_influx_init_force_disabled_without_no_start_fails(patch_base, monkeypat
     assert not (patch_base / "deploy" / "docker" / "influxdb.env").exists()
 
 
-def test_influx_init_external_mode_refused(patch_base):
+def test_influx_init_disabled_prints_helpful_message(patch_base, monkeypatch, capsys):
+    monkeypatch.setattr(emsctl, "run_docker_compose", lambda *a, **k: 0)
+    monkeypatch.setattr(emsctl, "execute_influx_schema_op", fake_schema_op())
+    rc = emsctl.handle_influx_command(init_args(), {"influxdb": {"enabled": False}})
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "InfluxDB is disabled in config.json" in err
+    # No Docker services and no secret file when disabled.
+    assert not (patch_base / "deploy" / "docker" / "influxdb.env").exists()
+
+
+def test_influx_init_disabled_json_single_object(patch_base, monkeypatch, capsys):
+    monkeypatch.setattr(emsctl, "run_docker_compose", lambda *a, **k: 0)
     rc = emsctl.handle_influx_command(
-        init_args(), {"influxdb": {"enabled": True, "mode": "external"}}
+        init_args(json=True), {"influxdb": {"enabled": False}}
     )
     assert rc == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert payload["command"] == "influx init"
+    assert payload["started"] is False
+
+
+def test_influx_init_external_validates_and_syncs(patch_base, monkeypatch):
+    calls = {"docker": 0}
+    monkeypatch.setattr(
+        emsctl, "run_docker_compose",
+        lambda *a, **k: calls.__setitem__("docker", calls["docker"] + 1) or 0,
+    )
+
+    def fake_execute(influx_config, action):
+        calls["action"] = action
+        return 0, {"action": action, "ok": True, "url": "", "report": {}}
+
+    monkeypatch.setattr(emsctl, "execute_influx_schema_op", fake_execute)
+    rc = emsctl.handle_influx_command(
+        init_args(),
+        {
+            "influxdb": {
+                "enabled": True,
+                "mode": "external",
+                "url": "http://192.168.1.5:8086",
+                "org": "ems",
+                "token": "external-token",
+            }
+        },
+    )
+    assert rc == 0
+    # External mode never touches Docker, and syncs when auto_sync is on.
+    assert calls["docker"] == 0
+    assert calls["action"] == "sync"
+
+
+def test_influx_init_external_incomplete_config_fails(patch_base, monkeypatch):
+    calls = {"docker": 0, "execute": 0}
+    monkeypatch.setattr(
+        emsctl, "run_docker_compose",
+        lambda *a, **k: calls.__setitem__("docker", calls["docker"] + 1) or 0,
+    )
+    monkeypatch.setattr(
+        emsctl, "execute_influx_schema_op",
+        lambda *a, **k: calls.__setitem__("execute", calls["execute"] + 1) or (0, {}),
+    )
+    rc = emsctl.handle_influx_command(
+        init_args(),
+        {"influxdb": {"enabled": True, "mode": "external"}},  # no token
+    )
+    assert rc != 0
+    # No connectivity attempt and no Docker when settings are incomplete.
+    assert calls["docker"] == 0
+    assert calls["execute"] == 0
+
+
+def test_influx_init_external_json_single_object(patch_base, monkeypatch, capsys):
+    monkeypatch.setattr(emsctl, "run_docker_compose", lambda *a, **k: 0)
+    monkeypatch.setattr(emsctl, "execute_influx_schema_op", fake_schema_op())
+    rc = emsctl.handle_influx_command(
+        init_args(json=True),
+        {
+            "influxdb": {
+                "enabled": True,
+                "mode": "external",
+                "url": "http://192.168.1.5:8086",
+                "org": "ems",
+                "token": "external-token",
+            }
+        },
+    )
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["mode"] == "external"
+    assert payload["started"] is False
+    assert payload["ready"] is True
+    assert payload["synced"] is True
+    assert payload["user_managed"] is True
 
 
 def test_influx_init_non_default_secret_file_refuses_start(patch_base, monkeypatch):
@@ -410,6 +500,43 @@ def test_influx_init_no_start_skips_data_dir(patch_base, monkeypatch):
     )
     assert rc == 0
     assert not (patch_base / "data" / "influxdb").exists()
+
+
+def test_influx_init_auto_sync_false_starts_without_sync(patch_base, monkeypatch, capsys):
+    actions = []
+
+    def fake_docker(command, cwd, dry_run=False, stdout_to_stderr=False):
+        return 0
+
+    def fake_execute(influx_config, action):
+        actions.append(action)
+        return 0, {"action": action, "ok": True, "url": "", "report": {}}
+
+    monkeypatch.setattr(emsctl, "run_docker_compose", fake_docker)
+    monkeypatch.setattr(emsctl, "execute_influx_schema_op", fake_execute)
+    rc = emsctl.handle_influx_command(
+        init_args(),
+        {"influxdb": {"enabled": True, "mode": "bundled", "auto_sync": False}},
+    )
+    assert rc == 0
+    # Readiness is probed via 'status'; the schema is never synced.
+    assert actions == ["status"]
+    out = capsys.readouterr().out
+    assert "python3 emsctl.py influx sync" in out
+
+
+def test_influx_init_bundled_json_reports_ready(patch_base, monkeypatch, capsys):
+    monkeypatch.setattr(emsctl, "run_docker_compose", lambda *a, **k: 0)
+    monkeypatch.setattr(emsctl, "execute_influx_schema_op", fake_schema_op())
+    rc = emsctl.handle_influx_command(
+        init_args(json=True), {"influxdb": {"enabled": True, "mode": "bundled"}}
+    )
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["mode"] == "bundled"
+    assert payload["started"] is True
+    assert payload["ready"] is True
+    assert payload["synced"] is True
 
 
 def test_influx_init_uses_host_url_for_sync(patch_base, monkeypatch):

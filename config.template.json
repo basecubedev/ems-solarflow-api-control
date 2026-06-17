@@ -94,9 +94,9 @@
   "influxdb": {
     "_comment": "Optional InfluxDB 2.x history/analytics backend. When disabled, the dashboard keeps using local SQLite history. The bundled docker-compose InfluxDB is the primary supported zero-config target. Config is the source of truth: bucket prefix, retention, downsampling tasks and query profiles are reconciled into InfluxDB by 'emsctl.py influx sync'.",
     "enabled": false,
-    "_comment_mode": "'bundled' uses the docker-compose InfluxDB managed for you (run 'python3 emsctl.py stack up' or 'emsctl.py influx init' to create local secrets and start it). 'external' points at an InfluxDB you run yourself; provide a token and run 'emsctl.py influx sync'.",
+    "_comment_mode": "'bundled' uses the docker-compose InfluxDB managed for you: run 'python3 emsctl.py influx init' for the complete end-to-end Analytics setup (secrets, start, wait, schema sync), or 'emsctl.py stack up' to also start the EMS container. 'external' points at an InfluxDB you run yourself (user-managed); 'influx init' then only validates settings, checks connectivity and syncs.",
     "mode": "bundled",
-    "_comment_auto": "For bundled mode: auto_init lets the setup helpers create the local secret file and start the container; auto_sync runs the schema sync automatically. Set both false for full manual control.",
+    "_comment_auto": "auto_init lets the emsctl setup commands bootstrap the bundled InfluxDB automatically (e.g. 'stack up' creates secrets and starts the container); it does NOT make the EMS controller start Docker during the control loop. auto_sync makes setup commands apply the bucket/retention/task schema once InfluxDB is reachable. With auto_sync=false, 'influx init' still starts bundled InfluxDB and prints the 'emsctl.py influx sync' next step. Set both false for full manual control.",
     "auto_init": true,
     "auto_sync": true,
     "_comment_secret_file": "Local, gitignored env file (relative to the project root) where 'influx init' generates secrets. Never commit it; no secrets belong in this config.json.",

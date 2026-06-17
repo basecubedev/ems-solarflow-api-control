@@ -33,6 +33,12 @@ from dashboard.sqlite_store import SUPPORTED_RANGES
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Shown when Analytics history is enabled but InfluxDB cannot be reached, so the
+# operator gets the one setup command that fixes it (the EMS never starts Docker).
+ANALYTICS_UNREACHABLE_HINT = (
+    "Analytics history is enabled, but InfluxDB is not reachable. "
+    "Run: python3 emsctl.py influx init"
+)
 MAX_JSON_BODY_BYTES = 16 * 1024
 MAX_SSE_CONNECTIONS = 8
 MAX_SSE_CONNECTIONS_PER_IP = 2
@@ -600,12 +606,14 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             payload["reason"] = "not_configured"
         elif not available:
             payload["reason"] = "unreachable"
+            payload["hint"] = ANALYTICS_UNREACHABLE_HINT
         self._send_json(payload)
 
     def _handle_analytics_series(self, query):
         # Long-term analytics, backed exclusively by InfluxDB. When InfluxDB is
-        # not configured we return a 200 with an explicit unavailable marker so
-        # the Analytics tab can show a clean info state instead of an error.
+        # not configured (or configured but unreachable) we return a 200 with an
+        # explicit unavailable marker so the Analytics tab can show a clean info
+        # state with an actionable hint instead of an error/broken chart.
         provider = self.server.analytics_provider()
         if not provider:
             self._send_json(
@@ -613,6 +621,16 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     "available": False,
                     "reason": "not_configured",
                     "source": "influxdb",
+                }
+            )
+            return
+        if not provider.available():
+            self._send_json(
+                {
+                    "available": False,
+                    "reason": "unreachable",
+                    "source": "influxdb",
+                    "hint": ANALYTICS_UNREACHABLE_HINT,
                 }
             )
             return
