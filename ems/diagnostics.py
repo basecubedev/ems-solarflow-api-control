@@ -951,6 +951,8 @@ def diagnose_runtime_state_plausibility(checks, runtime_path, config_data):
 
 
 def diagnose_parse_timestamp(value):
+    if not isinstance(value, str):
+        return None
     try:
         normalized = value.replace("Z", "+00:00")
         parsed = datetime.fromisoformat(normalized)
