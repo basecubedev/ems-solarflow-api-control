@@ -194,6 +194,30 @@ def with_server(store, **kwargs):
     return server, f"http://{host}:{port}"
 
 
+def test_ui_config_reports_animation_mode():
+    store = StoreStub()
+    server, base_url = with_server(store, animation_mode="reduced")
+    try:
+        status, headers, payload = json_response(f"{base_url}/api/ui-config")
+        assert status == 200
+        assert "application/json" in headers["Content-Type"]
+        assert payload == {"animation_mode": "reduced"}
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_ui_config_defaults_to_normal_and_sanitizes_invalid():
+    store = StoreStub()
+    server, base_url = with_server(store, animation_mode="bogus")
+    try:
+        _, _, payload = json_response(f"{base_url}/api/ui-config")
+        assert payload == {"animation_mode": "normal"}
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_dashboard_server_serves_read_only_api_endpoints():
     store = StoreStub()
     server, base_url = with_server(store)
@@ -254,6 +278,156 @@ def test_runtime_patch_without_session_is_rejected_when_auth_is_configured(tmp_p
 
     assert status == 401
     assert json.loads(raw_body.decode("utf-8"))["error"] == "not_authenticated"
+
+
+class SeriesStoreStub(StoreStub):
+    """Store stub exposing a ``path`` to a minimal snapshots SQLite database."""
+
+    def __init__(self, path):
+        super().__init__()
+        self.path = path
+
+
+def _seed_snapshots(path):
+    import sqlite3
+    from datetime import datetime, timedelta, timezone
+
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE snapshots (timestamp TEXT PRIMARY KEY, payload TEXT)")
+    now = datetime.now(timezone.utc)
+    for index in range(3):
+        ts = (now - timedelta(minutes=10 * (2 - index))).isoformat()
+        payload = json.dumps(
+            {
+                "timestamp": ts,
+                "pv_total_w": 1000 + index * 100,
+                "inverter_output_w": 400 + index * 50,
+                "battery_power_w": 200 - index * 50,
+                "devices": {"WR1": {"pv_input_w": 600 + index * 60}},
+            }
+        )
+        con.execute(
+            "INSERT INTO snapshots(timestamp, payload) VALUES (?, ?)", (ts, payload)
+        )
+    con.commit()
+    con.close()
+
+
+def test_history_series_endpoint_returns_columnar_sqlite_data(tmp_path):
+    db_path = str(tmp_path / "dashboard.sqlite")
+    _seed_snapshots(db_path)
+    store = SeriesStoreStub(db_path)
+    server, base_url = with_server(store)
+
+    try:
+        status, _, payload = json_response(
+            f"{base_url}/api/history/series?range=24h&series=pv,output,battery"
+        )
+        assert status == 200
+        assert payload["range"] == "24h"
+        assert payload["source"] == "sqlite"
+        assert len(payload["time"]) == 3
+        assert payload["series"]["pv"][0] == 1000
+        assert payload["series"]["output"][2] == 500
+        assert set(payload["series"].keys()) == {"pv", "output", "battery"}
+
+        # Device filter reads per-device snapshot fields.
+        status, _, filtered = json_response(
+            f"{base_url}/api/history/series?range=24h&series=pv&devices=WR1"
+        )
+        assert status == 200
+        assert filtered["devices"] == ["WR1"]
+        assert filtered["series"]["pv"][0] == 600
+
+        status, _, bad = json_response(f"{base_url}/api/history/series?range=bad")
+        assert status == 400
+        assert bad["error"] == "unsupported_range"
+        assert "365d" in bad["supported"]
+
+        # Custom date range via explicit start/end epoch bounds.
+        import time as _time
+
+        now = int(_time.time())
+        status, _, custom = json_response(
+            f"{base_url}/api/history/series?start={now - 3600}&end={now + 3600}&series=pv"
+        )
+        assert status == 200
+        assert custom["range"] == "custom"
+        assert len(custom["time"]) == 3
+
+        status, _, invalid = json_response(
+            f"{base_url}/api/history/series?start={now}&end={now - 3600}"
+        )
+        assert status == 400
+        assert invalid["error"] == "invalid_range"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_analytics_unavailable_without_influx(tmp_path):
+    # With no InfluxDB configured, the Analytics tab must get a clean, explicit
+    # unavailable response (HTTP 200, not an error) so it renders an info state.
+    store = SeriesStoreStub(str(tmp_path / "dashboard.sqlite"))
+    server, base_url = with_server(store)
+
+    try:
+        status, _, advertised = json_response(f"{base_url}/api/analytics/status")
+        assert status == 200
+        assert advertised["available"] is False
+        assert advertised["reason"] == "not_configured"
+
+        status, _, series = json_response(
+            f"{base_url}/api/analytics/series?range=24h&series=pv"
+        )
+        assert status == 200
+        assert series["available"] is False
+        assert series["reason"] == "not_configured"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_history_series_stays_sqlite_when_influx_enabled(tmp_path):
+    # Enabling InfluxDB must never silently replace the operational SQLite
+    # history: /api/history/series stays SQLite-backed, while /api/analytics/*
+    # is the only InfluxDB-backed surface.
+    db_path = str(tmp_path / "dashboard.sqlite")
+    _seed_snapshots(db_path)
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "influxdb": {
+                    "enabled": True,
+                    "url": "http://127.0.0.1:8086",
+                    "org": "ems",
+                    "token": "test-token",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    store = SeriesStoreStub(db_path)
+    server, base_url = with_server(store, config_path=str(config_path))
+
+    try:
+        status, _, payload = json_response(
+            f"{base_url}/api/history/series?range=24h&series=pv,output,battery"
+        )
+        assert status == 200
+        assert payload["source"] == "sqlite"
+        assert payload["series"]["pv"][0] == 1000
+
+        # The analytics provider is the InfluxDB one (advertised available).
+        status, _, advertised = json_response(f"{base_url}/api/analytics/status")
+        assert status == 200
+        assert advertised["available"] is True
+        assert advertised["provider"] == "influxdb"
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_dashboard_server_rejects_invalid_history_range_and_write_methods():

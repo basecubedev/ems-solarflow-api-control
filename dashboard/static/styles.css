@@ -226,6 +226,11 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
 .flow-panel, .rules-panel, .chart-panel { padding: 10px; }
 .shell.view-energy > .devices-section,
 .shell.view-energy > .chart-panel { display: none; }
+/* Analytics is a dedicated full-width analysis workspace: hide the device list
+   and the bottom operational history chart so the large primary chart owns the
+   view. */
+.shell.view-analytics > .devices-section,
+.shell.view-analytics > .chart-panel { display: none; }
 /* Diagnose and Logs are full-width operator views: hide the devices list, the
    history chart and the redundant outer "Live Flow" heading (their own panels
    carry the heading). The tab bar in .flow-heading-controls stays visible. */
@@ -837,6 +842,14 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
 .flow-wrap.view-devices .device-flow-view { display: block !important; }
 .flow-wrap.view-control .control-explain-view { display: block !important; }
 .flow-wrap.view-energy .energy-stats-view { display: block !important; }
+/* Analytics view: hide every other in-wrap panel and show its own. */
+.flow-wrap.view-analytics #flowSvg,
+.flow-wrap.view-analytics .device-flow-view,
+.flow-wrap.view-analytics .control-explain-view,
+.flow-wrap.view-analytics .energy-stats-view { display: none !important; }
+.flow-wrap.view-analytics .analytics-view { display: block !important; }
+.flow-wrap.view-analytics { overflow: visible; }
+.analytics-view { position: relative; z-index: 1; }
 .device-flow-svg {
   position: relative;
   display: block;
@@ -1680,7 +1693,7 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
 
 .range-tabs { gap: 5px; }
 .flow-heading-controls { justify-content: flex-end; gap: 7px; flex-wrap: wrap; }
-.flow-view-tabs { gap: 3px; padding: 3px; border: 1px solid rgba(148,163,184,.16); border-radius: 999px; background: rgba(255,255,255,.035); }
+.flow-view-tabs { gap: 3px; padding: 3px; border: 1px solid rgba(148,163,184,.16); border-radius: 999px; background: rgba(255,255,255,.035); flex-wrap: wrap; row-gap: 3px; }
 .range-tabs button,
 .flow-view-tabs button { min-width: 36px; height: 25px; border: 1px solid var(--border); border-radius: 999px; background: rgba(255,255,255,.045); color: var(--muted); font: inherit; font-size: 12px; font-weight: 850; cursor: pointer; transition: transform .16s ease, border-color .16s ease, background .16s ease; }
 .flow-view-tabs button { min-width: 78px; height: 24px; border-color: transparent; background: transparent; font-size: 11px; }
@@ -1691,11 +1704,88 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
 .charts { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 canvas { width: 100%; min-height: 94px; border: 1px solid rgba(148,163,184,.13); border-radius: 14px; background: linear-gradient(180deg, rgba(15,23,42,.80), rgba(15,23,42,.52)); box-shadow: inset 0 1px 0 rgba(255,255,255,.05); }
 
+/* Analytics single-chart panel (history & analytics) */
+.analytics-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.analytics-device { display: flex; align-items: center; gap: 6px; }
+.analytics-device-label { color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.analytics-device select { background: rgba(148,163,184,.06); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 3px 8px; font-size: 12px; }
+.analytics-custom { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.analytics-custom input { background: rgba(148,163,184,.06); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 2px 6px; font-size: 11px; color-scheme: dark; }
+/* The shared compact button is width:100% for grid cells; in this inline flex
+   control it must size to its content instead of taking a full row. */
+.analytics-custom .primary-button.compact { width: auto; min-height: 0; height: 28px; padding: 0 14px; }
+.analytics-overlays { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 6px 0 0; }
+.analytics-overlays button { min-width: 56px; height: 24px; border: 1px solid var(--border); border-radius: 999px; background: rgba(255,255,255,.045); color: var(--muted); font: inherit; font-size: 11px; font-weight: 800; cursor: pointer; transition: transform .16s ease, border-color .16s ease, background .16s ease; }
+.analytics-overlays button:hover { transform: translateY(-1px); border-color: var(--border-strong); }
+.analytics-overlays button.active { border-color: rgba(34, 211, 238, 0.46); background: linear-gradient(180deg, rgba(34, 211, 238, 0.18), rgba(139, 92, 246, 0.12)); color: var(--text); }
+.analytics-tabs { display: flex; gap: 3px; padding: 3px; margin: 6px 0 8px; border: 1px solid rgba(148,163,184,.16); border-radius: 999px; background: rgba(255,255,255,.035); width: fit-content; flex-wrap: wrap; }
+.analytics-tabs button { min-width: 72px; height: 24px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: var(--muted); font: inherit; font-size: 11px; font-weight: 850; cursor: pointer; transition: transform .16s ease, border-color .16s ease, background .16s ease; }
+.analytics-tabs button:hover { transform: translateY(-1px); border-color: var(--border-strong); }
+.analytics-tabs button.active { border-color: rgba(34, 211, 238, 0.46); background: linear-gradient(180deg, rgba(34, 211, 238, 0.18), rgba(139, 92, 246, 0.12)); color: var(--text); }
+.analytics-chart-wrap { position: relative; }
+.analytics-loading { position: absolute; top: 10px; right: 12px; z-index: 2; padding: 3px 10px; border: 1px solid var(--border); border-radius: 999px; background: rgba(15,23,42,.82); color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: .04em; box-shadow: 0 4px 14px rgba(0,0,0,.25); }
+.analytics-back-to-live { position: absolute; top: 10px; left: 12px; z-index: 3; padding: 4px 12px; border: 1px solid rgba(34, 211, 238, 0.46); border-radius: 999px; background: linear-gradient(180deg, rgba(34, 211, 238, 0.20), rgba(139, 92, 246, 0.14)); color: var(--text); font: inherit; font-size: 11px; font-weight: 850; cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,.28); transition: transform .16s ease, border-color .16s ease; }
+.analytics-back-to-live:hover { transform: translateY(-1px); border-color: var(--accent2); }
+.analytics-chart { width: 100%; min-height: 280px; border: 1px solid rgba(148,163,184,.13); border-radius: 14px; background: linear-gradient(180deg, rgba(15,23,42,.80), rgba(15,23,42,.52)); box-shadow: inset 0 1px 0 rgba(255,255,255,.05); padding: 6px 4px; }
+.analytics-chart .u-legend { font-size: 11px; color: var(--muted); }
+.analytics-empty { color: var(--muted); font-size: 12px; padding: 10px; text-align: center; }
+.analytics-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 7px; margin-top: 8px; }
+.analytics-kpi { display: flex; flex-direction: column; gap: 3px; min-height: 56px; padding: 8px 10px; border: 1px solid var(--border); border-left-width: 3px; border-radius: 12px; background: rgba(255,255,255,.035); }
+.analytics-kpi-label { color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.analytics-kpi-value { color: var(--text); font-size: 16px; font-weight: 850; }
+.analytics-kpi.tone-pv { border-left-color: var(--pv); }
+.analytics-kpi.tone-output { border-left-color: var(--output); }
+.analytics-kpi.tone-battery { border-left-color: var(--battery); }
+.analytics-kpi.tone-accent { border-left-color: var(--accent); }
+.analytics-kpi.tone-grid { border-left-color: var(--grid); }
+
+/* Small badge in the chart heading that names the data source (SQLite vs
+   InfluxDB) so the two history surfaces are distinguishable at a glance. */
+.chart-source-badge {
+  margin-left: 8px; padding: 2px 8px; border: 1px solid var(--border);
+  border-radius: 999px; background: rgba(148,163,184,.10);
+  color: var(--muted); font-size: 10px; font-weight: 800;
+  letter-spacing: .06em; text-transform: uppercase; vertical-align: middle;
+}
+
+/* The Analytics tab is an analysis workspace: its primary chart is much larger
+   than the lightweight operational history. */
+.analytics-view .analytics-chart { min-height: 560px; }
+/* Lightweight SQLite history chart (Aggregate/Devices) stays compact. */
+.history-chart { min-height: 240px; }
+/* History range tabs mirror the analytics range pills (kept a distinct class so
+   the analytics range handler does not bind these buttons). */
+.history-range-tabs { display: flex; align-items: center; gap: 5px; }
+.history-range-tabs button {
+  min-width: 38px; height: 26px; padding: 0 10px; border: 1px solid var(--border);
+  border-radius: 999px; background: rgba(255,255,255,.045); color: var(--muted);
+  font: inherit; font-size: 11px; font-weight: 800; cursor: pointer;
+  transition: transform .16s ease, border-color .16s ease, background .16s ease;
+}
+.history-range-tabs button:hover { transform: translateY(-1px); border-color: var(--border-strong); }
+.history-range-tabs button.active {
+  border-color: rgba(34, 211, 238, 0.46);
+  background: linear-gradient(180deg, rgba(34, 211, 238, 0.18), rgba(139, 92, 246, 0.12));
+  color: var(--text);
+}
+
+/* Clean "InfluxDB not configured" state for the Analytics tab. */
+.analytics-unavailable {
+  display: flex; flex-direction: column; align-items: center; text-align: center;
+  gap: 8px; padding: 48px 24px; color: var(--muted);
+  border: 1px dashed rgba(148,163,184,.22); border-radius: 16px;
+  background: rgba(255,255,255,.025); margin-top: 6px;
+}
+.analytics-unavailable-icon { width: 32px; height: 32px; color: var(--muted2); fill: none; stroke: currentColor; stroke-width: 1.6; }
+.analytics-unavailable h3 { margin: 0; font-size: 15px; font-weight: 850; color: var(--text); }
+.analytics-unavailable p { margin: 0; max-width: 420px; font-size: 12px; line-height: 1.5; }
+
 @media (max-width: 1180px) {
   .main-grid { grid-template-columns: 1fr; }
   .rules-list { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .rule-row { border-bottom: 0; border: 1px solid rgba(148,163,184,.10); border-radius: 12px; padding: 7px; background: rgba(255,255,255,.035); }
   .charts { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .analytics-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (max-width: 760px) {
   .shell { width: min(100% - 12px, 1480px); padding-top: 8px; }
@@ -1704,6 +1794,15 @@ canvas { width: 100%; min-height: 94px; border: 1px solid rgba(148,163,184,.13);
   .eyebrow { font-size: 9px; letter-spacing: .10em; overflow-wrap: anywhere; }
   .brand-subtitle { font-size: 11px; margin-top: 3px; }
   .metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+  .analytics-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .analytics-controls { justify-content: flex-start; width: 100%; }
+  .analytics-custom { width: 100%; }
+  .analytics-custom input { flex: 1 1 40%; min-width: 0; }
+  .analytics-chart { min-height: 220px; }
+  .analytics-view .analytics-chart { min-height: 360px; }
+  .history-chart { min-height: 200px; }
+  .analytics-kpi { min-height: 50px; padding: 7px 8px; }
+  .analytics-kpi-value { font-size: 15px; }
   .metric { min-height: 48px; padding: 7px; gap: 7px; border-radius: 14px; }
   .metric-icon { width: 26px; height: 26px; border-radius: 9px; font-size: 15px; }
   .metric strong { font-size: 17px; }
@@ -1712,7 +1811,12 @@ canvas { width: 100%; min-height: 94px; border: 1px solid rgba(148,163,184,.13);
   .flow-panel, .rules-panel, .chart-panel, .device-card, .energy-stats-panel { padding: 8px; border-radius: 15px; }
   .flow-wrap, #flowSvg { min-height: 206px; }
   #flowSvg { transform: scale(.98); transform-origin:center; }
-  .flow-heading-controls { justify-content: flex-start; }
+  /* The flow heading stacks on mobile so the tab strip gets the full width and
+     wraps onto multiple rows instead of overflowing off-screen. */
+  .flow-panel > .section-heading { flex-direction: column; align-items: stretch; gap: 6px; }
+  .flow-heading-controls { justify-content: flex-start; width: 100%; }
+  .flow-view-tabs { width: 100%; justify-content: flex-start; row-gap: 4px; }
+  .flow-view-tabs button { flex: 1 1 auto; min-width: 0; }
   .device-flow-view { padding: 6px; overflow-x: hidden; }
   .energy-stats-view { padding: 6px; }
   .device-flow-svg { min-width: 0; width: 100%; }
@@ -1785,6 +1889,43 @@ canvas { width: 100%; min-height: 94px; border: 1px solid rgba(148,163,184,.13);
   .control-result::after {
     animation: none;
   }
+}
+
+/* Dashboard animation mode (config: dashboard.animation_mode). Reduces or
+   disables expensive flow animations and glow/blur filters to lower browser
+   CPU/GPU load. State colours and basic flow indication are preserved; only the
+   continuous motion and heavy filters are scaled back. Browser-level
+   prefers-reduced-motion above takes precedence on top of these. */
+.dashboard-animation-reduced .pipe-energy {
+  animation-duration: 3s;
+  filter: drop-shadow(0 0 6px currentColor);
+}
+
+.dashboard-animation-reduced .pipe-glow {
+  filter: none;
+}
+
+.dashboard-animation-reduced .solar-visual.active .solar-sun,
+.dashboard-animation-reduced .battery-visual.charging .battery-fill,
+.dashboard-animation-reduced .inverter-visual.active .inverter-led {
+  animation: none;
+}
+
+.dashboard-animation-off .pipe-energy,
+.dashboard-animation-off .pipe-glow {
+  animation: none;
+  filter: none;
+}
+
+.dashboard-animation-off .pipe-glow {
+  opacity: 0;
+}
+
+.dashboard-animation-off .solar-visual.active .solar-sun,
+.dashboard-animation-off .battery-visual.charging .battery-fill,
+.dashboard-animation-off .inverter-visual.active .inverter-led,
+.dashboard-animation-off .control-result::after {
+  animation: none;
 }
 @media (max-width: 420px) {
   .topbar { flex-direction: column; gap: 5px; }

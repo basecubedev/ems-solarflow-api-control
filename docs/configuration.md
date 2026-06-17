@@ -274,6 +274,19 @@ window; ~5000 lines covers well over 15 minutes at typical settings and costs a
 few MB of RAM. `dashboard.log_redaction` (default `false`) masks secret-looking
 values in served log lines; enable it for shared/remote deployments.
 
+`dashboard.animation_mode` (default `normal`) controls how much the animated
+energy-flow view animates, to reduce browser CPU/GPU load on weak devices or
+long-open tabs. It is purely visual and never affects control, auth or data:
+
+- `normal` — full animated flow view (pipe motion, glow/blur filters).
+- `reduced` — keeps state colours and basic flow indication but drops glow
+  filters and slows pipe motion.
+- `off` — no continuous pipe animations and no glow/blur filters.
+
+The browser-level `prefers-reduced-motion` setting is always respected on top of
+this mode. The value is exposed read-only at `/api/ui-config` and applied as a
+root CSS class by the frontend.
+
 Dashboard write requests are constrained by the configured system and device
 power limits. For example, a runtime `max_total_power` update cannot exceed the
 configured `system.max_total_power`, and a device runtime `max_power` update

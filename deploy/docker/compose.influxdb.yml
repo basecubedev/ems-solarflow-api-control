@@ -1,0 +1,38 @@
+# Official optional InfluxDB 2.x backend for the EMS Analytics/History feature.
+#
+# InfluxDB is optional: the EMS controller and dashboard run fine without it
+# (the dashboard falls back to local SQLite history). Use this only if you want
+# the Analytics tab backed by InfluxDB with long-range downsampled history.
+#
+# Quick start:
+#   cp deploy/docker/influxdb.env.example deploy/docker/influxdb.env
+#   # edit deploy/docker/influxdb.env and set strong secrets
+#   docker compose -f deploy/docker/compose.influxdb.yml up -d
+#   # then enable influxdb in config.json and reconcile buckets/tasks:
+#   python3 emsctl.py influx sync
+#   python3 emsctl.py influx status
+#
+# See docs/influxdb.md for the full setup and the bucket/task sync workflow.
+services:
+  influxdb:
+    image: influxdb:2.7
+    container_name: ems-influxdb
+    ports:
+      - "8086:8086"
+    env_file:
+      - influxdb.env
+    environment:
+      # First-start bootstrap only. These are applied once, when the data
+      # volume is empty. Changing them later does not re-initialize InfluxDB.
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUXDB_ADMIN_USER}
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUXDB_ADMIN_PASSWORD}
+      DOCKER_INFLUXDB_INIT_ORG: ${INFLUXDB_ORG}
+      DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUXDB_INIT_BUCKET}
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_ADMIN_TOKEN}
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+    restart: unless-stopped
+
+volumes:
+  influxdb-data:

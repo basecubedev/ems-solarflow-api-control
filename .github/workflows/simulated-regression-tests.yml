@@ -113,3 +113,49 @@ jobs:
       - name: Verify writable data volume path
         run: |
           docker run --rm ems-solarflow-api-control:ci-smoke python -c "from pathlib import Path; p=Path('/app/data/ci-smoke.txt'); p.write_text('ok'); assert p.read_text() == 'ok'"
+
+  influx-e2e:
+    name: InfluxDB analytics e2e
+    runs-on: ubuntu-latest
+
+    services:
+      influxdb:
+        image: influxdb:2.7
+        ports:
+          - 8086:8086
+        env:
+          DOCKER_INFLUXDB_INIT_MODE: setup
+          DOCKER_INFLUXDB_INIT_USERNAME: ci
+          DOCKER_INFLUXDB_INIT_PASSWORD: ci-password-123
+          DOCKER_INFLUXDB_INIT_ORG: ems-e2e
+          DOCKER_INFLUXDB_INIT_BUCKET: bootstrap
+          DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ci-e2e-token
+        options: >-
+          --health-cmd "influx ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+          --health-start-period 10s
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install -r requirements-dev.txt
+
+      - name: Run InfluxDB-backed analytics e2e
+        env:
+          EMS_INFLUX_E2E_URL: http://localhost:8086
+          EMS_INFLUX_E2E_TOKEN: ci-e2e-token
+          EMS_INFLUX_E2E_ORG: ems-e2e
+        run: |
+          pytest -q -rs tests/test_history_analytics_e2e.py

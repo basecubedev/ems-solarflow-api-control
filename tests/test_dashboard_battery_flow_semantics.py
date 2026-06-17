@@ -251,7 +251,7 @@ def test_frontend_uses_normalized_battery_display_semantics():
     assert "Based on measured inverter output." in index_html
     assert "class=\"devices-section\"" in index_html
     assert index_html.index('id="energyStats"') < index_html.index('id="deviceGrid"')
-    assert index_html.index('id="deviceGrid"') < index_html.index('class="chart-panel"')
+    assert index_html.index('id="deviceGrid"') < index_html.index('chart-panel history-panel')
     assert index_html.count('id="energyStats"') == 1
     assert 'setText("metricBattery", signedWatts(batteryFlow.valueW));' in app_js
     assert 'setText("flowBattery", signedWatts(batteryFlow.valueW));' in app_js
@@ -263,7 +263,9 @@ def test_frontend_uses_normalized_battery_display_semantics():
     assert "sharedHomeGridGapY: 164" in app_js
     assert "const homeY = rowsCenterY - layout.sharedVisualHeight / 2;" in app_js
     assert 'return entries.reduce(' in app_js
-    assert '{ id: "chartBattery", title: "Battery", field: "battery_power_w", color: "#f06d6d", unit: "W" }' in app_js
+    # Phase 2/3: the single Analytics chart drives the battery series from the
+    # shared CSS token, replacing the old hardcoded per-canvas battery color.
+    assert 'battery: { label: "Battery Power", colorVar: "--battery", unit: "W" }' in app_js
     assert "displayBatteryPower" not in app_js
     assert "invert: true" not in app_js
 
@@ -337,6 +339,9 @@ def test_frontend_energy_statistics_executes_against_app_js():
         }
 
         function render(energyStats) {
+          // Energy stats only render while the Energy view is on screen
+          // (live snapshots are view-gated to avoid rebuilding hidden views).
+          context.setFlowView("energy");
           context.renderSnapshot({
             timestamp: "2026-05-27T12:00:00Z",
             pv_total_w: 1800,
@@ -1116,8 +1121,13 @@ def test_frontend_control_explain_view_executes_against_app_js():
         assert(demo.control_explain.devices.WR1.decision_reason.includes("stronger PV"), "demo WR1 has a clear decision reason");
         assert(demo.control_explain.devices.WR2.decision_reason.includes("carries more house load"), "demo WR2 has a clear decision reason");
 
+        // Control tab is active (clicked above): renderSnapshot renders the
+        // global metrics plus the control view. Aggregated/device content is
+        // view-gated, so render those views explicitly to assert their output.
         context.renderSnapshot(demo);
         const demoHtml = element("controlExplainView").innerHTML;
+        context.renderViewSnapshot("aggregated", demo);
+        context.renderViewSnapshot("devices", demo);
         assert(element("metricPv").textContent === "1.85 kW", "demo renders aggregated PV metric");
         assert(element("metricHome").textContent === "800 W", "demo renders aggregated home metric");
         assert(element("flowBatteryState").textContent === "Charging", "demo renders charging battery flow");

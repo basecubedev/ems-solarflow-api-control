@@ -71,7 +71,10 @@ def capture_assets(host, port, output_dir, scenario=CAPTURE_SCENARIO, views=None
                 [
                     firefox,
                     "--headless",
-                    "--window-size=1440,1200",
+                    # Tall viewport so the whole page (incl. the history chart and
+                    # device cards below the fold) is rendered; the empty margins
+                    # are then trimmed away by ImageMagick below.
+                    "--window-size=1440,2600",
                     "--screenshot",
                     png_path,
                     url,
@@ -81,7 +84,9 @@ def capture_assets(host, port, output_dir, scenario=CAPTURE_SCENARIO, views=None
             )
             jpg_path = os.path.join(output_dir, f"preview-{view}.jpg")
             subprocess.run(
-                [convert, png_path, "-quality", "88", jpg_path],
+                # Fuzz lets -trim drop the dark gradient margins (not an exact
+                # solid colour) down to the panel content.
+                [convert, png_path, "-fuzz", "8%", "-trim", "+repage", "-quality", "88", jpg_path],
                 check=True,
                 cwd=ROOT,
             )
@@ -101,7 +106,7 @@ def parse_args(argv=None):
         "--views",
         nargs="+",
         metavar="VIEW",
-        help="views to capture: flow view names or 'all' (default: diagnose logs)",
+        help="views to capture: flow view names or 'all' (default: all README/docs views)",
     )
     parser.add_argument("--serve-only", action="store_true")
     return parser.parse_args(argv)

@@ -54,7 +54,17 @@ DEFAULT_PORT = 8767
 # Capture mode is operator-oriented (Diagnose/Logs), so it defaults to the
 # authenticated scenario unless the user explicitly selects one.
 CAPTURE_DEFAULT_SCENARIO = "write-mode"
-DEFAULT_CAPTURE_VIEWS = ("diagnose", "logs")
+# Every view embedded in the README / docs, so a no-argument
+# ``capture_dashboard_previews.py`` run regenerates the full screenshot set.
+DEFAULT_CAPTURE_VIEWS = (
+    "aggregated",
+    "devices",
+    "analytics",
+    "control",
+    "energy",
+    "diagnose",
+    "logs",
+)
 
 
 def _preview_injection(view):
@@ -221,6 +231,20 @@ class PreviewHandler(BaseHTTPRequestHandler):
                 "items": self._scenario()["history"],
             })
             return
+        if path == "/api/history/series":
+            self._send_json(
+                self._history_series(parse_qs(parsed.query), source="sqlite")
+            )
+            return
+        if path == "/api/analytics/status":
+            self._send_json({"available": True, "provider": "influxdb"})
+            return
+        if path == "/api/analytics/series":
+            # Preview the InfluxDB analytics tab with the same synthetic series.
+            self._send_json(
+                self._history_series(parse_qs(parsed.query), source="influxdb")
+            )
+            return
         if path == "/api/runtime":
             self._send_json(self._scenario()["runtime"])
             return
@@ -255,6 +279,50 @@ class PreviewHandler(BaseHTTPRequestHandler):
 
     def _scenario(self):
         return build_scenario(self.server.scenario_name)
+
+    # Map each chart series id to the history-item field it reads. ``target``
+    # (EMS commanded) tracks the inverter output in the synthetic data.
+    _SERIES_FIELDS = {
+        "pv": "pv_total_w",
+        "output": "inverter_output_w",
+        "battery": "battery_power_w",
+        "soc": "average_soc",
+        "home": "home_load_w",
+        "grid": "grid_power_w",
+        "target": "inverter_output_w",
+    }
+
+    def _history_series(self, query, source):
+        # Columnar series derived from the synthetic snapshots. The same shape is
+        # served for SQLite history and InfluxDB analytics; only ``source``
+        # differs so the dashboard can label the data origin.
+        items = self._scenario()["history"]
+        requested = [s for s in (query.get("series", [""])[0] or "").split(",") if s]
+        keys = [s for s in requested if s in self._SERIES_FIELDS] or [
+            "pv",
+            "output",
+            "battery",
+        ]
+        time_axis = []
+        cols = {key: [] for key in keys}
+        for item in items:
+            iso = str(item.get("timestamp", "")).replace("Z", "+00:00")
+            try:
+                epoch = int(time.mktime(time.strptime(iso[:19], "%Y-%m-%dT%H:%M:%S")))
+            except (ValueError, TypeError):
+                continue
+            time_axis.append(epoch)
+            for key in keys:
+                cols[key].append(item.get(self._SERIES_FIELDS[key]))
+        return {
+            "source": source,
+            "range": query.get("range", ["24h"])[0],
+            "window": "raw",
+            "time": time_axis,
+            "series": cols,
+            "devices": [],
+            "meta": {"point_count": len(time_axis)},
+        }
 
     def _handle_write(self):
         """Preview-only write handler: never mutates disk, config, or devices."""
@@ -296,9 +364,75 @@ class PreviewHandler(BaseHTTPRequestHandler):
         with open(index_path, encoding="utf-8") as handle:
             html = handle.read()
         before, after = _preview_injection(view)
+        seed = self._chart_seed_script(view)
         marker = '<script src="/app.js"></script>'
-        html = html.replace(marker, f"{before}\n  {marker}{after}", 1)
+        html = html.replace(marker, f"{before}\n  {marker}{after}{seed}", 1)
         self._send_bytes(html.encode("utf-8"), "text/html; charset=utf-8")
+
+    def _chart_seed_script(self, view):
+        """Inline the chart series so the headless screenshot is never blank.
+
+        The captured charts otherwise show the async "Loading…" state because
+        Firefox screenshots at the load event, before the fetch resolves (and a
+        blocking XHR is rejected on the main thread). Embedding the same series
+        the API would return lets the chart render synchronously on load.
+        """
+
+        scenario = self._scenario()
+        auth = scenario["auth"]
+        snapshot = scenario["snapshot"]
+        runtime = scenario["runtime"]
+
+        # Seed auth + runtime + the live snapshot so the page renders the logged-in
+        # state of the scenario (e.g. write-mode shows the Control editor buttons
+        # and the Diagnose/Logs content) instead of the async "Connecting" state.
+        body = (
+            "if(typeof setConnection==='function')setConnection('Live',true);"
+            f"state.auth.configured={json.dumps(bool(auth.get('auth_configured')))};"
+            f"state.auth.authenticated={json.dumps(bool(auth.get('authenticated')))};"
+            f"state.auth.csrfToken={json.dumps(auth.get('csrf_token'))};"
+            f"state.runtime={json.dumps(runtime)};"
+            "if(typeof renderAuthState==='function')renderAuthState();"
+            f"if(typeof updateSnapshot==='function')updateSnapshot({json.dumps(snapshot)});"
+        )
+
+        query = {"range": ["24h"], "series": ["pv,output,battery,soc,grid"]}
+        if view in ("aggregated", "devices"):
+            data = self._history_series(query, source="sqlite")
+            body += (
+                f"state.history.data={json.dumps(data)};"
+                "if(typeof renderHistoryChart==='function')renderHistoryChart();"
+                "if(typeof setHistoryLoading==='function')setHistoryLoading(false);"
+            )
+        elif view == "analytics":
+            data = self._history_series(query, source="influxdb")
+            body += (
+                f"state.analytics.data={json.dumps(data)};"
+                "if(typeof setAnalyticsAvailable==='function')setAnalyticsAvailable(true);"
+                "if(typeof renderAnalytics==='function')renderAnalytics();"
+                "if(typeof setAnalyticsLoading==='function')setAnalyticsLoading(false);"
+            )
+        elif view == "control":
+            # Force the runtime editor (control buttons) to render with the
+            # seeded auth + runtime, even before the async runtime fetch lands.
+            body += (
+                "if(typeof renderControlExplain==='function')"
+                "renderControlExplain(state.snapshot,{forceRuntimeEditor:true});"
+            )
+        elif view == "diagnose":
+            body += (
+                f"state.diagnose.report={json.dumps(scenario['diagnose'])};"
+                "if(typeof renderDiagnoseView==='function')renderDiagnoseView();"
+            )
+        elif view == "logs":
+            body += (
+                f"state.logs.lines={json.dumps(self._log_lines())};"
+                "if(typeof applyLogs==='function')applyLogs();"
+            )
+        return (
+            "\n  <script>window.addEventListener('load',function(){"
+            "try{if(typeof state!=='undefined'){" + body + "}}catch(e){}});</script>"
+        )
 
     def _send_events(self):
         self.send_response(200)
@@ -323,12 +457,10 @@ class PreviewHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError, OSError):
             return
 
-    def _send_logs(self, query_string):
-        query = parse_qs(query_string)
-        after = int((query.get("after", ["0"]) or ["0"])[0] or "0")
+    def _log_lines(self, after=0):
         now = time.time()
         log_lines = self._scenario()["logs"]
-        lines = [
+        return [
             {
                 "seq": seq,
                 "ts": now - (len(log_lines) - seq) * 14,
@@ -339,6 +471,12 @@ class PreviewHandler(BaseHTTPRequestHandler):
             for seq, level, message in log_lines
             if seq > after
         ]
+
+    def _send_logs(self, query_string):
+        query = parse_qs(query_string)
+        after = int((query.get("after", ["0"]) or ["0"])[0] or "0")
+        log_lines = self._scenario()["logs"]
+        lines = self._log_lines(after)
         self._send_json({
             "lines": lines,
             "cursor": log_lines[-1][0] if log_lines else 0,

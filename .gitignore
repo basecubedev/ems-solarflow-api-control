@@ -32,6 +32,10 @@ runtime-state.json.*.tmp
 *.sqlite-wal
 *.sqlite-shm
 
+# InfluxDB official deployment (secrets / local state)
+/deploy/docker/influxdb.env
+/deploy/docker/data/
+
 # InfluxDB local development
 /develop/influxdb/.env
 /develop/influxdb/data/

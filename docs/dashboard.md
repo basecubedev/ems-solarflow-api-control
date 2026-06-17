@@ -15,7 +15,7 @@ default password and password setup is not available from the web UI.
 The Control view shows the detailed calculation flow from measurements to final
 handoff, so the control decision can be followed step by step.
 
-![Control Explain demo screenshot](assets/control-explain-demo.jpg)
+![Control Explain demo screenshot](assets/preview-control.jpg)
 
 ## Devices View
 
@@ -45,6 +45,18 @@ assist window active, restore pending, or scheduled), last full-charge and
 next due timestamps, and pending restore flags. Devices without a detected
 battery, and devices when the feature is globally disabled, do not show this
 section.
+
+## Analytics View
+
+The Analytics tab is the home for long-term, InfluxDB-backed analysis: a single
+large primary chart with custom date ranges, drag-zoom, series overlays,
+sub-tabs and KPI cards. It is optional — when InfluxDB is not configured the tab
+shows a clean "InfluxDB analytics is not configured" info state, and the
+Aggregate/Devices history (SQLite) keeps working unchanged. See
+[Two history sources](#two-history-sources-sqlite-operational-vs-influxdb-analytics)
+for the SQLite vs InfluxDB split and the endpoints involved.
+
+![Analytics tab demo screenshot](assets/preview-analytics.jpg)
 
 ## Energy Statistics View
 
@@ -142,8 +154,10 @@ The dashboard section in `config.json` controls startup:
 `database_path` is relative to the project directory unless an absolute path is
 used. The SQLite database stores short-term live dashboard snapshots and
 telemetry. Those short-term rows are cleaned according to
-`dashboard.history_hours`. `write_interval_seconds` keeps database writes low
-even when the EMS loop runs with a short interval.
+`dashboard.history_hours`. `write_interval_seconds` keeps SQLite database writes
+low even when the EMS loop runs with a short interval. It applies **only** to the
+SQLite dashboard history; the optional InfluxDB raw writer is independent and
+writes every EMS loop (see the InfluxDB ingestion section below).
 
 Daily energy statistics are stored in `daily_energy_stats` in the same database.
 They are persistent daily aggregates and are not removed by the short-term
@@ -271,13 +285,250 @@ Energy statistics only:
 GET /api/energy-stats
 ```
 
-Short-term history:
+Short-term history (legacy snapshot list, used by older clients):
 
 ```text
 GET /api/history?range=6h
 ```
 
 Supported ranges are `1h`, `6h`, `12h`, and `24h`.
+
+### Two history sources: SQLite (operational) vs InfluxDB (analytics)
+
+The dashboard deliberately keeps two **independent** time-series sources so the
+operational views stay fast and dependency-free while long-term analysis lives
+in its own workspace:
+
+| Source       | Backed by                         | Drives                                 | Endpoint               |
+|--------------|-----------------------------------|----------------------------------------|------------------------|
+| **SQLite**   | local snapshot store (always on)  | the **History** chart in Aggregate / Devices | `/api/history/series`  |
+| **InfluxDB** | optional InfluxDB 2.x (opt-in)    | the dedicated **Analytics** tab        | `/api/analytics/series`|
+
+InfluxDB never silently replaces the SQLite history: `/api/history/series` is
+**always** SQLite-backed, so the Aggregate and Devices views work with zero
+external dependencies and remain the default experience. Enabling InfluxDB only
+adds the Analytics tab; it does not change the operational charts.
+
+#### How analytics data gets into InfluxDB (ingestion)
+
+The recommended, out-of-the-box setup needs **no separate collector process**:
+
+```text
+config.json (influxdb.enabled = true)
+docker compose up -d        # InfluxDB
+# Analytics works
+```
+
+When `influxdb.enabled` is true and the EMS is reading real hardware (not
+simulation/replay), the control loop writes the telemetry it already collects
+each cycle directly into the `{prefix}_raw` bucket via the native writer
+(`ems/history/influx_writer.py`). There is **one** telemetry collection per
+cycle, fanned out to multiple storage targets:
+
+```text
+Telemetry snapshot ── runtime state
+                   ├─ SQLite history
+                   ├─ dashboard data
+                   └─ InfluxDB writer ─> {prefix}_raw ─> 1m ─> 5m ─> 1h
+```
+
+The native writer is **non-blocking and failure-isolated**: it only enqueues
+line protocol onto a bounded queue that a background daemon thread drains, so a
+slow, offline or misconfigured InfluxDB never blocks or stops the control loop;
+errors are logged as rate-limited warnings and the writer reconnects
+automatically. It writes only to the raw bucket — the downsampling tasks
+reconciled by `emsctl.py influx sync` handle raw -> 1m -> 5m -> 1h. The hardware
+is never polled a second time.
+
+**Write cadence — InfluxDB raw vs SQLite history are decoupled:**
+
+```text
+InfluxDB raw write cadence  = EMS loop cadence (system.loop_interval)
+SQLite dashboard history    = dashboard.write_interval_seconds
+```
+
+The native writer enqueues one raw sample **every EMS control loop**, so the raw
+bucket represents the highest available EMS sampling resolution (with a 3s loop,
+~3s resolution). The SQLite dashboard history keeps its own, typically lower,
+cadence from `dashboard.write_interval_seconds` and is unchanged — you do **not**
+need to set `write_interval_seconds = 0` to get full-resolution InfluxDB data.
+
+The raw cadence can optionally be throttled with
+`influxdb.raw_write_interval_seconds`:
+
+```text
+0 or null = write one raw sample every EMS loop (default)
+N > 0     = write at most one raw sample every N seconds
+```
+
+Spike visibility is ultimately bounded by this sampling cadence:
+**InfluxDB can only show spikes that were actually sampled by the EMS loop.**
+A spike shorter than the EMS loop interval can still be missed if it occurs
+between two samples.
+
+**Advanced usage — the standalone collector.** The collector
+(`scripts/capture_runtime_to_influx.py`, see
+[develop-tool-influxdb-telemetry.md](develop-tool-influxdb-telemetry.md)) is no
+longer required for normal operation. It remains available for development,
+diagnostics, experiments and backfill. It writes the same device and Shelly
+meter schema as the native writer (`zendure_device` / `shelly_meter`, numeric
+fields as float), but it cannot write `ems_runtime.target_output` because it does
+not run the EMS controller — so the EMS Target series stays empty for
+collector-captured data.
+
+#### `/api/history/series` — operational history (SQLite)
+
+```text
+GET /api/history/series?range=24h&series=pv,output,battery&devices=WR1
+GET /api/history/series?start=1717200000&end=1717286400&series=pv
+```
+
+Supported ranges are `1h`, `6h`, `24h`, `7d`, `30d`, `365d`. `series` and
+`devices` are optional comma-separated lists; an empty/invalid `series` falls
+back to the default `pv,output,battery`. For a **custom range**, pass `start`
+and `end` (epoch seconds or ISO 8601) instead of `range`; the response then
+reports `"range": "custom"`. `start >= end` or unparseable bounds return
+`400 invalid_range`. The response is columnar
+(`time`, `series`, `devices`, `source`, `window`, `range`, `meta`) so the
+front-end uPlot chart can plot every series on one shared time axis. The
+`source` is always `sqlite`.
+
+The lightweight **History** panel (shown only on the Aggregate and Devices
+views) uses this endpoint for one combined chart of the default
+PV / Inverter Output / Battery series with a range selector and a device
+filter. It is intentionally minimal — no overlays, sub-tabs, zoom or KPIs — so
+these operational views stay quick to load.
+
+#### `/api/analytics/series` and `/api/analytics/status` — analytics (InfluxDB)
+
+```text
+GET /api/analytics/status
+GET /api/analytics/series?range=30d&series=pv,output,battery&devices=WR1
+GET /api/analytics/series?start=1717200000&end=1717286400&series=pv
+```
+
+These are served exclusively by the InfluxDB `HistoryProvider` and are only
+active when `influxdb.enabled` is set in config. `/api/analytics/status` returns
+`{"available": <bool>, "provider": "influxdb", "reason": ...}` so the front-end
+can render a clean state. When InfluxDB is **not** configured, both endpoints
+respond with HTTP 200 and `{"available": false, "reason": "not_configured"}`
+(never a broken chart or a JavaScript error); the Analytics tab then shows an
+"InfluxDB analytics is not configured" info panel. The series response shares the
+same columnar shape as `/api/history/series`, with `source` set to `influxdb`.
+
+The **Analytics** tab is a dedicated, larger analysis workspace (the primary
+chart is ~560px tall on desktop) reusing the existing PV/Output/Battery/Grid
+colors, with a period selector, a device filter, custom date ranges, drag-zoom,
+overlays, sub-tabs, and KPI cards — one combined chart, never a chart explosion.
+
+The Analytics tab has sub-tabs that keep the same single chart and only change
+the visible series and KPI cards (no extra chart pages):
+
+- **Overview** / **Devices** — PV, Inverter Output, Battery Power; KPIs PV,
+  Output, Charge, Discharge, Current SoC, Runtime Role.
+- **Grid** — Grid Power and Home Load; KPIs Grid Import, Grid Export, Home, SoC.
+- **Battery** — Battery Power; KPIs Charge, Discharge, SoC, Runtime Role.
+- **PV** — PV Input; KPIs PV, PV Peak, Output, SoC.
+
+Energy KPIs are integrated from the selected period; Current SoC and Runtime
+Role come from the live snapshot.
+
+Overlay toggles add optional series on top of the active tab without changing
+it: **SoC** (drawn on a secondary right-hand percentage axis), **EMS Target**,
+and **Grid Power**. Every overlay is data-backed (no overlay is empty by
+design). Overlays render as dashed lines and the crosshair/live legend reports
+every visible series at the cursor. A custom date range (from/to pickers +
+Apply) replaces the period selector when set.
+
+Analytics series definitions (consistent across the native writer, the InfluxDB
+schema/provider and the frontend):
+
+- **Grid Power** (`grid`) — meter exchange power measured by the Shelly / grid
+  meter, positive = import from grid, negative = export to grid. Source:
+  `shelly_meter.grid_power`.
+- **Home Load** (`home`) — calculated household load (the Shelly / grid meter
+  does not measure household load directly; it is derived from inverter output
+  and grid power), `max(0, inverter_output_total + grid_power)`. Stored as
+  `shelly_meter.house_load`.
+- **EMS Target** (`target`) — the EMS effective output target actually used by
+  the controller after limits and safety logic (`effective_target_total_w`).
+  Source: `ems_runtime.target_output`.
+
+Performance and refresh behavior:
+
+- The endpoint decimates each response to at most ~2000 points per series, so
+  long ranges stay fast (a 365d query over 100k+ raw snapshots returns in well
+  under a second). Zoom/custom ranges request a narrower window and so return
+  finer detail.
+- The bucket and aggregation window are picked from `influxdb.query_profiles`
+  by the **effective requested range** (`end - start`), not by the dashboard
+  period button. The default profiles are:
+
+  | requested range | bucket | aggregation window |
+  | --------------- | ------ | ------------------ |
+  | ≤ 1h            | `raw`  | `1s`               |
+  | ≤ 6h            | `raw`  | `10s`              |
+  | ≤ 24h           | `1m`   | `1m`               |
+  | ≤ 30d           | `5m`   | `5m`               |
+  | longer          | `1h`   | `1h`               |
+
+  The `raw` bucket holds every stored snapshot; the **aggregation window** is a
+  separate `aggregateWindow(every: …, fn: mean)` step that smooths the raw
+  series before plotting. A short window (`1s` for ≤ 1h) keeps short power
+  spikes visible instead of averaging them into a 10s mean. Because profile
+  selection uses `end - start`, **zooming** into a sub-1h slice of a 24h / 7d /
+  30d view re-queries with the raw / `1s` detail profile, while a ~2h zoom uses
+  the raw / `10s` profile. Profiles are user-configurable; custom
+  `query_profiles` override these defaults.
+- Spike visibility is ultimately bounded by the actual sampling/write interval,
+  not by the chart window. With the EMS writing roughly every 3s, a 1h chart can
+  show ~3s-level detail, but a spike shorter than the write interval can still be
+  missed because it was never sampled.
+- The Analytics tab auto-refreshes every 30s, but only while it is the active
+  view; other views and a backgrounded browser tab do not trigger analytics
+  fetches. Each sub-tab loads only its own series. The lightweight History panel
+  refreshes on the same cadence while Aggregate/Devices is on screen.
+- Both panels are mobile-friendly (controls, overlay chips, sub-tabs and KPI
+  cards reflow; charts use reduced heights on small screens) and show explicit
+  loading and empty/unavailable states.
+
+Browser-CPU behavior (live updates):
+
+- Live SSE/poll snapshots are **view-gated**: each update refreshes the global
+  header metrics plus only the section for the visible view. Hidden views (the
+  aggregated flow SVG, device cards/flow, energy stats, control explain) are not
+  rebuilt while another tab is on screen, and switching views renders the newly
+  visible view immediately from the latest snapshot.
+- While the Analytics tab is active, live snapshots update only the cheap live
+  KPI cards (Current SoC, Runtime Role). The series-based KPIs are integrated
+  once per analytics data load and cached; they are not re-integrated on every
+  live snapshot.
+- The analytics and history charts are **reused in place** (`uPlot.setData`)
+  across refreshes when their structure (series set, overlays, axes, selected
+  device) is unchanged; the chart is only destroyed/recreated when that
+  structure changes or the data becomes empty.
+- `dashboard.animation_mode` (`normal` / `reduced` / `off`) reduces or disables
+  the animated flow view's pipe motion and glow/blur filters to lower CPU/GPU
+  load; `prefers-reduced-motion` is always honored on top of it. See
+  [configuration.md](configuration.md).
+
+End-to-end tests (`tests/test_history_analytics_e2e.py`) cover the whole path.
+The SQLite variant always runs (records snapshots through the real
+`DashboardStore`, serves the real dashboard, and asserts the
+`/api/history/series` payload). The InfluxDB variant is opt-in and runs against a
+live InfluxDB 2.x when these are set (e.g. with the bundled Docker InfluxDB from
+`develop/influxdb/`), asserting the `/api/analytics/series` payload:
+
+```bash
+EMS_INFLUX_E2E_URL=http://localhost:8086 \
+EMS_INFLUX_E2E_TOKEN=<token> \
+EMS_INFLUX_E2E_ORG=ems-e2e \
+pytest tests/test_history_analytics_e2e.py
+```
+
+It reconciles the schema, writes telemetry line protocol, and reads it back
+through the HTTP endpoint with InfluxDB as the active provider (test-scoped
+`emse2e_*` buckets).
 
 Live updates:
 

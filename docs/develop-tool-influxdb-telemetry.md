@@ -6,6 +6,18 @@ This document describes the optional InfluxDB telemetry tooling under
 This is a development and analysis feature. It is not part of the normal EMS
 control loop and it is not required for operating the EMS.
 
+> **Not the primary ingestion path.** For normal operation the EMS writes
+> telemetry into InfluxDB itself via the native writer
+> (`ems/history/influx_writer.py`); see
+> [dashboard.md](dashboard.md#how-analytics-data-gets-into-influxdb-ingestion).
+> This collector is kept for development, diagnostics, experiments and backfill.
+> It writes the same `zendure_device` and `shelly_meter` schema (including
+> `grid_power` and the derived `house_load`), so the Analytics PV/output/SoC,
+> grid and home series match the native writer. The one exception is
+> `ems_runtime.target_output`: the read-only collector never runs the controller,
+> so it cannot record the EMS output target and the Analytics `target` series is
+> empty for collector-captured data.
+
 ## Purpose
 
 The toolset captures Zendure runtime telemetry over longer periods to improve

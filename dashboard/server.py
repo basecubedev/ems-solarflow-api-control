@@ -57,6 +57,35 @@ SECURITY_HEADERS = {
 }
 
 
+def _split_csv(value):
+    """Split a comma-separated query value into a clean list of tokens."""
+    if not value:
+        return []
+    return [token.strip() for token in value.split(",") if token.strip()]
+
+
+def _parse_time_param(value):
+    """Parse a custom-range bound: epoch seconds or ISO 8601, to aware UTC."""
+    from datetime import datetime, timezone
+
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromtimestamp(float(text), tz=timezone.utc)
+    except (TypeError, ValueError, OverflowError, OSError):
+        pass
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
 class JsonBodyTooLarge(ValueError):
     pass
 
@@ -115,6 +144,7 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         runtime_state_path=None,
         log_buffer=None,
         log_redaction=False,
+        animation_mode="normal",
         sse_max_connections=MAX_SSE_CONNECTIONS,
         sse_max_connections_per_ip=MAX_SSE_CONNECTIONS_PER_IP,
         sse_max_connection_seconds=SSE_MAX_CONNECTION_SECONDS,
@@ -124,6 +154,11 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         self.runtime_state = runtime_state
         self.log_buffer = log_buffer
         self.log_redaction = bool(log_redaction)
+        # UI-only hint for the frontend bootstrap (no control/auth impact).
+        self.animation_mode = (
+            animation_mode if animation_mode in ("normal", "reduced", "off")
+            else "normal"
+        )
         self.auth_file = auth_file or resolve_auth_path(BASE_DIR)
         self.https_active = bool(https_active)
         # Paths the diagnose endpoints use to build service args. runtime_state_path
@@ -148,6 +183,68 @@ class DashboardHTTPServer(ThreadingHTTPServer):
             sse_max_connections_per_ip,
         )
         self.sse_max_connection_seconds = int(sse_max_connection_seconds)
+        # Two independent history sources, built lazily and cached:
+        #
+        # - ``sqlite_history_provider`` always reads the local SQLite snapshot
+        #   store. It backs the lightweight Aggregate/Devices history charts
+        #   (``/api/history/series``) and is always available, with no external
+        #   dependency. InfluxDB never silently replaces it.
+        # - ``analytics_provider`` is the optional InfluxDB-backed long-term
+        #   analytics source (``/api/analytics/series``). It is ``None`` unless
+        #   InfluxDB is explicitly enabled in config; the dashboard then shows a
+        #   clean "not configured" state instead of broken charts.
+        self._sqlite_provider = None
+        self._analytics_provider = None
+        self._analytics_built = False
+        self._history_provider_lock = threading.Lock()
+
+    def sqlite_history_provider(self):
+        """SQLite snapshot provider for the operational history charts."""
+        with self._history_provider_lock:
+            if self._sqlite_provider is None:
+                from ems.history.provider import SqliteHistoryProvider
+
+                self._sqlite_provider = SqliteHistoryProvider(
+                    getattr(self.store, "path", None)
+                )
+            return self._sqlite_provider
+
+    def analytics_provider(self):
+        """InfluxDB analytics provider, or ``None`` when not configured.
+
+        Returns ``None`` (rather than falling back to SQLite) so the Analytics
+        tab can render a dedicated unavailable state and the two data sources
+        never get mixed.
+        """
+        with self._history_provider_lock:
+            if not self._analytics_built:
+                self._analytics_provider = self._build_analytics_provider()
+                self._analytics_built = True
+            return self._analytics_provider
+
+    def _build_analytics_provider(self):
+        influx_cfg = self._influx_config()
+        if not (influx_cfg and influx_cfg.get("enabled")):
+            return None
+        try:
+            from ems.history.influx_provider import InfluxHistoryProvider
+
+            return InfluxHistoryProvider(influx_cfg)
+        except Exception:
+            logging.exception("failed to build InfluxDB analytics provider")
+            return None
+
+    def _influx_config(self):
+        if not (self.config_path and os.path.exists(self.config_path)):
+            return None
+        try:
+            with open(self.config_path, encoding="utf-8") as handle:
+                raw_config = json.load(handle)
+            from ems.config import normalize_influxdb_config
+
+            return normalize_influxdb_config(raw_config.get("influxdb"))
+        except Exception:
+            return None
 
 
 class DashboardRequestHandler(BaseHTTPRequestHandler):
@@ -185,8 +282,25 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             })
             return
 
+        if parsed.path == "/api/history/series":
+            self._handle_history_series(parse_qs(parsed.query))
+            return
+
+        if parsed.path == "/api/analytics/status":
+            self._handle_analytics_status()
+            return
+
+        if parsed.path == "/api/analytics/series":
+            self._handle_analytics_series(parse_qs(parsed.query))
+            return
+
         if parsed.path == "/api/energy-stats":
             self._send_json(self.server.store.energy_summary())
+            return
+
+        if parsed.path == "/api/ui-config":
+            # Read-only UI bootstrap hints (no auth/control/runtime impact).
+            self._send_json({"animation_mode": self.server.animation_mode})
             return
 
         if parsed.path == "/api/auth/status":
@@ -408,6 +522,101 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         "control",
         "control_quality",
     )
+
+    def _resolve_series_query(self, query):
+        """Parse range/start/end/series/devices from a series request.
+
+        Returns ``(range_name, start, end, series, devices)`` on success, or
+        ``None`` after already sending the appropriate 400 error response.
+        """
+        from ems.history.provider import (
+            HISTORY_RANGE_SECONDS,
+            normalize_series,
+            resolve_range,
+        )
+
+        range_name = query.get("range", ["24h"])[0]
+        start_param = query.get("start", [None])[0]
+        end_param = query.get("end", [None])[0]
+
+        if start_param is not None or end_param is not None:
+            # Custom date range: explicit start/end bounds override the token.
+            start = _parse_time_param(start_param)
+            end = _parse_time_param(end_param)
+            if start is None or end is None or start >= end:
+                self._send_json({"error": "invalid_range"}, status=400)
+                return None
+            range_name = "custom"
+        elif range_name in HISTORY_RANGE_SECONDS:
+            start, end = resolve_range(range_name)
+        else:
+            self._send_json(
+                {
+                    "error": "unsupported_range",
+                    "supported": sorted(HISTORY_RANGE_SECONDS.keys()),
+                },
+                status=400,
+            )
+            return None
+
+        series = normalize_series(_split_csv(query.get("series", [None])[0]))
+        devices = _split_csv(query.get("devices", [None])[0]) or None
+        return range_name, start, end, series, devices
+
+    def _serve_series(self, provider, query, *, log_label):
+        from ems.history.provider import decimate_history_result
+
+        parsed = self._resolve_series_query(query)
+        if parsed is None:
+            return
+        range_name, start, end, series, devices = parsed
+
+        try:
+            result = provider.query(start, end, devices=devices, series=series)
+        except Exception:
+            logging.exception("%s series query failed", log_label)
+            self._send_json({"error": "history_unavailable"}, status=503)
+            return
+
+        decimate_history_result(result)
+        payload = result.to_dict()
+        payload["range"] = range_name
+        self._send_json(payload)
+
+    def _handle_history_series(self, query):
+        # Lightweight operational history for the Aggregate/Devices charts.
+        # Always backed by the local SQLite snapshot store: InfluxDB never
+        # replaces this source, so these views work with zero external
+        # dependencies and remain the default experience.
+        self._serve_series(
+            self.server.sqlite_history_provider(), query, log_label="history"
+        )
+
+    def _handle_analytics_status(self):
+        provider = self.server.analytics_provider()
+        available = bool(provider and provider.available())
+        payload = {"available": available, "provider": "influxdb"}
+        if not provider:
+            payload["reason"] = "not_configured"
+        elif not available:
+            payload["reason"] = "unreachable"
+        self._send_json(payload)
+
+    def _handle_analytics_series(self, query):
+        # Long-term analytics, backed exclusively by InfluxDB. When InfluxDB is
+        # not configured we return a 200 with an explicit unavailable marker so
+        # the Analytics tab can show a clean info state instead of an error.
+        provider = self.server.analytics_provider()
+        if not provider:
+            self._send_json(
+                {
+                    "available": False,
+                    "reason": "not_configured",
+                    "source": "influxdb",
+                }
+            )
+            return
+        self._serve_series(provider, query, log_label="analytics")
 
     def _diagnose_args(self):
         # The browser never supplies paths or sampling: paths come from the
@@ -855,6 +1064,7 @@ def start_dashboard_server(
     runtime_state_path=None,
     log_buffer=None,
     log_redaction=False,
+    animation_mode="normal",
     sse_max_connections=MAX_SSE_CONNECTIONS,
     sse_max_connections_per_ip=MAX_SSE_CONNECTIONS_PER_IP,
     sse_max_connection_seconds=SSE_MAX_CONNECTION_SECONDS,
@@ -873,6 +1083,7 @@ def start_dashboard_server(
         runtime_state_path=runtime_state_path,
         log_buffer=log_buffer,
         log_redaction=log_redaction,
+        animation_mode=animation_mode,
         sse_max_connections=sse_max_connections,
         sse_max_connections_per_ip=sse_max_connections_per_ip,
         sse_max_connection_seconds=sse_max_connection_seconds,
