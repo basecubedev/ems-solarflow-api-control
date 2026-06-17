@@ -86,8 +86,8 @@ the filesystem supports it.
 > Leave `influxdb.token` empty: bundled mode reads the token from the generated
 > secret file (the variable named by `token_env`, default `INFLUXDB_TOKEN`), so
 > no secrets live in `config.json`. The `DOCKER_INFLUXDB_INIT_*` bootstrap
-> values are applied **only** on an empty data volume; changing them later does
-> not re-initialize InfluxDB.
+> values are applied **only** on an empty data directory (`data/influxdb`);
+> changing them later does not re-initialize InfluxDB.
 
 > **`url` vs `host_url`:** the EMS container reaches InfluxDB by its Docker
 > service name (`url`, `http://influxdb:8086`). The host-side `emsctl`
@@ -113,6 +113,49 @@ bucket keeps the highest available sampling resolution. This is independent of
 `dashboard.write_interval_seconds` (which only governs the SQLite dashboard
 history). To throttle raw writes, set `influxdb.raw_write_interval_seconds` to a
 positive number of seconds; `0` (the default) or `null` writes every loop.
+
+## Local data directory and backups
+
+Bundled InfluxDB stores its database state in a repo-local bind-mounted
+directory:
+
+```text
+data/influxdb/
+```
+
+This keeps all local EMS runtime/history data together under `./data/`:
+
+```text
+data/
+  ems_dashboard.sqlite
+  ems_state.sqlite
+  runtime-state.json
+  influxdb/            # bundled InfluxDB internal data
+```
+
+`data/influxdb` is **gitignored** (the whole `data/` tree is) — never commit it.
+`emsctl.py influx init` and `emsctl.py stack up` create the directory (idempotent)
+before starting the container, and report it:
+
+```text
+InfluxDB data directory: data/influxdb
+```
+
+To back up the important local EMS state (config, all runtime/history data and
+the generated secrets), archive `config.json`, `data/` and the secret file:
+
+```bash
+tar -czf ems-backup.tar.gz config.json data/ deploy/docker/influxdb.env
+```
+
+> **Migrating from an earlier RC named volume.** Earlier `v0.6.0`
+> release-candidate builds stored bundled InfluxDB data in a Docker **named
+> volume** (`influxdb-data`) instead of `./data/influxdb`. New setups use the
+> local directory. The old named volume is **not** removed automatically; if you
+> need its history, export/import or manually copy the Docker volume into
+> `data/influxdb` (with the container stopped) before removing it, e.g.
+> `docker volume ls | grep influx` to find it. A fresh `data/influxdb` simply
+> starts empty.
 
 ## Advanced / external path
 

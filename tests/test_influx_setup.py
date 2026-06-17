@@ -176,6 +176,31 @@ def test_build_compose_command():
     assert cmd == ["docker", "compose", "-f", "a.yml", "-f", "b.yml", "up", "-d"]
 
 
+# --- bundled InfluxDB local data directory ----------------------------------
+
+
+def test_compose_influxdb_uses_local_bind_mount():
+    # The bundled InfluxDB compose file must bind-mount ./data/influxdb and must
+    # not declare a Docker named volume for it anymore.
+    text = (ROOT / "deploy" / "docker" / "compose.influxdb.yml").read_text()
+    assert "./data/influxdb:/var/lib/influxdb2" in text
+    # No top-level named-volume definition / mapping for bundled data.
+    assert "influxdb-data:/var/lib/influxdb2" not in text
+    import re
+    # No `volumes:` top-level key defining a named volume (only the service-level
+    # `volumes:` list mapping the bind mount should remain).
+    assert not re.search(r"(?m)^volumes:\s*$", text)
+
+
+def test_ensure_data_dir_creates_idempotently(tmp_path):
+    rel = influx_setup.ensure_data_dir(base_dir=str(tmp_path))
+    assert rel == "data/influxdb"
+    assert (tmp_path / "data" / "influxdb").is_dir()
+    # Second call is a no-op and still returns the relative path.
+    assert influx_setup.ensure_data_dir(base_dir=str(tmp_path)) == "data/influxdb"
+    assert (tmp_path / "data" / "influxdb").is_dir()
+
+
 # --- host-side URL + secret-file path helpers -------------------------------
 
 
@@ -343,6 +368,48 @@ def test_influx_init_starts_and_syncs(patch_base, monkeypatch):
     # Starts only the influxdb service via the full compose file set.
     assert "influxdb" in calls["docker"]
     assert calls["sync"] == "sync"
+
+
+def test_influx_init_creates_data_dir_before_docker(patch_base, monkeypatch):
+    # The local bind-mount target must exist by the time docker compose runs.
+    observed = {}
+
+    def fake_docker(command, cwd, dry_run=False, stdout_to_stderr=False):
+        observed["data_dir_exists"] = (patch_base / "data" / "influxdb").is_dir()
+        return 0
+
+    monkeypatch.setattr(emsctl, "run_docker_compose", fake_docker)
+    monkeypatch.setattr(emsctl, "execute_influx_schema_op", fake_schema_op())
+    rc = emsctl.handle_influx_command(
+        init_args(), {"influxdb": {"enabled": True, "mode": "bundled"}}
+    )
+    assert rc == 0
+    assert observed["data_dir_exists"] is True
+    assert (patch_base / "data" / "influxdb").is_dir()
+
+
+def test_influx_init_json_reports_data_dir(patch_base, monkeypatch, capsys):
+    monkeypatch.setattr(emsctl, "run_docker_compose", lambda *a, **k: 0)
+    monkeypatch.setattr(emsctl, "execute_influx_schema_op", fake_schema_op())
+    rc = emsctl.handle_influx_command(
+        init_args(json=True),
+        {"influxdb": {"enabled": True, "mode": "bundled"}},
+    )
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["data_dir"] == "data/influxdb"
+
+
+def test_influx_init_no_start_skips_data_dir(patch_base, monkeypatch):
+    # --no-start only writes the secret file; it must not create the data dir.
+    monkeypatch.setattr(emsctl, "run_docker_compose", lambda *a, **k: 0)
+    monkeypatch.setattr(emsctl, "execute_influx_schema_op", fake_schema_op())
+    rc = emsctl.handle_influx_command(
+        init_args(no_start=True),
+        {"influxdb": {"enabled": True, "mode": "bundled"}},
+    )
+    assert rc == 0
+    assert not (patch_base / "data" / "influxdb").exists()
 
 
 def test_influx_init_uses_host_url_for_sync(patch_base, monkeypatch):
@@ -616,6 +683,44 @@ def test_stack_up_bundled_includes_overlays_and_syncs(patch_base, monkeypatch):
     assert captured["command"][2:4] == ["-f", "docker-compose.example.yml"]
     assert captured["sync"] == "sync"
     assert (patch_base / "deploy" / "docker" / "influxdb.env").exists()
+
+
+def test_stack_up_bundled_creates_data_dir_before_docker(patch_base, monkeypatch):
+    observed = {}
+
+    def fake_docker(command, cwd, dry_run=False, stdout_to_stderr=False):
+        observed["data_dir_exists"] = (patch_base / "data" / "influxdb").is_dir()
+        return 0
+
+    monkeypatch.setattr(emsctl, "run_docker_compose", fake_docker)
+    monkeypatch.setattr(emsctl, "execute_influx_schema_op", fake_schema_op())
+    rc = emsctl.handle_stack_command(
+        stack_args(), {"influxdb": {"enabled": True, "mode": "bundled"}}
+    )
+    assert rc == 0
+    assert observed["data_dir_exists"] is True
+    assert (patch_base / "data" / "influxdb").is_dir()
+
+
+def test_stack_up_bundled_json_reports_data_dir(patch_base, monkeypatch, capsys):
+    monkeypatch.setattr(emsctl, "run_docker_compose", lambda *a, **k: 0)
+    monkeypatch.setattr(emsctl, "execute_influx_schema_op", fake_schema_op())
+    rc = emsctl.handle_stack_command(
+        stack_args(json=True), {"influxdb": {"enabled": True, "mode": "bundled"}}
+    )
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["data_dir"] == "data/influxdb"
+
+
+def test_stack_up_disabled_skips_data_dir(patch_base, monkeypatch):
+    monkeypatch.setattr(emsctl, "run_docker_compose", lambda *a, **k: 0)
+    rc = emsctl.handle_stack_command(
+        stack_args(), {"influxdb": {"enabled": False}}
+    )
+    assert rc == 0
+    # Non-bundled stack must not create the bundled InfluxDB data directory.
+    assert not (patch_base / "data" / "influxdb").exists()
 
 
 def test_stack_up_external_mode_no_overlays(patch_base, monkeypatch):

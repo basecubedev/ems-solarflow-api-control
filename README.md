@@ -335,8 +335,10 @@ This generates a gitignored local secret file
 (`deploy/docker/influxdb.env`) with secure random tokens, starts the bundled
 InfluxDB and the EMS with the same `INFLUXDB_TOKEN`, and reconciles
 buckets/retention/downsampling tasks from `config.json`. No tokens are stored in
-`config.json`. See [docs/influxdb.md](docs/influxdb.md) for the bundled and
-external paths.
+`config.json`. Bundled InfluxDB stores its local history under `./data/influxdb`
+(gitignored), keeping all EMS runtime/history data together under `./data/` —
+include `./data/` in backups if you want to keep local history. See
+[docs/influxdb.md](docs/influxdb.md) for the bundled and external paths.
 
 Full Docker documentation: [docs/docker.md](docs/docker.md).
 

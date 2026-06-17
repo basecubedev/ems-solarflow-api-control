@@ -1431,7 +1431,15 @@ def execute_influx_schema_op(influx_config, action):
 
 def run_influx_schema_command(influx_config, action, json_output):
     """Standalone 'influx sync'/'influx status' handler (owns its own output)."""
+    from ems import influx_setup
+
     code, result = execute_influx_schema_op(influx_config, action)
+
+    # Surface the local data directory for the bundled backend so operators know
+    # where history is persisted on disk (and what to include in backups).
+    bundled = influx_config.get("mode") == "bundled"
+    if action == "status" and bundled:
+        result["data_dir"] = influx_setup.DEFAULT_DATA_DIR
 
     if json_output:
         print(json.dumps(result, indent=2, sort_keys=True))
@@ -1444,6 +1452,8 @@ def run_influx_schema_command(influx_config, action, json_output):
         print_influx_sync(result["report"])
     else:
         print_influx_status(result["report"])
+        if bundled:
+            print(f"  data directory: {influx_setup.DEFAULT_DATA_DIR}")
     return code
 
 
@@ -1544,6 +1554,9 @@ def handle_influx_init(args, influx_config):
     files = influx_setup.compose_files(influx_config)
     started = False
     if not args.no_start:
+        # Pre-create the local bind-mount target so the container writes its DB
+        # state under ./data/influxdb (idempotent).
+        influx_setup.ensure_data_dir()
         command = influx_setup.build_compose_command(
             files, action=("up", "-d", "influxdb")
         )
@@ -1578,6 +1591,7 @@ def handle_influx_init(args, influx_config):
         "generated_keys": secret_report["generated_keys"],
         "summary": secret_report["summary"],
         "compose_files": files,
+        "data_dir": influx_setup.DEFAULT_DATA_DIR,
         "started": started,
         "start_skipped": args.no_start,
         "synced": sync_ran,
@@ -1600,9 +1614,12 @@ def handle_influx_init(args, influx_config):
 
 
 def print_influx_init(secret_report, started, sync_ran, args):
+    from ems import influx_setup
+
     print("InfluxDB bundled setup")
     verb = "created" if secret_report["created"] else "updated"
     print(f"  secret file: {secret_report['relative_path']} ({verb}, gitignored)")
+    print(f"  data directory: {influx_setup.DEFAULT_DATA_DIR} (gitignored)")
     if secret_report["generated_keys"]:
         print(
             "  generated secrets: "
@@ -1660,6 +1677,11 @@ def handle_stack_command(args, config):
     if bundled and influx_config["auto_init"] and not args.dry_run:
         secret_report = influx_setup.ensure_secret_file(influx_config)
 
+    # Pre-create the local InfluxDB bind-mount target (idempotent). --dry-run
+    # only previews the command, so it stays side-effect-free.
+    if bundled and not args.dry_run:
+        influx_setup.ensure_data_dir()
+
     # 3 + 4. Build and run the compose command with the right files.
     files = influx_setup.compose_files(influx_config)
     command = influx_setup.build_compose_command(files, action=("up", "-d"))
@@ -1709,6 +1731,7 @@ def handle_stack_command(args, config):
             "secret_file_created": (
                 secret_report["created"] if secret_report else None
             ),
+            "data_dir": influx_setup.DEFAULT_DATA_DIR if bundled else None,
             "synced": sync_ran,
             "sync_skipped": not do_sync,
             "errors": errors,
@@ -1727,6 +1750,7 @@ def handle_stack_command(args, config):
     print("  dashboard: http://localhost:8080")
     if bundled:
         print("  influxdb:  http://localhost:8086")
+        print(f"  data dir:  {influx_setup.DEFAULT_DATA_DIR} (gitignored)")
         if sync_ran:
             print("  analytics: ready (schema synced)")
         else:

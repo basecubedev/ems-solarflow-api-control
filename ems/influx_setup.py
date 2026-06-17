@@ -32,6 +32,13 @@ DEFAULT_HOST_URL = "http://127.0.0.1:8086"
 # generated secrets and Compose's env_file stay in sync.
 DEFAULT_SECRET_FILE = "deploy/docker/influxdb.env"
 
+# Repo-local bind-mount target for bundled InfluxDB database state. Kept under
+# ./data/ so all local EMS runtime/history data (data/*.sqlite,
+# runtime-state.json) lives in one place that is easy to back up and migrate.
+# The bundled Compose file hard-codes the matching `./data/influxdb` bind mount,
+# resolved against the Compose project directory (the repo root).
+DEFAULT_DATA_DIR = "data/influxdb"
+
 # Base compose file shipped for everyone (EMS only, no InfluxDB).
 BASE_COMPOSE_FILE = "docker-compose.example.yml"
 # Bundled InfluxDB service.
@@ -73,6 +80,24 @@ def resolve_secret_file_path(influx_config, base_dir=None):
     if os.path.isabs(secret_file):
         return secret_file
     return os.path.join(base_dir, secret_file)
+
+
+def resolve_data_dir_path(base_dir=None):
+    """Absolute path to the bundled InfluxDB local data directory."""
+    base_dir = base_dir or BASE_DIR
+    return os.path.join(base_dir, DEFAULT_DATA_DIR)
+
+
+def ensure_data_dir(base_dir=None):
+    """Create the bundled InfluxDB local data directory (idempotent).
+
+    Returns the repo-root-relative path (``data/influxdb``). Docker would create
+    the bind-mount target itself, but pre-creating it keeps ownership with the
+    invoking user and makes the on-disk layout obvious before the container
+    starts.
+    """
+    os.makedirs(resolve_data_dir_path(base_dir=base_dir), exist_ok=True)
+    return DEFAULT_DATA_DIR
 
 
 def host_cli_url(influx_config):
