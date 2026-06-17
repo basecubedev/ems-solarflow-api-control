@@ -9,6 +9,7 @@ Everything here is hand-built constant data. No real Zendure/Shelly/MQTT/cloud
 access, no secrets, no SQLite history, and no runtime-state files are touched.
 """
 
+import math
 import time
 
 SCENARIOS = (
@@ -24,6 +25,7 @@ DEFAULT_SCENARIO = "normal"
 FLOW_VIEWS = (
     "aggregated",
     "devices",
+    "analytics",
     "control",
     "energy",
     "diagnose",
@@ -335,22 +337,59 @@ def _runtime(devices):
     }
 
 
-def _history(snapshot, points=18):
+def _history(snapshot, points=96):
+    """Synthetic but lively ~24h history (15-min steps) for the preview charts.
+
+    Shapes a realistic solar day instead of straight ramps: a PV bell curve with
+    passing-cloud dips, a morning/evening home-load profile, battery
+    charge/discharge that follows the PV surplus, a rising-then-plateau SoC, and
+    a grid curve derived from an energy balance so it imports at night/peaks and
+    exports around midday (i.e. it crosses zero). Fully deterministic (no RNG) so
+    the live preview and the captured screenshots stay reproducible.
+    """
+
     items = []
-    base = snapshot
+    step = 900  # 15 minutes
+    span = points * step
+    now = time.time()
     for index in range(points):
+        frac = index / (points - 1) if points > 1 else 0.0
+        hour = frac * 24.0
+        # PV: bell over daylight (~05:00-21:00) with two ripple frequencies to
+        # mimic passing clouds.
+        daylight = max(0.0, math.sin(math.pi * min(1.0, max(0.0, (hour - 5.0) / 16.0))))
+        clouds = 1.0 - 0.30 * max(0.0, math.sin(index * 0.8)) - 0.14 * max(0.0, math.sin(index * 2.3))
+        pv = max(0.0, 2100.0 * daylight * clouds)
+        # Home load: base draw + morning(~07:00) and evening(~20:00) bumps + a
+        # gentle ripple so it never looks synthetic-flat.
+        morning = math.exp(-((hour - 7.0) ** 2) / 3.0)
+        evening = math.exp(-((hour - 20.0) ** 2) / 4.0)
+        home = 250.0 + 360.0 * morning + 540.0 * evening + 90.0 * math.sin(index * 0.6)
+        home = max(120.0, home)
+        # Inverter output serves the home load, capped at the system limit.
+        output = min(800.0, home)
+        # Battery follows the PV surplus: charges (positive) midday, discharges
+        # (negative) morning/evening.
+        battery = max(-820.0, min(1600.0, (pv - output) * 0.7))
+        # Grid from a simple energy balance (home - pv + battery): imports when
+        # demand exceeds local supply, exports the midday surplus.
+        grid = home - pv + battery
+        # SoC: smooth S-curve rise with a small wobble.
+        soc = 38.0 + 52.0 * (0.5 - 0.5 * math.cos(math.pi * frac)) + 3.0 * math.sin(index * 0.5)
+        soc = max(5.0, min(100.0, soc))
         items.append(
             {
-                **base,
+                **snapshot,
                 "timestamp": time.strftime(
                     "%Y-%m-%dT%H:%M:%S+00:00",
-                    time.gmtime(time.time() - (points - 1 - index) * 300),
+                    time.gmtime(now - (span - index * step)),
                 ),
-                "pv_total_w": round(1200 + index * 38, 1),
-                "inverter_output_w": min(800, 520 + index * 18),
-                "home_load_w": min(800, 540 + index * 16),
-                "battery_power_w": round(720 + index * 18, 1),
-                "average_soc": round(56 + index * 0.22, 2),
+                "pv_total_w": round(pv, 1),
+                "inverter_output_w": round(output, 1),
+                "home_load_w": round(home, 1),
+                "battery_power_w": round(battery, 1),
+                "grid_power_w": round(grid, 1),
+                "average_soc": round(soc, 2),
             }
         )
     return items
@@ -478,7 +517,9 @@ def build_scenario(scenario=DEFAULT_SCENARIO):
         )
 
     devices = _devices_for(scenario)
-    grid_power_w = 120 if scenario == "offline-device" else 0
+    # Grid is held very close to zero (-5 W) to show the EMS regulating tightly
+    # against the house load; an offline device breaks that balance.
+    grid_power_w = 120 if scenario == "offline-device" else -5
     snapshot = _snapshot(devices, grid_power_w=grid_power_w)
     return {
         "name": scenario,

@@ -13,26 +13,28 @@
     <th>Energy Statistics</th>
   </tr>
   <tr>
-    <td width="33%"><img src="docs/assets/preview-aggregate.jpg" alt="EMS SolarFlow dashboard aggregated energy flow preview" width="100%"></td>
-    <td width="33%"><img src="docs/assets/preview-device.jpg" alt="EMS SolarFlow dashboard per-device energy flow preview" width="100%"></td>
+    <td width="33%"><img src="docs/assets/preview-aggregated.jpg" alt="EMS SolarFlow dashboard aggregated energy flow preview" width="100%"></td>
+    <td width="33%"><img src="docs/assets/preview-devices.jpg" alt="EMS SolarFlow dashboard per-device energy flow preview" width="100%"></td>
     <td width="33%"><img src="docs/assets/preview-energy.jpg" alt="EMS SolarFlow dashboard energy statistics preview" width="100%"></td>
   </tr>
 </table>
 
 <table>
   <tr>
+    <th>Analytics (InfluxDB)</th>
     <th>Diagnose</th>
     <th>Logs</th>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/assets/preview-diagnose.jpg" alt="Dashboard Diagnose tab" width="100%"></td>
-    <td width="50%"><img src="docs/assets/preview-logs.jpg" alt="Dashboard Logs tab" width="100%"></td>
+    <td width="33%"><img src="docs/assets/preview-analytics.jpg" alt="Dashboard Analytics tab backed by InfluxDB" width="100%"></td>
+    <td width="33%"><img src="docs/assets/preview-diagnose.jpg" alt="Dashboard Diagnose tab" width="100%"></td>
+    <td width="33%"><img src="docs/assets/preview-logs.jpg" alt="Dashboard Logs tab" width="100%"></td>
   </tr>
 </table>
 
 #### Control Center
 
-<img src="docs/assets/control-explain-demo.jpg" alt="EMS SolarFlow dashboard control center preview" width="100%">
+<img src="docs/assets/preview-control.jpg" alt="EMS SolarFlow dashboard control center preview" width="100%">
 
 Local-first EMS (Energy Management System) control for Zendure SolarFlow systems.
 

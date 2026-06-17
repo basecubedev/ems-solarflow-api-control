@@ -15,7 +15,7 @@ default password and password setup is not available from the web UI.
 The Control view shows the detailed calculation flow from measurements to final
 handoff, so the control decision can be followed step by step.
 
-![Control Explain demo screenshot](assets/control-explain-demo.jpg)
+![Control Explain demo screenshot](assets/preview-control.jpg)
 
 ## Devices View
 
@@ -55,6 +55,8 @@ shows a clean "InfluxDB analytics is not configured" info state, and the
 Aggregate/Devices history (SQLite) keeps working unchanged. See
 [Two history sources](#two-history-sources-sqlite-operational-vs-influxdb-analytics)
 for the SQLite vs InfluxDB split and the endpoints involved.
+
+![Analytics tab demo screenshot](assets/preview-analytics.jpg)
 
 ## Energy Statistics View
 

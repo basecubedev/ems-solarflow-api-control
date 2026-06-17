@@ -3851,6 +3851,28 @@ function analyticsChartHeight() {
   return 560;
 }
 
+// Friendly labels for the chart data-source badge. Makes the SQLite (operational)
+// vs InfluxDB (analytics) split visible at a glance on each chart.
+const SOURCE_LABELS = {
+  sqlite: "SQLite",
+  influxdb: "InfluxDB",
+  preview: "Preview",
+  demo: "Demo",
+};
+
+function setSourceBadge(elementId, source) {
+  const node = $(elementId);
+  if (!node) return;
+  const label = SOURCE_LABELS[source];
+  if (!label) {
+    node.hidden = true;
+    node.textContent = "";
+    return;
+  }
+  node.textContent = label;
+  node.hidden = false;
+}
+
 function cssColor(varName, fallback) {
   if (typeof getComputedStyle !== "function") return fallback;
   const value = getComputedStyle(document.documentElement)
@@ -3866,6 +3888,7 @@ function renderAnalyticsChart() {
   const data = state.analytics.data;
   const time = (data && data.time) || [];
   const empty = $("analyticsEmpty");
+  setSourceBadge("analyticsSource", data && data.source);
 
   if (state.analytics.chart) {
     state.analytics.chart.destroy();
@@ -4142,6 +4165,7 @@ function renderHistoryChart() {
   const data = state.history.data;
   const time = (data && data.time) || [];
   const empty = $("historyEmpty");
+  setSourceBadge("historySource", data && data.source);
 
   if (state.history.chart) {
     state.history.chart.destroy();
@@ -4485,6 +4509,7 @@ if (typeof module !== "undefined") {
     analyticsShouldAutoRefresh,
     analyticsFetchUrl,
     setAnalyticsAvailable,
+    setSourceBadge,
     historyVisible,
     historyFetchUrl,
     loadHistory,
