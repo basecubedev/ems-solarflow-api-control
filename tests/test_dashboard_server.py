@@ -194,6 +194,30 @@ def with_server(store, **kwargs):
     return server, f"http://{host}:{port}"
 
 
+def test_ui_config_reports_animation_mode():
+    store = StoreStub()
+    server, base_url = with_server(store, animation_mode="reduced")
+    try:
+        status, headers, payload = json_response(f"{base_url}/api/ui-config")
+        assert status == 200
+        assert "application/json" in headers["Content-Type"]
+        assert payload == {"animation_mode": "reduced"}
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_ui_config_defaults_to_normal_and_sanitizes_invalid():
+    store = StoreStub()
+    server, base_url = with_server(store, animation_mode="bogus")
+    try:
+        _, _, payload = json_response(f"{base_url}/api/ui-config")
+        assert payload == {"animation_mode": "normal"}
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_dashboard_server_serves_read_only_api_endpoints():
     store = StoreStub()
     server, base_url = with_server(store)

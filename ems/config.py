@@ -55,8 +55,15 @@ DASHBOARD_DEFAULTS = {
     "session_idle_timeout_seconds": 1800,
     "session_absolute_max_seconds": 43200,
     "log_buffer_lines": 5000,
-    "log_redaction": False
+    "log_redaction": False,
+    # Dashboard animation cost. "normal" keeps the full animated flow view;
+    # "reduced" trims glows/filters and slows pipe motion; "off" disables
+    # continuous pipe animations and glow/blur filters. Browser-level
+    # prefers-reduced-motion is always respected on top of this.
+    "animation_mode": "normal"
 }
+
+DASHBOARD_ANIMATION_MODES = ("normal", "reduced", "off")
 
 ENERGY_SAVINGS_DEFAULTS = {
     "enabled": True,
@@ -531,6 +538,11 @@ def normalize_dashboard_config(config):
     merged["log_redaction"] = safe_bool(
         merged.get("log_redaction"),
         DASHBOARD_DEFAULTS["log_redaction"],
+    )
+    mode = str(merged.get("animation_mode", "")).strip().lower()
+    merged["animation_mode"] = (
+        mode if mode in DASHBOARD_ANIMATION_MODES
+        else DASHBOARD_DEFAULTS["animation_mode"]
     )
     return merged
 

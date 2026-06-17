@@ -1890,6 +1890,43 @@ canvas { width: 100%; min-height: 94px; border: 1px solid rgba(148,163,184,.13);
     animation: none;
   }
 }
+
+/* Dashboard animation mode (config: dashboard.animation_mode). Reduces or
+   disables expensive flow animations and glow/blur filters to lower browser
+   CPU/GPU load. State colours and basic flow indication are preserved; only the
+   continuous motion and heavy filters are scaled back. Browser-level
+   prefers-reduced-motion above takes precedence on top of these. */
+.dashboard-animation-reduced .pipe-energy {
+  animation-duration: 3s;
+  filter: drop-shadow(0 0 6px currentColor);
+}
+
+.dashboard-animation-reduced .pipe-glow {
+  filter: none;
+}
+
+.dashboard-animation-reduced .solar-visual.active .solar-sun,
+.dashboard-animation-reduced .battery-visual.charging .battery-fill,
+.dashboard-animation-reduced .inverter-visual.active .inverter-led {
+  animation: none;
+}
+
+.dashboard-animation-off .pipe-energy,
+.dashboard-animation-off .pipe-glow {
+  animation: none;
+  filter: none;
+}
+
+.dashboard-animation-off .pipe-glow {
+  opacity: 0;
+}
+
+.dashboard-animation-off .solar-visual.active .solar-sun,
+.dashboard-animation-off .battery-visual.charging .battery-fill,
+.dashboard-animation-off .inverter-visual.active .inverter-led,
+.dashboard-animation-off .control-result::after {
+  animation: none;
+}
 @media (max-width: 420px) {
   .topbar { flex-direction: column; gap: 5px; }
   .status-cluster { justify-content:flex-start; gap: 6px; }

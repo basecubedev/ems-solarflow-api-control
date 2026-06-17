@@ -144,6 +144,7 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         runtime_state_path=None,
         log_buffer=None,
         log_redaction=False,
+        animation_mode="normal",
         sse_max_connections=MAX_SSE_CONNECTIONS,
         sse_max_connections_per_ip=MAX_SSE_CONNECTIONS_PER_IP,
         sse_max_connection_seconds=SSE_MAX_CONNECTION_SECONDS,
@@ -153,6 +154,11 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         self.runtime_state = runtime_state
         self.log_buffer = log_buffer
         self.log_redaction = bool(log_redaction)
+        # UI-only hint for the frontend bootstrap (no control/auth impact).
+        self.animation_mode = (
+            animation_mode if animation_mode in ("normal", "reduced", "off")
+            else "normal"
+        )
         self.auth_file = auth_file or resolve_auth_path(BASE_DIR)
         self.https_active = bool(https_active)
         # Paths the diagnose endpoints use to build service args. runtime_state_path
@@ -290,6 +296,11 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/energy-stats":
             self._send_json(self.server.store.energy_summary())
+            return
+
+        if parsed.path == "/api/ui-config":
+            # Read-only UI bootstrap hints (no auth/control/runtime impact).
+            self._send_json({"animation_mode": self.server.animation_mode})
             return
 
         if parsed.path == "/api/auth/status":
@@ -1053,6 +1064,7 @@ def start_dashboard_server(
     runtime_state_path=None,
     log_buffer=None,
     log_redaction=False,
+    animation_mode="normal",
     sse_max_connections=MAX_SSE_CONNECTIONS,
     sse_max_connections_per_ip=MAX_SSE_CONNECTIONS_PER_IP,
     sse_max_connection_seconds=SSE_MAX_CONNECTION_SECONDS,
@@ -1071,6 +1083,7 @@ def start_dashboard_server(
         runtime_state_path=runtime_state_path,
         log_buffer=log_buffer,
         log_redaction=log_redaction,
+        animation_mode=animation_mode,
         sse_max_connections=sse_max_connections,
         sse_max_connections_per_ip=sse_max_connections_per_ip,
         sse_max_connection_seconds=sse_max_connection_seconds,

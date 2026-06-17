@@ -492,6 +492,26 @@ Performance and refresh behavior:
   cards reflow; charts use reduced heights on small screens) and show explicit
   loading and empty/unavailable states.
 
+Browser-CPU behavior (live updates):
+
+- Live SSE/poll snapshots are **view-gated**: each update refreshes the global
+  header metrics plus only the section for the visible view. Hidden views (the
+  aggregated flow SVG, device cards/flow, energy stats, control explain) are not
+  rebuilt while another tab is on screen, and switching views renders the newly
+  visible view immediately from the latest snapshot.
+- While the Analytics tab is active, live snapshots update only the cheap live
+  KPI cards (Current SoC, Runtime Role). The series-based KPIs are integrated
+  once per analytics data load and cached; they are not re-integrated on every
+  live snapshot.
+- The analytics and history charts are **reused in place** (`uPlot.setData`)
+  across refreshes when their structure (series set, overlays, axes, selected
+  device) is unchanged; the chart is only destroyed/recreated when that
+  structure changes or the data becomes empty.
+- `dashboard.animation_mode` (`normal` / `reduced` / `off`) reduces or disables
+  the animated flow view's pipe motion and glow/blur filters to lower CPU/GPU
+  load; `prefers-reduced-motion` is always honored on top of it. See
+  [configuration.md](configuration.md).
+
 End-to-end tests (`tests/test_history_analytics_e2e.py`) cover the whole path.
 The SQLite variant always runs (records snapshots through the real
 `DashboardStore`, serves the real dashboard, and asserts the

@@ -339,6 +339,9 @@ def test_frontend_energy_statistics_executes_against_app_js():
         }
 
         function render(energyStats) {
+          // Energy stats only render while the Energy view is on screen
+          // (live snapshots are view-gated to avoid rebuilding hidden views).
+          context.setFlowView("energy");
           context.renderSnapshot({
             timestamp: "2026-05-27T12:00:00Z",
             pv_total_w: 1800,
@@ -1118,8 +1121,13 @@ def test_frontend_control_explain_view_executes_against_app_js():
         assert(demo.control_explain.devices.WR1.decision_reason.includes("stronger PV"), "demo WR1 has a clear decision reason");
         assert(demo.control_explain.devices.WR2.decision_reason.includes("carries more house load"), "demo WR2 has a clear decision reason");
 
+        // Control tab is active (clicked above): renderSnapshot renders the
+        // global metrics plus the control view. Aggregated/device content is
+        // view-gated, so render those views explicitly to assert their output.
         context.renderSnapshot(demo);
         const demoHtml = element("controlExplainView").innerHTML;
+        context.renderViewSnapshot("aggregated", demo);
+        context.renderViewSnapshot("devices", demo);
         assert(element("metricPv").textContent === "1.85 kW", "demo renders aggregated PV metric");
         assert(element("metricHome").textContent === "800 W", "demo renders aggregated home metric");
         assert(element("flowBatteryState").textContent === "Charging", "demo renders charging battery flow");

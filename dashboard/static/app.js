@@ -10,6 +10,7 @@ const state = {
     device: "",
     data: null,
     chart: null,
+    chartSignature: null,
     deviceOptions: [],
   },
   // InfluxDB-backed long-term analytics shown in the dedicated Analytics tab.
@@ -29,6 +30,12 @@ const state = {
     // they are not mistaken for a user zoom.
     zoom: null,
     applyingScale: false,
+    // Cached uPlot instance signature; when unchanged across refreshes the
+    // chart is updated in place (setData) instead of destroyed/recreated.
+    chartSignature: null,
+    // Cached series-based KPI values, keyed by a stable data key. Live snapshot
+    // updates reuse this cache instead of re-integrating the full series.
+    kpiCache: { dataKey: null, values: {} },
   },
   flowView: "aggregated",
   demoMode: isDemoMode(),
@@ -112,8 +119,10 @@ const ANALYTICS_KPIS = {
   gridExport: { label: (r) => `Grid Export · ${r}`, tone: "grid", compute: (d) => energyLabel(integrateSeries(d, "grid", _kpiNeg)) },
   home: { label: (r) => `Home · ${r}`, tone: "output", compute: (d) => energyLabel(integrateSeries(d, "home", _kpiPos)) },
   pvPeak: { label: () => "PV Peak", tone: "pv", compute: (d) => powerLabel(seriesPeak(d, "pv")) },
-  soc: { label: () => "Current SoC", tone: "accent", compute: (_d, s) => (s ? `${Math.round(Number(s.average_soc || 0))}%` : "--") },
-  role: { label: () => "Runtime Role", tone: "output", compute: (_d, s) => runtimeRoleLabel(s) },
+  // ``live`` KPIs read the cheap live snapshot (not the integrated series), so
+  // they can be refreshed on every SSE/poll update without re-integrating.
+  soc: { label: () => "Current SoC", tone: "accent", live: true, compute: (_d, s) => (s ? `${Math.round(Number(s.average_soc || 0))}%` : "--") },
+  role: { label: () => "Runtime Role", tone: "output", live: true, compute: (_d, s) => runtimeRoleLabel(s) },
 };
 
 const FLOW_THRESHOLD_W = 2;
@@ -245,20 +254,59 @@ function updateSnapshot(snapshot) {
   renderSnapshot(snapshot);
 }
 
+// View-aware live rendering. Every SSE/poll snapshot updates only the globally
+// required sections (header metrics, rules, device selector) plus the section
+// belonging to the currently visible view. Hidden views are not rebuilt, so the
+// browser does not waste CPU recreating device cards, the device-flow SVG,
+// energy stats, control explain, or animating the aggregated pipes while another
+// tab (e.g. Analytics) is on screen. setFlowView() is no longer called here; it
+// runs on initial setup and on actual view changes only.
 function renderSnapshot(snapshot) {
-  const batteryFlow = normalizeBatteryPowerForDisplay(aggregatedBatteryPowerW(snapshot));
-  const gridPower = Number(snapshot.grid_power_w || 0);
-  const pvPower = Number(snapshot.pv_total_w || 0);
-  const inverterPower = Number(snapshot.inverter_output_w || 0);
-  const homeLoad = Number(snapshot.home_load_w || 0);
-  const soc = clamp(Number(snapshot.average_soc || 0), 0, 100);
+  renderGlobalSnapshotMetrics(snapshot);
+  renderRules(snapshot.rules || {});
+  populateDeviceSelector(snapshot);
+  renderViewSnapshot(state.flowView, snapshot);
+}
 
+// Dispatch the view-specific live render for a single view. Shared by the live
+// snapshot path and by setFlowView() (so switching to a view immediately shows
+// fresh data from the latest snapshot without waiting for the next update).
+function renderViewSnapshot(view, snapshot) {
+  if (!snapshot) return;
+  if (view === "aggregated") {
+    renderAggregatedSnapshot(snapshot);
+  } else if (view === "devices") {
+    renderDevicesSnapshot(snapshot);
+  } else if (view === "control") {
+    renderControlSnapshot(snapshot);
+  } else if (view === "energy") {
+    renderEnergySnapshot(snapshot);
+  } else if (view === "analytics") {
+    renderAnalyticsLiveSnapshot(snapshot);
+  }
+  // diagnose/logs keep their own render/polling paths and are not rebuilt here.
+}
+
+// Header summary metrics shown on every view.
+function renderGlobalSnapshotMetrics(snapshot) {
+  const batteryFlow = normalizeBatteryPowerForDisplay(aggregatedBatteryPowerW(snapshot));
   setText("metricPv", watts(snapshot.pv_total_w));
   setText("metricHome", watts(snapshot.home_load_w));
   setText("metricGrid", watts(snapshot.grid_power_w));
   setText("metricBattery", signedWatts(batteryFlow.valueW));
   setText("metricSoc", pct(snapshot.average_soc));
   setText("lastUpdated", new Date(snapshot.timestamp).toLocaleTimeString());
+}
+
+// Aggregated energy-flow SVG (texts, battery fill, visual states, animated
+// pipes). Only run while the aggregated view is on screen.
+function renderAggregatedSnapshot(snapshot) {
+  const batteryFlow = normalizeBatteryPowerForDisplay(aggregatedBatteryPowerW(snapshot));
+  const gridPower = Number(snapshot.grid_power_w || 0);
+  const pvPower = Number(snapshot.pv_total_w || 0);
+  const inverterPower = Number(snapshot.inverter_output_w || 0);
+  const homeLoad = Number(snapshot.home_load_w || 0);
+  const soc = clamp(Number(snapshot.average_soc || 0), 0, 100);
 
   setText("flowPv", watts(snapshot.pv_total_w));
   setText("flowBattery", signedWatts(batteryFlow.valueW));
@@ -290,15 +338,27 @@ function renderSnapshot(snapshot) {
   setPipe("pipeBatteryInverter", batteryFlow.absW, batteryPipeDirection(batteryFlow));
   setPipe("pipeInverterHome", inverterPower, "forward");
   setPipe("pipeGridHome", Math.abs(gridPower), gridPower < -FLOW_THRESHOLD_W ? "reverse" : "forward");
+}
 
-  renderRules(snapshot.rules || {});
+function renderDevicesSnapshot(snapshot) {
   renderDevices(snapshot.devices || {});
-  renderEnergyStats(snapshot.energy_stats);
   renderDeviceFlow(snapshot);
+}
+
+function renderControlSnapshot(snapshot) {
   renderControlExplain(snapshot);
-  populateDeviceSelector(snapshot);
-  renderAnalyticsKpis();
-  setFlowView(state.flowView, false);
+}
+
+function renderEnergySnapshot(snapshot) {
+  renderEnergyStats(snapshot.energy_stats);
+}
+
+// Analytics live update is intentionally cheap: it only refreshes the live KPI
+// cards (Current SoC, Runtime Role) from the snapshot. The series-based KPIs and
+// the chart are not recomputed here -- they change only when analytics data is
+// (re)loaded (see renderAnalytics / the KPI cache).
+function renderAnalyticsLiveSnapshot(snapshot) {
+  renderAnalyticsLiveKpis(snapshot);
 }
 
 function setPipe(id, value, direction = "forward") {
@@ -2230,6 +2290,13 @@ function setFlowView(view, persist = true) {
     renderDiagnoseView();
   }
 
+  // On an actual view change, immediately render the now-visible view from the
+  // latest snapshot so switching tabs shows fresh data without waiting for the
+  // next live update (live updates only render the active view).
+  if (previousView !== nextView && state.snapshot) {
+    renderViewSnapshot(nextView, state.snapshot);
+  }
+
   // Lazy-load each data source only when its view becomes visible.
   if (historyVisible && previousView !== nextView) {
     loadHistory();
@@ -3336,6 +3403,36 @@ function isDemoMode() {
   return demoModeFromSearch(window.location?.search || "");
 }
 
+const ANIMATION_MODES = ["normal", "reduced", "off"];
+
+// Apply the dashboard animation mode as a root class so the CSS can scale back
+// expensive flow animations/filters. Purely visual: never affects control,
+// auth, runtime writes or data. Browser prefers-reduced-motion is honored on
+// top of this by the stylesheet.
+function setAnimationMode(mode) {
+  const normalized = ANIMATION_MODES.includes(mode) ? mode : "normal";
+  const root = typeof document !== "undefined" ? document.body : null;
+  if (!root || !root.classList) return normalized;
+  ANIMATION_MODES.forEach((value) => {
+    root.classList.toggle(`dashboard-animation-${value}`, value === normalized);
+  });
+  return normalized;
+}
+
+// Fetch the read-only UI bootstrap hints and apply the animation mode. Failure
+// is non-fatal: the dashboard keeps the default (normal) animations.
+async function applyAnimationMode() {
+  if (typeof fetch !== "function") return;
+  try {
+    const response = await fetch("/api/ui-config");
+    if (!response.ok) return;
+    const config = await response.json();
+    setAnimationMode(config && config.animation_mode);
+  } catch {
+    // Keep default animations when the hint cannot be loaded.
+  }
+}
+
 function demoSnapshot() {
   const timestamp = new Date().toISOString();
   return {
@@ -3932,6 +4029,34 @@ function analyticsSeriesTooltip(seriesId, displayValue, unit) {
   return `${rounded} ${unit}`;
 }
 
+// Identity of the uPlot structure (series set, axes, scales). When this is
+// unchanged across a refresh the chart can be updated in place with setData()
+// instead of being destroyed and recreated -- avoiding canvas setup, layout and
+// GC churn. A change (tab, series, overlays, device, axis/pct scale) forces a
+// rebuild.
+function analyticsChartSignature(chartSeries, usesPctScale) {
+  return JSON.stringify({
+    tab: state.analytics.tab,
+    series: chartSeries,
+    overlays: state.analytics.overlays,
+    device: state.analytics.device || "",
+    pct: usesPctScale,
+  });
+}
+
+// Re-apply an active zoom viewport to the chart (guarded so the programmatic
+// scale change is not mistaken for a fresh user zoom).
+function applyAnalyticsZoomToChart(chart) {
+  if (state.analytics.zoom && chart.setScale) {
+    state.analytics.applyingScale = true;
+    chart.setScale("x", {
+      min: state.analytics.zoom.start,
+      max: state.analytics.zoom.end,
+    });
+    state.analytics.applyingScale = false;
+  }
+}
+
 function renderAnalyticsChart() {
   const container = $("analyticsChart");
   if (!container || typeof uPlot === "undefined") return;
@@ -3941,13 +4066,15 @@ function renderAnalyticsChart() {
   const empty = $("analyticsEmpty");
   setSourceBadge("analyticsSource", data && data.source);
 
-  if (state.analytics.chart) {
-    state.analytics.chart.destroy();
-    state.analytics.chart = null;
-  }
-  container.innerHTML = "";
-
+  // No data: tear the chart down cleanly (and drop its signature) so a later
+  // refresh with data rebuilds, then show the empty/unavailable state.
   if (!time.length) {
+    if (state.analytics.chart) {
+      state.analytics.chart.destroy();
+      state.analytics.chart = null;
+    }
+    state.analytics.chartSignature = null;
+    container.innerHTML = "";
     if (empty) {
       const unavailable = !data || (data.meta && data.meta.unavailable);
       empty.textContent = unavailable
@@ -3960,14 +4087,42 @@ function renderAnalyticsChart() {
   if (empty) empty.hidden = true;
 
   const chartSeries = activeAnalyticsSeries().filter((id) => ANALYTICS_SERIES_META[id]);
+  let usesPctScale = false;
+  chartSeries.forEach((id) => {
+    if (ANALYTICS_SERIES_META[id].scaleId === "pct") usesPctScale = true;
+  });
+  const signature = analyticsChartSignature(chartSeries, usesPctScale);
   // Battery is inverted here for display only; raw state.analytics.data is untouched.
   const seriesData = analyticsChartSeriesData(data, chartSeries);
+
+  // Reuse path: same structure + a live chart in a still-attached container ->
+  // update the existing instance in place instead of recreating it.
+  const containerValid = !container.isConnected || container.isConnected === true;
+  if (
+    state.analytics.chart &&
+    state.analytics.chartSignature === signature &&
+    containerValid &&
+    state.analytics.chart.setData
+  ) {
+    state.analytics.applyingScale = true;
+    state.analytics.chart.setData(seriesData);
+    state.analytics.applyingScale = false;
+    applyAnalyticsZoomToChart(state.analytics.chart);
+    renderZoomControls();
+    return;
+  }
+
+  // Rebuild path: structure changed (or no chart yet) -> recreate.
+  if (state.analytics.chart) {
+    state.analytics.chart.destroy();
+    state.analytics.chart = null;
+  }
+  container.innerHTML = "";
+
   const seriesConfig = [{}];
-  let usesPctScale = false;
   chartSeries.forEach((id) => {
     const meta = ANALYTICS_SERIES_META[id];
     const isOverlay = !currentAnalyticsTab().series.includes(id);
-    if (meta.scaleId === "pct") usesPctScale = true;
     seriesConfig.push({
       label: meta.label,
       stroke: cssColor(meta.colorVar, "#888"),
@@ -4018,13 +4173,9 @@ function renderAnalyticsChart() {
   state.analytics.applyingScale = true;
   const chart = new uPlot(opts, seriesData, container);
   state.analytics.chart = chart;
-  if (state.analytics.zoom && chart.setScale) {
-    chart.setScale("x", {
-      min: state.analytics.zoom.start,
-      max: state.analytics.zoom.end,
-    });
-  }
+  state.analytics.chartSignature = signature;
   state.analytics.applyingScale = false;
+  applyAnalyticsZoomToChart(chart);
   renderZoomControls();
 }
 
@@ -4091,31 +4242,87 @@ function runtimeRoleLabel(snapshot) {
   return "Output";
 }
 
+// Stable identity for a loaded analytics dataset. When this is unchanged the
+// integrated (series-based) KPI values are guaranteed identical, so they can be
+// served from cache instead of re-integrated.
+function analyticsDataKey(data) {
+  if (!data || !data.time) return "empty";
+  return JSON.stringify({
+    source: data.source || "",
+    from: data.time[0] || null,
+    to: data.time[data.time.length - 1] || null,
+    points: data.time.length,
+    series: Object.keys(data.series || {}).sort(),
+  });
+}
+
+// Integrate every series-based KPI once for the given dataset. Live KPIs (soc,
+// role) are excluded -- they read the cheap snapshot at render time.
+function computeAnalyticsDataKpis(data) {
+  const values = {};
+  Object.keys(ANALYTICS_KPIS).forEach((id) => {
+    const spec = ANALYTICS_KPIS[id];
+    if (spec.live) return;
+    values[id] = spec.compute(data, null);
+  });
+  return values;
+}
+
+// Recompute the series-based KPI cache only when the analytics data identity
+// changed (data refresh / range / device / overlay change re-load the data).
+function ensureAnalyticsKpiCache() {
+  const cache = state.analytics.kpiCache;
+  const key = analyticsDataKey(state.analytics.data);
+  if (cache.dataKey !== key) {
+    cache.dataKey = key;
+    cache.values = computeAnalyticsDataKpis(state.analytics.data);
+  }
+  return cache;
+}
+
+function analyticsKpiCardHtml(id, label, value, tone) {
+  return (
+    `<div class="analytics-kpi tone-${escapeHtml(tone)}" data-analytics-kpi="${escapeHtml(id)}">` +
+    `<span class="analytics-kpi-label">${escapeHtml(label)}</span>` +
+    `<span class="analytics-kpi-value">${escapeHtml(value)}</span>` +
+    `</div>`
+  );
+}
+
+// Full KPI render: rebuilds the KPI card DOM for the active tab. Series-based
+// values come from the cache (integrated only on data change); live values are
+// read from the current snapshot. Called on analytics data refresh / tab /
+// range / device / overlay change -- not on every live snapshot.
 function renderAnalyticsKpis() {
   const host = $("analyticsKpis");
   if (!host) return;
-  const data = state.analytics.data;
+  const cache = ensureAnalyticsKpiCache();
   const snapshot = state.snapshot;
   const cards = currentAnalyticsTab()
     .kpis.map((id) => {
       const spec = ANALYTICS_KPIS[id];
       if (!spec) return null;
-      return {
-        label: spec.label(state.range),
-        value: spec.compute(data, snapshot),
-        tone: spec.tone,
-      };
+      const value = spec.live
+        ? spec.compute(null, snapshot)
+        : cache.values[id];
+      return analyticsKpiCardHtml(id, spec.label(state.range), value, spec.tone);
     })
     .filter(Boolean);
-  host.innerHTML = cards
-    .map(
-      (card) =>
-        `<div class="analytics-kpi tone-${escapeHtml(card.tone)}">` +
-        `<span class="analytics-kpi-label">${escapeHtml(card.label)}</span>` +
-        `<span class="analytics-kpi-value">${escapeHtml(card.value)}</span>` +
-        `</div>`
-    )
-    .join("");
+  host.innerHTML = cards.join("");
+}
+
+// Cheap live KPI refresh: updates only the live KPI card values (Current SoC,
+// Runtime Role) in place, without rebuilding DOM or re-integrating any series.
+// Used by the live SSE/poll snapshot path while the Analytics tab is visible.
+function renderAnalyticsLiveKpis(snapshot) {
+  const host = $("analyticsKpis");
+  if (!host || !host.querySelector) return;
+  currentAnalyticsTab().kpis.forEach((id) => {
+    const spec = ANALYTICS_KPIS[id];
+    if (!spec || !spec.live) return;
+    const card = host.querySelector(`[data-analytics-kpi="${id}"] .analytics-kpi-value`);
+    if (card) card.textContent = spec.compute(null, snapshot);
+  });
 }
 
 // Shared device <select> filler used by both the lightweight History panel and
@@ -4212,13 +4419,15 @@ function renderHistoryChart() {
   const empty = $("historyEmpty");
   setSourceBadge("historySource", data && data.source);
 
-  if (state.history.chart) {
-    state.history.chart.destroy();
-    state.history.chart = null;
-  }
-  container.innerHTML = "";
-
+  // No data: tear the chart down (and drop its signature) so a later refresh
+  // with data rebuilds, then show the empty/unavailable state.
   if (!time.length) {
+    if (state.history.chart) {
+      state.history.chart.destroy();
+      state.history.chart = null;
+    }
+    state.history.chartSignature = null;
+    container.innerHTML = "";
     if (empty) {
       const unavailable = !data || (data.meta && data.meta.unavailable);
       empty.textContent = unavailable
@@ -4230,11 +4439,9 @@ function renderHistoryChart() {
   }
   if (empty) empty.hidden = true;
 
+  const seriesIds = HISTORY_SERIES.filter((id) => ANALYTICS_SERIES_META[id]);
   const seriesData = [time];
-  const seriesConfig = [{}];
-  HISTORY_SERIES.forEach((id) => {
-    const meta = ANALYTICS_SERIES_META[id];
-    if (!meta) return;
+  seriesIds.forEach((id) => {
     const values = (data.series && data.series[id]) || [];
     seriesData.push(
       time.map((_, index) => {
@@ -4242,6 +4449,30 @@ function renderHistoryChart() {
         return value === null || value === undefined ? null : Number(value);
       })
     );
+  });
+
+  // The history chart structure only varies by the (fixed) series set and the
+  // selected device, so reuse the instance in place across refreshes when those
+  // are unchanged.
+  const signature = JSON.stringify({ series: seriesIds, device: state.history.device || "" });
+  if (
+    state.history.chart &&
+    state.history.chartSignature === signature &&
+    state.history.chart.setData
+  ) {
+    state.history.chart.setData(seriesData);
+    return;
+  }
+
+  if (state.history.chart) {
+    state.history.chart.destroy();
+    state.history.chart = null;
+  }
+  container.innerHTML = "";
+
+  const seriesConfig = [{}];
+  seriesIds.forEach((id) => {
+    const meta = ANALYTICS_SERIES_META[id];
     seriesConfig.push({
       label: meta.label,
       stroke: cssColor(meta.colorVar, "#888"),
@@ -4266,6 +4497,7 @@ function renderHistoryChart() {
     legend: { live: true },
   };
   state.history.chart = new uPlot(opts, seriesData, container);
+  state.history.chartSignature = signature;
 }
 
 function startEvents() {
@@ -4499,6 +4731,7 @@ function initDashboardApp() {
   initDiagnose();
   initLogs();
   initSessionHeartbeat();
+  applyAnimationMode();
   if (state.demoMode) {
     initDemoMode();
   } else {
@@ -4544,7 +4777,16 @@ if (typeof module !== "undefined") {
     deviceBatteryVisual,
     renderDevices,
     renderControlExplain,
+    renderEnergyStats,
+    renderDeviceFlow,
+    updateSnapshot,
+    renderSnapshot,
+    renderViewSnapshot,
+    renderGlobalSnapshotMetrics,
+    renderAggregatedSnapshot,
     setFlowView,
+    setAnimationMode,
+    applyAnimationMode,
     ANALYTICS_TABS,
     ANALYTICS_KPIS,
     ANALYTICS_OVERLAYS,
@@ -4568,6 +4810,12 @@ if (typeof module !== "undefined") {
     applyCustomRange,
     clearCustomRange,
     renderAnalyticsKpis,
+    renderAnalyticsLiveKpis,
+    renderAnalyticsChart,
+    analyticsDataKey,
+    computeAnalyticsDataKpis,
+    ensureAnalyticsKpiCache,
+    analyticsChartSignature,
     analyticsChartDisplayValue,
     analyticsChartSeriesData,
     analyticsSeriesTooltip,

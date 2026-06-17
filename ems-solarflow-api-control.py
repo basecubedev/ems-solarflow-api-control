@@ -238,6 +238,9 @@ def main():
                     cfg.DASHBOARD_CONFIG.get("log_redaction", False),
                     False
                 ),
+                animation_mode=str(
+                    cfg.DASHBOARD_CONFIG.get("animation_mode", "normal")
+                ),
                 session_timeout_seconds=cfg.safe_session_timeout(
                     cfg.DASHBOARD_CONFIG.get(
                         "session_idle_timeout_seconds", 1800

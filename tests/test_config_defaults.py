@@ -63,6 +63,15 @@ def test_dashboard_defaults_include_session_and_log_settings():
     assert DASHBOARD_DEFAULTS["log_redaction"] is False
 
 
+def test_dashboard_animation_mode_default_and_normalization():
+    assert DASHBOARD_DEFAULTS["animation_mode"] == "normal"
+    # Valid values pass through (case/space-insensitive); invalid -> normal.
+    assert cfg.normalize_dashboard_config({"animation_mode": "reduced"})["animation_mode"] == "reduced"
+    assert cfg.normalize_dashboard_config({"animation_mode": " OFF "})["animation_mode"] == "off"
+    assert cfg.normalize_dashboard_config({"animation_mode": "bogus"})["animation_mode"] == "normal"
+    assert cfg.normalize_dashboard_config({})["animation_mode"] == "normal"
+
+
 def test_config_template_energy_savings_matches_code_defaults():
     template = json.loads(Path("config.template.json").read_text())
 

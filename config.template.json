@@ -86,7 +86,9 @@
     "session_idle_timeout_seconds": 1800,
     "session_absolute_max_seconds": 43200,
     "log_buffer_lines": 5000,
-    "log_redaction": false
+    "log_redaction": false,
+    "_comment_animation_mode": "Dashboard animation cost. 'normal' keeps the full animated energy-flow view; 'reduced' trims glows/filters and slows pipe motion; 'off' disables continuous pipe animations and glow/blur filters. Purely visual (no control/auth impact); browser prefers-reduced-motion is always respected on top of this.",
+    "animation_mode": "normal"
   },
 
   "influxdb": {
