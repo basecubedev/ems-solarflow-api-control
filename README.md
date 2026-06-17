@@ -700,8 +700,9 @@ installations.
 | Winter mode | [docs/winter-mode.md](docs/winter-mode.md) |
 | Safety model | [docs/safety.md](docs/safety.md) |
 | Troubleshooting | [docs/troubleshooting.md](docs/troubleshooting.md) |
-| InfluxDB telemetry capture | [docs/develop-tool-influxdb-telemetry.md](docs/develop-tool-influxdb-telemetry.md) |
-| InfluxDB state-transition analysis | [docs/develop-tool-influxdb-state-transition-analysis.md](docs/develop-tool-influxdb-state-transition-analysis.md) |
+| InfluxDB analytics backend (optional) | [docs/influxdb.md](docs/influxdb.md) |
+| InfluxDB telemetry capture (development) | [docs/develop-tool-influxdb-telemetry.md](docs/develop-tool-influxdb-telemetry.md) |
+| InfluxDB state-transition analysis (development) | [docs/develop-tool-influxdb-state-transition-analysis.md](docs/develop-tool-influxdb-state-transition-analysis.md) |
 | Observed firmware behavior | [docs/observed-firmware-no-energy-path.md](docs/observed-firmware-no-energy-path.md) |
 
 ---
