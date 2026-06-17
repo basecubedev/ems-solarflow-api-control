@@ -1691,11 +1691,44 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
 .charts { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 canvas { width: 100%; min-height: 94px; border: 1px solid rgba(148,163,184,.13); border-radius: 14px; background: linear-gradient(180deg, rgba(15,23,42,.80), rgba(15,23,42,.52)); box-shadow: inset 0 1px 0 rgba(255,255,255,.05); }
 
+/* Analytics single-chart panel (history & analytics) */
+.analytics-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.analytics-device { display: flex; align-items: center; gap: 6px; }
+.analytics-device-label { color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.analytics-device select { background: rgba(148,163,184,.06); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 3px 8px; font-size: 12px; }
+.analytics-custom { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.analytics-custom input { background: rgba(148,163,184,.06); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 2px 6px; font-size: 11px; color-scheme: dark; }
+.analytics-overlays { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 6px 0 0; }
+.analytics-overlays button { min-width: 56px; height: 24px; border: 1px solid var(--border); border-radius: 999px; background: rgba(255,255,255,.045); color: var(--muted); font: inherit; font-size: 11px; font-weight: 800; cursor: pointer; transition: transform .16s ease, border-color .16s ease, background .16s ease; }
+.analytics-overlays button:hover { transform: translateY(-1px); border-color: var(--border-strong); }
+.analytics-overlays button.active { border-color: rgba(34, 211, 238, 0.46); background: linear-gradient(180deg, rgba(34, 211, 238, 0.18), rgba(139, 92, 246, 0.12)); color: var(--text); }
+.analytics-tabs { display: flex; gap: 3px; padding: 3px; margin: 6px 0 8px; border: 1px solid rgba(148,163,184,.16); border-radius: 999px; background: rgba(255,255,255,.035); width: fit-content; flex-wrap: wrap; }
+.analytics-tabs button { min-width: 72px; height: 24px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: var(--muted); font: inherit; font-size: 11px; font-weight: 850; cursor: pointer; transition: transform .16s ease, border-color .16s ease, background .16s ease; }
+.analytics-tabs button:hover { transform: translateY(-1px); border-color: var(--border-strong); }
+.analytics-tabs button.active { border-color: rgba(34, 211, 238, 0.46); background: linear-gradient(180deg, rgba(34, 211, 238, 0.18), rgba(139, 92, 246, 0.12)); color: var(--text); }
+.analytics-chart-wrap { position: relative; }
+.analytics-loading { position: absolute; top: 10px; right: 12px; z-index: 2; padding: 3px 10px; border: 1px solid var(--border); border-radius: 999px; background: rgba(15,23,42,.82); color: var(--muted); font-size: 11px; font-weight: 800; letter-spacing: .04em; box-shadow: 0 4px 14px rgba(0,0,0,.25); }
+.analytics-back-to-live { position: absolute; top: 10px; left: 12px; z-index: 3; padding: 4px 12px; border: 1px solid rgba(34, 211, 238, 0.46); border-radius: 999px; background: linear-gradient(180deg, rgba(34, 211, 238, 0.20), rgba(139, 92, 246, 0.14)); color: var(--text); font: inherit; font-size: 11px; font-weight: 850; cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,.28); transition: transform .16s ease, border-color .16s ease; }
+.analytics-back-to-live:hover { transform: translateY(-1px); border-color: var(--accent2); }
+.analytics-chart { width: 100%; min-height: 280px; border: 1px solid rgba(148,163,184,.13); border-radius: 14px; background: linear-gradient(180deg, rgba(15,23,42,.80), rgba(15,23,42,.52)); box-shadow: inset 0 1px 0 rgba(255,255,255,.05); padding: 6px 4px; }
+.analytics-chart .u-legend { font-size: 11px; color: var(--muted); }
+.analytics-empty { color: var(--muted); font-size: 12px; padding: 10px; text-align: center; }
+.analytics-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 7px; margin-top: 8px; }
+.analytics-kpi { display: flex; flex-direction: column; gap: 3px; min-height: 56px; padding: 8px 10px; border: 1px solid var(--border); border-left-width: 3px; border-radius: 12px; background: rgba(255,255,255,.035); }
+.analytics-kpi-label { color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.analytics-kpi-value { color: var(--text); font-size: 16px; font-weight: 850; }
+.analytics-kpi.tone-pv { border-left-color: var(--pv); }
+.analytics-kpi.tone-output { border-left-color: var(--output); }
+.analytics-kpi.tone-battery { border-left-color: var(--battery); }
+.analytics-kpi.tone-accent { border-left-color: var(--accent); }
+.analytics-kpi.tone-grid { border-left-color: var(--grid); }
+
 @media (max-width: 1180px) {
   .main-grid { grid-template-columns: 1fr; }
   .rules-list { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .rule-row { border-bottom: 0; border: 1px solid rgba(148,163,184,.10); border-radius: 12px; padding: 7px; background: rgba(255,255,255,.035); }
   .charts { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .analytics-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (max-width: 760px) {
   .shell { width: min(100% - 12px, 1480px); padding-top: 8px; }
@@ -1704,6 +1737,13 @@ canvas { width: 100%; min-height: 94px; border: 1px solid rgba(148,163,184,.13);
   .eyebrow { font-size: 9px; letter-spacing: .10em; overflow-wrap: anywhere; }
   .brand-subtitle { font-size: 11px; margin-top: 3px; }
   .metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+  .analytics-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .analytics-controls { justify-content: flex-start; width: 100%; }
+  .analytics-custom { width: 100%; }
+  .analytics-custom input { flex: 1 1 40%; min-width: 0; }
+  .analytics-chart { min-height: 220px; }
+  .analytics-kpi { min-height: 50px; padding: 7px 8px; }
+  .analytics-kpi-value { font-size: 15px; }
   .metric { min-height: 48px; padding: 7px; gap: 7px; border-radius: 14px; }
   .metric-icon { width: 26px; height: 26px; border-radius: 9px; font-size: 15px; }
   .metric strong { font-size: 17px; }

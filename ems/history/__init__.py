@@ -15,6 +15,7 @@ from ems.history.provider import (
     HistoryResult,
     SqliteHistoryProvider,
     create_history_provider,
+    decimate_history_result,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "HistoryResult",
     "SqliteHistoryProvider",
     "create_history_provider",
+    "decimate_history_result",
 ]

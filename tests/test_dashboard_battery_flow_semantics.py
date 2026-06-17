@@ -251,7 +251,7 @@ def test_frontend_uses_normalized_battery_display_semantics():
     assert "Based on measured inverter output." in index_html
     assert "class=\"devices-section\"" in index_html
     assert index_html.index('id="energyStats"') < index_html.index('id="deviceGrid"')
-    assert index_html.index('id="deviceGrid"') < index_html.index('class="chart-panel"')
+    assert index_html.index('id="deviceGrid"') < index_html.index('chart-panel analytics-panel')
     assert index_html.count('id="energyStats"') == 1
     assert 'setText("metricBattery", signedWatts(batteryFlow.valueW));' in app_js
     assert 'setText("flowBattery", signedWatts(batteryFlow.valueW));' in app_js
@@ -263,7 +263,9 @@ def test_frontend_uses_normalized_battery_display_semantics():
     assert "sharedHomeGridGapY: 164" in app_js
     assert "const homeY = rowsCenterY - layout.sharedVisualHeight / 2;" in app_js
     assert 'return entries.reduce(' in app_js
-    assert '{ id: "chartBattery", title: "Battery", field: "battery_power_w", color: "#f06d6d", unit: "W" }' in app_js
+    # Phase 2/3: the single Analytics chart drives the battery series from the
+    # shared CSS token, replacing the old hardcoded per-canvas battery color.
+    assert 'battery: { label: "Battery Power", colorVar: "--battery", unit: "W" }' in app_js
     assert "displayBatteryPower" not in app_js
     assert "invert: true" not in app_js
 

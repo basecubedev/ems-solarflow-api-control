@@ -221,6 +221,9 @@ class PreviewHandler(BaseHTTPRequestHandler):
                 "items": self._scenario()["history"],
             })
             return
+        if path == "/api/history/series":
+            self._send_json(self._history_series(parse_qs(parsed.query)))
+            return
         if path == "/api/runtime":
             self._send_json(self._scenario()["runtime"])
             return
@@ -255,6 +258,34 @@ class PreviewHandler(BaseHTTPRequestHandler):
 
     def _scenario(self):
         return build_scenario(self.server.scenario_name)
+
+    def _history_series(self, query):
+        # Columnar history for the single Analytics chart, derived from the same
+        # synthetic snapshots the preview uses for the old /api/history list.
+        items = self._scenario()["history"]
+        time_axis = []
+        pv = []
+        output = []
+        battery = []
+        for item in items:
+            iso = str(item.get("timestamp", "")).replace("Z", "+00:00")
+            try:
+                epoch = int(time.mktime(time.strptime(iso[:19], "%Y-%m-%dT%H:%M:%S")))
+            except (ValueError, TypeError):
+                continue
+            time_axis.append(epoch)
+            pv.append(item.get("pv_total_w"))
+            output.append(item.get("inverter_output_w"))
+            battery.append(item.get("battery_power_w"))
+        return {
+            "source": "preview",
+            "range": query.get("range", ["24h"])[0],
+            "window": "raw",
+            "time": time_axis,
+            "series": {"pv": pv, "output": output, "battery": battery},
+            "devices": [],
+            "meta": {"point_count": len(time_axis)},
+        }
 
     def _handle_write(self):
         """Preview-only write handler: never mutates disk, config, or devices."""

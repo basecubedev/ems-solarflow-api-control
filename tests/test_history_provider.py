@@ -8,8 +8,10 @@ from datetime import datetime, timedelta, timezone
 
 from ems.config import normalize_influxdb_config
 from ems.history import (
+    HistoryResult,
     SqliteHistoryProvider,
     create_history_provider,
+    decimate_history_result,
 )
 from ems.history.influx_provider import (
     InfluxHistoryProvider,
@@ -101,6 +103,33 @@ class SqliteProviderTest(unittest.TestCase):
         result = provider.query(_utc(2024, 1, 1), _utc(2024, 1, 2))
         self.assertTrue(result.meta.get("unavailable"))
         self.assertEqual(result.time, [])
+
+
+class DecimateTest(unittest.TestCase):
+    def _result(self, count):
+        return HistoryResult(
+            source="sqlite",
+            start=_utc(2026, 1, 1),
+            end=_utc(2026, 1, 2),
+            window="raw",
+            time=list(range(count)),
+            series={"pv": list(range(count)), "output": list(range(count))},
+        )
+
+    def test_no_op_when_under_limit(self):
+        result = decimate_history_result(self._result(100), max_points=2000)
+        self.assertEqual(len(result.time), 100)
+        self.assertNotIn("decimated", result.meta)
+
+    def test_caps_points_and_keeps_last(self):
+        result = decimate_history_result(self._result(10000), max_points=2000)
+        self.assertLessEqual(len(result.time), 2000)
+        self.assertEqual(len(result.series["pv"]), len(result.time))
+        self.assertEqual(len(result.series["output"]), len(result.time))
+        self.assertEqual(result.time[0], 0)
+        self.assertEqual(result.time[-1], 9999)  # last sample preserved
+        self.assertTrue(result.meta["decimated"])
+        self.assertEqual(result.meta["point_count"], len(result.time))
 
 
 class QueryProfileTest(unittest.TestCase):

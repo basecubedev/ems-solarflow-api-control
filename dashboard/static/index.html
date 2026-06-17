@@ -5,6 +5,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>EMS SolarFlow API Control</title>
+  <link rel="stylesheet" href="/uPlot.min.css">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -281,23 +282,52 @@
       <div id="deviceGrid" class="device-grid"></div>
     </section>
 
-    <section class="chart-panel">
+    <section class="chart-panel analytics-panel">
       <div class="section-heading">
-        <h2><svg class="heading-icon" aria-hidden="true"><use href="#icon-history"></use></svg>History</h2>
-        <div class="range-tabs" role="tablist" aria-label="History range">
-          <button data-range="1h">1h</button>
-          <button data-range="6h" class="active">6h</button>
-          <button data-range="12h">12h</button>
-          <button data-range="24h">24h</button>
+        <h2><svg class="heading-icon" aria-hidden="true"><use href="#icon-history"></use></svg>Analytics</h2>
+        <div class="analytics-controls">
+          <div class="range-tabs" role="tablist" aria-label="History range">
+            <button data-range="1h">1h</button>
+            <button data-range="6h">6h</button>
+            <button data-range="24h" class="active">24h</button>
+            <button data-range="7d">7d</button>
+            <button data-range="30d">30d</button>
+            <button data-range="365d">365d</button>
+          </div>
+          <label class="analytics-device">
+            <span class="analytics-device-label">Device</span>
+            <select id="analyticsDevice" aria-label="Device filter">
+              <option value="">All Devices</option>
+            </select>
+          </label>
+          <div class="analytics-custom" aria-label="Custom date range">
+            <span class="analytics-device-label">Custom</span>
+            <input id="analyticsCustomFrom" type="datetime-local" aria-label="Custom range start">
+            <input id="analyticsCustomTo" type="datetime-local" aria-label="Custom range end">
+            <button type="button" id="analyticsCustomApply" class="primary-button compact">Apply</button>
+          </div>
         </div>
       </div>
-      <div class="charts">
-        <canvas id="chartPv" height="125"></canvas>
-        <canvas id="chartSoc" height="125"></canvas>
-        <canvas id="chartOutput" height="125"></canvas>
-        <canvas id="chartHome" height="125"></canvas>
-        <canvas id="chartBattery" height="125"></canvas>
+      <div class="analytics-overlays" role="group" aria-label="Series overlays">
+        <span class="analytics-device-label">Overlays</span>
+        <button type="button" data-analytics-overlay="soc" aria-pressed="false">SoC</button>
+        <button type="button" data-analytics-overlay="target" aria-pressed="false">EMS Target</button>
+        <button type="button" data-analytics-overlay="grid" aria-pressed="false">Grid Share</button>
       </div>
+      <div class="analytics-tabs" role="tablist" aria-label="Analytics view">
+        <button type="button" data-analytics-tab="overview" class="active" role="tab" aria-selected="true">Overview</button>
+        <button type="button" data-analytics-tab="devices" role="tab" aria-selected="false">Devices</button>
+        <button type="button" data-analytics-tab="grid" role="tab" aria-selected="false">Grid</button>
+        <button type="button" data-analytics-tab="battery" role="tab" aria-selected="false">Battery</button>
+        <button type="button" data-analytics-tab="pv" role="tab" aria-selected="false">PV</button>
+      </div>
+      <div class="analytics-chart-wrap">
+        <div id="analyticsChart" class="analytics-chart" role="img" aria-label="Combined PV, output and battery history chart"></div>
+        <button type="button" id="analyticsBackToLive" class="analytics-back-to-live" hidden>↺ Back to live</button>
+        <div id="analyticsLoading" class="analytics-loading" hidden>Loading…</div>
+      </div>
+      <div id="analyticsEmpty" class="analytics-empty" hidden>No samples in this period.</div>
+      <div id="analyticsKpis" class="analytics-kpis"></div>
     </section>
   </main>
 
@@ -318,6 +348,7 @@
       </div>
     </form>
   </div>
+  <script src="/uPlot.iife.min.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

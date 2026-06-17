@@ -57,6 +57,35 @@ SECURITY_HEADERS = {
 }
 
 
+def _split_csv(value):
+    """Split a comma-separated query value into a clean list of tokens."""
+    if not value:
+        return []
+    return [token.strip() for token in value.split(",") if token.strip()]
+
+
+def _parse_time_param(value):
+    """Parse a custom-range bound: epoch seconds or ISO 8601, to aware UTC."""
+    from datetime import datetime, timezone
+
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromtimestamp(float(text), tz=timezone.utc)
+    except (TypeError, ValueError, OverflowError, OSError):
+        pass
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
 class JsonBodyTooLarge(ValueError):
     pass
 
@@ -148,6 +177,34 @@ class DashboardHTTPServer(ThreadingHTTPServer):
             sse_max_connections_per_ip,
         )
         self.sse_max_connection_seconds = int(sse_max_connection_seconds)
+        # History provider (Sqlite default / Influx when configured) is built
+        # lazily and cached: config is read once and the choice does not change
+        # while the server is running.
+        self._history_provider = None
+        self._history_provider_lock = threading.Lock()
+
+    def history_provider(self):
+        with self._history_provider_lock:
+            if self._history_provider is None:
+                self._history_provider = self._build_history_provider()
+            return self._history_provider
+
+    def _build_history_provider(self):
+        from ems.history.provider import create_history_provider
+
+        influx_cfg = None
+        if self.config_path and os.path.exists(self.config_path):
+            try:
+                with open(self.config_path, encoding="utf-8") as handle:
+                    raw_config = json.load(handle)
+                from ems.config import normalize_influxdb_config
+
+                influx_cfg = normalize_influxdb_config(raw_config.get("influxdb"))
+            except Exception:
+                influx_cfg = None
+
+        sqlite_path = getattr(self.store, "path", None)
+        return create_history_provider(influx_cfg, sqlite_path)
 
 
 class DashboardRequestHandler(BaseHTTPRequestHandler):
@@ -183,6 +240,10 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 "range": range_name,
                 "items": self.server.store.history(range_name),
             })
+            return
+
+        if parsed.path == "/api/history/series":
+            self._handle_history_series(parse_qs(parsed.query))
             return
 
         if parsed.path == "/api/energy-stats":
@@ -408,6 +469,57 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         "control",
         "control_quality",
     )
+
+    def _handle_history_series(self, query):
+        # Columnar history for the single Analytics/Dashboard chart. Both views
+        # share this endpoint; only the requested period/series/devices differ.
+        from ems.history.provider import (
+            HISTORY_RANGE_SECONDS,
+            decimate_history_result,
+            normalize_series,
+            resolve_range,
+        )
+
+        range_name = query.get("range", ["24h"])[0]
+        start_param = query.get("start", [None])[0]
+        end_param = query.get("end", [None])[0]
+
+        if start_param is not None or end_param is not None:
+            # Custom date range: explicit start/end bounds override the token.
+            start = _parse_time_param(start_param)
+            end = _parse_time_param(end_param)
+            if start is None or end is None or start >= end:
+                self._send_json({"error": "invalid_range"}, status=400)
+                return
+            range_name = "custom"
+        elif range_name in HISTORY_RANGE_SECONDS:
+            start, end = resolve_range(range_name)
+        else:
+            self._send_json(
+                {
+                    "error": "unsupported_range",
+                    "supported": sorted(HISTORY_RANGE_SECONDS.keys()),
+                },
+                status=400,
+            )
+            return
+
+        series = normalize_series(_split_csv(query.get("series", [None])[0]))
+        devices = _split_csv(query.get("devices", [None])[0]) or None
+
+        try:
+            result = self.server.history_provider().query(
+                start, end, devices=devices, series=series
+            )
+        except Exception:
+            logging.exception("history series query failed")
+            self._send_json({"error": "history_unavailable"}, status=503)
+            return
+
+        decimate_history_result(result)
+        payload = result.to_dict()
+        payload["range"] = range_name
+        self._send_json(payload)
 
     def _diagnose_args(self):
         # The browser never supplies paths or sampling: paths come from the

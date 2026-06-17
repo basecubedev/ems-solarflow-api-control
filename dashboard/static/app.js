@@ -1,8 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 const state = {
   snapshot: null,
-  range: "6h",
-  history: [],
+  range: "24h",
+  analytics: {
+    tab: "overview",
+    device: "",
+    data: null,
+    chart: null,
+    deviceOptions: [],
+    overlays: { soc: false, target: false, grid: false },
+    custom: { active: false, start: null, end: null },
+    // Zoom viewport (epoch seconds) when the user has zoomed into the chart;
+    // null means live mode. applyingScale guards programmatic scale changes so
+    // they are not mistaken for a user zoom.
+    zoom: null,
+    applyingScale: false,
+  },
   flowView: "aggregated",
   demoMode: isDemoMode(),
   liveTransport: "sse",
@@ -39,13 +52,54 @@ let pollingStarted = false;
 let pollingIntervalId = null;
 let pendingDeviceFlowBatteryAnimation = false;
 
-const charts = [
-  { id: "chartPv", title: "PV", field: "pv_total_w", color: "#f1c84b", unit: "W" },
-  { id: "chartSoc", title: "SOC", field: "average_soc", color: "#62d88a", unit: "%" },
-  { id: "chartOutput", title: "Output", field: "inverter_output_w", color: "#5fc8e8", unit: "W" },
-  { id: "chartHome", title: "Home", field: "home_load_w", color: "#7aa8ff", unit: "W" },
-  { id: "chartBattery", title: "Battery", field: "battery_power_w", color: "#f06d6d", unit: "W" },
+// Single-chart philosophy: one combined chart, configurable series. Colors are
+// resolved from the existing CSS tokens (styles.css), never re-hardcoded here.
+const ANALYTICS_SERIES_META = {
+  pv: { label: "PV Input", colorVar: "--pv", unit: "W" },
+  output: { label: "Inverter Output", colorVar: "--output", unit: "W" },
+  battery: { label: "Battery Power", colorVar: "--battery", unit: "W" },
+  soc: { label: "SoC", colorVar: "--accent", unit: "%", scaleId: "pct" },
+  home: { label: "Home Load", colorVar: "--accent2", unit: "W" },
+  grid: { label: "Grid", colorVar: "--grid", unit: "W" },
+  target: { label: "EMS Target", colorVar: "--accent2", unit: "W" },
+};
+
+// Optional overlays toggled on top of the active tab's base series. SoC uses a
+// secondary (percentage) axis; the rest share the watts axis. "Grid Share" is
+// the grid power overlay.
+const ANALYTICS_OVERLAYS = [
+  { id: "soc", label: "SoC" },
+  { id: "target", label: "EMS Target" },
+  { id: "grid", label: "Grid Share" },
 ];
+
+// Analytics sub-tabs. Each tab reuses the same chart + API; only the visible
+// series and KPI cards change (no chart explosion, no extra chart pages).
+const ANALYTICS_TABS = [
+  { id: "overview", label: "Overview", series: ["pv", "output", "battery"], kpis: ["pv", "output", "charge", "discharge", "soc", "role"] },
+  { id: "devices", label: "Devices", series: ["pv", "output", "battery"], kpis: ["pv", "output", "charge", "discharge", "soc", "role"] },
+  { id: "grid", label: "Grid", series: ["grid", "home"], kpis: ["gridImport", "gridExport", "home", "soc"] },
+  { id: "battery", label: "Battery", series: ["battery"], kpis: ["charge", "discharge", "soc", "role"] },
+  { id: "pv", label: "PV", series: ["pv"], kpis: ["pv", "pvPeak", "output", "soc"] },
+];
+
+const _kpiPos = (value) => Math.max(0, value);
+const _kpiNeg = (value) => Math.max(0, -value);
+
+// KPI registry: id -> { label(range), tone, compute(data, snapshot) }. Energy
+// KPIs integrate the fetched series; soc/role read the live snapshot.
+const ANALYTICS_KPIS = {
+  pv: { label: (r) => `PV · ${r}`, tone: "pv", compute: (d) => energyLabel(integrateSeries(d, "pv", _kpiPos)) },
+  output: { label: (r) => `Output · ${r}`, tone: "output", compute: (d) => energyLabel(integrateSeries(d, "output", _kpiPos)) },
+  charge: { label: (r) => `Charge · ${r}`, tone: "battery", compute: (d) => energyLabel(integrateSeries(d, "battery", _kpiPos)) },
+  discharge: { label: (r) => `Discharge · ${r}`, tone: "battery", compute: (d) => energyLabel(integrateSeries(d, "battery", _kpiNeg)) },
+  gridImport: { label: (r) => `Grid Import · ${r}`, tone: "grid", compute: (d) => energyLabel(integrateSeries(d, "grid", _kpiPos)) },
+  gridExport: { label: (r) => `Grid Export · ${r}`, tone: "grid", compute: (d) => energyLabel(integrateSeries(d, "grid", _kpiNeg)) },
+  home: { label: (r) => `Home · ${r}`, tone: "output", compute: (d) => energyLabel(integrateSeries(d, "home", _kpiPos)) },
+  pvPeak: { label: () => "PV Peak", tone: "pv", compute: (d) => powerLabel(seriesPeak(d, "pv")) },
+  soc: { label: () => "Current SoC", tone: "accent", compute: (_d, s) => (s ? `${Math.round(Number(s.average_soc || 0))}%` : "--") },
+  role: { label: () => "Runtime Role", tone: "output", compute: (_d, s) => runtimeRoleLabel(s) },
+};
 
 const FLOW_THRESHOLD_W = 2;
 const DEVICE_FLOW_LAYOUT = {
@@ -227,6 +281,8 @@ function renderSnapshot(snapshot) {
   renderEnergyStats(snapshot.energy_stats);
   renderDeviceFlow(snapshot);
   renderControlExplain(snapshot);
+  populateDeviceSelector(snapshot);
+  renderAnalyticsKpis();
   setFlowView(state.flowView, false);
 }
 
@@ -3473,16 +3529,30 @@ function demoRuntimeState() {
   };
 }
 
-function demoHistory(snapshot) {
-  return Array.from({ length: 18 }, (_, index) => ({
-    ...snapshot,
-    timestamp: new Date(Date.now() - (17 - index) * 5 * 60 * 1000).toISOString(),
-    pv_total_w: Math.round(1200 + index * 38),
-    inverter_output_w: Math.min(800, 520 + index * 18),
-    home_load_w: Math.min(800, 540 + index * 16),
-    battery_power_w: Math.round(720 + index * 18),
-    average_soc: 56 + index * 0.22,
-  }));
+function demoAnalyticsData() {
+  const time = [];
+  const pv = [];
+  const output = [];
+  const battery = [];
+  const grid = [];
+  const home = [];
+  const soc = [];
+  const now = Math.floor(Date.now() / 1000);
+  for (let index = 0; index < 48; index += 1) {
+    time.push(now - (47 - index) * 1800);
+    pv.push(Math.round(900 + index * 26));
+    output.push(Math.min(800, 420 + index * 13));
+    battery.push(Math.round(280 + Math.sin(index / 6) * 300));
+    grid.push(Math.round(Math.sin(index / 5) * 180));
+    home.push(Math.round(500 + Math.cos(index / 7) * 160));
+    soc.push(Math.min(100, 40 + index));
+  }
+  return {
+    time,
+    series: { pv, output, battery, grid, home, soc },
+    devices: [],
+    source: "demo",
+  };
 }
 
 function ensureDemoBadge() {
@@ -3499,90 +3569,448 @@ function initDemoMode() {
   ensureDemoBadge();
   state.runtime = demoRuntimeState();
   const snapshot = demoSnapshot();
-  state.history = demoHistory(snapshot);
+  state.analytics.data = demoAnalyticsData();
   updateSnapshot(snapshot);
   setConnection("Demo", true);
-  renderCharts();
+  renderAnalytics();
   setFlowView("energy", false);
 }
 
-async function loadHistory() {
+function currentAnalyticsTab() {
+  return ANALYTICS_TABS.find((tab) => tab.id === state.analytics.tab) || ANALYTICS_TABS[0];
+}
+
+// Active series = the tab's base series plus any enabled overlays, de-duplicated
+// while preserving order (base first, then overlays).
+function activeAnalyticsSeries() {
+  const series = currentAnalyticsTab().series.slice();
+  ANALYTICS_OVERLAYS.forEach((overlay) => {
+    if (state.analytics.overlays[overlay.id] && !series.includes(overlay.id)) {
+      series.push(overlay.id);
+    }
+  });
+  return series;
+}
+
+// Whether the Analytics panel is on screen. Hidden views (energy/diagnose/logs)
+// and a backgrounded tab must not trigger periodic fetches (lazy loading).
+function analyticsPanelVisible() {
+  if (typeof document !== "undefined" && document.hidden) return false;
+  return !["energy", "diagnose", "logs"].includes(state.flowView);
+}
+
+function setAnalyticsLoading(active) {
+  const node = $("analyticsLoading");
+  if (node) node.hidden = !active;
+  const chart = $("analyticsChart");
+  if (chart && chart.setAttribute) chart.setAttribute("aria-busy", active ? "true" : "false");
+}
+
+// Build the series request URL. Precedence: an active zoom viewport wins (so a
+// zoomed range re-queries the backend, which picks the finer query profile),
+// then an explicit custom range, otherwise the live period token.
+function analyticsFetchUrl() {
+  const params = new URLSearchParams();
+  const zoom = state.analytics.zoom;
+  const custom = state.analytics.custom;
+  if (zoom && zoom.start && zoom.end) {
+    params.set("start", String(zoom.start));
+    params.set("end", String(zoom.end));
+  } else if (custom.active && custom.start && custom.end) {
+    params.set("start", String(custom.start));
+    params.set("end", String(custom.end));
+  } else {
+    params.set("range", state.range);
+  }
+  params.set("series", activeAnalyticsSeries().join(","));
+  if (state.analytics.device) {
+    params.set("devices", state.analytics.device);
+  }
+  return `/api/history/series?${params.toString()}`;
+}
+
+// Auto-refresh runs only in live mode: paused while zoomed and skipped when the
+// panel is off-screen or the tab is backgrounded.
+function analyticsShouldAutoRefresh() {
+  return analyticsPanelVisible() && !state.analytics.zoom;
+}
+
+async function loadAnalytics(showLoading = true) {
   if (state.demoMode) {
-    state.history = demoHistory(state.snapshot || demoSnapshot());
-    renderCharts();
+    state.analytics.data = demoAnalyticsData();
+    renderAnalytics();
     return;
   }
-  const response = await fetch(`/api/history?range=${encodeURIComponent(state.range)}`);
-  const payload = await response.json();
-  state.history = payload.items || [];
-  renderCharts();
+  if (showLoading) setAnalyticsLoading(true);
+  try {
+    const response = await fetch(analyticsFetchUrl());
+    state.analytics.data = response.ok ? await response.json() : null;
+  } catch (error) {
+    state.analytics.data = null;
+  } finally {
+    setAnalyticsLoading(false);
+  }
+  renderAnalytics();
 }
 
-function renderCharts() {
-  charts.forEach((chart) => {
-    const canvas = $(chart.id);
-    const values = state.history.map((item) => Number(item[chart.field] || 0));
-    drawChart(canvas, chart.title, values, chart.color, chart.unit);
+function setAnalyticsTab(tabId) {
+  if (!ANALYTICS_TABS.some((tab) => tab.id === tabId)) return;
+  state.analytics.tab = tabId;
+  clearZoom();
+  renderAnalyticsTabs();
+  loadAnalytics();
+}
+
+function renderAnalyticsTabs() {
+  document.querySelectorAll(".analytics-tabs button").forEach((button) => {
+    const active = button.dataset.analyticsTab === state.analytics.tab;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
   });
 }
 
-function drawChart(canvas, title, values, color, unit) {
-  if (!canvas) return;
+function toggleAnalyticsOverlay(overlayId) {
+  if (!(overlayId in state.analytics.overlays)) return;
+  state.analytics.overlays[overlayId] = !state.analytics.overlays[overlayId];
+  clearZoom();
+  renderAnalyticsOverlays();
+  loadAnalytics();
+}
 
-  const ratio = window.devicePixelRatio || 1;
-  const width = canvas.clientWidth || 320;
-  const height = canvas.clientHeight || 94;
-  canvas.width = Math.floor(width * ratio);
-  canvas.height = Math.floor(height * ratio);
+function renderAnalyticsOverlays() {
+  document.querySelectorAll(".analytics-overlays button").forEach((button) => {
+    const active = !!state.analytics.overlays[button.dataset.analyticsOverlay];
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+}
 
-  const ctx = canvas.getContext("2d");
-  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-  ctx.clearRect(0, 0, width, height);
+function applyCustomRange(fromValue, toValue) {
+  const start = Date.parse(fromValue);
+  const end = Date.parse(toValue);
+  if (Number.isNaN(start) || Number.isNaN(end) || start >= end) return false;
+  state.analytics.custom = {
+    active: true,
+    start: Math.floor(start / 1000),
+    end: Math.floor(end / 1000),
+  };
+  clearZoom();
+  // Selector kept in a variable so this literal does not collide with the
+  // marker the node frontend tests use to trim the auto-init tail.
+  const rangeSelector = ".range-tabs button";
+  document.querySelectorAll(rangeSelector).forEach((item) => item.classList.remove("active"));
+  loadAnalytics();
+  return true;
+}
 
-  ctx.fillStyle = "#a1adb9";
-  ctx.font = "800 11px system-ui, sans-serif";
-  ctx.fillText(title, 9, 16);
+function clearCustomRange() {
+  state.analytics.custom = { active: false, start: null, end: null };
+}
 
-  if (!values.length) {
-    ctx.fillStyle = "#64717f";
-    ctx.font = "12px system-ui, sans-serif";
-    ctx.fillText("No samples", 10, height - 14);
+// -- Zoom (Fix 1-3) --------------------------------------------------------
+//
+// A user drag-zoom sets a viewport; we re-query the backend for that range so
+// it returns the finer query profile, keep the chart zoomed, and pause live
+// auto-refresh until the user returns to live.
+
+let analyticsZoomTimer = null;
+
+// Pure: decide whether a uPlot x-scale window is a zoom-in vs the full extent.
+function detectZoom(min, max, dataStart, dataEnd) {
+  const nums = [min, max, dataStart, dataEnd];
+  if (!nums.every((n) => typeof n === "number" && Number.isFinite(n))) return null;
+  const span = dataEnd - dataStart;
+  if (!(span > 0)) return null;
+  const eps = span * 0.005;
+  if (min > dataStart + eps || max < dataEnd - eps) {
+    return { start: Math.floor(min), end: Math.ceil(max) };
+  }
+  return null;
+}
+
+function scheduleZoomRequery() {
+  // Demo mode has no backend: the chart stays zoomed into the loaded data.
+  if (state.demoMode) return;
+  if (analyticsZoomTimer) clearTimeout(analyticsZoomTimer);
+  analyticsZoomTimer = setTimeout(() => {
+    analyticsZoomTimer = null;
+    loadAnalytics(true);
+  }, 180);
+}
+
+function onAnalyticsXScale(chart) {
+  if (state.analytics.applyingScale) return;
+  const xs = chart.data && chart.data[0];
+  if (!xs || xs.length < 2) return;
+  const zoom = detectZoom(
+    chart.scales.x.min,
+    chart.scales.x.max,
+    xs[0],
+    xs[xs.length - 1]
+  );
+  if (zoom) {
+    state.analytics.zoom = zoom;
+    renderZoomControls();
+    scheduleZoomRequery();
+  } else if (state.analytics.zoom) {
+    // Zoomed back out to the full extent (e.g. uPlot double-click): go live.
+    backToLive();
+  }
+}
+
+function clearZoom() {
+  state.analytics.zoom = null;
+  if (analyticsZoomTimer) {
+    clearTimeout(analyticsZoomTimer);
+    analyticsZoomTimer = null;
+  }
+}
+
+function backToLive() {
+  clearZoom();
+  renderZoomControls();
+  loadAnalytics(true);
+}
+
+function renderZoomControls() {
+  const button = $("analyticsBackToLive");
+  if (button) button.hidden = !state.analytics.zoom;
+}
+
+function renderAnalytics() {
+  renderAnalyticsChart();
+  renderAnalyticsKpis();
+}
+
+function analyticsChartHeight() {
+  if (typeof window !== "undefined" && window.innerWidth && window.innerWidth <= 760) {
+    return 220;
+  }
+  return 280;
+}
+
+function cssColor(varName, fallback) {
+  if (typeof getComputedStyle !== "function") return fallback;
+  const value = getComputedStyle(document.documentElement)
+    .getPropertyValue(varName)
+    .trim();
+  return value || fallback;
+}
+
+function renderAnalyticsChart() {
+  const container = $("analyticsChart");
+  if (!container || typeof uPlot === "undefined") return;
+
+  const data = state.analytics.data;
+  const time = (data && data.time) || [];
+  const empty = $("analyticsEmpty");
+
+  if (state.analytics.chart) {
+    state.analytics.chart.destroy();
+    state.analytics.chart = null;
+  }
+  container.innerHTML = "";
+
+  if (!time.length) {
+    if (empty) {
+      const unavailable = !data || (data.meta && data.meta.unavailable);
+      empty.textContent = unavailable
+        ? "History data is currently unavailable."
+        : "No samples in this period.";
+      empty.hidden = false;
+    }
     return;
   }
+  if (empty) empty.hidden = true;
 
-  const min = Math.min(...values, 0);
-  const max = Math.max(...values, 1);
-  const span = max - min || 1;
-  const left = 9;
-  const right = width - 9;
-  const top = 23;
-  const bottom = height - 17;
-
-  ctx.strokeStyle = "#2c3542";
-  ctx.lineWidth = 1;
-  for (let i = 0; i < 3; i += 1) {
-    const y = top + ((bottom - top) * i) / 2;
-    ctx.beginPath();
-    ctx.moveTo(left, y);
-    ctx.lineTo(right, y);
-    ctx.stroke();
-  }
-
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  values.forEach((value, index) => {
-    const x = values.length === 1 ? left : left + ((right - left) * index) / (values.length - 1);
-    const y = bottom - ((value - min) / span) * (bottom - top);
-    if (index === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
+  const seriesData = [time];
+  const seriesConfig = [{}];
+  let usesPctScale = false;
+  activeAnalyticsSeries().forEach((id) => {
+    const meta = ANALYTICS_SERIES_META[id];
+    if (!meta) return;
+    const values = (data.series && data.series[id]) || [];
+    seriesData.push(
+      time.map((_, index) => {
+        const value = values[index];
+        return value === null || value === undefined ? null : Number(value);
+      })
+    );
+    const isOverlay = !currentAnalyticsTab().series.includes(id);
+    if (meta.scaleId === "pct") usesPctScale = true;
+    seriesConfig.push({
+      label: meta.label,
+      stroke: cssColor(meta.colorVar, "#888"),
+      width: 2,
+      dash: isOverlay ? [6, 4] : undefined,
+      scale: meta.scaleId || "y",
+      value: (_self, raw) => (raw == null ? "--" : `${Math.round(raw)} ${meta.unit}`),
+    });
   });
-  ctx.stroke();
 
-  ctx.fillStyle = "#f3f6f8";
-  ctx.font = "800 12px system-ui, sans-serif";
-  const latest = values[values.length - 1] || 0;
-  ctx.fillText(`${Math.round(latest)} ${unit}`, 9, height - 5);
+  const axisColor = cssColor("--muted", "#8a94a3");
+  const gridColor = "rgba(255,255,255,0.06)";
+  const scales = { x: { time: true }, y: {} };
+  const axes = [
+    { stroke: axisColor, grid: { stroke: gridColor }, ticks: { stroke: gridColor } },
+    { scale: "y", stroke: axisColor, grid: { stroke: gridColor }, ticks: { stroke: gridColor } },
+  ];
+  if (usesPctScale) {
+    scales.pct = { range: [0, 100] };
+    axes.push({
+      scale: "pct",
+      side: 1,
+      stroke: cssColor("--accent", "#8b5cf6"),
+      grid: { show: false },
+      values: (_self, ticks) => ticks.map((t) => `${t}%`),
+    });
+  }
+  const opts = {
+    width: container.clientWidth || 600,
+    height: analyticsChartHeight(),
+    series: seriesConfig,
+    scales,
+    axes,
+    // Crosshair with synchronized cursor (shared key for any future charts);
+    // the live legend reads every series value at the cursor position.
+    cursor: { sync: { key: "analytics" }, focus: { prox: 24 } },
+    legend: { live: true },
+    hooks: {
+      setScale: [
+        (chart, key) => {
+          if (key === "x") onAnalyticsXScale(chart);
+        },
+      ],
+    },
+  };
+  // Guard programmatic scale changes (construction + re-applying the zoom
+  // viewport) so they aren't treated as a fresh user zoom.
+  state.analytics.applyingScale = true;
+  const chart = new uPlot(opts, seriesData, container);
+  state.analytics.chart = chart;
+  if (state.analytics.zoom && chart.setScale) {
+    chart.setScale("x", {
+      min: state.analytics.zoom.start,
+      max: state.analytics.zoom.end,
+    });
+  }
+  state.analytics.applyingScale = false;
+  renderZoomControls();
+}
+
+function integrateSeries(data, id, transform) {
+  if (!data || !data.time || !data.series) return null;
+  const time = data.time;
+  const values = data.series[id];
+  if (!values || values.length < 2) return null;
+  let wh = 0;
+  let counted = 0;
+  for (let index = 1; index < time.length; index += 1) {
+    const previous = values[index - 1];
+    const current = values[index];
+    if (previous == null || current == null) continue;
+    const dt = time[index] - time[index - 1];
+    if (!(dt > 0)) continue;
+    wh += ((transform(Number(previous)) + transform(Number(current))) / 2) * (dt / 3600);
+    counted += 1;
+  }
+  return counted ? wh : null;
+}
+
+function energyLabel(wh) {
+  if (wh == null) return "--";
+  if (Math.abs(wh) >= 1000) return `${(wh / 1000).toFixed(1)} kWh`;
+  return `${Math.round(wh)} Wh`;
+}
+
+function powerLabel(w) {
+  if (w == null) return "--";
+  if (Math.abs(w) >= 1000) return `${(w / 1000).toFixed(2)} kW`;
+  return `${Math.round(w)} W`;
+}
+
+function seriesPeak(data, id) {
+  if (!data || !data.series) return null;
+  const values = data.series[id];
+  if (!values || !values.length) return null;
+  let max = null;
+  values.forEach((value) => {
+    if (value == null) return;
+    const number = Number(value);
+    if (max == null || number > max) max = number;
+  });
+  return max;
+}
+
+function runtimeRoleLabel(snapshot) {
+  if (!snapshot || !snapshot.devices) return "--";
+  const names = state.analytics.device
+    ? [state.analytics.device]
+    : Object.keys(snapshot.devices);
+  if (!names.length) return "--";
+  let anyInput = false;
+  let anyOutput = false;
+  names.forEach((name) => {
+    const device = snapshot.devices[name];
+    if (!device) return;
+    if (Number(device.ac_mode) === 1) anyInput = true;
+    else anyOutput = true;
+  });
+  if (anyInput && anyOutput) return "Mixed";
+  if (anyInput) return "AC Input";
+  return "Output";
+}
+
+function renderAnalyticsKpis() {
+  const host = $("analyticsKpis");
+  if (!host) return;
+  const data = state.analytics.data;
+  const snapshot = state.snapshot;
+  const cards = currentAnalyticsTab()
+    .kpis.map((id) => {
+      const spec = ANALYTICS_KPIS[id];
+      if (!spec) return null;
+      return {
+        label: spec.label(state.range),
+        value: spec.compute(data, snapshot),
+        tone: spec.tone,
+      };
+    })
+    .filter(Boolean);
+  host.innerHTML = cards
+    .map(
+      (card) =>
+        `<div class="analytics-kpi tone-${escapeHtml(card.tone)}">` +
+        `<span class="analytics-kpi-label">${escapeHtml(card.label)}</span>` +
+        `<span class="analytics-kpi-value">${escapeHtml(card.value)}</span>` +
+        `</div>`
+    )
+    .join("");
+}
+
+function populateDeviceSelector(snapshot) {
+  const select = $("analyticsDevice");
+  if (!select || !select.options) return;
+  const names = snapshot && snapshot.devices ? Object.keys(snapshot.devices) : [];
+  if (names.join("|") === state.analytics.deviceOptions.join("|")) return;
+  state.analytics.deviceOptions = names;
+
+  const current = state.analytics.device;
+  while (select.options.length > 1) {
+    select.remove(1);
+  }
+  names.forEach((name) => {
+    const option = document.createElement("option");
+    option.value = name;
+    option.textContent = name;
+    select.appendChild(option);
+  });
+  if (current && names.includes(current)) {
+    select.value = current;
+  } else {
+    select.value = "";
+    state.analytics.device = "";
+  }
 }
 
 function startEvents() {
@@ -3729,11 +4157,60 @@ function initDashboardApp() {
       document.querySelectorAll(rangeTabSelector).forEach((item) => item.classList.remove("active"));
       button.classList.add("active");
       state.range = button.dataset.range;
-      await loadHistory();
+      clearCustomRange();
+      clearZoom();
+      renderZoomControls();
+      await loadAnalytics();
     });
   });
 
-  window.addEventListener("resize", renderCharts);
+  const backToLiveButton = $("analyticsBackToLive");
+  if (backToLiveButton) {
+    backToLiveButton.addEventListener("click", () => backToLive());
+  }
+  // ESC returns to live while zoomed (uPlot double-click already resets too).
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.analytics.zoom) backToLive();
+  });
+
+  document.querySelectorAll(".analytics-tabs button").forEach((button) => {
+    button.addEventListener("click", () => setAnalyticsTab(button.dataset.analyticsTab));
+  });
+  renderAnalyticsTabs();
+
+  document.querySelectorAll(".analytics-overlays button").forEach((button) => {
+    button.addEventListener("click", () => toggleAnalyticsOverlay(button.dataset.analyticsOverlay));
+  });
+  renderAnalyticsOverlays();
+
+  const customApply = $("analyticsCustomApply");
+  if (customApply) {
+    customApply.addEventListener("click", () => {
+      const from = $("analyticsCustomFrom");
+      const to = $("analyticsCustomTo");
+      applyCustomRange(from ? from.value : "", to ? to.value : "");
+    });
+  }
+
+  const deviceSelect = $("analyticsDevice");
+  if (deviceSelect) {
+    deviceSelect.addEventListener("change", async () => {
+      state.analytics.device = deviceSelect.value;
+      clearZoom();
+      renderZoomControls();
+      await loadAnalytics();
+    });
+  }
+
+  window.addEventListener("resize", () => {
+    const container = $("analyticsChart");
+    if (state.analytics.chart && container) {
+      state.analytics.chart.setSize({
+        width: container.clientWidth || 600,
+        height: analyticsChartHeight(),
+      });
+    }
+  });
 
   initFlowViewSwitch();
   initAuthControls();
@@ -3747,9 +4224,13 @@ function initDashboardApp() {
     loadAuthStatus();
     loadRuntimeState();
     startEvents();
-    loadHistory();
+    loadAnalytics();
     setInterval(loadAuthStatus, 60000);
-    setInterval(loadHistory, 30000);
+    // Periodic refresh skips fetching while the panel is off-screen, the tab is
+    // backgrounded (lazy loading), or the chart is zoomed (preserve zoom).
+    setInterval(() => {
+      if (analyticsShouldAutoRefresh()) loadAnalytics(false);
+    }, 30000);
   }
 }
 
@@ -3780,6 +4261,26 @@ if (typeof module !== "undefined") {
     renderDevices,
     renderControlExplain,
     setFlowView,
+    ANALYTICS_TABS,
+    ANALYTICS_KPIS,
+    ANALYTICS_OVERLAYS,
+    currentAnalyticsTab,
+    activeAnalyticsSeries,
+    analyticsPanelVisible,
+    analyticsShouldAutoRefresh,
+    analyticsFetchUrl,
+    detectZoom,
+    backToLive,
+    clearZoom,
+    toggleAnalyticsOverlay,
+    applyCustomRange,
+    clearCustomRange,
+    renderAnalyticsKpis,
+    integrateSeries,
+    seriesPeak,
+    energyLabel,
+    powerLabel,
+    runtimeRoleLabel,
     renderDiagnoseReport,
     renderDiagnoseView,
     diagnoseAuthState,

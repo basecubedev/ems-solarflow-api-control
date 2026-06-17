@@ -271,13 +271,67 @@ Energy statistics only:
 GET /api/energy-stats
 ```
 
-Short-term history:
+Short-term history (legacy snapshot list, used by older clients):
 
 ```text
 GET /api/history?range=6h
 ```
 
 Supported ranges are `1h`, `6h`, `12h`, and `24h`.
+
+Analytics chart series (columnar, drives the single Analytics chart):
+
+```text
+GET /api/history/series?range=24h&series=pv,output,battery&devices=WR1
+GET /api/history/series?start=1717200000&end=1717286400&series=pv
+```
+
+Supported ranges are `1h`, `6h`, `24h`, `7d`, `30d`, `365d`. `series` and
+`devices` are optional comma-separated lists; an empty/invalid `series` falls
+back to the default `pv,output,battery`. For a **custom range**, pass `start`
+and `end` (epoch seconds or ISO 8601) instead of `range`; the response then
+reports `"range": "custom"`. `start >= end` or unparseable bounds return
+`400 invalid_range`. The response is columnar
+(`time`, `series`, `devices`, `source`, `window`, `range`, `meta`) so the
+front-end uPlot chart can plot every series on one shared time axis. The backend
+chooses a `HistoryProvider` from config: the zero-dependency SQLite snapshot
+store by default, or InfluxDB when `influxdb.enabled` is set.
+
+The Analytics panel on the dashboard uses this endpoint for one combined chart
+(reusing the existing PV/Output/Battery/Grid colors) with a period selector, a
+device selector, and KPI cards. It replaces the previous five separate canvas
+charts.
+
+The panel has sub-tabs that keep the same single chart and only change the
+visible series and KPI cards (no extra chart pages):
+
+- **Overview** / **Devices** — PV, Inverter Output, Battery Power; KPIs PV,
+  Output, Charge, Discharge, Current SoC, Runtime Role.
+- **Grid** — Grid and Home Load; KPIs Grid Import, Grid Export, Home, SoC.
+- **Battery** — Battery Power; KPIs Charge, Discharge, SoC, Runtime Role.
+- **PV** — PV Input; KPIs PV, PV Peak, Output, SoC.
+
+Energy KPIs are integrated from the selected period; Current SoC and Runtime
+Role come from the live snapshot.
+
+Overlay toggles add optional series on top of the active tab without changing
+it: **SoC** (drawn on a secondary right-hand percentage axis), **EMS Target**,
+and **Grid Share** (grid power). Overlays render as dashed lines and the
+crosshair/live legend reports every visible series at the cursor. A custom date
+range (from/to pickers + Apply) replaces the period selector when set.
+
+Performance and refresh behavior:
+
+- The endpoint decimates each response to at most ~2000 points per series, so
+  long ranges stay fast (a 365d query over 100k+ raw snapshots returns in well
+  under a second). Zoom/custom ranges request a narrower window and so return
+  finer detail.
+- The panel auto-refreshes every 30s, but only while it is on screen; the
+  energy/diagnose/logs views (where the panel is hidden) and a backgrounded
+  browser tab do not trigger fetches. Each sub-tab loads only its own series.
+- The panel is mobile-friendly (controls, overlay chips, sub-tabs and KPI cards
+  reflow; the chart uses a reduced height on small screens) and shows explicit
+  loading and empty/unavailable states.
 
 Live updates:
 

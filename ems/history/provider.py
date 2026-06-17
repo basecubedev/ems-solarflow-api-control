@@ -16,7 +16,7 @@ import os
 import sqlite3
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 # Canonical chart series. Each entry maps a stable series id to the snapshot
 # field used by the SQLite provider. The InfluxDB provider maps the same ids to
@@ -45,6 +45,77 @@ SERIES_CATALOG = {
 }
 
 DEFAULT_SERIES = ["pv", "output", "battery"]
+
+# Per-device snapshot fields (under payload["devices"][name]) used when the
+# SQLite provider is asked to filter by device. Series absent from this map are
+# system-level only and resolve to None when a specific device is selected.
+SERIES_DEVICE_FIELD = {
+    "pv": "pv_input_w",
+    "output": "output_w",
+    "battery": "battery_power_w",
+    "soc": "soc",
+}
+
+# UI period tokens shared by the Dashboard (fixed 24h) and Analytics views.
+# Both must map to the same start/end resolution so they share one API.
+HISTORY_RANGE_SECONDS = {
+    "1h": 3600,
+    "6h": 6 * 3600,
+    "24h": 24 * 3600,
+    "7d": 7 * 86400,
+    "30d": 30 * 86400,
+    "365d": 365 * 86400,
+}
+
+DEFAULT_RANGE = "24h"
+
+# Keep payloads chart-friendly: uPlot stays fast at a few thousand points per
+# series, and the wire payload stays small. Raw SQLite snapshots over long
+# ranges can blow past this, so the endpoint decimates to at most this many
+# points (the Influx provider is already bounded by its aggregate window).
+DEFAULT_MAX_POINTS = 2000
+
+
+def resolve_range(range_name, now=None):
+    """Map a UI period token to an aware ``(start, end)`` tuple.
+
+    Unknown tokens fall back to :data:`DEFAULT_RANGE` so the endpoint never
+    rejects a request purely on the period name.
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    seconds = HISTORY_RANGE_SECONDS.get(
+        range_name, HISTORY_RANGE_SECONDS[DEFAULT_RANGE]
+    )
+    return now - timedelta(seconds=seconds), now
+
+
+def decimate_history_result(result, max_points=DEFAULT_MAX_POINTS):
+    """Stride-sample a :class:`HistoryResult` in place to ``max_points``.
+
+    Keeps the time axis and every series aligned; always keeps the last point so
+    the most recent sample is never dropped. No-op when already small enough.
+    Returns the (possibly mutated) result for convenience.
+    """
+    count = len(result.time)
+    if max_points <= 0 or count <= max_points:
+        return result
+
+    # Evenly spaced indices including both endpoints; at most ``max_points``
+    # (set() collapses any rounding collisions). Keeps first and last samples.
+    keep = sorted(
+        {round(i * (count - 1) / (max_points - 1)) for i in range(max_points)}
+    )
+
+    result.time = [result.time[i] for i in keep]
+    for name, values in result.series.items():
+        if len(values) == count:
+            result.series[name] = [values[i] for i in keep]
+    result.meta["point_count"] = len(result.time)
+    result.meta["decimated"] = True
+    return result
 
 
 @dataclass
@@ -126,6 +197,8 @@ class SqliteHistoryProvider(HistoryProvider):
             result.meta["unavailable"] = True
             return result
 
+        device_filter = [d for d in (devices or []) if d]
+
         rows = self._read_snapshots(start, end)
         for payload in rows:
             ts = _parse_iso(payload.get("timestamp"))
@@ -133,11 +206,14 @@ class SqliteHistoryProvider(HistoryProvider):
                 continue
             result.time.append(int(ts.timestamp()))
             for name in series:
-                spec = SERIES_CATALOG[name]
-                result.series[name].append(
-                    _coerce_number(_dig(payload, spec["sqlite_field"]))
-                )
+                if device_filter:
+                    value = _device_series_value(payload, name, device_filter)
+                else:
+                    spec = SERIES_CATALOG[name]
+                    value = _coerce_number(_dig(payload, spec["sqlite_field"]))
+                result.series[name].append(value)
 
+        result.devices = device_filter
         result.meta["point_count"] = len(result.time)
         return result
 
@@ -205,6 +281,33 @@ def _parse_iso(value):
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed
+
+
+def _device_series_value(payload, series_name, device_names):
+    """Aggregate one series across the selected devices in a snapshot.
+
+    Power series are summed; ``soc`` is averaged. Series with no per-device
+    field (home/grid/target) are system-level only and resolve to None.
+    """
+    field = SERIES_DEVICE_FIELD.get(series_name)
+    if not field:
+        return None
+    devices = payload.get("devices")
+    if not isinstance(devices, dict):
+        return None
+    values = []
+    for name in device_names:
+        device = devices.get(name)
+        if not isinstance(device, dict):
+            continue
+        number = _coerce_number(device.get(field))
+        if number is not None:
+            values.append(number)
+    if not values:
+        return None
+    if series_name == "soc":
+        return sum(values) / len(values)
+    return sum(values)
 
 
 def _dig(payload, dotted):

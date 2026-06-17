@@ -256,6 +256,91 @@ def test_runtime_patch_without_session_is_rejected_when_auth_is_configured(tmp_p
     assert json.loads(raw_body.decode("utf-8"))["error"] == "not_authenticated"
 
 
+class SeriesStoreStub(StoreStub):
+    """Store stub exposing a ``path`` to a minimal snapshots SQLite database."""
+
+    def __init__(self, path):
+        super().__init__()
+        self.path = path
+
+
+def _seed_snapshots(path):
+    import sqlite3
+    from datetime import datetime, timedelta, timezone
+
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE snapshots (timestamp TEXT PRIMARY KEY, payload TEXT)")
+    now = datetime.now(timezone.utc)
+    for index in range(3):
+        ts = (now - timedelta(minutes=10 * (2 - index))).isoformat()
+        payload = json.dumps(
+            {
+                "timestamp": ts,
+                "pv_total_w": 1000 + index * 100,
+                "inverter_output_w": 400 + index * 50,
+                "battery_power_w": 200 - index * 50,
+                "devices": {"WR1": {"pv_input_w": 600 + index * 60}},
+            }
+        )
+        con.execute(
+            "INSERT INTO snapshots(timestamp, payload) VALUES (?, ?)", (ts, payload)
+        )
+    con.commit()
+    con.close()
+
+
+def test_history_series_endpoint_returns_columnar_sqlite_data(tmp_path):
+    db_path = str(tmp_path / "dashboard.sqlite")
+    _seed_snapshots(db_path)
+    store = SeriesStoreStub(db_path)
+    server, base_url = with_server(store)
+
+    try:
+        status, _, payload = json_response(
+            f"{base_url}/api/history/series?range=24h&series=pv,output,battery"
+        )
+        assert status == 200
+        assert payload["range"] == "24h"
+        assert payload["source"] == "sqlite"
+        assert len(payload["time"]) == 3
+        assert payload["series"]["pv"][0] == 1000
+        assert payload["series"]["output"][2] == 500
+        assert set(payload["series"].keys()) == {"pv", "output", "battery"}
+
+        # Device filter reads per-device snapshot fields.
+        status, _, filtered = json_response(
+            f"{base_url}/api/history/series?range=24h&series=pv&devices=WR1"
+        )
+        assert status == 200
+        assert filtered["devices"] == ["WR1"]
+        assert filtered["series"]["pv"][0] == 600
+
+        status, _, bad = json_response(f"{base_url}/api/history/series?range=bad")
+        assert status == 400
+        assert bad["error"] == "unsupported_range"
+        assert "365d" in bad["supported"]
+
+        # Custom date range via explicit start/end epoch bounds.
+        import time as _time
+
+        now = int(_time.time())
+        status, _, custom = json_response(
+            f"{base_url}/api/history/series?start={now - 3600}&end={now + 3600}&series=pv"
+        )
+        assert status == 200
+        assert custom["range"] == "custom"
+        assert len(custom["time"]) == 3
+
+        status, _, invalid = json_response(
+            f"{base_url}/api/history/series?start={now}&end={now - 3600}"
+        )
+        assert status == 400
+        assert invalid["error"] == "invalid_range"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_dashboard_server_rejects_invalid_history_range_and_write_methods():
     store = StoreStub()
     server, base_url = with_server(store)

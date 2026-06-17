@@ -21,6 +21,19 @@ library.
 
 No visible in-dashboard attribution is required for the current icon set.
 
+## Vendored Frontend Chart Library
+
+The dashboard history/analytics charts use **uPlot** (v1.6.31), a small,
+canvas-based charting library. It is vendored verbatim under
+`dashboard/static/` (no package manager / build step in this project):
+
+- `dashboard/static/uPlot.iife.min.js`
+- `dashboard/static/uPlot.min.css`
+
+uPlot is licensed under the **MIT License**, Copyright (c) Leon Sorokin
+(https://github.com/leeoniya/uPlot). The MIT license text must be preserved
+when redistributing these files.
+
 ## Python Dependencies
 
 Direct Python dependencies keep their upstream licenses:
