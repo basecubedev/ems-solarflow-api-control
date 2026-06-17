@@ -1,0 +1,19 @@
+# Overlay: give the EMS container the same INFLUXDB_TOKEN / INFLUXDB_ORG as the
+# bundled InfluxDB, by sharing the generated secret file.
+#
+# This is kept as a separate overlay (not folded into docker-compose.example.yml)
+# so the default non-InfluxDB path keeps working:
+#   docker compose -f docker-compose.example.yml up -d        # no env_file needed
+#
+# It is only added when bundled InfluxDB is enabled, by:
+#   python3 emsctl.py stack up
+#   python3 emsctl.py influx init
+# which always invoke compose from the repo root with docker-compose.example.yml
+# first, so the env_file path below (repo-root relative, matching how Compose
+# resolves it against the project directory) points at the generated secrets.
+#
+# influxdb.env is gitignored. Never commit real tokens or passwords.
+services:
+  ems:
+    env_file:
+      - deploy/docker/influxdb.env

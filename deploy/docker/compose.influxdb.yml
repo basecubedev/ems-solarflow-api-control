@@ -4,14 +4,31 @@
 # (the dashboard falls back to local SQLite history). Use this only if you want
 # the Analytics tab backed by InfluxDB with long-range downsampled history.
 #
-# Quick start:
-#   cp deploy/docker/influxdb.env.example deploy/docker/influxdb.env
-#   # edit deploy/docker/influxdb.env and set strong secrets
-#   docker compose -f deploy/docker/compose.influxdb.yml up -d
-#   # then enable influxdb in config.json and reconcile buckets/tasks:
-#   python3 emsctl.py influx sync
+# Zero-config quick start (recommended):
+#   # in config.json set influxdb.enabled=true (mode stays "bundled")
+#   python3 emsctl.py stack up
+# This generates deploy/docker/influxdb.env automatically, starts InfluxDB and
+# the EMS with a shared INFLUXDB_TOKEN, and reconciles buckets/tasks.
+#
+# Manual equivalent:
+#   python3 emsctl.py influx init      # creates influxdb.env, starts, syncs
 #   python3 emsctl.py influx status
 #
+# All bootstrap values (DOCKER_INFLUXDB_INIT_*) and the EMS token live directly
+# in influxdb.env. We intentionally do NOT use ${...} interpolation here:
+# Compose variable substitution reads the shell / --env-file, not a service
+# env_file, so keeping the values in env_file avoids that pitfall.
+#
+# IMPORTANT: env_file below is resolved relative to the *project directory*
+# (the directory of the first -f compose file), so it is written repo-root
+# relative. Always run this file alongside the root docker-compose.example.yml
+# from the repo root, e.g.:
+#   docker compose -f docker-compose.example.yml \
+#     -f deploy/docker/compose.influxdb.yml \
+#     -f deploy/docker/compose.ems-influx-env.yml up -d
+# (emsctl.py stack up / influx init do this for you.)
+#
+# influxdb.env is gitignored. Never commit real tokens or passwords.
 # See docs/influxdb.md for the full setup and the bucket/task sync workflow.
 services:
   influxdb:
@@ -20,16 +37,7 @@ services:
     ports:
       - "8086:8086"
     env_file:
-      - influxdb.env
-    environment:
-      # First-start bootstrap only. These are applied once, when the data
-      # volume is empty. Changing them later does not re-initialize InfluxDB.
-      DOCKER_INFLUXDB_INIT_MODE: setup
-      DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUXDB_ADMIN_USER}
-      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUXDB_ADMIN_PASSWORD}
-      DOCKER_INFLUXDB_INIT_ORG: ${INFLUXDB_ORG}
-      DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUXDB_INIT_BUCKET}
-      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_ADMIN_TOKEN}
+      - deploy/docker/influxdb.env
     volumes:
       - influxdb-data:/var/lib/influxdb2
     restart: unless-stopped

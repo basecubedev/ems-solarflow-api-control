@@ -57,6 +57,7 @@ TOP_LEVEL_COMMANDS = (
     "winter",
     "dashboard",
     "influx",
+    "stack",
     "diagnose",
     "interactive",
     "menu",
@@ -529,15 +530,20 @@ Examples:
 
     influx = subparsers.add_parser(
         "influx",
-        help="Inspect or reconcile the InfluxDB history schema.",
+        help="Set up, inspect or reconcile the InfluxDB history backend.",
         description=(
             "Manage the optional InfluxDB 2.x history backend. Config is the "
-            "source of truth: 'sync' reconciles buckets, retention and "
-            "downsampling tasks to match config.json; 'status' reports the live "
-            "buckets, tasks and task health."
+            "source of truth: 'init' sets up the bundled docker-compose "
+            "InfluxDB zero-config (generate local secrets, start it, sync "
+            "schema); 'sync' reconciles buckets, retention and downsampling "
+            "tasks to match config.json; 'status' reports the live buckets, "
+            "tasks and task health."
         ),
         epilog="""\
 Examples:
+  python3 emsctl.py influx init
+  python3 emsctl.py influx init --no-start
+  python3 emsctl.py influx init --no-sync --json
   python3 emsctl.py influx status
   python3 emsctl.py influx status --json
   python3 emsctl.py influx sync
@@ -547,13 +553,70 @@ Examples:
     )
     influx.add_argument(
         "action",
-        choices=("status", "sync"),
-        help="status: read live schema. sync: reconcile schema to config.",
+        choices=("init", "status", "sync"),
+        help=(
+            "init: set up bundled InfluxDB (secrets, start, sync). "
+            "status: read live schema. sync: reconcile schema to config."
+        ),
     )
     influx.add_argument(
         "--json",
         action="store_true",
         help="Print machine-readable output.",
+    )
+    influx.add_argument(
+        "--no-start",
+        action="store_true",
+        help="init: create/merge secrets only; do not start the container.",
+    )
+    influx.add_argument(
+        "--no-sync",
+        action="store_true",
+        help="init: skip the schema sync step after InfluxDB is ready.",
+    )
+    influx.add_argument(
+        "--force-disabled",
+        action="store_true",
+        help="init: proceed even when influxdb.enabled is false in config.",
+    )
+
+    stack = subparsers.add_parser(
+        "stack",
+        help="Start the EMS docker-compose stack (with bundled InfluxDB).",
+        description=(
+            "Beginner-friendly host-side helper that starts the EMS "
+            "docker-compose stack. With bundled InfluxDB enabled it also "
+            "creates local secrets, includes the InfluxDB compose files and "
+            "runs the schema sync, so Analytics works from one command. Runs "
+            "docker on the host; the EMS controller never manages Docker."
+        ),
+        epilog="""\
+Examples:
+  python3 emsctl.py stack up
+  python3 emsctl.py stack up --no-sync
+  python3 emsctl.py stack up --json
+""",
+        formatter_class=EMSHelpFormatter,
+    )
+    stack.add_argument(
+        "stack_action",
+        choices=("up",),
+        help="up: create secrets if needed, start containers, sync schema.",
+    )
+    stack.add_argument(
+        "--json",
+        action="store_true",
+        help="Print machine-readable output.",
+    )
+    stack.add_argument(
+        "--no-sync",
+        action="store_true",
+        help="Skip the InfluxDB schema sync step.",
+    )
+    stack.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the docker compose command without running it.",
     )
 
     subparsers.add_parser(
@@ -1260,12 +1323,151 @@ def prompt_new_password(args, password_attr="password"):
     return password
 
 
-def handle_influx_command(args, config):
-    from ems.config import normalize_influxdb_config, resolve_influx_token
+def resolve_influx_token_with_secret_file(influx_config):
+    """Resolve a token from config/env, falling back to the bundled secret file.
+
+    Running the bundled stack on the host means the ``token_env`` variable is
+    usually only present inside the secret file, not the host environment, so
+    bundled mode reads it from there when config/env do not provide one.
+    """
+    from ems.config import resolve_influx_token
+    from ems import influx_setup
+
+    token = resolve_influx_token(influx_config)
+    if token:
+        return token
+    if influx_config.get("mode") == "bundled":
+        return influx_setup.read_secret_file_token(influx_config)
+    return ""
+
+
+def run_docker_compose(command, cwd, dry_run=False):
+    """Run a docker compose command on the host. Returns the exit code.
+
+    Kept thin and side-effect-only so it is easy to mock in unit tests, which
+    never execute Docker.
+    """
+    import subprocess
+
+    # Trace goes to stderr so stdout stays a clean single JSON object for
+    # --json consumers (and piping into jq).
+    print("+ " + " ".join(command), file=sys.stderr)
+    if dry_run:
+        return 0
+    try:
+        completed = subprocess.run(command, cwd=cwd)
+    except FileNotFoundError:
+        print(
+            "ERROR: 'docker' not found. Install Docker (with the compose "
+            "plugin) or start the stack manually.",
+            file=sys.stderr,
+        )
+        return 1
+    return completed.returncode
+
+
+def execute_influx_schema_op(influx_config, action):
+    """Run a schema 'sync'/'status' op without printing. Returns (code, result).
+
+    ``result`` is a single dict — ``{"action", "ok", "url", "report"|"error"}`` —
+    so callers (the standalone command, ``influx init``, ``stack up``) embed the
+    data in their own single JSON object instead of this function emitting a
+    second JSON fragment to stdout.
+
+    Host-side ops connect via the bundled ``host_url`` so the Docker compose
+    service name in ``influxdb.url`` does not need to resolve on the host.
+    """
     from ems.history import schema
     from ems.history.influx_client import HistoryInfluxClient, wait_for_influx_ready
+    from ems import influx_setup
+
+    url = influx_setup.host_cli_url(influx_config)
+    token = resolve_influx_token_with_secret_file(influx_config)
+    if not token:
+        return 2, {
+            "action": action,
+            "ok": False,
+            "url": url,
+            "error": (
+                "no InfluxDB token: set influxdb.token, export the env var "
+                f"named by influxdb.token_env ({influx_config['token_env']}), "
+                "or run 'emsctl.py influx init' for the bundled backend"
+            ),
+        }
+
+    client = HistoryInfluxClient(url, influx_config["org"], token)
+
+    try:
+        wait_for_influx_ready(client, timeout_s=15)
+    except TimeoutError as exc:
+        return 1, {"action": action, "ok": False, "url": url, "error": str(exc)}
+
+    try:
+        if action == "sync":
+            report = schema.sync(client, influx_config)
+        else:
+            report = schema.status(client, influx_config)
+    except Exception as exc:  # network/HTTP errors surface as a clean failure
+        return 1, {
+            "action": action,
+            "ok": False,
+            "url": url,
+            "error": f"influx {action} failed: {exc}",
+        }
+
+    return 0, {"action": action, "ok": True, "url": url, "report": report}
+
+
+def run_influx_schema_command(influx_config, action, json_output):
+    """Standalone 'influx sync'/'influx status' handler (owns its own output)."""
+    code, result = execute_influx_schema_op(influx_config, action)
+
+    if json_output:
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return code
+
+    if not result["ok"]:
+        return fail(result["error"], code=code)
+
+    if action == "sync":
+        print_influx_sync(result["report"])
+    else:
+        print_influx_status(result["report"])
+    return code
+
+
+def describe_token_status(influx_config):
+    """Redacted token provenance for JSON output (never the raw value)."""
+    from ems.config import resolve_influx_token
+    from ems import influx_setup
+
+    if str(influx_config.get("token", "")).strip():
+        source = "config"
+    elif resolve_influx_token(influx_config):
+        source = "token_env"
+    elif (
+        influx_config.get("mode") == "bundled"
+        and influx_setup.read_secret_file_token(influx_config)
+    ):
+        source = "secret_file"
+    else:
+        source = None
+
+    present = source is not None
+    return {
+        "source": source,
+        "present": present,
+        "redacted": "********" if present else None,
+    }
+
+
+def handle_influx_command(args, config):
+    from ems.config import normalize_influxdb_config
 
     influx_config = normalize_influxdb_config(config.get("influxdb"))
+
+    if args.action == "init":
+        return handle_influx_init(args, influx_config)
 
     if not influx_config["enabled"]:
         return fail(
@@ -1273,39 +1475,247 @@ def handle_influx_command(args, config):
             code=2,
         )
 
-    token = resolve_influx_token(influx_config)
-    if not token:
+    return run_influx_schema_command(influx_config, args.action, args.json)
+
+
+def handle_influx_init(args, influx_config):
+    """Set up the bundled InfluxDB backend zero-config (secrets + start + sync)."""
+    from ems import influx_setup
+    from ems.paths import BASE_DIR
+
+    # Disabled config: compose file selection returns only the base file (which
+    # has no influxdb service), so starting cannot work. Only the
+    # secret-file-only path (--force-disabled --no-start) is meaningful.
+    if not influx_config["enabled"]:
+        if not args.force_disabled:
+            return fail(
+                "influxdb is disabled in config (set influxdb.enabled = true, "
+                "or pass --force-disabled --no-start to create the secret file "
+                "only)",
+                code=2,
+            )
+        if not args.no_start:
+            return fail(
+                "InfluxDB is disabled. Use --force-disabled --no-start to only "
+                "create the secret file, or enable influxdb.enabled=true before "
+                "starting bundled InfluxDB.",
+                code=2,
+            )
+
+    if influx_config["mode"] != "bundled":
         return fail(
-            "no InfluxDB token: set influxdb.token or the env var named by "
-            f"influxdb.token_env ({influx_config['token_env']})",
+            "influx init manages the bundled docker-compose InfluxDB only "
+            f"(influxdb.mode is '{influx_config['mode']}'). For external mode, "
+            "provide a token (influxdb.token or the influxdb.token_env env "
+            "var) and run 'emsctl.py influx sync'.",
             code=2,
         )
 
-    client = HistoryInfluxClient(
-        influx_config["url"], influx_config["org"], token
-    )
+    # The bundled Compose overlays read a fixed env_file path, so a custom
+    # secret_file would write secrets the container never sees. Refuse to start
+    # in that case; --no-start (secret file only) is still allowed.
+    if not args.no_start and not influx_setup.uses_default_secret_file(influx_config):
+        return fail(
+            "influxdb.secret_file is not the default "
+            f"'{influx_setup.DEFAULT_SECRET_FILE}'. The bundled Docker Compose "
+            "overlays currently only read that path, so a custom secret_file "
+            "would not reach the containers. Use --no-start to only write the "
+            f"secret file, or set secret_file to '{influx_setup.DEFAULT_SECRET_FILE}'.",
+            code=2,
+        )
 
-    try:
-        wait_for_influx_ready(client, timeout_s=15)
-    except TimeoutError as exc:
-        return fail(str(exc))
+    # 1. Create/merge the local secret env file (idempotent, never overwrites).
+    secret_report = influx_setup.ensure_secret_file(influx_config)
 
-    try:
-        if args.action == "sync":
-            report = schema.sync(client, influx_config)
+    # 2. Start bundled InfluxDB unless --no-start. Use the full compose file
+    # set (base first) so env_file paths resolve against the repo root, but
+    # bring up only the influxdb service.
+    files = influx_setup.compose_files(influx_config)
+    started = False
+    if not args.no_start:
+        command = influx_setup.build_compose_command(
+            files, action=("up", "-d", "influxdb")
+        )
+        code = run_docker_compose(command, cwd=BASE_DIR)
+        if code != 0:
+            return fail("failed to start bundled InfluxDB via docker compose")
+        started = True
+
+    # 3 + 4. Wait for readiness and sync schema unless skipped. The nested op
+    # returns its data so it stays inside this command's single JSON object.
+    sync_ran = False
+    sync_result = None
+    errors = []
+    do_sync = started and not args.no_sync and influx_config["auto_sync"]
+    if do_sync:
+        rc, sync_result = execute_influx_schema_op(influx_config, "sync")
+        if rc == 0:
+            sync_ran = True
         else:
-            report = schema.status(client, influx_config)
-    except Exception as exc:  # network/HTTP errors surface as a clean failure
-        return fail(f"influx {args.action} failed: {exc}")
+            errors.append(sync_result["error"])
+
+    ok = not errors
+    payload = {
+        "ok": ok,
+        "command": "influx init",
+        "enabled": influx_config["enabled"],
+        "mode": influx_config["mode"],
+        "secret_file": secret_report["relative_path"],
+        "secret_file_created": secret_report["created"],
+        "generated_keys": secret_report["generated_keys"],
+        "summary": secret_report["summary"],
+        "compose_files": files,
+        "started": started,
+        "start_skipped": args.no_start,
+        "synced": sync_ran,
+        "sync_skipped": not do_sync,
+        "token": describe_token_status(influx_config),
+        "errors": errors,
+    }
+    if sync_result is not None and sync_result.get("ok"):
+        payload["sync_result"] = sync_result["report"]
 
     if args.json:
-        print(json.dumps(report, indent=2, sort_keys=True))
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0 if ok else 1
+
+    if not ok:
+        return fail(errors[0])
+
+    print_influx_init(secret_report, started, sync_ran, args)
+    return 0
+
+
+def print_influx_init(secret_report, started, sync_ran, args):
+    print("InfluxDB bundled setup")
+    verb = "created" if secret_report["created"] else "updated"
+    print(f"  secret file: {secret_report['relative_path']} ({verb}, gitignored)")
+    if secret_report["generated_keys"]:
+        print(
+            "  generated secrets: "
+            + ", ".join(secret_report["generated_keys"])
+            + " (redacted)"
+        )
+    else:
+        print("  generated secrets: none (existing values preserved)")
+    print("  values:")
+    for key, value in secret_report["summary"].items():
+        print(f"    {key}={value}")
+
+    if started:
+        print("  bundled InfluxDB: started (docker compose up -d influxdb)")
+    else:
+        print("  bundled InfluxDB: not started (--no-start)")
+
+    if sync_ran:
+        print("  schema sync: done")
+    else:
+        print("  schema sync: skipped")
+
+    print("\nNext steps:")
+    if not started:
+        print("  - start the stack:   python3 emsctl.py stack up")
+    elif not sync_ran:
+        print("  - reconcile schema:  python3 emsctl.py influx sync")
+    print("  - check status:      python3 emsctl.py influx status")
+
+
+def handle_stack_command(args, config):
+    from ems.config import normalize_influxdb_config
+    from ems import influx_setup
+    from ems.paths import BASE_DIR
+
+    influx_config = normalize_influxdb_config(config.get("influxdb"))
+    bundled = (
+        influx_config["enabled"] and influx_config["mode"] == "bundled"
+    )
+
+    # The bundled Compose overlays read a fixed env_file path, so a custom
+    # secret_file would write secrets the container never sees. Refuse clearly.
+    if bundled and not influx_setup.uses_default_secret_file(influx_config):
+        return fail(
+            "influxdb.secret_file is not the default "
+            f"'{influx_setup.DEFAULT_SECRET_FILE}'. The bundled Docker Compose "
+            "overlays currently only read that path. Set secret_file to "
+            f"'{influx_setup.DEFAULT_SECRET_FILE}' to start the bundled stack.",
+            code=2,
+        )
+
+    # 1 + 2. For bundled mode with auto_init, create local secrets first.
+    # --dry-run only previews the docker command, so it stays side-effect-free.
+    secret_report = None
+    if bundled and influx_config["auto_init"] and not args.dry_run:
+        secret_report = influx_setup.ensure_secret_file(influx_config)
+
+    # 3 + 4. Build and run the compose command with the right files.
+    files = influx_setup.compose_files(influx_config)
+    command = influx_setup.build_compose_command(files, action=("up", "-d"))
+    code = run_docker_compose(command, cwd=BASE_DIR, dry_run=args.dry_run)
+    if code != 0:
+        return fail("docker compose up failed")
+    if args.dry_run:
+        if args.json:
+            print(json.dumps(
+                {
+                    "ok": True,
+                    "command": "stack up",
+                    "bundled_influxdb": bundled,
+                    "compose_files": files,
+                    "dry_run": True,
+                },
+                indent=2,
+                sort_keys=True,
+            ))
         return 0
 
-    if args.action == "sync":
-        print_influx_sync(report)
-    else:
-        print_influx_status(report)
+    # 5. Sync schema once InfluxDB is ready (bundled mode only). The nested op
+    # returns its data so it stays inside this command's single JSON object.
+    sync_ran = False
+    sync_result = None
+    errors = []
+    do_sync = bundled and not args.no_sync and influx_config["auto_sync"]
+    if do_sync:
+        rc, sync_result = execute_influx_schema_op(influx_config, "sync")
+        if rc == 0:
+            sync_ran = True
+        else:
+            errors.append(sync_result["error"])
+
+    ok = not errors
+    if args.json:
+        payload = {
+            "ok": ok,
+            "command": "stack up",
+            "bundled_influxdb": bundled,
+            "compose_files": files,
+            "secret_file": (
+                secret_report["relative_path"] if secret_report else None
+            ),
+            "secret_file_created": (
+                secret_report["created"] if secret_report else None
+            ),
+            "synced": sync_ran,
+            "sync_skipped": not do_sync,
+            "errors": errors,
+        }
+        if bundled:
+            payload["token"] = describe_token_status(influx_config)
+        if sync_result is not None and sync_result.get("ok"):
+            payload["sync_result"] = sync_result["report"]
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0 if ok else 1
+
+    if not ok:
+        return fail(errors[0])
+
+    print("\nEMS stack started.")
+    print("  dashboard: http://localhost:8080")
+    if bundled:
+        print("  influxdb:  http://localhost:8086")
+        if sync_ran:
+            print("  analytics: ready (schema synced)")
+        else:
+            print("  analytics: run 'python3 emsctl.py influx sync' when ready")
     return 0
 
 
@@ -1612,6 +2022,9 @@ def main(argv=None):
 
         if args.command == "influx":
             return handle_influx_command(args, config)
+
+        if args.command == "stack":
+            return handle_stack_command(args, config)
 
         runtime_path = resolve_runtime_path(args, config)
         state, created = load_runtime_state(runtime_path, config)

@@ -20,7 +20,12 @@ Official, supported deployment assets live under `deploy/`:
 | Path | Purpose |
 |---|---|
 | [`deploy/docker/compose.influxdb.yml`](../deploy/docker/compose.influxdb.yml) | Docker Compose service for InfluxDB 2.7 |
-| [`deploy/docker/influxdb.env.example`](../deploy/docker/influxdb.env.example) | Environment template (copy to `influxdb.env`) |
+| [`deploy/docker/compose.ems-influx-env.yml`](../deploy/docker/compose.ems-influx-env.yml) | Overlay giving the EMS container the shared `INFLUXDB_TOKEN` |
+| [`deploy/docker/influxdb.env.example`](../deploy/docker/influxdb.env.example) | Reference template; the env file is normally generated for you |
+
+`deploy/docker/influxdb.env` itself is **gitignored** and holds local secrets.
+The zero-config flow generates it for you with secure random values; never
+commit it.
 
 For the standalone developer telemetry-capture and state-transition analysis
 workflow (separate org/buckets, read-only capture scripts), see
@@ -30,32 +35,22 @@ and
 [docs/develop-tool-influxdb-state-transition-analysis.md](develop-tool-influxdb-state-transition-analysis.md).
 That setup is development-only and independent of this production path.
 
-## Recommended setup (local or production)
+## Beginner / bundled path (zero-config, recommended)
 
-1. Create the environment file and set strong secrets:
+The bundled Docker InfluxDB is the primary supported path. You do **not** need
+to understand InfluxDB tokens, create env files, or pick passwords.
 
-   ```bash
-   cp deploy/docker/influxdb.env.example deploy/docker/influxdb.env
-   # edit deploy/docker/influxdb.env: set INFLUXDB_TOKEN, INFLUXDB_ADMIN_PASSWORD
-   ```
-
-   For a simple single-token setup keep `INFLUXDB_ADMIN_TOKEN` equal to
-   `INFLUXDB_TOKEN`. The first-start values are applied **only** when the data
-   volume is empty.
-
-2. Start InfluxDB:
-
-   ```bash
-   docker compose -f deploy/docker/compose.influxdb.yml up -d
-   ```
-
-3. Enable InfluxDB in `config.json` and make sure the connection matches the
-   env file. Defaults align with the env template:
+1. In `config.json`, enable InfluxDB (the defaults already select bundled mode):
 
    ```json
    "influxdb": {
      "enabled": true,
+     "mode": "bundled",
+     "auto_init": true,
+     "auto_sync": true,
+     "secret_file": "deploy/docker/influxdb.env",
      "url": "http://influxdb:8086",
+     "host_url": "http://127.0.0.1:8086",
      "org": "ems",
      "token": "",
      "token_env": "INFLUXDB_TOKEN",
@@ -63,19 +58,108 @@ That setup is development-only and independent of this production path.
    }
    ```
 
-   Leave `token` empty and provide the token via the env var named by
-   `token_env` (default `INFLUXDB_TOKEN`) so secrets are not committed. If the
-   EMS runs outside the Docker network, set `url` to the reachable address
-   (e.g. `http://localhost:8086`).
+2. Start the whole stack with one command:
 
-   The native writer enqueues one raw sample **every EMS control loop**, so the
-   raw bucket keeps the highest available sampling resolution. This is
-   independent of `dashboard.write_interval_seconds` (which only governs the
-   SQLite dashboard history). To throttle raw writes, set
-   `influxdb.raw_write_interval_seconds` to a positive number of seconds; `0`
-   (the default) or `null` writes every loop.
+   ```bash
+   python3 emsctl.py stack up
+   ```
 
-4. Reconcile buckets, retention and downsampling tasks from config (see below).
+   This generates `deploy/docker/influxdb.env` with secure random secrets (if
+   missing), starts the bundled InfluxDB and the EMS with the **same**
+   `INFLUXDB_TOKEN`, waits for readiness, and reconciles buckets/retention/tasks
+   from `config.json`. Analytics is then available — no manual token handling.
+
+If you only want to set up InfluxDB (without starting the EMS container yet):
+
+```bash
+python3 emsctl.py influx init      # generate secrets, start InfluxDB, sync schema
+python3 emsctl.py influx init --no-start   # only create/merge the secret file
+python3 emsctl.py influx init --no-sync    # start, but skip the schema sync
+python3 emsctl.py influx status
+```
+
+`influx init` is **idempotent and safe to rerun**: it never overwrites an
+existing token or password, only fills in missing values, and prints a redacted
+summary (never raw secrets). The generated file uses `0600` permissions where
+the filesystem supports it.
+
+> Leave `influxdb.token` empty: bundled mode reads the token from the generated
+> secret file (the variable named by `token_env`, default `INFLUXDB_TOKEN`), so
+> no secrets live in `config.json`. The `DOCKER_INFLUXDB_INIT_*` bootstrap
+> values are applied **only** on an empty data volume; changing them later does
+> not re-initialize InfluxDB.
+
+> **`url` vs `host_url`:** the EMS container reaches InfluxDB by its Docker
+> service name (`url`, `http://influxdb:8086`). The host-side `emsctl`
+> commands (`influx init`/`sync`/`status`, `stack up`) cannot resolve that name,
+> so for bundled mode they connect via `host_url` (default
+> `http://127.0.0.1:8086`, the published loopback port). Legacy configs without
+> `host_url` fall back to that default automatically. External mode uses `url`
+> for both runtime and CLI.
+
+> **Custom `secret_file` and the bundled stack:** the bundled Compose overlays
+> read a fixed `env_file` (`deploy/docker/influxdb.env`). If you point
+> `secret_file` at a different path, `influx init` and `stack up` refuse to
+> start the bundled containers (so generated secrets can never silently diverge
+> from what Compose reads). `influx init --no-start` still writes the custom
+> file. Keep `secret_file` at the default to use the one-command bundled flow.
+
+The `--json` flag on `influx init`, `influx sync`, `influx status` and
+`stack up` prints exactly one machine-readable JSON object on stdout (Docker
+command traces go to stderr), and never includes raw token values.
+
+The native writer enqueues one raw sample **every EMS control loop**, so the raw
+bucket keeps the highest available sampling resolution. This is independent of
+`dashboard.write_interval_seconds` (which only governs the SQLite dashboard
+history). To throttle raw writes, set `influxdb.raw_write_interval_seconds` to a
+positive number of seconds; `0` (the default) or `null` writes every loop.
+
+## Advanced / external path
+
+To point the EMS at an InfluxDB you run yourself, use `mode: "external"` and
+provide a token. The setup helpers do not create secrets or manage containers
+for external mode.
+
+```json
+"influxdb": {
+  "enabled": true,
+  "mode": "external",
+  "auto_init": false,
+  "auto_sync": false,
+  "url": "http://192.168.1.50:8086",
+  "org": "ems",
+  "token": "",
+  "token_env": "INFLUXDB_TOKEN"
+}
+```
+
+```bash
+export INFLUXDB_TOKEN=...        # or set influxdb.token directly
+python3 emsctl.py influx sync
+python3 emsctl.py influx status
+```
+
+If the EMS runs outside the Docker network, set `url` to the reachable address
+(e.g. `http://localhost:8086`).
+
+### Manual bundled setup (without the helpers)
+
+If you prefer to manage the bundled compose files by hand, copy the template,
+set strong secrets, and run compose from the repo root with the base compose
+file first (so the `env_file` path resolves correctly):
+
+```bash
+cp deploy/docker/influxdb.env.example deploy/docker/influxdb.env
+# edit deploy/docker/influxdb.env: set INFLUXDB_TOKEN and DOCKER_INFLUXDB_INIT_PASSWORD
+docker compose \
+  -f docker-compose.example.yml \
+  -f deploy/docker/compose.influxdb.yml \
+  -f deploy/docker/compose.ems-influx-env.yml up -d
+python3 emsctl.py influx sync
+```
+
+For a simple single-token setup keep `DOCKER_INFLUXDB_INIT_ADMIN_TOKEN` equal to
+`INFLUXDB_TOKEN`.
 
 ## Bucket and task sync (`emsctl influx`)
 
@@ -95,9 +179,11 @@ python3 emsctl.py influx status
 python3 emsctl.py influx status --json
 ```
 
-`sync` requires `influxdb.enabled = true` and a resolvable token (from
-`influxdb.token` or the `token_env` variable). Running `sync` twice with
-unchanged config performs no writes the second time.
+`sync` requires `influxdb.enabled = true` and a resolvable token. In bundled
+mode the token is read automatically from the generated secret file, so no
+manual `export` is needed; in external mode provide it via `influxdb.token` or
+the `token_env` variable. Running `sync` twice with unchanged config performs no
+writes the second time.
 
 ## Migration from `develop/influxdb/`
 

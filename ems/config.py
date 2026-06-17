@@ -86,7 +86,26 @@ BATTERY_FULL_CHARGE_ASSIST_DEFAULTS = {
 
 INFLUXDB_DEFAULTS = {
     "enabled": False,
+    # "bundled" = the bundled docker-compose InfluxDB managed by the setup
+    # helpers (emsctl influx init / stack up). "external" = a pre-existing
+    # InfluxDB the operator runs and provides a token for; setup helpers do not
+    # create secrets or start containers for it.
+    "mode": "bundled",
+    # For bundled mode, allow the CLI setup helpers to create missing local
+    # secrets and start the bundled InfluxDB service.
+    "auto_init": True,
+    # Allow setup/start helpers to run the InfluxDB schema sync automatically.
+    "auto_sync": True,
+    # Local env file (relative to the project root) holding the generated
+    # secrets for the bundled InfluxDB. Gitignored; never commit it.
+    "secret_file": "deploy/docker/influxdb.env",
+    # EMS runtime (in-container) URL. Inside the Docker network the bundled
+    # InfluxDB is reachable by its compose service name.
     "url": "http://influxdb:8086",
+    # Host-side URL used by emsctl (influx init/sync/status, stack up). The
+    # Docker service name "influxdb" is not resolvable on the host, so host-side
+    # CLI operations for bundled mode use this instead of "url".
+    "host_url": "http://127.0.0.1:8086",
     "org": "ems",
     "token": "",
     "token_env": "INFLUXDB_TOKEN",
@@ -675,6 +694,58 @@ def sanitize_bucket_prefix(value, default="ems"):
     return cleaned or default
 
 
+INFLUXDB_MODES = ("bundled", "external")
+
+
+def normalize_influxdb_mode(value):
+    """Return a valid influxdb mode, falling back to 'bundled' with a warning."""
+    text = str(value or "").strip().lower()
+    if text in INFLUXDB_MODES:
+        return text
+    if text:
+        logging.warning(
+            "Unknown influxdb.mode %r; falling back to 'bundled' "
+            "(valid: %s)",
+            value,
+            ", ".join(INFLUXDB_MODES),
+        )
+    return INFLUXDB_DEFAULTS["mode"]
+
+
+def normalize_secret_file(value):
+    """Validate the bundled-InfluxDB secret file path.
+
+    The secret file must be a project-local relative path: absolute paths and
+    paths that escape the project root via ``..`` are rejected (falling back to
+    the default) so generated secrets never land outside the repo. The path is
+    returned relative to the project root; callers resolve it against BASE_DIR.
+    """
+    default = INFLUXDB_DEFAULTS["secret_file"]
+    text = str(value or "").strip()
+    if not text:
+        return default
+
+    if os.path.isabs(text):
+        logging.warning(
+            "influxdb.secret_file %r is an absolute path; using default %r",
+            value,
+            default,
+        )
+        return default
+
+    normalized = os.path.normpath(text)
+    if normalized == ".." or normalized.startswith(".." + os.sep):
+        logging.warning(
+            "influxdb.secret_file %r escapes the project root; using "
+            "default %r",
+            value,
+            default,
+        )
+        return default
+
+    return normalized
+
+
 # Bucket/config names are interpolated into Flux query strings and bucket
 # paths, so keep them to a conservative character set. Anything outside this
 # (spaces, quotes, newlines, Flux fragments, path separators, shell
@@ -773,7 +844,25 @@ def normalize_influxdb_config(config):
 
     return {
         "enabled": safe_bool(config.get("enabled"), False),
+        "mode": normalize_influxdb_mode(
+            config.get("mode", INFLUXDB_DEFAULTS["mode"])
+        ),
+        "auto_init": safe_bool(
+            config.get("auto_init", INFLUXDB_DEFAULTS["auto_init"]),
+            INFLUXDB_DEFAULTS["auto_init"],
+        ),
+        "auto_sync": safe_bool(
+            config.get("auto_sync", INFLUXDB_DEFAULTS["auto_sync"]),
+            INFLUXDB_DEFAULTS["auto_sync"],
+        ),
+        "secret_file": normalize_secret_file(
+            config.get("secret_file", INFLUXDB_DEFAULTS["secret_file"])
+        ),
         "url": str(config.get("url", INFLUXDB_DEFAULTS["url"])).strip(),
+        "host_url": (
+            str(config.get("host_url", INFLUXDB_DEFAULTS["host_url"])).strip()
+            or INFLUXDB_DEFAULTS["host_url"]
+        ),
         "org": str(config.get("org", INFLUXDB_DEFAULTS["org"])).strip(),
         "token": str(config.get("token", "")),
         "token_env": str(

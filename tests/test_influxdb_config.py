@@ -115,6 +115,79 @@ class NormalizeInfluxConfigTest(unittest.TestCase):
         cfg = normalize_influxdb_config({"bucket_prefix": "my prefix!"})
         self.assertEqual(cfg["bucket_prefix"], "myprefix")
 
+    def test_zero_config_defaults(self):
+        cfg = normalize_influxdb_config({})
+        self.assertEqual(cfg["mode"], "bundled")
+        self.assertTrue(cfg["auto_init"])
+        self.assertTrue(cfg["auto_sync"])
+        self.assertEqual(cfg["secret_file"], "deploy/docker/influxdb.env")
+
+    def test_legacy_config_without_new_fields_still_normalizes(self):
+        # An existing config that predates mode/auto_init/auto_sync/secret_file.
+        cfg = normalize_influxdb_config(
+            {
+                "enabled": True,
+                "url": "http://influxdb:8086",
+                "org": "ems",
+                "token_env": "INFLUXDB_TOKEN",
+                "bucket_prefix": "ems",
+            }
+        )
+        self.assertTrue(cfg["enabled"])
+        self.assertEqual(cfg["mode"], "bundled")
+        self.assertTrue(cfg["auto_init"])
+        self.assertTrue(cfg["auto_sync"])
+        self.assertEqual(cfg["secret_file"], "deploy/docker/influxdb.env")
+
+    def test_host_url_default_for_bundled(self):
+        cfg = normalize_influxdb_config({})
+        self.assertEqual(cfg["host_url"], "http://127.0.0.1:8086")
+
+    def test_host_url_custom_value_kept(self):
+        cfg = normalize_influxdb_config({"host_url": "http://10.0.0.5:8086"})
+        self.assertEqual(cfg["host_url"], "http://10.0.0.5:8086")
+
+    def test_host_url_empty_falls_back_to_default(self):
+        cfg = normalize_influxdb_config({"host_url": "   "})
+        self.assertEqual(cfg["host_url"], "http://127.0.0.1:8086")
+
+    def test_legacy_config_without_host_url_defaults(self):
+        # A config predating host_url still normalizes to the loopback default.
+        cfg = normalize_influxdb_config(
+            {"enabled": True, "url": "http://influxdb:8086"}
+        )
+        self.assertEqual(cfg["url"], "http://influxdb:8086")
+        self.assertEqual(cfg["host_url"], "http://127.0.0.1:8086")
+
+    def test_external_mode_preserved(self):
+        cfg = normalize_influxdb_config({"mode": "external"})
+        self.assertEqual(cfg["mode"], "external")
+
+    def test_unknown_mode_falls_back_to_bundled(self):
+        cfg = normalize_influxdb_config({"mode": "weird"})
+        self.assertEqual(cfg["mode"], "bundled")
+
+    def test_auto_flags_can_be_disabled(self):
+        cfg = normalize_influxdb_config({"auto_init": False, "auto_sync": False})
+        self.assertFalse(cfg["auto_init"])
+        self.assertFalse(cfg["auto_sync"])
+
+    def test_secret_file_relative_kept(self):
+        cfg = normalize_influxdb_config({"secret_file": "deploy/docker/x.env"})
+        self.assertEqual(cfg["secret_file"], "deploy/docker/x.env")
+
+    def test_secret_file_absolute_rejected(self):
+        cfg = normalize_influxdb_config({"secret_file": "/etc/secrets/x.env"})
+        self.assertEqual(cfg["secret_file"], "deploy/docker/influxdb.env")
+
+    def test_secret_file_parent_escape_rejected(self):
+        cfg = normalize_influxdb_config({"secret_file": "../outside.env"})
+        self.assertEqual(cfg["secret_file"], "deploy/docker/influxdb.env")
+
+    def test_secret_file_empty_uses_default(self):
+        cfg = normalize_influxdb_config({"secret_file": "   "})
+        self.assertEqual(cfg["secret_file"], "deploy/docker/influxdb.env")
+
 
 class ValidInfluxNameTest(unittest.TestCase):
     def test_accepts_normal_names(self):

@@ -320,6 +320,24 @@ data/runtime-state.json   temporary runtime state
 data/ems_dashboard.sqlite dashboard statistics database
 ```
 
+### Optional: Analytics with bundled InfluxDB (zero-config)
+
+The dashboard works with built-in SQLite history out of the box. For the
+long-range **Analytics** tab backed by InfluxDB, enable it in `config.json`
+(`influxdb.enabled = true`, leaving the default `mode: "bundled"`) and start the
+stack with one command from the repo checkout:
+
+```bash
+python3 emsctl.py stack up
+```
+
+This generates a gitignored local secret file
+(`deploy/docker/influxdb.env`) with secure random tokens, starts the bundled
+InfluxDB and the EMS with the same `INFLUXDB_TOKEN`, and reconciles
+buckets/retention/downsampling tasks from `config.json`. No tokens are stored in
+`config.json`. See [docs/influxdb.md](docs/influxdb.md) for the bundled and
+external paths.
+
 Full Docker documentation: [docs/docker.md](docs/docker.md).
 
 Maintainers publish a new image by tagging a commit that is already on `main`:
