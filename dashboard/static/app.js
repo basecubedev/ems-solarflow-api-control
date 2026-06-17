@@ -74,17 +74,18 @@ const ANALYTICS_SERIES_META = {
   battery: { label: "Battery Power", colorVar: "--battery", unit: "W" },
   soc: { label: "SoC", colorVar: "--accent", unit: "%", scaleId: "pct" },
   home: { label: "Home Load", colorVar: "--accent2", unit: "W" },
-  grid: { label: "Grid", colorVar: "--grid", unit: "W" },
+  grid: { label: "Grid Power", colorVar: "--grid", unit: "W" },
   target: { label: "EMS Target", colorVar: "--accent2", unit: "W" },
 };
 
 // Optional overlays toggled on top of the active tab's base series. SoC uses a
-// secondary (percentage) axis; the rest share the watts axis. "Grid Share" is
-// the grid power overlay.
+// secondary (percentage) axis; the rest share the watts axis. Grid Power is the
+// meter exchange power (positive import / negative export); EMS Target is the
+// controller's effective output target. All overlays are data-backed.
 const ANALYTICS_OVERLAYS = [
   { id: "soc", label: "SoC" },
   { id: "target", label: "EMS Target" },
-  { id: "grid", label: "Grid Share" },
+  { id: "grid", label: "Grid Power" },
 ];
 
 // Analytics sub-tabs. Each tab reuses the same chart + API; only the visible
@@ -3571,6 +3572,7 @@ function demoAnalyticsData() {
   const grid = [];
   const home = [];
   const soc = [];
+  const target = [];
   const now = Math.floor(Date.now() / 1000);
   for (let index = 0; index < 48; index += 1) {
     time.push(now - (47 - index) * 1800);
@@ -3580,10 +3582,11 @@ function demoAnalyticsData() {
     grid.push(Math.round(Math.sin(index / 5) * 180));
     home.push(Math.round(500 + Math.cos(index / 7) * 160));
     soc.push(Math.min(100, 40 + index));
+    target.push(Math.min(800, 440 + index * 12));
   }
   return {
     time,
-    series: { pv, output, battery, grid, home, soc },
+    series: { pv, output, battery, grid, home, soc, target },
     devices: [],
     source: "demo",
   };
@@ -3812,10 +3815,12 @@ function onAnalyticsXScale(chart) {
     state.analytics.zoom = zoom;
     renderZoomControls();
     scheduleZoomRequery();
-  } else if (state.analytics.zoom) {
-    // Zoomed back out to the full extent (e.g. uPlot double-click): go live.
-    backToLive();
   }
+  // No automatic exit from zoom mode. A real-data requery returns data whose
+  // extent equals the zoom range, so a visible scale matching the full extent
+  // no longer means "live" -- inferring it here would clear the zoom the instant
+  // the finer dataset loads. Zoom is left only by explicit user actions: the
+  // Back to live button, ESC, changing period/device/tab, or a new custom range.
 }
 
 function clearZoom() {
@@ -3881,6 +3886,52 @@ function cssColor(varName, fallback) {
   return value || fallback;
 }
 
+// Analytics chart display-only sign convention. The backend/API/SQLite/KPI sign
+// convention is unchanged (charging positive, discharging negative). For the
+// Analytics uPlot chart only we invert the battery line so charging reads below
+// zero and discharging above zero, visually separating energy into vs out of the
+// battery. This must never be used for KPIs, raw state, or any other chart.
+function analyticsChartDisplayValue(seriesId, value) {
+  if (value === null || value === undefined) return value;
+  if (seriesId === "battery") return -value;
+  return value;
+}
+
+// Build the uPlot data matrix (x row + one row per series) for the Analytics
+// chart. Battery is inverted for display only (see analyticsChartDisplayValue);
+// all other series pass through unchanged. Kept pure and exported so the
+// display-only inversion is testable without uPlot.
+function analyticsChartSeriesData(data, seriesIds) {
+  const time = (data && data.time) || [];
+  const matrix = [time];
+  seriesIds.forEach((id) => {
+    const values = (data && data.series && data.series[id]) || [];
+    matrix.push(
+      time.map((_, index) => {
+        const value = values[index];
+        if (value === null || value === undefined) return null;
+        return analyticsChartDisplayValue(id, Number(value));
+      })
+    );
+  });
+  return matrix;
+}
+
+// Legend/tooltip value formatter. For the battery line (displayed with an
+// inverted sign) the displayed value is translated back into a human-readable
+// Charge/Discharge label so the inversion never implies the API sign convention
+// changed. Displayed negative == charging (raw positive); positive == discharging.
+function analyticsSeriesTooltip(seriesId, displayValue, unit) {
+  if (displayValue == null) return "--";
+  const rounded = Math.round(displayValue);
+  if (seriesId === "battery") {
+    if (rounded < 0) return `Charge ${Math.abs(rounded)} ${unit}`;
+    if (rounded > 0) return `Discharge ${rounded} ${unit}`;
+    return `0 ${unit}`;
+  }
+  return `${rounded} ${unit}`;
+}
+
 function renderAnalyticsChart() {
   const container = $("analyticsChart");
   if (!container || typeof uPlot === "undefined") return;
@@ -3908,19 +3959,13 @@ function renderAnalyticsChart() {
   }
   if (empty) empty.hidden = true;
 
-  const seriesData = [time];
+  const chartSeries = activeAnalyticsSeries().filter((id) => ANALYTICS_SERIES_META[id]);
+  // Battery is inverted here for display only; raw state.analytics.data is untouched.
+  const seriesData = analyticsChartSeriesData(data, chartSeries);
   const seriesConfig = [{}];
   let usesPctScale = false;
-  activeAnalyticsSeries().forEach((id) => {
+  chartSeries.forEach((id) => {
     const meta = ANALYTICS_SERIES_META[id];
-    if (!meta) return;
-    const values = (data.series && data.series[id]) || [];
-    seriesData.push(
-      time.map((_, index) => {
-        const value = values[index];
-        return value === null || value === undefined ? null : Number(value);
-      })
-    );
     const isOverlay = !currentAnalyticsTab().series.includes(id);
     if (meta.scaleId === "pct") usesPctScale = true;
     seriesConfig.push({
@@ -3929,7 +3974,7 @@ function renderAnalyticsChart() {
       width: 2,
       dash: isOverlay ? [6, 4] : undefined,
       scale: meta.scaleId || "y",
-      value: (_self, raw) => (raw == null ? "--" : `${Math.round(raw)} ${meta.unit}`),
+      value: (_self, raw) => analyticsSeriesTooltip(id, raw, meta.unit),
     });
   });
 
@@ -4503,6 +4548,7 @@ if (typeof module !== "undefined") {
     ANALYTICS_TABS,
     ANALYTICS_KPIS,
     ANALYTICS_OVERLAYS,
+    ANALYTICS_SERIES_META,
     currentAnalyticsTab,
     activeAnalyticsSeries,
     analyticsPanelVisible,
@@ -4515,12 +4561,16 @@ if (typeof module !== "undefined") {
     loadHistory,
     renderHistoryChart,
     detectZoom,
+    onAnalyticsXScale,
     backToLive,
     clearZoom,
     toggleAnalyticsOverlay,
     applyCustomRange,
     clearCustomRange,
     renderAnalyticsKpis,
+    analyticsChartDisplayValue,
+    analyticsChartSeriesData,
+    analyticsSeriesTooltip,
     integrateSeries,
     seriesPeak,
     energyLabel,

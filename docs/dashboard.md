@@ -396,7 +396,7 @@ the visible series and KPI cards (no extra chart pages):
 
 - **Overview** / **Devices** — PV, Inverter Output, Battery Power; KPIs PV,
   Output, Charge, Discharge, Current SoC, Runtime Role.
-- **Grid** — Grid and Home Load; KPIs Grid Import, Grid Export, Home, SoC.
+- **Grid** — Grid Power and Home Load; KPIs Grid Import, Grid Export, Home, SoC.
 - **Battery** — Battery Power; KPIs Charge, Discharge, SoC, Runtime Role.
 - **PV** — PV Input; KPIs PV, PV Peak, Output, SoC.
 
@@ -405,9 +405,23 @@ Role come from the live snapshot.
 
 Overlay toggles add optional series on top of the active tab without changing
 it: **SoC** (drawn on a secondary right-hand percentage axis), **EMS Target**,
-and **Grid Share** (grid power). Overlays render as dashed lines and the
-crosshair/live legend reports every visible series at the cursor. A custom date
-range (from/to pickers + Apply) replaces the period selector when set.
+and **Grid Power**. Every overlay is data-backed (no overlay is empty by
+design). Overlays render as dashed lines and the crosshair/live legend reports
+every visible series at the cursor. A custom date range (from/to pickers +
+Apply) replaces the period selector when set.
+
+Analytics series definitions (consistent across the native writer, the InfluxDB
+schema/provider and the frontend):
+
+- **Grid Power** (`grid`) — meter exchange power at the grid connection,
+  positive = import from grid, negative = export to grid. Source:
+  `shelly_meter.grid_power`.
+- **Home Load** (`home`) — calculated household load,
+  `max(0, inverter_output_total + grid_power)`. Source:
+  `shelly_meter.house_load`.
+- **EMS Target** (`target`) — the EMS effective output target actually used by
+  the controller after limits and safety logic (`effective_target_total_w`).
+  Source: `ems_runtime.target_output`.
 
 Performance and refresh behavior:
 

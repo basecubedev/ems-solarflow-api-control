@@ -51,6 +51,20 @@ INFLUX_SERIES = {
         "device_scoped": False,
         "collapse": "mean",
     },
+    # grid = meter exchange power (positive import, negative export).
+    "grid": {
+        "measurement": "shelly_meter",
+        "field": "grid_power",
+        "device_scoped": False,
+        "collapse": "mean",
+    },
+    # target = EMS effective output target after limits/safety logic.
+    "target": {
+        "measurement": "ems_runtime",
+        "field": "target_output",
+        "device_scoped": False,
+        "collapse": "mean",
+    },
     # battery power = discharge(pack_out) - charge(pack_in)
     "battery": {
         "measurement": "zendure_device",
@@ -194,7 +208,7 @@ class InfluxHistoryProvider(HistoryProvider):
         for name in series:
             spec = INFLUX_SERIES.get(name)
             if spec is None:
-                # Series not yet served by InfluxDB (e.g. grid/target); leave empty.
+                # Series with no InfluxDB mapping; leave empty rather than fail.
                 per_series_points[name] = {}
                 continue
             points = self._query_series(spec, bucket, window, devices, start, end)

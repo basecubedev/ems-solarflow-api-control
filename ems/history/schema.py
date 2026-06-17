@@ -40,6 +40,8 @@ NUMERIC_FIELDS = [
     "temp",
     "remain_minutes",
     "house_load",
+    "grid_power",
+    "target_output",
 ]
 
 STATE_FIELDS = [

@@ -297,15 +297,33 @@ class InfluxQueryTest(unittest.TestCase):
         )
         self.assertEqual(result.series["battery"], [150.0])
 
-    def test_unsupported_series_is_empty(self):
-        client = FakeQueryClient({})
+    def test_grid_series_maps_to_meter_grid_power(self):
+        client = FakeQueryClient(
+            {"grid_power": _csv("grid_power", [("2024-01-01T00:00:00Z", -120)])}
+        )
         provider = InfluxHistoryProvider(self.cfg, client=client)
         result = provider.query(
             _utc(2024, 1, 1, 0, 0),
             _utc(2024, 1, 1, 1, 0),
             series=["grid"],
         )
-        self.assertEqual(result.series["grid"], [])
+        self.assertEqual(result.series["grid"], [-120.0])
+        self.assertIn('r._measurement == "shelly_meter"', client.queries[0])
+        self.assertIn('r._field == "grid_power"', client.queries[0])
+
+    def test_target_series_maps_to_ems_runtime_target_output(self):
+        client = FakeQueryClient(
+            {"target_output": _csv("target_output", [("2024-01-01T00:00:00Z", 640)])}
+        )
+        provider = InfluxHistoryProvider(self.cfg, client=client)
+        result = provider.query(
+            _utc(2024, 1, 1, 0, 0),
+            _utc(2024, 1, 1, 1, 0),
+            series=["target"],
+        )
+        self.assertEqual(result.series["target"], [640.0])
+        self.assertIn('r._measurement == "ems_runtime"', client.queries[0])
+        self.assertIn('r._field == "target_output"', client.queries[0])
 
     def test_query_uses_profile_bucket(self):
         client = FakeQueryClient({})

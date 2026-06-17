@@ -73,6 +73,7 @@ def test_build_lines_cover_all_analytics_series():
         [_state(), _state(solar=600, output=480, soc=57, pack_in=30, pack_out=200)],
         {"WR1": True, "WR2": True},
         748.0,
+        target=900.0,
         timestamp_ns=1_000_000_000,
     )
     text = "\n".join(lines)
@@ -80,10 +81,31 @@ def test_build_lines_cover_all_analytics_series():
     assert text.count("zendure_device") == 2
     for field in ("solar=", "output=", "soc=", "pack_in=", "pack_out="):
         assert field in text
-    # home series comes from shelly_meter house_load.
+    # grid + home series come from shelly_meter: grid is meter exchange power,
+    # house_load = max(0, inverter_total + grid_power) = (400 + 480) + 748.
     assert "shelly_meter" in text
-    assert "house_load=" in text
+    assert "grid_power=748" in text
+    assert "house_load=1628" in text
+    # target series comes from the ems_runtime measurement.
+    assert "ems_runtime" in text
+    assert "target_output=900" in text
     assert "device=WR1" in text and "device=WR2" in text
+
+
+def test_build_lines_grid_power_export_clamps_house_load_to_zero():
+    # Strong export (negative grid) below total inverter output -> house load 0.
+    lines = build_telemetry_lines(
+        [_Dev("WR1")],
+        [_state(output=400)],
+        {"WR1": True},
+        -900.0,
+        timestamp_ns=1_000_000_000,
+    )
+    text = "\n".join(lines)
+    assert "grid_power=-900" in text
+    assert "house_load=0" in text
+    # No target supplied -> no ems_runtime point.
+    assert "ems_runtime" not in text
 
 
 def test_build_lines_marks_offline_devices_unavailable():
@@ -202,6 +224,8 @@ def test_controller_publish_to_influx_enqueues_built_lines():
         devices=[_Dev("WR1")],
         device_online={"WR1": True},
     )
-    EMSController.publish_to_influx(fake, 748.0, [_state()])
+    EMSController.publish_to_influx(fake, 748.0, [_state()], target=900.0)
     assert captured and any("zendure_device" in line for line in captured[0])
+    assert any("grid_power=748" in line for line in captured[0])
     assert any("house_load=" in line for line in captured[0])
+    assert any("target_output=900" in line for line in captured[0])

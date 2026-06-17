@@ -198,6 +198,22 @@ def test_history_e2e_influxdb(tmp_path):
                 ts_ns,
             )
         )
+        lines.append(
+            build_line_protocol(
+                "shelly_meter",
+                {"source": "shelly"},
+                {"grid_power": float(-50 + i * 10), "house_load": float(300 + i * 5)},
+                ts_ns,
+            )
+        )
+        lines.append(
+            build_line_protocol(
+                "ems_runtime",
+                {"source": "ems"},
+                {"target_output": float(420 + i * 10)},
+                ts_ns,
+            )
+        )
     client.write_lines(raw_bucket, lines)
     time.sleep(1.0)  # let Influx make the points queryable
 
@@ -213,7 +229,8 @@ def test_history_e2e_influxdb(tmp_path):
         assert advertised["available"] is True
 
         status, payload = _get_json(
-            f"{base}/api/analytics/series?range=1h&series=pv,output,soc,battery&devices=WR1"
+            f"{base}/api/analytics/series"
+            "?range=1h&series=pv,output,soc,battery,grid,home,target&devices=WR1"
         )
         assert status == 200
         assert payload["source"] == "influxdb"
@@ -225,6 +242,11 @@ def test_history_e2e_influxdb(tmp_path):
         # battery = pack_out - pack_in = 200
         battery_values = [v for v in payload["series"]["battery"] if v is not None]
         assert battery_values and max(battery_values) == pytest.approx(200, abs=1)
+        # grid (meter exchange) and target (EMS output target) are data-backed.
+        grid_values = [v for v in payload["series"]["grid"] if v is not None]
+        assert grid_values, "expected at least one grid sample from InfluxDB"
+        target_values = [v for v in payload["series"]["target"] if v is not None]
+        assert target_values, "expected at least one target sample from InfluxDB"
     finally:
         server.shutdown()
         server.server_close()

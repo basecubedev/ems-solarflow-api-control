@@ -168,6 +168,30 @@ def test_analytics_overlay_markup_present():
     assert 'id="analyticsCustomApply"' in html
 
 
+def test_grid_overlay_named_grid_power_not_grid_share():
+    # "Grid Share" was misleading (it plots grid power, not a share metric).
+    html = INDEX_HTML.read_text(encoding="utf-8")
+    app_js = APP_JS.read_text(encoding="utf-8")
+    assert "Grid Share" not in html
+    assert "Grid Share" not in app_js
+    assert ">Grid Power</button>" in html
+
+
+def test_overlays_are_all_data_backed_series():
+    # Every visible overlay must map to a series the catalog/provider serves.
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+console.log(JSON.stringify({{
+  overlays: app.ANALYTICS_OVERLAYS.map((o) => o.id),
+  meta: Object.keys(app.ANALYTICS_SERIES_META),
+}}));
+"""
+    out = run_node(script)
+    for overlay in out["overlays"]:
+        assert overlay in out["meta"], f"overlay {overlay} has no series metadata"
+    assert set(out["overlays"]) == {"soc", "target", "grid"}
+
+
 def test_analytics_overlays_extend_active_series_and_custom_range():
     script = f"""
 const app = require({json.dumps(str(APP_JS))});
@@ -319,6 +343,167 @@ console.log(JSON.stringify({{ zoom: app.state.analytics.zoom }}));
 """
     out = run_node(script)
     assert out["zoom"] is None
+
+
+def test_analytics_zoom_survives_real_data_requery():
+    # With real InfluxDB data a zoom triggers a backend requery; the returned
+    # dataset's extent equals the zoom range. The scale handler must NOT treat a
+    # visible scale matching that extent as "back to live" -- zoom stays active
+    # until the user explicitly leaves it.
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const nodes = {{ analyticsBackToLive: {{ hidden: true }} }};
+global.document = {{ hidden: false, getElementById: (id) => nodes[id] || null }};
+global.fetch = async () => ({{ ok: true, json: async () => ({{}}) }});
+
+app.state.flowView = "analytics";
+app.state.range = "30d";
+app.state.analytics.tab = "overview";
+// Demo mode short-circuits scheduleZoomRequery so no real timer/fetch runs,
+// while still exercising the pure scale-handler logic under test.
+app.state.demoMode = true;
+
+// 1) User zooms from the 30d view into a ~2h window.
+app.onAnalyticsXScale({{
+  data: [[0, 2592000]],
+  scales: {{ x: {{ min: 1000, max: 8200 }} }},
+}});
+const afterZoom = {{
+  zoom: app.state.analytics.zoom,
+  url: app.analyticsFetchUrl(),
+  refresh: app.analyticsShouldAutoRefresh(),
+  buttonHidden: nodes.analyticsBackToLive.hidden,
+}};
+
+// 2) The requery returns finer data whose extent equals the zoom range; the
+// re-render fires the scale handler with the visible scale == loaded extent.
+app.onAnalyticsXScale({{
+  data: [[1000, 8200]],
+  scales: {{ x: {{ min: 1000, max: 8200 }} }},
+}});
+const afterRequery = {{
+  zoom: app.state.analytics.zoom,
+  refresh: app.analyticsShouldAutoRefresh(),
+  buttonHidden: nodes.analyticsBackToLive.hidden,
+}};
+
+// 3) Explicit Back to live resets to live mode.
+app.backToLive();
+const afterBackToLive = {{
+  zoom: app.state.analytics.zoom,
+  refresh: app.analyticsShouldAutoRefresh(),
+  buttonHidden: nodes.analyticsBackToLive.hidden,
+}};
+
+console.log(JSON.stringify({{ afterZoom, afterRequery, afterBackToLive }}));
+"""
+    out = run_node(script)
+    # Zoom-in: state set, URL uses start/end (finer profile), refresh paused,
+    # Back to live shown.
+    assert out["afterZoom"]["zoom"] == {"start": 1000, "end": 8200}
+    assert "start=1000" in out["afterZoom"]["url"]
+    assert "end=8200" in out["afterZoom"]["url"]
+    assert "range=30d" not in out["afterZoom"]["url"]
+    assert out["afterZoom"]["refresh"] is False
+    assert out["afterZoom"]["buttonHidden"] is False
+    # Requery whose extent equals the zoom range must NOT clear zoom.
+    assert out["afterRequery"]["zoom"] == {"start": 1000, "end": 8200}
+    assert out["afterRequery"]["refresh"] is False
+    assert out["afterRequery"]["buttonHidden"] is False
+    # Explicit Back to live returns to live mode.
+    assert out["afterBackToLive"]["zoom"] is None
+    assert out["afterBackToLive"]["refresh"] is True
+    assert out["afterBackToLive"]["buttonHidden"] is True
+
+
+def test_analytics_chart_inverts_battery_display_only():
+    # Display-only sign flip for the Analytics uPlot chart: the battery line is
+    # rendered inverted (charging below zero, discharging above zero) while the
+    # raw Analytics state and every other series stay on the backend convention.
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const data = {{
+  time: [0, 1800, 3600],
+  series: {{
+    pv: [1000, 1000, 1000],
+    output: [500, 500, 500],
+    battery: [200, -450, null],
+  }},
+}};
+
+const matrix = app.analyticsChartSeriesData(data, ["pv", "output", "battery"]);
+console.log(JSON.stringify({{
+  // Pure helper: only battery flips sign, nulls pass through.
+  helper: {{
+    batteryCharge: app.analyticsChartDisplayValue("battery", 200),
+    batteryDischarge: app.analyticsChartDisplayValue("battery", -450),
+    pv: app.analyticsChartDisplayValue("pv", 1000),
+    nullValue: app.analyticsChartDisplayValue("battery", null),
+  }},
+  matrix,
+  // Raw analytics state must be untouched by chart rendering.
+  rawBattery: data.series.battery,
+  // Tooltip translates the inverted display value back to charge/discharge.
+  tooltip: {{
+    charging: app.analyticsSeriesTooltip("battery", -200, "W"),
+    discharging: app.analyticsSeriesTooltip("battery", 450, "W"),
+    pv: app.analyticsSeriesTooltip("pv", 1000, "W"),
+    none: app.analyticsSeriesTooltip("battery", null, "W"),
+  }},
+}}));
+"""
+    out = run_node(script)
+
+    # Helper inverts battery only.
+    assert out["helper"]["batteryCharge"] == -200
+    assert out["helper"]["batteryDischarge"] == 450
+    assert out["helper"]["pv"] == 1000
+    assert out["helper"]["nullValue"] is None
+
+    # Chart data matrix: [time, pv, output, battery]. Non-battery untouched,
+    # battery inverted, nulls preserved.
+    assert out["matrix"][0] == [0, 1800, 3600]
+    assert out["matrix"][1] == [1000, 1000, 1000]
+    assert out["matrix"][2] == [500, 500, 500]
+    assert out["matrix"][3] == [-200, 450, None]
+
+    # Raw Analytics state (and therefore KPIs that integrate it) is unchanged.
+    assert out["rawBattery"] == [200, -450, None]
+
+    # Tooltip never implies the API sign convention changed.
+    assert out["tooltip"]["charging"] == "Charge 200 W"
+    assert out["tooltip"]["discharging"] == "Discharge 450 W"
+    assert out["tooltip"]["pv"] == "1000 W"
+    assert out["tooltip"]["none"] == "--"
+
+
+def test_analytics_kpis_use_raw_battery_sign_despite_chart_inversion():
+    # KPI charge/discharge integration must keep using the raw battery sign
+    # (charging positive, discharging negative) even though the chart inverts the
+    # battery line. Charge counts positive raw samples, discharge counts negative.
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const host = {{ innerHTML: "" }};
+global.document = {{ getElementById: (id) => (id === "analyticsKpis" ? host : null) }};
+const data = {{
+  time: [0, 3600, 7200],
+  series: {{ battery: [1000, 1000, -1000] }},
+}};
+app.state.snapshot = {{ average_soc: 50, devices: {{}} }};
+app.state.analytics.data = data;
+app.state.range = "24h";
+app.state.analytics.tab = "battery";
+app.renderAnalyticsKpis();
+console.log(JSON.stringify({{ html: host.innerHTML }}));
+"""
+    out = run_node(script)
+    # Charge integrates the positive raw samples (1.5 kWh), discharge the negative
+    # one (500 Wh). If the chart inversion leaked into KPIs these would swap (the
+    # all-positive-then-negative ramp makes the two magnitudes distinct).
+    assert "Charge · 24h" in out["html"]
+    assert "Discharge · 24h" in out["html"]
+    assert "1.5 kWh" in out["html"]
+    assert "500 Wh" in out["html"]
 
 
 def test_analytics_series_peak_and_power_label():

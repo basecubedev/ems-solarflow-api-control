@@ -81,18 +81,31 @@ def _device_field_values(state):
     return fields
 
 
-def build_telemetry_lines(devices, states, online_map, house_load, timestamp_ns=None):
+def _is_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def build_telemetry_lines(
+    devices, states, online_map, grid_power, target=None, timestamp_ns=None
+):
     """Build InfluxDB line protocol from one control-loop telemetry snapshot.
 
-    Produces one ``zendure_device`` point per device and, when a meter reading is
-    available, one ``shelly_meter`` point. Offline devices are recorded with
+    Produces one ``zendure_device`` point per device, one ``shelly_meter`` point
+    carrying the meter exchange power (``grid_power``, positive import / negative
+    export) and the calculated household load (``house_load``), and, when a
+    controller target is supplied, one ``ems_runtime`` point with the selected
+    output target (``target_output``). Offline devices are recorded with
     ``available=False`` so gaps are explicit. Returns a list of line strings.
+
+    ``house_load`` mirrors the dashboard telemetry semantics:
+    ``max(0, inverter_output_total + grid_power)``.
     """
     if timestamp_ns is None:
         timestamp_ns = time.time_ns()
 
     online_map = online_map or {}
     lines = []
+    inverter_total = 0.0
     for device, state in zip(devices, states):
         tags = {"device": device.name, "source": "zendure"}
         online = bool(online_map.get(device.name, True))
@@ -105,15 +118,29 @@ def build_telemetry_lines(devices, states, online_map, house_load, timestamp_ns=
             continue
         fields = {"available": True}
         fields.update(_device_field_values(state))
+        if _is_number(fields.get("output")):
+            inverter_total += fields["output"]
         line = build_line_protocol("zendure_device", tags, fields, timestamp_ns)
         if line:
             lines.append(line)
 
-    if isinstance(house_load, (int, float)) and not isinstance(house_load, bool):
+    if _is_number(grid_power):
+        grid_power = float(grid_power)
+        house_load = max(0.0, inverter_total + grid_power)
         line = build_line_protocol(
             "shelly_meter",
             {"source": "shelly"},
-            {"house_load": float(house_load)},
+            {"grid_power": grid_power, "house_load": house_load},
+            timestamp_ns,
+        )
+        if line:
+            lines.append(line)
+
+    if _is_number(target):
+        line = build_line_protocol(
+            "ems_runtime",
+            {"source": "ems"},
+            {"target_output": float(target)},
             timestamp_ns,
         )
         if line:

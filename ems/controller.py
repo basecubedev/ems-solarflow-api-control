@@ -3029,10 +3029,14 @@ class EMSController:
                     error=e
                 )
 
-        self.publish_to_influx(load, states)
+        self.publish_to_influx(load, states, effective_total)
 
-    def publish_to_influx(self, load, states):
+    def publish_to_influx(self, load, states, target=None):
         """Enqueue this cycle's telemetry for the native InfluxDB writer.
+
+        ``load`` is the grid/meter exchange power (positive import) and
+        ``target`` the EMS effective output target; the writer derives the
+        household load and emits the grid/home/target Analytics series.
 
         Non-blocking and failure-isolated: building line protocol is cheap and
         any writer error is contained inside the background worker, so the
@@ -3046,7 +3050,7 @@ class EMSController:
             from ems.history.influx_writer import build_telemetry_lines
 
             lines = build_telemetry_lines(
-                self.devices, states, self.device_online, load
+                self.devices, states, self.device_online, load, target
             )
             writer.enqueue(lines)
         except Exception as e:
