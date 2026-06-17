@@ -251,7 +251,7 @@ def test_frontend_uses_normalized_battery_display_semantics():
     assert "Based on measured inverter output." in index_html
     assert "class=\"devices-section\"" in index_html
     assert index_html.index('id="energyStats"') < index_html.index('id="deviceGrid"')
-    assert index_html.index('id="deviceGrid"') < index_html.index('chart-panel analytics-panel')
+    assert index_html.index('id="deviceGrid"') < index_html.index('chart-panel history-panel')
     assert index_html.count('id="energyStats"') == 1
     assert 'setText("metricBattery", signedWatts(batteryFlow.valueW));' in app_js
     assert 'setText("flowBattery", signedWatts(batteryFlow.valueW));' in app_js

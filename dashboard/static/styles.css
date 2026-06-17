@@ -226,6 +226,11 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
 .flow-panel, .rules-panel, .chart-panel { padding: 10px; }
 .shell.view-energy > .devices-section,
 .shell.view-energy > .chart-panel { display: none; }
+/* Analytics is a dedicated full-width analysis workspace: hide the device list
+   and the bottom operational history chart so the large primary chart owns the
+   view. */
+.shell.view-analytics > .devices-section,
+.shell.view-analytics > .chart-panel { display: none; }
 /* Diagnose and Logs are full-width operator views: hide the devices list, the
    history chart and the redundant outer "Live Flow" heading (their own panels
    carry the heading). The tab bar in .flow-heading-controls stays visible. */
@@ -837,6 +842,14 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
 .flow-wrap.view-devices .device-flow-view { display: block !important; }
 .flow-wrap.view-control .control-explain-view { display: block !important; }
 .flow-wrap.view-energy .energy-stats-view { display: block !important; }
+/* Analytics view: hide every other in-wrap panel and show its own. */
+.flow-wrap.view-analytics #flowSvg,
+.flow-wrap.view-analytics .device-flow-view,
+.flow-wrap.view-analytics .control-explain-view,
+.flow-wrap.view-analytics .energy-stats-view { display: none !important; }
+.flow-wrap.view-analytics .analytics-view { display: block !important; }
+.flow-wrap.view-analytics { overflow: visible; }
+.analytics-view { position: relative; z-index: 1; }
 .device-flow-svg {
   position: relative;
   display: block;
@@ -1723,6 +1736,38 @@ canvas { width: 100%; min-height: 94px; border: 1px solid rgba(148,163,184,.13);
 .analytics-kpi.tone-accent { border-left-color: var(--accent); }
 .analytics-kpi.tone-grid { border-left-color: var(--grid); }
 
+/* The Analytics tab is an analysis workspace: its primary chart is much larger
+   than the lightweight operational history. */
+.analytics-view .analytics-chart { min-height: 560px; }
+/* Lightweight SQLite history chart (Aggregate/Devices) stays compact. */
+.history-chart { min-height: 240px; }
+/* History range tabs mirror the analytics range pills (kept a distinct class so
+   the analytics range handler does not bind these buttons). */
+.history-range-tabs { display: flex; align-items: center; gap: 5px; }
+.history-range-tabs button {
+  min-width: 38px; height: 26px; padding: 0 10px; border: 1px solid var(--border);
+  border-radius: 999px; background: rgba(255,255,255,.045); color: var(--muted);
+  font: inherit; font-size: 11px; font-weight: 800; cursor: pointer;
+  transition: transform .16s ease, border-color .16s ease, background .16s ease;
+}
+.history-range-tabs button:hover { transform: translateY(-1px); border-color: var(--border-strong); }
+.history-range-tabs button.active {
+  border-color: rgba(34, 211, 238, 0.46);
+  background: linear-gradient(180deg, rgba(34, 211, 238, 0.18), rgba(139, 92, 246, 0.12));
+  color: var(--text);
+}
+
+/* Clean "InfluxDB not configured" state for the Analytics tab. */
+.analytics-unavailable {
+  display: flex; flex-direction: column; align-items: center; text-align: center;
+  gap: 8px; padding: 48px 24px; color: var(--muted);
+  border: 1px dashed rgba(148,163,184,.22); border-radius: 16px;
+  background: rgba(255,255,255,.025); margin-top: 6px;
+}
+.analytics-unavailable-icon { width: 32px; height: 32px; color: var(--muted2); fill: none; stroke: currentColor; stroke-width: 1.6; }
+.analytics-unavailable h3 { margin: 0; font-size: 15px; font-weight: 850; color: var(--text); }
+.analytics-unavailable p { margin: 0; max-width: 420px; font-size: 12px; line-height: 1.5; }
+
 @media (max-width: 1180px) {
   .main-grid { grid-template-columns: 1fr; }
   .rules-list { grid-template-columns: repeat(2, minmax(0,1fr)); }
@@ -1742,6 +1787,8 @@ canvas { width: 100%; min-height: 94px; border: 1px solid rgba(148,163,184,.13);
   .analytics-custom { width: 100%; }
   .analytics-custom input { flex: 1 1 40%; min-width: 0; }
   .analytics-chart { min-height: 220px; }
+  .analytics-view .analytics-chart { min-height: 360px; }
+  .history-chart { min-height: 200px; }
   .analytics-kpi { min-height: 50px; padding: 7px 8px; }
   .analytics-kpi-value { font-size: 15px; }
   .metric { min-height: 48px; padding: 7px; gap: 7px; border-radius: 14px; }

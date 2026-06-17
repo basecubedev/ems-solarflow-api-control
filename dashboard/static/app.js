@@ -2,11 +2,25 @@
 const state = {
   snapshot: null,
   range: "24h",
+  // Lightweight SQLite-backed history shown in the Aggregate/Devices views.
+  // Independent of the InfluxDB analytics state below: it always works with no
+  // external dependency and is the default experience.
+  history: {
+    range: "24h",
+    device: "",
+    data: null,
+    chart: null,
+    deviceOptions: [],
+  },
+  // InfluxDB-backed long-term analytics shown in the dedicated Analytics tab.
+  // ``available`` is null until probed; false renders the "not configured"
+  // state instead of a broken chart.
   analytics: {
     tab: "overview",
     device: "",
     data: null,
     chart: null,
+    available: null,
     deviceOptions: [],
     overlays: { soc: false, target: false, grid: false },
     custom: { active: false, start: null, end: null },
@@ -2146,9 +2160,10 @@ function renderDeviceFirmwareStatus(device) {
 }
 
 function setFlowView(view, persist = true) {
-  const nextView = ["aggregated", "devices", "control", "energy", "diagnose", "logs"].includes(view)
+  const nextView = ["aggregated", "devices", "analytics", "control", "energy", "diagnose", "logs"].includes(view)
     ? view
     : "aggregated";
+  const previousView = state.flowView;
   state.flowView = nextView;
 
   const svg = $("flowSvg");
@@ -2157,6 +2172,7 @@ function setFlowView(view, persist = true) {
   const energyView = $("energyStatsView");
   const diagnoseView = $("diagnoseView");
   const logsView = $("logsView");
+  const analyticsView = $("analyticsView");
   const wrap = document.querySelector ? document.querySelector(".flow-wrap") : null;
   const shell = document.querySelector ? document.querySelector(".shell") : null;
 
@@ -2166,19 +2182,29 @@ function setFlowView(view, persist = true) {
   if (energyView) energyView.hidden = nextView !== "energy";
   if (diagnoseView) diagnoseView.hidden = nextView !== "diagnose";
   if (logsView) logsView.hidden = nextView !== "logs";
+  if (analyticsView) analyticsView.hidden = nextView !== "analytics";
   if (wrap?.classList) {
     wrap.classList.toggle("view-devices", nextView === "devices");
     wrap.classList.toggle("view-aggregated", nextView === "aggregated");
+    wrap.classList.toggle("view-analytics", nextView === "analytics");
     wrap.classList.toggle("view-control", nextView === "control");
     wrap.classList.toggle("view-energy", nextView === "energy");
     wrap.classList.toggle("view-diagnose", nextView === "diagnose");
     wrap.classList.toggle("view-logs", nextView === "logs");
   }
   if (shell?.classList) {
+    shell.classList.toggle("view-analytics", nextView === "analytics");
     shell.classList.toggle("view-energy", nextView === "energy");
     shell.classList.toggle("view-diagnose", nextView === "diagnose");
     shell.classList.toggle("view-logs", nextView === "logs");
   }
+
+  // The lightweight SQLite History panel only belongs to the operational views.
+  const historyPanel = document.querySelector
+    ? document.querySelector(".history-panel")
+    : null;
+  const historyVisible = nextView === "aggregated" || nextView === "devices";
+  if (historyPanel) historyPanel.hidden = !historyVisible;
 
   document.querySelectorAll("[data-flow-view]").forEach((button) => {
     const active = button.dataset.flowView === nextView;
@@ -2201,6 +2227,14 @@ function setFlowView(view, persist = true) {
 
   if (nextView === "diagnose") {
     renderDiagnoseView();
+  }
+
+  // Lazy-load each data source only when its view becomes visible.
+  if (historyVisible && previousView !== nextView) {
+    loadHistory();
+  }
+  if (nextView === "analytics" && previousView !== nextView) {
+    loadAnalytics();
   }
 
   if (nextView === "logs") {
@@ -3569,11 +3603,14 @@ function initDemoMode() {
   ensureDemoBadge();
   state.runtime = demoRuntimeState();
   const snapshot = demoSnapshot();
+  setAnalyticsAvailable(true);
   state.analytics.data = demoAnalyticsData();
+  state.history.data = demoAnalyticsData();
   updateSnapshot(snapshot);
   setConnection("Demo", true);
   renderAnalytics();
-  setFlowView("energy", false);
+  renderHistoryChart();
+  setFlowView("analytics", false);
 }
 
 function currentAnalyticsTab() {
@@ -3592,11 +3629,12 @@ function activeAnalyticsSeries() {
   return series;
 }
 
-// Whether the Analytics panel is on screen. Hidden views (energy/diagnose/logs)
-// and a backgrounded tab must not trigger periodic fetches (lazy loading).
+// Whether the Analytics panel is on screen. The InfluxDB analytics now lives in
+// its own dedicated tab, so it only fetches when that tab is active and the
+// browser tab is foregrounded (lazy loading).
 function analyticsPanelVisible() {
   if (typeof document !== "undefined" && document.hidden) return false;
-  return !["energy", "diagnose", "logs"].includes(state.flowView);
+  return state.flowView === "analytics";
 }
 
 function setAnalyticsLoading(active) {
@@ -3626,7 +3664,7 @@ function analyticsFetchUrl() {
   if (state.analytics.device) {
     params.set("devices", state.analytics.device);
   }
-  return `/api/history/series?${params.toString()}`;
+  return `/api/analytics/series?${params.toString()}`;
 }
 
 // Auto-refresh runs only in live mode: paused while zoomed and skipped when the
@@ -3635,21 +3673,43 @@ function analyticsShouldAutoRefresh() {
   return analyticsPanelVisible() && !state.analytics.zoom;
 }
 
+// Toggle the Analytics tab between its "InfluxDB not configured" info state and
+// the live chart body. Returns whether analytics is available.
+function setAnalyticsAvailable(available) {
+  state.analytics.available = available;
+  const unavailable = $("analyticsUnavailable");
+  const body = $("analyticsBody");
+  if (unavailable) unavailable.hidden = available;
+  if (body) body.hidden = !available;
+  return available;
+}
+
 async function loadAnalytics(showLoading = true) {
   if (state.demoMode) {
+    setAnalyticsAvailable(true);
     state.analytics.data = demoAnalyticsData();
     renderAnalytics();
     return;
   }
   if (showLoading) setAnalyticsLoading(true);
+  let payload = null;
   try {
     const response = await fetch(analyticsFetchUrl());
-    state.analytics.data = response.ok ? await response.json() : null;
+    payload = response.ok ? await response.json() : null;
   } catch (error) {
-    state.analytics.data = null;
+    payload = null;
   } finally {
     setAnalyticsLoading(false);
   }
+  // A 200 payload with available:false means InfluxDB is not configured; show
+  // the clean info state instead of an empty/broken chart.
+  if (payload && payload.available === false) {
+    setAnalyticsAvailable(false);
+    state.analytics.data = null;
+    return;
+  }
+  setAnalyticsAvailable(true);
+  state.analytics.data = payload;
   renderAnalytics();
 }
 
@@ -3782,11 +3842,13 @@ function renderAnalytics() {
   renderAnalyticsKpis();
 }
 
+// The Analytics tab is a dedicated analysis workspace, so its primary chart is
+// intentionally much larger than the lightweight Aggregate/Devices history.
 function analyticsChartHeight() {
   if (typeof window !== "undefined" && window.innerWidth && window.innerWidth <= 760) {
-    return 220;
+    return 360;
   }
-  return 280;
+  return 560;
 }
 
 function cssColor(varName, fallback) {
@@ -3988,14 +4050,17 @@ function renderAnalyticsKpis() {
     .join("");
 }
 
-function populateDeviceSelector(snapshot) {
-  const select = $("analyticsDevice");
+// Shared device <select> filler used by both the lightweight History panel and
+// the InfluxDB Analytics tab. ``store`` is the per-view state object that caches
+// the option list and holds the currently selected device.
+function fillDeviceSelect(selectId, snapshot, store) {
+  const select = $(selectId);
   if (!select || !select.options) return;
   const names = snapshot && snapshot.devices ? Object.keys(snapshot.devices) : [];
-  if (names.join("|") === state.analytics.deviceOptions.join("|")) return;
-  state.analytics.deviceOptions = names;
+  if (names.join("|") === store.deviceOptions.join("|")) return;
+  store.deviceOptions = names;
 
-  const current = state.analytics.device;
+  const current = store.device;
   while (select.options.length > 1) {
     select.remove(1);
   }
@@ -4009,8 +4074,129 @@ function populateDeviceSelector(snapshot) {
     select.value = current;
   } else {
     select.value = "";
-    state.analytics.device = "";
+    store.device = "";
   }
+}
+
+function populateDeviceSelector(snapshot) {
+  fillDeviceSelect("analyticsDevice", snapshot, state.analytics);
+  fillDeviceSelect("historyDevice", snapshot, state.history);
+}
+
+// -- Lightweight SQLite history (Aggregate / Devices) ----------------------
+//
+// Deliberately minimal: a single combined chart of the default series, backed
+// by the always-available local SQLite snapshot store (/api/history/series).
+// No overlays, sub-tabs, zoom, KPIs or custom ranges — those advanced features
+// live in the InfluxDB Analytics tab so these operational views stay fast.
+
+const HISTORY_SERIES = ["pv", "output", "battery"];
+
+function historyVisible() {
+  if (typeof document !== "undefined" && document.hidden) return false;
+  return state.flowView === "aggregated" || state.flowView === "devices";
+}
+
+function historyFetchUrl() {
+  const params = new URLSearchParams();
+  params.set("range", state.history.range);
+  params.set("series", HISTORY_SERIES.join(","));
+  if (state.history.device) params.set("devices", state.history.device);
+  return `/api/history/series?${params.toString()}`;
+}
+
+function setHistoryLoading(active) {
+  const node = $("historyLoading");
+  if (node) node.hidden = !active;
+}
+
+async function loadHistory(showLoading = true) {
+  if (state.demoMode) {
+    state.history.data = demoAnalyticsData();
+    renderHistoryChart();
+    return;
+  }
+  if (showLoading) setHistoryLoading(true);
+  try {
+    const response = await fetch(historyFetchUrl());
+    state.history.data = response.ok ? await response.json() : null;
+  } catch (error) {
+    state.history.data = null;
+  } finally {
+    setHistoryLoading(false);
+  }
+  renderHistoryChart();
+}
+
+function historyChartHeight() {
+  if (typeof window !== "undefined" && window.innerWidth && window.innerWidth <= 760) {
+    return 200;
+  }
+  return 260;
+}
+
+function renderHistoryChart() {
+  const container = $("historyChart");
+  if (!container || typeof uPlot === "undefined") return;
+
+  const data = state.history.data;
+  const time = (data && data.time) || [];
+  const empty = $("historyEmpty");
+
+  if (state.history.chart) {
+    state.history.chart.destroy();
+    state.history.chart = null;
+  }
+  container.innerHTML = "";
+
+  if (!time.length) {
+    if (empty) {
+      const unavailable = !data || (data.meta && data.meta.unavailable);
+      empty.textContent = unavailable
+        ? "History data is currently unavailable."
+        : "No samples in this period.";
+      empty.hidden = false;
+    }
+    return;
+  }
+  if (empty) empty.hidden = true;
+
+  const seriesData = [time];
+  const seriesConfig = [{}];
+  HISTORY_SERIES.forEach((id) => {
+    const meta = ANALYTICS_SERIES_META[id];
+    if (!meta) return;
+    const values = (data.series && data.series[id]) || [];
+    seriesData.push(
+      time.map((_, index) => {
+        const value = values[index];
+        return value === null || value === undefined ? null : Number(value);
+      })
+    );
+    seriesConfig.push({
+      label: meta.label,
+      stroke: cssColor(meta.colorVar, "#888"),
+      width: 2,
+      scale: "y",
+      value: (_self, raw) => (raw == null ? "--" : `${Math.round(raw)} ${meta.unit}`),
+    });
+  });
+
+  const axisColor = cssColor("--muted", "#8a94a3");
+  const gridColor = "rgba(255,255,255,0.06)";
+  const opts = {
+    width: container.clientWidth || 600,
+    height: historyChartHeight(),
+    series: seriesConfig,
+    scales: { x: { time: true }, y: {} },
+    axes: [
+      { stroke: axisColor, grid: { stroke: gridColor }, ticks: { stroke: gridColor } },
+      { scale: "y", stroke: axisColor, grid: { stroke: gridColor }, ticks: { stroke: gridColor } },
+    ],
+    cursor: { focus: { prox: 24 } },
+    legend: { live: true },
+  };
+  state.history.chart = new uPlot(opts, seriesData, container);
 }
 
 function startEvents() {
@@ -4202,12 +4388,38 @@ function initDashboardApp() {
     });
   }
 
+  // Lightweight History panel controls (SQLite, Aggregate/Devices views).
+  const historyRangeSelector = ".history-range-tabs button";
+  document.querySelectorAll(historyRangeSelector).forEach((button) => {
+    button.addEventListener("click", async () => {
+      document.querySelectorAll(historyRangeSelector).forEach((item) => item.classList.remove("active"));
+      button.classList.add("active");
+      state.history.range = button.dataset.historyRange;
+      await loadHistory();
+    });
+  });
+
+  const historyDeviceSelect = $("historyDevice");
+  if (historyDeviceSelect) {
+    historyDeviceSelect.addEventListener("change", async () => {
+      state.history.device = historyDeviceSelect.value;
+      await loadHistory();
+    });
+  }
+
   window.addEventListener("resize", () => {
     const container = $("analyticsChart");
     if (state.analytics.chart && container) {
       state.analytics.chart.setSize({
         width: container.clientWidth || 600,
         height: analyticsChartHeight(),
+      });
+    }
+    const historyContainer = $("historyChart");
+    if (state.history.chart && historyContainer) {
+      state.history.chart.setSize({
+        width: historyContainer.clientWidth || 600,
+        height: historyChartHeight(),
       });
     }
   });
@@ -4224,12 +4436,15 @@ function initDashboardApp() {
     loadAuthStatus();
     loadRuntimeState();
     startEvents();
-    loadAnalytics();
+    // Lazy initial load: only fetch the data source whose view is on screen.
+    if (state.flowView === "analytics") loadAnalytics();
+    if (historyVisible()) loadHistory();
     setInterval(loadAuthStatus, 60000);
-    // Periodic refresh skips fetching while the panel is off-screen, the tab is
-    // backgrounded (lazy loading), or the chart is zoomed (preserve zoom).
+    // Periodic refresh skips fetching while a panel is off-screen, the tab is
+    // backgrounded (lazy loading), or the analytics chart is zoomed.
     setInterval(() => {
       if (analyticsShouldAutoRefresh()) loadAnalytics(false);
+      if (historyVisible()) loadHistory(false);
     }, 30000);
   }
 }
@@ -4269,6 +4484,11 @@ if (typeof module !== "undefined") {
     analyticsPanelVisible,
     analyticsShouldAutoRefresh,
     analyticsFetchUrl,
+    setAnalyticsAvailable,
+    historyVisible,
+    historyFetchUrl,
+    loadHistory,
+    renderHistoryChart,
     detectZoom,
     backToLive,
     clearZoom,

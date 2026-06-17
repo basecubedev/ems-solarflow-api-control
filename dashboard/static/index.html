@@ -55,6 +55,7 @@
             <div class="flow-view-tabs" role="tablist" aria-label="Dashboard view">
               <button type="button" class="active" data-flow-view="aggregated" role="tab" aria-selected="true">Aggregated</button>
               <button type="button" data-flow-view="devices" role="tab" aria-selected="false">Devices</button>
+              <button type="button" data-flow-view="analytics" role="tab" aria-selected="false">Analytics</button>
               <button type="button" data-flow-view="control" role="tab" aria-selected="false">Control</button>
               <button type="button" data-flow-view="energy" role="tab" aria-selected="false">Energy</button>
               <button type="button" data-flow-view="diagnose" role="tab" aria-selected="false">Diagnose</button>
@@ -264,6 +265,62 @@
               <div id="logsOutput" class="logs-output" role="log" aria-live="polite"></div>
             </section>
           </div>
+          <div id="analyticsView" class="analytics-view" hidden>
+            <section class="chart-panel analytics-panel" aria-label="Long-term analytics">
+              <div class="section-heading">
+                <h2><svg class="heading-icon" aria-hidden="true"><use href="#icon-history"></use></svg>Analytics</h2>
+                <div class="analytics-controls">
+                  <div class="range-tabs" role="tablist" aria-label="Analytics range">
+                    <button data-range="1h">1h</button>
+                    <button data-range="6h">6h</button>
+                    <button data-range="24h" class="active">24h</button>
+                    <button data-range="7d">7d</button>
+                    <button data-range="30d">30d</button>
+                    <button data-range="365d">365d</button>
+                  </div>
+                  <label class="analytics-device">
+                    <span class="analytics-device-label">Device</span>
+                    <select id="analyticsDevice" aria-label="Device filter">
+                      <option value="">All Devices</option>
+                    </select>
+                  </label>
+                  <div class="analytics-custom" aria-label="Custom date range">
+                    <span class="analytics-device-label">Custom</span>
+                    <input id="analyticsCustomFrom" type="datetime-local" aria-label="Custom range start">
+                    <input id="analyticsCustomTo" type="datetime-local" aria-label="Custom range end">
+                    <button type="button" id="analyticsCustomApply" class="primary-button compact">Apply</button>
+                  </div>
+                </div>
+              </div>
+              <div id="analyticsUnavailable" class="analytics-unavailable" hidden>
+                <svg class="analytics-unavailable-icon" aria-hidden="true"><use href="#icon-history"></use></svg>
+                <h3>InfluxDB analytics is not configured</h3>
+                <p>Enable the optional InfluxDB service to use long-term analytics, zooming, and custom date ranges. The Aggregate and Devices views keep working without it.</p>
+              </div>
+              <div id="analyticsBody">
+                <div class="analytics-overlays" role="group" aria-label="Series overlays">
+                  <span class="analytics-device-label">Overlays</span>
+                  <button type="button" data-analytics-overlay="soc" aria-pressed="false">SoC</button>
+                  <button type="button" data-analytics-overlay="target" aria-pressed="false">EMS Target</button>
+                  <button type="button" data-analytics-overlay="grid" aria-pressed="false">Grid Share</button>
+                </div>
+                <div class="analytics-tabs" role="tablist" aria-label="Analytics view">
+                  <button type="button" data-analytics-tab="overview" class="active" role="tab" aria-selected="true">Overview</button>
+                  <button type="button" data-analytics-tab="devices" role="tab" aria-selected="false">Devices</button>
+                  <button type="button" data-analytics-tab="grid" role="tab" aria-selected="false">Grid</button>
+                  <button type="button" data-analytics-tab="battery" role="tab" aria-selected="false">Battery</button>
+                  <button type="button" data-analytics-tab="pv" role="tab" aria-selected="false">PV</button>
+                </div>
+                <div class="analytics-chart-wrap">
+                  <div id="analyticsChart" class="analytics-chart" role="img" aria-label="Combined PV, output and battery history chart"></div>
+                  <button type="button" id="analyticsBackToLive" class="analytics-back-to-live" hidden>↺ Back to live</button>
+                  <div id="analyticsLoading" class="analytics-loading" hidden>Loading…</div>
+                </div>
+                <div id="analyticsEmpty" class="analytics-empty" hidden>No samples in this period.</div>
+                <div id="analyticsKpis" class="analytics-kpis"></div>
+              </div>
+            </section>
+          </div>
         </div>
       </section>
 
@@ -282,52 +339,29 @@
       <div id="deviceGrid" class="device-grid"></div>
     </section>
 
-    <section class="chart-panel analytics-panel">
+    <section class="chart-panel history-panel">
       <div class="section-heading">
-        <h2><svg class="heading-icon" aria-hidden="true"><use href="#icon-history"></use></svg>Analytics</h2>
+        <h2><svg class="heading-icon" aria-hidden="true"><use href="#icon-history"></use></svg>History</h2>
         <div class="analytics-controls">
-          <div class="range-tabs" role="tablist" aria-label="History range">
-            <button data-range="1h">1h</button>
-            <button data-range="6h">6h</button>
-            <button data-range="24h" class="active">24h</button>
-            <button data-range="7d">7d</button>
-            <button data-range="30d">30d</button>
-            <button data-range="365d">365d</button>
+          <div class="history-range-tabs" role="tablist" aria-label="History range">
+            <button data-history-range="1h">1h</button>
+            <button data-history-range="6h">6h</button>
+            <button data-history-range="24h" class="active">24h</button>
+            <button data-history-range="7d">7d</button>
           </div>
           <label class="analytics-device">
             <span class="analytics-device-label">Device</span>
-            <select id="analyticsDevice" aria-label="Device filter">
+            <select id="historyDevice" aria-label="History device filter">
               <option value="">All Devices</option>
             </select>
           </label>
-          <div class="analytics-custom" aria-label="Custom date range">
-            <span class="analytics-device-label">Custom</span>
-            <input id="analyticsCustomFrom" type="datetime-local" aria-label="Custom range start">
-            <input id="analyticsCustomTo" type="datetime-local" aria-label="Custom range end">
-            <button type="button" id="analyticsCustomApply" class="primary-button compact">Apply</button>
-          </div>
         </div>
       </div>
-      <div class="analytics-overlays" role="group" aria-label="Series overlays">
-        <span class="analytics-device-label">Overlays</span>
-        <button type="button" data-analytics-overlay="soc" aria-pressed="false">SoC</button>
-        <button type="button" data-analytics-overlay="target" aria-pressed="false">EMS Target</button>
-        <button type="button" data-analytics-overlay="grid" aria-pressed="false">Grid Share</button>
-      </div>
-      <div class="analytics-tabs" role="tablist" aria-label="Analytics view">
-        <button type="button" data-analytics-tab="overview" class="active" role="tab" aria-selected="true">Overview</button>
-        <button type="button" data-analytics-tab="devices" role="tab" aria-selected="false">Devices</button>
-        <button type="button" data-analytics-tab="grid" role="tab" aria-selected="false">Grid</button>
-        <button type="button" data-analytics-tab="battery" role="tab" aria-selected="false">Battery</button>
-        <button type="button" data-analytics-tab="pv" role="tab" aria-selected="false">PV</button>
-      </div>
       <div class="analytics-chart-wrap">
-        <div id="analyticsChart" class="analytics-chart" role="img" aria-label="Combined PV, output and battery history chart"></div>
-        <button type="button" id="analyticsBackToLive" class="analytics-back-to-live" hidden>↺ Back to live</button>
-        <div id="analyticsLoading" class="analytics-loading" hidden>Loading…</div>
+        <div id="historyChart" class="analytics-chart history-chart" role="img" aria-label="PV, inverter output and battery power history"></div>
+        <div id="historyLoading" class="analytics-loading" hidden>Loading…</div>
       </div>
-      <div id="analyticsEmpty" class="analytics-empty" hidden>No samples in this period.</div>
-      <div id="analyticsKpis" class="analytics-kpis"></div>
+      <div id="historyEmpty" class="analytics-empty" hidden>No samples in this period.</div>
     </section>
   </main>
 

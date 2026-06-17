@@ -341,6 +341,71 @@ def test_history_series_endpoint_returns_columnar_sqlite_data(tmp_path):
         server.server_close()
 
 
+def test_analytics_unavailable_without_influx(tmp_path):
+    # With no InfluxDB configured, the Analytics tab must get a clean, explicit
+    # unavailable response (HTTP 200, not an error) so it renders an info state.
+    store = SeriesStoreStub(str(tmp_path / "dashboard.sqlite"))
+    server, base_url = with_server(store)
+
+    try:
+        status, _, advertised = json_response(f"{base_url}/api/analytics/status")
+        assert status == 200
+        assert advertised["available"] is False
+        assert advertised["reason"] == "not_configured"
+
+        status, _, series = json_response(
+            f"{base_url}/api/analytics/series?range=24h&series=pv"
+        )
+        assert status == 200
+        assert series["available"] is False
+        assert series["reason"] == "not_configured"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_history_series_stays_sqlite_when_influx_enabled(tmp_path):
+    # Enabling InfluxDB must never silently replace the operational SQLite
+    # history: /api/history/series stays SQLite-backed, while /api/analytics/*
+    # is the only InfluxDB-backed surface.
+    db_path = str(tmp_path / "dashboard.sqlite")
+    _seed_snapshots(db_path)
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "influxdb": {
+                    "enabled": True,
+                    "url": "http://127.0.0.1:8086",
+                    "org": "ems",
+                    "token": "test-token",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    store = SeriesStoreStub(db_path)
+    server, base_url = with_server(store, config_path=str(config_path))
+
+    try:
+        status, _, payload = json_response(
+            f"{base_url}/api/history/series?range=24h&series=pv,output,battery"
+        )
+        assert status == 200
+        assert payload["source"] == "sqlite"
+        assert payload["series"]["pv"][0] == 1000
+
+        # The analytics provider is the InfluxDB one (advertised available).
+        status, _, advertised = json_response(f"{base_url}/api/analytics/status")
+        assert status == 200
+        assert advertised["available"] is True
+        assert advertised["provider"] == "influxdb"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_dashboard_server_rejects_invalid_history_range_and_write_methods():
     store = StoreStub()
     server, base_url = with_server(store)

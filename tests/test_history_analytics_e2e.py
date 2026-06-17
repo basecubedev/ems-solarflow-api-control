@@ -207,8 +207,13 @@ def test_history_e2e_influxdb(tmp_path):
 
     server, base = _serve(_InfluxStoreStub(), config_path=str(config_path))
     try:
+        # Analytics status advertises the configured InfluxDB provider.
+        status, advertised = _get_json(f"{base}/api/analytics/status")
+        assert status == 200
+        assert advertised["available"] is True
+
         status, payload = _get_json(
-            f"{base}/api/history/series?range=1h&series=pv,output,soc,battery&devices=WR1"
+            f"{base}/api/analytics/series?range=1h&series=pv,output,soc,battery&devices=WR1"
         )
         assert status == 200
         assert payload["source"] == "influxdb"

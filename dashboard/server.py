@@ -177,34 +177,68 @@ class DashboardHTTPServer(ThreadingHTTPServer):
             sse_max_connections_per_ip,
         )
         self.sse_max_connection_seconds = int(sse_max_connection_seconds)
-        # History provider (Sqlite default / Influx when configured) is built
-        # lazily and cached: config is read once and the choice does not change
-        # while the server is running.
-        self._history_provider = None
+        # Two independent history sources, built lazily and cached:
+        #
+        # - ``sqlite_history_provider`` always reads the local SQLite snapshot
+        #   store. It backs the lightweight Aggregate/Devices history charts
+        #   (``/api/history/series``) and is always available, with no external
+        #   dependency. InfluxDB never silently replaces it.
+        # - ``analytics_provider`` is the optional InfluxDB-backed long-term
+        #   analytics source (``/api/analytics/series``). It is ``None`` unless
+        #   InfluxDB is explicitly enabled in config; the dashboard then shows a
+        #   clean "not configured" state instead of broken charts.
+        self._sqlite_provider = None
+        self._analytics_provider = None
+        self._analytics_built = False
         self._history_provider_lock = threading.Lock()
 
-    def history_provider(self):
+    def sqlite_history_provider(self):
+        """SQLite snapshot provider for the operational history charts."""
         with self._history_provider_lock:
-            if self._history_provider is None:
-                self._history_provider = self._build_history_provider()
-            return self._history_provider
+            if self._sqlite_provider is None:
+                from ems.history.provider import SqliteHistoryProvider
 
-    def _build_history_provider(self):
-        from ems.history.provider import create_history_provider
+                self._sqlite_provider = SqliteHistoryProvider(
+                    getattr(self.store, "path", None)
+                )
+            return self._sqlite_provider
 
-        influx_cfg = None
-        if self.config_path and os.path.exists(self.config_path):
-            try:
-                with open(self.config_path, encoding="utf-8") as handle:
-                    raw_config = json.load(handle)
-                from ems.config import normalize_influxdb_config
+    def analytics_provider(self):
+        """InfluxDB analytics provider, or ``None`` when not configured.
 
-                influx_cfg = normalize_influxdb_config(raw_config.get("influxdb"))
-            except Exception:
-                influx_cfg = None
+        Returns ``None`` (rather than falling back to SQLite) so the Analytics
+        tab can render a dedicated unavailable state and the two data sources
+        never get mixed.
+        """
+        with self._history_provider_lock:
+            if not self._analytics_built:
+                self._analytics_provider = self._build_analytics_provider()
+                self._analytics_built = True
+            return self._analytics_provider
 
-        sqlite_path = getattr(self.store, "path", None)
-        return create_history_provider(influx_cfg, sqlite_path)
+    def _build_analytics_provider(self):
+        influx_cfg = self._influx_config()
+        if not (influx_cfg and influx_cfg.get("enabled")):
+            return None
+        try:
+            from ems.history.influx_provider import InfluxHistoryProvider
+
+            return InfluxHistoryProvider(influx_cfg)
+        except Exception:
+            logging.exception("failed to build InfluxDB analytics provider")
+            return None
+
+    def _influx_config(self):
+        if not (self.config_path and os.path.exists(self.config_path)):
+            return None
+        try:
+            with open(self.config_path, encoding="utf-8") as handle:
+                raw_config = json.load(handle)
+            from ems.config import normalize_influxdb_config
+
+            return normalize_influxdb_config(raw_config.get("influxdb"))
+        except Exception:
+            return None
 
 
 class DashboardRequestHandler(BaseHTTPRequestHandler):
@@ -244,6 +278,14 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/history/series":
             self._handle_history_series(parse_qs(parsed.query))
+            return
+
+        if parsed.path == "/api/analytics/status":
+            self._handle_analytics_status()
+            return
+
+        if parsed.path == "/api/analytics/series":
+            self._handle_analytics_series(parse_qs(parsed.query))
             return
 
         if parsed.path == "/api/energy-stats":
@@ -470,12 +512,14 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         "control_quality",
     )
 
-    def _handle_history_series(self, query):
-        # Columnar history for the single Analytics/Dashboard chart. Both views
-        # share this endpoint; only the requested period/series/devices differ.
+    def _resolve_series_query(self, query):
+        """Parse range/start/end/series/devices from a series request.
+
+        Returns ``(range_name, start, end, series, devices)`` on success, or
+        ``None`` after already sending the appropriate 400 error response.
+        """
         from ems.history.provider import (
             HISTORY_RANGE_SECONDS,
-            decimate_history_result,
             normalize_series,
             resolve_range,
         )
@@ -490,7 +534,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             end = _parse_time_param(end_param)
             if start is None or end is None or start >= end:
                 self._send_json({"error": "invalid_range"}, status=400)
-                return
+                return None
             range_name = "custom"
         elif range_name in HISTORY_RANGE_SECONDS:
             start, end = resolve_range(range_name)
@@ -502,17 +546,24 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 },
                 status=400,
             )
-            return
+            return None
 
         series = normalize_series(_split_csv(query.get("series", [None])[0]))
         devices = _split_csv(query.get("devices", [None])[0]) or None
+        return range_name, start, end, series, devices
+
+    def _serve_series(self, provider, query, *, log_label):
+        from ems.history.provider import decimate_history_result
+
+        parsed = self._resolve_series_query(query)
+        if parsed is None:
+            return
+        range_name, start, end, series, devices = parsed
 
         try:
-            result = self.server.history_provider().query(
-                start, end, devices=devices, series=series
-            )
+            result = provider.query(start, end, devices=devices, series=series)
         except Exception:
-            logging.exception("history series query failed")
+            logging.exception("%s series query failed", log_label)
             self._send_json({"error": "history_unavailable"}, status=503)
             return
 
@@ -520,6 +571,41 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         payload = result.to_dict()
         payload["range"] = range_name
         self._send_json(payload)
+
+    def _handle_history_series(self, query):
+        # Lightweight operational history for the Aggregate/Devices charts.
+        # Always backed by the local SQLite snapshot store: InfluxDB never
+        # replaces this source, so these views work with zero external
+        # dependencies and remain the default experience.
+        self._serve_series(
+            self.server.sqlite_history_provider(), query, log_label="history"
+        )
+
+    def _handle_analytics_status(self):
+        provider = self.server.analytics_provider()
+        available = bool(provider and provider.available())
+        payload = {"available": available, "provider": "influxdb"}
+        if not provider:
+            payload["reason"] = "not_configured"
+        elif not available:
+            payload["reason"] = "unreachable"
+        self._send_json(payload)
+
+    def _handle_analytics_series(self, query):
+        # Long-term analytics, backed exclusively by InfluxDB. When InfluxDB is
+        # not configured we return a 200 with an explicit unavailable marker so
+        # the Analytics tab can show a clean info state instead of an error.
+        provider = self.server.analytics_provider()
+        if not provider:
+            self._send_json(
+                {
+                    "available": False,
+                    "reason": "not_configured",
+                    "source": "influxdb",
+                }
+            )
+            return
+        self._serve_series(provider, query, log_label="analytics")
 
     def _diagnose_args(self):
         # The browser never supplies paths or sampling: paths come from the

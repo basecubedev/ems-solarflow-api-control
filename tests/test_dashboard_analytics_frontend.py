@@ -33,6 +33,73 @@ def test_analytics_subtabs_present_in_markup():
         assert f'data-analytics-tab="{tab}"' in html
 
 
+def test_dedicated_analytics_tab_and_history_panel_markup():
+    html = INDEX_HTML.read_text(encoding="utf-8")
+    # Analytics is now a dedicated top-level tab with its own in-wrap view.
+    assert 'data-flow-view="analytics"' in html
+    assert 'id="analyticsView"' in html
+    # Clean unavailable state for when InfluxDB is not configured.
+    assert 'id="analyticsUnavailable"' in html
+    assert "InfluxDB analytics is not configured" in html
+    # Lightweight SQLite history panel remains for Aggregate/Devices.
+    assert 'class="chart-panel history-panel"' in html
+    assert 'id="historyChart"' in html
+    assert 'data-history-range=' in html
+
+
+def test_analytics_unavailable_state_toggles_body():
+    # available:false (InfluxDB not configured) shows the info state and hides
+    # the chart body; an available payload does the reverse.
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const nodes = {{
+  analyticsUnavailable: {{ hidden: false }},
+  analyticsBody: {{ hidden: false }},
+}};
+global.document = {{ hidden: false, getElementById: (id) => nodes[id] || null }};
+
+app.setAnalyticsAvailable(false);
+const whenUnavailable = {{
+  unavailableHidden: nodes.analyticsUnavailable.hidden,
+  bodyHidden: nodes.analyticsBody.hidden,
+  state: app.state.analytics.available,
+}};
+app.setAnalyticsAvailable(true);
+const whenAvailable = {{
+  unavailableHidden: nodes.analyticsUnavailable.hidden,
+  bodyHidden: nodes.analyticsBody.hidden,
+  state: app.state.analytics.available,
+}};
+console.log(JSON.stringify({{ whenUnavailable, whenAvailable }}));
+"""
+    out = run_node(script)
+    assert out["whenUnavailable"] == {
+        "unavailableHidden": False,
+        "bodyHidden": True,
+        "state": False,
+    }
+    assert out["whenAvailable"] == {
+        "unavailableHidden": True,
+        "bodyHidden": False,
+        "state": True,
+    }
+
+
+def test_history_fetch_url_uses_sqlite_endpoint():
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+global.document = {{ hidden: false, getElementById: () => null }};
+app.state.history.range = "6h";
+app.state.history.device = "WR1";
+console.log(JSON.stringify({{ url: app.historyFetchUrl() }}));
+"""
+    out = run_node(script)
+    assert out["url"].startswith("/api/history/series?")
+    assert "range=6h" in out["url"]
+    assert "series=pv%2Coutput%2Cbattery" in out["url"]
+    assert "devices=WR1" in out["url"]
+
+
 def test_analytics_kpis_render_per_tab():
     # uPlot is undefined under node, so the chart render is skipped, but the KPI
     # cards are pure data-to-HTML and exercise the per-tab config end to end.
@@ -150,27 +217,41 @@ def test_analytics_loading_and_chart_wrap_markup():
 
 
 def test_analytics_panel_visibility_gates_hidden_views():
+    # InfluxDB analytics lives in its own dedicated tab now: it is only visible
+    # (and only fetches) when that tab is active. The lightweight SQLite history
+    # is visible on the operational Aggregate/Devices views instead.
     script = f"""
 const app = require({json.dumps(str(APP_JS))});
 global.document = {{ hidden: false }};
-const out = {{}};
-for (const view of ["aggregated", "devices", "control", "energy", "diagnose", "logs"]) {{
+const analytics = {{}};
+const history = {{}};
+for (const view of ["aggregated", "devices", "analytics", "control", "energy", "diagnose", "logs"]) {{
   app.state.flowView = view;
-  out[view] = app.analyticsPanelVisible();
+  analytics[view] = app.analyticsPanelVisible();
+  history[view] = app.historyVisible();
 }}
+app.state.flowView = "analytics";
+global.document.hidden = true;
+const analyticsBackgrounded = app.analyticsPanelVisible();
+global.document.hidden = false;
 app.state.flowView = "aggregated";
 global.document.hidden = true;
-out.backgrounded = app.analyticsPanelVisible();
-console.log(JSON.stringify(out));
+const historyBackgrounded = app.historyVisible();
+console.log(JSON.stringify({{ analytics, history, analyticsBackgrounded, historyBackgrounded }}));
 """
     out = run_node(script)
-    assert out["aggregated"] is True
-    assert out["devices"] is True
-    assert out["control"] is True
-    assert out["energy"] is False
-    assert out["diagnose"] is False
-    assert out["logs"] is False
-    assert out["backgrounded"] is False
+    # Analytics (InfluxDB) only on its own tab.
+    assert out["analytics"]["analytics"] is True
+    for view in ("aggregated", "devices", "control", "energy", "diagnose", "logs"):
+        assert out["analytics"][view] is False
+    # Lightweight history (SQLite) only on the operational views.
+    assert out["history"]["aggregated"] is True
+    assert out["history"]["devices"] is True
+    for view in ("analytics", "control", "energy", "diagnose", "logs"):
+        assert out["history"][view] is False
+    # Backgrounded tabs never auto-fetch (lazy loading).
+    assert out["analyticsBackgrounded"] is False
+    assert out["historyBackgrounded"] is False
 
 
 def test_analytics_zoom_markup_present():
@@ -198,7 +279,7 @@ def test_analytics_zoom_drives_fetch_url_and_pauses_refresh():
 const app = require({json.dumps(str(APP_JS))});
 global.document = {{ hidden: false, getElementById: () => null }};
 
-app.state.flowView = "aggregated";
+app.state.flowView = "analytics";
 app.state.range = "30d";
 app.state.analytics.tab = "overview";
 
@@ -213,7 +294,9 @@ const zoomRefresh = app.analyticsShouldAutoRefresh();
 console.log(JSON.stringify({{ liveUrl, liveRefresh, zoomUrl, zoomRefresh }}));
 """
     out = run_node(script)
-    # Live mode uses the period token and auto-refreshes.
+    # Live mode uses the period token and auto-refreshes; the InfluxDB analytics
+    # tab uses the dedicated analytics endpoint, never the SQLite history one.
+    assert "/api/analytics/series" in out["liveUrl"]
     assert "range=30d" in out["liveUrl"]
     assert out["liveRefresh"] is True
     # Zoomed: the URL uses the visible start/end (so the backend picks the finer

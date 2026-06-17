@@ -46,6 +46,16 @@ next due timestamps, and pending restore flags. Devices without a detected
 battery, and devices when the feature is globally disabled, do not show this
 section.
 
+## Analytics View
+
+The Analytics tab is the home for long-term, InfluxDB-backed analysis: a single
+large primary chart with custom date ranges, drag-zoom, series overlays,
+sub-tabs and KPI cards. It is optional — when InfluxDB is not configured the tab
+shows a clean "InfluxDB analytics is not configured" info state, and the
+Aggregate/Devices history (SQLite) keeps working unchanged. See
+[Two history sources](#two-history-sources-sqlite-operational-vs-influxdb-analytics)
+for the SQLite vs InfluxDB split and the endpoints involved.
+
 ## Energy Statistics View
 
 The Energy tab shows historical inverter output totals and savings estimates
@@ -279,7 +289,23 @@ GET /api/history?range=6h
 
 Supported ranges are `1h`, `6h`, `12h`, and `24h`.
 
-Analytics chart series (columnar, drives the single Analytics chart):
+### Two history sources: SQLite (operational) vs InfluxDB (analytics)
+
+The dashboard deliberately keeps two **independent** time-series sources so the
+operational views stay fast and dependency-free while long-term analysis lives
+in its own workspace:
+
+| Source       | Backed by                         | Drives                                 | Endpoint               |
+|--------------|-----------------------------------|----------------------------------------|------------------------|
+| **SQLite**   | local snapshot store (always on)  | the **History** chart in Aggregate / Devices | `/api/history/series`  |
+| **InfluxDB** | optional InfluxDB 2.x (opt-in)    | the dedicated **Analytics** tab        | `/api/analytics/series`|
+
+InfluxDB never silently replaces the SQLite history: `/api/history/series` is
+**always** SQLite-backed, so the Aggregate and Devices views work with zero
+external dependencies and remain the default experience. Enabling InfluxDB only
+adds the Analytics tab; it does not change the operational charts.
+
+#### `/api/history/series` — operational history (SQLite)
 
 ```text
 GET /api/history/series?range=24h&series=pv,output,battery&devices=WR1
@@ -293,17 +319,39 @@ and `end` (epoch seconds or ISO 8601) instead of `range`; the response then
 reports `"range": "custom"`. `start >= end` or unparseable bounds return
 `400 invalid_range`. The response is columnar
 (`time`, `series`, `devices`, `source`, `window`, `range`, `meta`) so the
-front-end uPlot chart can plot every series on one shared time axis. The backend
-chooses a `HistoryProvider` from config: the zero-dependency SQLite snapshot
-store by default, or InfluxDB when `influxdb.enabled` is set.
+front-end uPlot chart can plot every series on one shared time axis. The
+`source` is always `sqlite`.
 
-The Analytics panel on the dashboard uses this endpoint for one combined chart
-(reusing the existing PV/Output/Battery/Grid colors) with a period selector, a
-device selector, and KPI cards. It replaces the previous five separate canvas
-charts.
+The lightweight **History** panel (shown only on the Aggregate and Devices
+views) uses this endpoint for one combined chart of the default
+PV / Inverter Output / Battery series with a range selector and a device
+filter. It is intentionally minimal — no overlays, sub-tabs, zoom or KPIs — so
+these operational views stay quick to load.
 
-The panel has sub-tabs that keep the same single chart and only change the
-visible series and KPI cards (no extra chart pages):
+#### `/api/analytics/series` and `/api/analytics/status` — analytics (InfluxDB)
+
+```text
+GET /api/analytics/status
+GET /api/analytics/series?range=30d&series=pv,output,battery&devices=WR1
+GET /api/analytics/series?start=1717200000&end=1717286400&series=pv
+```
+
+These are served exclusively by the InfluxDB `HistoryProvider` and are only
+active when `influxdb.enabled` is set in config. `/api/analytics/status` returns
+`{"available": <bool>, "provider": "influxdb", "reason": ...}` so the front-end
+can render a clean state. When InfluxDB is **not** configured, both endpoints
+respond with HTTP 200 and `{"available": false, "reason": "not_configured"}`
+(never a broken chart or a JavaScript error); the Analytics tab then shows an
+"InfluxDB analytics is not configured" info panel. The series response shares the
+same columnar shape as `/api/history/series`, with `source` set to `influxdb`.
+
+The **Analytics** tab is a dedicated, larger analysis workspace (the primary
+chart is ~560px tall on desktop) reusing the existing PV/Output/Battery/Grid
+colors, with a period selector, a device filter, custom date ranges, drag-zoom,
+overlays, sub-tabs, and KPI cards — one combined chart, never a chart explosion.
+
+The Analytics tab has sub-tabs that keep the same single chart and only change
+the visible series and KPI cards (no extra chart pages):
 
 - **Overview** / **Devices** — PV, Inverter Output, Battery Power; KPIs PV,
   Output, Charge, Discharge, Current SoC, Runtime Role.
@@ -326,11 +374,12 @@ Performance and refresh behavior:
   long ranges stay fast (a 365d query over 100k+ raw snapshots returns in well
   under a second). Zoom/custom ranges request a narrower window and so return
   finer detail.
-- The panel auto-refreshes every 30s, but only while it is on screen; the
-  energy/diagnose/logs views (where the panel is hidden) and a backgrounded
-  browser tab do not trigger fetches. Each sub-tab loads only its own series.
-- The panel is mobile-friendly (controls, overlay chips, sub-tabs and KPI cards
-  reflow; the chart uses a reduced height on small screens) and shows explicit
+- The Analytics tab auto-refreshes every 30s, but only while it is the active
+  view; other views and a backgrounded browser tab do not trigger analytics
+  fetches. Each sub-tab loads only its own series. The lightweight History panel
+  refreshes on the same cadence while Aggregate/Devices is on screen.
+- Both panels are mobile-friendly (controls, overlay chips, sub-tabs and KPI
+  cards reflow; charts use reduced heights on small screens) and show explicit
   loading and empty/unavailable states.
 
 End-to-end tests (`tests/test_history_analytics_e2e.py`) cover the whole path.
@@ -338,7 +387,7 @@ The SQLite variant always runs (records snapshots through the real
 `DashboardStore`, serves the real dashboard, and asserts the
 `/api/history/series` payload). The InfluxDB variant is opt-in and runs against a
 live InfluxDB 2.x when these are set (e.g. with the bundled Docker InfluxDB from
-`develop/influxdb/`):
+`develop/influxdb/`), asserting the `/api/analytics/series` payload:
 
 ```bash
 EMS_INFLUX_E2E_URL=http://localhost:8086 \
