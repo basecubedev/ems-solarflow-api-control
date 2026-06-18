@@ -408,6 +408,11 @@ class PreviewHandler(BaseHTTPRequestHandler):
             data = self._history_series(query, source="influxdb")
             body += (
                 f"state.analytics.data={json.dumps(data)};"
+                # Enable the Grid Power overlay so the analytics preview also
+                # demonstrates the grid meter exchange line (import positive /
+                # export negative) on top of the overview series.
+                "if(state.analytics&&state.analytics.overlays)"
+                "state.analytics.overlays.grid=true;"
                 "if(typeof setAnalyticsAvailable==='function')setAnalyticsAvailable(true);"
                 "if(typeof renderAnalytics==='function')renderAnalytics();"
                 "if(typeof setAnalyticsLoading==='function')setAnalyticsLoading(false);"
