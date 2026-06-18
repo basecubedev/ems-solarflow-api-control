@@ -218,13 +218,14 @@ class InfluxTelemetryWriter:
     def _build_client(self):
         if self._client_factory is not None:
             return self._client_factory()
-        from ems.config import resolve_influx_token
         from ems.history.influx_client import HistoryInfluxClient
+        from ems.influx_setup import runtime_influx_token, runtime_influx_url
 
-        token = resolve_influx_token(self.config)
-        if not token or not self.config.get("url"):
+        url = runtime_influx_url(self.config)
+        token = runtime_influx_token(self.config)
+        if not token or not url:
             return None
-        return HistoryInfluxClient(self.config["url"], self.config["org"], token)
+        return HistoryInfluxClient(url, self.config["org"], token)
 
     def _client_or_none(self):
         if self._client is None:
@@ -259,7 +260,9 @@ class InfluxTelemetryWriter:
 
             client = self._client_or_none()
             if client is None:
-                self._maybe_log_error("influx_writer_unconfigured")
+                self._maybe_log_error(
+                    "influx_writer_unconfigured", hint=self._setup_hint()
+                )
                 self._sleep_backoff(backoff)
                 backoff = min(backoff * 2, self._max_backoff)
                 continue
@@ -272,7 +275,10 @@ class InfluxTelemetryWriter:
                 # never let the failure escape to the control loop.
                 self._client = None
                 self._maybe_log_error(
-                    "influx_writer_write_error", error=exc, line_count=len(batch)
+                    "influx_writer_write_error",
+                    error=exc,
+                    line_count=len(batch),
+                    hint=self._setup_hint(),
                 )
                 self._sleep_backoff(backoff)
                 backoff = min(backoff * 2, self._max_backoff)
@@ -280,6 +286,25 @@ class InfluxTelemetryWriter:
     def _sleep_backoff(self, seconds):
         # Wait, but wake immediately on stop().
         self._stop.wait(timeout=seconds)
+
+    def _setup_hint(self):
+        """Actionable one-liner for "enabled but not reachable" log lines.
+
+        The EMS controller never manages Docker, so when bundled InfluxDB is
+        unreachable the fix is a host-side setup command, not anything the
+        control loop can do. External InfluxDB is user-managed.
+        """
+        if self.config.get("mode") == "bundled":
+            return (
+                "InfluxDB is enabled but not reachable. For bundled mode run: "
+                "python3 emsctl.py influx init or start the full stack with: "
+                "python3 emsctl.py stack up"
+            )
+        return (
+            "InfluxDB is enabled but not reachable. Check influxdb.url/token "
+            "(external InfluxDB is user-managed) and run: "
+            "python3 emsctl.py influx status"
+        )
 
     def _maybe_log_error(self, event, **fields):
         now = time.time()

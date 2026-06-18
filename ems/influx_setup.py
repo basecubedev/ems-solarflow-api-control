@@ -32,6 +32,13 @@ DEFAULT_HOST_URL = "http://127.0.0.1:8086"
 # generated secrets and Compose's env_file stay in sync.
 DEFAULT_SECRET_FILE = "deploy/docker/influxdb.env"
 
+# Repo-local bind-mount target for bundled InfluxDB database state. Kept under
+# ./data/ so all local EMS runtime/history data (data/*.sqlite,
+# runtime-state.json) lives in one place that is easy to back up and migrate.
+# The bundled Compose file hard-codes the matching `./data/influxdb` bind mount,
+# resolved against the Compose project directory (the repo root).
+DEFAULT_DATA_DIR = "data/influxdb"
+
 # Base compose file shipped for everyone (EMS only, no InfluxDB).
 BASE_COMPOSE_FILE = "docker-compose.example.yml"
 # Bundled InfluxDB service.
@@ -73,6 +80,24 @@ def resolve_secret_file_path(influx_config, base_dir=None):
     if os.path.isabs(secret_file):
         return secret_file
     return os.path.join(base_dir, secret_file)
+
+
+def resolve_data_dir_path(base_dir=None):
+    """Absolute path to the bundled InfluxDB local data directory."""
+    base_dir = base_dir or BASE_DIR
+    return os.path.join(base_dir, DEFAULT_DATA_DIR)
+
+
+def ensure_data_dir(base_dir=None):
+    """Create the bundled InfluxDB local data directory (idempotent).
+
+    Returns the repo-root-relative path (``data/influxdb``). Docker would create
+    the bind-mount target itself, but pre-creating it keeps ownership with the
+    invoking user and makes the on-disk layout obvious before the container
+    starts.
+    """
+    os.makedirs(resolve_data_dir_path(base_dir=base_dir), exist_ok=True)
+    return DEFAULT_DATA_DIR
 
 
 def host_cli_url(influx_config):
@@ -256,6 +281,68 @@ def read_secret_file_token(influx_config, base_dir=None):
     with open(path, "r", encoding="utf-8") as handle:
         values = parse_env_file(handle.read())
     return values.get(token_env, "").strip()
+
+
+def is_container_runtime(*, environ=None):
+    """Best-effort detection of whether EMS runs inside a Docker/OCI container.
+
+    Used to decide which bundled InfluxDB URL the runtime should use: the Docker
+    service name (``influxdb.url``) inside the container, or the host loopback
+    (``influxdb.host_url``) on a native host. Detection order:
+
+    1. Explicit ``EMS_IN_CONTAINER`` override (``1``/``true`` or ``0``/``false``)
+       so the compose overlay and tests can pin the answer.
+    2. The standard Docker marker file ``/.dockerenv``.
+    """
+    environ = os.environ if environ is None else environ
+    flag = str(environ.get("EMS_IN_CONTAINER", "")).strip().lower()
+    if flag in ("1", "true", "yes", "on"):
+        return True
+    if flag in ("0", "false", "no", "off"):
+        return False
+    return os.path.exists("/.dockerenv")
+
+
+def runtime_influx_url(influx_config, *, environ=None):
+    """URL the EMS runtime / dashboard analytics should connect to.
+
+    Bundled mode on a native host must reach the container's published port via
+    the host loopback (``host_url``, default ``http://127.0.0.1:8086``) because
+    the Docker service name in ``url`` is not resolvable outside the Docker
+    network. Bundled mode *inside* a container keeps using ``url`` (the service
+    name). External mode always uses the operator-configured ``url``.
+    """
+    if influx_config.get("mode") == "bundled" and not is_container_runtime(
+        environ=environ
+    ):
+        return host_cli_url(influx_config)
+    return (influx_config.get("url") or "").strip()
+
+
+def runtime_influx_token(influx_config, *, environ=None, base_dir=None):
+    """Token the EMS runtime / dashboard analytics should use.
+
+    Resolution order:
+
+    1. Explicit ``influxdb.token`` from config.
+    2. ``influxdb.token_env`` from the process environment.
+    3. Bundled mode only: ``INFLUXDB_TOKEN`` (``token_env``) read from the
+       generated secret file, so a native-host bundled install works without the
+       operator exporting the token manually.
+
+    External mode never reads the bundled secret file. Returns an empty string
+    when no usable token exists (callers treat that as "not configured").
+    """
+    # Resolve config/env first (explicit token, then token_env). Imported
+    # locally so this lightweight setup module stays cheap to import.
+    from ems.config import resolve_influx_token
+
+    token = resolve_influx_token(influx_config, environ=environ)
+    if token:
+        return token
+    if influx_config.get("mode") == "bundled":
+        return read_secret_file_token(influx_config, base_dir=base_dir)
+    return ""
 
 
 def compose_files(influx_config):

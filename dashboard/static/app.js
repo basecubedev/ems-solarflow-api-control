@@ -3778,11 +3778,34 @@ function analyticsShouldAutoRefresh() {
 
 // Toggle the Analytics tab between its "InfluxDB not configured" info state and
 // the live chart body. Returns whether analytics is available.
-function setAnalyticsAvailable(available) {
+function setAnalyticsAvailable(available, info) {
   state.analytics.available = available;
   const unavailable = $("analyticsUnavailable");
   const body = $("analyticsBody");
-  if (unavailable) unavailable.hidden = available;
+  if (unavailable) {
+    unavailable.hidden = available;
+    // When InfluxDB is configured but unreachable the API sends an actionable
+    // hint; show it (with a matching heading) instead of the default
+    // "not configured" copy so the operator knows how to fix it.
+    const heading = unavailable.querySelector ? unavailable.querySelector("h3") : null;
+    const detail = unavailable.querySelector ? unavailable.querySelector("p") : null;
+    const hint = info && info.reason === "unreachable" ? info.hint : null;
+    if (heading) heading.textContent = hint
+      ? "InfluxDB analytics is not reachable"
+      : "InfluxDB analytics is not configured";
+    if (detail && hint) {
+      // The hint carries an explicit newline before the setup command so the
+      // whole command always stays on its own line; preserve it on render.
+      detail.style.whiteSpace = "pre-line";
+      detail.textContent = hint;
+    } else if (detail) {
+      detail.style.whiteSpace = "";
+      detail.textContent =
+        "Enable the optional InfluxDB service to use long-term analytics, " +
+        "zooming, and custom date ranges. The Aggregate and Devices views " +
+        "keep working without it.";
+    }
+  }
   if (body) body.hidden = !available;
   return available;
 }
@@ -3807,7 +3830,7 @@ async function loadAnalytics(showLoading = true) {
   // A 200 payload with available:false means InfluxDB is not configured; show
   // the clean info state instead of an empty/broken chart.
   if (payload && payload.available === false) {
-    setAnalyticsAvailable(false);
+    setAnalyticsAvailable(false, payload);
     state.analytics.data = null;
     return;
   }
@@ -4443,16 +4466,10 @@ function renderHistoryChart() {
   if (empty) empty.hidden = true;
 
   const seriesIds = HISTORY_SERIES.filter((id) => ANALYTICS_SERIES_META[id]);
-  const seriesData = [time];
-  seriesIds.forEach((id) => {
-    const values = (data.series && data.series[id]) || [];
-    seriesData.push(
-      time.map((_, index) => {
-        const value = values[index];
-        return value === null || value === undefined ? null : Number(value);
-      })
-    );
-  });
+  // Reuse the Analytics matrix builder so the History chart (Aggregate/Devices)
+  // shares its display-only battery inversion (negative == charging, positive ==
+  // discharging) and null handling.
+  const seriesData = analyticsChartSeriesData(data, seriesIds);
 
   // The history chart structure only varies by the (fixed) series set and the
   // selected device, so reuse the instance in place across refreshes when those
@@ -4481,7 +4498,9 @@ function renderHistoryChart() {
       stroke: cssColor(meta.colorVar, "#888"),
       width: 2,
       scale: "y",
-      value: (_self, raw) => (raw == null ? "--" : `${Math.round(raw)} ${meta.unit}`),
+      // Reuse the Analytics tooltip so the inverted battery line reads back as
+      // Charge/Discharge instead of a sign-flipped raw watt value.
+      value: (_self, raw) => analyticsSeriesTooltip(id, raw, meta.unit),
     });
   });
 
@@ -4804,6 +4823,7 @@ if (typeof module !== "undefined") {
     historyVisible,
     historyFetchUrl,
     loadHistory,
+    HISTORY_SERIES,
     renderHistoryChart,
     detectZoom,
     onAnalyticsXScale,

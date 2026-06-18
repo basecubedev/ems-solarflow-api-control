@@ -359,3 +359,71 @@ def test_influx_failure_does_not_stop_publish(monkeypatch):
     # Must not raise; SQLite still records.
     _publish_dashboard(fake)
     assert len(store.records) == 1
+
+
+# -- runtime credential wiring: bundled native host ------------------------
+
+
+def _bundled_writer_config():
+    from ems.config import normalize_influxdb_config
+
+    return normalize_influxdb_config(
+        {
+            "enabled": True,
+            "mode": "bundled",
+            "bucket_prefix": "ems",
+            "url": "http://influxdb:8086",
+            "host_url": "http://127.0.0.1:8086",
+        }
+    )
+
+
+def test_build_client_bundled_native_uses_host_url_and_secret_token(
+    tmp_path, monkeypatch
+):
+    from ems import influx_setup
+    import ems.history.influx_client as influx_client_mod
+
+    cfg = _bundled_writer_config()
+    monkeypatch.setattr(influx_setup, "BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("EMS_IN_CONTAINER", "0")
+    monkeypatch.delenv("INFLUXDB_TOKEN", raising=False)
+    influx_setup.ensure_secret_file(cfg, base_dir=str(tmp_path))
+    secret = influx_setup.read_secret_file_token(cfg, base_dir=str(tmp_path))
+
+    captured = {}
+
+    class _RecordingClient:
+        def __init__(self, url, org, token):
+            captured.update(url=url, org=org, token=token)
+
+    monkeypatch.setattr(
+        influx_client_mod, "HistoryInfluxClient", _RecordingClient
+    )
+
+    writer = InfluxTelemetryWriter(cfg)
+    client = writer._build_client()
+    assert isinstance(client, _RecordingClient)
+    assert captured["url"] == "http://127.0.0.1:8086"
+    assert captured["org"] == cfg["org"]
+    assert captured["token"] == secret
+    assert secret
+
+
+def test_build_client_returns_none_without_usable_token(tmp_path, monkeypatch):
+    from ems import influx_setup
+
+    cfg = _bundled_writer_config()
+    monkeypatch.setattr(influx_setup, "BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("EMS_IN_CONTAINER", "0")
+    monkeypatch.delenv("INFLUXDB_TOKEN", raising=False)
+    # No secret file -> bundled fallback yields no token.
+
+    writer = InfluxTelemetryWriter(cfg)
+    assert writer._build_client() is None
+
+
+def test_build_client_factory_override_is_unchanged():
+    sentinel = object()
+    writer = InfluxTelemetryWriter(CONFIG, client_factory=lambda: sentinel)
+    assert writer._build_client() is sentinel

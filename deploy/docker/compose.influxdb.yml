@@ -38,9 +38,17 @@ services:
       - "8086:8086"
     env_file:
       - deploy/docker/influxdb.env
+    # Database state is bind-mounted under the repo-local ./data/ directory so
+    # all local EMS runtime/history data lives in one place that is easy to
+    # back up and migrate (alongside data/*.sqlite and runtime-state.json).
+    # The relative path resolves against the Compose project directory, which is
+    # the repo root: emsctl runs `docker compose` from there with the root
+    # docker-compose.example.yml as the first -f file. data/influxdb is
+    # gitignored; emsctl pre-creates it before starting the container.
+    #
+    # Earlier v0.6.0 release-candidate builds used a Docker named volume
+    # (influxdb-data) instead. That old volume is left untouched; see
+    # docs/influxdb.md for migrating its data if needed.
     volumes:
-      - influxdb-data:/var/lib/influxdb2
+      - ./data/influxdb:/var/lib/influxdb2
     restart: unless-stopped
-
-volumes:
-  influxdb-data:

@@ -85,8 +85,9 @@ python3 scripts/check_log_events.py /tmp/ems-sim.log \
 
 Build source archives with `git archive` so only tracked files are included.
 This excludes local runtime data and secrets (`.venv/`, `__pycache__/`,
-`data/*.sqlite`, `deploy/docker/influxdb.env`, `develop/influxdb/.env`,
-`develop/influxdb/data/`, …), which are all gitignored:
+`data/*.sqlite`, `data/influxdb/` (bundled InfluxDB database state),
+`deploy/docker/influxdb.env`, `develop/influxdb/.env`, `develop/influxdb/data/`,
+…), which are all gitignored:
 
 ```bash
 git archive --format=tar.gz -o ../ems-solarflow-api-control-clean.tar.gz HEAD

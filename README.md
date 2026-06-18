@@ -2,7 +2,7 @@
 
 [![Continuous Integration](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/simulated-regression-tests.yml/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/simulated-regression-tests.yml)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.14-blue)
-![Automated Tests](https://img.shields.io/badge/tests-%3E450-blue)
+![Automated Tests](https://img.shields.io/badge/tests-%3E650-blue)
 
 ### Dashboard Preview
 
@@ -324,19 +324,31 @@ data/ems_dashboard.sqlite dashboard statistics database
 
 The dashboard works with built-in SQLite history out of the box. For the
 long-range **Analytics** tab backed by InfluxDB, enable it in `config.json`
-(`influxdb.enabled = true`, leaving the default `mode: "bundled"`) and start the
-stack with one command from the repo checkout:
+(`influxdb.enabled = true`, leaving the default `mode: "bundled"`), then run the
+complete one-command setup from the repo checkout:
 
 ```bash
-python3 emsctl.py stack up
+python3 emsctl.py influx init      # complete bundled Analytics setup
 ```
 
-This generates a gitignored local secret file
-(`deploy/docker/influxdb.env`) with secure random tokens, starts the bundled
-InfluxDB and the EMS with the same `INFLUXDB_TOKEN`, and reconciles
+`influx init` is the full end-to-end bootstrap: it generates a gitignored local
+secret file (`deploy/docker/influxdb.env`) with secure random tokens, starts the
+bundled InfluxDB, waits for readiness, and reconciles
 buckets/retention/downsampling tasks from `config.json`. No tokens are stored in
-`config.json`. See [docs/influxdb.md](docs/influxdb.md) for the bundled and
-external paths.
+`config.json` and no manual Docker Compose or Influx CLI steps are needed.
+Bundled InfluxDB stores its local history under `./data/influxdb` (gitignored),
+keeping all EMS runtime/history data together under `./data/` — include
+`./data/` in backups if you want to keep local history.
+
+To start the whole stack (InfluxDB **and** the EMS container) at once, use:
+
+```bash
+python3 emsctl.py stack up         # runs the bundled init automatically (auto_init)
+```
+
+The EMS controller itself never starts Docker containers; external InfluxDB
+remains user-managed. See [docs/influxdb.md](docs/influxdb.md) for the bundled
+and external paths.
 
 Full Docker documentation: [docs/docker.md](docs/docker.md).
 

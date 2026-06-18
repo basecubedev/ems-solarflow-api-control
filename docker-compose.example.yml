@@ -8,6 +8,10 @@ services:
     environment:
       PUID: "${PUID:-}"
       PGID: "${PGID:-}"
+      # Marks this as an in-container EMS runtime so bundled InfluxDB is reached
+      # by its Docker service name (influxdb.url), not the host loopback
+      # (influxdb.host_url). A natively-running EMS leaves this unset.
+      EMS_IN_CONTAINER: "1"
     ports:
       - "8080:8080"
     volumes:

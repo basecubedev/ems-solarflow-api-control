@@ -337,16 +337,42 @@ def _runtime(devices):
     }
 
 
+def _lerp_curve(hour, points):
+    """Piecewise-linear interpolation over sorted ``(hour, value)`` control
+    points, clamped at both ends. Deterministic helper for the SoC profile."""
+    if hour <= points[0][0]:
+        return points[0][1]
+    if hour >= points[-1][0]:
+        return points[-1][1]
+    for i in range(1, len(points)):
+        h0, v0 = points[i - 1]
+        h1, v1 = points[i]
+        if hour <= h1:
+            t = (hour - h0) / (h1 - h0) if h1 > h0 else 0.0
+            return v0 + (v1 - v0) * t
+    return points[-1][1]
+
+
 def _history(snapshot, points=96):
     """Synthetic but lively ~24h history (15-min steps) for the preview charts.
 
-    Shapes a realistic solar day instead of straight ramps: a PV bell curve with
-    passing-cloud dips, a morning/evening home-load profile, battery
-    charge/discharge that follows the PV surplus, a rising-then-plateau SoC, and
-    a grid curve derived from an energy balance so it imports at night/peaks and
-    exports around midday (i.e. it crosses zero). Fully deterministic (no RNG) so
-    the live preview and the captured screenshots stay reproducible.
+    Models how the EMS keeps the **grid meter** near zero: while a source is
+    available (PV by day, or a charged battery), it balances the house load via
+    solar/battery so the grid line just wobbles around ~-5 W. Only when **both**
+    PV is absent **and** the battery is empty (a pre-dawn window here, after the
+    overnight discharge drains the pack) does the grid rise up to the full home
+    load -- because no energy source is feeding in, the meter must cover
+    everything. Battery, inverter output and SoC follow the same balance, and the
+    grid series is derived from it (grid = home - pv + battery). Fully
+    deterministic (no RNG) so the live preview and screenshots stay reproducible.
     """
+
+    # SoC drains overnight (battery serving the house), bottoms out empty in the
+    # pre-dawn hours, then recharges from the PV surplus and plateaus midday.
+    soc_curve = [
+        (0.0, 30.0), (2.5, 12.0), (4.0, 5.0), (5.5, 5.0), (8.0, 45.0),
+        (12.0, 84.0), (15.5, 96.0), (20.0, 84.0), (24.0, 32.0),
+    ]
 
     items = []
     step = 900  # 15 minutes
@@ -355,28 +381,37 @@ def _history(snapshot, points=96):
     for index in range(points):
         frac = index / (points - 1) if points > 1 else 0.0
         hour = frac * 24.0
-        # PV: bell over daylight (~05:00-21:00) with two ripple frequencies to
+        # PV: bell over daylight (~05:30-20:30) with two ripple frequencies to
         # mimic passing clouds.
-        daylight = max(0.0, math.sin(math.pi * min(1.0, max(0.0, (hour - 5.0) / 16.0))))
+        daylight = max(0.0, math.sin(math.pi * min(1.0, max(0.0, (hour - 5.5) / 15.0))))
         clouds = 1.0 - 0.30 * max(0.0, math.sin(index * 0.8)) - 0.14 * max(0.0, math.sin(index * 2.3))
         pv = max(0.0, 2100.0 * daylight * clouds)
-        # Home load: base draw + morning(~07:00) and evening(~20:00) bumps + a
-        # gentle ripple so it never looks synthetic-flat.
-        morning = math.exp(-((hour - 7.0) ** 2) / 3.0)
-        evening = math.exp(-((hour - 20.0) ** 2) / 4.0)
-        home = 250.0 + 360.0 * morning + 540.0 * evening + 90.0 * math.sin(index * 0.6)
-        home = max(120.0, home)
-        # Inverter output serves the home load, capped at the system limit.
-        output = min(800.0, home)
-        # Battery follows the PV surplus: charges (positive) midday, discharges
-        # (negative) morning/evening.
-        battery = max(-820.0, min(1600.0, (pv - output) * 0.7))
-        # Grid from a simple energy balance (home - pv + battery): imports when
-        # demand exceeds local supply, exports the midday surplus.
-        grid = home - pv + battery
-        # SoC: smooth S-curve rise with a small wobble.
-        soc = 38.0 + 52.0 * (0.5 - 0.5 * math.cos(math.pi * frac)) + 3.0 * math.sin(index * 0.5)
-        soc = max(5.0, min(100.0, soc))
+        # Home load: fairly steady base + morning(~07:30) and evening(~19:00)
+        # bumps + a gentle ripple so the "home level" reads as a clear line.
+        morning = math.exp(-((hour - 7.5) ** 2) / 3.0)
+        evening = math.exp(-((hour - 19.0) ** 2) / 5.0)
+        home = 480.0 + 180.0 * morning + 240.0 * evening + 45.0 * math.sin(index * 0.7)
+        home = max(360.0, home)
+        # SoC profile (independent design curve, qualitatively tracks the flows).
+        soc = max(5.0, min(100.0, _lerp_curve(hour, soc_curve) + 1.5 * math.sin(index * 0.5)))
+
+        # A source is "available" when PV is producing or the battery still holds
+        # charge. With no source the meter must carry the whole house.
+        source_available = pv > 30.0 or soc > 10.0
+        if source_available:
+            # EMS balances PV + battery to the load: the grid meter only wobbles
+            # around ~-5 W (between roughly -10 and +10 W).
+            grid = -2.0 + 5.0 * math.sin(index * 0.7) + 3.0 * math.sin(index * 1.9 + 0.6)
+            grid = max(-10.0, min(10.0, grid))
+        else:
+            # No PV and an empty battery: the grid rises to the full home load
+            # (PV, if any, shaves a little off it).
+            grid = home - pv
+        # Battery follows from the same energy balance (positive == charging).
+        battery = grid - home + pv
+        # Inverter output = house load served locally; drops to 0 when the meter
+        # is covering everything (grid == home), capped at the system limit.
+        output = max(0.0, min(800.0, home - max(0.0, grid)))
         items.append(
             {
                 **snapshot,

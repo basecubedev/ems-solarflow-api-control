@@ -355,3 +355,69 @@ class InfluxQueryTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --- runtime credential wiring: bundled native host ------------------------
+
+from ems import influx_setup as _influx_setup  # noqa: E402
+import ems.history.influx_client as _influx_client_mod  # noqa: E402
+
+
+def _bundled_provider_config():
+    return normalize_influxdb_config(
+        {
+            "enabled": True,
+            "mode": "bundled",
+            "bucket_prefix": "ems",
+            "url": "http://influxdb:8086",
+            "host_url": "http://127.0.0.1:8086",
+        }
+    )
+
+
+def test_provider_available_bundled_native_with_secret_file(tmp_path, monkeypatch):
+    cfg = _bundled_provider_config()
+    monkeypatch.setattr(_influx_setup, "BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("EMS_IN_CONTAINER", "0")
+    monkeypatch.delenv("INFLUXDB_TOKEN", raising=False)
+    _influx_setup.ensure_secret_file(cfg, base_dir=str(tmp_path))
+
+    provider = InfluxHistoryProvider(cfg)
+    assert provider.available() is True
+
+
+def test_provider_unavailable_when_no_token_or_secret(tmp_path, monkeypatch):
+    cfg = _bundled_provider_config()
+    monkeypatch.setattr(_influx_setup, "BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("EMS_IN_CONTAINER", "0")
+    monkeypatch.delenv("INFLUXDB_TOKEN", raising=False)
+    # No secret file written under tmp_path -> no bundled fallback token.
+
+    provider = InfluxHistoryProvider(cfg)
+    assert provider.available() is False
+
+
+def test_provider_client_uses_resolved_host_url_and_token(tmp_path, monkeypatch):
+    cfg = _bundled_provider_config()
+    monkeypatch.setattr(_influx_setup, "BASE_DIR", str(tmp_path))
+    monkeypatch.setenv("EMS_IN_CONTAINER", "0")
+    monkeypatch.delenv("INFLUXDB_TOKEN", raising=False)
+    _influx_setup.ensure_secret_file(cfg, base_dir=str(tmp_path))
+    secret = _influx_setup.read_secret_file_token(cfg, base_dir=str(tmp_path))
+
+    captured = {}
+
+    class _RecordingClient:
+        def __init__(self, url, org, token):
+            captured.update(url=url, org=org, token=token)
+
+    monkeypatch.setattr(
+        _influx_client_mod, "HistoryInfluxClient", _RecordingClient
+    )
+
+    provider = InfluxHistoryProvider(cfg)
+    provider.client()
+    assert captured["url"] == "http://127.0.0.1:8086"
+    assert captured["org"] == cfg["org"]
+    assert captured["token"] == secret
+    assert secret
