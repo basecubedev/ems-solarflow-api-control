@@ -192,10 +192,5 @@
     "_comment": "Household/grid power meter. Supported types: shelly, ecotracker, tasmota_http. Shelly uses total power by default. Use channels like [c] or [a,c] to read selected Shelly clamps. Tasmota needs url or ip plus power_path, for example StatusSNS.SML.Power_curr.",
     "type": "shelly",
     "ip": "192.168.1.50"
-  },
-
-  "shelly": {
-    "_comment": "Legacy fallback for one release. Prefer grid_meter above for new configs.",
-    "ip": "192.168.1.50"
   }
 }
