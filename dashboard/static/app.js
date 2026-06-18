@@ -3794,8 +3794,12 @@ function setAnalyticsAvailable(available, info) {
       ? "InfluxDB analytics is not reachable"
       : "InfluxDB analytics is not configured";
     if (detail && hint) {
+      // The hint carries an explicit newline before the setup command so the
+      // whole command always stays on its own line; preserve it on render.
+      detail.style.whiteSpace = "pre-line";
       detail.textContent = hint;
     } else if (detail) {
+      detail.style.whiteSpace = "";
       detail.textContent =
         "Enable the optional InfluxDB service to use long-term analytics, " +
         "zooming, and custom date ranges. The Aggregate and Devices views " +

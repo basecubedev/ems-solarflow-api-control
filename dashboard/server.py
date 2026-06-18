@@ -36,7 +36,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Shown when Analytics history is enabled but InfluxDB cannot be reached, so the
 # operator gets the one setup command that fixes it (the EMS never starts Docker).
 ANALYTICS_UNREACHABLE_HINT = (
-    "Analytics history is enabled, but InfluxDB is not reachable. "
+    "Analytics history is enabled, but InfluxDB is not reachable.\n"
     "Run: python3 emsctl.py influx init"
 )
 MAX_JSON_BODY_BYTES = 16 * 1024
