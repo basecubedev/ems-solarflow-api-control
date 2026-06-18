@@ -15,7 +15,8 @@ Import-side-effect-free.
 
 from datetime import datetime, timezone
 
-from ems.config import influx_duration_seconds, resolve_influx_token
+from ems.config import influx_duration_seconds
+from ems.influx_setup import runtime_influx_token, runtime_influx_url
 from ems.history.provider import (
     HistoryProvider,
     HistoryResult,
@@ -171,17 +172,17 @@ class InfluxHistoryProvider(HistoryProvider):
             from ems.history.influx_client import HistoryInfluxClient
 
             self._client = HistoryInfluxClient(
-                self.config["url"],
+                runtime_influx_url(self.config),
                 self.config["org"],
-                resolve_influx_token(self.config),
+                runtime_influx_token(self.config),
             )
         return self._client
 
     def available(self):
         if not self.config.get("enabled"):
             return False
-        return bool(self.config.get("url")) and bool(
-            resolve_influx_token(self.config)
+        return bool(runtime_influx_url(self.config)) and bool(
+            runtime_influx_token(self.config)
         )
 
     def query(self, start, end, window=None, devices=None, series=None):

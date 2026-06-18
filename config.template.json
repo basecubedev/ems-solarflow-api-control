@@ -101,7 +101,7 @@
     "auto_sync": true,
     "_comment_secret_file": "Local, gitignored env file (relative to the project root) where 'influx init' generates secrets. Never commit it; no secrets belong in this config.json.",
     "secret_file": "deploy/docker/influxdb.env",
-    "_comment_url": "EMS runtime uses 'url' (the in-container Docker service name for bundled mode). Host-side CLI commands (emsctl influx init/sync/status, stack up) use 'host_url' for bundled mode, because the Docker service name is not resolvable on the host.",
+    "_comment_url": "'url' is the in-container Docker service name, used only by an EMS running INSIDE a container (the compose overlay sets EMS_IN_CONTAINER=1). In bundled mode everything on the host - the emsctl CLI (influx init/sync/status, stack up) AND a natively-running EMS (telemetry writer + dashboard analytics) - uses 'host_url' instead, because the Docker service name is not resolvable on the host. External mode always uses 'url'.",
     "url": "http://influxdb:8086",
     "host_url": "http://127.0.0.1:8086",
     "org": "ems",

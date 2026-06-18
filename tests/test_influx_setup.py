@@ -962,3 +962,121 @@ def test_stack_command_appears_in_help():
         cwd=ROOT, text=True, capture_output=True, check=False,
     )
     assert "up" in result.stdout
+
+
+# --- runtime URL / token resolution (native host vs container) --------------
+
+
+def test_runtime_url_bundled_native_uses_host_url():
+    cfg = bundled_config(
+        url="http://influxdb:8086", host_url="http://127.0.0.1:8086"
+    )
+    # No /.dockerenv and no override -> treated as native host.
+    assert (
+        influx_setup.runtime_influx_url(cfg, environ={})
+        == "http://127.0.0.1:8086"
+    )
+
+
+def test_runtime_url_bundled_native_missing_host_url_falls_back_to_loopback():
+    cfg = bundled_config(url="http://influxdb:8086", host_url="")
+    # normalize fills host_url with the default; force it empty to exercise the
+    # runtime fallback path directly.
+    cfg["host_url"] = ""
+    assert (
+        influx_setup.runtime_influx_url(cfg, environ={})
+        == influx_setup.DEFAULT_HOST_URL
+    )
+
+
+def test_runtime_url_bundled_container_uses_service_url():
+    cfg = bundled_config(
+        url="http://influxdb:8086", host_url="http://127.0.0.1:8086"
+    )
+    assert (
+        influx_setup.runtime_influx_url(cfg, environ={"EMS_IN_CONTAINER": "1"})
+        == "http://influxdb:8086"
+    )
+
+
+def test_runtime_url_external_uses_configured_url_even_in_container():
+    cfg = normalize_influxdb_config(
+        {"enabled": True, "mode": "external", "url": "http://nas.local:8086"}
+    )
+    assert (
+        influx_setup.runtime_influx_url(cfg, environ={"EMS_IN_CONTAINER": "1"})
+        == "http://nas.local:8086"
+    )
+    assert (
+        influx_setup.runtime_influx_url(cfg, environ={})
+        == "http://nas.local:8086"
+    )
+
+
+def test_is_container_runtime_respects_explicit_override():
+    assert influx_setup.is_container_runtime(environ={"EMS_IN_CONTAINER": "1"})
+    assert not influx_setup.is_container_runtime(
+        environ={"EMS_IN_CONTAINER": "0"}
+    )
+
+
+def test_runtime_token_explicit_token_wins(tmp_path):
+    # Even with a bundled secret file present, an explicit token takes priority.
+    cfg = bundled_config(token="explicit-token")
+    influx_setup.ensure_secret_file(cfg, base_dir=str(tmp_path))
+    assert (
+        influx_setup.runtime_influx_token(
+            cfg, environ={"INFLUXDB_TOKEN": "env-token"}, base_dir=str(tmp_path)
+        )
+        == "explicit-token"
+    )
+
+
+def test_runtime_token_env_wins_over_secret_file(tmp_path):
+    cfg = bundled_config(token="")
+    influx_setup.ensure_secret_file(cfg, base_dir=str(tmp_path))
+    assert (
+        influx_setup.runtime_influx_token(
+            cfg, environ={"INFLUXDB_TOKEN": "env-token"}, base_dir=str(tmp_path)
+        )
+        == "env-token"
+    )
+
+
+def test_runtime_token_bundled_reads_secret_file_when_env_missing(tmp_path):
+    cfg = bundled_config(token="")
+    influx_setup.ensure_secret_file(cfg, base_dir=str(tmp_path))
+    secret_values = influx_setup.parse_env_file(
+        Path(
+            influx_setup.resolve_secret_file_path(cfg, base_dir=str(tmp_path))
+        ).read_text()
+    )
+    resolved = influx_setup.runtime_influx_token(
+        cfg, environ={}, base_dir=str(tmp_path)
+    )
+    assert resolved == secret_values["INFLUXDB_TOKEN"]
+    assert resolved
+
+
+def test_runtime_token_external_does_not_read_secret_file(tmp_path):
+    # A secret file written for bundled mode must not leak into external mode.
+    bundled = bundled_config(token="")
+    influx_setup.ensure_secret_file(bundled, base_dir=str(tmp_path))
+    external = normalize_influxdb_config(
+        {"enabled": True, "mode": "external", "url": "http://nas.local:8086"}
+    )
+    assert (
+        influx_setup.runtime_influx_token(
+            external, environ={}, base_dir=str(tmp_path)
+        )
+        == ""
+    )
+
+
+def test_runtime_token_bundled_missing_secret_file_returns_empty(tmp_path):
+    cfg = bundled_config(token="")
+    # No secret file created under tmp_path.
+    assert (
+        influx_setup.runtime_influx_token(cfg, environ={}, base_dir=str(tmp_path))
+        == ""
+    )

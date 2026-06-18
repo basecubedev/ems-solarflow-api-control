@@ -218,13 +218,14 @@ class InfluxTelemetryWriter:
     def _build_client(self):
         if self._client_factory is not None:
             return self._client_factory()
-        from ems.config import resolve_influx_token
         from ems.history.influx_client import HistoryInfluxClient
+        from ems.influx_setup import runtime_influx_token, runtime_influx_url
 
-        token = resolve_influx_token(self.config)
-        if not token or not self.config.get("url"):
+        url = runtime_influx_url(self.config)
+        token = runtime_influx_token(self.config)
+        if not token or not url:
             return None
-        return HistoryInfluxClient(self.config["url"], self.config["org"], token)
+        return HistoryInfluxClient(url, self.config["org"], token)
 
     def _client_or_none(self):
         if self._client is None:

@@ -1330,16 +1330,13 @@ def resolve_influx_token_with_secret_file(influx_config):
     Running the bundled stack on the host means the ``token_env`` variable is
     usually only present inside the secret file, not the host environment, so
     bundled mode reads it from there when config/env do not provide one.
+
+    Thin wrapper over :func:`ems.influx_setup.runtime_influx_token` so the
+    host-side CLI and the EMS/dashboard runtime resolve credentials identically.
     """
-    from ems.config import resolve_influx_token
     from ems import influx_setup
 
-    token = resolve_influx_token(influx_config)
-    if token:
-        return token
-    if influx_config.get("mode") == "bundled":
-        return influx_setup.read_secret_file_token(influx_config)
-    return ""
+    return influx_setup.runtime_influx_token(influx_config)
 
 
 def run_docker_compose(command, cwd, dry_run=False, stdout_to_stderr=False):
