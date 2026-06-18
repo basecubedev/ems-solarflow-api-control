@@ -373,6 +373,46 @@ Multiple items such as `["a", "c"]` sum only those selected clamps:
 `channels` entries may be `a`, `b`, `c`, `em1:0`, `em1:1`, or `em1:2`. The
 values `total` and `sum` are not valid inside `channels`.
 
+## Example 7b: Shelly 3EM Gen1 Grid Meter
+
+The older non-Pro Shelly 3EM Gen1 meter uses the classic `/status` endpoint
+instead of `/rpc/Shelly.GetStatus`. Use the `shelly_3em_gen1` type for it:
+
+```text
+shelly            = Shelly Pro / Gen2 / Gen3 via /rpc/Shelly.GetStatus
+shelly_3em_gen1   = Shelly 3EM Gen1 via /status
+```
+
+A Shelly 3EM Gen1 reads the top-level `total_power` by default, falling back to
+summing all three `emeters[].power` values:
+
+```json
+{
+  "grid_meter": {
+    "type": "shelly_3em_gen1",
+    "ip": "192.168.1.50"
+  }
+}
+```
+
+Use `channels` only when you intentionally want to read a subset of
+phases/clamps. Valid entries are `a`, `b`, `c`, `0`, `1`, `2`, `emeter:0`,
+`emeter:1`, and `emeter:2`. Phase letters are normalized to lowercase, and when
+`channels` is configured `total_power` is ignored:
+
+```json
+{
+  "grid_meter": {
+    "type": "shelly_3em_gen1",
+    "ip": "192.168.1.50",
+    "channels": ["a", "c"]
+  }
+}
+```
+
+Clamp direction must match EMS expectations: `positive = grid import`,
+`negative = grid export`. The sign is not inverted automatically.
+
 ## Example 8: Runtime-State Explained
 
 On first start, EMS creates the configured runtime-state file automatically.

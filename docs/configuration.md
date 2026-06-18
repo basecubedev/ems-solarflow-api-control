@@ -443,10 +443,20 @@ default, while runtime-state can override the active weighting.
 ## Grid Meter Settings
 
 `grid_meter.type` selects the local household/grid power meter implementation.
-Supported values are `shelly`, `ecotracker`, and `tasmota_http`.
+Supported values are `shelly`, `shelly_3em_gen1`, `ecotracker`, and
+`tasmota_http`.
+
+There are two Shelly meter types depending on the generation of your device:
+
+```text
+shelly            = Shelly Pro / Gen2 / Gen3 via /rpc/Shelly.GetStatus
+shelly_3em_gen1   = Shelly 3EM Gen1 via /status
+```
 
 `grid_meter.ip` is the local meter IP address. The EMS controller only uses the
 meter's current grid power value as the input for target calculation.
+
+### Shelly Pro / Gen2 / Gen3 (`shelly`)
 
 Shelly Pro 3EM uses:
 
@@ -463,6 +473,42 @@ single item list such as `["c"]` is valid and reads only clamp C. Multiple
 items such as `["a", "c"]` sum only those selected clamps. Valid entries are
 `a`, `b`, `c`, `em1:0`, `em1:1`, and `em1:2`; `total` and `sum` are not valid
 inside `channels`.
+
+### Shelly 3EM Gen1 (`shelly_3em_gen1`)
+
+The older non-Pro Shelly 3EM Gen1 meter uses the classic HTTP status endpoint:
+
+```text
+http://<ip>/status
+```
+
+By default the EMS prefers the top-level `total_power` value when present, and
+otherwise sums all numeric `emeters[].power` values (all three phases/clamps).
+
+Use `grid_meter.channels` only when you intentionally want to read a subset of
+phases/clamps. Valid entries are `a`, `b`, `c`, `0`, `1`, `2`, `emeter:0`,
+`emeter:1`, and `emeter:2`, mapped as:
+
+```text
+a / 0 / emeter:0 -> emeters[0].power
+b / 1 / emeter:1 -> emeters[1].power
+c / 2 / emeter:2 -> emeters[2].power
+```
+
+Phase letters are normalized to lowercase, so `["A", "C"]` becomes
+`["a", "c"]`. When `channels` is configured, `total_power` is ignored and only
+the selected `emeters[].power` values are summed (because `total_power` always
+represents all clamps and cannot represent a partial selection).
+
+Clamp direction must match EMS expectations:
+
+```text
+positive = grid import
+negative = grid export
+```
+
+The sign is not inverted automatically for `shelly_3em_gen1`. If your clamps
+are installed with reversed polarity, correct it on the device.
 
 everHome EcoTracker uses:
 
@@ -515,6 +561,29 @@ Shelly selected clamps A and C example:
 {
   "grid_meter": {
     "type": "shelly",
+    "ip": "192.168.1.50",
+    "channels": ["a", "c"]
+  }
+}
+```
+
+Shelly 3EM Gen1 example (all phases):
+
+```json
+{
+  "grid_meter": {
+    "type": "shelly_3em_gen1",
+    "ip": "192.168.1.50"
+  }
+}
+```
+
+Shelly 3EM Gen1 selected phases A and C example:
+
+```json
+{
+  "grid_meter": {
+    "type": "shelly_3em_gen1",
     "ip": "192.168.1.50",
     "channels": ["a", "c"]
   }

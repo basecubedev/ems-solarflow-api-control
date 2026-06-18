@@ -216,6 +216,27 @@ def test_shelly_grid_meter_config_preserves_channels(tmp_path):
         restore_config_module(snapshot)
 
 
+def test_shelly_3em_gen1_grid_meter_config_preserves_channels(tmp_path):
+    snapshot = snapshot_config_module()
+    values = base_minimal_config()
+    values["grid_meter"] = {
+        "type": "shelly_3em_gen1",
+        "ip": "192.168.1.50",
+        "channels": ["A", "C"],
+    }
+
+    try:
+        initialize_config_from_dict(tmp_path, values)
+
+        assert cfg.GRID_METER_CONFIG == {
+            "type": "shelly_3em_gen1",
+            "ip": "192.168.1.50",
+            "channels": ["a", "c"],
+        }
+    finally:
+        restore_config_module(snapshot)
+
+
 def test_shelly_grid_meter_config_rejects_channels_string(tmp_path):
     snapshot = snapshot_config_module()
     values = base_minimal_config()

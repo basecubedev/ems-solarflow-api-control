@@ -839,7 +839,7 @@ def diagnose_grid_meter_config(checks, config_data):
 
     meter_type = str(grid_meter.get("type", "shelly")).strip().lower()
     diagnose_add(checks, "config", "ok", "grid_meter_type", f"Grid meter type: {meter_type}", type=meter_type)
-    if meter_type in ("shelly", "ecotracker"):
+    if meter_type in ("shelly", "shelly_3em_gen1", "ecotracker"):
         if grid_meter.get("ip"):
             diagnose_add(checks, "config", "ok", "grid_meter_ip_present", f"{meter_type} grid meter IP is configured")
         else:
@@ -1299,6 +1299,15 @@ def diagnose_hardware(checks, config_data):
             diagnose_add(checks, "hardware", "ok", "shelly_read_ok", "Shelly read-only status endpoint returned parseable power", status_code=status, power_w=power)
         except Exception as exc:
             diagnose_add(checks, "hardware", "warning", "shelly_read_failed", f"Shelly read-only probe failed: {exc.__class__.__name__}")
+    elif meter_type == "shelly_3em_gen1" and grid_meter.get("ip"):
+        url = f"http://{grid_meter['ip']}/status"
+        try:
+            status, payload = diagnose_http_json(url)
+            from ems.clients import _parse_shelly_3em_gen1_power
+            power = _parse_shelly_3em_gen1_power(payload, channels=grid_meter.get("channels"))
+            diagnose_add(checks, "hardware", "ok", "shelly_3em_gen1_read_ok", "Shelly 3EM Gen1 read-only status endpoint returned parseable power", status_code=status, power_w=power)
+        except Exception as exc:
+            diagnose_add(checks, "hardware", "warning", "shelly_3em_gen1_read_failed", f"Shelly 3EM Gen1 read-only probe failed: {exc.__class__.__name__}")
     elif meter_type == "ecotracker" and grid_meter.get("ip"):
         url = f"http://{grid_meter['ip']}/v1/json"
         try:

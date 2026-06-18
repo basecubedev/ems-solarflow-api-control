@@ -352,6 +352,49 @@ class ShellyClient:
         return self.last_value
 
 
+class Shelly3EMGen1Client:
+    """Client for Shelly 3EM Gen1 power meters."""
+
+    def __init__(self, ip, session, channels=None):
+        self.ip = ip
+        self.session = session
+        self._channels = _normalize_shelly_channels(channels)
+        self.last_value = 0
+
+    @property
+    def channels(self):
+        return self._channels
+
+    def get_power(self):
+        """Return current household/grid power usage."""
+
+        try:
+            r = self.session.get(
+                f"http://{self.ip}/status",
+                timeout=3
+            )
+
+            self.last_value = round(
+                _parse_shelly_3em_gen1_power(
+                    r.json(),
+                    channels=self._channels,
+                ),
+                1
+            )
+
+        except Exception as e:
+            log_event(
+                logging.WARNING,
+                "shelly_3em_gen1_read_error",
+                ip=self.ip,
+                channels=self._channels,
+                error=e,
+                stale_value=self.last_value
+            )
+
+        return self.last_value
+
+
 class EcoTrackerClient:
     """Client for everHome EcoTracker local REST API."""
 
@@ -431,6 +474,13 @@ def create_grid_meter_client(config, session):
 
     if meter_type == "shelly":
         return ShellyClient(
+            ip,
+            session,
+            channels=config.get("channels"),
+        )
+
+    if meter_type == "shelly_3em_gen1":
+        return Shelly3EMGen1Client(
             ip,
             session,
             channels=config.get("channels"),
@@ -556,6 +606,80 @@ def _parse_shelly_power(data, channels=None):
             "Unsupported Shelly status payload: missing "
             "em:0.total_act_power or em1:* act_power values"
         ) from e
+
+
+_SHELLY_3EM_GEN1_CHANNEL_INDEX = {
+    "a": 0,
+    "b": 1,
+    "c": 2,
+    "emeter:0": 0,
+    "emeter:1": 1,
+    "emeter:2": 2,
+    "0": 0,
+    "1": 1,
+    "2": 2,
+}
+
+
+def _parse_shelly_3em_gen1_emeter_power(data, index, channel):
+    emeters = data.get("emeters")
+    if isinstance(emeters, list) and 0 <= index < len(emeters):
+        meter = emeters[index]
+        if isinstance(meter, dict):
+            value = meter.get("power")
+            if _is_numeric(value):
+                return float(value)
+
+    raise ValueError(
+        "Unsupported Shelly 3EM Gen1 status payload: missing numeric "
+        f"emeters[{index}].power for channel {channel}"
+    )
+
+
+def _parse_shelly_3em_gen1_power(data, channels=None):
+    """Extract grid power from Shelly 3EM Gen1 /status payloads."""
+
+    if not isinstance(data, dict):
+        raise ValueError("Unsupported Shelly 3EM Gen1 status payload: expected object")
+
+    channels = _normalize_shelly_channels(channels)
+    if channels:
+        for item in channels:
+            if item not in _SHELLY_3EM_GEN1_CHANNEL_INDEX:
+                raise ValueError(
+                    f"Unsupported Shelly 3EM Gen1 channel in channels: {item}"
+                )
+
+        return sum(
+            _parse_shelly_3em_gen1_emeter_power(
+                data, _SHELLY_3EM_GEN1_CHANNEL_INDEX[item], item
+            )
+            for item in channels
+        )
+
+    total_power = data.get("total_power")
+    if _is_numeric(total_power):
+        return float(total_power)
+
+    emeters = data.get("emeters")
+    if isinstance(emeters, list):
+        total = 0.0
+        found = False
+        for meter in emeters:
+            if not isinstance(meter, dict):
+                continue
+            value = meter.get("power")
+            if _is_numeric(value):
+                total += float(value)
+                found = True
+
+        if found:
+            return total
+
+    raise ValueError(
+        "Unsupported Shelly 3EM Gen1 status payload: missing numeric "
+        "total_power or emeters[].power values"
+    )
 
 
 def _parse_ecotracker_power(data):
