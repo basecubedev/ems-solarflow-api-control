@@ -993,3 +993,100 @@ def test_emsctl_diagnose_control_quality_support_bundle_export(tmp_path):
         text = bundle.read("control-quality.txt").decode()
     assert "Export / Import Quality" in text
     assert "Regulation Quality" in text
+
+
+def _levels_by_code(checks):
+    return {check["code"]: check["level"] for check in checks}
+
+
+def test_diagnose_grid_meter_config_accepts_shelly_3em_gen1_with_ip():
+    checks = []
+    diagnostics.diagnose_grid_meter_config(
+        checks,
+        {"grid_meter": {"type": "shelly_3em_gen1", "ip": "192.0.2.50"}},
+    )
+    levels = _levels_by_code(checks)
+    assert levels.get("grid_meter_type") == "ok"
+    assert levels.get("grid_meter_ip_present") == "ok"
+    assert "grid_meter_ip_missing" not in levels
+
+
+def test_diagnose_grid_meter_config_errors_when_shelly_3em_gen1_ip_missing():
+    checks = []
+    diagnostics.diagnose_grid_meter_config(
+        checks,
+        {"grid_meter": {"type": "shelly_3em_gen1"}},
+    )
+    levels = _levels_by_code(checks)
+    assert levels.get("grid_meter_ip_missing") == "error"
+
+
+def test_diagnose_hardware_probes_shelly_3em_gen1_status_endpoint(monkeypatch):
+    captured = {}
+
+    def fake_http_json(url, headers=None, timeout=2):
+        captured["url"] = url
+        return 200, {"total_power": 123.4}
+
+    monkeypatch.setattr(diagnostics, "diagnose_http_json", fake_http_json)
+
+    checks = []
+    diagnostics.diagnose_hardware(
+        checks,
+        {"grid_meter": {"type": "shelly_3em_gen1", "ip": "192.0.2.50"}, "devices": []},
+    )
+
+    assert captured["url"] == "http://192.0.2.50/status"
+    levels = _levels_by_code(checks)
+    assert levels.get("shelly_3em_gen1_read_ok") == "ok"
+
+
+def test_diagnose_hardware_passes_channels_to_shelly_3em_gen1_parser(monkeypatch):
+    def fake_http_json(url, headers=None, timeout=2):
+        return 200, {
+            "total_power": 999.0,
+            "emeters": [
+                {"power": 100.0},
+                {"power": 20.0},
+                {"power": -5.0},
+            ],
+        }
+
+    monkeypatch.setattr(diagnostics, "diagnose_http_json", fake_http_json)
+
+    checks = []
+    diagnostics.diagnose_hardware(
+        checks,
+        {
+            "grid_meter": {
+                "type": "shelly_3em_gen1",
+                "ip": "192.0.2.50",
+                "channels": ["a", "c"],
+            },
+            "devices": [],
+        },
+    )
+
+    ok = next(c for c in checks if c["code"] == "shelly_3em_gen1_read_ok")
+    # total_power (999) is ignored; only phases a + c are summed.
+    assert ok["details"]["power_w"] == 95.0
+
+
+def test_diagnose_hardware_probes_shelly_pro_rpc_endpoint(monkeypatch):
+    captured = {}
+
+    def fake_http_json(url, headers=None, timeout=2):
+        captured["url"] = url
+        return 200, {"em:0": {"total_act_power": 50.0}}
+
+    monkeypatch.setattr(diagnostics, "diagnose_http_json", fake_http_json)
+
+    checks = []
+    diagnostics.diagnose_hardware(
+        checks,
+        {"grid_meter": {"type": "shelly", "ip": "192.0.2.50"}, "devices": []},
+    )
+
+    assert captured["url"] == "http://192.0.2.50/rpc/Shelly.GetStatus"
+    levels = _levels_by_code(checks)
+    assert levels.get("shelly_read_ok") == "ok"

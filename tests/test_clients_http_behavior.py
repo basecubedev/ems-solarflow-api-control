@@ -8,11 +8,13 @@ from ems.clients import (
     EcoTrackerClient,
     HAClient,
     ShellyClient,
+    Shelly3EMGen1Client,
     TasmotaHttpClient,
     ZendureClient,
     create_grid_meter_client,
     create_session,
     _parse_ecotracker_power,
+    _parse_shelly_3em_gen1_power,
     _parse_shelly_power,
     _parse_tasmota_http_power,
     zendure_write_succeeded,
@@ -327,6 +329,190 @@ def test_parse_shelly_power_rejects_payload_without_numeric_power_values():
         )
 
 
+def test_parse_shelly_3em_gen1_power_prefers_total_power():
+    assert _parse_shelly_3em_gen1_power(
+        {
+            "total_power": 321.5,
+            "emeters": [
+                {"power": 100.0},
+                {"power": 20.0},
+                {"power": -5.0},
+            ],
+        }
+    ) == 321.5
+
+
+def test_parse_shelly_3em_gen1_power_sums_emeters_without_total():
+    assert _parse_shelly_3em_gen1_power(
+        {
+            "emeters": [
+                {"power": 100.0},
+                {"power": 20.0},
+                {"power": -5.0},
+            ]
+        }
+    ) == 115.0
+
+
+def test_parse_shelly_3em_gen1_power_supports_em_two_channel_payload():
+    assert _parse_shelly_3em_gen1_power(
+        {
+            "emeters": [
+                {"power": 40.0},
+                {"power": 2.5},
+            ]
+        }
+    ) == 42.5
+
+
+def test_parse_shelly_3em_gen1_power_supports_named_channels():
+    data = {
+        "total_power": 999.0,
+        "emeters": [
+            {"power": 100.0},
+            {"power": 20.0},
+            {"power": -5.0},
+        ],
+    }
+    assert _parse_shelly_3em_gen1_power(data, channels=["a"]) == 100.0
+    assert _parse_shelly_3em_gen1_power(data, channels=["b"]) == 20.0
+    assert _parse_shelly_3em_gen1_power(data, channels=["c"]) == -5.0
+    assert _parse_shelly_3em_gen1_power(data, channels=["a", "c"]) == 95.0
+
+
+def test_parse_shelly_3em_gen1_power_normalizes_uppercase_channels():
+    data = {
+        "emeters": [
+            {"power": 100.0},
+            {"power": 20.0},
+            {"power": -5.0},
+        ]
+    }
+    assert _parse_shelly_3em_gen1_power(data, channels=["A"]) == 100.0
+    assert _parse_shelly_3em_gen1_power(data, channels=["B"]) == 20.0
+    assert _parse_shelly_3em_gen1_power(data, channels=["C"]) == -5.0
+    assert _parse_shelly_3em_gen1_power(data, channels=["A", "C"]) == 95.0
+
+
+def test_parse_shelly_3em_gen1_power_ignores_total_power_when_channels_given():
+    data = {
+        "total_power": 999.0,
+        "emeters": [
+            {"power": 100.0},
+            {"power": 20.0},
+            {"power": -5.0},
+        ],
+    }
+    # Selecting a single phase must not return the all-clamp total_power.
+    assert _parse_shelly_3em_gen1_power(data, channels=["a"]) == 100.0
+    assert _parse_shelly_3em_gen1_power(data, channels=["a", "b"]) == 120.0
+
+
+def test_parse_shelly_3em_gen1_power_supports_emeter_index_channels():
+    data = {
+        "emeters": [
+            {"power": 100.0},
+            {"power": 20.0},
+            {"power": -5.0},
+        ]
+    }
+    assert _parse_shelly_3em_gen1_power(data, channels=["emeter:0"]) == 100.0
+    assert _parse_shelly_3em_gen1_power(data, channels=["emeter:1"]) == 20.0
+    assert _parse_shelly_3em_gen1_power(data, channels=["emeter:2"]) == -5.0
+
+
+def test_parse_shelly_3em_gen1_power_supports_numeric_channels():
+    data = {
+        "emeters": [
+            {"power": 100.0},
+            {"power": 20.0},
+            {"power": -5.0},
+        ]
+    }
+    assert _parse_shelly_3em_gen1_power(data, channels=["0"]) == 100.0
+    assert _parse_shelly_3em_gen1_power(data, channels=["1"]) == 20.0
+    assert _parse_shelly_3em_gen1_power(data, channels=["2"]) == -5.0
+
+
+def test_parse_shelly_3em_gen1_power_rejects_missing_selected_channel():
+    with pytest.raises(ValueError, match="missing numeric emeters"):
+        _parse_shelly_3em_gen1_power(
+            {"emeters": [{"power": 100.0}]},
+            channels=["c"],
+        )
+
+
+def test_parse_shelly_3em_gen1_power_rejects_non_numeric_channel():
+    with pytest.raises(ValueError, match="missing numeric emeters"):
+        _parse_shelly_3em_gen1_power(
+            {"emeters": [{"power": "100.0"}]},
+            channels=["a"],
+        )
+
+
+def test_parse_shelly_3em_gen1_power_rejects_boolean_power():
+    with pytest.raises(ValueError, match="Unsupported Shelly 3EM Gen1 status payload"):
+        _parse_shelly_3em_gen1_power(
+            {"emeters": [{"power": True}, {"power": False}]}
+        )
+
+
+def test_parse_shelly_3em_gen1_power_rejects_unsupported_channel_entry():
+    with pytest.raises(ValueError, match="Unsupported Shelly 3EM Gen1 channel"):
+        _parse_shelly_3em_gen1_power(
+            {"emeters": [{"power": 100.0}]},
+            channels=["total"],
+        )
+
+
+def test_parse_shelly_3em_gen1_power_rejects_invalid_payload_type():
+    with pytest.raises(ValueError, match="expected object"):
+        _parse_shelly_3em_gen1_power([{"power": 100.0}])
+
+
+def test_shelly_3em_gen1_client_reads_status_and_preserves_last_value(caplog):
+    client = Shelly3EMGen1Client(
+        "192.0.2.30",
+        SessionStub(
+            get_response=ResponseStub(payload={"total_power": 123.456})
+        ),
+    )
+    assert client.get_power() == 123.5
+    assert client.session.calls[0][1] == "http://192.0.2.30/status"
+
+    caplog.set_level(logging.WARNING)
+    client.session = SessionStub(
+        get_response=ResponseStub(payload={"wifi": {"sta_ip": "192.168.1.10"}})
+    )
+
+    assert client.get_power() == 123.5
+    assert "event=shelly_3em_gen1_read_error" in caplog.text
+    assert "stale_value=123.5" in caplog.text
+
+
+def test_shelly_3em_gen1_client_passes_configured_channels_to_parser():
+    client = Shelly3EMGen1Client(
+        "192.0.2.30",
+        SessionStub(
+            get_response=ResponseStub(
+                payload={
+                    "total_power": 999.0,
+                    "emeters": [
+                        {"power": 100.0},
+                        {"power": 20.0},
+                        {"power": -5.0},
+                    ],
+                }
+            )
+        ),
+        channels=["a", "c"],
+    )
+    assert client.channels == ["a", "c"]
+    # total_power (999) is ignored because channels are configured.
+    assert client.get_power() == 95.0
+    assert client.session.calls[0][1] == "http://192.0.2.30/status"
+
+
 def test_shelly_client_logs_parse_errors_and_keeps_last_value(caplog):
     client = ShellyClient(
         "192.0.2.20",
@@ -466,6 +652,34 @@ def test_create_grid_meter_client_supports_shelly_channels_list():
     )
     assert isinstance(shelly, ShellyClient)
     assert shelly.channels == ["a", "c"]
+
+
+def test_create_grid_meter_client_supports_shelly_3em_gen1():
+    gen1 = create_grid_meter_client(
+        {"type": "shelly_3em_gen1", "ip": "192.0.2.50"},
+        SessionStub(),
+    )
+    assert isinstance(gen1, Shelly3EMGen1Client)
+    assert not isinstance(gen1, ShellyClient)
+    assert gen1.channels is None
+
+
+def test_create_grid_meter_client_shelly_still_returns_pro_client():
+    shelly = create_grid_meter_client(
+        {"type": "shelly", "ip": "192.0.2.1"},
+        SessionStub(),
+    )
+    assert isinstance(shelly, ShellyClient)
+    assert not isinstance(shelly, Shelly3EMGen1Client)
+
+
+def test_create_grid_meter_client_supports_shelly_3em_gen1_channels_list():
+    gen1 = create_grid_meter_client(
+        {"type": "shelly_3em_gen1", "ip": "192.0.2.50", "channels": ["a", "c"]},
+        SessionStub(),
+    )
+    assert isinstance(gen1, Shelly3EMGen1Client)
+    assert gen1.channels == ["a", "c"]
 
 
 def test_parse_tasmota_http_power_sml():
