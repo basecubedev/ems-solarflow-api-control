@@ -4462,16 +4462,10 @@ function renderHistoryChart() {
   if (empty) empty.hidden = true;
 
   const seriesIds = HISTORY_SERIES.filter((id) => ANALYTICS_SERIES_META[id]);
-  const seriesData = [time];
-  seriesIds.forEach((id) => {
-    const values = (data.series && data.series[id]) || [];
-    seriesData.push(
-      time.map((_, index) => {
-        const value = values[index];
-        return value === null || value === undefined ? null : Number(value);
-      })
-    );
-  });
+  // Reuse the Analytics matrix builder so the History chart (Aggregate/Devices)
+  // shares its display-only battery inversion (negative == charging, positive ==
+  // discharging) and null handling.
+  const seriesData = analyticsChartSeriesData(data, seriesIds);
 
   // The history chart structure only varies by the (fixed) series set and the
   // selected device, so reuse the instance in place across refreshes when those
@@ -4500,7 +4494,9 @@ function renderHistoryChart() {
       stroke: cssColor(meta.colorVar, "#888"),
       width: 2,
       scale: "y",
-      value: (_self, raw) => (raw == null ? "--" : `${Math.round(raw)} ${meta.unit}`),
+      // Reuse the Analytics tooltip so the inverted battery line reads back as
+      // Charge/Discharge instead of a sign-flipped raw watt value.
+      value: (_self, raw) => analyticsSeriesTooltip(id, raw, meta.unit),
     });
   });
 
@@ -4823,6 +4819,7 @@ if (typeof module !== "undefined") {
     historyVisible,
     historyFetchUrl,
     loadHistory,
+    HISTORY_SERIES,
     renderHistoryChart,
     detectZoom,
     onAnalyticsXScale,

@@ -477,6 +477,49 @@ console.log(JSON.stringify({{
     assert out["tooltip"]["none"] == "--"
 
 
+def test_history_chart_inverts_battery_like_analytics():
+    # The History chart (Aggregate/Devices) must share the Analytics chart's
+    # display-only battery inversion: charging below zero, discharging above
+    # zero. It builds its uPlot matrix with the same analyticsChartSeriesData
+    # helper over the fixed HISTORY_SERIES set (which includes battery).
+    script = f"""
+const app = require({json.dumps(str(APP_JS))});
+const data = {{
+  time: [0, 1800, 3600],
+  series: {{
+    pv: [1000, 1000, 1000],
+    output: [500, 500, 500],
+    battery: [200, -450, null],
+  }},
+}};
+
+const seriesIds = app.HISTORY_SERIES.filter((id) => app.ANALYTICS_SERIES_META[id]);
+const matrix = app.analyticsChartSeriesData(data, seriesIds);
+console.log(JSON.stringify({{
+  historySeries: app.HISTORY_SERIES,
+  seriesIds,
+  matrix,
+  rawBattery: data.series.battery,
+}}));
+"""
+    out = run_node(script)
+
+    # History plots PV, inverter output and battery, with battery present so it
+    # is subject to the inversion.
+    assert out["historySeries"] == ["pv", "output", "battery"]
+    assert "battery" in out["seriesIds"]
+
+    # Matrix: [time, pv, output, battery]. Non-battery untouched, battery
+    # inverted (charge<0, discharge>0), nulls preserved.
+    assert out["matrix"][0] == [0, 1800, 3600]
+    assert out["matrix"][1] == [1000, 1000, 1000]
+    assert out["matrix"][2] == [500, 500, 500]
+    assert out["matrix"][3] == [-200, 450, None]
+
+    # Raw history state is unchanged by chart rendering.
+    assert out["rawBattery"] == [200, -450, None]
+
+
 def test_analytics_kpis_use_raw_battery_sign_despite_chart_inversion():
     # KPI charge/discharge integration must keep using the raw battery sign
     # (charging positive, discharging negative) even though the chart inverts the
