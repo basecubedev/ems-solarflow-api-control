@@ -26,6 +26,10 @@ runtime-state.json.*.tmp
 *.influx.csv
 *.influx.jsonl
 
+# Manual config/runtime backups (may contain secrets)
+/backup/
+/backup/**
+
 # Dashboard local SQLite history
 /data/
 /data/**

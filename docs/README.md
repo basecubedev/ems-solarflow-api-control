@@ -14,6 +14,7 @@ Start here:
 | Control logic details | [control-logic.md](control-logic.md) | Target calculation, filtering, allocation, minSoc idle, and write suppression behavior. |
 | Runtime state | [runtime-state.md](runtime-state.md) | Mutable operator state and the fields changed by CLI or Home Assistant helpers. |
 | CLI tool | [cli.md](cli.md) | Safe `emsctl.py` commands for runtime-state changes. |
+| Backup and restore | [backup-restore.md](backup-restore.md) | Step-by-step guide: backup before updates, dry-run restore checks, encrypted backups, and full local restore. |
 | Home Assistant integration | [home-assistant.md](home-assistant.md) | Optional HA publishing, helpers, sensors, dashboard files, and control relationship. |
 | Standalone dashboard | [dashboard.md](dashboard.md) | Read-only live dashboard, Control Explain view, local history, and telemetry endpoints. |
 | Winter mode | [winter-mode.md](winter-mode.md) | Optional winter minSoc ramp and reconciliation behavior. |

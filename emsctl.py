@@ -44,6 +44,8 @@ from ems.diagnostics import (
     diagnose_write_support_bundle,
 )
 
+from ems import backup as backup_mod
+
 DEFAULT_CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 DOCKER_CONFIG_PATH = os.path.join(BASE_DIR, "config", "config.json")
 DEFAULT_RUNTIME_STATE_PATH = os.path.join(BASE_DIR, "runtime-state.json")
@@ -59,11 +61,18 @@ TOP_LEVEL_COMMANDS = (
     "influx",
     "stack",
     "diagnose",
+    "backup",
     "interactive",
     "menu",
     "examples",
     "completion",
     "help",
+)
+BACKUP_ACTIONS = (
+    "create",
+    "restore",
+    "inspect",
+    "diff",
 )
 SYSTEM_ACTIONS = (
     "enable",
@@ -111,6 +120,7 @@ Command overview:
   winter enable|disable|status    Toggle or inspect winter mode
   dashboard <command>             Manage dashboard write-mode authentication
   diagnose [--json]               Run read-only local diagnostics
+  backup [create|restore|...]     Create/restore manual config backups
   interactive                     Open a menu for common runtime edits
   examples                        Print a longer command cookbook
   completion bash|zsh             Generate optional shell completion
@@ -184,6 +194,12 @@ Dashboard:
   python3 emsctl.py dashboard auth-status
   python3 emsctl.py dashboard set-password
 
+Backup / restore (config may contain secrets; database/InfluxDB hold history):
+  python3 emsctl.py backup
+  python3 emsctl.py backup create
+  python3 emsctl.py backup create --type databases
+  python3 emsctl.py backup restore ./backup/ems-config-manual-....tar.gz
+
 More help:
   python3 emsctl.py --help
   python3 emsctl.py examples
@@ -247,6 +263,17 @@ Diagnostics:
   python3 emsctl.py diagnose --json
   python3 emsctl.py diagnose --support-bundle
   python3 emsctl.py diagnose --support-bundle --output /tmp/ems-support.zip
+
+Backup / restore (config may contain secrets; database/InfluxDB hold history):
+  python3 emsctl.py backup
+  python3 emsctl.py backup create
+  python3 emsctl.py backup create --type databases
+  python3 emsctl.py backup create --compression-level 3
+  python3 emsctl.py backup inspect ./backup/ems-config-manual-....tar.gz
+  python3 emsctl.py backup restore ./backup/ems-config-manual-....tar.gz
+  python3 emsctl.py backup restore ./backup/ems-databases-manual-....tar.gz
+  python3 emsctl.py backup restore ./backup/...tar.gz --on-conflict keep --no-rollback
+  python3 emsctl.py backup diff ./backup/...tar.gz --file config.json
 
 Docker diagnostics:
   docker compose exec ems python3 emsctl.py diagnose
@@ -618,6 +645,126 @@ Examples:
         "--dry-run",
         action="store_true",
         help="Print the docker compose command without running it.",
+    )
+
+    backup = subparsers.add_parser(
+        "backup",
+        help="Create, inspect or restore manual config backups.",
+        description=(
+            "Manual config backup/restore. A config backup is a tar.gz archive "
+            "of config.json, the runtime state and configured dashboard "
+            "auth/cert files (plus the bundled InfluxDB secret when bundled "
+            "analytics is enabled). Config backups may contain secrets; "
+            "optional password protection encrypts the whole archive into a "
+            ".tar.gz.enc file. 'create --type databases' backs up the local "
+            "SQLite databases (consistent SQLite snapshots). 'create --type "
+            "influxdb' backs up bundled InfluxDB data via the official influx "
+            "backup CLI (bundled mode only; external mode is rejected). Run "
+            "'backup' with no action for an interactive menu."
+        ),
+        epilog="""\
+Examples:
+  python3 emsctl.py backup
+  python3 emsctl.py backup create
+  python3 emsctl.py backup create --type databases
+  python3 emsctl.py backup create --type influxdb
+  python3 emsctl.py backup create --compression-level 3
+  python3 emsctl.py backup inspect ./backup/ems-config-manual-2026-06-18-221500.tar.gz
+  python3 emsctl.py backup restore ./backup/ems-config-manual-2026-06-18-221500.tar.gz
+  python3 emsctl.py backup restore ./backup/ems-databases-manual-2026-06-18-221500.tar.gz
+  python3 emsctl.py backup restore ./backup/ems-influxdb-manual-2026-06-18-221500.tar.gz
+  python3 emsctl.py backup restore ./backup/...tar.gz --on-conflict keep --no-rollback
+  python3 emsctl.py backup diff ./backup/...tar.gz --file config.json
+""",
+        formatter_class=EMSHelpFormatter,
+    )
+    backup.add_argument(
+        "action",
+        nargs="?",
+        choices=BACKUP_ACTIONS,
+        help=(
+            "create: write a new config backup. restore: restore from a "
+            "backup. inspect: print a backup manifest. diff: compare a backed "
+            "up file to the current file. Omit for the interactive menu."
+        ),
+    )
+    backup.add_argument(
+        "file",
+        nargs="?",
+        help="Backup archive path (required for restore/inspect/diff).",
+    )
+    backup.add_argument(
+        "--file",
+        dest="diff_file",
+        help="Config file to diff (used with 'backup diff').",
+    )
+    backup.add_argument(
+        "--type",
+        dest="type",
+        choices=("config", "databases", "influxdb"),
+        default="config",
+        help=(
+            "create: backup type — config (default), databases or influxdb "
+            "(bundled InfluxDB data via the official influx backup CLI)."
+        ),
+    )
+    backup.add_argument(
+        "--compression-level",
+        type=int,
+        default=backup_mod.DEFAULT_COMPRESSION_LEVEL,
+        help="gzip compression level 0-9 (default: 3). Used with 'create'.",
+    )
+    backup.add_argument(
+        "--password",
+        action="store_true",
+        help="create: prompt for a password and encrypt the backup.",
+    )
+    backup.add_argument(
+        "--encryption",
+        dest="encryption",
+        choices=backup_mod.SUPPORTED_ENCRYPTION_ALGORITHMS,
+        default=backup_mod.DEFAULT_ENCRYPTION_ALGORITHM,
+        help=(
+            "create: streaming AEAD algorithm for encrypted backups "
+            f"(default: {backup_mod.DEFAULT_ENCRYPTION_ALGORITHM})."
+        ),
+    )
+    backup.add_argument(
+        "--chunk-size",
+        dest="chunk_size",
+        default=None,
+        help="create: encryption chunk size, e.g. 4M or 1048576 (default: 4M).",
+    )
+    backup.add_argument(
+        "--kdf-iterations",
+        dest="kdf_iterations",
+        type=int,
+        default=None,
+        help="create: PBKDF2-SHA256 iteration count (default: 300000).",
+    )
+    backup.add_argument(
+        "--on-conflict",
+        choices=("abort", "keep", "replace"),
+        default=None,
+        help="restore: how to handle existing differing files (default: ask).",
+    )
+    backup.add_argument(
+        "--rollback",
+        dest="rollback",
+        action="store_true",
+        default=None,
+        help="restore: create a rollback backup before restoring.",
+    )
+    backup.add_argument(
+        "--no-rollback",
+        dest="rollback",
+        action="store_false",
+        help="restore: do not create a rollback backup before restoring.",
+    )
+    backup.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="restore: show what would change without writing files.",
     )
 
     subparsers.add_parser(
@@ -2086,6 +2233,7 @@ def run_interactive(args, config):
         ("dashboard-set-password", "Dashboard set-password"),
         ("dashboard-change-password", "Dashboard change-password"),
         ("dashboard-disable-auth", "Dashboard disable-auth"),
+        ("backup", "Backup / Restore"),
         ("quit", "Quit"),
     ]
 
@@ -2102,6 +2250,10 @@ def run_interactive(args, config):
         try:
             if choice == "status":
                 print_status(runtime_path, state)
+                continue
+
+            if choice == "backup":
+                run_backup_interactive(args, config)
                 continue
 
             if choice.startswith("system-"):
@@ -2176,6 +2328,936 @@ def run_interactive(args, config):
             print(f"ERROR: {exc}")
 
 
+# ---------------------------------------------------------------------------
+# Backup / restore
+# ---------------------------------------------------------------------------
+
+DIAGNOSE_HINT = "  python3 emsctl.py diagnose --deep"
+
+
+def backup_path_kwargs(args, config):
+    """Return the resolved path kwargs for backup file selection."""
+
+    return {
+        "base_dir": BASE_DIR,
+        "config_path": args.config,
+        "runtime_state_path": resolve_runtime_path(args, config),
+        "dashboard_auth_path": resolve_dashboard_auth_path(args, config),
+    }
+
+
+def prompt_backup_password_new():
+    """Prompt for a new backup password twice; return it or None on abort."""
+
+    for _ in range(3):
+        password = getpass.getpass("Enter backup password: ")
+        if not password:
+            print("ERROR: password must not be empty.")
+            continue
+        repeat = getpass.getpass("Repeat backup password: ")
+        if password != repeat:
+            print("ERROR: passwords do not match; try again.")
+            continue
+        return password
+    print("ERROR: too many failed attempts; aborting.")
+    return None
+
+
+def print_sensitive_warning(included):
+    sensitive = [entry["arcname"] for entry in included if entry["sensitive"]]
+    print()
+    print("Config backup may contain sensitive data:")
+    for path in sensitive:
+        print(f"  - {path}")
+    if not sensitive:
+        print("  (no files flagged sensitive)")
+
+
+def print_backup_manifest(manifest):
+    print(f"  type:       {manifest.get('backup_type')}")
+    print(f"  purpose:    {manifest.get('backup_purpose')}")
+    print(f"  created_at: {manifest.get('created_at')}")
+    print(f"  format:     {manifest.get('backup_format')}")
+    encryption = manifest.get("encryption", {})
+    print(f"  encrypted:  {bool(encryption.get('enabled'))}")
+    if manifest.get("rollback_for"):
+        print(f"  rollback_for: {manifest['rollback_for']}")
+    source = manifest.get("source", {})
+    print(
+        "  source:     "
+        f"{source.get('git_commit_short')} ({source.get('git_branch')})"
+    )
+    print("  files:")
+    for entry in manifest.get("files", []):
+        if entry.get("sensitive"):
+            flag = " [sensitive]"
+        elif entry.get("privacy_relevant"):
+            flag = " [privacy]"
+        else:
+            flag = ""
+        print(
+            f"    - {entry.get('path')} "
+            f"({entry.get('size_bytes')} bytes){flag}"
+        )
+    skipped = manifest.get("skipped", [])
+    if skipped:
+        print("  skipped:")
+        for entry in skipped:
+            print(f"    - {entry.get('path')} ({entry.get('reason')})")
+
+    databases = manifest.get("databases")
+    if databases is not None:
+        print("  databases:")
+        for entry in databases:
+            if entry.get("included"):
+                state = "included"
+            else:
+                state = f"skipped ({entry.get('reason', 'missing')})"
+            print(f"    - {entry.get('path')}  {state}")
+
+    influx = manifest.get("influxdb")
+    if influx is not None:
+        print("  influxdb:")
+        if "backup_method" in influx:
+            # Dedicated bundled InfluxDB data backup.
+            print(f"    included:      {bool(influx.get('included'))}")
+            print(f"    mode:          {influx.get('mode')}")
+            print(f"    service:       {influx.get('service')}")
+            print(f"    backup_method: {influx.get('backup_method')}")
+            print(f"    org:           {influx.get('org')}")
+            print(f"    bucket_prefix: {influx.get('bucket_prefix')}")
+        else:
+            # InfluxDB status recorded in a database backup (data not included).
+            print(f"    detected: {bool(influx.get('detected'))}")
+            print(f"    mode:     {influx.get('mode')}")
+            print(f"    included: {bool(influx.get('included'))}")
+            print(f"    reason:   {influx.get('reason')}")
+
+
+def resolve_create_password(args):
+    """Resolve an optional new backup password before creating a backup.
+
+    Returns ``(password_or_None, status)`` where ``status`` is ``"ok"``,
+    ``"abort"`` (user aborted) or ``"error"`` (password entry failed).
+    """
+
+    if args.password:
+        password = prompt_backup_password_new()
+        return password, ("error" if password is None else "ok")
+    if sys.stdin.isatty():
+        choice = prompt_text(
+            "Protect backup with password? [y/n/a]", default="n"
+        )
+        if choice is None or choice.lower().startswith("a"):
+            return None, "abort"
+        if choice.lower().startswith("y"):
+            password = prompt_backup_password_new()
+            return password, ("error" if password is None else "ok")
+    return None, "ok"
+
+
+def resolve_backup_create_options(args):
+    """Validate compression/encryption options for a create command.
+
+    Validated up front (before any password prompt) so invalid CLI options fail
+    immediately with a clear message. Returns ``(options, error_code)`` where
+    ``options`` is a dict with ``compression_level`` and ``encryption_options``;
+    on invalid input ``options`` is ``None`` and ``error_code`` is non-zero. The
+    encryption options are ignored by the create functions for an unencrypted
+    backup.
+    """
+
+    level = getattr(args, "compression_level", backup_mod.DEFAULT_COMPRESSION_LEVEL)
+    if not 0 <= level <= 9:
+        return None, fail(f"invalid compression level: {level} (allowed 0-9)")
+
+    try:
+        chunk = backup_mod.parse_chunk_size(getattr(args, "chunk_size", None))
+        encryption_options = backup_mod.build_encryption_options(
+            algorithm=getattr(args, "encryption", None),
+            chunk_size=chunk,
+            kdf_iterations=getattr(args, "kdf_iterations", None),
+        )
+    except backup_mod.BackupError as exc:
+        return None, fail(str(exc))
+
+    return {"compression_level": level, "encryption_options": encryption_options}, None
+
+
+def prompt_optional_rollback_password():
+    """Ask whether to encrypt a rollback backup and collect its password.
+
+    Returns ``(password_or_None, status)`` where ``status`` is ``"ok"`` or
+    ``"abort"``.
+    """
+
+    print()
+    print("Rollback backup may contain sensitive data.")
+    choice = prompt_text(
+        "Protect rollback backup with password? [y/n/a]", default="n"
+    )
+    if choice is None or choice.lower().startswith("a"):
+        return None, "abort"
+    if not choice.lower().startswith("y"):
+        return None, "ok"
+
+    password = getpass.getpass("Enter rollback backup password: ")
+    repeat = getpass.getpass("Repeat rollback backup password: ")
+    if not password or password != repeat:
+        print("ERROR: passwords do not match; aborting rollback.")
+        return None, "abort"
+    return password, "ok"
+
+
+def handle_backup_create(args, config):
+    backup_type = getattr(args, "type", "config")
+    if backup_type == "databases":
+        return handle_backup_create_database(args, config)
+    if backup_type == "influxdb":
+        return handle_backup_create_influxdb(args, config)
+
+    paths = backup_path_kwargs(args, config)
+    included, skipped = backup_mod.collect_config_backup_files(config, **paths)
+    if not included:
+        return fail("no config files found to back up (config.json missing?)")
+
+    options, error = resolve_backup_create_options(args)
+    if options is None:
+        return error
+
+    print_sensitive_warning(included)
+
+    password, status = resolve_create_password(args)
+    if status == "error":
+        return 1
+    if status == "abort":
+        print("Aborted.")
+        return 0
+
+    path = backup_mod.create_config_backup(
+        config,
+        backup_purpose="manual",
+        password=password,
+        encryption_options=options["encryption_options"],
+        compression_level=options["compression_level"],
+        **paths,
+    )
+    print(f"Backup created:\n  {path}")
+    return 0
+
+
+def print_influx_skip_notice(influx):
+    if influx.get("detected"):
+        print()
+        print("InfluxDB analytics appears to be enabled.")
+        print("InfluxDB data is not included in a database backup.")
+        if influx.get("mode") == "bundled":
+            print(
+                "Back up bundled InfluxDB data separately with:"
+            )
+            print("  python3 emsctl.py backup create --type influxdb")
+        else:
+            print(
+                "External InfluxDB is not covered by EMS backups; use your "
+                "external InfluxDB backup strategy."
+            )
+
+
+def handle_backup_create_database(args, config):
+    present, missing = backup_mod.collect_database_backup_files(
+        config, base_dir=BASE_DIR
+    )
+    influx = backup_mod.detect_influxdb_status(config)
+
+    print()
+    print(
+        "This backup may contain historical energy data and local runtime "
+        "state."
+    )
+    print()
+    if present:
+        print("Databases to back up:")
+        for entry in present:
+            print(f"  - {entry['arcname']}")
+    else:
+        print("No SQLite databases found to back up.")
+    for entry in missing:
+        print(f"  - {entry['path']} (missing, skipped)")
+
+    print_influx_skip_notice(influx)
+
+    options, error = resolve_backup_create_options(args)
+    if options is None:
+        return error
+
+    password, status = resolve_create_password(args)
+    if status == "error":
+        return 1
+    if status == "abort":
+        print("Aborted.")
+        return 0
+
+    path = backup_mod.create_database_backup(
+        config,
+        base_dir=BASE_DIR,
+        backup_purpose="manual",
+        password=password,
+        encryption_options=options["encryption_options"],
+        compression_level=options["compression_level"],
+    )
+    print(f"Backup created:\n  {path}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Bundled InfluxDB data backup / restore (Docker orchestration)
+# ---------------------------------------------------------------------------
+
+def _influx_normalized(config):
+    from ems.config import normalize_influxdb_config
+
+    return normalize_influxdb_config(config.get("influxdb"))
+
+
+def _influx_compose_files(influx):
+    from ems import influx_setup
+
+    return influx_setup.compose_files(influx)
+
+
+def _influx_require_token(influx):
+    token = resolve_influx_token_with_secret_file(influx)
+    if not token:
+        raise backup_mod.BackupError(
+            "no InfluxDB token resolved: set influxdb.token, export the env "
+            f"var named by influxdb.token_env ({influx.get('token_env')}), or "
+            "run 'python3 emsctl.py influx init' for the bundled backend"
+        )
+    return token
+
+
+def _influx_ensure_running(files, *, json_output=False):
+    """Start the bundled InfluxDB container (idempotent) before backup/restore."""
+    from ems import influx_setup
+
+    influx_setup.ensure_data_dir()
+    command = influx_setup.build_compose_command(
+        files, action=("up", "-d", influx_setup.INFLUX_SERVICE)
+    )
+    if run_docker_compose(command, cwd=BASE_DIR, stdout_to_stderr=json_output) != 0:
+        raise backup_mod.BackupError(
+            "failed to start bundled InfluxDB via docker compose"
+        )
+
+
+def make_influx_backup_runner(config, *, json_output=False):
+    """Return a ``runner(host_dir)`` that fills ``host_dir`` via ``influx backup``."""
+    from ems import influx_setup
+
+    influx = _influx_normalized(config)
+    files = _influx_compose_files(influx)
+    _influx_require_token(influx)  # validate up front; secret stays in-container
+
+    def runner(host_influx_dir):
+        _influx_ensure_running(files, json_output=json_output)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        container_dir = f"/tmp/ems-influx-backup-{stamp}"
+        backup_cmd = influx_setup.build_influx_backup_command(files, container_dir)
+        if run_docker_compose(
+            backup_cmd, cwd=BASE_DIR, stdout_to_stderr=json_output
+        ) != 0:
+            raise backup_mod.BackupError(
+                "influx backup failed inside the bundled container"
+            )
+        copy_cmd = influx_setup.build_influx_copy_out_command(
+            files, container_dir + "/.", host_influx_dir
+        )
+        if run_docker_compose(
+            copy_cmd, cwd=BASE_DIR, stdout_to_stderr=json_output
+        ) != 0:
+            raise backup_mod.BackupError(
+                "failed to copy the InfluxDB backup out of the container"
+            )
+        # Best-effort cleanup of the in-container temporary directory.
+        cleanup_cmd = influx_setup.build_influx_exec_command(
+            files, ("rm", "-rf", container_dir)
+        )
+        run_docker_compose(cleanup_cmd, cwd=BASE_DIR, stdout_to_stderr=json_output)
+
+    return runner
+
+
+def make_influx_restore_runner(config, *, json_output=False):
+    """Return a ``runner(host_dir)`` that feeds ``host_dir`` to ``influx restore``."""
+    from ems import influx_setup
+
+    influx = _influx_normalized(config)
+    files = _influx_compose_files(influx)
+    _influx_require_token(influx)
+
+    def runner(host_influx_dir):
+        _influx_ensure_running(files, json_output=json_output)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        container_dir = f"/tmp/ems-influx-restore-{stamp}"
+        mkdir_cmd = influx_setup.build_influx_exec_command(
+            files, ("mkdir", "-p", container_dir)
+        )
+        if run_docker_compose(
+            mkdir_cmd, cwd=BASE_DIR, stdout_to_stderr=json_output
+        ) != 0:
+            raise backup_mod.BackupError(
+                "failed to create the restore directory inside the container"
+            )
+        copy_cmd = influx_setup.build_influx_copy_in_command(
+            files, host_influx_dir + "/.", container_dir
+        )
+        if run_docker_compose(
+            copy_cmd, cwd=BASE_DIR, stdout_to_stderr=json_output
+        ) != 0:
+            raise backup_mod.BackupError(
+                "failed to copy the InfluxDB backup into the container"
+            )
+        restore_cmd = influx_setup.build_influx_restore_command(files, container_dir)
+        if run_docker_compose(
+            restore_cmd, cwd=BASE_DIR, stdout_to_stderr=json_output
+        ) != 0:
+            raise backup_mod.BackupError(
+                "influx restore --full failed inside the bundled container"
+            )
+        cleanup_cmd = influx_setup.build_influx_exec_command(
+            files, ("rm", "-rf", container_dir)
+        )
+        run_docker_compose(cleanup_cmd, cwd=BASE_DIR, stdout_to_stderr=json_output)
+
+    return runner
+
+
+def handle_backup_create_influxdb(args, config):
+    evaluation = backup_mod.evaluate_influxdb_backup(config)
+    if not evaluation["supported"]:
+        print()
+        print(evaluation["message"])
+        # disabled is a no-op (nothing to back up); external is a hard reject.
+        return 0 if evaluation["reason"] == "disabled" else 1
+
+    print()
+    print(
+        "This backup may contain historical energy and runtime data and "
+        "InfluxDB metadata."
+    )
+
+    options, error = resolve_backup_create_options(args)
+    if options is None:
+        return error
+
+    password, status = resolve_create_password(args)
+    if status == "error":
+        return 1
+    if status == "abort":
+        print("Aborted.")
+        return 0
+
+    try:
+        runner = make_influx_backup_runner(config)
+        path = backup_mod.create_influxdb_backup(
+            config,
+            base_dir=BASE_DIR,
+            backup_purpose="manual",
+            password=password,
+            encryption_options=options["encryption_options"],
+            compression_level=options["compression_level"],
+            backup_runner=runner,
+        )
+    except backup_mod.BackupError as exc:
+        return fail(str(exc))
+    print(f"Backup created:\n  {path}")
+    return 0
+
+
+def print_influx_restore_done():
+    print()
+    print("InfluxDB restore completed.")
+    print()
+    print("Recommended next steps:")
+    print("  python3 emsctl.py influx status")
+    print(DIAGNOSE_HINT)
+
+
+def handle_backup_restore_influxdb(
+    args, config, archive_path, manifest, password, interactive
+):
+    evaluation = backup_mod.evaluate_influxdb_backup(config)
+    if not evaluation["supported"]:
+        print()
+        print(evaluation["message"])
+        return 1
+
+    if args.dry_run:
+        try:
+            result = backup_mod.restore_influxdb_backup(
+                archive_path, config, base_dir=BASE_DIR, password=password,
+                dry_run=True,
+            )
+        except backup_mod.BackupPasswordError as exc:
+            return fail(str(exc))
+        except backup_mod.BackupError as exc:
+            return fail(str(exc))
+        print()
+        for action in result["actions"]:
+            print(f"  {action['action']}: {action['path']}")
+        print("\nDry run: bundled InfluxDB data was not changed.")
+        return 0
+
+    print()
+    print("InfluxDB restore can replace existing bundled analytics data.")
+
+    interactive_tty = interactive and sys.stdin.isatty()
+
+    # Rollback decision (default yes — destructive restore).
+    do_rollback = args.rollback
+    if do_rollback is None:
+        if interactive_tty:
+            choice = prompt_text(
+                "Create rollback InfluxDB backup before restore? [y/n/a]",
+                default="y",
+            )
+            if choice is None or choice.lower().startswith("a"):
+                print("Aborted.")
+                return 0
+            do_rollback = choice.lower().startswith("y")
+        else:
+            do_rollback = False
+
+    rollback_password = None
+    if do_rollback and interactive_tty:
+        rollback_password, status = prompt_optional_rollback_password()
+        if status == "abort":
+            print("Aborted.")
+            return 0
+
+    if do_rollback:
+        try:
+            runner = make_influx_backup_runner(config)
+            rollback_path = backup_mod.create_influxdb_rollback_backup(
+                config,
+                os.path.basename(archive_path),
+                base_dir=BASE_DIR,
+                password=rollback_password,
+                backup_runner=runner,
+            )
+        except backup_mod.BackupError as exc:
+            return fail(f"rollback backup failed; restore not started: {exc}")
+        print(f"Rollback backup created:\n  {rollback_path}")
+
+    # Restore strategy confirmation. MVP supports replace only.
+    if interactive_tty:
+        choice = prompt_text(
+            "Restore strategy: [r] replace existing bundled InfluxDB data / "
+            "[a] abort",
+            default="a",
+        )
+        if choice is None or not choice.strip().lower().startswith("r"):
+            print("Aborted.")
+            return 0
+    elif args.on_conflict != "replace":
+        return fail(
+            "non-interactive InfluxDB restore requires --on-conflict replace "
+            "to confirm the destructive replace strategy"
+        )
+
+    try:
+        restore_runner = make_influx_restore_runner(config)
+        backup_mod.restore_influxdb_backup(
+            archive_path,
+            config,
+            base_dir=BASE_DIR,
+            password=password,
+            restore_runner=restore_runner,
+        )
+    except backup_mod.BackupPasswordError as exc:
+        return fail(str(exc))
+    except backup_mod.BackupError as exc:
+        return fail(str(exc))
+
+    print_influx_restore_done()
+    return 0
+
+
+def list_backup_files():
+    backup_dir = backup_mod.default_backup_dir()
+    if not os.path.isdir(backup_dir):
+        return []
+    names = [
+        name for name in os.listdir(backup_dir)
+        if name.startswith("ems-")
+        and (name.endswith(".tar.gz") or name.endswith(".tar.gz.enc"))
+    ]
+    return [os.path.join(backup_dir, name) for name in sorted(names)]
+
+
+def resolve_backup_password(args, archive_path, interactive):
+    """Return a password for an (encrypted) archive, or None when not needed."""
+
+    if not backup_mod.is_encrypted(archive_path):
+        return None
+    if interactive and sys.stdin.isatty():
+        print("Backup is password protected.")
+        return getpass.getpass("Enter backup password: ")
+    return None
+
+
+def make_interactive_conflict_resolver(args, config, archive_path, password):
+    def resolver(entry):
+        while True:
+            print()
+            print(f"{entry['path']} already exists and differs.")
+            choice = prompt_text("[k] keep / [r] replace / [d] diff / [a] abort")
+            if choice is None:
+                return "abort"
+            choice = choice.strip().lower()
+            if choice in ("k", "keep"):
+                return "keep"
+            if choice in ("r", "replace"):
+                return "replace"
+            if choice in ("a", "abort"):
+                return "abort"
+            if choice in ("d", "diff"):
+                result = backup_mod.diff_backup_file(
+                    archive_path,
+                    entry["path"],
+                    base_dir=BASE_DIR,
+                    password=password,
+                )
+                if result["binary"]:
+                    print(result["text"])
+                else:
+                    print(result["text"] or "(no differences in content)")
+                continue
+            print("ERROR: invalid choice.")
+
+    return resolver
+
+
+def print_restore_done(args, config, *, backup_type="config", influx=None):
+    print()
+    if backup_type == "databases":
+        print("Database restore completed.")
+    else:
+        print("Restore completed.")
+    if influx and influx.get("detected"):
+        print()
+        if influx.get("mode") == "bundled":
+            print(
+                "Note: InfluxDB data was not part of this backup and was not "
+                "restored. Restore bundled InfluxDB data separately with "
+                "'backup restore ./backup/ems-influxdb-...tar.gz'."
+            )
+        else:
+            print(
+                "Note: InfluxDB data was not part of this backup and was not "
+                "restored. External InfluxDB is not covered by EMS "
+                "backup/restore."
+            )
+    print()
+    print("Recommended next step:")
+    print(DIAGNOSE_HINT)
+    if sys.stdin.isatty():
+        choice = prompt_text("Run diagnose now? [y/n]", default="n")
+        if choice and choice.strip().lower().startswith("y"):
+            diag_args = make_args(
+                config=args.config,
+                runtime_state=getattr(args, "runtime_state", None),
+                dashboard_auth=getattr(args, "dashboard_auth", None),
+                json=False,
+                deep=True,
+                hardware=False,
+                support_bundle=False,
+                control=False,
+                control_quality=False,
+                quality=False,
+                sample_seconds=0,
+                output=None,
+            )
+            diag_args.config = resolve_config_path(diag_args)
+            handle_diagnose_command(diag_args)
+
+
+def handle_backup_restore(args, config, archive_path, interactive):
+    if not archive_path:
+        return fail("restore requires a backup file path", code=2)
+    if not os.path.isfile(archive_path):
+        return fail(f"backup not found: {archive_path}")
+
+    encrypted = backup_mod.is_encrypted(archive_path)
+    if encrypted and not interactive:
+        return fail(
+            "backup is password protected; interactive restore is required "
+            "to enter the password"
+        )
+
+    password = resolve_backup_password(args, archive_path, interactive)
+
+    # Inspect first so restore dispatch uses the backup type from the manifest.
+    try:
+        info = backup_mod.inspect_backup(archive_path, password=password)
+    except backup_mod.BackupPasswordError as exc:
+        return fail(str(exc))
+    except backup_mod.BackupError as exc:
+        return fail(str(exc))
+    manifest = info.get("manifest") or {}
+    backup_type = manifest.get("backup_type", "config")
+    if backup_type == "influxdb":
+        return handle_backup_restore_influxdb(
+            args, config, archive_path, manifest, password, interactive
+        )
+    is_databases = backup_type == "databases"
+
+    # Dry-run never creates rollbacks and never resolves conflicts; it prints
+    # the plan (including conflicts) and exits.
+    if args.dry_run:
+        try:
+            result = backup_mod.restore_backup(
+                archive_path,
+                base_dir=BASE_DIR,
+                password=password,
+                dry_run=True,
+            )
+        except backup_mod.BackupPasswordError as exc:
+            return fail(str(exc))
+        except backup_mod.BackupError as exc:
+            return fail(str(exc))
+        print()
+        for action in result["actions"]:
+            print(f"  {action['action']}: {action['path']}")
+        print("\nDry run: no files were changed and no rollback was created.")
+        return 0
+
+    # Rollback decision.
+    do_rollback = args.rollback
+    if do_rollback is None:
+        if interactive and sys.stdin.isatty():
+            label = "database" if is_databases else "config"
+            choice = prompt_text(
+                f"Create rollback {label} backup before restore? [y/n/a]",
+                default="y",
+            )
+            if choice is None or choice.lower().startswith("a"):
+                print("Aborted.")
+                return 0
+            do_rollback = choice.lower().startswith("y")
+        else:
+            do_rollback = False
+
+    # Source and rollback passwords are intentionally independent.
+    rollback_password = None
+    if do_rollback and interactive and sys.stdin.isatty():
+        rollback_password, status = prompt_optional_rollback_password()
+        if status == "abort":
+            print("Aborted.")
+            return 0
+
+    if do_rollback:
+        try:
+            if is_databases:
+                rollback_path = backup_mod.create_database_rollback_backup(
+                    config,
+                    os.path.basename(archive_path),
+                    base_dir=BASE_DIR,
+                    password=rollback_password,
+                )
+            else:
+                rollback_path = backup_mod.create_rollback_backup(
+                    config,
+                    os.path.basename(archive_path),
+                    password=rollback_password,
+                    **backup_path_kwargs(args, config),
+                )
+        except backup_mod.BackupError as exc:
+            return fail(f"rollback backup failed; restore not started: {exc}")
+        print(f"Rollback backup created:\n  {rollback_path}")
+
+    on_conflict = args.on_conflict
+    conflict_resolver = None
+    if on_conflict is None:
+        if interactive and sys.stdin.isatty():
+            conflict_resolver = make_interactive_conflict_resolver(
+                args, config, archive_path, password
+            )
+            on_conflict = "abort"
+        else:
+            on_conflict = "abort"
+
+    try:
+        result = backup_mod.restore_backup(
+            archive_path,
+            base_dir=BASE_DIR,
+            password=password,
+            on_conflict=on_conflict,
+            conflict_resolver=conflict_resolver,
+            dry_run=args.dry_run,
+        )
+    except backup_mod.BackupPasswordError as exc:
+        return fail(str(exc))
+    except backup_mod.BackupError as exc:
+        return fail(str(exc))
+
+    print()
+    for action in result["actions"]:
+        print(f"  {action['action']}: {action['path']}")
+
+    print_restore_done(
+        args,
+        config,
+        backup_type=backup_type,
+        influx=manifest.get("influxdb"),
+    )
+    return 0
+
+
+def handle_backup_inspect(archive_path, password=None):
+    if not archive_path:
+        return fail("inspect requires a backup file path", code=2)
+    try:
+        info = backup_mod.inspect_backup(archive_path, password=password)
+    except backup_mod.BackupPasswordError as exc:
+        return fail(str(exc))
+    except backup_mod.BackupError as exc:
+        return fail(str(exc))
+
+    print(f"Backup: {archive_path}")
+    if info["manifest"] is None:
+        print("  encrypted: True")
+        print("  (password required to read the manifest)")
+        return 0
+    print_backup_manifest(info["manifest"])
+    return 0
+
+
+def handle_backup_diff(args, archive_path):
+    if not archive_path:
+        return fail("diff requires a backup file path", code=2)
+    if not args.diff_file:
+        return fail("diff requires --file <path>", code=2)
+    password = resolve_backup_password(args, archive_path, interactive=True)
+    try:
+        result = backup_mod.diff_backup_file(
+            archive_path,
+            args.diff_file,
+            base_dir=BASE_DIR,
+            password=password,
+        )
+    except backup_mod.BackupPasswordError as exc:
+        return fail(str(exc))
+    except backup_mod.BackupError as exc:
+        return fail(str(exc))
+
+    if result["binary"]:
+        print(result["text"])
+    else:
+        print(result["text"] or "(no differences)")
+    return 0
+
+
+def backup_interactive_args(args):
+    """Build a backup args namespace with interactive-friendly defaults."""
+
+    return make_args(
+        config=getattr(args, "config", None),
+        runtime_state=getattr(args, "runtime_state", None),
+        dashboard_auth=getattr(args, "dashboard_auth", None),
+        action=None,
+        file=None,
+        diff_file=None,
+        type="config",
+        compression_level=backup_mod.DEFAULT_COMPRESSION_LEVEL,
+        password=False,
+        encryption=backup_mod.DEFAULT_ENCRYPTION_ALGORITHM,
+        chunk_size=None,
+        kdf_iterations=None,
+        on_conflict=None,
+        rollback=None,
+        dry_run=False,
+    )
+
+
+def run_backup_interactive(args, config):
+    args = backup_interactive_args(args)
+    menu = [
+        ("create", "Create config backup"),
+        ("create-db", "Create database backup"),
+        ("create-influx", "Create InfluxDB backup"),
+        ("restore", "Restore backup"),
+        ("inspect", "Inspect backup"),
+        ("quit", "Exit"),
+    ]
+    print()
+    print("Backup / Restore")
+    while True:
+        choice = prompt_choice("Select an action", menu)
+        try:
+            if choice == "quit":
+                return 0
+            if choice == "create":
+                handle_backup_create(args, config)
+            elif choice == "create-db":
+                handle_backup_create_database(args, config)
+            elif choice == "create-influx":
+                handle_backup_create_influxdb(args, config)
+            elif choice == "restore":
+                archive_path = prompt_backup_selection()
+                if archive_path:
+                    handle_backup_restore(
+                        args, config, archive_path, interactive=True
+                    )
+            elif choice == "inspect":
+                archive_path = prompt_backup_selection()
+                if archive_path:
+                    password = resolve_backup_password(
+                        args, archive_path, interactive=True
+                    )
+                    handle_backup_inspect(archive_path, password=password)
+        except (OSError, ValueError) as exc:
+            print(f"ERROR: {exc}")
+
+
+def prompt_backup_selection():
+    files = list_backup_files()
+    if files:
+        print()
+        print("Available backups:")
+        for index, path in enumerate(files, start=1):
+            print(f"  {index}. {os.path.basename(path)}")
+        raw = prompt_text("Choose a number or enter a path")
+        if raw is None or raw == "":
+            return None
+        if raw.isdigit():
+            index = int(raw)
+            if 1 <= index <= len(files):
+                return files[index - 1]
+            print("ERROR: invalid selection.")
+            return None
+        return raw
+    raw = prompt_text("Enter backup file path")
+    return raw or None
+
+
+def handle_backup_command(args, config):
+    action = getattr(args, "action", None)
+    if action is None:
+        return run_backup_interactive(args, config)
+    if action == "create":
+        return handle_backup_create(args, config)
+    if action == "restore":
+        return handle_backup_restore(args, config, args.file, interactive=True)
+    if action == "inspect":
+        password = resolve_backup_password(args, args.file, interactive=True) \
+            if args.file and os.path.isfile(args.file) else None
+        return handle_backup_inspect(args.file, password=password)
+    if action == "diff":
+        return handle_backup_diff(args, args.file)
+    return fail(f"unknown backup action {action}", code=2)
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     if not argv:
@@ -2221,6 +3303,9 @@ def main(argv=None):
 
         if args.command == "stack":
             return handle_stack_command(args, config)
+
+        if args.command == "backup":
+            return handle_backup_command(args, config)
 
         runtime_path = resolve_runtime_path(args, config)
         state, created = load_runtime_state(runtime_path, config)

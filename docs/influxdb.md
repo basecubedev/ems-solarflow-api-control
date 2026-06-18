@@ -188,8 +188,60 @@ before starting the container, and report it:
 InfluxDB data directory: data/influxdb
 ```
 
-To back up the important local EMS state (config, all runtime/history data and
-the generated secrets), archive `config.json`, `data/` and the secret file:
+### Recommended: managed backups via `emsctl backup`
+
+For a step-by-step walkthrough, see the
+[Backup and Restore Guide](backup-restore.md).
+
+Use the built-in backup tool rather than copying files by hand. It produces
+self-describing, optionally encrypted archives and never copies a live database:
+
+```bash
+python3 emsctl.py backup create --type config      # config.json, runtime state, secrets
+python3 emsctl.py backup create --type databases   # local SQLite (consistent snapshots)
+python3 emsctl.py backup create --type influxdb    # bundled InfluxDB data (official backup)
+```
+
+- **Config backup** — `config.json`, runtime state, dashboard auth/cert/key and
+  the bundled InfluxDB secret file. May contain secrets.
+- **Database backup** — `data/ems_dashboard.sqlite` and `data/ems_state.sqlite`,
+  snapshotted with the SQLite online backup API. InfluxDB data is **not** part of
+  this archive.
+- **InfluxDB backup** — bundled InfluxDB data via the official `influx backup`
+  CLI run inside the `ems-influxdb` container, packaged under `influxdb/` in the
+  archive. The live `data/influxdb` directory is never copied while InfluxDB is
+  running. **Bundled mode only** — external InfluxDB is rejected (use your
+  provider's backup tool). Restore uses `influx restore --full` (replace-style)
+  and offers a rollback InfluxDB backup first. See
+  [Backup / Restore](cli.md#backup--restore) for the full flow, password
+  protection and post-restore checks.
+
+### Recommended restore order (migrating / recovering)
+
+`influx restore --full` is replace-style and restores InfluxDB metadata (org,
+buckets, users, tokens, dashboards) **and** time-series data, so the bundled
+token and config must agree. Restore in this order:
+
+1. **Restore the config backup first** — brings back `config.json` and the
+   bundled InfluxDB secret (`deploy/docker/influxdb.env`).
+2. **Verify** the bundled InfluxDB secret/config files are present.
+3. **Restore the InfluxDB backup** (bundled mode only — external InfluxDB is not
+   supported by EMS backup/restore; restore can replace existing analytics
+   history, so create a rollback first; encrypted backups require the password).
+4. **Verify**:
+
+   ```bash
+   python3 emsctl.py influx status
+   python3 emsctl.py diagnose --deep
+   ```
+
+See [Backup / Restore](cli.md#backup--restore) for the full flow.
+
+### Manual (offline) archive
+
+When the stack is **stopped**, you can also archive the on-disk state directly
+(`config.json`, `data/` and the secret file). Do not copy `data/influxdb` while
+InfluxDB is running — use `backup create --type influxdb` instead.
 
 ```bash
 tar -czf ems-backup.tar.gz config.json data/ deploy/docker/influxdb.env

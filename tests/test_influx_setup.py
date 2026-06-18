@@ -967,7 +967,24 @@ def test_stack_command_appears_in_help():
 # --- runtime URL / token resolution (native host vs container) --------------
 
 
-def test_runtime_url_bundled_native_uses_host_url():
+def _force_native_host(monkeypatch):
+    """Pretend the test process is not inside a container.
+
+    ``is_container_runtime`` falls back to probing the real ``/.dockerenv``
+    marker when there is no explicit override. The test runner itself may run
+    inside a container, so neutralize that filesystem check to keep these
+    native-host assertions deterministic.
+    """
+    real_exists = os.path.exists
+    monkeypatch.setattr(
+        influx_setup.os.path,
+        "exists",
+        lambda path: False if path == "/.dockerenv" else real_exists(path),
+    )
+
+
+def test_runtime_url_bundled_native_uses_host_url(monkeypatch):
+    _force_native_host(monkeypatch)
     cfg = bundled_config(
         url="http://influxdb:8086", host_url="http://127.0.0.1:8086"
     )
@@ -978,7 +995,10 @@ def test_runtime_url_bundled_native_uses_host_url():
     )
 
 
-def test_runtime_url_bundled_native_missing_host_url_falls_back_to_loopback():
+def test_runtime_url_bundled_native_missing_host_url_falls_back_to_loopback(
+    monkeypatch,
+):
+    _force_native_host(monkeypatch)
     cfg = bundled_config(url="http://influxdb:8086", host_url="")
     # normalize fills host_url with the default; force it empty to exercise the
     # runtime fallback path directly.

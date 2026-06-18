@@ -1,55 +1,30 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Zero-config setup helpers for the bundled docker-compose InfluxDB backend.
-
-This module owns the *host-side* setup flow that makes the bundled InfluxDB
-analytics backend work without the operator having to understand InfluxDB
-tokens:
-
-- generate a gitignored local secret file (``deploy/docker/influxdb.env``) with
-  secure random tokens/passwords, merging into any existing file without ever
-  overwriting secrets that are already there;
-- select the right docker-compose files for the EMS + bundled-InfluxDB stack;
-- build the ``docker compose ...`` command line.
-
-It is import-side-effect-free and never runs Docker itself: the actual
-subprocess call lives in ``emsctl.py`` so it stays mockable and so the running
-controller never manages Docker. ``config.json`` remains the source of truth and
-holds no secrets.
-"""
+"""Setup and command helpers for the bundled InfluxDB backend."""
 
 import os
 import secrets
+import shlex
 from collections import OrderedDict
 
 from ems.paths import BASE_DIR
 
-# Host-side fallback URL for bundled mode when host_url is missing from a legacy
-# config. The bundled InfluxDB publishes 8086 to the host loopback.
+INFLUX_SERVICE = "influxdb"
+INFLUX_CONTAINER_NAME = "ems-influxdb"
+INFLUX_BACKUP_METHOD = "influx backup"
+
 DEFAULT_HOST_URL = "http://127.0.0.1:8086"
 
-# The only secret file path the bundled Compose overlays read (their env_file is
-# fixed to this). A bundled install must keep secret_file at this default so the
-# generated secrets and Compose's env_file stay in sync.
+# Must match the env_file path used by the bundled compose overlays.
 DEFAULT_SECRET_FILE = "deploy/docker/influxdb.env"
 
-# Repo-local bind-mount target for bundled InfluxDB database state. Kept under
-# ./data/ so all local EMS runtime/history data (data/*.sqlite,
-# runtime-state.json) lives in one place that is easy to back up and migrate.
-# The bundled Compose file hard-codes the matching `./data/influxdb` bind mount,
-# resolved against the Compose project directory (the repo root).
+# Must match the bundled InfluxDB bind mount.
 DEFAULT_DATA_DIR = "data/influxdb"
 
-# Base compose file shipped for everyone (EMS only, no InfluxDB).
 BASE_COMPOSE_FILE = "docker-compose.example.yml"
-# Bundled InfluxDB service.
 INFLUX_COMPOSE_FILE = "deploy/docker/compose.influxdb.yml"
-# Overlay that feeds the same secret env file (INFLUXDB_TOKEN/ORG) to the EMS
-# container. Only included when bundled InfluxDB is enabled, so the default
-# non-InfluxDB ``docker compose up -d`` path is never affected.
 EMS_INFLUX_ENV_COMPOSE_FILE = "deploy/docker/compose.ems-influx-env.yml"
 
-# Secret keys that must never be printed and must never be regenerated when a
-# value already exists in the secret file.
+# Preserve existing secret values; never print or regenerate these.
 SECRET_KEYS = (
     "INFLUXDB_TOKEN",
     "DOCKER_INFLUXDB_INIT_PASSWORD",
@@ -366,3 +341,55 @@ def build_compose_command(files, action=("up", "-d"), binary=("docker", "compose
         command.extend(["-f", compose_file])
     command.extend(action)
     return command
+
+
+# ---------------------------------------------------------------------------
+# Bundled InfluxDB backup/restore command builders
+#
+# Build docker compose commands without exposing the token on the host CLI: the
+# container already has ``INFLUXDB_TOKEN`` in its environment, so commands
+# reference ``"$INFLUXDB_TOKEN"`` inside a ``sh -c`` wrapper.
+# ---------------------------------------------------------------------------
+
+def build_influx_backup_command(
+    files, container_dir, *, token_env="INFLUXDB_TOKEN", binary=("docker", "compose")
+):
+    """Build the official ``influx backup`` command run inside the container."""
+    inner = (
+        f'influx backup {shlex.quote(container_dir)} -t "${token_env}"'
+    )
+    action = ("exec", "-T", INFLUX_SERVICE, "sh", "-c", inner)
+    return build_compose_command(files, action=action, binary=binary)
+
+
+def build_influx_restore_command(
+    files, container_dir, *, token_env="INFLUXDB_TOKEN", binary=("docker", "compose")
+):
+    """Build the official replace-style InfluxDB restore command."""
+    inner = (
+        f'influx restore --full {shlex.quote(container_dir)} -t "${token_env}"'
+    )
+    action = ("exec", "-T", INFLUX_SERVICE, "sh", "-c", inner)
+    return build_compose_command(files, action=action, binary=binary)
+
+
+def build_influx_exec_command(files, argv, binary=("docker", "compose")):
+    """Build a plain ``docker compose exec -T influxdb <argv...>`` command."""
+    action = ("exec", "-T", INFLUX_SERVICE) + tuple(argv)
+    return build_compose_command(files, action=action, binary=binary)
+
+
+def build_influx_copy_out_command(
+    files, container_path, host_path, binary=("docker", "compose")
+):
+    """Build ``docker compose cp influxdb:<container_path> <host_path>``."""
+    action = ("cp", f"{INFLUX_SERVICE}:{container_path}", host_path)
+    return build_compose_command(files, action=action, binary=binary)
+
+
+def build_influx_copy_in_command(
+    files, host_path, container_path, binary=("docker", "compose")
+):
+    """Build ``docker compose cp <host_path> influxdb:<container_path>``."""
+    action = ("cp", host_path, f"{INFLUX_SERVICE}:{container_path}")
+    return build_compose_command(files, action=action, binary=binary)
