@@ -84,7 +84,11 @@ def test_config_template_standalone_live_control_defaults():
     assert template["ha"]["enabled"] is False
     assert template["ha"]["control_enabled"] is False
     assert template["grid_meter"]["type"] == "shelly"
-    assert template["grid_meter"]["ip"] == template["shelly"]["ip"]
+    assert isinstance(template["grid_meter"]["ip"], str)
+    assert template["grid_meter"]["ip"]
+    # The deprecated top-level "shelly" block has been removed; the grid meter
+    # is configured solely under grid_meter.
+    assert "shelly" not in template
     removed_key = "chan" + "nel"
     assert removed_key not in template["grid_meter"]
     assert template["system"]["dry_run"] is False
