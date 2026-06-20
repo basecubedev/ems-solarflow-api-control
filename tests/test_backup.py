@@ -62,10 +62,37 @@ def test_running_in_container_truthy_env(tmp_path):
     )
 
 
-def test_running_in_container_docker_marker(tmp_path):
+def _official_layout(tmp_path):
+    """Create an /app-style layout under tmp_path and return its app_dir."""
+    app_dir = tmp_path / "app"
+    (app_dir / "config").mkdir(parents=True)
+    (app_dir / "data").mkdir()
+    return app_dir
+
+
+def test_running_in_container_marker_with_official_layout(tmp_path):
     marker = tmp_path / ".dockerenv"
     marker.write_text("")
-    assert backup.running_in_container(environ={}, docker_env_path=str(marker))
+    app_dir = _official_layout(tmp_path)
+    assert backup.running_in_container(
+        environ={},
+        docker_env_path=str(marker),
+        base_dir=str(app_dir),
+        app_dir=str(app_dir),
+    )
+
+
+def test_running_in_container_marker_without_official_layout(tmp_path):
+    # /.dockerenv present (CI/devcontainer) but base dir is a temp project, not
+    # the official /app layout: must not force container backup defaults.
+    marker = tmp_path / ".dockerenv"
+    marker.write_text("")
+    assert not backup.running_in_container(
+        environ={},
+        docker_env_path=str(marker),
+        base_dir=str(tmp_path),
+        app_dir=str(tmp_path / "app"),
+    )
 
 
 def test_running_in_container_native(tmp_path):
@@ -78,14 +105,18 @@ def test_running_in_container_native(tmp_path):
 def test_running_in_container_explicit_false_overrides_marker(tmp_path):
     marker = tmp_path / ".dockerenv"
     marker.write_text("")
+    app_dir = _official_layout(tmp_path)
     assert not backup.running_in_container(
-        environ={"EMS_IN_CONTAINER": "0"}, docker_env_path=str(marker)
+        environ={"EMS_IN_CONTAINER": "0"},
+        docker_env_path=str(marker),
+        base_dir=str(app_dir),
+        app_dir=str(app_dir),
     )
 
 
-def test_default_backup_dir_uses_data_backups_via_docker_marker(tmp_path, monkeypatch):
-    marker = tmp_path / ".dockerenv"
-    marker.write_text("")
+def test_default_backup_dir_marker_without_official_layout_is_native(
+    tmp_path, monkeypatch
+):
     real_exists = os.path.exists
     monkeypatch.setattr(
         backup.os.path,
@@ -94,7 +125,7 @@ def test_default_backup_dir_uses_data_backups_via_docker_marker(tmp_path, monkey
     )
     assert (
         backup.default_backup_dir(base_dir=str(tmp_path), environ={})
-        == "/app/data/backups"
+        == os.path.join(str(tmp_path), "backup")
     )
 
 
@@ -110,6 +141,29 @@ def test_default_backup_dir_remains_project_backup_for_native(tmp_path):
         base_dir=str(tmp_path),
         environ={"EMS_IN_CONTAINER": "0"},
     ) == os.path.join(str(tmp_path), "backup")
+
+
+def test_container_detection_source_env_wins(tmp_path):
+    assert backup.container_detection_source(
+        environ={"EMS_IN_CONTAINER": "1"},
+        docker_env_path=str(tmp_path / "no-dockerenv"),
+    ) == "EMS_IN_CONTAINER"
+
+
+def test_container_detection_source_marker_requires_official_layout(tmp_path):
+    marker = tmp_path / ".dockerenv"
+    marker.write_text("")
+    # Marker present but not the official /app layout: native, no source.
+    assert backup.container_detection_source(
+        environ={}, docker_env_path=str(marker),
+        base_dir=str(tmp_path), app_dir=str(tmp_path / "app"),
+    ) is None
+
+    app_dir = _official_layout(tmp_path)
+    assert backup.container_detection_source(
+        environ={}, docker_env_path=str(marker),
+        base_dir=str(app_dir), app_dir=str(app_dir),
+    ) == str(marker)
 
 
 def test_create_backup_creates_container_default_dir(tmp_path, monkeypatch):

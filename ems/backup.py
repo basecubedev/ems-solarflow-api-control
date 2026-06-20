@@ -33,6 +33,7 @@ CONFIG_BACKUP_FORMAT_VERSION = 1
 MANIFEST_NAME = "backup-manifest.json"
 DEFAULT_BACKUP_DIR_NAME = "backup"
 CONTAINER_BACKUP_DIR = "/app/data/backups"
+OFFICIAL_APP_DIR = "/app"
 DEFAULT_COMPRESSION_LEVEL = 3
 
 BACKUP_TYPES = ("config", "databases", "influxdb")
@@ -510,30 +511,55 @@ def build_manifest(
 # Create
 # ---------------------------------------------------------------------------
 
-def running_in_container(environ=None, docker_env_path="/.dockerenv"):
-    # An explicit EMS_IN_CONTAINER (truthy or falsy) wins so the compose overlay
-    # and tests can pin the answer; otherwise fall back to the Docker marker file
-    # so existing users get persistent backups without editing their compose.
+def _in_official_app_layout(
+    base_dir=None, app_dir=OFFICIAL_APP_DIR, path_exists=os.path.exists
+):
+    # The /.dockerenv marker also exists in CI/devcontainers, so it alone is too
+    # broad. Only the official image layout (app at /app with mounted config/data)
+    # should route backups to the persistent /app/data/backups default.
+    base_dir = base_dir or BASE_DIR
+    return (
+        os.path.abspath(base_dir) == app_dir
+        and path_exists(os.path.join(app_dir, "config"))
+        and path_exists(os.path.join(app_dir, "data"))
+    )
+
+
+def running_in_container(
+    environ=None, docker_env_path="/.dockerenv", base_dir=None,
+    app_dir=OFFICIAL_APP_DIR,
+):
+    # An explicit EMS_IN_CONTAINER (truthy or falsy) always wins so the compose
+    # overlay and tests can pin the answer. The Docker marker only forces the
+    # container backup default when the official /app layout is present, so
+    # native tests in temp dirs keep their project-local backup directory.
     environ = os.environ if environ is None else environ
     flag = str(environ.get("EMS_IN_CONTAINER", "")).strip()
     if flag:
         return safe_bool(flag)
-    return os.path.exists(docker_env_path)
+    return os.path.exists(docker_env_path) and _in_official_app_layout(
+        base_dir, app_dir
+    )
 
 
-def container_detection_source(environ=None, docker_env_path="/.dockerenv"):
+def container_detection_source(
+    environ=None, docker_env_path="/.dockerenv", base_dir=None,
+    app_dir=OFFICIAL_APP_DIR,
+):
     """Name the signal that put backups in container mode (None if native)."""
     environ = os.environ if environ is None else environ
     flag = str(environ.get("EMS_IN_CONTAINER", "")).strip()
     if flag:
         return "EMS_IN_CONTAINER" if safe_bool(flag) else None
-    if os.path.exists(docker_env_path):
+    if os.path.exists(docker_env_path) and _in_official_app_layout(
+        base_dir, app_dir
+    ):
         return docker_env_path
     return None
 
 
 def default_backup_dir(base_dir=None, environ=None):
-    if running_in_container(environ):
+    if running_in_container(environ, base_dir=base_dir):
         return CONTAINER_BACKUP_DIR
     return os.path.join(base_dir or BASE_DIR, DEFAULT_BACKUP_DIR_NAME)
 
