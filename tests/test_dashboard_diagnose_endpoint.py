@@ -10,6 +10,7 @@ import zipfile
 import pytest
 
 from dashboard.auth import write_password_file
+from ems import diagnostics
 from test_dashboard_server import (
     StoreStub,
     json_response,
@@ -131,7 +132,23 @@ def test_diagnose_install_returns_contract_when_authenticated(tmp_path):
 @pytest.mark.parametrize(
     "profile", ["install", "deep", "hardware", "control", "control_quality"]
 )
-def test_diagnose_each_profile_returns_contract(tmp_path, profile):
+def test_diagnose_each_profile_returns_contract(tmp_path, monkeypatch, profile):
+    if profile == "deep":
+        def fake_diagnose_docker_deep(checks):
+            diagnostics.diagnose_add(
+                checks,
+                "docker",
+                "ok",
+                "docker_deep_test_stub",
+                "Docker deep check stubbed for dashboard endpoint contract test",
+            )
+
+        monkeypatch.setattr(
+            diagnostics,
+            "diagnose_docker_deep",
+            fake_diagnose_docker_deep,
+        )
+
     server, base_url = diag_server(tmp_path)
     try:
         cookie, _ = login(base_url)
@@ -143,6 +160,11 @@ def test_diagnose_each_profile_returns_contract(tmp_path, profile):
         assert payload["schema_version"] == 1
         assert payload["profile"] == profile
         assert payload["diagnosis"]["status"] in ("ok", "warning", "error")
+        if profile == "deep":
+            assert any(
+                check["code"] == "docker_deep_test_stub"
+                for check in payload["checks"]
+            )
     finally:
         server.shutdown()
         server.server_close()

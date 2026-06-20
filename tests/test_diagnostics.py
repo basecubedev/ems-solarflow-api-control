@@ -7,6 +7,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 import emsctl
 from ems import diagnostics
 from ems import paths as ems_paths
@@ -150,6 +152,110 @@ def test_diagnose_redact_report_for_http_masks_structured_and_text_secrets():
     assert check["missing"] == ["ip", "sn"]
     assert secret not in check["message"]
     json.dumps(redacted, sort_keys=True)
+
+
+def test_diagnose_docker_deep_warns_when_docker_cli_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(diagnostics, "BASE_DIR", str(tmp_path))
+    monkeypatch.setattr(diagnostics.shutil, "which", lambda name: None)
+    checks = []
+
+    diagnostics.diagnose_docker_deep(checks)
+
+    assert [check["code"] for check in checks] == ["docker_cli_missing"]
+    assert checks[0]["level"] == "warning"
+
+
+def test_diagnose_docker_deep_warns_when_compose_file_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(diagnostics, "BASE_DIR", str(tmp_path))
+    monkeypatch.setattr(diagnostics.shutil, "which", lambda name: "/usr/bin/docker")
+    checks = []
+
+    diagnostics.diagnose_docker_deep(checks)
+
+    assert [check["code"] for check in checks] == [
+        "docker_cli_found",
+        "compose_file_missing",
+    ]
+    assert checks[-1]["level"] == "warning"
+
+
+def test_diagnose_docker_deep_reports_compose_ps_success(tmp_path, monkeypatch):
+    (tmp_path / "docker-compose.yml").write_text("services: {}\n")
+    monkeypatch.setattr(diagnostics, "BASE_DIR", str(tmp_path))
+    monkeypatch.setattr(diagnostics.shutil, "which", lambda name: "/usr/bin/docker")
+    run_calls = []
+
+    def fake_run(*args, **kwargs):
+        run_calls.append((args, kwargs))
+        return SimpleNamespace(returncode=0, stdout='[{"Name":"ems"}]\n', stderr="")
+
+    monkeypatch.setattr(diagnostics.subprocess, "run", fake_run)
+    checks = []
+
+    diagnostics.diagnose_docker_deep(checks)
+
+    assert [check["code"] for check in checks] == [
+        "docker_cli_found",
+        "compose_file_found",
+        "docker_compose_ps",
+    ]
+    args, kwargs = run_calls[0]
+    assert args[0] == ["/usr/bin/docker", "compose", "ps", "--format", "json"]
+    assert kwargs == {
+        "cwd": str(tmp_path),
+        "text": True,
+        "capture_output": True,
+        "timeout": 5,
+        "check": False,
+    }
+    assert checks[-1]["details"]["output_preview"] == '[{"Name":"ems"}]'
+
+
+def test_diagnose_docker_deep_reports_compose_ps_nonzero(tmp_path, monkeypatch):
+    (tmp_path / "compose.yaml").write_text("services: {}\n")
+    monkeypatch.setattr(diagnostics, "BASE_DIR", str(tmp_path))
+    monkeypatch.setattr(diagnostics.shutil, "which", lambda name: "/usr/bin/docker")
+    monkeypatch.setattr(
+        diagnostics.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="compose failed",
+        ),
+    )
+    checks = []
+
+    diagnostics.diagnose_docker_deep(checks)
+
+    assert checks[-1]["code"] == "docker_compose_ps_failed"
+    assert checks[-1]["level"] == "warning"
+    assert checks[-1]["details"]["stderr_preview"] == "compose failed"
+
+
+@pytest.mark.parametrize(
+    "exception",
+    [
+        subprocess.TimeoutExpired(["docker", "compose", "ps"], 5),
+        subprocess.SubprocessError("subprocess failed"),
+    ],
+)
+def test_diagnose_docker_deep_reports_subprocess_errors(tmp_path, monkeypatch, exception):
+    (tmp_path / "docker-compose.yml").write_text("services: {}\n")
+    monkeypatch.setattr(diagnostics, "BASE_DIR", str(tmp_path))
+    monkeypatch.setattr(diagnostics.shutil, "which", lambda name: "/usr/bin/docker")
+
+    def fake_run(*args, **kwargs):
+        raise exception
+
+    monkeypatch.setattr(diagnostics.subprocess, "run", fake_run)
+    checks = []
+
+    diagnostics.diagnose_docker_deep(checks)
+
+    assert checks[-1]["code"] == "docker_compose_ps_failed"
+    assert checks[-1]["level"] == "warning"
+    assert exception.__class__.__name__ in checks[-1]["message"]
 
 
 def test_emsctl_diagnose_json_contains_v2_structure(tmp_path):
