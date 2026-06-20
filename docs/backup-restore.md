@@ -5,6 +5,13 @@ setup. For the full command reference (every flag and the exact archive format)
 see [Backup / Restore](cli.md#backup--restore).
 
 All commands run from the project directory. Backups are written to `./backup/`.
+Docker commands are shown first for common workflows. For detailed restore
+examples later in this page, Docker users can run the same `emsctl.py` command
+inside the service, for example:
+
+```bash
+docker compose exec ems python3 emsctl.py backup restore ./backup/example.tar.gz --dry-run
+```
 
 ## When should I create a backup?
 
@@ -20,6 +27,16 @@ Create a backup:
 Run these before an update to capture config, local history and (if you use
 bundled InfluxDB) analytics history:
 
+Docker:
+
+```bash
+docker compose exec ems python3 emsctl.py backup create --type config --password
+docker compose exec ems python3 emsctl.py backup create --type databases --password
+docker compose exec ems python3 emsctl.py backup create --type influxdb --password
+```
+
+Native Python:
+
 ```bash
 python3 emsctl.py backup create --type config --password
 python3 emsctl.py backup create --type databases --password
@@ -31,6 +48,16 @@ twice). **Keep the password safe — without it the encrypted backup cannot be
 restored.**
 
 If you do not want password protection, drop `--password`:
+
+Docker:
+
+```bash
+docker compose exec ems python3 emsctl.py backup create --type config
+docker compose exec ems python3 emsctl.py backup create --type databases
+docker compose exec ems python3 emsctl.py backup create --type influxdb
+```
+
+Native Python:
 
 ```bash
 python3 emsctl.py backup create --type config
@@ -112,6 +139,14 @@ ls -lh backup/
 
 Or open the interactive menu, which also lists available backups when you choose
 to restore or inspect:
+
+Docker:
+
+```bash
+docker compose exec ems python3 emsctl.py backup
+```
+
+Native Python:
 
 ```bash
 python3 emsctl.py backup

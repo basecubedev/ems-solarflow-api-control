@@ -2,10 +2,11 @@
 
 This software can write to real power hardware.
 
-The template default is standalone live control: Home Assistant disabled,
-`dry_run=false`, `allow_hardware_writes=true`, and
-`allow_state_reconciliation_writes=true`. Set `dry_run=true` manually when you
-want a no-write validation run.
+The template profile is intended for normal standalone live control after real
+local values are configured and installation limits are reviewed. If required
+placeholders are still present, EMS forces safe mode: control disabled,
+dry-run enabled, and hardware writes blocked. Set `dry_run=true` manually when
+you want a no-write validation run.
 
 ## Operator Responsibility
 
@@ -20,6 +21,9 @@ PV factors, and any local grid or electrical requirements.
 The EMS should not run in parallel with another controller that writes Zendure
 `outputLimit`. Monitor the first live run and every run after relevant
 configuration changes.
+
+Use [first-run-checklist.md](first-run-checklist.md) before unattended
+operation.
 
 ## Write Gates
 
@@ -80,6 +84,15 @@ device to `acMode=2`. An explicit runtime output command, such as
 
 ## Preflight
 
+Docker first checks:
+
+```bash
+docker compose exec ems python3 emsctl.py diagnose
+docker compose exec ems python3 emsctl.py diagnose --hardware
+```
+
+Native Python preflight:
+
 ```bash
 python3 -B ems-solarflow-api-control.py --preflight
 ```
@@ -89,7 +102,7 @@ control writes.
 
 ## Bounded Runs
 
-Use bounded runs for live tests:
+Use bounded runs for native Python live tests:
 
 ```bash
 python3 -B ems-solarflow-api-control.py --duration 60

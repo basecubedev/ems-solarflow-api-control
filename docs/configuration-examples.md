@@ -1,14 +1,19 @@
 # Configuration Examples
 
-These examples are starting points for `config.json`. The primary example
-matches the template default: standalone-first, Home Assistant disabled, live
-Zendure output control enabled, and required state reconciliation enabled.
+These examples are starting points for `config.json` or Docker
+`config/config.json`. The template profile is intended for normal standalone
+live control after real local values are configured and installation limits are
+reviewed.
 
-Set `dry_run=true` manually when you want a no-write validation run.
+If required placeholders are still present, EMS forces safe mode: control
+disabled, dry-run enabled, and hardware writes blocked. Set `dry_run=true`
+manually when you want an explicit no-write validation run after configuration.
 
 Use example IP addresses and serial numbers as placeholders only. Before
-unattended operation, enter real grid meter and Zendure values, review power and SOC
-limits, confirm battery and PV metadata, and monitor the first bounded live run.
+unattended operation, enter real grid meter and Zendure values, review power and
+SOC limits, confirm battery and PV metadata, run
+[first-run-checklist.md](first-run-checklist.md), and monitor the first live
+run.
 
 ## Example 1: One Zendure Device Without Home Assistant
 
@@ -109,7 +114,13 @@ Change:
 - `energy_savings.currency`
 - `energy_savings.timezone` only when you do not want Europe/Berlin calendar days
 
-Run:
+Docker check:
+
+```bash
+docker compose exec ems python3 emsctl.py diagnose
+```
+
+Native Python validation:
 
 ```bash
 python3 -B ems-solarflow-api-control.py --simulate --max-cycles 1
@@ -188,7 +199,13 @@ Change:
 - `grid_meter.type`, `grid_meter.ip`, and Shelly `grid_meter.channels` if needed
 - PV and battery metadata
 
-Run:
+Docker check:
+
+```bash
+docker compose exec ems python3 emsctl.py diagnose
+```
+
+Native Python validation:
 
 ```bash
 python3 -B ems-solarflow-api-control.py --preflight
@@ -210,7 +227,13 @@ Zendure hardware writes.
 }
 ```
 
-Run:
+Docker check:
+
+```bash
+docker compose exec ems python3 emsctl.py diagnose
+```
+
+Native Python validation:
 
 ```bash
 python3 -B ems-solarflow-api-control.py --preflight --dry-run
@@ -232,10 +255,16 @@ manual validation.
 }
 ```
 
-This is not the template default. It blocks both normal `outputLimit` writes and
-state reconciliation writes until you change the flags back.
+This is not the normal template profile. It blocks both normal `outputLimit`
+writes and state reconciliation writes until you change the flags back.
 
-Validate with:
+Docker check:
+
+```bash
+docker compose exec ems python3 emsctl.py diagnose
+```
+
+Native Python validation:
 
 ```bash
 python3 -B ems-solarflow-api-control.py --preflight --dry-run
@@ -244,8 +273,9 @@ python3 -B ems-solarflow-api-control.py --dry-run --once
 
 ## Example 5: Default Live Control Profile
 
-This is the normal default policy for live standalone operation after local
-configuration.
+This is the normal template policy for standalone operation after required
+placeholders are replaced, real local values are configured, and installation
+limits are reviewed.
 
 ```json
 {
