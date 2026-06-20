@@ -43,6 +43,47 @@ python3 -B ems-solarflow-api-control.py --preflight --dry-run
 python3 -B ems-solarflow-api-control.py --dry-run --once
 ```
 
+## Updating config.json After Upgrades
+
+New releases may add config keys. EMS keeps older configs running by applying
+conservative runtime fallback defaults in memory. Normal startup does not
+rewrite `config.json`.
+
+To review missing keys:
+
+```bash
+python3 emsctl.py config upgrade --dry-run
+```
+
+To update `config.json` interactively:
+
+```bash
+python3 emsctl.py config upgrade
+```
+
+The upgrade command uses `config.template.json` as the source for missing
+user-facing config defaults and explanatory `_comment*` keys. Before writing,
+EMS asks whether to create a normal config backup with the existing backup
+tool.
+
+For automation:
+
+```bash
+python3 emsctl.py config upgrade --yes --backup
+python3 emsctl.py config upgrade --yes --no-backup
+```
+
+After upgrading:
+
+```bash
+python3 emsctl.py diagnose --deep
+```
+
+`config.template.json` contains the defaults users adopt into `config.json`.
+Runtime fallback defaults are a separate safety net so old or incomplete
+configs can still start safely. The `config_schema_version` value tracks config
+compatibility, not the application version.
+
 ## Config vs Runtime-State
 
 `config.json` contains static installation and safety settings:
