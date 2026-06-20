@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import json
+import copy
+import stat
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -135,6 +137,322 @@ def base_minimal_config():
     }
 
 
+def minimal_upgrade_config():
+    return {
+        "_comment": "keep user top comment",
+        "ha": {
+            "_comment": "keep user ha comment",
+            "enabled": True,
+            "custom_ha_key": "kept",
+        },
+        "system": {
+            "enabled": True,
+            "dry_run": False,
+            "max_total_power": 1234,
+            "max_device_power": 900,
+            "deadband": 10,
+            "loop_interval": 5,
+        },
+        "devices": [
+            {
+                "name": "USER",
+                "ip": "192.0.2.20",
+                "sn": "USER_SN",
+            }
+        ],
+        "shelly": {
+            "ip": "192.168.1.50",
+        },
+        "unknown_top": {
+            "nested": True,
+        },
+    }
+
+
+def upgrade(values):
+    return cfg.build_config_upgrade_plan(values)["upgraded_config"]
+
+
+def test_config_template_upgrade_preserves_existing_comments():
+    user = minimal_upgrade_config()
+
+    result = upgrade(user)
+
+    assert result["_comment"] == "keep user top comment"
+    assert result["ha"]["_comment"] == "keep user ha comment"
+
+
+def test_config_template_upgrade_adds_missing_template_comments():
+    result = upgrade(minimal_upgrade_config())
+
+    assert "_comment_docs" in result
+    assert "_comment" in result["dashboard"]
+    assert "_comment_animation_mode" in result["dashboard"]
+
+
+def test_config_template_upgrade_does_not_add_sample_devices():
+    user = minimal_upgrade_config()
+    user.pop("devices")
+
+    result = upgrade(user)
+
+    assert result["devices"] == []
+
+
+def test_config_template_upgrade_preserves_user_devices():
+    user = minimal_upgrade_config()
+
+    result = upgrade(user)
+
+    assert result["devices"][0]["name"] == user["devices"][0]["name"]
+    assert result["devices"][0]["ip"] == user["devices"][0]["ip"]
+    assert result["devices"][0]["sn"] == user["devices"][0]["sn"]
+
+
+def test_config_template_upgrade_preserves_user_values():
+    result = upgrade(minimal_upgrade_config())
+
+    assert result["ha"]["enabled"] is True
+    assert result["system"]["max_total_power"] == 1234
+    assert result["system"]["dry_run"] is False
+
+
+def test_config_template_upgrade_preserves_unknown_keys():
+    result = upgrade(minimal_upgrade_config())
+
+    assert result["unknown_top"] == {"nested": True}
+    assert result["ha"]["custom_ha_key"] == "kept"
+
+
+def test_config_template_upgrade_adds_missing_template_keys():
+    result = upgrade(minimal_upgrade_config())
+
+    assert result["dashboard"]["animation_mode"] == "normal"
+    assert result["influxdb"]["raw_write_interval_seconds"] == 0
+    assert result["battery_full_charge_assist"]["ac_charge_power"] == 600
+
+
+def test_config_template_upgrade_uses_legacy_shelly_ip_for_grid_meter():
+    result = upgrade(minimal_upgrade_config())
+
+    assert result["grid_meter"]["type"] == "shelly"
+    assert result["grid_meter"]["ip"] == "192.168.1.50"
+    assert "_comment" in result["grid_meter"]
+
+
+def test_config_template_upgrade_sets_schema_version():
+    result = upgrade(minimal_upgrade_config())
+
+    assert result["config_schema_version"] == cfg.LATEST_CONFIG_SCHEMA_VERSION
+
+
+def test_config_template_upgrade_is_idempotent():
+    result = upgrade(minimal_upgrade_config())
+    second_plan = cfg.build_config_upgrade_plan(result)
+
+    assert second_plan["changed"] is False
+    assert second_plan["upgraded_config"] == result
+
+
+def test_config_template_upgrade_adds_device_defaults():
+    user = minimal_upgrade_config()
+    user["devices"][0].pop("max_power", None)
+
+    plan = cfg.build_config_upgrade_plan(user)
+    result = plan["upgraded_config"]
+
+    assert result["devices"][0]["max_power"] == 800
+    assert any(item["path"] == "devices[0].max_power" for item in plan["add"])
+
+
+def test_config_template_upgrade_adds_device_comments():
+    user = minimal_upgrade_config()
+    user["devices"][0].pop("_comment_smart_mode", None)
+    user["devices"][0].pop("_comment_soc", None)
+
+    plan = cfg.build_config_upgrade_plan(user)
+    result = plan["upgraded_config"]
+
+    assert "_comment_smart_mode" in result["devices"][0]
+    assert "_comment_soc" in result["devices"][0]
+    paths = {item["path"] for item in plan["comment_add"]}
+    assert "devices[0]._comment_smart_mode" in paths
+    assert "devices[0]._comment_soc" in paths
+
+
+def test_config_template_upgrade_never_overwrites_device_identity():
+    user = minimal_upgrade_config()
+    user["devices"][0].update({
+        "name": "REAL",
+        "ip": "192.0.2.44",
+        "sn": "REAL_SN",
+    })
+
+    result = upgrade(user)
+
+    assert result["devices"][0]["name"] == "REAL"
+    assert result["devices"][0]["ip"] == "192.0.2.44"
+    assert result["devices"][0]["sn"] == "REAL_SN"
+
+
+def test_config_template_upgrade_does_not_fill_missing_device_identity():
+    user = minimal_upgrade_config()
+    user["devices"] = [{"max_power": 500}]
+
+    result = upgrade(user)
+
+    assert "name" not in result["devices"][0]
+    assert "ip" not in result["devices"][0]
+    assert "sn" not in result["devices"][0]
+    assert result["devices"][0]["max_power"] == 500
+
+
+def test_config_template_upgrade_preserves_unknown_device_keys():
+    user = minimal_upgrade_config()
+    user["devices"][0]["custom_device_key"] = "kept"
+
+    result = upgrade(user)
+
+    assert result["devices"][0]["custom_device_key"] == "kept"
+
+
+def test_config_template_upgrade_preserves_invalid_device_items():
+    user = minimal_upgrade_config()
+    user["devices"] = ["invalid"]
+
+    result = upgrade(user)
+
+    assert result["devices"] == ["invalid"]
+
+
+def test_missing_config_schema_version_is_treated_as_schema_1():
+    assert cfg.read_config_schema_version(minimal_upgrade_config()) == 1
+
+
+def test_config_schema_migrations_run_serially():
+    calls = []
+
+    def one_to_two(config, changes):
+        calls.append((1, 2))
+        config["one"] = True
+        return config
+
+    def two_to_three(config, changes):
+        calls.append((2, 3))
+        config["two"] = config["one"]
+        return config
+
+    result, steps = cfg.run_config_schema_migrations(
+        {"system": {}, "devices": []},
+        migrations={
+            (1, 2): ("one", one_to_two),
+            (2, 3): ("two", two_to_three),
+        },
+        latest_schema=3,
+    )
+
+    assert calls == [(1, 2), (2, 3)]
+    assert [(step["from"], step["to"]) for step in steps] == [(1, 2), (2, 3)]
+    assert result["config_schema_version"] == 3
+    assert result["two"] is True
+
+
+def test_config_schema_migration_starts_at_existing_schema():
+    calls = []
+
+    def two_to_three(config, changes):
+        calls.append((2, 3))
+        return config
+
+    result, steps = cfg.run_config_schema_migrations(
+        {"config_schema_version": 2},
+        migrations={(2, 3): ("two", two_to_three)},
+        latest_schema=3,
+    )
+
+    assert calls == [(2, 3)]
+    assert [(step["from"], step["to"]) for step in steps] == [(2, 3)]
+    assert result["config_schema_version"] == 3
+
+
+def test_config_schema_latest_runs_no_schema_migrations():
+    result, steps = cfg.run_config_schema_migrations(
+        {"config_schema_version": 3, "user": "kept"},
+        migrations={},
+        latest_schema=3,
+    )
+
+    assert steps == []
+    assert result["user"] == "kept"
+    assert result["config_schema_version"] == 3
+
+
+def test_config_schema_future_version_aborts():
+    with pytest.raises(cfg.ConfigUpgradeError, match="newer EMS version"):
+        cfg.run_config_schema_migrations(
+            {"config_schema_version": 999},
+            latest_schema=3,
+        )
+
+
+def test_config_schema_missing_intermediate_migration_aborts():
+    with pytest.raises(cfg.ConfigUpgradeError, match="missing config schema migration"):
+        cfg.run_config_schema_migrations(
+            {"config_schema_version": 1},
+            migrations={(2, 3): ("two", lambda config, changes: config)},
+            latest_schema=3,
+        )
+
+
+def test_existing_values_change_only_with_explicit_migration():
+    def two_to_three(config, changes):
+        old = config["battery_full_charge_assist"]["ac_charge_power"]
+        config["battery_full_charge_assist"]["ac_charge_power"] = 600
+        changes.append({
+            "path": "battery_full_charge_assist.ac_charge_power",
+            "old_value": old,
+            "value": 600,
+        })
+        return config
+
+    user = minimal_upgrade_config()
+    user["config_schema_version"] = 2
+    user["battery_full_charge_assist"] = {"ac_charge_power": 200}
+
+    plan = cfg.build_config_upgrade_plan(
+        user,
+        migrations={(2, 3): ("battery assist", two_to_three)},
+        latest_schema=3,
+    )
+
+    assert plan["upgraded_config"]["battery_full_charge_assist"]["ac_charge_power"] == 600
+    assert plan["schema_migrations"][0]["changes"] == [{
+        "path": "battery_full_charge_assist.ac_charge_power",
+        "old_value": 200,
+        "value": 600,
+    }]
+
+
+def test_write_config_json_atomic_preserves_existing_permissions(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text("{}")
+    path.chmod(0o600)
+
+    cfg.write_config_json_atomic(str(path), {"ok": True})
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert json.loads(path.read_text()) == {"ok": True}
+
+
+def test_write_config_json_atomic_creates_restrictive_file(tmp_path):
+    path = tmp_path / "config.json"
+
+    cfg.write_config_json_atomic(str(path), {"ok": True})
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert json.loads(path.read_text()) == {"ok": True}
+
+
 def initialize_config_from_dict(tmp_path, values):
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps(values))
@@ -170,6 +488,83 @@ def test_legacy_shelly_ip_fallback_populates_grid_meter(tmp_path):
             "ip": "192.168.1.51",
         }
         assert cfg.SHELLY_IP == "192.168.1.51"
+    finally:
+        restore_config_module(snapshot)
+
+
+def test_runtime_load_applies_conservative_missing_defaults_in_memory(tmp_path):
+    snapshot = snapshot_config_module()
+    values = {
+        "system": {
+            "enabled": True,
+            "max_total_power": 800,
+            "max_device_power": 800,
+            "deadband": 10,
+        },
+        "devices": [],
+        "shelly": {"ip": "192.168.1.77"},
+    }
+
+    try:
+        initialize_config_from_dict(tmp_path, values)
+
+        assert cfg.DRY_RUN is True
+        assert cfg.SIMULATION_MODE is False
+        assert cfg.ALLOW_HARDWARE_WRITES is False
+        assert cfg.ALLOW_STATE_RECONCILIATION_WRITES is False
+        assert cfg.LOOP_INTERVAL == 5
+        assert cfg.GRID_METER_CONFIG == {
+            "type": "shelly",
+            "ip": "192.168.1.77",
+        }
+    finally:
+        restore_config_module(snapshot)
+
+
+def test_runtime_load_does_not_rewrite_config_file(tmp_path):
+    snapshot = snapshot_config_module()
+    values = {
+        "system": {
+            "enabled": True,
+            "max_total_power": 800,
+            "max_device_power": 800,
+            "deadband": 10,
+        },
+        "devices": [],
+    }
+    config_path = tmp_path / "config.json"
+    original_text = json.dumps(values)
+    config_path.write_text(original_text)
+    args = SimpleNamespace(
+        config=str(config_path),
+        dry_run=False,
+        simulate=False,
+        replay=None,
+        self_test=False,
+        no_ha=False,
+    )
+
+    try:
+        cfg.initialize(args, str(tmp_path))
+
+        assert config_path.read_text() == original_text
+    finally:
+        restore_config_module(snapshot)
+
+
+def test_runtime_load_preserves_user_values(tmp_path):
+    snapshot = snapshot_config_module()
+    values = base_minimal_config()
+    values["system"]["dry_run"] = False
+    values["system"]["allow_hardware_writes"] = True
+    values["system"]["allow_state_reconciliation_writes"] = True
+
+    try:
+        initialize_config_from_dict(tmp_path, values)
+
+        assert cfg.DRY_RUN is False
+        assert cfg.ALLOW_HARDWARE_WRITES is True
+        assert cfg.ALLOW_STATE_RECONCILIATION_WRITES is True
     finally:
         restore_config_module(snapshot)
 

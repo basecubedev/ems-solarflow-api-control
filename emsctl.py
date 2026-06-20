@@ -45,6 +45,7 @@ from ems.diagnostics import (
 )
 
 from ems import backup as backup_mod
+from ems import config as config_mod
 
 DEFAULT_CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 DOCKER_CONFIG_PATH = os.path.join(BASE_DIR, "config", "config.json")
@@ -62,6 +63,7 @@ TOP_LEVEL_COMMANDS = (
     "stack",
     "diagnose",
     "backup",
+    "config",
     "interactive",
     "menu",
     "examples",
@@ -647,6 +649,61 @@ Examples:
         help="Print the docker compose command without running it.",
     )
 
+    config_cmd = subparsers.add_parser(
+        "config",
+        help="Inspect or upgrade config.json.",
+        description=(
+            "Inspect or upgrade config.json. The upgrade command fills missing "
+            "persisted keys from config.template.json; normal EMS startup only "
+            "uses conservative in-memory fallbacks."
+        ),
+        epilog="""\
+Examples:
+  python3 emsctl.py config upgrade --dry-run
+  python3 emsctl.py config upgrade
+  python3 emsctl.py config upgrade --yes --backup
+  python3 emsctl.py config upgrade --yes --no-backup
+""",
+        formatter_class=EMSHelpFormatter,
+    )
+    config_subparsers = config_cmd.add_subparsers(
+        dest="config_command",
+        required=True,
+    )
+    config_upgrade = config_subparsers.add_parser(
+        "upgrade",
+        help="Fill missing persisted config keys from config.template.json.",
+        description=(
+            "Plan or apply a template-based config.json upgrade. User values "
+            "and unknown keys are preserved."
+        ),
+        formatter_class=EMSHelpFormatter,
+    )
+    config_upgrade.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show the upgrade plan without writing config.json.",
+    )
+    config_upgrade.add_argument(
+        "--yes",
+        action="store_true",
+        help="Apply without interactive confirmation.",
+    )
+    backup_policy = config_upgrade.add_mutually_exclusive_group()
+    backup_policy.add_argument(
+        "--backup",
+        dest="backup",
+        action="store_true",
+        default=None,
+        help="Create a normal config backup before writing.",
+    )
+    backup_policy.add_argument(
+        "--no-backup",
+        dest="backup",
+        action="store_false",
+        help="Write without creating a backup.",
+    )
+
     backup = subparsers.add_parser(
         "backup",
         help="Create, inspect or restore manual config backups.",
@@ -1031,7 +1088,7 @@ _emsctl_py_completion()
   command=""
   for ((i = 1; i < COMP_CWORD; i++)); do
     case "${{COMP_WORDS[i]}}" in
-      status|system|device|ha|ha-control|winter|dashboard|diagnose|interactive|menu|examples|completion|help)
+      status|system|device|ha|ha-control|winter|dashboard|influx|stack|diagnose|backup|config|interactive|menu|examples|completion|help)
         command="${{COMP_WORDS[i]}}"
         break
         ;;
@@ -3258,6 +3315,145 @@ def handle_backup_command(args, config):
     return fail(f"unknown backup action {action}", code=2)
 
 
+def _json_value(value):
+    return json.dumps(value, sort_keys=True)
+
+
+def print_config_upgrade_plan(plan):
+    if not plan["changed"]:
+        print("Config is already up to date.")
+        return
+
+    print("Config upgrade plan:")
+    print(f"  template: {os.path.relpath(plan['template_path'], BASE_DIR)}")
+    print()
+
+    if plan.get("schema_migrations"):
+        print("Schema migrations:")
+        for step in plan["schema_migrations"]:
+            print(f"  {step['from']} -> {step['to']}: {step['description']}")
+            for change in step.get("changes", []):
+                if "old_value" in change:
+                    print(
+                        f"    Change {change['path']}: "
+                        f"{_json_value(change['old_value'])} -> "
+                        f"{_json_value(change['value'])}"
+                    )
+                else:
+                    print(f"    {change['path']} = {_json_value(change['value'])}")
+        print()
+
+    if plan["add"]:
+        print("Add:")
+        for item in plan["add"]:
+            print(f"  {item['path']} = {_json_value(item['value'])}")
+        print()
+
+    if plan.get("comment_add"):
+        print(f"Add explanatory comments: {len(plan['comment_add'])}")
+        print()
+
+    print("No existing user values will be overwritten.")
+    print("Missing keys will be added from config.template.json.")
+    print("Review live-write settings before restarting EMS.")
+
+
+def resolve_config_upgrade_backup_policy(args):
+    if args.dry_run:
+        return None, "ok"
+
+    if args.yes:
+        if args.backup is None:
+            return None, "non-interactive config upgrade requires --backup or --no-backup"
+        return bool(args.backup), "ok"
+
+    if not sys.stdin.isatty():
+        return None, "non-interactive config upgrade requires --yes and --backup or --no-backup"
+
+    choice = prompt_text("Write upgraded config.json? [y/n]", default="n")
+    if not choice or not choice.strip().lower().startswith("y"):
+        return None, "abort"
+
+    choice = prompt_text("Create config backup before writing? [y/n]", default="y")
+    if choice is None:
+        return None, "abort"
+    return choice.strip().lower().startswith("y"), "ok"
+
+
+def create_upgrade_backup(args, config):
+    included, _ = backup_mod.collect_config_backup_files(
+        config,
+        **backup_path_kwargs(args, config),
+    )
+    if included:
+        print_sensitive_warning(included)
+
+    create_args = make_args(
+        password=False,
+        compression_level=backup_mod.DEFAULT_COMPRESSION_LEVEL,
+        encryption=backup_mod.DEFAULT_ENCRYPTION_ALGORITHM,
+        chunk_size=None,
+        kdf_iterations=None,
+    )
+    password, status = resolve_create_password(create_args)
+    if status == "abort":
+        return None, "abort"
+    if status == "error":
+        return None, "backup password entry failed"
+
+    options, error = resolve_backup_create_options(create_args)
+    if options is None:
+        return None, f"backup options failed with exit code {error}"
+
+    path = backup_mod.create_config_backup(
+        config,
+        backup_purpose="manual",
+        password=password,
+        encryption_options=options["encryption_options"],
+        compression_level=options["compression_level"],
+        **backup_path_kwargs(args, config),
+    )
+    return path, "ok"
+
+
+def handle_config_command(args, config):
+    if args.config_command != "upgrade":
+        return fail(f"unknown config command {args.config_command}", code=2)
+
+    try:
+        plan = config_mod.build_config_upgrade_plan(config, BASE_DIR)
+    except config_mod.ConfigUpgradeError as exc:
+        return fail(str(exc), code=2)
+    print_config_upgrade_plan(plan)
+    if args.dry_run or not plan["changed"]:
+        return 0
+
+    do_backup, status = resolve_config_upgrade_backup_policy(args)
+    if status == "abort":
+        print("Aborted.")
+        return 0
+    if status != "ok":
+        return fail(status, code=2)
+
+    if do_backup:
+        try:
+            backup_path, backup_status = create_upgrade_backup(args, config)
+        except backup_mod.BackupError as exc:
+            return fail(f"backup failed; config.json not changed: {exc}")
+        if backup_status == "abort":
+            print("Aborted.")
+            return 0
+        if backup_status != "ok":
+            return fail(f"backup failed; config.json not changed: {backup_status}")
+        print(f"Backup created:\n  {backup_path}")
+    else:
+        print("Continuing without backup. Existing config.json will be modified.")
+
+    config_mod.write_config_json_atomic(args.config, plan["upgraded_config"])
+    print(f"Updated {args.config}")
+    return 0
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     if not argv:
@@ -3272,6 +3468,14 @@ def main(argv=None):
 
         if args.command == "diagnose":
             return handle_diagnose_command(args)
+
+        if args.command == "config" and args.config_command == "upgrade":
+            if not os.path.exists(args.config):
+                return fail(
+                    f"config file does not exist: {args.config}\n"
+                    "Copy config.template.json first, then run config upgrade.",
+                    code=2,
+                )
 
         config = load_config(args.config)
 
@@ -3303,6 +3507,9 @@ def main(argv=None):
 
         if args.command == "stack":
             return handle_stack_command(args, config)
+
+        if args.command == "config":
+            return handle_config_command(args, config)
 
         if args.command == "backup":
             return handle_backup_command(args, config)

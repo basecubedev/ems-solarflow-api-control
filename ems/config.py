@@ -5,7 +5,11 @@ import logging
 import os
 import re
 import sys
+import stat
 from datetime import datetime
+
+LATEST_CONFIG_SCHEMA_VERSION = 3
+CURRENT_CONFIG_SCHEMA_VERSION = LATEST_CONFIG_SCHEMA_VERSION
 
 OUTPUT_CONTROL_DEFAULTS = {
     "load_deadband_w": 5,
@@ -143,10 +147,18 @@ INFLUXDB_RETENTION_KEY_BY_BUCKET = {
 }
 
 
+class ConfigUpgradeError(Exception):
+    """Raised when config upgrade planning must abort before writing."""
+
+
+MISSING = object()
+
+
 def default_safe_config():
     """Return a minimal safe config for simulation and replay."""
 
     return {
+        "config_schema_version": CURRENT_CONFIG_SCHEMA_VERSION,
         "ha": {
             "enabled": False,
             "control_enabled": False,
@@ -195,6 +207,407 @@ def default_safe_config():
         }
     }
 
+
+def default_runtime_config():
+    config = default_safe_config()
+    config["system"]["simulation_mode"] = False
+    return config
+
+
+def _deep_merge_defaults(defaults, values):
+    if not isinstance(defaults, dict):
+        return copy.deepcopy(values if values is not None else defaults)
+
+    if not isinstance(values, dict):
+        values = {}
+
+    merged = copy.deepcopy(defaults)
+    for key, value in values.items():
+        if (
+            key in merged
+            and isinstance(merged[key], dict)
+            and isinstance(value, dict)
+        ):
+            merged[key] = _deep_merge_defaults(merged[key], value)
+        else:
+            merged[key] = copy.deepcopy(value)
+    return merged
+
+
+def apply_runtime_config_defaults(config):
+    if not isinstance(config, dict):
+        config = {}
+
+    merged = _deep_merge_defaults(default_runtime_config(), config)
+    legacy_shelly = config.get("shelly", {})
+    if (
+        "grid_meter" not in config
+        and isinstance(legacy_shelly, dict)
+        and legacy_shelly.get("ip")
+    ):
+        merged["grid_meter"] = {
+            "type": "shelly",
+            "ip": str(legacy_shelly.get("ip", "")),
+        }
+    return merged
+
+
+def _is_comment_key(key):
+    return isinstance(key, str) and key.startswith("_comment")
+
+
+def _load_template_upgrade_data(base_dir=None):
+    base_dir = base_dir or BASE_DIR or os.getcwd()
+    path = os.path.join(base_dir, "config.template.json")
+    with open(path) as f:
+        template = json.load(f)
+    if not isinstance(template, dict):
+        raise ValueError("config.template.json must contain a JSON object")
+
+    sample_devices = template.get("devices", [])
+    device_defaults = {}
+    if sample_devices and isinstance(sample_devices[0], dict):
+        device_defaults = {
+            key: copy.deepcopy(value)
+            for key, value in sample_devices[0].items()
+            if key not in ("name", "ip", "sn")
+        }
+
+    view = copy.deepcopy(template)
+    view["config_schema_version"] = LATEST_CONFIG_SCHEMA_VERSION
+    view["devices"] = []
+    view.pop("shelly", None)
+    return view, path, device_defaults
+
+
+def load_template_upgrade_view(base_dir=None):
+    view, path, _ = _load_template_upgrade_data(base_dir)
+    return view, path
+
+
+def _path_exists(values, path):
+    cursor = values
+    for key in path:
+        if isinstance(cursor, dict):
+            if key not in cursor:
+                return False
+            cursor = cursor[key]
+        elif isinstance(cursor, list) and isinstance(key, int):
+            if key < 0 or key >= len(cursor):
+                return False
+            cursor = cursor[key]
+        else:
+            return False
+    return True
+
+
+def _path_value(values, path):
+    cursor = values
+    for key in path:
+        cursor = cursor[key]
+    return cursor
+
+
+def _format_path(path):
+    result = ""
+    for item in path:
+        if isinstance(item, int):
+            result += f"[{item}]"
+        elif result:
+            result += f".{item}"
+        else:
+            result = str(item)
+    return result
+
+
+def _collect_added_paths(original, upgraded, path=(), *, comments):
+    if isinstance(upgraded, dict):
+        added = []
+        original_dict = original if isinstance(original, dict) else {}
+        for key, value in upgraded.items():
+            is_comment = _is_comment_key(key)
+            if comments != is_comment:
+                continue
+            child_path = path + (key,)
+            child_original = (
+                original_dict[key] if key in original_dict else MISSING
+            )
+            added.extend(
+                _collect_added_paths(
+                    child_original,
+                    value,
+                    child_path,
+                    comments=comments,
+                )
+            )
+        if comments:
+            for key, value in upgraded.items():
+                if not _is_comment_key(key):
+                    child_path = path + (key,)
+                    child_original = (
+                        original_dict[key] if key in original_dict else MISSING
+                    )
+                    added.extend(
+                        _collect_added_paths(
+                            child_original,
+                            value,
+                            child_path,
+                            comments=comments,
+                        )
+                    )
+        return added
+
+    if isinstance(upgraded, list):
+        added = []
+        original_list = original if isinstance(original, list) else []
+        for index, value in enumerate(upgraded):
+            original_value = (
+                original_list[index]
+                if index < len(original_list)
+                else MISSING
+            )
+            added.extend(
+                _collect_added_paths(
+                    original_value,
+                    value,
+                    path + (index,),
+                    comments=comments,
+                )
+            )
+        return added
+
+    if comments:
+        if path and _is_comment_key(path[-1]) and original is MISSING:
+            return [path]
+        return []
+
+    if original is MISSING:
+        return [path]
+    return []
+
+
+def _merge_template_upgrade_view(template, user_config, device_defaults):
+    upgraded = _deep_merge_defaults(template, user_config)
+    devices = user_config.get("devices")
+    if isinstance(devices, list):
+        enriched = []
+        for item in devices:
+            if isinstance(item, dict):
+                enriched.append(_deep_merge_defaults(device_defaults, item))
+            else:
+                enriched.append(copy.deepcopy(item))
+        upgraded["devices"] = enriched
+    return upgraded
+
+
+def read_config_schema_version(config):
+    value = config.get("config_schema_version")
+    if value is None:
+        return 1
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigUpgradeError(
+            f"invalid config_schema_version: {value!r}"
+        ) from exc
+    if parsed < 1:
+        raise ConfigUpgradeError(
+            f"invalid config_schema_version: {value!r}"
+        )
+    return parsed
+
+
+def _migration_entry_parts(entry):
+    if isinstance(entry, tuple):
+        return entry[0], entry[1]
+    return getattr(entry, "__name__", "schema migration"), entry
+
+
+def migrate_config_1_to_2(config, changes):
+    legacy_shelly = config.get("shelly", {})
+    if (
+        "grid_meter" not in config
+        and isinstance(legacy_shelly, dict)
+        and legacy_shelly.get("ip")
+    ):
+        config["grid_meter"] = {
+            "type": "shelly",
+            "ip": str(legacy_shelly.get("ip", "")),
+        }
+        changes.append({
+            "path": "grid_meter.ip",
+            "value": config["grid_meter"]["ip"],
+            "reason": "from legacy shelly.ip",
+        })
+    return config
+
+
+def migrate_config_2_to_3(config, changes):
+    return config
+
+
+CONFIG_MIGRATIONS = {
+    (1, 2): ("migrate legacy grid meter settings", migrate_config_1_to_2),
+    (2, 3): ("enable template-sync-only schema marker", migrate_config_2_to_3),
+}
+
+
+def run_config_schema_migrations(
+    user_config,
+    *,
+    migrations=None,
+    latest_schema=None,
+):
+    latest_schema = latest_schema or LATEST_CONFIG_SCHEMA_VERSION
+    migrations = CONFIG_MIGRATIONS if migrations is None else migrations
+    config = copy.deepcopy(user_config)
+    current_schema = read_config_schema_version(config)
+
+    if current_schema > latest_schema:
+        raise ConfigUpgradeError(
+            "config_schema_version "
+            f"{current_schema} is newer than this EMS supports "
+            f"({latest_schema}); config.json appears to come from a newer "
+            "EMS version"
+        )
+
+    steps = []
+    while current_schema < latest_schema:
+        next_schema = current_schema + 1
+        entry = migrations.get((current_schema, next_schema))
+        if entry is None:
+            raise ConfigUpgradeError(
+                "missing config schema migration "
+                f"{current_schema} -> {next_schema}; config.json not changed"
+            )
+        description, migration = _migration_entry_parts(entry)
+        changes = []
+        config = migration(config, changes)
+        if not isinstance(config, dict):
+            raise ConfigUpgradeError(
+                f"config schema migration {current_schema} -> {next_schema} "
+                "did not return a JSON object"
+            )
+        steps.append({
+            "from": current_schema,
+            "to": next_schema,
+            "description": description,
+            "changes": changes,
+        })
+        current_schema = next_schema
+
+    config["config_schema_version"] = latest_schema
+    return config, steps
+
+
+def _items_from_paths(upgraded, paths):
+    return [
+        {
+            "path": _format_path(path),
+            "value": _path_value(upgraded, path),
+        }
+        for path in paths
+    ]
+
+
+def build_config_upgrade_plan(
+    user_config,
+    base_dir=None,
+    *,
+    migrations=None,
+    latest_schema=None,
+):
+    if not isinstance(user_config, dict):
+        raise ValueError("config.json must contain a JSON object")
+
+    latest_schema = latest_schema or LATEST_CONFIG_SCHEMA_VERSION
+    template, template_path, device_defaults = _load_template_upgrade_data(base_dir)
+    template["config_schema_version"] = latest_schema
+    migrated_config, schema_steps = run_config_schema_migrations(
+        user_config,
+        migrations=migrations,
+        latest_schema=latest_schema,
+    )
+    upgraded = _merge_template_upgrade_view(
+        template,
+        migrated_config,
+        device_defaults,
+    )
+    upgraded["config_schema_version"] = latest_schema
+
+    added_paths = _collect_added_paths(
+        user_config,
+        upgraded,
+        comments=False,
+    )
+    comment_paths = _collect_added_paths(
+        user_config,
+        upgraded,
+        comments=True,
+    )
+
+    migration_paths = {
+        change["path"]
+        for step in schema_steps
+        for change in step.get("changes", [])
+        if "path" in change
+    }
+    added = [
+        item for item in _items_from_paths(upgraded, added_paths)
+        if item["path"] not in migration_paths
+    ]
+    comments = _items_from_paths(upgraded, comment_paths)
+
+    return {
+        "template_path": template_path,
+        "upgraded_config": upgraded,
+        "add": added,
+        "comment_add": comments,
+        "schema_migrations": schema_steps,
+        "migrate": [
+            change
+            for step in schema_steps
+            for change in step.get("changes", [])
+        ],
+        "changed": upgraded != user_config,
+    }
+
+
+def write_config_json_atomic(path, data):
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+    mode = 0o600
+    uid = gid = None
+    try:
+        current = os.stat(path)
+        mode = stat.S_IMODE(current.st_mode)
+        uid, gid = current.st_uid, current.st_gid
+    except FileNotFoundError:
+        pass
+
+    tmp_path = f"{path}.{os.getpid()}.tmp"
+    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f, indent=2)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp_path, mode)
+        if uid is not None and gid is not None:
+            try:
+                os.chown(tmp_path, uid, gid)
+            except PermissionError:
+                pass
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.remove(tmp_path)
+        except FileNotFoundError:
+            pass
+        raise
 
 ARGS = None
 BASE_DIR = None
@@ -254,7 +667,7 @@ def load_config(args=None, base_dir=None):
 
     try:
         with open(path) as f:
-            return json.load(f)
+            return apply_runtime_config_defaults(json.load(f))
     except FileNotFoundError:
         if args.simulate or args.replay or args.self_test:
             return default_safe_config()

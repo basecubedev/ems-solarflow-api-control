@@ -1,6 +1,7 @@
 {
   "_comment": "Copy this file to config.json and adjust your local setup.",
   "_comment_docs": "Detailed configuration guide and examples: docs/configuration.md and docs/configuration-examples.md",
+  "config_schema_version": 3,
 
   "ha": {
     "_comment": "Optional Home Assistant integration. Standalone default keeps HA disabled.",

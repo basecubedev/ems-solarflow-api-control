@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import json
+import shutil
+import stat
 import subprocess
 import sys
 import zipfile
@@ -321,7 +323,7 @@ def test_emsctl_completion_bash_contains_commands_and_configured_device(tmp_path
     result = run_emsctl(tmp_path, "completion", "bash")
 
     assert result.returncode == 0, result.stderr
-    assert "status system device ha ha-control winter dashboard influx stack diagnose backup interactive menu examples completion help" in result.stdout
+    assert "status system device ha ha-control winter dashboard influx stack diagnose backup config interactive menu examples completion help" in result.stdout
     assert "set-password change-password disable-auth auth-status" in result.stdout
     assert "off eco standard" in result.stdout
     assert "output input" in result.stdout
@@ -333,7 +335,7 @@ def test_emsctl_completion_zsh_contains_commands_and_configured_device(tmp_path)
     result = run_emsctl(tmp_path, "completion", "zsh")
 
     assert result.returncode == 0, result.stderr
-    assert "commands=(status system device ha ha-control winter dashboard influx stack diagnose backup interactive menu examples completion help)" in result.stdout
+    assert "commands=(status system device ha ha-control winter dashboard influx stack diagnose backup config interactive menu examples completion help)" in result.stdout
     assert "dashboard_actions=(set-password change-password disable-auth auth-status)" in result.stdout
     assert "offgrid_modes=(off eco standard)" in result.stdout
     assert "ac_modes=(output input)" in result.stdout
@@ -623,3 +625,429 @@ def test_emsctl_dashboard_rejects_mismatch_and_wrong_current_password(tmp_path):
     )
     assert result.returncode != 0
     assert "current dashboard password is incorrect" in result.stderr
+
+
+def write_upgrade_candidate(path):
+    path.write_text(json.dumps({
+        "ha": {"enabled": True},
+        "system": {
+            "enabled": True,
+            "max_total_power": 800,
+            "max_device_power": 800,
+            "deadband": 10,
+        },
+        "devices": [],
+        "shelly": {"ip": "192.168.1.50"},
+    }))
+
+
+def prepare_config_upgrade_base(tmp_path, monkeypatch):
+    patch_emsctl_base(monkeypatch, tmp_path)
+    shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")
+    config_path = tmp_path / "config.json"
+    write_upgrade_candidate(config_path)
+    return config_path
+
+
+def test_config_upgrade_dry_run_reports_missing_keys(tmp_path):
+    config_path = tmp_path / "config.json"
+    write_upgrade_candidate(config_path)
+
+    result = run_emsctl(tmp_path, "config", "upgrade", "--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    assert "Config upgrade plan:" in result.stdout
+    assert "Schema migrations:" in result.stdout
+    assert "1 -> 2" in result.stdout
+    assert "2 -> 3" in result.stdout
+    assert "dashboard.animation_mode" in result.stdout
+    assert "grid_meter.ip" in result.stdout
+    assert "No existing user values will be overwritten." in result.stdout
+    assert "Missing keys will be added from config.template.json." in result.stdout
+    assert "Review live-write settings before restarting EMS." in result.stdout
+
+
+def test_config_upgrade_dry_run_rejects_missing_config(tmp_path, monkeypatch, capsys):
+    missing = tmp_path / "missing.json"
+    calls = []
+    monkeypatch.setattr(
+        emsctl.backup_mod,
+        "create_config_backup",
+        lambda *args, **kwargs: calls.append(kwargs),
+    )
+
+    code = emsctl.main([
+        "--config",
+        str(missing),
+        "config",
+        "upgrade",
+        "--dry-run",
+    ])
+
+    output = capsys.readouterr()
+    assert code != 0
+    assert not missing.exists()
+    assert calls == []
+    assert f"config file does not exist: {missing}" in output.err
+    assert "Copy config.template.json first" in output.err
+
+
+def test_config_upgrade_apply_rejects_missing_config(tmp_path, monkeypatch, capsys):
+    missing = tmp_path / "missing.json"
+    calls = []
+    monkeypatch.setattr(
+        emsctl.backup_mod,
+        "create_config_backup",
+        lambda *args, **kwargs: calls.append(kwargs),
+    )
+
+    code = emsctl.main([
+        "--config",
+        str(missing),
+        "config",
+        "upgrade",
+        "--yes",
+        "--no-backup",
+    ])
+
+    output = capsys.readouterr()
+    assert code != 0
+    assert not missing.exists()
+    assert calls == []
+    assert f"config file does not exist: {missing}" in output.err
+    assert "Copy config.template.json first" in output.err
+
+
+def test_config_upgrade_dry_run_does_not_write_file(tmp_path):
+    config_path = tmp_path / "config.json"
+    write_upgrade_candidate(config_path)
+    original = config_path.read_text()
+
+    result = run_emsctl(tmp_path, "config", "upgrade", "--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    assert config_path.read_text() == original
+
+
+def test_config_upgrade_interactive_offers_backup_before_write(
+    tmp_path,
+    monkeypatch,
+):
+    config_path = prepare_config_upgrade_base(tmp_path, monkeypatch)
+    calls = []
+
+    def fake_backup(*args, **kwargs):
+        calls.append(kwargs)
+        return str(tmp_path / "backup" / "ems-config-manual-test.tar.gz")
+
+    responses = iter(["y", "y", "n"])
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda prompt: next(responses))
+    monkeypatch.setattr(emsctl.backup_mod, "create_config_backup", fake_backup)
+
+    code = emsctl.main(["--config", str(config_path), "config", "upgrade"])
+
+    assert code == 0
+    assert calls
+    assert json.loads(config_path.read_text())["config_schema_version"] == 3
+
+
+def test_config_upgrade_interactive_can_write_without_backup(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    config_path = prepare_config_upgrade_base(tmp_path, monkeypatch)
+    calls = []
+
+    responses = iter(["y", "n"])
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda prompt: next(responses))
+    monkeypatch.setattr(
+        emsctl.backup_mod,
+        "create_config_backup",
+        lambda *args, **kwargs: calls.append(kwargs),
+    )
+
+    code = emsctl.main(["--config", str(config_path), "config", "upgrade"])
+
+    assert code == 0
+    assert calls == []
+    output = capsys.readouterr().out
+    assert "No existing user values will be overwritten." in output
+    assert "Missing keys will be added from config.template.json." in output
+    assert "Review live-write settings before restarting EMS." in output
+    assert "Continuing without backup" in output
+    assert json.loads(config_path.read_text())["config_schema_version"] == 3
+
+
+def test_config_upgrade_uses_existing_backup_tool_when_selected(
+    tmp_path,
+    monkeypatch,
+):
+    config_path = prepare_config_upgrade_base(tmp_path, monkeypatch)
+    calls = []
+
+    def fake_backup(config, **kwargs):
+        calls.append((config, kwargs))
+        return str(tmp_path / "backup" / "ems-config-manual-test.tar.gz")
+
+    monkeypatch.setattr(emsctl.backup_mod, "create_config_backup", fake_backup)
+
+    code = emsctl.main([
+        "--config",
+        str(config_path),
+        "config",
+        "upgrade",
+        "--yes",
+        "--backup",
+    ])
+
+    assert code == 0
+    assert calls
+    assert calls[0][1]["backup_purpose"] == "manual"
+
+
+def test_config_upgrade_aborts_if_selected_backup_fails(tmp_path, monkeypatch):
+    config_path = prepare_config_upgrade_base(tmp_path, monkeypatch)
+    original = config_path.read_text()
+
+    def fail_backup(*args, **kwargs):
+        raise emsctl.backup_mod.BackupError("boom")
+
+    monkeypatch.setattr(emsctl.backup_mod, "create_config_backup", fail_backup)
+
+    code = emsctl.main([
+        "--config",
+        str(config_path),
+        "config",
+        "upgrade",
+        "--yes",
+        "--backup",
+    ])
+
+    assert code == 1
+    assert config_path.read_text() == original
+
+
+def test_config_upgrade_noninteractive_requires_explicit_backup_policy(tmp_path):
+    config_path = tmp_path / "config.json"
+    write_upgrade_candidate(config_path)
+
+    result = run_emsctl(tmp_path, "config", "upgrade", "--yes")
+
+    assert result.returncode == 2
+    assert "--backup or --no-backup" in result.stderr
+
+
+def test_config_upgrade_noninteractive_with_backup_uses_backup_tool(
+    tmp_path,
+    monkeypatch,
+):
+    config_path = prepare_config_upgrade_base(tmp_path, monkeypatch)
+    calls = []
+
+    monkeypatch.setattr(
+        emsctl.backup_mod,
+        "create_config_backup",
+        lambda config, **kwargs: calls.append(kwargs)
+        or str(tmp_path / "backup" / "ems-config-manual-test.tar.gz"),
+    )
+
+    code = emsctl.main([
+        "--config",
+        str(config_path),
+        "config",
+        "upgrade",
+        "--yes",
+        "--backup",
+    ])
+
+    assert code == 0
+    assert calls
+    assert json.loads(config_path.read_text())["config_schema_version"] == 3
+
+
+def test_config_upgrade_noninteractive_no_backup_writes_without_backup(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    config_path = prepare_config_upgrade_base(tmp_path, monkeypatch)
+    calls = []
+
+    monkeypatch.setattr(
+        emsctl.backup_mod,
+        "create_config_backup",
+        lambda *args, **kwargs: calls.append(kwargs),
+    )
+
+    code = emsctl.main([
+        "--config",
+        str(config_path),
+        "config",
+        "upgrade",
+        "--yes",
+        "--no-backup",
+    ])
+
+    assert code == 0
+    assert calls == []
+    assert "Continuing without backup" in capsys.readouterr().out
+    assert json.loads(config_path.read_text())["config_schema_version"] == 3
+
+
+def strip_comment_keys(value):
+    if isinstance(value, dict):
+        return {
+            key: strip_comment_keys(item)
+            for key, item in value.items()
+            if not key.startswith("_comment")
+        }
+    if isinstance(value, list):
+        return [strip_comment_keys(item) for item in value]
+    return value
+
+
+def test_config_upgrade_dry_run_reports_comment_only_changes(tmp_path):
+    template = json.loads((ROOT / "config.template.json").read_text())
+    config = strip_comment_keys(template)
+    config["devices"] = []
+    (tmp_path / "config.json").write_text(json.dumps(config))
+
+    result = run_emsctl(tmp_path, "config", "upgrade", "--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    assert "Config is already up to date." not in result.stdout
+    assert "Add explanatory comments:" in result.stdout
+
+
+def test_config_upgrade_future_schema_aborts_without_writing(tmp_path):
+    config_path = tmp_path / "config.json"
+    write_upgrade_candidate(config_path)
+    config = json.loads(config_path.read_text())
+    config["config_schema_version"] = 999
+    config_path.write_text(json.dumps(config))
+    original = config_path.read_text()
+
+    result = run_emsctl(
+        tmp_path,
+        "config",
+        "upgrade",
+        "--yes",
+        "--no-backup",
+    )
+
+    assert result.returncode == 2
+    assert "newer EMS version" in result.stderr
+    assert config_path.read_text() == original
+
+
+def test_config_upgrade_restores_removed_dashboard_block(tmp_path):
+    config = json.loads((ROOT / "config.template.json").read_text())
+    config.pop("dashboard")
+    config["devices"] = []
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(config))
+
+    result = run_emsctl(
+        tmp_path,
+        "config",
+        "upgrade",
+        "--yes",
+        "--no-backup",
+    )
+
+    assert result.returncode == 0, result.stderr
+    upgraded = json.loads(config_path.read_text())
+    assert upgraded["dashboard"]["animation_mode"] == "normal"
+    assert "_comment" in upgraded["dashboard"]
+
+
+def test_config_upgrade_restores_removed_normal_key(tmp_path):
+    config = json.loads((ROOT / "config.template.json").read_text())
+    config["devices"] = []
+    config["dashboard"]["host"] = "127.0.0.1"
+    config["dashboard"].pop("animation_mode")
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(config))
+
+    result = run_emsctl(
+        tmp_path,
+        "config",
+        "upgrade",
+        "--yes",
+        "--no-backup",
+    )
+
+    assert result.returncode == 0, result.stderr
+    upgraded = json.loads(config_path.read_text())
+    assert upgraded["dashboard"]["animation_mode"] == "normal"
+    assert upgraded["dashboard"]["host"] == "127.0.0.1"
+
+
+def test_config_upgrade_restores_removed_influx_key(tmp_path):
+    config = json.loads((ROOT / "config.template.json").read_text())
+    config["devices"] = []
+    config["influxdb"]["enabled"] = True
+    config["influxdb"].pop("raw_write_interval_seconds")
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(config))
+
+    result = run_emsctl(
+        tmp_path,
+        "config",
+        "upgrade",
+        "--yes",
+        "--no-backup",
+    )
+
+    assert result.returncode == 0, result.stderr
+    upgraded = json.loads(config_path.read_text())
+    assert upgraded["influxdb"]["raw_write_interval_seconds"] == 0
+    assert upgraded["influxdb"]["enabled"] is True
+
+
+def test_config_upgrade_enriches_existing_device(tmp_path):
+    config = json.loads((ROOT / "config.template.json").read_text())
+    config["devices"] = [{
+        "name": "REAL",
+        "ip": "192.0.2.55",
+        "sn": "REAL_SN",
+    }]
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(config))
+
+    result = run_emsctl(
+        tmp_path,
+        "config",
+        "upgrade",
+        "--yes",
+        "--no-backup",
+    )
+
+    assert result.returncode == 0, result.stderr
+    device = json.loads(config_path.read_text())["devices"][0]
+    assert device["name"] == "REAL"
+    assert device["ip"] == "192.0.2.55"
+    assert device["sn"] == "REAL_SN"
+    assert device["max_power"] == 800
+    assert "_comment_smart_mode" in device
+    assert "_comment_soc" in device
+
+
+def test_config_upgrade_preserves_config_permissions(tmp_path):
+    config_path = tmp_path / "config.json"
+    write_upgrade_candidate(config_path)
+    config_path.chmod(0o600)
+
+    result = run_emsctl(
+        tmp_path,
+        "config",
+        "upgrade",
+        "--yes",
+        "--no-backup",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert stat.S_IMODE(config_path.stat().st_mode) == 0o600
