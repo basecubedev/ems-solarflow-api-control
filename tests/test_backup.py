@@ -55,6 +55,49 @@ def create(tmp_path, config, base, config_path, **kwargs):
     )
 
 
+def test_running_in_container_truthy_env(tmp_path):
+    missing_marker = str(tmp_path / "no-dockerenv")
+    assert backup.running_in_container(
+        environ={"EMS_IN_CONTAINER": "1"}, docker_env_path=missing_marker
+    )
+
+
+def test_running_in_container_docker_marker(tmp_path):
+    marker = tmp_path / ".dockerenv"
+    marker.write_text("")
+    assert backup.running_in_container(environ={}, docker_env_path=str(marker))
+
+
+def test_running_in_container_native(tmp_path):
+    missing_marker = str(tmp_path / "no-dockerenv")
+    assert not backup.running_in_container(
+        environ={}, docker_env_path=missing_marker
+    )
+
+
+def test_running_in_container_explicit_false_overrides_marker(tmp_path):
+    marker = tmp_path / ".dockerenv"
+    marker.write_text("")
+    assert not backup.running_in_container(
+        environ={"EMS_IN_CONTAINER": "0"}, docker_env_path=str(marker)
+    )
+
+
+def test_default_backup_dir_uses_data_backups_via_docker_marker(tmp_path, monkeypatch):
+    marker = tmp_path / ".dockerenv"
+    marker.write_text("")
+    real_exists = os.path.exists
+    monkeypatch.setattr(
+        backup.os.path,
+        "exists",
+        lambda path: True if path == "/.dockerenv" else real_exists(path),
+    )
+    assert (
+        backup.default_backup_dir(base_dir=str(tmp_path), environ={})
+        == "/app/data/backups"
+    )
+
+
 def test_default_backup_dir_uses_data_backups_in_container(tmp_path):
     assert backup.default_backup_dir(
         base_dir=str(tmp_path),

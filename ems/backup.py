@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from ems import backup_crypto
 from ems import influx_setup
 from ems.build_info import collect_build_info
-from ems.config import normalize_influxdb_config
+from ems.config import normalize_influxdb_config, safe_bool
 from ems.diagnostics import DIAGNOSE_SCHEMA_VERSION, SUPPORT_BUNDLE_VERSION
 from ems.paths import BASE_DIR
 
@@ -510,14 +510,26 @@ def build_manifest(
 # Create
 # ---------------------------------------------------------------------------
 
-def running_in_container(environ=None):
+def running_in_container(environ=None, docker_env_path="/.dockerenv"):
+    # An explicit EMS_IN_CONTAINER (truthy or falsy) wins so the compose overlay
+    # and tests can pin the answer; otherwise fall back to the Docker marker file
+    # so existing users get persistent backups without editing their compose.
     environ = os.environ if environ is None else environ
-    return str(environ.get("EMS_IN_CONTAINER", "")).strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
+    flag = str(environ.get("EMS_IN_CONTAINER", "")).strip()
+    if flag:
+        return safe_bool(flag)
+    return os.path.exists(docker_env_path)
+
+
+def container_detection_source(environ=None, docker_env_path="/.dockerenv"):
+    """Name the signal that put backups in container mode (None if native)."""
+    environ = os.environ if environ is None else environ
+    flag = str(environ.get("EMS_IN_CONTAINER", "")).strip()
+    if flag:
+        return "EMS_IN_CONTAINER" if safe_bool(flag) else None
+    if os.path.exists(docker_env_path):
+        return docker_env_path
+    return None
 
 
 def default_backup_dir(base_dir=None, environ=None):

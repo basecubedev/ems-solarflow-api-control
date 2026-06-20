@@ -4,6 +4,12 @@ FROM python:3.14-slim
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
+# Mark the image as a container runtime so existing users get persistent
+# backups under /app/data/backups after a plain image pull, without editing
+# their local compose file. EMS_CONFIG_FILE mirrors the entrypoint default.
+ENV EMS_IN_CONTAINER=1
+ENV EMS_CONFIG_FILE=/app/config/config.json
+
 WORKDIR /app
 
 COPY requirements.txt ./

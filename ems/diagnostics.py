@@ -141,6 +141,7 @@ def diagnose_section_title(section_id):
     labels = {
         "environment": "Environment",
         "project": "Project structure",
+        "runtime_paths": "Runtime paths",
         "config": "Config",
         "runtime_state": "Runtime state",
         "data": "Data/database",
@@ -2608,6 +2609,62 @@ def diagnose_write_support_bundle(report, args, config_data, runtime_path):
     return output_path
 
 
+def diagnose_runtime_paths(checks, args):
+    # Lazy import: ems.backup imports this module, so importing it at module top
+    # would create a cycle.
+    from ems import backup as backup_mod
+
+    in_container = backup_mod.running_in_container()
+    backup_default = backup_mod.default_backup_dir()
+    config_path = args.config
+    data_dir = (
+        os.path.dirname(backup_default) or "/app/data"
+        if in_container
+        else os.path.join(BASE_DIR, "data")
+    )
+
+    diagnose_add(
+        checks, "runtime_paths", "ok", "container_mode",
+        f"container mode: {'yes' if in_container else 'no'}",
+        container_mode=in_container,
+    )
+    if in_container:
+        source = backup_mod.container_detection_source()
+        if source:
+            diagnose_add(
+                checks, "runtime_paths", "ok", "container_detection",
+                f"container detection: {source}", source=source,
+            )
+    diagnose_add(
+        checks, "runtime_paths", "ok", "config_path",
+        f"config: {config_path}", path=config_path,
+    )
+    diagnose_add(
+        checks, "runtime_paths", "ok", "data_path",
+        f"data: {data_dir}", path=data_dir,
+    )
+    diagnose_add(
+        checks, "runtime_paths", "ok", "backup_default",
+        f"backup default: {backup_default}", path=backup_default,
+    )
+
+    if in_container:
+        persistent = diagnose_path_within(backup_default, "/app/data")
+        diagnose_add(
+            checks, "runtime_paths", "ok", "backup_persistent",
+            f"backup persistent: {'yes' if persistent else 'no'}",
+            persistent=persistent,
+        )
+        if not persistent:
+            diagnose_add(
+                checks, "runtime_paths", "warning",
+                "container_backup_not_persistent",
+                "container backup default is not under /app/data; "
+                "backups may not survive container recreation.",
+                path=backup_default,
+            )
+
+
 def diagnose_collect(args):
     checks = []
     mode, mode_sources = diagnose_container_mode()
@@ -2790,6 +2847,8 @@ def diagnose_collect(args):
             else:
                 diagnose_add(checks, "docker", "warning", "container_data_path_outside_app_data", f"{label} does not resolve below /app/data: {path}", path=path)
 
+    diagnose_runtime_paths(checks, args)
+
     if args.deep:
         diagnose_database_deep(checks, database_path)
         diagnose_dashboard_deep(checks, config_data)
@@ -2906,6 +2965,7 @@ def diagnose_text(report):
     section_labels = {
         "environment": "Environment",
         "project": "Project structure",
+        "runtime_paths": "Runtime paths",
         "config": "Config",
         "runtime_state": "Runtime state",
         "data": "Data/database",
@@ -2916,7 +2976,7 @@ def diagnose_text(report):
         "control": "Control diagnostics",
         "control_quality": "Control quality",
     }
-    order = ("environment", "project", "config", "runtime_state", "data", "dashboard", "logs", "docker", "hardware", "control", "control_quality")
+    order = ("environment", "project", "runtime_paths", "config", "runtime_state", "data", "dashboard", "logs", "docker", "hardware", "control", "control_quality")
     level_labels = {"ok": "OK", "warning": "WARN", "error": "ERROR"}
 
     lines = [

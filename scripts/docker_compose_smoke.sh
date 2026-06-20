@@ -76,4 +76,14 @@ docker compose --project-name ems-compose-smoke exec -T ems \
 docker compose --project-name ems-compose-smoke exec -T ems \
     python3 emsctl.py diagnose >/dev/null || true
 
+# Backups must land on the persistent ./data mount (host data/backups/) without
+# the user adding a separate backup volume.
+docker compose --project-name ems-compose-smoke exec -T ems \
+    python3 emsctl.py backup create >/dev/null
+test -d data/backups
+if [ "$(find data/backups -name '*.tar.gz' -o -name '*.tar.gz.enc' | wc -l)" -lt 1 ]; then
+    echo "no backup archive was created under data/backups/." >&2
+    exit 1
+fi
+
 docker compose --project-name ems-compose-smoke down -v
