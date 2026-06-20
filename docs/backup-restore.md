@@ -5,7 +5,9 @@ setup. For the full command reference (every flag and the exact archive format)
 see [Backup / Restore](cli.md#backup--restore).
 
 All commands run from the project directory. Docker backups are written to
-`data/backups/` on the host. Native Python backups are written to `./backup/`.
+`data/backups/` on the host via the existing `./data:/app/data` mount, so no
+separate backup volume is needed. Native Python backups are written to
+`./backup/`.
 Docker commands are shown first for common workflows. For detailed restore
 examples later in this page, Docker users can run the same `emsctl.py` command
 inside the service, for example:

@@ -67,7 +67,8 @@ Backup:
 docker compose exec ems python3 emsctl.py backup create
 ```
 
-Docker backup archives are stored on the host under `data/backups/`.
+Docker backup archives are stored on the host under `data/backups/` via the
+existing `./data:/app/data` mount; no separate backup volume is needed.
 
 Config init:
 

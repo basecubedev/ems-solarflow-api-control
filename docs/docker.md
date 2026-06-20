@@ -205,7 +205,9 @@ docker compose exec ems python3 emsctl.py diagnose
 ```
 
 Backups created in Docker are stored on the host under `data/backups/`, using
-the existing `./data:/app/data` mount.
+the existing `./data:/app/data` mount. No separate backup volume is needed for
+the standard setup, and existing installs get persistent backups automatically
+after pulling the updated image — even without editing their compose file.
 
 For stable deployments, pin a release tag in `docker-compose.yml`, then update
 that tag intentionally when you want to move to a newer release. Existing

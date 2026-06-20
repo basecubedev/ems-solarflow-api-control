@@ -77,7 +77,8 @@ output.
 
 ## Where Are Docker Backups?
 
-`data/backups/`
+`data/backups/` on the host (via the existing `./data:/app/data` mount). No
+separate backup volume is needed.
 
 ## Where Is The Dashboard?
 
