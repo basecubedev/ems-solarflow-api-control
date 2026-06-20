@@ -325,6 +325,109 @@ def test_config_template_upgrade_preserves_invalid_device_items():
     assert result["devices"] == ["invalid"]
 
 
+def test_config_upgrade_render_uses_device_template_layout():
+    user = minimal_upgrade_config()
+    user["devices"][0].update({
+        "pv_kwp": 2.5,
+        "battery_kwh": 1.92,
+        "custom_device_key": "kept",
+    })
+    user["devices"][0].pop("_comment_smart_mode", None)
+    user["devices"][0].pop("_comment_soc", None)
+
+    plan = cfg.build_config_upgrade_plan(user)
+    text = cfg.render_config_json(
+        plan["upgraded_config"],
+        plan["template_layout"],
+    )
+    parsed = json.loads(text)
+    device = parsed["devices"][0]
+
+    assert device["pv_kwp"] == 2.5
+    assert device["battery_kwh"] == 1.92
+    assert device["custom_device_key"] == "kept"
+    assert (
+        '      "sn": "USER_SN",\n\n'
+        '      "_comment_smart_mode": "smart_mode=1 is runtime/RAM mode.",'
+    ) in text
+    assert (
+        '      "battery_kwh": 1.92,\n\n'
+        '      "_comment_soc": "min_soc/max_soc in percent. Use 0 to leave the value unmanaged.",'
+    ) in text
+    assert text.index('"custom_device_key"') > text.index('"max_soc"')
+
+
+def test_config_upgrade_render_does_not_fill_missing_device_identity():
+    user = minimal_upgrade_config()
+    user["devices"] = [{"max_power": 500}]
+
+    plan = cfg.build_config_upgrade_plan(user)
+    text = cfg.render_config_json(
+        plan["upgraded_config"],
+        plan["template_layout"],
+    )
+    device = json.loads(text)["devices"][0]
+
+    assert "name" not in device
+    assert "ip" not in device
+    assert "sn" not in device
+    assert "YOUR_SN" not in text
+
+
+def test_config_upgrade_render_blank_lines_are_template_driven(tmp_path):
+    template_text = Path("config.template.json").read_text()
+    template_text = template_text.replace(
+        '      "max_power": 800,\n'
+        '      "pv_kwp": 1.0,',
+        '      "max_power": 800,\n\n'
+        '      "pv_kwp": 1.0,',
+        1,
+    )
+    (tmp_path / "config.template.json").write_text(template_text)
+    user = minimal_upgrade_config()
+    user["devices"][0]["pv_kwp"] = 2.5
+
+    plan = cfg.build_config_upgrade_plan(user, base_dir=str(tmp_path))
+    text = cfg.render_config_json(
+        plan["upgraded_config"],
+        plan["template_layout"],
+    )
+
+    assert '      "max_power": 800,\n\n      "pv_kwp": 2.5,' in text
+    assert json.loads(text)["devices"][0]["pv_kwp"] == 2.5
+
+
+def test_config_upgrade_render_uses_first_template_device_shape(tmp_path):
+    needle = (
+        '      "max_power": 800,\n'
+        '      "pv_kwp": 1.0,'
+    )
+    template_text = Path("config.template.json").read_text()
+    first = template_text.index(needle)
+    second = template_text.index(needle, first + len(needle))
+    template_text = (
+        template_text[:second]
+        + '      "max_power": 800,\n\n'
+        '      "pv_kwp": 1.0,'
+        + template_text[second + len(needle):]
+    )
+    (tmp_path / "config.template.json").write_text(template_text)
+    user = minimal_upgrade_config()
+    user["devices"] = [
+        {"name": "A", "ip": "192.0.2.1", "sn": "A_SN", "pv_kwp": 1.5},
+        {"name": "B", "ip": "192.0.2.2", "sn": "B_SN", "pv_kwp": 2.5},
+    ]
+
+    plan = cfg.build_config_upgrade_plan(user, base_dir=str(tmp_path))
+    text = cfg.render_config_json(
+        plan["upgraded_config"],
+        plan["template_layout"],
+    )
+
+    assert '      "max_power": 800,\n      "pv_kwp": 2.5,' in text
+    assert '      "max_power": 800,\n\n      "pv_kwp": 2.5,' not in text
+
+
 def test_missing_config_schema_version_is_treated_as_schema_1():
     assert cfg.read_config_schema_version(minimal_upgrade_config()) == 1
 

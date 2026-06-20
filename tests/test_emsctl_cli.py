@@ -1036,6 +1036,27 @@ def test_config_upgrade_enriches_existing_device(tmp_path):
     assert "_comment_soc" in device
 
 
+def test_config_upgrade_is_idempotent_after_template_format_write(tmp_path):
+    config_path = tmp_path / "config.json"
+    write_upgrade_candidate(config_path)
+
+    first = run_emsctl(
+        tmp_path,
+        "config",
+        "upgrade",
+        "--yes",
+        "--no-backup",
+    )
+    assert first.returncode == 0, first.stderr
+    after_first = config_path.read_text()
+
+    second = run_emsctl(tmp_path, "config", "upgrade")
+
+    assert second.returncode == 0, second.stderr
+    assert "Config is already up to date." in second.stdout
+    assert config_path.read_text() == after_first
+
+
 def test_config_upgrade_preserves_config_permissions(tmp_path):
     config_path = tmp_path / "config.json"
     write_upgrade_candidate(config_path)

@@ -154,6 +154,234 @@ class ConfigUpgradeError(Exception):
 MISSING = object()
 
 
+class _JsonLayoutParser:
+    def __init__(self, text):
+        self.text = text
+        self.pos = 0
+        self.objects = {}
+        self.list_item_objects = {}
+
+    def parse(self):
+        self._parse_value(())
+        return {
+            "objects": self.objects,
+            "list_item_objects": self.list_item_objects,
+        }
+
+    def _skip_ws(self):
+        start = self.pos
+        while self.pos < len(self.text) and self.text[self.pos] in " \t\r\n":
+            self.pos += 1
+        return self.text[start:self.pos]
+
+    @staticmethod
+    def _blank_lines_in(ws):
+        return max(0, ws.count("\n") - 1)
+
+    def _parse_string(self):
+        start = self.pos
+        self.pos += 1
+        escaped = False
+        while self.pos < len(self.text):
+            char = self.text[self.pos]
+            self.pos += 1
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                break
+        return json.loads(self.text[start:self.pos])
+
+    def _parse_primitive(self):
+        while self.pos < len(self.text) and self.text[self.pos] not in ",]} \t\r\n":
+            self.pos += 1
+
+    def _parse_value(self, path):
+        self._skip_ws()
+        if self.pos >= len(self.text):
+            return
+        char = self.text[self.pos]
+        if char == "{":
+            self._parse_object(path)
+        elif char == "[":
+            self._parse_array(path)
+        elif char == '"':
+            self._parse_string()
+        else:
+            self._parse_primitive()
+
+    def _parse_object(self, path):
+        start = self.pos
+        self.pos += 1
+        keys = []
+        blank_lines_before = {}
+        ws = self._skip_ws()
+        if self.pos < len(self.text) and self.text[self.pos] == "}":
+            self.pos += 1
+            self.objects[path] = {
+                "keys": keys,
+                "blank_lines_before": blank_lines_before,
+                "inline": "\n" not in self.text[start:self.pos],
+            }
+            return
+
+        while self.pos < len(self.text):
+            before = self._blank_lines_in(ws)
+            key = self._parse_string()
+            keys.append(key)
+            blank_lines_before[key] = before
+            self._skip_ws()
+            if self.pos < len(self.text) and self.text[self.pos] == ":":
+                self.pos += 1
+            self._parse_value(path + (key,))
+            ws = self._skip_ws()
+            if self.pos < len(self.text) and self.text[self.pos] == ",":
+                self.pos += 1
+                ws = self._skip_ws()
+                continue
+            if self.pos < len(self.text) and self.text[self.pos] == "}":
+                self.pos += 1
+                break
+
+        layout = {
+            "keys": keys,
+            "blank_lines_before": blank_lines_before,
+            "inline": "\n" not in self.text[start:self.pos],
+        }
+        self.objects[path] = layout
+        if path and isinstance(path[-1], int):
+            self.list_item_objects.setdefault(path[:-1], layout)
+
+    def _parse_array(self, path):
+        self.pos += 1
+        index = 0
+        self._skip_ws()
+        if self.pos < len(self.text) and self.text[self.pos] == "]":
+            self.pos += 1
+            return
+        while self.pos < len(self.text):
+            self._parse_value(path + (index,))
+            index += 1
+            self._skip_ws()
+            if self.pos < len(self.text) and self.text[self.pos] == ",":
+                self.pos += 1
+                self._skip_ws()
+                continue
+            if self.pos < len(self.text) and self.text[self.pos] == "]":
+                self.pos += 1
+                break
+
+
+def _extract_template_layout(text):
+    return _JsonLayoutParser(text).parse()
+
+
+def _is_json_scalar(value):
+    return value is None or isinstance(value, (str, int, float, bool))
+
+
+def _layout_for_path(layout, path):
+    if not layout:
+        return None
+    if path and isinstance(path[-1], int):
+        list_item = layout.get("list_item_objects", {}).get(path[:-1])
+        if list_item is not None:
+            return list_item
+    exact = layout.get("objects", {}).get(path)
+    if exact is not None:
+        return exact
+    return None
+
+
+def _ordered_object_items(value, object_layout):
+    if not object_layout:
+        return list(value.items())
+
+    known = [
+        (key, value[key])
+        for key in object_layout["keys"]
+        if key in value
+    ]
+    unknown = [
+        (key, item)
+        for key, item in value.items()
+        if key not in object_layout["keys"]
+    ]
+    return known + unknown
+
+
+def _render_inline_object(value, object_layout):
+    items = _ordered_object_items(value, object_layout)
+    if not all(_is_json_scalar(item) for _, item in items):
+        return None
+    body = ", ".join(
+        f"{json.dumps(key)}: {json.dumps(item)}"
+        for key, item in items
+    )
+    return "{ " + body + " }"
+
+
+def _render_json_value(value, path, indent, layout):
+    prefix = " " * indent
+    if isinstance(value, dict):
+        object_layout = _layout_for_path(layout, path)
+        if object_layout and object_layout.get("inline"):
+            inline = _render_inline_object(value, object_layout)
+            if inline is not None:
+                return [prefix + inline]
+        if not value:
+            return [prefix + "{}"]
+
+        lines = [prefix + "{"]
+        previous_item = False
+        known_keys = set(object_layout["keys"]) if object_layout else set()
+        for key, item in _ordered_object_items(value, object_layout):
+            if previous_item:
+                lines[-1] += ","
+            if previous_item and object_layout and key in known_keys:
+                for _ in range(object_layout["blank_lines_before"].get(key, 0)):
+                    lines.append("")
+            elif previous_item and object_layout and key not in known_keys:
+                lines.append("")
+
+            child = _render_json_value(item, path + (key,), indent + 2, layout)
+            key_prefix = " " * (indent + 2) + f"{json.dumps(key)}: "
+            lines.append(key_prefix + child[0].strip())
+            lines.extend(child[1:])
+            previous_item = True
+        lines.append(prefix + "}")
+        return lines
+
+    if isinstance(value, list):
+        if not value:
+            return [prefix + "[]"]
+        if all(_is_json_scalar(item) for item in value):
+            inline = "[" + ", ".join(json.dumps(item) for item in value) + "]"
+            if len(prefix) + len(inline) <= 100:
+                return [prefix + inline]
+
+        lines = [prefix + "["]
+        previous_item = False
+        for index, item in enumerate(value):
+            if previous_item:
+                lines[-1] += ","
+            lines.extend(
+                _render_json_value(item, path + (index,), indent + 2, layout)
+            )
+            previous_item = True
+        lines.append(prefix + "]")
+        return lines
+
+    return [prefix + json.dumps(value)]
+
+
+def render_config_json(data, layout=None):
+    if layout is None:
+        return json.dumps(data, indent=2) + "\n"
+    return "\n".join(_render_json_value(data, (), 0, layout)) + "\n"
+
+
 def default_safe_config():
     """Return a minimal safe config for simulation and replay."""
 
@@ -260,9 +488,11 @@ def _load_template_upgrade_data(base_dir=None):
     base_dir = base_dir or BASE_DIR or os.getcwd()
     path = os.path.join(base_dir, "config.template.json")
     with open(path) as f:
-        template = json.load(f)
+        raw_template = f.read()
+    template = json.loads(raw_template)
     if not isinstance(template, dict):
         raise ValueError("config.template.json must contain a JSON object")
+    layout = _extract_template_layout(raw_template)
 
     sample_devices = template.get("devices", [])
     device_defaults = {}
@@ -277,11 +507,11 @@ def _load_template_upgrade_data(base_dir=None):
     view["config_schema_version"] = LATEST_CONFIG_SCHEMA_VERSION
     view["devices"] = []
     view.pop("shelly", None)
-    return view, path, device_defaults
+    return view, path, device_defaults, layout
 
 
 def load_template_upgrade_view(base_dir=None):
-    view, path, _ = _load_template_upgrade_data(base_dir)
+    view, path, _, _ = _load_template_upgrade_data(base_dir)
     return view, path
 
 
@@ -521,7 +751,9 @@ def build_config_upgrade_plan(
         raise ValueError("config.json must contain a JSON object")
 
     latest_schema = latest_schema or LATEST_CONFIG_SCHEMA_VERSION
-    template, template_path, device_defaults = _load_template_upgrade_data(base_dir)
+    template, template_path, device_defaults, layout = _load_template_upgrade_data(
+        base_dir
+    )
     template["config_schema_version"] = latest_schema
     migrated_config, schema_steps = run_config_schema_migrations(
         user_config,
@@ -560,6 +792,7 @@ def build_config_upgrade_plan(
 
     return {
         "template_path": template_path,
+        "template_layout": layout,
         "upgraded_config": upgraded,
         "add": added,
         "comment_add": comments,
@@ -573,7 +806,7 @@ def build_config_upgrade_plan(
     }
 
 
-def write_config_json_atomic(path, data):
+def write_config_json_atomic(path, data, *, layout=None):
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
@@ -591,8 +824,7 @@ def write_config_json_atomic(path, data):
     fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
     try:
         with os.fdopen(fd, "w") as f:
-            json.dump(data, f, indent=2)
-            f.write("\n")
+            f.write(render_config_json(data, layout))
             f.flush()
             os.fsync(f.fileno())
         os.chmod(tmp_path, mode)

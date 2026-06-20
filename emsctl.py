@@ -3353,6 +3353,10 @@ def print_config_upgrade_plan(plan):
         print(f"Add explanatory comments: {len(plan['comment_add'])}")
         print()
 
+    if plan.get("format_changed"):
+        print("Reformat according to config.template.json layout.")
+        print()
+
     print("No existing user values will be overwritten.")
     print("Missing keys will be added from config.template.json.")
     print("Review live-write settings before restarting EMS.")
@@ -3424,6 +3428,17 @@ def handle_config_command(args, config):
         plan = config_mod.build_config_upgrade_plan(config, BASE_DIR)
     except config_mod.ConfigUpgradeError as exc:
         return fail(str(exc), code=2)
+    rendered_config = config_mod.render_config_json(
+        plan["upgraded_config"],
+        plan.get("template_layout"),
+    )
+    try:
+        current_config_text = open(args.config).read()
+    except OSError:
+        current_config_text = None
+    if current_config_text is not None and current_config_text != rendered_config:
+        plan["changed"] = True
+        plan["format_changed"] = True
     print_config_upgrade_plan(plan)
     if args.dry_run or not plan["changed"]:
         return 0
@@ -3449,7 +3464,11 @@ def handle_config_command(args, config):
     else:
         print("Continuing without backup. Existing config.json will be modified.")
 
-    config_mod.write_config_json_atomic(args.config, plan["upgraded_config"])
+    config_mod.write_config_json_atomic(
+        args.config,
+        plan["upgraded_config"],
+        layout=plan.get("template_layout"),
+    )
     print(f"Updated {args.config}")
     return 0
 
