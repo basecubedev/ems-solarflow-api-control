@@ -846,6 +846,50 @@ def test_runtime_load_preserves_user_values(tmp_path):
         restore_config_module(snapshot)
 
 
+def test_runtime_load_forces_safe_mode_for_template_placeholders(tmp_path, caplog):
+    snapshot = snapshot_config_module()
+    shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")
+    values = json.loads((ROOT / "config.template.json").read_text())
+
+    try:
+        initialize_config_from_dict(tmp_path, values)
+
+        assert cfg.SYSTEM_ENABLED is False
+        assert cfg.DRY_RUN is True
+        assert cfg.ALLOW_HARDWARE_WRITES is False
+        assert cfg.ALLOW_STATE_RECONCILIATION_WRITES is False
+        assert "Config still contains template placeholder values" in caplog.text
+        assert "devices[0].sn" in caplog.text
+    finally:
+        restore_config_module(snapshot)
+
+
+def test_runtime_load_keeps_live_mode_after_required_values_are_configured(tmp_path):
+    snapshot = snapshot_config_module()
+    shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")
+    values = json.loads((ROOT / "config.template.json").read_text())
+    values["grid_meter"]["ip"] = "192.0.2.50"
+    values["devices"] = [{
+        **values["devices"][0],
+        "ip": "192.0.2.100",
+        "sn": "REAL_SN",
+    }]
+    values["system"]["enabled"] = True
+    values["system"]["dry_run"] = False
+    values["system"]["allow_hardware_writes"] = True
+    values["system"]["allow_state_reconciliation_writes"] = True
+
+    try:
+        initialize_config_from_dict(tmp_path, values)
+
+        assert cfg.SYSTEM_ENABLED is True
+        assert cfg.DRY_RUN is False
+        assert cfg.ALLOW_HARDWARE_WRITES is True
+        assert cfg.ALLOW_STATE_RECONCILIATION_WRITES is True
+    finally:
+        restore_config_module(snapshot)
+
+
 def test_explicit_grid_meter_overrides_legacy_shelly(tmp_path):
     snapshot = snapshot_config_module()
     values = base_minimal_config()

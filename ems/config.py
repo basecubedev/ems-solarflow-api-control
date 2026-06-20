@@ -7,6 +7,7 @@ import re
 import sys
 import stat
 from datetime import datetime
+from urllib.parse import urlparse
 
 LATEST_CONFIG_SCHEMA_VERSION = 3
 CURRENT_CONFIG_SCHEMA_VERSION = LATEST_CONFIG_SCHEMA_VERSION
@@ -691,6 +692,115 @@ CONFIG_MIGRATIONS = {
     (2, 3): ("enable template-sync-only schema marker", migrate_config_2_to_3),
 }
 
+TEMPLATE_PLACEHOLDER_VALUES = {
+    "192.168.1.100",
+    "192.168.1.101",
+    "192.168.1.50",
+    "0.0.0.0",
+    "example.com",
+    "localhost",
+    "your_sn",
+    "your_token_here",
+}
+
+
+def is_template_placeholder_value(value):
+    if value is None:
+        return False
+    text = str(value).strip()
+    if not text:
+        return False
+
+    lowered = text.lower()
+    if lowered in TEMPLATE_PLACEHOLDER_VALUES:
+        return True
+    if lowered.startswith("your_") or lowered.startswith("your-"):
+        return True
+    if "example.com" in lowered:
+        return True
+
+    parsed = urlparse(text if "://" in text else f"//{text}")
+    host = (parsed.hostname or "").lower()
+    return host in TEMPLATE_PLACEHOLDER_VALUES
+
+
+def _missing_or_placeholder(value):
+    return (
+        value is None
+        or str(value).strip() == ""
+        or is_template_placeholder_value(value)
+    )
+
+
+def template_placeholder_paths(config):
+    """Return required setup fields that still contain template-like values."""
+
+    if not isinstance(config, dict):
+        return []
+
+    paths = []
+    devices = config.get("devices")
+    configured_devices = []
+    if isinstance(devices, list):
+        configured_devices = [
+            device for device in devices
+            if isinstance(device, dict)
+        ]
+        for index, device in enumerate(configured_devices):
+            if _missing_or_placeholder(device.get("ip")):
+                paths.append(f"devices[{index}].ip")
+            if _missing_or_placeholder(device.get("sn")):
+                paths.append(f"devices[{index}].sn")
+
+    grid_meter = config.get("grid_meter")
+    if isinstance(grid_meter, dict) and configured_devices:
+        meter_type = str(grid_meter.get("type") or "shelly").strip().lower()
+        if meter_type == "tasmota_http":
+            endpoint = grid_meter.get("url") or grid_meter.get("ip")
+            if _missing_or_placeholder(endpoint):
+                paths.append("grid_meter.url")
+            if _missing_or_placeholder(grid_meter.get("power_path")):
+                paths.append("grid_meter.power_path")
+        elif meter_type != "ha" and _missing_or_placeholder(grid_meter.get("ip")):
+            paths.append("grid_meter.ip")
+
+    ha_config = config.get("ha")
+    if isinstance(ha_config, dict) and safe_bool(ha_config.get("enabled"), False):
+        if _missing_or_placeholder(ha_config.get("url")):
+            paths.append("ha.url")
+        if _missing_or_placeholder(ha_config.get("token")):
+            paths.append("ha.token")
+
+    return paths
+
+
+def apply_template_placeholder_safety(config, *, emit_message=None):
+    """Force no-write runtime mode while required setup fields are placeholders."""
+
+    paths = template_placeholder_paths(config)
+    if not paths:
+        return config
+
+    protected = copy.deepcopy(config)
+    system = protected.setdefault("system", {})
+    system["enabled"] = False
+    system["dry_run"] = True
+    system["allow_hardware_writes"] = False
+    system["allow_state_reconciliation_writes"] = False
+
+    if emit_message:
+        shown = ", ".join(paths[:6])
+        if len(paths) > 6:
+            shown += f", ... ({len(paths)} total)"
+        emit_message(
+            logging.WARNING,
+            "Config still contains template placeholder values; "
+            "forcing EMS control disabled, dry_run=true and hardware writes "
+            f"disabled until configured fields are replaced: {shown}",
+        )
+
+    return protected
+
 
 def run_config_schema_migrations(
     user_config,
@@ -1062,7 +1172,11 @@ def load_config(args=None, base_dir=None):
         sys.exit(1)
 
     raw_config = perform_startup_config_upgrade(raw_config, path, base_dir)
-    return apply_runtime_config_defaults(raw_config)
+    runtime_config = apply_runtime_config_defaults(raw_config)
+    return apply_template_placeholder_safety(
+        runtime_config,
+        emit_message=_emit_startup_config_message,
+    )
 
 
 def initialize(args, base_dir):

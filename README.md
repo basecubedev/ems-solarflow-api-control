@@ -214,6 +214,12 @@ Create local config:
 cp config.template.json config.json
 ```
 
+Optional guided setup:
+
+```bash
+python3 emsctl.py config init
+```
+
 Edit:
 
 - Zendure device IPs
@@ -311,6 +317,17 @@ Edit the generated configuration and restart:
 nano config/config.json
 docker compose restart
 ```
+
+Optional guided setup inside the container:
+
+```bash
+docker compose exec ems python3 emsctl.py config init
+docker compose restart
+docker compose exec ems python3 emsctl.py diagnose
+```
+
+The guided setup is optional. Advanced users can keep editing
+`config/config.json` manually.
 
 Persistent files are stored in:
 
@@ -457,6 +474,15 @@ More:
 
 - [docs/runtime-state.md](docs/runtime-state.md)
 - [docs/cli.md](docs/cli.md) includes shell completion setup for Bash and Zsh.
+
+---
+
+## FAQ
+
+### Do I have to run `config init` when using Docker?
+
+No. Docker creates a template config automatically at `config/config.json` on
+first startup. `config init` is optional and helps fill it interactively.
 
 ---
 

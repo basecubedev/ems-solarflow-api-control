@@ -114,6 +114,13 @@ jobs:
         run: |
           docker run --rm ems-solarflow-api-control:ci-smoke python -c "from pathlib import Path; p=Path('/app/data/ci-smoke.txt'); p.write_text('ok'); assert p.read_text() == 'ok'"
 
+      - name: Run Docker Compose first-run smoke
+        env:
+          EMS_DOCKER_SMOKE_IMAGE: ems-solarflow-api-control:ci-smoke
+          EMS_DOCKER_SMOKE_BUILD: "0"
+        run: |
+          scripts/docker_compose_smoke.sh
+
   influx-e2e:
     name: InfluxDB analytics e2e
     runs-on: ubuntu-latest
