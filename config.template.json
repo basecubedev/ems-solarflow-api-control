@@ -3,6 +3,13 @@
   "_comment_docs": "Detailed configuration guide and examples: docs/configuration.md and docs/configuration-examples.md",
   "config_schema_version": 3,
 
+  "config_upgrade": {
+    "_comment": "Controls optional config.json maintenance on startup. 'check' only reports missing template keys. 'apply' writes missing keys after backup and reloads config before EMS starts.",
+    "on_startup": "check",
+    "backup_before_apply": true,
+    "backup_failure_policy": "continue_without_upgrade"
+  },
+
   "ha": {
     "_comment": "Optional Home Assistant integration. Standalone default keeps HA disabled.",
     "enabled": false,

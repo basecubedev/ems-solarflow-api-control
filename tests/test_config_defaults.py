@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import json
 import copy
+import shutil
 import stat
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,11 +10,14 @@ import pytest
 
 from ems import config as cfg
 from ems.config import (
+    CONFIG_UPGRADE_DEFAULTS,
     DASHBOARD_DEFAULTS,
     ENERGY_SAVINGS_DEFAULTS,
     OUTPUT_CONTROL_DEFAULTS,
     WINTER_DEFAULTS,
 )
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def without_comment_keys(values):
@@ -107,6 +111,12 @@ def test_config_template_uses_persisted_data_paths():
     assert docker_only_flag not in json.dumps(template)
     assert template["system"]["runtime_state_path"] == "data/runtime-state.json"
     assert template["dashboard"]["database_path"] == "data/ems_dashboard.sqlite"
+
+
+def test_config_template_contains_startup_upgrade_defaults():
+    template = json.loads(Path("config.template.json").read_text())
+
+    assert without_comment_keys(template["config_upgrade"]) == CONFIG_UPGRADE_DEFAULTS
 
 
 def base_minimal_config():
@@ -653,6 +663,170 @@ def test_runtime_load_does_not_rewrite_config_file(tmp_path):
         assert config_path.read_text() == original_text
     finally:
         restore_config_module(snapshot)
+
+
+def prepare_startup_upgrade_fixture(tmp_path, values=None):
+    shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(values or minimal_upgrade_config()))
+    return config_path
+
+
+def test_startup_config_upgrade_check_reports_without_writing(tmp_path):
+    config_path = prepare_startup_upgrade_fixture(tmp_path)
+    original_text = config_path.read_text()
+    messages = []
+
+    raw = cfg.perform_startup_config_upgrade(
+        json.loads(original_text),
+        str(config_path),
+        str(tmp_path),
+        emit_message=lambda level, message: messages.append((level, message)),
+    )
+
+    assert raw == json.loads(original_text)
+    assert config_path.read_text() == original_text
+    assert any("Config upgrade available:" in message for _, message in messages)
+    assert any(
+        "emsctl.py config upgrade --dry-run" in message
+        for _, message in messages
+    )
+
+
+def test_startup_config_upgrade_disabled_skips_check_and_write(tmp_path):
+    values = minimal_upgrade_config()
+    values["config_upgrade"] = {"on_startup": "disabled"}
+    config_path = prepare_startup_upgrade_fixture(tmp_path, values)
+    original_text = config_path.read_text()
+    messages = []
+
+    raw = cfg.perform_startup_config_upgrade(
+        values,
+        str(config_path),
+        str(tmp_path),
+        emit_message=lambda level, message: messages.append((level, message)),
+    )
+
+    assert raw == values
+    assert config_path.read_text() == original_text
+    assert messages == []
+
+
+def test_startup_config_upgrade_apply_backs_up_writes_and_reloads(tmp_path):
+    values = minimal_upgrade_config()
+    values["config_upgrade"] = {
+        "on_startup": "apply",
+        "backup_before_apply": True,
+        "backup_failure_policy": "continue_without_upgrade",
+    }
+    config_path = prepare_startup_upgrade_fixture(tmp_path, values)
+    backups = []
+    original_write = cfg.write_config_json_atomic
+
+    def fake_backup(raw_config, path, base_dir):
+        backups.append((copy.deepcopy(raw_config), path, base_dir))
+        return str(tmp_path / "backup.tar.gz")
+
+    def write_with_disk_marker(path, data, *, layout=None):
+        marked = copy.deepcopy(data)
+        marked["disk_reload_marker"] = "from-disk"
+        original_write(path, marked, layout=layout)
+
+    try:
+        cfg.write_config_json_atomic = write_with_disk_marker
+        raw = cfg.perform_startup_config_upgrade(
+            values,
+            str(config_path),
+            str(tmp_path),
+            backup_factory=fake_backup,
+            emit_message=lambda level, message: None,
+        )
+    finally:
+        cfg.write_config_json_atomic = original_write
+
+    written = json.loads(config_path.read_text())
+    assert backups
+    assert written["config_schema_version"] == cfg.LATEST_CONFIG_SCHEMA_VERSION
+    assert written["config_upgrade"]["on_startup"] == "apply"
+    assert written["disk_reload_marker"] == "from-disk"
+    assert raw["disk_reload_marker"] == "from-disk"
+
+
+def test_startup_config_upgrade_apply_skips_when_backup_fails(tmp_path):
+    values = minimal_upgrade_config()
+    values["config_upgrade"] = {"on_startup": "apply"}
+    config_path = prepare_startup_upgrade_fixture(tmp_path, values)
+    original_text = config_path.read_text()
+    messages = []
+
+    def fail_backup(raw_config, path, base_dir):
+        raise RuntimeError("backup boom")
+
+    raw = cfg.perform_startup_config_upgrade(
+        values,
+        str(config_path),
+        str(tmp_path),
+        backup_factory=fail_backup,
+        emit_message=lambda level, message: messages.append((level, message)),
+    )
+
+    assert raw == values
+    assert config_path.read_text() == original_text
+    assert any(
+        "Config auto-upgrade skipped because backup failed" in message
+        for _, message in messages
+    )
+
+
+def test_startup_config_upgrade_invalid_mode_falls_back_to_check(tmp_path):
+    values = minimal_upgrade_config()
+    values["config_upgrade"] = {"on_startup": "something-else"}
+    config_path = prepare_startup_upgrade_fixture(tmp_path, values)
+    original_text = config_path.read_text()
+    messages = []
+
+    raw = cfg.perform_startup_config_upgrade(
+        values,
+        str(config_path),
+        str(tmp_path),
+        emit_message=lambda level, message: messages.append((level, message)),
+    )
+
+    assert raw == values
+    assert config_path.read_text() == original_text
+    assert any(
+        "Invalid config_upgrade.on_startup" in message
+        for _, message in messages
+    )
+    assert any("Config upgrade available:" in message for _, message in messages)
+
+
+def test_startup_config_upgrade_invalid_backup_policy_falls_back(tmp_path):
+    values = minimal_upgrade_config()
+    values["config_upgrade"] = {
+        "on_startup": "apply",
+        "backup_before_apply": True,
+        "backup_failure_policy": "fail_startup",
+    }
+    config_path = prepare_startup_upgrade_fixture(tmp_path, values)
+    messages = []
+
+    raw = cfg.perform_startup_config_upgrade(
+        values,
+        str(config_path),
+        str(tmp_path),
+        backup_factory=lambda raw_config, path, base_dir: str(
+            tmp_path / "backup.tar.gz"
+        ),
+        emit_message=lambda level, message: messages.append((level, message)),
+    )
+
+    assert raw["config_upgrade"]["backup_failure_policy"] == "fail_startup"
+    assert json.loads(config_path.read_text())["config_schema_version"] == 3
+    assert any(
+        "Invalid config_upgrade.backup_failure_policy" in message
+        for _, message in messages
+    )
 
 
 def test_runtime_load_preserves_user_values(tmp_path):

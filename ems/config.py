@@ -88,6 +88,15 @@ BATTERY_FULL_CHARGE_ASSIST_DEFAULTS = {
     "state_database_path": "data/ems_state.sqlite"
 }
 
+CONFIG_UPGRADE_DEFAULTS = {
+    "on_startup": "check",
+    "backup_before_apply": True,
+    "backup_failure_policy": "continue_without_upgrade",
+}
+
+CONFIG_UPGRADE_STARTUP_MODES = ("disabled", "check", "apply")
+CONFIG_UPGRADE_BACKUP_FAILURE_POLICIES = ("continue_without_upgrade",)
+
 INFLUXDB_DEFAULTS = {
     "enabled": False,
     # "bundled" = the bundled docker-compose InfluxDB managed by the setup
@@ -424,6 +433,7 @@ def default_safe_config():
         "battery_full_charge_assist": copy.deepcopy(
             BATTERY_FULL_CHARGE_ASSIST_DEFAULTS
         ),
+        "config_upgrade": copy.deepcopy(CONFIG_UPGRADE_DEFAULTS),
         "influxdb": copy.deepcopy(INFLUXDB_DEFAULTS),
         "devices": [],
         "grid_meter": {
@@ -841,6 +851,151 @@ def write_config_json_atomic(path, data, *, layout=None):
             pass
         raise
 
+
+def normalize_config_upgrade_config(config, *, emit_warning=None):
+    if not isinstance(config, dict):
+        config = {}
+
+    merged = {
+        **CONFIG_UPGRADE_DEFAULTS,
+        **config,
+    }
+
+    mode = str(merged.get("on_startup", "")).strip().lower()
+    if mode not in CONFIG_UPGRADE_STARTUP_MODES:
+        if emit_warning:
+            emit_warning(
+                "Invalid config_upgrade.on_startup "
+                f"{merged.get('on_startup')!r}; using 'check'."
+            )
+        mode = CONFIG_UPGRADE_DEFAULTS["on_startup"]
+
+    backup_failure_policy = str(
+        merged.get("backup_failure_policy", "")
+    ).strip().lower()
+    if backup_failure_policy not in CONFIG_UPGRADE_BACKUP_FAILURE_POLICIES:
+        if emit_warning:
+            emit_warning(
+                "Invalid config_upgrade.backup_failure_policy "
+                f"{merged.get('backup_failure_policy')!r}; using "
+                "'continue_without_upgrade'."
+            )
+        backup_failure_policy = CONFIG_UPGRADE_DEFAULTS[
+            "backup_failure_policy"
+        ]
+
+    return {
+        "on_startup": mode,
+        "backup_before_apply": safe_bool(
+            merged.get("backup_before_apply"),
+            CONFIG_UPGRADE_DEFAULTS["backup_before_apply"],
+        ),
+        "backup_failure_policy": backup_failure_policy,
+    }
+
+
+def _emit_startup_config_message(level, message):
+    if logging.getLogger().handlers:
+        logging.log(level, message)
+    else:
+        print(message, file=sys.stderr)
+
+
+def _read_raw_config(path):
+    with open(path) as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError("config.json must contain a JSON object")
+    return data
+
+
+def _startup_config_upgrade_summary(plan):
+    return len(plan.get("add", [])) + len(plan.get("comment_add", [])) + len(
+        plan.get("migrate", [])
+    )
+
+
+def _create_startup_config_backup(raw_config, path, base_dir):
+    from ems import backup as backup_mod
+
+    runtime_config = apply_runtime_config_defaults(raw_config)
+    return backup_mod.create_config_backup(
+        runtime_config,
+        base_dir=base_dir,
+        config_path=path,
+        backup_purpose="auto",
+    )
+
+
+def perform_startup_config_upgrade(
+    raw_config,
+    path,
+    base_dir=None,
+    *,
+    backup_factory=None,
+    emit_message=None,
+):
+    base_dir = base_dir or BASE_DIR or os.getcwd()
+    emit_message = emit_message or _emit_startup_config_message
+
+    def warn(message):
+        emit_message(logging.WARNING, message)
+
+    upgrade_config = normalize_config_upgrade_config(
+        raw_config.get("config_upgrade", {}),
+        emit_warning=warn,
+    )
+    mode = upgrade_config["on_startup"]
+    if mode == "disabled":
+        return raw_config
+
+    try:
+        plan = build_config_upgrade_plan(raw_config, base_dir)
+    except (ConfigUpgradeError, OSError, ValueError) as exc:
+        emit_message(
+            logging.WARNING,
+            f"Config startup upgrade check skipped: {exc}",
+        )
+        return raw_config
+
+    if not plan["changed"]:
+        return raw_config
+
+    missing_count = _startup_config_upgrade_summary(plan)
+    if mode == "check":
+        emit_message(
+            logging.INFO,
+            "Config upgrade available: "
+            f"{missing_count} missing keys from config.template.json.\n"
+            "Run: python3 emsctl.py config upgrade --dry-run",
+        )
+        return raw_config
+
+    if upgrade_config["backup_before_apply"]:
+        create_backup = backup_factory or _create_startup_config_backup
+        try:
+            backup_path = create_backup(raw_config, path, base_dir)
+        except Exception as exc:
+            emit_message(
+                logging.WARNING,
+                "Config auto-upgrade skipped because backup failed. "
+                f"Starting with existing config. Error: {exc}",
+            )
+            return raw_config
+        emit_message(logging.INFO, f"Config auto-upgrade backup created: {backup_path}")
+
+    write_config_json_atomic(
+        path,
+        plan["upgraded_config"],
+        layout=plan.get("template_layout"),
+    )
+    emit_message(
+        logging.INFO,
+        "Config auto-upgrade applied; reloading config.json before startup.",
+    )
+    return _read_raw_config(path)
+
+
 ARGS = None
 BASE_DIR = None
 CONFIG = None
@@ -898,14 +1053,16 @@ def load_config(args=None, base_dir=None):
     path = args.config or os.path.join(base_dir, "config.json")
 
     try:
-        with open(path) as f:
-            return apply_runtime_config_defaults(json.load(f))
+        raw_config = _read_raw_config(path)
     except FileNotFoundError:
         if args.simulate or args.replay or args.self_test:
             return default_safe_config()
 
         print("config.json missing. Please create it from template.")
         sys.exit(1)
+
+    raw_config = perform_startup_config_upgrade(raw_config, path, base_dir)
+    return apply_runtime_config_defaults(raw_config)
 
 
 def initialize(args, base_dir):
