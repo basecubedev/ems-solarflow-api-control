@@ -2,7 +2,7 @@
 
 [![Continuous Integration](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/simulated-regression-tests.yml/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/simulated-regression-tests.yml)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.14-blue)
-![Automated Tests](https://img.shields.io/badge/tests-%3E650-blue)
+![Automated Tests](https://img.shields.io/badge/tests-%3E850-blue)
 
 ### Dashboard Preview
 
@@ -337,8 +337,14 @@ bundled InfluxDB, waits for readiness, and reconciles
 buckets/retention/downsampling tasks from `config.json`. No tokens are stored in
 `config.json` and no manual Docker Compose or Influx CLI steps are needed.
 Bundled InfluxDB stores its local history under `./data/influxdb` (gitignored),
-keeping all EMS runtime/history data together under `./data/` — include
-`./data/` in backups if you want to keep local history.
+keeping all EMS runtime/history data together under `./data/`. To back up local
+history use `python3 emsctl.py backup` for config, SQLite history, and bundled
+InfluxDB data. Do not copy `data/influxdb` while InfluxDB is running — use
+`python3 emsctl.py backup create --type influxdb` instead, which takes a
+consistent snapshot via the official `influx backup` CLI.
+
+For step-by-step backup and restore instructions, see
+[Backup and Restore Guide](docs/backup-restore.md).
 
 To start the whole stack (InfluxDB **and** the EMS container) at once, use:
 

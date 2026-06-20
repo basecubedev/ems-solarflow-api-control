@@ -263,8 +263,9 @@ python3 emsctl.py menu
 
 The menu works directly with Python standard input/output and does not require
 Bash or Zsh completion setup. It can show status, edit system limits, toggle HA
-publishing/helper control, toggle winter mode, edit configured devices, and show
-or manage dashboard authentication.
+publishing/helper control, toggle winter mode, edit configured devices, show
+or manage dashboard authentication, and open the Backup / Restore submenu (see
+[Backup / Restore](#backup--restore)).
 
 Interactive mode preserves the same safety rules as direct commands:
 
@@ -409,6 +410,339 @@ Hidden password automation flags exist for tests and non-interactive automation
 but are intentionally omitted from normal help. Do not use them for interactive
 terminal sessions because shell history and process listings can expose command
 arguments.
+
+## Backup / Restore
+
+Manual config and database backup/restore for moving a setup to another device
+or recovering a broken installation without copying files by hand.
+
+> For a beginner-friendly, step-by-step workflow (backup before an update,
+> dry-run restore checks, full local restore order) see the
+> [Backup and Restore Guide](backup-restore.md). This page is the detailed
+> command reference.
+
+```bash
+python3 emsctl.py backup                       # interactive menu
+python3 emsctl.py backup create                # config backup
+python3 emsctl.py backup create --type databases
+python3 emsctl.py backup create --type influxdb
+python3 emsctl.py backup create --compression-level 3
+python3 emsctl.py backup inspect ./backup/ems-config-manual-2026-06-18-221500.tar.gz
+python3 emsctl.py backup restore ./backup/ems-config-manual-2026-06-18-221500.tar.gz
+python3 emsctl.py backup restore ./backup/ems-databases-manual-2026-06-18-221500.tar.gz
+python3 emsctl.py backup restore ./backup/ems-influxdb-manual-2026-06-18-221500.tar.gz
+python3 emsctl.py backup diff ./backup/ems-config-manual-2026-06-18-221500.tar.gz --file config.json
+```
+
+`python3 emsctl.py backup` (no action) opens a small menu:
+
+```text
+Backup / Restore
+  [1] Create config backup
+  [2] Create database backup
+  [3] Create InfluxDB backup
+  [4] Restore backup
+  [5] Inspect backup
+  [6] Exit
+```
+
+### What a config backup contains
+
+A config backup is a sortable `tar.gz` archive written to `./backup/`:
+
+```text
+./backup/ems-config-manual-2026-06-18-221500.tar.gz
+./backup/ems-config-manual-2026-06-18-221500.tar.gz.enc   # password-protected
+./backup/ems-config-rollback-2026-06-18-222000.tar.gz     # auto rollback
+```
+
+Included files (when present and configured):
+
+- `config.json`
+- the runtime state (`system.runtime_state_path`)
+- dashboard auth/cert/key (`dashboard.auth_file`, `ssl_cert_file`, `ssl_key_file`)
+- the bundled InfluxDB secret (`influxdb.secret_file`) — only when
+  `influxdb.enabled` is true **and** `influxdb.mode` is `bundled`
+
+Every archive contains a `backup-manifest.json` with the backup format, type,
+purpose, UTC timestamp, build metadata (git commit/branch/describe), contract
+versions, and per-file sensitivity flags and SHA256 checksums.
+
+> **Config backups may contain secrets.** `config.json`, the dashboard auth
+> file, the dashboard TLS key and the InfluxDB secret are flagged sensitive.
+> The CLI prints a sensitive-data warning before creating a backup.
+
+### What a database backup contains
+
+`backup create --type databases` backs up the local SQLite databases into a
+`tar.gz` archive written to `./backup/`:
+
+```text
+./backup/ems-databases-manual-2026-06-18-221500.tar.gz
+./backup/ems-databases-manual-2026-06-18-221500.tar.gz.enc   # password-protected
+./backup/ems-databases-rollback-2026-06-18-222000.tar.gz     # auto rollback
+```
+
+Included databases (only when present):
+
+- `data/ems_dashboard.sqlite` (`dashboard.database_path`) — dashboard/history DB
+- `data/ems_state.sqlite` (`battery_full_charge_assist.state_database_path`) —
+  local EMS state (calibration / full-charge assist)
+
+Each database is snapshotted with the SQLite online backup API into a temporary
+staging directory before archiving, so the stored copy is internally consistent
+even while the EMS is running — live files are never copied directly. Missing
+databases do not fail the backup; they are recorded in the manifest as
+`included: false`.
+
+Database and InfluxDB backups may contain historical energy and runtime data —
+not classic secrets such as passwords or tokens, but local usage history that
+can reveal usage patterns. SQLite database files are flagged `privacy_relevant`
+in the manifest (not `sensitive`). Use an encrypted backup if you want to
+protect local usage history. The manifest records a `databases` list and an
+`influxdb` block describing detected analytics.
+
+> **InfluxDB data is not part of a database backup.** A database backup covers
+> the local SQLite files only. When InfluxDB analytics is enabled (bundled or
+> external) the CLI notes that InfluxDB data is detected but not in this archive,
+> and the manifest records it as
+> `{"included": false, "reason": "use_influxdb_backup_type"}`. Use
+> `backup create --type influxdb` (below) to back up bundled InfluxDB data.
+
+### What an InfluxDB backup contains
+
+`backup create --type influxdb` backs up the **bundled** InfluxDB analytics data
+using the official `influx backup` CLI run inside the `ems-influxdb` container,
+then packages the output into a `tar.gz` archive written to `./backup/`:
+
+```text
+./backup/ems-influxdb-manual-2026-06-18-221500.tar.gz
+./backup/ems-influxdb-manual-2026-06-18-221500.tar.gz.enc    # password-protected
+./backup/ems-influxdb-rollback-2026-06-18-222000.tar.gz      # auto rollback
+```
+
+The archive contains `backup-manifest.json` plus an `influxdb/` directory with
+the official backup output (KV/SQL store and bucket data). The live
+`data/influxdb` bind mount is **never** copied directly. The manifest records an
+`influxdb` block:
+
+```json
+"influxdb": {
+  "included": true,
+  "mode": "bundled",
+  "service": "influxdb",
+  "container_name": "ems-influxdb",
+  "org": "ems",
+  "bucket_prefix": "ems",
+  "backup_method": "influx backup",
+  "data_dir": "data/influxdb"
+}
+```
+
+What is **included**: all InfluxDB buckets, tasks and history captured by the
+official backup, packaged with checksums. What is **not** included: config,
+SQLite databases, and any external InfluxDB (use your provider's backup tool).
+
+Supported modes:
+
+- **Bundled** (`influxdb.enabled: true`, `influxdb.mode: bundled`) — supported.
+  Requires Docker/Compose and a usable token (`influxdb.token`, the
+  `influxdb.token_env` variable, or the generated `deploy/docker/influxdb.env`).
+  The container is started if it is not already running.
+- **External** (`influxdb.mode: external`) — rejected with a clear message; use
+  your external InfluxDB backup strategy.
+- **Disabled** — nothing to back up; the command is a no-op.
+
+> InfluxDB backups may contain historical energy and runtime data and InfluxDB
+> metadata. The CLI offers optional password protection (same `.tar.gz.enc`
+> format as config/database backups). Tokens are never embedded in the archive
+> or the manifest, and the admin token is passed to the container via its
+> environment, never on the command line.
+
+### Unique archive names (no silent overwrite)
+
+Backup archives are timestamped to the second. If two backups of the same type
+and purpose land in the same second, the second one is written to a unique
+`...-2`, `...-3`, … name instead of overwriting the first. The archive is built
+into a temporary file and atomically linked into place, so an existing backup is
+never silently clobbered and no partial archive is left behind on failure.
+
+```text
+ems-config-manual-2026-06-20-120000.tar.gz
+ems-config-manual-2026-06-20-120000-2.tar.gz
+ems-config-manual-2026-06-20-120000.tar.gz.enc
+ems-config-manual-2026-06-20-120000-2.tar.gz.enc
+```
+
+### Symlinks
+
+A backup source file that is a symlink is **rejected** with a clear error
+(`Refusing to back up symlink path: <path>`) and no partial archive is written.
+On restore, only regular-file manifest entries are accepted; a crafted archive
+whose member is a symlink is rejected.
+
+### Optional password protection (streaming encryption)
+
+Manual backups can be encrypted into a `.tar.gz.enc` file:
+
+```bash
+python3 emsctl.py backup create --password
+python3 emsctl.py backup create --type config --password --encryption aes-256-gcm
+python3 emsctl.py backup create --type influxdb --password --chunk-size 4M --kdf-iterations 300000
+```
+
+New encrypted backups use a versioned **streaming** format (format version 2):
+the archive is encrypted in independently authenticated chunks, so neither
+encryption nor decryption ever loads the whole archive into memory — suitable
+for larger InfluxDB backups on a Raspberry Pi 4.
+
+- Default algorithm: **ChaCha20-Poly1305** (fast on ARM hardware without AES
+  acceleration). Optional: **AES-256-GCM** (`--encryption aes-256-gcm`).
+- KDF: **PBKDF2-HMAC-SHA256**, default 300000 iterations (`--kdf-iterations`).
+- Default chunk size: **4 MiB** (`--chunk-size`, accepts e.g. `4M`/`512K`/bytes).
+- All parameters (algorithm, KDF, iterations, chunk size, salt, base nonce) are
+  stored in a self-describing header, so restore auto-detects the algorithm.
+
+Each chunk binds the format version, algorithm, chunk index and final-chunk
+marker as authenticated data, so a wrong password, modified ciphertext, a
+truncated file, reordered chunks, and unsupported algorithms/versions all fail
+cleanly. The encrypted header and per-chunk metadata are bounds-checked before
+any decryption, so a malformed or hostile `.enc` file is rejected with a
+backup-format error before any restored file is written. Invalid `--encryption`,
+`--chunk-size`, `--kdf-iterations` or `--compression-level` values are rejected
+with a clear message (no traceback) and no partial archive.
+
+**Legacy compatibility:** existing whole-file Fernet encrypted backups (format
+version 1) remain restorable — restore detects the format from the header and
+decrypts them through the legacy path. Only new backups use the streaming
+format.
+
+The password is entered twice, **never stored**, and never logged. Restoring or
+inspecting an encrypted backup prompts for the password; a wrong password aborts
+cleanly. In non-interactive mode an encrypted restore fails with a clear message.
+
+### Restore
+
+```bash
+python3 emsctl.py backup restore ./backup/ems-config-manual-2026-06-18-221500.tar.gz
+python3 emsctl.py backup restore ./backup/...tar.gz --on-conflict keep --no-rollback
+python3 emsctl.py backup restore ./backup/...tar.gz --dry-run
+```
+
+Restore detects the backup type from its manifest. Config and database backups
+follow the file-restore flow below; InfluxDB backups follow the dedicated
+replace flow described in [Restoring an InfluxDB backup](#restoring-an-influxdb-backup).
+Interactive restore first asks whether to create a
+rollback backup (`backup_purpose=rollback`, matching the backup type). When you
+choose to create one, the CLI then asks whether to **password-protect the
+rollback backup**:
+
+```text
+Create rollback backup before restore? [y/n/a]
+Rollback backup may contain sensitive data.
+Protect rollback backup with password? [y/n/a]
+Enter rollback backup password:
+Repeat rollback backup password:
+```
+
+The rollback password is **independent of the source backup password** and is
+never reused automatically — you may restore an encrypted backup while keeping
+an unencrypted rollback, or the reverse. A password-protected rollback is
+written as `...-rollback-....tar.gz.enc`; an unprotected one stays a plain
+`.tar.gz`. If the two rollback passwords do not match the restore aborts and **no
+partial rollback archive is created**; if rollback creation fails the restore
+does not start. In non-interactive mode the rollback (when requested) is created
+unencrypted — the CLI never silently produces an encrypted rollback.
+
+After the rollback step, restore continues. For each existing file that differs
+you can keep the current file, replace it with the backup version, show a
+unified diff (binary databases report that no diff is shown), or abort.
+Identical files are skipped silently. Because a database backup stores a
+re-serialized SQLite snapshot, restoring over an unchanged database is normally
+reported as a conflict; existing database files are never overwritten without
+explicit confirmation or an explicit `--on-conflict replace`. After a database
+restore the CLI notes that InfluxDB data was not part of the backup.
+
+Non-interactive options:
+
+- `--on-conflict abort|keep|replace` (default for scripts: `abort`)
+- `--rollback` / `--no-rollback`
+- `--dry-run` — show the plan without writing
+
+`--dry-run` is conflict-safe: it reports a plan for every file and **never**
+writes files, creates rollback archives, requires conflict decisions, or aborts
+just because a target file differs. Each file is reported with an explicit
+action — `would_restore_new`, `would_replace_conflict`, `would_skip_identical`
+(and `would_restore_influxdb` for an InfluxDB backup). Validation still runs in
+dry-run: archive structure and manifest checksums are checked, and path
+traversal, unsafe entries, corrupted backups, wrong passwords and unsupported
+formats still fail.
+
+Restore is safe by construction: only files listed in `backup-manifest.json`
+are restored, archive entries with absolute paths or `..` traversal are
+rejected, and every file's SHA256 is validated before it is written.
+
+After a successful config/database restore the CLI recommends:
+
+```text
+  python3 emsctl.py diagnose --deep
+```
+
+### Restoring an InfluxDB backup
+
+Restoring an `ems-influxdb-*` archive uses the official `influx restore --full`
+mechanism inside the bundled container, which **replaces all bundled InfluxDB
+data** (KV/SQL store and every bucket). It is intentionally conservative:
+
+```text
+InfluxDB restore can replace existing bundled analytics data.
+Create rollback InfluxDB backup before restore?   [y/n/a]
+Protect rollback backup with password?            [y/n/a]
+Restore strategy: [r] replace existing bundled InfluxDB data / [a] abort
+```
+
+- Only **bundled** mode is restorable; external mode is rejected.
+- An encrypted source archive prompts for its password.
+- A rollback InfluxDB backup can be created first, and can itself be encrypted.
+  If rollback creation fails, the restore does not start (unless you chose no
+  rollback).
+- The MVP supports **replace-style restore only** — no merge of buckets, tasks
+  or history. Non-interactive restores must pass `--on-conflict replace` to
+  confirm the destructive replace.
+- `--full` restores InfluxDB metadata (org, buckets, users, tokens, dashboards)
+  **and** time-series data. Restoring a backup taken from the *same* bundled
+  instance keeps `deploy/docker/influxdb.env` in sync; restoring one from a
+  different instance may require updating the token.
+
+After an InfluxDB restore the CLI recommends:
+
+```text
+  python3 emsctl.py influx status
+  python3 emsctl.py diagnose --deep
+```
+
+### Recommended restore order (moving / recovering a setup)
+
+Because `influx restore --full` replaces InfluxDB org/buckets/users/tokens as
+well as history, restore in this order so the bundled token and config agree:
+
+1. **Restore the config backup first** (`ems-config-...`) — brings back
+   `config.json` and the bundled InfluxDB secret (`deploy/docker/influxdb.env`).
+2. **Verify** the bundled InfluxDB secret/config files are present (the env file
+   exists and `config.json` has `influxdb.enabled: true`, `mode: bundled`).
+3. **Restore the InfluxDB backup** (`ems-influxdb-...`) — replace-style restore
+   of analytics history (bundled mode only; external mode is not supported).
+4. **Verify**:
+
+   ```bash
+   python3 emsctl.py influx status
+   python3 emsctl.py diagnose --deep
+   ```
+
+Restore a database backup (`ems-databases-...`) at any point in this sequence;
+it is independent of the InfluxDB data. A rollback backup before the InfluxDB
+restore is strongly recommended, and encrypted source backups prompt for the
+restore password.
 
 ## Validation
 

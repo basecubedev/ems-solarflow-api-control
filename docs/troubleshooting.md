@@ -171,6 +171,40 @@ Review container detection, `/app/config`, `/app/data`, UID/GID ownership,
 runtime-state path location, and whether mutable files resolve below
 `/app/data`.
 
+## Backup / Restore Problems
+
+See [Backup / Restore](cli.md#backup--restore) for the full workflow. Common
+issues:
+
+- **"InfluxDB analytics is disabled. Nothing to back up."** — `backup create
+  --type influxdb` only applies when `influxdb.enabled` is true. Enable bundled
+  analytics first (`emsctl.py influx init`).
+- **"External InfluxDB detected. … not supported for external mode."** —
+  Automatic InfluxDB backup/restore covers **bundled** mode only. Use your
+  external InfluxDB provider's backup tooling. External mode never blocks config
+  or database backups.
+- **"no InfluxDB token resolved"** — the backup needs a usable token. Set
+  `influxdb.token`, export the `influxdb.token_env` variable, or run
+  `python3 emsctl.py influx init` to generate `deploy/docker/influxdb.env`.
+- **"failed to start bundled InfluxDB via docker compose"** — Docker/Compose is
+  required. Check `docker compose ps` and see [Docker Problems](#docker-problems).
+- **Encrypted archive won't open** — restoring or inspecting a `.tar.gz.enc`
+  prompts for the password; a wrong password aborts cleanly. The password is
+  never stored and cannot be recovered.
+- **After an InfluxDB restore** the data is replaced (`influx restore --full`,
+  bundled mode only — it restores org/buckets/users/tokens and history). Verify
+  with `python3 emsctl.py influx status` and `python3 emsctl.py diagnose --deep`.
+  If you created a rollback InfluxDB backup you can restore it the same way.
+
+When **migrating or recovering a whole setup**, restore in this order so the
+bundled token and config stay in sync:
+
+1. Restore the config backup first (`ems-config-...`).
+2. Verify the bundled InfluxDB secret/config files are present
+   (`deploy/docker/influxdb.env`, `config.json`).
+3. Restore the InfluxDB backup (`ems-influxdb-...`); create a rollback first.
+4. Run `python3 emsctl.py influx status` and `python3 emsctl.py diagnose --deep`.
+
 ## Opening a GitHub Issue
 
 Diagnostics are optional. You can open an issue even if you cannot run them or
