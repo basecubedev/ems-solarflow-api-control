@@ -266,6 +266,10 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
 .energy-pipe.battery { color: var(--battery); }
 .energy-pipe.output { color: var(--output); }
 .energy-pipe.grid { color: var(--grid); }
+.energy-pipe.flow-speed-idle { --pipe-speed: 1.85s; }
+.energy-pipe.flow-speed-low { --pipe-speed: 1.70s; }
+.energy-pipe.flow-speed-medium { --pipe-speed: 1.38s; }
+.energy-pipe.flow-speed-high { --pipe-speed: 1.10s; }
 .energy-pipe path {
   fill: none;
   stroke: currentColor;
@@ -306,7 +310,7 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
   stroke-dasharray: none;
   opacity: .10;
   filter: none;
-  animation: none;
+  animation-play-state: paused;
 }
 .energy-pipe.reverse .pipe-energy { animation-direction: reverse; }
 @keyframes pipeFlow { to { stroke-dashoffset: -52; } }

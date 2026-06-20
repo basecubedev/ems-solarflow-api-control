@@ -49,6 +49,8 @@ const state = {
   runtime: null,
   runtimeEditorDirty: false,
   runtimeEditorFocused: false,
+  flowActivity: new Map(),
+  deviceFlowSignature: null,
   diagnose: {
     profile: "install",
     report: null,
@@ -125,7 +127,15 @@ const ANALYTICS_KPIS = {
   role: { label: () => "Runtime Role", tone: "output", live: true, compute: (_d, s) => runtimeRoleLabel(s) },
 };
 
-const FLOW_THRESHOLD_W = 2;
+const FLOW_ACTIVATE_THRESHOLD_W = 8;
+const FLOW_DEACTIVATE_THRESHOLD_W = 3;
+const FLOW_THRESHOLD_W = FLOW_ACTIVATE_THRESHOLD_W;
+const FLOW_SPEED_BUCKETS = {
+  idle: { alpha: 0.12, width: 3, glow: 0.08 },
+  low: { alpha: 0.48, width: 4, glow: 0.16 },
+  medium: { alpha: 0.68, width: 5, glow: 0.26 },
+  high: { alpha: 0.90, width: 6, glow: 0.40 },
+};
 const DEVICE_FLOW_LAYOUT = {
   width: 900,
   rowHeight: 244,
@@ -318,17 +328,17 @@ function renderAggregatedSnapshot(snapshot) {
   setText("flowGridDirection", gridDirectionLabel(gridPower));
 
   setBatteryFill("flowBatteryFill", soc);
-  setVisualState("visualPv", pvPower > FLOW_THRESHOLD_W, "active");
+  setVisualState("visualPv", flowActive("aggregate:visualPv", pvPower), "active");
   setVisualState(
     "visualBattery",
-    batteryFlow.absW > FLOW_THRESHOLD_W,
+    flowActive("aggregate:visualBattery", batteryFlow.absW),
     batteryFlow.state
   );
-  setVisualState("visualInverter", inverterPower > FLOW_THRESHOLD_W, "active");
-  setVisualState("visualHome", homeLoad > FLOW_THRESHOLD_W, "active");
+  setVisualState("visualInverter", flowActive("aggregate:visualInverter", inverterPower), "active");
+  setVisualState("visualHome", flowActive("aggregate:visualHome", homeLoad), "active");
   setVisualState(
     "visualGrid",
-    Math.abs(gridPower) > FLOW_THRESHOLD_W,
+    flowActive("aggregate:visualGrid", Math.abs(gridPower)),
     gridPower > FLOW_THRESHOLD_W ? "importing" : gridPower < -FLOW_THRESHOLD_W ? "exporting" : "neutral"
   );
 
@@ -361,20 +371,63 @@ function renderAnalyticsLiveSnapshot(snapshot) {
   renderAnalyticsLiveKpis(snapshot);
 }
 
+function flowActive(key, value) {
+  const wattsValue = Math.abs(Number(value || 0));
+  const wasActive = Boolean(state.flowActivity.get(key));
+  const active = wasActive
+    ? wattsValue > FLOW_DEACTIVATE_THRESHOLD_W
+    : wattsValue >= FLOW_ACTIVATE_THRESHOLD_W;
+  state.flowActivity.set(key, active);
+  return active;
+}
+
+function flowSpeedBucket(value, active) {
+  if (!active) return "idle";
+  const wattsValue = Math.abs(Number(value || 0));
+  if (wattsValue >= 600) return "high";
+  if (wattsValue >= 150) return "medium";
+  return "low";
+}
+
+function applyFlowClasses(el, active, direction, speedBucket) {
+  if (!el) return;
+  const previousBucket = typeof el.getAttribute === "function"
+    ? el.getAttribute("data-flow-speed") || ""
+    : "";
+  el.classList.toggle("active", active);
+  el.classList.toggle("idle", !active);
+  el.classList.toggle("reverse", direction === "reverse");
+  ["idle", "low", "medium", "high"].forEach((bucket) => {
+    el.classList.toggle(`flow-speed-${bucket}`, speedBucket === bucket);
+  });
+  if (previousBucket !== speedBucket && typeof el.setAttribute === "function") {
+    el.setAttribute("data-flow-speed", speedBucket);
+  }
+}
+
+function applyPipeStyleBucket(el, speedBucket) {
+  if (!el) return;
+  if (typeof el.getAttribute === "function" && el.getAttribute("data-flow-style") === speedBucket) {
+    return;
+  }
+  const style = FLOW_SPEED_BUCKETS[speedBucket] || FLOW_SPEED_BUCKETS.idle;
+  el.style.setProperty("--pipe-alpha", String(style.alpha));
+  el.style.setProperty("--pipe-width", `${style.width}px`);
+  el.style.setProperty("--pipe-glow", String(style.glow));
+  if (typeof el.setAttribute === "function") {
+    el.setAttribute("data-flow-style", speedBucket);
+  }
+}
+
 function setPipe(id, value, direction = "forward") {
   const el = $(id);
   if (!el) return;
   const wattsValue = Math.abs(Number(value || 0));
-  const active = wattsValue > FLOW_THRESHOLD_W;
-  const intensity = active ? clamp(wattsValue / 1400, 0.22, 1) : 0;
+  const active = flowActive(`aggregate:${id}`, wattsValue);
+  const speedBucket = flowSpeedBucket(wattsValue, active);
 
-  el.classList.toggle("active", active);
-  el.classList.toggle("idle", !active);
-  el.classList.toggle("reverse", direction === "reverse");
-  el.style.setProperty("--pipe-alpha", active ? String(0.34 + intensity * 0.56) : "0.12");
-  el.style.setProperty("--pipe-width", `${active ? 3 + intensity * 3 : 3}px`);
-  el.style.setProperty("--pipe-glow", active ? String(0.10 + intensity * 0.30) : "0.08");
-  el.style.setProperty("--pipe-speed", `${1.85 - intensity * 0.72}s`);
+  applyFlowClasses(el, active, direction, speedBucket);
+  applyPipeStyleBucket(el, speedBucket);
 }
 
 function setVisualState(id, active, mode) {
@@ -895,6 +948,7 @@ function renderDeviceFlow(snapshotOrDevices) {
   const entries = normalizeDeviceEntries(devices);
   if (!entries.length) {
     container.innerHTML = `<div class="device-flow-empty">No per-device telemetry available.</div>`;
+    state.deviceFlowSignature = null;
     return;
   }
 
@@ -906,6 +960,17 @@ function renderDeviceFlow(snapshotOrDevices) {
   const viewHeight = Math.max(rowsBottomY, gridY + layout.sharedVisualHeight) + layout.rowBottomPadding;
   const homeLoad = Number(snapshot.home_load_w || 0);
   const gridPower = Number(snapshot.grid_power_w || 0);
+  const signature = deviceFlowSignature(entries, layout, viewHeight);
+  if (
+    state.deviceFlowSignature === signature
+    && typeof container.querySelector === "function"
+    && container.querySelector("[data-device-flow-root]")
+  ) {
+    updateDeviceFlowSnapshot(container, snapshot, entries);
+    animateDeviceFlowIfVisible(container);
+    return;
+  }
+
   const previousBatteryScales = readDeviceBatteryFillScales(container);
   const rows = entries
     .map(([name, device], index) => {
@@ -926,20 +991,30 @@ function renderDeviceFlow(snapshotOrDevices) {
     .join("");
 
   container.innerHTML = `
-    <svg class="device-flow-svg" viewBox="0 0 ${layout.width} ${viewHeight}" role="img" aria-label="Per-device PV, battery, inverter, home and grid energy flow">
+    <svg class="device-flow-svg" data-device-flow-root viewBox="0 0 ${layout.width} ${viewHeight}" role="img" aria-label="Per-device PV, battery, inverter, home and grid energy flow">
       <g class="device-flow-layer" aria-hidden="true">
         ${rows}
       </g>
       ${deviceSharedVisuals(layout.sharedX, homeY, gridY, homeLoad, gridPower)}
     </svg>
   `;
-  applyDeviceFlowDynamicStyles(container);
+  state.deviceFlowSignature = signature;
+  applyDeviceFlowInitialStyles(container);
+  animateDeviceFlowIfVisible(container);
+}
+
+function animateDeviceFlowIfVisible(container) {
   if (state.flowView === "devices" && !container.hidden) {
     pendingDeviceFlowBatteryAnimation = false;
     animateDeviceBatteryFills(container);
   } else {
     pendingDeviceFlowBatteryAnimation = true;
   }
+}
+
+function deviceFlowSignature(entries, layout, viewHeight) {
+  const names = entries.map(([name]) => String(name || "")).join("|");
+  return `${layout.width}:${viewHeight}:${entries.length}:${names}`;
 }
 
 function readDeviceBatteryFillScales(container) {
@@ -978,29 +1053,13 @@ function animateDeviceBatteryFills(container) {
   afterNextPaint(applyTargets);
 }
 
-function applyDeviceFlowDynamicStyles(container) {
+function applyDeviceFlowInitialStyles(container) {
   if (!container || typeof container.querySelectorAll !== "function") {
     return;
   }
 
-  container.querySelectorAll("[data-pipe-alpha][data-pipe-width][data-pipe-glow][data-pipe-speed]").forEach((el) => {
-    const alpha = Number(el.getAttribute("data-pipe-alpha"));
-    const width = Number(el.getAttribute("data-pipe-width"));
-    const glow = Number(el.getAttribute("data-pipe-glow"));
-    const speed = Number(el.getAttribute("data-pipe-speed"));
-
-    if (Number.isFinite(alpha)) {
-      el.style.setProperty("--pipe-alpha", String(clamp(alpha, 0, 1)));
-    }
-    if (Number.isFinite(width)) {
-      el.style.setProperty("--pipe-width", `${clamp(width, 0, 12)}px`);
-    }
-    if (Number.isFinite(glow)) {
-      el.style.setProperty("--pipe-glow", String(clamp(glow, 0, 1)));
-    }
-    if (Number.isFinite(speed)) {
-      el.style.setProperty("--pipe-speed", `${Math.max(0.1, speed)}s`);
-    }
+  container.querySelectorAll("[data-flow-speed]").forEach((el) => {
+    applyPipeStyleBucket(el, el.getAttribute("data-flow-speed") || "idle");
   });
 
   container.querySelectorAll("[data-battery-fill-start]").forEach((el) => {
@@ -1009,6 +1068,86 @@ function applyDeviceFlowDynamicStyles(container) {
       el.style.transform = `scaleX(${clamp(start, 0, 1)})`;
     }
   });
+}
+
+function dataElementMap(container, attribute) {
+  const result = new Map();
+  if (!container || typeof container.querySelectorAll !== "function") return result;
+  container.querySelectorAll(`[${attribute}]`).forEach((el) => {
+    const key = el.getAttribute(attribute);
+    if (key !== null) result.set(key, el);
+  });
+  return result;
+}
+
+function setMappedText(map, key, value) {
+  const el = map.get(key);
+  if (el) el.textContent = value;
+}
+
+function setSvgClass(el, className) {
+  if (!el) return;
+  if (typeof el.setAttribute === "function") {
+    el.setAttribute("class", className);
+  } else {
+    el.className = className;
+  }
+}
+
+function updateDevicePipeElement(el, key, kind, value, direction = "forward") {
+  if (!el) return;
+  const wattsValue = Math.abs(Number(value || 0));
+  const active = flowActive(`device:${key}:${kind}`, wattsValue);
+  const speedBucket = flowSpeedBucket(wattsValue, active);
+  setSvgClass(el, devicePipeClass(kind, active, direction, speedBucket));
+  applyPipeStyleBucket(el, speedBucket);
+}
+
+function updateDeviceFlowSnapshot(container, snapshot, entries) {
+  const texts = dataElementMap(container, "data-flow-text");
+  const visuals = dataElementMap(container, "data-flow-visual");
+  const pipes = dataElementMap(container, "data-flow-pipe");
+  const fills = dataElementMap(container, "data-device-battery-fill");
+  const homeLoad = Number(snapshot.home_load_w || 0);
+  const gridPower = Number(snapshot.grid_power_w || 0);
+
+  entries.forEach(([name, device], index) => {
+    const key = deviceFlowKey(name, index);
+    const pvPower = devicePvPower(device);
+    const outputPower = deviceOutputPower(device);
+    const batteryFlow = normalizeBatteryPowerForDisplay(device?.battery_power_w);
+    const soc = clamp(deviceSoc(device), 0, 100);
+    const fill = fills.get(String(index));
+
+    updateDevicePipeElement(pipes.get(`${key}:pv`), key, "pv", pvPower);
+    updateDevicePipeElement(pipes.get(`${key}:battery`), key, "battery", batteryFlow.absW, batteryPipeDirection(batteryFlow));
+    updateDevicePipeElement(pipes.get(`${key}:output`), key, "output", outputPower);
+    setSvgClass(visuals.get(`${key}:pv`), deviceVisualClasses("solar-visual", flowActive(`device:${key}:visualPv`, pvPower)));
+    setSvgClass(visuals.get(`${key}:battery`), deviceVisualClasses("battery-visual", flowActive(`device:${key}:visualBattery`, batteryFlow.absW), batteryFlow.state));
+    setSvgClass(visuals.get(`${key}:inverter`), deviceVisualClasses("inverter-visual", flowActive(`device:${key}:visualInverter`, outputPower)));
+
+    setMappedText(texts, `${key}:pv-label`, `${name || "Unknown"} PV`);
+    setMappedText(texts, `${key}:pv-value`, watts(pvPower));
+    setMappedText(texts, `${key}:inverter-label`, name || "Unknown");
+    setMappedText(texts, `${key}:inverter-value`, watts(outputPower));
+    setMappedText(texts, `${key}:battery-state`, batteryStateLabel(batteryFlow));
+    setMappedText(texts, `${key}:battery-value`, signedWatts(batteryFlow.valueW));
+    setMappedText(texts, `${key}:battery-soc`, pct(soc));
+
+    if (fill) {
+      const fillScale = soc / 100;
+      fill.setAttribute("data-battery-fill-target", String(fillScale));
+      setSvgClass(fill, `battery-fill${soc < 20 ? " low" : soc >= 90 ? " full" : ""}`);
+    }
+  });
+
+  const gridActive = flowActive("device:shared:visualGrid", Math.abs(gridPower));
+  updateDevicePipeElement(pipes.get("shared:grid"), "shared", "grid", Math.abs(gridPower), gridPower < -FLOW_THRESHOLD_W ? "reverse" : "forward");
+  setSvgClass(visuals.get("shared:home"), deviceVisualClasses("home-visual", flowActive("device:shared:visualHome", homeLoad)));
+  setSvgClass(visuals.get("shared:grid"), deviceVisualClasses("grid-visual", gridActive, gridPower > FLOW_THRESHOLD_W ? "importing" : gridPower < -FLOW_THRESHOLD_W ? "exporting" : "neutral"));
+  setMappedText(texts, "shared:home-value", watts(homeLoad));
+  setMappedText(texts, "shared:grid-state", gridDirectionLabel(gridPower));
+  setMappedText(texts, "shared:grid-value", watts(gridPower));
 }
 
 function renderControlExplain(snapshot, options = {}) {
@@ -1881,6 +2020,7 @@ function firstExplainValue(...values) {
 
 function deviceFlowRow(name, device, y, layout, homeY, rowIndex = 0, previousBatteryScale = 0) {
   const safeName = escapeHtml(name || "Unknown");
+  const key = deviceFlowKey(name, rowIndex);
   const pvPower = devicePvPower(device);
   const outputPower = deviceOutputPower(device);
   const batteryFlow = normalizeBatteryPowerForDisplay(device.battery_power_w);
@@ -1903,34 +2043,41 @@ function deviceFlowRow(name, device, y, layout, homeY, rowIndex = 0, previousBat
   const homeJoinX = sharedX - 72;
 
   return `
-    <g class="device-flow-device" data-device="${safeName}">
-      ${devicePipeGroup("pv", pvPower, `M${pvX + 184} ${pvMidY} H${leftJoinX} V${inverterPvPortY} H${inverterX}`)}
-      ${devicePipeGroup("battery", batteryFlow.absW, `M${batteryX + 184} ${batteryMidY} H${leftJoinX} V${inverterBatteryPortY} H${inverterX}`, batteryPipeDirection(batteryFlow))}
-      ${devicePipeGroup("output", outputPower, `M${inverterX + 196} ${inverterMidY} H${homeJoinX} V${homeMidY} H${sharedX}`)}
-      ${deviceSolarVisual(pvX, pvY, `${safeName} PV`, watts(pvPower), pvPower > FLOW_THRESHOLD_W)}
-      ${deviceBatteryVisual(batteryX, batteryY, batteryStateText, signedWatts(batteryFlow.valueW), soc, batteryFlow.absW > FLOW_THRESHOLD_W, batteryFlow.state, rowIndex, previousBatteryScale)}
-      ${deviceInverterVisual(inverterX, inverterY, safeName, watts(outputPower), outputPower > FLOW_THRESHOLD_W)}
+    <g class="device-flow-device" data-device="${safeName}" data-device-flow-row="${key}">
+      ${devicePipeGroup("pv", pvPower, `M${pvX + 184} ${pvMidY} H${leftJoinX} V${inverterPvPortY} H${inverterX}`, "forward", key)}
+      ${devicePipeGroup("battery", batteryFlow.absW, `M${batteryX + 184} ${batteryMidY} H${leftJoinX} V${inverterBatteryPortY} H${inverterX}`, batteryPipeDirection(batteryFlow), key)}
+      ${devicePipeGroup("output", outputPower, `M${inverterX + 196} ${inverterMidY} H${homeJoinX} V${homeMidY} H${sharedX}`, "forward", key)}
+      ${deviceSolarVisual(pvX, pvY, `${safeName} PV`, watts(pvPower), flowActive(`device:${key}:visualPv`, pvPower), key)}
+      ${deviceBatteryVisual(batteryX, batteryY, batteryStateText, signedWatts(batteryFlow.valueW), soc, flowActive(`device:${key}:visualBattery`, batteryFlow.absW), batteryFlow.state, rowIndex, previousBatteryScale, key)}
+      ${deviceInverterVisual(inverterX, inverterY, safeName, watts(outputPower), flowActive(`device:${key}:visualInverter`, outputPower), key)}
     </g>
   `;
 }
 
-function devicePipeGroup(kind, value, path, direction = "forward") {
-  const wattsValue = Math.abs(Number(value || 0));
-  const active = wattsValue > FLOW_THRESHOLD_W;
-  const intensity = active ? clamp(wattsValue / 1400, 0.22, 1) : 0;
-  const classes = [
+function deviceFlowKey(name, index) {
+  return `row-${index}-${String(name || "unknown").replace(/[^a-zA-Z0-9_-]+/g, "-")}`;
+}
+
+function devicePipeClass(kind, active, direction, speedBucket) {
+  return [
     "energy-pipe",
     kind,
     active ? "active" : "idle",
     direction === "reverse" ? "reverse" : "",
+    `flow-speed-${speedBucket}`,
   ].filter(Boolean).join(" ");
-  const pipeAlpha = active ? 0.34 + intensity * 0.56 : 0.12;
-  const pipeWidth = active ? 3 + intensity * 3 : 3;
-  const pipeGlow = active ? 0.10 + intensity * 0.30 : 0.08;
-  const pipeSpeed = 1.85 - intensity * 0.72;
+}
+
+function devicePipeGroup(kind, value, path, direction = "forward", key = "") {
+  const wattsValue = Math.abs(Number(value || 0));
+  const stateKey = key ? `device:${key}:${kind}` : `device:shared:${kind}`;
+  const active = flowActive(stateKey, wattsValue);
+  const speedBucket = flowSpeedBucket(wattsValue, active);
+  const classes = devicePipeClass(kind, active, direction, speedBucket);
+  const pipeKey = key ? `${key}:${kind}` : `shared:${kind}`;
 
   return `
-    <g class="${classes}" data-pipe-alpha="${pipeAlpha}" data-pipe-width="${pipeWidth}" data-pipe-glow="${pipeGlow}" data-pipe-speed="${pipeSpeed}">
+    <g class="${classes}" data-flow-pipe="${pipeKey}" data-flow-speed="${speedBucket}">
       <path class="pipe-base" d="${path}"></path>
       <path class="pipe-glow" d="${path}"></path>
       <path class="pipe-energy" d="${path}"></path>
@@ -1946,9 +2093,10 @@ function deviceVisualClasses(baseClass, active, mode = "active") {
   ].filter(Boolean).join(" ");
 }
 
-function deviceSolarVisual(x, y, label, value, active) {
+function deviceSolarVisual(x, y, label, value, active, key = "") {
+  const attrs = key ? ` data-flow-visual="${key}:pv"` : "";
   return `
-    <g class="${deviceVisualClasses("solar-visual", active)}" transform="translate(${x} ${y})">
+    <g class="${deviceVisualClasses("solar-visual", active)}"${attrs} transform="translate(${x} ${y})">
       <rect class="visual-shell" x="0" y="0" width="184" height="76" rx="38"></rect>
       <rect class="visual-icon-bay" x="12" y="10" width="72" height="56" rx="24"></rect>
       <circle class="solar-sun" cx="46" cy="27" r="8"></circle>
@@ -1957,22 +2105,23 @@ function deviceSolarVisual(x, y, label, value, active) {
         <path class="panel-grid" d="M17 0 24 48M36 0 46 48M55 0 68 48M8 16h72M14 32h72"></path>
         <path class="panel-reflect" d="M7 3h32l8 16H14Z"></path>
       </g>
-      <text class="visual-label" x="166" y="32" text-anchor="end">${label}</text>
-      <text class="visual-value" x="166" y="56" text-anchor="end">${value}</text>
+      <text class="visual-label" data-flow-text="${key}:pv-label" x="166" y="32" text-anchor="end">${label}</text>
+      <text class="visual-value" data-flow-text="${key}:pv-value" x="166" y="56" text-anchor="end">${value}</text>
     </g>
   `;
 }
 
-function deviceInverterVisual(x, y, label, value, active) {
+function deviceInverterVisual(x, y, label, value, active, key = "") {
+  const attrs = key ? ` data-flow-visual="${key}:inverter"` : "";
   return `
-    <g class="${deviceVisualClasses("inverter-visual", active)}" transform="translate(${x} ${y})">
+    <g class="${deviceVisualClasses("inverter-visual", active)}"${attrs} transform="translate(${x} ${y})">
       <rect class="visual-shell" x="0" y="0" width="196" height="76" rx="38"></rect>
       <rect class="visual-icon-bay" x="14" y="10" width="76" height="56" rx="26"></rect>
       <rect class="inverter-body" x="34" y="20" width="38" height="40" rx="10"></rect>
       <path class="inverter-wave" d="M41 41c5-12 10 12 15 0s10 12 15 0"></path>
       <circle class="inverter-led" cx="65" cy="29" r="3"></circle>
-      <text class="visual-label" x="174" y="32" text-anchor="end">${label}</text>
-      <text class="visual-value" x="174" y="56" text-anchor="end">${value}</text>
+      <text class="visual-label" data-flow-text="${key}:inverter-label" x="174" y="32" text-anchor="end">${label}</text>
+      <text class="visual-value" data-flow-text="${key}:inverter-value" x="174" y="56" text-anchor="end">${value}</text>
     </g>
   `;
 }
@@ -1986,7 +2135,8 @@ function deviceBatteryVisual(
   active,
   mode,
   rowIndex = 0,
-  previousFillScale = null
+  previousFillScale = null,
+  key = ""
 ) {
   const clampedSoc = normalizeSoc(soc);
   const fillScale = clampedSoc / 100;
@@ -1999,17 +2149,18 @@ function deviceBatteryVisual(
     ? String(Math.max(0, Math.floor(numericRowIndex)))
     : "0";
   const fillClass = clampedSoc < 20 ? " low" : clampedSoc >= 90 ? " full" : "";
+  const attrs = key ? ` data-flow-visual="${key}:battery"` : "";
   return `
-    <g class="${deviceVisualClasses("battery-visual", active, mode)}" transform="translate(${x} ${y})">
+    <g class="${deviceVisualClasses("battery-visual", active, mode)}"${attrs} transform="translate(${x} ${y})">
       <rect class="visual-shell" x="0" y="0" width="184" height="76" rx="38"></rect>
       <rect class="visual-icon-bay" x="12" y="10" width="72" height="56" rx="24"></rect>
       <rect class="battery-case" x="24" y="27" width="52" height="23" rx="7"></rect>
       <rect class="battery-cap" x="76" y="35" width="5" height="8" rx="2"></rect>
       <rect class="battery-fill${fillClass}" x="29" y="32" width="42" height="13" rx="4" data-device-battery-fill="${safeRowIndex}" data-battery-fill-start="${initialFillScale}" data-battery-fill-target="${fillScale}"></rect>
-      <text class="battery-soc" x="50" y="43" text-anchor="middle">${pct(clampedSoc)}</text>
-      <text class="visual-state" x="166" y="20" text-anchor="end">${stateText}</text>
+      <text class="battery-soc" data-flow-text="${key}:battery-soc" x="50" y="43" text-anchor="middle">${pct(clampedSoc)}</text>
+      <text class="visual-state" data-flow-text="${key}:battery-state" x="166" y="20" text-anchor="end">${stateText}</text>
       <text class="visual-label" x="166" y="39" text-anchor="end">Battery</text>
-      <text class="visual-value" x="166" y="61" text-anchor="end">${value}</text>
+      <text class="visual-value" data-flow-text="${key}:battery-value" x="166" y="61" text-anchor="end">${value}</text>
     </g>
   `;
 }
@@ -2022,35 +2173,35 @@ function deviceSharedVisuals(x, homeY, gridY, homeLoad, gridPower) {
   return `
     <g class="device-flow-shared-home">
       ${devicePipeGroup("grid", Math.abs(gridPower), `M${x + 88} ${gridMidY} H${x + 128} V${homeMidY} H${x + 88}`, gridPower < -FLOW_THRESHOLD_W ? "reverse" : "forward")}
-      ${deviceHomeVisual(x, homeY, watts(homeLoad), homeLoad > FLOW_THRESHOLD_W)}
-      ${deviceGridVisual(x, gridY, gridDirection, watts(gridPower), Math.abs(gridPower) > FLOW_THRESHOLD_W, gridPower > FLOW_THRESHOLD_W ? "importing" : gridPower < -FLOW_THRESHOLD_W ? "exporting" : "neutral")}
+      ${deviceHomeVisual(x, homeY, watts(homeLoad), flowActive("device:shared:visualHome", homeLoad))}
+      ${deviceGridVisual(x, gridY, gridDirection, watts(gridPower), flowActive("device:shared:visualGrid", Math.abs(gridPower)), gridPower > FLOW_THRESHOLD_W ? "importing" : gridPower < -FLOW_THRESHOLD_W ? "exporting" : "neutral")}
     </g>
   `;
 }
 
 function deviceHomeVisual(x, y, value, active) {
   return `
-    <g class="${deviceVisualClasses("home-visual", active)}" transform="translate(${x} ${y})">
+    <g class="${deviceVisualClasses("home-visual", active)}" data-flow-visual="shared:home" transform="translate(${x} ${y})">
       <rect class="visual-shell" x="0" y="0" width="176" height="76" rx="38"></rect>
       <rect class="visual-icon-bay" x="12" y="10" width="68" height="56" rx="24"></rect>
       <path class="home-roof" d="M27 39 46 24l19 15"></path>
       <path class="home-body" d="M32 38v18h28V38"></path>
       <path class="home-door" d="M43 56V45h8v11"></path>
       <text class="visual-label" x="158" y="32" text-anchor="end">Home</text>
-      <text class="visual-value" x="158" y="56" text-anchor="end">${value}</text>
+      <text class="visual-value" data-flow-text="shared:home-value" x="158" y="56" text-anchor="end">${value}</text>
     </g>
   `;
 }
 
 function deviceGridVisual(x, y, stateText, value, active, mode) {
   return `
-    <g class="${deviceVisualClasses("grid-visual", active, mode)}" transform="translate(${x} ${y})">
+    <g class="${deviceVisualClasses("grid-visual", active, mode)}" data-flow-visual="shared:grid" transform="translate(${x} ${y})">
       <rect class="visual-shell" x="0" y="0" width="176" height="76" rx="38"></rect>
       <rect class="visual-icon-bay" x="12" y="10" width="68" height="56" rx="24"></rect>
       <path class="grid-tower" d="M46 20v40M31 60h30M34 34h24M29 47h34M37 34 29 60M55 34l8 26M39 26h14"></path>
-      <text class="visual-state" x="158" y="20" text-anchor="end">${stateText}</text>
+      <text class="visual-state" data-flow-text="shared:grid-state" x="158" y="20" text-anchor="end">${stateText}</text>
       <text class="visual-label" x="158" y="39" text-anchor="end">Grid</text>
-      <text class="visual-value" x="158" y="61" text-anchor="end">${value}</text>
+      <text class="visual-value" data-flow-text="shared:grid-value" x="158" y="61" text-anchor="end">${value}</text>
     </g>
   `;
 }
@@ -4806,6 +4957,9 @@ if (typeof module !== "undefined") {
     renderViewSnapshot,
     renderGlobalSnapshotMetrics,
     renderAggregatedSnapshot,
+    flowActive,
+    flowSpeedBucket,
+    deviceFlowSignature,
     setFlowView,
     setAnimationMode,
     applyAnimationMode,
