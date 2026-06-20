@@ -50,6 +50,23 @@ def test_emsctl_config_discovery_prefers_legacy_config(tmp_path, monkeypatch):
     )
 
 
+def test_backup_create_output_dir_overrides_default(tmp_path):
+    output_dir = tmp_path / "explicit-backups"
+
+    result = run_emsctl(
+        tmp_path,
+        "backup",
+        "create",
+        "--output-dir",
+        str(output_dir),
+    )
+
+    assert result.returncode == 0, result.stderr
+    archives = list(output_dir.glob("ems-config-manual-*.tar.gz"))
+    assert len(archives) == 1
+    assert f"  {archives[0]}" in result.stdout
+
+
 def test_emsctl_config_discovery_falls_back_to_docker_config(tmp_path, monkeypatch):
     patch_emsctl_base(monkeypatch, tmp_path)
     write_discovery_config(

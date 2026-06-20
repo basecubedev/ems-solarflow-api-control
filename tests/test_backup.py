@@ -55,6 +55,53 @@ def create(tmp_path, config, base, config_path, **kwargs):
     )
 
 
+def test_default_backup_dir_uses_data_backups_in_container(tmp_path):
+    assert backup.default_backup_dir(
+        base_dir=str(tmp_path),
+        environ={"EMS_IN_CONTAINER": "1"},
+    ) == "/app/data/backups"
+
+
+def test_default_backup_dir_remains_project_backup_for_native(tmp_path):
+    assert backup.default_backup_dir(
+        base_dir=str(tmp_path),
+        environ={"EMS_IN_CONTAINER": "0"},
+    ) == os.path.join(str(tmp_path), "backup")
+
+
+def test_create_backup_creates_container_default_dir(tmp_path, monkeypatch):
+    base, config, config_path = write_project(tmp_path)
+    container_backup_dir = tmp_path / "app" / "data" / "backups"
+    monkeypatch.setattr(backup, "CONTAINER_BACKUP_DIR", str(container_backup_dir))
+    monkeypatch.setenv("EMS_IN_CONTAINER", "1")
+
+    path = backup.create_config_backup(
+        config,
+        base_dir=base,
+        config_path=config_path,
+    )
+
+    assert path.startswith(str(container_backup_dir))
+    assert container_backup_dir.is_dir()
+    assert os.path.isfile(path)
+
+
+def test_explicit_backup_dir_overrides_container_default(tmp_path, monkeypatch):
+    base, config, config_path = write_project(tmp_path)
+    explicit_dir = tmp_path / "custom-backups"
+    monkeypatch.setenv("EMS_IN_CONTAINER", "1")
+
+    path = backup.create_config_backup(
+        config,
+        base_dir=base,
+        config_path=config_path,
+        backup_dir=str(explicit_dir),
+    )
+
+    assert path.startswith(str(explicit_dir))
+    assert explicit_dir.is_dir()
+
+
 # ---------------------------------------------------------------------------
 # File selection
 # ---------------------------------------------------------------------------

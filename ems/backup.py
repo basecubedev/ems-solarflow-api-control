@@ -32,6 +32,7 @@ BACKUP_FORMAT_VERSION = 1
 CONFIG_BACKUP_FORMAT_VERSION = 1
 MANIFEST_NAME = "backup-manifest.json"
 DEFAULT_BACKUP_DIR_NAME = "backup"
+CONTAINER_BACKUP_DIR = "/app/data/backups"
 DEFAULT_COMPRESSION_LEVEL = 3
 
 BACKUP_TYPES = ("config", "databases", "influxdb")
@@ -509,7 +510,19 @@ def build_manifest(
 # Create
 # ---------------------------------------------------------------------------
 
-def default_backup_dir(base_dir=None):
+def running_in_container(environ=None):
+    environ = os.environ if environ is None else environ
+    return str(environ.get("EMS_IN_CONTAINER", "")).strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def default_backup_dir(base_dir=None, environ=None):
+    if running_in_container(environ):
+        return CONTAINER_BACKUP_DIR
     return os.path.join(base_dir or BASE_DIR, DEFAULT_BACKUP_DIR_NAME)
 
 

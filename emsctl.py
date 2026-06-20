@@ -762,6 +762,7 @@ Examples:
   python3 emsctl.py backup create
   python3 emsctl.py backup create --type databases
   python3 emsctl.py backup create --type influxdb
+  python3 emsctl.py backup create --output-dir ./my-backups
   python3 emsctl.py backup create --compression-level 3
   python3 emsctl.py backup inspect ./backup/ems-config-manual-2026-06-18-221500.tar.gz
   python3 emsctl.py backup restore ./backup/ems-config-manual-2026-06-18-221500.tar.gz
@@ -807,6 +808,11 @@ Examples:
         type=int,
         default=backup_mod.DEFAULT_COMPRESSION_LEVEL,
         help="gzip compression level 0-9 (default: 3). Used with 'create'.",
+    )
+    backup.add_argument(
+        "--output-dir",
+        default=None,
+        help="create: directory for the created backup archive.",
     )
     backup.add_argument(
         "--password",
@@ -2635,6 +2641,7 @@ def handle_backup_create(args, config):
     path = backup_mod.create_config_backup(
         config,
         backup_purpose="manual",
+        backup_dir=getattr(args, "output_dir", None),
         password=password,
         encryption_options=options["encryption_options"],
         compression_level=options["compression_level"],
@@ -2698,6 +2705,7 @@ def handle_backup_create_database(args, config):
     path = backup_mod.create_database_backup(
         config,
         base_dir=BASE_DIR,
+        backup_dir=getattr(args, "output_dir", None),
         backup_purpose="manual",
         password=password,
         encryption_options=options["encryption_options"],
@@ -2860,6 +2868,7 @@ def handle_backup_create_influxdb(args, config):
         path = backup_mod.create_influxdb_backup(
             config,
             base_dir=BASE_DIR,
+            backup_dir=getattr(args, "output_dir", None),
             backup_purpose="manual",
             password=password,
             encryption_options=options["encryption_options"],
