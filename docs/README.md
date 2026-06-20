@@ -17,7 +17,7 @@ This directory contains the public project documentation.
 |---|---|---|
 | Install Docker | [install-docker.md](install-docker.md) | Practical Docker Engine and Compose plugin install help for Debian, Ubuntu, and Raspberry Pi OS. |
 | Common commands | [common-commands.md](common-commands.md) | Daily Docker-first command sheet with native Python equivalents. |
-| Docker | [docker.md](docker.md) | Compose reference, first-run config bootstrap, persisted data, permissions, and version scope after v0.5.6. |
+| Docker | [docker.md](docker.md) | Compose reference, first-run config bootstrap, persisted data, permissions, and v0.6.0 release scope. |
 | Native Python | [native-python.md](native-python.md) | Advanced/manual setup with venv, local config, dry-run checks, and service-manager notes. |
 | CLI tool | [cli.md](cli.md) | Safe `emsctl.py` commands for runtime-state, diagnostics, config init/upgrade, and backups. |
 | Backup and restore | [backup-restore.md](backup-restore.md) | Step-by-step guide: backup before updates, dry-run restore checks, encrypted backups, and full local restore. |

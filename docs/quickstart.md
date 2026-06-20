@@ -129,6 +129,7 @@ http://127.0.0.1:8080
 - Docker reference: [docker.md](docker.md)
 - Troubleshooting: [troubleshooting.md](troubleshooting.md)
 - Backup and restore: [backup-restore.md](backup-restore.md)
+- Docker backups are stored on the host under `data/backups/`.
 - FAQ: [faq.md](faq.md)
 
 ## 9. Native Python Setup

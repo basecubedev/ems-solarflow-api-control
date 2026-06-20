@@ -337,6 +337,8 @@ InfluxDB is disabled. For analytics setup and repair, see
 See [Backup / Restore](cli.md#backup--restore) for the full workflow. Common
 issues:
 
+Docker backups are stored on the host under `data/backups/`.
+
 - **"InfluxDB analytics is disabled. Nothing to back up."** — `backup create
   --type influxdb` only applies when `influxdb.enabled` is true. Enable bundled
   analytics first (`emsctl.py influx init`).

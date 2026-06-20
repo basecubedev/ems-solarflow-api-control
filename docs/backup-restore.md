@@ -4,13 +4,14 @@ This is the practical, step-by-step guide for backing up and restoring your EMS
 setup. For the full command reference (every flag and the exact archive format)
 see [Backup / Restore](cli.md#backup--restore).
 
-All commands run from the project directory. Backups are written to `./backup/`.
+All commands run from the project directory. Docker backups are written to
+`data/backups/` on the host. Native Python backups are written to `./backup/`.
 Docker commands are shown first for common workflows. For detailed restore
 examples later in this page, Docker users can run the same `emsctl.py` command
 inside the service, for example:
 
 ```bash
-docker compose exec ems python3 emsctl.py backup restore ./backup/example.tar.gz --dry-run
+docker compose exec ems python3 emsctl.py backup restore /app/data/backups/example.tar.gz --dry-run
 ```
 
 ## When should I create a backup?
@@ -101,7 +102,17 @@ Notes:
 
 ## Where are backups stored?
 
-In `./backup/` inside the project directory. File names are timestamped, e.g.:
+Docker:
+
+```text
+data/backups/ems-config-manual-2026-06-20-120000.tar.gz
+data/backups/ems-databases-manual-2026-06-20-120000.tar.gz.enc   # password-protected
+data/backups/ems-influxdb-rollback-2026-06-20-122000.tar.gz      # auto rollback
+```
+
+Inside the container, the same files are under `/app/data/backups/`.
+
+Native Python:
 
 ```text
 ./backup/ems-config-manual-2026-06-20-120000.tar.gz
@@ -132,6 +143,14 @@ password to restore.
 ## How to list existing backups
 
 List the backup folder:
+
+Docker:
+
+```bash
+ls -lh data/backups/
+```
+
+Native Python:
 
 ```bash
 ls -lh backup/

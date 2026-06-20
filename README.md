@@ -30,6 +30,7 @@ inside the container and stores your important local files in clear folders:
 ```text
 config/config.json   your setup
 data/                runtime state, dashboard history, optional analytics data
+data/backups/        Docker backup archives
 ```
 
 Native Python is still supported for developers and advanced/manual installs;
@@ -152,6 +153,7 @@ For stable deployments, pin a release tag in `docker-compose.yml` instead of
 using `latest`, then update that tag intentionally.
 
 Backup and restore details: [docs/backup-restore.md](docs/backup-restore.md).
+Docker backups are stored on the host under `data/backups/`.
 Daily command sheet: [docs/common-commands.md](docs/common-commands.md).
 
 ## Native Python Setup

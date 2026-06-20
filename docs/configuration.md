@@ -117,6 +117,14 @@ python3 emsctl.py config upgrade --yes --no-backup
 
 After upgrading:
 
+Docker:
+
+```bash
+docker compose exec ems python3 emsctl.py diagnose --deep
+```
+
+Native Python:
+
 ```bash
 python3 emsctl.py diagnose --deep
 ```

@@ -75,6 +75,10 @@ output.
 
 `data/`
 
+## Where Are Docker Backups?
+
+`data/backups/`
+
 ## Where Is The Dashboard?
 
 `http://<host-ip>:8080`

@@ -1,8 +1,8 @@
 # Docker
 
-The improved Docker first-run bootstrap is available in `latest` and releases
-after `v0.5.6`. Older container tags, including `v0.5.6` and earlier, use the
-previous manual setup procedure.
+The improved Docker first-run bootstrap is available in `latest` and `v0.6.0`
+or newer releases. Older container tags use the previous manual setup
+procedure.
 
 For the beginner flow, start with [quickstart.md](quickstart.md). This page is
 the Docker reference for mounts, tags, CLI commands, permissions, updates, and
@@ -182,11 +182,11 @@ a warning:
 ```text
 WARNING: config.json still matches the shipped template.
 Please review ./config/config.json and configure your installation.
-Startup continues, but device settings may be incomplete.
+Startup continues in safe mode until required placeholders are replaced.
+Hardware writes are disabled while template placeholders remain.
 ```
 
 Startup continues in safe mode until required placeholders are replaced.
-Hardware writes are disabled while required template placeholders remain.
 Existing config validation and runtime errors still report missing IPs, serial
 numbers, or invalid device settings.
 
@@ -204,6 +204,9 @@ docker compose exec ems python3 emsctl.py config upgrade
 docker compose exec ems python3 emsctl.py diagnose
 ```
 
+Backups created in Docker are stored on the host under `data/backups/`, using
+the existing `./data:/app/data` mount.
+
 For stable deployments, pin a release tag in `docker-compose.yml`, then update
 that tag intentionally when you want to move to a newer release. Existing
 `./config` and `./data` files are preserved by the recommended bind mounts.
@@ -214,9 +217,8 @@ Existing Docker installations continue to work. A legacy bind mount such as
 `./config.json:/app/config/config.json:ro` can keep working, but new setups
 should use the directory-based `./config:/app/config` mount.
 
-Docker setup has been simplified for images after `v0.5.6`: with the
+Docker setup has been simplified for `v0.6.0` and newer images: with the
 recommended `docker-compose.yml`, the container creates `./config/config.json`
 from the built-in `config.template.json` on first start, stores runtime state
 and dashboard database files in `./data`, and never overwrites existing config
-files. Older tags, including `v0.5.6` and earlier, still use the previous
-manual Docker setup.
+files. Older tags still use the previous manual Docker setup.
