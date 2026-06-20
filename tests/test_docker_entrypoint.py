@@ -218,7 +218,8 @@ def test_docker_entrypoint_warns_when_config_matches_template(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert "WARNING: config.json still matches the shipped template." in result.stderr
-    assert "Startup continues, but device settings may be incomplete." in result.stderr
+    assert "Startup continues in safe mode until required placeholders are replaced." in result.stderr
+    assert "Hardware writes are disabled while template placeholders remain." in result.stderr
 
 
 def test_docker_entrypoint_skips_template_warning_after_edit(tmp_path):
