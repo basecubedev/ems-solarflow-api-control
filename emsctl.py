@@ -3058,7 +3058,7 @@ def print_restore_done(args, config, *, backup_type="config", influx=None):
             print(
                 "Note: InfluxDB data was not part of this backup and was not "
                 "restored. Restore bundled InfluxDB data separately with "
-                "'backup restore ./backup/ems-influxdb-...tar.gz'."
+                "'backup restore data/backups/ems-influxdb-...tar.gz'."
             )
         else:
             print(

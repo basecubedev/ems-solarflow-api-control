@@ -842,6 +842,9 @@ def test_post_restore_database_message(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "Database restore completed." in out
     assert "InfluxDB data was not part of this backup" in out
+    assert "backup restore data/backups/ems-influxdb-...tar.gz" in out
+    old_hint = "backup restore " + "./" + "backup/ems-influxdb-...tar.gz"
+    assert old_hint not in out
     assert "diagnose --deep" in out
 
 
