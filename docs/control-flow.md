@@ -15,11 +15,11 @@ Some operator values can also be changed through runtime state or Home
 Assistant. In that case the runtime value is used during the cycle, but the
 control block shown here is the same.
 
-The template default is standalone-first: Home Assistant disabled, live
-Zendure `outputLimit` writes enabled, and required regulation/state
-reconciliation enabled after local configuration. This is a starting point for
-normal standalone operation, not a universal safety profile. Set
-`system.dry_run=true` for an optional no-write validation run.
+The template profile is intended for normal standalone live control after real
+local values are configured and installation limits are reviewed. If required
+placeholders are still present, EMS forces safe mode: control disabled, dry-run
+enabled, and hardware writes blocked. Set `system.dry_run=true` for an
+optional no-write validation run.
 
 ## How To Read This Diagram
 
@@ -79,9 +79,9 @@ flowchart TD
 | Parameter | Control Block | What It Changes | Details |
 |---|---|---|---|
 | `system.enabled` | Runtime state / effective target | Enables or disables EMS output control. When disabled, effective targets become `0` and output writes are skipped. | [configuration.md](configuration.md), [runtime-state.md](runtime-state.md) |
-| `system.dry_run` | Safety gates | Blocks real Zendure writes while still calculating targets and logging intended writes. The template default is `false`; set `true` for manual no-write validation. | [configuration.md](configuration.md), [safety.md](safety.md) |
-| `system.allow_hardware_writes` | Safety gates | Allows Zendure `/properties/write` calls only when dry-run and simulation/replay gates also allow them. The template default is `true` for live output control. | [configuration.md](configuration.md), [safety.md](safety.md) |
-| `system.allow_state_reconciliation_writes` | SOC / mode reconciliation | Allows SOC, mode, runtime device state, and winter reconciliation writes after hardware writes are also allowed. The template default is `true` for the normal regulation profile after local limits have been reviewed. | [configuration.md](configuration.md), [safety.md](safety.md) |
+| `system.dry_run` | Safety gates | Blocks real Zendure writes while still calculating targets and logging intended writes. The template value is `false` after placeholders are replaced; set `true` for manual no-write validation. | [configuration.md](configuration.md), [safety.md](safety.md) |
+| `system.allow_hardware_writes` | Safety gates | Allows Zendure `/properties/write` calls only when dry-run, simulation/replay, and placeholder safe-mode gates also allow them. The template value is `true` for normal live output control after real local values are configured. | [configuration.md](configuration.md), [safety.md](safety.md) |
+| `system.allow_state_reconciliation_writes` | SOC / mode reconciliation | Allows SOC, mode, runtime device state, and winter reconciliation writes after hardware writes are also allowed. The template value is `true` for the normal regulation profile after local limits have been reviewed and placeholders are replaced. | [configuration.md](configuration.md), [safety.md](safety.md) |
 | `system.max_total_power` | Total target calculation / limits | Caps the combined EMS target before allocation. Runtime state can override it. | [configuration.md](configuration.md), [runtime-state.md](runtime-state.md) |
 | `system.max_device_power` | Limits, clamping and redistribution | Default per-device output cap used when a device has no stronger configured cap. | [configuration.md](configuration.md) |
 | `system.deadband` | Final write suppression | Skips small per-device `outputLimit` changes compared with current `outputLimit`, or current output when `outputLimit` is missing. | [control-logic.md](control-logic.md) |

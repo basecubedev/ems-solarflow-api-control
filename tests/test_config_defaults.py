@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import json
 import copy
+import shutil
 import stat
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,11 +10,14 @@ import pytest
 
 from ems import config as cfg
 from ems.config import (
+    CONFIG_UPGRADE_DEFAULTS,
     DASHBOARD_DEFAULTS,
     ENERGY_SAVINGS_DEFAULTS,
     OUTPUT_CONTROL_DEFAULTS,
     WINTER_DEFAULTS,
 )
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def without_comment_keys(values):
@@ -107,6 +111,12 @@ def test_config_template_uses_persisted_data_paths():
     assert docker_only_flag not in json.dumps(template)
     assert template["system"]["runtime_state_path"] == "data/runtime-state.json"
     assert template["dashboard"]["database_path"] == "data/ems_dashboard.sqlite"
+
+
+def test_config_template_contains_startup_upgrade_defaults():
+    template = json.loads(Path("config.template.json").read_text())
+
+    assert without_comment_keys(template["config_upgrade"]) == CONFIG_UPGRADE_DEFAULTS
 
 
 def base_minimal_config():
@@ -323,6 +333,109 @@ def test_config_template_upgrade_preserves_invalid_device_items():
     result = upgrade(user)
 
     assert result["devices"] == ["invalid"]
+
+
+def test_config_upgrade_render_uses_device_template_layout():
+    user = minimal_upgrade_config()
+    user["devices"][0].update({
+        "pv_kwp": 2.5,
+        "battery_kwh": 1.92,
+        "custom_device_key": "kept",
+    })
+    user["devices"][0].pop("_comment_smart_mode", None)
+    user["devices"][0].pop("_comment_soc", None)
+
+    plan = cfg.build_config_upgrade_plan(user)
+    text = cfg.render_config_json(
+        plan["upgraded_config"],
+        plan["template_layout"],
+    )
+    parsed = json.loads(text)
+    device = parsed["devices"][0]
+
+    assert device["pv_kwp"] == 2.5
+    assert device["battery_kwh"] == 1.92
+    assert device["custom_device_key"] == "kept"
+    assert (
+        '      "sn": "USER_SN",\n\n'
+        '      "_comment_smart_mode": "smart_mode=1 is runtime/RAM mode.",'
+    ) in text
+    assert (
+        '      "battery_kwh": 1.92,\n\n'
+        '      "_comment_soc": "min_soc/max_soc in percent. Use 0 to leave the value unmanaged.",'
+    ) in text
+    assert text.index('"custom_device_key"') > text.index('"max_soc"')
+
+
+def test_config_upgrade_render_does_not_fill_missing_device_identity():
+    user = minimal_upgrade_config()
+    user["devices"] = [{"max_power": 500}]
+
+    plan = cfg.build_config_upgrade_plan(user)
+    text = cfg.render_config_json(
+        plan["upgraded_config"],
+        plan["template_layout"],
+    )
+    device = json.loads(text)["devices"][0]
+
+    assert "name" not in device
+    assert "ip" not in device
+    assert "sn" not in device
+    assert "YOUR_SN" not in text
+
+
+def test_config_upgrade_render_blank_lines_are_template_driven(tmp_path):
+    template_text = Path("config.template.json").read_text()
+    template_text = template_text.replace(
+        '      "max_power": 800,\n'
+        '      "pv_kwp": 1.0,',
+        '      "max_power": 800,\n\n'
+        '      "pv_kwp": 1.0,',
+        1,
+    )
+    (tmp_path / "config.template.json").write_text(template_text)
+    user = minimal_upgrade_config()
+    user["devices"][0]["pv_kwp"] = 2.5
+
+    plan = cfg.build_config_upgrade_plan(user, base_dir=str(tmp_path))
+    text = cfg.render_config_json(
+        plan["upgraded_config"],
+        plan["template_layout"],
+    )
+
+    assert '      "max_power": 800,\n\n      "pv_kwp": 2.5,' in text
+    assert json.loads(text)["devices"][0]["pv_kwp"] == 2.5
+
+
+def test_config_upgrade_render_uses_first_template_device_shape(tmp_path):
+    needle = (
+        '      "max_power": 800,\n'
+        '      "pv_kwp": 1.0,'
+    )
+    template_text = Path("config.template.json").read_text()
+    first = template_text.index(needle)
+    second = template_text.index(needle, first + len(needle))
+    template_text = (
+        template_text[:second]
+        + '      "max_power": 800,\n\n'
+        '      "pv_kwp": 1.0,'
+        + template_text[second + len(needle):]
+    )
+    (tmp_path / "config.template.json").write_text(template_text)
+    user = minimal_upgrade_config()
+    user["devices"] = [
+        {"name": "A", "ip": "192.0.2.1", "sn": "A_SN", "pv_kwp": 1.5},
+        {"name": "B", "ip": "192.0.2.2", "sn": "B_SN", "pv_kwp": 2.5},
+    ]
+
+    plan = cfg.build_config_upgrade_plan(user, base_dir=str(tmp_path))
+    text = cfg.render_config_json(
+        plan["upgraded_config"],
+        plan["template_layout"],
+    )
+
+    assert '      "max_power": 800,\n      "pv_kwp": 2.5,' in text
+    assert '      "max_power": 800,\n\n      "pv_kwp": 2.5,' not in text
 
 
 def test_missing_config_schema_version_is_treated_as_schema_1():
@@ -552,6 +665,170 @@ def test_runtime_load_does_not_rewrite_config_file(tmp_path):
         restore_config_module(snapshot)
 
 
+def prepare_startup_upgrade_fixture(tmp_path, values=None):
+    shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(values or minimal_upgrade_config()))
+    return config_path
+
+
+def test_startup_config_upgrade_check_reports_without_writing(tmp_path):
+    config_path = prepare_startup_upgrade_fixture(tmp_path)
+    original_text = config_path.read_text()
+    messages = []
+
+    raw = cfg.perform_startup_config_upgrade(
+        json.loads(original_text),
+        str(config_path),
+        str(tmp_path),
+        emit_message=lambda level, message: messages.append((level, message)),
+    )
+
+    assert raw == json.loads(original_text)
+    assert config_path.read_text() == original_text
+    assert any("Config upgrade available:" in message for _, message in messages)
+    assert any(
+        "emsctl.py config upgrade --dry-run" in message
+        for _, message in messages
+    )
+
+
+def test_startup_config_upgrade_disabled_skips_check_and_write(tmp_path):
+    values = minimal_upgrade_config()
+    values["config_upgrade"] = {"on_startup": "disabled"}
+    config_path = prepare_startup_upgrade_fixture(tmp_path, values)
+    original_text = config_path.read_text()
+    messages = []
+
+    raw = cfg.perform_startup_config_upgrade(
+        values,
+        str(config_path),
+        str(tmp_path),
+        emit_message=lambda level, message: messages.append((level, message)),
+    )
+
+    assert raw == values
+    assert config_path.read_text() == original_text
+    assert messages == []
+
+
+def test_startup_config_upgrade_apply_backs_up_writes_and_reloads(tmp_path):
+    values = minimal_upgrade_config()
+    values["config_upgrade"] = {
+        "on_startup": "apply",
+        "backup_before_apply": True,
+        "backup_failure_policy": "continue_without_upgrade",
+    }
+    config_path = prepare_startup_upgrade_fixture(tmp_path, values)
+    backups = []
+    original_write = cfg.write_config_json_atomic
+
+    def fake_backup(raw_config, path, base_dir):
+        backups.append((copy.deepcopy(raw_config), path, base_dir))
+        return str(tmp_path / "backup.tar.gz")
+
+    def write_with_disk_marker(path, data, *, layout=None):
+        marked = copy.deepcopy(data)
+        marked["disk_reload_marker"] = "from-disk"
+        original_write(path, marked, layout=layout)
+
+    try:
+        cfg.write_config_json_atomic = write_with_disk_marker
+        raw = cfg.perform_startup_config_upgrade(
+            values,
+            str(config_path),
+            str(tmp_path),
+            backup_factory=fake_backup,
+            emit_message=lambda level, message: None,
+        )
+    finally:
+        cfg.write_config_json_atomic = original_write
+
+    written = json.loads(config_path.read_text())
+    assert backups
+    assert written["config_schema_version"] == cfg.LATEST_CONFIG_SCHEMA_VERSION
+    assert written["config_upgrade"]["on_startup"] == "apply"
+    assert written["disk_reload_marker"] == "from-disk"
+    assert raw["disk_reload_marker"] == "from-disk"
+
+
+def test_startup_config_upgrade_apply_skips_when_backup_fails(tmp_path):
+    values = minimal_upgrade_config()
+    values["config_upgrade"] = {"on_startup": "apply"}
+    config_path = prepare_startup_upgrade_fixture(tmp_path, values)
+    original_text = config_path.read_text()
+    messages = []
+
+    def fail_backup(raw_config, path, base_dir):
+        raise RuntimeError("backup boom")
+
+    raw = cfg.perform_startup_config_upgrade(
+        values,
+        str(config_path),
+        str(tmp_path),
+        backup_factory=fail_backup,
+        emit_message=lambda level, message: messages.append((level, message)),
+    )
+
+    assert raw == values
+    assert config_path.read_text() == original_text
+    assert any(
+        "Config auto-upgrade skipped because backup failed" in message
+        for _, message in messages
+    )
+
+
+def test_startup_config_upgrade_invalid_mode_falls_back_to_check(tmp_path):
+    values = minimal_upgrade_config()
+    values["config_upgrade"] = {"on_startup": "something-else"}
+    config_path = prepare_startup_upgrade_fixture(tmp_path, values)
+    original_text = config_path.read_text()
+    messages = []
+
+    raw = cfg.perform_startup_config_upgrade(
+        values,
+        str(config_path),
+        str(tmp_path),
+        emit_message=lambda level, message: messages.append((level, message)),
+    )
+
+    assert raw == values
+    assert config_path.read_text() == original_text
+    assert any(
+        "Invalid config_upgrade.on_startup" in message
+        for _, message in messages
+    )
+    assert any("Config upgrade available:" in message for _, message in messages)
+
+
+def test_startup_config_upgrade_invalid_backup_policy_falls_back(tmp_path):
+    values = minimal_upgrade_config()
+    values["config_upgrade"] = {
+        "on_startup": "apply",
+        "backup_before_apply": True,
+        "backup_failure_policy": "fail_startup",
+    }
+    config_path = prepare_startup_upgrade_fixture(tmp_path, values)
+    messages = []
+
+    raw = cfg.perform_startup_config_upgrade(
+        values,
+        str(config_path),
+        str(tmp_path),
+        backup_factory=lambda raw_config, path, base_dir: str(
+            tmp_path / "backup.tar.gz"
+        ),
+        emit_message=lambda level, message: messages.append((level, message)),
+    )
+
+    assert raw["config_upgrade"]["backup_failure_policy"] == "fail_startup"
+    assert json.loads(config_path.read_text())["config_schema_version"] == 3
+    assert any(
+        "Invalid config_upgrade.backup_failure_policy" in message
+        for _, message in messages
+    )
+
+
 def test_runtime_load_preserves_user_values(tmp_path):
     snapshot = snapshot_config_module()
     values = base_minimal_config()
@@ -562,6 +839,50 @@ def test_runtime_load_preserves_user_values(tmp_path):
     try:
         initialize_config_from_dict(tmp_path, values)
 
+        assert cfg.DRY_RUN is False
+        assert cfg.ALLOW_HARDWARE_WRITES is True
+        assert cfg.ALLOW_STATE_RECONCILIATION_WRITES is True
+    finally:
+        restore_config_module(snapshot)
+
+
+def test_runtime_load_forces_safe_mode_for_template_placeholders(tmp_path, caplog):
+    snapshot = snapshot_config_module()
+    shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")
+    values = json.loads((ROOT / "config.template.json").read_text())
+
+    try:
+        initialize_config_from_dict(tmp_path, values)
+
+        assert cfg.SYSTEM_ENABLED is False
+        assert cfg.DRY_RUN is True
+        assert cfg.ALLOW_HARDWARE_WRITES is False
+        assert cfg.ALLOW_STATE_RECONCILIATION_WRITES is False
+        assert "Config still contains template placeholder values" in caplog.text
+        assert "devices[0].sn" in caplog.text
+    finally:
+        restore_config_module(snapshot)
+
+
+def test_runtime_load_keeps_live_mode_after_required_values_are_configured(tmp_path):
+    snapshot = snapshot_config_module()
+    shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")
+    values = json.loads((ROOT / "config.template.json").read_text())
+    values["grid_meter"]["ip"] = "192.0.2.50"
+    values["devices"] = [{
+        **values["devices"][0],
+        "ip": "192.0.2.100",
+        "sn": "REAL_SN",
+    }]
+    values["system"]["enabled"] = True
+    values["system"]["dry_run"] = False
+    values["system"]["allow_hardware_writes"] = True
+    values["system"]["allow_state_reconciliation_writes"] = True
+
+    try:
+        initialize_config_from_dict(tmp_path, values)
+
+        assert cfg.SYSTEM_ENABLED is True
         assert cfg.DRY_RUN is False
         assert cfg.ALLOW_HARDWARE_WRITES is True
         assert cfg.ALLOW_STATE_RECONCILIATION_WRITES is True

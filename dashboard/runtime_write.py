@@ -84,9 +84,15 @@ def build_validation_context(config=None, runtime_state=None):
     defaults = defaults if isinstance(defaults, dict) else {}
     default_devices = defaults.get("devices", {}) if isinstance(defaults.get("devices"), dict) else {}
 
-    system_max = _safe_int(
-        system.get("max_total_power_limit"),
+    configured_system_max = _safe_int(
+        system.get("max_total_power"),
         GENERIC_MAX_POWER_W,
+        minimum=0,
+        maximum=GENERIC_MAX_POWER_W,
+    )
+    system_max = _safe_int(
+        system.get("max_total_power_limit", configured_system_max),
+        configured_system_max,
         minimum=0,
         maximum=GENERIC_MAX_POWER_W,
     )

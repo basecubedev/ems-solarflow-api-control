@@ -166,6 +166,83 @@ console.log(JSON.stringify({
     assert out["metricPv"] == "1.80 kW"
 
 
+def test_device_flow_same_layout_does_not_replace_svg():
+    script = PRELUDE + """
+let innerHtmlWrites = 0;
+const container = new FakeElement("deviceFlowView");
+Object.defineProperty(container, "innerHTML", {
+  get() { return this._html || ""; },
+  set(value) { innerHtmlWrites += 1; this._html = value; },
+});
+container.querySelector = (selector) => selector === "[data-device-flow-root]" && container.innerHTML ? {} : null;
+container.querySelectorAll = () => [];
+const doc = makeDoc({
+  getElementById(id) {
+    if (id === "deviceFlowView") return container;
+    return new FakeElement(id);
+  },
+});
+global.document = doc;
+app.state.flowView = "devices";
+app.state.deviceFlowSignature = null;
+app.state.flowActivity = new Map();
+
+const first = {
+  home_load_w: 500,
+  grid_power_w: 0,
+  devices: { WR1: { soc: 60, pv_input_w: 120, output_w: 80, battery_power_w: 40 } },
+};
+const second = {
+  home_load_w: 510,
+  grid_power_w: 2,
+  devices: { WR1: { soc: 61, pv_input_w: 125, output_w: 82, battery_power_w: 43 } },
+};
+app.renderDeviceFlow(first);
+app.renderDeviceFlow(second);
+
+console.log(JSON.stringify({ innerHtmlWrites }));
+"""
+    out = run_node(script)
+    assert out["innerHtmlWrites"] == 1
+
+
+def test_flow_hysteresis_and_speed_buckets_are_stable():
+    script = PRELUDE + """
+app.state.flowActivity = new Map();
+const activeAtEight = app.flowActive("pipe", 8);
+const stillActiveAtFour = app.flowActive("pipe", 4);
+const inactiveAtThree = app.flowActive("pipe", 3);
+const stillInactiveAtSeven = app.flowActive("pipe", 7);
+const activeAgainAtEight = app.flowActive("pipe", 8);
+
+console.log(JSON.stringify({
+  activeAtEight,
+  stillActiveAtFour,
+  inactiveAtThree,
+  stillInactiveAtSeven,
+  activeAgainAtEight,
+  idle: app.flowSpeedBucket(0, false),
+  lowA: app.flowSpeedBucket(9, true),
+  lowB: app.flowSpeedBucket(149, true),
+  medium: app.flowSpeedBucket(150, true),
+  high: app.flowSpeedBucket(600, true),
+}));
+"""
+    out = run_node(script)
+    assert out == {
+        "activeAtEight": True,
+        "stillActiveAtFour": True,
+        "inactiveAtThree": False,
+        "stillInactiveAtSeven": False,
+        "activeAgainAtEight": True,
+        "idle": "idle",
+        "lowA": "low",
+        "lowB": "low",
+        "medium": "medium",
+        "high": "high",
+    }
+
+
 def test_analytics_chart_reused_when_structure_unchanged():
     # Same signature across refreshes -> setData (reuse); changing the overlay
     # set -> destroy + recreate.

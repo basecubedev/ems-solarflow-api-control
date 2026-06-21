@@ -1,39 +1,69 @@
 # Configuration Guide
 
-The EMS uses one static installation config:
+The EMS uses one static installation config. With the recommended Docker setup,
+the file is:
+
+```text
+config/config.json
+```
+
+On first Docker start, the container creates that file from
+`config.template.json` if it does not exist. Existing Docker configs are not
+overwritten.
+
+Native Python installations normally use:
 
 ```text
 config.json
 ```
 
-Create it from the versioned template:
+You can also pass an explicit path with `--config`.
+
+For native/manual setups, create the config from the versioned template:
 
 ```bash
 cp config.template.json config.json
 ```
 
-`config.json` is local and ignored by Git. Do not commit real Home Assistant
-tokens, Zendure serial numbers, or local IP addresses.
+`config.json` and `config/config.json` are local and ignored by Git. Do not
+commit real Home Assistant tokens, Zendure serial numbers, or local IP
+addresses.
 
 ## Quick Start
 
-1. Copy `config.template.json` to `config.json`.
+1. Start Docker once so it creates `config/config.json`, or copy
+   `config.template.json` to `config.json` for native Python.
 2. Configure the real grid meter IP.
 3. Configure one or more real Zendure device IPs and serial numbers.
 4. Review power, SOC, battery, and PV limits for the installation.
 5. Keep Home Assistant disabled unless you want HA integration.
-6. Optionally set `dry_run=true` for a no-write validation run.
-7. Run simulation, preflight, or dry-run if you want extra checks.
-8. Monitor the first bounded live run before unattended operation.
+6. Optionally run `docker compose exec ems python3 emsctl.py config init`
+   (Docker) or `python3 emsctl.py config init` (native Python) for guided
+   setup.
+7. Optionally set `dry_run=true` for a no-write validation run.
+8. Run diagnostics.
+9. Monitor the first live run before unattended operation.
 
-The template default is standalone-first and live-control-ready after local
-configuration:
+The template profile is intended for normal standalone live control after real
+local values are configured and installation limits are reviewed:
 `dry_run=false`, `allow_hardware_writes=true`, and
 `allow_state_reconciliation_writes=true`.
 
-This exposes the main regulation features with minimal setup. It is not a
-universal safety profile; review device limits, SOC limits, grid meter readings,
-and installation-specific constraints before normal operation.
+If required placeholders are still present, EMS forces safe mode: control
+disabled, dry-run enabled, and hardware writes blocked. This prevents an
+untouched template from writing to hardware.
+
+Docker:
+
+```bash
+docker compose exec ems python3 emsctl.py diagnose
+```
+
+Native Python:
+
+```bash
+python3 emsctl.py diagnose
+```
 
 Safe first checks:
 
@@ -55,10 +85,22 @@ To review missing keys:
 python3 emsctl.py config upgrade --dry-run
 ```
 
+Inside Docker:
+
+```bash
+docker compose exec ems python3 emsctl.py config upgrade --dry-run
+```
+
 To update `config.json` interactively:
 
 ```bash
 python3 emsctl.py config upgrade
+```
+
+Inside Docker:
+
+```bash
+docker compose exec ems python3 emsctl.py config upgrade
 ```
 
 The upgrade command uses `config.template.json` as the source for missing
@@ -74,6 +116,14 @@ python3 emsctl.py config upgrade --yes --no-backup
 ```
 
 After upgrading:
+
+Docker:
+
+```bash
+docker compose exec ems python3 emsctl.py diagnose --deep
+```
+
+Native Python:
 
 ```bash
 python3 emsctl.py diagnose --deep
@@ -149,19 +199,22 @@ Standalone mode:
 created.
 
 `system.dry_run` calculates targets but blocks Zendure hardware writes. The
-template default is `false` for normal standalone control. Set it to `true` for
-a manual no-write validation run.
+template value is `false` for normal standalone control after required
+placeholders are replaced. Set it to `true` for a manual no-write validation
+run.
 
 `system.simulation_mode` runs without real hardware. Most users should keep it
 `false` and use `--simulate` from the command line when needed.
 
 `system.allow_hardware_writes` allows Zendure `/properties/write` calls when
-`dry_run=false`. The template default is `true` so normal `outputLimit` control
-works after local device and grid meter configuration.
+`dry_run=false`. The template value is `true` so normal `outputLimit` control
+works after local device and grid meter configuration. Required placeholders
+still force safe mode and block writes.
 
 `system.allow_state_reconciliation_writes` allows SOC and mode reconciliation
-writes. The template default is `true` because this is part of the default
+writes. The template value is `true` because this is part of the default
 regulation profile after local device limits and SOC limits have been reviewed.
+Required placeholders still force safe mode and block these writes.
 
 `system.reconcile_ac_mode_on_start` keeps the legacy startup compatibility gate
 enabled. Runtime AC mode intent is evaluated during the control loop, but

@@ -217,6 +217,47 @@ Relative `runtime_state_path` and dashboard `auth_file` values are still
 resolved relative to the application directory. The runtime-state path always
 comes from the selected config unless `--runtime-state` is passed explicitly.
 
+## Config Commands
+
+`config init` is the optional first setup assistant. It helps fill common
+settings and does not blindly replace edited configs.
+
+Native Python:
+
+```bash
+python3 emsctl.py config init
+python3 emsctl.py config init --dry-run
+python3 emsctl.py config init --yes --backup
+python3 emsctl.py config init --yes --no-backup
+```
+
+Docker:
+
+```bash
+docker compose exec ems python3 emsctl.py config init
+```
+
+Edited configs need an explicit backup decision for non-interactive writes:
+use `--yes --backup` to create a backup first, or `--yes --no-backup` when you
+intentionally do not want one.
+
+`config upgrade` is different from `config init`. It fills missing persisted
+keys after updates by comparing your config with `config.template.json`.
+
+Native Python:
+
+```bash
+python3 emsctl.py config upgrade --dry-run
+python3 emsctl.py config upgrade
+```
+
+Docker:
+
+```bash
+docker compose exec ems python3 emsctl.py config upgrade --dry-run
+docker compose exec ems python3 emsctl.py config upgrade
+```
+
 ## Docker Usage
 
 With the recommended Compose service name `ems`, common commands can be run
@@ -226,6 +267,8 @@ without an explicit config path:
 docker compose exec ems python3 emsctl.py status
 docker compose exec ems python3 emsctl.py interactive
 docker compose exec ems python3 emsctl.py dashboard auth-status
+docker compose exec ems python3 emsctl.py config init
+docker compose exec ems python3 emsctl.py config upgrade --dry-run
 docker compose exec ems python3 emsctl.py diagnose
 docker compose exec ems python3 emsctl.py diagnose --control
 docker compose exec ems python3 emsctl.py diagnose --control-quality --sample-seconds 60
@@ -236,7 +279,7 @@ docker compose exec ems python3 emsctl.py diagnose --support-bundle
 For unusual mounts or troubleshooting, an explicit config path still works:
 
 ```bash
-docker compose exec ems python emsctl.py --config /app/config/config.json status
+docker compose exec ems python3 emsctl.py --config /app/config/config.json status
 ```
 
 Each command group also has focused help:

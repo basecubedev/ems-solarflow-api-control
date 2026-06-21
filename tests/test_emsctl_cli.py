@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import emsctl
+from ems import config_init as config_init_mod
 from ems import paths as ems_paths
 from ems.state_store import BatteryFullChargeStateStore
 
@@ -49,6 +50,23 @@ def test_emsctl_config_discovery_prefers_legacy_config(tmp_path, monkeypatch):
     )
 
 
+def test_backup_create_output_dir_overrides_default(tmp_path):
+    output_dir = tmp_path / "explicit-backups"
+
+    result = run_emsctl(
+        tmp_path,
+        "backup",
+        "create",
+        "--output-dir",
+        str(output_dir),
+    )
+
+    assert result.returncode == 0, result.stderr
+    archives = list(output_dir.glob("ems-config-manual-*.tar.gz"))
+    assert len(archives) == 1
+    assert f"  {archives[0]}" in result.stdout
+
+
 def test_emsctl_config_discovery_falls_back_to_docker_config(tmp_path, monkeypatch):
     patch_emsctl_base(monkeypatch, tmp_path)
     write_discovery_config(
@@ -68,6 +86,24 @@ def test_emsctl_config_discovery_falls_back_to_docker_config(tmp_path, monkeypat
     assert emsctl.resolve_dashboard_auth_path(args, config) == str(
         tmp_path / "config" / "dashboard-auth.json"
     )
+
+
+def test_emsctl_config_discovery_prefers_docker_config_in_container(
+    tmp_path,
+    monkeypatch,
+):
+    patch_emsctl_base(monkeypatch, tmp_path)
+    write_discovery_config(tmp_path / "config.json", "runtime-state.json")
+    write_discovery_config(
+        tmp_path / "config" / "config.json",
+        "data/runtime-state.json",
+    )
+    monkeypatch.setenv("EMS_IN_CONTAINER", "1")
+
+    args = config_args()
+    selected = emsctl.resolve_config_path(args)
+
+    assert selected == str(tmp_path / "config" / "config.json")
 
 
 def test_emsctl_explicit_config_wins(tmp_path, monkeypatch):
@@ -627,6 +663,282 @@ def test_emsctl_dashboard_rejects_mismatch_and_wrong_current_password(tmp_path):
     assert "current dashboard password is incorrect" in result.stderr
 
 
+def test_config_init_dry_run_does_not_write_file(tmp_path):
+    config_path = tmp_path / "guided.json"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(EMSCTL),
+            "--config",
+            str(config_path),
+            "config",
+            "init",
+            "--dry-run",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Dry run: config preview follows" in result.stdout
+    assert not config_path.exists()
+
+
+def test_config_init_missing_config_creates_valid_config_when_confirmed(
+    tmp_path,
+    monkeypatch,
+):
+    patch_emsctl_base(monkeypatch, tmp_path)
+    shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")
+    config_path = tmp_path / "config.json"
+    responses = iter([
+        "y",
+        "1",
+        "192.0.2.50",
+        "2",
+        "",
+        "192.0.2.100",
+        "SN100",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "192.0.2.101",
+        "SN101",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "900",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "y",
+    ])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(responses))
+
+    code = emsctl.main(["--config", str(config_path), "config", "init"])
+
+    assert code == 0
+    created = json.loads(config_path.read_text())
+    assert created["grid_meter"]["type"] == "shelly"
+    assert created["grid_meter"]["ip"] == "192.0.2.50"
+    assert [device["name"] for device in created["devices"]] == ["WR1", "WR2"]
+    assert created["devices"][0]["ip"] == "192.0.2.100"
+    assert created["devices"][1]["sn"] == "SN101"
+    assert created["system"]["max_total_power"] == 900
+
+
+def test_config_init_template_config_uses_first_run_continue_wording(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    patch_emsctl_base(monkeypatch, tmp_path)
+    shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")
+    config_path = tmp_path / "config.json"
+    shutil.copy(ROOT / "config.template.json", config_path)
+    monkeypatch.setattr("builtins.input", lambda prompt="": "n")
+
+    code = emsctl.main(["--config", str(config_path), "config", "init"])
+
+    output = capsys.readouterr()
+    assert code == 0
+    assert "This config still looks like the default template." in output.out
+    assert "The setup assistant will fill it with your answers." in output.out
+    assert "Continue? [Y/n]" in output.out
+
+
+def test_config_init_required_placeholders_are_not_prompt_defaults(
+    monkeypatch,
+    capsys,
+):
+    responses = iter(["", "REAL_SN"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(responses))
+
+    value = config_init_mod.ask_text(
+        "Device 1 serial number",
+        "YOUR_SN",
+        required=True,
+    )
+
+    output = capsys.readouterr()
+    assert value == "REAL_SN"
+    assert "Device 1 serial number [YOUR_SN]" not in output.out
+    assert "Device 1 serial number: " in output.out
+    assert "Please enter a value." in output.out
+
+
+def test_config_init_yes_rejects_template_placeholders(tmp_path):
+    config_path = tmp_path / "config.json"
+    shutil.copy(ROOT / "config.template.json", config_path)
+
+    result = run_emsctl(tmp_path, "config", "init", "--yes")
+
+    assert result.returncode == 2
+    assert "Grid meter IP address is required" in result.stderr
+
+
+def test_config_init_edited_config_preserves_unknown_keys(tmp_path, monkeypatch):
+    patch_emsctl_base(monkeypatch, tmp_path)
+    shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({
+        "custom_top": {"keep": True},
+        "system": {"max_total_power": 777, "min_output_limit": 40},
+        "grid_meter": {
+            "type": "shelly",
+            "ip": "192.0.2.10",
+            "custom_meter": "keep",
+        },
+        "devices": [{
+            "name": "REAL",
+            "ip": "192.0.2.20",
+            "sn": "REAL_SN",
+            "custom_device": "keep",
+        }],
+    }))
+
+    code = emsctl.main([
+        "--config",
+        str(config_path),
+        "config",
+        "init",
+        "--yes",
+        "--no-backup",
+    ])
+
+    assert code == 0
+    updated = json.loads(config_path.read_text())
+    assert updated["custom_top"] == {"keep": True}
+    assert updated["grid_meter"]["custom_meter"] == "keep"
+    assert updated["devices"][0]["custom_device"] == "keep"
+    assert updated["devices"][0]["name"] == "REAL"
+    assert updated["system"]["max_total_power"] == 777
+
+
+def test_config_init_cleans_stale_grid_meter_fields_when_switching_type(
+    tmp_path,
+    monkeypatch,
+):
+    patch_emsctl_base(monkeypatch, tmp_path)
+    shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({
+        "system": {"max_total_power": 777, "min_output_limit": 40},
+        "grid_meter": {
+            "type": "tasmota_http",
+            "url": "http://tasmota.local/cm?cmnd=Status%2010",
+            "power_path": "StatusSNS.SML.Power_curr",
+            "custom_meter": "keep",
+        },
+        "devices": [{
+            "name": "REAL",
+            "ip": "192.0.2.20",
+            "sn": "REAL_SN",
+        }],
+    }))
+    responses = iter(["y", "1", "192.0.2.50", *([""] * 18), "y", "n"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(responses))
+
+    code = emsctl.main(["--config", str(config_path), "config", "init"])
+
+    assert code == 0
+    updated = json.loads(config_path.read_text())
+    assert updated["grid_meter"]["type"] == "shelly"
+    assert updated["grid_meter"]["ip"] == "192.0.2.50"
+    assert "url" not in updated["grid_meter"]
+    assert "power_path" not in updated["grid_meter"]
+    assert updated["grid_meter"]["custom_meter"] == "keep"
+
+
+def test_config_init_edited_config_asks_for_backup_by_default(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    patch_emsctl_base(monkeypatch, tmp_path)
+    shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({
+        "custom": True,
+        "system": {
+            "enabled": True,
+            "max_total_power": 900,
+            "min_output_limit": 35,
+        },
+        "dashboard": {"enabled": True},
+        "winter": {"enabled": False},
+        "battery_full_charge_assist": {"enabled": False},
+        "influxdb": {"enabled": False},
+        "ha": {"enabled": False},
+        "grid_meter": {"type": "shelly", "ip": "192.0.2.10"},
+        "devices": [{
+            "name": "WR1",
+            "ip": "192.0.2.20",
+            "sn": "REAL_SN",
+            "max_power": 800,
+            "pv_kwp": 1.0,
+            "battery_kwh": 1.0,
+            "min_soc": 15,
+            "max_soc": 100,
+        }],
+    }))
+    responses = iter(["y", *([""] * 19), "y", "n"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(responses))
+
+    code = emsctl.main(["--config", str(config_path), "config", "init"])
+
+    output = capsys.readouterr()
+    assert code == 0
+    assert "Existing config detected." in output.out
+    assert "Create backup before writing? [Y/n]" in output.out
+
+
+def test_config_init_noninteractive_edited_config_requires_backup_policy(tmp_path):
+    config_path = tmp_path / "config.json"
+    write_config(config_path)
+
+    result = run_emsctl(tmp_path, "config", "init", "--yes")
+
+    assert result.returncode == 2
+    assert "--backup or --no-backup" in result.stderr
+
+
+def test_config_init_grid_meter_choices_are_runtime_supported():
+    assert config_init_mod.SUPPORTED_GRID_METER_TYPES == (
+        "shelly",
+        "shelly_3em_gen1",
+        "ecotracker",
+        "tasmota_http",
+    )
+
+
+def test_config_init_dry_run_redacts_home_assistant_token(tmp_path):
+    config_path = tmp_path / "config.json"
+    write_config(config_path)
+    config = json.loads(config_path.read_text())
+    config["ha"]["enabled"] = True
+    config["ha"]["token"] = "super-secret-token"
+    config_path.write_text(json.dumps(config))
+
+    result = run_emsctl(tmp_path, "config", "init", "--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    assert "super-secret-token" not in result.stdout
+    assert "<redacted>" in result.stdout
+
+
 def write_upgrade_candidate(path):
     path.write_text(json.dumps({
         "ha": {"enabled": True},
@@ -1034,6 +1346,27 @@ def test_config_upgrade_enriches_existing_device(tmp_path):
     assert device["max_power"] == 800
     assert "_comment_smart_mode" in device
     assert "_comment_soc" in device
+
+
+def test_config_upgrade_is_idempotent_after_template_format_write(tmp_path):
+    config_path = tmp_path / "config.json"
+    write_upgrade_candidate(config_path)
+
+    first = run_emsctl(
+        tmp_path,
+        "config",
+        "upgrade",
+        "--yes",
+        "--no-backup",
+    )
+    assert first.returncode == 0, first.stderr
+    after_first = config_path.read_text()
+
+    second = run_emsctl(tmp_path, "config", "upgrade")
+
+    assert second.returncode == 0, second.stderr
+    assert "Config is already up to date." in second.stdout
+    assert config_path.read_text() == after_first
 
 
 def test_config_upgrade_preserves_config_permissions(tmp_path):

@@ -1,8 +1,15 @@
 # Docker
 
-The improved Docker first-run bootstrap is available in `latest` and releases
-after `v0.5.6`. Older container tags, including `v0.5.6` and earlier, use the
-previous manual setup procedure.
+The improved Docker first-run bootstrap is available in `latest` and `v0.6.0`
+or newer releases. Older container tags use the previous manual setup
+procedure.
+
+For the beginner flow, start with [quickstart.md](quickstart.md). This page is
+the Docker reference for mounts, tags, CLI commands, permissions, updates, and
+troubleshooting details.
+
+If Docker is not installed yet, see [install-docker.md](install-docker.md).
+For daily copy/paste commands, see [common-commands.md](common-commands.md).
 
 ## Recommended Setup
 
@@ -43,6 +50,17 @@ nano config/config.json
 docker compose restart
 ```
 
+Optional guided setup inside the container:
+
+```bash
+docker compose exec ems python3 emsctl.py config init
+docker compose restart
+docker compose exec ems python3 emsctl.py diagnose
+```
+
+`config init` is optional and does not blindly replace an existing edited
+config. Manual editing of `config/config.json` remains fully supported.
+
 ## CLI Inside Docker
 
 With the recommended Compose service name `ems`, `emsctl.py` automatically
@@ -52,8 +70,11 @@ uses `/app/config/config.json` when no legacy `/app/config.json` exists:
 docker compose exec ems python3 emsctl.py status
 docker compose exec ems python3 emsctl.py interactive
 docker compose exec ems python3 emsctl.py dashboard auth-status
+docker compose exec ems python3 emsctl.py config init
+docker compose exec ems python3 emsctl.py config upgrade --dry-run
 docker compose exec ems python3 emsctl.py diagnose
 docker compose exec ems python3 emsctl.py diagnose --deep
+docker compose exec ems python3 emsctl.py diagnose --hardware
 docker compose exec ems python3 emsctl.py diagnose --control
 docker compose exec ems python3 emsctl.py diagnose --control-quality --sample-seconds 60
 docker compose exec ems python3 emsctl.py diagnose --support-bundle
@@ -80,7 +101,7 @@ is redacted and contains safe diagnostic material for maintainers.
 For unusual mounts or troubleshooting, pass the config path explicitly:
 
 ```bash
-docker compose exec ems python emsctl.py --config /app/config/config.json status
+docker compose exec ems python3 emsctl.py --config /app/config/config.json status
 ```
 
 ## Generated Files
@@ -123,8 +144,9 @@ Verify the real PID 1 user inside the running container:
 docker compose exec ems sh -c 'cat /proc/1/status | grep -E "^(Name|Uid|Gid):"'
 ```
 
-The `Uid:` and `Gid:` lines should show non-zero values matching your `.env`
-`PUID` and `PGID`.
+The `Uid:` and `Gid:` lines should show non-zero values. They should match
+explicit `PUID`/`PGID` values if set, otherwise they should match the detected
+owner of the mounted `config` and `data` directories.
 
 Verify host file ownership:
 
@@ -160,22 +182,32 @@ a warning:
 ```text
 WARNING: config.json still matches the shipped template.
 Please review ./config/config.json and configure your installation.
-Startup continues, but device settings may be incomplete.
+Startup continues in safe mode until required placeholders are replaced.
+Hardware writes are disabled while template placeholders remain.
 ```
 
-Startup continues after this warning. Existing config validation and runtime
-errors still report missing IPs, serial numbers, or invalid device settings.
-The EMS will likely not control devices until the required values are
-configured.
+Startup continues in safe mode until required placeholders are replaced.
+Existing config validation and runtime errors still report missing IPs, serial
+numbers, or invalid device settings.
 
 ## Updating
 
-For `latest`, pull the current image and recreate the container:
+For `latest`, create a backup, pull the current image, recreate the container,
+check whether new config keys are available, and run diagnostics:
 
 ```bash
+docker compose exec ems python3 emsctl.py backup create
 docker compose pull
 docker compose up -d
+docker compose exec ems python3 emsctl.py config upgrade --dry-run
+docker compose exec ems python3 emsctl.py config upgrade
+docker compose exec ems python3 emsctl.py diagnose
 ```
+
+Backups created in Docker are stored on the host under `data/backups/`, using
+the existing `./data:/app/data` mount. No separate backup volume is needed for
+the standard setup, and existing installs get persistent backups automatically
+after pulling the updated image — even without editing their compose file.
 
 For stable deployments, pin a release tag in `docker-compose.yml`, then update
 that tag intentionally when you want to move to a newer release. Existing
@@ -187,9 +219,8 @@ Existing Docker installations continue to work. A legacy bind mount such as
 `./config.json:/app/config/config.json:ro` can keep working, but new setups
 should use the directory-based `./config:/app/config` mount.
 
-Docker setup has been simplified for images after `v0.5.6`: with the
+Docker setup has been simplified for `v0.6.0` and newer images: with the
 recommended `docker-compose.yml`, the container creates `./config/config.json`
 from the built-in `config.template.json` on first start, stores runtime state
 and dashboard database files in `./data`, and never overwrites existing config
-files. Older tags, including `v0.5.6` and earlier, still use the previous
-manual Docker setup.
+files. Older tags still use the previous manual Docker setup.

@@ -1196,3 +1196,84 @@ def test_diagnose_hardware_probes_shelly_pro_rpc_endpoint(monkeypatch):
     assert captured["url"] == "http://192.0.2.50/rpc/Shelly.GetStatus"
     levels = _levels_by_code(checks)
     assert levels.get("shelly_read_ok") == "ok"
+
+
+def test_diagnose_install_includes_runtime_paths(tmp_path, monkeypatch):
+    monkeypatch.delenv("EMS_IN_CONTAINER", raising=False)
+    report = diagnostics.run_install_diagnosis(diagnose_args(tmp_path))
+
+    codes = {
+        check["code"]
+        for check in report["checks"]
+        if check["section"] == "runtime_paths"
+    }
+    assert {"container_mode", "config_path", "data_path", "backup_default"} <= codes
+
+    text = diagnostics.diagnose_text(report)
+    assert "Runtime paths" in text
+    assert "backup default:" in text
+
+
+def test_diagnose_runtime_paths_native_even_when_runner_in_container(
+    tmp_path, monkeypatch
+):
+    # A containerized test runner has /.dockerenv but is not the official /app
+    # layout: diagnostics must still report native mode and a project backup dir.
+    from ems import backup as backup_mod
+
+    monkeypatch.delenv("EMS_IN_CONTAINER", raising=False)
+    real_exists = backup_mod.os.path.exists
+    monkeypatch.setattr(
+        backup_mod.os.path,
+        "exists",
+        lambda path: True if path == "/.dockerenv" else real_exists(path),
+    )
+    report = diagnostics.run_install_diagnosis(diagnose_args(tmp_path))
+
+    container_check = next(
+        check
+        for check in report["checks"]
+        if check["section"] == "runtime_paths" and check["code"] == "container_mode"
+    )
+    assert container_check["details"]["container_mode"] is False
+    backup_check = next(
+        check
+        for check in report["checks"]
+        if check["section"] == "runtime_paths" and check["code"] == "backup_default"
+    )
+    assert backup_check["details"]["path"] != "/app/data/backups"
+
+
+def test_diagnose_runtime_paths_warns_when_container_backup_not_persistent(
+    tmp_path, monkeypatch
+):
+    from ems import backup as backup_mod
+
+    monkeypatch.setenv("EMS_IN_CONTAINER", "1")
+    monkeypatch.setattr(
+        backup_mod, "CONTAINER_BACKUP_DIR", str(tmp_path / "loose-backups")
+    )
+    report = diagnostics.run_install_diagnosis(diagnose_args(tmp_path))
+
+    codes = {
+        check["code"]
+        for check in report["checks"]
+        if check["section"] == "runtime_paths"
+    }
+    assert "container_backup_not_persistent" in codes
+    assert any("not under /app/data" in message for message in report["warnings"])
+
+
+def test_diagnose_runtime_paths_no_warning_for_persistent_container_backup(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("EMS_IN_CONTAINER", "1")
+    report = diagnostics.run_install_diagnosis(diagnose_args(tmp_path))
+
+    codes = {
+        check["code"]
+        for check in report["checks"]
+        if check["section"] == "runtime_paths"
+    }
+    assert "backup_persistent" in codes
+    assert "container_backup_not_persistent" not in codes

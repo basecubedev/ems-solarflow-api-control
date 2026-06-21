@@ -188,7 +188,8 @@ if [ -f "$CONFIG_FILE" ] && [ -f "$TEMPLATE_FILE" ] && cmp -s "$CONFIG_FILE" "$T
     cat >&2 <<'EOF'
 WARNING: config.json still matches the shipped template.
 Please review ./config/config.json and configure your installation.
-Startup continues, but device settings may be incomplete.
+Startup continues in safe mode until required placeholders are replaced.
+Hardware writes are disabled while template placeholders remain.
 EOF
 fi
 

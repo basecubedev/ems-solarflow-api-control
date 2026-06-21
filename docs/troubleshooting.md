@@ -1,5 +1,56 @@
 # Troubleshooting
 
+## Symptom Index
+
+| Symptom | Start Here |
+|---|---|
+| Dashboard not reachable | [Dashboard Not Reachable](#dashboard-not-reachable) |
+| Config placeholders / safe mode | [Config Still Contains Placeholders](#config-still-contains-placeholders) |
+| Docker permission denied | [Docker Permission Denied](#docker-permission-denied) |
+| Grid meter not reachable | [Grid Meter Not Reachable](#grid-meter-not-reachable) |
+| Zendure device not reachable | [Zendure Device Not Reachable](#zendure-device-not-reachable) |
+| Analytics / InfluxDB not reachable | [Analytics Or InfluxDB Not Reachable](#analytics-or-influxdb-not-reachable) |
+| EMS not regulating | [EMS Not Regulating](#ems-not-regulating) |
+| No power changes | [No Power Changes](#no-power-changes) |
+| Opening an issue | [Opening a GitHub Issue](#opening-a-github-issue) |
+
+Daily command sheet: [common-commands.md](common-commands.md).
+First-run validation: [first-run-checklist.md](first-run-checklist.md).
+
+## Start Here With Docker
+
+For the recommended Docker setup, run these checks first:
+
+```bash
+docker compose ps
+docker compose logs -f
+docker compose exec ems python3 emsctl.py diagnose
+```
+
+Use hardware diagnostics only when you are ready to probe the configured local
+meter and Zendure devices. It is read-only.
+
+```bash
+docker compose exec ems python3 emsctl.py diagnose --hardware
+```
+
+Common first fixes:
+
+- Dashboard not reachable: verify `docker compose ps`, host port `8080`, and
+  container logs.
+- Config still contains placeholders: edit `config/config.json`, replace
+  example values and `YOUR_SN`, restart, then run diagnose again.
+- Docker socket permission denied: run Docker with `sudo` or complete the
+  optional post-install steps in [install-docker.md](install-docker.md).
+- Grid meter not reachable: check meter IP, meter type, local network routing,
+  and `diagnose --hardware`.
+- Zendure device not reachable: check device IP, serial number, local network
+  routing, and `diagnose --hardware`.
+- Analytics/InfluxDB not reachable: the dashboard still works without
+  InfluxDB; see [influxdb.md](influxdb.md).
+- Home Assistant not configured: Home Assistant is optional and not required
+  for standalone EMS control.
+
 The EMS uses structured logs:
 
 ```text
@@ -10,27 +61,29 @@ Use these logs to validate behavior during dry-run checks and live operation.
 Change one setting at a time and run a short dry-run or bounded live test after
 each change.
 
-The template default is standalone live control after local configuration:
-Home Assistant disabled, `dry_run=false`, `allow_hardware_writes=true`, and
-`allow_state_reconciliation_writes=true`. Use `--dry-run` or set
-`system.dry_run=true` when you want a no-write validation run.
-
-These defaults assume real Shelly and Zendure values have already been entered
-and installation-specific power, SOC, battery, and PV limits have been
-reviewed. They are a starting point for troubleshooting, not a universal safety
-profile.
+The template profile is intended for normal standalone live control after real
+local values are configured and installation limits are reviewed. If required
+placeholders are still present, EMS forces safe mode: control disabled, dry-run
+enabled, and hardware writes blocked. Use `--dry-run` or set
+`system.dry_run=true` when you want an explicit no-write validation run.
 
 ## Basic Checks
 
-When you're not sure where to start, local diagnostics can give a quick
-overview:
+When you're not sure where to start, diagnostics can give a quick overview.
+
+Docker:
+
+```bash
+docker compose exec ems python3 emsctl.py diagnose
+docker compose exec ems python3 emsctl.py diagnose --deep
+docker compose exec ems python3 emsctl.py diagnose --support-bundle
+```
+
+Native Python:
 
 ```bash
 python3 emsctl.py diagnose
 python3 emsctl.py diagnose --deep
-python3 emsctl.py diagnose --control
-python3 emsctl.py diagnose --control --sample-seconds 30
-python3 emsctl.py diagnose --control-quality --sample-seconds 60
 python3 emsctl.py diagnose --json
 python3 emsctl.py diagnose --support-bundle
 ```
@@ -43,6 +96,15 @@ redacted ZIP for GitHub/support requests. Exit code `1` means at least one
 diagnostic error was found; warnings still exit `0`.
 
 Use control diagnostics when EMS output looks surprising:
+
+Docker:
+
+```bash
+docker compose exec ems python3 emsctl.py diagnose --control
+docker compose exec ems python3 emsctl.py diagnose --control --sample-seconds 30
+```
+
+Native Python:
 
 ```bash
 python3 emsctl.py diagnose --control
@@ -66,6 +128,14 @@ likely root causes. Common findings:
 
 Use control quality diagnostics when the system regulates but the result looks
 poor over time:
+
+Docker:
+
+```bash
+docker compose exec ems python3 emsctl.py diagnose --control-quality --sample-seconds 60
+```
+
+Native Python:
 
 ```bash
 python3 emsctl.py diagnose --control-quality --sample-seconds 60
@@ -93,6 +163,7 @@ Inside Docker:
 
 ```bash
 docker compose exec ems python3 emsctl.py diagnose
+docker compose exec ems python3 emsctl.py diagnose --hardware
 docker compose exec ems python3 emsctl.py diagnose --control
 docker compose exec ems python3 emsctl.py diagnose --control-quality --sample-seconds 60
 docker compose exec ems python3 emsctl.py diagnose --deep
@@ -101,7 +172,13 @@ docker compose exec ems python3 emsctl.py diagnose --support-bundle
 
 ## EMS Not Regulating
 
-Run:
+Docker:
+
+```bash
+docker compose exec ems python3 emsctl.py diagnose --control
+```
+
+Native Python:
 
 ```bash
 python3 emsctl.py diagnose --control
@@ -117,7 +194,13 @@ and shown as informational output.
 
 ## Export Peaks
 
-Run:
+Docker:
+
+```bash
+docker compose exec ems python3 emsctl.py diagnose --control-quality --sample-seconds 60
+```
+
+Native Python:
 
 ```bash
 python3 emsctl.py diagnose --control-quality --sample-seconds 60
@@ -130,7 +213,13 @@ holding the zero-export target.
 
 ## Uneven Battery Usage
 
-Run:
+Docker:
+
+```bash
+docker compose exec ems python3 emsctl.py diagnose --control-quality --sample-seconds 60
+```
+
+Native Python:
 
 ```bash
 python3 emsctl.py diagnose --control-quality --sample-seconds 60
@@ -142,7 +231,13 @@ max-power limits that prevent balanced distribution.
 
 ## Hardware Communication Problems
 
-Run:
+Docker:
+
+```bash
+docker compose exec ems python3 emsctl.py diagnose --hardware
+```
+
+Native Python:
 
 ```bash
 python3 emsctl.py diagnose --hardware
@@ -155,7 +250,17 @@ unreachable.
 
 ## Docker Problems
 
-Run:
+Run from the directory with `docker-compose.yml`:
+
+```bash
+docker compose ps
+docker compose logs -f
+docker compose exec ems python3 emsctl.py diagnose
+```
+
+Stop following logs with `Ctrl+C`; the container keeps running.
+
+For native Python, run:
 
 ```bash
 python3 emsctl.py diagnose
@@ -171,10 +276,68 @@ Review container detection, `/app/config`, `/app/data`, UID/GID ownership,
 runtime-state path location, and whether mutable files resolve below
 `/app/data`.
 
+### Dashboard Not Reachable
+
+Check the container and published port:
+
+```bash
+docker compose ps
+docker compose logs -f
+```
+
+The example Compose file publishes `8080:8080`. Open
+`http://<host-ip>:8080`, or `http://127.0.0.1:8080` on the same host.
+
+### Config Still Contains Placeholders
+
+Edit the Docker config:
+
+```bash
+nano config/config.json
+docker compose restart
+docker compose exec ems python3 emsctl.py diagnose
+```
+
+Template placeholders force safe mode until replaced. Safe mode disables EMS
+control, enables dry-run, and blocks hardware writes.
+
+### Docker Permission Denied
+
+If Docker reports permission denied for the daemon socket, run the command with
+`sudo` or complete the optional Docker post-install group setup in
+[install-docker.md](install-docker.md). Open a new login session after changing
+group membership.
+
+### Grid Meter Not Reachable
+
+Check `grid_meter.type`, `grid_meter.ip`, local network routing, and firewall
+rules. Then run:
+
+```bash
+docker compose exec ems python3 emsctl.py diagnose --hardware
+```
+
+### Zendure Device Not Reachable
+
+Check each device `ip` and `sn` in `config/config.json`, verify the device is
+on the same reachable network, and run:
+
+```bash
+docker compose exec ems python3 emsctl.py diagnose --hardware
+```
+
+### Analytics Or InfluxDB Not Reachable
+
+InfluxDB is optional. The dashboard keeps using local SQLite history when
+InfluxDB is disabled. For analytics setup and repair, see
+[influxdb.md](influxdb.md).
+
 ## Backup / Restore Problems
 
 See [Backup / Restore](cli.md#backup--restore) for the full workflow. Common
 issues:
+
+Docker backups are stored on the host under `data/backups/`.
 
 - **"InfluxDB analytics is disabled. Nothing to back up."** — `backup create
   --type influxdb` only applies when `influxdb.enabled` is true. Enable bundled
@@ -232,7 +395,7 @@ passwords, serial numbers, dashboard auth files, or database contents.
 
 Helpful links:
 
-- [README troubleshooting section](../README.md#troubleshooting--diagnostics)
+- [Getting help](../README.md#getting-help)
 - [CLI documentation](cli.md)
 
 ## Optional Local Validation
@@ -848,7 +1011,8 @@ write_runtime_device_state
 
 Set `allow_state_reconciliation_writes=false` while validating normal output
 control only if you deliberately want a conservative troubleshooting variant.
-The template default keeps it enabled for the full regulation profile.
+The normal template profile keeps it enabled for the full regulation profile
+after required placeholders are replaced and local limits are reviewed.
 
 Related docs: [configuration.md](configuration.md), [winter-mode.md](winter-mode.md),
 [safety.md](safety.md).

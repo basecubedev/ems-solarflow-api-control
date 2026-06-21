@@ -7,6 +7,7 @@ import re
 import sys
 import stat
 from datetime import datetime
+from urllib.parse import urlparse
 
 LATEST_CONFIG_SCHEMA_VERSION = 3
 CURRENT_CONFIG_SCHEMA_VERSION = LATEST_CONFIG_SCHEMA_VERSION
@@ -88,6 +89,15 @@ BATTERY_FULL_CHARGE_ASSIST_DEFAULTS = {
     "state_database_path": "data/ems_state.sqlite"
 }
 
+CONFIG_UPGRADE_DEFAULTS = {
+    "on_startup": "check",
+    "backup_before_apply": True,
+    "backup_failure_policy": "continue_without_upgrade",
+}
+
+CONFIG_UPGRADE_STARTUP_MODES = ("disabled", "check", "apply")
+CONFIG_UPGRADE_BACKUP_FAILURE_POLICIES = ("continue_without_upgrade",)
+
 INFLUXDB_DEFAULTS = {
     "enabled": False,
     # "bundled" = the bundled docker-compose InfluxDB managed by the setup
@@ -154,6 +164,234 @@ class ConfigUpgradeError(Exception):
 MISSING = object()
 
 
+class _JsonLayoutParser:
+    def __init__(self, text):
+        self.text = text
+        self.pos = 0
+        self.objects = {}
+        self.list_item_objects = {}
+
+    def parse(self):
+        self._parse_value(())
+        return {
+            "objects": self.objects,
+            "list_item_objects": self.list_item_objects,
+        }
+
+    def _skip_ws(self):
+        start = self.pos
+        while self.pos < len(self.text) and self.text[self.pos] in " \t\r\n":
+            self.pos += 1
+        return self.text[start:self.pos]
+
+    @staticmethod
+    def _blank_lines_in(ws):
+        return max(0, ws.count("\n") - 1)
+
+    def _parse_string(self):
+        start = self.pos
+        self.pos += 1
+        escaped = False
+        while self.pos < len(self.text):
+            char = self.text[self.pos]
+            self.pos += 1
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                break
+        return json.loads(self.text[start:self.pos])
+
+    def _parse_primitive(self):
+        while self.pos < len(self.text) and self.text[self.pos] not in ",]} \t\r\n":
+            self.pos += 1
+
+    def _parse_value(self, path):
+        self._skip_ws()
+        if self.pos >= len(self.text):
+            return
+        char = self.text[self.pos]
+        if char == "{":
+            self._parse_object(path)
+        elif char == "[":
+            self._parse_array(path)
+        elif char == '"':
+            self._parse_string()
+        else:
+            self._parse_primitive()
+
+    def _parse_object(self, path):
+        start = self.pos
+        self.pos += 1
+        keys = []
+        blank_lines_before = {}
+        ws = self._skip_ws()
+        if self.pos < len(self.text) and self.text[self.pos] == "}":
+            self.pos += 1
+            self.objects[path] = {
+                "keys": keys,
+                "blank_lines_before": blank_lines_before,
+                "inline": "\n" not in self.text[start:self.pos],
+            }
+            return
+
+        while self.pos < len(self.text):
+            before = self._blank_lines_in(ws)
+            key = self._parse_string()
+            keys.append(key)
+            blank_lines_before[key] = before
+            self._skip_ws()
+            if self.pos < len(self.text) and self.text[self.pos] == ":":
+                self.pos += 1
+            self._parse_value(path + (key,))
+            ws = self._skip_ws()
+            if self.pos < len(self.text) and self.text[self.pos] == ",":
+                self.pos += 1
+                ws = self._skip_ws()
+                continue
+            if self.pos < len(self.text) and self.text[self.pos] == "}":
+                self.pos += 1
+                break
+
+        layout = {
+            "keys": keys,
+            "blank_lines_before": blank_lines_before,
+            "inline": "\n" not in self.text[start:self.pos],
+        }
+        self.objects[path] = layout
+        if path and isinstance(path[-1], int):
+            self.list_item_objects.setdefault(path[:-1], layout)
+
+    def _parse_array(self, path):
+        self.pos += 1
+        index = 0
+        self._skip_ws()
+        if self.pos < len(self.text) and self.text[self.pos] == "]":
+            self.pos += 1
+            return
+        while self.pos < len(self.text):
+            self._parse_value(path + (index,))
+            index += 1
+            self._skip_ws()
+            if self.pos < len(self.text) and self.text[self.pos] == ",":
+                self.pos += 1
+                self._skip_ws()
+                continue
+            if self.pos < len(self.text) and self.text[self.pos] == "]":
+                self.pos += 1
+                break
+
+
+def _extract_template_layout(text):
+    return _JsonLayoutParser(text).parse()
+
+
+def _is_json_scalar(value):
+    return value is None or isinstance(value, (str, int, float, bool))
+
+
+def _layout_for_path(layout, path):
+    if not layout:
+        return None
+    if path and isinstance(path[-1], int):
+        list_item = layout.get("list_item_objects", {}).get(path[:-1])
+        if list_item is not None:
+            return list_item
+    exact = layout.get("objects", {}).get(path)
+    if exact is not None:
+        return exact
+    return None
+
+
+def _ordered_object_items(value, object_layout):
+    if not object_layout:
+        return list(value.items())
+
+    known = [
+        (key, value[key])
+        for key in object_layout["keys"]
+        if key in value
+    ]
+    unknown = [
+        (key, item)
+        for key, item in value.items()
+        if key not in object_layout["keys"]
+    ]
+    return known + unknown
+
+
+def _render_inline_object(value, object_layout):
+    items = _ordered_object_items(value, object_layout)
+    if not all(_is_json_scalar(item) for _, item in items):
+        return None
+    body = ", ".join(
+        f"{json.dumps(key)}: {json.dumps(item)}"
+        for key, item in items
+    )
+    return "{ " + body + " }"
+
+
+def _render_json_value(value, path, indent, layout):
+    prefix = " " * indent
+    if isinstance(value, dict):
+        object_layout = _layout_for_path(layout, path)
+        if object_layout and object_layout.get("inline"):
+            inline = _render_inline_object(value, object_layout)
+            if inline is not None:
+                return [prefix + inline]
+        if not value:
+            return [prefix + "{}"]
+
+        lines = [prefix + "{"]
+        previous_item = False
+        known_keys = set(object_layout["keys"]) if object_layout else set()
+        for key, item in _ordered_object_items(value, object_layout):
+            if previous_item:
+                lines[-1] += ","
+            if previous_item and object_layout and key in known_keys:
+                for _ in range(object_layout["blank_lines_before"].get(key, 0)):
+                    lines.append("")
+            elif previous_item and object_layout and key not in known_keys:
+                lines.append("")
+
+            child = _render_json_value(item, path + (key,), indent + 2, layout)
+            key_prefix = " " * (indent + 2) + f"{json.dumps(key)}: "
+            lines.append(key_prefix + child[0].strip())
+            lines.extend(child[1:])
+            previous_item = True
+        lines.append(prefix + "}")
+        return lines
+
+    if isinstance(value, list):
+        if not value:
+            return [prefix + "[]"]
+        if all(_is_json_scalar(item) for item in value):
+            inline = "[" + ", ".join(json.dumps(item) for item in value) + "]"
+            if len(prefix) + len(inline) <= 100:
+                return [prefix + inline]
+
+        lines = [prefix + "["]
+        previous_item = False
+        for index, item in enumerate(value):
+            if previous_item:
+                lines[-1] += ","
+            lines.extend(
+                _render_json_value(item, path + (index,), indent + 2, layout)
+            )
+            previous_item = True
+        lines.append(prefix + "]")
+        return lines
+
+    return [prefix + json.dumps(value)]
+
+
+def render_config_json(data, layout=None):
+    if layout is None:
+        return json.dumps(data, indent=2) + "\n"
+    return "\n".join(_render_json_value(data, (), 0, layout)) + "\n"
+
+
 def default_safe_config():
     """Return a minimal safe config for simulation and replay."""
 
@@ -196,6 +434,7 @@ def default_safe_config():
         "battery_full_charge_assist": copy.deepcopy(
             BATTERY_FULL_CHARGE_ASSIST_DEFAULTS
         ),
+        "config_upgrade": copy.deepcopy(CONFIG_UPGRADE_DEFAULTS),
         "influxdb": copy.deepcopy(INFLUXDB_DEFAULTS),
         "devices": [],
         "grid_meter": {
@@ -260,9 +499,11 @@ def _load_template_upgrade_data(base_dir=None):
     base_dir = base_dir or BASE_DIR or os.getcwd()
     path = os.path.join(base_dir, "config.template.json")
     with open(path) as f:
-        template = json.load(f)
+        raw_template = f.read()
+    template = json.loads(raw_template)
     if not isinstance(template, dict):
         raise ValueError("config.template.json must contain a JSON object")
+    layout = _extract_template_layout(raw_template)
 
     sample_devices = template.get("devices", [])
     device_defaults = {}
@@ -277,11 +518,11 @@ def _load_template_upgrade_data(base_dir=None):
     view["config_schema_version"] = LATEST_CONFIG_SCHEMA_VERSION
     view["devices"] = []
     view.pop("shelly", None)
-    return view, path, device_defaults
+    return view, path, device_defaults, layout
 
 
 def load_template_upgrade_view(base_dir=None):
-    view, path, _ = _load_template_upgrade_data(base_dir)
+    view, path, _, _ = _load_template_upgrade_data(base_dir)
     return view, path
 
 
@@ -451,6 +692,115 @@ CONFIG_MIGRATIONS = {
     (2, 3): ("enable template-sync-only schema marker", migrate_config_2_to_3),
 }
 
+TEMPLATE_PLACEHOLDER_VALUES = {
+    "192.168.1.100",
+    "192.168.1.101",
+    "192.168.1.50",
+    "0.0.0.0",
+    "example.com",
+    "localhost",
+    "your_sn",
+    "your_token_here",
+}
+
+
+def is_template_placeholder_value(value):
+    if value is None:
+        return False
+    text = str(value).strip()
+    if not text:
+        return False
+
+    lowered = text.lower()
+    if lowered in TEMPLATE_PLACEHOLDER_VALUES:
+        return True
+    if lowered.startswith("your_") or lowered.startswith("your-"):
+        return True
+    if "example.com" in lowered:
+        return True
+
+    parsed = urlparse(text if "://" in text else f"//{text}")
+    host = (parsed.hostname or "").lower()
+    return host in TEMPLATE_PLACEHOLDER_VALUES
+
+
+def _missing_or_placeholder(value):
+    return (
+        value is None
+        or str(value).strip() == ""
+        or is_template_placeholder_value(value)
+    )
+
+
+def template_placeholder_paths(config):
+    """Return required setup fields that still contain template-like values."""
+
+    if not isinstance(config, dict):
+        return []
+
+    paths = []
+    devices = config.get("devices")
+    configured_devices = []
+    if isinstance(devices, list):
+        configured_devices = [
+            device for device in devices
+            if isinstance(device, dict)
+        ]
+        for index, device in enumerate(configured_devices):
+            if _missing_or_placeholder(device.get("ip")):
+                paths.append(f"devices[{index}].ip")
+            if _missing_or_placeholder(device.get("sn")):
+                paths.append(f"devices[{index}].sn")
+
+    grid_meter = config.get("grid_meter")
+    if isinstance(grid_meter, dict) and configured_devices:
+        meter_type = str(grid_meter.get("type") or "shelly").strip().lower()
+        if meter_type == "tasmota_http":
+            endpoint = grid_meter.get("url") or grid_meter.get("ip")
+            if _missing_or_placeholder(endpoint):
+                paths.append("grid_meter.url")
+            if _missing_or_placeholder(grid_meter.get("power_path")):
+                paths.append("grid_meter.power_path")
+        elif meter_type != "ha" and _missing_or_placeholder(grid_meter.get("ip")):
+            paths.append("grid_meter.ip")
+
+    ha_config = config.get("ha")
+    if isinstance(ha_config, dict) and safe_bool(ha_config.get("enabled"), False):
+        if _missing_or_placeholder(ha_config.get("url")):
+            paths.append("ha.url")
+        if _missing_or_placeholder(ha_config.get("token")):
+            paths.append("ha.token")
+
+    return paths
+
+
+def apply_template_placeholder_safety(config, *, emit_message=None):
+    """Force no-write runtime mode while required setup fields are placeholders."""
+
+    paths = template_placeholder_paths(config)
+    if not paths:
+        return config
+
+    protected = copy.deepcopy(config)
+    system = protected.setdefault("system", {})
+    system["enabled"] = False
+    system["dry_run"] = True
+    system["allow_hardware_writes"] = False
+    system["allow_state_reconciliation_writes"] = False
+
+    if emit_message:
+        shown = ", ".join(paths[:6])
+        if len(paths) > 6:
+            shown += f", ... ({len(paths)} total)"
+        emit_message(
+            logging.WARNING,
+            "Config still contains template placeholder values; "
+            "forcing EMS control disabled, dry_run=true and hardware writes "
+            f"disabled until configured fields are replaced: {shown}",
+        )
+
+    return protected
+
 
 def run_config_schema_migrations(
     user_config,
@@ -521,7 +871,9 @@ def build_config_upgrade_plan(
         raise ValueError("config.json must contain a JSON object")
 
     latest_schema = latest_schema or LATEST_CONFIG_SCHEMA_VERSION
-    template, template_path, device_defaults = _load_template_upgrade_data(base_dir)
+    template, template_path, device_defaults, layout = _load_template_upgrade_data(
+        base_dir
+    )
     template["config_schema_version"] = latest_schema
     migrated_config, schema_steps = run_config_schema_migrations(
         user_config,
@@ -560,6 +912,7 @@ def build_config_upgrade_plan(
 
     return {
         "template_path": template_path,
+        "template_layout": layout,
         "upgraded_config": upgraded,
         "add": added,
         "comment_add": comments,
@@ -573,7 +926,7 @@ def build_config_upgrade_plan(
     }
 
 
-def write_config_json_atomic(path, data):
+def write_config_json_atomic(path, data, *, layout=None):
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, exist_ok=True)
@@ -591,8 +944,7 @@ def write_config_json_atomic(path, data):
     fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
     try:
         with os.fdopen(fd, "w") as f:
-            json.dump(data, f, indent=2)
-            f.write("\n")
+            f.write(render_config_json(data, layout))
             f.flush()
             os.fsync(f.fileno())
         os.chmod(tmp_path, mode)
@@ -608,6 +960,151 @@ def write_config_json_atomic(path, data):
         except FileNotFoundError:
             pass
         raise
+
+
+def normalize_config_upgrade_config(config, *, emit_warning=None):
+    if not isinstance(config, dict):
+        config = {}
+
+    merged = {
+        **CONFIG_UPGRADE_DEFAULTS,
+        **config,
+    }
+
+    mode = str(merged.get("on_startup", "")).strip().lower()
+    if mode not in CONFIG_UPGRADE_STARTUP_MODES:
+        if emit_warning:
+            emit_warning(
+                "Invalid config_upgrade.on_startup "
+                f"{merged.get('on_startup')!r}; using 'check'."
+            )
+        mode = CONFIG_UPGRADE_DEFAULTS["on_startup"]
+
+    backup_failure_policy = str(
+        merged.get("backup_failure_policy", "")
+    ).strip().lower()
+    if backup_failure_policy not in CONFIG_UPGRADE_BACKUP_FAILURE_POLICIES:
+        if emit_warning:
+            emit_warning(
+                "Invalid config_upgrade.backup_failure_policy "
+                f"{merged.get('backup_failure_policy')!r}; using "
+                "'continue_without_upgrade'."
+            )
+        backup_failure_policy = CONFIG_UPGRADE_DEFAULTS[
+            "backup_failure_policy"
+        ]
+
+    return {
+        "on_startup": mode,
+        "backup_before_apply": safe_bool(
+            merged.get("backup_before_apply"),
+            CONFIG_UPGRADE_DEFAULTS["backup_before_apply"],
+        ),
+        "backup_failure_policy": backup_failure_policy,
+    }
+
+
+def _emit_startup_config_message(level, message):
+    if logging.getLogger().handlers:
+        logging.log(level, message)
+    else:
+        print(message, file=sys.stderr)
+
+
+def _read_raw_config(path):
+    with open(path) as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError("config.json must contain a JSON object")
+    return data
+
+
+def _startup_config_upgrade_summary(plan):
+    return len(plan.get("add", [])) + len(plan.get("comment_add", [])) + len(
+        plan.get("migrate", [])
+    )
+
+
+def _create_startup_config_backup(raw_config, path, base_dir):
+    from ems import backup as backup_mod
+
+    runtime_config = apply_runtime_config_defaults(raw_config)
+    return backup_mod.create_config_backup(
+        runtime_config,
+        base_dir=base_dir,
+        config_path=path,
+        backup_purpose="auto",
+    )
+
+
+def perform_startup_config_upgrade(
+    raw_config,
+    path,
+    base_dir=None,
+    *,
+    backup_factory=None,
+    emit_message=None,
+):
+    base_dir = base_dir or BASE_DIR or os.getcwd()
+    emit_message = emit_message or _emit_startup_config_message
+
+    def warn(message):
+        emit_message(logging.WARNING, message)
+
+    upgrade_config = normalize_config_upgrade_config(
+        raw_config.get("config_upgrade", {}),
+        emit_warning=warn,
+    )
+    mode = upgrade_config["on_startup"]
+    if mode == "disabled":
+        return raw_config
+
+    try:
+        plan = build_config_upgrade_plan(raw_config, base_dir)
+    except (ConfigUpgradeError, OSError, ValueError) as exc:
+        emit_message(
+            logging.WARNING,
+            f"Config startup upgrade check skipped: {exc}",
+        )
+        return raw_config
+
+    if not plan["changed"]:
+        return raw_config
+
+    missing_count = _startup_config_upgrade_summary(plan)
+    if mode == "check":
+        emit_message(
+            logging.INFO,
+            "Config upgrade available: "
+            f"{missing_count} missing keys from config.template.json.\n"
+            "Run: python3 emsctl.py config upgrade --dry-run",
+        )
+        return raw_config
+
+    if upgrade_config["backup_before_apply"]:
+        create_backup = backup_factory or _create_startup_config_backup
+        try:
+            backup_path = create_backup(raw_config, path, base_dir)
+        except Exception as exc:
+            emit_message(
+                logging.WARNING,
+                "Config auto-upgrade skipped because backup failed. "
+                f"Starting with existing config. Error: {exc}",
+            )
+            return raw_config
+        emit_message(logging.INFO, f"Config auto-upgrade backup created: {backup_path}")
+
+    write_config_json_atomic(
+        path,
+        plan["upgraded_config"],
+        layout=plan.get("template_layout"),
+    )
+    emit_message(
+        logging.INFO,
+        "Config auto-upgrade applied; reloading config.json before startup.",
+    )
+    return _read_raw_config(path)
+
 
 ARGS = None
 BASE_DIR = None
@@ -666,14 +1163,20 @@ def load_config(args=None, base_dir=None):
     path = args.config or os.path.join(base_dir, "config.json")
 
     try:
-        with open(path) as f:
-            return apply_runtime_config_defaults(json.load(f))
+        raw_config = _read_raw_config(path)
     except FileNotFoundError:
         if args.simulate or args.replay or args.self_test:
             return default_safe_config()
 
         print("config.json missing. Please create it from template.")
         sys.exit(1)
+
+    raw_config = perform_startup_config_upgrade(raw_config, path, base_dir)
+    runtime_config = apply_runtime_config_defaults(raw_config)
+    return apply_template_placeholder_safety(
+        runtime_config,
+        emit_message=_emit_startup_config_message,
+    )
 
 
 def initialize(args, base_dir):

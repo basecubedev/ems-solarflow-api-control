@@ -1,7 +1,7 @@
 services:
   ems:
     # latest tracks main and is rebuilt weekly.
-    # For stable deployments, pin a release tag such as v0.5.6.
+    # For stable deployments, pin a release tag such as v0.6.0.
     image: ghcr.io/basecubedev/ems-solarflow-api-control:latest
     container_name: ems-solarflow-api-control
     restart: unless-stopped

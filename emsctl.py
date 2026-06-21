@@ -46,6 +46,8 @@ from ems.diagnostics import (
 
 from ems import backup as backup_mod
 from ems import config as config_mod
+from ems import config_init as config_init_mod
+from ems.cli_privilege import maybe_drop_privileges
 
 DEFAULT_CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 DOCKER_CONFIG_PATH = os.path.join(BASE_DIR, "config", "config.json")
@@ -651,14 +653,16 @@ Examples:
 
     config_cmd = subparsers.add_parser(
         "config",
-        help="Inspect or upgrade config.json.",
+        help="Inspect, initialize, or upgrade config.json.",
         description=(
-            "Inspect or upgrade config.json. The upgrade command fills missing "
-            "persisted keys from config.template.json; normal EMS startup only "
-            "uses conservative in-memory fallbacks."
+            "Inspect, initialize, or upgrade config.json. The init command "
+            "guides first setup; upgrade fills missing persisted keys from "
+            "config.template.json."
         ),
         epilog="""\
 Examples:
+  python3 emsctl.py config init
+  python3 emsctl.py config init --dry-run
   python3 emsctl.py config upgrade --dry-run
   python3 emsctl.py config upgrade
   python3 emsctl.py config upgrade --yes --backup
@@ -669,6 +673,40 @@ Examples:
     config_subparsers = config_cmd.add_subparsers(
         dest="config_command",
         required=True,
+    )
+    config_init = config_subparsers.add_parser(
+        "init",
+        help="Run the guided first setup assistant.",
+        description=(
+            "Run a local guided setup assistant for beginner-relevant "
+            "config.json values. Existing edited configs preserve unknown "
+            "keys and unrelated values."
+        ),
+        formatter_class=EMSHelpFormatter,
+    )
+    config_init.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show the generated config preview without writing config.json.",
+    )
+    config_init.add_argument(
+        "--yes",
+        action="store_true",
+        help="Run without prompts, accepting existing values and defaults.",
+    )
+    init_backup_policy = config_init.add_mutually_exclusive_group()
+    init_backup_policy.add_argument(
+        "--backup",
+        dest="backup",
+        action="store_true",
+        default=None,
+        help="Create a normal config backup before writing.",
+    )
+    init_backup_policy.add_argument(
+        "--no-backup",
+        dest="backup",
+        action="store_false",
+        help="Write without creating a backup.",
     )
     config_upgrade = config_subparsers.add_parser(
         "upgrade",
@@ -725,6 +763,7 @@ Examples:
   python3 emsctl.py backup create
   python3 emsctl.py backup create --type databases
   python3 emsctl.py backup create --type influxdb
+  python3 emsctl.py backup create --output-dir ./my-backups
   python3 emsctl.py backup create --compression-level 3
   python3 emsctl.py backup inspect ./backup/ems-config-manual-2026-06-18-221500.tar.gz
   python3 emsctl.py backup restore ./backup/ems-config-manual-2026-06-18-221500.tar.gz
@@ -770,6 +809,11 @@ Examples:
         type=int,
         default=backup_mod.DEFAULT_COMPRESSION_LEVEL,
         help="gzip compression level 0-9 (default: 3). Used with 'create'.",
+    )
+    backup.add_argument(
+        "--output-dir",
+        default=None,
+        help="create: directory for the created backup archive.",
     )
     backup.add_argument(
         "--password",
@@ -899,6 +943,10 @@ def resolve_config_path(args):
     env_path = os.environ.get("EMS_CONFIG_FILE")
     if env_path:
         return env_path
+
+    in_container = str(os.environ.get("EMS_IN_CONTAINER", "")).strip().lower()
+    if in_container in ("1", "true", "yes") and os.path.exists(DOCKER_CONFIG_PATH):
+        return DOCKER_CONFIG_PATH
 
     if os.path.exists(DEFAULT_CONFIG_PATH):
         return DEFAULT_CONFIG_PATH
@@ -2594,6 +2642,7 @@ def handle_backup_create(args, config):
     path = backup_mod.create_config_backup(
         config,
         backup_purpose="manual",
+        backup_dir=getattr(args, "output_dir", None),
         password=password,
         encryption_options=options["encryption_options"],
         compression_level=options["compression_level"],
@@ -2657,6 +2706,7 @@ def handle_backup_create_database(args, config):
     path = backup_mod.create_database_backup(
         config,
         base_dir=BASE_DIR,
+        backup_dir=getattr(args, "output_dir", None),
         backup_purpose="manual",
         password=password,
         encryption_options=options["encryption_options"],
@@ -2819,6 +2869,7 @@ def handle_backup_create_influxdb(args, config):
         path = backup_mod.create_influxdb_backup(
             config,
             base_dir=BASE_DIR,
+            backup_dir=getattr(args, "output_dir", None),
             backup_purpose="manual",
             password=password,
             encryption_options=options["encryption_options"],
@@ -3353,6 +3404,10 @@ def print_config_upgrade_plan(plan):
         print(f"Add explanatory comments: {len(plan['comment_add'])}")
         print()
 
+    if plan.get("format_changed"):
+        print("Reformat according to config.template.json layout.")
+        print()
+
     print("No existing user values will be overwritten.")
     print("Missing keys will be added from config.template.json.")
     print("Review live-write settings before restarting EMS.")
@@ -3416,7 +3471,84 @@ def create_upgrade_backup(args, config):
     return path, "ok"
 
 
+def resolve_config_init_backup_policy(args, plan):
+    if args.dry_run:
+        return False, "ok"
+
+    needs_policy = plan["kind"] == "edited"
+    if args.yes:
+        if needs_policy and args.backup is None:
+            return None, "non-interactive config init requires --backup or --no-backup for edited configs"
+        return bool(args.backup), "ok"
+
+    if needs_policy:
+        do_backup = config_init_mod.ask_confirm(
+            "Create backup before writing?",
+            True,
+        )
+        return do_backup, "ok"
+
+    return bool(args.backup), "ok"
+
+
+def handle_config_init_command(args, config):
+    config_exists = os.path.exists(args.config)
+    if args.yes and not args.dry_run and config_exists:
+        kind = config_init_mod.classify_config(config, config_exists, BASE_DIR)
+        if kind == "edited" and args.backup is None:
+            return fail(
+                "non-interactive config init requires --backup or --no-backup for edited configs",
+                code=2,
+            )
+    try:
+        updated, plan = config_init_mod.run_config_init(
+            config=config,
+            config_exists=config_exists,
+            config_path=args.config,
+            base_dir=BASE_DIR,
+            dry_run=args.dry_run,
+            yes=args.yes,
+        )
+    except config_mod.ConfigUpgradeError as exc:
+        return fail(str(exc), code=2)
+    except config_init_mod.ConfigInitError as exc:
+        return fail(str(exc), code=2)
+
+    if args.dry_run or updated is None:
+        return 0
+
+    do_backup, status = resolve_config_init_backup_policy(args, plan)
+    if status != "ok":
+        return fail(status, code=2)
+
+    if do_backup and config_exists:
+        try:
+            backup_path, backup_status = create_upgrade_backup(args, config)
+        except backup_mod.BackupError as exc:
+            return fail(f"backup failed; config.json not changed: {exc}")
+        if backup_status == "abort":
+            print("Aborted.")
+            return 0
+        if backup_status != "ok":
+            return fail(f"backup failed; config.json not changed: {backup_status}")
+        print(f"Backup created:\n  {backup_path}")
+    elif plan["kind"] == "edited":
+        print("Continuing without backup. Existing config.json will be modified.")
+
+    config_mod.write_config_json_atomic(
+        args.config,
+        updated,
+        layout=plan.get("layout"),
+    )
+    print("Config updated.")
+    config_init_mod.print_next_steps()
+    return 0
+
+
 def handle_config_command(args, config):
+    if args.config_command == "init":
+        return handle_config_init_command(args, config)
+
     if args.config_command != "upgrade":
         return fail(f"unknown config command {args.config_command}", code=2)
 
@@ -3424,6 +3556,17 @@ def handle_config_command(args, config):
         plan = config_mod.build_config_upgrade_plan(config, BASE_DIR)
     except config_mod.ConfigUpgradeError as exc:
         return fail(str(exc), code=2)
+    rendered_config = config_mod.render_config_json(
+        plan["upgraded_config"],
+        plan.get("template_layout"),
+    )
+    try:
+        current_config_text = open(args.config).read()
+    except OSError:
+        current_config_text = None
+    if current_config_text is not None and current_config_text != rendered_config:
+        plan["changed"] = True
+        plan["format_changed"] = True
     print_config_upgrade_plan(plan)
     if args.dry_run or not plan["changed"]:
         return 0
@@ -3449,12 +3592,18 @@ def handle_config_command(args, config):
     else:
         print("Continuing without backup. Existing config.json will be modified.")
 
-    config_mod.write_config_json_atomic(args.config, plan["upgraded_config"])
+    config_mod.write_config_json_atomic(
+        args.config,
+        plan["upgraded_config"],
+        layout=plan.get("template_layout"),
+    )
     print(f"Updated {args.config}")
     return 0
 
 
 def main(argv=None):
+    maybe_drop_privileges()
+
     argv = sys.argv[1:] if argv is None else argv
     if not argv:
         print_quick_help()

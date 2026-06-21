@@ -82,13 +82,16 @@ def test_lowering_system_power_does_not_lower_later_edit_ceiling(tmp_path):
         },
     )
     runtime_state.load_or_create()
-    context = build_validation_context(runtime_state=runtime_state)
+    context = build_validation_context(
+        {"system": {"max_total_power": 1600, "max_total_power_limit": 1600}},
+        runtime_state,
+    )
 
     apply_system_update(runtime_state, {"max_total_power": 800}, context)
     apply_system_update(runtime_state, {"max_total_power": 1600}, context)
 
     assert runtime_state.snapshot()["system"]["max_total_power"] == 1600
-    assert effective_limits(context)["system"]["max_total_power"] == 5000
+    assert effective_limits(context)["system"]["max_total_power"] == 1600
 
 
 def test_lowering_system_power_does_not_lower_min_output_limit_ceiling(tmp_path):
@@ -107,7 +110,10 @@ def test_lowering_system_power_does_not_lower_min_output_limit_ceiling(tmp_path)
         },
     )
     runtime_state.load_or_create()
-    context = build_validation_context(runtime_state=runtime_state)
+    context = build_validation_context(
+        {"system": {"max_total_power": 1600, "max_total_power_limit": 1600}},
+        runtime_state,
+    )
 
     apply_system_update(runtime_state, {"max_total_power": 800}, context)
     apply_system_update(runtime_state, {"min_output_limit": 1600}, context)
@@ -115,7 +121,7 @@ def test_lowering_system_power_does_not_lower_min_output_limit_ceiling(tmp_path)
     snapshot = runtime_state.snapshot()
     assert snapshot["system"]["max_total_power"] == 800
     assert snapshot["system"]["min_output_limit"] == 1600
-    assert effective_limits(context)["system"]["min_output_limit"] == 5000
+    assert effective_limits(context)["system"]["min_output_limit"] == 1600
 
 
 def test_lowering_device_power_does_not_lower_device_ceiling(tmp_path):
@@ -207,6 +213,64 @@ def test_runtime_numeric_limits_reject_invalid_high_and_low_values(tmp_path):
     for payload, message in invalid_device_updates:
         with pytest.raises(RuntimeWriteError, match=message):
             apply_device_update(runtime_state, "WR1", payload, context)
+
+
+def test_runtime_write_limit_fallback_uses_configured_system_max(tmp_path):
+    runtime_state = RuntimeState(
+        str(tmp_path / "runtime-state.json"),
+        {
+            "system": {
+                "enabled": True,
+                "max_total_power": 800,
+                "loop_interval": 5,
+                "min_output_limit": 35,
+            },
+            "ha": {"enabled": False, "control_enabled": False},
+            "winter": {"enabled": False},
+            "devices": {},
+        },
+    )
+    runtime_state.load_or_create()
+    context = build_validation_context(
+        {"system": {"max_total_power": 800}},
+        runtime_state,
+    )
+    limits = effective_limits(context)
+
+    with pytest.raises(RuntimeWriteError, match="max_total_power must be between 0 and 800"):
+        apply_system_update(runtime_state, {"max_total_power": 801}, context)
+    apply_system_update(runtime_state, {"max_total_power": 800}, context)
+
+    assert runtime_state.snapshot()["system"]["max_total_power"] == 800
+    assert limits["system"]["max_total_power"] == 800
+    assert limits["system"]["min_output_limit"] == 800
+
+
+def test_explicit_runtime_hard_limit_can_exceed_configured_system_max(tmp_path):
+    runtime_state = RuntimeState(
+        str(tmp_path / "runtime-state.json"),
+        {
+            "system": {
+                "enabled": True,
+                "max_total_power": 800,
+                "loop_interval": 5,
+                "min_output_limit": 35,
+            },
+            "ha": {"enabled": False, "control_enabled": False},
+            "winter": {"enabled": False},
+            "devices": {},
+        },
+    )
+    runtime_state.load_or_create()
+    context = build_validation_context(
+        {"system": {"max_total_power": 800, "max_total_power_limit": 1200}},
+        runtime_state,
+    )
+
+    apply_system_update(runtime_state, {"max_total_power": 1200}, context)
+
+    assert runtime_state.snapshot()["system"]["max_total_power"] == 1200
+    assert effective_limits(context)["system"]["max_total_power"] == 1200
 
 
 def test_runtime_write_limit_fallback_is_conservative():
