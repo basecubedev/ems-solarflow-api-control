@@ -238,9 +238,9 @@ def test_influxdb_rollback_backup_metadata(tmp_path):
         config,
         "ems-influxdb-manual-2026-06-18-221500.tar.gz",
         base_dir=str(tmp_path),
-        backup_dir=str(tmp_path / "backup"),
         backup_runner=fake_backup_runner(),
     )
+    assert path.startswith(str(tmp_path / "data" / "backups"))
     assert "ems-influxdb-rollback-" in os.path.basename(path)
     manifest = backup.inspect_backup(path)["manifest"]
     assert manifest["backup_purpose"] == "rollback"

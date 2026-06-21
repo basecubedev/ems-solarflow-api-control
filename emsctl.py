@@ -202,7 +202,7 @@ Backup / restore (config may contain secrets; database/InfluxDB hold history):
   python3 emsctl.py backup
   python3 emsctl.py backup create
   python3 emsctl.py backup create --type databases
-  python3 emsctl.py backup restore ./backup/ems-config-manual-....tar.gz
+  python3 emsctl.py backup restore data/backups/ems-config-manual-....tar.gz
 
 More help:
   python3 emsctl.py --help
@@ -273,11 +273,11 @@ Backup / restore (config may contain secrets; database/InfluxDB hold history):
   python3 emsctl.py backup create
   python3 emsctl.py backup create --type databases
   python3 emsctl.py backup create --compression-level 3
-  python3 emsctl.py backup inspect ./backup/ems-config-manual-....tar.gz
-  python3 emsctl.py backup restore ./backup/ems-config-manual-....tar.gz
-  python3 emsctl.py backup restore ./backup/ems-databases-manual-....tar.gz
-  python3 emsctl.py backup restore ./backup/...tar.gz --on-conflict keep --no-rollback
-  python3 emsctl.py backup diff ./backup/...tar.gz --file config.json
+  python3 emsctl.py backup inspect data/backups/ems-config-manual-....tar.gz
+  python3 emsctl.py backup restore data/backups/ems-config-manual-....tar.gz
+  python3 emsctl.py backup restore data/backups/ems-databases-manual-....tar.gz
+  python3 emsctl.py backup restore data/backups/...tar.gz --on-conflict keep --no-rollback
+  python3 emsctl.py backup diff data/backups/...tar.gz --file config.json
 
 Docker diagnostics:
   docker compose exec ems python3 emsctl.py diagnose
@@ -765,12 +765,12 @@ Examples:
   python3 emsctl.py backup create --type influxdb
   python3 emsctl.py backup create --output-dir ./my-backups
   python3 emsctl.py backup create --compression-level 3
-  python3 emsctl.py backup inspect ./backup/ems-config-manual-2026-06-18-221500.tar.gz
-  python3 emsctl.py backup restore ./backup/ems-config-manual-2026-06-18-221500.tar.gz
-  python3 emsctl.py backup restore ./backup/ems-databases-manual-2026-06-18-221500.tar.gz
-  python3 emsctl.py backup restore ./backup/ems-influxdb-manual-2026-06-18-221500.tar.gz
-  python3 emsctl.py backup restore ./backup/...tar.gz --on-conflict keep --no-rollback
-  python3 emsctl.py backup diff ./backup/...tar.gz --file config.json
+  python3 emsctl.py backup inspect data/backups/ems-config-manual-2026-06-18-221500.tar.gz
+  python3 emsctl.py backup restore data/backups/ems-config-manual-2026-06-18-221500.tar.gz
+  python3 emsctl.py backup restore data/backups/ems-databases-manual-2026-06-18-221500.tar.gz
+  python3 emsctl.py backup restore data/backups/ems-influxdb-manual-2026-06-18-221500.tar.gz
+  python3 emsctl.py backup restore data/backups/...tar.gz --on-conflict keep --no-rollback
+  python3 emsctl.py backup diff data/backups/...tar.gz --file config.json
 """,
         formatter_class=EMSHelpFormatter,
     )
@@ -3058,7 +3058,7 @@ def print_restore_done(args, config, *, backup_type="config", influx=None):
             print(
                 "Note: InfluxDB data was not part of this backup and was not "
                 "restored. Restore bundled InfluxDB data separately with "
-                "'backup restore ./backup/ems-influxdb-...tar.gz'."
+                "'backup restore data/backups/ems-influxdb-...tar.gz'."
             )
         else:
             print(

@@ -470,12 +470,17 @@ python3 emsctl.py backup create                # config backup
 python3 emsctl.py backup create --type databases
 python3 emsctl.py backup create --type influxdb
 python3 emsctl.py backup create --compression-level 3
-python3 emsctl.py backup inspect ./backup/ems-config-manual-2026-06-18-221500.tar.gz
-python3 emsctl.py backup restore ./backup/ems-config-manual-2026-06-18-221500.tar.gz
-python3 emsctl.py backup restore ./backup/ems-databases-manual-2026-06-18-221500.tar.gz
-python3 emsctl.py backup restore ./backup/ems-influxdb-manual-2026-06-18-221500.tar.gz
-python3 emsctl.py backup diff ./backup/ems-config-manual-2026-06-18-221500.tar.gz --file config.json
+python3 emsctl.py backup inspect data/backups/ems-config-manual-2026-06-18-221500.tar.gz
+python3 emsctl.py backup restore data/backups/ems-config-manual-2026-06-18-221500.tar.gz
+python3 emsctl.py backup restore data/backups/ems-databases-manual-2026-06-18-221500.tar.gz
+python3 emsctl.py backup restore data/backups/ems-influxdb-manual-2026-06-18-221500.tar.gz
+python3 emsctl.py backup diff data/backups/ems-config-manual-2026-06-18-221500.tar.gz --file config.json
 ```
+
+Backups are stored in `data/backups/` by default. Docker users see the same
+folder on the host because `data/` is mounted into the container. Older
+versions may have used `backup/`; existing archives there can still be restored
+by passing the archive path.
 
 `python3 emsctl.py backup` (no action) opens a small menu:
 
@@ -491,12 +496,12 @@ Backup / Restore
 
 ### What a config backup contains
 
-A config backup is a sortable `tar.gz` archive written to `./backup/`:
+A config backup is a sortable `tar.gz` archive written to `data/backups/`:
 
 ```text
-./backup/ems-config-manual-2026-06-18-221500.tar.gz
-./backup/ems-config-manual-2026-06-18-221500.tar.gz.enc   # password-protected
-./backup/ems-config-rollback-2026-06-18-222000.tar.gz     # auto rollback
+data/backups/ems-config-manual-2026-06-18-221500.tar.gz
+data/backups/ems-config-manual-2026-06-18-221500.tar.gz.enc   # password-protected
+data/backups/ems-config-rollback-2026-06-18-222000.tar.gz     # auto rollback
 ```
 
 Included files (when present and configured):
@@ -518,12 +523,12 @@ versions, and per-file sensitivity flags and SHA256 checksums.
 ### What a database backup contains
 
 `backup create --type databases` backs up the local SQLite databases into a
-`tar.gz` archive written to `./backup/`:
+`tar.gz` archive written to `data/backups/`:
 
 ```text
-./backup/ems-databases-manual-2026-06-18-221500.tar.gz
-./backup/ems-databases-manual-2026-06-18-221500.tar.gz.enc   # password-protected
-./backup/ems-databases-rollback-2026-06-18-222000.tar.gz     # auto rollback
+data/backups/ems-databases-manual-2026-06-18-221500.tar.gz
+data/backups/ems-databases-manual-2026-06-18-221500.tar.gz.enc   # password-protected
+data/backups/ems-databases-rollback-2026-06-18-222000.tar.gz     # auto rollback
 ```
 
 Included databases (only when present):
@@ -556,12 +561,12 @@ protect local usage history. The manifest records a `databases` list and an
 
 `backup create --type influxdb` backs up the **bundled** InfluxDB analytics data
 using the official `influx backup` CLI run inside the `ems-influxdb` container,
-then packages the output into a `tar.gz` archive written to `./backup/`:
+then packages the output into a `tar.gz` archive written to `data/backups/`:
 
 ```text
-./backup/ems-influxdb-manual-2026-06-18-221500.tar.gz
-./backup/ems-influxdb-manual-2026-06-18-221500.tar.gz.enc    # password-protected
-./backup/ems-influxdb-rollback-2026-06-18-222000.tar.gz      # auto rollback
+data/backups/ems-influxdb-manual-2026-06-18-221500.tar.gz
+data/backups/ems-influxdb-manual-2026-06-18-221500.tar.gz.enc    # password-protected
+data/backups/ems-influxdb-rollback-2026-06-18-222000.tar.gz      # auto rollback
 ```
 
 The archive contains `backup-manifest.json` plus an `influxdb/` directory with
@@ -667,9 +672,9 @@ cleanly. In non-interactive mode an encrypted restore fails with a clear message
 ### Restore
 
 ```bash
-python3 emsctl.py backup restore ./backup/ems-config-manual-2026-06-18-221500.tar.gz
-python3 emsctl.py backup restore ./backup/...tar.gz --on-conflict keep --no-rollback
-python3 emsctl.py backup restore ./backup/...tar.gz --dry-run
+python3 emsctl.py backup restore data/backups/ems-config-manual-2026-06-18-221500.tar.gz
+python3 emsctl.py backup restore data/backups/...tar.gz --on-conflict keep --no-rollback
+python3 emsctl.py backup restore data/backups/...tar.gz --dry-run
 ```
 
 Restore detects the backup type from its manifest. Config and database backups

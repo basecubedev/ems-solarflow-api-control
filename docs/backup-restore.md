@@ -4,10 +4,10 @@ This is the practical, step-by-step guide for backing up and restoring your EMS
 setup. For the full command reference (every flag and the exact archive format)
 see [Backup / Restore](cli.md#backup--restore).
 
-All commands run from the project directory. Docker backups are written to
-`data/backups/` on the host via the existing `./data:/app/data` mount, so no
-separate backup volume is needed. Native Python backups are written to
-`./backup/`.
+All commands run from the project directory. Backups are written to
+`data/backups/` by default. Docker users see the same folder on the host because
+`data/` is mounted into the container, so no separate backup volume is needed.
+Native Python users use the same project-relative folder.
 Docker commands are shown first for common workflows. For detailed restore
 examples later in this page, Docker users can run the same `emsctl.py` command
 inside the service, for example:
@@ -104,7 +104,7 @@ Notes:
 
 ## Where are backups stored?
 
-Docker:
+Default location:
 
 ```text
 data/backups/ems-config-manual-2026-06-20-120000.tar.gz
@@ -114,7 +114,8 @@ data/backups/ems-influxdb-rollback-2026-06-20-122000.tar.gz      # auto rollback
 
 Inside the container, the same files are under `/app/data/backups/`.
 
-Native Python:
+Older releases may have used `backup/`; those archives are not moved or deleted
+and can still be restored by passing the archive path:
 
 ```text
 ./backup/ems-config-manual-2026-06-20-120000.tar.gz
@@ -146,16 +147,8 @@ password to restore.
 
 List the backup folder:
 
-Docker:
-
 ```bash
 ls -lh data/backups/
-```
-
-Native Python:
-
-```bash
-ls -lh backup/
 ```
 
 Or open the interactive menu, which also lists available backups when you choose
@@ -178,26 +171,26 @@ python3 emsctl.py backup
 Print a backup's manifest (type, timestamp, included files, checksums):
 
 ```bash
-python3 emsctl.py backup inspect ./backup/ems-config-manual-2026-06-20-120000.tar.gz
+python3 emsctl.py backup inspect data/backups/ems-config-manual-2026-06-20-120000.tar.gz
 ```
 
 For an encrypted backup, the CLI detects the `.enc` file and asks for the
 password automatically. A wrong password aborts cleanly:
 
 ```bash
-python3 emsctl.py backup inspect ./backup/ems-config-manual-2026-06-20-120000.tar.gz.enc
+python3 emsctl.py backup inspect data/backups/ems-config-manual-2026-06-20-120000.tar.gz.enc
 ```
 
 You can also pass `--password` to force password mode explicitly:
 
 ```bash
-python3 emsctl.py backup inspect ./backup/ems-config-manual-2026-06-20-120000.tar.gz.enc --password
+python3 emsctl.py backup inspect data/backups/ems-config-manual-2026-06-20-120000.tar.gz.enc --password
 ```
 
 To compare a single config file in the backup against your current file:
 
 ```bash
-python3 emsctl.py backup diff ./backup/ems-config-manual-2026-06-20-120000.tar.gz --file config.json
+python3 emsctl.py backup diff data/backups/ems-config-manual-2026-06-20-120000.tar.gz --file config.json
 ```
 
 ## How to verify a backup
@@ -211,7 +204,7 @@ dry-run restore:
    file's checksum **without writing anything**:
 
 ```bash
-python3 emsctl.py backup restore ./backup/ems-config-manual-2026-06-20-120000.tar.gz --dry-run
+python3 emsctl.py backup restore data/backups/ems-config-manual-2026-06-20-120000.tar.gz --dry-run
 ```
 
 If the archive is corrupted, has a wrong password, or contains unsafe entries,
@@ -223,7 +216,7 @@ Always test first with `--dry-run`. It shows the plan and **never** changes loca
 files, creates rollback archives, or asks conflict questions:
 
 ```bash
-python3 emsctl.py backup restore ./backup/ems-config-manual-2026-06-20-120000.tar.gz --dry-run
+python3 emsctl.py backup restore data/backups/ems-config-manual-2026-06-20-120000.tar.gz --dry-run
 ```
 
 Each file is reported as `would_restore_new`, `would_replace_conflict`,
@@ -234,17 +227,17 @@ When the plan looks right, run the same command without `--dry-run`.
 
 ```bash
 # 1. Preview (no changes)
-python3 emsctl.py backup restore ./backup/ems-config-manual-2026-06-20-120000.tar.gz --dry-run
+python3 emsctl.py backup restore data/backups/ems-config-manual-2026-06-20-120000.tar.gz --dry-run
 
 # 2. Restore for real
-python3 emsctl.py backup restore ./backup/ems-config-manual-2026-06-20-120000.tar.gz
+python3 emsctl.py backup restore data/backups/ems-config-manual-2026-06-20-120000.tar.gz
 ```
 
 For an encrypted config backup, just point at the `.enc` file — the CLI asks for
 the password automatically:
 
 ```bash
-python3 emsctl.py backup restore ./backup/ems-config-manual-2026-06-20-120000.tar.gz.enc
+python3 emsctl.py backup restore data/backups/ems-config-manual-2026-06-20-120000.tar.gz.enc
 ```
 
 Because this is an encrypted backup, the CLI will ask for the password. You can
@@ -254,8 +247,8 @@ way, an encrypted backup cannot be restored without the correct password.
 ## Restore local SQLite dashboard/history data
 
 ```bash
-python3 emsctl.py backup restore ./backup/ems-databases-manual-2026-06-20-120000.tar.gz --dry-run
-python3 emsctl.py backup restore ./backup/ems-databases-manual-2026-06-20-120000.tar.gz
+python3 emsctl.py backup restore data/backups/ems-databases-manual-2026-06-20-120000.tar.gz --dry-run
+python3 emsctl.py backup restore data/backups/ems-databases-manual-2026-06-20-120000.tar.gz
 ```
 
 A database backup stores a re-serialized SQLite snapshot, so restoring over an
@@ -269,8 +262,8 @@ inside the bundled container. It replaces **all** bundled InfluxDB data (every
 bucket plus org/users/tokens). Test first, then restore:
 
 ```bash
-python3 emsctl.py backup restore ./backup/ems-influxdb-manual-2026-06-20-120000.tar.gz --dry-run
-python3 emsctl.py backup restore ./backup/ems-influxdb-manual-2026-06-20-120000.tar.gz
+python3 emsctl.py backup restore data/backups/ems-influxdb-manual-2026-06-20-120000.tar.gz --dry-run
+python3 emsctl.py backup restore data/backups/ems-influxdb-manual-2026-06-20-120000.tar.gz
 ```
 
 For an encrypted InfluxDB backup, the CLI prompts for the password
@@ -298,19 +291,19 @@ Example (preview each step first):
 
 ```bash
 # 1. Config
-python3 emsctl.py backup restore ./backup/ems-config-manual-2026-06-20-120000.tar.gz --dry-run
-python3 emsctl.py backup restore ./backup/ems-config-manual-2026-06-20-120000.tar.gz
+python3 emsctl.py backup restore data/backups/ems-config-manual-2026-06-20-120000.tar.gz --dry-run
+python3 emsctl.py backup restore data/backups/ems-config-manual-2026-06-20-120000.tar.gz
 
 # 2. Check the bundled InfluxDB secret/config are present
 #    (deploy/docker/influxdb.env exists; config.json has influxdb enabled, mode bundled)
 
 # 3. SQLite databases
-python3 emsctl.py backup restore ./backup/ems-databases-manual-2026-06-20-120000.tar.gz --dry-run
-python3 emsctl.py backup restore ./backup/ems-databases-manual-2026-06-20-120000.tar.gz
+python3 emsctl.py backup restore data/backups/ems-databases-manual-2026-06-20-120000.tar.gz --dry-run
+python3 emsctl.py backup restore data/backups/ems-databases-manual-2026-06-20-120000.tar.gz
 
 # 4. Bundled InfluxDB
-python3 emsctl.py backup restore ./backup/ems-influxdb-manual-2026-06-20-120000.tar.gz --dry-run
-python3 emsctl.py backup restore ./backup/ems-influxdb-manual-2026-06-20-120000.tar.gz
+python3 emsctl.py backup restore data/backups/ems-influxdb-manual-2026-06-20-120000.tar.gz --dry-run
+python3 emsctl.py backup restore data/backups/ems-influxdb-manual-2026-06-20-120000.tar.gz
 
 # 5. Checks (next section)
 ```

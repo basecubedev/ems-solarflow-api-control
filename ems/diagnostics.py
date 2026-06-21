@@ -2649,6 +2649,11 @@ def diagnose_runtime_paths(checks, args):
     )
 
     if in_container:
+        host_backup_path = "data/backups"
+        diagnose_add(
+            checks, "runtime_paths", "ok", "backup_host_path",
+            f"backup host path: {host_backup_path}", path=host_backup_path,
+        )
         persistent = diagnose_path_within(backup_default, "/app/data")
         diagnose_add(
             checks, "runtime_paths", "ok", "backup_persistent",

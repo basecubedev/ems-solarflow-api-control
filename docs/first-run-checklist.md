@@ -38,6 +38,8 @@ http://<host-ip>:8080
 10. Monitor the first live run.
 11. Do not enable unattended operation until behavior looks correct.
 
+Backups are stored in `data/backups/` by default.
+
 ## Native Python
 
 ```bash
@@ -46,6 +48,8 @@ python3 emsctl.py diagnose --hardware
 python3 -B ems-solarflow-api-control.py --dry-run --no-ha --once
 python3 -B ems-solarflow-api-control.py --duration 120
 ```
+
+Backups are stored in `data/backups/` by default.
 
 ## What Not To Do
 
