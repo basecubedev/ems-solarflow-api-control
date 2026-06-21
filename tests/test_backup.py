@@ -125,7 +125,7 @@ def test_default_backup_dir_marker_without_official_layout_is_native(
     )
     assert (
         backup.default_backup_dir(base_dir=str(tmp_path), environ={})
-        == os.path.join(str(tmp_path), "backup")
+        == os.path.join(str(tmp_path), "data", "backups")
     )
 
 
@@ -136,11 +136,27 @@ def test_default_backup_dir_uses_data_backups_in_container(tmp_path):
     ) == "/app/data/backups"
 
 
-def test_default_backup_dir_remains_project_backup_for_native(tmp_path):
+def test_default_backup_dir_uses_data_backups_for_native(tmp_path):
     assert backup.default_backup_dir(
         base_dir=str(tmp_path),
         environ={"EMS_IN_CONTAINER": "0"},
-    ) == os.path.join(str(tmp_path), "backup")
+    ) == os.path.join(str(tmp_path), "data", "backups")
+
+
+def test_create_backup_creates_native_default_dir(tmp_path, monkeypatch):
+    base, config, config_path = write_project(tmp_path)
+    monkeypatch.setenv("EMS_IN_CONTAINER", "0")
+
+    path = backup.create_config_backup(
+        config,
+        base_dir=base,
+        config_path=config_path,
+    )
+
+    expected_dir = os.path.join(base, "data", "backups")
+    assert path.startswith(expected_dir)
+    assert os.path.isdir(expected_dir)
+    assert os.path.isfile(path)
 
 
 def test_container_detection_source_env_wins(tmp_path):
@@ -323,8 +339,8 @@ def test_rollback_backup_metadata(tmp_path):
         "ems-config-manual-2026-06-18-221500.tar.gz",
         base_dir=base,
         config_path=config_path,
-        backup_dir=os.path.join(base, "backup"),
     )
+    assert path.startswith(os.path.join(base, "data", "backups"))
     assert "-rollback-" in os.path.basename(path)
     manifest = backup.inspect_backup(path)["manifest"]
     assert manifest["backup_purpose"] == "rollback"
@@ -780,8 +796,8 @@ def test_db_rollback_backup_metadata(tmp_path):
         config,
         "ems-databases-manual-2026-06-18-221500.tar.gz",
         base_dir=base,
-        backup_dir=os.path.join(base, "backup"),
     )
+    assert path.startswith(os.path.join(base, "data", "backups"))
     assert "ems-databases-rollback-" in os.path.basename(path)
     manifest = backup.inspect_backup(path)["manifest"]
     assert manifest["backup_purpose"] == "rollback"
@@ -946,13 +962,14 @@ def test_config_restore_rollback_can_be_encrypted(tmp_path, monkeypatch):
     rc = emsctl.handle_backup_restore(args, config, path, interactive=True)
     assert rc == 0
 
+    rollback_dir = os.path.join(base, "data", "backups")
     rollbacks = [
-        name for name in os.listdir(backup_dir)
+        name for name in os.listdir(rollback_dir)
         if name.startswith("ems-config-rollback-")
     ]
     assert rollbacks
     assert all(name.endswith(".tar.gz.enc") for name in rollbacks)
-    rb = os.path.join(backup_dir, rollbacks[0])
+    rb = os.path.join(rollback_dir, rollbacks[0])
     assert backup.is_encrypted(rb)
     # Cannot inspect without the password.
     assert backup.inspect_backup(rb)["manifest"] is None
@@ -987,13 +1004,14 @@ def test_database_restore_rollback_can_be_encrypted(tmp_path, monkeypatch):
     rc = emsctl.handle_backup_restore(args, config, path, interactive=True)
     assert rc == 0
 
+    rollback_dir = os.path.join(base, "data", "backups")
     rollbacks = [
-        name for name in os.listdir(backup_dir)
+        name for name in os.listdir(rollback_dir)
         if name.startswith("ems-databases-rollback-")
     ]
     assert rollbacks
     assert all(name.endswith(".tar.gz.enc") for name in rollbacks)
-    rb = os.path.join(backup_dir, rollbacks[0])
+    rb = os.path.join(rollback_dir, rollbacks[0])
     assert backup.inspect_backup(rb)["manifest"] is None
     manifest = backup.inspect_backup(rb, password="dbrbpw99")["manifest"]
     assert manifest["backup_type"] == "databases"
@@ -1032,8 +1050,11 @@ def test_rollback_password_mismatch_aborts(tmp_path, monkeypatch):
     assert rc == 0  # aborted cleanly before any changes
 
     # No partial rollback archive must be left behind.
-    rollbacks = [
-        name for name in os.listdir(backup_dir)
-        if name.startswith("ems-config-rollback-")
-    ]
+    rollback_dir = os.path.join(base, "data", "backups")
+    rollbacks = []
+    if os.path.isdir(rollback_dir):
+        rollbacks = [
+            name for name in os.listdir(rollback_dir)
+            if name.startswith("ems-config-rollback-")
+        ]
     assert rollbacks == []

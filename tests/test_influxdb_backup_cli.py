@@ -83,7 +83,7 @@ def test_cli_create_influxdb_makes_archive(tmp_path, monkeypatch):
 
     rc = emsctl.handle_backup_create_influxdb(_args(), config)
     assert rc == 0
-    backups = os.listdir(os.path.join(str(tmp_path), "backup"))
+    backups = os.listdir(os.path.join(str(tmp_path), "data", "backups"))
     assert any(name.startswith("ems-influxdb-manual-") for name in backups)
 
 
@@ -171,7 +171,7 @@ def test_influxdb_restore_requires_replace_confirmation_interactive(
 def test_influxdb_restore_can_create_rollback_backup(tmp_path, monkeypatch):
     config = bundled_config()
     archive = _make_influx_archive(tmp_path, config)
-    backup_dir = os.path.join(str(tmp_path), "backup")
+    backup_dir = os.path.join(str(tmp_path), "data", "backups")
     monkeypatch.setattr(emsctl, "BASE_DIR", str(tmp_path))
     monkeypatch.setattr(emsctl.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(
@@ -201,7 +201,7 @@ def test_influxdb_restore_can_create_rollback_backup(tmp_path, monkeypatch):
 def test_influxdb_restore_rollback_can_be_encrypted(tmp_path, monkeypatch):
     config = bundled_config()
     archive = _make_influx_archive(tmp_path, config)
-    backup_dir = os.path.join(str(tmp_path), "backup")
+    backup_dir = os.path.join(str(tmp_path), "data", "backups")
     monkeypatch.setattr(emsctl, "BASE_DIR", str(tmp_path))
     monkeypatch.setattr(emsctl.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(

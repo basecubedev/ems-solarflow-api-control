@@ -31,7 +31,7 @@ APP_NAME = "ems-solarflow-api-control"
 BACKUP_FORMAT_VERSION = 1
 CONFIG_BACKUP_FORMAT_VERSION = 1
 MANIFEST_NAME = "backup-manifest.json"
-DEFAULT_BACKUP_DIR_NAME = "backup"
+DEFAULT_BACKUP_DIR_NAME = os.path.join("data", "backups")
 CONTAINER_BACKUP_DIR = "/app/data/backups"
 OFFICIAL_APP_DIR = "/app"
 DEFAULT_COMPRESSION_LEVEL = 3
@@ -516,7 +516,8 @@ def _in_official_app_layout(
 ):
     # The /.dockerenv marker also exists in CI/devcontainers, so it alone is too
     # broad. Only the official image layout (app at /app with mounted config/data)
-    # should route backups to the persistent /app/data/backups default.
+    # should report container mode; native and container defaults both live
+    # under the persistent data directory.
     base_dir = base_dir or BASE_DIR
     return (
         os.path.abspath(base_dir) == app_dir

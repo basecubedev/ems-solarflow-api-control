@@ -75,10 +75,10 @@ output.
 
 `data/`
 
-## Where Are Docker Backups?
+## Where Are Backups?
 
-`data/backups/` on the host (via the existing `./data:/app/data` mount). No
-separate backup volume is needed.
+`data/backups/` by default. Docker users see that folder on the host via the
+existing `./data:/app/data` mount; no separate backup volume is needed.
 
 ## Where Is The Dashboard?
 

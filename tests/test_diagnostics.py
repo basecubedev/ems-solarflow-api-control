@@ -1218,7 +1218,7 @@ def test_diagnose_runtime_paths_native_even_when_runner_in_container(
     tmp_path, monkeypatch
 ):
     # A containerized test runner has /.dockerenv but is not the official /app
-    # layout: diagnostics must still report native mode and a project backup dir.
+    # layout: diagnostics must still report native mode and the data backup dir.
     from ems import backup as backup_mod
 
     monkeypatch.delenv("EMS_IN_CONTAINER", raising=False)
@@ -1241,7 +1241,7 @@ def test_diagnose_runtime_paths_native_even_when_runner_in_container(
         for check in report["checks"]
         if check["section"] == "runtime_paths" and check["code"] == "backup_default"
     )
-    assert backup_check["details"]["path"] != "/app/data/backups"
+    assert backup_check["details"]["path"].endswith("data/backups")
 
 
 def test_diagnose_runtime_paths_warns_when_container_backup_not_persistent(
@@ -1275,5 +1275,11 @@ def test_diagnose_runtime_paths_no_warning_for_persistent_container_backup(
         for check in report["checks"]
         if check["section"] == "runtime_paths"
     }
+    host_path = next(
+        check
+        for check in report["checks"]
+        if check["section"] == "runtime_paths" and check["code"] == "backup_host_path"
+    )
     assert "backup_persistent" in codes
     assert "container_backup_not_persistent" not in codes
+    assert host_path["details"]["path"] == "data/backups"

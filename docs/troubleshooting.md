@@ -337,7 +337,8 @@ InfluxDB is disabled. For analytics setup and repair, see
 See [Backup / Restore](cli.md#backup--restore) for the full workflow. Common
 issues:
 
-Docker backups are stored on the host under `data/backups/`.
+Backups are stored in `data/backups/` by default. Docker users see the same
+folder on the host via the existing `./data:/app/data` mount.
 
 - **"InfluxDB analytics is disabled. Nothing to back up."** — `backup create
   --type influxdb` only applies when `influxdb.enabled` is true. Enable bundled

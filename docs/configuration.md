@@ -106,7 +106,7 @@ docker compose exec ems python3 emsctl.py config upgrade
 The upgrade command uses `config.template.json` as the source for missing
 user-facing config defaults and explanatory `_comment*` keys. Before writing,
 EMS asks whether to create a normal config backup with the existing backup
-tool.
+tool. Backups are stored in `data/backups/` by default.
 
 For automation:
 

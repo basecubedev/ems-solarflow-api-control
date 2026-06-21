@@ -134,4 +134,6 @@ python3 emsctl.py config upgrade --dry-run
 python3 emsctl.py config upgrade
 ```
 
+Native backups are stored in `data/backups/` by default.
+
 More CLI details: [cli.md](cli.md).
