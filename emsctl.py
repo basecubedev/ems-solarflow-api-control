@@ -47,6 +47,7 @@ from ems.diagnostics import (
 from ems import backup as backup_mod
 from ems import config as config_mod
 from ems import config_init as config_init_mod
+from ems.cli_privilege import maybe_drop_privileges
 
 DEFAULT_CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 DOCKER_CONFIG_PATH = os.path.join(BASE_DIR, "config", "config.json")
@@ -3601,6 +3602,8 @@ def handle_config_command(args, config):
 
 
 def main(argv=None):
+    maybe_drop_privileges()
+
     argv = sys.argv[1:] if argv is None else argv
     if not argv:
         print_quick_help()

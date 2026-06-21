@@ -77,12 +77,28 @@ docker compose --project-name ems-compose-smoke exec -T ems \
     python3 emsctl.py diagnose >/dev/null || true
 
 # Backups must land on the persistent ./data mount (host data/backups/) without
-# the user adding a separate backup volume.
+# the user adding a separate backup volume. The documented exec command must run
+# as the runtime user so the archive is host-deletable (no root-owned files).
 docker compose --project-name ems-compose-smoke exec -T ems \
     python3 emsctl.py backup create >/dev/null
 test -d data/backups
 if [ "$(find data/backups -name '*.tar.gz' -o -name '*.tar.gz.enc' | wc -l)" -lt 1 ]; then
     echo "no backup archive was created under data/backups/." >&2
+    exit 1
+fi
+
+# emsctl exec commands must not leave root-owned files in the bind mounts.
+root_owned="$(find config data -maxdepth 5 -uid 0 -print -quit 2>/dev/null || true)"
+if [ -n "$root_owned" ]; then
+    echo "root-owned file left in bind mount: $root_owned" >&2
+    ls -lan "$root_owned" >&2 || true
+    exit 1
+fi
+
+# The host user must be able to delete the generated backup archive.
+backup_archive="$(find data/backups -name '*.tar.gz' -o -name '*.tar.gz.enc' | head -n 1)"
+if [ -n "$backup_archive" ] && ! rm -f "$backup_archive"; then
+    echo "host user cannot delete backup archive: $backup_archive" >&2
     exit 1
 fi
 
