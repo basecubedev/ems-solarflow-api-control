@@ -27,6 +27,9 @@ Docker does not automatically run a container as the same user that runs
 normal host user is usually enough: EMS detects the owner of these mounted
 directories and runs as that UID/GID.
 
+The recommended Compose file uses service name `ems`, port mapping
+`8080:8080`, and bind mounts `./config:/app/config` and `./data:/app/data`.
+
 `PUID` and `PGID` are optional for the standard flow. If you want to set the
 runtime UID/GID explicitly, start with:
 
@@ -192,22 +195,39 @@ numbers, or invalid device settings.
 
 ## Updating
 
-For `latest`, create a backup, pull the current image, recreate the container,
-check whether new config keys are available, and run diagnostics:
+For `latest`, create password-protected backups, pull the current image,
+recreate the container, check whether new config keys are available, apply the
+upgrade with a normal config backup, and run diagnostics:
 
 ```bash
-docker compose exec ems python3 emsctl.py backup create
+docker compose exec ems python3 emsctl.py backup create --type config --password
+docker compose exec ems python3 emsctl.py backup create --type databases --password
 docker compose pull
 docker compose up -d
 docker compose exec ems python3 emsctl.py config upgrade --dry-run
-docker compose exec ems python3 emsctl.py config upgrade
+docker compose exec ems python3 emsctl.py config upgrade --yes --backup
 docker compose exec ems python3 emsctl.py diagnose
+```
+
+If you intentionally do not want password protection for local backups, use:
+
+```bash
+docker compose exec ems python3 emsctl.py backup create --type config
+docker compose exec ems python3 emsctl.py backup create --type databases
 ```
 
 Backups created in Docker are stored on the host under `data/backups/`, using
 the existing `./data:/app/data` mount. No separate backup volume is needed for
 the standard setup, and existing installs get persistent backups automatically
 after pulling the updated image — even without editing their compose file.
+
+Password-protected backups are recommended because config backups may include
+secrets, device serials, dashboard authentication paths, TLS keys, and bundled
+InfluxDB secrets. Without the password, encrypted backups cannot be restored.
+`config upgrade --dry-run` should be reviewed before applying changes.
+`config upgrade --yes --backup` creates a normal config backup before writing.
+Bundled InfluxDB backups are only needed when bundled InfluxDB analytics is
+enabled.
 
 For stable deployments, pin a release tag in `docker-compose.yml`, then update
 that tag intentionally when you want to move to a newer release. Existing

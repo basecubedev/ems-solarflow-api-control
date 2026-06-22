@@ -58,8 +58,8 @@ docker compose up -d
 ```
 
 The recommended Compose file uses service name `ems`, publishes the dashboard
-on host port `8080`, mounts `./config` to `/app/config`, and mounts `./data` to
-`/app/data`.
+as `8080:8080`, mounts `./config:/app/config`, and mounts
+`./data:/app/data`.
 
 On first start, Docker creates `config/config.json` from the built-in template
 if it does not already exist. Existing configs are not overwritten.
@@ -137,23 +137,35 @@ More dashboard details: [docs/dashboard.md](docs/dashboard.md).
 
 ## Updating
 
-Create a backup, pull the current image, restart, check for new config keys,
-and run diagnostics:
+Create password-protected backups, pull the current image, restart, check for
+new config keys, apply the config upgrade with a normal backup, and run
+diagnostics:
 
 ```bash
-docker compose exec ems python3 emsctl.py backup create
+docker compose exec ems python3 emsctl.py backup create --type config --password
+docker compose exec ems python3 emsctl.py backup create --type databases --password
 docker compose pull
 docker compose up -d
 docker compose exec ems python3 emsctl.py config upgrade --dry-run
-docker compose exec ems python3 emsctl.py config upgrade
+docker compose exec ems python3 emsctl.py config upgrade --yes --backup
 docker compose exec ems python3 emsctl.py diagnose
+```
+
+If you intentionally keep local unencrypted backups, use:
+
+```bash
+docker compose exec ems python3 emsctl.py backup create --type config
+docker compose exec ems python3 emsctl.py backup create --type databases
 ```
 
 For stable deployments, pin a release tag in `docker-compose.yml` instead of
 using `latest`, then update that tag intentionally.
 
 Backup and restore details: [docs/backup-restore.md](docs/backup-restore.md).
-Backups are stored in `data/backups/` by default.
+Password-protected backups are recommended for config archives because they can
+contain secrets. Without the password, encrypted backups cannot be restored.
+Backups are stored in host path `data/backups/` by default. Bundled InfluxDB
+backups are only needed when you use bundled InfluxDB analytics.
 Daily command sheet: [docs/common-commands.md](docs/common-commands.md).
 
 ## Native Python Setup

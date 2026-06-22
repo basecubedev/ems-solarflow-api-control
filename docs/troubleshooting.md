@@ -258,6 +258,17 @@ docker compose logs -f
 docker compose exec ems python3 emsctl.py diagnose
 ```
 
+If an update went wrong, inspect the backups under host path `data/backups/`
+before changing files by hand:
+
+```bash
+docker compose exec ems python3 emsctl.py backup inspect data/backups/<file>.tar.gz.enc
+docker compose exec ems python3 emsctl.py backup restore data/backups/<file>.tar.gz.enc --dry-run
+docker compose exec ems python3 emsctl.py backup restore data/backups/<file>.tar.gz.enc --on-conflict replace --rollback
+```
+
+For unencrypted backups, use the same commands with `data/backups/<file>.tar.gz`.
+
 Stop following logs with `Ctrl+C`; the container keeps running.
 
 For native Python, run:
