@@ -3011,6 +3011,9 @@ def resolve_backup_password(args, archive_path, interactive):
     if interactive and sys.stdin.isatty():
         print("Backup is password protected.")
         return getpass.getpass("Enter backup password: ")
+    if not sys.stdin.isatty():
+        password = sys.stdin.readline().rstrip("\r\n")
+        return password or None
     return None
 
 
