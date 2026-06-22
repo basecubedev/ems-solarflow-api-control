@@ -55,6 +55,10 @@ jobs:
         run: |
           python -m compileall ems dashboard scripts tests emsctl.py ems-solarflow-api-control.py
 
+      - name: Validate example Compose file
+        run: |
+          docker compose -f docker-compose.example.yml config
+
       - name: Run full test suite
         run: |
           pytest -q tests/
@@ -82,6 +86,29 @@ jobs:
             org.opencontainers.image.description=Local EMS controller for Zendure SolarFlow. Docker images include automatic first-run config bootstrap. See README for Quick Start and docs/docker.md for full setup.
             org.opencontainers.image.source=https://github.com/basecubedev/ems-solarflow-api-control
             org.opencontainers.image.documentation=https://github.com/basecubedev/ems-solarflow-api-control/blob/main/docs/docker.md
+
+      - name: Build local Docker image for content validation
+        run: |
+          docker build -t ems-solarflow-api-control:ci .
+
+      - name: Validate Docker image runtime content
+        run: |
+          docker run --rm ems-solarflow-api-control:ci python3 emsctl.py --help
+          docker run --rm ems-solarflow-api-control:ci test -f /app/config.template.json
+          docker run --rm ems-solarflow-api-control:ci sh -c '
+            test -f /app/emsctl.py &&
+            test -f /app/docker-entrypoint.sh &&
+            test -f /app/docs/docker.md &&
+            test -f /app/ems/config.py &&
+            test -f /app/dashboard/server.py &&
+            test ! -e /app/.git &&
+            test ! -e /app/tests &&
+            test ! -e /app/__pycache__ &&
+            test ! -e /app/backup &&
+            test ! -e /app/.venv &&
+            test ! -e /app/deploy/docker/influxdb.env &&
+            test -z "$(find /app/data -mindepth 1 -maxdepth 1 -print -quit)"
+          '
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v7

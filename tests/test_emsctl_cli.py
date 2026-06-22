@@ -1156,11 +1156,13 @@ def test_config_upgrade_aborts_if_selected_backup_fails(tmp_path, monkeypatch):
 def test_config_upgrade_noninteractive_requires_explicit_backup_policy(tmp_path):
     config_path = tmp_path / "config.json"
     write_upgrade_candidate(config_path)
+    original = config_path.read_text()
 
     result = run_emsctl(tmp_path, "config", "upgrade", "--yes")
 
     assert result.returncode == 2
     assert "--backup or --no-backup" in result.stderr
+    assert config_path.read_text() == original
 
 
 def test_config_upgrade_noninteractive_with_backup_uses_backup_tool(
@@ -1218,6 +1220,66 @@ def test_config_upgrade_noninteractive_no_backup_writes_without_backup(
     assert calls == []
     assert "Continuing without backup" in capsys.readouterr().out
     assert json.loads(config_path.read_text())["config_schema_version"] == 3
+
+
+def test_encrypted_backup_inspect_and_restore_accept_stdin_password(tmp_path):
+    backup_dir = tmp_path / "backups"
+    password = "stdin-backup-password"
+
+    create = run_emsctl(
+        tmp_path,
+        "backup",
+        "create",
+        "--type",
+        "config",
+        "--output-dir",
+        str(backup_dir),
+        "--password",
+        input_text=f"{password}\n{password}\n",
+    )
+    assert create.returncode == 0, create.stderr
+    assert password not in create.stdout + create.stderr
+    archive = next(backup_dir.glob("*.tar.gz.enc"))
+
+    inspect = run_emsctl(
+        tmp_path,
+        "backup",
+        "inspect",
+        str(archive),
+        input_text=f"{password}\n",
+    )
+    assert inspect.returncode == 0, inspect.stderr
+    assert "encrypted:  True" in inspect.stdout
+    assert password not in inspect.stdout + inspect.stderr
+
+    restore = run_emsctl(
+        tmp_path,
+        "backup",
+        "restore",
+        str(archive),
+        "--dry-run",
+        "--on-conflict",
+        "keep",
+        "--no-rollback",
+        input_text=f"{password}\n",
+    )
+    assert restore.returncode == 0, restore.stderr
+    assert "Dry run: no files were changed" in restore.stdout
+    assert password not in restore.stdout + restore.stderr
+
+    wrong = run_emsctl(
+        tmp_path,
+        "backup",
+        "restore",
+        str(archive),
+        "--dry-run",
+        "--on-conflict",
+        "keep",
+        "--no-rollback",
+        input_text="wrong-password\n",
+    )
+    assert wrong.returncode != 0
+    assert "incorrect password or corrupted backup" in wrong.stderr
 
 
 def strip_comment_keys(value):

@@ -13,7 +13,7 @@ examples later in this page, Docker users can run the same `emsctl.py` command
 inside the service, for example:
 
 ```bash
-docker compose exec ems python3 emsctl.py backup restore /app/data/backups/example.tar.gz --dry-run
+docker compose exec ems python3 emsctl.py backup restore data/backups/<file>.tar.gz --dry-run
 ```
 
 ## When should I create a backup?
@@ -175,6 +175,15 @@ python3 emsctl.py backup
 
 Print a backup's manifest (type, timestamp, included files, checksums):
 
+Docker:
+
+```bash
+docker compose exec ems python3 emsctl.py backup inspect data/backups/<file>.tar.gz
+docker compose exec ems python3 emsctl.py backup inspect data/backups/<file>.tar.gz.enc
+```
+
+Native Python:
+
 ```bash
 python3 emsctl.py backup inspect data/backups/ems-config-manual-2026-06-20-120000.tar.gz
 ```
@@ -220,6 +229,15 @@ these checks fail before any file would be touched.
 Always test first with `--dry-run`. It shows the plan and **never** changes local
 files, creates rollback archives, or asks conflict questions:
 
+Docker:
+
+```bash
+docker compose exec ems python3 emsctl.py backup restore data/backups/<file>.tar.gz.enc --dry-run
+docker compose exec ems python3 emsctl.py backup restore data/backups/<file>.tar.gz --dry-run
+```
+
+Native Python:
+
 ```bash
 python3 emsctl.py backup restore data/backups/ems-config-manual-2026-06-20-120000.tar.gz --dry-run
 ```
@@ -229,6 +247,24 @@ Each file is reported as `would_restore_new`, `would_replace_conflict`,
 When the plan looks right, run the same command without `--dry-run`.
 
 ## Restore config
+
+Docker, encrypted:
+
+```bash
+docker compose exec ems python3 emsctl.py backup inspect data/backups/<file>.tar.gz.enc
+docker compose exec ems python3 emsctl.py backup restore data/backups/<file>.tar.gz.enc --dry-run
+docker compose exec ems python3 emsctl.py backup restore data/backups/<file>.tar.gz.enc --on-conflict replace --rollback
+```
+
+Docker, unencrypted:
+
+```bash
+docker compose exec ems python3 emsctl.py backup inspect data/backups/<file>.tar.gz
+docker compose exec ems python3 emsctl.py backup restore data/backups/<file>.tar.gz --dry-run
+docker compose exec ems python3 emsctl.py backup restore data/backups/<file>.tar.gz --on-conflict replace --rollback
+```
+
+Native Python:
 
 ```bash
 # 1. Preview (no changes)

@@ -49,6 +49,9 @@ On first start, the container creates `config/config.json` from the built-in
 template if the file does not exist yet. Existing `config/config.json` files
 are not overwritten.
 
+The downloaded Compose file uses service name `ems`, port mapping
+`8080:8080`, and bind mounts `./config:/app/config` and `./data:/app/data`.
+
 Check that the container started:
 
 ```bash
@@ -132,7 +135,26 @@ http://127.0.0.1:8080
 - Backups are stored in `data/backups/` by default.
 - FAQ: [faq.md](faq.md)
 
-## 9. Native Python Setup
+## 9. Safe Updates
+
+Before pulling a new image, create backups. Password-protected backups are
+recommended, especially for config archives:
+
+```bash
+docker compose exec ems python3 emsctl.py backup create --type config --password
+docker compose exec ems python3 emsctl.py backup create --type databases --password
+docker compose pull
+docker compose up -d
+docker compose exec ems python3 emsctl.py config upgrade --dry-run
+docker compose exec ems python3 emsctl.py config upgrade --yes --backup
+docker compose exec ems python3 emsctl.py diagnose
+```
+
+Backups are stored under host path `data/backups/`. Without the password, an
+encrypted backup cannot be restored. If you do not use bundled InfluxDB
+analytics, you do not need an InfluxDB backup.
+
+## 10. Native Python Setup
 
 Native Python is still supported for developers and advanced/manual installs.
 Use [native-python.md](native-python.md) for venv, dependency installation,

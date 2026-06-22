@@ -64,12 +64,21 @@ docker compose exec ems python3 emsctl.py diagnose --support-bundle
 Backup:
 
 ```bash
-docker compose exec ems python3 emsctl.py backup create
+docker compose exec ems python3 emsctl.py backup create --type config --password
+docker compose exec ems python3 emsctl.py backup create --type databases --password
 ```
 
 Backups are stored in `data/backups/` by default. Docker users see the same
 folder on the host via the existing `./data:/app/data` mount; no separate
-backup volume is needed.
+backup volume is needed. Password-protected backups are recommended; without
+the password, encrypted backups cannot be restored.
+
+Unencrypted backup variant:
+
+```bash
+docker compose exec ems python3 emsctl.py backup create --type config
+docker compose exec ems python3 emsctl.py backup create --type databases
+```
 
 Config init:
 
@@ -81,7 +90,19 @@ Config upgrade:
 
 ```bash
 docker compose exec ems python3 emsctl.py config upgrade --dry-run
-docker compose exec ems python3 emsctl.py config upgrade
+docker compose exec ems python3 emsctl.py config upgrade --yes --backup
+```
+
+Safe update:
+
+```bash
+docker compose exec ems python3 emsctl.py backup create --type config --password
+docker compose exec ems python3 emsctl.py backup create --type databases --password
+docker compose pull
+docker compose up -d
+docker compose exec ems python3 emsctl.py config upgrade --dry-run
+docker compose exec ems python3 emsctl.py config upgrade --yes --backup
+docker compose exec ems python3 emsctl.py diagnose
 ```
 
 ## Native Python
@@ -94,7 +115,7 @@ python3 emsctl.py diagnose
 python3 emsctl.py diagnose --deep
 python3 emsctl.py diagnose --hardware
 python3 emsctl.py diagnose --support-bundle
-python3 emsctl.py backup create
+python3 emsctl.py backup create --type config --password
 python3 emsctl.py config init
 python3 emsctl.py config upgrade --dry-run
 python3 emsctl.py config upgrade
