@@ -2,6 +2,7 @@
 import json
 import shutil
 import subprocess
+from html.parser import HTMLParser
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,36 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 APP_JS = ROOT / "dashboard" / "static" / "app.js"
 INDEX_HTML = ROOT / "dashboard" / "static" / "index.html"
+
+
+class FlowTabParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self._in_flow_tabs = False
+        self._current_tab = None
+        self.tabs = []
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        classes = attrs.get("class", "").split()
+        if tag == "div" and "flow-view-tabs" in classes:
+            self._in_flow_tabs = True
+            return
+        if self._in_flow_tabs and tag == "button" and "data-flow-view" in attrs:
+            self._current_tab = {"view": attrs["data-flow-view"], "label": ""}
+
+    def handle_data(self, data):
+        if self._current_tab is not None:
+            self._current_tab["label"] += data
+
+    def handle_endtag(self, tag):
+        if self._current_tab is not None and tag == "button":
+            self._current_tab["label"] = self._current_tab["label"].strip()
+            self.tabs.append(self._current_tab)
+            self._current_tab = None
+            return
+        if self._in_flow_tabs and tag == "div":
+            self._in_flow_tabs = False
 
 
 def run_node(script):
@@ -25,6 +56,20 @@ def run_node(script):
     )
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
+
+
+def test_top_level_dashboard_tabs_use_workflow_order():
+    parser = FlowTabParser()
+    parser.feed(INDEX_HTML.read_text(encoding="utf-8"))
+    assert parser.tabs == [
+        {"view": "aggregated", "label": "Overview"},
+        {"view": "devices", "label": "Devices"},
+        {"view": "energy", "label": "Energy"},
+        {"view": "analytics", "label": "Analytics"},
+        {"view": "control", "label": "Control"},
+        {"view": "diagnose", "label": "Diagnose"},
+        {"view": "logs", "label": "Logs"},
+    ]
 
 
 def test_analytics_subtabs_present_in_markup():

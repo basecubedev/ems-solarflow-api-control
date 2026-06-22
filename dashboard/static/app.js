@@ -2372,7 +2372,7 @@ function renderDeviceFirmwareStatus(device) {
 }
 
 function setFlowView(view, persist = true) {
-  const nextView = ["aggregated", "devices", "analytics", "control", "energy", "diagnose", "logs"].includes(view)
+  const nextView = ["aggregated", "devices", "energy", "analytics", "control", "diagnose", "logs"].includes(view)
     ? view
     : "aggregated";
   const previousView = state.flowView;
