@@ -366,7 +366,8 @@ def _render_json_value(value, path, indent, layout):
     if isinstance(value, list):
         if not value:
             return [prefix + "[]"]
-        if all(_is_json_scalar(item) for item in value):
+        is_comment_value = bool(path and _is_comment_key(path[-1]))
+        if not is_comment_value and all(_is_json_scalar(item) for item in value):
             inline = "[" + ", ".join(json.dumps(item) for item in value) + "]"
             if len(prefix) + len(inline) <= 100:
                 return [prefix + inline]
@@ -562,6 +563,11 @@ def _format_path(path):
 
 
 def _collect_added_paths(original, upgraded, path=(), *, comments):
+    if comments and path and _is_comment_key(path[-1]):
+        if original is MISSING:
+            return [path]
+        return []
+
     if isinstance(upgraded, dict):
         added = []
         original_dict = original if isinstance(original, dict) else {}
@@ -618,8 +624,6 @@ def _collect_added_paths(original, upgraded, path=(), *, comments):
         return added
 
     if comments:
-        if path and _is_comment_key(path[-1]) and original is MISSING:
-            return [path]
         return []
 
     if original is MISSING:

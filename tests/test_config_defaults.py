@@ -119,6 +119,65 @@ def test_config_template_contains_startup_upgrade_defaults():
     assert without_comment_keys(template["config_upgrade"]) == CONFIG_UPGRADE_DEFAULTS
 
 
+def test_config_template_comments_are_readable_values():
+    template = json.loads(Path("config.template.json").read_text())
+    failures = []
+
+    def walk(value, path):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                child_path = f"{path}.{key}" if path else key
+                if key.startswith("_comment"):
+                    if isinstance(item, str):
+                        comment_lines = [item]
+                    elif (
+                        isinstance(item, list)
+                        and item
+                        and all(isinstance(line, str) for line in item)
+                    ):
+                        comment_lines = item
+                    else:
+                        failures.append(f"{child_path}: invalid comment value")
+                        continue
+                    too_long = [line for line in comment_lines if len(line) > 88]
+                    if too_long:
+                        failures.append(f"{child_path}: line too long")
+                walk(item, child_path)
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                walk(item, f"{path}[{index}]")
+
+    walk(template, "")
+    assert failures == []
+
+
+def test_config_renderer_keeps_comment_arrays_multiline():
+    layout = cfg._extract_template_layout(
+        '{\n'
+        '  "_comment": [\n'
+        '    "Short sentence one.",\n'
+        '    "Short sentence two."\n'
+        '  ],\n'
+        '  "months": [1, 2, 3]\n'
+        '}'
+    )
+    text = cfg.render_config_json(
+        {
+            "_comment": ["Short sentence one.", "Short sentence two."],
+            "months": [1, 2, 3],
+        },
+        layout,
+    )
+
+    assert (
+        '  "_comment": [\n'
+        '    "Short sentence one.",\n'
+        '    "Short sentence two."\n'
+        '  ],'
+    ) in text
+    assert '  "months": [1, 2, 3]' in text
+
+
 def base_minimal_config():
     return {
         "ha": {
@@ -358,11 +417,13 @@ def test_config_upgrade_render_uses_device_template_layout():
     assert device["custom_device_key"] == "kept"
     assert (
         '      "sn": "USER_SN",\n\n'
-        '      "_comment_smart_mode": "smart_mode=1 is runtime/RAM mode.",'
+        '      "_comment_smart_mode": [\n'
+        '        "Use smart_mode=1 for runtime/RAM mode.",'
     ) in text
     assert (
         '      "battery_kwh": 1.92,\n\n'
-        '      "_comment_soc": "min_soc/max_soc in percent. Use 0 to leave the value unmanaged.",'
+        '      "_comment_soc": [\n'
+        '        "Battery SOC limits in percent.",'
     ) in text
     assert text.index('"custom_device_key"') > text.index('"max_soc"')
 
