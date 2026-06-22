@@ -1,10 +1,17 @@
 {
   "_comment": "Copy this file to config.json and adjust your local setup.",
-  "_comment_docs": "Detailed configuration guide and examples: docs/configuration.md and docs/configuration-examples.md",
+  "_comment_docs": [
+    "Detailed setup guide: docs/configuration.md.",
+    "Example profiles: docs/configuration-examples.md."
+  ],
   "config_schema_version": 3,
 
   "config_upgrade": {
-    "_comment": "Controls optional config.json maintenance on startup. 'check' only reports missing template keys. 'apply' writes missing keys after backup and reloads config before EMS starts.",
+    "_comment": [
+      "Optional config.json maintenance on startup.",
+      "'check' reports missing template keys without writing.",
+      "'apply' backs up the file and adds missing keys before EMS starts."
+    ],
     "on_startup": "check",
     "backup_before_apply": true,
     "backup_failure_policy": "continue_without_upgrade"
@@ -19,7 +26,11 @@
   },
 
   "system": {
-    "_comment": "Standalone default: HA disabled, live Zendure control enabled. Set dry_run=true for a no-write validation run.",
+    "_comment": [
+      "Standalone live-control defaults.",
+      "Set dry_run=true when validating a setup without hardware writes.",
+      "Review power and SOC limits before the first live run."
+    ],
     "enabled": true,
     "dry_run": false,
     "simulation_mode": false,
@@ -35,7 +46,10 @@
     "min_output_limit": 35,
     "loop_interval": 3,
     "output_control": {
-      "_comment_output_control": "Advanced output smoothing/tuning. Most users should keep the defaults.",
+      "_comment_output_control": [
+        "Advanced output smoothing and ramp tuning.",
+        "Most installations should keep these defaults."
+      ],
       "load_deadband_w": 5,
       "target_deadband_w": 10,
       "filter_enabled": true,
@@ -68,7 +82,11 @@
   },
 
   "winter": {
-    "_comment": "Optional winter SOC strategy. See docs/configuration-examples.md before changing advanced values.",
+    "_comment": [
+      "Optional seasonal minimum-SOC strategy.",
+      "Enable it when batteries need a higher winter reserve.",
+      "See docs/configuration-examples.md before changing advanced values."
+    ],
     "enabled": false,
     "months": [10, 11, 12, 1, 2, 3],
     "summer_min_soc": 15,
@@ -79,7 +97,11 @@
   },
 
   "dashboard": {
-    "_comment": "Optional live dashboard. Runtime write mode is unavailable until a local admin password is configured with emsctl dashboard set-password.",
+    "_comment": [
+      "Optional live dashboard.",
+      "Runtime write controls need a local admin password.",
+      "Create it with: python3 emsctl.py dashboard set-password."
+    ],
     "enabled": true,
     "host": "0.0.0.0",
     "port": 8080,
@@ -95,40 +117,92 @@
     "session_absolute_max_seconds": 43200,
     "log_buffer_lines": 5000,
     "log_redaction": false,
-    "_comment_animation_mode": "Dashboard animation cost. 'normal' keeps the full animated energy-flow view; 'reduced' trims glows/filters and slows pipe motion; 'off' disables continuous pipe animations and glow/blur filters. Purely visual (no control/auth impact); browser prefers-reduced-motion is always respected on top of this.",
+    "_comment_animation_mode": [
+      "Visual animation cost for the dashboard.",
+      "'normal' keeps the full animated energy-flow view.",
+      "'reduced' trims glows and slows pipe motion.",
+      "'off' disables continuous pipe animations and glow filters.",
+      "This does not affect control behavior or authentication."
+    ],
     "animation_mode": "normal"
   },
 
   "influxdb": {
-    "_comment": "Optional InfluxDB 2.x history/analytics backend. When disabled, the dashboard keeps using local SQLite history. The bundled docker-compose InfluxDB is the primary supported zero-config target. Config is the source of truth: bucket prefix, retention, downsampling tasks and query profiles are reconciled into InfluxDB by 'emsctl.py influx sync'.",
+    "_comment": [
+      "Optional InfluxDB 2.x backend for long-term analytics.",
+      "When disabled, the dashboard still uses local SQLite history.",
+      "Bundled mode is the supported zero-config Docker setup.",
+      "Run 'python3 emsctl.py influx sync' after changing schema settings."
+    ],
     "enabled": false,
-    "_comment_mode": "'bundled' uses the docker-compose InfluxDB managed for you: run 'python3 emsctl.py influx init' for the complete end-to-end Analytics setup (secrets, start, wait, schema sync), or 'emsctl.py stack up' to also start the EMS container. 'external' points at an InfluxDB you run yourself (user-managed); 'influx init' then only validates settings, checks connectivity and syncs.",
+    "_comment_mode": [
+      "'bundled' uses the docker-compose InfluxDB managed by this project.",
+      "Run 'python3 emsctl.py influx init' for the complete setup.",
+      "Use 'python3 emsctl.py stack up' to start InfluxDB and EMS together.",
+      "'external' points at an InfluxDB instance you manage yourself."
+    ],
     "mode": "bundled",
-    "_comment_auto": "auto_init lets the emsctl setup commands bootstrap the bundled InfluxDB automatically (e.g. 'stack up' creates secrets and starts the container); it does NOT make the EMS controller start Docker during the control loop. auto_sync makes setup commands apply the bucket/retention/task schema once InfluxDB is reachable. With auto_sync=false, 'influx init' still starts bundled InfluxDB and prints the 'emsctl.py influx sync' next step. Set both false for full manual control.",
+    "_comment_auto": [
+      "auto_init lets setup commands create bundled InfluxDB secrets.",
+      "It can also start the bundled container during setup.",
+      "The EMS control loop never starts Docker by itself.",
+      "auto_sync applies bucket, retention, and task schema during setup.",
+      "Set both values false when managing InfluxDB fully by hand."
+    ],
     "auto_init": true,
     "auto_sync": true,
-    "_comment_secret_file": "Local, gitignored env file (relative to the project root) where 'influx init' generates secrets. Never commit it; no secrets belong in this config.json.",
+    "_comment_secret_file": [
+      "Local gitignored env file for generated bundled secrets.",
+      "Path is relative to the project root.",
+      "Never commit this file or place secrets directly in config.json."
+    ],
     "secret_file": "deploy/docker/influxdb.env",
-    "_comment_url": "'url' is the in-container Docker service name, used only by an EMS running INSIDE a container (the compose overlay sets EMS_IN_CONTAINER=1). In bundled mode everything on the host - the emsctl CLI (influx init/sync/status, stack up) AND a natively-running EMS (telemetry writer + dashboard analytics) - uses 'host_url' instead, because the Docker service name is not resolvable on the host. External mode always uses 'url'.",
+    "_comment_url": [
+      "'url' is used by EMS when it runs inside Docker.",
+      "In bundled mode, host-side commands use 'host_url' instead.",
+      "A native EMS process also uses 'host_url' in bundled mode.",
+      "External mode always uses 'url'."
+    ],
     "url": "http://influxdb:8086",
     "host_url": "http://127.0.0.1:8086",
     "org": "ems",
-    "_comment_token": "Leave token empty to read it from the env var named by token_env (recommended; do not commit secrets). Bundled mode populates token_env from secret_file automatically.",
+    "_comment_token": [
+      "Leave token empty to read it from token_env.",
+      "This avoids committing secrets.",
+      "Bundled mode fills token_env from secret_file automatically."
+    ],
     "token": "",
     "token_env": "INFLUXDB_TOKEN",
     "bucket_prefix": "ems",
-    "_comment_raw_write_interval": "Raw telemetry write cadence. 0 (or null) writes one raw sample per EMS control loop (highest available resolution for spike visibility). A positive value throttles raw writes to at most once every N seconds. This is independent of dashboard.write_interval_seconds, which only controls the SQLite dashboard history cadence.",
+    "_comment_raw_write_interval": [
+      "Raw telemetry write cadence for InfluxDB.",
+      "Use 0 or null to write one raw sample per EMS control loop.",
+      "Use a positive number to throttle writes to every N seconds.",
+      "This is separate from dashboard.write_interval_seconds."
+    ],
     "raw_write_interval_seconds": 0,
+    "_comment_retention": [
+      "How long InfluxDB keeps each resolution bucket.",
+      "Increase values only when storage capacity is planned."
+    ],
     "retention": {
       "raw_days": 14,
       "one_minute_days": 90,
       "five_minute_days": 365,
       "one_hour_days": 1825
     },
+    "_comment_downsampling": [
+      "Rules for creating lower-resolution history buckets.",
+      "Keep aligned with retention and query profiles."
+    ],
     "downsampling": [
       { "source": "raw", "target": "1m", "window": "1m" },
       { "source": "1m", "target": "5m", "window": "5m" },
       { "source": "5m", "target": "1h", "window": "1h" }
+    ],
+    "_comment_query_profiles": [
+      "Dashboard analytics query resolution by selected time range.",
+      "Short ranges use detailed data; long ranges use downsampled buckets."
     ],
     "query_profiles": [
       { "max_range": "1h", "bucket": "raw", "window": "1s" },
@@ -140,7 +214,11 @@
   },
 
   "energy_savings": {
-    "_comment": "Lightweight SQLite daily energy statistics based on measured inverter AC output. Set price_per_kwh to estimate savings.",
+    "_comment": [
+      "Lightweight daily energy statistics stored in SQLite.",
+      "Values are based on measured inverter AC output.",
+      "Set price_per_kwh to estimate savings."
+    ],
     "enabled": true,
     "price_per_kwh": 0.0,
     "currency": "EUR",
@@ -149,7 +227,11 @@
   },
 
   "battery_full_charge_assist": {
-    "_comment": "Optional EMS full-charge assist. Temporarily raises device Max-SoC to 100% so battery-backed devices reach firmware Max-SoC at least once within the configured interval.",
+    "_comment": [
+      "Optional full-charge assist for battery-backed devices.",
+      "Temporarily raises device Max-SoC to 100%.",
+      "Use it when devices should reach firmware Max-SoC periodically."
+    ],
     "enabled": false,
     "interval_days": 28,
     "assist_window_days": 7,
@@ -160,21 +242,31 @@
     "state_database_path": "data/ems_state.sqlite"
   },
 
-  "_comment_devices": "One entry per Zendure device. IP and SN must match your local device.",
+  "_comment_devices": [
+    "One entry per Zendure device.",
+    "Replace IP and SN with values from your local installation.",
+    "Use one real device first, then add more devices after validation."
+  ],
   "devices": [
     {
       "name": "WR1",
       "ip": "192.168.1.100",
       "sn": "YOUR_SN",
 
-      "_comment_smart_mode": "smart_mode=1 is runtime/RAM mode.",
+      "_comment_smart_mode": [
+        "Use smart_mode=1 for runtime/RAM mode.",
+        "This is the normal setting for live EMS control."
+      ],
       "smart_mode": 1,
       "max_power": 800,
       "pv_kwp": 1.0,
       "pv_priority_factor": 1.0,
       "battery_kwh": 1.0,
 
-      "_comment_soc": "min_soc/max_soc in percent. Use 0 to leave the value unmanaged.",
+      "_comment_soc": [
+        "Battery SOC limits in percent.",
+        "Use 0 to leave a value unmanaged."
+      ],
       "min_soc": 15,
       "max_soc": 100
     },
@@ -183,21 +275,33 @@
       "ip": "192.168.1.101",
       "sn": "YOUR_SN",
 
-      "_comment_smart_mode": "smart_mode=1 is runtime/RAM mode.",
+      "_comment_smart_mode": [
+        "Use smart_mode=1 for runtime/RAM mode.",
+        "This is the normal setting for live EMS control."
+      ],
       "smart_mode": 1,
       "max_power": 800,
       "pv_kwp": 1.0,
       "pv_priority_factor": 1.0,
       "battery_kwh": 1.0,
 
-      "_comment_soc": "min_soc/max_soc in percent. Use 0 to leave the value unmanaged.",
+      "_comment_soc": [
+        "Battery SOC limits in percent.",
+        "Use 0 to leave a value unmanaged."
+      ],
       "min_soc": 15,
       "max_soc": 100
     }
   ],
 
   "grid_meter": {
-    "_comment": "Household/grid power meter. Supported types: shelly (Pro/Gen2/Gen3 via /rpc/Shelly.GetStatus), shelly_3em_gen1 (Shelly 3EM Gen1 via /status), ecotracker, tasmota_http. Shelly uses total power by default. Use channels like [c] or [a,c] to read selected clamps/phases. Tasmota needs url or ip plus power_path, for example StatusSNS.SML.Power_curr.",
+    "_comment": [
+      "Household or grid power meter used as the EMS load signal.",
+      "Supported types: shelly, shelly_3em_gen1, ecotracker, tasmota_http.",
+      "Shelly reads total power by default.",
+      "Use channels like [c] or [a,c] for selected clamps or phases.",
+      "Tasmota needs url or ip plus power_path."
+    ],
     "type": "shelly",
     "ip": "192.168.1.50"
   }
