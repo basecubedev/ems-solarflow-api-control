@@ -2,7 +2,7 @@
 
 [![Continuous Integration](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/simulated-regression-tests.yml/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/simulated-regression-tests.yml)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.14-blue)
-![automated tests](https://img.shields.io/badge/automated%20tests-950%2B-blue)
+![automated tests](https://img.shields.io/badge/automated%20tests-1000%2B-blue)
 
 Local-first EMS (Energy Management System) control for Zendure SolarFlow
 systems. It reads local meter and device telemetry, controls inverter output,
