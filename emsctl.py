@@ -3371,8 +3371,15 @@ def _json_value(value):
 
 
 def print_config_upgrade_plan(plan):
-    if not plan["changed"]:
+    comment_refresh_count = len(plan.get("comment_refresh", []))
+
+    if not plan["changed"] and not comment_refresh_count:
         print("Config is already up to date.")
+        return
+
+    if not plan["changed"]:
+        print("Config keys are already up to date.")
+        print(f"Outdated comment entries: {comment_refresh_count}")
         return
 
     print("Config upgrade plan:")
@@ -3403,6 +3410,9 @@ def print_config_upgrade_plan(plan):
     if plan.get("comment_add"):
         print(f"Add explanatory comments: {len(plan['comment_add'])}")
         print()
+
+    print(f"Outdated comment entries: {comment_refresh_count}")
+    print()
 
     if plan.get("format_changed"):
         print("Reformat according to config.template.json layout.")
@@ -3469,6 +3479,61 @@ def create_upgrade_backup(args, config):
         **backup_path_kwargs(args, config),
     )
     return path, "ok"
+
+
+def prompt_comment_refresh(count):
+    print()
+    print(f"{count} comment entries differ from the current template.")
+    print()
+    print("Refresh explanatory comments from template?")
+    print()
+    print("This updates only _comment* entries.")
+    print("No configuration values will be modified.")
+    print()
+    choice = prompt_text("[y/N]")
+    return bool(choice and choice.strip().lower().startswith("y"))
+
+
+def maybe_refresh_config_comments(
+    args,
+    config,
+    *,
+    layout=None,
+    backup_already_created=False,
+):
+    if args.yes or args.dry_run:
+        return 0
+
+    differences = config_mod.template_comment_differences(config, BASE_DIR)
+    if not differences or not sys.stdin.isatty():
+        return 0
+
+    if not prompt_comment_refresh(len(differences)):
+        return 0
+
+    if not backup_already_created:
+        try:
+            backup_path, backup_status = create_upgrade_backup(args, config)
+        except backup_mod.BackupError as exc:
+            return fail(f"backup failed; comments not refreshed: {exc}")
+        if backup_status == "abort":
+            print("Aborted.")
+            return 0
+        if backup_status != "ok":
+            return fail(f"backup failed; comments not refreshed: {backup_status}")
+        print(f"Backup created:\n  {backup_path}")
+
+    refreshed, refreshed_items = config_mod.refresh_template_comments(
+        config,
+        BASE_DIR,
+    )
+    config_mod.write_config_json_atomic(
+        args.config,
+        refreshed,
+        layout=layout,
+    )
+    print(f"Refreshed explanatory comments: {len(refreshed_items)}")
+    return 0
 
 
 def resolve_config_init_backup_policy(args, plan):
@@ -3568,8 +3633,14 @@ def handle_config_command(args, config):
         plan["changed"] = True
         plan["format_changed"] = True
     print_config_upgrade_plan(plan)
-    if args.dry_run or not plan["changed"]:
+    if args.dry_run:
         return 0
+    if not plan["changed"]:
+        return maybe_refresh_config_comments(
+            args,
+            config,
+            layout=plan.get("template_layout"),
+        )
 
     do_backup, status = resolve_config_upgrade_backup_policy(args)
     if status == "abort":
@@ -3589,8 +3660,10 @@ def handle_config_command(args, config):
         if backup_status != "ok":
             return fail(f"backup failed; config.json not changed: {backup_status}")
         print(f"Backup created:\n  {backup_path}")
+        backup_already_created = True
     else:
         print("Continuing without backup. Existing config.json will be modified.")
+        backup_already_created = False
 
     config_mod.write_config_json_atomic(
         args.config,
@@ -3598,7 +3671,12 @@ def handle_config_command(args, config):
         layout=plan.get("template_layout"),
     )
     print(f"Updated {args.config}")
-    return 0
+    return maybe_refresh_config_comments(
+        args,
+        plan["upgraded_config"],
+        layout=plan.get("template_layout"),
+        backup_already_created=backup_already_created,
+    )
 
 
 def main(argv=None):

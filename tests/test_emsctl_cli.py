@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import emsctl
+from ems import config as cfg
 from ems import config_init as config_init_mod
 from ems import paths as ems_paths
 from ems.state_store import BatteryFullChargeStateStore
@@ -953,6 +954,16 @@ def write_upgrade_candidate(path):
     }))
 
 
+def write_current_config_with_outdated_comment(path):
+    template_text = (ROOT / "config.template.json").read_text()
+    config = json.loads(template_text)
+    config["devices"] = []
+    config["system"]["_comment"] = "Outdated system comment."
+    layout = cfg._extract_template_layout(template_text)
+    cfg.write_config_json_atomic(str(path), config, layout=layout)
+    return config
+
+
 def prepare_config_upgrade_base(tmp_path, monkeypatch):
     patch_emsctl_base(monkeypatch, tmp_path)
     shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")
@@ -1232,6 +1243,68 @@ def test_config_upgrade_dry_run_reports_comment_only_changes(tmp_path):
     assert result.returncode == 0, result.stderr
     assert "Config is already up to date." not in result.stdout
     assert "Add explanatory comments:" in result.stdout
+
+
+def test_config_upgrade_dry_run_reports_outdated_comments(tmp_path):
+    config_path = tmp_path / "config.json"
+    original = write_current_config_with_outdated_comment(config_path)
+
+    result = run_emsctl(tmp_path, "config", "upgrade", "--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    assert "Outdated comment entries: 1" in result.stdout
+    assert json.loads(config_path.read_text()) == original
+
+
+def test_config_upgrade_yes_does_not_refresh_outdated_comments(tmp_path):
+    config_path = tmp_path / "config.json"
+    write_current_config_with_outdated_comment(config_path)
+
+    result = run_emsctl(
+        tmp_path,
+        "config",
+        "upgrade",
+        "--yes",
+        "--no-backup",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Refresh explanatory comments" not in result.stdout
+    assert json.loads(config_path.read_text())["system"]["_comment"] == (
+        "Outdated system comment."
+    )
+
+
+def test_config_upgrade_interactive_refreshes_outdated_comments(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    patch_emsctl_base(monkeypatch, tmp_path)
+    shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")
+    config_path = tmp_path / "config.json"
+    write_current_config_with_outdated_comment(config_path)
+    backups = []
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda prompt: "y")
+    monkeypatch.setattr(
+        emsctl,
+        "create_upgrade_backup",
+        lambda args, config: backups.append(config)
+        or (str(tmp_path / "backup.tar.gz"), "ok"),
+    )
+
+    code = emsctl.main(["--config", str(config_path), "config", "upgrade"])
+
+    assert code == 0
+    assert backups
+    output = capsys.readouterr().out
+    assert "Refresh explanatory comments from template?" in output
+    assert "Refreshed explanatory comments: 1" in output
+    refreshed = json.loads(config_path.read_text())
+    template = json.loads((ROOT / "config.template.json").read_text())
+    assert refreshed["system"]["_comment"] == template["system"]["_comment"]
 
 
 def test_config_upgrade_future_schema_aborts_without_writing(tmp_path):
