@@ -104,9 +104,19 @@ docker compose exec ems python3 emsctl.py config upgrade
 ```
 
 The upgrade command uses `config.template.json` as the source for missing
-user-facing config defaults and explanatory `_comment*` keys. Before writing,
-EMS asks whether to create a normal config backup with the existing backup
-tool. Backups are stored in `data/backups/` by default.
+user-facing config defaults and explanatory `_comment*` keys. A dry-run also
+reports how many existing template-managed comments differ from the current
+template.
+
+Before writing normal upgrade changes, EMS asks whether to create a normal
+config backup with the existing backup tool. Backups are stored in
+`data/backups/` by default.
+
+After a successful interactive upgrade, EMS may offer to refresh explanatory
+comments from the current template. This optional refresh updates only exact
+template-managed `_comment*` paths. It does not change configuration values or
+unknown user keys. If you accept the refresh and no upgrade backup was already
+created, EMS creates a normal config backup before writing the comment changes.
 
 For automation:
 
@@ -114,6 +124,10 @@ For automation:
 python3 emsctl.py config upgrade --yes --backup
 python3 emsctl.py config upgrade --yes --no-backup
 ```
+
+`--yes` remains non-interactive: it applies the normal upgrade according to the
+selected backup policy, does not ask about comment refresh, and does not refresh
+existing comments.
 
 After upgrading:
 

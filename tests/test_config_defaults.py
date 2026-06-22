@@ -178,6 +178,116 @@ def test_config_renderer_keeps_comment_arrays_multiline():
     assert '  "months": [1, 2, 3]' in text
 
 
+def write_comment_refresh_template(tmp_path):
+    template = {
+        "system": {
+            "_comment": ["Current system comment."],
+            "_comment_mode": "Current mode comment.",
+            "enabled": False,
+            "max_soc": 90,
+        },
+        "devices": [{
+            "name": "WR1",
+            "ip": "192.168.1.100",
+            "sn": "YOUR_SN",
+            "_comment_soc": ["Current SOC comment."],
+            "max_soc": 100,
+        }],
+    }
+    (tmp_path / "config.template.json").write_text(json.dumps(template))
+    return template
+
+
+def test_template_comment_differences_detects_outdated_comments(tmp_path):
+    write_comment_refresh_template(tmp_path)
+    user = {
+        "system": {
+            "_comment": "Old system comment.",
+            "_comment_custom": "User-owned comment.",
+            "enabled": True,
+            "max_soc": 80,
+        },
+        "devices": [{
+            "name": "REAL",
+            "ip": "192.0.2.1",
+            "sn": "REAL_SN",
+            "_comment_soc": "Old SOC comment.",
+            "max_soc": 95,
+        }],
+    }
+
+    differences = cfg.template_comment_differences(user, base_dir=str(tmp_path))
+
+    assert [item["path"] for item in differences] == [
+        "system._comment",
+        "devices[0]._comment_soc",
+    ]
+
+
+def test_refresh_template_comments_preserves_values_and_unknown_keys(tmp_path):
+    template = write_comment_refresh_template(tmp_path)
+    user = {
+        "system": {
+            "_comment": "Old system comment.",
+            "_comment_custom": "User-owned comment.",
+            "enabled": True,
+            "max_soc": 80,
+            "my_custom_key": True,
+        },
+        "devices": [{
+            "name": "REAL",
+            "ip": "192.0.2.1",
+            "sn": "REAL_SN",
+            "_comment_soc": "Old SOC comment.",
+            "_comment_custom": "Keep device note.",
+            "max_soc": 95,
+        }],
+    }
+
+    refreshed, items = cfg.refresh_template_comments(user, base_dir=str(tmp_path))
+
+    assert [item["path"] for item in items] == [
+        "system._comment",
+        "devices[0]._comment_soc",
+    ]
+    assert refreshed["system"]["_comment"] == template["system"]["_comment"]
+    assert refreshed["devices"][0]["_comment_soc"] == ["Current SOC comment."]
+    assert refreshed["system"]["enabled"] is True
+    assert refreshed["system"]["max_soc"] == 80
+    assert refreshed["system"]["my_custom_key"] is True
+    assert refreshed["system"]["_comment_custom"] == "User-owned comment."
+    assert refreshed["devices"][0]["name"] == "REAL"
+    assert refreshed["devices"][0]["ip"] == "192.0.2.1"
+    assert refreshed["devices"][0]["sn"] == "REAL_SN"
+    assert refreshed["devices"][0]["max_soc"] == 95
+    assert refreshed["devices"][0]["_comment_custom"] == "Keep device note."
+    assert "_comment_mode" not in refreshed["system"]
+
+
+def test_config_upgrade_plan_adds_missing_comment_entries(tmp_path):
+    write_comment_refresh_template(tmp_path)
+    user = {
+        "system": {
+            "_comment": ["Current system comment."],
+            "enabled": True,
+            "max_soc": 80,
+        },
+        "devices": [],
+    }
+
+    plan = cfg.build_config_upgrade_plan(
+        user,
+        base_dir=str(tmp_path),
+        migrations={},
+        latest_schema=1,
+    )
+
+    assert any(
+        item["path"] == "system._comment_mode"
+        for item in plan["comment_add"]
+    )
+
+
 def base_minimal_config():
     return {
         "ha": {

@@ -864,6 +864,79 @@ def _items_from_paths(upgraded, paths):
     ]
 
 
+def _collect_comment_items(values, path=()):
+    items = []
+    if isinstance(values, dict):
+        for key, value in values.items():
+            child_path = path + (key,)
+            if _is_comment_key(key):
+                items.append((child_path, copy.deepcopy(value)))
+            else:
+                items.extend(_collect_comment_items(value, child_path))
+    elif isinstance(values, list):
+        for index, value in enumerate(values):
+            items.extend(_collect_comment_items(value, path + (index,)))
+    return items
+
+
+def _template_comment_items_for_config(user_config, base_dir=None):
+    template, _, device_defaults, _ = _load_template_upgrade_data(base_dir)
+    items = _collect_comment_items(template)
+
+    devices = user_config.get("devices")
+    if isinstance(devices, list):
+        device_comment_items = _collect_comment_items(device_defaults)
+        for index, device in enumerate(devices):
+            if isinstance(device, dict):
+                for path, value in device_comment_items:
+                    items.append((("devices", index) + path, copy.deepcopy(value)))
+
+    return items
+
+
+def template_comment_differences(user_config, base_dir=None):
+    if not isinstance(user_config, dict):
+        raise ValueError("config.json must contain a JSON object")
+
+    differences = []
+    for path, template_value in _template_comment_items_for_config(
+        user_config,
+        base_dir,
+    ):
+        if _path_exists(user_config, path):
+            current_value = _path_value(user_config, path)
+            if current_value != template_value:
+                differences.append({
+                    "path": _format_path(path),
+                    "value": copy.deepcopy(template_value),
+                    "old_value": copy.deepcopy(current_value),
+                })
+    return differences
+
+
+def refresh_template_comments(user_config, base_dir=None):
+    if not isinstance(user_config, dict):
+        raise ValueError("config.json must contain a JSON object")
+
+    refreshed = copy.deepcopy(user_config)
+    differences = []
+    for path, template_value in _template_comment_items_for_config(
+        refreshed,
+        base_dir,
+    ):
+        if _path_exists(refreshed, path):
+            current_value = _path_value(refreshed, path)
+            if current_value != template_value:
+                parent = _path_value(refreshed, path[:-1]) if path[:-1] else refreshed
+                parent[path[-1]] = copy.deepcopy(template_value)
+                differences.append({
+                    "path": _format_path(path),
+                    "value": copy.deepcopy(template_value),
+                    "old_value": copy.deepcopy(current_value),
+                })
+    return refreshed, differences
+
+
 def build_config_upgrade_plan(
     user_config,
     base_dir=None,
@@ -913,6 +986,7 @@ def build_config_upgrade_plan(
         if item["path"] not in migration_paths
     ]
     comments = _items_from_paths(upgraded, comment_paths)
+    outdated_comments = template_comment_differences(user_config, base_dir)
 
     return {
         "template_path": template_path,
@@ -920,6 +994,7 @@ def build_config_upgrade_plan(
         "upgraded_config": upgraded,
         "add": added,
         "comment_add": comments,
+        "comment_refresh": outdated_comments,
         "schema_migrations": schema_steps,
         "migrate": [
             change

@@ -243,6 +243,9 @@ intentionally do not want one.
 
 `config upgrade` is different from `config init`. It fills missing persisted
 keys after updates by comparing your config with `config.template.json`.
+Dry-run output includes missing keys, missing explanatory comments, and the
+number of existing template-managed `_comment*` entries whose text differs from
+the current template.
 
 Native Python:
 
@@ -257,6 +260,12 @@ Docker:
 docker compose exec ems python3 emsctl.py config upgrade --dry-run
 docker compose exec ems python3 emsctl.py config upgrade
 ```
+
+When run interactively, `config upgrade` can optionally refresh outdated
+template-managed explanatory comments after the normal upgrade completes. The
+refresh changes only exact `_comment*` paths from the template; configuration
+values and unknown user keys are preserved. Non-interactive `--yes` runs do not
+prompt for or apply this comment refresh.
 
 ## Docker Usage
 

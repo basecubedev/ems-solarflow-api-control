@@ -82,6 +82,11 @@ If you only run the bundled InfluxDB, the `influxdb` backup is the one that
 preserves your analytics history. If you do not use bundled InfluxDB, you can
 skip it.
 
+`emsctl.py config upgrade` uses the same config backup workflow before writing
+normal upgrade changes. In interactive runs, accepting the optional explanatory
+comment refresh also uses this config backup workflow when no upgrade backup
+has already been created.
+
 ## Which backup type do I need?
 
 | Backup type | What it contains | Typical use |
