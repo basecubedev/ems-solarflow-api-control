@@ -11,7 +11,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PASSWORD = "rc4-docker-test-password"
+PASSWORD = "test-restore-password"
 
 
 def docker_compose_available():
@@ -291,7 +291,8 @@ def test_docker_encrypted_backup_inspect_and_restore_dry_run(docker_install):
     assert "encrypted:  True" in inspect.stdout
     assert PASSWORD not in inspect.stdout + inspect.stderr
 
-    config_before = (docker_install / "config" / "config.json").read_text()
+    config_path = docker_install / "config" / "config.json"
+    config_before = config_path.read_text()
     restore = compose(
         docker_install,
         "exec",
@@ -306,8 +307,14 @@ def test_docker_encrypted_backup_inspect_and_restore_dry_run(docker_install):
     )
     assert restore.returncode == 0, restore.stderr
     assert "Dry run: no files were changed" in restore.stdout
-    assert (docker_install / "config" / "config.json").read_text() == config_before
+    assert config_path.read_text() == config_before
     assert PASSWORD not in restore.stdout + restore.stderr
+
+    changed = json.loads(config_path.read_text())
+    changed["custom_user_key"]["restore_probe"] = "changed-after-backup"
+    config_path.write_text(json.dumps(changed))
+    changed_after_backup = config_path.read_text()
+    assert "changed-after-backup" in changed_after_backup
 
     wrong = compose(
         docker_install,
@@ -316,9 +323,30 @@ def test_docker_encrypted_backup_inspect_and_restore_dry_run(docker_install):
         "ems",
         "sh",
         "-lc",
-        f'printf "%s\\n" "wrong-password" | python3 emsctl.py backup restore {in_container_archive} --dry-run --on-conflict keep --no-rollback',
+        f'printf "%s\\n" "wrong-password" | python3 emsctl.py backup restore {in_container_archive} --on-conflict replace --no-rollback',
     )
     assert wrong.returncode != 0
     assert "incorrect password or corrupted backup" in wrong.stderr
     assert PASSWORD not in wrong.stdout + wrong.stderr
-    assert (docker_install / "config" / "config.json").read_text() == config_before
+    assert config_path.read_text() == changed_after_backup
+
+    real_restore = compose(
+        docker_install,
+        "exec",
+        "-T",
+        "-e",
+        "EMS_TEST_BACKUP_PASSWORD",
+        "ems",
+        "sh",
+        "-lc",
+        f'printf "%s\\n" "$EMS_TEST_BACKUP_PASSWORD" | python3 emsctl.py backup restore {in_container_archive} --on-conflict replace --no-rollback',
+        env={"EMS_TEST_BACKUP_PASSWORD": PASSWORD},
+    )
+    assert real_restore.returncode == 0, real_restore.stderr
+    assert "Restore completed." in real_restore.stdout
+    assert PASSWORD not in real_restore.stdout + real_restore.stderr
+    assert config_path.read_text() == config_before
+
+    logs = compose(docker_install, "logs", "ems")
+    assert logs.returncode == 0, logs.stderr
+    assert PASSWORD not in logs.stdout + logs.stderr
