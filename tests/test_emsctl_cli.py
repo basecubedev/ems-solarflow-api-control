@@ -963,6 +963,14 @@ def prepare_config_upgrade_base(tmp_path, monkeypatch):
     return config_path
 
 
+def prepare_config_upgrade_with_outdated_comment(tmp_path, monkeypatch):
+    config_path = prepare_config_upgrade_base(tmp_path, monkeypatch)
+    config = json.loads(config_path.read_text())
+    config["system"]["_comment"] = "Outdated system comment."
+    config_path.write_text(json.dumps(config))
+    return config_path
+
+
 def test_config_upgrade_dry_run_reports_missing_keys(tmp_path):
     config_path = tmp_path / "config.json"
     write_upgrade_candidate(config_path)
@@ -1328,7 +1336,126 @@ def test_config_upgrade_yes_does_not_refresh_outdated_comments(tmp_path):
     )
 
 
-def test_config_upgrade_interactive_refreshes_outdated_comments(
+def test_config_upgrade_interactive_refreshes_comments_without_second_backup(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    config_path = prepare_config_upgrade_with_outdated_comment(tmp_path, monkeypatch)
+    backups = []
+    writes = []
+    original_write = cfg.write_config_json_atomic
+
+    def fake_write(path, data, *, layout=None):
+        writes.append(data)
+        original_write(path, data, layout=layout)
+
+    responses = iter(["y", "n", "y"])
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda prompt: next(responses))
+    monkeypatch.setattr(
+        emsctl,
+        "create_upgrade_backup",
+        lambda args, config: backups.append(config)
+        or (str(tmp_path / "backup.tar.gz"), "ok"),
+    )
+    monkeypatch.setattr(emsctl.config_mod, "write_config_json_atomic", fake_write)
+
+    code = emsctl.main(["--config", str(config_path), "config", "upgrade"])
+
+    assert code == 0
+    assert backups == []
+    assert len(writes) == 1
+    output = capsys.readouterr().out
+    assert "Refresh explanatory comments as part of this upgrade?" in output
+    assert "Continuing without backup. Existing config.json will be modified." in output
+    assert "Backup created" not in output
+    assert "Refreshed explanatory comments: 1" in output
+    upgraded = json.loads(config_path.read_text())
+    template = json.loads((ROOT / "config.template.json").read_text())
+    assert upgraded["config_schema_version"] == 3
+    assert upgraded["system"]["_comment"] == template["system"]["_comment"]
+
+
+def test_config_upgrade_interactive_creates_one_backup_before_combined_write(
+    tmp_path,
+    monkeypatch,
+):
+    config_path = prepare_config_upgrade_with_outdated_comment(tmp_path, monkeypatch)
+    events = []
+    original_write = cfg.write_config_json_atomic
+
+    def fake_backup(args, config):
+        events.append(("backup", config.get("config_schema_version")))
+        return str(tmp_path / "backup.tar.gz"), "ok"
+
+    def fake_write(path, data, *, layout=None):
+        events.append(("write", data.get("config_schema_version")))
+        original_write(path, data, layout=layout)
+
+    responses = iter(["y", "y", "y"])
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda prompt: next(responses))
+    monkeypatch.setattr(emsctl, "create_upgrade_backup", fake_backup)
+    monkeypatch.setattr(emsctl.config_mod, "write_config_json_atomic", fake_write)
+
+    code = emsctl.main(["--config", str(config_path), "config", "upgrade"])
+
+    assert code == 0
+    assert events == [("backup", None), ("write", 3)]
+    upgraded = json.loads(config_path.read_text())
+    template = json.loads((ROOT / "config.template.json").read_text())
+    assert upgraded["config_schema_version"] == 3
+    assert upgraded["system"]["_comment"] == template["system"]["_comment"]
+
+
+def test_config_upgrade_interactive_refreshes_comment_only_without_backup(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    patch_emsctl_base(monkeypatch, tmp_path)
+    shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")
+    config_path = tmp_path / "config.json"
+    write_current_config_with_outdated_comment(config_path)
+    backups = []
+    prompts = []
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    responses = iter(["y", "n"])
+    monkeypatch.setattr(
+        "builtins.input",
+        lambda prompt: prompts.append(prompt) or next(responses),
+    )
+    monkeypatch.setattr(
+        emsctl,
+        "create_upgrade_backup",
+        lambda args, config: backups.append(config)
+        or (str(tmp_path / "backup.tar.gz"), "ok"),
+    )
+
+    code = emsctl.main(["--config", str(config_path), "config", "upgrade"])
+
+    assert code == 0
+    assert backups == []
+    output = capsys.readouterr().out
+    assert "Refresh explanatory comments from template?" in output
+    assert any(
+        "Create config backup before refreshing comments? [y/n]" in prompt
+        for prompt in prompts
+    )
+    assert (
+        "Continuing without backup. Existing config.json comments will be modified."
+        in output
+    )
+    assert "Backup created" not in output
+    assert "Refreshed explanatory comments: 1" in output
+    refreshed = json.loads(config_path.read_text())
+    template = json.loads((ROOT / "config.template.json").read_text())
+    assert refreshed["system"]["_comment"] == template["system"]["_comment"]
+
+
+def test_config_upgrade_interactive_refreshes_comment_only_with_backup(
     tmp_path,
     monkeypatch,
     capsys,
@@ -1340,7 +1467,8 @@ def test_config_upgrade_interactive_refreshes_outdated_comments(
     backups = []
 
     monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr("builtins.input", lambda prompt: "y")
+    responses = iter(["y", "y"])
+    monkeypatch.setattr("builtins.input", lambda prompt: next(responses))
     monkeypatch.setattr(
         emsctl,
         "create_upgrade_backup",
@@ -1351,13 +1479,78 @@ def test_config_upgrade_interactive_refreshes_outdated_comments(
     code = emsctl.main(["--config", str(config_path), "config", "upgrade"])
 
     assert code == 0
-    assert backups
+    assert len(backups) == 1
     output = capsys.readouterr().out
-    assert "Refresh explanatory comments from template?" in output
+    assert "Backup created" in output
     assert "Refreshed explanatory comments: 1" in output
     refreshed = json.loads(config_path.read_text())
     template = json.loads((ROOT / "config.template.json").read_text())
     assert refreshed["system"]["_comment"] == template["system"]["_comment"]
+
+
+def test_config_upgrade_interactive_comment_only_aborts_on_backup_prompt(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    patch_emsctl_base(monkeypatch, tmp_path)
+    shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")
+    config_path = tmp_path / "config.json"
+    original = write_current_config_with_outdated_comment(config_path)
+    backups = []
+
+    def fake_input(prompt):
+        if "before refreshing comments" in prompt:
+            raise EOFError
+        return "y"
+
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", fake_input)
+    monkeypatch.setattr(
+        emsctl,
+        "create_upgrade_backup",
+        lambda args, config: backups.append(config)
+        or (str(tmp_path / "backup.tar.gz"), "ok"),
+    )
+
+    code = emsctl.main(["--config", str(config_path), "config", "upgrade"])
+
+    assert code == 0
+    assert backups == []
+    output = capsys.readouterr().out
+    assert "Aborted." in output
+    assert "Refreshed explanatory comments" not in output
+    assert json.loads(config_path.read_text()) == original
+
+
+def test_config_upgrade_interactive_declines_comment_refresh(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    config_path = prepare_config_upgrade_with_outdated_comment(tmp_path, monkeypatch)
+    writes = []
+    original_write = cfg.write_config_json_atomic
+
+    def fake_write(path, data, *, layout=None):
+        writes.append(data)
+        original_write(path, data, layout=layout)
+
+    responses = iter(["y", "n", "n"])
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda prompt: next(responses))
+    monkeypatch.setattr(emsctl.config_mod, "write_config_json_atomic", fake_write)
+
+    code = emsctl.main(["--config", str(config_path), "config", "upgrade"])
+
+    assert code == 0
+    assert len(writes) == 1
+    output = capsys.readouterr().out
+    assert "Refresh explanatory comments as part of this upgrade?" in output
+    assert "Refreshed explanatory comments" not in output
+    upgraded = json.loads(config_path.read_text())
+    assert upgraded["config_schema_version"] == 3
+    assert upgraded["system"]["_comment"] == "Outdated system comment."
 
 
 def test_config_upgrade_future_schema_aborts_without_writing(tmp_path):
