@@ -152,6 +152,14 @@ Device health:
 Health counters are in-memory only and reset when EMS restarts; they describe
 current runtime health, not long-term history.
 
+Runtime communication health is kept in memory by the running EMS process. It
+resets when EMS restarts and is intended for live diagnostics, dashboard/API
+exposure, or future telemetry export.
+
+`emsctl diagnose --hardware` is a fresh read-only probe from the CLI process. It
+checks the currently configured meter and devices at the time the command is
+run. It does not read historic runtime counters from the running EMS process.
+
 Repeated grid-meter read timeouts (for example Shelly `ReadTimeoutError` on
 `/rpc/Shelly.GetStatus`) usually indicate a slow or unresponsive meter or a
 flaky network, not an EMS control problem. Power-cycling the meter often clears

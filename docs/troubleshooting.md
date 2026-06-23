@@ -256,6 +256,13 @@ EMS kept the last known value (intended fallback, not a control bug). Read and
 write health are tracked separately, so a device can read fine while writes fail
 or are intentionally blocked. These counters are in-memory and reset on restart.
 
+Runtime communication health is kept in memory by the running EMS process. It is
+intended for live diagnostics, dashboard/API exposure, or future telemetry
+export. `emsctl diagnose --hardware` is a fresh read-only probe from a separate
+CLI process: it checks the currently configured meter and devices at the moment
+you run it, and does not read historic runtime counters from the running EMS
+process.
+
 Intermittent grid-meter read timeouts (for example a Shelly `ReadTimeoutError`
 on `/rpc/Shelly.GetStatus`) usually point at a slow/unresponsive meter or a
 flaky network rather than an EMS control problem; power-cycling the meter often
@@ -346,6 +353,35 @@ rules. Then run:
 ```bash
 docker compose exec ems python3 emsctl.py diagnose --hardware
 ```
+
+If the Shelly is still reachable but repeatedly times out, its HTTP/RPC stack
+may be slow or temporarily stuck. A Shelly reboot can clear that state. Treat
+this as a device/network diagnostic step, not as an EMS session-reset
+workaround.
+
+### Advanced TCP Reachability Checks
+
+EMS checks the actual HTTP/API read path. For deeper network-level diagnostics
+you can optionally use `paping-go`:
+
+https://github.com/basecubedev/paping-go
+
+Example long-running checks:
+
+```bash
+# Shelly HTTP/RPC port, run for 6 hours with one probe per second
+paping-go -p 80 -d 6h -r 1 192.168.100.93
+
+# EMS dashboard port, run for one day with one probe every 5 seconds
+paping-go -p 8080 -d 24h -r 5 <ems-host>
+```
+
+This is optional and not required for normal EMS operation. It is most useful
+for long-running TCP latency/reachability tests over several hours or days when
+you need to catch rare timeouts, Wi-Fi drops, router path issues, Shelly
+HTTP/RPC stalls, inverter reachability problems, or EMS dashboard port
+instability. Very short smoke tests are fine for a quick check, but the main use
+case is sustained monitoring over hours or days.
 
 ### Zendure Device Not Reachable
 
