@@ -548,6 +548,42 @@ Examples:
         help="ZIP output path. Only valid with --support-bundle.",
     )
 
+    grid_meter = subparsers.add_parser(
+        "grid-meter",
+        help="Probe the configured grid meter read endpoint.",
+        description=(
+            "Read-only grid-meter communication test. Repeatedly reads the "
+            "configured grid meter and reports success rate and read latency."
+        ),
+        epilog="""\
+Examples:
+  python3 emsctl.py grid-meter test
+  python3 emsctl.py grid-meter test --duration 120 --interval 1
+""",
+        formatter_class=EMSHelpFormatter,
+    )
+    grid_meter_subparsers = grid_meter.add_subparsers(
+        dest="action",
+        required=True,
+    )
+    grid_meter_test = grid_meter_subparsers.add_parser(
+        "test",
+        help="Repeatedly read the grid meter and report latency/error stats.",
+        formatter_class=EMSHelpFormatter,
+    )
+    grid_meter_test.add_argument(
+        "--duration",
+        type=int,
+        default=30,
+        help="Total test duration in seconds (default: 30).",
+    )
+    grid_meter_test.add_argument(
+        "--interval",
+        type=float,
+        default=1.0,
+        help="Seconds between reads (default: 1.0).",
+    )
+
     influx = subparsers.add_parser(
         "influx",
         help="Set up, inspect or reconcile the InfluxDB history backend.",
@@ -975,6 +1011,61 @@ def handle_diagnose_command(args):
         if bundle_path:
             print(f"Support bundle: {bundle_path}")
     return 1 if report["status"] == "error" else 0
+
+
+def handle_grid_meter_command(args, config):
+    if args.action != "test":
+        return fail(f"unknown grid-meter action: {args.action}", code=2)
+
+    import time as _time
+
+    from ems.clients import create_grid_meter_client, create_session
+    from ems.health import percentile
+
+    grid_meter = config.get("grid_meter")
+    if not isinstance(grid_meter, dict) or not grid_meter:
+        shelly = config.get("shelly")
+        grid_meter = {"type": "shelly", **shelly} if isinstance(shelly, dict) else {}
+
+    try:
+        client = create_grid_meter_client(grid_meter, create_session())
+    except Exception as exc:
+        return fail(f"cannot create grid meter client: {exc}", code=2)
+
+    provider = getattr(client, "provider", "grid meter")
+    endpoint = getattr(client, "ip", None) or getattr(client, "url", "")
+    duration = max(1, int(args.duration))
+    interval = max(0.0, float(args.interval))
+
+    print(f"Grid meter read test: {provider} {endpoint}".rstrip())
+    print(f"Duration: {duration}s")
+
+    latencies = []
+    reads = ok = failed = 0
+    deadline = _time.monotonic() + duration
+
+    while _time.monotonic() < deadline:
+        prev_success = client.health.success_count
+        client.get_power()
+        reads += 1
+        if client.health.last_latency_ms is not None:
+            latencies.append(client.health.last_latency_ms)
+        if client.health.success_count > prev_success:
+            ok += 1
+        else:
+            failed += 1
+        if interval and _time.monotonic() < deadline:
+            _time.sleep(interval)
+
+    print(f"Reads: {reads}")
+    print(f"OK: {ok}")
+    print(f"Failed: {failed}")
+    if latencies:
+        print(f"p50 latency: {int(round(percentile(latencies, 0.5)))} ms")
+        print(f"p95 latency: {int(round(percentile(latencies, 0.95)))} ms")
+        print(f"max latency: {int(round(max(latencies)))} ms")
+
+    return 0 if failed == 0 else 1
 
 
 def int_value(value, field, minimum=0):
@@ -3756,6 +3847,9 @@ def main(argv=None):
 
         if args.command == "backup":
             return handle_backup_command(args, config)
+
+        if args.command == "grid-meter":
+            return handle_grid_meter_command(args, config)
 
         runtime_path = resolve_runtime_path(args, config)
         state, created = load_runtime_state(runtime_path, config)

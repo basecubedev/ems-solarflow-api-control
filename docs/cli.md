@@ -86,7 +86,8 @@ Modes:
   and a dashboard loopback check when enabled.
 - `--hardware` performs explicit short-timeout read-only network probes for
   configured grid meters and Zendure read endpoints. It never writes hardware
-  state.
+  state. The output also includes compact grid-meter and per-device
+  communication health (see "Communication health" below).
 - `--control` explains the current regulation path from local config and
   runtime-state: grid power, filtered grid power, target output, final output,
   deadband state, device allocation, SOC protection, write-path blockers, and
@@ -117,7 +118,73 @@ Control interpretation:
   until their runtime intent returns to output mode and `acMode=2` has been
   reconciled.
 
-AC mode runtime role:
+## Communication health
+
+`diagnose --hardware` reports lightweight communication health so intermittent
+read/write problems are visible without digging through logs:
+
+```text
+Grid meter health:
+  provider: Shelly
+  status: ok
+  last success: 3s ago
+  consecutive errors: 0
+  last latency: 42 ms
+  stale value used: no
+
+Device health:
+  WR1:
+    read: ok, last success 2s ago, consecutive errors 0, last latency 180 ms
+    write: ok, last success 35s ago, consecutive errors 0
+```
+
+- **Grid-meter health** tracks reads of the configured grid meter (Shelly,
+  EcoTracker, Tasmota, ...). `stale value used: yes` means the read failed and
+  EMS kept the last known value rather than reacting to a bad reading. This is
+  intentional fallback behavior, not a control bug.
+- **Device read/write health** is tracked separately per device. Reads and
+  writes never share state: a device can be readable while writes fail or are
+  intentionally blocked (for example a device parked in AC-input mode).
+- **Status** is `ok` (recent success), `degraded` (recent failures or a stale
+  value, but still a recent good value), `failed` (no recent good value or
+  repeated consecutive failures), or `unknown` (nothing attempted yet).
+
+Health counters are in-memory only and reset when EMS restarts; they describe
+current runtime health, not long-term history.
+
+Runtime communication health is kept in memory by the running EMS process. It
+resets when EMS restarts and is intended for live diagnostics, dashboard/API
+exposure, or future telemetry export.
+
+`emsctl diagnose --hardware` is a fresh read-only probe from the CLI process. It
+checks the currently configured meter and devices at the time the command is
+run. It does not read historic runtime counters from the running EMS process.
+
+Repeated grid-meter read timeouts (for example Shelly `ReadTimeoutError` on
+`/rpc/Shelly.GetStatus`) usually indicate a slow or unresponsive meter or a
+flaky network, not an EMS control problem. Power-cycling the meter often clears
+it. Use `grid-meter test` to confirm:
+
+```bash
+python3 emsctl.py grid-meter test
+python3 emsctl.py grid-meter test --duration 120 --interval 1
+```
+
+```text
+Grid meter read test: Shelly 192.168.100.93
+Duration: 120s
+Reads: 120
+OK: 117
+Failed: 3
+p50 latency: 42 ms
+p95 latency: 310 ms
+max latency: 3012 ms
+```
+
+`grid-meter test` is read-only and does not write to any device. It exits
+non-zero if any read fails.
+
+## AC mode runtime role
 
 ```bash
 python3 emsctl.py device WR1 ac-mode output

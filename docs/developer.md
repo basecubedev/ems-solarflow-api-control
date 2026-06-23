@@ -30,6 +30,13 @@ Existing detailed sections such as `checks`, `control`, and
 `schema_version`, `diagnosis`, `sections`, `metrics`, `root_causes`,
 `warnings`, and `errors` fields for cross-mode handling.
 
+`diagnose --hardware` additionally populates a top-level `hardware_health`
+object (`{grid_meter, devices[]}`) with in-memory communication-health
+snapshots per endpoint (status, success/failure/consecutive counters, latency
+summary, staleness). It is additive and absent for other modes; consumers must
+treat it as optional. The same snapshot shape is produced at runtime by
+`EMSController.health_snapshot()` for future dashboard/InfluxDB export.
+
 The diagnose API `schema_version` is the machine-readable JSON contract
 version. It is independent from the README Diagnose Evolution labels, which
 describe the feature rollout stages V1 through V6.

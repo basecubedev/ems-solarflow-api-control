@@ -17,6 +17,7 @@ from ems.clients import (
     _parse_shelly_3em_gen1_power,
     _parse_shelly_power,
     _parse_tasmota_http_power,
+    zendure_write,
     zendure_write_succeeded,
 )
 
@@ -790,3 +791,114 @@ def test_create_grid_meter_client_rejects_tasmota_http_missing_config():
 def test_create_grid_meter_client_rejects_unknown_type():
     with pytest.raises(ValueError, match="Unsupported grid meter type"):
         create_grid_meter_client({"type": "unknown", "ip": "192.0.2.3"}, SessionStub())
+
+
+# =====================
+# COMMUNICATION HEALTH
+# =====================
+
+
+def _zendure_client(session):
+    return ZendureClient(
+        "WR1",
+        "192.0.2.20",
+        "SN-WR1",
+        session,
+        10,
+        90,
+        1,
+        0,
+    )
+
+
+def test_shelly_read_success_updates_health():
+    client = ShellyClient(
+        "192.0.2.10",
+        SessionStub(
+            get_response=ResponseStub(payload={"em:0": {"total_act_power": 120.0}})
+        ),
+    )
+
+    assert client.get_power() == 120.0
+    assert client.health.success_count == 1
+    assert client.health.consecutive_failures == 0
+    assert client.health.last_latency_ms is not None
+    assert client.health.classify() == "ok"
+
+
+def test_shelly_read_failure_keeps_stale_value_and_tracks_health():
+    client = ShellyClient("192.0.2.10", SessionStub(get_response=ConnectionError("offline")))
+    client.last_value = 55.0
+
+    assert client.get_power() == 55.0
+    assert client.health.failure_count == 1
+    assert client.health.consecutive_failures == 1
+    assert client.health.stale_used is True
+
+    # A later success resets the consecutive-failure counter.
+    client.session = SessionStub(
+        get_response=ResponseStub(payload={"em:0": {"total_act_power": 10.0}})
+    )
+    assert client.get_power() == 10.0
+    assert client.health.consecutive_failures == 0
+    assert client.health.stale_used is False
+
+
+def test_zendure_fetch_updates_read_health_on_success_and_failure():
+    client = _zendure_client(
+        SessionStub(
+            get_response=ResponseStub(payload={"properties": {"electricLevel": 50}})
+        )
+    )
+    assert client.fetch() is not None
+    assert client.read_health.success_count == 1
+
+    client.session = SessionStub(get_response=ConnectionError("down"))
+    assert client.fetch() is None
+    assert client.read_health.failure_count == 1
+    assert client.read_health.consecutive_failures == 1
+
+
+def test_zendure_write_updates_write_health_without_touching_read_health():
+    client = _zendure_client(SessionStub(post_response=ResponseStub(status_code=200)))
+
+    assert zendure_write(
+        client,
+        "outputLimit",
+        {"outputLimit": 100},
+        "write_output_limit_error",
+        target_w=100,
+    ) is True
+    assert client.write_health.success_count == 1
+    assert client.write_health.last_field == "outputLimit"
+    assert client.read_health.attempted is False
+
+
+def test_zendure_write_failure_increments_write_health():
+    client = _zendure_client(
+        SessionStub(post_response=ResponseStub(status_code=500, text="boom"))
+    )
+
+    assert zendure_write(
+        client,
+        "outputLimit",
+        {"outputLimit": 100},
+        "write_output_limit_error",
+        target_w=100,
+    ) is False
+    assert client.write_health.failure_count == 1
+    assert client.write_health.consecutive_failures == 1
+
+
+def test_zendure_write_transport_error_records_failure_and_reraises():
+    client = _zendure_client(SessionStub(post_response=ConnectionError("down")))
+
+    with pytest.raises(ConnectionError):
+        zendure_write(
+            client,
+            "outputLimit",
+            {"outputLimit": 100},
+            "write_output_limit_error",
+        )
+    assert client.write_health.failure_count == 1
+    assert client.write_health.consecutive_failures == 1

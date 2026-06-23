@@ -30,6 +30,11 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from dashboard import auth as dashboard_auth
+from ems.health import (
+    CommHealth,
+    render_device_health,
+    render_grid_meter_health,
+)
 from ems.paths import (
     BASE_DIR,
     resolve_project_path,
@@ -1281,9 +1286,27 @@ def diagnose_http_json(url, headers=None, timeout=2):
         return response.status, payload
 
 
+GRID_METER_PROVIDERS = {
+    "shelly": "Shelly",
+    "shelly_3em_gen1": "Shelly 3EM Gen1",
+    "ecotracker": "EcoTracker",
+    "tasmota_http": "Tasmota",
+    "ha": "Home Assistant",
+}
+
+
+def _diagnose_record_probe(tracker, start, error=None):
+    latency_ms = (time.monotonic() - start) * 1000.0
+    if error is None:
+        tracker.record_success(latency_ms)
+    else:
+        tracker.record_failure(error=error, latency_ms=latency_ms)
+
+
 def diagnose_hardware(checks, config_data):
+    health = {"grid_meter": None, "devices": []}
     if not isinstance(config_data, dict):
-        return
+        return health
     grid_meter = config_data.get("grid_meter")
     if not isinstance(grid_meter, dict):
         grid_meter = config_data.get("shelly") if isinstance(config_data.get("shelly"), dict) else {}
@@ -1291,40 +1314,57 @@ def diagnose_hardware(checks, config_data):
             grid_meter = {"type": "shelly", **grid_meter}
     meter_type = str(grid_meter.get("type", "shelly")).strip().lower() if isinstance(grid_meter, dict) else "unknown"
 
+    provider = GRID_METER_PROVIDERS.get(meter_type, meter_type or "unknown")
+    grid_tracker = CommHealth(provider, kind="read")
+
     if meter_type == "shelly" and grid_meter.get("ip"):
         url = f"http://{grid_meter['ip']}/rpc/Shelly.GetStatus"
+        start = time.monotonic()
         try:
             status, payload = diagnose_http_json(url)
             from ems.clients import _parse_shelly_power
             power = _parse_shelly_power(payload, channels=grid_meter.get("channels"))
+            _diagnose_record_probe(grid_tracker, start)
             diagnose_add(checks, "hardware", "ok", "shelly_read_ok", "Shelly read-only status endpoint returned parseable power", status_code=status, power_w=power)
         except Exception as exc:
+            _diagnose_record_probe(grid_tracker, start, exc)
             diagnose_add(checks, "hardware", "warning", "shelly_read_failed", f"Shelly read-only probe failed: {exc.__class__.__name__}")
     elif meter_type == "shelly_3em_gen1" and grid_meter.get("ip"):
         url = f"http://{grid_meter['ip']}/status"
+        start = time.monotonic()
         try:
             status, payload = diagnose_http_json(url)
             from ems.clients import _parse_shelly_3em_gen1_power
             power = _parse_shelly_3em_gen1_power(payload, channels=grid_meter.get("channels"))
+            _diagnose_record_probe(grid_tracker, start)
             diagnose_add(checks, "hardware", "ok", "shelly_3em_gen1_read_ok", "Shelly 3EM Gen1 read-only status endpoint returned parseable power", status_code=status, power_w=power)
         except Exception as exc:
+            _diagnose_record_probe(grid_tracker, start, exc)
             diagnose_add(checks, "hardware", "warning", "shelly_3em_gen1_read_failed", f"Shelly 3EM Gen1 read-only probe failed: {exc.__class__.__name__}")
     elif meter_type == "ecotracker" and grid_meter.get("ip"):
         url = f"http://{grid_meter['ip']}/v1/json"
+        start = time.monotonic()
         try:
             status, payload = diagnose_http_json(url)
             from ems.clients import _parse_ecotracker_power
             power = _parse_ecotracker_power(payload)
+            _diagnose_record_probe(grid_tracker, start)
             diagnose_add(checks, "hardware", "ok", "ecotracker_read_ok", "EcoTracker read-only endpoint returned parseable power", status_code=status, power_w=power)
         except Exception as exc:
+            _diagnose_record_probe(grid_tracker, start, exc)
             diagnose_add(checks, "hardware", "warning", "ecotracker_read_failed", f"EcoTracker read-only probe failed: {exc.__class__.__name__}")
     else:
         diagnose_add(checks, "hardware", "warning", "grid_meter_probe_skipped", f"No read-only grid meter probe implemented for type: {meter_type}", type=meter_type)
+
+    grid_snapshot = grid_tracker.snapshot()
+    grid_snapshot["provider"] = provider
+    health["grid_meter"] = grid_snapshot
 
     for index, device in enumerate(config_data.get("devices", [])):
         if not isinstance(device, dict):
             continue
         name = str(device.get("name") or f"device-{index}")
+        read_tracker = CommHealth(name, kind="read")
         missing = [
             key
             for key in ("ip", "sn")
@@ -1332,16 +1372,23 @@ def diagnose_hardware(checks, config_data):
         ]
         if missing:
             diagnose_add(checks, "hardware", "warning", "zendure_device_config_incomplete", f"Zendure device {name} missing required config: {', '.join(missing)}", device=name, missing=missing)
+            health["devices"].append({"name": name, "read": read_tracker.snapshot(), "write": None})
             continue
         diagnose_add(checks, "hardware", "ok", "zendure_device_config_complete", f"Zendure device {name} has required read config", device=name, serial_configured=True)
         url = f"http://{device['ip']}/properties/report"
+        start = time.monotonic()
         try:
             status, payload = diagnose_http_json(url)
             from ems.clients import parse_device
             parse_device(payload)
+            _diagnose_record_probe(read_tracker, start)
             diagnose_add(checks, "hardware", "ok", "zendure_read_ok", f"Zendure device {name} read-only report endpoint returned parseable payload", device=name, status_code=status)
         except Exception as exc:
+            _diagnose_record_probe(read_tracker, start, exc)
             diagnose_add(checks, "hardware", "warning", "zendure_read_failed", f"Zendure device {name} read-only probe failed: {exc.__class__.__name__}", device=name)
+        health["devices"].append({"name": name, "read": read_tracker.snapshot(), "write": None})
+
+    return health
 
 
 def diagnose_redact_key(key):
@@ -2859,8 +2906,9 @@ def diagnose_collect(args):
         diagnose_logs_deep(checks, config_data)
         diagnose_docker_deep(checks)
 
+    hardware_health = None
     if args.hardware:
-        diagnose_hardware(checks, config_data)
+        hardware_health = diagnose_hardware(checks, config_data)
 
     control_report = None
     if args.control:
@@ -2910,6 +2958,7 @@ def diagnose_collect(args):
         "control": control_report,
         "control_quality": control_quality_report,
         "battery_full_charge_assist": battery_full_charge_report,
+        "hardware_health": hardware_health,
     }
 
 
@@ -2958,6 +3007,18 @@ def run_control_diagnosis(args):
 
 def run_control_quality_diagnosis(args):
     return run_diagnosis(diagnose_service_args(args, control_quality=True, quality=False))
+
+
+def diagnose_hardware_health_text(hardware_health):
+    """Render the grid-meter and device communication health blocks."""
+
+    lines = []
+    grid = hardware_health.get("grid_meter")
+    if grid:
+        lines.extend(render_grid_meter_health(grid))
+        lines.append("")
+    lines.extend(render_device_health(hardware_health.get("devices") or []))
+    return "\n".join(lines) + "\n"
 
 
 def diagnose_text(report):
@@ -3014,6 +3075,10 @@ def diagnose_text(report):
         lines.append(section_labels.get(section, section.title()))
         for check in checks:
             lines.append(f"[{level_labels.get(check['level'], check['level'].upper())}] {check['message']}")
+
+    if report.get("hardware_health"):
+        lines.append("")
+        lines.append(diagnose_hardware_health_text(report["hardware_health"]).rstrip())
 
     lines.append("")
     lines.append(f"Result: {report['status']}")

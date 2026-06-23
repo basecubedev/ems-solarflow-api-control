@@ -13,6 +13,16 @@ No, but Docker is recommended for normal users.
 Shelly, Shelly 3EM Gen1, EcoTracker, and Tasmota HTTP setups are documented in
 [supported-setups.md](supported-setups.md).
 
+## Can A Shelly Meter Hang Or Become Slow?
+
+Yes. If you repeatedly see Shelly `ReadTimeoutError` messages, the meter may be
+reachable but slow or temporarily stuck. First run `diagnose --hardware` and
+`grid-meter test`. If the meter keeps timing out, also try checking the network
+path and rebooting the Shelly before changing EMS settings.
+
+See [troubleshooting.md](troubleshooting.md#grid-meter-not-reachable) for
+details.
+
 ## Can I Use Multiple Zendure Inverters?
 
 Yes, if each configured device has a real IP address, serial number, and
