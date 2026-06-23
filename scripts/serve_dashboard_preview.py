@@ -29,7 +29,6 @@ default.
 
 import argparse
 import json
-import mimetypes
 import os
 import time
 from html import escape
@@ -38,8 +37,12 @@ from urllib.parse import parse_qs, urlparse
 
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(SCRIPT_DIR)
+sys.path.insert(0, SCRIPT_DIR)
+sys.path.insert(0, ROOT)
 
+from dashboard.static_files import build_static_asset_index, static_asset_key  # noqa: E402
 from dashboard_preview_data import (  # noqa: E402
     DEFAULT_SCENARIO,
     FLOW_VIEWS,
@@ -47,8 +50,8 @@ from dashboard_preview_data import (  # noqa: E402
     build_scenario,
 )
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATIC_DIR = os.path.join(ROOT, "dashboard", "static")
+STATIC_ASSETS = build_static_asset_index(STATIC_DIR)
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8767
 # Capture mode is operator-oriented (Diagnose/Logs), so it defaults to the
@@ -65,6 +68,12 @@ DEFAULT_CAPTURE_VIEWS = (
     "diagnose",
     "logs",
 )
+SAFE_RESPONSE_CONTENT_TYPES = {
+    "application/json; charset=utf-8",
+    "application/javascript; charset=utf-8",
+    "text/css; charset=utf-8",
+    "text/html; charset=utf-8",
+}
 
 
 def _preview_injection(view):
@@ -490,17 +499,11 @@ class PreviewHandler(BaseHTTPRequestHandler):
         })
 
     def _send_static(self, request_path):
-        path = "/index.html" if request_path in ("", "/") else request_path
-        normalized = os.path.normpath(path.lstrip("/"))
-        full_path = os.path.abspath(os.path.join(STATIC_DIR, normalized))
-        static_root = os.path.abspath(STATIC_DIR)
-        if (
-            os.path.commonpath([static_root, full_path]) != static_root
-            or not os.path.isfile(full_path)
-        ):
+        asset = STATIC_ASSETS.get(static_asset_key(request_path))
+        if asset is None:
             self.send_error(404, "Not Found")
             return
-        content_type = mimetypes.guess_type(full_path)[0] or "application/octet-stream"
+        full_path, content_type = asset
         with open(full_path, "rb") as handle:
             self._send_bytes(handle.read(), content_type)
 
@@ -520,6 +523,8 @@ class PreviewHandler(BaseHTTPRequestHandler):
         )
 
     def _send_bytes(self, body, content_type, status=200):
+        if content_type not in SAFE_RESPONSE_CONTENT_TYPES:
+            content_type = "application/octet-stream"
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Cache-Control", "no-store")

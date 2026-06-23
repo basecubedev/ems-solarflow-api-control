@@ -29,6 +29,7 @@ def ensure_dashboard_ssl_context(config, base_dir):
         )
 
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(cert_file, key_file)
     return context
 

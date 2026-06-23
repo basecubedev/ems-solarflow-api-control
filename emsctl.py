@@ -1720,6 +1720,32 @@ def describe_token_status(influx_config):
     }
 
 
+def redact_influx_env_summary(summary):
+    """Return an output-safe copy of a bundled InfluxDB secret summary."""
+
+    from ems import influx_setup
+
+    redacted = {}
+    for key, value in summary.items():
+        redacted[key] = "<redacted>" if key in influx_setup.SECRET_KEYS else value
+    return redacted
+
+
+def redact_influx_env_generated_keys(keys):
+    return ["<redacted>" for _key in keys]
+
+
+def public_influx_env_report(report):
+    """Return only non-sensitive setup fields plus explicit redactions."""
+
+    return {
+        "relative_path": str(report["relative_path"]),
+        "created": bool(report["created"]),
+        "generated_keys": redact_influx_env_generated_keys(report["generated_keys"]),
+        "summary": redact_influx_env_summary(report["summary"]),
+    }
+
+
 def handle_influx_command(args, config):
     from ems.config import normalize_influxdb_config
 
@@ -1833,7 +1859,8 @@ def handle_influx_init_bundled(args, influx_config):
         )
 
     # 1. Create/merge the local secret env file (idempotent, never overwrites).
-    secret_report = influx_setup.ensure_secret_file(influx_config)
+    env_report = influx_setup.ensure_secret_file(influx_config)
+    public_env_report = public_influx_env_report(env_report)
 
     # 2. Start bundled InfluxDB unless --no-start. Use the full compose file
     # set (base first) so env_file paths resolve against the repo root, but
@@ -1888,10 +1915,10 @@ def handle_influx_init_bundled(args, influx_config):
         "command": "influx init",
         "enabled": influx_config["enabled"],
         "mode": influx_config["mode"],
-        "secret_file": secret_report["relative_path"],
-        "secret_file_created": secret_report["created"],
-        "generated_keys": secret_report["generated_keys"],
-        "summary": secret_report["summary"],
+        "secret_file": public_env_report["relative_path"],
+        "secret_file_created": public_env_report["created"],
+        "generated_keys": public_env_report["generated_keys"],
+        "summary": public_env_report["summary"],
         "compose_files": files,
         "data_dir": influx_setup.DEFAULT_DATA_DIR,
         "started": started,
@@ -1912,7 +1939,7 @@ def handle_influx_init_bundled(args, influx_config):
     if not ok:
         return fail(errors[0])
 
-    print_influx_init(secret_report, started, sync_ran, ready, args)
+    print_influx_init(public_env_report, started, sync_ran, ready, args)
     return 0
 
 
@@ -1988,23 +2015,19 @@ def handle_influx_init_external(args, influx_config):
     return 0
 
 
-def print_influx_init(secret_report, started, sync_ran, ready, args):
+def print_influx_init(env_report, started, sync_ran, ready, args):
     from ems import influx_setup
 
     print("InfluxDB bundled setup")
-    verb = "created" if secret_report["created"] else "updated"
-    print(f"  secret file: {secret_report['relative_path']} ({verb}, gitignored)")
+    verb = "created" if env_report["created"] else "updated"
+    print(f"  secret file: {env_report['relative_path']} ({verb}, gitignored)")
     print(f"  data directory: {influx_setup.DEFAULT_DATA_DIR} (gitignored)")
-    if secret_report["generated_keys"]:
-        print(
-            "  generated secrets: "
-            + ", ".join(secret_report["generated_keys"])
-            + " (redacted)"
-        )
+    if env_report["generated_keys"]:
+        print("  generated secrets: <redacted>")
     else:
         print("  generated secrets: none (existing values preserved)")
     print("  values:")
-    for key, value in secret_report["summary"].items():
+    for key, value in env_report["summary"].items():
         print(f"    {key}={value}")
 
     if started:
@@ -2070,9 +2093,11 @@ def handle_stack_command(args, config):
 
     # 1 + 2. For bundled mode with auto_init, create local secrets first.
     # --dry-run only previews the docker command, so it stays side-effect-free.
-    secret_report = None
+    env_report = None
     if bundled and influx_config["auto_init"] and not args.dry_run:
-        secret_report = influx_setup.ensure_secret_file(influx_config)
+        env_report = public_influx_env_report(
+            influx_setup.ensure_secret_file(influx_config)
+        )
 
     # Pre-create the local InfluxDB bind-mount target (idempotent). --dry-run
     # only previews the command, so it stays side-effect-free.
@@ -2123,10 +2148,10 @@ def handle_stack_command(args, config):
             "bundled_influxdb": bundled,
             "compose_files": files,
             "secret_file": (
-                secret_report["relative_path"] if secret_report else None
+                env_report["relative_path"] if env_report else None
             ),
             "secret_file_created": (
-                secret_report["created"] if secret_report else None
+                env_report["created"] if env_report else None
             ),
             "data_dir": influx_setup.DEFAULT_DATA_DIR if bundled else None,
             "synced": sync_ran,
