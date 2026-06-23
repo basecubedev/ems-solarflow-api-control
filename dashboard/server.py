@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import json
 import logging
-import mimetypes
 import os
 import tempfile
 import threading
@@ -29,9 +28,11 @@ from dashboard.runtime_write import (
     runtime_payload,
 )
 from dashboard.sqlite_store import SUPPORTED_RANGES
+from dashboard.static_files import build_static_asset_index, static_asset_key
 
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+STATIC_ASSETS = build_static_asset_index(STATIC_DIR)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Shown when Analytics history is enabled but InfluxDB cannot be reached, so the
 # operator gets the one setup command that fixes it (the EMS never starts Docker).
@@ -1032,22 +1033,15 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self.server.sse_limiter.release(remote)
 
     def _send_static(self, request_path):
-        path = "/index.html" if request_path in ("", "/") else request_path
-        normalized = os.path.normpath(path.lstrip("/"))
-        full_path = os.path.abspath(os.path.join(STATIC_DIR, normalized))
-        static_root = os.path.abspath(STATIC_DIR)
-
-        if (
-            os.path.commonpath([static_root, full_path]) != static_root
-            or not os.path.isfile(full_path)
-        ):
+        asset = STATIC_ASSETS.get(static_asset_key(request_path))
+        if asset is None:
             self.send_error(404)
             return
 
+        full_path, content_type = asset
         with open(full_path, "rb") as f:
             body = f.read()
 
-        content_type = mimetypes.guess_type(full_path)[0] or "application/octet-stream"
         self.send_response(200)
         self._send_security_headers()
         self.send_header("Content-Type", content_type)

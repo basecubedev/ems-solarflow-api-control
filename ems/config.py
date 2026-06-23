@@ -707,6 +707,13 @@ TEMPLATE_PLACEHOLDER_VALUES = {
 }
 
 
+def _is_template_placeholder_host(host):
+    if not host:
+        return False
+    value = str(host).strip().lower().rstrip(".")
+    return value in TEMPLATE_PLACEHOLDER_VALUES or value.endswith(".example.com")
+
+
 def is_template_placeholder_value(value):
     if value is None:
         return False
@@ -719,12 +726,9 @@ def is_template_placeholder_value(value):
         return True
     if lowered.startswith("your_") or lowered.startswith("your-"):
         return True
-    if "example.com" in lowered:
-        return True
-
     parsed = urlparse(text if "://" in text else f"//{text}")
     host = (parsed.hostname or "").lower()
-    return host in TEMPLATE_PLACEHOLDER_VALUES
+    return _is_template_placeholder_host(host)
 
 
 def _missing_or_placeholder(value):

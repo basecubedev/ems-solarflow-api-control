@@ -6,10 +6,15 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   full-test-suite:
     name: Full Python test suite (${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -70,6 +75,8 @@ jobs:
   simulated-regression-tests:
     name: Simulated power-control regression tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout repository
@@ -93,6 +100,8 @@ jobs:
   docker-smoke-test:
     name: Docker smoke test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout repository
@@ -128,6 +137,8 @@ jobs:
   influx-e2e:
     name: InfluxDB analytics e2e
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     services:
       influxdb:

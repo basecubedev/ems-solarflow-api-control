@@ -36,6 +36,7 @@ def test_ssl_context_autogenerates_missing_files(tmp_path):
     )
 
     assert isinstance(context, ssl.SSLContext)
+    assert context.minimum_version == ssl.TLSVersion.TLSv1_2
     assert (tmp_path / "dashboard.crt").exists()
     assert (tmp_path / "dashboard.key").exists()
 

@@ -1035,6 +1035,20 @@ def test_runtime_load_forces_safe_mode_for_template_placeholders(tmp_path, caplo
         restore_config_module(snapshot)
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("example.com", True),
+        ("https://example.com/api", True),
+        ("https://api.example.com/api", True),
+        ("notexample.com", False),
+        ("https://notexample.com/api", False),
+    ],
+)
+def test_template_placeholder_url_detection_uses_hostname(value, expected):
+    assert cfg.is_template_placeholder_value(value) is expected
+
+
 def test_runtime_load_keeps_live_mode_after_required_values_are_configured(tmp_path):
     snapshot = snapshot_config_module()
     shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")

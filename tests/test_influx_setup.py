@@ -129,6 +129,19 @@ def test_report_summary_redacts_secrets(tmp_path):
     assert summary["DOCKER_INFLUXDB_INIT_BUCKET"] == "ems_raw"
 
 
+def test_public_influx_env_report_redacts_secret_fields(tmp_path):
+    cfg = bundled_config()
+    report = influx_setup.ensure_secret_file(cfg, base_dir=str(tmp_path))
+    public = emsctl.public_influx_env_report(report)
+
+    assert public["relative_path"] == report["relative_path"]
+    assert public["created"] is True
+    assert public["generated_keys"] == ["<redacted>"] * len(report["generated_keys"])
+    for key in influx_setup.SECRET_KEYS:
+        assert public["summary"][key] == "<redacted>"
+    assert public["summary"]["DOCKER_INFLUXDB_INIT_BUCKET"] == "ems_raw"
+
+
 def test_read_secret_file_token(tmp_path):
     cfg = bundled_config()
     influx_setup.ensure_secret_file(cfg, base_dir=str(tmp_path))
@@ -601,7 +614,8 @@ def test_influx_init_json_is_single_object_without_secrets(patch_base, monkeypat
     secret_path = patch_base / "deploy" / "docker" / "influxdb.env"
     values = influx_setup.parse_env_file(secret_path.read_text())
     assert values["INFLUXDB_TOKEN"] not in out
-    assert "redacted" in payload["summary"]["INFLUXDB_TOKEN"]
+    assert payload["summary"]["INFLUXDB_TOKEN"] == "<redacted>"
+    assert payload["generated_keys"] == ["<redacted>"] * 3
     assert payload["token"]["redacted"] == "********"
 
 
