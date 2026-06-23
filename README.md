@@ -168,6 +168,16 @@ Backups are stored in host path `data/backups/` by default. Bundled InfluxDB
 backups are only needed when you use bundled InfluxDB analytics.
 Daily command sheet: [docs/common-commands.md](docs/common-commands.md).
 
+## Quality And Maintenance
+
+EMS is tested and maintained with automated checks for the Python code, Docker
+image, simulated power-control behavior, optional analytics paths, linting, and
+runtime packaging. Dependency updates are checked regularly, and the Docker
+image is rebuilt on release/main changes and on a weekly schedule.
+
+See [docs/quality-and-maintenance.md](docs/quality-and-maintenance.md) for the
+factual overview and limitations.
+
 ## Native Python Setup
 
 Native Python remains supported. Use it when you want to develop locally,
@@ -199,6 +209,7 @@ Short beginner answers are in [docs/faq.md](docs/faq.md).
 | Control flow | [docs/control-flow.md](docs/control-flow.md) |
 | Architecture | [docs/architecture.md](docs/architecture.md) |
 | Safety model | [docs/safety.md](docs/safety.md) |
+| Quality and maintenance | [docs/quality-and-maintenance.md](docs/quality-and-maintenance.md) |
 | Backup and restore | [docs/backup-restore.md](docs/backup-restore.md) |
 | InfluxDB analytics | [docs/influxdb.md](docs/influxdb.md) |
 | Home Assistant | [docs/home-assistant.md](docs/home-assistant.md) |
