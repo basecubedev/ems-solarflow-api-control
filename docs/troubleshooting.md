@@ -248,6 +248,25 @@ Zendure endpoints. It does not write to devices. Use it when telemetry is
 missing, a grid meter cannot be parsed, or configured devices appear
 unreachable.
 
+The output also includes a compact communication-health summary: grid-meter
+read health and per-device read/write health, each with a status
+(`ok`/`degraded`/`failed`/`unknown`), last-success age, consecutive errors, and
+last read latency. `stale value used: yes` means a grid-meter read failed and
+EMS kept the last known value (intended fallback, not a control bug). Read and
+write health are tracked separately, so a device can read fine while writes fail
+or are intentionally blocked. These counters are in-memory and reset on restart.
+
+Intermittent grid-meter read timeouts (for example a Shelly `ReadTimeoutError`
+on `/rpc/Shelly.GetStatus`) usually point at a slow/unresponsive meter or a
+flaky network rather than an EMS control problem; power-cycling the meter often
+clears it. Confirm with a focused read test:
+
+```bash
+python3 emsctl.py grid-meter test --duration 120 --interval 1
+```
+
+It reports read count, OK/failed counts, and p50/p95/max read latency.
+
 ## Docker Problems
 
 Run from the directory with `docker-compose.yml`:

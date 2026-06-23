@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from ems import config as cfg
 from ems.clients import (
     fetch_all_devices,
-    zendure_write_succeeded,
+    zendure_write,
     zero_device_state,
 )
 from ems.logging_utils import log_event
@@ -37,6 +37,10 @@ from ems.target_control import (
 STARTUP_AC_MODE_RECONCILE_REASON = "startup_ac_mode_reconcile"
 FULL_CHARGE_ASSIST_REASON = "battery_full_charge_assist"
 FULL_CHARGE_ASSIST_RESTORE_REASON = "battery_full_charge_assist_restore"
+
+# Unchanged-state reconciliation is the normal idle/stable case; surface it at
+# INFO only occasionally per device/field and keep every-loop output at DEBUG.
+RUNTIME_STATE_UNCHANGED_INFO_INTERVAL_S = 300
 
 
 class EMSController:
@@ -95,6 +99,7 @@ class EMSController:
         self._last_influx_publish = 0
         self.last_control_explanation = None
         self.runtime_intents = {}
+        self._unchanged_log_times = {}
 
     def build_battery_full_charge_store(self):
         if not cfg.BASE_DIR:
@@ -1145,23 +1150,15 @@ class EMSController:
             return False
 
         try:
-            response = dev.session.post(
-                f"http://{dev.ip}/properties/write",
-                json={
-                    "sn": dev.sn,
-                    "properties": {
-                        "acMode": desired_ac_mode
-                    }
-                },
-                timeout=2
+            ok = zendure_write(
+                dev,
+                "acMode",
+                {"acMode": desired_ac_mode},
+                "write_ac_mode_intent_error",
+                **fields
             )
 
-            if not zendure_write_succeeded(
-                "write_ac_mode_intent_error",
-                dev,
-                response,
-                **fields
-            ):
+            if not ok:
                 return False
 
             log_event(
@@ -1291,23 +1288,15 @@ class EMSController:
             return False
 
         try:
-            response = dev.session.post(
-                f"http://{dev.ip}/properties/write",
-                json={
-                    "sn": dev.sn,
-                    "properties": {
-                        "inputLimit": desired_input_limit
-                    }
-                },
-                timeout=2
+            ok = zendure_write(
+                dev,
+                "inputLimit",
+                {"inputLimit": desired_input_limit},
+                "runtime_ac_charge_power_write_error",
+                **fields
             )
 
-            if not zendure_write_succeeded(
-                "runtime_ac_charge_power_write_error",
-                dev,
-                response,
-                **fields
-            ):
+            if not ok:
                 return False
 
             log_event(
@@ -1990,23 +1979,15 @@ class EMSController:
             return
 
         try:
-            response = dev.session.post(
-                f"http://{dev.ip}/properties/write",
-                json={
-                    "sn": dev.sn,
-                    "properties": {
-                        "outputLimit": int(value)
-                    }
-                },
-                timeout=2
+            ok = zendure_write(
+                dev,
+                "outputLimit",
+                {"outputLimit": int(value)},
+                "write_output_limit_error",
+                target_w=value
             )
 
-            if not zendure_write_succeeded(
-                "write_output_limit_error",
-                dev,
-                response,
-                target_w=value
-            ):
+            if not ok:
                 return
 
             log_event(
@@ -2091,27 +2072,21 @@ class EMSController:
 
         try:
 
-            response = dev.session.post(
-                f"http://{dev.ip}/properties/write",
-                json={
-                    "sn": dev.sn,
-                    "properties": {
-                        "minSoc": int(effective_min_soc * 10),
-                        "socSet": int(effective_max_soc * 10)
-                    }
-                },
-                timeout=2
-            )
-
-            if not zendure_write_succeeded(
-                "write_soc_limits_error",
+            ok = zendure_write(
                 dev,
-                response,
+                "minSoc/socSet",
+                {
+                    "minSoc": int(effective_min_soc * 10),
+                    "socSet": int(effective_max_soc * 10)
+                },
+                "write_soc_limits_error",
                 min_soc=effective_min_soc,
                 max_soc=effective_max_soc,
                 max_soc_property="socSet",
                 reason=reason
-            ):
+            )
+
+            if not ok:
                 return False
 
             log_event(
@@ -2220,21 +2195,15 @@ class EMSController:
             return
 
         try:
-            response = dev.session.post(
-                f"http://{dev.ip}/properties/write",
-                json={
-                    "sn": dev.sn,
-                    "properties": properties
-                },
-                timeout=2
+            ok = zendure_write(
+                dev,
+                "winter_ac_charge_limit",
+                properties,
+                "write_winter_ac_charge_limit_error",
+                **fields
             )
 
-            if not zendure_write_succeeded(
-                "write_winter_ac_charge_limit_error",
-                dev,
-                response,
-                **fields
-            ):
+            if not ok:
                 return
 
             log_event(
@@ -2344,21 +2313,15 @@ class EMSController:
             return
 
         try:
-            response = dev.session.post(
-                f"http://{dev.ip}/properties/write",
-                json={
-                    "sn": dev.sn,
-                    "properties": properties
-                },
-                timeout=2
+            ok = zendure_write(
+                dev,
+                ",".join(properties),
+                properties,
+                "write_device_modes_error",
+                **fields
             )
 
-            if not zendure_write_succeeded(
-                "write_device_modes_error",
-                dev,
-                response,
-                **fields
-            ):
+            if not ok:
                 return
 
             log_event(
@@ -2375,6 +2338,55 @@ class EMSController:
                 device=dev.name,
                 error=e
             )
+
+    def health_snapshot(self):
+        """Aggregate in-memory grid-meter and device comm health.
+
+        Shape is export-friendly for later dashboard/InfluxDB use. Stale
+        thresholds derive from the active loop interval so they scale with how
+        often the EMS actually reads.
+        """
+
+        loop_interval = self.runtime_system_int(
+            "loop_interval", cfg.LOOP_INTERVAL, minimum=1
+        )
+        stale_after = max(loop_interval * 6, 30)
+
+        grid = None
+        grid_health = getattr(self.shelly, "health", None)
+        if grid_health is not None:
+            grid = grid_health.snapshot(stale_after_s=stale_after)
+            grid["provider"] = getattr(self.shelly, "provider", grid.get("name"))
+
+        devices = []
+        for dev in self.devices:
+            read = getattr(dev, "read_health", None)
+            write = getattr(dev, "write_health", None)
+            devices.append({
+                "name": dev.name,
+                "read": read.snapshot(stale_after_s=stale_after) if read else None,
+                "write": write.snapshot(stale_after_s=stale_after) if write else None,
+            })
+
+        return {"grid_meter": grid, "devices": devices}
+
+    def log_runtime_state_unchanged(self, fields):
+        """Log unchanged-state reconciliation at DEBUG, throttled to INFO.
+
+        Unchanged state is the normal idle/stable case and floods INFO when
+        logged every loop; emit DEBUG each time but keep an occasional INFO per
+        device/field so it stays discoverable.
+        """
+
+        key = (fields.get("device"), fields.get("field"))
+        now = time.monotonic()
+        last = self._unchanged_log_times.get(key)
+
+        if last is None or now - last >= RUNTIME_STATE_UNCHANGED_INFO_INTERVAL_S:
+            self._unchanged_log_times[key] = now
+            log_event(logging.INFO, "runtime_device_state_unchanged", **fields)
+        else:
+            log_event(logging.DEBUG, "runtime_device_state_unchanged", **fields)
 
     def apply_runtime_device_state(self, dev, state):
         """Apply runtime-state device intents through safe reconciliation."""
@@ -2424,11 +2436,7 @@ class EMSController:
         }
 
         if current_grid_off_mode == desired_grid_off_mode:
-            log_event(
-                logging.INFO,
-                "runtime_device_state_unchanged",
-                **fields
-            )
+            self.log_runtime_state_unchanged(fields)
             return
 
         if not cfg.state_reconciliation_writes_allowed():
@@ -2449,23 +2457,15 @@ class EMSController:
             return
 
         try:
-            response = dev.session.post(
-                f"http://{dev.ip}/properties/write",
-                json={
-                    "sn": dev.sn,
-                    "properties": {
-                        "gridOffMode": desired_grid_off_mode
-                    }
-                },
-                timeout=2
+            ok = zendure_write(
+                dev,
+                "gridOffMode",
+                {"gridOffMode": desired_grid_off_mode},
+                "write_runtime_device_state_error",
+                **fields
             )
 
-            if not zendure_write_succeeded(
-                "write_runtime_device_state_error",
-                dev,
-                response,
-                **fields
-            ):
+            if not ok:
                 return
 
             log_event(

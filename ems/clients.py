@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
@@ -7,6 +8,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from ems import config as cfg
+from ems.health import CommHealth
 from ems.logging_utils import log_event
 from ems.models import DeviceState
 
@@ -31,6 +33,48 @@ def zendure_write_succeeded(error_event, dev, response, **fields):
     )
 
     return False
+
+
+def zendure_write(dev, field, properties, error_event, timeout=2, **fields):
+    """POST a Zendure properties write, record write health, return success.
+
+    Records latency and success/failure on ``dev.write_health`` when present.
+    On transport exceptions the failure is recorded before re-raising so callers
+    keep their existing error logging and control flow.
+    """
+
+    health = getattr(dev, "write_health", None)
+    start = time.monotonic()
+
+    try:
+        response = dev.session.post(
+            f"http://{dev.ip}/properties/write",
+            json={"sn": dev.sn, "properties": properties},
+            timeout=timeout,
+        )
+    except Exception as exc:
+        if health is not None:
+            health.record_failure(
+                error=exc,
+                latency_ms=(time.monotonic() - start) * 1000.0,
+                field=field,
+            )
+        raise
+
+    latency_ms = (time.monotonic() - start) * 1000.0
+    ok = zendure_write_succeeded(error_event, dev, response, **fields)
+
+    if health is not None:
+        if ok:
+            health.record_success(latency_ms, field=field)
+        else:
+            health.record_failure(
+                error=f"http_status_{getattr(response, 'status_code', 0)}",
+                latency_ms=latency_ms,
+                field=field,
+            )
+
+    return ok
 
 # =====================
 # HTTP SESSION
@@ -291,19 +335,28 @@ class ZendureClient:
         self.pv_kwp = pv_kwp or 1.0
         self.battery_kwh = battery_kwh or 1.0
         self.pv_priority_factor = pv_priority_factor or 1.0
+        self.read_health = CommHealth(name, kind="read")
+        self.write_health = CommHealth(name, kind="write")
 
     def fetch(self):
         """Fetch current device state."""
 
+        start = time.monotonic()
         try:
             r = self.session.get(
                 f"http://{self.ip}/properties/report",
                 timeout=2
             )
 
-            return parse_device(r.json())
+            state = parse_device(r.json())
+            self.read_health.record_success((time.monotonic() - start) * 1000.0)
+            return state
 
         except Exception as e:
+            self.read_health.record_failure(
+                error=e,
+                latency_ms=(time.monotonic() - start) * 1000.0,
+            )
             logging.warning(f"{self.name} fetch failed: {e}")
             return None
 
@@ -311,11 +364,14 @@ class ZendureClient:
 class ShellyClient:
     """Client for Shelly power meter."""
 
+    provider = "Shelly"
+
     def __init__(self, ip, session, channels=None):
         self.ip = ip
         self.session = session
         self._channels = _normalize_shelly_channels(channels)
         self.last_value = 0
+        self.health = CommHealth(self.provider, kind="read")
 
     @property
     def channels(self):
@@ -324,6 +380,7 @@ class ShellyClient:
     def get_power(self):
         """Return current household power usage."""
 
+        start = time.monotonic()
         try:
             r = self.session.get(
                 f"http://{self.ip}/rpc/Shelly.GetStatus",
@@ -337,8 +394,14 @@ class ShellyClient:
                 ),
                 1
             )
+            self.health.record_success((time.monotonic() - start) * 1000.0)
 
         except Exception as e:
+            self.health.record_failure(
+                error=e,
+                latency_ms=(time.monotonic() - start) * 1000.0,
+                stale_used=True,
+            )
             log_event(
                 logging.WARNING,
                 "shelly_read_error",
@@ -354,11 +417,14 @@ class ShellyClient:
 class Shelly3EMGen1Client:
     """Client for Shelly 3EM Gen1 power meters."""
 
+    provider = "Shelly 3EM Gen1"
+
     def __init__(self, ip, session, channels=None):
         self.ip = ip
         self.session = session
         self._channels = _normalize_shelly_channels(channels)
         self.last_value = 0
+        self.health = CommHealth(self.provider, kind="read")
 
     @property
     def channels(self):
@@ -367,6 +433,7 @@ class Shelly3EMGen1Client:
     def get_power(self):
         """Return current household/grid power usage."""
 
+        start = time.monotonic()
         try:
             r = self.session.get(
                 f"http://{self.ip}/status",
@@ -380,8 +447,14 @@ class Shelly3EMGen1Client:
                 ),
                 1
             )
+            self.health.record_success((time.monotonic() - start) * 1000.0)
 
         except Exception as e:
+            self.health.record_failure(
+                error=e,
+                latency_ms=(time.monotonic() - start) * 1000.0,
+                stale_used=True,
+            )
             log_event(
                 logging.WARNING,
                 "shelly_3em_gen1_read_error",
@@ -397,14 +470,18 @@ class Shelly3EMGen1Client:
 class EcoTrackerClient:
     """Client for everHome EcoTracker local REST API."""
 
+    provider = "EcoTracker"
+
     def __init__(self, ip, session):
         self.ip = ip
         self.session = session
         self.last_value = 0
+        self.health = CommHealth(self.provider, kind="read")
 
     def get_power(self):
         """Return current household/grid power usage."""
 
+        start = time.monotonic()
         try:
             r = self.session.get(
                 f"http://{self.ip}/v1/json",
@@ -415,8 +492,14 @@ class EcoTrackerClient:
                 _parse_ecotracker_power(r.json()),
                 1
             )
+            self.health.record_success((time.monotonic() - start) * 1000.0)
 
         except Exception as e:
+            self.health.record_failure(
+                error=e,
+                latency_ms=(time.monotonic() - start) * 1000.0,
+                stale_used=True,
+            )
             log_event(
                 logging.WARNING,
                 "ecotracker_read_error",
@@ -431,15 +514,19 @@ class EcoTrackerClient:
 class TasmotaHttpClient:
     """Client for Tasmota HTTP JSON smart meter payloads."""
 
+    provider = "Tasmota"
+
     def __init__(self, url, power_path, session):
         self.url = url
         self.power_path = power_path
         self.session = session
         self.last_value = 0
+        self.health = CommHealth(self.provider, kind="read")
 
     def get_power(self):
         """Return current household/grid power usage."""
 
+        start = time.monotonic()
         try:
             r = self.session.get(
                 self.url,
@@ -450,8 +537,14 @@ class TasmotaHttpClient:
                 _parse_tasmota_http_power(r.json(), self.power_path),
                 1
             )
+            self.health.record_success((time.monotonic() - start) * 1000.0)
 
         except Exception as e:
+            self.health.record_failure(
+                error=e,
+                latency_ms=(time.monotonic() - start) * 1000.0,
+                stale_used=True,
+            )
             log_event(
                 logging.WARNING,
                 "tasmota_http_read_error",

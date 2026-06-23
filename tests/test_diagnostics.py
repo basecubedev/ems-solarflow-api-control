@@ -1187,6 +1187,52 @@ def test_diagnose_hardware_probes_shelly_pro_rpc_endpoint(monkeypatch):
     assert levels.get("shelly_read_ok") == "ok"
 
 
+def test_diagnose_hardware_returns_health_and_renders_sections(monkeypatch):
+    def fake_http_json(url, headers=None, timeout=2):
+        if "Shelly.GetStatus" in url:
+            raise TimeoutError("Read timed out")
+        return 200, {"properties": {"electricLevel": 50}}
+
+    monkeypatch.setattr(diagnostics, "diagnose_http_json", fake_http_json)
+
+    checks = []
+    health = diagnostics.diagnose_hardware(
+        checks,
+        {
+            "grid_meter": {"type": "shelly", "ip": "192.0.2.50"},
+            "devices": [{"name": "WR1", "ip": "192.0.2.60", "sn": "SN1"}],
+        },
+    )
+
+    assert health["grid_meter"]["provider"] == "Shelly"
+    assert health["grid_meter"]["status"] == "failed"
+    assert health["devices"][0]["name"] == "WR1"
+    assert health["devices"][0]["read"]["status"] == "ok"
+    assert health["devices"][0]["write"] is None
+
+    text = diagnostics.diagnose_hardware_health_text(health)
+    assert "Grid meter health:" in text
+    assert "provider: Shelly" in text
+    assert "Device health:" in text
+    assert "WR1:" in text
+    assert "write: not attempted" in text
+
+
+def test_diagnose_report_includes_hardware_health_section(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        diagnostics,
+        "diagnose_http_json",
+        lambda url, headers=None, timeout=2: (200, {"em:0": {"total_act_power": 12.0}}),
+    )
+    write_config(tmp_path / "config.json")
+
+    report = emsctl.run_hardware_diagnosis(diagnose_args(tmp_path))
+
+    assert report["hardware_health"] is not None
+    text = diagnostics.diagnose_text(report)
+    assert "Grid meter health:" in text
+
+
 def test_diagnose_install_includes_runtime_paths(tmp_path, monkeypatch):
     monkeypatch.delenv("EMS_IN_CONTAINER", raising=False)
     report = diagnostics.run_install_diagnosis(diagnose_args(tmp_path))
