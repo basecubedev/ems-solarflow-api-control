@@ -6,7 +6,6 @@ import os
 import re
 import sys
 import stat
-from datetime import datetime
 from urllib.parse import urlparse
 
 LATEST_CONFIG_SCHEMA_VERSION = 3

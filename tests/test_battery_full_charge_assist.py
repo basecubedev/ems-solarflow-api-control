@@ -1,5 +1,4 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-import json
 import unittest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -11,11 +10,8 @@ from ems import config as cfg
 from ems.clients import parse_device
 from ems.controller import (
     EMSController,
-    FULL_CHARGE_ASSIST_REASON,
-    FULL_CHARGE_ASSIST_RESTORE_REASON,
 )
 from ems.models import DeviceState
-from ems.runtime_intents import DeviceRuntimeRole
 from ems.state_store import BatteryFullChargeStateStore
 
 

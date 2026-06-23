@@ -4,16 +4,10 @@ import shutil
 import stat
 import subprocess
 import sys
-import zipfile
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from types import SimpleNamespace
 
 import emsctl
 from ems import config as cfg
 from ems import config_init as config_init_mod
-from ems import paths as ems_paths
-from ems.state_store import BatteryFullChargeStateStore
 
 from _emsctl_test_helpers import (
     EMSCTL,
@@ -21,15 +15,12 @@ from _emsctl_test_helpers import (
     assert_diagnose_help_discovery,
     assert_diagnose_option_flags,
     config_args,
-    diagnose_args,
     patch_emsctl_base,
     run_emsctl,
     run_emsctl_no_args,
     runtime_state,
     write_config,
-    write_control_runtime,
     write_discovery_config,
-    write_two_device_config,
 )
 
 

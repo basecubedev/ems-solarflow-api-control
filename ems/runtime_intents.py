@@ -3,7 +3,6 @@
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
 
 
 class DeviceRuntimeRole(str, Enum):
@@ -16,7 +15,7 @@ class DeviceRuntimeIntent:
     device: str
     role: DeviceRuntimeRole
     reason: str
-    desired_ac_mode: Optional[int]
+    desired_ac_mode: int | None
     output_control_allowed: bool
     priority: int = 0
 

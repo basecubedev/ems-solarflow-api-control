@@ -1,33 +1,22 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import json
 import subprocess
-import sys
 import zipfile
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 import emsctl
 from ems import diagnostics
-from ems import paths as ems_paths
 from ems.state_store import BatteryFullChargeStateStore
 
 from _emsctl_test_helpers import (
-    EMSCTL,
-    ROOT,
     assert_diagnose_help_discovery,
-    assert_diagnose_option_flags,
-    config_args,
     diagnose_args,
-    patch_emsctl_base,
     run_emsctl,
-    run_emsctl_no_args,
-    runtime_state,
     write_config,
     write_control_runtime,
-    write_discovery_config,
     write_two_device_config,
 )
 

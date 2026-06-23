@@ -1524,7 +1524,6 @@ def diagnose_meter_failure_count(runtime_data):
 
 
 def diagnose_control_snapshot(config_data, runtime_data, runtime_path):
-    controller = runtime_data.get("controller", {}) if isinstance(runtime_data.get("controller"), dict) else {}
     devices = runtime_data.get("devices", {}) if isinstance(runtime_data.get("devices"), dict) else {}
     system_runtime = runtime_data.get("system", {}) if isinstance(runtime_data.get("system"), dict) else {}
     system_config = config_data.get("system", {}) if isinstance(config_data.get("system"), dict) else {}

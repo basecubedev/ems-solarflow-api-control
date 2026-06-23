@@ -219,7 +219,7 @@ def ensure_secret_file(influx_config, base_dir=None):
 
     existing = OrderedDict()
     if existed:
-        with open(path, "r", encoding="utf-8") as handle:
+        with open(path, encoding="utf-8") as handle:
             existing = parse_env_file(handle.read())
 
     values, generated_keys = build_env_values(influx_config, existing)
@@ -253,7 +253,7 @@ def read_secret_file_token(influx_config, base_dir=None):
     if not os.path.exists(path):
         return ""
     token_env = (influx_config.get("token_env") or "INFLUXDB_TOKEN").strip()
-    with open(path, "r", encoding="utf-8") as handle:
+    with open(path, encoding="utf-8") as handle:
         values = parse_env_file(handle.read())
     return values.get(token_env, "").strip()
 

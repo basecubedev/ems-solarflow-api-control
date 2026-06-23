@@ -11,7 +11,6 @@ import threading
 import time
 from types import SimpleNamespace
 
-import pytest
 
 from ems.history.influx_writer import (
     InfluxTelemetryWriter,
