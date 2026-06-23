@@ -8,7 +8,6 @@ commands it would run and to emulate the container side (``influx backup`` /
 
 import os
 
-import pytest
 
 import emsctl
 from ems import backup, influx_setup

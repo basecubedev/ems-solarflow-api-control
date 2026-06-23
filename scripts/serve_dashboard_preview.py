@@ -455,7 +455,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
                 timestamp = snapshot.get("timestamp")
                 if timestamp != last_timestamp:
                     payload = json.dumps(snapshot, sort_keys=True)
-                    self.wfile.write(f"event: telemetry\ndata: {payload}\n\n".encode("utf-8"))
+                    self.wfile.write(f"event: telemetry\ndata: {payload}\n\n".encode())
                     self.wfile.flush()
                     last_timestamp = timestamp
                 time.sleep(2)

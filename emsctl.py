@@ -3,45 +3,34 @@
 """Safe runtime-state editor for ems-solarflow-api-control."""
 
 import argparse
-import shutil
-import sqlite3
 import subprocess
-import statistics
 import getpass
 import json
 import math
 import os
-import platform
 import re
 import sys
-import time
-import zipfile
-from dataclasses import asdict, dataclass, field
-from datetime import datetime, timedelta, timezone
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from datetime import datetime
 
 from dashboard import auth as dashboard_auth
 
 
 from ems.paths import (
     BASE_DIR,
-    resolve_project_path,
     resolve_runtime_path,
     resolve_dashboard_auth_path,
 )
 
 from ems.diagnostics import (
-    run_diagnosis,
-    run_install_diagnosis,
-    run_deep_diagnosis,
-    run_hardware_diagnosis,
-    run_control_diagnosis,
-    run_control_quality_diagnosis,
-    diagnose_text,
     diagnose_json_file,
+    diagnose_text,
     diagnose_write_support_bundle,
+    run_control_diagnosis as run_control_diagnosis,
+    run_control_quality_diagnosis as run_control_quality_diagnosis,
+    run_deep_diagnosis as run_deep_diagnosis,
+    run_diagnosis,
+    run_hardware_diagnosis as run_hardware_diagnosis,
+    run_install_diagnosis as run_install_diagnosis,
 )
 
 from ems import backup as backup_mod
@@ -1604,7 +1593,6 @@ def run_docker_compose(command, cwd, dry_run=False, stdout_to_stderr=False):
     ``stdout_to_stderr=args.json`` to keep stdout a clean JSON channel while the
     human-readable Docker output is still shown (on stderr).
     """
-    import subprocess
 
     # Trace goes to stderr so stdout stays a clean single JSON object for
     # --json consumers (and piping into jq).

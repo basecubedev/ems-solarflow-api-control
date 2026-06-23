@@ -46,6 +46,10 @@ jobs:
           print("zoneinfo ok", zoneinfo.ZoneInfo("Europe/Berlin"))
           PY
 
+      - name: Run Ruff lint
+        run: |
+          ruff check .
+
       - name: Compile Python files
         run: |
           python -m compileall ems dashboard scripts tests emsctl.py ems-solarflow-api-control.py

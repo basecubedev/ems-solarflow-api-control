@@ -329,7 +329,7 @@ def ask_devices(
             noninteractive=noninteractive,
         )
         current["pv_kwp"] = ask_float(
-            f"PV size connected to this device in kWp",
+            "PV size connected to this device in kWp",
             current.get("pv_kwp", 1.0),
             minimum=0.0,
             noninteractive=noninteractive,

@@ -1,0 +1,20 @@
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+  "E",
+  "F",
+  "UP",
+  "B",
+]
+ignore = [
+  "E501",
+  "E722",
+  "B007",
+  "B023",
+  "B904",
+  "B905",
+  "UP031",
+]
