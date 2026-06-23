@@ -3588,26 +3588,36 @@ def create_upgrade_backup(args, config):
     return path, "ok"
 
 
-def prompt_comment_refresh(count):
+def prompt_comment_refresh(count, *, upgrade=False):
     print()
     print(f"{count} comment entries differ from the current template.")
     print()
-    print("Refresh explanatory comments from template?")
+    if upgrade:
+        print("Refresh explanatory comments as part of this upgrade?")
+    else:
+        print("Refresh explanatory comments from template?")
     print()
     print("This updates only _comment* entries.")
-    print("No configuration values will be modified.")
+    if upgrade:
+        print("The selected config upgrade will be written at the same time.")
+    else:
+        print("No configuration values will be modified.")
     print()
     choice = prompt_text("[y/N]")
     return bool(choice and choice.strip().lower().startswith("y"))
 
 
-def maybe_refresh_config_comments(
-    args,
-    config,
-    *,
-    layout=None,
-    backup_already_created=False,
-):
+def resolve_comment_refresh_backup_policy():
+    choice = prompt_text(
+        "Create config backup before refreshing comments? [y/n]",
+        default="y",
+    )
+    if choice is None:
+        return None, "abort"
+    return choice.strip().lower().startswith("y"), "ok"
+
+
+def maybe_refresh_config_comments(args, config, *, layout=None):
     if args.yes or args.dry_run:
         return 0
 
@@ -3618,7 +3628,17 @@ def maybe_refresh_config_comments(
     if not prompt_comment_refresh(len(differences)):
         return 0
 
-    if not backup_already_created:
+    do_backup, policy_status = resolve_comment_refresh_backup_policy()
+    if policy_status == "abort":
+        print("Aborted.")
+        return 0
+
+    if not do_backup:
+        print(
+            "Continuing without backup. Existing config.json comments "
+            "will be modified."
+        )
+    else:
         try:
             backup_path, backup_status = create_upgrade_backup(args, config)
         except backup_mod.BackupError as exc:
@@ -3640,6 +3660,42 @@ def maybe_refresh_config_comments(
         layout=layout,
     )
     print(f"Refreshed explanatory comments: {len(refreshed_items)}")
+    return 0
+
+
+def prompt_upgrade_comment_refresh(plan):
+    differences = plan.get("comment_refresh", [])
+    if not differences or not sys.stdin.isatty():
+        return None
+    if prompt_comment_refresh(len(differences), upgrade=True):
+        return config_mod.refresh_template_comments(
+            plan["upgraded_config"],
+            BASE_DIR,
+        )
+    return None
+
+
+def write_config_upgrade(args, config, updated_config, layout, do_backup):
+    if do_backup:
+        try:
+            backup_path, backup_status = create_upgrade_backup(args, config)
+        except backup_mod.BackupError as exc:
+            return fail(f"backup failed; config.json not changed: {exc}")
+        if backup_status == "abort":
+            print("Aborted.")
+            return 0
+        if backup_status != "ok":
+            return fail(f"backup failed; config.json not changed: {backup_status}")
+        print(f"Backup created:\n  {backup_path}")
+    else:
+        print("Continuing without backup. Existing config.json will be modified.")
+
+    config_mod.write_config_json_atomic(
+        args.config,
+        updated_config,
+        layout=layout,
+    )
+    print(f"Updated {args.config}")
     return 0
 
 
@@ -3756,34 +3812,26 @@ def handle_config_command(args, config):
     if status != "ok":
         return fail(status, code=2)
 
-    if do_backup:
-        try:
-            backup_path, backup_status = create_upgrade_backup(args, config)
-        except backup_mod.BackupError as exc:
-            return fail(f"backup failed; config.json not changed: {exc}")
-        if backup_status == "abort":
-            print("Aborted.")
-            return 0
-        if backup_status != "ok":
-            return fail(f"backup failed; config.json not changed: {backup_status}")
-        print(f"Backup created:\n  {backup_path}")
-        backup_already_created = True
+    refreshed_comments = prompt_upgrade_comment_refresh(plan)
+    if refreshed_comments is None:
+        final_config = plan["upgraded_config"]
+        refreshed_count = 0
     else:
-        print("Continuing without backup. Existing config.json will be modified.")
-        backup_already_created = False
+        final_config, refreshed_items = refreshed_comments
+        refreshed_count = len(refreshed_items)
 
-    config_mod.write_config_json_atomic(
-        args.config,
-        plan["upgraded_config"],
-        layout=plan.get("template_layout"),
-    )
-    print(f"Updated {args.config}")
-    return maybe_refresh_config_comments(
+    result = write_config_upgrade(
         args,
-        plan["upgraded_config"],
-        layout=plan.get("template_layout"),
-        backup_already_created=backup_already_created,
+        config,
+        final_config,
+        plan.get("template_layout"),
+        do_backup,
     )
+    if result != 0:
+        return result
+    if refreshed_count:
+        print(f"Refreshed explanatory comments: {refreshed_count}")
+    return 0
 
 
 def main(argv=None):
