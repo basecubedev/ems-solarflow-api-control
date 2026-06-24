@@ -17,6 +17,8 @@ data/
 
 tests/
 scripts/
+# Keep the one runtime dependency of ems/history (Analytics influx sync/status).
+!scripts/influx_utils.py
 tasks/
 docs/develop/tasks/
 runtime-traces/

@@ -185,16 +185,15 @@ YAML
 }
 
 write_env() {
-    # Local .env: run EMS as the invoking user and, for Analytics, default the
-    # compose profile so plain `docker compose up -d` keeps starting the stack.
+    # Local .env runs EMS as the invoking user. The Analytics profile is added
+    # later by enable_analytics_profile, only after config/influxdb.env exists —
+    # activating it earlier would make every `docker compose run` pull the
+    # bundled InfluxDB service (required env_file) into scope before its secret
+    # file is generated.
     uid=$(id -u 2>/dev/null || echo "")
     gid=$(id -g 2>/dev/null || echo "")
     if [ "$DRY_RUN" -eq 1 ]; then
-        if [ "$ANALYTICS" -eq 1 ]; then
-            log "DRY-RUN: write .env (PUID/PGID, COMPOSE_PROFILES=with-analytics)"
-        else
-            log "DRY-RUN: write .env (PUID/PGID)"
-        fi
+        log "DRY-RUN: write .env (PUID/PGID)"
         return 0
     fi
     {
@@ -202,10 +201,17 @@ write_env() {
             printf 'PUID=%s\n' "$uid"
             printf 'PGID=%s\n' "$gid"
         fi
-        if [ "$ANALYTICS" -eq 1 ]; then
-            printf 'COMPOSE_PROFILES=with-analytics\n'
-        fi
     } > .env
+}
+
+# Default plain `docker compose up -d` to the Analytics profile. Called only
+# after config/influxdb.env exists so the bundled InfluxDB service can load it.
+enable_analytics_profile() {
+    if [ "$DRY_RUN" -eq 1 ]; then
+        log "DRY-RUN: append COMPOSE_PROFILES=with-analytics to .env"
+        return 0
+    fi
+    printf 'COMPOSE_PROFILES=with-analytics\n' >> .env
 }
 
 compose() {
@@ -233,6 +239,7 @@ main() {
             compose run --rm ems python3 emsctl.py config init --analytics --yes --no-backup
         fi
         compose run --rm ems python3 emsctl.py influx init --no-start
+        enable_analytics_profile
     fi
 
     if [ "$START" -eq 0 ] || [ "$DRY_RUN" -eq 1 ]; then

@@ -156,12 +156,13 @@ function Write-Compose {
     Write-Info "Wrote docker-compose.yml (image tag: $Tag)."
 }
 
-function Write-EnvFile {
-    # Windows / Docker Desktop does not use PUID/PGID; only set the profile.
-    if ($DryRun) { Write-Info "DRY-RUN: write .env"; return }
-    if ($Analytics) {
-        Set-Content -Path .env -Value "COMPOSE_PROFILES=with-analytics" -Encoding ascii
-    }
+function Enable-AnalyticsProfile {
+    # Default plain `docker compose up -d` to the Analytics profile. Called only
+    # after config/influxdb.env exists so the bundled InfluxDB service (required
+    # env_file) is not pulled into scope before its secret file is generated.
+    # Windows / Docker Desktop does not use PUID/PGID, so .env holds only this.
+    if ($DryRun) { Write-Info "DRY-RUN: write .env (COMPOSE_PROFILES=with-analytics)"; return }
+    Set-Content -Path .env -Value "COMPOSE_PROFILES=with-analytics" -Encoding ascii
 }
 
 function Invoke-Compose {
@@ -179,7 +180,6 @@ if ($Analytics) {
 }
 
 Write-Compose
-Write-EnvFile
 
 if ($Analytics) {
     if ((Test-Path config/config.json) -and (-not $Force)) {
@@ -188,6 +188,7 @@ if ($Analytics) {
         Invoke-Compose run --rm ems python3 emsctl.py config init --analytics --yes --no-backup
     }
     Invoke-Compose run --rm ems python3 emsctl.py influx init --no-start
+    Enable-AnalyticsProfile
 }
 
 if ($NoStart -or $DryRun) {
