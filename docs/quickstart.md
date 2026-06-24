@@ -34,22 +34,52 @@ docker compose version
 
 ## 3. Start With Docker
 
+### Quick install (recommended)
+
+The installer writes `docker-compose.yml`, creates `config/` and `data/`, and
+starts EMS. No repository clone is required. For EMS-only installs,
+`config/config.json` is created on first container start; with Analytics the
+installer creates it during setup because it runs `config init --analytics`.
+
+Linux/macOS, EMS only:
+
 ```bash
+mkdir -p ems-solarflow-api-control && cd ems-solarflow-api-control
+curl -fsSLo install-docker.sh https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/main/install-docker.sh
+sh install-docker.sh
+```
+
+Linux/macOS, EMS + Analytics (bundled InfluxDB):
+
+```bash
+mkdir -p ems-solarflow-api-control && cd ems-solarflow-api-control
+curl -fsSLo install-docker.sh https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/main/install-docker.sh
+sh install-docker.sh --analytics
+```
+
+Windows PowerShell (Docker Desktop with Linux containers), EMS only:
+
+```powershell
 mkdir ems-solarflow-api-control
 cd ems-solarflow-api-control
-mkdir -p config data
-
-curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/main/docker-compose.example.yml
-
-docker compose pull
-docker compose up -d
+irm https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/main/install-docker.ps1 -OutFile install-docker.ps1
+powershell -ExecutionPolicy Bypass -File .\install-docker.ps1
 ```
+
+Add `-Analytics` for EMS + Analytics. `chmod +x` is not required on
+Linux/macOS: run the script through `sh install-docker.sh`.
+
+### Manual install (full control)
+
+If you prefer to run each step yourself, see the manual path in
+[docker.md](docker.md). It downloads `docker-compose.yml`, runs `config init`,
+and starts the stack with the same commands the installer uses.
 
 On first start, the container creates `config/config.json` from the built-in
 template if the file does not exist yet. Existing `config/config.json` files
 are not overwritten.
 
-The downloaded Compose file uses service name `ems`, port mapping
+The generated Compose file uses service name `ems`, port mapping
 `8080:8080`, and bind mounts `./config:/app/config` and `./data:/app/data`.
 
 Check that the container started:
@@ -130,6 +160,7 @@ http://127.0.0.1:8080
 - First-run checklist: [first-run-checklist.md](first-run-checklist.md)
 - Common commands: [common-commands.md](common-commands.md)
 - Docker reference: [docker.md](docker.md)
+- Analytics (bundled InfluxDB): [influxdb.md](influxdb.md)
 - Troubleshooting: [troubleshooting.md](troubleshooting.md)
 - Backup and restore: [backup-restore.md](backup-restore.md)
 - Backups are stored in `data/backups/` by default.
