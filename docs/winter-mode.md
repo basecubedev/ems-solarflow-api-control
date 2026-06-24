@@ -99,6 +99,11 @@ write_winter_ac_charge_limit
 write_winter_ac_charge_limit_error
 ```
 
+`winter_mode_state` is logged at `info` only when the active state changes or an
+adjustment is due; otherwise it is a `debug` trace, so the per-reconcile state
+no longer floods the default log. Actual writes and ramps stay at `info`. Set
+`system.log_level=debug` to see every reconcile interval.
+
 ## Home Assistant
 
 Winter status and calculated targets are published to HA. See

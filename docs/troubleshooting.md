@@ -741,7 +741,8 @@ python3 -B ems-solarflow-api-control.py --dry-run --duration 120
 Control-chain details: [control-logic.md](control-logic.md) and
 [control-flow.md](control-flow.md).
 
-Relevant events:
+Relevant events (per-cycle control-loop traces; emitted at `debug`, set
+`system.log_level=debug` to see them):
 
 ```text
 output_control_state
@@ -790,7 +791,8 @@ target_calculation
 | target jumps too hard | `ramp_up_w_per_cycle` / `ramp_down_w_per_cycle` | decrease |
 | devices fight each other | disable other controllers | check Zendure app, HEMS, HA automations |
 
-Relevant events:
+Relevant events (`output_control_deadband_hold` is a `debug` trace; the actual
+write `write_output_limit` stays at `info`):
 
 ```text
 output_control_deadband_hold
@@ -881,6 +883,12 @@ night_min_soc_idle_hold_skip_write
 night_min_soc_idle_park_write
 min_output_limit_applied
 ```
+
+Night/min-SOC idle entry and exit (`night_min_soc_idle_enter`,
+`night_min_soc_idle_exit`) and the parking write (`night_min_soc_idle_park_write`)
+are real transitions/writes and stay at `info`.
+`night_min_soc_idle_hold_skip_write` only confirms a device is already parked, so
+it is a `debug` trace; set `system.log_level=debug` to see it.
 
 Related docs: [configuration.md](configuration.md), [winter-mode.md](winter-mode.md),
 [safety.md](safety.md).
@@ -1076,6 +1084,10 @@ dry_run_runtime_device_state_write
 write_runtime_device_state
 ```
 
+The `*_unchanged` events (`soc_limits_unchanged`, `device_modes_unchanged`,
+`runtime_device_state_unchanged`) are healthy idle behavior and are emitted at
+`debug`. Actual writes (`write_*`) and dry-run skips stay visible at `info`.
+
 Set `allow_state_reconciliation_writes=false` while validating normal output
 control only if you deliberately want a conservative troubleshooting variant.
 The normal template profile keeps it enabled for the full regulation profile
@@ -1107,6 +1119,11 @@ If no winter event appears, check:
 
 Winter logic runs through SOC reconciliation. It is not a per-cycle output
 control mechanism.
+
+`winter_mode_state` is logged at `info` only when the active state changes or an
+adjustment is due; otherwise it is a `debug` trace. Actual winter writes
+(`write_winter_ac_charge_limit`, `winter_ramp`, `winter_summer_reset`) stay
+visible at `info`. Enable `system.log_level=debug` to see every reconcile.
 
 ## One Device Is Used Too Much Or Too Little
 
@@ -1141,8 +1158,8 @@ Relevant events:
 balance_weight
 pv_first_limit
 pv_first_limited (DEBUG diagnostic; normal before battery top-up)
-pv_first_battery_topup
-pv_first_battery_topup_unmet
+pv_first_battery_topup (DEBUG diagnostic; normal allocation detail)
+pv_first_battery_topup_unmet (WARNING; unresolved shortfall after top-up)
 target_calculation
 ```
 

@@ -38,10 +38,6 @@ STARTUP_AC_MODE_RECONCILE_REASON = "startup_ac_mode_reconcile"
 FULL_CHARGE_ASSIST_REASON = "battery_full_charge_assist"
 FULL_CHARGE_ASSIST_RESTORE_REASON = "battery_full_charge_assist_restore"
 
-# Unchanged-state reconciliation is the normal idle/stable case; surface it at
-# INFO only occasionally per device/field and keep every-loop output at DEBUG.
-RUNTIME_STATE_UNCHANGED_INFO_INTERVAL_S = 300
-
 
 class EMSController:
     """Main EMS control loop."""
@@ -91,6 +87,7 @@ class EMSController:
         )
         self.commanded_device_targets = {}
         self.last_winter_adjust_date = None
+        self._last_winter_active = None
         self.winter_min_soc_targets = {}
         self.night_min_soc_idle_active = False
         self.night_min_soc_idle_parked = set()
@@ -99,7 +96,6 @@ class EMSController:
         self._last_influx_publish = 0
         self.last_control_explanation = None
         self.runtime_intents = {}
-        self._unchanged_log_times = {}
 
     def build_battery_full_charge_store(self):
         if not cfg.BASE_DIR:
@@ -228,7 +224,7 @@ class EMSController:
         self.filtered_load_w = adjusted_filtered
 
         log_event(
-            logging.INFO,
+            logging.DEBUG,
             "output_control_sign_change_fast_response",
             raw_load_w=round(raw_load, 1),
             previous_filtered_load_w=(
@@ -419,7 +415,7 @@ class EMSController:
             desired = self.commanded_total_w
             held = True
             log_event(
-                logging.INFO,
+                logging.DEBUG,
                 "output_control_no_export_capacity_hold",
                 raw_load_w=round(raw_load, 1),
                 filtered_load_w=round(filtered_load, 1),
@@ -431,7 +427,7 @@ class EMSController:
         elif abs(filtered_load) <= load_deadband:
             held = True
             log_event(
-                logging.INFO,
+                logging.DEBUG,
                 "output_control_deadband_hold",
                 reason="load_deadband",
                 raw_load_w=round(raw_load, 1),
@@ -457,7 +453,7 @@ class EMSController:
             desired = self.commanded_total_w
             held = True
             log_event(
-                logging.INFO,
+                logging.DEBUG,
                 "output_control_deadband_hold",
                 reason="target_deadband",
                 raw_load_w=round(raw_load, 1),
@@ -473,7 +469,7 @@ class EMSController:
 
         if bypass:
             log_event(
-                logging.INFO,
+                logging.DEBUG,
                 "output_control_bypass",
                 raw_load_w=round(raw_load, 1),
                 filtered_load_w=round(filtered_load, 1)
@@ -518,7 +514,7 @@ class EMSController:
                     else self.commanded_total_w - ramp_limit
                 )
                 log_event(
-                    logging.INFO,
+                    logging.DEBUG,
                     "output_control_ramp_limited",
                     previous_total_w=round(self.commanded_total_w, 1),
                     desired_total_w=round(desired, 1),
@@ -529,7 +525,7 @@ class EMSController:
         ramped = max(0, min(max_power, ramped))
 
         log_event(
-            logging.INFO,
+            logging.DEBUG,
             "output_control_state",
             initialized=False,
             raw_load_w=round(raw_load, 1),
@@ -600,7 +596,7 @@ class EMSController:
             if limit > 0 and abs(delta) > limit:
                 ramped = previous + limit if delta > 0 else previous - limit
                 log_event(
-                    logging.INFO,
+                    logging.DEBUG,
                     "output_control_device_ramp_limited",
                     device=dev.name,
                     previous_target_w=round(previous),
@@ -764,7 +760,7 @@ class EMSController:
 
             if dev.name in self.night_min_soc_idle_parked:
                 log_event(
-                    logging.INFO,
+                    logging.DEBUG,
                     "night_min_soc_idle_hold_skip_write",
                     device=dev.name,
                     output_limit_w=state.output_limit,
@@ -775,7 +771,7 @@ class EMSController:
 
             if state.output_limit == min_output_limit:
                 log_event(
-                    logging.INFO,
+                    logging.DEBUG,
                     "night_min_soc_idle_hold_skip_write",
                     device=dev.name,
                     output_limit_w=state.output_limit,
@@ -2044,7 +2040,7 @@ class EMSController:
         ):
 
             log_event(
-                logging.INFO,
+                logging.DEBUG,
                 "soc_limits_unchanged",
                 device=dev.name,
                 reason=reason
@@ -2288,7 +2284,7 @@ class EMSController:
         if not properties:
 
             log_event(
-                logging.INFO,
+                logging.DEBUG,
                 "device_modes_unchanged",
                 device=dev.name
             )
@@ -2371,22 +2367,13 @@ class EMSController:
         return {"grid_meter": grid, "devices": devices}
 
     def log_runtime_state_unchanged(self, fields):
-        """Log unchanged-state reconciliation at DEBUG, throttled to INFO.
+        """Log unchanged-state reconciliation at DEBUG.
 
-        Unchanged state is the normal idle/stable case and floods INFO when
-        logged every loop; emit DEBUG each time but keep an occasional INFO per
-        device/field so it stays discoverable.
+        Unchanged state is the normal idle/stable case; logging it at INFO
+        floods the default log every loop with no actionable information.
         """
 
-        key = (fields.get("device"), fields.get("field"))
-        now = time.monotonic()
-        last = self._unchanged_log_times.get(key)
-
-        if last is None or now - last >= RUNTIME_STATE_UNCHANGED_INFO_INTERVAL_S:
-            self._unchanged_log_times[key] = now
-            log_event(logging.INFO, "runtime_device_state_unchanged", **fields)
-        else:
-            log_event(logging.DEBUG, "runtime_device_state_unchanged", **fields)
+        log_event(logging.DEBUG, "runtime_device_state_unchanged", **fields)
 
     def apply_runtime_device_state(self, dev, state):
         """Apply runtime-state device intents through safe reconciliation."""
@@ -3310,8 +3297,14 @@ class EMSController:
                 )
 
                 if cfg.winter_feature_enabled(self.runtime_state):
+                    winter_state_changed = (
+                        self._last_winter_active != winter_active
+                    )
+                    self._last_winter_active = winter_active
                     log_event(
-                        logging.INFO,
+                        logging.INFO
+                        if winter_state_changed or winter_adjust_today
+                        else logging.DEBUG,
                         "winter_mode_state",
                         active=winter_active,
                         month=now.month,
@@ -3391,7 +3384,7 @@ class EMSController:
             current = sum(d.output for d in states)
             new = sum(effective_targets)
 
-            logging.info(
+            logging.debug(
                 f"Load={load}W "
                 f"Target={new}W "
                 f"Enabled={enabled} "
@@ -3551,7 +3544,7 @@ class EMSController:
                         device_explanation.write_reason = "output_limit_update"
         self.last_control_explanation = control_explanation
 
-        logging.info(
+        logging.debug(
             f"Load={load}W "
             f"ControllerTarget={new}W "
             f"AllocatedTarget={sum(targets)}W "

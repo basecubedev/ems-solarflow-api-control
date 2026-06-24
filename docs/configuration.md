@@ -247,7 +247,13 @@ ignored for hardware writes.
 for the intended Zendure runtime/RAM mode behavior.
 
 `system.log_level` controls log verbosity. Common values are `info` and
-`debug`.
+`debug`. The default `info` level focuses on lifecycle events (startup,
+dashboard/Influx start), actual hardware/state writes, and warnings/errors
+(unreachable devices, write failures, invalid config, stale telemetry). Normal
+per-cycle control-loop traces (`output_control_state`,
+`output_control_deadband_hold`, `output_control_ramp_limited`, unchanged
+reconciliation events, repeated `winter_mode_state`) are emitted at `debug`;
+set `log_level` to `debug` to see them.
 
 `system.max_total_power` is the default maximum combined EMS target in watts.
 
