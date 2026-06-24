@@ -29,6 +29,10 @@ runtime-state.json.*.tmp
 *.influx.csv
 *.influx.jsonl
 
+# local generated reports
+/reports/
+/reports/**
+
 # Manual config/runtime backups (may contain secrets)
 /backup/
 /backup/**

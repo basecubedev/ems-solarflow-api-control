@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="640" viewBox="0 0 960 640" role="img" aria-labelledby="title desc">
+  <title id="title">v0.6.0-RC6 Release Validation Snapshot</title>
+  <desc id="desc">Release validation snapshot for Docker-first install, Docker update, backup restore, password handling, file ownership, dashboard API, EMS core, diagnostics, and emsctl CLI.</desc>
+  <style>
+    .bg { fill: #f7f8f5; }
+    .panel { fill: #ffffff; stroke: #cfd6cf; stroke-width: 1; }
+    .title { font: 700 30px Arial, sans-serif; fill: #17211b; }
+    .subtitle { font: 400 15px Arial, sans-serif; fill: #4b5750; }
+    .section { font: 700 16px Arial, sans-serif; fill: #17211b; }
+    .label { font: 600 15px Arial, sans-serif; fill: #26302a; }
+    .meta { font: 400 13px Arial, sans-serif; fill: #5d6962; }
+    .badgeText { font: 700 13px Arial, sans-serif; fill: #ffffff; }
+    .scoreText { font: 700 13px Arial, sans-serif; fill: #17211b; }
+    .valueText { font: 700 13px Arial, sans-serif; fill: #17211b; }
+    .note { font: 400 12px Arial, sans-serif; fill: #4b5750; }
+    .barBg { fill: #e6ebe6; }
+    .barGreen { fill: #2f7d50; }
+    .barTeal { fill: #237a78; }
+    .barAmber { fill: #b67822; }
+    .badgeGreen { fill: #2f7d50; }
+    .badgeTeal { fill: #237a78; }
+    .badgeAmber { fill: #b67822; }
+    .divider { stroke: #dce2dc; stroke-width: 1; }
+  </style>
+  <rect class="bg" width="960" height="640"/>
+  <rect class="panel" x="32" y="28" width="896" height="584" rx="8"/>
+
+  <text class="title" x="64" y="78">v0.6.0-RC6 Release Validation Snapshot</text>
+  <text class="subtitle" x="64" y="104">Release validation, not a 100% coverage claim</text>
+
+  <text class="section" x="64" y="146">Docker-first user flows</text>
+  <line class="divider" x1="64" y1="158" x2="896" y2="158"/>
+
+  <text class="label" x="80" y="188">Docker-first install</text>
+  <rect class="badgeGreen" x="600" y="169" width="150" height="28" rx="6"/>
+  <text class="badgeText" x="624" y="188">Real-flow tested</text>
+  <text class="scoreText" x="766" y="188">100%</text>
+  <text class="meta" x="820" y="188">install + compose</text>
+
+  <text class="label" x="80" y="226">Docker update flow</text>
+  <rect class="badgeGreen" x="600" y="207" width="150" height="28" rx="6"/>
+  <text class="badgeText" x="624" y="226">Real-flow tested</text>
+  <text class="scoreText" x="766" y="226">100%</text>
+  <text class="meta" x="820" y="226">preserve data</text>
+
+  <text class="label" x="80" y="264">Bundled InfluxDB backup/restore</text>
+  <rect class="badgeGreen" x="600" y="245" width="150" height="28" rx="6"/>
+  <text class="badgeText" x="650" y="264">Strong</text>
+  <text class="scoreText" x="766" y="264">95%</text>
+  <text class="meta" x="820" y="264">flow + CLI</text>
+
+  <text class="label" x="80" y="302">Encrypted backup/restore</text>
+  <rect class="badgeGreen" x="600" y="283" width="150" height="28" rx="6"/>
+  <text class="badgeText" x="650" y="302">Strong</text>
+  <text class="scoreText" x="766" y="302">95%</text>
+  <text class="meta" x="820" y="302">passwords</text>
+
+  <text class="label" x="80" y="340">Password handling</text>
+  <rect class="badgeGreen" x="600" y="321" width="150" height="28" rx="6"/>
+  <text class="badgeText" x="648" y="340">Covered</text>
+  <text class="scoreText" x="766" y="340">90%</text>
+  <text class="meta" x="820" y="340">leak checks</text>
+
+  <text class="label" x="80" y="378">File ownership</text>
+  <rect class="badgeGreen" x="600" y="359" width="150" height="28" rx="6"/>
+  <text class="badgeText" x="648" y="378">Covered</text>
+  <text class="scoreText" x="766" y="378">90%</text>
+  <text class="meta" x="820" y="378">ownership</text>
+
+  <text class="label" x="80" y="416">Config upgrade safety</text>
+  <rect class="badgeTeal" x="600" y="397" width="150" height="28" rx="6"/>
+  <text class="badgeText" x="654" y="416">Solid</text>
+  <text class="scoreText" x="766" y="416">89%</text>
+  <text class="meta" x="820" y="416">unit + update</text>
+
+  <text class="section" x="64" y="466">Code and service coverage signals</text>
+  <line class="divider" x1="64" y1="478" x2="896" y2="478"/>
+
+  <text class="label" x="80" y="508">Dashboard / API</text>
+  <rect class="barBg" x="300" y="492" width="280" height="18" rx="4"/>
+  <rect class="barTeal" x="300" y="492" width="238" height="18" rx="4"/>
+  <text class="valueText" x="600" y="508">84.9%</text>
+
+  <text class="label" x="80" y="538">EMS core</text>
+  <rect class="barBg" x="300" y="522" width="280" height="18" rx="4"/>
+  <rect class="barTeal" x="300" y="522" width="221" height="18" rx="4"/>
+  <text class="valueText" x="600" y="538">79.0%</text>
+
+  <text class="label" x="80" y="568">Diagnostics</text>
+  <rect class="barBg" x="300" y="552" width="280" height="18" rx="4"/>
+  <rect class="barAmber" x="300" y="552" width="200" height="18" rx="4"/>
+  <text class="valueText" x="600" y="568">71.4%</text>
+
+  <text class="label" x="80" y="598">emsctl CLI</text>
+  <rect class="barBg" x="300" y="582" width="280" height="18" rx="4"/>
+  <rect class="barAmber" x="300" y="582" width="160" height="18" rx="4"/>
+  <text class="valueText" x="600" y="598">57.2%</text>
+
+  <text class="note" x="650" y="508">Validation level is mixed:</text>
+  <text class="note" x="650" y="528">Docker scores use real end-to-end tests.</text>
+  <text class="note" x="650" y="548">Code rows use line coverage.</text>
+</svg>
