@@ -8,6 +8,10 @@ The goal is simple: users should be able to install it, understand what is happe
 
 The project uses automated checks on pull requests and on changes to `main`. At the time of this documentation update, the test suite contains 1000+ tests.
 
+For the current release-candidate validation snapshot, including the Docker-first
+status, coverage summary, known caveats, and stable-release checklist, see
+[release-quality-status.md](release-quality-status.md).
+
 The checks include:
 
 * Python test suite on supported Python versions
