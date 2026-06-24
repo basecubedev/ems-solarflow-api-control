@@ -59,9 +59,9 @@ jobs:
         run: |
           docker compose -f docker-compose.example.yml config
 
-      - name: Run full test suite
+      - name: Run full test suite (excludes real-Docker e2e, covered by CI workflow)
         run: |
-          pytest -q tests/
+          pytest -q -m "not docker" tests/
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4

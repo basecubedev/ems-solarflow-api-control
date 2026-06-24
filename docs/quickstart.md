@@ -10,7 +10,9 @@ Home Assistant is optional. Native Python setup is documented separately in
 
 You need:
 
-- Docker with the current `docker compose` plugin
+- Docker with Docker Compose v2.24.0 or newer (`docker compose`, not the legacy
+  `docker-compose`). On macOS/Windows use Docker Desktop; Windows must use Linux
+  containers.
 - network access from the EMS host to the grid meter
 - network access from the EMS host to each Zendure device
 - Zendure device IP address and serial number

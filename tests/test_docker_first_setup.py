@@ -293,13 +293,23 @@ _SANDBOX_TOOLS = (
 ).split()
 
 # Stub docker: report a Compose version (FAKE_COMPOSE_VERSION) and daemon
-# reachability (FAKE_INFO_OK). Everything else just succeeds.
+# reachability (FAKE_INFO_OK), record every invocation to FAKE_DOCKER_LOG, and
+# optionally fail any command containing FAKE_FAIL_SUBSTR. Everything else
+# just succeeds, so the installer runs its full flow without a real daemon.
 _DOCKER_STUB = """#!/bin/sh
+if [ -n "${FAKE_DOCKER_LOG:-}" ]; then printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"; fi
+if [ "$1" = "--version" ]; then echo "Docker version 27.0.0, build fakefake"; exit 0; fi
+if [ "$1" = "compose" ] && [ "$2" = "version" ] && [ "${FAKE_NO_COMPOSE:-0}" = "1" ]; then
+    echo "docker: 'compose' is not a docker command." >&2; exit 1
+fi
 if [ "$1" = "compose" ] && [ "$2" = "version" ] && [ "$3" = "--short" ]; then
     printf '%s\\n' "${FAKE_COMPOSE_VERSION:-2.26.1}"; exit 0
 fi
 if [ "$1" = "compose" ] && [ "$2" = "version" ]; then exit 0; fi
 if [ "$1" = "info" ]; then [ "${FAKE_INFO_OK:-1}" = "1" ] && exit 0 || exit 1; fi
+if [ -n "${FAKE_FAIL_SUBSTR:-}" ]; then
+    case "$*" in *"$FAKE_FAIL_SUBSTR"*) exit 1 ;; esac
+fi
 exit 0
 """
 
@@ -332,6 +342,7 @@ def _run_installer(tmp_path, args, *, with_docker_version=None, env_extra=None):
     env = {"PATH": str(bindir)}
     if with_docker_version is not None:
         env["FAKE_COMPOSE_VERSION"] = with_docker_version
+        env["FAKE_DOCKER_LOG"] = str(tmp_path / "docker-calls.log")
     if env_extra:
         env.update(env_extra)
     return subprocess.run(
@@ -341,6 +352,11 @@ def _run_installer(tmp_path, args, *, with_docker_version=None, env_extra=None):
         capture_output=True,
         text=True,
     )
+
+
+def _docker_calls(tmp_path):
+    log = tmp_path / "docker-calls.log"
+    return log.read_text(encoding="utf-8") if log.exists() else ""
 
 
 @posix_only
@@ -413,3 +429,236 @@ def test_powershell_installer_has_dry_run_prereq_handling():
 def test_installers_state_compose_minimum_version():
     assert "2.24.0" in read(INSTALL_SH)
     assert "2.24.0" in read(INSTALL_PS1)
+
+
+def test_compose_couples_optional_env_file_with_minimum_version():
+    # `env_file.required: false` only works on Compose >= 2.24, so the file must
+    # document that requirement next to the feature it depends on.
+    compose = read(COMPOSE)
+    assert "required: false" in compose
+    assert "2.24" in compose
+
+
+# --- Recording fake-Docker installer flow ---------------------------------
+#
+# These run the real installer against a fake `docker` that records every call
+# and succeeds, so we can assert the command flow and the generated files
+# without a real daemon. _ANY_VERSION just opts the sandbox into a stub docker.
+
+_ANY_VERSION = "2.26.1"
+
+
+@posix_only
+def test_ems_only_no_start_generates_files_and_skips_influx(tmp_path):
+    result = _run_installer(tmp_path, ["--no-start"], with_docker_version=_ANY_VERSION)
+    assert result.returncode == 0, result.stdout + result.stderr
+    work = tmp_path / "work"
+    assert (work / "docker-compose.yml").is_file()
+    assert (work / ".env").is_file()
+    assert (work / "config").is_dir()
+    assert (work / "data").is_dir()
+    assert not (work / "data" / "influxdb").exists()
+    assert not (work / "config" / "influxdb.env").exists()
+
+    calls = _docker_calls(tmp_path)
+    assert "compose up -d" not in calls
+    assert "influx" not in calls
+    assert "config init" not in calls
+
+
+@posix_only
+def test_ems_only_start_runs_compose_up(tmp_path):
+    result = _run_installer(tmp_path, [], with_docker_version=_ANY_VERSION)
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = _docker_calls(tmp_path)
+    assert "compose up -d" in calls
+    assert "influx" not in calls
+    assert "config init --analytics" not in calls
+
+
+@posix_only
+def test_analytics_no_start_runs_config_init_and_influx_init_only(tmp_path):
+    result = _run_installer(
+        tmp_path, ["--analytics", "--no-start"], with_docker_version=_ANY_VERSION
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    work = tmp_path / "work"
+    assert (work / "data" / "influxdb").is_dir()
+    assert "COMPOSE_PROFILES=with-analytics" in read(work / ".env")
+
+    calls = _docker_calls(tmp_path)
+    assert "compose run --rm ems python3 emsctl.py config init --analytics --yes --no-backup" in calls
+    assert "compose run --rm ems python3 emsctl.py influx init --no-start" in calls
+    assert "compose up -d" not in calls
+    assert "influx sync" not in calls
+    assert "influx status" not in calls
+
+
+@posix_only
+def test_analytics_start_runs_full_influx_flow(tmp_path):
+    result = _run_installer(tmp_path, ["--analytics"], with_docker_version=_ANY_VERSION)
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = _docker_calls(tmp_path)
+    assert "config init --analytics" in calls
+    assert "influx init --no-start" in calls
+    assert "compose up -d" in calls
+    assert "influx sync" in calls
+    assert "influx status" in calls
+
+
+@posix_only
+def test_tag_is_baked_into_generated_compose(tmp_path):
+    result = _run_installer(
+        tmp_path,
+        ["--tag", "v0.6.0", "--analytics", "--no-start"],
+        with_docker_version=_ANY_VERSION,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    compose = read(tmp_path / "work" / "docker-compose.yml")
+    assert "ems-solarflow-api-control:v0.6.0" in compose
+    assert "ems-solarflow-api-control:latest" not in compose
+
+
+@posix_only
+def test_force_overwrites_only_with_flag(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    sentinel = "# user-edited compose, keep me\n"
+    (work / "docker-compose.yml").write_text(sentinel)
+
+    kept = _run_installer(tmp_path, ["--no-start"], with_docker_version=_ANY_VERSION)
+    assert kept.returncode == 0, kept.stdout + kept.stderr
+    assert (work / "docker-compose.yml").read_text() == sentinel
+
+    forced = _run_installer(
+        tmp_path, ["--no-start", "--force"], with_docker_version=_ANY_VERSION
+    )
+    assert forced.returncode == 0, forced.stdout + forced.stderr
+    assert "services:" in (work / "docker-compose.yml").read_text()
+
+
+@posix_only
+def test_existing_config_is_kept_without_force(tmp_path):
+    work = tmp_path / "work"
+    (work / "config").mkdir(parents=True)
+    (work / "config" / "config.json").write_text("{}\n")
+
+    result = _run_installer(
+        tmp_path, ["--analytics", "--no-start"], with_docker_version=_ANY_VERSION
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Keeping existing config/config.json" in result.stdout
+    assert "config init --analytics" not in _docker_calls(tmp_path)
+
+
+@posix_only
+def test_missing_compose_in_normal_mode_is_fatal(tmp_path):
+    # docker present, but `docker compose version` fails -> Compose v2 missing.
+    result = _run_installer(
+        tmp_path,
+        ["--no-start"],
+        with_docker_version=_ANY_VERSION,
+        env_extra={"FAKE_NO_COMPOSE": "1"},
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "docker compose" in combined.lower()
+
+
+@posix_only
+def test_missing_compose_in_dry_run_is_non_fatal(tmp_path):
+    result = _run_installer(
+        tmp_path,
+        ["--dry-run"],
+        with_docker_version=_ANY_VERSION,
+        env_extra={"FAKE_NO_COMPOSE": "1"},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Dry-run continues" in result.stdout + result.stderr
+
+
+# --- Documentation verification path --------------------------------------
+#
+# Shared command constants keep the docs and the tested flow from drifting. Each
+# constant is a command an end user is told to run and that the E2E tests cover.
+
+DOC_EMS_ONLY_INSTALL = "sh install-docker.sh"
+DOC_ANALYTICS_INSTALL = "sh install-docker.sh --analytics"
+DOC_COMPOSE_UP = "docker compose up -d"
+DOC_ANALYTICS_COMPOSE_UP = "docker compose --profile with-analytics up -d"
+DOC_DIAGNOSE = "docker compose exec ems python3 emsctl.py diagnose"
+DOC_INFLUX_STATUS = "docker compose exec ems python3 emsctl.py influx status"
+DOC_INFLUX_SYNC = "docker compose exec ems python3 emsctl.py influx sync"
+
+COMMON_COMMANDS_DOC = ROOT / "docs" / "common-commands.md"
+FIRST_RUN_DOC = ROOT / "docs" / "first-run-checklist.md"
+
+
+def test_readme_uses_tested_install_commands():
+    text = read(README)
+    assert DOC_EMS_ONLY_INSTALL in text
+    assert DOC_ANALYTICS_INSTALL in text
+
+
+def test_docker_doc_has_verification_commands():
+    text = read(DOCKER_DOC)
+    assert "Verifying a Docker-first install" in text
+    assert DOC_DIAGNOSE in text
+    assert DOC_INFLUX_STATUS in text
+
+
+def test_common_commands_doc_has_verification_path():
+    text = read(COMMON_COMMANDS_DOC)
+    assert DOC_COMPOSE_UP in text
+    assert DOC_DIAGNOSE in text
+    assert DOC_INFLUX_STATUS in text
+    assert DOC_INFLUX_SYNC in text
+
+
+def test_first_run_checklist_has_first_run_checks():
+    text = read(FIRST_RUN_DOC)
+    assert "docker compose restart" in text
+    assert DOC_DIAGNOSE in text
+    assert "emsctl.py diagnose --hardware" in text
+    assert DOC_INFLUX_STATUS in text
+
+
+def test_docs_mark_native_helpers_as_poweruser():
+    # `stack up` and deploy/docker/* are the repo/native path; they must be
+    # labelled so end users do not adopt them for the Docker-first setup.
+    common = read(COMMON_COMMANDS_DOC)
+    assert "stack up" in common
+    assert "poweruser" in common
+    influx = read(INFLUX_DOC)
+    assert "poweruser" in influx
+    assert "deploy/docker" in influx
+
+
+# --- PowerShell installer smoke (skipped without pwsh) ---------------------
+
+pwsh_only = pytest.mark.skipif(
+    shutil.which("pwsh") is None,
+    reason="pwsh not available; PowerShell installer covered statically",
+)
+
+
+@pwsh_only
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["-DryRun"],
+        ["-DryRun", "-Analytics"],
+    ],
+)
+def test_powershell_dry_run_smoke(tmp_path, args):
+    work = tmp_path / "work"
+    work.mkdir()
+    result = subprocess.run(
+        ["pwsh", "-NoProfile", "-File", str(INSTALL_PS1), *args],
+        cwd=str(work),
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "DRY-RUN" in result.stdout
+    assert not (work / "docker-compose.yml").exists()

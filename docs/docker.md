@@ -11,6 +11,12 @@ troubleshooting details.
 If Docker is not installed yet, see [install-docker.md](install-docker.md).
 For daily copy/paste commands, see [common-commands.md](common-commands.md).
 
+## Prerequisites
+
+Required: Docker with Docker Compose v2.24.0 or newer (`docker compose`, not the
+legacy `docker-compose`). Works on Linux, macOS, and Windows. On macOS/Windows
+use Docker Desktop; Windows must use Linux containers.
+
 ## Docker-first installer (recommended)
 
 The installer is the shortest path for endusers. It needs only Docker and runs
@@ -137,8 +143,9 @@ are never overwritten.
 
 The container starts as root only long enough to select the runtime UID/GID,
 then re-executes the entrypoint as that non-root user before creating
-`config/config.json` or writing runtime data. Files created under bind-mounted
-`./config` and `./data` use the detected or explicit UID/GID.
+`config/config.json` or writing runtime data. Files written into the
+bind-mounted `./config` and `./data` directories are owned by that detected or
+explicit UID/GID.
 
 Edit the generated configuration and restart:
 

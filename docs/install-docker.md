@@ -1,10 +1,20 @@
 # Install Docker
 
-Install Docker Engine with the current Compose plugin. The EMS quickstart uses
-`docker compose`, not the old standalone `docker-compose` v1 command.
+Required dependency: Docker with Docker Compose v2.24.0 or newer. The EMS
+quickstart uses `docker compose`, not the old standalone `docker-compose` v1
+command.
+
+**Linux / Raspberry Pi:** Install Docker Engine and the Docker Compose plugin
+(see the OS sections below).
+
+**macOS:** Install Docker Desktop, then verify `docker compose version`.
+
+**Windows:** Install Docker Desktop, use Linux containers, and verify
+`docker compose version`. Run the PowerShell installer from PowerShell.
 
 For full, current instructions, use the official Docker docs:
 
+- Docker Desktop (macOS/Windows): <https://docs.docker.com/desktop/>
 - Debian: <https://docs.docker.com/engine/install/debian/>
 - Ubuntu: <https://docs.docker.com/engine/install/ubuntu/>
 - Raspberry Pi OS: <https://docs.docker.com/engine/install/raspberry-pi-os/>

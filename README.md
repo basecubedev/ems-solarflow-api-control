@@ -38,6 +38,11 @@ see [docs/native-python.md](docs/native-python.md).
 
 ## Quick Start With Docker
 
+Docker is required for the Docker quickstart: Docker with Docker Compose
+v2.24.0 or newer. Linux/macOS use `install-docker.sh`; Windows PowerShell uses
+`install-docker.ps1`. Full details are in [docs/quickstart.md](docs/quickstart.md)
+and [docs/docker.md](docs/docker.md).
+
 Install Docker first if needed:
 
 - [Docker install help](docs/install-docker.md)

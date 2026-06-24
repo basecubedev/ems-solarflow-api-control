@@ -59,13 +59,13 @@ jobs:
         run: |
           python -m compileall ems dashboard scripts tests emsctl.py ems-solarflow-api-control.py
 
-      - name: Run full test suite
+      - name: Run full test suite (excludes real-Docker e2e, see docker-first-e2e job)
         run: |
-          pytest -q tests/
+          pytest -q -m "not docker" tests/
 
       - name: Run strict deprecation warning check
         run: |
-          PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -W error::DeprecationWarning -m pytest -q tests/
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -W error::DeprecationWarning -m pytest -q -m "not docker" tests/
 
       - name: Run Python 3.14 runtime simulation smoke
         if: matrix.python-version == '3.14'
@@ -133,6 +133,43 @@ jobs:
           EMS_DOCKER_SMOKE_BUILD: "0"
         run: |
           scripts/docker_compose_smoke.sh
+
+  docker-first-e2e:
+    name: Docker-first setup e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      # Real Docker daemon tests only (docker marker): install-docker.sh
+      # quickstarts, image-content checks, and update/backup flows. Tests build
+      # the image, run the documented Docker flow, print redacted compose logs
+      # on failure, and clean up their own project in a finally block. Non-Docker
+      # contract/unit tests run in the full-test-suite job instead.
+      - name: Run real-Docker e2e tests
+        run: |
+          pytest -q -rs -m docker tests/
+
+      - name: Show leftover containers on failure
+        if: failure()
+        run: |
+          docker ps -a
+          docker volume ls
+          docker network ls
 
   influx-e2e:
     name: InfluxDB analytics e2e

@@ -83,10 +83,15 @@ chain to remember, and no host-side `python3 emsctl.py stack up` is required.
 > at `deploy/docker/influxdb.env` keep working unchanged. The Docker-first path
 > below does not require cloning the repository.
 
-## Beginner / bundled path (zero-config, recommended)
+## Native / repo power-user bundled path
 
-The bundled Docker InfluxDB is the primary supported path. You do **not** need
-to understand InfluxDB tokens, create env files, or pick passwords.
+> New users should not start here. The default beginner path is the Docker-first
+> quickstart above, which uses `config/influxdb.env`. This section is the
+> repo/native poweruser path: it runs `emsctl` on the host and uses the default
+> `deploy/docker/influxdb.env` secret file.
+
+This bundled path is for repository checkouts running `emsctl` natively. You do
+**not** need to understand InfluxDB tokens, create env files, or pick passwords.
 
 1. In `config.json`, enable InfluxDB (the defaults already select bundled mode):
 
