@@ -99,8 +99,8 @@ dashboard as `8080:8080`, mounts `./config:/app/config`, and mounts
 
 ### Docker-first Install Preview
 
-The short demo below shows the Docker-first setup from an empty folder to the
-running dashboard.
+The short demo below shows the Docker-first Analytics setup from an empty
+folder to the running dashboard.
 
 ![Docker-first install demo](docs/assets/install-demo.gif)
 

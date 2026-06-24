@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Build the Docker-first install demo GIF/WebM from synthetic frames."""
+"""Build the Docker-first Analytics bootstrap demo GIF/WebM."""
 
 from __future__ import annotations
 
@@ -17,10 +17,16 @@ ROOT = Path(__file__).resolve().parents[2]
 ASSETS = ROOT / "docs" / "assets"
 OUTPUT_GIF = ASSETS / "install-demo.gif"
 OUTPUT_WEBM = ASSETS / "install-demo.webm"
+
 WIDTH = 900
 HEIGHT = 506
-TERMINAL_HEIGHT = 362
-DASHBOARD_HEIGHT = 320
+CONTENT_X = 32
+CONTENT_TOP = 24
+CONTENT_WIDTH = WIDTH - (CONTENT_X * 2)
+HEADER_HEIGHT = 72
+BODY_TOP = CONTENT_TOP + HEADER_HEIGHT
+BODY_BOTTOM = HEIGHT - 28
+DASHBOARD_HEIGHT = BODY_BOTTOM - BODY_TOP
 FPS = 5
 
 
@@ -37,16 +43,10 @@ def load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFo
     return ImageFont.load_default()
 
 
-FONT_TITLE = load_font(24, bold=True)
-FONT_BODY = load_font(18)
+FONT_TITLE = load_font(23, bold=True)
 FONT_SMALL = load_font(15)
 FONT_MONO = load_font(15)
 FONT_MONO_BOLD = load_font(15, bold=True)
-
-
-def text_size(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> tuple[int, int]:
-    box = draw.textbbox((0, 0), text, font=font)
-    return box[2] - box[0], box[3] - box[1]
 
 
 def draw_panel(draw: ImageDraw.ImageDraw, xy: tuple[int, int, int, int], fill: str, outline: str) -> None:
@@ -54,34 +54,55 @@ def draw_panel(draw: ImageDraw.ImageDraw, xy: tuple[int, int, int, int], fill: s
 
 
 def base_frame(title: str, subtitle: str) -> Image.Image:
-    img = Image.new("RGB", (WIDTH, HEIGHT), "#f5f7fb")
+    img = Image.new("RGB", (WIDTH, HEIGHT), "#0b111b")
     draw = ImageDraw.Draw(img)
-    draw.rectangle((0, 0, WIDTH, 70), fill="#18212f")
-    draw.text((30, 18), title, font=FONT_TITLE, fill="#f8fafc")
-    draw.text((30, 46), subtitle, font=FONT_SMALL, fill="#b8c2d2")
+    draw.rounded_rectangle(
+        (CONTENT_X, CONTENT_TOP, CONTENT_X + CONTENT_WIDTH, BODY_TOP + 8),
+        radius=10,
+        fill="#172033",
+    )
+    draw.rectangle(
+        (CONTENT_X, BODY_TOP - 8, CONTENT_X + CONTENT_WIDTH, BODY_TOP + 8),
+        fill="#172033",
+    )
+    draw.text((CONTENT_X + 22, CONTENT_TOP + 14), title, font=FONT_TITLE, fill="#f8fafc")
+    draw.text((CONTENT_X + 22, CONTENT_TOP + 43), subtitle, font=FONT_SMALL, fill="#b8c2d2")
     return img
 
 
 def terminal_frame(title: str, subtitle: str, lines: list[tuple[str, str]]) -> Image.Image:
     img = base_frame(title, subtitle)
     draw = ImageDraw.Draw(img)
-    draw_panel(draw, (32, 92, WIDTH - 32, 92 + TERMINAL_HEIGHT), "#101620", "#273346")
-    draw.rectangle((32, 92, WIDTH - 32, 122), fill="#1f2937")
-    for i, color in enumerate(("#ef4444", "#f59e0b", "#22c55e")):
-        draw.ellipse((50 + i * 22, 102, 62 + i * 22, 114), fill=color)
-    draw.text((132, 101), "demo shell - empty folder install", font=FONT_SMALL, fill="#d1d5db")
+    draw_panel(draw, (CONTENT_X, BODY_TOP, CONTENT_X + CONTENT_WIDTH, BODY_BOTTOM), "#101620", "#293548")
+    draw.rectangle((CONTENT_X, BODY_TOP, CONTENT_X + CONTENT_WIDTH, BODY_TOP + 30), fill="#202b3b")
+    for index, color in enumerate(("#ef4444", "#f59e0b", "#22c55e")):
+        draw.ellipse(
+            (
+                CONTENT_X + 18 + index * 22,
+                BODY_TOP + 10,
+                CONTENT_X + 30 + index * 22,
+                BODY_TOP + 22,
+            ),
+            fill=color,
+        )
+    draw.text(
+        (CONTENT_X + 100, BODY_TOP + 9),
+        "demo shell - docker-first analytics bootstrap",
+        font=FONT_SMALL,
+        fill="#d1d5db",
+    )
 
-    y = 142
+    y = BODY_TOP + 50
+    colors = {
+        "cmd": "#93c5fd",
+        "out": "#d1d5db",
+        "ok": "#86efac",
+        "warn": "#facc15",
+        "dim": "#94a3b8",
+    }
     for kind, text in lines:
-        color = {
-            "cmd": "#93c5fd",
-            "out": "#d1d5db",
-            "ok": "#86efac",
-            "warn": "#facc15",
-            "dim": "#94a3b8",
-        }[kind]
         font = FONT_MONO_BOLD if kind == "cmd" else FONT_MONO
-        draw.text((52, y), text, font=font, fill=color)
+        draw.text((CONTENT_X + 20, y), text, font=font, fill=colors[kind])
         y += 24
     return img
 
@@ -89,10 +110,9 @@ def terminal_frame(title: str, subtitle: str, lines: list[tuple[str, str]]) -> I
 def dashboard_frame(view: str, title: str, subtitle: str) -> Image.Image:
     img = base_frame(title, subtitle)
     draw = ImageDraw.Draw(img)
-    source = ASSETS / f"preview-{view}.jpg"
-    preview = Image.open(source).convert("RGB")
+    preview = Image.open(ASSETS / f"preview-{view}.jpg").convert("RGB")
 
-    crop_ratio = WIDTH / DASHBOARD_HEIGHT
+    crop_ratio = CONTENT_WIDTH / DASHBOARD_HEIGHT
     source_ratio = preview.width / preview.height
     if source_ratio > crop_ratio:
         new_width = int(preview.height * crop_ratio)
@@ -100,14 +120,27 @@ def dashboard_frame(view: str, title: str, subtitle: str) -> Image.Image:
         preview = preview.crop((left, 0, left + new_width, preview.height))
     else:
         new_height = int(preview.width / crop_ratio)
-        top = 0
-        preview = preview.crop((0, top, preview.width, min(top + new_height, preview.height)))
+        preview = preview.crop((0, 0, preview.width, min(new_height, preview.height)))
 
-    preview = preview.resize((WIDTH - 64, DASHBOARD_HEIGHT), Image.Resampling.LANCZOS)
-    draw_panel(draw, (32, 92, WIDTH - 32, HEIGHT - 38), "#ffffff", "#d7dde8")
-    img.paste(preview, (32, 92))
-    draw.rounded_rectangle((620, 408, 862, 438), radius=6, fill="#18212f")
-    draw.text((636, 416), "http://localhost:8080", font=FONT_SMALL, fill="#f8fafc")
+    preview = preview.resize((CONTENT_WIDTH, DASHBOARD_HEIGHT), Image.Resampling.LANCZOS)
+    draw_panel(draw, (CONTENT_X, BODY_TOP, CONTENT_X + CONTENT_WIDTH, BODY_BOTTOM), "#101620", "#293548")
+    img.paste(preview, (CONTENT_X, BODY_TOP))
+    draw.rounded_rectangle(
+        (
+            CONTENT_X + CONTENT_WIDTH - 248,
+            BODY_BOTTOM - 46,
+            CONTENT_X + CONTENT_WIDTH - 12,
+            BODY_BOTTOM - 16,
+        ),
+        radius=6,
+        fill="#172033",
+    )
+    draw.text(
+        (CONTENT_X + CONTENT_WIDTH - 232, BODY_BOTTOM - 38),
+        "http://localhost:8080",
+        font=FONT_SMALL,
+        fill="#f8fafc",
+    )
     return img
 
 
@@ -116,85 +149,88 @@ def build_frames() -> list[tuple[Image.Image, int]]:
     return [
         (
             terminal_frame(
-                "Docker-first install preview",
-                "Start in an empty folder; no repository clone required.",
+                "Docker-first Analytics bootstrap",
+                "Start in an empty folder; no repository clone or host Python.",
                 [
                     ("cmd", "demo@ems-demo:~$ mkdir ems-demo && cd ems-demo"),
-                    ("out", "folder is empty"),
                     ("cmd", f"{prompt} ls -A"),
-                    ("dim", "(no files yet)"),
+                    ("dim", "(empty folder)"),
+                    ("cmd", f"{prompt} curl -fsSLo install-docker.sh \\"),
+                    ("cmd", "  https://raw.githubusercontent.com/basecubedev/.../install-docker.sh"),
+                    ("out", "install-docker.sh saved"),
                 ],
             ),
-            3200,
+            4200,
         ),
         (
             terminal_frame(
-                "Download the installer",
-                "The installer writes the Compose file and local folders.",
+                "Run the RC6 InfluxDB bootstrap",
+                "The installer prepares Compose, config, secrets, and data folders.",
                 [
-                    ("cmd", f"{prompt} curl -fsSLo install-docker.sh \\"),
-                    ("cmd", "  https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/main/install-docker.sh"),
-                    ("out", "install-docker.sh saved"),
-                    ("cmd", f"{prompt} sh install-docker.sh"),
-                    ("ok", "created docker-compose.yml, config/, data/"),
-                    ("ok", "starting EMS service ... done"),
+                    ("cmd", f"{prompt} sh install-docker.sh --analytics"),
+                    ("ok", "Docker Compose v2.24+ detected"),
+                    ("ok", "created config/, data/, data/influxdb/"),
+                    ("ok", "wrote docker-compose.yml"),
+                    ("ok", "generated config/influxdb.env"),
+                    ("ok", "config init --analytics --yes --no-backup"),
+                    ("ok", "influx init --no-start"),
+                ],
+            ),
+            5600,
+        ),
+        (
+            terminal_frame(
+                "Start EMS plus bundled InfluxDB",
+                "The with-analytics profile is enabled for normal compose commands.",
+                [
+                    ("ok", "enabled COMPOSE_PROFILES=with-analytics"),
+                    ("cmd", f"{prompt} docker compose up -d"),
+                    ("ok", "Container ems       Started"),
+                    ("ok", "Container influxdb  Started"),
+                    ("out", "dashboard: http://localhost:8080"),
+                    ("out", "analytics: http://localhost:8086"),
                 ],
             ),
             5000,
         ),
         (
             terminal_frame(
-                "Guided setup with demo values",
-                "Only documentation-safe dummy values are shown.",
+                "Verify the install",
+                "Only dummy values are used in this documentation demo.",
                 [
-                    ("cmd", f"{prompt} docker compose exec ems python3 emsctl.py config init"),
-                    ("out", "Shelly IP: 192.0.2.10"),
-                    ("out", "Inverter serial: DEMO-SF800P2-1"),
-                    ("out", "Second inverter serial: DEMO-SF800P2-2"),
-                    ("out", "System limit: 800 W"),
-                    ("out", "Min/Max SoC: 15 / 90"),
-                    ("ok", "config/config.json updated"),
+                    ("cmd", f"{prompt} docker compose ps"),
+                    ("out", "NAME      SERVICE    STATUS   PORTS"),
+                    ("ok", "ems       ems        running  0.0.0.0:8080->8080/tcp"),
+                    ("ok", "influxdb  influxdb   running  0.0.0.0:8086->8086/tcp"),
+                    ("cmd", f"{prompt} docker compose exec ems python3 emsctl.py influx status"),
+                    ("ok", "InfluxDB ready; EMS bucket reachable"),
+                    ("cmd", f"{prompt} docker compose exec ems python3 emsctl.py diagnose"),
+                    ("ok", "diagnose completed"),
                 ],
             ),
             6200,
         ),
         (
             terminal_frame(
-                "Start and check status",
-                "The dashboard is published on port 8080.",
+                "Add safe demo configuration",
+                "Use documentation-safe values before a real first run.",
                 [
-                    ("cmd", f"{prompt} docker compose up -d"),
-                    ("ok", "Container ems  Started"),
-                    ("cmd", f"{prompt} docker compose ps"),
-                    ("out", "NAME   SERVICE   STATUS   PORTS"),
-                    ("ok", "ems    ems       running  0.0.0.0:8080->8080/tcp"),
-                    ("cmd", f"{prompt} docker compose exec ems python3 emsctl.py diagnose"),
-                    ("ok", "diagnose completed - dashboard ready: http://localhost:8080"),
+                    ("cmd", f"{prompt} docker compose exec ems python3 emsctl.py config init"),
+                    ("out", "Grid meter IP: 192.0.2.10"),
+                    ("out", "Inverter serial: DEMO-SF800P2-1"),
+                    ("out", "System limit: 800 W"),
+                    ("out", "Min/Max SoC: 15 / 90"),
+                    ("cmd", f"{prompt} docker compose restart"),
+                    ("ok", "configuration saved; EMS restarted"),
                 ],
             ),
-            6200,
+            5000,
         ),
         (
             dashboard_frame(
                 "aggregated",
                 "Dashboard overview",
                 "Open http://localhost:8080 and confirm live status at a glance.",
-            ),
-            6200,
-        ),
-        (
-            dashboard_frame(
-                "devices",
-                "Device view",
-                "Synthetic devices show where inverter state and limits appear.",
-            ),
-            5200,
-        ),
-        (
-            dashboard_frame(
-                "energy",
-                "Energy view",
-                "Analytics preview uses demo history, not private runtime data.",
             ),
             5200,
         ),

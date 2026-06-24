@@ -2,8 +2,8 @@
 
 `docs/assets/install-demo.gif` and `docs/assets/install-demo.webm` are generated
 from deterministic, documentation-safe frames. The terminal flow is synthetic
-and the dashboard segment reuses the existing preview screenshots under
-`docs/assets/preview-*.jpg`.
+and follows the Docker-first Analytics bootstrap. The dashboard segment reuses
+the existing aggregated preview screenshot under `docs/assets/preview-aggregated.jpg`.
 
 Regenerate the assets from the repository root:
 
@@ -17,5 +17,6 @@ Requirements:
 - `ffmpeg` for `install-demo.webm`
 
 The demo intentionally uses only dummy values such as `192.0.2.10` and
-`DEMO-SF800P2-1`. Do not replace these with real device IPs, serial numbers,
-tokens, dashboard credentials, or host-specific shell prompts.
+`DEMO-SF800P2-1`, and it never prints generated InfluxDB secrets. Do not replace
+these with real device IPs, serial numbers, tokens, dashboard credentials, or
+host-specific shell prompts.

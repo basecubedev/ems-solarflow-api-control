@@ -20,7 +20,7 @@ For full, current instructions, use the official Docker docs:
 - Raspberry Pi OS: <https://docs.docker.com/engine/install/raspberry-pi-os/>
 - Linux post-install: <https://docs.docker.com/engine/install/linux-postinstall/>
 
-After Docker is installed, the EMS quickstart flow looks like this:
+After Docker is installed, the EMS Analytics quickstart flow looks like this:
 
 ![Docker-first install demo](assets/install-demo.gif)
 
