@@ -21,6 +21,9 @@ runtime-state.json.*.tmp
 /config/
 /config/**
 
+# Docker-first enduser .env (PUID/PGID, COMPOSE_PROFILES)
+/.env
+
 # logs
 *.log
 *.influx.csv

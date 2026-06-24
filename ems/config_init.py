@@ -429,12 +429,34 @@ def apply_system_basics(
         )
 
 
+# Docker-first secret path: secrets live next to config.json under the mounted
+# config/ folder, not the repo-only deploy/docker/ tree.
+DOCKER_FIRST_SECRET_FILE = "config/influxdb.env"
+
+
+def apply_analytics(config):
+    """Enable bundled InfluxDB analytics for the Docker-first setup.
+
+    Sets the supported zero-config bundled defaults and points secrets at
+    ``config/influxdb.env`` so a Docker-first install needs no repo checkout.
+    Other influxdb keys (url/host_url/org/...) keep their template values.
+    """
+    influxdb = config.setdefault("influxdb", {})
+    influxdb["enabled"] = True
+    influxdb["mode"] = "bundled"
+    influxdb["auto_init"] = True
+    influxdb["auto_sync"] = True
+    influxdb["secret_file"] = DOCKER_FIRST_SECRET_FILE
+    return config
+
+
 def apply_answers(
     base_config,
     template_config,
     *,
     noninteractive=False,
     allow_placeholder_defaults=False,
+    analytics=False,
 ):
     updated = copy.deepcopy(base_config)
     updated["grid_meter"] = ask_grid_meter(
@@ -453,6 +475,8 @@ def apply_answers(
         noninteractive=noninteractive,
         allow_placeholder_defaults=allow_placeholder_defaults,
     )
+    if analytics:
+        apply_analytics(updated)
     return updated
 
 
@@ -590,20 +614,30 @@ def run_config_init(
     base_dir,
     dry_run=False,
     yes=False,
+    analytics=False,
 ):
     plan = build_plan(config, config_exists, config_path, base_dir)
     print_intro(plan)
+    if analytics:
+        print("Analytics (bundled InfluxDB) will be enabled.")
+        print()
 
     prompt_enabled = not dry_run and not yes
     if prompt_enabled and not ask_confirm("Continue?", True):
         print("Aborted.")
         return None, plan
 
+    # --analytics is a Docker-first bootstrap flag: it must seed a fresh/template
+    # config unattended (enabling Analytics) without forcing real device values,
+    # so it tolerates template placeholders the same way --dry-run does. Plain
+    # `config init --yes` still rejects placeholders.
+    allow_placeholder_defaults = dry_run or (yes and analytics)
     updated = apply_answers(
         plan["base_config"],
         plan["template_config"],
         noninteractive=(dry_run or yes),
-        allow_placeholder_defaults=dry_run,
+        allow_placeholder_defaults=allow_placeholder_defaults,
+        analytics=analytics,
     )
     print_summary(updated, config_path)
 
