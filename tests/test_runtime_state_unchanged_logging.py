@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import logging
 
-from ems.controller import (
-    RUNTIME_STATE_UNCHANGED_INFO_INTERVAL_S,
-    EMSController,
-)
+from ems.controller import EMSController
 
 
 def make_controller():
@@ -19,7 +16,7 @@ def _unchanged_records(caplog):
     ]
 
 
-def test_unchanged_state_logs_info_once_then_debug(caplog):
+def test_unchanged_state_logs_debug_only(caplog):
     controller = make_controller()
     fields = {"device": "WR1", "field": "gridOffMode"}
 
@@ -28,23 +25,6 @@ def test_unchanged_state_logs_info_once_then_debug(caplog):
         controller.log_runtime_state_unchanged(fields)
 
     records = _unchanged_records(caplog)
-    info = [r for r in records if r.levelno == logging.INFO]
-    debug = [r for r in records if r.levelno == logging.DEBUG]
-
-    assert len(info) == 1
-    assert len(debug) == 3
-
-
-def test_unchanged_state_emits_info_again_after_throttle_window(caplog):
-    controller = make_controller()
-    fields = {"device": "WR1", "field": "gridOffMode"}
-
-    caplog.set_level(logging.DEBUG)
-    controller.log_runtime_state_unchanged(fields)
-    controller._unchanged_log_times[("WR1", "gridOffMode")] -= (
-        RUNTIME_STATE_UNCHANGED_INFO_INTERVAL_S + 1
-    )
-    controller.log_runtime_state_unchanged(fields)
-
-    info = [r for r in _unchanged_records(caplog) if r.levelno == logging.INFO]
-    assert len(info) == 2
+    assert len(records) == 4
+    assert all(record.levelno == logging.DEBUG for record in records)
+    assert not [r for r in records if r.levelno == logging.INFO]

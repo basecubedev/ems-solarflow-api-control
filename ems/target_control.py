@@ -616,7 +616,7 @@ def apply_battery_topup_after_pv_first(
         ]
 
         log_event(
-            logging.INFO,
+            logging.DEBUG,
             "pv_first_battery_topup",
             requested_total=requested_total,
             pv_first_total=round(pv_first_total),

@@ -181,6 +181,10 @@ def test_pv_first_topup_success_does_not_create_warning(caplog):
     assert sum(targets) == 1200
     assert any(
         "event=pv_first_battery_topup" in msg
+        for msg in _log_messages(caplog, logging.DEBUG)
+    )
+    assert all(
+        "event=pv_first_battery_topup" not in msg
         for msg in _log_messages(caplog, logging.INFO)
     )
     assert not _log_messages(caplog, logging.WARNING)
