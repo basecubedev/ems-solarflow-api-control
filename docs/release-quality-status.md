@@ -12,7 +12,7 @@ The current branch was checked on 2026-06-24. Test collection reports `1110` tes
 
 ## Quality snapshot
 
-![v0.6.0-RC6 Release Validation Snapshot](assets/release-quality/rc6-release-validation-snapshot.svg)
+![v0.6.0-RC6 Release Validation Snapshot](assets/release-quality/v0.6.0-rc6-release-validation-snapshot.svg)
 
 The graphic is a mixed release-validation view, not a pure code-coverage chart. Docker-first rows are based on E2E and contract validation. EMS, Dashboard/API, Diagnostics, and `emsctl` values include Python line coverage from the non-Docker suite.
 
