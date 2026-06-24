@@ -20,6 +20,8 @@ DEFAULT_SECRET_FILE = "deploy/docker/influxdb.env"
 # Must match the bundled InfluxDB bind mount.
 DEFAULT_DATA_DIR = "data/influxdb"
 
+DEFAULT_CLI_CONFIG_NAME = "ems"
+
 BASE_COMPOSE_FILE = "docker-compose.example.yml"
 INFLUX_COMPOSE_FILE = "deploy/docker/compose.influxdb.yml"
 EMS_INFLUX_ENV_COMPOSE_FILE = "deploy/docker/compose.ems-influx-env.yml"
@@ -169,6 +171,9 @@ def build_env_values(influx_config, existing=None):
         existing.get("DOCKER_INFLUXDB_INIT_BUCKET") or init_bucket
     )
     values["DOCKER_INFLUXDB_INIT_ADMIN_TOKEN"] = admin_token
+    values["DOCKER_INFLUXDB_INIT_CLI_CONFIG_NAME"] = (
+        existing.get("DOCKER_INFLUXDB_INIT_CLI_CONFIG_NAME") or DEFAULT_CLI_CONFIG_NAME
+    )
 
     # Preserve any extra keys the operator added that we don't manage.
     for key, value in existing.items():
