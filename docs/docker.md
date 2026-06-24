@@ -11,16 +11,116 @@ troubleshooting details.
 If Docker is not installed yet, see [install-docker.md](install-docker.md).
 For daily copy/paste commands, see [common-commands.md](common-commands.md).
 
-## Recommended Setup
+## Prerequisites
+
+Required: Docker with Docker Compose v2.24.0 or newer (`docker compose`, not the
+legacy `docker-compose`). Works on Linux, macOS, and Windows. On macOS/Windows
+use Docker Desktop; Windows must use Linux containers.
+
+## Docker-first installer (recommended)
+
+The installer is the shortest path for endusers. It needs only Docker and runs
+from an empty folder — no repository clone, no overlay Compose files, and no
+host-side Python.
+
+Linux/macOS:
+
+```bash
+mkdir -p ems-solarflow-api-control && cd ems-solarflow-api-control
+curl -fsSLo install-docker.sh https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/main/install-docker.sh
+sh install-docker.sh                 # EMS only
+sh install-docker.sh --analytics     # EMS + Analytics (bundled InfluxDB)
+```
+
+Windows PowerShell (Docker Desktop with Linux containers):
+
+```powershell
+irm https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/main/install-docker.ps1 -OutFile install-docker.ps1
+powershell -ExecutionPolicy Bypass -File .\install-docker.ps1            # EMS only
+powershell -ExecutionPolicy Bypass -File .\install-docker.ps1 -Analytics # EMS + Analytics
+```
+
+Installer flags:
+
+| Shell (`sh install-docker.sh`) | PowerShell (`install-docker.ps1`) | Effect |
+|---|---|---|
+| `--analytics` | `-Analytics` | Enable Analytics (bundled InfluxDB) |
+| `--tag v0.6.0` | `-Tag v0.6.0` | Pin the container image tag |
+| `--no-start` | `-NoStart` | Prepare files but do not start |
+| `--dry-run` | `-DryRun` | Show actions without writing/starting |
+| `--force` | `-Force` | Overwrite existing compose/config |
+| `--help` | `-Help` | Show help |
+
+The installer checks Docker (requires Docker Compose v2.24.0+, because the
+single compose file uses an optional `env_file.required:false`), creates
+`config/` and `data/`, writes `docker-compose.yml`, generates
+`config/influxdb.env` for Analytics, and starts the stack. For Analytics it also
+writes a local `.env` with `COMPOSE_PROFILES=with-analytics` so plain
+`docker compose up -d` keeps starting EMS **and** InfluxDB.
+
+For EMS-only installs, `config/config.json` is created on first container start.
+With Analytics, the installer creates it during setup because it runs
+`config init --analytics`. With `--no-start`/`-NoStart`, an EMS-only
+`config/config.json` is created the first time you run `docker compose up -d`.
+
+`--dry-run`/`-DryRun` prints the planned actions without running Docker, so it
+is useful even when Docker is missing or older than v2.24.0: prerequisite
+problems are reported as warnings instead of aborting.
+
+## Manual install path (full control)
+
+Every step the installer performs, run by hand. Compose V2 uses
+`docker compose` (with a space), not the legacy `docker-compose`.
+
+EMS only:
 
 ```bash
 mkdir ems-solarflow-api-control
 cd ems-solarflow-api-control
 mkdir -p config data
-curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/main/docker-compose.example.yml
+curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/main/docker-compose.yml
 docker compose pull
 docker compose up -d
 ```
+
+EMS + Analytics (bundled InfluxDB):
+
+```bash
+mkdir ems-solarflow-api-control
+cd ems-solarflow-api-control
+mkdir -p config data data/influxdb
+curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/main/docker-compose.yml
+docker compose run --rm ems python3 emsctl.py config init --analytics --yes --no-backup
+docker compose run --rm ems python3 emsctl.py influx init --no-start
+docker compose --profile with-analytics up -d
+docker compose exec ems python3 emsctl.py influx sync
+docker compose exec ems python3 emsctl.py influx status
+```
+
+`config init --analytics` enables bundled InfluxDB and points
+`influxdb.secret_file` at `config/influxdb.env`. `influx init --no-start`
+generates the local secrets without starting anything. Analytics secrets stay
+local in `config/influxdb.env` (gitignored) and are never printed.
+
+The single `docker-compose.yml` keeps EMS-only simple (`docker compose up -d`)
+and adds Analytics behind the `with-analytics` profile — no overlay `-f` chain
+and no host-side `python3 emsctl.py stack up`. `stack up` remains a
+repo/native poweruser helper; see [influxdb.md](influxdb.md).
+
+## Verifying a Docker-first install
+
+After `sh install-docker.sh` (EMS only) from an empty folder, confirm:
+
+- `docker-compose.yml`, `config/config.json`, and `data/` exist
+- the EMS container is up: `docker compose ps`
+- the dashboard answers on `http://localhost:8080`
+- `docker compose exec ems python3 emsctl.py diagnose` runs
+
+After `sh install-docker.sh --analytics`, also confirm:
+
+- `config/influxdb.env` and `data/influxdb/` exist
+- the InfluxDB container is up and reachable on `http://localhost:8086`
+- `docker compose exec ems python3 emsctl.py influx status` runs
 
 Docker does not automatically run a container as the same user that runs
 `docker compose`. Creating `config` and `data` before the first start as your
@@ -43,8 +143,9 @@ are never overwritten.
 
 The container starts as root only long enough to select the runtime UID/GID,
 then re-executes the entrypoint as that non-root user before creating
-`config/config.json` or writing runtime data. Files created under bind-mounted
-`./config` and `./data` use the detected or explicit UID/GID.
+`config/config.json` or writing runtime data. Files written into the
+bind-mounted `./config` and `./data` directories are owned by that detected or
+explicit UID/GID.
 
 Edit the generated configuration and restart:
 

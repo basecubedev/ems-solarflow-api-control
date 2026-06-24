@@ -719,6 +719,14 @@ Examples:
         action="store_true",
         help="Run without prompts, accepting existing values and defaults.",
     )
+    config_init.add_argument(
+        "--analytics",
+        action="store_true",
+        help=(
+            "Enable bundled InfluxDB analytics (Docker-first: secrets in "
+            "config/influxdb.env)."
+        ),
+    )
     init_backup_policy = config_init.add_mutually_exclusive_group()
     init_backup_policy.add_argument(
         "--backup",
@@ -1714,14 +1722,17 @@ def execute_influx_schema_op(influx_config, action):
     data in their own single JSON object instead of this function emitting a
     second JSON fragment to stdout.
 
-    Host-side ops connect via the bundled ``host_url`` so the Docker compose
-    service name in ``influxdb.url`` does not need to resolve on the host.
+    The URL is container-aware: on the host, bundled ops connect via
+    ``host_url`` (the published port) because the Docker compose service name in
+    ``influxdb.url`` does not resolve on the host; inside the EMS container
+    (``EMS_IN_CONTAINER=1``) they use that service name. This lets the
+    Docker-first flow run ``docker compose exec ems ... influx sync`` directly.
     """
     from ems.history import schema
     from ems.history.influx_client import HistoryInfluxClient, wait_for_influx_ready
     from ems import influx_setup
 
-    url = influx_setup.host_cli_url(influx_config)
+    url = influx_setup.runtime_influx_url(influx_config)
     token = resolve_influx_token_with_secret_file(influx_config)
     if not token:
         return 2, {
@@ -3736,6 +3747,7 @@ def handle_config_init_command(args, config):
             base_dir=BASE_DIR,
             dry_run=args.dry_run,
             yes=args.yes,
+            analytics=getattr(args, "analytics", False),
         )
     except config_mod.ConfigUpgradeError as exc:
         return fail(str(exc), code=2)

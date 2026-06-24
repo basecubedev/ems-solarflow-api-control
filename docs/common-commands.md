@@ -105,6 +105,30 @@ docker compose exec ems python3 emsctl.py config upgrade --yes --backup
 docker compose exec ems python3 emsctl.py diagnose
 ```
 
+## Analytics (bundled InfluxDB)
+
+Enable Analytics with the installer (`sh install-docker.sh --analytics`). With
+the local `.env` it writes (`COMPOSE_PROFILES=with-analytics`), the normal
+commands above already start EMS and InfluxDB together.
+
+Start Analytics manually without that `.env`:
+
+```bash
+docker compose --profile with-analytics up -d
+```
+
+Analytics status and schema sync:
+
+```bash
+docker compose exec ems python3 emsctl.py influx status
+docker compose exec ems python3 emsctl.py influx sync
+```
+
+The `with-analytics` profile adds the bundled InfluxDB service to the normal
+EMS stack. EMS-only setups never need `config/influxdb.env`. The host-side
+`python3 emsctl.py stack up` is a repo/native poweruser helper and is not
+needed for the Docker-first setup.
+
 ## Native Python
 
 Run native commands from the repository checkout, usually with your virtual

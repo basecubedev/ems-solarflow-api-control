@@ -35,10 +35,63 @@ and
 [docs/develop-tool-influxdb-state-transition-analysis.md](develop-tool-influxdb-state-transition-analysis.md).
 That setup is development-only and independent of this production path.
 
-## Beginner / bundled path (zero-config, recommended)
+## Docker-first Analytics (no repo checkout, recommended for endusers)
 
-The bundled Docker InfluxDB is the primary supported path. You do **not** need
-to understand InfluxDB tokens, create env files, or pick passwords.
+If you installed EMS with the Docker-first installer, enabling **Analytics** is
+a single flag — you never touch the `deploy/` assets above or run
+`stack up`:
+
+```bash
+sh install-docker.sh --analytics
+```
+
+This generates `config/influxdb.env` (local secrets, gitignored, never
+printed), starts the bundled InfluxDB through the `with-analytics` Compose
+profile, and syncs the schema. To do the same by hand from an empty folder:
+
+```bash
+curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/main/docker-compose.yml
+mkdir -p config data data/influxdb
+docker compose run --rm ems python3 emsctl.py config init --analytics --yes --no-backup
+docker compose run --rm ems python3 emsctl.py influx init --no-start
+docker compose --profile with-analytics up -d
+docker compose exec ems python3 emsctl.py influx sync
+docker compose exec ems python3 emsctl.py influx status
+```
+
+In this Docker-first setup the secrets live in `config/influxdb.env` (next to
+`config.json`, both under the mounted `config/` folder), so `config init
+--analytics` sets:
+
+```json
+"influxdb": {
+  "enabled": true,
+  "mode": "bundled",
+  "auto_init": true,
+  "auto_sync": true,
+  "secret_file": "config/influxdb.env"
+}
+```
+
+Bundled InfluxDB is the technical backend; the enduser-facing feature is just
+**Analytics**. The single `docker-compose.yml` means there is no overlay `-f`
+chain to remember, and no host-side `python3 emsctl.py stack up` is required.
+
+> **`stack up` and `deploy/docker/*` are the repo/native poweruser path.** They
+> remain supported for repository checkouts and use the default
+> `secret_file: deploy/docker/influxdb.env`. Existing configs that still point
+> at `deploy/docker/influxdb.env` keep working unchanged. The Docker-first path
+> below does not require cloning the repository.
+
+## Native / repo power-user bundled path
+
+> New users should not start here. The default beginner path is the Docker-first
+> quickstart above, which uses `config/influxdb.env`. This section is the
+> repo/native poweruser path: it runs `emsctl` on the host and uses the default
+> `deploy/docker/influxdb.env` secret file.
+
+This bundled path is for repository checkouts running `emsctl` natively. You do
+**not** need to understand InfluxDB tokens, create env files, or pick passwords.
 
 1. In `config.json`, enable InfluxDB (the defaults already select bundled mode):
 

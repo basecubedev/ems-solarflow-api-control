@@ -40,6 +40,13 @@ http://<host-ip>:8080
 
 Backups are stored in `data/backups/` by default.
 
+If you enabled Analytics (`sh install-docker.sh --analytics`), confirm the
+bundled InfluxDB is reachable:
+
+```bash
+docker compose exec ems python3 emsctl.py influx status
+```
+
 ## Native Python
 
 ```bash

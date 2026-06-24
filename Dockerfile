@@ -19,6 +19,9 @@ RUN pip install --no-cache-dir -r requirements.txt \
 
 COPY ems/ ./ems/
 COPY dashboard/ ./dashboard/
+# Runtime dependency of ems/history (Analytics influx sync/status); the rest of
+# scripts/ is dev tooling and intentionally not shipped.
+COPY scripts/influx_utils.py ./scripts/influx_utils.py
 COPY ems-solarflow-api-control.py emsctl.py config.template.json README.md ./
 COPY docker-entrypoint.sh ./
 COPY LICENSE THIRD_PARTY_LICENSES.md ./

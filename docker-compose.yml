@@ -1,0 +1,56 @@
+# EMS SolarFlow API control — Docker-first setup.
+#
+# EMS only:
+#   docker compose up -d
+#
+# EMS + Analytics (bundled InfluxDB):
+#   docker compose --profile with-analytics up -d
+#
+# The installer (install-docker.sh / install-docker.ps1) writes this file and,
+# when Analytics is selected, a local .env with COMPOSE_PROFILES=with-analytics
+# so plain `docker compose up -d` keeps starting the same stack.
+#
+# Files written next to this compose file:
+#   config/config.json      your setup
+#   config/influxdb.env      bundled Analytics secrets (only with Analytics)
+#   data/                    runtime state and dashboard history
+#   data/influxdb/           bundled Analytics database (only with Analytics)
+services:
+  ems:
+    # latest tracks main and is rebuilt weekly.
+    # For stable deployments, pin a release tag such as v0.6.0.
+    image: ghcr.io/basecubedev/ems-solarflow-api-control:latest
+    container_name: ems-solarflow-api-control
+    restart: unless-stopped
+    environment:
+      PUID: "${PUID:-}"
+      PGID: "${PGID:-}"
+      # Marks this as an in-container EMS runtime so bundled InfluxDB is reached
+      # by its Docker service name (influxdb.url), not the host loopback
+      # (influxdb.host_url). A natively-running EMS leaves this unset.
+      EMS_IN_CONTAINER: "1"
+    # Optional: only present for EMS + Analytics. required:false keeps EMS-only
+    # working without the secrets file (needs Docker Compose v2.24+).
+    env_file:
+      - path: ./config/influxdb.env
+        required: false
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config:/app/config
+      - ./data:/app/data
+
+  influxdb:
+    image: influxdb:2.7
+    container_name: ems-influxdb
+    # Only started with the Analytics profile, so plain `docker compose up -d`
+    # stays EMS-only.
+    profiles:
+      - with-analytics
+    ports:
+      - "8086:8086"
+    env_file:
+      - ./config/influxdb.env
+    volumes:
+      - ./data/influxdb:/var/lib/influxdb2
+    restart: unless-stopped

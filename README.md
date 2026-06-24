@@ -38,31 +38,67 @@ see [docs/native-python.md](docs/native-python.md).
 
 ## Quick Start With Docker
 
+Docker is required for the Docker quickstart: Docker with Docker Compose
+v2.24.0 or newer. Linux/macOS use `install-docker.sh`; Windows PowerShell uses
+`install-docker.ps1`. Full details are in [docs/quickstart.md](docs/quickstart.md)
+and [docs/docker.md](docs/docker.md).
+
 Install Docker first if needed:
 
 - [Docker install help](docs/install-docker.md)
 - [Supported setups](docs/supported-setups.md)
 - [Official Docker Engine docs](https://docs.docker.com/engine/install/)
 
-Then start EMS:
+The installer sets up everything in the current folder. No repository clone is
+required. It writes `docker-compose.yml`, creates `config/` and `data/`, and
+starts EMS. For EMS-only installs, `config/config.json` is created on first
+container start; with Analytics the installer creates it during setup because
+it runs `config init --analytics`.
+
+**Linux/macOS — EMS only**
 
 ```bash
-mkdir ems-solarflow-api-control
-cd ems-solarflow-api-control
-mkdir -p config data
-
-curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/main/docker-compose.example.yml
-
-docker compose pull
-docker compose up -d
+mkdir -p ems-solarflow-api-control && cd ems-solarflow-api-control
+curl -fsSLo install-docker.sh https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/main/install-docker.sh
+sh install-docker.sh
 ```
 
-The recommended Compose file uses service name `ems`, publishes the dashboard
-as `8080:8080`, mounts `./config:/app/config`, and mounts
-`./data:/app/data`.
+**Linux/macOS — EMS + Analytics**
 
-On first start, Docker creates `config/config.json` from the built-in template
-if it does not already exist. Existing configs are not overwritten.
+```bash
+mkdir -p ems-solarflow-api-control && cd ems-solarflow-api-control
+curl -fsSLo install-docker.sh https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/main/install-docker.sh
+sh install-docker.sh --analytics
+```
+
+**Windows PowerShell — EMS only**
+
+```powershell
+mkdir ems-solarflow-api-control
+cd ems-solarflow-api-control
+irm https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/main/install-docker.ps1 -OutFile install-docker.ps1
+powershell -ExecutionPolicy Bypass -File .\install-docker.ps1
+```
+
+**Windows PowerShell — EMS + Analytics**
+
+```powershell
+mkdir ems-solarflow-api-control
+cd ems-solarflow-api-control
+irm https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/main/install-docker.ps1 -OutFile install-docker.ps1
+powershell -ExecutionPolicy Bypass -File .\install-docker.ps1 -Analytics
+```
+
+The Windows installer needs Docker Desktop with Linux containers and working
+`docker compose`. **Analytics** is the long-term charts/history feature; it is
+backed by a bundled InfluxDB the installer manages for you.
+
+The generated `docker-compose.yml` uses service name `ems`, publishes the
+dashboard as `8080:8080`, mounts `./config:/app/config`, and mounts
+`./data:/app/data`. Existing `config/config.json` files are not overwritten.
+
+For the manual step-by-step path and what the installer does internally, see
+[docs/docker.md](docs/docker.md) and [docs/quickstart.md](docs/quickstart.md).
 
 ## Configure EMS
 
@@ -219,13 +255,25 @@ Short beginner answers are in [docs/faq.md](docs/faq.md).
 
 ## Optional Analytics
 
-The dashboard works with local SQLite history by default. Long-range analytics
-can use bundled InfluxDB.
+The dashboard works with local SQLite history by default. **Analytics**
+(long-range charts and history) is backed by a bundled InfluxDB.
 
-Analytics setup starts and configures an InfluxDB container from the host, so
-it is documented separately for repository checkouts and advanced Docker
-stacks. See [docs/influxdb.md](docs/influxdb.md) for bundled and external
-InfluxDB setups.
+The simplest way to enable it is the Docker-first installer:
+
+```bash
+sh install-docker.sh --analytics
+```
+
+This starts EMS plus bundled InfluxDB through the `with-analytics` Compose
+profile and generates local secrets in `config/influxdb.env`. To start
+Analytics manually later:
+
+```bash
+docker compose --profile with-analytics up -d
+```
+
+See [docs/influxdb.md](docs/influxdb.md) for the Docker-first, manual, and
+external InfluxDB setups.
 
 ## Safety And Responsibility
 

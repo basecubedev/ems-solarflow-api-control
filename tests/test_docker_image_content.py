@@ -49,6 +49,9 @@ def test_docker_image_contains_runtime_files_and_excludes_dev_content():
         "/app/docs/docker.md",
         "/app/ems/config.py",
         "/app/dashboard/server.py",
+        # Runtime dependency of ems/history; without it Analytics influx
+        # sync/status fail in-container with ModuleNotFoundError: scripts.
+        "/app/scripts/influx_utils.py",
     )
     forbidden = (
         "/app/.git",
@@ -57,6 +60,9 @@ def test_docker_image_contains_runtime_files_and_excludes_dev_content():
         "/app/backup",
         "/app/.venv",
         "/app/deploy/docker/influxdb.env",
+        # Dev-only scripts must not be shipped (only influx_utils.py is).
+        "/app/scripts/capture_runtime_to_influx.py",
+        "/app/scripts/docker_compose_smoke.sh",
     )
     script = " && ".join(
         [*(f"test -f {path}" for path in required)]
@@ -69,3 +75,9 @@ def test_docker_image_contains_runtime_files_and_excludes_dev_content():
     help_result = run("docker", "run", "--rm", IMAGE, "python3", "emsctl.py", "--help")
     assert help_result.returncode == 0, help_result.stderr
     assert "EMS runtime control CLI" in help_result.stdout
+
+    analytics_import = run(
+        "docker", "run", "--rm", IMAGE,
+        "python3", "-c", "import ems.history.influx_client",
+    )
+    assert analytics_import.returncode == 0, analytics_import.stderr
