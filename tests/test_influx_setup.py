@@ -56,6 +56,44 @@ def test_ensure_secret_file_creates_with_generated_secrets(tmp_path):
     assert values["DOCKER_INFLUXDB_INIT_BUCKET"] == "ems_raw"
 
 
+def test_fresh_env_file_has_cli_config_name(tmp_path):
+    cfg = bundled_config()
+    report = influx_setup.ensure_secret_file(cfg, base_dir=str(tmp_path))
+    values = influx_setup.parse_env_file(Path(report["path"]).read_text())
+    assert values["DOCKER_INFLUXDB_INIT_CLI_CONFIG_NAME"] == "ems"
+
+
+def test_cli_config_name_appended_to_existing_without_overwriting_secrets(tmp_path):
+    secret_path = tmp_path / "deploy" / "docker" / "influxdb.env"
+    secret_path.parent.mkdir(parents=True)
+    secret_path.write_text(
+        "INFLUXDB_TOKEN=preexisting-token\n"
+        "DOCKER_INFLUXDB_INIT_PASSWORD=preexisting-password\n"
+    )
+
+    cfg = bundled_config()
+    report = influx_setup.ensure_secret_file(cfg, base_dir=str(tmp_path))
+    values = influx_setup.parse_env_file(secret_path.read_text())
+
+    assert values["DOCKER_INFLUXDB_INIT_CLI_CONFIG_NAME"] == "ems"
+    assert values["INFLUXDB_TOKEN"] == "preexisting-token"
+    assert values["DOCKER_INFLUXDB_INIT_PASSWORD"] == "preexisting-password"
+    assert "INFLUXDB_TOKEN" not in report["generated_keys"]
+    assert "DOCKER_INFLUXDB_INIT_PASSWORD" not in report["generated_keys"]
+    assert "DOCKER_INFLUXDB_INIT_CLI_CONFIG_NAME" not in report["generated_keys"]
+
+
+def test_existing_cli_config_name_preserved(tmp_path):
+    secret_path = tmp_path / "deploy" / "docker" / "influxdb.env"
+    secret_path.parent.mkdir(parents=True)
+    secret_path.write_text("DOCKER_INFLUXDB_INIT_CLI_CONFIG_NAME=custom-name\n")
+
+    cfg = bundled_config()
+    influx_setup.ensure_secret_file(cfg, base_dir=str(tmp_path))
+    values = influx_setup.parse_env_file(secret_path.read_text())
+    assert values["DOCKER_INFLUXDB_INIT_CLI_CONFIG_NAME"] == "custom-name"
+
+
 def test_secret_file_uses_restrictive_permissions(tmp_path):
     cfg = bundled_config()
     report = influx_setup.ensure_secret_file(cfg, base_dir=str(tmp_path))

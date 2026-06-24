@@ -244,6 +244,23 @@ def test_analytics_quickstart(built_image, tmp_path):
         assert influx["mode"] == "bundled"
         assert influx["secret_file"] == "config/influxdb.env"
 
+        env_keys = {
+            line.split("=", 1)[0]
+            for line in (project.path / "config" / "influxdb.env").read_text().splitlines()
+            if "=" in line and not line.lstrip().startswith("#")
+        }
+        assert {
+            "INFLUXDB_ORG",
+            "INFLUXDB_TOKEN",
+            "DOCKER_INFLUXDB_INIT_MODE",
+            "DOCKER_INFLUXDB_INIT_USERNAME",
+            "DOCKER_INFLUXDB_INIT_PASSWORD",
+            "DOCKER_INFLUXDB_INIT_ORG",
+            "DOCKER_INFLUXDB_INIT_BUCKET",
+            "DOCKER_INFLUXDB_INIT_ADMIN_TOKEN",
+            "DOCKER_INFLUXDB_INIT_CLI_CONFIG_NAME",
+        } <= env_keys
+
         failed = "docker compose --profile with-analytics up -d"
         up = project.compose("up", "-d", profile=True)
         assert up.returncode == 0, up.stderr
