@@ -34,43 +34,36 @@
   <text class="label" x="80" y="188">Docker-first install</text>
   <rect class="badgeGreen" x="600" y="169" width="150" height="28" rx="6"/>
   <text class="badgeText" x="624" y="188">Real-flow tested</text>
-  <text class="scoreText" x="766" y="188">100%</text>
   <text class="meta" x="820" y="188">install + compose</text>
 
   <text class="label" x="80" y="226">Docker update flow</text>
   <rect class="badgeGreen" x="600" y="207" width="150" height="28" rx="6"/>
   <text class="badgeText" x="624" y="226">Real-flow tested</text>
-  <text class="scoreText" x="766" y="226">100%</text>
   <text class="meta" x="820" y="226">preserve data</text>
 
   <text class="label" x="80" y="264">Bundled InfluxDB backup/restore</text>
   <rect class="badgeGreen" x="600" y="245" width="150" height="28" rx="6"/>
   <text class="badgeText" x="650" y="264">Strong</text>
-  <text class="scoreText" x="766" y="264">95%</text>
   <text class="meta" x="820" y="264">flow + CLI</text>
 
   <text class="label" x="80" y="302">Encrypted backup/restore</text>
   <rect class="badgeGreen" x="600" y="283" width="150" height="28" rx="6"/>
   <text class="badgeText" x="650" y="302">Strong</text>
-  <text class="scoreText" x="766" y="302">95%</text>
   <text class="meta" x="820" y="302">passwords</text>
 
   <text class="label" x="80" y="340">Password handling</text>
   <rect class="badgeGreen" x="600" y="321" width="150" height="28" rx="6"/>
   <text class="badgeText" x="648" y="340">Covered</text>
-  <text class="scoreText" x="766" y="340">90%</text>
   <text class="meta" x="820" y="340">leak checks</text>
 
   <text class="label" x="80" y="378">File ownership</text>
   <rect class="badgeGreen" x="600" y="359" width="150" height="28" rx="6"/>
   <text class="badgeText" x="648" y="378">Covered</text>
-  <text class="scoreText" x="766" y="378">90%</text>
   <text class="meta" x="820" y="378">ownership</text>
 
   <text class="label" x="80" y="416">Config upgrade safety</text>
   <rect class="badgeTeal" x="600" y="397" width="150" height="28" rx="6"/>
   <text class="badgeText" x="654" y="416">Solid</text>
-  <text class="scoreText" x="766" y="416">89%</text>
   <text class="meta" x="820" y="416">unit + update</text>
 
   <text class="section" x="64" y="466">Code and service coverage signals</text>
