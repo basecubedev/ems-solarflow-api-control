@@ -1040,7 +1040,7 @@ def calculate_targets(
 
             if pv_unmet > 0:
                 log_event(
-                    logging.WARNING,
+                    logging.DEBUG,
                     "pv_first_limited",
                     requested_total=new_total,
                     pv_only_total=round(pv_only_total),
@@ -1097,7 +1097,7 @@ def calculate_targets(
 
             if new_total > 0:
                 log_event(
-                    logging.WARNING,
+                    logging.DEBUG,
                     "pv_first_limited",
                     requested_total=new_total,
                     pv_only_total=0,

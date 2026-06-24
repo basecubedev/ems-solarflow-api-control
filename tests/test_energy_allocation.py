@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import json
+import logging
 import unittest
 from contextlib import ExitStack
 from types import SimpleNamespace
@@ -72,6 +73,141 @@ def state(
     )
 
 
+def _calculate_targets_for_test(
+    states,
+    device_configs=None,
+    requested_total=0,
+    max_power=2000,
+    capabilities=None,
+    redistribute=True,
+    pv_kwp_weighting=True,
+    battery_kwh_weighting=True,
+    pv_charge_balance_enabled=False,
+    pv_charge_balance_deadband_percent=5.0,
+    pv_charge_balance_full_bias_percent=15.0,
+    pv_charge_balance_strength=1.0,
+    explain=False
+):
+    if device_configs is None:
+        device_configs = [
+            device(f"WR{i + 1}")
+            for i in range(len(states))
+        ]
+
+    patches = {
+        "REDISTRIBUTE_CLAMPED_POWER": redistribute,
+        "PV_KWP_WEIGHTING": pv_kwp_weighting,
+        "BATTERY_KWH_WEIGHTING": battery_kwh_weighting,
+        "PV_CHARGE_BALANCE_ENABLED": pv_charge_balance_enabled,
+        "PV_CHARGE_BALANCE_DEADBAND_PERCENT": (
+            pv_charge_balance_deadband_percent
+        ),
+        "PV_CHARGE_BALANCE_FULL_BIAS_PERCENT": (
+            pv_charge_balance_full_bias_percent
+        ),
+        "PV_CHARGE_BALANCE_STRENGTH": pv_charge_balance_strength
+    }
+
+    with ExitStack() as stack:
+        for name, value in patches.items():
+            stack.enter_context(
+                patch(f"ems.target_control.cfg.{name}", value)
+            )
+
+        return calculate_targets(
+            load=0,
+            devices=states,
+            max_power=max_power,
+            device_configs=device_configs,
+            capabilities=capabilities,
+            requested_total=requested_total,
+            explain=explain
+        )
+
+
+def _log_messages(caplog, level=None):
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if level is None or record.levelno == level
+    ]
+
+
+def test_pv_first_limited_is_not_warning_when_final_target_is_met(caplog):
+    states = [
+        state(soc=40, min_soc=15, solar=724),
+        state(soc=80, min_soc=15, solar=1000)
+    ]
+    configs = [
+        device("WR1", max_power=800),
+        device("WR2", max_power=800)
+    ]
+
+    with caplog.at_level(logging.DEBUG):
+        targets, _, _ = _calculate_targets_for_test(
+            states,
+            configs,
+            requested_total=1600,
+            max_power=1600,
+            pv_charge_balance_enabled=True
+        )
+
+    assert sum(targets) == 1600
+    assert any("event=pv_first_limited" in msg for msg in _log_messages(caplog))
+    assert all(
+        "event=pv_first_limited" not in msg
+        for msg in _log_messages(caplog, logging.WARNING)
+    )
+
+
+def test_pv_first_topup_success_does_not_create_warning(caplog):
+    states = [
+        state(soc=70, min_soc=15, solar=1000, pack_in=600),
+        state(soc=60, min_soc=15, solar=600)
+    ]
+    configs = [
+        device("WR1", max_power=1000),
+        device("WR2", max_power=1000)
+    ]
+
+    with caplog.at_level(logging.DEBUG):
+        targets, _, _ = _calculate_targets_for_test(
+            states,
+            configs,
+            requested_total=1200,
+            max_power=1600
+        )
+
+    assert sum(targets) == 1200
+    assert any(
+        "event=pv_first_battery_topup" in msg
+        for msg in _log_messages(caplog, logging.INFO)
+    )
+    assert not _log_messages(caplog, logging.WARNING)
+
+
+def test_pv_first_unresolved_topup_shortfall_still_warns(caplog):
+    states = [
+        state(soc=15, min_soc=15, solar=1000, pack_in=600)
+    ]
+    configs = [
+        device("WR1", max_power=1000)
+    ]
+
+    with caplog.at_level(logging.DEBUG):
+        targets, _, _ = _calculate_targets_for_test(
+            states,
+            configs,
+            requested_total=700,
+            max_power=1000
+        )
+
+    assert sum(targets) == 400
+    warnings = _log_messages(caplog, logging.WARNING)
+    assert any("event=pv_first_battery_topup_unmet" in msg for msg in warnings)
+    assert all("event=pv_first_limited" not in msg for msg in warnings)
+
+
 class EnergyAllocationTest(unittest.TestCase):
     def calculate(
         self,
@@ -95,35 +231,21 @@ class EnergyAllocationTest(unittest.TestCase):
                 for i in range(len(states))
             ]
 
-        patches = {
-            "REDISTRIBUTE_CLAMPED_POWER": redistribute,
-            "PV_KWP_WEIGHTING": pv_kwp_weighting,
-            "BATTERY_KWH_WEIGHTING": battery_kwh_weighting,
-            "PV_CHARGE_BALANCE_ENABLED": pv_charge_balance_enabled,
-            "PV_CHARGE_BALANCE_DEADBAND_PERCENT": (
-                pv_charge_balance_deadband_percent
-            ),
-            "PV_CHARGE_BALANCE_FULL_BIAS_PERCENT": (
-                pv_charge_balance_full_bias_percent
-            ),
-            "PV_CHARGE_BALANCE_STRENGTH": pv_charge_balance_strength
-        }
-
-        with ExitStack() as stack:
-            for name, value in patches.items():
-                stack.enter_context(
-                    patch(f"ems.target_control.cfg.{name}", value)
-                )
-
-            return calculate_targets(
-                load=0,
-                devices=states,
-                max_power=max_power,
-                device_configs=device_configs,
-                capabilities=capabilities,
-                requested_total=requested_total,
-                explain=explain
-            )
+        return _calculate_targets_for_test(
+            states,
+            device_configs,
+            requested_total,
+            max_power,
+            capabilities,
+            redistribute,
+            pv_kwp_weighting,
+            battery_kwh_weighting,
+            pv_charge_balance_enabled,
+            pv_charge_balance_deadband_percent,
+            pv_charge_balance_full_bias_percent,
+            pv_charge_balance_strength,
+            explain
+        )
 
     def assert_total(self, targets, expected, delta=1):
         self.assertAlmostEqual(sum(targets), expected, delta=delta)
