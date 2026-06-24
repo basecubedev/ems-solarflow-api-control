@@ -3,6 +3,10 @@
 This guide starts a normal Docker installation, creates or edits the config,
 runs diagnostics, and opens the dashboard.
 
+![Docker-first install demo](assets/install-demo.gif)
+
+The same preview is also available as [WebM](assets/install-demo.webm).
+
 Home Assistant is optional. Native Python setup is documented separately in
 [native-python.md](native-python.md).
 
