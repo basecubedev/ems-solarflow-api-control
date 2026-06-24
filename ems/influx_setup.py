@@ -258,8 +258,29 @@ def read_secret_file_token(influx_config, base_dir=None):
     return values.get(token_env, "").strip()
 
 
-def is_container_runtime(*, environ=None):
-    """Best-effort detection of whether EMS runs inside a Docker/OCI container.
+OFFICIAL_APP_DIR = "/app"
+
+
+def _in_official_app_layout(
+    base_dir=None, app_dir=OFFICIAL_APP_DIR, path_exists=os.path.exists
+):
+    # /.dockerenv also exists in CI/devcontainers, so it alone is too broad.
+    # Only the official image layout (app at /app with mounted config/data)
+    # counts as the EMS Docker runtime. Mirrors ems.backup._in_official_app_layout
+    # (kept local to avoid an import cycle: backup imports influx_setup).
+    base_dir = base_dir or BASE_DIR
+    return (
+        os.path.abspath(base_dir) == app_dir
+        and path_exists(os.path.join(app_dir, "config"))
+        and path_exists(os.path.join(app_dir, "data"))
+    )
+
+
+def is_container_runtime(
+    *, environ=None, docker_env_path="/.dockerenv", base_dir=None,
+    app_dir=OFFICIAL_APP_DIR,
+):
+    """Best-effort detection of whether EMS runs as the official Docker image.
 
     Used to decide which bundled InfluxDB URL the runtime should use: the Docker
     service name (``influxdb.url``) inside the container, or the host loopback
@@ -267,7 +288,9 @@ def is_container_runtime(*, environ=None):
 
     1. Explicit ``EMS_IN_CONTAINER`` override (``1``/``true`` or ``0``/``false``)
        so the compose overlay and tests can pin the answer.
-    2. The standard Docker marker file ``/.dockerenv``.
+    2. The Docker marker ``/.dockerenv`` *and* the official ``/app`` layout
+       (``/app/config`` + ``/app/data``). The marker alone is not enough, so a
+       generic devcontainer/CI container is not mistaken for the EMS image.
     """
     environ = os.environ if environ is None else environ
     flag = str(environ.get("EMS_IN_CONTAINER", "")).strip().lower()
@@ -275,7 +298,9 @@ def is_container_runtime(*, environ=None):
         return True
     if flag in ("0", "false", "no", "off"):
         return False
-    return os.path.exists("/.dockerenv")
+    return os.path.exists(docker_env_path) and _in_official_app_layout(
+        base_dir, app_dir
+    )
 
 
 def runtime_influx_url(influx_config, *, environ=None):
@@ -393,3 +418,33 @@ def build_influx_copy_in_command(
     """Build ``docker compose cp <host_path> influxdb:<container_path>``."""
     action = ("cp", host_path, f"{INFLUX_SERVICE}:{container_path}")
     return build_compose_command(files, action=action, binary=binary)
+
+
+# ---------------------------------------------------------------------------
+# In-container InfluxDB backup/restore (Docker-first mode)
+#
+# When EMS runs inside the official container it talks to the bundled InfluxDB
+# over the Docker network and runs the official ``influx`` CLI directly, with no
+# Docker CLI or socket. The host/token are passed via the environment so they
+# never appear in argv.
+# ---------------------------------------------------------------------------
+
+INFLUX_CLI_BINARY = "influx"
+
+
+def build_influx_cli_backup_argv(staging_dir, *, binary=INFLUX_CLI_BINARY):
+    """Argv for the official ``influx backup`` run directly in this container."""
+    return [binary, "backup", staging_dir]
+
+
+def build_influx_cli_restore_argv(staging_dir, *, binary=INFLUX_CLI_BINARY):
+    """Argv for the official ``influx restore --full`` run directly in-container."""
+    return [binary, "restore", "--full", staging_dir]
+
+
+def influx_cli_env(url, token, *, environ=None):
+    """Environment for the in-container influx CLI; keeps host/token out of argv."""
+    env = dict(os.environ if environ is None else environ)
+    env["INFLUX_HOST"] = url
+    env["INFLUX_TOKEN"] = token
+    return env

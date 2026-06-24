@@ -3,6 +3,8 @@
 
 import os
 
+import pytest
+
 from ems import cli_privilege
 
 
@@ -107,10 +109,19 @@ def test_drop_sets_guard_and_calls_setids(monkeypatch):
     assert calls == {"groups": [1001], "gid": 1001, "uid": 1000}
 
 
-def test_no_drop_when_target_is_root(monkeypatch):
+def test_error_when_target_is_root(monkeypatch):
     monkeypatch.setattr(cli_privilege.os, "geteuid", lambda: 0)
     monkeypatch.setattr(
         cli_privilege, "resolve_runtime_ids", lambda env: (0, 0)
     )
     env = {"EMS_IN_CONTAINER": "1"}
-    assert cli_privilege.maybe_drop_privileges(env) is None
+    with pytest.raises(cli_privilege.PrivilegeDropError):
+        cli_privilege.maybe_drop_privileges(env)
+
+
+def test_error_when_no_target_resolvable(monkeypatch):
+    monkeypatch.setattr(cli_privilege.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(cli_privilege, "resolve_runtime_ids", lambda env: None)
+    env = {"EMS_IN_CONTAINER": "1"}
+    with pytest.raises(cli_privilege.PrivilegeDropError):
+        cli_privilege.maybe_drop_privileges(env)

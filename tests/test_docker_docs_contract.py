@@ -54,6 +54,24 @@ def test_update_docs_keep_backup_upgrade_and_diagnose_sequence_visible():
     assert "docker compose exec ems python3 emsctl.py diagnose" in update_docs
 
 
+def test_docker_influxdb_backup_command_is_only_advertised_if_e2e_covered():
+    """Docs may advertise the Docker-first InfluxDB backup only while the real
+    Docker E2E test actually exercises it (create + restore + influx status)."""
+    docs_blob = "\n".join(read(path) for path in DOCS)
+    advertises = (
+        "docker compose exec ems python3 emsctl.py backup create --type influxdb"
+        in docs_blob
+    )
+    if not advertises:
+        return
+
+    e2e = read(ROOT / "tests" / "test_docker_first_e2e.py")
+    assert "backup create --type influxdb" in e2e
+    assert "backup restore" in e2e
+    assert "--on-conflict replace --no-rollback" in e2e
+    assert 'emsctl.py", "influx", "status"' in e2e
+
+
 def test_backup_docs_name_host_backup_path_and_restore_variants():
     text = read(ROOT / "docs" / "backup-restore.md")
     normalized = " ".join(text.split())

@@ -636,8 +636,12 @@ protect local usage history. The manifest records a `databases` list and an
 ### What an InfluxDB backup contains
 
 `backup create --type influxdb` backs up the **bundled** InfluxDB analytics data
-using the official `influx backup` CLI run inside the `ems-influxdb` container,
-then packages the output into a `tar.gz` archive written to `data/backups/`:
+using the official `influx backup` CLI, then packages the output into a `tar.gz`
+archive written to `data/backups/`. Docker users run the command inside the
+`ems` container (the CLI ships in the image and talks to the bundled InfluxDB
+over the Docker network — no Docker socket required); native users run it from
+the repo, where it drives the bundled `ems-influxdb` container via
+`docker compose`:
 
 ```text
 data/backups/ems-influxdb-manual-2026-06-18-221500.tar.gz

@@ -2,12 +2,15 @@
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import tarfile
 import textwrap
 from pathlib import Path
 
 import pytest
+
+from docker_e2e_utils import assert_no_root_owned_files
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -143,14 +146,6 @@ def backup_names(install, suffix):
     return sorted(path.name for path in (install / "data" / "backups").glob(suffix))
 
 
-def assert_no_root_owned_files(install):
-    for base in (install / "config", install / "data"):
-        for path in base.rglob("*"):
-            stat = path.stat()
-            assert stat.st_uid != 0, path
-            assert stat.st_gid != 0, path
-
-
 def test_docker_update_flow_preserves_config_and_creates_backups(docker_install):
     up = compose(docker_install, "up", "-d", "--build")
     assert up.returncode == 0, up.stderr
@@ -231,7 +226,7 @@ def test_docker_update_flow_preserves_config_and_creates_backups(docker_install)
     assert "No config.json found." not in logs.stdout + logs.stderr
 
     assert (docker_install / "config" / "config.json").is_file()
-    assert_no_root_owned_files(docker_install)
+    assert_no_root_owned_files(docker_install / "config", docker_install / "data")
 
 
 def test_docker_encrypted_backup_inspect_and_restore_dry_run(docker_install):
@@ -350,3 +345,80 @@ def test_docker_encrypted_backup_inspect_and_restore_dry_run(docker_install):
     logs = compose(docker_install, "logs", "ems")
     assert logs.returncode == 0, logs.stderr
     assert PASSWORD not in logs.stdout + logs.stderr
+
+    assert_no_root_owned_files(docker_install / "config", docker_install / "data")
+
+
+def test_docker_encrypted_database_backup_inspect_and_restore_dry_run(docker_install):
+    up = compose(docker_install, "up", "-d", "--build")
+    assert up.returncode == 0, up.stderr
+
+    # Seed valid SQLite databases host-side so the backup carries real content
+    # without leaving root-owned files in the mount (the seed must not bypass
+    # the runtime user the way a root `exec ... python3 -c` would).
+    for db_name in ("ems_dashboard.sqlite", "ems_state.sqlite"):
+        conn = sqlite3.connect(docker_install / "data" / db_name)
+        conn.execute("CREATE TABLE IF NOT EXISTS seed (id INTEGER PRIMARY KEY)")
+        conn.commit()
+        conn.close()
+
+    create = compose(
+        docker_install,
+        "exec",
+        "-T",
+        "-e",
+        "EMS_TEST_BACKUP_PASSWORD",
+        "ems",
+        "sh",
+        "-lc",
+        'printf "%s\\n%s\\n" "$EMS_TEST_BACKUP_PASSWORD" "$EMS_TEST_BACKUP_PASSWORD" | python3 emsctl.py backup create --type databases --password',
+        env={"EMS_TEST_BACKUP_PASSWORD": PASSWORD},
+    )
+    assert create.returncode == 0, create.stderr
+    assert PASSWORD not in create.stdout + create.stderr
+    archives = backup_names(docker_install, "ems-databases-manual-*.tar.gz.enc")
+    assert len(archives) == 1, archives
+    in_container_archive = f"data/backups/{archives[0]}"
+
+    archive_path = docker_install / "data" / "backups" / archives[0]
+    with pytest.raises(tarfile.TarError):
+        tarfile.open(archive_path, "r:gz")
+
+    inspect = compose(
+        docker_install,
+        "exec",
+        "-T",
+        "-e",
+        "EMS_TEST_BACKUP_PASSWORD",
+        "ems",
+        "sh",
+        "-lc",
+        f'printf "%s\\n" "$EMS_TEST_BACKUP_PASSWORD" | python3 emsctl.py backup inspect {in_container_archive}',
+        env={"EMS_TEST_BACKUP_PASSWORD": PASSWORD},
+    )
+    assert inspect.returncode == 0, inspect.stderr
+    assert "encrypted:  True" in inspect.stdout
+    assert "type:       databases" in inspect.stdout
+    assert PASSWORD not in inspect.stdout + inspect.stderr
+
+    dry_run = compose(
+        docker_install,
+        "exec",
+        "-T",
+        "-e",
+        "EMS_TEST_BACKUP_PASSWORD",
+        "ems",
+        "sh",
+        "-lc",
+        f'printf "%s\\n" "$EMS_TEST_BACKUP_PASSWORD" | python3 emsctl.py backup restore {in_container_archive} --dry-run --on-conflict replace --no-rollback',
+        env={"EMS_TEST_BACKUP_PASSWORD": PASSWORD},
+    )
+    assert dry_run.returncode == 0, dry_run.stderr
+    assert "Dry run: no files were changed" in dry_run.stdout
+    assert PASSWORD not in dry_run.stdout + dry_run.stderr
+
+    logs = compose(docker_install, "logs", "ems")
+    assert logs.returncode == 0, logs.stderr
+    assert PASSWORD not in logs.stdout + logs.stderr
+
+    assert_no_root_owned_files(docker_install / "config", docker_install / "data")
