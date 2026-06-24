@@ -1140,11 +1140,17 @@ Relevant events:
 ```text
 balance_weight
 pv_first_limit
-pv_first_limited
+pv_first_limited (DEBUG diagnostic; normal before battery top-up)
 pv_first_battery_topup
 pv_first_battery_topup_unmet
 target_calculation
 ```
+
+`pv_first_limited` means the PV-only allocation pass did not cover the full
+requested target by itself. This is usually normal in PV-first mode, especially
+when a device is already charging its battery or derating output. Treat
+`pv_first_battery_topup_unmet` as the warning event for an unresolved PV-first
+shortfall after allowed battery top-up.
 
 Keep `pv_priority_factor=1.0` first. Adjust only after confirming realistic
 `pv_kwp`, `battery_kwh`, and SOC limits.
