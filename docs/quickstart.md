@@ -5,7 +5,9 @@ runs diagnostics, and opens the dashboard.
 
 ![Docker-first install demo](assets/install-demo.gif)
 
-The preview shows the Docker-first Analytics bootstrap and is also available as
+The preview shows the Docker-first Analytics bootstrap — install commands,
+installer output, a guided `config init` with example values, and the running
+dashboard. It is also available as video: [MP4](assets/install-demo.mp4) ·
 [WebM](assets/install-demo.webm).
 
 Home Assistant is optional. Native Python setup is documented separately in

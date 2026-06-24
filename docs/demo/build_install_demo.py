@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 ASSETS = ROOT / "docs" / "assets"
 OUTPUT_GIF = ASSETS / "install-demo.gif"
 OUTPUT_WEBM = ASSETS / "install-demo.webm"
+OUTPUT_MP4 = ASSETS / "install-demo.mp4"
 
 WIDTH = 900
 HEIGHT = 506
@@ -87,10 +88,22 @@ def terminal_frame(title: str, subtitle: str, lines: list[tuple[str, str]]) -> I
         )
     draw.text(
         (CONTENT_X + 100, BODY_TOP + 9),
-        "demo shell - docker-first analytics bootstrap",
+        "demo shell",
         font=FONT_SMALL,
         fill="#d1d5db",
     )
+    draw.rounded_rectangle(
+        (CONTENT_X + CONTENT_WIDTH - 322, BODY_TOP + 6, CONTENT_X + CONTENT_WIDTH - 196, BODY_TOP + 24),
+        radius=4,
+        fill="#102a4d",
+    )
+    draw.text((CONTENT_X + CONTENT_WIDTH - 314, BODY_TOP + 8), "YOU RUN", font=FONT_SMALL, fill="#bfdbfe")
+    draw.rounded_rectangle(
+        (CONTENT_X + CONTENT_WIDTH - 184, BODY_TOP + 6, CONTENT_X + CONTENT_WIDTH - 16, BODY_TOP + 24),
+        radius=4,
+        fill="#123421",
+    )
+    draw.text((CONTENT_X + CONTENT_WIDTH - 176, BODY_TOP + 8), "SCRIPT OUTPUT", font=FONT_SMALL, fill="#bbf7d0")
 
     y = BODY_TOP + 50
     colors = {
@@ -99,10 +112,22 @@ def terminal_frame(title: str, subtitle: str, lines: list[tuple[str, str]]) -> I
         "ok": "#86efac",
         "warn": "#facc15",
         "dim": "#94a3b8",
+        "ask": "#94a3b8",
+        "answer": "#fbbf24",
     }
-    for kind, text in lines:
+    for line in lines:
+        kind, text = line[0], line[1]
+        answer = line[2] if len(line) > 2 else None
         font = FONT_MONO_BOLD if kind == "cmd" else FONT_MONO
         draw.text((CONTENT_X + 20, y), text, font=font, fill=colors[kind])
+        if answer is not None:
+            prompt_width = draw.textlength(text, font=font)
+            draw.text(
+                (CONTENT_X + 20 + prompt_width, y),
+                answer,
+                font=FONT_MONO_BOLD,
+                fill=colors["answer"],
+            )
         y += 24
     return img
 
@@ -145,92 +170,66 @@ def dashboard_frame(view: str, title: str, subtitle: str) -> Image.Image:
 
 
 def build_frames() -> list[tuple[Image.Image, int]]:
-    prompt = "demo@ems-demo:~/ems-demo$"
+    prompt = "$"
     return [
         (
             terminal_frame(
-                "Docker-first Analytics bootstrap",
-                "Start in an empty folder; no repository clone or host Python.",
+                "Minimal Analytics bootstrap",
+                "These are the only shell commands for a fresh install.",
                 [
-                    ("cmd", "demo@ems-demo:~$ mkdir ems-demo && cd ems-demo"),
-                    ("cmd", f"{prompt} ls -A"),
-                    ("dim", "(empty folder)"),
-                    ("cmd", f"{prompt} curl -fsSLo install-docker.sh \\"),
-                    ("cmd", "  https://raw.githubusercontent.com/basecubedev/.../install-docker.sh"),
-                    ("out", "install-docker.sh saved"),
+                    ("cmd", f"{prompt} mkdir ems-demo && cd ems-demo"),
+                    ("cmd", f"{prompt} curl -fsSLo install-docker.sh https://raw.githubusercontent.com/.../install-docker.sh"),
+                    ("cmd", f"{prompt} sh install-docker.sh --analytics"),
                 ],
             ),
-            4200,
+            5200,
         ),
         (
             terminal_frame(
-                "Run the RC6 InfluxDB bootstrap",
-                "The installer prepares Compose, config, secrets, and data folders.",
+                "Installer bootstrap output",
+                "Everything below is done by the installer script.",
                 [
-                    ("cmd", f"{prompt} sh install-docker.sh --analytics"),
-                    ("ok", "Docker Compose v2.24+ detected"),
                     ("ok", "created config/, data/, data/influxdb/"),
                     ("ok", "wrote docker-compose.yml"),
                     ("ok", "generated config/influxdb.env"),
                     ("ok", "config init --analytics --yes --no-backup"),
                     ("ok", "influx init --no-start"),
-                ],
-            ),
-            5600,
-        ),
-        (
-            terminal_frame(
-                "Start EMS plus bundled InfluxDB",
-                "The with-analytics profile is enabled for normal compose commands.",
-                [
                     ("ok", "enabled COMPOSE_PROFILES=with-analytics"),
-                    ("cmd", f"{prompt} docker compose up -d"),
+                    ("ok", "docker compose up -d"),
                     ("ok", "Container ems       Started"),
                     ("ok", "Container influxdb  Started"),
                     ("out", "dashboard: http://localhost:8080"),
                     ("out", "analytics: http://localhost:8086"),
                 ],
             ),
-            5000,
+            6800,
         ),
         (
             terminal_frame(
-                "Verify the install",
-                "Only dummy values are used in this documentation demo.",
-                [
-                    ("cmd", f"{prompt} docker compose ps"),
-                    ("out", "NAME      SERVICE    STATUS   PORTS"),
-                    ("ok", "ems       ems        running  0.0.0.0:8080->8080/tcp"),
-                    ("ok", "influxdb  influxdb   running  0.0.0.0:8086->8086/tcp"),
-                    ("cmd", f"{prompt} docker compose exec ems python3 emsctl.py influx status"),
-                    ("ok", "InfluxDB ready; EMS bucket reachable"),
-                    ("cmd", f"{prompt} docker compose exec ems python3 emsctl.py diagnose"),
-                    ("ok", "diagnose completed"),
-                ],
-            ),
-            6200,
-        ),
-        (
-            terminal_frame(
-                "Add safe demo configuration",
-                "Use documentation-safe values before a real first run.",
+                "Add your meter and devices",
+                "Guided setup with example values; most prompts accept the default.",
                 [
                     ("cmd", f"{prompt} docker compose exec ems python3 emsctl.py config init"),
-                    ("out", "Grid meter IP: 192.0.2.10"),
-                    ("out", "Inverter serial: DEMO-SF800P2-1"),
-                    ("out", "System limit: 800 W"),
-                    ("out", "Min/Max SoC: 15 / 90"),
-                    ("cmd", f"{prompt} docker compose restart"),
-                    ("ok", "configuration saved; EMS restarted"),
+                    ("dim", "Which grid meter do you use?"),
+                    ("dim", "  1) Shelly   2) EcoTracker   3) Tasmota"),
+                    ("ask", "Choice [1]: ", "1"),
+                    ("ask", "Grid meter IP address: ", "192.0.2.20"),
+                    ("ask", "How many Zendure inverters? [1]: ", "1"),
+                    ("ask", "Device 1 IP: ", "192.0.2.10"),
+                    ("ask", "Device 1 serial number: ", "DEMO-SF800P2-1"),
+                    ("ask", "Device 1 max output power [800]: ", "800"),
+                    ("ask", "Battery size in kWh [1.92]: ", "1.92"),
+                    ("ask", "Minimum SOC [15]: ", "10"),
+                    ("ok", "wrote config/config.json"),
                 ],
             ),
-            5000,
+            8000,
         ),
         (
             dashboard_frame(
                 "aggregated",
-                "Dashboard overview",
-                "Open http://localhost:8080 and confirm live status at a glance.",
+                "Open the dashboard",
+                "The installer prints the URL; open http://localhost:8080.",
             ),
             5200,
         ),
@@ -252,10 +251,15 @@ def write_gif(frames: list[tuple[Image.Image, int]], output: Path) -> None:
     )
 
 
-def write_webm(frames: list[tuple[Image.Image, int]], output: Path) -> None:
+def _encode_video(
+    frames: list[tuple[Image.Image, int]],
+    output: Path,
+    codec_args: list[str],
+    label: str,
+) -> None:
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
-        print("ffmpeg not found; skipped WebM generation")
+        print(f"ffmpeg not found; skipped {label} generation")
         return
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="install-demo-frames-") as tmp:
@@ -287,23 +291,40 @@ def write_webm(frames: list[tuple[Image.Image, int]], output: Path) -> None:
                 str(concat_path),
                 "-vf",
                 f"fps={FPS},format=yuv420p",
-                "-c:v",
-                "libvpx-vp9",
-                "-b:v",
-                "0",
-                "-crf",
-                "38",
+                *codec_args,
                 str(output),
             ],
             check=True,
         )
 
 
+def write_webm(frames: list[tuple[Image.Image, int]], output: Path) -> None:
+    _encode_video(
+        frames,
+        output,
+        ["-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "38"],
+        "WebM",
+    )
+
+
+def write_mp4(frames: list[tuple[Image.Image, int]], output: Path) -> None:
+    # H.264 / yuv420p with +faststart embeds inline on most forums (Discourse,
+    # phpBB) where WebM playback is unreliable.
+    _encode_video(
+        frames,
+        output,
+        ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "26", "-movflags", "+faststart"],
+        "MP4",
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gif", default=OUTPUT_GIF, type=Path)
     parser.add_argument("--webm", default=OUTPUT_WEBM, type=Path)
+    parser.add_argument("--mp4", default=OUTPUT_MP4, type=Path)
     parser.add_argument("--skip-webm", action="store_true")
+    parser.add_argument("--skip-mp4", action="store_true")
     return parser.parse_args()
 
 
@@ -317,6 +338,10 @@ def main() -> None:
         write_webm(frames, args.webm)
         if args.webm.exists():
             print(f"wrote {args.webm.relative_to(ROOT)}")
+    if not args.skip_mp4:
+        write_mp4(frames, args.mp4)
+        if args.mp4.exists():
+            print(f"wrote {args.mp4.relative_to(ROOT)}")
 
 
 if __name__ == "__main__":

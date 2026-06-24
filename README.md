@@ -100,11 +100,11 @@ dashboard as `8080:8080`, mounts `./config:/app/config`, and mounts
 ### Docker-first Install Preview
 
 The short demo below shows the Docker-first Analytics setup from an empty
-folder to the running dashboard.
+folder, through a guided `config init`, to the running dashboard.
 
 ![Docker-first install demo](docs/assets/install-demo.gif)
 
-[WebM version](docs/assets/install-demo.webm)
+Video: [MP4](docs/assets/install-demo.mp4) · [WebM](docs/assets/install-demo.webm)
 
 For the manual step-by-step path and what the installer does internally, see
 [docs/docker.md](docs/docker.md) and [docs/quickstart.md](docs/quickstart.md).

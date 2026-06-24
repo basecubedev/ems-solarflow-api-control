@@ -24,7 +24,7 @@ After Docker is installed, the EMS Analytics quickstart flow looks like this:
 
 ![Docker-first install demo](assets/install-demo.gif)
 
-[WebM version](assets/install-demo.webm)
+Video: [MP4](assets/install-demo.mp4) · [WebM](assets/install-demo.webm)
 
 ## Debian
 
