@@ -1054,6 +1054,72 @@ def test_is_container_runtime_respects_explicit_override():
     )
 
 
+def _official_app_layout(tmp_path):
+    app_dir = tmp_path / "app"
+    (app_dir / "config").mkdir(parents=True)
+    (app_dir / "data").mkdir()
+    return app_dir
+
+
+def test_is_container_runtime_marker_with_official_layout(tmp_path):
+    marker = tmp_path / ".dockerenv"
+    marker.write_text("")
+    app_dir = _official_app_layout(tmp_path)
+    assert influx_setup.is_container_runtime(
+        environ={},
+        docker_env_path=str(marker),
+        base_dir=str(app_dir),
+        app_dir=str(app_dir),
+    )
+
+
+def test_is_container_runtime_marker_without_official_layout(tmp_path):
+    # /.dockerenv present (generic devcontainer/CI) but base dir is a temp
+    # project, not the official /app layout: must not report container mode.
+    marker = tmp_path / ".dockerenv"
+    marker.write_text("")
+    assert not influx_setup.is_container_runtime(
+        environ={},
+        docker_env_path=str(marker),
+        base_dir=str(tmp_path),
+        app_dir=str(tmp_path / "app"),
+    )
+
+
+def test_is_container_runtime_marker_alone_without_config_data_is_not_enough(
+    tmp_path,
+):
+    # The app dir matches but config/ + data/ are missing: still not the image.
+    marker = tmp_path / ".dockerenv"
+    marker.write_text("")
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    assert not influx_setup.is_container_runtime(
+        environ={},
+        docker_env_path=str(marker),
+        base_dir=str(app_dir),
+        app_dir=str(app_dir),
+    )
+
+
+def test_runtime_url_bundled_generic_container_uses_host_url(monkeypatch):
+    # Generic container: /.dockerenv exists but the official /app layout does
+    # not, and no explicit override -> must use host_url, not the service name.
+    real_exists = os.path.exists
+    monkeypatch.setattr(
+        influx_setup.os.path,
+        "exists",
+        lambda path: True if path == "/.dockerenv" else real_exists(path),
+    )
+    cfg = bundled_config(
+        url="http://influxdb:8086", host_url="http://127.0.0.1:8086"
+    )
+    assert (
+        influx_setup.runtime_influx_url(cfg, environ={})
+        == "http://127.0.0.1:8086"
+    )
+
+
 def test_runtime_token_explicit_token_wins(tmp_path):
     # Even with a bundled secret file present, an explicit token takes priority.
     cfg = bundled_config(token="explicit-token")

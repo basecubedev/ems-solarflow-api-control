@@ -81,3 +81,11 @@ def test_docker_image_contains_runtime_files_and_excludes_dev_content():
         "python3", "-c", "import ems.history.influx_client",
     )
     assert analytics_import.returncode == 0, analytics_import.stderr
+
+    # The official influx CLI must be present for in-container bundled InfluxDB
+    # backups, but the Docker CLI must not (no Docker-in-Docker / socket reliance).
+    influx_cli = run("docker", "run", "--rm", IMAGE, "influx", "version")
+    assert influx_cli.returncode == 0, influx_cli.stderr
+
+    no_docker = run("docker", "run", "--rm", IMAGE, "sh", "-c", "command -v docker")
+    assert no_docker.returncode != 0, "Docker CLI must not be present in the image"

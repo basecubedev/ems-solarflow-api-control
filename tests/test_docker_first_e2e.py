@@ -16,15 +16,30 @@ import json
 import os
 import re
 import subprocess
+import tarfile
 import time
 import uuid
 from pathlib import Path
 
 import pytest
 
+from docker_e2e_utils import assert_no_root_owned_files
+
 ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SH = ROOT / "install-docker.sh"
 IMAGE_TAG = "ems-solarflow-api-control:first-e2e"
+
+# Backup password is passed via this env var (never argv) so it cannot leak into
+# process arguments or test diagnostics.
+BACKUP_PASSWORD = "e2e-influx-backup-pw"
+
+# Exports the bundled InfluxDB host/token for the in-container influx CLI. The
+# token is read from the mounted secret file into the environment so it never
+# appears in argv.
+_INFLUX_CLI_ENV = (
+    "export INFLUX_HOST=http://influxdb:8086; "
+    "export INFLUX_TOKEN=\"$(sed -n 's/^INFLUXDB_TOKEN=//p' config/influxdb.env)\"; "
+)
 
 
 def docker_available():
@@ -252,6 +267,142 @@ def test_analytics_quickstart(built_image, tmp_path):
         status = project.compose("exec", "-T", "ems", "python3", "emsctl.py", "influx", "status")
         assert status.returncode == 0, status.stdout + status.stderr
         assert "healthy: yes" in status.stdout
+
+        org = influx["org"]
+        project.env["EMS_TEST_BACKUP_PASSWORD"] = BACKUP_PASSWORD
+
+        # Seed a real data point in a dedicated bucket so the restore check below
+        # proves data (not just metadata) survives the round trip.
+        failed = "seed influx data point"
+        seed = project.compose(
+            "exec", "-T", "ems", "sh", "-lc",
+            _INFLUX_CLI_ENV
+            + f"influx bucket create -n e2e_probe -o {org} && "
+            + "influx write -b e2e_probe -o " + org
+            + " --precision s 'e2e_probe value=42 1700000000'",
+        )
+        assert seed.returncode == 0, seed.stdout + seed.stderr
+
+        # Encrypted bundled InfluxDB backup must work from inside the EMS
+        # container without the Docker CLI/socket (Docker-first end-user path).
+        failed = "backup create --type influxdb --password"
+        create = project.compose(
+            "exec", "-T", "-e", "EMS_TEST_BACKUP_PASSWORD", "ems", "sh", "-lc",
+            'printf "%s\\n%s\\n" "$EMS_TEST_BACKUP_PASSWORD" '
+            '"$EMS_TEST_BACKUP_PASSWORD" | '
+            "python3 emsctl.py backup create --type influxdb --password",
+        )
+        assert create.returncode == 0, create.stdout + create.stderr
+        assert BACKUP_PASSWORD not in create.stdout + create.stderr
+
+        archives = sorted(
+            (project.path / "data" / "backups").glob("ems-influxdb-manual-*.tar.gz.enc")
+        )
+        assert len(archives) == 1, [p.name for p in archives]
+        archive = archives[0]
+        in_container = f"data/backups/{archive.name}"
+
+        # Encrypted archive must not be openable as a plain gzip tar.
+        with pytest.raises(tarfile.TarError):
+            tarfile.open(archive, "r:gz")
+
+        failed = "backup inspect encrypted (no password)"
+        inspect_nopw = project.compose(
+            "exec", "-T", "ems", "sh", "-lc",
+            f"python3 emsctl.py backup inspect {in_container} < /dev/null",
+        )
+        assert inspect_nopw.returncode == 0, inspect_nopw.stderr
+        assert "password required" in inspect_nopw.stdout
+
+        failed = "backup inspect encrypted (with password)"
+        inspect_pw = project.compose(
+            "exec", "-T", "-e", "EMS_TEST_BACKUP_PASSWORD", "ems", "sh", "-lc",
+            'printf "%s\\n" "$EMS_TEST_BACKUP_PASSWORD" | '
+            f"python3 emsctl.py backup inspect {in_container}",
+        )
+        assert inspect_pw.returncode == 0, inspect_pw.stderr
+        assert "encrypted:  True" in inspect_pw.stdout
+        assert "type:       influxdb" in inspect_pw.stdout
+        assert "mode:          bundled" in inspect_pw.stdout
+        assert BACKUP_PASSWORD not in inspect_pw.stdout + inspect_pw.stderr
+
+        # Drop the bucket so the restore has something real to bring back.
+        failed = "delete seeded bucket"
+        drop = project.compose(
+            "exec", "-T", "ems", "sh", "-lc",
+            _INFLUX_CLI_ENV + f"influx bucket delete -n e2e_probe -o {org}",
+        )
+        assert drop.returncode == 0, drop.stdout + drop.stderr
+
+        failed = "wrong-password restore must fail cleanly"
+        wrong = project.compose(
+            "exec", "-T", "ems", "sh", "-lc",
+            'printf "%s\\n" "wrong-password" | '
+            f"python3 emsctl.py backup restore {in_container} "
+            "--on-conflict replace --no-rollback",
+        )
+        assert wrong.returncode != 0
+        assert "Traceback" not in wrong.stdout + wrong.stderr
+        assert BACKUP_PASSWORD not in wrong.stdout + wrong.stderr
+
+        failed = "dry-run restore"
+        dry = project.compose(
+            "exec", "-T", "-e", "EMS_TEST_BACKUP_PASSWORD", "ems", "sh", "-lc",
+            'printf "%s\\n" "$EMS_TEST_BACKUP_PASSWORD" | '
+            f"python3 emsctl.py backup restore {in_container} "
+            "--dry-run --on-conflict replace --no-rollback",
+        )
+        assert dry.returncode == 0, dry.stdout + dry.stderr
+        assert BACKUP_PASSWORD not in dry.stdout + dry.stderr
+
+        failed = "real restore"
+        restore = project.compose(
+            "exec", "-T", "-e", "EMS_TEST_BACKUP_PASSWORD", "ems", "sh", "-lc",
+            'printf "%s\\n" "$EMS_TEST_BACKUP_PASSWORD" | '
+            f"python3 emsctl.py backup restore {in_container} "
+            "--on-conflict replace --no-rollback",
+        )
+        assert restore.returncode == 0, restore.stdout + restore.stderr
+        assert BACKUP_PASSWORD not in restore.stdout + restore.stderr
+
+        failed = "influx status after restore"
+
+        def healthy_again():
+            res = project.compose(
+                "exec", "-T", "ems", "python3", "emsctl.py", "influx", "status"
+            )
+            return res.returncode == 0 and "healthy: yes" in res.stdout
+
+        assert _wait(healthy_again, timeout=60, interval=3)
+
+        failed = "seeded data point survives restore"
+
+        def probe_restored():
+            res = project.compose(
+                "exec", "-T", "ems", "sh", "-lc",
+                _INFLUX_CLI_ENV
+                + "influx query -o " + org + " '"
+                + 'from(bucket:"e2e_probe") '
+                + "|> range(start: 1970-01-01T00:00:00Z) "
+                + '|> filter(fn: (r) => r._measurement == "e2e_probe")\'',
+            )
+            return res.returncode == 0 and "42" in res.stdout
+
+        assert _wait(probe_restored, timeout=30, interval=3)
+
+        failed = "no password in docker logs"
+        logs = project.compose("logs", "--no-color", "ems", "influxdb", profile=True)
+        assert BACKUP_PASSWORD not in logs.stdout + logs.stderr
+
+        # Every emsctl write above (backup create, restore staging) must land as
+        # the host runtime user. The bundled InfluxDB data dir belongs to the
+        # separate influxdb container, so it is excluded from the EMS check.
+        failed = "no root-owned files in mounts"
+        assert_no_root_owned_files(
+            project.path / "config",
+            project.path / "data",
+            exclude=[project.path / "data" / "influxdb"],
+        )
     except Exception:
         print(project.diagnostics(failed))
         raise

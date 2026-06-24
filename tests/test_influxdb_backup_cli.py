@@ -288,6 +288,9 @@ def test_influxdb_restore_non_interactive_requires_replace_flag(
 
 def test_backup_runner_uses_official_commands(tmp_path, monkeypatch):
     config = bundled_config()
+    # Host-side runner test: pin host mode so it stays deterministic even when
+    # the suite itself runs inside a generic container (where /.dockerenv exists).
+    monkeypatch.setenv("EMS_IN_CONTAINER", "0")
     monkeypatch.setattr(emsctl, "BASE_DIR", str(tmp_path))
     monkeypatch.setattr(influx_setup, "ensure_data_dir", lambda *a, **k: "data/influxdb")
     commands = []
@@ -313,3 +316,147 @@ def test_backup_runner_uses_official_commands(tmp_path, monkeypatch):
     assert any("up -d influxdb" in c for c in flat)
     assert any("influx backup" in c for c in flat)
     assert any("cp" in c.split() for c in flat)
+
+
+# ---------------------------------------------------------------------------
+# container-mode runners (Docker-first: direct influx CLI, no docker compose)
+# ---------------------------------------------------------------------------
+
+def _force_container(monkeypatch):
+    monkeypatch.setattr(influx_setup, "is_container_runtime", lambda **k: True)
+
+
+def _forbid_docker_compose(monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("container mode must not call docker compose")
+
+    monkeypatch.setattr(emsctl, "run_docker_compose", boom)
+
+
+def test_container_backup_runner_uses_direct_cli(tmp_path, monkeypatch):
+    config = bundled_config(url="http://influxdb:8086")
+    _force_container(monkeypatch)
+    _forbid_docker_compose(monkeypatch)
+    calls = []
+
+    def fake_cli(argv, env, *, json_output=False):
+        calls.append((argv, env))
+        return 0
+
+    monkeypatch.setattr(emsctl, "run_influx_cli", fake_cli)
+
+    runner = emsctl.make_influx_backup_runner(config)
+    out_dir = tmp_path / "influxdb"
+    out_dir.mkdir()
+    runner(str(out_dir))
+
+    assert len(calls) == 1
+    argv, env = calls[0]
+    assert argv[:2] == ["influx", "backup"]
+    assert str(out_dir) in argv
+    assert env["INFLUX_HOST"] == "http://influxdb:8086"
+    assert env["INFLUX_TOKEN"] == "tok-abc"
+
+
+def test_container_restore_runner_uses_direct_cli(tmp_path, monkeypatch):
+    config = bundled_config(url="http://influxdb:8086")
+    _force_container(monkeypatch)
+    _forbid_docker_compose(monkeypatch)
+    calls = []
+
+    def fake_cli(argv, env, *, json_output=False):
+        calls.append((argv, env))
+        return 0
+
+    monkeypatch.setattr(emsctl, "run_influx_cli", fake_cli)
+
+    runner = emsctl.make_influx_restore_runner(config)
+    in_dir = tmp_path / "influxdb"
+    in_dir.mkdir()
+    runner(str(in_dir))
+
+    assert len(calls) == 1
+    argv, env = calls[0]
+    assert argv[:3] == ["influx", "restore", "--full"]
+    assert str(in_dir) in argv
+    assert env["INFLUX_TOKEN"] == "tok-abc"
+
+
+def test_container_runner_keeps_token_out_of_argv_and_trace(tmp_path, monkeypatch, capsys):
+    config = bundled_config(url="http://influxdb:8086", token="super-secret-token")
+    _force_container(monkeypatch)
+    _forbid_docker_compose(monkeypatch)
+
+    captured = {}
+
+    def fake_subprocess_run(argv, env=None, stdout=None, stderr=None):
+        captured["argv"] = argv
+        captured["env"] = env
+
+        class R:
+            returncode = 0
+
+        return R()
+
+    monkeypatch.setattr(emsctl.subprocess, "run", fake_subprocess_run)
+
+    runner = emsctl.make_influx_backup_runner(config)
+    out_dir = tmp_path / "influxdb"
+    out_dir.mkdir()
+    runner(str(out_dir))
+
+    assert "super-secret-token" not in " ".join(captured["argv"])
+    assert captured["env"]["INFLUX_TOKEN"] == "super-secret-token"
+    trace = capsys.readouterr().err
+    assert "super-secret-token" not in trace
+
+
+def test_container_backup_runner_missing_token_raises(monkeypatch):
+    config = bundled_config(url="http://influxdb:8086")
+    config["influxdb"].pop("token")
+    _force_container(monkeypatch)
+    _forbid_docker_compose(monkeypatch)
+    monkeypatch.setattr(influx_setup, "runtime_influx_token", lambda *a, **k: "")
+
+    try:
+        emsctl.make_influx_backup_runner(config)
+    except backup.BackupError as exc:
+        assert "token" in str(exc).lower()
+    else:
+        raise AssertionError("expected BackupError when no token resolves")
+
+
+def test_container_runner_missing_url_raises(monkeypatch):
+    config = bundled_config()
+    config["influxdb"].pop("url", None)
+    _force_container(monkeypatch)
+    _forbid_docker_compose(monkeypatch)
+    monkeypatch.setattr(influx_setup, "runtime_influx_url", lambda *a, **k: "")
+
+    try:
+        emsctl.make_influx_restore_runner(config)
+    except backup.BackupError as exc:
+        assert "url" in str(exc).lower()
+    else:
+        raise AssertionError("expected BackupError when URL cannot resolve")
+
+
+def test_container_backup_runner_missing_cli_raises(tmp_path, monkeypatch):
+    config = bundled_config(url="http://influxdb:8086")
+    _force_container(monkeypatch)
+    _forbid_docker_compose(monkeypatch)
+
+    def missing(argv, env=None, stdout=None, stderr=None):
+        raise FileNotFoundError("influx")
+
+    monkeypatch.setattr(emsctl.subprocess, "run", missing)
+
+    runner = emsctl.make_influx_backup_runner(config)
+    out_dir = tmp_path / "influxdb"
+    out_dir.mkdir()
+    try:
+        runner(str(out_dir))
+    except backup.BackupError as exc:
+        assert "influx" in str(exc).lower()
+    else:
+        raise AssertionError("expected BackupError when influx CLI is missing")

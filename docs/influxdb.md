@@ -261,11 +261,13 @@ python3 emsctl.py backup create --type influxdb    # bundled InfluxDB data (offi
   snapshotted with the SQLite online backup API. InfluxDB data is **not** part of
   this archive.
 - **InfluxDB backup** — bundled InfluxDB data via the official `influx backup`
-  CLI run inside the `ems-influxdb` container, packaged under `influxdb/` in the
-  archive. The live `data/influxdb` directory is never copied while InfluxDB is
-  running. **Bundled mode only** — external InfluxDB is rejected (use your
-  provider's backup tool). Restore uses `influx restore --full` (replace-style)
-  and offers a rollback InfluxDB backup first. See
+  CLI, packaged under `influxdb/` in the archive. Docker users run it inside the
+  `ems` container (the CLI ships in the image; no Docker socket needed); native
+  users run it from the repo, where it drives the `ems-influxdb` container via
+  `docker compose`. The live `data/influxdb` directory is never copied while
+  InfluxDB is running. **Bundled mode only** — external InfluxDB is rejected (use
+  your provider's backup tool). Restore uses `influx restore --full`
+  (replace-style) and offers a rollback InfluxDB backup first. See
   [Backup / Restore](cli.md#backup--restore) for the full flow, password
   protection and post-restore checks.
 

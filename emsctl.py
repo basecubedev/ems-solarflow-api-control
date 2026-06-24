@@ -36,7 +36,7 @@ from ems.diagnostics import (
 from ems import backup as backup_mod
 from ems import config as config_mod
 from ems import config_init as config_init_mod
-from ems.cli_privilege import maybe_drop_privileges
+from ems.cli_privilege import PrivilegeDropError, maybe_drop_privileges
 
 DEFAULT_CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 DOCKER_CONFIG_PATH = os.path.join(BASE_DIR, "config", "config.json")
@@ -1714,6 +1714,24 @@ def run_docker_compose(command, cwd, dry_run=False, stdout_to_stderr=False):
     return completed.returncode
 
 
+def run_influx_cli(argv, env, *, json_output=False):
+    """Run the official ``influx`` CLI directly (Docker-first container mode).
+
+    The host/token live in ``env`` (never argv), so the trace below is safe to
+    print. Raises :class:`BackupError` when the CLI is missing from the image.
+    """
+    print("+ " + " ".join(argv), file=sys.stderr)
+    stream = sys.stderr if json_output else None
+    try:
+        completed = subprocess.run(argv, env=env, stdout=stream, stderr=stream)
+    except FileNotFoundError:
+        raise backup_mod.BackupError(
+            "'influx' CLI not found in the EMS container; rebuild the image so "
+            "bundled InfluxDB backups work"
+        )
+    return completed.returncode
+
+
 def execute_influx_schema_op(influx_config, action):
     """Run a schema 'sync'/'status' op without printing. Returns (code, result).
 
@@ -2872,11 +2890,51 @@ def _influx_ensure_running(files, *, json_output=False):
         )
 
 
+def _influx_container_url(influx):
+    from ems import influx_setup
+
+    url = influx_setup.runtime_influx_url(influx)
+    if not url:
+        raise backup_mod.BackupError(
+            "could not resolve the bundled InfluxDB URL (set influxdb.url)"
+        )
+    return url
+
+
 def make_influx_backup_runner(config, *, json_output=False):
-    """Return a ``runner(host_dir)`` that fills ``host_dir`` via ``influx backup``."""
+    """Return a ``runner(dir)`` that fills it via the official ``influx backup``.
+
+    Inside the EMS container the CLI runs directly against the bundled service;
+    on a host it orchestrates the bundled container via ``docker compose``.
+    """
     from ems import influx_setup
 
     influx = _influx_normalized(config)
+    if influx_setup.is_container_runtime():
+        return _make_influx_backup_runner_container(influx, json_output=json_output)
+    return _make_influx_backup_runner_host(influx, json_output=json_output)
+
+
+def _make_influx_backup_runner_container(influx, *, json_output=False):
+    from ems import influx_setup
+
+    url = _influx_container_url(influx)
+    token = _influx_require_token(influx)
+
+    def runner(host_influx_dir):
+        argv = influx_setup.build_influx_cli_backup_argv(host_influx_dir)
+        env = influx_setup.influx_cli_env(url, token)
+        if run_influx_cli(argv, env, json_output=json_output) != 0:
+            raise backup_mod.BackupError(
+                "influx backup failed against the bundled InfluxDB"
+            )
+
+    return runner
+
+
+def _make_influx_backup_runner_host(influx, *, json_output=False):
+    from ems import influx_setup
+
     files = _influx_compose_files(influx)
     _influx_require_token(influx)  # validate up front; secret stays in-container
 
@@ -2910,10 +2968,39 @@ def make_influx_backup_runner(config, *, json_output=False):
 
 
 def make_influx_restore_runner(config, *, json_output=False):
-    """Return a ``runner(host_dir)`` that feeds ``host_dir`` to ``influx restore``."""
+    """Return a ``runner(dir)`` that feeds ``dir`` to ``influx restore --full``.
+
+    Inside the EMS container the CLI runs directly against the bundled service;
+    on a host it orchestrates the bundled container via ``docker compose``.
+    """
     from ems import influx_setup
 
     influx = _influx_normalized(config)
+    if influx_setup.is_container_runtime():
+        return _make_influx_restore_runner_container(influx, json_output=json_output)
+    return _make_influx_restore_runner_host(influx, json_output=json_output)
+
+
+def _make_influx_restore_runner_container(influx, *, json_output=False):
+    from ems import influx_setup
+
+    url = _influx_container_url(influx)
+    token = _influx_require_token(influx)
+
+    def runner(host_influx_dir):
+        argv = influx_setup.build_influx_cli_restore_argv(host_influx_dir)
+        env = influx_setup.influx_cli_env(url, token)
+        if run_influx_cli(argv, env, json_output=json_output) != 0:
+            raise backup_mod.BackupError(
+                "influx restore --full failed against the bundled InfluxDB"
+            )
+
+    return runner
+
+
+def _make_influx_restore_runner_host(influx, *, json_output=False):
+    from ems import influx_setup
+
     files = _influx_compose_files(influx)
     _influx_require_token(influx)
 
@@ -3847,7 +3934,10 @@ def handle_config_command(args, config):
 
 
 def main(argv=None):
-    maybe_drop_privileges()
+    try:
+        maybe_drop_privileges()
+    except PrivilegeDropError as exc:
+        return fail(str(exc), code=2)
 
     argv = sys.argv[1:] if argv is None else argv
     if not argv:

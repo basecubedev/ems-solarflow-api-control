@@ -21,6 +21,18 @@ RUN_AS_USER = "ems"
 
 _TRUTHY = ("1", "true", "yes")
 
+_UNRESOLVABLE_MESSAGE = (
+    "Refusing to run emsctl as root inside the EMS container.\n"
+    "Could not determine a safe non-root user to run as, so this command\n"
+    "would create root-owned files in the mounted config/ and data/ dirs.\n"
+    "Set PUID/PGID, or ensure ./config and ./data are owned by your user:\n"
+    "  PUID=$(id -u) PGID=$(id -g) docker compose up -d"
+)
+
+
+class PrivilegeDropError(RuntimeError):
+    """Raised when emsctl runs as root in-container but cannot drop safely."""
+
 
 def _positive_int(value):
     try:
@@ -98,8 +110,11 @@ def _in_official_container(environ):
 def maybe_drop_privileges(environ=None):
     """Drop to the runtime user when running as root in the official container.
 
-    Returns the ``(uid, gid)`` dropped to, or ``None`` when no drop happens
-    (native install, already non-root, guard already set, or no usable target).
+    Returns the ``(uid, gid)`` dropped to, or ``None`` when no drop is needed
+    (native install, already non-root, or guard already set). Raises
+    :class:`PrivilegeDropError` when running as root in the official container
+    but no safe non-root user can be resolved, so the command never silently
+    creates root-owned files in the bind mounts.
     """
     environ = os.environ if environ is None else environ
 
@@ -111,11 +126,9 @@ def maybe_drop_privileges(environ=None):
         return None
 
     target = resolve_runtime_ids(environ)
-    if target is None:
-        return None
+    if target is None or target[0] == 0 or target[1] == 0:
+        raise PrivilegeDropError(_UNRESOLVABLE_MESSAGE)
     uid, gid = target
-    if uid == 0 or gid == 0:
-        return None
 
     environ[GUARD_ENV] = "1"
     os.environ[GUARD_ENV] = "1"

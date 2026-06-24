@@ -147,6 +147,11 @@ then re-executes the entrypoint as that non-root user before creating
 bind-mounted `./config` and `./data` directories are owned by that detected or
 explicit UID/GID.
 
+`docker compose exec ems python3 emsctl.py ...` starts as root because `exec`
+bypasses the entrypoint, so `emsctl.py` drops to the same runtime UID/GID before
+running. Backups, restores, and config upgrades stay owned by your host user —
+no extra `--user` flag needed.
+
 Edit the generated configuration and restart:
 
 ```bash
@@ -303,6 +308,8 @@ upgrade with a normal config backup, and run diagnostics:
 ```bash
 docker compose exec ems python3 emsctl.py backup create --type config --password
 docker compose exec ems python3 emsctl.py backup create --type databases --password
+# Analytics users (bundled InfluxDB) — back up history too:
+docker compose exec ems python3 emsctl.py backup create --type influxdb --password
 docker compose pull
 docker compose up -d
 docker compose exec ems python3 emsctl.py config upgrade --dry-run
