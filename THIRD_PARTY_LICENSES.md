@@ -40,6 +40,7 @@ Direct Python dependencies keep their upstream licenses:
 
 - `requests`: Apache-2.0
 - `cryptography`: Apache-2.0 OR BSD-3-Clause
+- `paho-mqtt`: EPL-2.0 OR BSD-3-Clause
 - `pytest`: MIT
 
 ## Packaging

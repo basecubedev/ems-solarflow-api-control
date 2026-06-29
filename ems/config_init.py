@@ -2,6 +2,7 @@
 """Guided first-run config assistant."""
 
 import copy
+import getpass
 import json
 import os
 
@@ -13,14 +14,28 @@ GRID_METER_CHOICES = (
     ("shelly_3em_gen1", "Shelly 3EM Gen1"),
     ("ecotracker", "EcoTracker"),
     ("tasmota_http", "Tasmota HTTP / SmartMeter reader"),
+    (
+        config_mod.ZENDURE_SMARTMETER_D0_GRID_METER_TYPE,
+        "Zendure SmartMeter D0 via MQTT",
+    ),
+    ("mqtt", "Generic MQTT grid meter"),
 )
 SUPPORTED_GRID_METER_TYPES = tuple(value for value, _ in GRID_METER_CHOICES)
 
-SECRET_KEYS = {"token"}
+SECRET_KEYS = {"token", "password"}
 
 
 class ConfigInitError(ValueError):
     """Raised for setup input or planning errors."""
+
+
+def _zendure_d0_serial_from_topic(topic):
+    text = str(topic or "")
+    prefix = "Zendure/sensor/"
+    suffix = "/totalPower"
+    if text.startswith(prefix) and text.endswith(suffix):
+        return text[len(prefix):-len(suffix)]
+    return ""
 
 
 def _load_template(base_dir):
@@ -46,14 +61,9 @@ def classify_config(config, config_exists, base_dir):
     return "edited"
 
 
-def _print(prompt):
-    print(prompt, end="", flush=True)
-
-
 def _read_line(prompt):
-    _print(prompt)
     try:
-        return input("").strip()
+        return input(prompt).strip()
     except EOFError:
         return None
 
@@ -100,6 +110,39 @@ def ask_text(
         if value is None:
             raise ConfigInitError("input aborted")
         if value == "" and default is not None:
+            value = str(default)
+        if not required or value.strip():
+            return value.strip()
+        print("Please enter a value.")
+
+
+def ask_secret_text(
+    label,
+    default=None,
+    *,
+    required=False,
+    noninteractive=False,
+    allow_placeholder_default=False,
+):
+    default = _usable_default(
+        default,
+        required=required,
+        allow_placeholder_default=allow_placeholder_default,
+    )
+    if noninteractive:
+        if required and (default is None or str(default).strip() == ""):
+            raise ConfigInitError(f"{label} is required")
+        return "" if default is None else str(default)
+
+    configured = default is not None and str(default).strip() != ""
+    state = "configured, press Enter to keep" if configured else "not set"
+    prompt = f"{label} [{state}]: "
+    while True:
+        try:
+            value = getpass.getpass(prompt)
+        except EOFError:
+            raise ConfigInitError("input aborted") from None
+        if value == "" and configured:
             value = str(default)
         if not required or value.strip():
             return value.strip()
@@ -215,7 +258,122 @@ def ask_grid_meter(
 
     result = copy.deepcopy(existing)
     result["type"] = meter_type
-    if meter_type == "tasmota_http":
+    if meter_type in config_mod.MQTT_GRID_METER_TYPES:
+        mqtt_settings = config_mod.grid_meter_mqtt_settings(result)
+        existing_password = mqtt_settings.pop("password", None)
+        mqtt_settings["host"] = ask_text(
+            "MQTT broker host",
+            mqtt_settings.get("host") or "",
+            required=True,
+            noninteractive=noninteractive,
+            allow_placeholder_default=allow_placeholder_defaults,
+        )
+        mqtt_settings["port"] = ask_int(
+            "MQTT broker port",
+            mqtt_settings.get("port", 1883),
+            minimum=1,
+            noninteractive=noninteractive,
+        )
+        mqtt_settings["username"] = ask_text(
+            "MQTT username (optional)",
+            mqtt_settings.get("username") or "",
+            noninteractive=noninteractive,
+        )
+        mqtt_settings["password"] = ask_secret_text(
+            "MQTT password (optional)",
+            existing_password,
+            noninteractive=noninteractive,
+        )
+
+        if meter_type == config_mod.ZENDURE_SMARTMETER_D0_GRID_METER_TYPE:
+            serial_default = _zendure_d0_serial_from_topic(
+                mqtt_settings.get("topic")
+            )
+            serial = ask_text(
+                "Zendure SmartMeter D0 serial number",
+                serial_default,
+                required=not mqtt_settings.get("topic"),
+                noninteractive=noninteractive,
+                allow_placeholder_default=allow_placeholder_defaults,
+            )
+            generated_topic = (
+                f"Zendure/sensor/{serial}/totalPower"
+                if serial
+                else mqtt_settings.get("topic", "")
+            )
+            if noninteractive:
+                topic = mqtt_settings.get("topic") or generated_topic
+            elif ask_confirm(
+                f"Use generated MQTT topic {generated_topic}?",
+                True,
+                noninteractive=noninteractive,
+            ):
+                topic = generated_topic
+            else:
+                topic = ask_text(
+                    "Custom MQTT power topic",
+                    mqtt_settings.get("topic") or generated_topic,
+                    required=True,
+                    noninteractive=noninteractive,
+                    allow_placeholder_default=allow_placeholder_defaults,
+                )
+            mqtt_settings["topic"] = topic
+            payload_format = "number"
+            mqtt_settings.pop("value_path", None)
+        else:
+            mqtt_settings["topic"] = ask_text(
+                "MQTT power topic",
+                mqtt_settings.get("topic") or "",
+                required=True,
+                noninteractive=noninteractive,
+                allow_placeholder_default=allow_placeholder_defaults,
+            )
+            payload_format = ask_text(
+                "MQTT payload format (number/json)",
+                mqtt_settings.get("payload_format") or "number",
+                required=True,
+                noninteractive=noninteractive,
+            ).strip().lower()
+            if payload_format not in ("number", "json"):
+                if noninteractive:
+                    raise ConfigInitError("MQTT payload format must be number or json")
+                print("Unknown payload format, using number.")
+                payload_format = "number"
+            mqtt_settings["payload_format"] = payload_format
+            if payload_format == "json":
+                mqtt_settings["value_path"] = ask_text(
+                    "MQTT JSON value path",
+                    mqtt_settings.get("value_path") or "",
+                    required=True,
+                    noninteractive=noninteractive,
+                    allow_placeholder_default=allow_placeholder_defaults,
+                )
+            else:
+                mqtt_settings.pop("value_path", None)
+        mqtt_settings["payload_format"] = payload_format
+        mqtt_settings["max_age_seconds"] = ask_int(
+            "MQTT max value age in seconds",
+            mqtt_settings.get("max_age_seconds", 15),
+            minimum=1,
+            noninteractive=noninteractive,
+        )
+        result["mqtt"] = mqtt_settings
+        for key in (
+            "ip",
+            "url",
+            "power_path",
+            "channels",
+            "host",
+            "port",
+            "username",
+            "password",
+            "topic",
+            "payload_format",
+            "value_path",
+            "max_age_seconds",
+        ):
+            result.pop(key, None)
+    elif meter_type == "tasmota_http":
         current_url = result.get("url") or result.get("ip") or ""
         value = ask_text(
             "Tasmota HTTP URL or IP",
@@ -237,6 +395,19 @@ def ask_grid_meter(
             noninteractive=noninteractive,
             allow_placeholder_default=allow_placeholder_defaults,
         )
+        for key in (
+            "host",
+            "port",
+            "username",
+            "password",
+            "topic",
+            "payload_format",
+            "value_path",
+            "max_age_seconds",
+            "channels",
+            "mqtt",
+        ):
+            result.pop(key, None)
     else:
         result["ip"] = ask_text(
             "Grid meter IP address",
@@ -247,6 +418,18 @@ def ask_grid_meter(
         )
         result.pop("url", None)
         result.pop("power_path", None)
+        for key in (
+            "host",
+            "port",
+            "username",
+            "password",
+            "topic",
+            "payload_format",
+            "value_path",
+            "max_age_seconds",
+            "mqtt",
+        ):
+            result.pop(key, None)
     return result
 
 
@@ -420,9 +603,9 @@ def apply_system_basics(
             noninteractive=noninteractive,
             allow_placeholder_default=allow_placeholder_defaults,
         )
-        ha["token"] = ask_text(
+        ha["token"] = ask_secret_text(
             "Home Assistant token",
-            ha.get("token") or "",
+            ha.get("token"),
             required=True,
             noninteractive=noninteractive,
             allow_placeholder_default=allow_placeholder_defaults,
@@ -482,6 +665,16 @@ def apply_answers(
 
 def _meter_summary(grid_meter):
     meter_type = grid_meter.get("type", "shelly")
+    if meter_type in config_mod.MQTT_GRID_METER_TYPES:
+        mqtt_settings = config_mod.grid_meter_mqtt_settings(grid_meter)
+        target = mqtt_settings.get("host") or "(not set)"
+        topic = mqtt_settings.get("topic") or "(no topic)"
+        label = (
+            "Zendure SmartMeter D0"
+            if meter_type == config_mod.ZENDURE_SMARTMETER_D0_GRID_METER_TYPE
+            else "Generic MQTT"
+        )
+        return f"{label} at {target}:{mqtt_settings.get('port', 1883)} {topic}"
     if meter_type == "tasmota_http":
         target = grid_meter.get("url") or grid_meter.get("ip") or "(not set)"
         return f"Tasmota HTTP at {target}"
@@ -547,6 +740,10 @@ def redacted_config(config):
     if isinstance(config, list):
         return [redacted_config(item) for item in config]
     return config
+
+
+def render_redacted_config_json(config, layout=None):
+    return config_mod.render_config_json(redacted_config(config), layout)
 
 
 def print_next_steps():
@@ -644,13 +841,11 @@ def run_config_init(
     if dry_run:
         print()
         print("Dry run: config preview follows. No files were written.")
-        print(
-            config_mod.render_config_json(
-                redacted_config(updated),
-                plan.get("layout"),
-            ),
-            end="",
+        safe_preview = render_redacted_config_json(
+            updated,
+            plan.get("layout"),
         )
+        os.write(1, safe_preview.encode())
         return None, plan
 
     if prompt_enabled and not ask_confirm("Continue?", True):

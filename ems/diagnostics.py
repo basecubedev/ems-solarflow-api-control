@@ -17,6 +17,7 @@ import os
 import platform
 import re
 import shutil
+import socket
 import sqlite3
 import statistics
 import subprocess
@@ -30,6 +31,7 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from dashboard import auth as dashboard_auth
+from ems import config as config_mod
 from ems.health import (
     CommHealth,
     render_device_health,
@@ -859,6 +861,30 @@ def diagnose_grid_meter_config(checks, config_data):
             diagnose_add(checks, "config", "ok", "grid_meter_power_path_present", "Tasmota HTTP grid_meter.power_path is configured")
         else:
             diagnose_add(checks, "config", "error", "grid_meter_power_path_missing", "Tasmota HTTP grid meter requires grid_meter.power_path")
+    elif meter_type in config_mod.MQTT_GRID_METER_TYPES:
+        mqtt_settings = config_mod.grid_meter_mqtt_settings(grid_meter)
+        label = (
+            "Zendure SmartMeter D0"
+            if meter_type == config_mod.ZENDURE_SMARTMETER_D0_GRID_METER_TYPE
+            else "MQTT grid meter"
+        )
+        if mqtt_settings.get("host"):
+            diagnose_add(checks, "config", "ok", "grid_meter_mqtt_host_present", f"{label} broker host is configured")
+        else:
+            diagnose_add(checks, "config", "error", "grid_meter_mqtt_host_missing", f"{label} requires grid_meter.mqtt.host")
+        if mqtt_settings.get("topic"):
+            diagnose_add(checks, "config", "ok", "grid_meter_mqtt_topic_present", f"{label} topic is configured")
+        else:
+            diagnose_add(checks, "config", "error", "grid_meter_mqtt_topic_missing", f"{label} requires grid_meter.mqtt.topic")
+        payload_format = str(mqtt_settings.get("payload_format") or "number").strip().lower()
+        if payload_format in ("number", "json"):
+            diagnose_add(checks, "config", "ok", "grid_meter_mqtt_payload_format", f"MQTT payload format: {payload_format}", payload_format=payload_format)
+        else:
+            diagnose_add(checks, "config", "error", "grid_meter_mqtt_payload_format_invalid", "MQTT grid meter payload_format must be number or json", payload_format=payload_format)
+        if meter_type == config_mod.ZENDURE_SMARTMETER_D0_GRID_METER_TYPE and payload_format != "number":
+            diagnose_add(checks, "config", "error", "grid_meter_mqtt_payload_format_invalid", "Zendure SmartMeter D0 requires payload_format number", payload_format=payload_format)
+        if payload_format == "json" and not mqtt_settings.get("value_path"):
+            diagnose_add(checks, "config", "error", "grid_meter_mqtt_value_path_missing", "MQTT JSON grid meter requires grid_meter.mqtt.value_path")
     elif meter_type in ("ha", "homeassistant", "home_assistant"):
         diagnose_add(checks, "config", "ok", "grid_meter_ha_config", "Home Assistant grid meter type detected; only config completeness is checked by diagnose")
     else:
@@ -1291,6 +1317,8 @@ GRID_METER_PROVIDERS = {
     "shelly_3em_gen1": "Shelly 3EM Gen1",
     "ecotracker": "EcoTracker",
     "tasmota_http": "Tasmota",
+    "mqtt": "MQTT",
+    "zendure_smartmeter_d0": "Zendure SmartMeter D0",
     "ha": "Home Assistant",
 }
 
@@ -1353,6 +1381,36 @@ def diagnose_hardware(checks, config_data):
         except Exception as exc:
             _diagnose_record_probe(grid_tracker, start, exc)
             diagnose_add(checks, "hardware", "warning", "ecotracker_read_failed", f"EcoTracker read-only probe failed: {exc.__class__.__name__}")
+    elif meter_type in config_mod.MQTT_GRID_METER_TYPES:
+        mqtt_settings = config_mod.grid_meter_mqtt_settings(grid_meter)
+        host = str(mqtt_settings.get("host") or "").strip()
+        if not host:
+            diagnose_add(checks, "hardware", "warning", "grid_meter_probe_skipped", f"No read-only grid meter probe implemented for type: {meter_type}", type=meter_type)
+        else:
+            start = time.monotonic()
+            try:
+                port = int(float(mqtt_settings.get("port", 1883)))
+                with socket.create_connection((host, port), timeout=2):
+                    pass
+                _diagnose_record_probe(grid_tracker, start)
+                diagnose_add(
+                    checks,
+                    "hardware",
+                    "ok",
+                    "mqtt_broker_connect_ok",
+                    "MQTT broker TCP connection succeeded",
+                    host=host,
+                    port=port,
+                )
+            except Exception as exc:
+                _diagnose_record_probe(grid_tracker, start, exc)
+                diagnose_add(
+                    checks,
+                    "hardware",
+                    "warning",
+                    "mqtt_broker_connect_failed",
+                    f"MQTT broker TCP probe failed: {exc.__class__.__name__}",
+                )
     else:
         diagnose_add(checks, "hardware", "warning", "grid_meter_probe_skipped", f"No read-only grid meter probe implemented for type: {meter_type}", type=meter_type)
 

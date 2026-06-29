@@ -557,51 +557,65 @@ default, while runtime-state can override the active weighting.
 ## Grid Meter Settings
 
 `grid_meter.type` selects the local household/grid power meter implementation.
-Supported values are `shelly`, `shelly_3em_gen1`, `ecotracker`, and
-`tasmota_http`.
+Positive values mean grid import and negative values mean grid export, unless
+the physical device is installed or reports values differently. Run
+`emsctl config init` for guided setup.
 
-There are two Shelly meter types depending on the generation of your device:
+### Supported grid meters
 
-```text
-shelly            = Shelly Pro / Gen2 / Gen3 via /rpc/Shelly.GetStatus
-shelly_3em_gen1   = Shelly 3EM Gen1 via /status
+| Device / integration | `grid_meter.type` | Required fields | Notes |
+| --- | --- | --- | --- |
+| Shelly Pro/Plus Gen2/Gen3 | `shelly` | `ip` | Uses `/rpc/Shelly.GetStatus` |
+| Shelly 3EM Gen1 | `shelly_3em_gen1` | `ip` | Uses `/status` |
+| everHome EcoTracker | `ecotracker` | `ip` | Uses `/v1/json` |
+| Tasmota HTTP / SmartMeter | `tasmota_http` | `ip` or `url`, `power_path` | Uses `Status 10` JSON |
+| Zendure SmartMeter D0 (MQTT) | `zendure_smartmeter_d0` | `mqtt.host`, `mqtt.topic` | D0 preset, numeric payload |
+| Generic MQTT grid meter | `mqtt` | `mqtt.host`, `mqtt.topic`, `mqtt.payload_format` | Numeric or JSON payload |
+
+### Shelly Pro/Plus Gen2/Gen3 (`shelly`)
+
+The EMS reads `http://<ip>/rpc/Shelly.GetStatus`. By default it uses the
+aggregate `em:0.total_act_power` value and falls back to summing all `em1:*`
+clamp values if the aggregate is unavailable.
+
+The optional `grid_meter.channels` field selects individual clamps. Valid
+values are `a`, `b`, `c`, `em1:0`, `em1:1`, and `em1:2`. Do not use `total` or
+`sum` in `channels`.
+
+Example: Shelly Pro/Plus with all clamps:
+
+```json
+{
+  "grid_meter": {
+    "type": "shelly",
+    "ip": "192.0.2.50"
+  }
+}
 ```
 
-`grid_meter.ip` is the local meter IP address. The EMS controller only uses the
-meter's current grid power value as the input for target calculation.
+Example: Shelly selected clamp C:
 
-### Shelly Pro / Gen2 / Gen3 (`shelly`)
-
-Shelly Pro 3EM uses:
-
-```text
-http://<ip>/rpc/Shelly.GetStatus
+```json
+{
+  "grid_meter": {
+    "type": "shelly",
+    "ip": "192.0.2.50",
+    "channels": ["c"]
+  }
+}
 ```
 
-Shelly uses the aggregate `em:0.total_act_power` value by default and falls
-back to summing all `em1:*` clamp values if the aggregate value is not
-available.
-
-Use `grid_meter.channels` when only selected Shelly clamps should be used. A
-single item list such as `["c"]` is valid and reads only clamp C. Multiple
-items such as `["a", "c"]` sum only those selected clamps. Valid entries are
-`a`, `b`, `c`, `em1:0`, `em1:1`, and `em1:2`; `total` and `sum` are not valid
-inside `channels`.
+Multiple selections such as `["a", "c"]` sum only the selected clamps.
 
 ### Shelly 3EM Gen1 (`shelly_3em_gen1`)
 
-The older non-Pro Shelly 3EM Gen1 meter uses the classic HTTP status endpoint:
+The EMS reads `http://<ip>/status`. By default it prefers the top-level
+`total_power` value and otherwise sums all numeric `emeters[].power` values.
 
-```text
-http://<ip>/status
-```
-
-By default the EMS prefers the top-level `total_power` value when present, and
-otherwise sums all numeric `emeters[].power` values (all three phases/clamps).
-
-Use `grid_meter.channels` only when you intentionally want to read a subset of
-phases/clamps. Valid entries are `a`, `b`, `c`, `0`, `1`, `2`, `emeter:0`,
-`emeter:1`, and `emeter:2`, mapped as:
+The optional `grid_meter.channels` field selects phases or clamps. Valid values
+are `a`, `b`, `c`, `0`, `1`, `2`, `emeter:0`, `emeter:1`, and `emeter:2`.
+Phase letters are case-insensitive. When `channels` is configured, the EMS
+ignores `total_power` and sums only the selected `emeters[].power` values:
 
 ```text
 a / 0 / emeter:0 -> emeters[0].power
@@ -609,135 +623,147 @@ b / 1 / emeter:1 -> emeters[1].power
 c / 2 / emeter:2 -> emeters[2].power
 ```
 
-Phase letters are normalized to lowercase, so `["A", "C"]` becomes
-`["a", "c"]`. When `channels` is configured, `total_power` is ignored and only
-the selected `emeters[].power` values are summed (because `total_power` always
-represents all clamps and cannot represent a partial selection).
+The EMS does not invert the sign automatically. Correct reversed clamp polarity
+on the device.
 
-Clamp direction must match EMS expectations:
+Example: Shelly 3EM Gen1 with all phases:
+
+```json
+{
+  "grid_meter": {
+    "type": "shelly_3em_gen1",
+    "ip": "192.0.2.51"
+  }
+}
+```
+
+Example: Shelly 3EM Gen1 selected phases A and C:
+
+```json
+{
+  "grid_meter": {
+    "type": "shelly_3em_gen1",
+    "ip": "192.0.2.51",
+    "channels": ["a", "c"]
+  }
+}
+```
+
+### everHome EcoTracker (`ecotracker`)
+
+The EMS reads `http://<ip>/v1/json` and uses the flat JSON `power` field.
+Phase values and energy counters are not required for EMS control.
+
+Example: everHome EcoTracker:
+
+```json
+{
+  "grid_meter": {
+    "type": "ecotracker",
+    "ip": "192.0.2.60"
+  }
+}
+```
+
+### Tasmota HTTP / SmartMeter (`tasmota_http`)
+
+With `grid_meter.ip`, the default endpoint is
+`http://<ip>/cm?cmnd=Status%2010`. Alternatively, set `grid_meter.url` to an
+explicit endpoint. `grid_meter.power_path` is always required and must contain
+the dot-separated path to the current power value. The keys depend on the
+active Tasmota meter script, so the EMS does not guess them.
+
+Example: Tasmota SML using the default endpoint:
+
+```json
+{
+  "grid_meter": {
+    "type": "tasmota_http",
+    "ip": "192.0.2.70",
+    "power_path": "StatusSNS.SML.Power_curr"
+  }
+}
+```
+
+Example: Tasmota with an explicit URL and OBIS-style key:
+
+```json
+{
+  "grid_meter": {
+    "type": "tasmota_http",
+    "url": "http://192.0.2.70/cm?cmnd=Status%2010",
+    "power_path": "StatusSNS.SM.16_7_0"
+  }
+}
+```
+
+### Zendure SmartMeter D0 (MQTT) (`zendure_smartmeter_d0`)
+
+The EMS subscribes to an existing MQTT broker; it does not run a broker or
+write to the D0. The default topic is `Zendure/sensor/<serial>/totalPower`, and
+the payload is numeric watts:
 
 ```text
 positive = grid import
 negative = grid export
 ```
 
-The sign is not inverted automatically for `shelly_3em_gen1`. If your clamps
-are installed with reversed polarity, correct it on the device.
+Configure MQTT under `grid_meter.mqtt`. A username and password may be required
+by the broker. TLS is not supported here. Live D0 validation currently depends
+on external tester feedback.
 
-everHome EcoTracker uses:
-
-```text
-http://<ip>/v1/json
-```
-
-The EMS reads the required flat JSON `power` field. Positive values mean grid
-import, negative values mean grid export. Phase values and energy counters are
-optional and are not required for EMS control.
-
-Tasmota HTTP JSON uses the `Status 10` sensor endpoint:
-
-```text
-http://<ip>/cm?cmnd=Status%2010
-```
-
-Set `grid_meter.power_path` to the dot-separated path of your current power
-field inside the JSON response. Tasmota smart meter keys depend on the active
-meter script, so the EMS does not guess a default. Positive power means grid
-import; negative power means export/feed-in when your meter reports signed
-values that way.
-
-Shelly example:
+Example: Zendure SmartMeter D0 via MQTT:
 
 ```json
 {
   "grid_meter": {
-    "type": "shelly",
-    "ip": "192.168.1.50"
+    "type": "zendure_smartmeter_d0",
+    "mqtt": {
+      "host": "192.0.2.10",
+      "port": 1883,
+      "username": "YOUR_MQTT_USER",
+      "password": "YOUR_MQTT_PASSWORD",
+      "topic": "Zendure/sensor/D0DEMO123456/totalPower",
+      "payload_format": "number",
+      "max_age_seconds": 15
+    }
   }
 }
 ```
 
-Shelly selected clamp C example:
+### Generic MQTT grid meter (`mqtt`)
+
+Use this type for custom MQTT-based meters. It uses the same MQTT client and
+backend as the D0 preset. Set `grid_meter.mqtt.payload_format` to `number` for
+a plain numeric payload, or to `json` and provide
+`grid_meter.mqtt.value_path` for a JSON payload.
+
+MQTT meters cache the latest parsed value. The control loop does not wait for a
+message. If no value has arrived, or its age exceeds
+`grid_meter.mqtt.max_age_seconds`, the meter is treated as stale and the last
+cached value is used.
+
+Example: Generic MQTT JSON payload:
 
 ```json
 {
   "grid_meter": {
-    "type": "shelly",
-    "ip": "192.168.1.50",
-    "channels": ["c"]
+    "type": "mqtt",
+    "mqtt": {
+      "host": "192.0.2.10",
+      "port": 1883,
+      "topic": "meter/grid",
+      "payload_format": "json",
+      "value_path": "power.total",
+      "max_age_seconds": 15
+    }
   }
 }
 ```
 
-Shelly selected clamps A and C example:
+For a numeric payload, use `"payload_format": "number"` and omit `value_path`.
 
-```json
-{
-  "grid_meter": {
-    "type": "shelly",
-    "ip": "192.168.1.50",
-    "channels": ["a", "c"]
-  }
-}
-```
-
-Shelly 3EM Gen1 example (all phases):
-
-```json
-{
-  "grid_meter": {
-    "type": "shelly_3em_gen1",
-    "ip": "192.168.1.50"
-  }
-}
-```
-
-Shelly 3EM Gen1 selected phases A and C example:
-
-```json
-{
-  "grid_meter": {
-    "type": "shelly_3em_gen1",
-    "ip": "192.168.1.50",
-    "channels": ["a", "c"]
-  }
-}
-```
-
-EcoTracker example:
-
-```json
-{
-  "grid_meter": {
-    "type": "ecotracker",
-    "ip": "192.168.1.60"
-  }
-}
-```
-
-Tasmota SML example:
-
-```json
-{
-  "grid_meter": {
-    "type": "tasmota_http",
-    "ip": "192.168.1.70",
-    "power_path": "StatusSNS.SML.Power_curr"
-  }
-}
-```
-
-Tasmota OBIS-style key example:
-
-```json
-{
-  "grid_meter": {
-    "type": "tasmota_http",
-    "url": "http://192.168.1.70/cm?cmnd=Status%2010",
-    "power_path": "StatusSNS.SM.16_7_0"
-  }
-}
-```
+### Legacy config compatibility
 
 Legacy configs with only `shelly.ip` still work. New configs should use
 `grid_meter`.

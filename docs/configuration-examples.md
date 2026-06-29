@@ -369,7 +369,54 @@ OBIS-style key path:
 Positive power means grid import. Negative power means export/feed-in when the
 meter reports signed values that way.
 
-## Example 7: Shelly Clamp/Phase Selection
+## Example 7: Zendure SmartMeter D0 via MQTT
+
+Use Zendure SmartMeter D0 (MQTT) when the D0 publishes signed `totalPower` to
+an existing broker. EMS subscribes as a client; it does not run a broker and
+does not publish or write values back to the meter.
+
+Zendure SmartMeter D0 `totalPower` example:
+
+```json
+{
+  "grid_meter": {
+    "type": "zendure_smartmeter_d0",
+    "mqtt": {
+      "host": "192.168.1.10",
+      "port": 1883,
+      "username": "YOUR_MQTT_USER",
+      "password": "YOUR_MQTT_PASSWORD",
+      "topic": "Zendure/sensor/YOUR_D0_SERIAL/totalPower",
+      "payload_format": "number",
+      "max_age_seconds": 15
+    }
+  }
+}
+```
+
+Known D0 samples use positive values for grid import and negative values for
+grid export. This integration has unit-test coverage and mocked MQTT coverage;
+live D0 hardware validation depends on external tester feedback.
+
+Generic JSON MQTT payload example:
+
+```json
+{
+  "grid_meter": {
+    "type": "mqtt",
+    "mqtt": {
+      "host": "192.168.1.10",
+      "port": 1883,
+      "topic": "meter/grid",
+      "payload_format": "json",
+      "value_path": "power.total",
+      "max_age_seconds": 15
+    }
+  }
+}
+```
+
+## Example 8: Shelly Clamp/Phase Selection
 
 Shelly uses `em:0.total_act_power` by default and falls back to summing
 `em1:0`, `em1:1`, and `em1:2` `act_power` values when the aggregate is not
@@ -403,7 +450,7 @@ Multiple items such as `["a", "c"]` sum only those selected clamps:
 `channels` entries may be `a`, `b`, `c`, `em1:0`, `em1:1`, or `em1:2`. The
 values `total` and `sum` are not valid inside `channels`.
 
-## Example 7b: Shelly 3EM Gen1 Grid Meter
+## Example 8b: Shelly 3EM Gen1 Grid Meter
 
 The older non-Pro Shelly 3EM Gen1 meter uses the classic `/status` endpoint
 instead of `/rpc/Shelly.GetStatus`. Use the `shelly_3em_gen1` type for it:
@@ -443,7 +490,7 @@ phases/clamps. Valid entries are `a`, `b`, `c`, `0`, `1`, `2`, `emeter:0`,
 Clamp direction must match EMS expectations: `positive = grid import`,
 `negative = grid export`. The sign is not inverted automatically.
 
-## Example 8: Runtime-State Explained
+## Example 9: Runtime-State Explained
 
 On first start, EMS creates the configured runtime-state file automatically.
 New generated configs use `data/runtime-state.json`.
@@ -487,7 +534,7 @@ python3 emsctl.py winter enable
 `pv-priority-factor` changes PV-first weighting only. It does not create
 additional PV power and does not override device power limits.
 
-## Example 9: Winter Mode Enabled
+## Example 10: Winter Mode Enabled
 
 Winter mode is optional and runs as SOC reconciliation, not as normal output
 control.
@@ -528,7 +575,7 @@ Run first:
 python3 -B ems-solarflow-api-control.py --dry-run --once
 ```
 
-## Example 10: Advanced Output Control Defaults
+## Example 11: Advanced Output Control Defaults
 
 Most installations should keep these defaults. Change them only when the live
 logs show target oscillation, stale telemetry, or excessive write frequency.

@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import logging
+import json
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -557,6 +559,204 @@ class TasmotaHttpClient:
         return self.last_value
 
 
+class MqttGridMeterClient:
+    """Non-blocking MQTT subscriber for grid power values."""
+
+    provider = "MQTT"
+    transport = "mqtt"
+
+    def __init__(
+        self,
+        host,
+        port,
+        topic,
+        *,
+        username="",
+        password="",
+        payload_format="number",
+        value_path="",
+        max_age_seconds=15,
+        client_factory=None,
+        provider=None,
+    ):
+        if provider:
+            self.provider = provider
+        self.host = str(host).strip()
+        self.port = int(port)
+        self.topic = str(topic).strip()
+        self.username = str(username or "")
+        self.payload_format = str(payload_format or "number").strip().lower()
+        self.value_path = str(value_path or "").strip()
+        self.max_age_seconds = max(1, int(max_age_seconds))
+        self.last_value = 0
+        self.last_message_monotonic = None
+        self.health = CommHealth(self.provider, kind="read")
+        self._lock = threading.Lock()
+        self._connect_error = None
+        self._client = self._create_client(client_factory)
+
+        self._client.on_connect = self._on_connect
+        self._client.on_message = self._on_message
+        self._client.on_disconnect = self._on_disconnect
+
+        if self.username:
+            self._client.username_pw_set(self.username, password or None)
+
+        try:
+            self._client.connect_async(self.host, self.port, keepalive=30)
+            self._client.loop_start()
+        except Exception as exc:
+            self._connect_error = exc
+            log_event(
+                logging.WARNING,
+                "mqtt_grid_meter_connect_error",
+                host=self.host,
+                port=self.port,
+                topic=self.topic,
+                error=exc,
+            )
+
+    @property
+    def endpoint(self):
+        return f"{self.host}:{self.port} {self.topic}"
+
+    def _create_client(self, client_factory):
+        if client_factory is not None:
+            return client_factory()
+
+        try:
+            import paho.mqtt.client as mqtt
+        except ImportError as exc:
+            raise RuntimeError(
+                "MQTT grid meter requires the paho-mqtt package"
+            ) from exc
+
+        try:
+            return mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+        except (AttributeError, TypeError):
+            return mqtt.Client()
+
+    def _on_connect(self, client, userdata, flags, rc, properties=None):
+        if _mqtt_rc_success(rc):
+            self._connect_error = None
+            client.subscribe(self.topic)
+            log_event(
+                logging.INFO,
+                "mqtt_grid_meter_connected",
+                host=self.host,
+                port=self.port,
+                topic=self.topic,
+            )
+            return
+
+        self._connect_error = f"connect_rc_{rc}"
+        log_event(
+            logging.WARNING,
+            "mqtt_grid_meter_connect_error",
+            host=self.host,
+            port=self.port,
+            topic=self.topic,
+            rc=rc,
+        )
+
+    def _on_disconnect(self, client, userdata, *args):
+        rc = args[-2] if len(args) >= 3 else (args[0] if args else 0)
+        if _mqtt_rc_success(rc):
+            return
+        self._connect_error = f"disconnect_rc_{rc}"
+        log_event(
+            logging.WARNING,
+            "mqtt_grid_meter_disconnected",
+            host=self.host,
+            port=self.port,
+            topic=self.topic,
+            rc=rc,
+        )
+
+    def _on_message(self, client, userdata, message):
+        try:
+            value = _parse_mqtt_grid_power_payload(
+                message.payload,
+                payload_format=self.payload_format,
+                value_path=self.value_path,
+            )
+        except Exception as exc:
+            self.health.record_failure(error=exc, latency_ms=0.0, stale_used=True)
+            log_event(
+                logging.WARNING,
+                "mqtt_grid_meter_parse_error",
+                topic=getattr(message, "topic", self.topic),
+                payload_format=self.payload_format,
+                value_path=self.value_path,
+                error=exc,
+                stale_value=self.last_value,
+            )
+            return
+
+        with self._lock:
+            self.last_value = round(value, 1)
+            self.last_message_monotonic = time.monotonic()
+
+    def get_power(self):
+        """Return the latest received MQTT grid power without blocking."""
+
+        start = time.monotonic()
+        with self._lock:
+            value = self.last_value
+            last_message_monotonic = self.last_message_monotonic
+
+        latency_ms = (time.monotonic() - start) * 1000.0
+        if last_message_monotonic is None:
+            error = self._connect_error or "no MQTT message received yet"
+            self.health.record_failure(
+                error=error,
+                latency_ms=latency_ms,
+                stale_used=True,
+            )
+            log_event(
+                logging.WARNING,
+                "mqtt_grid_meter_no_value",
+                host=self.host,
+                port=self.port,
+                topic=self.topic,
+                error=error,
+                stale_value=value,
+            )
+            return value
+
+        age_seconds = time.monotonic() - last_message_monotonic
+        if age_seconds > self.max_age_seconds:
+            self.health.record_failure(
+                error=f"MQTT value stale after {age_seconds:.1f}s",
+                latency_ms=latency_ms,
+                stale_used=True,
+            )
+            log_event(
+                logging.WARNING,
+                "mqtt_grid_meter_stale",
+                host=self.host,
+                port=self.port,
+                topic=self.topic,
+                age_seconds=round(age_seconds, 1),
+                max_age_seconds=self.max_age_seconds,
+                stale_value=value,
+            )
+            return value
+
+        self.health.record_success(latency_ms)
+        return value
+
+    def close(self):
+        try:
+            self._client.loop_stop()
+        except Exception:
+            pass
+        try:
+            self._client.disconnect()
+        except Exception:
+            pass
+
+
 def create_grid_meter_client(config, session):
     """Create the configured household/grid power meter client."""
 
@@ -593,6 +793,38 @@ def create_grid_meter_client(config, session):
             url = f"http://{ip}/cm?cmnd=Status%2010"
 
         return TasmotaHttpClient(url, power_path.strip(), session)
+
+    if meter_type in cfg.MQTT_GRID_METER_TYPES:
+        mqtt_config = cfg.grid_meter_mqtt_settings(config)
+        host = str(mqtt_config.get("host") or "").strip()
+        topic = str(mqtt_config.get("topic") or "").strip()
+        if not host:
+            raise ValueError("MQTT grid meter requires host")
+        if not topic:
+            raise ValueError("MQTT grid meter requires topic")
+
+        try:
+            port = int(mqtt_config.get("port", 1883))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("MQTT grid meter port must be an integer") from exc
+
+        provider = (
+            "Zendure SmartMeter D0"
+            if meter_type == cfg.ZENDURE_SMARTMETER_D0_GRID_METER_TYPE
+            else "MQTT"
+        )
+        return MqttGridMeterClient(
+            host,
+            port,
+            topic,
+            username=mqtt_config.get("username") or "",
+            password=mqtt_config.get("password") or "",
+            payload_format=mqtt_config.get("payload_format") or "number",
+            value_path=mqtt_config.get("value_path") or "",
+            max_age_seconds=mqtt_config.get("max_age_seconds") or 15,
+            client_factory=mqtt_config.get("_mqtt_client_factory"),
+            provider=provider,
+        )
 
     raise ValueError(f"Unsupported grid meter type: {meter_type}")
 
@@ -813,6 +1045,48 @@ def _parse_tasmota_http_power(data, power_path):
         return float(value)
 
     raise ValueError(f"Tasmota power path is not numeric: {power_path}")
+
+
+def _mqtt_rc_success(rc):
+    if rc in (0, None):
+        return True
+    return str(rc).lower() in ("0", "success", "normal disconnection")
+
+
+def _parse_mqtt_number_value(value):
+    if _is_numeric(value):
+        return float(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            return float(value.strip())
+        except ValueError:
+            pass
+    raise ValueError("MQTT grid power value is not numeric")
+
+
+def _parse_mqtt_grid_power_payload(
+    payload,
+    *,
+    payload_format="number",
+    value_path="",
+):
+    """Extract grid power from an MQTT payload."""
+
+    if isinstance(payload, bytes):
+        text = payload.decode("utf-8").strip()
+    else:
+        text = str(payload).strip()
+
+    payload_format = str(payload_format or "number").strip().lower()
+    if payload_format in ("number", "numeric", "plain", "text"):
+        return _parse_mqtt_number_value(text)
+
+    if payload_format == "json":
+        data = json.loads(text)
+        value = _get_json_path(data, value_path) if value_path else data
+        return _parse_mqtt_number_value(value)
+
+    raise ValueError(f"Unsupported MQTT payload_format: {payload_format}")
 
 
 def fetch_all_devices(devices):

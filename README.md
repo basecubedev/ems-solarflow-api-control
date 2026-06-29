@@ -113,7 +113,7 @@ For the manual step-by-step path and what the installer does internally, see
 
 You need:
 
-- grid meter type and IP address
+- grid meter type and endpoint settings
 - Zendure device IP address and serial number for each device
 - suitable power limits
 - suitable SOC limits
@@ -128,7 +128,9 @@ docker compose exec ems python3 emsctl.py diagnose
 ```
 
 `config init` is optional. It helps fill the config interactively and does not
-blindly replace an existing edited config.
+blindly replace an existing edited config. Choose your grid meter in the guided
+setup assistant. For Zendure SmartMeter D0, select "Zendure SmartMeter D0 via
+MQTT".
 
 ### Option B: Manual Config Editing
 

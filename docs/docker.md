@@ -168,7 +168,9 @@ docker compose exec ems python3 emsctl.py diagnose
 ```
 
 `config init` is optional and does not blindly replace an existing edited
-config. Manual editing of `config/config.json` remains fully supported.
+config. Choose your grid meter in the guided setup assistant. For Zendure
+SmartMeter D0, select "Zendure SmartMeter D0 via MQTT". Manual editing of
+`config/config.json` remains fully supported.
 
 ## CLI Inside Docker
 

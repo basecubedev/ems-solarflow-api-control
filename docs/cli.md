@@ -139,9 +139,11 @@ Device health:
 ```
 
 - **Grid-meter health** tracks reads of the configured grid meter (Shelly,
-  EcoTracker, Tasmota, ...). `stale value used: yes` means the read failed and
-  EMS kept the last known value rather than reacting to a bad reading. This is
-  intentional fallback behavior, not a control bug.
+  EcoTracker, Tasmota, MQTT, ...). `stale value used: yes` means the read
+  failed, no fresh MQTT value arrived, or a cached MQTT value exceeded
+  `grid_meter.max_age_seconds`; EMS kept the last known value rather than
+  reacting to a bad reading. This is intentional fallback behavior, not a
+  control bug.
 - **Device read/write health** is tracked separately per device. Reads and
   writes never share state: a device can be readable while writes fail or are
   intentionally blocked (for example a device parked in AC-input mode).
@@ -180,6 +182,11 @@ p50 latency: 42 ms
 p95 latency: 310 ms
 max latency: 3012 ms
 ```
+
+For MQTT grid meters the command subscribes through the configured broker and
+reports `Latest power` once a fresh value has arrived. If the broker is
+reachable but the topic is wrong or stale, the output says no fresh MQTT value
+was received.
 
 `grid-meter test` is read-only and does not write to any device. It exits
 non-zero if any read fails.

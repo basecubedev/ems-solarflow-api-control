@@ -23,7 +23,7 @@ You need:
 - network access from the EMS host to the grid meter
 - network access from the EMS host to each Zendure device
 - Zendure device IP address and serial number
-- grid meter type and IP address
+- grid meter type and endpoint settings
 
 Zendure Local API must be available and enabled for local EMS control. Do not
 run Zendure HEMS, Home Assistant automations, MQTT writers, or any other
@@ -112,6 +112,8 @@ docker compose exec ems python3 emsctl.py config init
 
 The setup assistant is optional. It helps fill common settings and does not
 blindly replace an existing edited config.
+Choose your grid meter in the guided setup assistant. For Zendure SmartMeter
+D0, select "Zendure SmartMeter D0 via MQTT".
 
 ### Option B: Manual Editing
 
@@ -122,7 +124,8 @@ nano config/config.json
 Set at least:
 
 - `grid_meter.type`
-- `grid_meter.ip`
+- `grid_meter.ip` for HTTP meters, or `grid_meter.mqtt.host` and
+  `grid_meter.mqtt.topic` for Zendure SmartMeter D0 / MQTT
 - each device `ip`
 - each device `sn`
 - installation-specific power and SOC limits

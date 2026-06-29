@@ -352,8 +352,11 @@ group membership.
 
 ### Grid Meter Not Reachable
 
-Check `grid_meter.type`, `grid_meter.ip`, local network routing, and firewall
-rules. Then run:
+Check `grid_meter.type`, the meter endpoint (`grid_meter.ip` for HTTP meters
+or `grid_meter.mqtt.host`/`grid_meter.mqtt.topic` for Zendure SmartMeter D0
+and MQTT), local network routing, and firewall rules. For authenticated MQTT
+brokers, also verify that the configured username and password match the
+broker credentials. Then run:
 
 ```bash
 docker compose exec ems python3 emsctl.py diagnose --hardware
@@ -363,6 +366,10 @@ If the Shelly is still reachable but repeatedly times out, its HTTP/RPC stack
 may be slow or temporarily stuck. A Shelly reboot can clear that state. Treat
 this as a device/network diagnostic step, not as an EMS session-reset
 workaround.
+
+For MQTT meters, `diagnose --hardware` checks broker TCP reachability only. Use
+`grid-meter test` to wait for a subscribed value and distinguish broker
+connectivity from a missing or stale topic payload.
 
 ### Advanced TCP Reachability Checks
 
