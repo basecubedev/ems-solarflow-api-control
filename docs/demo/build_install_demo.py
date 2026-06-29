@@ -211,9 +211,11 @@ def build_frames() -> list[tuple[Image.Image, int]]:
                 [
                     ("cmd", f"{prompt} docker compose exec ems python3 emsctl.py config init"),
                     ("dim", "Which grid meter do you use?"),
-                    ("dim", "  1) Shelly   2) EcoTracker   3) Tasmota"),
-                    ("ask", "Choice [1]: ", "1"),
-                    ("ask", "Grid meter IP address: ", "192.0.2.20"),
+                    ("dim", "  1) Shelly Pro/Plus        2) Shelly 3EM Gen1"),
+                    ("dim", "  3) EcoTracker             4) Tasmota HTTP"),
+                    ("dim", "  5) Zendure D0 via MQTT    6) Generic MQTT"),
+                    ("ask", "Choice [1]: ", "2"),
+                    ("ask", "Shelly 3EM Gen1 IP address: ", "192.0.2.20"),
                     ("ask", "How many Zendure inverters? [1]: ", "1"),
                     ("ask", "Device 1 IP: ", "192.0.2.10"),
                     ("ask", "Device 1 serial number: ", "DEMO-SF800P2-1"),
@@ -262,6 +264,7 @@ def _encode_video(
         print(f"ffmpeg not found; skipped {label} generation")
         return
     output.parent.mkdir(parents=True, exist_ok=True)
+    total_duration_seconds = sum(duration_ms for _, duration_ms in frames) / 1000
     with tempfile.TemporaryDirectory(prefix="install-demo-frames-") as tmp:
         tmp_path = Path(tmp)
         concat_path = tmp_path / "frames.txt"
@@ -292,6 +295,8 @@ def _encode_video(
                 "-vf",
                 f"fps={FPS},format=yuv420p",
                 *codec_args,
+                "-t",
+                f"{total_duration_seconds:.3f}",
                 str(output),
             ],
             check=True,
