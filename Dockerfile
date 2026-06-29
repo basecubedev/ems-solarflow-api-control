@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Provides the official ``influx`` CLI so bundled InfluxDB backup/restore works
 # from inside this container without the Docker CLI or socket.
-FROM influxdb:2.7 AS influxdb-cli
+FROM influxdb:2.9 AS influxdb-cli
 
 FROM python:3.14-slim
 
