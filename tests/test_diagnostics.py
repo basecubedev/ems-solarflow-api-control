@@ -36,6 +36,7 @@ def test_emsctl_diagnose_service_entry_points(tmp_path):
         report = service_function(args)
 
         assert report["schema_version"] == 1
+        assert report["ems_version"] == "0.6.0"
         assert report["diagnosis"]["version"] == 1
         if enabled_option:
             assert report["options"][enabled_option] is True

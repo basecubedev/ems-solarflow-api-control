@@ -25,8 +25,10 @@ You need:
 - Zendure device IP address and serial number
 - grid meter type and IP address
 
-The EMS should not run in parallel with another controller that writes Zendure
-`outputLimit`.
+Zendure Local API must be available and enabled for local EMS control. Do not
+run Zendure HEMS, Home Assistant automations, MQTT writers, or any other
+controller in parallel if they write Zendure `outputLimit`. EMS assumes
+exclusive write control over `outputLimit` while active.
 
 ## 2. Install Docker
 

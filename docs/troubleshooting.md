@@ -45,11 +45,16 @@ Common first fixes:
 - Grid meter not reachable: check meter IP, meter type, local network routing,
   and `diagnose --hardware`.
 - Zendure device not reachable: check device IP, serial number, local network
-  routing, and `diagnose --hardware`.
+  routing, Zendure Local API availability, and `diagnose --hardware`.
 - Analytics/InfluxDB not reachable: the dashboard still works without
   InfluxDB; see [influxdb.md](influxdb.md).
 - Home Assistant not configured: Home Assistant is optional and not required
   for standalone EMS control.
+
+Zendure Local API must be available and enabled for local EMS control. Do not
+run Zendure HEMS, Home Assistant automations, MQTT writers, or any other
+controller in parallel if they write Zendure `outputLimit`. EMS assumes
+exclusive write control over `outputLimit` while active.
 
 The EMS uses structured logs:
 

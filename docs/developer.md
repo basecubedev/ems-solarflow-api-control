@@ -97,7 +97,7 @@ bundle-metadata.json
 {
   "bundle_version": 1,
   "generated_at": "ISO-8601 timestamp",
-  "ems_version": "unknown",
+  "ems_version": "0.6.0",
   "schema_version": 1
 }
 ```

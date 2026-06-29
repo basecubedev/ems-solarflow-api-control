@@ -321,6 +321,7 @@ def test_create_writes_valid_manifest_and_checksums(tmp_path):
     assert manifest["created_at"].endswith("Z")
     assert manifest["encryption"]["enabled"] is False
     assert "config_backup_format_version" in manifest["contracts"]
+    assert manifest["source"]["ems_version"] == "0.6.0"
     assert "git_commit" in manifest["source"]
 
 
