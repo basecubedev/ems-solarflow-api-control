@@ -155,6 +155,20 @@ INFLUXDB_RETENTION_KEY_BY_BUCKET = {
     "1h": "one_hour_days",
 }
 
+ZENDURE_SMARTMETER_D0_GRID_METER_TYPE = "zendure_smartmeter_d0"
+MQTT_GRID_METER_TYPES = ("mqtt", ZENDURE_SMARTMETER_D0_GRID_METER_TYPE)
+MQTT_GRID_METER_KEYS = (
+    "host",
+    "port",
+    "username",
+    "password",
+    "topic",
+    "payload_format",
+    "value_path",
+    "max_age_seconds",
+    "_mqtt_client_factory",
+)
+
 
 class ConfigUpgradeError(Exception):
     """Raised when config upgrade planning must abort before writing."""
@@ -724,7 +738,12 @@ def is_template_placeholder_value(value):
     lowered = text.lower()
     if lowered in TEMPLATE_PLACEHOLDER_VALUES:
         return True
-    if lowered.startswith("your_") or lowered.startswith("your-"):
+    if (
+        lowered.startswith("your_")
+        or lowered.startswith("your-")
+        or "your_" in lowered
+        or "your-" in lowered
+    ):
         return True
     parsed = urlparse(text if "://" in text else f"//{text}")
     host = (parsed.hostname or "").lower()
@@ -737,6 +756,74 @@ def _missing_or_placeholder(value):
         or str(value).strip() == ""
         or is_template_placeholder_value(value)
     )
+
+
+def grid_meter_mqtt_settings(grid_meter):
+    """Return MQTT backend settings from either nested or legacy flat config."""
+
+    if not isinstance(grid_meter, dict):
+        return {}
+
+    settings = {}
+    nested = grid_meter.get("mqtt")
+    if isinstance(nested, dict):
+        settings.update(copy.deepcopy(nested))
+
+    for key in MQTT_GRID_METER_KEYS:
+        if key not in settings and key in grid_meter:
+            settings[key] = copy.deepcopy(grid_meter[key])
+
+    return settings
+
+
+def normalize_mqtt_grid_meter_settings(grid_meter, *, meter_type=None):
+    meter_type = str(
+        meter_type
+        or (grid_meter.get("type") if isinstance(grid_meter, dict) else "mqtt")
+    ).strip().lower()
+    settings = grid_meter_mqtt_settings(grid_meter)
+
+    for key in (
+        "host",
+        "username",
+        "password",
+        "topic",
+        "payload_format",
+        "value_path",
+    ):
+        if key in settings and settings[key] is not None:
+            settings[key] = str(settings[key])
+
+    if not str(settings.get("host") or "").strip():
+        raise ValueError("MQTT grid meter requires grid_meter.mqtt.host")
+    if not str(settings.get("topic") or "").strip():
+        raise ValueError("MQTT grid meter requires grid_meter.mqtt.topic")
+
+    try:
+        settings["port"] = max(1, int(float(settings.get("port", 1883))))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "MQTT grid meter requires numeric grid_meter.mqtt.port"
+        ) from exc
+
+    payload_format = str(settings.get("payload_format") or "number").strip().lower()
+    if payload_format not in ("number", "json"):
+        raise ValueError("MQTT grid meter payload_format must be number or json")
+    if (
+        meter_type == ZENDURE_SMARTMETER_D0_GRID_METER_TYPE
+        and payload_format != "number"
+    ):
+        raise ValueError(
+            "Zendure SmartMeter D0 grid meter requires payload_format number"
+        )
+    settings["payload_format"] = payload_format
+    if payload_format != "json":
+        settings.pop("value_path", None)
+    settings["max_age_seconds"] = max(
+        1,
+        safe_int(settings.get("max_age_seconds", 15), 15, minimum=1),
+    )
+    return settings
 
 
 def template_placeholder_paths(config):
@@ -762,7 +849,13 @@ def template_placeholder_paths(config):
     grid_meter = config.get("grid_meter")
     if isinstance(grid_meter, dict) and configured_devices:
         meter_type = str(grid_meter.get("type") or "shelly").strip().lower()
-        if meter_type == "tasmota_http":
+        if meter_type in MQTT_GRID_METER_TYPES:
+            mqtt_settings = grid_meter_mqtt_settings(grid_meter)
+            if _missing_or_placeholder(mqtt_settings.get("host")):
+                paths.append("grid_meter.mqtt.host")
+            if _missing_or_placeholder(mqtt_settings.get("topic")):
+                paths.append("grid_meter.mqtt.topic")
+        elif meter_type == "tasmota_http":
             endpoint = grid_meter.get("url") or grid_meter.get("ip")
             if _missing_or_placeholder(endpoint):
                 paths.append("grid_meter.url")
@@ -1394,10 +1487,42 @@ def initialize(args, base_dir):
     configured_grid_meter = CONFIG.get("grid_meter")
     if isinstance(configured_grid_meter, dict):
         GRID_METER_CONFIG = dict(configured_grid_meter)
-        GRID_METER_CONFIG["type"] = str(GRID_METER_CONFIG.get("type", "shelly"))
-        for key in ("ip", "url", "power_path"):
+        GRID_METER_CONFIG["type"] = str(
+            GRID_METER_CONFIG.get("type", "shelly")
+        ).strip().lower()
+        for key in (
+            "ip",
+            "url",
+            "power_path",
+            "host",
+            "username",
+            "password",
+            "topic",
+            "payload_format",
+            "value_path",
+        ):
             if key in GRID_METER_CONFIG and GRID_METER_CONFIG[key] is not None:
                 GRID_METER_CONFIG[key] = str(GRID_METER_CONFIG[key])
+        if GRID_METER_CONFIG["type"] in MQTT_GRID_METER_TYPES:
+            GRID_METER_CONFIG["mqtt"] = normalize_mqtt_grid_meter_settings(
+                GRID_METER_CONFIG,
+                meter_type=GRID_METER_CONFIG["type"],
+            )
+            for stale_key in (
+                "ip",
+                "url",
+                "power_path",
+                "channels",
+                "host",
+                "port",
+                "username",
+                "password",
+                "topic",
+                "payload_format",
+                "value_path",
+                "max_age_seconds",
+            ):
+                GRID_METER_CONFIG.pop(stale_key, None)
         if (
             "channels" in GRID_METER_CONFIG
             and GRID_METER_CONFIG["channels"] is not None

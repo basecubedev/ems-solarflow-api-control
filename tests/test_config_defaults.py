@@ -1043,6 +1043,7 @@ def test_runtime_load_forces_safe_mode_for_template_placeholders(tmp_path, caplo
         ("https://api.example.com/api", True),
         ("notexample.com", False),
         ("https://notexample.com/api", False),
+        ("Zendure/sensor/YOUR_D0_SERIAL/totalPower", True),
     ],
 )
 def test_template_placeholder_url_detection_uses_hostname(value, expected):
@@ -1192,6 +1193,142 @@ def test_tasmota_grid_meter_config_preserves_url_ip_and_power_path(tmp_path):
             "ip": "192.168.1.71",
             "power_path": "StatusSNS.SM.16_7_0",
         }
+    finally:
+        restore_config_module(snapshot)
+
+
+def test_mqtt_grid_meter_config_preserves_and_normalizes_fields(tmp_path):
+    snapshot = snapshot_config_module()
+    values = base_minimal_config()
+    values["grid_meter"] = {
+        "type": "MQTT",
+        "host": "mqtt.local",
+        "port": "1883",
+        "username": "user",
+        "password": "secret",
+        "topic": "Zendure/sensor/SN/totalPower",
+        "payload_format": "Number",
+        "max_age_seconds": "15",
+    }
+
+    try:
+        initialize_config_from_dict(tmp_path, values)
+
+        assert cfg.GRID_METER_CONFIG == {
+            "type": "mqtt",
+            "mqtt": {
+                "host": "mqtt.local",
+                "port": 1883,
+                "username": "user",
+                "password": "secret",
+                "topic": "Zendure/sensor/SN/totalPower",
+                "payload_format": "number",
+                "max_age_seconds": 15,
+            },
+        }
+    finally:
+        restore_config_module(snapshot)
+
+
+def test_zendure_smartmeter_d0_grid_meter_config_uses_mqtt_backend(tmp_path):
+    snapshot = snapshot_config_module()
+    values = base_minimal_config()
+    values["grid_meter"] = {
+        "type": "zendure_smartmeter_d0",
+        "mqtt": {
+            "host": "mqtt.local",
+            "port": "1883",
+            "username": "user",
+            "password": "secret",
+            "topic": "Zendure/sensor/SN/totalPower",
+            "payload_format": "Number",
+            "max_age_seconds": "10",
+        },
+    }
+
+    try:
+        initialize_config_from_dict(tmp_path, values)
+
+        assert cfg.GRID_METER_CONFIG == {
+            "type": "zendure_smartmeter_d0",
+            "mqtt": {
+                "host": "mqtt.local",
+                "port": 1883,
+                "username": "user",
+                "password": "secret",
+                "topic": "Zendure/sensor/SN/totalPower",
+                "payload_format": "number",
+                "max_age_seconds": 10,
+            },
+        }
+    finally:
+        restore_config_module(snapshot)
+
+
+def test_zendure_smartmeter_d0_grid_meter_rejects_incomplete_mqtt_config(tmp_path):
+    snapshot = snapshot_config_module()
+    values = base_minimal_config()
+    values["grid_meter"] = {
+        "type": "zendure_smartmeter_d0",
+        "mqtt": {"host": "mqtt.local"},
+    }
+
+    try:
+        with pytest.raises(ValueError, match="grid_meter.mqtt.topic"):
+            initialize_config_from_dict(tmp_path, values)
+    finally:
+        restore_config_module(snapshot)
+
+
+def test_zendure_smartmeter_d0_grid_meter_rejects_json_payload(tmp_path):
+    snapshot = snapshot_config_module()
+    values = base_minimal_config()
+    values["grid_meter"] = {
+        "type": "zendure_smartmeter_d0",
+        "mqtt": {
+            "host": "mqtt.local",
+            "topic": "Zendure/sensor/SN/totalPower",
+            "payload_format": "json",
+            "value_path": "power.total",
+        },
+    }
+
+    try:
+        with pytest.raises(ValueError, match="payload_format number"):
+            initialize_config_from_dict(tmp_path, values)
+    finally:
+        restore_config_module(snapshot)
+
+
+def test_mqtt_grid_meter_config_requires_host_and_topic(tmp_path):
+    snapshot = snapshot_config_module()
+    values = base_minimal_config()
+    values["grid_meter"] = {
+        "type": "mqtt",
+        "host": "",
+        "topic": "",
+    }
+
+    try:
+        with pytest.raises(ValueError, match="grid_meter.mqtt.host"):
+            initialize_config_from_dict(tmp_path, values)
+    finally:
+        restore_config_module(snapshot)
+
+
+def test_mqtt_grid_meter_config_rejects_unknown_payload_format(tmp_path):
+    snapshot = snapshot_config_module()
+    values = base_minimal_config()
+    values["grid_meter"] = {
+        "type": "mqtt",
+        "host": "mqtt.local",
+        "topic": "meter/grid",
+        "payload_format": "xml",
+    }
+
+    try:
+        with pytest.raises(ValueError, match="payload_format"):
+            initialize_config_from_dict(tmp_path, values)
     finally:
         restore_config_module(snapshot)
 

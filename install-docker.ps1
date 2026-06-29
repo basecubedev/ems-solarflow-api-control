@@ -223,3 +223,9 @@ Write-Info "  docker compose exec ems python3 emsctl.py diagnose"
 if ($Analytics) {
     Write-Info "  docker compose exec ems python3 emsctl.py influx status"
 }
+Write-Info ""
+Write-Info "Next: choose your grid meter and set your devices in config/config.json,"
+Write-Info "or run the guided setup assistant:"
+Write-Info "  docker compose exec ems python3 emsctl.py config init"
+Write-Info 'For Zendure SmartMeter D0, select "Zendure SmartMeter D0 via MQTT".'
+Write-Info "Then restart EMS with: docker compose restart"

@@ -24,6 +24,14 @@ from _emsctl_test_helpers import (
 )
 
 
+def visible_input(responses):
+    def read(prompt=""):
+        print(prompt, end="")
+        return next(responses)
+
+    return read
+
+
 def test_emsctl_config_discovery_prefers_legacy_config(tmp_path, monkeypatch):
     patch_emsctl_base(monkeypatch, tmp_path)
     write_discovery_config(tmp_path / "config.json", "runtime-state.json")
@@ -740,7 +748,7 @@ def test_config_init_template_config_uses_first_run_continue_wording(
     shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")
     config_path = tmp_path / "config.json"
     shutil.copy(ROOT / "config.template.json", config_path)
-    monkeypatch.setattr("builtins.input", lambda prompt="": "n")
+    monkeypatch.setattr("builtins.input", visible_input(iter(["n"])))
 
     code = emsctl.main(["--config", str(config_path), "config", "init"])
 
@@ -756,7 +764,7 @@ def test_config_init_required_placeholders_are_not_prompt_defaults(
     capsys,
 ):
     responses = iter(["", "REAL_SN"])
-    monkeypatch.setattr("builtins.input", lambda prompt="": next(responses))
+    monkeypatch.setattr("builtins.input", visible_input(responses))
 
     value = config_init_mod.ask_text(
         "Device 1 serial number",
@@ -851,6 +859,7 @@ def test_config_init_cleans_stale_grid_meter_fields_when_switching_type(
     assert updated["grid_meter"]["ip"] == "192.0.2.50"
     assert "url" not in updated["grid_meter"]
     assert "power_path" not in updated["grid_meter"]
+    assert "mqtt" not in updated["grid_meter"]
     assert updated["grid_meter"]["custom_meter"] == "keep"
 
 
@@ -887,7 +896,7 @@ def test_config_init_edited_config_asks_for_backup_by_default(
         }],
     }))
     responses = iter(["y", *([""] * 19), "y", "n"])
-    monkeypatch.setattr("builtins.input", lambda prompt="": next(responses))
+    monkeypatch.setattr("builtins.input", visible_input(responses))
 
     code = emsctl.main(["--config", str(config_path), "config", "init"])
 
@@ -913,7 +922,121 @@ def test_config_init_grid_meter_choices_are_runtime_supported():
         "shelly_3em_gen1",
         "ecotracker",
         "tasmota_http",
+        "zendure_smartmeter_d0",
+        "mqtt",
     )
+
+
+def test_config_init_zendure_smartmeter_d0_generates_mqtt_topic(monkeypatch):
+    responses = iter([
+        "5",
+        "mqtt.local",
+        "",
+        "",
+        "D0SN",
+        "y",
+        "10",
+    ])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(responses))
+    monkeypatch.setattr(config_init_mod.getpass, "getpass", lambda prompt: "")
+
+    result = config_init_mod.ask_grid_meter({})
+
+    assert result == {
+        "type": "zendure_smartmeter_d0",
+        "mqtt": {
+            "host": "mqtt.local",
+            "port": 1883,
+            "username": "",
+            "password": "",
+            "topic": "Zendure/sensor/D0SN/totalPower",
+            "payload_format": "number",
+            "max_age_seconds": 10,
+        },
+    }
+
+
+def test_config_init_generic_mqtt_keeps_advanced_payload_flow(monkeypatch):
+    responses = iter([
+        "6",
+        "mqtt.local",
+        "",
+        "",
+        "meter/grid",
+        "json",
+        "power.total",
+        "10",
+    ])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(responses))
+    monkeypatch.setattr(config_init_mod.getpass, "getpass", lambda prompt: "")
+
+    result = config_init_mod.ask_grid_meter({})
+
+    assert result == {
+        "type": "mqtt",
+        "mqtt": {
+            "host": "mqtt.local",
+            "port": 1883,
+            "username": "",
+            "password": "",
+            "topic": "meter/grid",
+            "payload_format": "json",
+            "value_path": "power.total",
+            "max_age_seconds": 10,
+        },
+    }
+
+
+def test_config_init_mqtt_password_prompt_keeps_default_without_exposing_it(
+    monkeypatch,
+    capsys,
+):
+    password = "super-secret-mqtt-password"
+    responses = iter(["", "", "", "", "", "", ""])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(responses))
+
+    def press_enter(prompt):
+        print(prompt, end="")
+        return ""
+
+    monkeypatch.setattr(config_init_mod.getpass, "getpass", press_enter)
+    result = config_init_mod.ask_grid_meter({
+        "type": "mqtt",
+        "mqtt": {
+            "host": "mqtt.local",
+            "port": 1883,
+            "username": "meter",
+            "password": password,
+            "topic": "meter/grid",
+            "payload_format": "number",
+            "max_age_seconds": 15,
+        },
+    })
+
+    output = capsys.readouterr()
+    assert result["mqtt"]["password"] == password
+    assert password not in output.out + output.err
+    assert "configured, press Enter to keep" in output.out
+
+
+def test_config_init_mqtt_new_password_is_stored_without_being_printed(
+    monkeypatch,
+    capsys,
+):
+    password = "new-super-secret-mqtt-password"
+    responses = iter(["6", "mqtt.local", "", "", "meter/grid", "", ""])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(responses))
+    monkeypatch.setattr(
+        config_init_mod.getpass,
+        "getpass",
+        lambda prompt: password,
+    )
+
+    result = config_init_mod.ask_grid_meter({})
+
+    output = capsys.readouterr()
+    assert result["mqtt"]["password"] == password
+    assert password not in output.out + output.err
 
 
 def test_config_init_dry_run_redacts_home_assistant_token(tmp_path):
@@ -928,6 +1051,31 @@ def test_config_init_dry_run_redacts_home_assistant_token(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert "super-secret-token" not in result.stdout
+    assert "<redacted>" in result.stdout
+
+
+def test_config_init_dry_run_redacts_mqtt_password(tmp_path):
+    config_path = tmp_path / "config.json"
+    write_config(config_path)
+    config = json.loads(config_path.read_text())
+    config["grid_meter"] = {
+        "type": "mqtt",
+        "mqtt": {
+            "host": "mqtt.local",
+            "port": 1883,
+            "username": "meter",
+            "password": "super-secret-mqtt-password",
+            "topic": "meter/grid",
+            "payload_format": "number",
+            "max_age_seconds": 15,
+        },
+    }
+    config_path.write_text(json.dumps(config))
+
+    result = run_emsctl(tmp_path, "config", "init", "--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    assert "super-secret-mqtt-password" not in result.stdout
     assert "<redacted>" in result.stdout
 
 

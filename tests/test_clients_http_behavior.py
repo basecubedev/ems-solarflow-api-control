@@ -7,6 +7,7 @@ import pytest
 from ems.clients import (
     EcoTrackerClient,
     HAClient,
+    MqttGridMeterClient,
     ShellyClient,
     Shelly3EMGen1Client,
     TasmotaHttpClient,
@@ -16,6 +17,7 @@ from ems.clients import (
     _parse_ecotracker_power,
     _parse_shelly_3em_gen1_power,
     _parse_shelly_power,
+    _parse_mqtt_grid_power_payload,
     _parse_tasmota_http_power,
     zendure_write,
     zendure_write_succeeded,
@@ -51,6 +53,37 @@ class SessionStub:
         if isinstance(self.post_response, BaseException):
             raise self.post_response
         return self.post_response
+
+
+class FakeMqttClient:
+    def __init__(self):
+        self.on_connect = None
+        self.on_disconnect = None
+        self.on_message = None
+        self.username_password = None
+        self.connect_calls = []
+        self.subscriptions = []
+        self.loop_started = False
+        self.loop_stopped = False
+        self.disconnected = False
+
+    def username_pw_set(self, username, password=None):
+        self.username_password = (username, password)
+
+    def connect_async(self, host, port, keepalive=60):
+        self.connect_calls.append((host, port, keepalive))
+
+    def loop_start(self):
+        self.loop_started = True
+
+    def loop_stop(self):
+        self.loop_stopped = True
+
+    def disconnect(self):
+        self.disconnected = True
+
+    def subscribe(self, topic):
+        self.subscriptions.append(topic)
 
 
 def test_create_session_configures_retrying_http_adapters():
@@ -786,6 +819,145 @@ def test_create_grid_meter_client_rejects_tasmota_http_missing_config():
             {"type": "tasmota_http", "power_path": "StatusSNS.SML.Power_curr"},
             SessionStub(),
         )
+
+
+def test_parse_mqtt_grid_power_payload_accepts_number_and_json():
+    assert _parse_mqtt_grid_power_payload(b"-6") == -6.0
+    assert _parse_mqtt_grid_power_payload("1.5") == 1.5
+    assert _parse_mqtt_grid_power_payload(
+        b'{"power": {"total": 42}}',
+        payload_format="json",
+        value_path="power.total",
+    ) == 42.0
+
+
+def test_parse_mqtt_grid_power_payload_rejects_invalid_values():
+    with pytest.raises(ValueError, match="not numeric"):
+        _parse_mqtt_grid_power_payload(b"OFF")
+
+    with pytest.raises(ValueError, match="Missing JSON path"):
+        _parse_mqtt_grid_power_payload(
+            b'{"power": {}}',
+            payload_format="json",
+            value_path="power.total",
+        )
+
+    with pytest.raises(ValueError, match="Unsupported MQTT payload_format"):
+        _parse_mqtt_grid_power_payload(b"1", payload_format="xml")
+
+
+def test_mqtt_grid_meter_client_subscribes_and_returns_latest_value():
+    fake = FakeMqttClient()
+    client = MqttGridMeterClient(
+        "mqtt.local",
+        1883,
+        "Zendure/sensor/SN/totalPower",
+        username="user",
+        password="secret",
+        client_factory=lambda: fake,
+    )
+
+    assert fake.username_password == ("user", "secret")
+    assert fake.connect_calls == [("mqtt.local", 1883, 30)]
+    assert fake.loop_started is True
+
+    fake.on_connect(fake, None, None, 0)
+    assert fake.subscriptions == ["Zendure/sensor/SN/totalPower"]
+
+    fake.on_message(
+        fake,
+        None,
+        SimpleNamespace(topic="Zendure/sensor/SN/totalPower", payload=b"-6"),
+    )
+
+    assert client.get_power() == -6.0
+    assert client.health.success_count == 1
+
+    client.close()
+    assert fake.loop_stopped is True
+    assert fake.disconnected is True
+
+
+def test_mqtt_grid_meter_client_reports_missing_and_stale_values():
+    fake = FakeMqttClient()
+    client = MqttGridMeterClient(
+        "mqtt.local",
+        1883,
+        "meter/grid",
+        max_age_seconds=1,
+        client_factory=lambda: fake,
+    )
+
+    assert client.get_power() == 0
+    assert client.health.failure_count == 1
+
+    fake.on_message(
+        fake,
+        None,
+        SimpleNamespace(topic="meter/grid", payload=b"12"),
+    )
+    client.last_message_monotonic = 0
+
+    assert client.get_power() == 12.0
+    assert client.health.failure_count == 2
+
+
+def test_create_grid_meter_client_supports_mqtt_with_factory():
+    fake = FakeMqttClient()
+    client = create_grid_meter_client(
+        {
+            "type": "mqtt",
+            "mqtt": {
+                "host": "mqtt.local",
+                "port": 1883,
+                "topic": "meter/grid",
+                "payload_format": "number",
+                "max_age_seconds": 15,
+                "_mqtt_client_factory": lambda: fake,
+            },
+        },
+        SessionStub(),
+    )
+
+    assert isinstance(client, MqttGridMeterClient)
+    assert client.endpoint == "mqtt.local:1883 meter/grid"
+    assert client.provider == "MQTT"
+
+
+def test_create_grid_meter_client_supports_zendure_smartmeter_d0_preset():
+    fake = FakeMqttClient()
+    client = create_grid_meter_client(
+        {
+            "type": "zendure_smartmeter_d0",
+            "mqtt": {
+                "host": "mqtt.local",
+                "port": 1883,
+                "topic": "Zendure/sensor/SN/totalPower",
+                "payload_format": "number",
+                "_mqtt_client_factory": lambda: fake,
+            },
+        },
+        SessionStub(),
+    )
+
+    assert isinstance(client, MqttGridMeterClient)
+    assert client.provider == "Zendure SmartMeter D0"
+    assert client.transport == "mqtt"
+    assert client.endpoint == "mqtt.local:1883 Zendure/sensor/SN/totalPower"
+    fake.on_message(
+        fake,
+        None,
+        SimpleNamespace(topic="Zendure/sensor/SN/totalPower", payload=b"-6"),
+    )
+    assert client.get_power() == -6.0
+
+
+def test_create_grid_meter_client_rejects_mqtt_missing_config():
+    with pytest.raises(ValueError, match="requires host"):
+        create_grid_meter_client({"type": "mqtt", "topic": "meter/grid"}, SessionStub())
+
+    with pytest.raises(ValueError, match="requires topic"):
+        create_grid_meter_client({"type": "mqtt", "host": "mqtt.local"}, SessionStub())
 
 
 def test_create_grid_meter_client_rejects_unknown_type():

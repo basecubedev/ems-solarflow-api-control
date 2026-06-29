@@ -50,6 +50,71 @@ def test_grid_meter_test_reports_latency_summary(monkeypatch, capsys):
     assert rc == 1
 
 
+def test_grid_meter_test_reports_missing_mqtt_value(monkeypatch, capsys):
+    fake = FakeMeterClient()
+    fake.provider = "MQTT"
+    fake.ip = ""
+    fake.endpoint = "mqtt.local:1883 meter/grid"
+    fake.get_power = lambda: fake.health.record_failure(
+        error="no MQTT message received yet",
+        latency_ms=0,
+        stale_used=True,
+    ) or 0
+    monkeypatch.setattr(
+        clients_mod, "create_grid_meter_client", lambda config, session: fake
+    )
+    monkeypatch.setattr(clients_mod, "create_session", lambda: object())
+
+    args = SimpleNamespace(action="test", duration=1, interval=0.0)
+    rc = emsctl.handle_grid_meter_command(
+        args, {"grid_meter": {"type": "mqtt", "host": "mqtt.local", "topic": "meter/grid"}}
+    )
+
+    out = capsys.readouterr().out
+    assert "Grid meter read test: MQTT mqtt.local:1883 meter/grid" in out
+    assert "Latest power: unavailable (no fresh MQTT value received)" in out
+    assert rc == 1
+
+
+def test_grid_meter_test_displays_zendure_smartmeter_d0(monkeypatch, capsys):
+    fake = FakeMeterClient()
+    fake.provider = "Zendure SmartMeter D0"
+    fake.transport = "mqtt"
+    fake.ip = ""
+    fake.endpoint = "mqtt.local:1883 Zendure/sensor/SN/totalPower"
+    fake.get_power = lambda: fake.health.record_failure(
+        error="no MQTT message received yet",
+        latency_ms=0,
+        stale_used=True,
+    ) or 0
+    monkeypatch.setattr(
+        clients_mod, "create_grid_meter_client", lambda config, session: fake
+    )
+    monkeypatch.setattr(clients_mod, "create_session", lambda: object())
+
+    args = SimpleNamespace(action="test", duration=1, interval=0.0)
+    rc = emsctl.handle_grid_meter_command(
+        args,
+        {
+            "grid_meter": {
+                "type": "zendure_smartmeter_d0",
+                "mqtt": {
+                    "host": "mqtt.local",
+                    "topic": "Zendure/sensor/SN/totalPower",
+                },
+            }
+        },
+    )
+
+    out = capsys.readouterr().out
+    assert (
+        "Grid meter read test: Zendure SmartMeter D0 "
+        "mqtt.local:1883 Zendure/sensor/SN/totalPower"
+    ) in out
+    assert "Latest power: unavailable (no fresh MQTT value received)" in out
+    assert rc == 1
+
+
 def test_grid_meter_test_rejects_unknown_action():
     rc = emsctl.handle_grid_meter_command(
         SimpleNamespace(action="bogus"), {"grid_meter": {}}

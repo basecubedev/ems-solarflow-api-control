@@ -1041,7 +1041,11 @@ def handle_grid_meter_command(args, config):
         return fail(f"cannot create grid meter client: {exc}", code=2)
 
     provider = getattr(client, "provider", "grid meter")
-    endpoint = getattr(client, "ip", None) or getattr(client, "url", "")
+    endpoint = (
+        getattr(client, "endpoint", None)
+        or getattr(client, "ip", None)
+        or getattr(client, "url", "")
+    )
     duration = max(1, int(args.duration))
     interval = max(0.0, float(args.interval))
 
@@ -1050,24 +1054,37 @@ def handle_grid_meter_command(args, config):
 
     latencies = []
     reads = ok = failed = 0
+    latest_power = None
     deadline = _time.monotonic() + duration
 
-    while _time.monotonic() < deadline:
-        prev_success = client.health.success_count
-        client.get_power()
-        reads += 1
-        if client.health.last_latency_ms is not None:
-            latencies.append(client.health.last_latency_ms)
-        if client.health.success_count > prev_success:
-            ok += 1
-        else:
-            failed += 1
-        if interval and _time.monotonic() < deadline:
-            _time.sleep(interval)
+    try:
+        while _time.monotonic() < deadline:
+            prev_success = client.health.success_count
+            latest_power = client.get_power()
+            reads += 1
+            if client.health.last_latency_ms is not None:
+                latencies.append(client.health.last_latency_ms)
+            if client.health.success_count > prev_success:
+                ok += 1
+            else:
+                failed += 1
+            if interval and _time.monotonic() < deadline:
+                _time.sleep(interval)
+    finally:
+        close = getattr(client, "close", None)
+        if callable(close):
+            close()
 
     print(f"Reads: {reads}")
     print(f"OK: {ok}")
     print(f"Failed: {failed}")
+    if ok and latest_power is not None:
+        print(f"Latest power: {latest_power} W")
+    elif (
+        str(getattr(client, "transport", "")).lower() == "mqtt"
+        or str(getattr(client, "provider", "")).lower() == "mqtt"
+    ):
+        print("Latest power: unavailable (no fresh MQTT value received)")
     if latencies:
         print(f"p50 latency: {int(round(percentile(latencies, 0.5)))} ms")
         print(f"p95 latency: {int(round(percentile(latencies, 0.95)))} ms")

@@ -1117,6 +1117,141 @@ def test_diagnose_grid_meter_config_errors_when_shelly_3em_gen1_ip_missing():
     assert levels.get("grid_meter_ip_missing") == "error"
 
 
+def test_diagnose_grid_meter_config_accepts_mqtt_number_payload():
+    checks = []
+    diagnostics.diagnose_grid_meter_config(
+        checks,
+        {
+            "grid_meter": {
+                "type": "mqtt",
+                "host": "mqtt.local",
+                "topic": "Zendure/sensor/SN/totalPower",
+                "payload_format": "number",
+            }
+        },
+    )
+    levels = _levels_by_code(checks)
+    assert levels.get("grid_meter_mqtt_host_present") == "ok"
+    assert levels.get("grid_meter_mqtt_topic_present") == "ok"
+    assert levels.get("grid_meter_mqtt_payload_format") == "ok"
+
+
+def test_diagnose_grid_meter_config_accepts_zendure_smartmeter_d0():
+    checks = []
+    diagnostics.diagnose_grid_meter_config(
+        checks,
+        {
+            "grid_meter": {
+                "type": "zendure_smartmeter_d0",
+                "mqtt": {
+                    "host": "mqtt.local",
+                    "topic": "Zendure/sensor/SN/totalPower",
+                    "payload_format": "number",
+                },
+            }
+        },
+    )
+    levels = _levels_by_code(checks)
+    assert levels.get("grid_meter_type") == "ok"
+    assert levels.get("grid_meter_mqtt_host_present") == "ok"
+    assert levels.get("grid_meter_mqtt_topic_present") == "ok"
+    assert levels.get("grid_meter_mqtt_payload_format") == "ok"
+
+
+def test_diagnose_grid_meter_config_requires_mqtt_json_value_path():
+    checks = []
+    diagnostics.diagnose_grid_meter_config(
+        checks,
+        {
+            "grid_meter": {
+                "type": "mqtt",
+                "host": "mqtt.local",
+                "topic": "meter/grid",
+                "payload_format": "json",
+            }
+        },
+    )
+    levels = _levels_by_code(checks)
+    assert levels.get("grid_meter_mqtt_value_path_missing") == "error"
+    check = next(item for item in checks if item["code"] == "grid_meter_mqtt_value_path_missing")
+    assert check["message"] == "MQTT JSON grid meter requires grid_meter.mqtt.value_path"
+
+
+def test_diagnose_hardware_checks_mqtt_broker_tcp(monkeypatch):
+    captured = {}
+
+    class FakeSocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    def fake_create_connection(address, timeout=0):
+        captured["address"] = address
+        captured["timeout"] = timeout
+        return FakeSocket()
+
+    monkeypatch.setattr(diagnostics.socket, "create_connection", fake_create_connection)
+
+    checks = []
+    health = diagnostics.diagnose_hardware(
+        checks,
+        {
+            "grid_meter": {
+                "type": "mqtt",
+                "host": "mqtt.local",
+                "port": 1883,
+            },
+            "devices": [],
+        },
+    )
+
+    assert captured == {"address": ("mqtt.local", 1883), "timeout": 2}
+    levels = _levels_by_code(checks)
+    assert levels.get("mqtt_broker_connect_ok") == "ok"
+    assert health["grid_meter"]["provider"] == "MQTT"
+
+
+def test_diagnose_hardware_checks_zendure_smartmeter_d0_broker_tcp(monkeypatch):
+    captured = {}
+
+    class FakeSocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    def fake_create_connection(address, timeout=0):
+        captured["address"] = address
+        captured["timeout"] = timeout
+        return FakeSocket()
+
+    monkeypatch.setattr(diagnostics.socket, "create_connection", fake_create_connection)
+
+    checks = []
+    health = diagnostics.diagnose_hardware(
+        checks,
+        {
+            "grid_meter": {
+                "type": "zendure_smartmeter_d0",
+                "mqtt": {
+                    "host": "mqtt.local",
+                    "port": 1883,
+                    "topic": "Zendure/sensor/SN/totalPower",
+                },
+            },
+            "devices": [],
+        },
+    )
+
+    assert captured == {"address": ("mqtt.local", 1883), "timeout": 2}
+    levels = _levels_by_code(checks)
+    assert levels.get("mqtt_broker_connect_ok") == "ok"
+    assert health["grid_meter"]["provider"] == "Zendure SmartMeter D0"
+
+
 def test_diagnose_hardware_probes_shelly_3em_gen1_status_endpoint(monkeypatch):
     captured = {}
 

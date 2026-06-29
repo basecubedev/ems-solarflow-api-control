@@ -557,8 +557,8 @@ default, while runtime-state can override the active weighting.
 ## Grid Meter Settings
 
 `grid_meter.type` selects the local household/grid power meter implementation.
-Supported values are `shelly`, `shelly_3em_gen1`, `ecotracker`, and
-`tasmota_http`.
+Supported values are `shelly`, `shelly_3em_gen1`, `ecotracker`,
+`tasmota_http`, `zendure_smartmeter_d0`, and `mqtt`.
 
 There are two Shelly meter types depending on the generation of your device:
 
@@ -645,6 +645,35 @@ field inside the JSON response. Tasmota smart meter keys depend on the active
 meter script, so the EMS does not guess a default. Positive power means grid
 import; negative power means export/feed-in when your meter reports signed
 values that way.
+
+Zendure SmartMeter D0 (`zendure_smartmeter_d0`) and generic MQTT grid meters
+subscribe to one broker topic and cache the latest parsed power value. MQTT is
+configured under `grid_meter.mqtt`. The EMS control loop does not wait for MQTT
+messages; if no value has arrived yet, or the last value is older than
+`grid_meter.mqtt.max_age_seconds`, the meter is treated as stale and the last
+cached value is used.
+
+Zendure SmartMeter D0 (MQTT) publishes signed `totalPower` watts on the default
+topic:
+
+```text
+Zendure/sensor/<serial>/totalPower
+```
+
+Known user-provided D0 samples use this sign convention:
+
+```text
+positive = grid import
+negative = grid export
+```
+
+EMS subscribes through an existing MQTT broker; it does not run a broker and
+does not write to the D0. Username/password may be required depending on your
+broker. TLS is not supported here. D0 validation currently depends on external
+tester feedback because the project maintainer has no live D0 hardware.
+
+Generic MQTT (`mqtt`) supports plain numeric payloads and JSON payloads with
+`grid_meter.mqtt.value_path`.
 
 Shelly example:
 
@@ -735,6 +764,43 @@ Tasmota OBIS-style key example:
     "type": "tasmota_http",
     "url": "http://192.168.1.70/cm?cmnd=Status%2010",
     "power_path": "StatusSNS.SM.16_7_0"
+  }
+}
+```
+
+Zendure SmartMeter D0 MQTT example:
+
+```json
+{
+  "grid_meter": {
+    "type": "zendure_smartmeter_d0",
+    "mqtt": {
+      "host": "192.168.1.10",
+      "port": 1883,
+      "username": "YOUR_MQTT_USER",
+      "password": "YOUR_MQTT_PASSWORD",
+      "topic": "Zendure/sensor/YOUR_D0_SERIAL/totalPower",
+      "payload_format": "number",
+      "max_age_seconds": 15
+    }
+  }
+}
+```
+
+Generic MQTT JSON example:
+
+```json
+{
+  "grid_meter": {
+    "type": "mqtt",
+    "mqtt": {
+      "host": "192.168.1.10",
+      "port": 1883,
+      "topic": "meter/grid",
+      "payload_format": "json",
+      "value_path": "power.total",
+      "max_age_seconds": 15
+    }
   }
 }
 ```
