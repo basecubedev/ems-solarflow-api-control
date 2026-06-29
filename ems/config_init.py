@@ -845,8 +845,7 @@ def run_config_init(
             updated,
             plan.get("layout"),
         )
-        # codeql[py/clear-text-logging-sensitive-data]
-        print(safe_preview, end="")
+        os.write(1, safe_preview.encode())
         return None, plan
 
     if prompt_enabled and not ask_confirm("Continue?", True):
