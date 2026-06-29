@@ -6,17 +6,12 @@ The goal is simple: users should be able to install it, understand what is happe
 
 ## Tested Before Release
 
-The project uses automated checks on pull requests and on changes to `main`. At the time of this documentation update, the test suite contains 1000+ tests.
-
-For the current release-candidate validation snapshot, including the Docker-first
-status, coverage summary, known caveats, and stable-release checklist, see
-[release-quality-status.md](release-quality-status.md).
+The project uses automated checks on pull requests and on changes to `main`.
 
 The checks include:
 
 * Python test suite on supported Python versions
 * Ruff linting
-* CodeQL security analysis
 * dependency and import checks
 * Python compile checks
 * deprecation warning checks
@@ -45,7 +40,10 @@ Before live operation, users should configure their real meter, Zendure devices,
 
 ## Kept Up to Date
 
-Dependabot tracks dependency updates for Python, Docker, and GitHub Actions. Ruff keeps code style and common issues visible. CodeQL adds another automated layer for finding potential security problems.
+Dependabot tracks dependency updates for Python, Docker, and GitHub Actions. Ruff keeps code style and common issues visible.
+
+CodeQL security scanning is enabled through GitHub default setup for this repository.
+It is not maintained as a checked-in workflow file.
 
 Updates still need tests and review. The project does not claim that every bug or vulnerability is impossible. Instead, the development process is transparent, automated, and built to catch common mistakes early.
 

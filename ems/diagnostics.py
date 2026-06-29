@@ -41,6 +41,7 @@ from ems.paths import (
     resolve_runtime_path,
     resolve_dashboard_auth_path,
 )
+from ems.version import __version__
 
 
 BATTERY_FULL_CHARGE_ASSIST_DEFAULTS = {
@@ -79,7 +80,6 @@ DIAGNOSE_REDACT_KEYWORDS = (
 
 DIAGNOSE_SCHEMA_VERSION = 1
 SUPPORT_BUNDLE_VERSION = 1
-EMS_VERSION = "unknown"
 ROOT_CAUSE_SEVERITIES = ("info", "warning", "error")
 
 @dataclass
@@ -285,7 +285,7 @@ def diagnose_finalize_report(report):
     )
 
     report["schema_version"] = DIAGNOSE_SCHEMA_VERSION
-    report["ems_version"] = EMS_VERSION
+    report["ems_version"] = __version__
     report["diagnosis"] = asdict(model)
     report["sections"] = sections
     report["metrics"] = report.get("summary", {})
@@ -2601,7 +2601,7 @@ def diagnose_write_support_bundle(report, args, config_data, runtime_path):
     metadata = {
         "bundle_version": SUPPORT_BUNDLE_VERSION,
         "generated_at": report.get("generated_at"),
-        "ems_version": report.get("ems_version", EMS_VERSION),
+        "ems_version": report.get("ems_version", __version__),
         "schema_version": report.get("schema_version", DIAGNOSE_SCHEMA_VERSION),
     }
 

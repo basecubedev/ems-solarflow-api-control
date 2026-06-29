@@ -213,7 +213,7 @@ def test_support_bundle_contract_files_and_metadata(tmp_path):
     assert metadata["bundle_version"] == 1
     assert metadata["schema_version"] == 1
     assert metadata["generated_at"] == diagnosis["generated_at"]
-    assert "ems_version" in metadata
+    assert metadata["ems_version"] == "0.6.0"
     assert control["snapshot"]["grid_power_w"] == 142
     assert quality["export_import"]["samples"] == 4
 

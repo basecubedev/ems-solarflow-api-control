@@ -18,9 +18,11 @@ Before unattended operation, verify device serial numbers, IP addresses, Shelly
 readings, maximum power limits, minimum and maximum SOC limits, battery sizes,
 PV factors, and any local grid or electrical requirements.
 
-The EMS should not run in parallel with another controller that writes Zendure
-`outputLimit`. Monitor the first live run and every run after relevant
-configuration changes.
+Zendure Local API must be available and enabled for local EMS control. Do not
+run Zendure HEMS, Home Assistant automations, MQTT writers, or any other
+controller in parallel if they write Zendure `outputLimit`. EMS assumes
+exclusive write control over `outputLimit` while active. Monitor the first live
+run and every run after relevant configuration changes.
 
 Use [first-run-checklist.md](first-run-checklist.md) before unattended
 operation.

@@ -12,10 +12,7 @@ import shutil
 import subprocess
 
 from ems.paths import BASE_DIR
-
-# Kept in sync with ems.diagnostics.EMS_VERSION; there is currently no version
-# file in the repo, so this is a placeholder until releases are tagged.
-EMS_VERSION = "unknown"
+from ems.version import __version__
 
 
 def _run_git(args, cwd):
@@ -49,7 +46,7 @@ def collect_build_info(base_dir=None):
     base_dir = base_dir or BASE_DIR
 
     info = {
-        "ems_version": EMS_VERSION,
+        "ems_version": __version__,
         "git_commit": "unknown",
         "git_commit_short": "unknown",
         "git_branch": "unknown",

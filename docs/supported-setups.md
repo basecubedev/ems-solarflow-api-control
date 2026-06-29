@@ -6,7 +6,8 @@ editing config.
 ## Recommended Setup
 
 - Docker Compose
-- local network access to Zendure devices
+- local network access to Zendure devices with Zendure Local API available and
+  enabled
 - one supported grid meter
 - EMS is the only controller writing Zendure `outputLimit`
 - dashboard reachable only on your trusted local network
@@ -40,6 +41,11 @@ different from the supported local API behavior.
 - Home Assistant is optional.
 - InfluxDB analytics is optional.
 - Native Python is supported for advanced/manual installs.
+
+Zendure Local API must be available and enabled for local EMS control. Do not
+run Zendure HEMS, Home Assistant automations, MQTT writers, or any other
+controller in parallel if they write Zendure `outputLimit`. EMS assumes
+exclusive write control over `outputLimit` while active.
 
 ## Not Recommended
 

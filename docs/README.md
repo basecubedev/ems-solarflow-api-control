@@ -10,7 +10,6 @@ This directory contains the public project documentation.
 | Supported setups | [supported-setups.md](supported-setups.md) | Check whether your grid meter, Zendure devices, and setup style fit EMS. |
 | First-run checklist | [first-run-checklist.md](first-run-checklist.md) | Safe validation sequence after the first config edit. |
 | Quality and maintenance | [quality-and-maintenance.md](quality-and-maintenance.md) | How the project is tested, packaged, maintained, and where the limits remain. |
-| Release quality status | [release-quality-status.md](release-quality-status.md) | Current release-candidate validation snapshot and stable-release checklist. |
 | FAQ | [faq.md](faq.md) | Short beginner answers for Docker, Home Assistant, config, dashboard, and updates. |
 
 ## Setup And Operation
@@ -46,7 +45,6 @@ This directory contains the public project documentation.
 | Runtime state | [runtime-state.md](runtime-state.md) | Mutable operator state and the fields changed by CLI or Home Assistant helpers. |
 | Safety model | [safety.md](safety.md) | Hardware-write gates, dry-run behavior, and staged validation. |
 | Quality and maintenance | [quality-and-maintenance.md](quality-and-maintenance.md) | User-facing overview of automated checks, Docker rebuilds, dependency maintenance, runtime safety design, and limitations. |
-| Release quality status | [release-quality-status.md](release-quality-status.md) | RC validation status, quality snapshot graphic, test summary, caveats, and stable-release checklist. |
 | Architecture | [architecture.md](architecture.md) | Project structure and runtime component boundaries. |
 | Observed firmware behavior | [observed-firmware-no-energy-path.md](observed-firmware-no-energy-path.md) | Observed Zendure behavior when no energy path is available. |
 
