@@ -237,13 +237,17 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
 .shell.view-diagnose > .devices-section,
 .shell.view-diagnose > .chart-panel,
 .shell.view-logs > .devices-section,
-.shell.view-logs > .chart-panel { display: none; }
+.shell.view-logs > .chart-panel,
+.shell.view-maintenance > .devices-section,
+.shell.view-maintenance > .chart-panel { display: none; }
 .shell.view-diagnose .flow-panel > .section-heading > h2,
-.shell.view-logs .flow-panel > .section-heading > h2 { display: none; }
+.shell.view-logs .flow-panel > .section-heading > h2,
+.shell.view-maintenance .flow-panel > .section-heading > h2 { display: none; }
 /* With the heading hidden the flex row loses its space-between anchor, so keep
    the tab bar right-aligned. */
 .shell.view-diagnose .flow-panel > .section-heading,
-.shell.view-logs .flow-panel > .section-heading { justify-content: flex-end; }
+.shell.view-logs .flow-panel > .section-heading,
+.shell.view-maintenance .flow-panel > .section-heading { justify-content: flex-end; }
 .section-heading { position: relative; justify-content: space-between; gap: 10px; margin-bottom: 7px; }
 .flow-wrap {
   position: relative; overflow: hidden; min-height: 242px; border: 1px solid rgba(148,163,184,.12); border-radius: 18px;
@@ -842,7 +846,11 @@ h2 { display: inline-flex; align-items: center; gap: 7px; }
 .flow-wrap.view-logs #flowSvg,
 .flow-wrap.view-logs .device-flow-view,
 .flow-wrap.view-logs .control-explain-view,
-.flow-wrap.view-logs .energy-stats-view { display: none !important; }
+.flow-wrap.view-logs .energy-stats-view,
+.flow-wrap.view-maintenance #flowSvg,
+.flow-wrap.view-maintenance .device-flow-view,
+.flow-wrap.view-maintenance .control-explain-view,
+.flow-wrap.view-maintenance .energy-stats-view { display: none !important; }
 .flow-wrap.view-devices .device-flow-view { display: block !important; }
 .flow-wrap.view-control .control-explain-view { display: block !important; }
 .flow-wrap.view-energy .energy-stats-view { display: block !important; }
@@ -2109,3 +2117,240 @@ select optgroup {
 .logs-row.log-info .logs-level { color: var(--accent2); }
 .logs-row.log-warning .logs-level { color: #ffd166; }
 .logs-row.log-error .logs-level { color: var(--danger); }
+
+/* Maintenance view: Control/Energy stage style, guided operator workflow. */
+.maintenance-view { position: relative; z-index: 1; padding: 4px 2px; }
+.maintenance-heading h2 { margin: 0; }
+.maintenance-heading p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+.maintenance-status { margin: 8px 0; color: var(--muted); font-size: 12px; min-height: 16px; }
+.maintenance-results { display: flex; flex-direction: column; gap: 10px; }
+.maintenance-empty {
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(148,163,184,.04);
+  color: var(--muted);
+  font-size: 13px;
+}
+.maintenance-empty.compact { padding: 10px; font-size: 12px; }
+
+/* Flat card chrome (no large radial gradients) so stage 01 reads cleanly. */
+.maintenance-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: rgba(8, 20, 32, .55);
+}
+.maintenance-stage-head { display: flex; align-items: center; gap: 10px; }
+.maintenance-stage-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 7px;
+  border: 1px solid rgba(34,211,238,.30);
+  background: rgba(34,211,238,.07);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .08em;
+}
+.maintenance-stage-headings { display: flex; flex-direction: column; gap: 1px; }
+.maintenance-stage-title { margin: 0; font-size: 14px; font-weight: 700; color: var(--text); }
+.maintenance-stage-subtitle { font-size: 11px; color: var(--muted); }
+.maintenance-stage-body { display: flex; flex-direction: column; gap: 10px; }
+
+.maintenance-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+.maintenance-fact {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(148,163,184,.05);
+}
+.maintenance-fact-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.maintenance-fact strong { font-size: 13px; color: var(--text); overflow-wrap: anywhere; }
+
+/* Compact, side-by-side action buttons (not full-width column cells). */
+.maintenance-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.maintenance-actions .primary-button.compact.maintenance-action {
+  width: auto;
+  min-width: 0;
+  min-height: 34px;
+  height: 34px;
+  margin-top: 0;
+  padding: 0 14px;
+  flex: 0 0 auto;
+  justify-self: auto;
+  align-self: auto;
+  font-size: 12px;
+}
+.maintenance-action.maintenance-mini { min-height: 26px; height: 26px; padding: 0 10px; font-size: 11px; }
+.maintenance-action.maintenance-danger { border-color: rgba(248,113,113,.5); }
+
+.maintenance-warning {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,209,102,.32);
+  background: rgba(255,209,102,.08);
+  color: var(--text);
+  font-size: 12px;
+}
+.maintenance-note { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.maintenance-legend { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); line-height: 1.45; }
+.maintenance-legend strong { color: var(--text); font-weight: 600; }
+.maintenance-upgrade-summary { color: var(--text); font-size: 13px; font-weight: 600; }
+.maintenance-upgrade-plan { display: flex; flex-direction: column; gap: 8px; }
+.maintenance-upgrade-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(148,163,184,.05);
+}
+.maintenance-upgrade-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.maintenance-upgrade-row code { color: var(--text); }
+
+.maintenance-restore-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+.maintenance-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.maintenance-field select,
+.maintenance-field input {
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(8,20,32,.6);
+  color: var(--text);
+  font-size: 13px;
+}
+.maintenance-plan-area:empty { display: none; }
+.maintenance-plan {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(148,163,184,.04);
+}
+.maintenance-plan-summary { font-size: 12px; font-weight: 700; color: var(--text); }
+.maintenance-plan-actions { display: flex; flex-direction: column; gap: 2px; }
+.maintenance-plan-row {
+  display: grid;
+  grid-template-columns: minmax(0, 160px) minmax(0, 1fr);
+  gap: 8px;
+  font-size: 12px;
+}
+.maintenance-plan-action { color: var(--accent2); font-weight: 600; overflow-wrap: anywhere; }
+.maintenance-plan-path { color: var(--muted); overflow-wrap: anywhere; }
+.maintenance-detail:empty { display: none; }
+.maintenance-detail-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(148,163,184,.04);
+}
+.maintenance-detail-head { font-size: 12px; font-weight: 700; color: var(--text); overflow-wrap: anywhere; }
+.maintenance-detail-subhead {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.maintenance-file-list { display: flex; flex-direction: column; gap: 2px; }
+.maintenance-file-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 7px;
+  background: rgba(148,163,184,.05);
+  font-size: 12px;
+}
+.maintenance-file-path { color: var(--text); overflow-wrap: anywhere; font-family: var(--mono, ui-monospace, monospace); }
+.maintenance-file-kind { color: var(--muted); white-space: nowrap; }
+.maintenance-file-badges { display: flex; gap: 4px; }
+.maintenance-badge {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 999px;
+}
+.badge-secret { color: #fecaca; background: rgba(248,113,113,.16); border: 1px solid rgba(248,113,113,.4); }
+.badge-privacy { color: #fde68a; background: rgba(255,209,102,.14); border: 1px solid rgba(255,209,102,.4); }
+
+.maintenance-backup-list { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.maintenance-backup-row {
+  display: grid;
+  grid-template-columns:
+    minmax(0, 2.4fr)
+    repeat(5, minmax(0, 1fr))
+    minmax(76px, .75fr);
+  gap: 6px;
+  align-items: center;
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: rgba(148,163,184,.04);
+}
+.maintenance-backup-head {
+  text-align: left;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  background: transparent;
+}
+.maintenance-backup-head > span {
+  width: 100%;
+  justify-self: start;
+  text-align: left;
+}
+.maintenance-backup-name { overflow-wrap: anywhere; color: var(--text); }
+.maintenance-backup-meta { color: var(--muted); overflow-wrap: anywhere; }
+
+/* The Maintenance view is not a live-monitoring screen: also hide the top live
+   metrics strip (the flow chart + heading are hidden with the diagnose/logs
+   group above). */
+.shell.view-maintenance .metrics-grid { display: none; }
+
+@media (max-width: 720px) {
+  .maintenance-backup-row { grid-template-columns: 1fr 1fr auto; }
+  .maintenance-backup-head { display: none; }
+}
