@@ -98,6 +98,64 @@ deployments (raw by default for authenticated operators).
 
 ![Dashboard Logs tab screenshot](assets/preview-logs.jpg)
 
+## Maintenance View
+
+The Maintenance tab exposes the v0.6.0 operator maintenance tools (backup,
+restore and config upgrade) so a Docker-first user never has to drop to a
+terminal. It uses the Control/Energy stage style with five numbered stage
+cards: **01 Maintenance Status**, **02 Backup**, **03 Restore**, **04 Config
+Upgrade**, **05 Safety Notes**. The Maintenance view hides the live-flow chrome
+(the top live metrics strip and the "Live Flow" heading) because it is not a
+live-monitoring screen.
+
+It is **operator-only** behind an authenticated session. The read endpoints
+(`status`, `backups`, `config-upgrade`) require a valid session; every
+create/inspect/restore/apply action is a write action (session + CSRF token)
+and is disabled until authenticated. Action buttons are also disabled while a
+maintenance action is running, and a server-side single-flight lock prevents
+concurrent backup/restore/upgrade operations.
+
+What it can do:
+
+- **Create backups** (`config`, `databases`, and bundled `influxdb`) while the
+  EMS keeps running. The GUI creates **unencrypted** local archives; the UI
+  warns that backups may contain secrets and private energy data and should be
+  downloaded/stored safely. Bundled InfluxDB uses the same runner as the CLI;
+  if InfluxDB is disabled or external, the card shows a clean unavailable state
+  instead of failing.
+- **List and inspect backups** from the project backup directory only
+  (`ems-*.tar.gz` / `.enc`). Inspect is a `POST` so an encrypted backup's
+  password can travel in the body, never the URL. The current Details action
+  does not request a password, so encrypted contents stay locked there; use
+  Restore preview or `emsctl` inspect with the password instead. Manifest
+  summaries are sanitized (no file checksums).
+- **Restore** config, local SQLite databases and bundled InfluxDB backups with
+  a deliberate two-step flow: **select a backup → preview (dry-run) → confirm**.
+  Restore wraps the same `ems.backup` core as `emsctl.py backup restore`. Every
+  restore creates a rollback backup first (and refuses to start if the rollback
+  fails), validates checksums, and uses non-interactive replace semantics only
+  after explicit confirmation. Config restore reports that a restart and
+  re-login may be required; database restore is coordinated with the dashboard
+  store so SQLite files are not swapped mid-write; bundled InfluxDB restore is
+  replace-style and external InfluxDB is rejected.
+- **Preview and apply a config upgrade**. Before applying, the preview shows the
+  concrete added keys, migrated values, new explanatory comments,
+  refreshable/outdated comments, and format/layout changes. Sensitive values
+  are redacted. Apply requires explicit confirmation, always creates a config
+  backup first, and reminds the operator to restart EMS and re-login if needed.
+
+Encrypted-backup passwords are read from the input only at request time and
+cleared from the field after the request; they are never stored in browser
+state or rendered back into the page.
+
+![Dashboard Maintenance tab screenshot](assets/preview-maintenance.jpg)
+
+What it intentionally does **not** do: EMS version downgrade, image switching,
+or container start/stop/restart. Downgrade is modelled as restore from a backup
+that records the previous EMS version, not as picking an older image — use the
+CLI for controlled offline operations. The canonical restore command remains
+`python3 emsctl.py backup restore <archive>`.
+
 ## Local Preview (No Hardware)
 
 For local UI development you can run the dashboard with deterministic, synthetic,
@@ -113,9 +171,10 @@ python3 scripts/serve_dashboard_preview.py --scenario write-mode
 It serves the real dashboard assets on `http://127.0.0.1:8767`. Open the landing
 page at `http://127.0.0.1:8767/preview` for links to every view, or go straight to
 a view (`/preview/aggregated`, `/preview/devices`, `/preview/control`,
-`/preview/energy`, `/preview/diagnose`, `/preview/logs`). Scenarios cover a healthy
-system, mixed firmware-status values (including unknown values), an offline device,
-and read-only/write-mode authentication states. See
+`/preview/energy`, `/preview/diagnose`, `/preview/logs`,
+`/preview/maintenance`). Scenarios cover a healthy system, mixed firmware-status
+values (including unknown values), an offline device, and read-only/write-mode
+authentication states. See
 [developer.md](developer.md#local-dashboard-preview) for details.
 
 ## Configuration
@@ -574,6 +633,45 @@ POST /api/logs/level   body {"level": "DEBUG|INFO|WARNING|ERROR|CRITICAL"}
 `/api/logs` returns `{lines, cursor, dropped}`; pass the returned `cursor` as the
 next `after` for incremental polling. `dropped` is `true` when the ring buffer
 rolled past the caller's cursor.
+
+Operator-only maintenance (backup, restore, config upgrade). The `GET` read
+endpoints require an authenticated session (no CSRF, side-effect-free); every
+`POST` is a write action and requires session + `X-CSRF-Token` (inspect and
+restore-plan are `POST` so an encrypted backup's password can travel in the body
+instead of the URL):
+
+```text
+GET  /api/maintenance/status
+GET  /api/maintenance/backups
+GET  /api/maintenance/config-upgrade
+POST /api/maintenance/backups/create         body {"type": "config|databases|influxdb"}
+POST /api/maintenance/backups/inspect        body {"file": "...", "password": null}
+POST /api/maintenance/backups/restore-plan   body {"file": "...", "password": null}
+POST /api/maintenance/backups/restore        body {"file": "...", "password": null,
+                                                   "confirm_preview": true,
+                                                   "confirm_restore": true,
+                                                   "confirm_replace": true}
+POST /api/maintenance/config-upgrade/apply   body {
+                                                   "plan_id": "<plan id from GET /api/maintenance/config-upgrade>",
+                                                   "refresh_comments": true,
+                                                   "confirm_apply": true
+                                                 }
+```
+
+All file parameters are basenames and reject path traversal (`/`, `\`, `..`,
+absolute paths, or names outside the backup directory). Encrypted backups
+without a password are reported as `encrypted=true`/`manifest_available=false`.
+`restore-plan` returns a dry-run action list and writes nothing; `restore`
+creates a rollback backup first (refusing to start if that fails), then restores
+with replace semantics and returns the rollback path plus restart/re-login
+hints. `config-upgrade` redacts suspicious values. Its latest preview response
+provides the `plan_id` required by `config-upgrade/apply`; apply fails when that
+plan is stale or no longer matches the current config/template state. Refresh
+the preview before trying again. Apply also requires `confirm_apply` and always
+creates a config backup before writing.
+Restore wraps the same `ems.backup` core as `emsctl.py backup restore`; EMS
+version downgrade and container controls are intentionally not exposed — see the
+Maintenance View section.
 
 ## Session Lifetime
 

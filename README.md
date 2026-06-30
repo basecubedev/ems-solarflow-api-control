@@ -2,7 +2,7 @@
 
 [![Continuous Integration](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/simulated-regression-tests.yml/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/simulated-regression-tests.yml)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.14-blue)
-![automated tests](https://img.shields.io/badge/automated%20tests-1000%2B-blue)
+![automated tests](https://img.shields.io/badge/automated%20tests-1200%2B-blue)
 
 Local-first EMS (Energy Management System) control for Zendure SolarFlow
 systems. It reads local meter and device telemetry, controls inverter output,
@@ -321,11 +321,13 @@ dry-run commands in the native setup guide. Detailed safety model:
     <th>Analytics (InfluxDB)</th>
     <th>Diagnose</th>
     <th>Logs</th>
+    <th>Maintenance</th>
   </tr>
   <tr>
-    <td width="33%"><img src="docs/assets/preview-analytics.jpg" alt="Dashboard Analytics tab backed by InfluxDB" width="100%"></td>
-    <td width="33%"><img src="docs/assets/preview-diagnose.jpg" alt="Dashboard Diagnose tab" width="100%"></td>
-    <td width="33%"><img src="docs/assets/preview-logs.jpg" alt="Dashboard Logs tab" width="100%"></td>
+    <td width="25%"><img src="docs/assets/preview-analytics.jpg" alt="Dashboard Analytics tab backed by InfluxDB" width="100%"></td>
+    <td width="25%"><img src="docs/assets/preview-diagnose.jpg" alt="Dashboard Diagnose tab" width="100%"></td>
+    <td width="25%"><img src="docs/assets/preview-logs.jpg" alt="Dashboard Logs tab" width="100%"></td>
+    <td width="25%"><img src="docs/assets/preview-maintenance.jpg" alt="Dashboard Maintenance tab" width="100%"></td>
   </tr>
 </table>
 
