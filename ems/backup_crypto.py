@@ -150,13 +150,82 @@ def _chunk_aad(algorithm, index, final):
     ))
 
 
-def is_encrypted_backup(path):
+def _validated_existing_file_path(path, allowed_root=None):
+    """Return a canonical, existing regular-file path."""
+
+    if not isinstance(path, (str, os.PathLike)):
+        raise BackupFormatError("invalid backup path")
+    try:
+        path = os.fspath(path)
+    except TypeError as exc:
+        raise BackupFormatError("invalid backup path") from exc
+    if not isinstance(path, str) or not path or "\x00" in path:
+        raise BackupFormatError("invalid backup path")
+    if os.path.islink(path):
+        raise BackupFormatError("backup path must not be a symlink")
+
+    path = os.path.realpath(path)
+    if allowed_root is not None:
+        if not isinstance(allowed_root, (str, os.PathLike)):
+            raise BackupFormatError("invalid allowed backup directory")
+        try:
+            allowed_root = os.fspath(allowed_root)
+        except TypeError as exc:
+            raise BackupFormatError("invalid allowed backup directory") from exc
+        if (
+            not isinstance(allowed_root, str)
+            or not allowed_root
+            or "\x00" in allowed_root
+            or os.path.islink(allowed_root)
+        ):
+            raise BackupFormatError("invalid allowed backup directory")
+        allowed_root = os.path.realpath(allowed_root)
+        if not os.path.isdir(allowed_root):
+            raise BackupFormatError("allowed backup directory not found")
+        try:
+            inside_allowed_root = (
+                os.path.commonpath([allowed_root, path]) == allowed_root
+            )
+        except ValueError:
+            inside_allowed_root = False
+        if not inside_allowed_root:
+            raise BackupFormatError("backup path is outside allowed directory")
+
+    if not os.path.isfile(path):
+        raise BackupFormatError(f"backup file not found: {path}")
+    return path
+
+
+def _validated_temp_dir(temp_dir):
+    if temp_dir is None:
+        return None
+    if not isinstance(temp_dir, (str, os.PathLike)):
+        raise BackupFormatError("invalid temporary directory")
+    try:
+        temp_dir = os.fspath(temp_dir)
+    except TypeError as exc:
+        raise BackupFormatError("invalid temporary directory") from exc
+    if (
+        not isinstance(temp_dir, str)
+        or not temp_dir
+        or "\x00" in temp_dir
+        or os.path.islink(temp_dir)
+    ):
+        raise BackupFormatError("invalid temporary directory")
+    temp_dir = os.path.realpath(temp_dir)
+    if not os.path.isdir(temp_dir):
+        raise BackupFormatError("temporary directory not found")
+    return temp_dir
+
+
+def is_encrypted_backup(path, allowed_root=None):
     """Return True when ``path`` is an EMS encrypted-backup envelope."""
 
     try:
+        path = _validated_existing_file_path(path, allowed_root=allowed_root)
         with open(path, "rb") as handle:
             return handle.read(len(MAGIC)) == MAGIC
-    except OSError:
+    except (BackupFormatError, OSError):
         return False
 
 
@@ -234,7 +303,9 @@ def _read_exact(handle, count):
     return data
 
 
-def decrypt_file_to_temp(encrypted_path, password, temp_dir=None):
+def decrypt_file_to_temp(
+    encrypted_path, password, temp_dir=None, allowed_root=None
+):
     """Decrypt ``encrypted_path`` to a temp ``.tar.gz`` file and return its path.
 
     Auto-detects the streaming (version 2) and legacy Fernet (version 1)
@@ -243,6 +314,10 @@ def decrypt_file_to_temp(encrypted_path, password, temp_dir=None):
     caller is responsible for deleting the returned temp file.
     """
 
+    encrypted_path = _validated_existing_file_path(
+        encrypted_path, allowed_root=allowed_root
+    )
+    temp_dir = _validated_temp_dir(temp_dir)
     with open(encrypted_path, "rb") as handle:
         if handle.read(len(MAGIC)) != MAGIC:
             raise BackupFormatError("not an EMS encrypted backup")
