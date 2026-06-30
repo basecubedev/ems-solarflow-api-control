@@ -16,6 +16,7 @@ if SCRIPTS_DIR not in sys.path:
 import serve_dashboard_preview  # noqa: E402
 from dashboard_preview_data import FLOW_VIEWS, SCENARIOS, build_scenario  # noqa: E402
 from serve_dashboard_preview import (  # noqa: E402
+    DEFAULT_CAPTURE_VIEWS,
     normalize_views,
     parse_args,
     resolve_scenario,
@@ -135,6 +136,20 @@ def test_api_logs_returns_lines(preview_server):
     assert payload["lines"]
     first = payload["lines"][0]
     assert {"seq", "ts", "level", "message"} <= set(first)
+
+
+def test_maintenance_preview_uses_current_upgrade_contract(preview_server):
+    _, base = preview_server("write-mode")
+    payload = _get_json(base, "/api/maintenance/config-upgrade")
+    assert payload["apply_available"] is True
+    assert payload["plan_id"]
+    assert {"add", "migrate", "comment_add", "comment_refresh"} <= {
+        item["kind"] for item in payload["items"]
+    }
+
+    with _get(base, "/preview/maintenance") as response:
+        html = response.read().decode("utf-8")
+    assert "setFlowView('maintenance',false)" in html
 
 
 def test_auth_status_changes_with_scenario(preview_server):
@@ -280,10 +295,13 @@ def test_capture_mode_uses_write_mode_by_default(tmp_path, monkeypatch, capsys):
     import capture_dashboard_previews as capture
 
     monkeypatch.setattr(capture, "capture_assets", fake_capture_assets)
-    serve_dashboard_preview.main(["--capture", "--output-dir", str(tmp_path)])
+    serve_dashboard_preview.main(
+        ["--capture", "--port", "0", "--output-dir", str(tmp_path)]
+    )
 
     assert captured["scenario"] == "write-mode"
     assert captured["views"] is None  # default capture views resolved downstream
+    assert "maintenance" in DEFAULT_CAPTURE_VIEWS
     assert "Captured preview screenshots:" in capsys.readouterr().out
 
 

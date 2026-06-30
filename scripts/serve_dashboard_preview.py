@@ -20,6 +20,7 @@ Open, for example:
     http://127.0.0.1:8767/preview/energy
     http://127.0.0.1:8767/preview/diagnose
     http://127.0.0.1:8767/preview/logs
+    http://127.0.0.1:8767/preview/maintenance
 
 Safety: the preview never contacts real Zendure/Shelly/MQTT/InfluxDB/Home
 Assistant endpoints, never reads secrets from config.json, and never writes
@@ -67,6 +68,7 @@ DEFAULT_CAPTURE_VIEWS = (
     "energy",
     "diagnose",
     "logs",
+    "maintenance",
 )
 SAFE_RESPONSE_CONTENT_TYPES = {
     "application/json; charset=utf-8",
@@ -198,6 +200,143 @@ def _landing_page(scenario):
 """
 
 
+# Synthetic Maintenance-tab data. Mirrors the sanitized shapes the real
+# /api/maintenance/* endpoints return so the tab renders fully in the preview.
+PREVIEW_MAINTENANCE = {
+    "status": {
+        "config_path": "config/config.json",
+        "backup_dir": "data/backups",
+        "backup_types": ["config", "databases", "influxdb"],
+        "influxdb": {
+            "enabled": True,
+            "mode": "bundled",
+            "backup_supported": True,
+            "restore_supported": True,
+        },
+        "restore_available_in_dashboard": True,
+    },
+    "backups": [
+        {
+            "name": "ems-config-manual-2026-06-29-201500.tar.gz",
+            "size_bytes": 12456,
+            "modified_at": "2026-06-29T20:15:00Z",
+            "encrypted": False,
+            "manifest_available": True,
+            "backup_type": "config",
+            "backup_purpose": "manual",
+            "ems_version": "0.6.0",
+        },
+        {
+            "name": "ems-databases-manual-2026-06-28-093000.tar.gz",
+            "size_bytes": 384122,
+            "modified_at": "2026-06-28T09:30:00Z",
+            "encrypted": False,
+            "manifest_available": True,
+            "backup_type": "databases",
+            "backup_purpose": "manual",
+            "ems_version": "0.6.0",
+        },
+        {
+            "name": "ems-config-manual-2026-06-20-070000.tar.gz.enc",
+            "size_bytes": 12992,
+            "modified_at": "2026-06-20T07:00:00Z",
+            "encrypted": True,
+            "manifest_available": False,
+            "backup_type": "config",
+            "backup_purpose": "manual",
+            "ems_version": None,
+        },
+    ],
+    # Per-type manifests so Details is consistent with each row's backup type
+    # (a database backup must not show config files, etc.).
+    "manifests": {
+        "config": {
+            "backup_type": "config",
+            "backup_purpose": "manual",
+            "backup_format": 1,
+            "created_at": "2026-06-29T20:15:00Z",
+            "ems_version": "0.6.0",
+            "git_commit_short": "b87add4324ea",
+            "git_branch": "main",
+            "encrypted": False,
+            "encryption_method": None,
+            "rollback_for": None,
+            "skipped_count": 0,
+            "files": [
+                {"path": "config.json", "kind": "config", "sensitive": True},
+                {"path": "runtime-state.json", "kind": "runtime_state", "sensitive": False},
+                {"path": "dashboard-auth.json", "kind": "dashboard_auth", "sensitive": True},
+            ],
+        },
+        "databases": {
+            "backup_type": "databases",
+            "backup_purpose": "manual",
+            "backup_format": 1,
+            "created_at": "2026-06-28T09:30:00Z",
+            "ems_version": "0.6.0",
+            "git_commit_short": "b87add4324ea",
+            "git_branch": "main",
+            "encrypted": False,
+            "encryption_method": None,
+            "rollback_for": None,
+            "skipped_count": 0,
+            "files": [
+                {"path": "data/ems_dashboard.sqlite", "kind": "sqlite",
+                 "sensitive": False, "privacy_relevant": True},
+                {"path": "data/ems_state.sqlite", "kind": "sqlite",
+                 "sensitive": False, "privacy_relevant": True},
+            ],
+        },
+        "influxdb": {
+            "backup_type": "influxdb",
+            "backup_purpose": "manual",
+            "backup_format": 1,
+            "created_at": "2026-06-27T06:00:00Z",
+            "ems_version": "0.6.0",
+            "git_commit_short": "b87add4324ea",
+            "git_branch": "main",
+            "encrypted": False,
+            "encryption_method": None,
+            "rollback_for": None,
+            "skipped_count": 0,
+            "files": [
+                {"path": "influxdb/20260627T060000Z.bolt", "kind": "influxdb",
+                 "sensitive": False, "privacy_relevant": True},
+                {"path": "influxdb/20260627T060000Z.sqlite", "kind": "influxdb",
+                 "sensitive": False, "privacy_relevant": True},
+            ],
+        },
+    },
+    "config_upgrade": {
+        "changed": True,
+        "apply_available": True,
+        "plan_id": "preview-config-upgrade-plan",
+        "format_changed": True,
+        "add_count": 3,
+        "comment_add_count": 4,
+        "comment_refresh_count": 21,
+        "migration_count": 1,
+        "template": "config.template.json",
+        "items": [
+            {"kind": "add", "path": "config_upgrade.on_startup", "value": "check"},
+            {"kind": "add", "path": "dashboard.session_idle_timeout_seconds", "value": 1800},
+            {"kind": "add", "path": "ha.token", "value": "<redacted>"},
+            {
+                "kind": "migrate",
+                "path": "config_schema_version",
+                "old_value": 2,
+                "value": 3,
+            },
+            {"kind": "comment_add", "path": "config_upgrade._comment"},
+            {"kind": "comment_add", "path": "dashboard._comment"},
+            {"kind": "comment_refresh", "path": "system._comment"},
+            {"kind": "comment_refresh", "path": "devices[0]._comment_soc"},
+        ],
+        "requires_restart": True,
+    },
+}
+
+
 class PreviewServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -266,6 +405,15 @@ class PreviewHandler(BaseHTTPRequestHandler):
         if path == "/api/logs":
             self._send_logs(parsed.query)
             return
+        if path == "/api/maintenance/status":
+            self._send_json(PREVIEW_MAINTENANCE["status"])
+            return
+        if path == "/api/maintenance/backups":
+            self._send_json({"items": PREVIEW_MAINTENANCE["backups"]})
+            return
+        if path == "/api/maintenance/config-upgrade":
+            self._send_json(PREVIEW_MAINTENANCE["config_upgrade"])
+            return
 
         self._send_static(path)
 
@@ -333,12 +481,42 @@ class PreviewHandler(BaseHTTPRequestHandler):
             "meta": {"point_count": len(time_axis)},
         }
 
+    def _maintenance_inspect(self, body):
+        name = (body or {}).get("file") or ""
+        password = (body or {}).get("password")
+        match = next(
+            (b for b in PREVIEW_MAINTENANCE["backups"] if b["name"] == name), None
+        )
+        if match and match.get("encrypted") and not password:
+            return {"name": name, "encrypted": True, "manifest_available": False}
+        backup_type = (match or {}).get("backup_type", "config")
+        manifest = PREVIEW_MAINTENANCE["manifests"].get(
+            backup_type, PREVIEW_MAINTENANCE["manifests"]["config"]
+        )
+        return {
+            "name": name or "ems-config-manual-2026-06-29-201500.tar.gz",
+            "encrypted": bool(match and match.get("encrypted")),
+            "manifest_available": True,
+            "manifest": manifest,
+        }
+
+    def _read_json_body(self):
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        if length <= 0:
+            return {}
+        try:
+            raw = self.rfile.read(length)
+            data = json.loads(raw.decode("utf-8"))
+            return data if isinstance(data, dict) else {}
+        except (ValueError, BrokenPipeError, ConnectionResetError):
+            return {}
+
     def _handle_write(self):
         """Preview-only write handler: never mutates disk, config, or devices."""
 
         parsed = urlparse(self.path)
         path = parsed.path
-        self._drain_body()
+        body = self._read_json_body()
 
         if path == "/api/auth/login":
             # Let reviewers exercise the write UI without a real password.
@@ -350,6 +528,75 @@ class PreviewHandler(BaseHTTPRequestHandler):
             return
         if path in ("/api/auth/logout", "/api/auth/refresh"):
             self._send_json({"ok": True})
+            return
+        if path == "/api/maintenance/backups/create":
+            # Preview-only: report a created backup without writing anything.
+            self._send_json({
+                "created": True,
+                "backup": {
+                    "name": "ems-config-manual-2026-06-30-120000.tar.gz",
+                    "path": "data/backups/ems-config-manual-2026-06-30-120000.tar.gz",
+                    "backup_type": "config",
+                },
+            })
+            return
+        if path == "/api/maintenance/backups/inspect":
+            self._send_json(self._maintenance_inspect(body))
+            return
+        if path == "/api/maintenance/backups/restore-plan":
+            self._send_json({
+                "file": (body.get("file") if isinstance(body, dict) else None)
+                or "ems-config-manual-2026-06-29-201500.tar.gz",
+                "backup_type": "config",
+                "encrypted": False,
+                "actions": [
+                    {"path": "config/config.json", "action": "would_replace_conflict", "status": "conflict"},
+                    {"path": "runtime-state.json", "action": "would_skip_identical", "status": "identical"},
+                ],
+                "requires_restart": True,
+                "requires_relogin": True,
+                "warnings": [
+                    "Config restore changes files on disk. Restart EMS for "
+                    "restored settings to take effect.",
+                ],
+            })
+            return
+        if path == "/api/maintenance/backups/restore":
+            self._send_json({
+                "restored": True,
+                "backup_type": "config",
+                "rollback_backup": "data/backups/ems-config-rollback-2026-06-30-120000.tar.gz",
+                "actions": [
+                    {"path": "config/config.json", "action": "restored", "status": "conflict"},
+                ],
+                "requires_restart": True,
+                "requires_relogin": True,
+                "message": (
+                    "Restore completed (preview only — nothing was written). "
+                    "Restart EMS for restored settings to take effect."
+                ),
+            })
+            return
+        if path == "/api/maintenance/config-upgrade/apply":
+            self._send_json({
+                "changed": True,
+                "backup": "data/backups/ems-config-manual-2026-06-30-120000.tar.gz",
+                "backup_name": "ems-config-manual-2026-06-30-120000.tar.gz",
+                "requires_restart": True,
+                "requires_relogin": False,
+                "applied": {
+                    "keys_added": 3,
+                    "values_migrated": 1,
+                    "comments_added": 4,
+                    "comments_refreshed": 21,
+                    "format_changed": True,
+                },
+                "applied_count": 30,
+                "message": (
+                    "Config upgraded. Restart EMS for changed settings to take "
+                    "effect. (preview only — nothing was written)"
+                ),
+            })
             return
 
         # Runtime PATCH / log-level / other write endpoints all echo a clear
@@ -442,6 +689,15 @@ class PreviewHandler(BaseHTTPRequestHandler):
             body += (
                 f"state.logs.lines={json.dumps(self._log_lines())};"
                 "if(typeof applyLogs==='function')applyLogs();"
+            )
+        elif view == "maintenance":
+            body += (
+                f"state.maintenance.status={json.dumps(PREVIEW_MAINTENANCE['status'])};"
+                f"state.maintenance.backups={json.dumps(PREVIEW_MAINTENANCE['backups'])};"
+                "state.maintenance.configUpgrade="
+                f"{json.dumps(PREVIEW_MAINTENANCE['config_upgrade'])};"
+                "if(typeof setFlowView==='function')"
+                "setFlowView('maintenance',false);"
             )
         return (
             "\n  <script>window.addEventListener('load',function(){"
