@@ -3600,7 +3600,7 @@ def print_config_upgrade_plan(plan):
         return
 
     if not plan["changed"]:
-        print("Config keys are already up to date.")
+        print("Config values are already up to date.")
         print(f"Outdated comment entries: {comment_refresh_count}")
         return
 
@@ -3640,7 +3640,10 @@ def print_config_upgrade_plan(plan):
         print("Reformat according to config.template.json layout.")
         print()
 
-    print("No existing user values will be overwritten.")
+    if plan.get("schema_migrations"):
+        print("Only values listed under Schema migrations will be overwritten.")
+    else:
+        print("No existing user values will be overwritten.")
     print("Missing keys will be added from config.template.json.")
     print("Review live-write settings before restarting EMS.")
 
