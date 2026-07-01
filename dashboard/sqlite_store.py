@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
+import contextlib
 import json
 import os
 import sqlite3
@@ -226,6 +227,19 @@ class DashboardStore:
         self._latest = json.loads(row[0])
         self._latest["energy_stats"] = self.energy_summary()
         return self._latest
+
+    @contextlib.contextmanager
+    def maintenance_pause(self):
+        """Hold the store lock and drop cached state for a DB file swap.
+
+        Used by the maintenance restore path so no record()/latest() runs (and
+        opens a connection) while the SQLite file is being replaced. The cached
+        ``latest`` snapshot is cleared so the next read re-opens the restored DB.
+        """
+        with self._lock:
+            self._latest = None
+            yield
+            self._latest = None
 
     def history(self, range_name="6h"):
         delta = SUPPORTED_RANGES.get(range_name, SUPPORTED_RANGES["6h"])

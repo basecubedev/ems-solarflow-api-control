@@ -30,6 +30,7 @@ FLOW_VIEWS = (
     "energy",
     "diagnose",
     "logs",
+    "maintenance",
 )
 
 
