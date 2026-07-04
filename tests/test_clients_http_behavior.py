@@ -12,6 +12,7 @@ from ems.clients import (
     Shelly3EMGen1Client,
     TasmotaHttpClient,
     ZendureClient,
+    ZendureSmartMeter3CTHttpClient,
     create_grid_meter_client,
     create_session,
     _parse_ecotracker_power,
@@ -19,6 +20,7 @@ from ems.clients import (
     _parse_shelly_power,
     _parse_mqtt_grid_power_payload,
     _parse_tasmota_http_power,
+    _parse_zendure_smartmeter_3ct_power,
     zendure_write,
     zendure_write_succeeded,
 )
@@ -817,6 +819,88 @@ def test_create_grid_meter_client_rejects_tasmota_http_missing_config():
     with pytest.raises(ValueError, match="requires url or ip"):
         create_grid_meter_client(
             {"type": "tasmota_http", "power_path": "StatusSNS.SML.Power_curr"},
+            SessionStub(),
+        )
+
+
+def test_parse_zendure_smartmeter_3ct_power_accepts_example_payload():
+    data = {
+        "timestamp": 1783163312,
+        "messageId": 12,
+        "deviceId": "rhRkw909",
+        "a_aprt_power": 0,
+        "b_aprt_power": 0,
+        "c_aprt_power": -798,
+        "total_power": -798,
+    }
+
+    assert _parse_zendure_smartmeter_3ct_power(data) == -798.0
+
+
+def test_parse_zendure_smartmeter_3ct_power_rejects_missing_total_power():
+    with pytest.raises(ValueError, match="missing numeric total_power"):
+        _parse_zendure_smartmeter_3ct_power({"a_aprt_power": 10})
+
+
+def test_parse_zendure_smartmeter_3ct_power_rejects_non_numeric():
+    with pytest.raises(ValueError, match="missing numeric total_power"):
+        _parse_zendure_smartmeter_3ct_power({"total_power": "-798"})
+
+
+def test_parse_zendure_smartmeter_3ct_power_rejects_boolean():
+    with pytest.raises(ValueError, match="missing numeric total_power"):
+        _parse_zendure_smartmeter_3ct_power({"total_power": True})
+
+
+def test_parse_zendure_smartmeter_3ct_power_rejects_non_object():
+    with pytest.raises(ValueError, match="expected object"):
+        _parse_zendure_smartmeter_3ct_power([{"total_power": -798}])
+
+
+def test_zendure_smartmeter_3ct_http_client_reads_report_and_preserves_last_value():
+    client = ZendureSmartMeter3CTHttpClient(
+        "192.0.2.80",
+        SessionStub(
+            get_response=ResponseStub(payload={"total_power": -798.44})
+        ),
+    )
+
+    assert client.get_power() == -798.4
+    assert client.session.calls[0][1] == "http://192.0.2.80/properties/report"
+
+    client.session = SessionStub(get_response=ValueError("offline"))
+    assert client.get_power() == -798.4
+
+
+def test_zendure_smartmeter_3ct_http_client_logs_read_error(caplog):
+    client = ZendureSmartMeter3CTHttpClient(
+        "192.0.2.80",
+        SessionStub(get_response=ResponseStub(payload={"total_power": 120.0})),
+    )
+    assert client.get_power() == 120.0
+
+    caplog.set_level(logging.WARNING)
+    client.session = SessionStub(get_response=ResponseStub(payload={"foo": 1}))
+
+    assert client.get_power() == 120.0
+    assert "event=zendure_smartmeter_3ct_http_read_error" in caplog.text
+    assert "stale_value=120.0" in caplog.text
+
+
+def test_create_grid_meter_client_supports_zendure_smartmeter_3ct_http():
+    client = create_grid_meter_client(
+        {"type": "zendure_smartmeter_3ct_http", "ip": "192.0.2.80"},
+        SessionStub(),
+    )
+    assert isinstance(client, ZendureSmartMeter3CTHttpClient)
+    assert client.ip == "192.0.2.80"
+    assert client.provider == "Zendure Smart Meter 3CT"
+
+
+def test_create_grid_meter_client_rejects_zendure_smartmeter_3ct_http_missing_ip():
+    with pytest.raises(ValueError, match="requires ip"):
+        create_grid_meter_client(
+            {"type": "zendure_smartmeter_3ct_http"},
             SessionStub(),
         )
 

@@ -921,6 +921,7 @@ def test_config_init_grid_meter_choices_are_runtime_supported():
         "shelly",
         "shelly_3em_gen1",
         "ecotracker",
+        "zendure_smartmeter_3ct_http",
         "tasmota_http",
         "zendure_smartmeter_d0",
         "mqtt",
@@ -929,7 +930,7 @@ def test_config_init_grid_meter_choices_are_runtime_supported():
 
 def test_config_init_zendure_smartmeter_d0_generates_mqtt_topic(monkeypatch):
     responses = iter([
-        "5",
+        "6",
         "mqtt.local",
         "",
         "",
@@ -958,7 +959,7 @@ def test_config_init_zendure_smartmeter_d0_generates_mqtt_topic(monkeypatch):
 
 def test_config_init_generic_mqtt_keeps_advanced_payload_flow(monkeypatch):
     responses = iter([
-        "6",
+        "7",
         "mqtt.local",
         "",
         "",
@@ -1024,7 +1025,7 @@ def test_config_init_mqtt_new_password_is_stored_without_being_printed(
     capsys,
 ):
     password = "new-super-secret-mqtt-password"
-    responses = iter(["6", "mqtt.local", "", "", "meter/grid", "", ""])
+    responses = iter(["7", "mqtt.local", "", "", "meter/grid", "", ""])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(responses))
     monkeypatch.setattr(
         config_init_mod.getpass,
