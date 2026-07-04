@@ -13,6 +13,10 @@ GRID_METER_CHOICES = (
     ("shelly", "Shelly Pro 3EM / Shelly Plus/Pro Gen2/Gen3"),
     ("shelly_3em_gen1", "Shelly 3EM Gen1"),
     ("ecotracker", "EcoTracker"),
+    (
+        config_mod.ZENDURE_SMARTMETER_3CT_HTTP_GRID_METER_TYPE,
+        "Zendure Smart Meter 3CT HTTP",
+    ),
     ("tasmota_http", "Tasmota HTTP / SmartMeter reader"),
     (
         config_mod.ZENDURE_SMARTMETER_D0_GRID_METER_TYPE,
@@ -682,6 +686,8 @@ def _meter_summary(grid_meter):
         "shelly": "Shelly",
         "shelly_3em_gen1": "Shelly 3EM Gen1",
         "ecotracker": "EcoTracker",
+        config_mod.ZENDURE_SMARTMETER_3CT_HTTP_GRID_METER_TYPE:
+            "Zendure Smart Meter 3CT HTTP",
     }.get(meter_type, meter_type)
     return f"{label} at {grid_meter.get('ip') or '(not set)'}"
 

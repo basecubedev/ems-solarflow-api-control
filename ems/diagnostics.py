@@ -847,7 +847,12 @@ def diagnose_grid_meter_config(checks, config_data):
 
     meter_type = str(grid_meter.get("type", "shelly")).strip().lower()
     diagnose_add(checks, "config", "ok", "grid_meter_type", f"Grid meter type: {meter_type}", type=meter_type)
-    if meter_type in ("shelly", "shelly_3em_gen1", "ecotracker"):
+    if meter_type in (
+        "shelly",
+        "shelly_3em_gen1",
+        "ecotracker",
+        config_mod.ZENDURE_SMARTMETER_3CT_HTTP_GRID_METER_TYPE,
+    ):
         if grid_meter.get("ip"):
             diagnose_add(checks, "config", "ok", "grid_meter_ip_present", f"{meter_type} grid meter IP is configured")
         else:

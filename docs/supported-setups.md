@@ -19,6 +19,7 @@ editing config.
 | Shelly Pro / Plus / Gen2 / Gen3 | `shelly` | Uses the RPC status endpoint. |
 | Shelly 3EM Gen1 | `shelly_3em_gen1` | Uses the classic `/status` endpoint. |
 | EcoTracker | `ecotracker` | Uses the local API path implemented by EMS. |
+| Zendure Smart Meter 3CT HTTP | `zendure_smartmeter_3ct_http` | Reads `total_power` from the local `/properties/report` REST endpoint; no MQTT required. |
 | Tasmota HTTP / SmartMeter reader | `tasmota_http` | Requires URL/IP and `power_path`. |
 | Zendure SmartMeter D0 (MQTT) | `zendure_smartmeter_d0` | Subscribes to an existing broker topic such as `Zendure/sensor/<SERIAL>/totalPower`; positive import, negative export. |
 | Generic MQTT grid meter | `mqtt` | Requires an existing broker, one topic, and a numeric or JSON power payload. |
