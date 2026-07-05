@@ -20,6 +20,19 @@ def _read(name):
         return handle.read()
 
 
+def test_admin_js_has_valid_syntax_when_node_is_available():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not available")
+    result = subprocess.run(
+        [node, "--check", os.path.join(STATIC_DIR, "admin.js")],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_index_has_cidr_input():
     html = _read("index.html")
     assert 'id="cidr-input"' in html

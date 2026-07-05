@@ -43,6 +43,11 @@ references still live in `data/backups/`. The status stage warns if the backup
 directory is outside the install root or if archives are locked (encrypted) or
 invalid.
 
+The backup directory is inside the EMS install root — this keeps archived paths
+resolvable, but it does not put backups out of harm's way. By default backups
+live under `data/backups/`. If you manually delete `data/`, you also delete
+local backups. Export important backups before a manual reset.
+
 ## What the Admin Console can restore
 
 Admin Console restore currently supports **config** and **database** archives.

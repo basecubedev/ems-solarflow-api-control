@@ -61,7 +61,7 @@ def validate_cidr(raw_cidr):
 
     Only private, link-local, or loopback ranges are allowed, and the host count
     is capped (``MAX_HOSTS``). Public internet ranges are rejected; there is no
-    unsafe override in this MVP.
+    unsafe override.
     """
 
     if not isinstance(raw_cidr, str) or not raw_cidr.strip():

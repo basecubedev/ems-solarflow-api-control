@@ -164,6 +164,9 @@ class BackupEnv:
 
     @property
     def safe_location(self):
+        # True only means the backup directory is inside the EMS install root, so
+        # archived paths stay resolvable. It does NOT mean the backups survive a
+        # manual reset: deleting data/ deletes local backups too (export first).
         base = os.path.abspath(self.base_dir)
         backup = os.path.abspath(self.backup_dir)
         return backup == base or backup.startswith(base + os.sep)

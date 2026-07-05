@@ -92,9 +92,9 @@ class MqttBrokerCandidate:
 def future_active_device(device):
     """Preview shape for a future promoted "active device" entry.
 
-    This is planning-only: it is never written into the real EMS config in the
-    MVP. Kept here so the result model is demonstrably promotable later without
-    reshaping discovery output.
+    This is planning-only: it is never written into the real EMS config. Kept
+    here so the result model is demonstrably promotable later without reshaping
+    discovery output.
     """
 
     return {

@@ -8,7 +8,7 @@ Short answers, grouped so you can scan. For detail, follow the links.
 
 The Admin Console (product name **EMS SolarFlow Admin**) is a local browser tool
 for setup, device discovery, maintenance, updates and backups. EMS still owns the
-control logic. See [admin.md](admin-console.md).
+control logic. See [Admin Console](admin-console.md).
 
 ### Do I have to use the Admin Console?
 

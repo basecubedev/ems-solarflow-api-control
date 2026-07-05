@@ -1,9 +1,9 @@
 # EMS SolarFlow Admin Console Technical Reference
 
 This is the technical reference for the Admin Console. For a short user overview, see
-[admin.md](../user/admin-console.md); for the two guided flows, see
-[setup/admin-setup.md](../user/admin-setup.md) (Set up a new system) and
-[setup/admin-maintenance.md](../user/admin-maintenance.md) (Manage my existing
+[Admin Console](../user/admin-console.md); for the two guided flows, see
+[Admin setup](../user/admin-setup.md) (Set up a new system) and
+[Admin maintenance](../user/admin-maintenance.md) (Manage my existing
 system). This page documents the internals: the setup wizard, release and
 build-identity gating, network discovery, deployment-capable Docker setup, and
 security.
@@ -129,16 +129,15 @@ planned image reference is shown, but pulling it remains part of the later
 Deployment step.
 
 If a concrete active or prepared image tag is found, older releases are
-disabled. Downgrades remain intentionally unsupported until a later
-Backup/Restore flow exists. A moving `latest` image tag is not treated as a
-concrete installed version.
+disabled. Downgrades remain intentionally unsupported. A moving `latest` image
+tag is not treated as a concrete installed version.
 
 Discovery is deferred until the Devices step is first opened and then runs once
 per session (mDNS keeps polling on its own). Technical lists (detected networks,
 manual CIDR scan, mDNS controls, ignored devices, MQTT broker candidates, config
 preview) live in collapsed details so the page stays short. **Diagnostics /
-Advanced** holds the Deployment, System, and Network / WiFi placeholders for
-later phases.
+Advanced** exposes the Deployment and System panels; only in-UI Network / WiFi
+editing remains a placeholder for a later phase.
 
 ## Discovery capabilities
 
