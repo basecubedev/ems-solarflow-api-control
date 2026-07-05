@@ -84,6 +84,8 @@ def build_routes():
         "/api/setup/config-template": setup["config_template"],
         "/api/setup/config/catalog": setup["config_catalog"],
         "/api/discovery/networks": setup["networks"],
+        "/api/setup/deployment/plan": setup["deployment_plan"],
+        "/api/setup/deployment/status": setup["deployment_status"],
     }
     post_routes = {
         "/api/setup/config-preview": setup["config_preview"],
@@ -221,7 +223,8 @@ def main(argv=None):
     print(f"Admin docs preview on http://{args.host}:{args.port}/?screen=landing")
     print("Screens: landing, guided-setup-start, discovery, config-preview,")
     print("         maintenance-overview, backup-restore, guided-upgrade,")
-    print("         admin-update-reconnect")
+    print("         upgrade-run-1, upgrade-run-2, upgrade-run-3, upgrade-run-4,")
+    print("         upgrade-done, admin-update-reconnect")
     try:
         import time
 

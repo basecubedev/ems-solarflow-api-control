@@ -59,6 +59,111 @@
     );
   }
 
+  // Guided-upgrade live-run steps, mirroring the plan order emitted by
+  // admin/guided_upgrade.py with all options enabled. These only feed
+  // renderUpgradeSteps so the "04 Upgrade validation" box can be shown
+  // progressing through green check-marks; nothing is ever executed.
+  var UPGRADE_RUN_STEPS = [
+    { key: "verify_image", label: "Verify target image", done: "digest verified" },
+    { key: "preflight", label: "Preflight checks", done: "environment OK" },
+    { key: "backup", label: "Create backup", done: "snapshot saved" },
+    { key: "config_check", label: "Check config", done: "compared to template" },
+    { key: "config_write", label: "Update config", done: "3 missing keys added" },
+    { key: "pull_image", label: "Pull image", done: "image downloaded" },
+    { key: "update_compose", label: "Update compose", done: "image ref updated" },
+    { key: "recreate_ems", label: "Recreate EMS", done: "container recreated" },
+    { key: "diagnostics", label: "Run diagnostics", done: "health check passed" },
+  ];
+
+  // Live job "steps" payload with `doneCount` steps complete and the next one
+  // running (rest pending) — the exact shape renderUpgradeSteps expects.
+  function buildUpgradeRunSteps(doneCount) {
+    return UPGRADE_RUN_STEPS.map(function (step, i) {
+      var state = i < doneCount ? "done" : i === doneCount ? "running" : "pending";
+      return {
+        key: step.key,
+        label: step.label,
+        state: state,
+        message: state === "done" ? step.done : null,
+      };
+    });
+  }
+
+  // Completed-result payload for renderUpgradeResult (all steps ok, green).
+  function buildUpgradeResult() {
+    return {
+      ok: true,
+      steps: UPGRADE_RUN_STEPS.map(function (step) {
+        return { status: "ok", label: step.label, detail: step.done };
+      }),
+      warnings: [],
+      target_release: "v0.7.0",
+      target_image: "ghcr.io/example/ems-solarflow-api-control:v0.7.0",
+    };
+  }
+
+  // The validation box shows Current/Target facts that renderUpgradePlan would
+  // normally fill; once we neutralize that render, set them here so the box still
+  // names the upgrade even in the live-run screens.
+  function setUpgradeFacts() {
+    if (typeof upgradeEls === "undefined") return;
+    var cur = (typeof upgradeState !== "undefined" && upgradeState.current) || {};
+    if (upgradeEls.factCurrent) {
+      upgradeEls.factCurrent.textContent = cur.image || cur.tag || "Current version unknown";
+    }
+    if (upgradeEls.factTarget) upgradeEls.factTarget.textContent = "v0.7.0";
+  }
+
+  // Render the validation box in a live-run (doneCount) or completed (null) state.
+  function applyUpgradeRun(doneCount) {
+    if (doneCount === null) {
+      if (typeof setUpgradeRunning === "function") setUpgradeRunning(false);
+      if (typeof renderUpgradeResult === "function") {
+        renderUpgradeResult(buildUpgradeResult());
+      }
+    } else {
+      if (typeof setUpgradeRunning === "function") setUpgradeRunning(true);
+      if (typeof renderUpgradeSteps === "function") {
+        renderUpgradeSteps(buildUpgradeRunSteps(doneCount));
+      }
+    }
+    setUpgradeFacts();
+  }
+
+  // Drive the guided-upgrade panel into a live-run state. The panel keeps
+  // re-planning asynchronously (each openMaintenance re-runs loadUpgradePlanning),
+  // so once the target release has loaded we neutralize renderUpgradePlan and take
+  // ownership of the validation box, then keep re-asserting the step list so the
+  // screenshot lands on it deterministically.
+  function driveUpgradeRun(doneCount) {
+    if (!driveUpgradeRun.opened) {
+      driveUpgradeRun.opened = true;
+      openMaintenance("upgrade");
+    }
+    when(
+      function () {
+        return typeof upgradeState !== "undefined" && upgradeState.selected;
+      },
+      function () {
+        if (!driveUpgradeRun.armed) {
+          driveUpgradeRun.armed = true;
+          upgradeState.planned = true;
+          // Stop the async planner from overwriting the live step list. Safe:
+          // each screen is a separate page load, so this only affects the run.
+          if (typeof renderUpgradePlan === "function") {
+            renderUpgradePlan = function () {};
+          }
+          [300, 700, 1200, 2000, 2800].forEach(function (ms) {
+            window.setTimeout(function () {
+              applyUpgradeRun(doneCount);
+            }, ms);
+          });
+        }
+        applyUpgradeRun(doneCount);
+      }
+    );
+  }
+
   var drivers = {
     landing: function () {
       // The authenticated start gate is the default surface; nothing to do.
@@ -83,6 +188,32 @@
       enterSetup();
       when(releaseIsReady, function () {
         setActiveStep("config");
+        // Expand a few feature rows so the config page shows the feature list
+        // opened up (with its settings), not just collapsed rows.
+        if (typeof openFeatures !== "undefined" && openFeatures.add) {
+          ["winter", "energy_savings", "battery_full_charge_assist"].forEach(function (id) {
+            openFeatures.add(id);
+          });
+        }
+        if (typeof renderFeatureSettings === "function") renderFeatureSettings();
+      });
+    },
+    "setup-start-done": function () {
+      // Drive the wizard to the final Start step showing the running EMS and the
+      // "Open EMS Dashboard" (localhost:8080) success card. The deployment state
+      // is set in memory so the Start step unlocks; the mocked deployment
+      // plan/status endpoints then render the success state.
+      enterSetup();
+      when(releaseIsReady, function () {
+        if (typeof setupState !== "undefined" && setupState.deployment) {
+          var dep = setupState.deployment;
+          dep.prepared = true;
+          dep.generated_ready = true;
+          dep.status = "succeeded";
+          dep.docker = { state: "ready" };
+          dep.workspace = "/opt/ems";
+        }
+        setActiveStep("start");
       });
     },
     "maintenance-overview": function () {
@@ -105,6 +236,24 @@
           if (typeof renderUpgradePlan === "function") renderUpgradePlan();
         }
       );
+    },
+    // Live EMS software upgrade: the "04 Upgrade validation" box progressing
+    // through green check-marks as each step completes (verify → preflight →
+    // backup → config → add missing keys → pull → recreate → diagnostics).
+    "upgrade-run-1": function () {
+      driveUpgradeRun(2); // backup running
+    },
+    "upgrade-run-2": function () {
+      driveUpgradeRun(4); // "Update config" (add missing keys) running
+    },
+    "upgrade-run-3": function () {
+      driveUpgradeRun(5); // config keys added ✓, pulling image
+    },
+    "upgrade-run-4": function () {
+      driveUpgradeRun(7); // recreating the EMS container
+    },
+    "upgrade-done": function () {
+      driveUpgradeRun(null); // all steps done — upgrade completed
     },
     "admin-update-reconnect": function () {
       // The reconnect overlay is a full-screen modal, so it does not depend on a

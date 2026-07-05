@@ -1,53 +1,89 @@
 # Admin Console demo videos
 
-This directory is reserved for short Admin Console workflow demos. No videos are
-committed yet — the [screenshots](../../screenshots/admin/) show the current
-workflow layout, and videos are planned for the first public Admin Console
-release.
+Short Admin Console workflow demos (720p, no audio), embedded in
+[docs/user/admin-console.md](../../../user/admin-console.md). They use
+**deterministic demo data** (fake devices, IPs, serials, image refs and backup
+names) and do **not** show a real installation.
 
-## Recommended videos
+## Formats
 
-| File | Workflow | Target length |
-| --- | --- | --- |
-| `admin-guided-setup-demo.webm` | Fresh install / Guided Setup | 30–90s |
-| `admin-backup-restore-demo.webm` | Backup creation and restore preview | 30–90s |
-| `admin-guided-upgrade-demo.webm` | Guided Upgrade and Admin reconnect | 30–90s |
+Each committed demo ships in two formats:
 
-## Recording notes
+- **MP4/H.264** (`yuv420p`, `+faststart`): best compatibility for forums and
+  mobile browsers. Use MP4 for forum posts (e.g. the Zendure forum) if only one
+  format can be attached.
+- **WebM/VP9**: compact open web format, kept as an inline fallback and download.
 
-- Format: `.webm`, 1280x720 or 1440x900, no audio required.
-- Use a clean demo environment only. Record the same demo data as the
-  screenshots (see [the capture guide](../../screenshots/admin/README.md) and
-  the `EMS_ADMIN_DEMO_DOCS` note there is not required — the docs-preview server
-  already serves demo data).
-- Stop before any destructive step unless you are in a throwaway demo
-  environment (do not apply config, restore live data or replace containers on a
-  real host).
+The user docs prefer the MP4 source first and fall back to WebM.
 
-### Guided Setup demo
+## Files
 
-1. Open the Admin Console and select **Guided setup**.
-2. Choose a demo grid meter and add a demo inverter/device.
-3. Show the generated config preview.
-4. Stop before applying (or apply only in a demo environment).
+Currently committed videos (two, in both formats):
 
-### Backup / Restore demo
+| Workflow | MP4 | WebM | Length |
+| --- | --- | --- | --- |
+| Guided Setup (fresh install with hardware discovery, feature settings and starting EMS) | `admin-guided-setup-demo.mp4` | `admin-guided-setup-demo.webm` | ~28s |
+| Guided Upgrade (EMS software upgrade with the live "Upgrade validation" box ticking off each step) | `admin-guided-upgrade-demo.mp4` | `admin-guided-upgrade-demo.webm` | ~26s |
 
-1. Open **Maintenance** → **Backup / Restore**.
-2. Show backup creation options and the backup list.
-3. Show a restore preview/diff. Do not restore live data.
+Planned optional future video (not committed yet):
 
-### Guided Upgrade demo
+| File | Workflow |
+| --- | --- |
+| `admin-backup-restore-demo.webm` | Backup creation and restore preview |
 
-1. Select a target release and show the upgrade plan.
-2. Show the Admin update requirement / reconnect if applicable.
-3. Show the backup and config-check steps.
-4. Stop before real container replacement if no demo image is available.
+Only add the Backup/Restore video (and its embed/link in
+[docs/user/admin-console.md](../../../user/admin-console.md)) once the file
+actually exists — do not link to it before then.
 
-## Do not commit
+## How to refresh
 
-Do not commit videos that contain real serial numbers, IP addresses, passwords,
-tokens or personal hostnames. If a clean video is too large for Git, host it as a
-GitHub release asset and link it from
-[docs/user/admin-console.md](../../../user/admin-console.md) instead of
-committing the media here.
+The videos are rendered from the **real** Admin static UI (`admin/static/`)
+driven by the docs-preview server with deterministic demo API responses from
+[`tests/fixtures/admin_docs/`](../../../../tests/fixtures/admin_docs). Each
+workflow step is captured as a full-page frame with headless Firefox and the
+frames are stitched into a 1280x720 `.webm` (VP9) with gentle vertical pans, so
+tall pages stay readable. No hardware, Docker, discovery, MQTT, `config.json` or
+password is involved, and nothing is written to config/runtime state.
+
+Requirements: `firefox` (headless), ImageMagick `convert` and `ffmpeg`.
+(MP4-only conversion needs just `ffmpeg` — it reuses the committed WebM.)
+
+Render both videos in both formats (WebM + MP4, the default):
+
+```bash
+python3 scripts/render_admin_docs_video.py
+```
+
+Render one workflow, or pick formats with `--format {webm,mp4,all}`:
+
+```bash
+python3 scripts/render_admin_docs_video.py --videos admin-guided-setup-demo.webm
+python3 scripts/render_admin_docs_video.py --format webm    # WebM only
+python3 scripts/render_admin_docs_video.py --format mp4     # MP4 from existing WebM
+```
+
+The MP4 is a straight H.264 transcode of the rendered WebM. To make one by hand
+(same encoding the script uses — forum/mobile-friendly, no audio):
+
+```bash
+ffmpeg -i admin-guided-setup-demo.webm \
+  -c:v libx264 -pix_fmt yuv420p -movflags +faststart \
+  -crf 23 -preset medium -an \
+  admin-guided-setup-demo.mp4
+```
+
+If an MP4 comes out too large, retry with `-crf 26`; if quality looks too low,
+`-crf 20`. Keep 1280x720 — do not upscale.
+
+To change the steps, durations or which screens appear, edit `VIDEOS` in
+`scripts/render_admin_docs_video.py`; to change what a screen shows, edit the
+matching fixture in `tests/fixtures/admin_docs/`.
+
+## Rules
+
+- Keep the demo data fake — no real serial numbers, IP addresses, passwords,
+  tokens or personal hostnames.
+- Keep the files small. If a future video becomes too large for Git, host it as
+  a GitHub release asset and link it from
+  [docs/user/admin-console.md](../../../user/admin-console.md) instead of
+  committing the media here.
