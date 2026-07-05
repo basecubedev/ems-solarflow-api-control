@@ -84,7 +84,6 @@ MAX_TRACKED_SCANS = 20
 # Dashboard, but the browser sessions are separate (a Dashboard login must not
 # grant Admin access and vice versa).
 ADMIN_SESSION_COOKIE_NAME = "ems_admin_session"
-MIN_PASSWORD_LENGTH = 8
 
 # Only these paths are reachable without an Admin session. Everything else
 # (setup, maintenance, discovery, config, deployment, backup) requires auth.
@@ -98,12 +97,15 @@ PUBLIC_POST_PATHS = frozenset(
 
 
 def _validate_new_password(password, confirm):
-    """Validate an initial password. Returns an error code or ``None``."""
+    """Validate an initial password. Returns an error code or ``None``.
+
+    The shared EMS Dashboard/Admin password has no length or complexity
+    requirement: any non-empty value is accepted. Only structurally invalid
+    requests (missing password, confirmation mismatch) are rejected here.
+    """
 
     if not isinstance(password, str) or not password:
         return "password_required"
-    if len(password) < MIN_PASSWORD_LENGTH:
-        return "password_too_short"
     if not isinstance(confirm, str) or password != confirm:
         return "password_mismatch"
     return None

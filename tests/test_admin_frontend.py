@@ -3727,6 +3727,31 @@ def test_index_has_auth_gate_views_and_logout():
     assert "Use your EMS Dashboard password." in html
 
 
+def test_auth_password_inputs_have_no_length_requirement():
+    html = _read("index.html")
+    js = _read("admin.js")
+    # Short passwords are allowed: no HTML length floor on the password inputs and
+    # no user-facing copy demanding a minimum length.
+    assert 'minlength="8"' not in html
+    assert "minlength" not in html
+    for text in ("at least 8 characters", "8 characters", "at least 8"):
+        assert text not in html
+        assert text not in js
+    # The old too-short error message is gone from the auth message map.
+    assert "password_too_short" not in js
+
+
+def test_auth_form_is_compact_and_pins_fields_to_content_height():
+    css = _read("admin.css")
+    form = css.split(".admin-auth-form {", 1)[1].split("}", 1)[0]
+    # Fields stack with a tight 8-10px rhythm instead of the wide default gap.
+    assert "gap: 10px" in form
+    # The shared .field flex-basis is neutralised inside the auth form so fields
+    # size to their content and the submit button sits right below them.
+    field = css.split(".admin-auth-form .field {", 1)[1].split("}", 1)[0]
+    assert "flex: 0 0 auto" in field
+
+
 def test_js_checks_auth_status_before_bootstrapping_workflows():
     js = _read("admin.js")
     assert "/api/admin/auth/status" in js

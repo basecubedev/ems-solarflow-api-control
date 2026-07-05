@@ -165,9 +165,11 @@ def test_admin_auth_setup_does_not_overwrite_existing_password(tmp_path, monkeyp
 @pytest.mark.parametrize(
     "body,error",
     [
+        # A missing password field is still a malformed request.
         ({"confirm_password": "x"}, "password_required"),
-        ({"password": "short7", "confirm_password": "short7"}, "password_too_short"),
-        ({"password": "longenough1", "confirm_password": "mismatch"}, "password_mismatch"),
+        ({"password": "", "confirm_password": ""}, "password_required"),
+        # Confirmation mismatch during setup is still rejected.
+        ({"password": "abc", "confirm_password": "mismatch"}, "password_mismatch"),
     ],
 )
 def test_admin_auth_setup_validates_password(tmp_path, monkeypatch, body, error):
@@ -180,6 +182,50 @@ def test_admin_auth_setup_validates_password(tmp_path, monkeypatch, body, error)
         assert status == 400
         assert payload["error"] == error
         assert not (tmp_path / "config" / "dashboard-auth.json").exists()
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+@pytest.mark.parametrize("password", ["x", "1234567", "short"])
+def test_admin_auth_setup_accepts_short_password(tmp_path, monkeypatch, password):
+    # The shared password has no length/complexity requirement: passwords shorter
+    # than the old 8-character minimum must be accepted at setup.
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
+    srv, base = _serve()
+    try:
+        status, headers, payload = _request(
+            f"{base}/api/admin/auth/setup",
+            method="POST",
+            body={"password": password, "confirm_password": password},
+        )
+        assert status == 200
+        assert payload["authenticated"] is True
+        assert "ems_admin_session=" in headers["Set-Cookie"]
+
+        auth_file = tmp_path / "config" / "dashboard-auth.json"
+        assert auth_file.exists()
+        assert verify_password_file(auth_file, password)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_admin_login_accepts_short_password(tmp_path, monkeypatch):
+    # A short password created at setup must also authenticate at login.
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
+    write_password_file(tmp_path / "config" / "dashboard-auth.json", "x")
+
+    srv, base = _serve()
+    try:
+        status, headers, payload = _request(
+            f"{base}/api/admin/auth/login",
+            method="POST",
+            body={"password": "x"},
+        )
+        assert status == 200
+        assert payload["authenticated"] is True
+        assert "ems_admin_session=" in headers["Set-Cookie"]
     finally:
         srv.shutdown()
         srv.server_close()

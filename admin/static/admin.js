@@ -8411,7 +8411,6 @@ function setAuthError(el, message) {
 
 const AUTH_ERROR_MESSAGES = {
   password_required: "Enter a password.",
-  password_too_short: "Password must be at least 8 characters.",
   password_mismatch: "Passwords do not match.",
   auth_already_configured: "Password is already configured. Please log in.",
   invalid_password: "Incorrect password.",

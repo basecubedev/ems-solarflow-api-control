@@ -67,7 +67,10 @@ body {
 }
 .admin-auth-title { margin: 0; font-size: 18px; font-weight: 800; }
 .admin-auth-copy { margin: 0; color: var(--muted); font-size: 13px; }
-.admin-auth-form { display: flex; flex-direction: column; gap: 12px; }
+/* Compact, stacked auth form: password fields sit close together with the
+   submit button right below the last field. The per-field override lives next to
+   the shared `.field` rule below. */
+.admin-auth-form { display: flex; flex-direction: column; gap: 10px; }
 .eyebrow {
   margin: 0 0 2px;
   color: var(--accent2);
@@ -683,6 +686,11 @@ code {
   flex: 1 1 240px;
   min-width: 0;
 }
+/* Inside the stacked auth form the shared 240px flex-basis balloons each field
+   vertically and pushes the submit button far below. Pin fields to their content
+   height so the button sits right under the last field. */
+.admin-auth-form .field { flex: 0 0 auto; gap: 6px; }
+.admin-auth-form .primary-button { margin-top: 2px; }
 .field-label {
   color: var(--muted);
   font-size: 10px;
