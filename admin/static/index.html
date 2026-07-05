@@ -15,9 +15,57 @@
         Guided Docker setup for local EMS deployments.
         Pick a release, discover devices, generate config, and deploy safely.
       </p>
+      <button type="button" id="auth-logout" class="secondary-button compact admin-logout" hidden>
+        Logout
+      </button>
     </header>
 
-    <section class="admin-view start-gate" id="view-start" aria-label="Choose how to continue">
+    <section class="admin-view admin-auth" id="view-auth" aria-label="Admin Console login" hidden>
+      <div class="admin-auth-card">
+        <div class="admin-auth-block" id="auth-create" hidden>
+          <h2 class="admin-auth-title">Protect your Admin Console</h2>
+          <p class="admin-auth-copy">
+            This password is shared with the EMS Dashboard. It protects setup,
+            maintenance, backups, restore and update actions on this EMS host.
+          </p>
+          <form id="auth-create-form" class="admin-auth-form" autocomplete="off">
+            <label class="field">
+              <span class="field-label">Password</span>
+              <input id="auth-create-password" type="password" autocomplete="new-password" required>
+            </label>
+            <label class="field">
+              <span class="field-label">Confirm password</span>
+              <input id="auth-create-confirm" type="password" autocomplete="new-password" required>
+            </label>
+            <button type="submit" class="primary-button compact">Create password and continue</button>
+          </form>
+          <p id="auth-create-error" class="scan-error" role="alert" hidden></p>
+        </div>
+        <div class="admin-auth-block" id="auth-login" hidden>
+          <h2 class="admin-auth-title">Login</h2>
+          <p class="admin-auth-copy">Use your EMS Dashboard password.</p>
+          <form id="auth-login-form" class="admin-auth-form" autocomplete="off">
+            <label class="field">
+              <span class="field-label">Password</span>
+              <input id="auth-login-password" type="password" autocomplete="current-password" required>
+            </label>
+            <button type="submit" class="primary-button compact">Log in</button>
+          </form>
+          <p id="auth-login-error" class="scan-error" role="alert" hidden></p>
+        </div>
+        <div class="admin-auth-block" id="auth-recovery" hidden>
+          <h2 class="admin-auth-title">Password file needs repair</h2>
+          <p class="admin-auth-copy">
+            The shared EMS/Admin password file exists but cannot be read. Repair
+            or remove <code>config/dashboard-auth.json</code> on the EMS host,
+            then reload this page.
+          </p>
+          <button type="button" id="auth-recovery-retry" class="primary-button compact">Retry</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="admin-view start-gate" id="view-start" aria-label="Choose how to continue" hidden>
       <div class="start-gate-recommend" id="start-recommend" role="status" aria-live="polite">
         Checking the current installation…
       </div>

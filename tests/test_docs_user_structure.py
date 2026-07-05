@@ -15,6 +15,22 @@ def read(path):
     return path.read_text(encoding="utf-8")
 
 
+# --- Shared Admin/Dashboard password ---------------------------------------
+
+
+def test_user_docs_document_shared_admin_dashboard_password():
+    text = read(ROOT / "docs" / "user" / "admin-console.md")
+    assert "same password as the EMS Dashboard" in text
+    assert "config/dashboard-auth.json" in text
+    assert "first" in text.lower()
+
+
+def test_readme_mentions_first_start_password_without_becoming_security_manual():
+    text = read(ROOT / "README.md")
+    assert "shared EMS/Admin password" in text or "Admin Console password" in text
+    assert len(text.splitlines()) <= 130
+
+
 # --- README is a compact router, not a manual -----------------------------
 
 
@@ -237,6 +253,14 @@ def test_faq_answers_admin_console_user_questions():
         "Is the Admin Console safe to expose to the internet?",
     ]:
         assert expected in text
+
+
+def test_faq_documents_admin_shared_dashboard_password():
+    text = read(ROOT / "docs" / "user" / "faq.md")
+    assert "same password file as the EMS Dashboard" in text
+    assert "config/dashboard-auth.json" in text
+    # The old "no built-in authentication" wording must be gone.
+    assert "no built-in authentication" not in text.lower()
 
 
 def test_faq_has_copy_paste_troubleshooting_commands():

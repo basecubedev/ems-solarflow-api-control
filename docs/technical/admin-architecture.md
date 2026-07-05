@@ -66,6 +66,39 @@ admin state:
 and UI state). It is not EMS config and not part of the EMS control path.
 Removing it does not change EMS behavior; it only resets Admin Console state.
 
+## Authentication
+
+The Admin Console is protected by the shared EMS/Dashboard password — there is
+exactly one local password per host, and no Admin-only password store.
+
+- **Shared password file.** Admin auth uses the shared dashboard auth file. The
+  path is resolved from the EMS install context (`EMS_INSTALL_DIR` / install
+  root). A fresh install without `config/config.json` uses
+  `config/dashboard-auth.json`; when a config exists and sets
+  `dashboard.auth_file`, that path is honoured (relative paths resolve against
+  the install root).
+- **First visitor creates it.** When no password exists, the first browser user
+  creates the initial password. Creation is atomic (`O_EXCL`) so a second
+  concurrent visitor gets a clean `409` instead of overwriting it. Until the
+  password is set, every setup/maintenance/discovery API stays blocked.
+- **Malformed file is a recovery state, not setup.** If the shared file exists
+  but cannot be parsed, `auth/status` reports `recovery_required` (with
+  `auth_configured: true`, `requires_initial_password: false`); the UI shows a
+  repair panel instead of first-password setup. `auth/setup` and `auth/login`
+  return `409 auth_file_invalid` and the file is never auto-overwritten or
+  auto-deleted — the operator repairs or removes it on the EMS host.
+- **Shared password, separate sessions.** Admin and the Dashboard share the
+  password but not the browser session: Admin uses its own `ems_admin_session`
+  cookie, so a Dashboard login does not grant Admin access and vice versa.
+- **Standard web hardening.** Authenticated mutating endpoints require the
+  session CSRF token (`X-CSRF-Token`); read-only endpoints require a valid
+  session. Logins are rate limited. The password is never logged or returned to
+  the UI. No running EMS container is required for any of this.
+
+The password file lives under the mounted install layout
+(`config/dashboard-auth.json`), never only inside the Admin container image, so
+EMS reuses the same password later.
+
 ## Why this split matters
 
 - A single source of truth (EMS/Core) means the Admin Console, the CLI and the

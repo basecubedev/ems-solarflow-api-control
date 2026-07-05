@@ -44,7 +44,30 @@ body {
   gap: 16px;
 }
 
-.admin-header { margin-bottom: 4px; }
+.admin-header { margin-bottom: 4px; position: relative; }
+.admin-logout {
+  position: absolute;
+  top: 0;
+  right: 0;
+}
+
+/* Login / create-password gate. Reuses the shared field and button styles so it
+   stays inside the existing Admin visual system. */
+.admin-auth { align-items: center; }
+.admin-auth-card {
+  width: 100%;
+  max-width: 420px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 24px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.admin-auth-title { margin: 0; font-size: 18px; font-weight: 800; }
+.admin-auth-copy { margin: 0; color: var(--muted); font-size: 13px; }
+.admin-auth-form { display: flex; flex-direction: column; gap: 12px; }
 .eyebrow {
   margin: 0 0 2px;
   color: var(--accent2);

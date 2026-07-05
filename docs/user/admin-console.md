@@ -63,6 +63,15 @@ Then open:
 http://127.0.0.1:8090
 ```
 
+## Login
+
+The Admin Console uses the same password as the EMS Dashboard.
+
+On the first start, if no password exists yet, the first browser user creates it.
+The password is stored in `config/dashboard-auth.json` and is shared with EMS.
+
+After that, log in with the EMS Dashboard password.
+
 ### Networking
 
 The default uses **host networking**. EMS SolarFlow is a local LAN system, so

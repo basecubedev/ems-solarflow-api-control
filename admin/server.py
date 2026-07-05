@@ -9,12 +9,15 @@ reads secrets. It only writes the real EMS ``config.json`` on the explicit
 offers a backup by default and requires explicit confirmation before apply.
 """
 
+import hmac
 import json
 import os
 import threading
 import uuid
+from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from admin import auth as admin_auth
 from admin.config_apply import ConfigApplyService, ConfigChangedError
 from admin.config_export import ConfigExportService, ConfigExportValidationError
 from admin.config_preview import ConfigPreviewGenerator
@@ -68,12 +71,45 @@ from admin.models import utc_now_iso
 from admin.networks import detect_network_suggestions
 from admin.releases import ReleaseError, ReleaseManager, default_admin_data_dir
 from admin.setup_config import build_setup_catalog
+from dashboard.auth import LoginRateLimiter, SessionStore
 from dashboard.static_files import build_static_asset_index, static_asset_key
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 MAX_JSON_BODY_BYTES = 4 * 1024
 MAX_CONFIG_PREVIEW_BODY_BYTES = 64 * 1024
 MAX_TRACKED_SCANS = 20
+
+# Admin uses its own session cookie: the password is shared with the EMS
+# Dashboard, but the browser sessions are separate (a Dashboard login must not
+# grant Admin access and vice versa).
+ADMIN_SESSION_COOKIE_NAME = "ems_admin_session"
+MIN_PASSWORD_LENGTH = 8
+
+# Only these paths are reachable without an Admin session. Everything else
+# (setup, maintenance, discovery, config, deployment, backup) requires auth.
+PUBLIC_POST_PATHS = frozenset(
+    {
+        "/api/admin/auth/setup",
+        "/api/admin/auth/login",
+        "/api/admin/auth/logout",
+    }
+)
+
+
+def _validate_new_password(password, confirm):
+    """Validate an initial password. Returns an error code or ``None``."""
+
+    if not isinstance(password, str) or not password:
+        return "password_required"
+    if len(password) < MIN_PASSWORD_LENGTH:
+        return "password_too_short"
+    if not isinstance(confirm, str) or password != confirm:
+        return "password_mismatch"
+    return None
+
+
+def _hmac_compare(left, right):
+    return hmac.compare_digest(str(left), str(right))
 
 # Guided-upgrade preflight rejection reasons -> HTTP status. Accepted runs spawn
 # a job (202) whose live step progress is polled; only rejections use this map.
@@ -217,6 +253,16 @@ class AdminServer(ThreadingHTTPServer):
         self.upgrade_jobs = UpgradeJobRegistry()
         self.backup_service = backup_service or BackupRestoreService()
         self.backup_jobs = BackupJobRegistry()
+        # Shared password, separate Admin session. Setup can be hammered but only
+        # succeeds once, so a simple per-address limiter is enough there.
+        self.auth_sessions = SessionStore(
+            timeout_seconds=1800, absolute_max_seconds=43200
+        )
+        self.auth_login_limiter = LoginRateLimiter()
+        self.auth_setup_limiter = LoginRateLimiter(max_failures=10, window_seconds=60)
+        # Local HTTP appliance: the Secure cookie flag is only added when the
+        # Admin server knows HTTPS is active (never required for local HTTP).
+        self.https_active = False
         self.static_assets = (
             static_assets
             if static_assets is not None
@@ -231,6 +277,18 @@ class AdminHandler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         if path in ("", "/", "/index.html"):
             self._send_static("/index.html")
+            return
+        # The unauthenticated browser must be able to load the login/setup UI and
+        # read auth status; every other GET below requires a valid Admin session.
+        if path == "/api/admin/auth/status":
+            self._send_json(self._auth_status_payload())
+            return
+        if not path.startswith("/api/"):
+            self._send_static(path)
+            return
+        auth_error = self._require_admin_read_auth()
+        if auth_error:
+            self._send_json(auth_error[0], status=auth_error[1])
             return
         if path == "/api/admin/status":
             self._send_json(self._status_payload())
@@ -321,13 +379,25 @@ class AdminHandler(BaseHTTPRequestHandler):
         if path.startswith("/api/discovery/result/"):
             self._send_result(path[len("/api/discovery/result/"):])
             return
-        if path.startswith("/api/"):
-            self._send_json({"error": "not found"}, status=404)
-            return
-        self._send_static(path)
+        # Only authenticated /api/ paths reach here; static was served above.
+        self._send_json({"error": "not found"}, status=404)
 
     def do_POST(self):
         path = self.path.split("?", 1)[0]
+        if path in PUBLIC_POST_PATHS:
+            self._handle_public_auth_post(path)
+            return
+        auth_error = self._require_admin_write_auth()
+        if auth_error:
+            self._send_json(auth_error[0], status=auth_error[1])
+            return
+        if path == "/api/admin/auth/refresh":
+            # Genuine-activity heartbeat: slide the idle timeout. It is treated as
+            # a state change, so the write-auth gate above already required a valid
+            # session and CSRF token.
+            self.server.auth_sessions.touch(self._admin_session_cookie_value())
+            self._send_json(self._auth_status_payload())
+            return
         if path == "/api/admin/start-path":
             self._handle_start_path()
             return
@@ -429,6 +499,224 @@ class AdminHandler(BaseHTTPRequestHandler):
 
     def log_message(self, _fmt, *_args):
         return
+
+    # --- auth ------------------------------------------------------------
+
+    def _handle_public_auth_post(self, path):
+        if path == "/api/admin/auth/setup":
+            self._handle_auth_setup()
+        elif path == "/api/admin/auth/login":
+            self._handle_auth_login()
+        elif path == "/api/admin/auth/logout":
+            self._handle_auth_logout()
+
+    def _auth_status_payload(self):
+        paths = admin_auth.resolve_admin_auth_paths()
+        auth = admin_auth.admin_auth_status()
+        session = self._current_admin_session() if auth.valid else None
+        authenticated = session is not None
+        payload = {
+            "auth_configured": auth.configured,
+            "authenticated": authenticated,
+            "requires_initial_password": not auth.configured,
+            "recovery_required": auth.recovery_required,
+        }
+        if auth.recovery_required:
+            # A malformed file must not offer first-password setup; report a clear
+            # recovery state instead.
+            payload["error"] = auth.error
+            payload["message"] = auth.message
+        elif not auth.configured:
+            payload["shared_password_file"] = admin_auth.SHARED_AUTH_HINT
+            payload["message"] = "Create a password to protect the Admin Console."
+        elif not authenticated:
+            payload["message"] = "Use your EMS Dashboard password."
+        if paths.warning:
+            payload["warning"] = paths.warning
+        if authenticated:
+            payload["csrf_token"] = session.csrf_token
+            if session.expires_at is None:
+                payload["session_expires_in_seconds"] = None
+            else:
+                remaining = session.expires_at - self.server.auth_sessions.time_fn()
+                payload["session_expires_in_seconds"] = max(0, int(remaining))
+        return payload
+
+    def _handle_auth_setup(self):
+        remote = self.client_address[0] if self.client_address else "unknown"
+        if self.server.auth_setup_limiter.is_limited(remote):
+            self._send_json({"error": "setup_rate_limited"}, status=429)
+            return
+        auth = admin_auth.admin_auth_status()
+        if auth.recovery_required:
+            # A malformed auth file must not reopen first-password setup and must
+            # never be overwritten here.
+            self._send_json(
+                {"error": auth.error, "message": auth.message}, status=409
+            )
+            return
+        if auth.configured:
+            self._send_json(
+                {
+                    "error": "auth_already_configured",
+                    "message": "Password is already configured. Please log in.",
+                },
+                status=409,
+            )
+            return
+        if not admin_auth.install_dir_available():
+            self._send_json(
+                {
+                    "error": "install_dir_unavailable",
+                    "message": (
+                        "Admin install directory is not mounted. "
+                        "Start the Admin Console with install-admin-console.sh."
+                    ),
+                },
+                status=409,
+            )
+            return
+        body = self._read_json_body()
+        if body is None:
+            return
+        if not isinstance(body, dict):
+            self._send_json({"error": "expected a JSON object"}, status=400)
+            return
+        error = _validate_new_password(body.get("password"), body.get("confirm_password"))
+        if error:
+            self.server.auth_setup_limiter.record_failure(remote)
+            self._send_json({"error": error}, status=400)
+            return
+        try:
+            # Initial password creation must not overwrite a password created by
+            # another browser; the atomic helper turns that race into a 409.
+            admin_auth.create_shared_password_if_missing(body["password"])
+        except FileExistsError:
+            self._send_json(
+                {
+                    "error": "auth_already_configured",
+                    "message": "Password is already configured. Please log in.",
+                },
+                status=409,
+            )
+            return
+        except OSError as exc:
+            self._send_json(
+                {"error": "auth_write_failed", "message": f"Could not save the password: {exc}"},
+                status=500,
+            )
+            return
+        session = self.server.auth_sessions.create()
+        self._send_json(
+            {**self._auth_status_payload(), "authenticated": True,
+             "csrf_token": session.csrf_token},
+            headers={"Set-Cookie": self._admin_session_cookie(session.session_id)},
+        )
+
+    def _handle_auth_login(self):
+        remote = self.client_address[0] if self.client_address else "unknown"
+        auth = admin_auth.admin_auth_status()
+        if auth.recovery_required:
+            self._send_json(
+                {"error": auth.error, "message": auth.message}, status=409
+            )
+            return
+        if not auth.configured:
+            self._send_json({"error": "auth_not_configured"}, status=403)
+            return
+        if self.server.auth_login_limiter.is_limited(remote):
+            self._send_json({"error": "login_rate_limited"}, status=429)
+            return
+        body = self._read_json_body()
+        if body is None:
+            return
+        password = body.get("password") if isinstance(body, dict) else None
+        if not isinstance(password, str) or not admin_auth.verify_admin_password(password):
+            self.server.auth_login_limiter.record_failure(remote)
+            self._send_json({"error": "invalid_password"}, status=403)
+            return
+        self.server.auth_login_limiter.reset(remote)
+        session = self.server.auth_sessions.create()
+        self._send_json(
+            {**self._auth_status_payload(), "authenticated": True,
+             "csrf_token": session.csrf_token},
+            headers={"Set-Cookie": self._admin_session_cookie(session.session_id)},
+        )
+
+    def _handle_auth_logout(self):
+        # Logout takes no input and may clear the cookie even if already logged
+        # out, so any accidental body is drained rather than required.
+        self._drain_body()
+        self.server.auth_sessions.destroy(self._admin_session_cookie_value())
+        self._send_json(
+            self._auth_status_payload(),
+            headers={"Set-Cookie": self._expired_admin_session_cookie()},
+        )
+
+    def _require_admin_read_auth(self):
+        # Side-effect-free GET endpoints need a valid session but not a CSRF
+        # token (SameSite=Strict + CSP frame-ancestors 'none' already block
+        # cross-site cookie use), mirroring the Dashboard read-auth model.
+        auth = admin_auth.admin_auth_status()
+        if auth.recovery_required:
+            return {"error": auth.error, "message": auth.message}, 403
+        if not auth.configured:
+            return {"error": "auth_not_configured"}, 403
+        if self._current_admin_session() is None:
+            return {"error": "not_authenticated"}, 401
+        return None
+
+    def _require_admin_write_auth(self):
+        auth = admin_auth.admin_auth_status()
+        if auth.recovery_required:
+            return {"error": auth.error, "message": auth.message}, 403
+        if not auth.configured:
+            return {"error": "auth_not_configured"}, 403
+        session = self._current_admin_session()
+        if session is None:
+            return {"error": "not_authenticated"}, 401
+        csrf_token = self.headers.get("X-CSRF-Token", "")
+        if not csrf_token or not _hmac_compare(csrf_token, session.csrf_token):
+            return {"error": "csrf_failed"}, 403
+        return None
+
+    def _current_admin_session(self):
+        return self.server.auth_sessions.get(self._admin_session_cookie_value())
+
+    def _admin_session_cookie_value(self):
+        raw = self.headers.get("Cookie", "")
+        if not raw:
+            return None
+        parsed = cookies.SimpleCookie()
+        try:
+            parsed.load(raw)
+        except cookies.CookieError:
+            return None
+        morsel = parsed.get(ADMIN_SESSION_COOKIE_NAME)
+        return morsel.value if morsel else None
+
+    def _admin_session_cookie(self, session_id):
+        parts = [
+            f"{ADMIN_SESSION_COOKIE_NAME}={session_id}",
+            "Path=/",
+            "HttpOnly",
+            "SameSite=Strict",
+        ]
+        if getattr(self.server, "https_active", False):
+            parts.append("Secure")
+        return "; ".join(parts)
+
+    def _expired_admin_session_cookie(self):
+        parts = [
+            f"{ADMIN_SESSION_COOKIE_NAME}=",
+            "Path=/",
+            "Max-Age=0",
+            "HttpOnly",
+            "SameSite=Strict",
+        ]
+        if getattr(self.server, "https_active", False):
+            parts.append("Secure")
+        return "; ".join(parts)
 
     # --- handlers --------------------------------------------------------
 
@@ -1287,11 +1575,12 @@ class AdminHandler(BaseHTTPRequestHandler):
         with open(full_path, "rb") as handle:
             self._send_bytes(handle.read(), content_type)
 
-    def _send_json(self, payload, status=200):
+    def _send_json(self, payload, status=200, headers=None):
         self._send_bytes(
             json.dumps(payload).encode("utf-8"),
             "application/json; charset=utf-8",
             status=status,
+            headers=headers,
         )
 
     def _send_bytes(self, body, content_type, status=200, headers=None):

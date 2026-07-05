@@ -38,7 +38,12 @@ Admin Console can create and restore backups for you — see
 ## Do not expose local control interfaces
 
 EMS and the Admin Console are designed for trusted local networks. Do not expose
-them to the internet.
+the Admin Console — or the EMS ports — to the internet. Use them only on a
+trusted local network.
+
+The Admin Console requires a password (the same one as the EMS Dashboard) before
+any setup, maintenance or backup action. This is a local safeguard, not a
+substitute for keeping the appliance off the public internet.
 
 ## Technical safety model
 

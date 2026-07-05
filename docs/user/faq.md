@@ -150,9 +150,11 @@ engine, which is effectively root-equivalent.
 
 ### Does the Admin Console use the EMS Dashboard password?
 
-Not yet. The Admin Console has no built-in authentication, so keep it on a
-trusted local network. If a future release adds Admin authentication, it should
-reuse the EMS Dashboard password file; check your version's release notes.
+Yes. The Admin Console uses the same password file as the EMS Dashboard:
+`config/dashboard-auth.json`.
+
+On first start, if no password exists yet, the first browser user creates it.
+After that, use the EMS Dashboard password to log in.
 
 ## Troubleshooting
 

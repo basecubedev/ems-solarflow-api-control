@@ -163,8 +163,8 @@ later phases.
 
 ## Current limitations
 
-- No login/auth on the Admin Console. Run it only on a trusted local network (see
-  [Security note](#security-note)).
+- The Admin Console requires a password, but is still LAN-only by design. Run it
+  only on a trusted local network (see [Security note](#security-note)).
 - InfluxDB restore is not available in Admin. InfluxDB backups can be created,
   inspected, listed and deleted, but restore uses the EMS CLI (see
   [setup/admin-backup-restore.md](../user/admin-backup-restore.md)).
@@ -497,6 +497,10 @@ Device discovery scans the local network, so guardrails are enforced:
 - No user input is ever passed to a shell.
 - The server sends the same security headers as the dashboard and blocks static
   path traversal; dynamic values are escaped before insertion into the DOM.
+- Every non-auth API requires a valid Admin session; mutating requests also
+  require the session CSRF token. The Admin session uses its own
+  `ems_admin_session` cookie and the shared `config/dashboard-auth.json`
+  password (see [admin-architecture.md](admin-architecture.md#authentication)).
 
 The preview binds to `127.0.0.1` by default. If you publish it on `0.0.0.0` or
 use host networking, treat it as **trusted local network only** — never expose

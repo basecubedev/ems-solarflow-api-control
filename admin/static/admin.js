@@ -6,6 +6,79 @@
 const POLL_INTERVAL_MS = 1200;
 const POLL_MAX_MS = 120000;
 
+// --- Admin auth gate --------------------------------------------------------
+// One shared password protects the Admin Console and the EMS Dashboard (same
+// file, separate sessions). Every workflow below stays behind this gate.
+const authState = {
+  configured: false,
+  authenticated: false,
+  requiresInitialPassword: true,
+  recoveryRequired: false,
+  csrfToken: null,
+};
+
+// Pollers/bootstrap loaders check this before hitting a protected API so a
+// timer never hammers the backend with 401s after logout or session expiry.
+function isAuthenticated() {
+  return Boolean(authState && authState.authenticated);
+}
+
+// Reachable without an Admin session; every other POST needs the CSRF token.
+const AUTH_PUBLIC_POST_PATHS = new Set([
+  "/api/admin/auth/setup",
+  "/api/admin/auth/login",
+  "/api/admin/auth/logout",
+]);
+const AUTH_ERROR_CODES = new Set([
+  "not_authenticated",
+  "auth_not_configured",
+  "csrf_failed",
+  "auth_file_invalid",
+]);
+
+// Bypass the wrapped fetch for the public auth-status probe and login handshake,
+// so those calls never try to attach a CSRF token or recurse on auth failure.
+const rawFetch = window.fetch.bind(window);
+
+// Wrap fetch once so authenticated mutating requests carry X-CSRF-Token and any
+// auth failure (401/403 with an auth error) drops the UI back to the login gate.
+window.fetch = function (input, init) {
+  const options = init ? { ...init } : {};
+  const url = typeof input === "string" ? input : (input && input.url) || "";
+  const path = url.split("?", 1)[0];
+  const method = (options.method || "GET").toUpperCase();
+  const isApi = path.indexOf("/api/") !== -1;
+  if (
+    method !== "GET" &&
+    authState.csrfToken &&
+    isApi &&
+    !AUTH_PUBLIC_POST_PATHS.has(path)
+  ) {
+    const headers = new Headers(options.headers || {});
+    if (!headers.has("X-CSRF-Token")) {
+      headers.set("X-CSRF-Token", authState.csrfToken);
+    }
+    options.headers = headers;
+  }
+  return rawFetch(input, options).then((resp) => {
+    if (
+      (resp.status === 401 || resp.status === 403) &&
+      isApi &&
+      path !== "/api/admin/auth/status" &&
+      !AUTH_PUBLIC_POST_PATHS.has(path)
+    ) {
+      resp
+        .clone()
+        .json()
+        .then((data) => {
+          if (data && AUTH_ERROR_CODES.has(data.error)) onAuthLost();
+        })
+        .catch(() => {});
+    }
+    return resp;
+  });
+};
+
 const els = {
   form: document.getElementById("scan-form"),
   cidr: document.getElementById("cidr-input"),
@@ -989,6 +1062,9 @@ function renderIgnoredDevices() {
 }
 
 async function pollMdns() {
+  // Recurring interval poller: no-op while unauthenticated so a logged-out or
+  // expired session never keeps calling the protected discovery API.
+  if (!isAuthenticated()) return;
   try {
     const [statusRes, devicesRes] = await Promise.all([
       fetch("/api/discovery/mdns/status"),
@@ -1094,6 +1170,7 @@ function renderMqttBrokers() {
 }
 
 async function loadMqttBrokers() {
+  if (!isAuthenticated()) return;
   try {
     const res = await fetch("/api/discovery/mqtt-brokers");
     const data = await res.json();
@@ -8299,10 +8376,197 @@ document.querySelectorAll("[data-start-path]").forEach((card) => {
   card.addEventListener("click", () => startPath(card.dataset.startPath));
 });
 
-loadInstallState();
+// --- Auth gate wiring -------------------------------------------------------
+// The Admin Console renders the login/create-password gate first and only runs
+// its normal bootstrap (install state + discovery pollers) once authenticated.
+// Setup/maintenance/discovery APIs are never called before that.
+const authEls = {
+  view: document.getElementById("view-auth"),
+  createBlock: document.getElementById("auth-create"),
+  loginBlock: document.getElementById("auth-login"),
+  recoveryBlock: document.getElementById("auth-recovery"),
+  recoveryRetry: document.getElementById("auth-recovery-retry"),
+  createForm: document.getElementById("auth-create-form"),
+  createPassword: document.getElementById("auth-create-password"),
+  createConfirm: document.getElementById("auth-create-confirm"),
+  createError: document.getElementById("auth-create-error"),
+  loginForm: document.getElementById("auth-login-form"),
+  loginPassword: document.getElementById("auth-login-password"),
+  loginError: document.getElementById("auth-login-error"),
+  logout: document.getElementById("auth-logout"),
+};
 
-// Discovery pollers can run before the workspace is revealed; they only feed the
-// devices step once setup is entered.
-pollMdns();
-loadMqttBrokers();
-window.setInterval(pollMdns, MDNS_POLL_INTERVAL_MS);
+let adminBootstrapped = false;
+
+function setAuthError(el, message) {
+  if (!el) return;
+  if (!message) {
+    el.hidden = true;
+    el.textContent = "";
+    return;
+  }
+  el.hidden = false;
+  el.textContent = message;
+}
+
+const AUTH_ERROR_MESSAGES = {
+  password_required: "Enter a password.",
+  password_too_short: "Password must be at least 8 characters.",
+  password_mismatch: "Passwords do not match.",
+  auth_already_configured: "Password is already configured. Please log in.",
+  invalid_password: "Incorrect password.",
+  login_rate_limited: "Too many attempts. Wait a moment and try again.",
+  setup_rate_limited: "Too many attempts. Wait a moment and try again.",
+  install_dir_unavailable:
+    "Admin install directory is not mounted. Start the Admin Console with install-admin-console.sh.",
+};
+
+function authMessage(data) {
+  if (data && data.message) return data.message;
+  if (data && AUTH_ERROR_MESSAGES[data.error]) return AUTH_ERROR_MESSAGES[data.error];
+  return "Something went wrong. Please try again.";
+}
+
+// Show the auth gate (create, login, or recovery) and hide every workspace
+// surface so no setup/maintenance panel is reachable before authentication.
+function showAuthView(mode) {
+  workspaceRevealed = false;
+  if (startEls.gate) startEls.gate.hidden = true;
+  document.querySelectorAll("[data-admin-view-panel]").forEach((panel) => {
+    panel.hidden = true;
+  });
+  if (authEls.view) authEls.view.hidden = false;
+  if (authEls.createBlock) authEls.createBlock.hidden = mode !== "create";
+  if (authEls.loginBlock) authEls.loginBlock.hidden = mode !== "login";
+  if (authEls.recoveryBlock) authEls.recoveryBlock.hidden = mode !== "recovery";
+  if (authEls.logout) authEls.logout.hidden = true;
+}
+
+function showAuthenticatedApp() {
+  if (authEls.view) authEls.view.hidden = true;
+  if (authEls.logout) authEls.logout.hidden = false;
+  if (startEls.gate && !workspaceRevealed) startEls.gate.hidden = false;
+  if (!adminBootstrapped) {
+    adminBootstrapped = true;
+    loadInstallState();
+    // Discovery pollers only feed the devices step once setup is entered.
+    pollMdns();
+    loadMqttBrokers();
+    window.setInterval(pollMdns, MDNS_POLL_INTERVAL_MS);
+  }
+}
+
+function applyAuthStatus(status) {
+  authState.configured = Boolean(status.auth_configured);
+  authState.authenticated = Boolean(status.authenticated);
+  authState.requiresInitialPassword = Boolean(status.requires_initial_password);
+  authState.recoveryRequired = Boolean(status.recovery_required);
+  authState.csrfToken = status.csrf_token || null;
+  if (authState.authenticated) {
+    showAuthenticatedApp();
+  } else if (authState.recoveryRequired) {
+    // A malformed shared password file: block setup/login and ask for repair.
+    showAuthView("recovery");
+  } else if (authState.requiresInitialPassword) {
+    showAuthView("create");
+  } else {
+    showAuthView("login");
+  }
+}
+
+function onAuthLost() {
+  authState.authenticated = false;
+  authState.csrfToken = null;
+  refreshAuthStatus();
+}
+
+async function refreshAuthStatus() {
+  try {
+    const resp = await rawFetch("/api/admin/auth/status");
+    applyAuthStatus(await resp.json());
+  } catch (err) {
+    showAuthView("login");
+  }
+}
+
+async function submitCreatePassword(event) {
+  event.preventDefault();
+  setAuthError(authEls.createError, "");
+  const password = authEls.createPassword.value;
+  const confirm = authEls.createConfirm.value;
+  if (password !== confirm) {
+    setAuthError(authEls.createError, "Passwords do not match.");
+    return;
+  }
+  try {
+    const resp = await rawFetch("/api/admin/auth/setup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password, confirm_password: confirm }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (data && data.error === "auth_file_invalid") {
+      authState.recoveryRequired = true;
+      showAuthView("recovery");
+      return;
+    }
+    if (resp.status === 409) {
+      setAuthError(authEls.createError, "Password is already configured. Please log in.");
+      showAuthView("login");
+      return;
+    }
+    if (!resp.ok) {
+      setAuthError(authEls.createError, authMessage(data));
+      return;
+    }
+    applyAuthStatus(data);
+  } catch (err) {
+    setAuthError(authEls.createError, "Could not create the password.");
+  }
+}
+
+async function submitLogin(event) {
+  event.preventDefault();
+  setAuthError(authEls.loginError, "");
+  const password = authEls.loginPassword.value;
+  try {
+    const resp = await rawFetch("/api/admin/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (data && data.error === "auth_file_invalid") {
+      authState.recoveryRequired = true;
+      showAuthView("recovery");
+      return;
+    }
+    if (!resp.ok) {
+      setAuthError(authEls.loginError, authMessage(data));
+      return;
+    }
+    if (authEls.loginPassword) authEls.loginPassword.value = "";
+    applyAuthStatus(data);
+  } catch (err) {
+    setAuthError(authEls.loginError, "Could not log in.");
+  }
+}
+
+async function submitLogout() {
+  try {
+    const resp = await rawFetch("/api/admin/auth/logout", { method: "POST" });
+    const data = await resp.json().catch(() => ({}));
+    applyAuthStatus(data);
+  } catch (err) {
+    authState.authenticated = false;
+    authState.csrfToken = null;
+    showAuthView("login");
+  }
+}
+
+if (authEls.createForm) authEls.createForm.addEventListener("submit", submitCreatePassword);
+if (authEls.loginForm) authEls.loginForm.addEventListener("submit", submitLogin);
+if (authEls.logout) authEls.logout.addEventListener("click", submitLogout);
+if (authEls.recoveryRetry) authEls.recoveryRetry.addEventListener("click", refreshAuthStatus);
+
+refreshAuthStatus();

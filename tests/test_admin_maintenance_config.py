@@ -16,8 +16,14 @@ from admin.maintenance_config import (
     summarize_config_changes,
 )
 from admin.server import ScanRegistry, create_server
+from tests.admin_auth_helpers import auth_headers, authenticate
 
 pytestmark = pytest.mark.simulation
+
+
+@pytest.fixture(autouse=True)
+def _isolate(isolated_install_root):
+    return isolated_install_root
 
 
 def _config():
@@ -303,19 +309,22 @@ def _server(config_apply=None):
     )
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()
-    return srv, f"http://127.0.0.1:{srv.server_address[1]}"
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    authenticate(base)
+    return srv, base
 
 
 def _get(url):
-    with urllib.request.urlopen(url) as resp:
+    req = urllib.request.Request(url, headers=auth_headers(url, "GET"), method="GET")
+    with urllib.request.urlopen(req) as resp:
         return resp.status, json.loads(resp.read())
 
 
 def _post(url, body):
     data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(
-        url, data=data, headers={"Content-Type": "application/json"}, method="POST"
-    )
+    headers = dict(auth_headers(url, "POST"))
+    headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req) as resp:
             return resp.status, json.loads(resp.read() or b"null")

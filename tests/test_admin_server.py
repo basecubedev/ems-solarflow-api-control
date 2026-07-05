@@ -18,6 +18,7 @@ from admin.models import DiscoveredDevice
 from admin.mqtt_discovery import MqttBrokerDiscovery
 from admin.releases import ReleaseError
 from admin.server import ScanRegistry, create_server
+from tests.admin_auth_helpers import auth_headers, authenticate
 
 pytestmark = pytest.mark.simulation
 
@@ -77,6 +78,7 @@ def server():
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()
     base = f"http://127.0.0.1:{srv.server_address[1]}"
+    authenticate(base)
     try:
         yield base
     finally:
@@ -86,7 +88,7 @@ def server():
 
 def _request(url, method="GET", body=None):
     data = None
-    headers = {}
+    headers = dict(auth_headers(url, method))
     if body is not None:
         data = json.dumps(body).encode("utf-8")
         headers["Content-Type"] = "application/json"
@@ -939,6 +941,7 @@ def test_networks_endpoint_uses_injected_detector():
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()
     base = f"http://127.0.0.1:{srv.server_address[1]}"
+    authenticate(base)
     try:
         status, _, payload = _request(f"{base}/api/discovery/networks")
         assert status == 200
@@ -1008,6 +1011,7 @@ def test_gateway_probe_endpoint_uses_injected_prober():
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()
     base = f"http://127.0.0.1:{srv.server_address[1]}"
+    authenticate(base)
     try:
         status, headers, payload = _request(
             f"{base}/api/discovery/gateway-probe", method="POST"
@@ -1101,7 +1105,9 @@ def _serve(**kwargs):
                         gateway_prober=_fake_gateway_prober, **kwargs)
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()
-    return srv, f"http://127.0.0.1:{srv.server_address[1]}"
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    authenticate(base)
+    return srv, base
 
 
 def test_mdns_enable_disable_and_results_use_provider():

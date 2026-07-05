@@ -11,8 +11,14 @@ import pytest
 
 from admin.ems_cli import EmsCliDiagnostics
 from admin.server import ScanRegistry, create_server
+from tests.admin_auth_helpers import auth_headers, authenticate
 
 pytestmark = pytest.mark.simulation
+
+
+@pytest.fixture(autouse=True)
+def _isolate(isolated_install_root):
+    return isolated_install_root
 
 
 COMPOSE_TEXT = """
@@ -65,12 +71,15 @@ def _server(ems_cli):
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()
     base = f"http://127.0.0.1:{srv.server_address[1]}"
+    authenticate(base)
     return srv, base
 
 
 def _post(url, body=None):
     data = json.dumps(body).encode("utf-8") if body is not None else b""
-    headers = {"Content-Type": "application/json"} if body is not None else {}
+    headers = dict(auth_headers(url, "POST"))
+    if body is not None:
+        headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req) as resp:
@@ -206,7 +215,11 @@ def test_overview_endpoint_still_works_alongside_diagnostics(tmp_path, monkeypat
     ems_cli = _make_ems_cli(tmp_path, FakeDocker(_running_ems()), lambda *a, **k: _completed())
     srv, base = _server(ems_cli)
     try:
-        with urllib.request.urlopen(f"{base}/api/admin/maintenance/overview") as resp:
+        overview_url = f"{base}/api/admin/maintenance/overview"
+        overview_req = urllib.request.Request(
+            overview_url, headers=auth_headers(overview_url, "GET"), method="GET"
+        )
+        with urllib.request.urlopen(overview_req) as resp:
             overview = json.loads(resp.read())
     finally:
         srv.shutdown()

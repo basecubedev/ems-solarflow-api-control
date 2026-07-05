@@ -119,6 +119,24 @@ def test_admin_installer_creates_admin_data_layout():
     assert "mkdir -p" in text
 
 
+def test_admin_installer_creates_config_dir_for_shared_password():
+    # config/ must exist so the Admin Console can create config/dashboard-auth.json
+    # before EMS or config/config.json exist (fresh install).
+    text = read(INSTALLER)
+    make_dirs = text.split("make_dirs()", 1)[1].split("}", 1)[0]
+    assert "config" in make_dirs
+
+
+def test_admin_installer_does_not_generate_password_or_token():
+    # Auth is created in the browser (first visitor wins); the installer must not
+    # bake a password, an env password, or a setup token.
+    text = read(INSTALLER)
+    assert "dashboard-auth.json" not in text
+    assert "set-password" not in text
+    assert "SETUP_TOKEN" not in text
+    assert "ADMIN_PASSWORD" not in text
+
+
 def test_admin_installer_dry_run_writes_nothing(tmp_path):
     # Dry-run degrades gracefully with or without Docker and must not touch disk.
     result = subprocess.run(

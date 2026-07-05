@@ -3698,3 +3698,105 @@ def test_backup_row_main_stacks_vertically_and_name_never_wraps():
     mobile = css.split("@media (max-width: 860px) {", 1)[1].split("\n}", 1)[0]
     assert "white-space: normal" not in mobile
     assert "overflow-wrap: anywhere" not in mobile
+
+
+# --- Admin auth gate -------------------------------------------------------
+
+
+def test_index_has_auth_gate_views_and_logout():
+    html = _read("index.html")
+    assert 'id="view-auth"' in html
+    assert 'id="auth-create"' in html
+    assert 'id="auth-login"' in html
+    assert 'id="auth-logout"' in html
+    # The create-password view frames the password as shared with the Dashboard.
+    assert "shared with the EMS Dashboard" in html
+    assert "Use your EMS Dashboard password." in html
+
+
+def test_js_checks_auth_status_before_bootstrapping_workflows():
+    js = _read("admin.js")
+    assert "/api/admin/auth/status" in js
+    # The install-state / discovery bootstrap only runs once authenticated.
+    fn = js.split("function showAuthenticatedApp", 1)[1].split("\nfunction ", 1)[0]
+    assert "loadInstallState()" in fn
+    assert "pollMdns()" in fn
+    assert "loadMqttBrokers()" in fn
+    # There is no unconditional top-level bootstrap anymore.
+    assert "\nloadInstallState();" not in js
+    # The auth gate is what runs at startup.
+    assert "refreshAuthStatus();" in js
+
+
+def test_js_posts_to_auth_setup_login_logout_endpoints():
+    js = _read("admin.js")
+    assert "/api/admin/auth/setup" in js
+    assert "/api/admin/auth/login" in js
+    assert "/api/admin/auth/logout" in js
+
+
+def test_js_attaches_csrf_token_to_authenticated_posts():
+    js = _read("admin.js")
+    assert "X-CSRF-Token" in js
+    assert "authState.csrfToken" in js
+    # Public auth endpoints are exempt from the CSRF attach.
+    assert "AUTH_PUBLIC_POST_PATHS" in js
+
+
+def test_js_returns_to_auth_view_on_401_or_403():
+    js = _read("admin.js")
+    assert "resp.status === 401 || resp.status === 403" in js
+    lost = js.split("function onAuthLost", 1)[1].split("\nasync function ", 1)[0]
+    assert "refreshAuthStatus()" in lost
+
+
+def test_js_logout_button_calls_endpoint_once_authenticated():
+    js = _read("admin.js")
+    logout = js.split("async function submitLogout", 1)[1].split("\n\n", 1)[0]
+    assert "/api/admin/auth/logout" in logout
+    assert 'authEls.logout.addEventListener("click", submitLogout)' in js
+
+
+def test_admin_frontend_defines_is_authenticated_helper():
+    js = _read("admin.js")
+    assert "function isAuthenticated()" in js
+    assert "authState.authenticated" in js
+
+
+def test_admin_frontend_mdns_poll_checks_auth_before_fetch():
+    js = _read("admin.js")
+    fn = js.split("async function pollMdns", 1)[1].split("\nasync function ", 1)[0]
+    # The recurring interval poller no-ops while unauthenticated, before any fetch.
+    assert "isAuthenticated()" in fn
+    assert fn.find("isAuthenticated") < fn.find("fetch(")
+
+
+def test_admin_frontend_mqtt_load_checks_auth_before_fetch():
+    js = _read("admin.js")
+    fn = js.split("async function loadMqttBrokers", 1)[1].split(
+        "\nasync function ", 1
+    )[0]
+    assert "isAuthenticated()" in fn
+    assert fn.find("isAuthenticated") < fn.find("fetch(")
+
+
+def test_index_has_auth_recovery_panel_without_password_forms():
+    html = _read("index.html")
+    recovery = html.split('id="auth-recovery"', 1)[1].split("</section>", 1)[0]
+    assert "Password file needs repair" in recovery
+    assert "config/dashboard-auth.json" in recovery
+    assert 'id="auth-recovery-retry"' in recovery
+    # The recovery block offers a Retry action, never a password form.
+    assert "<form" not in recovery
+    assert "type=\"password\"" not in recovery
+
+
+def test_js_recovery_status_blocks_password_forms():
+    js = _read("admin.js")
+    fn = js.split("function applyAuthStatus", 1)[1].split("\nfunction ", 1)[0]
+    # recovery_required routes to the repair panel, not create/login.
+    assert "recovery_required" in fn
+    assert 'showAuthView("recovery")' in fn
+    assert fn.find('showAuthView("recovery")') < fn.find('showAuthView("create")')
+    # The Retry button re-checks the shared auth status.
+    assert 'authEls.recoveryRetry.addEventListener("click", refreshAuthStatus)' in js

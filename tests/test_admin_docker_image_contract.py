@@ -63,6 +63,13 @@ def test_dockerfile_copies_the_ems_path_resolver():
     assert "ems/paths.py" in copies
 
 
+def test_admin_image_contains_dashboard_auth_helper():
+    # Admin shares the EMS Dashboard password; the auth helper must ship in the
+    # image so the Admin server can hash/verify against config/dashboard-auth.json.
+    dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+    assert "COPY dashboard/auth.py ./dashboard/auth.py" in dockerfile
+
+
 def test_copied_files_are_sufficient_for_admin_startup(tmp_path):
     app_root = tmp_path / "app"
     app_root.mkdir()

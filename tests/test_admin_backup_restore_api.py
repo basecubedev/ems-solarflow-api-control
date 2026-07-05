@@ -20,6 +20,7 @@ from admin.backup_restore import (
 )
 from admin.install_context import detect_install_context
 from admin.server import create_server
+from tests.admin_auth_helpers import auth_headers, authenticate
 from tests.test_admin_backup_restore import (
     _build_install,
     _make_config_archive,
@@ -48,6 +49,7 @@ def server(install):
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()
     base = f"http://127.0.0.1:{srv.server_address[1]}"
+    authenticate(base)
     try:
         yield base
     finally:
@@ -66,6 +68,7 @@ def backup_server(install):
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()
     base = f"http://127.0.0.1:{srv.server_address[1]}"
+    authenticate(base)
     try:
         yield base, service
     finally:
@@ -75,7 +78,7 @@ def backup_server(install):
 
 def _request(url, method="GET", body=None):
     data = None
-    headers = {}
+    headers = dict(auth_headers(url, method))
     if body is not None:
         data = json.dumps(body).encode("utf-8")
         headers["Content-Type"] = "application/json"

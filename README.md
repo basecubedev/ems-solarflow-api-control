@@ -56,6 +56,8 @@ Open:
 http://127.0.0.1:8090
 ```
 
+On first start, create the shared EMS/Admin password in the browser.
+
 Default mode uses host networking for reliable local discovery.
 Use `--bridge` only if you need Docker bridge networking.
 

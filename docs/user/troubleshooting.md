@@ -35,6 +35,17 @@ http://127.0.0.1:8090
 
 If the Admin Console runs on another LAN host, use that host IP instead.
 
+### Admin Console says the password file needs repair
+
+The Admin Console and EMS Dashboard share `config/dashboard-auth.json`.
+
+If this file is damaged, the Admin Console will not create a new password
+automatically. Repair or remove the file on the EMS host, then reload the Admin
+Console.
+
+Do this only if you understand that removing the file resets the local
+dashboard/admin password.
+
 ### Device discovery does not find my devices
 
 Check that your EMS host is in the same local network as your devices.

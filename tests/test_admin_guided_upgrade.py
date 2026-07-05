@@ -22,8 +22,14 @@ from admin.image_identity import (
 )
 from admin.install_context import detect_install_context
 from admin.server import ScanRegistry, create_server
+from tests.admin_auth_helpers import auth_headers, authenticate
 
 pytestmark = pytest.mark.simulation
+
+
+@pytest.fixture(autouse=True)
+def _isolate(isolated_install_root):
+    return isolated_install_root
 
 TAG = "v0.6.1"
 
@@ -441,9 +447,9 @@ def test_verify_unknown_identity_blocks_before_mutation(tmp_path):
 
 def _post(url, body):
     data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(
-        url, data=data, headers={"Content-Type": "application/json"}, method="POST"
-    )
+    headers = dict(auth_headers(url, "POST"))
+    headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req) as resp:
             return resp.status, json.loads(resp.read() or b"null")
@@ -452,7 +458,7 @@ def _post(url, body):
 
 
 def _get(url):
-    req = urllib.request.Request(url, method="GET")
+    req = urllib.request.Request(url, headers=auth_headers(url, "GET"), method="GET")
     try:
         with urllib.request.urlopen(req) as resp:
             return resp.status, json.loads(resp.read() or b"null")
@@ -476,7 +482,9 @@ def _server(guided_upgrade):
     registry = ScanRegistry(scan_runner=lambda *a, **k: ([], []))
     srv = create_server("127.0.0.1", 0, registry=registry, guided_upgrade=guided_upgrade)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    return srv, f"http://127.0.0.1:{srv.server_address[1]}"
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    authenticate(base)
+    return srv, base
 
 
 def test_endpoint_requires_confirm(tmp_path):

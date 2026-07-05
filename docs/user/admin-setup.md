@@ -42,6 +42,12 @@ Bridge mode publishes the UI on `127.0.0.1:8090` and isolates the container from
 the host network, so automatic LAN discovery can be less reliable; enter your LAN
 CIDR manually if a scan sees only Docker networks.
 
+A fresh install may start with only the Admin Console — no EMS container and no
+`config/config.json` yet. On first start, create the shared EMS/Admin password
+in the browser (the first visitor creates it), then continue Guided setup. The
+password is saved to `config/dashboard-auth.json` and later reused by the EMS
+Dashboard.
+
 Run the Admin Console only on a trusted local machine or trusted LAN — never
 expose it to the internet. Contributors building from a Git checkout use
 `deploy/admin/start-admin-setup.sh` instead — see
