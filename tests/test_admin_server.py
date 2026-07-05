@@ -22,6 +22,20 @@ from admin.server import ScanRegistry, create_server
 pytestmark = pytest.mark.simulation
 
 
+@pytest.fixture(autouse=True)
+def _isolate_install_root(isolated_install_root):
+    """Keep these tests off the developer's real repo-local config/data.
+
+    ``create_server`` builds the config preview/export/apply services with the
+    default install-context provider, so without isolation a developer's local
+    config/config.json would leak into the server's setup endpoints. Tests that
+    intentionally exercise path resolution re-point ``BASE_DIR``/``EMS_INSTALL_DIR``
+    themselves on top of this baseline.
+    """
+
+    return isolated_install_root
+
+
 def _fake_scan(cidr, timeout_ms=600, max_workers=32):
     device = DiscoveredDevice(
         ip="192.168.178.42",
@@ -117,6 +131,41 @@ def test_status_endpoint_reports_config_apply_capability(server):
     assert "config_apply" in payload["capabilities"]
     assert "deployment_start" in payload["capabilities"]
     assert payload["writes_generated_config"] is True
+
+
+def test_setup_config_catalog_endpoint_returns_setup_sections(server):
+    status, _, payload = _request(f"{server}/api/setup/config/catalog")
+
+    assert status == 200
+    assert payload["mode"] == "setup"
+    ids = [section["id"] for section in payload["sections"]]
+    assert ids[:3] == ["system", "grid_meter", "devices"]
+    assert "ha" not in ids
+    assert set(payload["grid_meter_variants"]) >= {"shelly", "mqtt"}
+
+
+def test_setup_config_catalog_endpoint_never_exposes_secret_values(server):
+    _, _, payload = _request(f"{server}/api/setup/config/catalog")
+    secrets = [
+        field
+        for section in payload["sections"]
+        for field in section["fields"]
+        if field.get("secret")
+    ]
+
+    assert secrets  # at least the MQTT password is marked secret
+    assert all("default" not in field for field in secrets)
+
+
+def test_config_preview_endpoint_accepts_features_object(server):
+    status, _, payload = _request(
+        f"{server}/api/setup/config-preview",
+        method="POST",
+        body={"devices": [], "features": {"winter.enabled": True}},
+    )
+
+    assert status == 200
+    assert "validation" in payload
 
 
 class _FakeReleaseManager:
@@ -392,6 +441,43 @@ def test_config_status_reports_generated_config_presence(tmp_path):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_config_preview_endpoint_ignores_local_repo_config(tmp_path, monkeypatch):
+    # Regression: even when the resolved repo root holds a gitignored local
+    # config/config.json, the setup preview endpoint must stay isolated to the
+    # explicit EMS_INSTALL_DIR and use the release template, never reading or
+    # touching the developer's local runtime config.
+    from ems import paths
+
+    repo_root = tmp_path / "repo"
+    (repo_root / "config").mkdir(parents=True)
+    local_config = repo_root / "config" / "config.json"
+    local_config.write_bytes(b'{"operator_only": "do-not-touch"}')
+    original = local_config.read_bytes()
+    monkeypatch.setattr(paths, "BASE_DIR", str(repo_root))
+
+    install_root = tmp_path / "install"
+    install_root.mkdir()
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(install_root))
+
+    srv, base = _serve(
+        release_manager=_FakeReleaseManager(tmp_path / "admin", template={"devices": []})
+    )
+    try:
+        status, _, preview = _request(
+            f"{base}/api/setup/config-preview",
+            method="POST",
+            body={"devices": [], "supported_grid_meter_count": 0},
+        )
+        assert status == 200
+        assert preview["base"] == {"source": "release_template"}
+        assert preview["config"] == {"devices": []}
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert local_config.read_bytes() == original
 
 
 def _apply_service(manager, admin_data_dir, install_root):

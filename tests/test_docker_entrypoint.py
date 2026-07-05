@@ -197,7 +197,7 @@ def test_docker_entrypoint_has_clear_root_refusal_message():
 
 
 def test_docker_entrypoint_uses_shared_config_template(tmp_path):
-    template_path = ROOT / "config.template.json"
+    template_path = ROOT / "config" / "config.template.json"
     config_path = tmp_path / "config" / "config.json"
 
     result = run_entrypoint(tmp_path, config_path, template_path)

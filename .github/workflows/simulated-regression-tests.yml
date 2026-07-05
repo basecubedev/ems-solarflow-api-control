@@ -59,6 +59,10 @@ jobs:
         run: |
           python -m compileall ems dashboard scripts tests emsctl.py ems-solarflow-api-control.py
 
+      - name: Check generated config template
+        run: |
+          python tools/build_config_template.py --check
+
       - name: Run full test suite (excludes real-Docker e2e, see docker-first-e2e job)
         run: |
           pytest -q -m "not docker" tests/

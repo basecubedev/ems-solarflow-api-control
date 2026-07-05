@@ -191,6 +191,32 @@ def test_prepare_extracts_only_whitelisted_resources_and_writes_manifest(tmp_pat
     assert not (tmp_path / "selected-release.json").exists()
 
 
+def test_prepare_accepts_config_directory_template(tmp_path):
+    # Newer release archives ship the template at config/config.template.json;
+    # it is flattened into the cache as config.template.json.
+    content = {
+        "repo/config/config.template.json": b'{"devices": []}\n',
+        "repo/docker-compose.example.yml": b"services: {}\n",
+        "repo/install-docker.sh": b"#!/bin/sh\n",
+        "repo/install-docker.ps1": b"Write-Host install\n",
+        "repo/deploy/docker/compose.influxdb.yml": b"services: {}\n",
+    }
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as handle:
+        for name, value in content.items():
+            handle.writestr(name, value)
+
+    manager = ReleaseManager(data_dir=tmp_path, urlopen=_opener(output.getvalue()))
+    manager.list_releases()
+    result = manager.prepare("v0.6.0")
+    root = tmp_path / "releases" / "v0.6.0"
+
+    assert result["status"] == "ready"
+    assert result["config_template_loaded"] is True
+    assert (root / "config.template.json").is_file()
+    assert not (root / "config").exists()
+
+
 def test_archive_path_traversal_is_rejected(tmp_path):
     archive = _archive({"repo/../../outside.txt": b"unsafe"})
     manager = ReleaseManager(data_dir=tmp_path, urlopen=_opener(archive))

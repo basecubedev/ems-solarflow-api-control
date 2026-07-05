@@ -31,9 +31,9 @@ class ConfigApplyService:
         self.install_context_provider = install_context_provider
         self._write_lock = threading.Lock()
 
-    def apply(self, draft, supported_grid_meter_count=None):
+    def apply(self, draft, supported_grid_meter_count=None, features=None):
         payload, preview = self.config_export.serialize(
-            draft, supported_grid_meter_count
+            draft, supported_grid_meter_count, features
         )
         context = self.install_context_provider()
         target = Path(context.config_path)

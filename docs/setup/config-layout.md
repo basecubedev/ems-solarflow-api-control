@@ -29,9 +29,20 @@ Else if ./config.json exists    -> use it (legacy fallback)
 Else (new config generation)    -> create ./config/config.json
 ```
 
-Template resolution prefers `./config/config.template.json` and falls back to
-the legacy root `./config.template.json` (and, inside the Docker image,
-`/app/config.template.json`).
+`./config/config.template.json` is the canonical template shipped in the
+repository. Template resolution prefers it and falls back to a legacy root
+`./config.template.json` (kept only for older installs) and, inside the Docker
+image, to `/app/config.template.json` (copied from the canonical file at build
+time).
+
+The committed template is generated from `ems/config_catalog.py`. Change the
+catalog, not the generated JSON, when adding defaults, comments, variants, or
+configuration metadata. Regenerate and verify it with:
+
+```bash
+python tools/build_config_template.py
+python tools/build_config_template.py --check
+```
 
 ## Legacy migration states
 

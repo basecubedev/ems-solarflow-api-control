@@ -37,8 +37,13 @@ RESOURCE_PATHS = {
     "deploy_docker_dir": "deploy/docker",
 }
 OPTIONAL_FILES = {"docs/install-docker.md", "docs/docker.md"}
+CONFIG_TEMPLATE_NAME = "config.template.json"
+# Release archives may ship the template at the canonical config/ path or, for
+# older releases, at the archive root. Both are flattened to CONFIG_TEMPLATE_NAME
+# in the cache so downstream cache checks stay stable.
+ARCHIVE_TEMPLATE_PATHS = ("config/config.template.json", CONFIG_TEMPLATE_NAME)
 REQUIRED_FILES = {
-    "config.template.json",
+    CONFIG_TEMPLATE_NAME,
     "docker-compose.example.yml",
     "install-docker.sh",
     "install-docker.ps1",
@@ -128,8 +133,15 @@ def _is_whitelisted(path):
     return (
         value in REQUIRED_FILES
         or value in OPTIONAL_FILES
+        or value in ARCHIVE_TEMPLATE_PATHS
         or value.startswith("deploy/docker/")
     )
+
+
+def _cache_relative(relative):
+    if relative.as_posix() in ARCHIVE_TEMPLATE_PATHS:
+        return PurePosixPath(CONFIG_TEMPLATE_NAME)
+    return relative
 
 
 class ReleaseManager:
@@ -465,8 +477,12 @@ class ReleaseManager:
             for item in payload["tree"]
             if isinstance(item, dict) and item.get("type") == "blob"
         }
-        return REQUIRED_FILES.issubset(paths) and any(
-            str(path).startswith("deploy/docker/") for path in paths
+        resource_files = REQUIRED_FILES - {CONFIG_TEMPLATE_NAME}
+        has_template = any(path in paths for path in ARCHIVE_TEMPLATE_PATHS)
+        return (
+            resource_files.issubset(paths)
+            and has_template
+            and any(str(path).startswith("deploy/docker/") for path in paths)
         )
 
     @staticmethod
@@ -566,9 +582,12 @@ class ReleaseManager:
                 if (info.external_attr >> 16) & 0o170000 == 0o120000:
                     raise ReleaseError("Release archive contains a symbolic link.")
                 total = self._checked_total(total, info.file_size)
+                cache_relative = _cache_relative(relative)
                 with handle.open(info) as source:
-                    self._write_resource(destination, relative, source.read(MAX_FILE_BYTES + 1))
-                extracted.add(relative.as_posix())
+                    self._write_resource(
+                        destination, cache_relative, source.read(MAX_FILE_BYTES + 1)
+                    )
+                extracted.add(cache_relative.as_posix())
         return extracted
 
     def _extract_tar(self, handle, destination):
@@ -584,8 +603,11 @@ class ReleaseManager:
             source = handle.extractfile(member)
             if source is None:
                 raise ReleaseError("Release archive contains an unreadable resource.")
-            self._write_resource(destination, relative, source.read(MAX_FILE_BYTES + 1))
-            extracted.add(relative.as_posix())
+            cache_relative = _cache_relative(relative)
+            self._write_resource(
+                destination, cache_relative, source.read(MAX_FILE_BYTES + 1)
+            )
+            extracted.add(cache_relative.as_posix())
         return extracted
 
     @staticmethod

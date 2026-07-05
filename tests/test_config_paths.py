@@ -146,13 +146,12 @@ def test_layout_state_both_different(tmp_path):
     )
 
 
-def test_repo_template_copies_stay_in_sync():
-    # The standard config/config.template.json is the preferred location; the
-    # legacy root config.template.json is kept for Docker build and old
-    # checkouts. Guard against the two copies drifting.
+def test_repo_uses_canonical_template_only():
+    # config/config.template.json is the single canonical editable template.
+    # The legacy root copy must no longer exist in the repo; Docker builds
+    # generate /app/config.template.json from the canonical file instead.
     root = Path(paths.BASE_DIR)
-    standard = root / "config" / "config.template.json"
-    legacy = root / "config.template.json"
-    assert standard.exists()
-    assert legacy.exists()
-    assert standard.read_bytes() == legacy.read_bytes()
+    canonical = root / "config" / "config.template.json"
+    assert canonical.exists()
+    assert not (root / "config.template.json").exists()
+    assert paths.resolve_template_path(base_dir=root) == canonical

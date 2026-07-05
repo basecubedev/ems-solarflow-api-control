@@ -13,6 +13,13 @@ from admin.releases import ReleaseError
 pytestmark = pytest.mark.simulation
 
 
+@pytest.fixture(autouse=True)
+def _isolate_install_root(isolated_install_root):
+    """Keep these tests off the developer's real repo-local config/data."""
+
+    return isolated_install_root
+
+
 TEMPLATE = {
     "system": {"max_total_power": 1600, "dry_run": False},
     "devices": [
@@ -321,3 +328,110 @@ def test_fresh_setup_uses_release_template_base_when_no_config(tmp_path):
     assert result["base"] == {"source": "release_template"}
     assert result["ready"] is True
     assert [d["name"] for d in result["config"]["devices"]] == ["inverter_1"]
+
+
+def test_default_install_context_is_isolated_from_local_repo_config():
+    # Regression: with the isolation fixture active, a preview built with the
+    # default install-context provider must fall back to the release template
+    # instead of a developer's real gitignored repo-local config/config.json.
+    # Without isolation this resolves against paths.BASE_DIR and, in a used
+    # developer checkout, silently adopts the local config as the base.
+    result = ConfigPreviewGenerator(_ReleaseManager()).generate(
+        [_device(1), _meter()], 1
+    )
+
+    assert result["base"] == {"source": "release_template"}
+
+
+# --- catalog-driven feature settings integration -------------------------
+
+FEATURE_TEMPLATE = {
+    "system": {"max_total_power": 1600, "dry_run": False},
+    "devices": [{"name": "WR1", "ip": "192.0.2.1", "sn": "YOUR_SN", "max_power": 800}],
+    "grid_meter": {"type": "shelly", "ip": "192.0.2.3"},
+    "winter": {"enabled": False, "summer_min_soc": 15, "winter_min_soc": 40},
+    "dashboard": {"enabled": True, "port": 8080},
+    "influxdb": {"enabled": False, "mode": "bundled"},
+}
+
+
+def _feature_generator():
+    return ConfigPreviewGenerator(_ReleaseManager(copy.deepcopy(FEATURE_TEMPLATE)))
+
+
+def test_winter_feature_values_flow_into_preview():
+    result = _feature_generator().generate(
+        [_device(1), _meter()],
+        1,
+        features={
+            "winter.enabled": True,
+            "winter.summer_min_soc": 20,
+            "winter.winter_min_soc": 55,
+        },
+    )
+
+    winter = result["config"]["winter"]
+    assert winter["enabled"] is True
+    assert winter["summer_min_soc"] == 20
+    assert winter["winter_min_soc"] == 55
+    codes = {issue["code"] for issue in result["validation"]["info"]}
+    assert "setup_features_applied" in codes
+
+
+def test_dashboard_port_feature_changes_preview():
+    result = _feature_generator().generate(
+        [_device(1), _meter()], 1, features={"dashboard.port": "9099"}
+    )
+
+    assert result["config"]["dashboard"]["port"] == 9099
+
+
+def test_influxdb_enable_and_mode_feature_changes_preview():
+    result = _feature_generator().generate(
+        [_device(1), _meter()],
+        1,
+        features={"influxdb.enabled": True, "influxdb.mode": "external"},
+    )
+
+    influx = result["config"]["influxdb"]
+    assert influx["enabled"] is True
+    assert influx["mode"] == "external"
+
+
+def test_grid_meter_variant_feature_overrides_draft_type():
+    result = _feature_generator().generate(
+        [_device(1), _meter()],
+        1,
+        features={
+            "grid_meter.type": "mqtt",
+            "grid_meter.mqtt.host": "192.0.2.50",
+            "grid_meter.mqtt.port": "1883",
+        },
+    )
+
+    grid = result["config"]["grid_meter"]
+    assert grid["type"] == "mqtt"
+    assert grid["mqtt"]["host"] == "192.0.2.50"
+    assert grid["mqtt"]["port"] == 1883
+
+
+def test_features_are_optional_and_do_not_change_preview_by_default():
+    baseline = _feature_generator().generate([_device(1), _meter()], 1)
+    with_empty = _feature_generator().generate([_device(1), _meter()], 1, features={})
+
+    assert baseline["config"] == with_empty["config"]
+    assert with_empty["config"]["winter"]["enabled"] is False
+
+
+def test_device_setup_still_works_alongside_features():
+    result = _feature_generator().generate(
+        [_device(1, config_name="WR1", ip="192.168.9.9", serial_number="SN9"), _meter()],
+        1,
+        features={"winter.enabled": True},
+    )
+
+    assert result["ready"] is True
+    device = result["config"]["devices"][0]
+    assert device["name"] == "WR1"
+    assert device["ip"] == "192.168.9.9"
+    assert device["sn"] == "SN9"

@@ -53,10 +53,12 @@ RUN pip install --no-cache-dir --no-compile -r requirements.txt \
 COPY admin/ ./admin/
 COPY dashboard/__init__.py ./dashboard/__init__.py
 COPY dashboard/static_files.py ./dashboard/static_files.py
-# Admin install-context detection reuses the central EMS path resolver; copy just
-# that (not the whole EMS core) so the orchestration image stays small.
+# Admin install-context detection reuses the central EMS path resolver, and the
+# setup config UI reads the central config catalog; copy just those (not the
+# whole EMS core) so the orchestration image stays small.
 COPY ems/__init__.py ./ems/__init__.py
 COPY ems/paths.py ./ems/paths.py
+COPY ems/config_catalog.py ./ems/config_catalog.py
 
 USER admin
 

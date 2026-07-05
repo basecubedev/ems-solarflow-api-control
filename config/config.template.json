@@ -17,14 +17,6 @@
     "backup_failure_policy": "continue_without_upgrade"
   },
 
-  "ha": {
-    "_comment": "Optional Home Assistant integration. Standalone default keeps HA disabled.",
-    "enabled": false,
-    "control_enabled": false,
-    "url": "http://homeassistant.local:8123",
-    "token": "YOUR_TOKEN_HERE"
-  },
-
   "system": {
     "_comment": [
       "Standalone live-control defaults.",
@@ -81,6 +73,73 @@
     "soc_reconcile_interval": 10
   },
 
+  "grid_meter": {
+    "_comment": [
+      "Household or grid power meter used as the EMS load signal.",
+      "Supported types: shelly, shelly_3em_gen1, ecotracker, tasmota_http,",
+      "zendure_smartmeter_d0, mqtt.",
+      "Shelly reads total power by default.",
+      "Use channels like [c] or [a,c] for selected clamps or phases.",
+      "Tasmota needs url or ip plus power_path.",
+      "Zendure SmartMeter D0 and MQTT use grid_meter.mqtt with host, port, topic,",
+      "payload_format and max_age_seconds."
+    ],
+    "type": "shelly",
+    "ip": "192.168.1.50"
+  },
+
+  "_comment_devices": [
+    "One entry per Zendure device.",
+    "Replace IP and SN with values from your local installation.",
+    "Use one real device first, then add more devices after validation."
+  ],
+  "devices": [
+    {
+      "name": "WR1",
+      "ip": "192.168.1.100",
+      "sn": "YOUR_SN",
+
+      "_comment_smart_mode": [
+        "Use smart_mode=1 for runtime/RAM mode.",
+        "This is the normal setting for live EMS control."
+      ],
+      "smart_mode": 1,
+      "max_power": 800,
+      "pv_kwp": 1.0,
+      "pv_priority_factor": 1.0,
+      "battery_kwh": 1.0,
+
+      "_comment_soc": [
+        "Battery SOC limits in percent.",
+        "Use 0 to leave a value unmanaged."
+      ],
+      "min_soc": 15,
+      "max_soc": 100
+    },
+    {
+      "name": "WR2",
+      "ip": "192.168.1.101",
+      "sn": "YOUR_SN",
+
+      "_comment_smart_mode": [
+        "Use smart_mode=1 for runtime/RAM mode.",
+        "This is the normal setting for live EMS control."
+      ],
+      "smart_mode": 1,
+      "max_power": 800,
+      "pv_kwp": 1.0,
+      "pv_priority_factor": 1.0,
+      "battery_kwh": 1.0,
+
+      "_comment_soc": [
+        "Battery SOC limits in percent.",
+        "Use 0 to leave a value unmanaged."
+      ],
+      "min_soc": 15,
+      "max_soc": 100
+    }
+  ],
+
   "winter": {
     "_comment": [
       "Optional seasonal minimum-SOC strategy.",
@@ -94,6 +153,35 @@
     "ramp_step_percent": 5,
     "adjust_hour": 12,
     "ac_charge_power": 200
+  },
+
+  "battery_full_charge_assist": {
+    "_comment": [
+      "Optional full-charge assist for battery-backed devices.",
+      "Temporarily raises device Max-SoC to 100%.",
+      "Use it when devices should reach firmware Max-SoC periodically."
+    ],
+    "enabled": false,
+    "interval_days": 28,
+    "assist_window_days": 7,
+    "assist_start_soc": 80,
+    "force_time": "14:00",
+    "ac_charge_power": 600,
+    "enable_ac_charge_mode": true,
+    "state_database_path": "data/ems_state.sqlite"
+  },
+
+  "energy_savings": {
+    "_comment": [
+      "Lightweight daily energy statistics stored in SQLite.",
+      "Values are based on measured inverter AC output.",
+      "Set price_per_kwh to estimate savings."
+    ],
+    "enabled": true,
+    "price_per_kwh": 0.0,
+    "currency": "EUR",
+    "max_sample_delta_seconds": 20,
+    "timezone": "Europe/Berlin"
   },
 
   "dashboard": {
@@ -213,99 +301,15 @@
     ]
   },
 
-  "energy_savings": {
+  "ha": {
     "_comment": [
-      "Lightweight daily energy statistics stored in SQLite.",
-      "Values are based on measured inverter AC output.",
-      "Set price_per_kwh to estimate savings."
-    ],
-    "enabled": true,
-    "price_per_kwh": 0.0,
-    "currency": "EUR",
-    "max_sample_delta_seconds": 20,
-    "timezone": "Europe/Berlin"
-  },
-
-  "battery_full_charge_assist": {
-    "_comment": [
-      "Optional full-charge assist for battery-backed devices.",
-      "Temporarily raises device Max-SoC to 100%.",
-      "Use it when devices should reach firmware Max-SoC periodically."
+      "Legacy Home Assistant integration.",
+      "Disabled by default; not recommended for new Admin-guided setups.",
+      "Future Admin flows should prefer telemetry publishing instead of HA-based control."
     ],
     "enabled": false,
-    "interval_days": 28,
-    "assist_window_days": 7,
-    "assist_start_soc": 80,
-    "force_time": "14:00",
-    "ac_charge_power": 600,
-    "enable_ac_charge_mode": true,
-    "state_database_path": "data/ems_state.sqlite"
-  },
-
-  "_comment_devices": [
-    "One entry per Zendure device.",
-    "Replace IP and SN with values from your local installation.",
-    "Use one real device first, then add more devices after validation."
-  ],
-  "devices": [
-    {
-      "name": "WR1",
-      "ip": "192.168.1.100",
-      "sn": "YOUR_SN",
-
-      "_comment_smart_mode": [
-        "Use smart_mode=1 for runtime/RAM mode.",
-        "This is the normal setting for live EMS control."
-      ],
-      "smart_mode": 1,
-      "max_power": 800,
-      "pv_kwp": 1.0,
-      "pv_priority_factor": 1.0,
-      "battery_kwh": 1.0,
-
-      "_comment_soc": [
-        "Battery SOC limits in percent.",
-        "Use 0 to leave a value unmanaged."
-      ],
-      "min_soc": 15,
-      "max_soc": 100
-    },
-    {
-      "name": "WR2",
-      "ip": "192.168.1.101",
-      "sn": "YOUR_SN",
-
-      "_comment_smart_mode": [
-        "Use smart_mode=1 for runtime/RAM mode.",
-        "This is the normal setting for live EMS control."
-      ],
-      "smart_mode": 1,
-      "max_power": 800,
-      "pv_kwp": 1.0,
-      "pv_priority_factor": 1.0,
-      "battery_kwh": 1.0,
-
-      "_comment_soc": [
-        "Battery SOC limits in percent.",
-        "Use 0 to leave a value unmanaged."
-      ],
-      "min_soc": 15,
-      "max_soc": 100
-    }
-  ],
-
-  "grid_meter": {
-    "_comment": [
-      "Household or grid power meter used as the EMS load signal.",
-      "Supported types: shelly, shelly_3em_gen1, ecotracker, tasmota_http,",
-      "zendure_smartmeter_d0, mqtt.",
-      "Shelly reads total power by default.",
-      "Use channels like [c] or [a,c] for selected clamps or phases.",
-      "Tasmota needs url or ip plus power_path.",
-      "Zendure SmartMeter D0 and MQTT use grid_meter.mqtt with host, port, topic,",
-      "payload_format and max_age_seconds."
-    ],
-    "type": "shelly",
-    "ip": "192.168.1.50"
+    "control_enabled": false,
+    "url": "http://homeassistant.local:8123",
+    "token": "YOUR_TOKEN_HERE"
   }
 }

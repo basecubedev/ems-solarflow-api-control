@@ -9,6 +9,7 @@ from pathlib import Path
 
 from admin.install_context import detect_install_context
 from admin.releases import ReleaseError
+from admin.setup_config import apply_setup_features
 
 
 _HOST_LABEL = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
@@ -134,7 +135,7 @@ class ConfigPreviewGenerator:
             return base_meta, base_config
         return {"source": "release_template"}, template
 
-    def generate(self, draft=None, supported_grid_meter_count=None):
+    def generate(self, draft=None, supported_grid_meter_count=None, features=None):
         validation = {"errors": [], "warnings": [], "info": []}
         try:
             resource = self.release_manager.config_template()
@@ -211,6 +212,18 @@ class ConfigPreviewGenerator:
         self._apply_grid_meter(
             preview, meters, template, names, validation, supported_grid_meter_count, existing_base
         )
+
+        # Catalog-driven feature values are applied last so setup choices (winter,
+        # dashboard, InfluxDB, grid meter variant, ...) override template/base
+        # defaults while device entries stay owned by the draft above.
+        applied_features = apply_setup_features(preview, features)
+        if applied_features:
+            validation["info"].append(
+                _issue(
+                    "setup_features_applied",
+                    f"Applied {len(applied_features)} setup feature value(s).",
+                )
+            )
 
         duplicate_names = sorted({name for name in names if name and names.count(name) > 1})
         if any(not name for name in names):

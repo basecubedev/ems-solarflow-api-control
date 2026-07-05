@@ -11,6 +11,13 @@ from admin.config_preview import ConfigPreviewGenerator
 pytestmark = pytest.mark.simulation
 
 
+@pytest.fixture(autouse=True)
+def _isolate_install_root(isolated_install_root):
+    """Keep these tests off the developer's real repo-local config/data."""
+
+    return isolated_install_root
+
+
 TEMPLATE = {
     "system": {"max_total_power": 800},
     "devices": [
@@ -111,3 +118,38 @@ def test_write_replaces_existing_target_only_with_confirmation(tmp_path):
 
     assert result["ok"] is True
     assert json.loads(target.read_text(encoding="utf-8"))["system"] == TEMPLATE["system"]
+
+
+def test_export_ignores_local_repo_config_and_leaves_it_untouched(tmp_path, monkeypatch):
+    # Regression for the developer-checkout scenario: a gitignored local
+    # config/config.json sitting in the resolved repo root must never be adopted
+    # as the export base, nor read, modified, or deleted. The export path stays
+    # isolated to its own empty install root via an explicit context provider.
+    from ems import paths
+    from admin.install_context import detect_install_context
+
+    repo_root = tmp_path / "repo"
+    (repo_root / "config").mkdir(parents=True)
+    (repo_root / "data" / "admin").mkdir(parents=True)
+    local_config = repo_root / "config" / "config.json"
+    local_config.write_bytes(b'{"operator_only": "do-not-touch"}')
+    original = local_config.read_bytes()
+    monkeypatch.setattr(paths, "BASE_DIR", str(repo_root))
+
+    install_root = tmp_path / "install"
+    preview = ConfigPreviewGenerator(
+        _ReleaseManager(),
+        install_context_provider=lambda: detect_install_context(
+            base_dir=str(install_root)
+        ),
+    )
+    service = ConfigExportService(preview, tmp_path / "admin")
+
+    payload, result = service.serialize(_draft(), 1)
+    config = json.loads(payload)
+
+    assert result["base"] == {"source": "release_template"}
+    assert "operator_only" not in config
+    # The developer's local config is neither used as base, modified, nor removed.
+    assert local_config.exists()
+    assert local_config.read_bytes() == original

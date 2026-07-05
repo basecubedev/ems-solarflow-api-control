@@ -40,6 +40,7 @@ from admin.mqtt_discovery import MqttBrokerDiscovery
 from admin.models import utc_now_iso
 from admin.networks import detect_network_suggestions
 from admin.releases import ReleaseError, ReleaseManager, default_admin_data_dir
+from admin.setup_config import build_setup_catalog
 from dashboard.static_files import build_static_asset_index, static_asset_key
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -193,6 +194,9 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/setup/config-template":
             self._handle_config_template()
+            return
+        if path == "/api/setup/config/catalog":
+            self._send_json(build_setup_catalog())
             return
         if path == "/api/setup/config-preview":
             self._send_json(self.server.config_preview.generate())
@@ -422,7 +426,12 @@ class AdminHandler(BaseHTTPRequestHandler):
         count = body.get("supported_grid_meter_count")
         if not isinstance(count, int) or isinstance(count, bool) or count < 0:
             count = None
-        self._send_json(self.server.config_preview.generate(draft, count))
+        features = body.get("features")
+        if not isinstance(features, dict):
+            features = None
+        self._send_json(
+            self.server.config_preview.generate(draft, count, features)
+        )
 
     def _config_export_request(self):
         body = self._read_json_body(MAX_CONFIG_PREVIEW_BODY_BYTES)
@@ -447,15 +456,20 @@ class AdminHandler(BaseHTTPRequestHandler):
         if not isinstance(overwrite, bool):
             self._send_json({"error": "overwrite must be a boolean"}, status=400)
             return None
-        return draft, count, overwrite
+        features = body.get("features")
+        if not isinstance(features, dict):
+            features = None
+        return draft, count, overwrite, features
 
     def _handle_config_download(self):
         request = self._config_export_request()
         if request is None:
             return
-        draft, count, _overwrite = request
+        draft, count, _overwrite, features = request
         try:
-            payload, _preview = self.server.config_export.serialize(draft, count)
+            payload, _preview = self.server.config_export.serialize(
+                draft, count, features
+            )
         except ConfigExportValidationError as exc:
             self._send_validation_failure(exc.preview)
             return
@@ -469,9 +483,11 @@ class AdminHandler(BaseHTTPRequestHandler):
         request = self._config_export_request()
         if request is None:
             return
-        draft, count, overwrite = request
+        draft, count, overwrite, features = request
         try:
-            result = self.server.config_export.write(draft, count, overwrite)
+            result = self.server.config_export.write(
+                draft, count, overwrite, features
+            )
         except ConfigExportValidationError as exc:
             self._send_validation_failure(exc.preview)
             return
@@ -492,9 +508,9 @@ class AdminHandler(BaseHTTPRequestHandler):
         request = self._config_export_request()
         if request is None:
             return
-        draft, count, _overwrite = request
+        draft, count, _overwrite, features = request
         try:
-            result = self.server.config_apply.apply(draft, count)
+            result = self.server.config_apply.apply(draft, count, features)
         except ConfigExportValidationError as exc:
             self._send_validation_failure(exc.preview)
             return

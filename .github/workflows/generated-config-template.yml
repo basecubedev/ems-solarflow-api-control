@@ -1,0 +1,84 @@
+name: Generated config template
+
+"on":
+  pull_request:
+    paths:
+      - "ems/config_catalog.py"
+      - "tools/build_config_template.py"
+      - "config/config.template.json"
+      - ".github/workflows/generated-config-template.yml"
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  update-same-repository-pr:
+    name: Update template on same-repository PR
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+
+    steps:
+      - name: Check out PR head branch
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Regenerate config template
+        run: python tools/build_config_template.py
+
+      - name: Commit and push updated template
+        env:
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          if git diff --quiet -- config/config.template.json; then
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- config/config.template.json
+          git commit -m "chore(config): update generated config template"
+          git push origin "HEAD:${HEAD_BRANCH}"
+
+  check-fork-pr:
+    name: Check template on fork PR
+    if: github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+
+    steps:
+      - name: Check out fork PR head
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Check generated config template
+        run: |
+          if python tools/build_config_template.py --check; then
+            exit 0
+          fi
+
+          printf '%s\n' \
+            "Generated config template is stale." \
+            "Run: python tools/build_config_template.py" \
+            "Then commit config/config.template.json." >&2
+          exit 1

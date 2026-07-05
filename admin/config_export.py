@@ -26,8 +26,10 @@ class ConfigExportService:
         target = self.target_path
         return {"path": str(target), "exists": target.is_file()}
 
-    def serialize(self, draft, supported_grid_meter_count=None):
-        preview = self.preview_generator.generate(draft, supported_grid_meter_count)
+    def serialize(self, draft, supported_grid_meter_count=None, features=None):
+        preview = self.preview_generator.generate(
+            draft, supported_grid_meter_count, features
+        )
         if not preview["ready"]:
             raise ConfigExportValidationError(preview)
         payload = json.dumps(
@@ -38,8 +40,8 @@ class ConfigExportService:
         ).encode("utf-8") + b"\n"
         return payload, preview
 
-    def write(self, draft, supported_grid_meter_count=None, overwrite=False):
-        payload, preview = self.serialize(draft, supported_grid_meter_count)
+    def write(self, draft, supported_grid_meter_count=None, overwrite=False, features=None):
+        payload, preview = self.serialize(draft, supported_grid_meter_count, features)
         target = self.target_path
         with self._write_lock:
             target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
