@@ -369,6 +369,27 @@ OBIS-style key path:
 Positive power means grid import. Negative power means export/feed-in when the
 meter reports signed values that way.
 
+## Example 6b: Zendure Smart Meter 3CT HTTP Grid Meter
+
+Use `zendure_smartmeter_3ct_http` when the Zendure Smart Meter 3CT is reachable
+on the LAN but MQTT cannot be enabled (for example when the Zendure app greys out
+the MQTT configuration page). EMS reads the local REST endpoint
+`http://<ip>/properties/report` and uses the flat `total_power` field. No MQTT
+broker and no app MQTT configuration are required, and current known firmware
+serves the endpoint without authentication.
+
+```json
+{
+  "grid_meter": {
+    "type": "zendure_smartmeter_3ct_http",
+    "ip": "192.168.1.50"
+  }
+}
+```
+
+The sign is used as reported by the device. Per-phase fields such as
+`a_aprt_power`, `b_aprt_power`, and `c_aprt_power` are ignored for now.
+
 ## Example 7: Zendure SmartMeter D0 via MQTT
 
 Use Zendure SmartMeter D0 (MQTT) when the D0 publishes signed `totalPower` to

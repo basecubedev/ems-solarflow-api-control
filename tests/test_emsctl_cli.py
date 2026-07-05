@@ -32,7 +32,7 @@ def visible_input(responses):
     return read
 
 
-def test_emsctl_config_discovery_prefers_legacy_config(tmp_path, monkeypatch):
+def test_emsctl_config_discovery_prefers_canonical_config(tmp_path, monkeypatch):
     patch_emsctl_base(monkeypatch, tmp_path)
     write_discovery_config(tmp_path / "config.json", "runtime-state.json")
     write_discovery_config(
@@ -44,9 +44,9 @@ def test_emsctl_config_discovery_prefers_legacy_config(tmp_path, monkeypatch):
     selected = emsctl.resolve_config_path(args)
     config = emsctl.load_config(selected)
 
-    assert selected == str(tmp_path / "config.json")
+    assert selected == str(tmp_path / "config" / "config.json")
     assert emsctl.resolve_runtime_path(args, config) == str(
-        tmp_path / "runtime-state.json"
+        tmp_path / "data" / "runtime-state.json"
     )
 
 
@@ -253,9 +253,9 @@ def test_emsctl_dashboard_auth_path_comes_from_selected_config(
     selected = emsctl.resolve_config_path(args)
     config = emsctl.load_config(selected)
 
-    assert selected == str(tmp_path / "config.json")
+    assert selected == str(tmp_path / "config" / "config.json")
     assert emsctl.resolve_dashboard_auth_path(args, config) == str(
-        tmp_path / "dashboard-auth.json"
+        tmp_path / "config" / "dashboard-auth.json"
     )
 
 
@@ -692,7 +692,7 @@ def test_config_init_missing_config_creates_valid_config_when_confirmed(
     monkeypatch,
 ):
     patch_emsctl_base(monkeypatch, tmp_path)
-    shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")
+    shutil.copy(ROOT / "config" / "config.template.json", tmp_path / "config.template.json")
     config_path = tmp_path / "config.json"
     responses = iter([
         "y",
@@ -739,15 +739,63 @@ def test_config_init_missing_config_creates_valid_config_when_confirmed(
     assert created["system"]["max_total_power"] == 900
 
 
+def test_config_init_fresh_creates_standard_config_layout(tmp_path, monkeypatch):
+    patch_emsctl_base(monkeypatch, tmp_path)
+    shutil.copy(ROOT / "config" / "config.template.json", tmp_path / "config.template.json")
+
+    code = emsctl.main(["config", "init", "--yes", "--analytics"])
+
+    assert code == 0
+    standard = tmp_path / "config" / "config.json"
+    assert standard.exists()
+    assert (tmp_path / "config").is_dir()
+    assert not (tmp_path / "config.json").exists()
+
+
+def test_config_init_legacy_root_only_warns_before_editing(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    patch_emsctl_base(monkeypatch, tmp_path)
+    shutil.copy(ROOT / "config" / "config.template.json", tmp_path / "config.template.json")
+    legacy = tmp_path / "config.json"
+    shutil.copy(ROOT / "config" / "config.template.json", legacy)
+
+    code = emsctl.main(["config", "init", "--dry-run"])
+
+    output = capsys.readouterr()
+    assert code == 0
+    assert "Legacy root config.json detected." in output.out
+    assert str(tmp_path / "config" / "config.json") in output.out
+    # Dry run must not create the standard-layout config as a side effect.
+    assert not (tmp_path / "config" / "config.json").exists()
+
+
+def test_config_init_standard_layout_does_not_warn_about_legacy(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    patch_emsctl_base(monkeypatch, tmp_path)
+    shutil.copy(ROOT / "config" / "config.template.json", tmp_path / "config.template.json")
+
+    code = emsctl.main(["config", "init", "--dry-run"])
+
+    output = capsys.readouterr()
+    assert code == 0
+    assert "Legacy root config.json detected." not in output.out
+
+
 def test_config_init_template_config_uses_first_run_continue_wording(
     tmp_path,
     monkeypatch,
     capsys,
 ):
     patch_emsctl_base(monkeypatch, tmp_path)
-    shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")
+    shutil.copy(ROOT / "config" / "config.template.json", tmp_path / "config.template.json")
     config_path = tmp_path / "config.json"
-    shutil.copy(ROOT / "config.template.json", config_path)
+    shutil.copy(ROOT / "config" / "config.template.json", config_path)
     monkeypatch.setattr("builtins.input", visible_input(iter(["n"])))
 
     code = emsctl.main(["--config", str(config_path), "config", "init"])
@@ -781,7 +829,7 @@ def test_config_init_required_placeholders_are_not_prompt_defaults(
 
 def test_config_init_yes_rejects_template_placeholders(tmp_path):
     config_path = tmp_path / "config.json"
-    shutil.copy(ROOT / "config.template.json", config_path)
+    shutil.copy(ROOT / "config" / "config.template.json", config_path)
 
     result = run_emsctl(tmp_path, "config", "init", "--yes")
 
@@ -791,7 +839,7 @@ def test_config_init_yes_rejects_template_placeholders(tmp_path):
 
 def test_config_init_edited_config_preserves_unknown_keys(tmp_path, monkeypatch):
     patch_emsctl_base(monkeypatch, tmp_path)
-    shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")
+    shutil.copy(ROOT / "config" / "config.template.json", tmp_path / "config.template.json")
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps({
         "custom_top": {"keep": True},
@@ -832,7 +880,7 @@ def test_config_init_cleans_stale_grid_meter_fields_when_switching_type(
     monkeypatch,
 ):
     patch_emsctl_base(monkeypatch, tmp_path)
-    shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")
+    shutil.copy(ROOT / "config" / "config.template.json", tmp_path / "config.template.json")
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps({
         "system": {"max_total_power": 777, "min_output_limit": 40},
@@ -869,7 +917,7 @@ def test_config_init_edited_config_asks_for_backup_by_default(
     capsys,
 ):
     patch_emsctl_base(monkeypatch, tmp_path)
-    shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")
+    shutil.copy(ROOT / "config" / "config.template.json", tmp_path / "config.template.json")
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps({
         "custom": True,
@@ -921,6 +969,7 @@ def test_config_init_grid_meter_choices_are_runtime_supported():
         "shelly",
         "shelly_3em_gen1",
         "ecotracker",
+        "zendure_smartmeter_3ct_http",
         "tasmota_http",
         "zendure_smartmeter_d0",
         "mqtt",
@@ -929,7 +978,7 @@ def test_config_init_grid_meter_choices_are_runtime_supported():
 
 def test_config_init_zendure_smartmeter_d0_generates_mqtt_topic(monkeypatch):
     responses = iter([
-        "5",
+        "6",
         "mqtt.local",
         "",
         "",
@@ -958,7 +1007,7 @@ def test_config_init_zendure_smartmeter_d0_generates_mqtt_topic(monkeypatch):
 
 def test_config_init_generic_mqtt_keeps_advanced_payload_flow(monkeypatch):
     responses = iter([
-        "6",
+        "7",
         "mqtt.local",
         "",
         "",
@@ -1024,7 +1073,7 @@ def test_config_init_mqtt_new_password_is_stored_without_being_printed(
     capsys,
 ):
     password = "new-super-secret-mqtt-password"
-    responses = iter(["6", "mqtt.local", "", "", "meter/grid", "", ""])
+    responses = iter(["7", "mqtt.local", "", "", "meter/grid", "", ""])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(responses))
     monkeypatch.setattr(
         config_init_mod.getpass,
@@ -1094,7 +1143,7 @@ def write_upgrade_candidate(path):
 
 
 def write_current_config_with_outdated_comment(path):
-    template_text = (ROOT / "config.template.json").read_text()
+    template_text = (ROOT / "config" / "config.template.json").read_text()
     config = json.loads(template_text)
     config["devices"] = []
     config["system"]["_comment"] = "Outdated system comment."
@@ -1105,7 +1154,7 @@ def write_current_config_with_outdated_comment(path):
 
 def prepare_config_upgrade_base(tmp_path, monkeypatch):
     patch_emsctl_base(monkeypatch, tmp_path)
-    shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")
+    shutil.copy(ROOT / "config" / "config.template.json", tmp_path / "config.template.json")
     config_path = tmp_path / "config.json"
     write_upgrade_candidate(config_path)
     return config_path
@@ -1442,7 +1491,7 @@ def strip_comment_keys(value):
 
 
 def test_config_upgrade_dry_run_reports_comment_only_changes(tmp_path):
-    template = json.loads((ROOT / "config.template.json").read_text())
+    template = json.loads((ROOT / "config" / "config.template.json").read_text())
     config = strip_comment_keys(template)
     config["devices"] = []
     (tmp_path / "config.json").write_text(json.dumps(config))
@@ -1520,7 +1569,7 @@ def test_config_upgrade_interactive_refreshes_comments_without_second_backup(
     assert "Backup created" not in output
     assert "Refreshed explanatory comments: 1" in output
     upgraded = json.loads(config_path.read_text())
-    template = json.loads((ROOT / "config.template.json").read_text())
+    template = json.loads((ROOT / "config" / "config.template.json").read_text())
     assert upgraded["config_schema_version"] == 3
     assert upgraded["system"]["_comment"] == template["system"]["_comment"]
 
@@ -1552,7 +1601,7 @@ def test_config_upgrade_interactive_creates_one_backup_before_combined_write(
     assert code == 0
     assert events == [("backup", None), ("write", 3)]
     upgraded = json.loads(config_path.read_text())
-    template = json.loads((ROOT / "config.template.json").read_text())
+    template = json.loads((ROOT / "config" / "config.template.json").read_text())
     assert upgraded["config_schema_version"] == 3
     assert upgraded["system"]["_comment"] == template["system"]["_comment"]
 
@@ -1563,7 +1612,7 @@ def test_config_upgrade_interactive_refreshes_comment_only_without_backup(
     capsys,
 ):
     patch_emsctl_base(monkeypatch, tmp_path)
-    shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")
+    shutil.copy(ROOT / "config" / "config.template.json", tmp_path / "config.template.json")
     config_path = tmp_path / "config.json"
     write_current_config_with_outdated_comment(config_path)
     backups = []
@@ -1599,7 +1648,7 @@ def test_config_upgrade_interactive_refreshes_comment_only_without_backup(
     assert "Backup created" not in output
     assert "Refreshed explanatory comments: 1" in output
     refreshed = json.loads(config_path.read_text())
-    template = json.loads((ROOT / "config.template.json").read_text())
+    template = json.loads((ROOT / "config" / "config.template.json").read_text())
     assert refreshed["system"]["_comment"] == template["system"]["_comment"]
 
 
@@ -1609,7 +1658,7 @@ def test_config_upgrade_interactive_refreshes_comment_only_with_backup(
     capsys,
 ):
     patch_emsctl_base(monkeypatch, tmp_path)
-    shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")
+    shutil.copy(ROOT / "config" / "config.template.json", tmp_path / "config.template.json")
     config_path = tmp_path / "config.json"
     write_current_config_with_outdated_comment(config_path)
     backups = []
@@ -1632,7 +1681,7 @@ def test_config_upgrade_interactive_refreshes_comment_only_with_backup(
     assert "Backup created" in output
     assert "Refreshed explanatory comments: 1" in output
     refreshed = json.loads(config_path.read_text())
-    template = json.loads((ROOT / "config.template.json").read_text())
+    template = json.loads((ROOT / "config" / "config.template.json").read_text())
     assert refreshed["system"]["_comment"] == template["system"]["_comment"]
 
 
@@ -1642,7 +1691,7 @@ def test_config_upgrade_interactive_comment_only_aborts_on_backup_prompt(
     capsys,
 ):
     patch_emsctl_base(monkeypatch, tmp_path)
-    shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")
+    shutil.copy(ROOT / "config" / "config.template.json", tmp_path / "config.template.json")
     config_path = tmp_path / "config.json"
     original = write_current_config_with_outdated_comment(config_path)
     backups = []
@@ -1723,7 +1772,7 @@ def test_config_upgrade_future_schema_aborts_without_writing(tmp_path):
 
 
 def test_config_upgrade_restores_removed_dashboard_block(tmp_path):
-    config = json.loads((ROOT / "config.template.json").read_text())
+    config = json.loads((ROOT / "config" / "config.template.json").read_text())
     config.pop("dashboard")
     config["devices"] = []
     config_path = tmp_path / "config.json"
@@ -1744,7 +1793,7 @@ def test_config_upgrade_restores_removed_dashboard_block(tmp_path):
 
 
 def test_config_upgrade_restores_removed_normal_key(tmp_path):
-    config = json.loads((ROOT / "config.template.json").read_text())
+    config = json.loads((ROOT / "config" / "config.template.json").read_text())
     config["devices"] = []
     config["dashboard"]["host"] = "127.0.0.1"
     config["dashboard"].pop("animation_mode")
@@ -1766,7 +1815,7 @@ def test_config_upgrade_restores_removed_normal_key(tmp_path):
 
 
 def test_config_upgrade_restores_removed_influx_key(tmp_path):
-    config = json.loads((ROOT / "config.template.json").read_text())
+    config = json.loads((ROOT / "config" / "config.template.json").read_text())
     config["devices"] = []
     config["influxdb"]["enabled"] = True
     config["influxdb"].pop("raw_write_interval_seconds")
@@ -1788,7 +1837,7 @@ def test_config_upgrade_restores_removed_influx_key(tmp_path):
 
 
 def test_config_upgrade_enriches_existing_device(tmp_path):
-    config = json.loads((ROOT / "config.template.json").read_text())
+    config = json.loads((ROOT / "config" / "config.template.json").read_text())
     config["devices"] = [{
         "name": "REAL",
         "ip": "192.0.2.55",

@@ -73,6 +73,45 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Resolve build identity
+        id: build_identity
+        run: |
+          # `latest` is a channel, not a version. Resolve a monotonic build
+          # identity so Admin can compare a running `latest` image against
+          # stable/rc tags by image labels, not tag name alone.
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            release_tag="${GITHUB_REF#refs/tags/}"
+            # Only a real release tag becomes the runtime ems_version; `latest`
+            # stays empty so a channel never poses as a release version.
+            ems_release_tag="${release_tag}"
+            if [[ "${release_tag}" == *-* ]]; then
+              channel="rc"        # refs/tags/vX.Y.Z-...  (pre-release)
+            else
+              channel="stable"    # refs/tags/vX.Y.Z
+            fi
+          else
+            channel="latest"      # main / schedule / workflow_dispatch
+            release_tag="latest"
+            ems_release_tag=""
+          fi
+          git_describe="$(git describe --tags --always --dirty 2>/dev/null || true)"
+          git_commit_short="${GITHUB_SHA::12}"
+          if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
+            git_dirty="true"
+          else
+            git_dirty="false"
+          fi
+          {
+            echo "channel=${channel}"
+            echo "release_tag=${release_tag}"
+            echo "ems_release_tag=${ems_release_tag}"
+            echo "git_describe=${git_describe}"
+            echo "git_commit_short=${git_commit_short}"
+            echo "git_dirty=${git_dirty}"
+            echo "build_serial=${GITHUB_RUN_NUMBER}"
+            echo "build_id=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          } >> "${GITHUB_OUTPUT}"
+
       - name: Generate Docker metadata
         id: meta
         uses: docker/metadata-action@v6
@@ -86,10 +125,26 @@ jobs:
             org.opencontainers.image.description=Local EMS controller for Zendure SolarFlow. Docker images include automatic first-run config bootstrap. See README for Quick Start and docs/docker.md for full setup.
             org.opencontainers.image.source=https://github.com/basecubedev/ems-solarflow-api-control
             org.opencontainers.image.documentation=https://github.com/basecubedev/ems-solarflow-api-control/blob/main/docs/docker.md
+            org.opencontainers.image.version=${{ steps.build_identity.outputs.release_tag }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            de.basecubedev.ems.channel=${{ steps.build_identity.outputs.channel }}
+            de.basecubedev.ems.build_serial=${{ steps.build_identity.outputs.build_serial }}
+            de.basecubedev.ems.build_id=${{ steps.build_identity.outputs.build_id }}
+            de.basecubedev.ems.release_tag=${{ steps.build_identity.outputs.release_tag }}
 
       - name: Build local Docker image for content validation
         run: |
-          docker build -t ems-solarflow-api-control:ci .
+          docker build \
+            --build-arg EMS_RELEASE_TAG="${{ steps.build_identity.outputs.ems_release_tag }}" \
+            --build-arg EMS_GIT_COMMIT="${{ github.sha }}" \
+            --build-arg EMS_GIT_COMMIT_SHORT="${{ steps.build_identity.outputs.git_commit_short }}" \
+            --build-arg EMS_GIT_DESCRIBE="${{ steps.build_identity.outputs.git_describe }}" \
+            --build-arg EMS_GIT_BRANCH="${{ github.ref_name }}" \
+            --build-arg EMS_GIT_DIRTY="${{ steps.build_identity.outputs.git_dirty }}" \
+            --build-arg EMS_BUILD_ID="${{ steps.build_identity.outputs.build_id }}" \
+            --build-arg EMS_BUILD_SERIAL="${{ steps.build_identity.outputs.build_serial }}" \
+            --build-arg EMS_CHANNEL="${{ steps.build_identity.outputs.channel }}" \
+            -t ems-solarflow-api-control:ci .
 
       - name: Validate Docker image runtime content
         run: |
@@ -119,5 +174,56 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            EMS_RELEASE_TAG=${{ steps.build_identity.outputs.ems_release_tag }}
+            EMS_GIT_COMMIT=${{ github.sha }}
+            EMS_GIT_COMMIT_SHORT=${{ steps.build_identity.outputs.git_commit_short }}
+            EMS_GIT_DESCRIBE=${{ steps.build_identity.outputs.git_describe }}
+            EMS_GIT_BRANCH=${{ github.ref_name }}
+            EMS_GIT_DIRTY=${{ steps.build_identity.outputs.git_dirty }}
+            EMS_BUILD_ID=${{ steps.build_identity.outputs.build_id }}
+            EMS_BUILD_SERIAL=${{ steps.build_identity.outputs.build_serial }}
+            EMS_CHANNEL=${{ steps.build_identity.outputs.channel }}
           annotations: |
             index:org.opencontainers.image.description=Local EMS controller for Zendure SolarFlow. Docker images include automatic first-run config bootstrap. See README for Quick Start and docs/docker.md for full setup.
+
+      # --- Admin Console image ------------------------------------------------
+      # The installable Admin Console ships as its own image so end users can run
+      # it without a source checkout. It reuses the same build identity as the
+      # EMS image; only the metadata and Dockerfile differ.
+      - name: Generate Admin Docker metadata
+        id: meta_admin
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/basecubedev/ems-solarflow-admin
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+          labels: |
+            org.opencontainers.image.title=ems-solarflow-admin
+            org.opencontainers.image.description=Browser-based Admin Console for EMS SolarFlow setup, maintenance, updates and backups.
+            org.opencontainers.image.source=https://github.com/basecubedev/ems-solarflow-api-control
+            org.opencontainers.image.documentation=https://github.com/basecubedev/ems-solarflow-api-control/blob/main/docs/user/admin-console.md
+            org.opencontainers.image.version=${{ steps.build_identity.outputs.release_tag }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            de.basecubedev.ems.channel=${{ steps.build_identity.outputs.channel }}
+            de.basecubedev.ems.build_serial=${{ steps.build_identity.outputs.build_serial }}
+            de.basecubedev.ems.build_id=${{ steps.build_identity.outputs.build_id }}
+            de.basecubedev.ems.release_tag=${{ steps.build_identity.outputs.release_tag }}
+
+      - name: Build local Admin image for content validation
+        run: |
+          docker build -f deploy/admin/Dockerfile -t ems-solarflow-admin:ci .
+          docker run --rm ems-solarflow-admin:ci python -m admin --help
+
+      - name: Build and push Admin Docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./deploy/admin/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta_admin.outputs.tags }}
+          labels: ${{ steps.meta_admin.outputs.labels }}
+          annotations: |
+            index:org.opencontainers.image.description=Browser-based Admin Console for EMS SolarFlow setup, maintenance, updates and backups.

@@ -7,12 +7,17 @@ import json
 import os
 
 from ems import config as config_mod
+from ems.paths import resolve_template_path
 
 
 GRID_METER_CHOICES = (
     ("shelly", "Shelly Pro 3EM / Shelly Plus/Pro Gen2/Gen3"),
     ("shelly_3em_gen1", "Shelly 3EM Gen1"),
     ("ecotracker", "EcoTracker"),
+    (
+        config_mod.ZENDURE_SMARTMETER_3CT_HTTP_GRID_METER_TYPE,
+        "Zendure Smart Meter 3CT HTTP",
+    ),
     ("tasmota_http", "Tasmota HTTP / SmartMeter reader"),
     (
         config_mod.ZENDURE_SMARTMETER_D0_GRID_METER_TYPE,
@@ -39,7 +44,7 @@ def _zendure_d0_serial_from_topic(topic):
 
 
 def _load_template(base_dir):
-    path = os.path.join(base_dir, "config.template.json")
+    path = resolve_template_path(base_dir=base_dir)
     with open(path) as f:
         return json.load(f)
 
@@ -682,6 +687,8 @@ def _meter_summary(grid_meter):
         "shelly": "Shelly",
         "shelly_3em_gen1": "Shelly 3EM Gen1",
         "ecotracker": "EcoTracker",
+        config_mod.ZENDURE_SMARTMETER_3CT_HTTP_GRID_METER_TYPE:
+            "Zendure Smart Meter 3CT HTTP",
     }.get(meter_type, meter_type)
     return f"{label} at {grid_meter.get('ip') or '(not set)'}"
 

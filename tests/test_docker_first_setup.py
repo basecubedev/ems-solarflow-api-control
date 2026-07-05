@@ -17,9 +17,10 @@ INSTALL_SH = ROOT / "install-docker.sh"
 INSTALL_PS1 = ROOT / "install-docker.ps1"
 COMPOSE = ROOT / "docker-compose.yml"
 README = ROOT / "README.md"
+DOCKER_BOOTSTRAP_DOC = ROOT / "docs" / "user" / "docker-bootstrap.md"
 DOCKER_DOC = ROOT / "docs" / "docker.md"
 QUICKSTART_DOC = ROOT / "docs" / "quickstart.md"
-INFLUX_DOC = ROOT / "docs" / "influxdb.md"
+INFLUX_DOC = ROOT / "docs" / "technical" / "influxdb.md"
 
 
 def read(path):
@@ -173,16 +174,21 @@ def test_docker_first_secret_file_is_accepted_by_normalizer():
 # --- Documentation contract -----------------------------------------------
 
 
-def test_readme_has_short_installer_quickstarts():
-    text = read(README)
+def test_docker_bootstrap_doc_has_short_installer_quickstarts():
+    # The Docker Bootstrap install commands live in the user docker guide now,
+    # not in the router README.
+    text = read(DOCKER_BOOTSTRAP_DOC)
     assert "install-docker.sh" in text
     assert "install-docker.ps1" in text
     assert "sh install-docker.sh --analytics" in text
     assert "-Analytics" in text
 
 
-def test_readme_does_not_contain_full_manual_compose_walkthrough():
+def test_readme_is_router_without_bootstrap_or_manual_walkthrough():
     text = read(README)
+    # The README routes to Docker Bootstrap; it does not carry its commands.
+    assert "install-docker.sh" not in text
+    assert "docs/user/docker-bootstrap.md" in text
     # The multi-step manual Analytics sequence belongs in docs/, not the README.
     assert "docker compose run --rm ems python3 emsctl.py config init --analytics" not in text
     assert "influx init --no-start" not in text
@@ -457,6 +463,8 @@ def test_ems_only_no_start_generates_files_and_skips_influx(tmp_path):
     assert (work / ".env").is_file()
     assert (work / "config").is_dir()
     assert (work / "data").is_dir()
+    generated_compose = read(work / "docker-compose.yml")
+    assert 'user: "${PUID}:${PGID}"' in generated_compose
     assert not (work / "data" / "influxdb").exists()
     assert not (work / "config" / "influxdb.env").exists()
 
@@ -594,8 +602,8 @@ COMMON_COMMANDS_DOC = ROOT / "docs" / "common-commands.md"
 FIRST_RUN_DOC = ROOT / "docs" / "first-run-checklist.md"
 
 
-def test_readme_uses_tested_install_commands():
-    text = read(README)
+def test_docker_bootstrap_doc_uses_tested_install_commands():
+    text = read(DOCKER_BOOTSTRAP_DOC)
     assert DOC_EMS_ONLY_INSTALL in text
     assert DOC_ANALYTICS_INSTALL in text
 

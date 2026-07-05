@@ -8,6 +8,8 @@ __pycache__
 
 config.json
 config/
+# Canonical template must reach the image build (copied to /app/config.template.json).
+!config/config.template.json
 runtime-state.json
 data/
 *.log

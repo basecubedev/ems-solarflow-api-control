@@ -35,7 +35,7 @@ body:
         Useful documentation:
 
         - [General project documentation](https://github.com/basecubedev/ems-solarflow-api-control/blob/main/README.md)
-        - [Troubleshooting guide](https://github.com/basecubedev/ems-solarflow-api-control/blob/main/docs/troubleshooting.md)
+        - [Troubleshooting guide](https://github.com/basecubedev/ems-solarflow-api-control/blob/main/docs/user/troubleshooting.md)
         - [CLI documentation](https://github.com/basecubedev/ems-solarflow-api-control/blob/main/docs/cli.md)
     validations:
       required: false

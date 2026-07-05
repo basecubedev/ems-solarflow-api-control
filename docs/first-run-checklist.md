@@ -66,4 +66,4 @@ Backups are stored in `data/backups/` by default.
 - Do not expose the dashboard publicly without a reverse proxy/auth design.
 - Do not skip first-run diagnose.
 
-More detail: [safety.md](safety.md) and [troubleshooting.md](troubleshooting.md).
+More detail: [safety.md](user/safety.md) and [troubleshooting.md](user/troubleshooting.md).

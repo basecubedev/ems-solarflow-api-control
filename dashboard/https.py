@@ -5,27 +5,64 @@ import os
 import socket
 import ssl
 
+_TRUE_TOKENS = ("true", "1", "yes", "on")
+_FALSE_TOKENS = ("false", "0", "no", "off")
 
-def ensure_dashboard_ssl_context(config, base_dir):
+
+def coerce_bool(value, *, default):
+    """Parse a config flag that may be a real bool, a string, or absent.
+
+    ``bool("false")`` is ``True``, so string config values must be parsed
+    explicitly. ``None`` (key absent) returns ``default``; unrecognised strings
+    fall back to ``default`` rather than silently flipping a safety flag.
+    """
+
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    token = str(value).strip().lower()
+    if token in _TRUE_TOKENS:
+        return True
+    if token in _FALSE_TOKENS:
+        return False
+    return default
+
+
+def ensure_ssl_context(
+    config,
+    base_dir,
+    *,
+    default_cert_file,
+    default_key_file,
+    common_name,
+    service_label,
+):
+    """Build an ``SSLContext`` for one service, generating a self-signed cert if
+    needed. Shared by the Dashboard and the Admin Console so certificate
+    generation lives in exactly one place; only the defaults/labels differ.
+    """
+
     cert_file = _resolve_path(
         base_dir,
-        config.get("ssl_cert_file", os.path.join("config", "dashboard.crt")),
+        config.get("ssl_cert_file", default_cert_file),
     )
     key_file = _resolve_path(
         base_dir,
-        config.get("ssl_key_file", os.path.join("config", "dashboard.key")),
+        config.get("ssl_key_file", default_key_file),
     )
-    auto_generate = bool(config.get("ssl_auto_generate", True))
+    auto_generate = coerce_bool(config.get("ssl_auto_generate"), default=True)
 
     if not os.path.exists(cert_file) or not os.path.exists(key_file):
         if not auto_generate:
             raise RuntimeError(
-                "dashboard HTTPS is enabled but certificate or key is missing"
+                f"{service_label} HTTPS is enabled but certificate or key is missing"
             )
         generate_self_signed_certificate(
             cert_file,
             key_file,
             host=str(config.get("host", "localhost")),
+            common_name=common_name,
         )
 
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -34,7 +71,24 @@ def ensure_dashboard_ssl_context(config, base_dir):
     return context
 
 
-def generate_self_signed_certificate(cert_file, key_file, host="localhost"):
+def ensure_dashboard_ssl_context(config, base_dir):
+    return ensure_ssl_context(
+        config,
+        base_dir,
+        default_cert_file=os.path.join("config", "dashboard.crt"),
+        default_key_file=os.path.join("config", "dashboard.key"),
+        common_name="EMS Dashboard",
+        service_label="dashboard",
+    )
+
+
+def generate_self_signed_certificate(
+    cert_file,
+    key_file,
+    host="localhost",
+    *,
+    common_name="EMS Dashboard",
+):
     try:
         from cryptography import x509
         from cryptography.hazmat.primitives import hashes, serialization
@@ -54,7 +108,7 @@ def generate_self_signed_certificate(cert_file, key_file, host="localhost"):
 
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     subject = issuer = x509.Name([
-        x509.NameAttribute(NameOID.COMMON_NAME, "EMS Dashboard"),
+        x509.NameAttribute(NameOID.COMMON_NAME, common_name),
     ])
     now = datetime.datetime.now(datetime.UTC)
     names = _subject_alt_names(host)

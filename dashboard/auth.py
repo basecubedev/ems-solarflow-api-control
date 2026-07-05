@@ -130,6 +130,43 @@ def write_password_file(path, password):
     return record
 
 
+def create_password_file_if_missing(path, password):
+    """Atomically create the auth file, refusing to overwrite an existing one.
+
+    Unlike :func:`write_password_file` (which replaces), this uses ``O_EXCL`` so
+    a first-visitor password creation can never clobber a password another
+    browser created a moment earlier. Raises ``FileExistsError`` if the file
+    already exists.
+    """
+
+    record = hash_password(password)
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    fd = os.open(path, flags, 0o600)
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(record, f, indent=2, sort_keys=True)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+    except Exception:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        raise
+
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+    return record
+
+
 def remove_auth_file(path):
     try:
         os.remove(path)

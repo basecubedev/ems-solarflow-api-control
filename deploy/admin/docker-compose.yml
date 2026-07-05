@@ -1,0 +1,72 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# EMS SolarFlow Admin — source/developer local-build, deployment-capable setup.
+#
+# For normal users: run install-admin-console.sh instead — it uses the published
+# image with no source checkout. This file builds the image locally from the
+# repository and is meant for Developer Setup / build from source.
+#
+# Recommended: let the launcher discover the Docker socket group id for you.
+#
+#   deploy/admin/start-admin-setup.sh
+#
+# Or run Compose directly (the launcher exports the host-visible data path and
+# runtime ids in addition to DOCKER_GID):
+#
+#   DOCKER_GID="$(stat -c '%g' /var/run/docker.sock)" \
+#     docker compose -f deploy/admin/docker-compose.yml up --build
+#
+# The Admin container controls the *host* Docker engine over the mounted
+# /var/run/docker.sock (Docker-out-of-Docker): Step 04 pulls the EMS/InfluxDB
+# images into the host image cache and (later, Step 05) starts them as sibling
+# containers next to this one. It ships only the Docker client and Compose
+# plugin — no daemon runs inside the Admin container; there is no
+# Docker-in-Docker.
+#
+# For device discovery on the real LAN, add the host-network override:
+#   ... -f deploy/admin/docker-compose.hostnet.yml
+# For a restricted preview with no Docker access, use
+# docker-compose.discovery-only.yml instead.
+#
+# SECURITY: mounting /var/run/docker.sock grants effectively root-equivalent
+# control of the host through the Docker API. Run this only on a trusted local
+# machine and never expose the Admin UI to the internet.
+services:
+  ems-solarflow-admin:
+    build:
+      context: ../..
+      dockerfile: deploy/admin/Dockerfile
+    image: ems-solarflow-control-admin:local
+    user: "${PUID:-1000}:${PGID:-1000}"
+    # Grant the non-root container user access to the host Docker socket. The
+    # launcher discovers the socket's owning group; the 999 fallback covers the
+    # common Debian/Raspberry Pi default when Compose is started by hand. A
+    # mismatch surfaces in Step 04 as a permission problem, not a hard failure.
+    group_add:
+      - "${DOCKER_GID:-999}"
+    # Bind published port to loopback so the UI is not reachable off-host by
+    # default. To scan the LAN, add the docker-compose.hostnet.yml override.
+    ports:
+      - "127.0.0.1:8090:8090"
+    environment:
+      # Same-path mounting: these point at the real host install root and Admin
+      # data dir so ems.paths resolves the live config/data/compose and any bind
+      # mount Admin forwards to the host Docker daemon stays a valid host path.
+      EMS_INSTALL_DIR: "${EMS_INSTALL_DIR}"
+      EMS_ADMIN_DATA_DIR: "${EMS_ADMIN_DATA_DIR}"
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
+      # The Docker CLI writes its config under DOCKER_CONFIG; point it at the
+      # writable tmpfs so the read-only root filesystem keeps working.
+      DOCKER_CONFIG: /tmp/docker
+    volumes:
+      - "${EMS_INSTALL_DIR}:${EMS_INSTALL_DIR}"
+      - "${EMS_ADMIN_DATA_DIR}:${EMS_ADMIN_DATA_DIR}"
+      - /var/run/docker.sock:/var/run/docker.sock
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
