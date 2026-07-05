@@ -119,3 +119,14 @@ def test_launcher_is_executable():
     path = os.path.join(DEPLOY_ADMIN_DIR, "start-admin-setup.sh")
     mode = os.stat(path).st_mode
     assert mode & stat.S_IXUSR
+
+
+def test_source_compose_files_build_locally_not_from_ghcr():
+    # These are the source/developer local-build files. The runtime/end-user
+    # counterparts (docker-compose.runtime*.yml) use the published GHCR image
+    # with no build section — covered in test_admin_installer.py.
+    for name in ("docker-compose.yml", "docker-compose.discovery-only.yml"):
+        compose = _read(name)
+        assert "build:" in compose, name
+        assert "dockerfile: deploy/admin/Dockerfile" in compose, name
+        assert "ghcr.io/basecubedev/ems-solarflow-admin" not in compose, name

@@ -11,8 +11,14 @@ not touch `data/` or runtime databases.
 
 ## Start
 
+No Git checkout is required. The installer downloads the published image and
+starts the Admin Console in the current folder:
+
 ```bash
-deploy/admin/start-admin-setup.sh
+mkdir -p ems-solarflow-api-control
+cd ems-solarflow-api-control
+curl -fsSLO https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/main/deploy/admin/install-admin-console.sh
+sh install-admin-console.sh
 ```
 
 Then open:
@@ -21,13 +27,26 @@ Then open:
 http://127.0.0.1:8090
 ```
 
-If device discovery cannot see your LAN, start it with host networking instead:
+The default uses **host networking** for reliable LAN device discovery. EMS
+SolarFlow is a local LAN system, so host networking lets discovery see the LAN
+like a local host process; the UI is also reachable from another device on your
+LAN at `http://<host-ip>:8090`. This is normal local-appliance behaviour.
+
+If you need Docker bridge networking instead — for example in a restricted
+environment where host networking is not available — use `--bridge`:
 
 ```bash
-deploy/admin/start-admin-setup.sh --hostnet
+sh install-admin-console.sh --bridge
 ```
 
-Run the Admin Console only on a trusted local machine.
+Bridge mode publishes the UI on `127.0.0.1:8090` and isolates the container from
+the host network, so automatic LAN discovery can be less reliable; enter your LAN
+CIDR manually if a scan sees only Docker networks.
+
+Run the Admin Console only on a trusted local machine or trusted LAN — never
+expose it to the internet. Contributors building from a Git checkout use
+`deploy/admin/start-admin-setup.sh` instead — see
+[developer-setup.md](developer-setup.md).
 
 ## Layout
 

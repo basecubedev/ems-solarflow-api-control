@@ -34,8 +34,24 @@ def test_readme_names_three_operating_models():
 
 def test_readme_has_copy_paste_admin_console_start():
     text = read(ROOT / "README.md")
-    assert "deploy/admin/start-admin-setup.sh" in text
+    assert "install-admin-console.sh" in text
     assert "http://127.0.0.1:8090" in text
+
+
+def test_readme_admin_console_start_requires_no_git_checkout():
+    text = read(ROOT / "README.md")
+    admin_section = text.split("## Recommended: Admin Console", 1)[1].split("##", 1)[0]
+    assert "install-admin-console.sh" in admin_section
+    assert "git clone" not in admin_section
+
+
+def test_readme_keeps_git_clone_only_under_developer_setup():
+    text = read(ROOT / "README.md")
+    # git clone stays in the README, but only as the source/developer build path.
+    assert "git clone" in text
+    dev_section = text.split("## Developer Setup", 1)[1]
+    assert "git clone" in dev_section
+    assert "deploy/admin/start-admin-setup.sh" in dev_section
 
 
 def test_readme_has_copy_paste_docker_bootstrap_start():
@@ -112,4 +128,35 @@ def test_faq_has_copy_paste_troubleshooting_commands():
     assert "The dashboard is not reachable. What should I check?" in text
     assert "Device discovery does not find my devices. What should I try?" in text
     assert "docker compose ps" in text
-    assert "deploy/admin/start-admin-setup.sh --hostnet" in text
+    assert "sh install-admin-console.sh --bridge" in text
+
+
+def test_readme_admin_console_defaults_to_host_networking():
+    text = read(ROOT / "README.md")
+    admin_section = text.split("## Recommended: Admin Console", 1)[1].split("##", 1)[0]
+    # Normal users are never told to pass --hostnet; host networking is the
+    # documented default and --bridge is the opt-in.
+    assert "--hostnet" not in admin_section
+    assert "host networking" in admin_section
+    assert "--bridge" in admin_section
+
+
+def test_faq_explains_host_networking_default_and_bridge():
+    text = read(ROOT / "docs" / "faq.md")
+    assert "Why does the Admin Console use host networking by default?" in text
+    assert "Can I run the Admin Console in bridge mode?" in text
+    assert "sh install-admin-console.sh --bridge" in text
+    # The start answer no longer tells normal users to pass --hostnet.
+    start_answer = text.split(
+        "### How do I start the Admin Console?", 1
+    )[1].split("###", 1)[0]
+    assert "--hostnet" not in start_answer
+
+
+def test_faq_start_path_uses_installer_not_source_launcher():
+    text = read(ROOT / "docs" / "faq.md")
+    start_answer = text.split(
+        "### How do I start the Admin Console?", 1
+    )[1].split("###", 1)[0]
+    assert "install-admin-console.sh" in start_answer
+    assert "deploy/admin/start-admin-setup.sh" not in start_answer

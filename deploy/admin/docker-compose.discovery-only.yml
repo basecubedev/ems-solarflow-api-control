@@ -1,5 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# EMS SolarFlow Admin — restricted discovery-only mode.
+# EMS SolarFlow Admin — source/developer local-build, restricted discovery-only mode.
+#
+# For normal users: run install-admin-console.sh --discovery-only instead — it
+# uses the published image with no source checkout. This file builds the image
+# locally and is meant for Developer Setup / build from source.
 #
 #   deploy/admin/start-admin-setup.sh --discovery-only
 #   # or:

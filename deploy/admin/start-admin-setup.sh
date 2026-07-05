@@ -1,6 +1,8 @@
 #!/bin/sh
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# Start the EMS SolarFlow Admin Setup wizard.
+# Start the EMS SolarFlow Admin Console from a source checkout (build from
+# source). For normal users, use install-admin-console.sh instead — it runs the
+# published image with no Git checkout required.
 #
 # Default mode is deployment-capable: the Admin container controls the host
 # Docker engine through /var/run/docker.sock. No Docker daemon runs inside the

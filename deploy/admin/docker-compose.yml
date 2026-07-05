@@ -1,5 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# EMS SolarFlow Admin — default, deployment-capable setup.
+# EMS SolarFlow Admin — source/developer local-build, deployment-capable setup.
+#
+# For normal users: run install-admin-console.sh instead — it uses the published
+# image with no source checkout. This file builds the image locally from the
+# repository and is meant for Developer Setup / build from source.
 #
 # Recommended: let the launcher discover the Docker socket group id for you.
 #

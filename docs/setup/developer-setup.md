@@ -42,3 +42,22 @@ python3 -B ems-solarflow-api-control.py --dry-run --no-ha --once
 Full detail: [../native-python.md](../native-python.md) and
 [../development.md](../development.md). Layout and legacy migration:
 [config-layout.md](config-layout.md).
+
+## Build the Admin Console from source
+
+Normal users install the Admin Console from the published image with
+`install-admin-console.sh` (see [admin-setup.md](admin-setup.md)); no Git is
+required. Contributors can instead build and run the Admin Console image from a
+Git checkout:
+
+```bash
+git clone https://github.com/basecubedev/ems-solarflow-api-control.git
+cd ems-solarflow-api-control
+deploy/admin/start-admin-setup.sh
+```
+
+Then open `http://127.0.0.1:8090`. Add `--hostnet` for LAN discovery or
+`--discovery-only` for the restricted, no-Docker-socket preview. This launcher
+builds the image locally from the checkout; the installer path uses the published
+`ghcr.io/basecubedev/ems-solarflow-admin` image. Full technical reference:
+[../admin-discovery.md](../admin-discovery.md).

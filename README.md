@@ -32,10 +32,14 @@ browser. It guides setup, device discovery, config generation, updates, backups
 and maintenance. EMS still runs the control loop — the Admin Console is UI and
 orchestration only.
 
+No Git checkout is required. The installer downloads the published image and
+starts the Admin Console in the current folder:
+
 ```bash
-git clone https://github.com/basecubedev/ems-solarflow-api-control.git
+mkdir -p ems-solarflow-api-control
 cd ems-solarflow-api-control
-deploy/admin/start-admin-setup.sh
+curl -fsSLO https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/main/deploy/admin/install-admin-console.sh
+sh install-admin-console.sh
 ```
 
 Then open:
@@ -44,14 +48,17 @@ Then open:
 http://127.0.0.1:8090
 ```
 
-If device discovery cannot see your LAN, start it with host networking:
+The default uses host networking for reliable LAN device discovery, so the UI is
+also reachable from another device on your LAN at `http://<host-ip>:8090`. Use
+`--bridge` if you need Docker bridge networking instead:
 
 ```bash
-deploy/admin/start-admin-setup.sh --hostnet
+sh install-admin-console.sh --bridge
 ```
 
-Run the Admin Console only on a trusted local machine — never expose it to the
-internet. Overview: [docs/admin.md](docs/admin.md). Full guide:
+The Admin Console is designed for a trusted local EMS host or trusted LAN. Run it
+only there — never expose it to the internet. Overview:
+[docs/admin.md](docs/admin.md). Full guide:
 [docs/setup/admin-setup.md](docs/setup/admin-setup.md).
 
 ## Docker Bootstrap
@@ -100,6 +107,18 @@ Python environment. This is **not** the normal user path — for a home install,
 use the Admin Console or Docker Bootstrap above.
 
 Start here: [docs/setup/developer-setup.md](docs/setup/developer-setup.md).
+
+### Build Admin Console from source (Developer Setup only)
+
+Contributors can build and run the Admin Console image from a Git checkout
+instead of the published image. Normal users should use the
+`install-admin-console.sh` installer above.
+
+```bash
+git clone https://github.com/basecubedev/ems-solarflow-api-control.git
+cd ems-solarflow-api-control
+deploy/admin/start-admin-setup.sh
+```
 
 ## Configure EMS
 

@@ -186,3 +186,44 @@ jobs:
             EMS_CHANNEL=${{ steps.build_identity.outputs.channel }}
           annotations: |
             index:org.opencontainers.image.description=Local EMS controller for Zendure SolarFlow. Docker images include automatic first-run config bootstrap. See README for Quick Start and docs/docker.md for full setup.
+
+      # --- Admin Console image ------------------------------------------------
+      # The installable Admin Console ships as its own image so end users can run
+      # it without a source checkout. It reuses the same build identity as the
+      # EMS image; only the metadata and Dockerfile differ.
+      - name: Generate Admin Docker metadata
+        id: meta_admin
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/basecubedev/ems-solarflow-admin
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+          labels: |
+            org.opencontainers.image.title=ems-solarflow-admin
+            org.opencontainers.image.description=Browser-based Admin Console for EMS SolarFlow setup, maintenance, updates and backups.
+            org.opencontainers.image.source=https://github.com/basecubedev/ems-solarflow-api-control
+            org.opencontainers.image.documentation=https://github.com/basecubedev/ems-solarflow-api-control/blob/main/docs/admin.md
+            org.opencontainers.image.version=${{ steps.build_identity.outputs.release_tag }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            de.basecubedev.ems.channel=${{ steps.build_identity.outputs.channel }}
+            de.basecubedev.ems.build_serial=${{ steps.build_identity.outputs.build_serial }}
+            de.basecubedev.ems.build_id=${{ steps.build_identity.outputs.build_id }}
+            de.basecubedev.ems.release_tag=${{ steps.build_identity.outputs.release_tag }}
+
+      - name: Build local Admin image for content validation
+        run: |
+          docker build -f deploy/admin/Dockerfile -t ems-solarflow-admin:ci .
+          docker run --rm ems-solarflow-admin:ci python -m admin --help
+
+      - name: Build and push Admin Docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./deploy/admin/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta_admin.outputs.tags }}
+          labels: ${{ steps.meta_admin.outputs.labels }}
+          annotations: |
+            index:org.opencontainers.image.description=Browser-based Admin Console for EMS SolarFlow setup, maintenance, updates and backups.

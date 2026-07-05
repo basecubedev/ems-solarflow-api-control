@@ -15,6 +15,11 @@ backup/restore, all through EMS-owned tooling. Device discovery — finding
 supported EMS devices on the local network and showing them in the EMS dashboard
 style — is described in detail below.
 
+> For normal users, use `install-admin-console.sh` (see
+> [setup/admin-setup.md](setup/admin-setup.md)); it runs the published image with
+> no Git checkout. This page documents the technical/source and runtime behavior,
+> including the local-build launcher `deploy/admin/start-admin-setup.sh`.
+
 ## Layout
 
 The UI has two top-level tabs. **Setup** (the default) is a compact
@@ -270,12 +275,27 @@ not authenticate, create permanent connections, or subscribe to topics.
 
 ### Docker networking
 
-- **Bridge mode (default):** the container often only sees Docker networks
-  (`172.17.0.0/16`, `172.18.0.0/16`, …), which are not useful for LAN discovery.
-  The UI then shows a clear warning and you can still enter your LAN CIDR
-  manually.
-- **Host mode (Linux / Raspberry Pi):** host networking exposes the host's real
-  interfaces so detection finds your actual LAN. Add the host-network override:
+Network mode and UI bind address are independent concerns. The **network mode**
+(host vs bridge) changes what discovery can see; the **UI bind host**
+(`127.0.0.1` vs `0.0.0.0`) changes what address the Admin server listens on. Do
+not conflate the two.
+
+The installed Admin Console (`install-admin-console.sh`) and the published-image
+runtime Compose files default to **host networking**.
+
+- **Host network (default):** improves LAN/mDNS/broadcast/subnet discovery by
+  exposing the host's real interfaces, so detection finds your actual LAN. The
+  web UI bind is controlled by the Admin server bind host; the image binds
+  `0.0.0.0:8090`, so with host networking the UI is reachable on every host
+  address. Use it only on a trusted local machine or trusted LAN.
+- **Bridge network (`--bridge`):** the container usually only sees Docker
+  networks (`172.17.0.0/16`, `172.18.0.0/16`, …), which are not useful for LAN
+  discovery, so the UI shows a clear warning and you enter your LAN CIDR
+  manually. Docker port publishing controls UI reachability (`127.0.0.1:8090` by
+  default).
+
+The source/developer launcher builds from a checkout and defaults to bridge; add
+host networking with a Compose override instead of `--bridge`:
 
   ```bash
   deploy/admin/start-admin-setup.sh --hostnet
@@ -401,6 +421,31 @@ never treats a private `data/admin/deployment/` directory as the runtime EMS
 layout; `data/admin/` holds only Admin-owned state, staging, release cache,
 backups, and logs.
 
+### Published-image runtime (no source checkout)
+
+`deploy/admin/start-admin-setup.sh` and `docker-compose.yml` build the image
+locally from the checkout — the Developer Setup / build-from-source path. Normal
+users instead run `install-admin-console.sh`, which needs no checkout: it writes a
+self-contained `docker-compose.admin.yml` (published
+`ghcr.io/basecubedev/ems-solarflow-admin` image, resolved host paths baked in),
+creates `config/` and `data/admin/`, and starts the Admin Console.
+
+The same runtime is also available as fixed repository Compose files that use the
+published image with no `build:` section:
+
+- `deploy/admin/docker-compose.runtime.yml` — deployment-capable, **host
+  networking** (Docker socket, no port mapping). The end-user default.
+- `deploy/admin/docker-compose.runtime.bridge.yml` — deployment-capable, bridge
+  networking. Publishes the UI on `${EMS_ADMIN_BIND:-127.0.0.1}:${EMS_ADMIN_PORT:-8090}`.
+- `deploy/admin/docker-compose.runtime.discovery-only.yml` — restricted, no
+  socket, host networking.
+
+All keep same-path mounting for `EMS_INSTALL_DIR` and `EMS_ADMIN_DATA_DIR`. Host
+networking is the default so discovery sees the real LAN; the bridge file is the
+opt-in for Docker bridge networking with a published port, matching
+`install-admin-console.sh --bridge`. Set `EMS_ADMIN_TAG` to pin an image tag
+(default `latest`).
+
 ### Restricted discovery-only mode
 
 To run discovery and build a config draft **without** granting any Docker
@@ -437,7 +482,8 @@ The container is designed for small Raspberry Pi deployments:
 - Idle footprint targets well under 100 MB RSS; a scan raises usage only while
   it runs, with bounded concurrency and short request timeouts.
 
-To scan the host's real LAN from a Pi, publish on the LAN IP or use the
+Scanning the host's real LAN from a Pi works out of the box with the installer's
+host-networking default. On the source/developer path, add the
 `docker-compose.hostnet.yml` override (see [Docker networking](#docker-networking)).
 
 ## Security note

@@ -17,12 +17,34 @@ installer with Docker commands and `emsctl.py`.
 
 ### How do I start the Admin Console?
 
+No Git checkout is required:
+
 ```bash
-deploy/admin/start-admin-setup.sh
+mkdir -p ems-solarflow-api-control
+cd ems-solarflow-api-control
+curl -fsSLO https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/main/deploy/admin/install-admin-console.sh
+sh install-admin-console.sh
 ```
 
-Then open `http://127.0.0.1:8090`. Add `--hostnet` if device discovery cannot
-see your LAN.
+Then open `http://127.0.0.1:8090`. The default uses host networking for reliable
+LAN device discovery; use `--bridge` if you need Docker bridge networking.
+
+### Why does the Admin Console use host networking by default?
+
+EMS is a local LAN system. Host networking makes device discovery more reliable
+because the container sees the LAN like a local host process. Use `--bridge` if
+you want Docker bridge networking instead.
+
+### Can I run the Admin Console in bridge mode?
+
+Yes.
+
+```bash
+sh install-admin-console.sh --bridge
+```
+
+Discovery may be less reliable in bridge mode. The UI is published on
+`127.0.0.1:8090`.
 
 ### Should I choose Setup or Maintenance?
 
@@ -145,13 +167,17 @@ Then open `http://127.0.0.1:8080` (or `http://<host-ip>:8080`) and confirm port
 
 ### Device discovery does not find my devices. What should I try?
 
-Start the Admin Console with host networking so discovery can see your LAN:
+The default install already uses host networking, which is the most reliable
+mode for LAN discovery. First confirm the container is running and reachable:
 
 ```bash
-deploy/admin/start-admin-setup.sh --hostnet
+docker compose -f docker-compose.admin.yml ps
 ```
 
-Then rerun the scan. See [troubleshooting.md](troubleshooting.md) for more.
+Then rerun the scan and, if needed, enter your LAN CIDR (for example
+`192.168.178.0/24`) manually. If you started the Admin Console in bridge mode,
+switch back to the host-networking default (drop `--bridge`) so discovery can see
+the real LAN. See [troubleshooting.md](troubleshooting.md) for more.
 
 ### How do I create a support bundle?
 

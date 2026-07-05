@@ -48,8 +48,14 @@ guided upgrade and restore back up what they replace first.
 
 ## Start
 
+No Git checkout is required for the normal Admin Console install. The installer
+downloads the published image and starts the Admin Console in the current folder:
+
 ```bash
-deploy/admin/start-admin-setup.sh
+mkdir -p ems-solarflow-api-control
+cd ems-solarflow-api-control
+curl -fsSLO https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/main/deploy/admin/install-admin-console.sh
+sh install-admin-console.sh
 ```
 
 Then open:
@@ -58,16 +64,33 @@ Then open:
 http://127.0.0.1:8090
 ```
 
-If device discovery cannot see your LAN, start it with host networking:
+### Networking
+
+The default uses **host networking**. EMS SolarFlow is a local LAN system, so
+host networking lets discovery see the LAN more like a local host process, which
+is the most reliable mode. The UI is then also reachable from another device on
+your LAN at `http://<host-ip>:8090`.
+
+Bridge networking is available with `--bridge`:
 
 ```bash
-deploy/admin/start-admin-setup.sh --hostnet
+sh install-admin-console.sh --bridge
 ```
+
+In bridge mode the container is isolated from the host network, Docker port
+publishing controls how the UI is reached (`127.0.0.1:8090` by default), and
+automatic LAN discovery can be less reliable — enter your LAN CIDR manually if a
+scan sees only Docker networks.
+
+Contributors who build from a Git checkout instead use
+`deploy/admin/start-admin-setup.sh` — see
+[setup/developer-setup.md](setup/developer-setup.md).
 
 ## Safety
 
-Do not expose the Admin Console to the internet. A deployment-capable Admin
-container controls the host Docker engine, which is effectively root-equivalent.
-Run it only on a trusted local network.
+The Admin Console is designed for a trusted local EMS host or trusted LAN. The
+Zendure local APIs are not encrypted. Do not expose the Admin Console — or the
+EMS ports — to the internet. A deployment-capable Admin container controls the
+host Docker engine, which is effectively root-equivalent.
 
 Full technical reference: [admin-discovery.md](admin-discovery.md).
