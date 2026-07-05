@@ -116,7 +116,7 @@ a view (`/preview/aggregated`, `/preview/devices`, `/preview/control`,
 `/preview/energy`, `/preview/diagnose`, `/preview/logs`). Scenarios cover a healthy
 system, mixed firmware-status values (including unknown values), an offline device,
 and read-only/write-mode authentication states. See
-[developer.md](developer.md#local-dashboard-preview) for details.
+[developer.md](developer/developer.md#local-dashboard-preview) for details.
 
 ## Configuration
 
@@ -368,7 +368,7 @@ between two samples.
 
 **Advanced usage — the standalone collector.** The collector
 (`scripts/capture_runtime_to_influx.py`, see
-[develop-tool-influxdb-telemetry.md](develop-tool-influxdb-telemetry.md)) is no
+[develop-tool-influxdb-telemetry.md](developer/design-notes/develop-tool-influxdb-telemetry.md)) is no
 longer required for normal operation. It remains available for development,
 diagnostics, experiments and backfill. It writes the same device and Shelly
 meter schema as the native writer (`zendure_device` / `shelly_meter`, numeric
@@ -510,7 +510,7 @@ Browser-CPU behavior (live updates):
 - `dashboard.animation_mode` (`normal` / `reduced` / `off`) reduces or disables
   the animated flow view's pipe motion and glow/blur filters to lower CPU/GPU
   load; `prefers-reduced-motion` is always honored on top of it. See
-  [configuration.md](configuration.md).
+  [configuration.md](technical/configuration.md).
 
 End-to-end tests (`tests/test_history_analytics_e2e.py`) cover the whole path.
 The SQLite variant always runs (records snapshots through the real

@@ -8,7 +8,7 @@ Short answers, grouped so you can scan. For detail, follow the links.
 
 The Admin Console (product name **EMS SolarFlow Admin**) is a local browser tool
 for setup, device discovery, maintenance, updates and backups. EMS still owns the
-control logic. See [admin.md](admin.md).
+control logic. See [admin.md](admin-console.md).
 
 ### Do I have to use the Admin Console?
 
@@ -17,7 +17,7 @@ installer with Docker commands and `emsctl.py`.
 
 ### How do I start the Admin Console?
 
-No Git checkout is required:
+Run the installer:
 
 ```bash
 mkdir -p ems-solarflow-api-control
@@ -50,8 +50,8 @@ Discovery may be less reliable in bridge mode. The UI is published on
 
 Use **Set up a new system** for a fresh install or deliberate reinstall. Use
 **Manage my existing system** for updates, diagnostics, config changes and
-backups. See [setup/admin-setup.md](setup/admin-setup.md) and
-[setup/admin-maintenance.md](setup/admin-maintenance.md).
+backups. See the [Admin setup guide](admin-setup.md) and
+[Admin maintenance guide](admin-maintenance.md).
 
 ### Does the Admin Console overwrite my config?
 
@@ -65,14 +65,14 @@ existing config is backed up first.
 Use the **Admin Console** if you want a browser-guided setup with device
 discovery and maintenance. Use **Docker Bootstrap** if you prefer copy/paste
 shell commands without the browser wizard. Both use the same `config/config.json`
-layout, so you can switch later. See
-[setup/docker-bootstrap.md](setup/docker-bootstrap.md).
+layout, so you can switch later. See the
+[Docker Bootstrap guide](docker-bootstrap.md).
 
 ### What is Developer Setup?
 
 Developer Setup is a Git checkout with a local Python environment, for
 development, debugging and contributing. It is **not** the normal user path. See
-[setup/developer-setup.md](setup/developer-setup.md).
+the [Developer Setup guide](../developer/developer-setup.md).
 
 ## Config and files
 
@@ -91,35 +91,38 @@ existing `./data:/app/data` mount; no separate backup volume is needed.
 
 ### What is `data/admin/`?
 
-`data/admin/` holds the Admin Console's own state: release cache, staging, logs
-and backup-set metadata. It is not a second EMS config and not a live EMS runtime
+`data/admin/` holds the Admin Console's own state: temporary files, logs and
+backup-set metadata. It is not a second EMS config and not a live EMS runtime
 layout.
 
 ### I already have `config.json` in the project root. What should I do?
 
 That is the legacy layout. New Docker and Admin Console setups use
 `config/config.json`. The Admin Console routes a legacy root config to
-Maintenance and offers to migrate it. See
-[setup/config-layout.md](setup/config-layout.md).
+Maintenance and offers to migrate it. See the
+[config layout guide](config-layout.md).
 
 ## Updates and backups
 
 ### What should I do before updating?
 
-Create a backup first, then check diagnostics:
+If you use the Admin Console, open **Maintenance** and create a backup before
+starting **Guided upgrade**. The upgrade flow shows the plan, runs checks, and
+asks for confirmation before changing the system.
+
+For Docker Bootstrap or advanced shell use, create a backup and run diagnostics
+before updating:
 
 ```bash
 docker compose exec ems python3 emsctl.py backup create --type config
 docker compose exec ems python3 emsctl.py diagnose
 ```
 
-Then use the Admin Console **Guided upgrade** or update with Docker commands.
-
 ### Are Admin Console backups normal EMS backups?
 
 Yes. The Admin Console uses the EMS backup tooling. Backup archives live in
-`data/backups/` by default. See
-[setup/admin-backup-restore.md](setup/admin-backup-restore.md).
+`data/backups/` by default. See the
+[Admin backup and restore guide](admin-backup-restore.md).
 
 ### Can I create encrypted backups in the Admin Console?
 
@@ -155,7 +158,10 @@ reuse the EMS Dashboard password file; check your version's release notes.
 
 ### The dashboard is not reachable. What should I check?
 
-Check the containers and logs:
+If you installed through the Admin Console, first check the Maintenance overview
+for container state and dashboard link.
+
+For Docker Bootstrap or shell checks:
 
 ```bash
 docker compose ps
@@ -180,6 +186,10 @@ switch back to the host-networking default (drop `--bridge`) so discovery can se
 the real LAN. See [troubleshooting.md](troubleshooting.md) for more.
 
 ### How do I create a support bundle?
+
+If the Admin Console offers a support bundle action, use that first.
+
+For Docker Bootstrap or advanced shell use:
 
 ```bash
 docker compose exec ems python3 emsctl.py diagnose --support-bundle
@@ -219,7 +229,7 @@ configured local meter.
 ### Is native Python still supported?
 
 Yes. It is documented as an advanced/manual setup in
-[native-python.md](native-python.md).
+[native-python.md](../native-python.md).
 
 ### Do I need InfluxDB?
 
@@ -243,15 +253,18 @@ exist. Existing `config/config.json` is not overwritten.
 
 ### What should I do after editing config?
 
-Restart the container and run diagnose:
+If you changed config through the Admin Console, follow the shown restart and
+diagnostic result.
+
+For Docker Bootstrap or manual file edits, restart EMS and run diagnostics:
 
 ```bash
 docker compose restart
 docker compose exec ems python3 emsctl.py diagnose
 ```
 
-The [first-run checklist](first-run-checklist.md) is a good next step after a
-larger config edit.
+The [first-run checklist](../first-run-checklist.md) is a good next step after a
+larger manual config edit.
 
 ### How do I stop EMS?
 

@@ -203,7 +203,7 @@ jobs:
             org.opencontainers.image.title=ems-solarflow-admin
             org.opencontainers.image.description=Browser-based Admin Console for EMS SolarFlow setup, maintenance, updates and backups.
             org.opencontainers.image.source=https://github.com/basecubedev/ems-solarflow-api-control
-            org.opencontainers.image.documentation=https://github.com/basecubedev/ems-solarflow-api-control/blob/main/docs/admin.md
+            org.opencontainers.image.documentation=https://github.com/basecubedev/ems-solarflow-api-control/blob/main/docs/user/admin-console.md
             org.opencontainers.image.version=${{ steps.build_identity.outputs.release_tag }}
             org.opencontainers.image.revision=${{ github.sha }}
             de.basecubedev.ems.channel=${{ steps.build_identity.outputs.channel }}

@@ -43,7 +43,7 @@ CONFLICT_POLICIES = ("abort", "keep", "replace")
 
 # InfluxDB has a dedicated EMS/CLI restore flow; its archives must never go
 # through the generic EMS file restore path. Admin blocks InfluxDB restore until
-# an EMS-tool-backed runner is wired in (see docs/setup/admin-backup-restore.md).
+# an EMS-tool-backed runner is wired in (see docs/user/admin-backup-restore.md).
 UNSUPPORTED_ADMIN_RESTORE_TYPES = ("influxdb",)
 ADMIN_RESTORE_UNSUPPORTED_MESSAGE = (
     "InfluxDB restore is not available in the Admin UI yet. Use EMS CLI restore "

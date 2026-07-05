@@ -1954,7 +1954,7 @@ canvas { width: 100%; min-height: 94px; border: 1px solid rgba(148,163,184,.13);
   canvas { min-height: 72px; }
 }
 
-/* Diagnose tab — Control / Energy stage style (see docs/dashboard-style-guide.md) */
+/* Diagnose tab — Control / Energy stage style (see docs/developer/dashboard-style-guide.md) */
 /* position/z-index lift the panel above the decorative .flow-wrap::before grid
    overlay so its (statically positioned) profile buttons remain clickable. */
 .diagnose-view { position: relative; z-index: 1; padding: 4px 2px; }
@@ -2048,7 +2048,7 @@ canvas { width: 100%; min-height: 94px; border: 1px solid rgba(148,163,184,.13);
 .diagnose-root-message { font-size: 12px; color: var(--muted); }
 .diagnose-root-hint { font-size: 11px; color: var(--muted2); margin-top: 2px; }
 
-/* Logs tab — Control / Energy stage style (see docs/dashboard-style-guide.md) */
+/* Logs tab — Control / Energy stage style (see docs/developer/dashboard-style-guide.md) */
 /* Lift above the decorative .flow-wrap::before grid overlay (see diagnose-view). */
 .logs-view { position: relative; z-index: 1; padding: 4px 2px; }
 .logs-heading h2 { margin: 0; }

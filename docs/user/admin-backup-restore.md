@@ -8,7 +8,7 @@ creating, inspecting and restoring backups from the Admin Console. It is a
 The Admin Console is orchestration/UI only. It never invents a new backup format:
 every archive is a normal EMS backup archive created and read through the EMS Core
 helpers (the same ones behind `emsctl.py backup`, documented in
-[../backup-restore.md](../backup-restore.md)). A **backup set** is optional Admin
+[../backup-restore.md](../technical/backup-restore.md)). A **backup set** is optional Admin
 metadata that groups existing EMS archives (config + databases, plus bundled
 InfluxDB when supported) — it is not a new artifact.
 
@@ -36,7 +36,7 @@ default. The Admin Console keeps only its own metadata under `data/admin/`.
 | Path | What it holds |
 | --- | --- |
 | `data/backups/` | EMS backup archives (the real `.tar.gz` / `.tar.gz.enc` files) |
-| `data/admin/` | Admin Console state, release cache, staging, logs and backup-set metadata |
+| `data/admin/` | Admin Console state, temporary files, logs and backup-set metadata |
 
 Admin backup-set metadata lives under `data/admin/backups/sets/`; the archives it
 references still live in `data/backups/`. The status stage warns if the backup
@@ -51,7 +51,7 @@ Console, but **InfluxDB restore is intentionally blocked** in the Admin Console:
 InfluxDB has a dedicated EMS/CLI restore flow and must never be pushed through the
 generic file restore path. Until an EMS-tool-backed InfluxDB restore runner is
 wired in, use the EMS CLI (`emsctl.py backup`, see
-[../backup-restore.md](../backup-restore.md)) to restore InfluxDB backups.
+[../backup-restore.md](../technical/backup-restore.md)) to restore InfluxDB backups.
 
 The block is enforced in the backend, not just hidden in the UI: an InfluxDB
 archive cannot enter a restore preview, no restore plan containing an InfluxDB
@@ -72,7 +72,7 @@ with the backup state, Admin Console restore treats differing files as replace
 candidates. The preview lists those files and counts them under "Will replace".
 Nothing is written until you explicitly confirm the restore. The lower-level EMS
 restore tooling (`emsctl.py backup`, see
-[../backup-restore.md](../backup-restore.md)) still supports stricter conflict
+[../backup-restore.md](../technical/backup-restore.md)) still supports stricter conflict
 policies for CLI/advanced workflows.
 
 ## Rollback and automatic rollback

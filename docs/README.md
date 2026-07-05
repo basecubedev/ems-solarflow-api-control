@@ -1,87 +1,111 @@
 # EMS SolarFlow Documentation
 
-This directory contains the public project documentation. It is grouped so
-normal users can find setup and everyday tasks first, and technical or developer
-detail stays clearly separated.
+This is the documentation map. The root [README.md](../README.md) is the short
+router that points you at one of three setup paths; this page lists everything.
 
-The root [README.md](../README.md) is the short, user-first entry point. This
-page is the full documentation map.
+Documentation is split by audience:
 
-## For users
+- **[docs/user/](user/)** — start here for setup, everyday operation and help.
+- **[docs/technical/](technical/)** — architecture, internals and reference.
+- **[docs/developer/](developer/)** — source checkout, tests, CI and design notes.
 
-Everyday setup, operation and help.
-
-| Topic | Document | Use |
-|---|---|---|
-| Admin Console overview | [admin.md](admin.md) | What the Admin Console is, its two paths, and where files live. |
-| Set up a new system | [setup/admin-setup.md](setup/admin-setup.md) | Admin Console "Set up a new system" flow with device discovery, release selection, and config apply. |
-| Manage my existing system | [setup/admin-maintenance.md](setup/admin-maintenance.md) | Admin Console "Manage my existing system" flow: guided upgrade, read-only overview, config editor, and backup. |
-| Admin Console backup / restore | [setup/admin-backup-restore.md](setup/admin-backup-restore.md) | Preview-first backup and restore from the Admin Console, what it can restore, and what is blocked. |
-| Quickstart | [quickstart.md](quickstart.md) | Docker-first beginner setup from install check to dashboard and diagnose. |
-| First-run checklist | [first-run-checklist.md](first-run-checklist.md) | Safe validation sequence after the first config edit. |
-| Common commands | [common-commands.md](common-commands.md) | Daily Docker-first command sheet with native Python equivalents. |
-| Backup and restore | [backup-restore.md](backup-restore.md) | CLI backup before updates, dry-run restore checks, encrypted backups, and full local restore. |
-| FAQ | [faq.md](faq.md) | Short answers for Admin, Docker, config, dashboard, backups, and updates. |
-| Troubleshooting | [troubleshooting.md](troubleshooting.md) | Symptom index, beginner checks, diagnostics, and links back to detail pages. |
-| Supported setups | [supported-setups.md](supported-setups.md) | Check whether your grid meter, Zendure devices, and setup style fit EMS. |
-| Safety model | [safety.md](safety.md) | Hardware-write gates, dry-run behavior, and staged validation. |
+Normal users should start with **User documentation**.
+Use **Technical reference** only when you need deeper behavior or implementation
+details.
+Use **Developer documentation** only for source checkout, tests, local builds and
+contributing.
 
 ## Operating models
 
-There are three operating models. All converge on the same standard
-`config/config.json` layout, so you can switch later.
+Admin Console and Docker Bootstrap are the two user setup paths; both converge on
+the same standard `config/config.json` layout. Developer Setup is a
+source-checkout path for development and contributing, not a normal user setup.
+
+| Path | Audience | Start here |
+| --- | --- | --- |
+| Admin Console | Most users | [Admin Console](user/admin-console.md) |
+| Docker Bootstrap | Shell-only Docker users | [Docker Bootstrap](user/docker-bootstrap.md) |
+| Developer Setup | Developers and contributors only | [Developer Setup](developer/developer-setup.md) |
+
+## User documentation
+
+Setup, everyday operation and help. Normal users only need this section.
+
+### Setup paths
+
+Normal users choose one of these two; both converge on the same standard
+`config/config.json` layout.
 
 | Model | Document | Use |
 |---|---|---|
-| Admin Console | [setup/admin-setup.md](setup/admin-setup.md) | Recommended browser-guided setup, maintenance, updates and backups for most users. |
-| Docker Bootstrap | [setup/docker-bootstrap.md](setup/docker-bootstrap.md) | Copy/paste Docker install for shell users, without the browser wizard. |
-| Developer Setup | [setup/developer-setup.md](setup/developer-setup.md) | Setup from a Git checkout for development, debugging and contributing. |
+| Admin Console | [user/admin-console.md](user/admin-console.md) | Recommended browser-guided setup, discovery, maintenance, updates and backups. |
+| Docker Bootstrap | [user/docker-bootstrap.md](user/docker-bootstrap.md) | Shell-only Docker install without the browser wizard. |
 
-Supporting setup references:
-
-| Topic | Document | Use |
-|---|---|---|
-| Native Python / advanced | [native-python.md](native-python.md) | Manual setup with venv, local config, dry-run checks, and service-manager notes. |
-| Config layout | [setup/config-layout.md](setup/config-layout.md) | Standard `config/config.json` layout and legacy root-config migration. |
-| Install Docker | [install-docker.md](install-docker.md) | Practical Docker Engine and Compose plugin install help. |
-| Docker reference | [docker.md](docker.md) | Compose reference, first-run config bootstrap, persisted data, and permissions. |
-| Quality and maintenance | [quality-and-maintenance.md](quality-and-maintenance.md) | How the project is tested, packaged, maintained, and where the limits remain. |
-
-## Features
+### Admin Console guides
 
 | Topic | Document | Use |
 |---|---|---|
-| Standalone dashboard | [dashboard.md](dashboard.md) | Read-only live dashboard, Control Explain view, local history, and telemetry endpoints. |
-| InfluxDB analytics | [influxdb.md](influxdb.md) | Optional long-range analytics with bundled or external InfluxDB. |
-| Home Assistant integration | [home-assistant.md](home-assistant.md) | Optional HA publishing, helpers, sensors, dashboard files, and control relationship. |
-| Winter mode | [winter-mode.md](winter-mode.md) | Optional winter minSoc ramp and reconciliation behavior. |
-| Battery full-charge assist | [battery-full-charge-assist.md](battery-full-charge-assist.md) | Optional EMS-managed full-charge assist based on firmware `socLimit`. |
+| Admin setup | [user/admin-setup.md](user/admin-setup.md) | "Set up a new system" flow: discovery, config generation and apply. |
+| Admin maintenance | [user/admin-maintenance.md](user/admin-maintenance.md) | "Manage my existing system" flow: guided upgrade, overview, config editor, backup. |
+| Backup and restore | [user/admin-backup-restore.md](user/admin-backup-restore.md) | Preview-first backup and restore from the Admin Console. |
+
+### Everyday use and help
+
+| Topic | Document | Use |
+|---|---|---|
+| Quickstart | [quickstart.md](quickstart.md) | Docker-first beginner setup from install check to dashboard. |
+| First-run checklist | [first-run-checklist.md](first-run-checklist.md) | Safe validation sequence after the first config edit. |
+| Common commands | [common-commands.md](common-commands.md) | Daily Docker-first command sheet with native equivalents. |
+| Config layout | [user/config-layout.md](user/config-layout.md) | Standard `config/config.json` layout and legacy migration. |
+| Supported setups | [user/supported-setups.md](user/supported-setups.md) | Whether your grid meter and devices fit EMS. |
+| FAQ | [user/faq.md](user/faq.md) | Short answers for Admin, Docker, config, dashboard, backups and updates. |
+| Troubleshooting | [user/troubleshooting.md](user/troubleshooting.md) | Short, Admin-first guide for common problems. |
+| Safety | [user/safety.md](user/safety.md) | Simple pre-live checklist for hardware writes. |
+
+### Install and features
+
+| Topic | Document | Use |
+|---|---|---|
+| Install Docker | [install-docker.md](install-docker.md) | Docker Engine and Compose plugin install help. |
+| Docker reference | [docker.md](docker.md) | Compose reference, first-run bootstrap and persisted data. |
+| Native Python / advanced | [native-python.md](native-python.md) | Manual venv setup with local config and dry-run checks. |
+| Standalone dashboard | [dashboard.md](dashboard.md) | Read-only live dashboard, Control Explain view and history. |
+| Home Assistant | [home-assistant.md](home-assistant.md) | Optional HA publishing, helpers and sensors. |
+| Winter mode | [winter-mode.md](winter-mode.md) | Optional winter minSoc ramp and reconciliation. |
+| Battery full-charge assist | [battery-full-charge-assist.md](battery-full-charge-assist.md) | Optional EMS-managed full-charge assist. |
+| Quality and maintenance | [quality-and-maintenance.md](quality-and-maintenance.md) | How the project is tested, packaged and maintained. |
 
 ## Technical reference
 
-Deeper detail. You do not need this for a normal setup.
+Architecture, internals and reference. You do not need this for a normal setup.
 
 | Topic | Document | Use |
 |---|---|---|
-| Configuration reference | [configuration.md](configuration.md) | Static `config.json` keys, safety flags, output control, devices, grid meters, HA, and winter settings. |
-| Configuration examples | [configuration-examples.md](configuration-examples.md) | Copy/paste starting points for standalone, HA, dry-run, live writes, runtime state, and winter mode. |
-| Control flow | [control-flow.md](control-flow.md) | Visual map of where config values affect one EMS control cycle. |
-| Control logic | [control-logic.md](control-logic.md) | Target calculation, filtering, allocation, minSoc idle, and write suppression behavior. |
-| Runtime state | [runtime-state.md](runtime-state.md) | Mutable operator state and the fields changed by CLI or Home Assistant helpers. |
-| CLI tool | [cli.md](cli.md) | Full `emsctl.py` reference for runtime-state, diagnostics, config, and backups. |
-| Safety model | [safety.md](safety.md) | Hardware-write gates, dry-run behavior, and staged validation. |
-| Admin Console technical reference | [admin-discovery.md](admin-discovery.md) | Full Admin Console internals: wizard, release/build-identity gating, network discovery, Docker setup, and security. |
-| Architecture | [architecture.md](architecture.md) | Project structure and runtime component boundaries. |
+| Architecture | [technical/architecture.md](technical/architecture.md) | Project structure and runtime component boundaries. |
+| Admin architecture | [technical/admin-architecture.md](technical/admin-architecture.md) | Admin Console = UI/orchestration, Docker Bootstrap layout, EMS/Core as source of truth. |
+| Admin discovery | [technical/admin-discovery.md](technical/admin-discovery.md) | Full Admin Console internals: wizard, release/build identity, discovery, Docker setup, security. |
+| Configuration | [technical/configuration.md](technical/configuration.md) | Static `config.json` keys, safety flags, devices, grid meters and winter settings. |
+| Configuration examples | [configuration-examples.md](configuration-examples.md) | Copy/paste starting points for standalone, HA, dry-run and live writes. |
+| Control logic | [technical/control-logic.md](technical/control-logic.md) | Target calculation, filtering, allocation and write suppression. |
+| Control flow | [technical/control-flow.md](technical/control-flow.md) | Visual map of where config values affect one control cycle. |
+| Runtime state | [technical/runtime-state.md](technical/runtime-state.md) | Mutable operator state and fields changed by CLI or HA helpers. |
+| Safety model | [technical/safety-model.md](technical/safety-model.md) | Write gates, runtime write types and the Zendure fields EMS writes. |
+| Troubleshooting reference | [technical/troubleshooting-reference.md](technical/troubleshooting-reference.md) | Command-level diagnostics, log events and deeper failure analysis. |
+| Backup/restore internals | [technical/backup-restore.md](technical/backup-restore.md) | CLI backup, dry-run restore checks, encrypted backups and full restore. |
+| Analytics / InfluxDB | [technical/influxdb.md](technical/influxdb.md) | Optional long-range analytics with bundled or external InfluxDB. |
+| CLI reference | [cli.md](cli.md) | Full `emsctl.py` reference for runtime-state, diagnostics, config and backups. |
 | Observed firmware behavior | [observed-firmware-no-energy-path.md](observed-firmware-no-energy-path.md) | Observed Zendure behavior when no energy path is available. |
 
-## Developer and maintainer docs
+## Developer documentation
 
-For contributors and maintainers.
+For contributors and maintainers. Git clone and build-from-source belong here.
 
 | Topic | Document | Use |
 |---|---|---|
-| Development notes | [development.md](development.md) | Developer workflow and validation notes. |
-| Developer notes | [developer.md](developer.md) | Additional development and maintenance context. |
-| Dashboard style guide | [dashboard-style-guide.md](dashboard-style-guide.md) | Dashboard UI style conventions. |
-| InfluxDB telemetry capture | [develop-tool-influxdb-telemetry.md](develop-tool-influxdb-telemetry.md) | Development tool for recording EMS runtime telemetry into InfluxDB. |
-| InfluxDB state-transition analysis | [develop-tool-influxdb-state-transition-analysis.md](develop-tool-influxdb-state-transition-analysis.md) | Development tool for analyzing runtime state transitions from InfluxDB data. |
+| Developer setup | [developer/developer-setup.md](developer/developer-setup.md) | Source checkout, venv, local config and dry-run validation. |
+| Development notes | [developer/development.md](developer/development.md) | Module layout and developer workflow. |
+| Developer notes | [developer/developer.md](developer/developer.md) | Additional development and maintenance context. |
+| Testing | [developer/testing.md](developer/testing.md) | Compile checks, self-test, simulation and the pytest suite. |
+| CI / release | [developer/ci-release.md](developer/ci-release.md) | Continuous integration, image publishing and release archives. |
+| Dashboard style guide | [developer/dashboard-style-guide.md](developer/dashboard-style-guide.md) | Dashboard UI style conventions. |
+| Design notes | [developer/design-notes/](developer/design-notes/) | Development tools and deeper design notes. |

@@ -63,7 +63,7 @@ python3 emsctl.py config init
 
 Older checkouts may still use a root `config.json`. That legacy layout is still
 read as a fallback, but new setups should use `config/config.json`. See
-[setup/config-layout.md](setup/config-layout.md).
+[setup/config-layout.md](user/config-layout.md).
 
 ## First Checks
 

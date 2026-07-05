@@ -34,7 +34,7 @@ exclusive write control over `outputLimit` while active.
 
 If Docker is not installed yet, see [install-docker.md](install-docker.md).
 If you are unsure whether your hardware fits, see
-[supported-setups.md](supported-setups.md).
+[supported-setups.md](user/supported-setups.md).
 
 Verify that both commands work:
 
@@ -168,17 +168,17 @@ http://127.0.0.1:8080
 
 ## 8. Next Steps
 
-- Configuration details: [configuration.md](configuration.md)
+- Configuration details: [configuration.md](technical/configuration.md)
 - Copy/paste examples: [configuration-examples.md](configuration-examples.md)
-- Supported setups: [supported-setups.md](supported-setups.md)
+- Supported setups: [supported-setups.md](user/supported-setups.md)
 - First-run checklist: [first-run-checklist.md](first-run-checklist.md)
 - Common commands: [common-commands.md](common-commands.md)
 - Docker reference: [docker.md](docker.md)
-- Analytics (bundled InfluxDB): [influxdb.md](influxdb.md)
-- Troubleshooting: [troubleshooting.md](troubleshooting.md)
-- Backup and restore: [backup-restore.md](backup-restore.md)
+- Analytics (bundled InfluxDB): [influxdb.md](technical/influxdb.md)
+- Troubleshooting: [troubleshooting.md](user/troubleshooting.md)
+- Backup and restore: [backup-restore.md](technical/backup-restore.md)
 - Backups are stored in `data/backups/` by default.
-- FAQ: [faq.md](faq.md)
+- FAQ: [faq.md](user/faq.md)
 
 ## 9. Safe Updates
 

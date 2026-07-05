@@ -9,7 +9,7 @@ chain. Use it as a map when tuning a value and asking:
 
 It does not replace the detailed configuration reference. For exact value
 descriptions and examples, see [configuration.md](configuration.md) and
-[configuration-examples.md](configuration-examples.md).
+[configuration-examples.md](../configuration-examples.md).
 
 Some operator values can also be changed through runtime state or Home
 Assistant. In that case the runtime value is used during the cycle, but the
@@ -79,9 +79,9 @@ flowchart TD
 | Parameter | Control Block | What It Changes | Details |
 |---|---|---|---|
 | `system.enabled` | Runtime state / effective target | Enables or disables EMS output control. When disabled, effective targets become `0` and output writes are skipped. | [configuration.md](configuration.md), [runtime-state.md](runtime-state.md) |
-| `system.dry_run` | Safety gates | Blocks real Zendure writes while still calculating targets and logging intended writes. The template value is `false` after placeholders are replaced; set `true` for manual no-write validation. | [configuration.md](configuration.md), [safety.md](safety.md) |
-| `system.allow_hardware_writes` | Safety gates | Allows Zendure `/properties/write` calls only when dry-run, simulation/replay, and placeholder safe-mode gates also allow them. The template value is `true` for normal live output control after real local values are configured. | [configuration.md](configuration.md), [safety.md](safety.md) |
-| `system.allow_state_reconciliation_writes` | SOC / mode reconciliation | Allows SOC, mode, runtime device state, and winter reconciliation writes after hardware writes are also allowed. The template value is `true` for the normal regulation profile after local limits have been reviewed and placeholders are replaced. | [configuration.md](configuration.md), [safety.md](safety.md) |
+| `system.dry_run` | Safety gates | Blocks real Zendure writes while still calculating targets and logging intended writes. The template value is `false` after placeholders are replaced; set `true` for manual no-write validation. | [configuration.md](configuration.md), [safety.md](../user/safety.md) |
+| `system.allow_hardware_writes` | Safety gates | Allows Zendure `/properties/write` calls only when dry-run, simulation/replay, and placeholder safe-mode gates also allow them. The template value is `true` for normal live output control after real local values are configured. | [configuration.md](configuration.md), [safety.md](../user/safety.md) |
+| `system.allow_state_reconciliation_writes` | SOC / mode reconciliation | Allows SOC, mode, runtime device state, and winter reconciliation writes after hardware writes are also allowed. The template value is `true` for the normal regulation profile after local limits have been reviewed and placeholders are replaced. | [configuration.md](configuration.md), [safety.md](../user/safety.md) |
 | `system.max_total_power` | Total target calculation / limits | Caps the combined EMS target before allocation. Runtime state can override it. | [configuration.md](configuration.md), [runtime-state.md](runtime-state.md) |
 | `system.max_device_power` | Limits, clamping and redistribution | Default per-device output cap used when a device has no stronger configured cap. | [configuration.md](configuration.md) |
 | `system.deadband` | Final write suppression | Skips small per-device `outputLimit` changes compared with current `outputLimit`, or current output when `outputLimit` is missing. | [control-logic.md](control-logic.md) |
@@ -94,7 +94,7 @@ flowchart TD
 | `system.pv_charge_balance_full_bias_percent` | PV charge / SOC balancing | Defines the SOC gap where the configured balancing strength reaches full effect. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
 | `system.pv_charge_balance_strength` | PV charge / SOC balancing | Controls the maximum charge-balance multiplier applied to PV-first weights. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
 | `system.battery_kwh_weighting` | Battery top-up / battery weighting | Enables use of configured battery size in discharge and PV-first top-up weights. If disabled, usable SOC percent is used without kWh scaling. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
-| `system.soc_reconcile_interval` | SOC / mode reconciliation | Controls how often SOC/mode reconciliation is checked, measured in EMS cycles. `0` disables cyclic reconciliation. | [configuration.md](configuration.md), [safety.md](safety.md) |
+| `system.soc_reconcile_interval` | SOC / mode reconciliation | Controls how often SOC/mode reconciliation is checked, measured in EMS cycles. `0` disables cyclic reconciliation. | [configuration.md](configuration.md), [safety.md](../user/safety.md) |
 | `system.output_control.load_deadband_w` | Load filtering / total target stabilization | Holds the current total target when the filtered load is within this small-load band. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
 | `system.output_control.target_deadband_w` | Total target calculation | Holds the current commanded total when the newly desired total is only slightly different. This is earlier than final `system.deadband`. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
 | `system.output_control.filter_enabled` | Load filtering | Enables or disables load filtering before total target calculation. | [configuration.md](configuration.md) |
@@ -113,14 +113,14 @@ flowchart TD
 | `system.output_control.large_import_bypass_w` | Total ramp / bypass | Detects large import situations. The controller increases ramp speed during bypass behavior. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
 | `system.output_control.large_export_bypass_w` | Total ramp / bypass | Detects large export situations. The controller increases ramp speed during bypass behavior. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
 | `system.output_control.bypass_ramp_multiplier` | Total ramp and device ramp | Multiplies total and per-device ramp limits during large import/export bypass situations. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
-| `system.output_control.telemetry_max_age_seconds` | Telemetry freshness / stale ramp | Marks device telemetry as stale after this age. Stale telemetry reduces ramp speed. | [configuration.md](configuration.md), [troubleshooting.md](troubleshooting.md) |
-| `system.output_control.stale_telemetry_ramp_factor` | Total ramp / stale telemetry | Multiplies total ramp speed when telemetry is stale. Lower values make stale-telemetry changes more conservative. | [configuration.md](configuration.md), [troubleshooting.md](troubleshooting.md) |
+| `system.output_control.telemetry_max_age_seconds` | Telemetry freshness / stale ramp | Marks device telemetry as stale after this age. Stale telemetry reduces ramp speed. | [configuration.md](configuration.md), [troubleshooting.md](../user/troubleshooting.md) |
+| `system.output_control.stale_telemetry_ramp_factor` | Total ramp / stale telemetry | Multiplies total ramp speed when telemetry is stale. Lower values make stale-telemetry changes more conservative. | [configuration.md](configuration.md), [troubleshooting.md](../user/troubleshooting.md) |
 | `devices[].max_power` | Limits, clamping and redistribution | Sets the per-device output cap used during allocation, final target clamping, and effective target calculation. Runtime state can override it. | [configuration.md](configuration.md), [runtime-state.md](runtime-state.md) |
 | `devices[].pv_kwp` | PV-first weighting | Represents the configured PV size for this device and scales the PV-first allocation weight when `system.pv_kwp_weighting=true`. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
 | `devices[].pv_priority_factor` | PV-first weighting | Amplifies or reduces this device's PV-first allocation weight. Runtime state can override it. It does not create real PV power. | [configuration.md](configuration.md), [runtime-state.md](runtime-state.md), [control-logic.md](control-logic.md) |
 | `devices[].battery_kwh` | Battery top-up / battery weighting | Represents configured battery size and scales discharge/top-up allocation when `system.battery_kwh_weighting=true`. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
 | `devices[].min_soc` | SOC reconciliation / battery weighting / idle protection | Sets the discharge floor used for SOC reconciliation, usable battery weighting, top-up eligibility, and night/minSoc idle detection. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
-| `devices[].max_soc` | SOC reconciliation | Sets the upper SOC boundary used by reconciliation and remaining-time context. | [configuration.md](configuration.md), [safety.md](safety.md) |
+| `devices[].max_soc` | SOC reconciliation | Sets the upper SOC boundary used by reconciliation and remaining-time context. | [configuration.md](configuration.md), [safety.md](../user/safety.md) |
 
 ## Notes On Weights, Limits, Filters, And Writes
 
@@ -165,7 +165,7 @@ SOC reconciliation and battery eligibility.
 Write suppression and write safety happen near the end of the cycle.
 `system.deadband` is the final per-device write suppression threshold and is
 separate from `system.output_control.target_deadband_w`. Real Zendure writes
-also require the safety gates described in [safety.md](safety.md): no dry-run,
+also require the safety gates described in [safety.md](../user/safety.md): no dry-run,
 no simulation/replay, and `system.allow_hardware_writes=true`. State
 reconciliation writes additionally require
 `system.allow_state_reconciliation_writes=true`.
@@ -173,8 +173,8 @@ reconciliation writes additionally require
 ## Related Documentation
 
 - [configuration.md](configuration.md)
-- [configuration-examples.md](configuration-examples.md)
+- [configuration-examples.md](../configuration-examples.md)
 - [control-logic.md](control-logic.md)
 - [runtime-state.md](runtime-state.md)
-- [safety.md](safety.md)
-- [troubleshooting.md](troubleshooting.md)
+- [safety.md](../user/safety.md)
+- [troubleshooting.md](../user/troubleshooting.md)

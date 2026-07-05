@@ -11,8 +11,7 @@ not touch `data/` or runtime databases.
 
 ## Start
 
-No Git checkout is required. The installer downloads the published image and
-starts the Admin Console in the current folder:
+Install and start the Admin Console in a local EMS folder:
 
 ```bash
 mkdir -p ems-solarflow-api-control
@@ -46,7 +45,7 @@ CIDR manually if a scan sees only Docker networks.
 Run the Admin Console only on a trusted local machine or trusted LAN — never
 expose it to the internet. Contributors building from a Git checkout use
 `deploy/admin/start-admin-setup.sh` instead — see
-[developer-setup.md](developer-setup.md).
+[developer-setup.md](../developer/developer-setup.md).
 
 ## Layout
 
@@ -72,7 +71,7 @@ state and recommends the safest of exactly **two** flows:
 
 Docker Bootstrap and Developer Setup are documentation-level alternatives
 ([docker-bootstrap.md](docker-bootstrap.md),
-[developer-setup.md](developer-setup.md)); they are not selectable flows inside
+[developer-setup.md](../developer/developer-setup.md)); they are not selectable flows inside
 the Admin Console.
 
 The router recommends and preselects a flow but never acts silently:
@@ -102,5 +101,5 @@ After setup, open the dashboard at `http://<host-ip>:8080`, work through the
 If a legacy root `config.json` is present, the Admin Console can use it as source
 data, but the applied target is always `config/config.json`.
 
-Full detail: [../admin-discovery.md](../admin-discovery.md). Layout and legacy
+Full detail: [../admin-discovery.md](../technical/admin-discovery.md). Layout and legacy
 migration: [config-layout.md](config-layout.md).

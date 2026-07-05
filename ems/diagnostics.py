@@ -5,7 +5,7 @@ Extracted verbatim from emsctl.py so that both the CLI (emsctl.py) and the
 dashboard can consume the same diagnosis functions without importing the CLI.
 This module is import-side-effect-free and must never import emsctl.
 
-The report shape is a versioned public contract (see docs/developer.md and
+The report shape is a versioned public contract (see docs/developer/developer.md and
 tests/test_emsctl_diagnose_contract.py); do not change it incompatibly without
 bumping DIAGNOSE_SCHEMA_VERSION / SUPPORT_BUNDLE_VERSION.
 """

@@ -4,12 +4,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPOSE = ROOT / "docker-compose.example.yml"
+# The Docker Bootstrap contract now lives in the user docker guide, not the
+# router README.
 DOCS = [
-    ROOT / "README.md",
+    ROOT / "docs" / "user" / "docker-bootstrap.md",
     ROOT / "docs" / "quickstart.md",
     ROOT / "docs" / "docker.md",
     ROOT / "docs" / "common-commands.md",
-    ROOT / "docs" / "backup-restore.md",
+    ROOT / "docs" / "technical" / "backup-restore.md",
 ]
 
 
@@ -73,7 +75,7 @@ def test_docker_influxdb_backup_command_is_only_advertised_if_e2e_covered():
 
 
 def test_backup_docs_name_host_backup_path_and_restore_variants():
-    text = read(ROOT / "docs" / "backup-restore.md")
+    text = read(ROOT / "docs" / "technical" / "backup-restore.md")
     normalized = " ".join(text.split())
 
     assert "data/backups/" in text

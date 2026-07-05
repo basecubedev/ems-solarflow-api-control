@@ -178,4 +178,4 @@ battery status, PV details, and power-flow visualization. This is separate from
 the built-in standalone dashboard documented in `docs/dashboard.md`.
 
 Troubleshooting stale, unavailable, or ignored HA values:
-[troubleshooting.md](troubleshooting.md).
+[troubleshooting.md](user/troubleshooting.md).

@@ -13,7 +13,7 @@ REPOSITORY_URL_PREFIX = "/basecubedev/ems-solarflow-api-control/blob/main/"
 EXPECTED_DOCUMENTATION_PATHS = {
     "README.md",
     "docs/cli.md",
-    "docs/troubleshooting.md",
+    "docs/user/troubleshooting.md",
 }
 
 

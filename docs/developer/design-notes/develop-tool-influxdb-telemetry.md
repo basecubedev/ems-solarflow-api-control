@@ -9,7 +9,7 @@ control loop and it is not required for operating the EMS.
 > **Not the primary ingestion path.** For normal operation the EMS writes
 > telemetry into InfluxDB itself via the native writer
 > (`ems/history/influx_writer.py`); see
-> [dashboard.md](dashboard.md#how-analytics-data-gets-into-influxdb-ingestion).
+> [dashboard.md](../../dashboard.md#how-analytics-data-gets-into-influxdb-ingestion).
 > This collector is kept for development, diagnostics, experiments and backfill.
 > It writes the same `zendure_device` and `shelly_meter` schema (including
 > `grid_power` and the derived `house_load`), so the Analytics PV/output/SoC,
