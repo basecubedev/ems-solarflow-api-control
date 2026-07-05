@@ -137,6 +137,44 @@ def test_admin_installer_does_not_generate_password_or_token():
     assert "ADMIN_PASSWORD" not in text
 
 
+def test_admin_installer_help_lists_https_flags():
+    result = subprocess.run(
+        ["sh", str(INSTALLER), "--help"], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    for flag in ("--https", "--https-port", "--https-bind", "--no-https-auto-generate"):
+        assert flag in result.stdout, flag
+
+
+def test_admin_installer_declares_https_env_keys():
+    text = read(INSTALLER)
+    for key in (
+        "EMS_ADMIN_HTTPS_ENABLED",
+        "EMS_ADMIN_HTTPS_PORT",
+        "EMS_ADMIN_HTTPS_CERT_FILE",
+        "EMS_ADMIN_HTTPS_KEY_FILE",
+        "EMS_ADMIN_HTTPS_AUTO_GENERATE",
+    ):
+        assert key in text, key
+    # Default generated cert/key paths under the EMS install root.
+    assert "config/admin.crt" in text
+    assert "config/admin.key" in text
+
+
+def test_admin_installer_https_dry_run_mentions_browser_warning(tmp_path):
+    # Dry-run degrades without Docker and still prints the HTTPS/self-signed note.
+    result = subprocess.run(
+        ["sh", str(INSTALLER), "--dry-run", "--https"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "https://127.0.0.1:8091" in result.stdout
+    assert "certificate warning" in result.stdout
+    assert "8090/8091" in result.stdout
+
+
 def test_admin_installer_dry_run_writes_nothing(tmp_path):
     # Dry-run degrades gracefully with or without Docker and must not touch disk.
     result = subprocess.run(
@@ -183,6 +221,23 @@ def test_admin_runtime_bridge_compose_publishes_loopback_port():
     assert "${DOCKER_GID" in text
     assert '"${EMS_INSTALL_DIR}:${EMS_INSTALL_DIR}"' in text
     assert '"${EMS_ADMIN_DATA_DIR}:${EMS_ADMIN_DATA_DIR}"' in text
+
+
+def test_admin_runtime_compose_files_declare_optional_https_env():
+    for compose in (RUNTIME_COMPOSE, RUNTIME_BRIDGE):
+        text = read(compose)
+        # HTTPS is opt-in and defaults to off; HTTP is never disabled.
+        assert 'EMS_ADMIN_HTTPS_ENABLED: "${EMS_ADMIN_HTTPS_ENABLED:-false}"' in text
+        assert 'EMS_ADMIN_HTTPS_PORT: "${EMS_ADMIN_HTTPS_PORT:-8091}"' in text
+        assert "EMS_ADMIN_HTTPS_AUTO_GENERATE" in text
+
+
+def test_admin_runtime_bridge_compose_maps_optional_https_port():
+    text = read(RUNTIME_BRIDGE)
+    assert (
+        '"${EMS_ADMIN_HTTPS_BIND:-127.0.0.1}:${EMS_ADMIN_HTTPS_PORT:-8091}:8091"'
+        in text
+    )
 
 
 def test_admin_runtime_discovery_only_has_no_socket_or_build():
@@ -290,6 +345,69 @@ def test_installer_default_generates_host_network_compose(tmp_path):
         text=True,
     )
     assert validated.returncode == 0, validated.stderr
+
+
+@docker_required
+def test_installer_host_https_enables_env_without_port_mapping(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    result = subprocess.run(
+        ["sh", str(INSTALLER), "--no-start", "--https"],
+        cwd=str(work),
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    text = read(work / "docker-compose.admin.yml")
+    assert 'EMS_ADMIN_HTTPS_ENABLED: "true"' in text
+    # Host networking never adds a Docker port mapping, even with HTTPS.
+    assert "network_mode: host" in text
+    assert "ports:" not in text
+    validated = subprocess.run(
+        ["docker", "compose", "-f", str(work / "docker-compose.admin.yml"), "config"],
+        capture_output=True,
+        text=True,
+    )
+    assert validated.returncode == 0, validated.stderr
+
+
+@docker_required
+def test_installer_bridge_https_maps_8091(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    result = subprocess.run(
+        ["sh", str(INSTALLER), "--no-start", "--bridge", "--https"],
+        cwd=str(work),
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    text = read(work / "docker-compose.admin.yml")
+    assert 'EMS_ADMIN_HTTPS_ENABLED: "true"' in text
+    assert "127.0.0.1:8091:8091" in text
+    validated = subprocess.run(
+        ["docker", "compose", "-f", str(work / "docker-compose.admin.yml"), "config"],
+        capture_output=True,
+        text=True,
+    )
+    assert validated.returncode == 0, validated.stderr
+
+
+@docker_required
+def test_installer_default_omits_https_port_mapping(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    result = subprocess.run(
+        ["sh", str(INSTALLER), "--no-start", "--bridge"],
+        cwd=str(work),
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    text = read(work / "docker-compose.admin.yml")
+    assert 'EMS_ADMIN_HTTPS_ENABLED: "false"' in text
+    # Without --https the bridge compose maps only the HTTP port.
+    assert "8091:8091" not in text
 
 
 @docker_required

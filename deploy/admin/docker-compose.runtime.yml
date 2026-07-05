@@ -39,6 +39,14 @@ services:
       PUID: "${PUID:-1000}"
       PGID: "${PGID:-1000}"
       DOCKER_CONFIG: /tmp/docker
+      # Optional parallel HTTPS listener (HTTP on 8090 stays available). With
+      # host networking the server binds 8091 directly when enabled; no port
+      # mapping applies. Generated cert/key default to config/admin.crt|key.
+      EMS_ADMIN_HTTPS_ENABLED: "${EMS_ADMIN_HTTPS_ENABLED:-false}"
+      EMS_ADMIN_HTTPS_PORT: "${EMS_ADMIN_HTTPS_PORT:-8091}"
+      EMS_ADMIN_HTTPS_CERT_FILE: "${EMS_ADMIN_HTTPS_CERT_FILE:-config/admin.crt}"
+      EMS_ADMIN_HTTPS_KEY_FILE: "${EMS_ADMIN_HTTPS_KEY_FILE:-config/admin.key}"
+      EMS_ADMIN_HTTPS_AUTO_GENERATE: "${EMS_ADMIN_HTTPS_AUTO_GENERATE:-true}"
     volumes:
       - "${EMS_INSTALL_DIR}:${EMS_INSTALL_DIR}"
       - "${EMS_ADMIN_DATA_DIR}:${EMS_ADMIN_DATA_DIR}"

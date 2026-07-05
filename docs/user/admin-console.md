@@ -93,6 +93,26 @@ scan sees only Docker networks.
 Contributors who build from source use `deploy/admin/start-admin-setup.sh`.
 See the [Developer Setup guide](../developer/developer-setup.md).
 
+## Optional HTTPS
+
+The Admin Console uses HTTP on port `8090` by default.
+
+You can optionally enable a second HTTPS listener on port `8091` with `--https`:
+
+```bash
+sh install-admin-console.sh --https
+```
+
+HTTP stays available, so you are not locked out if your browser does not trust
+the generated certificate. HTTPS is an additional URL
+(`https://<host>:8091`), never a redirect.
+
+If the Admin Console generates a self-signed certificate, your browser will show
+a certificate warning. This is expected for local installations. Use HTTPS only
+if you understand this warning or provide your own trusted certificate.
+
+Do not expose the Admin Console HTTP or HTTPS ports to the internet.
+
 ## Safety
 
 The Admin Console is designed for a trusted local EMS host or trusted LAN. The

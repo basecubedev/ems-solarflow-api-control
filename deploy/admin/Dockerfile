@@ -73,10 +73,14 @@ COPY ems/clients.py ./ems/clients.py
 COPY ems/models.py ./ems/models.py
 COPY ems/logging_utils.py ./ems/logging_utils.py
 COPY dashboard/auth.py ./dashboard/auth.py
+# Shared HTTPS helper: the optional Admin HTTPS listener reuses the Dashboard's
+# certificate generation and SSLContext code instead of duplicating it.
+COPY dashboard/https.py ./dashboard/https.py
 
 USER admin
 
-EXPOSE 8090
+# 8090 HTTP always; 8091 optional HTTPS (started only when EMS_ADMIN_HTTPS_ENABLED).
+EXPOSE 8090 8091
 
 # Bind inside the container; Compose limits the bridge preview to host loopback.
 CMD ["python", "-B", "-m", "admin", "--host", "0.0.0.0", "--port", "8090"]

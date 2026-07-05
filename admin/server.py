@@ -14,6 +14,7 @@ import json
 import os
 import threading
 import uuid
+from dataclasses import dataclass, field
 from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -211,67 +212,143 @@ class ScanRegistry:
             self._scans.pop(oldest, None)
 
 
+@dataclass
+class AdminRuntime:
+    """Shared Admin state backing both the HTTP and (optional) HTTPS listeners.
+
+    The parallel HTTPS listener reuses one runtime so sessions, rate limiters,
+    discovery state, mDNS, and the backup/upgrade job registries are never
+    duplicated across transports; only ``AdminServer.https_active`` differs.
+    """
+
+    registry: ScanRegistry
+    network_detector: object
+    gateway_prober: object
+    mqtt_discovery: MqttBrokerDiscovery
+    mdns_provider: MdnsProvider
+    release_manager: ReleaseManager
+    config_preview: ConfigPreviewGenerator
+    config_export: ConfigExportService
+    config_apply: ConfigApplyService
+    deployment: DeploymentService
+    ems_cli: EmsCliDiagnostics
+    guided_upgrade: GuidedUpgradeExecutor
+    upgrade_jobs: UpgradeJobRegistry
+    backup_service: BackupRestoreService
+    backup_jobs: BackupJobRegistry
+    auth_sessions: SessionStore
+    auth_login_limiter: LoginRateLimiter
+    auth_setup_limiter: LoginRateLimiter
+    static_assets: dict = field(default_factory=dict)
+    # Whether the process started an optional HTTPS listener at all (global; the
+    # per-request transport is reported separately via AdminServer.https_active).
+    https_configured: bool = False
+    https_port: int = 8091
+
+
+def create_admin_runtime(
+    registry=None,
+    static_assets=None,
+    network_detector=None,
+    gateway_prober=None,
+    mdns_provider=None,
+    mqtt_discovery=None,
+    release_manager=None,
+    config_export=None,
+    config_apply=None,
+    deployment=None,
+    ems_cli=None,
+    guided_upgrade=None,
+    backup_service=None,
+):
+    """Build the shared Admin service graph once, for one or more listeners."""
+
+    registry = registry or ScanRegistry()
+    network_detector = network_detector or detect_network_suggestions
+    gateway_prober = gateway_prober or probe_gateway_candidates
+    mqtt_discovery = mqtt_discovery or MqttBrokerDiscovery()
+    mdns_provider = mdns_provider or MdnsProvider(
+        mqtt_handler=mqtt_discovery.add_mdns_candidate
+    )
+    # Give the release manager a read-only Docker inspector so it can compare a
+    # running build's identity against release targets; harmless when the daemon
+    # is absent (all inspections degrade to an unknown identity).
+    release_manager = release_manager or ReleaseManager(docker=DockerCli())
+    config_preview = ConfigPreviewGenerator(release_manager)
+    admin_data_dir = getattr(release_manager, "data_dir", default_admin_data_dir())
+    config_export = config_export or ConfigExportService(
+        config_preview, admin_data_dir
+    )
+    config_apply = config_apply or ConfigApplyService(config_export, admin_data_dir)
+    deployment = deployment or DeploymentService(
+        release_manager, config_export, admin_data_dir=admin_data_dir
+    )
+    ems_cli = ems_cli or EmsCliDiagnostics()
+    guided_upgrade = guided_upgrade or GuidedUpgradeExecutor(
+        release_manager=release_manager, ems_cli=ems_cli
+    )
+    static_assets = (
+        static_assets
+        if static_assets is not None
+        else build_static_asset_index(STATIC_DIR)
+    )
+    return AdminRuntime(
+        registry=registry,
+        network_detector=network_detector,
+        gateway_prober=gateway_prober,
+        mqtt_discovery=mqtt_discovery,
+        mdns_provider=mdns_provider,
+        release_manager=release_manager,
+        config_preview=config_preview,
+        config_export=config_export,
+        config_apply=config_apply,
+        deployment=deployment,
+        ems_cli=ems_cli,
+        guided_upgrade=guided_upgrade,
+        upgrade_jobs=UpgradeJobRegistry(),
+        backup_service=backup_service or BackupRestoreService(),
+        backup_jobs=BackupJobRegistry(),
+        # Shared password, separate Admin session. Setup can be hammered but only
+        # succeeds once, so a simple per-address limiter is enough there.
+        auth_sessions=SessionStore(timeout_seconds=1800, absolute_max_seconds=43200),
+        auth_login_limiter=LoginRateLimiter(),
+        auth_setup_limiter=LoginRateLimiter(max_failures=10, window_seconds=60),
+        static_assets=static_assets,
+    )
+
+
 class AdminServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, server_address, handler, registry=None, static_assets=None,
-                 network_detector=None, gateway_prober=None, mdns_provider=None,
-                 mqtt_discovery=None, release_manager=None, config_export=None,
-                 config_apply=None, deployment=None, ems_cli=None,
-                 guided_upgrade=None, backup_service=None):
+    def __init__(self, server_address, handler, runtime=None, *, https_active=False):
         super().__init__(server_address, handler)
-        self.registry = registry or ScanRegistry()
-        self.network_detector = network_detector or detect_network_suggestions
-        self.gateway_prober = gateway_prober or probe_gateway_candidates
-        self.mqtt_discovery = mqtt_discovery or MqttBrokerDiscovery()
-        self.mdns_provider = mdns_provider or MdnsProvider(
-            mqtt_handler=self.mqtt_discovery.add_mdns_candidate
-        )
-        # Give the release manager a read-only Docker inspector so it can compare
-        # a running build's identity against release targets; harmless when the
-        # daemon is absent (all inspections degrade to an unknown identity).
-        self.release_manager = release_manager or ReleaseManager(docker=DockerCli())
-        self.config_preview = ConfigPreviewGenerator(self.release_manager)
-        admin_data_dir = getattr(
-            self.release_manager, "data_dir", default_admin_data_dir()
-        )
-        self.config_export = config_export or ConfigExportService(
-            self.config_preview,
-            admin_data_dir,
-        )
-        self.config_apply = config_apply or ConfigApplyService(
-            self.config_export,
-            admin_data_dir,
-        )
-        self.deployment = deployment or DeploymentService(
-            self.release_manager,
-            self.config_export,
-            admin_data_dir=admin_data_dir,
-        )
-        self.ems_cli = ems_cli or EmsCliDiagnostics()
-        self.guided_upgrade = guided_upgrade or GuidedUpgradeExecutor(
-            release_manager=self.release_manager,
-            ems_cli=self.ems_cli,
-        )
-        self.upgrade_jobs = UpgradeJobRegistry()
-        self.backup_service = backup_service or BackupRestoreService()
-        self.backup_jobs = BackupJobRegistry()
-        # Shared password, separate Admin session. Setup can be hammered but only
-        # succeeds once, so a simple per-address limiter is enough there.
-        self.auth_sessions = SessionStore(
-            timeout_seconds=1800, absolute_max_seconds=43200
-        )
-        self.auth_login_limiter = LoginRateLimiter()
-        self.auth_setup_limiter = LoginRateLimiter(max_failures=10, window_seconds=60)
-        # Local HTTP appliance: the Secure cookie flag is only added when the
-        # Admin server knows HTTPS is active (never required for local HTTP).
-        self.https_active = False
-        self.static_assets = (
-            static_assets
-            if static_assets is not None
-            else build_static_asset_index(STATIC_DIR)
-        )
+        # Both listeners point at one AdminRuntime; the handlers keep reading
+        # self.server.<attr>, so expose each shared service as an attribute.
+        self.runtime = runtime if runtime is not None else create_admin_runtime()
+        runtime = self.runtime
+        self.registry = runtime.registry
+        self.network_detector = runtime.network_detector
+        self.gateway_prober = runtime.gateway_prober
+        self.mqtt_discovery = runtime.mqtt_discovery
+        self.mdns_provider = runtime.mdns_provider
+        self.release_manager = runtime.release_manager
+        self.config_preview = runtime.config_preview
+        self.config_export = runtime.config_export
+        self.config_apply = runtime.config_apply
+        self.deployment = runtime.deployment
+        self.ems_cli = runtime.ems_cli
+        self.guided_upgrade = runtime.guided_upgrade
+        self.upgrade_jobs = runtime.upgrade_jobs
+        self.backup_service = runtime.backup_service
+        self.backup_jobs = runtime.backup_jobs
+        self.auth_sessions = runtime.auth_sessions
+        self.auth_login_limiter = runtime.auth_login_limiter
+        self.auth_setup_limiter = runtime.auth_setup_limiter
+        self.static_assets = runtime.static_assets
+        # Local HTTP appliance: the Secure cookie flag is only added when this
+        # listener is the HTTPS one (never required for local HTTP).
+        self.https_active = bool(https_active)
 
 
 class AdminHandler(BaseHTTPRequestHandler):
@@ -748,7 +825,19 @@ class AdminHandler(BaseHTTPRequestHandler):
             ],
             "writes_config": True,
             "writes_generated_config": True,
+            "admin_https": self._admin_https_status(),
             "time": utc_now_iso(),
+        }
+
+    def _admin_https_status(self):
+        # One listener answers each request: ``current_request_https`` reflects
+        # this transport, ``configured`` reflects whether the process started the
+        # optional HTTPS listener at all (shared via the runtime).
+        runtime = getattr(self.server, "runtime", None)
+        return {
+            "configured": bool(getattr(runtime, "https_configured", False)),
+            "current_request_https": bool(getattr(self.server, "https_active", False)),
+            "port": int(getattr(runtime, "https_port", 8091)),
         }
 
     def _handle_start_path(self):
@@ -1623,12 +1712,30 @@ def create_server(host="127.0.0.1", port=8090, registry=None, static_assets=None
                   network_detector=None, gateway_prober=None, mdns_provider=None,
                   mqtt_discovery=None, release_manager=None, config_export=None,
                   config_apply=None, deployment=None, ems_cli=None,
-                  guided_upgrade=None, backup_service=None):
-    """Create (but do not start) an ``AdminServer`` bound to ``host:port``."""
+                  guided_upgrade=None, backup_service=None, runtime=None,
+                  https_active=False):
+    """Create (but do not start) an ``AdminServer`` bound to ``host:port``.
 
+    Pass a shared ``runtime`` to bind a second (HTTPS) listener to the same
+    Admin state; otherwise one is built from the individual service overrides.
+    """
+
+    if runtime is None:
+        runtime = create_admin_runtime(
+            registry=registry,
+            static_assets=static_assets,
+            network_detector=network_detector,
+            gateway_prober=gateway_prober,
+            mdns_provider=mdns_provider,
+            mqtt_discovery=mqtt_discovery,
+            release_manager=release_manager,
+            config_export=config_export,
+            config_apply=config_apply,
+            deployment=deployment,
+            ems_cli=ems_cli,
+            guided_upgrade=guided_upgrade,
+            backup_service=backup_service,
+        )
     return AdminServer(
-        (host, int(port)), AdminHandler, registry, static_assets, network_detector,
-        gateway_prober, mdns_provider, mqtt_discovery, release_manager,
-        config_export, config_apply, deployment, ems_cli, guided_upgrade,
-        backup_service,
+        (host, int(port)), AdminHandler, runtime=runtime, https_active=https_active,
     )

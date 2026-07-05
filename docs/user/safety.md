@@ -45,6 +45,10 @@ The Admin Console requires a password (the same one as the EMS Dashboard) before
 any setup, maintenance or backup action. This is a local safeguard, not a
 substitute for keeping the appliance off the public internet.
 
+The Admin Console is intended for a trusted local network. Optional HTTPS can
+protect local browser traffic, but the generated self-signed certificate is not
+a replacement for a VPN or a properly secured reverse proxy for remote access.
+
 ## Technical safety model
 
 For write gates, runtime write types, and control internals, see the

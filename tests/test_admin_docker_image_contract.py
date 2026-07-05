@@ -70,6 +70,14 @@ def test_admin_image_contains_dashboard_auth_helper():
     assert "COPY dashboard/auth.py ./dashboard/auth.py" in dockerfile
 
 
+def test_admin_image_contains_https_helper():
+    # The optional Admin HTTPS listener reuses dashboard/https.py; it must ship in
+    # the image (certificate generation lives there, never duplicated in admin/).
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    assert "COPY dashboard/https.py ./dashboard/https.py" in text
+    assert "EXPOSE 8090 8091" in text or "EXPOSE 8091" in text
+
+
 def test_copied_files_are_sufficient_for_admin_startup(tmp_path):
     app_root = tmp_path / "app"
     app_root.mkdir()

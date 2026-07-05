@@ -29,8 +29,11 @@ services:
       - "${DOCKER_GID:-999}"
     # Bridge networking: publish the UI on the chosen host address/port. Defaults
     # to loopback so the UI is not reachable off-host unless you set EMS_ADMIN_BIND.
+    # The optional HTTPS port is always mapped (loopback by default); the server
+    # only listens on it when EMS_ADMIN_HTTPS_ENABLED=true.
     ports:
       - "${EMS_ADMIN_BIND:-127.0.0.1}:${EMS_ADMIN_PORT:-8090}:8090"
+      - "${EMS_ADMIN_HTTPS_BIND:-127.0.0.1}:${EMS_ADMIN_HTTPS_PORT:-8091}:8091"
     environment:
       # Same-path mounting: point at the real host install root and Admin data
       # dir so any bind mount Admin forwards to the host Docker daemon stays a
@@ -40,6 +43,13 @@ services:
       PUID: "${PUID:-1000}"
       PGID: "${PGID:-1000}"
       DOCKER_CONFIG: /tmp/docker
+      # Optional parallel HTTPS listener (HTTP on 8090 stays available). Generated
+      # cert/key default to config/admin.crt|key under the EMS install root.
+      EMS_ADMIN_HTTPS_ENABLED: "${EMS_ADMIN_HTTPS_ENABLED:-false}"
+      EMS_ADMIN_HTTPS_PORT: "${EMS_ADMIN_HTTPS_PORT:-8091}"
+      EMS_ADMIN_HTTPS_CERT_FILE: "${EMS_ADMIN_HTTPS_CERT_FILE:-config/admin.crt}"
+      EMS_ADMIN_HTTPS_KEY_FILE: "${EMS_ADMIN_HTTPS_KEY_FILE:-config/admin.key}"
+      EMS_ADMIN_HTTPS_AUTO_GENERATE: "${EMS_ADMIN_HTTPS_AUTO_GENERATE:-true}"
     volumes:
       - "${EMS_INSTALL_DIR}:${EMS_INSTALL_DIR}"
       - "${EMS_ADMIN_DATA_DIR}:${EMS_ADMIN_DATA_DIR}"

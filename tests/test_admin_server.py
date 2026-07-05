@@ -17,7 +17,12 @@ from admin.install_context import detect_install_context
 from admin.models import DiscoveredDevice
 from admin.mqtt_discovery import MqttBrokerDiscovery
 from admin.releases import ReleaseError
-from admin.server import SECURITY_HEADERS, ScanRegistry, create_server
+from admin.server import (
+    SECURITY_HEADERS,
+    ScanRegistry,
+    create_admin_runtime,
+    create_server,
+)
 from tests.admin_auth_helpers import auth_headers, authenticate, raw_request
 
 pytestmark = pytest.mark.simulation
@@ -205,6 +210,95 @@ def test_status_endpoint_reports_current_capabilities_not_mvp(server):
         "restore_preview",
     ):
         assert capability in payload["capabilities"], capability
+
+
+def test_status_endpoint_reports_admin_https_transport(server):
+    # This fixture server is HTTP-only and did not configure an HTTPS listener.
+    status, _, payload = _request(f"{server}/api/admin/status")
+    assert status == 200
+    assert payload["admin_https"] == {
+        "configured": False,
+        "current_request_https": False,
+        "port": 8091,
+    }
+
+
+# --- shared runtime for parallel HTTP/HTTPS listeners ----------------------
+
+
+def test_admin_runtime_can_be_shared_by_http_and_https_servers():
+    runtime = create_admin_runtime()
+    http_server = create_server("127.0.0.1", 0, runtime=runtime, https_active=False)
+    https_server = create_server("127.0.0.1", 0, runtime=runtime, https_active=True)
+
+    try:
+        assert http_server.auth_sessions is https_server.auth_sessions
+        assert http_server.auth_login_limiter is https_server.auth_login_limiter
+        assert http_server.auth_setup_limiter is https_server.auth_setup_limiter
+        assert http_server.registry is https_server.registry
+        assert http_server.mqtt_discovery is https_server.mqtt_discovery
+        assert http_server.mdns_provider is https_server.mdns_provider
+        assert http_server.upgrade_jobs is https_server.upgrade_jobs
+        assert http_server.backup_jobs is https_server.backup_jobs
+        assert http_server.release_manager is https_server.release_manager
+        assert http_server.deployment is https_server.deployment
+        assert http_server.https_active is False
+        assert https_server.https_active is True
+    finally:
+        http_server.server_close()
+        https_server.server_close()
+
+
+def test_admin_http_server_does_not_set_secure_cookie(tmp_path, monkeypatch):
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
+
+    runtime = create_admin_runtime()
+    server = create_server("127.0.0.1", 0, runtime=runtime, https_active=False)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+
+    try:
+        status, headers, _ = raw_request(
+            f"{base}/api/admin/auth/setup",
+            method="POST",
+            body={
+                "password": "secret-password",
+                "confirm_password": "secret-password",
+            },
+        )
+        assert status == 200
+        assert "Secure" not in headers["Set-Cookie"]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_admin_https_server_sets_secure_cookie(tmp_path, monkeypatch):
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
+
+    # The https_active flag alone controls the Secure cookie attribute; the test
+    # server speaks plain HTTP so no real TLS handshake is needed.
+    runtime = create_admin_runtime()
+    server = create_server("127.0.0.1", 0, runtime=runtime, https_active=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+
+    try:
+        status, headers, _ = raw_request(
+            f"{base}/api/admin/auth/setup",
+            method="POST",
+            body={
+                "password": "secret-password",
+                "confirm_password": "secret-password",
+            },
+        )
+        assert status == 200
+        assert "Secure" in headers["Set-Cookie"]
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_setup_config_catalog_endpoint_returns_setup_sections(server):

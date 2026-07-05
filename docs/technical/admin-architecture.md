@@ -111,9 +111,33 @@ The Admin Console sends browser hardening headers on every UI and API response
 - `Permissions-Policy` disabling geolocation, microphone, camera, payment and USB
 
 HTTPS is not forced by default because the Admin Console is designed for trusted
-local networks and self-signed certificates are confusing for many users. If
-HTTPS support is added later, it should be an optional parallel listener rather
-than a forced redirect.
+local networks and self-signed certificates are confusing for many users. HTTPS
+is available as an optional parallel listener (below), never a forced redirect,
+and no HSTS or `upgrade-insecure-requests` is added.
+
+### Admin HTTPS listener
+
+Admin HTTPS reuses the shared `dashboard/https.py` helper; certificate
+generation and the `SSLContext` build live there and are never duplicated in
+`admin/`. `admin/https.py` is a thin wrapper that only adds Admin default paths
+and install-root resolution.
+
+The default Admin certificate paths are:
+
+- `config/admin.crt`
+- `config/admin.key`
+
+They are resolved relative to the EMS install root, not the Admin container
+working directory. If no mounted install root is available, Admin refuses to
+generate a certificate rather than writing one into the read-only image.
+
+When enabled (`--https` / `EMS_ADMIN_HTTPS_ENABLED`), Admin starts HTTP on 8090
+and HTTPS on 8091 against the **same** `AdminRuntime` object, so auth sessions,
+rate limiters, discovery/scan state, the mDNS provider, MQTT discovery and the
+upgrade/backup job registries are shared and not duplicated across transports.
+Only the per-listener transport flag differs: the HTTPS listener wraps its
+socket with the `SSLContext` and sets `https_active=True`, which adds the
+`Secure` attribute to Admin session cookies.
 
 ## Why this split matters
 
