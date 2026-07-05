@@ -24,6 +24,9 @@ runtime-state.json.*.tmp
 # Docker-first enduser .env (PUID/PGID, COMPOSE_PROFILES)
 /.env
 
+# Guided-upgrade pre-update backup of the compose file
+/docker-compose.yml.bak
+
 # logs
 *.log
 *.influx.csv

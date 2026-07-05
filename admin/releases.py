@@ -382,6 +382,11 @@ class ReleaseManager:
             "docker_image": self._docker_image(tag),
         }
 
+    def prepared_release(self):
+        """Return the currently prepared+cached release tag, or ``None``."""
+
+        return self._selected_release(self._cached_manifests())
+
     def detect_active_release(self):
         for name in ("docker-compose.yml", "compose.yml"):
             path = self.project_dir / name

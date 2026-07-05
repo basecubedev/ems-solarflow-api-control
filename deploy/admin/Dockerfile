@@ -53,12 +53,15 @@ RUN pip install --no-cache-dir --no-compile -r requirements.txt \
 COPY admin/ ./admin/
 COPY dashboard/__init__.py ./dashboard/__init__.py
 COPY dashboard/static_files.py ./dashboard/static_files.py
-# Admin install-context detection reuses the central EMS path resolver, and the
-# setup config UI reads the central config catalog; copy just those (not the
-# whole EMS core) so the orchestration image stays small.
+# Admin install-context detection reuses the central EMS path resolver, the
+# setup config UI reads the central config catalog, and the guided upgrade reuses
+# the EMS config upgrade/render helpers; copy just those (not the whole EMS core,
+# and never the crypto-backed backup module) so the orchestration image stays
+# small. The EMS-format backup runs inside the EMS container via emsctl instead.
 COPY ems/__init__.py ./ems/__init__.py
 COPY ems/paths.py ./ems/paths.py
 COPY ems/config_catalog.py ./ems/config_catalog.py
+COPY ems/config.py ./ems/config.py
 
 USER admin
 

@@ -3182,8 +3182,8 @@ function setAdminView(view) {
   }
 }
 
-// Each maintenance path maps to exactly one full-page panel; only "manual"
-// loads the read-only overview.
+// Each maintenance path maps to exactly one full-page panel. "manual" loads the
+// read-only overview; "upgrade" loads its own read-only planning data.
 const MAINTENANCE_PANEL_IDS = {
   hub: "maintenance-hub",
   manual: "maintenance-manual-panel",
@@ -3199,6 +3199,9 @@ function setMaintenancePath(path) {
   });
   if (next === "manual") {
     loadMaintenanceOverview();
+  }
+  if (next === "upgrade") {
+    loadUpgradePlanning();
   }
 }
 
@@ -5060,6 +5063,522 @@ async function loadMaintenanceOverview(options = {}) {
 
 if (maintenanceEls.refresh) {
   maintenanceEls.refresh.addEventListener("click", loadMaintenanceOverview);
+}
+
+// --- Guided upgrade planning + execute -----------------------------------
+// Reads the maintenance overview for the current version, lists releases, and
+// (using the existing setup prepare flow) can download a target release.
+// "Plan upgrade" only renders the summary; the guarded "Upgrade EMS" button is
+// the sole mutating action and POSTs the confirmed executor, which is enabled
+// only once a target is selected, prepared, and planned. Every dynamic value is
+// escaped before it reaches the DOM.
+
+const upgradeEls = {
+  currentVersion: document.getElementById("upgrade-current-version"),
+  currentDetail: document.getElementById("upgrade-current-detail"),
+  form: document.getElementById("upgrade-release-form"),
+  select: document.getElementById("upgrade-release-select"),
+  badges: document.getElementById("upgrade-release-badges"),
+  prepareBtn: document.getElementById("upgrade-prepare-btn"),
+  releaseStatus: document.getElementById("upgrade-release-status"),
+  releaseError: document.getElementById("upgrade-release-error"),
+  options: Array.from(document.querySelectorAll("[data-upgrade-option]")),
+  validationCard: document.getElementById("upgrade-validation-card"),
+  validationState: document.getElementById("upgrade-validation-state"),
+  validationList: document.getElementById("upgrade-validation"),
+  factCurrent: document.getElementById("upgrade-fact-current"),
+  factTarget: document.getElementById("upgrade-fact-target"),
+  planBtn: document.getElementById("upgrade-plan-btn"),
+  executeBtn: document.getElementById("upgrade-execute-btn"),
+};
+
+// Plan-summary wording for each option, keyed by its data-upgrade-option value.
+const UPGRADE_OPTIONS = [
+  { key: "backup", plan: "Create a pre-upgrade backup" },
+  { key: "config_check", plan: "Check config against the target template" },
+  { key: "config_add_keys", plan: "Add missing config keys" },
+  { key: "config_comments", plan: "Refresh config comments / metadata" },
+  { key: "pull_image", plan: "Pull the target Docker image" },
+  { key: "recreate", plan: "Recreate the EMS container" },
+  { key: "diagnostics", plan: "Run diagnostics after the upgrade" },
+];
+
+const UPGRADE_RELEASE_STATUS_TEXT = {
+  idle: "Select a target release, then prepare it.",
+  loading: "Loading EMS releases…",
+  preparing: "Preparing target release…",
+  ready: "Target release prepared.",
+  failed: "Update check unavailable.",
+};
+
+const upgradeState = {
+  current: { tag: null, image: null, state: null },
+  releases: [],
+  selected: null,
+  prepared: false,
+  preparedTag: null,
+  status: "idle",
+  error: null,
+  planned: false,
+  loading: false,
+  running: false,
+};
+
+function renderUpgradeBadges(release) {
+  if (!upgradeEls.badges) return;
+  upgradeEls.badges.replaceChildren();
+  if (!release) return;
+  const badges = [];
+  if (release.channel === "stable") badges.push(["stable", "source-mdns"]);
+  if (release.channel === "latest") badges.push(["latest", "source-scan"]);
+  if (release.prerelease) badges.push(["rc", "source-scan"]);
+  badges.push(
+    release.docker_supported ? ["docker", "source-mdns"] : ["unsupported", "source-scan"]
+  );
+  if (release.prepared) badges.push(["prepared", "source-mdns"]);
+  if (release.active) badges.push(["active", "source-mdns"]);
+  for (const badge of badges) {
+    const span = document.createElement("span");
+    span.className = "source-badge " + badge[1];
+    span.textContent = badge[0];
+    upgradeEls.badges.appendChild(span);
+  }
+}
+
+function upgradeSelectedRelease() {
+  return upgradeState.releases.find((item) => item.tag === upgradeState.selected) || null;
+}
+
+function upgradeTargetPrepared() {
+  return upgradeState.prepared && upgradeState.preparedTag === upgradeState.selected;
+}
+
+function setUpgradeReleaseStatus() {
+  if (upgradeEls.releaseStatus) {
+    upgradeEls.releaseStatus.textContent =
+      UPGRADE_RELEASE_STATUS_TEXT[upgradeState.status] || "";
+  }
+  if (upgradeEls.releaseError) {
+    upgradeEls.releaseError.hidden = !upgradeState.error;
+    upgradeEls.releaseError.textContent = upgradeState.error || "";
+  }
+  if (upgradeEls.prepareBtn) {
+    const release = upgradeSelectedRelease();
+    upgradeEls.prepareBtn.disabled =
+      upgradeState.status === "loading" ||
+      upgradeState.status === "preparing" ||
+      upgradeTargetPrepared() ||
+      !release ||
+      release.selectable === false;
+    upgradeEls.prepareBtn.textContent = upgradeTargetPrepared()
+      ? "Target ready"
+      : upgradeState.status === "failed"
+      ? "Retry"
+      : "Prepare target";
+  }
+}
+
+function readUpgradeOptions() {
+  const state = {};
+  for (const el of upgradeEls.options) {
+    state[el.dataset.upgradeOption] = el.checked;
+  }
+  return state;
+}
+
+function renderUpgradeValidation(items, prepared) {
+  if (!upgradeEls.validationCard) return;
+  const hasError = items.some((item) => item.tone === "error");
+  const hasWarn = items.some((item) => item.tone === "warn");
+  const tone = hasError ? "error" : hasWarn ? "warn" : prepared ? "ready" : "pending";
+  upgradeEls.validationCard.dataset.tone = tone;
+  if (upgradeEls.validationState) {
+    upgradeEls.validationState.textContent =
+      tone === "ready"
+        ? "Ready"
+        : tone === "warn"
+        ? "Review"
+        : tone === "error"
+        ? "Blocked"
+        : "Planning";
+  }
+  upgradeEls.validationList.innerHTML = items
+    .map((item) => {
+      const icon = item.tone === "error" ? "×" : item.tone === "warn" ? "!" : "✓";
+      return (
+        '<div class="config-validation-item config-validation-item-' +
+        item.tone +
+        '"><span class="config-validation-icon" aria-hidden="true">' +
+        icon +
+        "</span><span>" +
+        escapeHtml(item.text) +
+        "</span></div>"
+      );
+    })
+    .join("");
+}
+
+function renderUpgradeCurrent() {
+  const cur = upgradeState.current;
+  if (upgradeEls.currentVersion) {
+    upgradeEls.currentVersion.textContent =
+      cur.image || cur.tag || "Current version unknown";
+  }
+  if (upgradeEls.currentDetail) {
+    upgradeEls.currentDetail.textContent = cur.state || "—";
+  }
+}
+
+function renderUpgradePlan() {
+  const release = upgradeSelectedRelease();
+  const cur = upgradeState.current;
+  if (upgradeEls.factCurrent) {
+    upgradeEls.factCurrent.textContent = cur.image || cur.tag || "Current version unknown";
+  }
+  if (upgradeEls.factTarget) {
+    upgradeEls.factTarget.textContent = release
+      ? release.name || release.tag
+      : "Not selected";
+  }
+
+  if (!upgradeState.planned) {
+    renderUpgradeValidation(
+      [{ tone: "info", text: "Review the target release and options, then plan the upgrade." }],
+      false
+    );
+    updateExecuteButton();
+    return;
+  }
+
+  const prepared = upgradeTargetPrepared();
+  const items = [];
+  if (!upgradeState.selected) {
+    items.push({ tone: "warn", text: "Select a target version manually" });
+  } else if (prepared) {
+    items.push({ tone: "info", text: "Target release prepared" });
+  } else if (upgradeState.status === "failed") {
+    items.push({ tone: "warn", text: "Update check unavailable" });
+  } else {
+    items.push({ tone: "warn", text: "Prepare the target release before upgrading" });
+  }
+  if (!cur.tag && !cur.image) {
+    items.push({ tone: "warn", text: "Current version unknown" });
+  }
+
+  const options = readUpgradeOptions();
+  for (const opt of UPGRADE_OPTIONS) {
+    if (options[opt.key]) items.push({ tone: "info", text: opt.plan });
+  }
+  if (!options.backup) {
+    items.push({
+      tone: "warn",
+      text: "Backup is disabled. Planning can continue, but a real upgrade should normally create a backup first.",
+    });
+  }
+
+  items.push({ tone: "info", text: "Review the plan, then run Upgrade EMS" });
+  renderUpgradeValidation(items, prepared);
+  updateExecuteButton();
+}
+
+// Execute is only allowed once a target is selected, prepared, and planned, and
+// while no upgrade is already running.
+function updateExecuteButton() {
+  if (!upgradeEls.executeBtn) return;
+  const allowed =
+    upgradeState.planned &&
+    Boolean(upgradeState.selected) &&
+    upgradeTargetPrepared() &&
+    !upgradeState.running;
+  upgradeEls.executeBtn.disabled = !allowed;
+  upgradeEls.executeBtn.textContent = upgradeState.running ? "Upgrading…" : "Upgrade EMS";
+}
+
+function setUpgradeRunning(running) {
+  upgradeState.running = running;
+  if (upgradeEls.planBtn) upgradeEls.planBtn.disabled = running;
+  if (upgradeEls.select) upgradeEls.select.disabled = running || !upgradeState.releases.length;
+  for (const el of upgradeEls.options) el.disabled = running;
+  if (running && upgradeEls.prepareBtn) upgradeEls.prepareBtn.disabled = true;
+  if (!running) setUpgradeReleaseStatus();
+  updateExecuteButton();
+}
+
+// Live step glyphs while a job is running, keyed by the job step state.
+const UPGRADE_STEP_ICON = {
+  done: "✓",
+  running: "▶",
+  pending: "○",
+  failed: "×",
+  skipped: "✓",
+};
+const UPGRADE_POLL_INTERVAL_MS = 1200;
+let upgradePollTimer = null;
+
+function stopUpgradePolling() {
+  if (upgradePollTimer !== null) {
+    clearTimeout(upgradePollTimer);
+    upgradePollTimer = null;
+  }
+}
+
+function renderUpgradeSteps(steps) {
+  if (!upgradeEls.validationCard || !upgradeEls.validationList) return;
+  const list = Array.isArray(steps) ? steps : [];
+  const hasFailed = list.some((step) => step.state === "failed");
+  upgradeEls.validationCard.dataset.tone = hasFailed ? "error" : "pending";
+  if (upgradeEls.validationState) {
+    upgradeEls.validationState.textContent = hasFailed ? "Blocked" : "Running";
+  }
+  upgradeEls.validationList.innerHTML = list
+    .map((step) => {
+      const state = step.state || "pending";
+      const icon = UPGRADE_STEP_ICON[state] || "○";
+      const tone = state === "failed" ? "error" : "info";
+      const label = step.label || step.key || "";
+      const text = step.message ? label + " — " + step.message : label;
+      return (
+        '<div class="config-validation-item config-validation-item-' +
+        tone +
+        '"><span class="config-validation-icon" aria-hidden="true">' +
+        icon +
+        "</span><span>" +
+        escapeHtml(text) +
+        "</span></div>"
+      );
+    })
+    .join("");
+}
+
+async function pollUpgradeJob(jobId) {
+  try {
+    const res = await fetch(
+      "/api/admin/maintenance/upgrade/jobs/" + encodeURIComponent(jobId)
+    );
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      throw new Error((data && data.error) || "Upgrade status unavailable.");
+    }
+    renderUpgradeSteps(data.steps);
+    if (data.status === "succeeded" || data.status === "failed") {
+      stopUpgradePolling();
+      const result = data.result || { ok: data.status === "succeeded", steps: data.steps };
+      renderUpgradeResult(result);
+      setUpgradeRunning(false);
+      return;
+    }
+    upgradePollTimer = setTimeout(() => pollUpgradeJob(jobId), UPGRADE_POLL_INTERVAL_MS);
+  } catch (err) {
+    stopUpgradePolling();
+    renderUpgradeValidation([{ tone: "error", text: err.message || String(err) }], false);
+    setUpgradeRunning(false);
+  }
+}
+
+function renderUpgradeResult(data) {
+  const items = [];
+  const steps = Array.isArray(data.steps) ? data.steps : [];
+  for (const step of steps) {
+    // Skipped/disabled steps stay out of the summary unless they warn.
+    if (step.status === "skipped") continue;
+    const tone =
+      step.status === "error" ? "error" : step.status === "warning" ? "warn" : "info";
+    items.push({ tone, text: step.detail ? step.label + " — " + step.detail : step.label });
+  }
+  const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+  for (const warning of warnings) items.push({ tone: "warn", text: warning });
+  if (data.ok) {
+    items.push({
+      tone: "info",
+      text: "Upgrade completed: " + (data.target_image || data.target_release || ""),
+    });
+  } else {
+    items.push({ tone: "error", text: data.message || "Upgrade did not complete." });
+  }
+  renderUpgradeValidation(items, upgradeTargetPrepared());
+}
+
+async function executeUpgrade() {
+  if (upgradeState.running || upgradeEls.executeBtn.disabled) return;
+  const target = upgradeState.preparedTag || upgradeState.selected;
+  stopUpgradePolling();
+  setUpgradeRunning(true);
+  renderUpgradeValidation([{ tone: "info", text: "Upgrade running — applying steps…" }], false);
+  if (upgradeEls.validationState) upgradeEls.validationState.textContent = "Running";
+  try {
+    const res = await fetch("/api/admin/maintenance/upgrade/execute", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        confirm: true,
+        target_release: target,
+        options: readUpgradeOptions(),
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok || !data.job_id) {
+      // Synchronous rejection (guard checks) — render it and stop.
+      renderUpgradeResult(data);
+      setUpgradeRunning(false);
+      return;
+    }
+    renderUpgradeSteps(data.steps);
+    pollUpgradeJob(data.job_id);
+  } catch (err) {
+    renderUpgradeValidation([{ tone: "error", text: err.message || String(err) }], false);
+    setUpgradeRunning(false);
+  }
+}
+
+async function loadUpgradeCurrentVersion() {
+  try {
+    const resp = await fetch("/api/admin/maintenance/overview");
+    if (!resp.ok) throw new Error("overview request failed");
+    const data = await resp.json();
+    const ems = (data.containers && data.containers.ems) || {};
+    const state = data.install_state || {};
+    upgradeState.current = {
+      tag: ems.tag || null,
+      image: ems.image || null,
+      state: state.label || state.state || null,
+    };
+  } catch (err) {
+    upgradeState.current = { tag: null, image: null, state: null };
+  }
+  renderUpgradeCurrent();
+}
+
+async function loadUpgradeReleases() {
+  upgradeState.status = "loading";
+  upgradeState.error = null;
+  setUpgradeReleaseStatus();
+  try {
+    const res = await fetch("/api/setup/releases");
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data && data.error ? data.error : "release list unavailable");
+    }
+    const releases = Array.isArray(data.releases) ? data.releases : [];
+    upgradeState.releases = releases;
+    upgradeEls.select.innerHTML = "";
+    for (const release of releases) {
+      const option = document.createElement("option");
+      option.value = release.tag;
+      option.textContent = releaseOptionLabel(release);
+      option.disabled = release.selectable === false;
+      upgradeEls.select.appendChild(option);
+    }
+    const selected =
+      releases.find((item) => item.tag === data.default_release && item.selectable !== false) ||
+      releases.find((item) => item.tag === data.prepared_release && item.selectable !== false) ||
+      releases.find((item) => item.selectable !== false);
+    if (!selected) {
+      throw new Error(
+        Array.isArray(data.warnings) && data.warnings.length
+          ? data.warnings[0]
+          : "No EMS releases are available."
+      );
+    }
+    upgradeEls.select.value = selected.tag;
+    upgradeEls.select.disabled = false;
+    upgradeState.selected = selected.tag;
+    upgradeState.prepared = Boolean(selected.prepared) && selected.tag === data.prepared_release;
+    upgradeState.preparedTag = upgradeState.prepared ? selected.tag : null;
+    upgradeState.status = upgradeState.prepared ? "ready" : "idle";
+    renderUpgradeBadges(selected);
+  } catch (err) {
+    upgradeState.releases = [];
+    upgradeState.selected = null;
+    upgradeState.prepared = false;
+    upgradeState.preparedTag = null;
+    upgradeState.status = "failed";
+    upgradeState.error = err.message || String(err);
+    if (upgradeEls.select) upgradeEls.select.disabled = true;
+    renderUpgradeBadges(null);
+  }
+  setUpgradeReleaseStatus();
+}
+
+async function loadUpgradePlanning() {
+  if (upgradeState.loading) return;
+  upgradeState.loading = true;
+  try {
+    await loadUpgradeCurrentVersion();
+    await loadUpgradeReleases();
+  } finally {
+    upgradeState.loading = false;
+  }
+  renderUpgradePlan();
+}
+
+function onUpgradeReleaseChange() {
+  upgradeState.selected = upgradeEls.select.value || null;
+  upgradeState.prepared = upgradeState.preparedTag === upgradeState.selected;
+  upgradeState.status = upgradeTargetPrepared() ? "ready" : "idle";
+  upgradeState.error = null;
+  renderUpgradeBadges(upgradeSelectedRelease());
+  setUpgradeReleaseStatus();
+  renderUpgradePlan();
+}
+
+async function prepareUpgradeTarget() {
+  const tag = upgradeEls.select.value;
+  if (!tag) {
+    upgradeState.status = "failed";
+    upgradeState.error = "Select a target release first.";
+    setUpgradeReleaseStatus();
+    return;
+  }
+  upgradeState.status = "preparing";
+  upgradeState.error = null;
+  setUpgradeReleaseStatus();
+  try {
+    const res = await fetch("/api/setup/releases/prepare", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tag: tag }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data && data.error ? data.error : "release preparation failed");
+    }
+    upgradeState.prepared = true;
+    upgradeState.preparedTag = data.tag;
+    upgradeState.selected = data.tag;
+    upgradeState.status = "ready";
+    const release = upgradeState.releases.find((item) => item.tag === data.tag);
+    if (release) release.prepared = true;
+    renderUpgradeBadges(release);
+  } catch (err) {
+    upgradeState.prepared = false;
+    upgradeState.preparedTag = null;
+    upgradeState.status = "failed";
+    upgradeState.error = err.message || String(err);
+  }
+  setUpgradeReleaseStatus();
+  renderUpgradePlan();
+}
+
+if (upgradeEls.form) {
+  upgradeEls.form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    prepareUpgradeTarget();
+  });
+}
+if (upgradeEls.select) {
+  upgradeEls.select.addEventListener("change", onUpgradeReleaseChange);
+}
+for (const el of upgradeEls.options) {
+  el.addEventListener("change", renderUpgradePlan);
+}
+if (upgradeEls.planBtn) {
+  upgradeEls.planBtn.addEventListener("click", () => {
+    upgradeState.planned = true;
+    renderUpgradePlan();
+  });
+}
+if (upgradeEls.executeBtn) {
+  upgradeEls.executeBtn.addEventListener("click", executeUpgrade);
 }
 
 // --- EMS diagnostics (read-only) -----------------------------------------

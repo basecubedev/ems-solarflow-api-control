@@ -18,29 +18,23 @@ Execution mode is chosen for safety, preferring the installed version:
 """
 
 import json
-import re
 import subprocess
 import time
 from pathlib import Path
 
+from admin.ems_tool import (
+    CONTAINER_EMSCTL_PATH,
+    resolve_running_ems_container,
+)
 from admin.install_context import detect_install_context
-from admin.maintenance import DEFAULT_EMS_CONTAINER
 
 # Output caps keep a misbehaving/old EMS build from returning unbounded text.
 STDOUT_CAP = 64 * 1024
 STDERR_CAP = 32 * 1024
 
-# Container path of emsctl.py inside the published EMS image.
-CONTAINER_EMSCTL_PATH = "/app/emsctl.py"
-
 UNAVAILABLE_MESSAGE = (
     "EMS CLI diagnostics are unavailable because no running EMS container or "
     "local emsctl.py was found."
-)
-
-_COMPOSE_EMS_NAME_RE = re.compile(
-    r"^\s*container_name:\s*[\"']?([A-Za-z0-9][A-Za-z0-9_.-]*)[\"']?\s*(?:#.*)?$",
-    re.MULTILINE,
 )
 
 # A disabled subsystem is an expected config state, not a diagnostic failure.
@@ -148,7 +142,7 @@ class EmsCliDiagnostics:
 
     def _resolve_mode(self):
         context = self._install_context_provider()
-        container = self._running_ems_container(context)
+        container = resolve_running_ems_container(self._docker_cli(), context)
         if container is not None:
             return {"mode": "container", "container": container}
         emsctl_path = self._local_emsctl(context)
@@ -167,29 +161,6 @@ class EmsCliDiagnostics:
         from admin.deployment import DockerCli
 
         return DockerCli()
-
-    def _running_ems_container(self, context):
-        docker = self._docker_cli()
-        probe = getattr(docker, "probe", None)
-        inspect = getattr(docker, "inspect_container", None)
-        if not callable(probe) or not callable(inspect):
-            return None
-        try:
-            state = probe()
-        except Exception:  # host Docker state must never break diagnostics
-            return None
-        if not state or state.get("state") != "ready":
-            return None
-        name = _ems_container_name(context)
-        try:
-            existing = inspect(name)
-        except Exception:  # a failed inspect degrades to no container, never a 500
-            return None
-        if existing is None:
-            return None
-        if str(existing.get("status") or "").lower() != "running":
-            return None
-        return existing.get("container_name") or name
 
     @staticmethod
     def _local_emsctl(context):
@@ -263,19 +234,6 @@ class EmsCliDiagnostics:
             check_id, spec, status, exit_code, stdout, stderr,
             _elapsed_ms(started), out_trunc or err_trunc, parsed, message,
         )
-
-
-def _ems_container_name(context):
-    if not getattr(context, "compose_exists", False):
-        return DEFAULT_EMS_CONTAINER
-    try:
-        text = Path(context.compose_path).read_text(encoding="utf-8")
-    except OSError:
-        return DEFAULT_EMS_CONTAINER
-    for name in _COMPOSE_EMS_NAME_RE.findall(text):
-        if "influx" not in name.lower():
-            return name
-    return DEFAULT_EMS_CONTAINER
 
 
 def _status_for(exit_code, spec):

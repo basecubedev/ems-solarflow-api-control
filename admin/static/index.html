@@ -1143,22 +1143,136 @@
           <button type="button" class="workspace-back" data-back="maintenance-hub">← Maintenance</button>
           <div class="maintenance-head-titles">
             <h2 class="maintenance-title">Guided upgrade</h2>
-            <p class="maintenance-subtitle">Plan a safe EMS upgrade with backup and diagnostics</p>
+            <p class="maintenance-subtitle">Plan a safe EMS update before anything is changed</p>
           </div>
         </header>
 
-        <section class="control-pipeline-stage maintenance-card" aria-label="Guided upgrade planned">
-          <div class="control-stage-head maintenance-card-head">
+        <section class="control-pipeline-stage guided-upgrade-stage" aria-label="EMS release">
+          <div class="control-stage-head">
             <span class="control-stage-step">01</span>
             <div class="control-stage-title-block">
-              <span class="control-stage-title">Upgrade planning</span>
-              <span class="control-stage-subtitle">Version selection and safety checks will appear here</span>
+              <span class="control-stage-title">EMS release</span>
+              <span class="control-stage-subtitle">Confirm the current version and pick a target</span>
             </div>
           </div>
-          <p class="future-note">
-            Guided upgrade will let users choose a target EMS version, keep backup enabled by default,
-            validate config changes, update the Docker image, recreate containers and run diagnostics.
+          <div class="maintenance-facts">
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Current</span>
+              <span class="maintenance-fact-value" id="upgrade-current-version">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Install state</span>
+              <span class="maintenance-fact-value muted" id="upgrade-current-detail">…</span>
+            </div>
+          </div>
+          <form id="upgrade-release-form" class="scan-form" autocomplete="off">
+            <label class="field">
+              <span class="field-label">Target release</span>
+              <select id="upgrade-release-select" disabled>
+                <option value="">Loading releases…</option>
+              </select>
+            </label>
+            <button id="upgrade-prepare-btn" type="submit" class="primary-button compact" disabled>
+              Prepare target
+            </button>
+          </form>
+          <div id="upgrade-release-badges" class="device-sources" aria-label="Target release classification"></div>
+          <p id="upgrade-release-status" class="scan-status" role="status" aria-live="polite">
+            Loading EMS releases…
           </p>
+          <p id="upgrade-release-error" class="scan-error" role="alert" hidden></p>
+        </section>
+
+        <section class="control-pipeline-stage guided-upgrade-stage" aria-label="Upgrade options">
+          <div class="control-stage-head">
+            <span class="control-stage-step">02</span>
+            <div class="control-stage-title-block">
+              <span class="control-stage-title">Upgrade options</span>
+              <span class="control-stage-subtitle">Safety steps are on by default — uncheck to skip</span>
+            </div>
+          </div>
+          <div class="feature-fields upgrade-options" role="group" aria-label="Upgrade steps">
+            <label class="feature-field-row">
+              <span class="feature-field-label">Create backup before upgrade</span>
+              <span class="feature-field-control">
+                <input class="feature-input" type="checkbox" data-upgrade-option="backup" checked>
+              </span>
+              <span class="feature-field-desc">Recommended safety step before changes.</span>
+            </label>
+            <label class="feature-field-row">
+              <span class="feature-field-label">Check config against target template</span>
+              <span class="feature-field-control">
+                <input class="feature-input" type="checkbox" data-upgrade-option="config_check" checked>
+              </span>
+              <span class="feature-field-desc">Compare config.json against the target release template.</span>
+            </label>
+            <label class="feature-field-row">
+              <span class="feature-field-label">Add missing config keys</span>
+              <span class="feature-field-control">
+                <input class="feature-input" type="checkbox" data-upgrade-option="config_add_keys" checked>
+              </span>
+              <span class="feature-field-desc">Fill in any new keys the target introduces.</span>
+            </label>
+            <label class="feature-field-row">
+              <span class="feature-field-label">Refresh config comments / metadata</span>
+              <span class="feature-field-control">
+                <input class="feature-input" type="checkbox" data-upgrade-option="config_comments" checked>
+              </span>
+              <span class="feature-field-desc">Update inline comments and metadata to match the target.</span>
+            </label>
+            <label class="feature-field-row">
+              <span class="feature-field-label">Pull target Docker image</span>
+              <span class="feature-field-control">
+                <input class="feature-input" type="checkbox" data-upgrade-option="pull_image" checked>
+              </span>
+              <span class="feature-field-desc">Download the target EMS image before switching.</span>
+            </label>
+            <label class="feature-field-row">
+              <span class="feature-field-label">Recreate EMS container</span>
+              <span class="feature-field-control">
+                <input class="feature-input" type="checkbox" data-upgrade-option="recreate" checked>
+              </span>
+              <span class="feature-field-desc">Recreate the EMS container on the new image.</span>
+            </label>
+            <label class="feature-field-row">
+              <span class="feature-field-label">Run diagnostics after upgrade</span>
+              <span class="feature-field-control">
+                <input class="feature-input" type="checkbox" data-upgrade-option="diagnostics" checked>
+              </span>
+              <span class="feature-field-desc">Run a health check once the upgrade completes.</span>
+            </label>
+          </div>
+        </section>
+
+        <section class="control-pipeline-stage guided-upgrade-stage" aria-label="Upgrade validation">
+          <div class="control-stage-head">
+            <span class="control-stage-step">03</span>
+            <div class="control-stage-title-block">
+              <span class="control-stage-title">Upgrade validation</span>
+              <span class="control-stage-subtitle">Review the plan — nothing is changed yet</span>
+            </div>
+          </div>
+          <section id="upgrade-validation-card" class="config-validation-card" data-tone="pending">
+            <div class="config-validation-head">
+              <div>
+                <h3>Upgrade plan</h3>
+                <p class="config-validation-source">Planning only — no containers will be changed yet.</p>
+              </div>
+              <span id="upgrade-validation-state" class="config-validation-state">Planning</span>
+            </div>
+            <div id="upgrade-validation" class="config-validation-list"
+                 role="status" aria-live="polite"></div>
+            <div class="config-validation-facts">
+              <span>Current: <strong id="upgrade-fact-current">Unknown</strong></span>
+              <span>Target: <strong id="upgrade-fact-target">Not selected</strong></span>
+            </div>
+          </section>
+          <div class="mconfig-actions">
+            <button type="button" id="upgrade-plan-btn" class="primary-button compact">Plan upgrade</button>
+            <button type="button" id="upgrade-execute-btn" class="secondary-button compact" disabled>
+              Upgrade EMS
+            </button>
+          </div>
         </section>
       </div>
 

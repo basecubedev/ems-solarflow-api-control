@@ -114,6 +114,18 @@ code {
 
 .maintenance-view { display: flex; flex-direction: column; gap: 10px; }
 .maintenance-hub { display: flex; flex-direction: column; gap: 10px; }
+/* The hub sets display:flex, which overrides the UA [hidden] { display: none }
+   rule, so a hidden hub would still render above the selected subpage. Restore
+   hidden semantics explicitly for the hub and each full-page maintenance panel. */
+.maintenance-hub[hidden],
+#maintenance-manual-panel[hidden],
+#maintenance-upgrade-panel[hidden],
+#maintenance-backup-panel[hidden] {
+  display: none;
+}
+/* Guided upgrade reads as a clean staged workflow: plain control stages with
+   even spacing, no maintenance status accent line ([hidden] keeps priority). */
+#maintenance-upgrade-panel { display: flex; flex-direction: column; gap: 10px; }
 .maintenance-path-card { padding: 14px 16px; }
 .maintenance-path-card .control-stage-head { margin-bottom: 10px; }
 .maintenance-path-card .source-badge { margin-left: auto; }
@@ -484,6 +496,9 @@ code {
 }
 .maintenance-container-actions { margin-top: 10px; }
 .mconfig-backup-choice { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 700; }
+/* Upgrade options reuse the settings-list (.feature-fields) rows, so the
+   container only adds a little breathing room under the stage header. */
+.upgrade-options { margin-top: 4px; }
 .mconfig-feature[data-disabled="true"] .feature-body { opacity: .72; }
 .mconfig-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 .mconfig-result { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px; }

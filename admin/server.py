@@ -29,6 +29,12 @@ from admin.discovery import (
 )
 from admin.ems_cli import EmsCliDiagnostics
 from admin.gateway_probe import probe_gateway_candidates
+from admin.guided_upgrade import (
+    GuidedUpgradeExecutor,
+    UpgradeJob,
+    UpgradeJobRegistry,
+    plan_upgrade_steps,
+)
 from admin.install_context import detect_install_context
 from admin.install_state import (
     LegacyMigrationError,
@@ -58,6 +64,16 @@ STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 MAX_JSON_BODY_BYTES = 4 * 1024
 MAX_CONFIG_PREVIEW_BODY_BYTES = 64 * 1024
 MAX_TRACKED_SCANS = 20
+
+# Guided-upgrade preflight rejection reasons -> HTTP status. Accepted runs spawn
+# a job (202) whose live step progress is polled; only rejections use this map.
+_UPGRADE_STATUS_CODES = {
+    "confirm_required": 400,
+    "target_required": 400,
+    "target_not_prepared": 409,
+    "config_missing": 409,
+    "compose_missing": 409,
+}
 
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
@@ -152,7 +168,8 @@ class AdminServer(ThreadingHTTPServer):
     def __init__(self, server_address, handler, registry=None, static_assets=None,
                  network_detector=None, gateway_prober=None, mdns_provider=None,
                  mqtt_discovery=None, release_manager=None, config_export=None,
-                 config_apply=None, deployment=None, ems_cli=None):
+                 config_apply=None, deployment=None, ems_cli=None,
+                 guided_upgrade=None):
         super().__init__(server_address, handler)
         self.registry = registry or ScanRegistry()
         self.network_detector = network_detector or detect_network_suggestions
@@ -180,6 +197,11 @@ class AdminServer(ThreadingHTTPServer):
             admin_data_dir=admin_data_dir,
         )
         self.ems_cli = ems_cli or EmsCliDiagnostics()
+        self.guided_upgrade = guided_upgrade or GuidedUpgradeExecutor(
+            release_manager=self.release_manager,
+            ems_cli=self.ems_cli,
+        )
+        self.upgrade_jobs = UpgradeJobRegistry()
         self.static_assets = (
             static_assets
             if static_assets is not None
@@ -209,6 +231,11 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/admin/maintenance/containers/plan":
             self._handle_maintenance_container_plan()
+            return
+        if path.startswith("/api/admin/maintenance/upgrade/jobs/"):
+            self._send_upgrade_job(
+                path[len("/api/admin/maintenance/upgrade/jobs/"):]
+            )
             return
         if path == "/api/setup/releases":
             self._send_json(self.server.release_manager.list_releases())
@@ -288,6 +315,9 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/admin/maintenance/containers/sync":
             self._handle_maintenance_container_sync()
+            return
+        if path == "/api/admin/maintenance/upgrade/execute":
+            self._handle_maintenance_upgrade_execute()
             return
         if path == "/api/setup/releases/prepare":
             self._handle_release_prepare()
@@ -580,6 +610,65 @@ class AdminHandler(BaseHTTPRequestHandler):
         elif not result.get("ok"):
             status = 500
         self._send_json(result, status=status)
+
+    def _handle_maintenance_upgrade_execute(self):
+        # Confirmed mutation: bump the EMS image and force-recreate only the EMS
+        # service. The target is resolved from the prepared release, not the body.
+        body = self._read_json_body()
+        if body is None:
+            return
+        if not isinstance(body, dict):
+            self._send_json({"error": "expected a JSON object"}, status=400)
+            return
+        if set(body) - {"confirm", "target_release", "options"}:
+            self._send_json({"error": "unsupported upgrade field"}, status=400)
+            return
+        options = body.get("options", {})
+        if not isinstance(options, dict):
+            self._send_json({"error": "options must be a JSON object"}, status=400)
+            return
+        try:
+            rejection, run_context = self.server.guided_upgrade.preflight(
+                body.get("target_release"),
+                options,
+                confirm=body.get("confirm") is True,
+            )
+        except Exception:  # never leak a traceback to the UI
+            self._send_json(
+                {"ok": False, "status": "error", "message": "Upgrade failed unexpectedly."},
+                status=500,
+            )
+            return
+        if rejection is not None:
+            self._send_json(
+                rejection,
+                status=_UPGRADE_STATUS_CODES.get(rejection.get("reason"), 400),
+            )
+            return
+        # Real (slow) upgrade work runs on a job thread; the UI polls for live
+        # step progress. Guard checks already passed synchronously above.
+        executor = self.server.guided_upgrade
+        job = UpgradeJob(uuid.uuid4().hex, plan_upgrade_steps(run_context.options))
+        self.server.upgrade_jobs.submit(
+            job, lambda handle: handle.finish(executor.run(run_context, progress=handle))
+        )
+        snapshot = job.snapshot()
+        self._send_json(
+            {
+                "ok": True,
+                "job_id": job.job_id,
+                "status": snapshot["status"],
+                "steps": snapshot["steps"],
+            },
+            status=202,
+        )
+
+    def _send_upgrade_job(self, job_id):
+        job = self.server.upgrade_jobs.get(job_id.strip("/"))
+        if job is None:
+            self._send_json({"ok": False, "error": "unknown job_id"}, status=404)
+            return
+        self._send_json({"ok": True, **job})
 
     def _handle_release_prepare(self):
         body = self._read_json_body()
@@ -1009,11 +1098,12 @@ def _result_view(record):
 def create_server(host="127.0.0.1", port=8090, registry=None, static_assets=None,
                   network_detector=None, gateway_prober=None, mdns_provider=None,
                   mqtt_discovery=None, release_manager=None, config_export=None,
-                  config_apply=None, deployment=None, ems_cli=None):
+                  config_apply=None, deployment=None, ems_cli=None,
+                  guided_upgrade=None):
     """Create (but do not start) an ``AdminServer`` bound to ``host:port``."""
 
     return AdminServer(
         (host, int(port)), AdminHandler, registry, static_assets, network_detector,
         gateway_prober, mdns_provider, mqtt_discovery, release_manager,
-        config_export, config_apply, deployment, ems_cli,
+        config_export, config_apply, deployment, ems_cli, guided_upgrade,
     )

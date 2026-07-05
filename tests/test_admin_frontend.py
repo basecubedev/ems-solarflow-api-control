@@ -2084,6 +2084,142 @@ def test_maintenance_subpages_are_full_page_siblings_of_hub():
         assert "/api/admin/" not in maintenance.split('id="' + panel + '"', 1)[1]
 
 
+def test_css_hidden_maintenance_panels_beat_hub_flex_layout():
+    css = _read("admin.css")
+    # The hub sets display:flex, which would override the UA [hidden] rule and
+    # leave the hub rendered above the selected subpage. A targeted rule must
+    # restore hidden semantics for the hub and each full-page panel.
+    for selector in (
+        ".maintenance-hub[hidden]",
+        "#maintenance-manual-panel[hidden]",
+        "#maintenance-upgrade-panel[hidden]",
+        "#maintenance-backup-panel[hidden]",
+    ):
+        assert selector in css
+    block = css.split(".maintenance-hub[hidden]", 1)[1].split("}", 1)[0]
+    assert "display: none" in block
+
+
+def _upgrade_panel(html):
+    maintenance = _maintenance_section(html)
+    return maintenance.split('id="maintenance-upgrade-panel"', 1)[1].split(
+        'id="maintenance-backup-panel"', 1
+    )[0]
+
+
+def test_guided_upgrade_planning_has_three_numbered_stages():
+    html = _read("index.html")
+    panel = _upgrade_panel(html)
+    for label in ("EMS release", "Upgrade options", "Upgrade validation"):
+        assert 'aria-label="' + label + '"' in panel
+    for step in ("01", "02", "03"):
+        assert ">" + step + "<" in panel
+    # Current version + a target selector are shown.
+    assert 'id="upgrade-current-version"' in panel
+    assert 'id="upgrade-release-select"' in panel
+    assert 'id="upgrade-prepare-btn"' in panel
+
+
+def test_guided_upgrade_uses_clean_stage_style_not_maintenance_card():
+    html = _read("index.html")
+    panel = _upgrade_panel(html)
+    # The guided workflow must not reuse the collapsible maintenance/config card
+    # language (which draws the blue accent line and form-style option rows).
+    for cls in ("maintenance-card", "maintenance-card-head", "mconfig-backup-choice"):
+        assert cls not in panel
+    # Its stages are plain control-pipeline stages carrying the guided marker.
+    assert panel.count("control-pipeline-stage guided-upgrade-stage") == 3
+    # Options reuse the shared settings-list rows instead of inline checkboxes.
+    assert "feature-fields upgrade-options" in panel
+    assert "feature-field-row" in panel
+
+
+def test_guided_upgrade_options_default_on_with_backup():
+    html = _read("index.html")
+    panel = _upgrade_panel(html)
+    for key in (
+        "backup",
+        "config_check",
+        "config_add_keys",
+        "config_comments",
+        "pull_image",
+        "recreate",
+        "diagnostics",
+    ):
+        marker = 'data-upgrade-option="' + key + '"'
+        assert marker in panel
+        # Each option box ships checked by default.
+        box = panel.split(marker, 1)[1].split(">", 1)[0]
+        prefix = panel.split(marker, 1)[0].rsplit("<input", 1)[1]
+        assert "checked" in prefix + box
+
+
+def test_guided_upgrade_validation_reuses_setup_card_and_has_execute_action():
+    html = _read("index.html")
+    panel = _upgrade_panel(html)
+    # Validation reuses the Setup validation card style.
+    assert 'id="upgrade-validation-card" class="config-validation-card"' in panel
+    assert 'id="upgrade-validation"' in panel and "config-validation-list" in panel
+    assert 'id="upgrade-plan-btn"' in panel
+    # The execute button exists but ships disabled; the JS enables it only once a
+    # target is selected, prepared, and planned.
+    assert 'id="upgrade-execute-btn"' in panel
+    execute = panel.split('id="upgrade-execute-btn"', 1)[1].split(">", 1)[0]
+    prefix = panel.split('id="upgrade-execute-btn"', 1)[0].rsplit("<button", 1)[1]
+    assert "disabled" in prefix + execute
+
+
+def test_guided_upgrade_js_planning_and_guarded_execute():
+    js = _read("admin.js")
+    # Entering the upgrade path loads its own read-only planning data.
+    path = js.split("function setMaintenancePath", 1)[1].split("\nfunction ", 1)[0]
+    assert 'next === "upgrade"' in path
+    assert "loadUpgradePlanning()" in path
+    upgrade = js.split("Guided upgrade planning", 1)[1].split(
+        "// --- EMS diagnostics", 1
+    )[0]
+    # Planning consumes read-only / existing preparation endpoints.
+    assert "/api/admin/maintenance/overview" in upgrade
+    assert "/api/setup/releases" in upgrade
+    # The only mutating call is the explicit, confirmed upgrade executor.
+    assert "/api/admin/maintenance/upgrade/execute" in upgrade
+    assert "confirm: true" in upgrade
+    # No other destructive lifecycle calls are made from the module.
+    for forbidden in ("config/apply", "containers/sync", "docker rm", "compose up"):
+        assert forbidden not in upgrade
+
+
+def test_guided_upgrade_js_polls_live_step_progress():
+    js = _read("admin.js")
+    upgrade = js.split("Guided upgrade planning", 1)[1].split(
+        "// --- EMS diagnostics", 1
+    )[0]
+    # Execute kicks off a job and the UI polls it for live step states.
+    assert "/api/admin/maintenance/upgrade/jobs/" in upgrade
+    assert "job_id" in upgrade
+    assert "pollUpgradeJob" in upgrade
+    assert "renderUpgradeSteps" in upgrade
+    # Polling loops on a timer and stops on a terminal status.
+    assert "setTimeout" in upgrade
+    assert "stopUpgradePolling" in upgrade
+    assert '"succeeded"' in upgrade and '"failed"' in upgrade
+    # Live steps render every job step state, including running/pending.
+    for state in ("done", "running", "pending", "failed"):
+        assert state in upgrade
+
+
+def test_guided_upgrade_execute_button_enabled_only_when_ready():
+    js = _read("admin.js")
+    fn = js.split("function updateExecuteButton", 1)[1].split("\nfunction ", 1)[0]
+    # Execution is gated on a generated plan, a selected + prepared target, and no
+    # in-flight run; it starts disabled in the HTML until this logic enables it.
+    assert "upgradeState.planned" in fn
+    assert "upgradeTargetPrepared()" in fn
+    assert "upgradeState.selected" in fn
+    assert "upgradeState.running" in fn
+    assert "executeBtn.disabled = !allowed" in fn
+
+
 def test_maintenance_view_has_three_numbered_sections():
     html = _read("index.html")
     maintenance = _maintenance_section(html)
