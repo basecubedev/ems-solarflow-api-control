@@ -58,9 +58,12 @@ per file, whether the restore would create a new file, replace a conflicting
 file, or skip an identical file, and blocks up front on invalid checksums. No
 files are written during a preview.
 
-Conflict handling is explicit. With the default **Abort on conflicts** policy,
-a preview that finds conflicts is blocked until you choose **Replace** or
-**Keep**. Restore requires an explicit confirmation before it runs.
+Because a restore normally replaces the current state with the backup state,
+Admin restore always treats differing files as replace candidates. The preview
+lists those files and counts them under "Will replace". Nothing is written until
+you explicitly confirm the restore. The lower-level EMS restore tooling (`emsctl.py
+backup`, see [../backup-restore.md](../backup-restore.md)) still supports stricter
+conflict policies for CLI/advanced workflows.
 
 ## Rollback and automatic rollback
 

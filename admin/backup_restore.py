@@ -1036,7 +1036,9 @@ class BackupRestoreService:
         scope = request.get("scope", "config")
         if scope not in RESTORE_SCOPES:
             raise BackupRestoreError("unsupported restore scope")
-        conflict_policy = request.get("conflict_policy", "abort")
+        # Admin restore always previews before writing and requires an explicit
+        # confirm, so differing files default to replace rather than blocking.
+        conflict_policy = request.get("conflict_policy", "replace")
         if conflict_policy not in CONFLICT_POLICIES:
             raise BackupRestoreError("unsupported conflict policy")
         backup_id = request.get("id")

@@ -816,7 +816,7 @@ class AdminHandler(BaseHTTPRequestHandler):
         if body.get("scope") not in RESTORE_SCOPES:
             self._send_json({"error": "unsupported restore scope"}, status=400)
             return
-        if body.get("conflict_policy", "abort") not in CONFLICT_POLICIES:
+        if body.get("conflict_policy", "replace") not in CONFLICT_POLICIES:
             self._send_json({"error": "unsupported conflict policy"}, status=400)
             return
         try:

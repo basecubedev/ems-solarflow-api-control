@@ -3269,6 +3269,34 @@ def test_backup_restore_buttons_and_sections_exist():
         assert action in js, action
 
 
+def test_backup_restore_has_no_conflict_policy_selector():
+    html = _read("index.html")
+    restore_stage = html.split('id="backup-restore-stage"', 1)[1].split(
+        'id="advanced-deployment"', 1
+    )[0]
+    assert 'id="backup-conflict-policy"' not in html
+    assert "Existing files" not in restore_stage
+    assert "Keep existing files" not in html
+    assert "Abort on conflicts" not in html
+
+
+def test_previewRestore_sends_replace_conflict_policy():
+    js = _read("admin.js")
+    fn = _extract_fn(js, "previewRestore")
+    assert 'conflict_policy: "replace"' in fn
+    assert "backupEls.conflictPolicy" not in fn
+    assert "/api/admin/maintenance/backups/restore/preview" in fn
+
+
+def test_executeRestore_requires_confirmation_and_confirm_flag():
+    js = _read("admin.js")
+    fn = _extract_fn(js, "executeRestore")
+    assert "window.confirm(" in fn
+    assert "/api/admin/maintenance/backups/restore/execute" in fn
+    assert "confirm: true" in fn
+    assert "plan.blocked" in fn
+
+
 def test_backup_restore_frontend_references_expected_endpoints():
     js = _read("admin.js")
     for endpoint in (

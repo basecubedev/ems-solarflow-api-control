@@ -168,6 +168,22 @@ def test_restore_preview_endpoint_returns_plan_id(server, install):
     assert (install / "config" / "config.json").read_text() == '{"changed": true}'
 
 
+def test_restore_preview_endpoint_defaults_to_replace(server, install):
+    _make_config_archive(install)
+    (install / "config" / "config.json").write_text('{"changed": true}')
+    backup_id = _first_backup_id(server)
+    status, data = _request(
+        server + "/api/admin/maintenance/backups/restore/preview",
+        method="POST",
+        body={"id": backup_id, "scope": "config"},
+    )
+    assert status == 200
+    assert data["ok"] is True
+    assert data["conflict_policy"] == "replace"
+    assert data["blocked"] is False
+    assert data["summary"]["would_replace"] >= 1
+
+
 def test_restore_execute_endpoint_requires_confirm_and_plan(server, install):
     status, data = _request(
         server + "/api/admin/maintenance/backups/restore/execute",

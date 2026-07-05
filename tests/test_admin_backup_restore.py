@@ -415,6 +415,21 @@ def test_restore_preview_reports_new_conflict_identical_without_writing(tmp_path
     assert original_config  # sanity
 
 
+def test_restore_preview_defaults_to_replace_without_blocking(tmp_path):
+    root = _build_install(tmp_path)
+    _make_config_archive(root)
+    service = _service(root)
+    backup_id = service.list_backups()["backups"][0]["id"]
+
+    (root / "config" / "config.json").write_text('{"changed": true}')  # -> conflict
+
+    plan = service.create_restore_plan({"id": backup_id, "scope": "config"})
+    assert plan["conflict_policy"] == "replace"
+    assert plan["blocked"] is False
+    assert plan["summary"]["would_replace"] >= 1
+    assert any(f["action"] == "would_replace_conflict" for f in plan["files"])
+
+
 def test_restore_preview_blocks_invalid_checksum(tmp_path):
     root = _build_install(tmp_path)
     path = _make_config_archive(root)
