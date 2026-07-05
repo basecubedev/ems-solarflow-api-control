@@ -983,6 +983,7 @@ els.mqttRefresh.addEventListener("click", refreshMqttBrokers);
 
 const CONFIG_DRAFT_STORAGE_KEY = "ems-admin-config-draft";
 const CONFIG_DISMISSED_STORAGE_KEY = "ems-admin-config-dismissed";
+const CONFIG_FEATURES_STORAGE_KEY = "ems-admin-config-features";
 const DEFAULT_INVERTER_DISPLAY = "SolarFlow 800 Pro 2";
 const DEFAULT_GRID_METER_DISPLAY = "Shelly Pro 3EM";
 
@@ -994,6 +995,7 @@ const configEls = {
   manualForm: document.getElementById("config-manual-form"),
   manualName: document.getElementById("config-manual-name"),
   manualRole: document.getElementById("config-manual-role"),
+  manualType: document.getElementById("config-manual-type"),
   manualHost: document.getElementById("config-manual-host"),
   manualPort: document.getElementById("config-manual-port"),
   manualSerial: document.getElementById("config-manual-serial"),
@@ -1003,6 +1005,12 @@ const configEls = {
   draftEmpty: document.getElementById("config-draft-empty"),
   draftList: document.getElementById("config-draft-list"),
   preview: document.getElementById("config-preview"),
+  featureSettings: document.getElementById("config-feature-settings"),
+  featureLists: {
+    features: document.getElementById("config-feature-list-features"),
+    advanced: document.getElementById("config-feature-list-advanced"),
+  },
+  featureEmpty: document.getElementById("config-feature-empty"),
   templateStatus: document.getElementById("config-template-status"),
   templatePreview: document.getElementById("config-template-preview"),
   validationCard: document.getElementById("config-validation-card"),
@@ -1032,6 +1040,38 @@ const configDismissed = loadConfigDismissed();
 // Source-id -> latest discovered device, refreshed on every available render so
 // the add-button handler always has the current device record.
 const configAvailableIndex = new Map();
+
+// Catalog-driven setup feature settings. The catalog (fetched once) is the
+// reference for possible options; featureValues holds only user-changed values
+// keyed by their stable config path, so unopened features keep template
+// defaults. openFeatures tracks which accordion rows are expanded.
+let setupCatalog = null;
+const featureValues = loadFeatureValues();
+const openFeatures = new Set();
+const openHardwareCards = new Set();
+
+function loadFeatureValues() {
+  try {
+    const raw = window.localStorage.getItem(CONFIG_FEATURES_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed
+      : {};
+  } catch (err) {
+    return {};
+  }
+}
+
+function saveFeatureValues() {
+  try {
+    window.localStorage.setItem(
+      CONFIG_FEATURES_STORAGE_KEY,
+      JSON.stringify(featureValues)
+    );
+  } catch (err) {
+    /* localStorage may be unavailable; feature values still live in memory. */
+  }
+}
 
 function loadConfigDraft() {
   try {
@@ -1149,6 +1189,7 @@ function draftItemFromDevice(device, role) {
       ),
       role: "grid_meter",
       enabled: true,
+      grid_meter_type: "",
       ip: device.ip || "",
       port: device.port || "",
       serial_number: device.serial_number || "",
@@ -1201,6 +1242,7 @@ function selectGridMeter(sourceId) {
   );
   const item = draftItemFromDevice(device, "grid_meter");
   item.auto_selected = false;
+  syncGridMeterFeatureValues(item);
   configDraftItems.push(item);
   commitDraftChange();
 }
@@ -1208,6 +1250,7 @@ function selectGridMeter(sourceId) {
 function removeDraftItem(sourceId) {
   // Remember the removal so auto-config does not re-add it on the next poll.
   configDismissed.add(sourceId);
+  openHardwareCards.delete(sourceId);
   saveConfigDismissed();
   configDraftItems = configDraftItems.filter(
     (item) => item.source_id !== sourceId
@@ -1282,6 +1325,7 @@ function autoSelectGridMeter() {
   if (configDismissed.has(sourceId)) return false;
   const item = draftItemFromDevice(meters[0], "grid_meter");
   item.auto_selected = true;
+  syncGridMeterFeatureValues(item);
   configDraftItems.push(item);
   return true;
 }
@@ -1316,6 +1360,65 @@ function showManualError(text) {
   configEls.manualError.textContent = text || "";
 }
 
+function manualRole() {
+  return configEls.manualRole && configEls.manualRole.value === "grid_meter"
+    ? "grid_meter"
+    : "inverter";
+}
+
+function manualHardwareVariants(role) {
+  const variants =
+    setupCatalog &&
+    setupCatalog.hardware_variants &&
+    setupCatalog.hardware_variants[role];
+  return Array.isArray(variants) ? variants : [];
+}
+
+function selectedManualHardwareVariant() {
+  const select = configEls.manualType;
+  const variants = manualHardwareVariants(manualRole());
+  return (
+    variants.find((variant) => variant.id === select.value) ||
+    variants.find((variant) => variant.default) ||
+    variants[0] ||
+    null
+  );
+}
+
+function syncManualTypeDetails(resetPort) {
+  const variant = selectedManualHardwareVariant();
+  if (resetPort && configEls.manualPort) {
+    configEls.manualPort.value =
+      variant && variant.default_port != null ? String(variant.default_port) : "";
+  }
+}
+
+// Manual type choices are role-specific and come from the setup catalog.
+function populateManualTypes(resetSelection) {
+  const select = configEls.manualType;
+  if (!select) return;
+  const variants = manualHardwareVariants(manualRole());
+  const previous = select.value;
+  select.innerHTML = variants
+    .map(
+      (variant) =>
+        '<option value="' + escapeHtml(variant.id) + '">' +
+        escapeHtml(variant.label || variant.id) + "</option>"
+    )
+    .join("");
+  if (!resetSelection && variants.some((variant) => variant.id === previous)) {
+    select.value = previous;
+  } else {
+    const defaultVariant = variants.find((variant) => variant.default);
+    if (defaultVariant) select.value = defaultVariant.id;
+  }
+  syncManualTypeDetails(Boolean(resetSelection));
+}
+
+function resetManualTypeForRole() {
+  populateManualTypes(true);
+}
+
 // Build a draft item from hand-entered details for devices discovery can't reach.
 // Keyed by host:port so re-adding the same endpoint is a no-op, and flagged
 // `manual` so auto-config and staleness leave it alone.
@@ -1325,22 +1428,30 @@ function addManualDevice() {
     showManualError("Host / IP is required.");
     return;
   }
-  const role = configEls.manualRole.value === "grid_meter" ? "grid_meter" : "inverter";
+  const role = manualRole();
   const port = (configEls.manualPort.value || "").trim();
   const sourceId = "manual:" + host + ":" + (port || "");
   if (draftHasSource(sourceId)) {
     showManualError("A device with this host is already in the draft.");
     return;
   }
+  const variant = selectedManualHardwareVariant();
+  if (!variant) {
+    showManualError("Choose a supported connection type.");
+    return;
+  }
+  const selectedType = String(variant.id || "").trim();
   const displayBase =
     (configEls.manualName.value || "").trim() ||
-    (role === "grid_meter" ? DEFAULT_GRID_METER_DISPLAY : DEFAULT_INVERTER_DISPLAY);
+    (role === "grid_meter"
+      ? variant.label || DEFAULT_GRID_METER_DISPLAY
+      : DEFAULT_INVERTER_DISPLAY);
   if (role === "grid_meter") {
     configDraftItems = configDraftItems.filter((item) => item.role !== "grid_meter");
   }
   configDismissed.delete(sourceId);
   saveConfigDismissed();
-  configDraftItems.push({
+  const item = {
     source_id: sourceId,
     config_name: role === "grid_meter" ? "grid_meter" : nextInverterName(),
     display_name: uniqueDisplayName(displayBase, role),
@@ -1354,9 +1465,17 @@ function addManualDevice() {
     discovery_source: "manual",
     manual: true,
     auto_selected: false,
-  });
+  };
+  if (role === "grid_meter") {
+    item.grid_meter_type = selectedType;
+  } else {
+    item.connection_type = selectedType;
+  }
+  configDraftItems.push(item);
+  if (role === "grid_meter") syncGridMeterFeatureValues(item);
   showManualError("");
   configEls.manualForm.reset();
+  resetManualTypeForRole();
   commitDraftChange();
 }
 
@@ -1450,7 +1569,15 @@ function renderConfigDraft() {
   renderConfigPreview();
   renderConfigValidation();
   notifySetupStatus();
-  if (!configDraftItems.length) {
+  renderInverterList();
+}
+
+// The visible draft list only holds inverters; the grid meter is a separate
+// Hardware concept shown in its own selection area, never as an inverter row.
+function renderInverterList() {
+  if (!configEls.draftList) return;
+  const inverters = inverterItems();
+  if (!inverters.length) {
     configEls.draftList.hidden = true;
     configEls.draftList.innerHTML = "";
     configEls.draftEmpty.hidden = false;
@@ -1458,100 +1585,290 @@ function renderConfigDraft() {
   }
   configEls.draftEmpty.hidden = true;
   configEls.draftList.hidden = false;
-  configEls.draftList.innerHTML = configDraftItems
-    .map(renderConfigDraftCard)
-    .join("");
+  configEls.draftList.innerHTML = inverters.map(renderInverterDraftRow).join("");
 }
 
-function renderConfigDraftCard(item) {
-  const roleClass = "role-" + String(item.role).replace(/[^a-z_]/gi, "");
-  const id = escapeHtml(item.source_id);
-  const inverterIndex = inverterItems().findIndex(
-    (entry) => entry.source_id === item.source_id
-  );
-  const kind =
-    item.role === "grid_meter" ? "Grid meter" : "Inverter " + (inverterIndex + 1);
-  const title = item.display_name || item.device_type || item.config_name;
+// --- inverter draft rows (catalog-driven, compact hardware style) ---------
+// Inverters mirror the grid meter presentation: a collapsed summary row that
+// expands into compact label | control | description field rows. Field labels,
+// descriptions, types, units and ordering all come from the devices section of
+// the setup catalog; only name/ip/sn map to dedicated draft item properties,
+// the rest are stored as per-device overrides in item.config_values.
+
+const DEVICE_MAPPED_FIELD_KEYS = {
+  name: "config_name",
+  ip: "ip",
+  sn: "serial_number",
+};
+
+function deviceCatalogSection() {
+  if (!setupCatalog || !Array.isArray(setupCatalog.sections)) return null;
+  return setupCatalog.sections.find((section) => section.id === "devices") || null;
+}
+
+function deviceCatalogFields() {
+  const section = deviceCatalogSection();
+  return section && Array.isArray(section.fields) ? section.fields : [];
+}
+
+function deviceCatalogField(path) {
+  return deviceCatalogFields().find((field) => field.path === path) || null;
+}
+
+function deviceFieldKey(fieldPath) {
+  return String(fieldPath).replace(/^devices\[\]\./, "");
+}
+
+// Unset device values fall back to the release template prototype so the row
+// shows the same defaults the backend preview would generate.
+function deviceTemplatePrototype() {
+  if (!activeConfigTemplate || !Array.isArray(activeConfigTemplate.devices)) {
+    return {};
+  }
+  return activeConfigTemplate.devices[0] || {};
+}
+
+function deviceFieldValue(item, field) {
+  const key = deviceFieldKey(field.path);
+  const mapped = DEVICE_MAPPED_FIELD_KEYS[key];
+  if (mapped) return item[mapped];
+  if (
+    item.config_values &&
+    Object.prototype.hasOwnProperty.call(item.config_values, key)
+  ) {
+    return item.config_values[key];
+  }
+  const proto = deviceTemplatePrototype();
+  if (Object.prototype.hasOwnProperty.call(proto, key)) return proto[key];
+  return field.default != null ? field.default : "";
+}
+
+function updateDraftDeviceField(item, field, rawValue) {
+  const key = deviceFieldKey(field.path);
+  const mapped = DEVICE_MAPPED_FIELD_KEYS[key];
+  if (mapped) {
+    item[mapped] = rawValue;
+    return;
+  }
+  if (!item.config_values || typeof item.config_values !== "object") {
+    item.config_values = {};
+  }
+  item.config_values[key] = rawValue;
+}
+
+function inverterSummaryText(item) {
   const endpoint =
     String(item.ip || "") + (item.port ? ":" + String(item.port) : "");
-  const metadata = [
-    endpoint,
-    item.serial_number || "Serial missing",
-    item.api_family,
-    item.discovery_source,
-  ].filter(Boolean);
-  const autoBadge =
-    item.role === "grid_meter" && item.auto_selected
-      ? '<span class="config-auto-badge">Auto-selected</span>'
-      : "";
-  const staleBadge =
-    item.role === "grid_meter" && selectedGridMeterStale()
-      ? '<span class="stale-badge">stale</span>'
-      : "";
+  const serial = item.serial_number ? "SN " + item.serial_number : "Serial missing";
+  const parts = [item.config_name, endpoint, serial];
+  const outputField = deviceCatalogField("devices[].max_power");
+  if (outputField) {
+    const output = deviceFieldValue(item, outputField);
+    if (output !== "" && output != null) parts.push(String(output) + " W");
+  }
+  return parts.filter(Boolean).join(" · ");
+}
+
+function inverterModelText(item) {
+  return String(item.display_name || item.model || DEFAULT_INVERTER_DISPLAY);
+}
+
+function renderHardwareCard(card) {
+  const id = escapeHtml(card.sourceId);
+  const safe = String(card.sourceId).replace(/[^a-z0-9]/gi, "-");
+  const status = card.enabled ? "Enabled" : "Disabled";
+  const badges = (card.badges || []).join("");
   return (
-    '<article class="config-draft-card" data-source-id="' +
-    id +
-    '">' +
-    '<div class="config-draft-head">' +
-    '<div class="config-draft-identity"><span class="config-draft-kind ' +
-    escapeHtml(roleClass) +
-    '">' +
-    escapeHtml(kind) +
-    '</span><span class="config-draft-separator" aria-hidden="true">·</span>' +
-    '<span class="config-draft-title">' +
-    escapeHtml(title) +
-    "</span></div>" +
-    autoBadge +
-    staleBadge +
-    '<div class="config-draft-buttons">' +
-    '<button type="button" class="secondary-button compact config-draft-action config-draft-move" data-move="up" aria-label="Move up" title="Move up">↑</button>' +
-    '<button type="button" class="secondary-button compact config-draft-action config-draft-move" data-move="down" aria-label="Move down" title="Move down">↓</button>' +
-    '<button type="button" class="secondary-button compact config-draft-action config-draft-reset">Reset name</button>' +
-    '<button type="button" class="secondary-button compact config-draft-action config-draft-remove">Remove</button>' +
+    '<article class="hardware-card hardware-card-' + escapeHtml(card.kind) +
+    '" data-source-id="' + id + '"' +
+    (card.open ? ' data-open="true"' : "") + ">" +
+    '<div class="hardware-card-head">' +
+    '<button type="button" class="hardware-card-summary" ' +
+    card.toggleAttr + '="' + id + '"' +
+    ' aria-expanded="' + (card.open ? "true" : "false") + '"' +
+    ' aria-controls="hardware-body-' + safe + '">' +
+    '<span class="hardware-card-title">' + escapeHtml(card.title) + "</span>" +
+    '<span class="hardware-card-model">' + escapeHtml(card.model) + "</span>" +
+    '<span class="hardware-card-meta">' + escapeHtml(card.meta) + "</span>" +
+    "</button>" +
+    '<div class="hardware-card-actions">' +
+    '<span class="hardware-card-status">' + escapeHtml(status) + "</span>" +
+    badges +
+    '<button type="button" class="hardware-card-remove secondary-button compact ' +
+    card.removeClass + '">Remove</button>' +
+    '<button type="button" class="hardware-card-toggle" ' +
+    card.toggleAttr + '="' + id + '"' +
+    ' aria-expanded="' + (card.open ? "true" : "false") +
+    '" aria-controls="hardware-body-' + safe +
+    '" aria-label="' + (card.open ? "Collapse " : "Expand ") +
+    escapeHtml(card.title) + '">' +
+    '<span aria-hidden="true">' + (card.open ? "▾" : "▸") + "</span>" +
+    "</button>" +
     "</div>" +
     "</div>" +
-    '<div class="config-draft-fields">' +
-    '<label class="field"><span class="field-label">Config name</span>' +
-    '<input type="text" data-field="config_name" value="' +
-    escapeHtml(item.config_name) +
-    '"></label>' +
-    '<label class="field"><span class="field-label">Display name</span>' +
-    '<input type="text" data-field="display_name" value="' +
-    escapeHtml(item.display_name) +
-    '"></label>' +
-    '<label class="field"><span class="field-label">Role</span>' +
-    '<select data-field="role">' +
-    '<option value="inverter"' +
-    (item.role === "inverter" ? " selected" : "") +
-    ">inverter</option>" +
-    '<option value="grid_meter"' +
-    (item.role === "grid_meter" ? " selected" : "") +
-    ">grid_meter</option>" +
-    "</select></label>" +
-    '<label class="config-draft-toggle"><input type="checkbox" data-field="enabled"' +
-    (item.enabled ? " checked" : "") +
-    "><span>Enabled</span></label>" +
+    '<div class="hardware-card-body" id="hardware-body-' + safe + '"' +
+    (card.open ? "" : " hidden") + ">" +
+    (card.open ? card.body : "") +
     "</div>" +
-    '<details class="config-device-details"><summary><span>Device details</span>' +
-    '<span class="config-device-meta-preview">' +
-    escapeHtml(metadata.join(" · ")) +
-    "</span></summary>" +
-    '<div class="config-device-details-grid">' +
-    fact("IP", escapeHtml(item.ip)) +
-    fact("Port", escapeHtml(item.port)) +
-    fact(
-      "Serial",
-      item.serial_number
-        ? '<span class="v">' + escapeHtml(item.serial_number) + "</span>"
-        : '<span class="v missing">missing</span>',
-      true
-    ) +
-    fact("Type", escapeHtml(item.device_type)) +
-    fact("API family", escapeHtml(item.api_family)) +
-    fact("Source", escapeHtml(item.discovery_source)) +
-    '</div><p class="future-note">Advanced parameters coming later.</p></details>' +
     "</article>"
   );
+}
+
+function renderInverterDraftRow(item, index) {
+  const safe = String(item.source_id).replace(/[^a-z0-9]/gi, "-");
+  const open = openHardwareCards.has(item.source_id);
+  const title = "Inverter " + (index + 1);
+  return renderHardwareCard({
+    kind: "inverter",
+    sourceId: item.source_id,
+    title,
+    model: inverterModelText(item),
+    meta: inverterSummaryText(item),
+    enabled: item.enabled,
+    open,
+    toggleAttr: "data-inverter-toggle",
+    removeClass: "config-draft-remove",
+    body: renderInverterBody(item, safe),
+  });
+}
+
+function renderHardwareEnabledRow(dataAttr, id, enabled, description) {
+  const inputId = "enabled-" + String(id).replace(/[^a-z0-9]/gi, "-");
+  return (
+    '<div class="feature-fields">' +
+    '<label class="feature-field-row" for="' + inputId + '">' +
+    '<span class="feature-field-label">Enabled</span>' +
+    '<span class="feature-field-control">' +
+    '<input type="checkbox" id="' + inputId + '" class="feature-input"' +
+    " " + dataAttr + '="' + escapeHtml(String(id)) + '"' +
+    (enabled ? " checked" : "") + ">" +
+    "</span>" +
+    '<span class="feature-field-desc">' + escapeHtml(description) + "</span>" +
+    "</label>" +
+    "</div>"
+  );
+}
+
+function renderInverterBody(item, safe) {
+  return (
+    renderHardwareEnabledRow(
+      "data-inverter-enable",
+      item.source_id,
+      item.enabled,
+      "Include this inverter in the generated EMS config."
+    ) +
+    renderInverterFields(item, safe) +
+    renderInverterActions()
+  );
+}
+
+function renderInverterFields(item, safe) {
+  const byLevel = { normal: [], advanced: [], expert: [] };
+  for (const field of deviceCatalogFields()) {
+    if (FEATURE_LEVELS_HIDDEN.has(field.level)) continue;
+    const level =
+      field.level === "advanced" || field.level === "expert" ? field.level : "normal";
+    byLevel[level].push(field);
+  }
+  if (!byLevel.normal.length && !byLevel.advanced.length && !byLevel.expert.length) {
+    return '<p class="future-note">Device settings load with the release template.</p>';
+  }
+  let html =
+    '<div class="feature-fields">' +
+    byLevel.normal.map((field) => renderDeviceField(item, field, safe)).join("") +
+    "</div>";
+  if (byLevel.advanced.length) {
+    html +=
+      '<details class="feature-advanced"><summary>Advanced settings</summary>' +
+      '<div class="feature-fields">' +
+      byLevel.advanced.map((field) => renderDeviceField(item, field, safe)).join("") +
+      "</div></details>";
+  }
+  if (byLevel.expert.length) {
+    html +=
+      '<details class="feature-expert">' +
+      "<summary>Developer / expert settings</summary>" +
+      '<p class="feature-expert-warning">Changing expert tuning values can affect ' +
+      "EMS control stability. Only change these values if you know why they are " +
+      "needed.</p>" +
+      '<div class="feature-fields">' +
+      byLevel.expert.map((field) => renderDeviceField(item, field, safe)).join("") +
+      "</div></details>";
+  }
+  return html;
+}
+
+function renderDeviceField(item, field, safe) {
+  const key = deviceFieldKey(field.path);
+  const inputId = "device-" + safe + "-" + key.replace(/[^a-z0-9]/gi, "-");
+  const unit = field.unit
+    ? '<span class="feature-unit">' + escapeHtml(field.unit) + "</span>"
+    : "";
+  const desc = field.description
+    ? '<span class="feature-field-desc">' + escapeHtml(field.description) + "</span>"
+    : '<span class="feature-field-desc"></span>';
+  return (
+    '<label class="feature-field-row" for="' + inputId + '">' +
+    '<span class="feature-field-label">' + escapeHtml(field.label) + "</span>" +
+    '<span class="feature-field-control">' +
+    renderDeviceControl(item, field, inputId) +
+    unit +
+    "</span>" +
+    desc +
+    "</label>"
+  );
+}
+
+function renderDeviceControl(item, field, inputId) {
+  const value = deviceFieldValue(item, field);
+  const common =
+    ' id="' + inputId + '" data-device-field="' + escapeHtml(field.path) + '"';
+  if (field.type === "boolean") {
+    return (
+      '<input type="checkbox"' + common + ' class="feature-input"' +
+      (value ? " checked" : "") + ">"
+    );
+  }
+  if (Array.isArray(field.options)) {
+    const current = String(value == null ? "" : value);
+    const options = field.options
+      .map((option) => {
+        const opt = String(option);
+        return (
+          '<option value="' + escapeHtml(opt) + '"' +
+          (opt === current ? " selected" : "") + ">" +
+          escapeHtml(opt) + "</option>"
+        );
+      })
+      .join("");
+    return "<select" + common + ' class="feature-input">' + options + "</select>";
+  }
+  const inputType =
+    field.type === "number" || field.type === "integer" ? "number" : "text";
+  return (
+    '<input type="' + inputType + '"' + common + ' class="feature-input"' +
+    ' value="' + escapeHtml(formatFeatureValue(value)) + '">'
+  );
+}
+
+function renderInverterActions() {
+  return (
+    '<div class="inverter-row-actions">' +
+    '<button type="button" class="secondary-button compact config-draft-move" data-move="up" aria-label="Move up" title="Move up">↑</button>' +
+    '<button type="button" class="secondary-button compact config-draft-move" data-move="down" aria-label="Move down" title="Move down">↓</button>' +
+    '<button type="button" class="secondary-button compact config-draft-reset">Reset name</button>' +
+    "</div>"
+  );
+}
+
+// Update the collapsed summary in place so editing a field does not force a
+// full list re-render (which would drop input focus mid-typing).
+function updateInverterSummary(row, item) {
+  if (!row) return;
+  const desc = row.querySelector(".hardware-card-meta");
+  if (desc) desc.textContent = inverterSummaryText(item);
+  const status = row.querySelector(".hardware-card-status");
+  if (status) status.textContent = item.enabled ? "Enabled" : "Disabled";
 }
 
 function configValidationHints() {
@@ -1614,7 +1931,15 @@ function renderGridMeterSelection() {
   const el = configEls.gridMeterSelection;
   if (!el) return;
   const meters = supportedGridMeters();
-  if (gridMeterItem() || meters.length === 1) {
+  const selected = gridMeterItem();
+  if (selected) {
+    // The grid meter no longer renders as a draft card, so its compact summary
+    // here keeps a change/remove path without regressing the Grid meter area.
+    el.hidden = false;
+    el.innerHTML = renderSelectedGridMeter(selected);
+    return;
+  }
+  if (meters.length === 1) {
     el.hidden = true;
     el.innerHTML = "";
     return;
@@ -1665,6 +1990,490 @@ function renderGridMeterSelection() {
     options +
     "</div>" +
     "</div>";
+}
+
+function gridMeterModelText(meter) {
+  const type = gridMeterType(meter, "shelly");
+  const variant = gridMeterVariants()[type];
+  return (variant && variant.label) || meter.display_name || DEFAULT_GRID_METER_DISPLAY;
+}
+
+function renderSelectedGridMeter(meter) {
+  const enabled = meter.enabled !== false;
+  const endpoint =
+    String(meter.ip || "") + (meter.port ? ":" + String(meter.port) : "");
+  const badges = [];
+  if (meter.auto_selected) {
+    badges.push('<span class="config-auto-badge">Auto-selected</span>');
+  }
+  if (selectedGridMeterStale()) {
+    badges.push('<span class="stale-badge">stale</span>');
+  }
+  return renderHardwareCard({
+    kind: "grid-meter",
+    sourceId: meter.source_id,
+    title: "Grid meter",
+    model: gridMeterModelText(meter),
+    meta: endpoint,
+    enabled,
+    open: openHardwareCards.has(meter.source_id),
+    toggleAttr: "data-grid-toggle",
+    removeClass: "config-grid-remove",
+    badges,
+    body: renderGridMeterBody(meter),
+  });
+}
+
+function gridMeterCatalogSection() {
+  if (!setupCatalog || !Array.isArray(setupCatalog.sections)) return null;
+  return setupCatalog.sections.find((section) => section.id === "grid_meter") || null;
+}
+
+function renderGridMeterBody(meter) {
+  return (
+    renderHardwareEnabledRow(
+      "data-grid-enable",
+      meter.source_id,
+      meter.enabled !== false,
+      "Include this grid meter in the generated EMS config."
+    ) +
+    renderGridMeterFields(meter)
+  );
+}
+
+function renderGridMeterFields(meter) {
+  const section = gridMeterCatalogSection();
+  const fields = section
+    ? visibleFeatureFields(section, gridMeterType(meter, "shelly"))
+    : [];
+  const standard = fields.filter(
+    (field) =>
+      field.path !== "grid_meter.type" && field.path !== "grid_meter.ip"
+  );
+  const byLevel = { normal: [], advanced: [], expert: [] };
+  for (const field of standard) {
+    const level =
+      field.level === "advanced" || field.level === "expert" ? field.level : "normal";
+    byLevel[level].push(field);
+  }
+  let html =
+    '<div class="feature-fields">' +
+    renderGridMeterTypeField(meter) +
+    renderGridMeterEndpointField(
+      "ip",
+      "Host / IP",
+      meter.ip,
+      "Address of the meter."
+    ) +
+    renderGridMeterEndpointField(
+      "port",
+      "Port",
+      meter.port,
+      "HTTP port."
+    ) +
+    byLevel.normal.map(renderFeatureField).join("") +
+    "</div>";
+  if (byLevel.advanced.length) {
+    html +=
+      '<details class="feature-advanced"><summary>Advanced settings</summary>' +
+      '<div class="feature-fields">' +
+      byLevel.advanced.map(renderFeatureField).join("") +
+      "</div></details>";
+  }
+  if (byLevel.expert.length) {
+    html +=
+      '<details class="feature-expert"><summary>Developer / expert settings</summary>' +
+      '<div class="feature-fields">' +
+      byLevel.expert.map(renderFeatureField).join("") +
+      "</div></details>";
+  }
+  return html;
+}
+
+function renderGridMeterTypeField(meter) {
+  const section = gridMeterCatalogSection();
+  const field = section && section.fields.find(
+    (item) => item.path === "grid_meter.type"
+  );
+  if (!field) return "";
+  return (
+    '<label class="feature-field-row" for="grid-meter-type">' +
+    '<span class="feature-field-label">Meter type</span>' +
+    '<span class="feature-field-control">' +
+    renderGridTypeSelect(field, "grid-meter-type", gridMeterType(meter, "shelly")) +
+    "</span>" +
+    '<span class="feature-field-desc">Hardware/API family used for config generation.</span>' +
+    "</label>"
+  );
+}
+
+function renderGridMeterEndpointField(key, label, value, description) {
+  const inputId = "grid-meter-" + key;
+  return (
+    '<label class="feature-field-row" for="' + inputId + '">' +
+    '<span class="feature-field-label">' + escapeHtml(label) + "</span>" +
+    '<span class="feature-field-control">' +
+    '<input type="' + (key === "port" ? "number" : "text") + '"' +
+    ' id="' + inputId + '" class="feature-input" data-grid-field="' +
+    escapeHtml(key) + '" value="' + escapeHtml(String(value || "")) + '">' +
+    "</span>" +
+    '<span class="feature-field-desc">' + escapeHtml(description) + "</span>" +
+    "</label>"
+  );
+}
+
+// --- catalog-driven feature settings -------------------------------------
+// The setup UI renders a compact accordion from catalog metadata instead of a
+// wall of forms. Each section is one collapsible row; normal fields show first,
+// advanced and expert fields sit in nested collapsed areas that stay closed by
+// default. The catalog is the reference for possible options; the committed
+// template is only the default example. Every dynamic value passes through
+// escapeHtml before it reaches the DOM.
+
+const FEATURE_LEVELS_HIDDEN = new Set(["deprecated", "internal"]);
+
+async function loadSetupCatalog() {
+  try {
+    const res = await fetch("/api/setup/config/catalog");
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data && data.error ? data.error : "catalog unavailable");
+    }
+    setupCatalog = data;
+  } catch (err) {
+    setupCatalog = null;
+  }
+  renderFeatureSettings();
+  populateManualTypes(true);
+  renderGridMeterSelection();
+  renderInverterList();
+}
+
+function featureSections() {
+  if (!setupCatalog || !Array.isArray(setupCatalog.sections)) return [];
+  return setupCatalog.sections.filter(
+    (section) => section.id !== "devices" && section.id !== "grid_meter"
+  );
+}
+
+function fieldCurrentValue(field) {
+  if (Object.prototype.hasOwnProperty.call(featureValues, field.path)) {
+    return featureValues[field.path];
+  }
+  if (field.secret) return "";
+  return field.default;
+}
+
+function featureEnabledPath(section) {
+  const path = section.enabled_path;
+  if (typeof path === "string" && path) return path;
+  if (Array.isArray(path) && path.length) return path.join(".");
+  return null;
+}
+
+function isFeatureEnabled(section) {
+  const path = featureEnabledPath(section);
+  if (!path) return null;
+  const field = (section.fields || []).find((item) => item.path === path);
+  const value = Object.prototype.hasOwnProperty.call(featureValues, path)
+    ? featureValues[path]
+    : field
+    ? field.default
+    : false;
+  return Boolean(value);
+}
+
+function gridMeterVariants() {
+  return (setupCatalog && setupCatalog.grid_meter_variants) || {};
+}
+
+function selectedGridMeterType() {
+  const value = fieldCurrentValue({ path: "grid_meter.type", default: "shelly" });
+  return String(value == null ? "shelly" : value);
+}
+
+// Only the fields for the selected grid meter variant are shown, so switching
+// the meter type updates which connection fields appear.
+function gridVariantFields(section, selectedType) {
+  const variant = gridMeterVariants()[selectedType || selectedGridMeterType()];
+  const allowed = new Set(variant ? variant.fields : []);
+  return section.fields.filter(
+    (field) => field.path === "grid_meter.type" || allowed.has(field.path)
+  );
+}
+
+function visibleFeatureFields(section, selectedType) {
+  const fields =
+    section.id === "grid_meter"
+      ? gridVariantFields(section, selectedType)
+      : section.fields;
+  const enabledPath = featureEnabledPath(section);
+  return fields.filter((field) => {
+    if (field.path === enabledPath) return false; // shown as the row toggle
+    if (FEATURE_LEVELS_HIDDEN.has(field.level)) return false;
+    return true;
+  });
+}
+
+function featureStatusText(section) {
+  const enabled = isFeatureEnabled(section);
+  if (enabled !== null) return enabled ? "Enabled" : "Disabled";
+  if (section.id === "grid_meter") {
+    const variant = gridMeterVariants()[selectedGridMeterType()];
+    return variant ? variant.label : selectedGridMeterType();
+  }
+  return "Configured";
+}
+
+// Top-level setup groups render in order: Hardware, Features, Advanced/System.
+// Grid meter and devices live under Hardware; devices keep their dedicated draft
+// UI, so only the grid meter section renders as a Hardware feature row here.
+const SETUP_GROUP_ORDER = ["hardware", "features", "advanced"];
+
+function setupGroupOrder() {
+  if (setupCatalog && Array.isArray(setupCatalog.groups) && setupCatalog.groups.length) {
+    return setupCatalog.groups.map((group) => group.id);
+  }
+  return SETUP_GROUP_ORDER;
+}
+
+function sectionsForGroup(groupId) {
+  return featureSections().filter(
+    (section) => (section.setup_group || "features") === groupId
+  );
+}
+
+function renderFeatureSettings() {
+  const lists = configEls.featureLists || {};
+  if (!Object.values(lists).some(Boolean)) return;
+  const hasCatalog = featureSections().length > 0;
+  for (const groupId of setupGroupOrder()) {
+    const list = lists[groupId];
+    if (!list) continue;
+    const groupSections = sectionsForGroup(groupId);
+    list.hidden = groupSections.length === 0;
+    list.innerHTML = groupSections.map(renderFeatureRow).join("");
+  }
+  if (configEls.featureEmpty) configEls.featureEmpty.hidden = hasCatalog;
+}
+
+function renderFeatureRow(section) {
+  const id = escapeHtml(section.id);
+  const open = openFeatures.has(section.id);
+  const enabled = isFeatureEnabled(section);
+  const status = escapeHtml(featureStatusText(section));
+  const toggle =
+    enabled === null
+      ? ""
+      : '<input type="checkbox" class="feature-enable"' +
+        ' data-feature-enable="' + id + '"' +
+        (enabled ? " checked" : "") +
+        ' aria-label="Enable ' + escapeHtml(section.title) + '">';
+  return (
+    '<div class="feature-row" role="listitem" data-feature-id="' + id + '"' +
+    (open ? ' data-open="true"' : "") + ">" +
+    '<div class="feature-row-head">' +
+    toggle +
+    '<button type="button" class="feature-row-summary"' +
+    ' data-feature-toggle="' + id + '"' +
+    ' aria-expanded="' + (open ? "true" : "false") + '"' +
+    ' aria-controls="feature-body-' + id + '">' +
+    '<span class="feature-title">' + escapeHtml(section.title) + "</span>" +
+    '<span class="feature-desc">' +
+    escapeHtml(section.description || section.summary || "") + "</span>" +
+    '<span class="feature-status">' + status + "</span>" +
+    '<span class="feature-caret" aria-hidden="true">' + (open ? "▾" : "▸") + "</span>" +
+    "</button>" +
+    "</div>" +
+    '<div class="feature-body" id="feature-body-' + id + '"' +
+    (open ? "" : " hidden") + ">" +
+    (open ? renderFeatureBody(section) : "") +
+    "</div>" +
+    "</div>"
+  );
+}
+
+function renderFeatureBody(section) {
+  const byLevel = { normal: [], advanced: [], expert: [] };
+  for (const field of visibleFeatureFields(section)) {
+    const level =
+      field.level === "advanced" || field.level === "expert" ? field.level : "normal";
+    byLevel[level].push(field);
+  }
+  let html =
+    '<div class="feature-fields">' +
+    byLevel.normal.map(renderFeatureField).join("") +
+    "</div>";
+  if (byLevel.advanced.length) {
+    html +=
+      '<details class="feature-advanced"><summary>Advanced settings</summary>' +
+      '<div class="feature-fields">' +
+      byLevel.advanced.map(renderFeatureField).join("") +
+      "</div></details>";
+  }
+  if (byLevel.expert.length) {
+    html +=
+      '<details class="feature-expert">' +
+      "<summary>Developer / expert settings</summary>" +
+      '<p class="feature-expert-warning">Changing expert tuning values can affect ' +
+      "EMS control stability. Only change these values if you know why they are " +
+      "needed.</p>" +
+      '<div class="feature-fields">' +
+      byLevel.expert.map(renderFeatureField).join("") +
+      "</div></details>";
+  }
+  return html;
+}
+
+// One compact settings row per field: label | control (+ unit) | description.
+// The grid columns are set in CSS so long labels, values and descriptions line
+// up and wrap cleanly instead of stacking into card-like tiles.
+function renderFeatureField(field) {
+  const inputId = "feature-field-" + field.path.replace(/[^a-z0-9]/gi, "-");
+  const unit = field.unit
+    ? '<span class="feature-unit">' + escapeHtml(field.unit) + "</span>"
+    : "";
+  const desc = field.description
+    ? '<span class="feature-field-desc">' + escapeHtml(field.description) + "</span>"
+    : '<span class="feature-field-desc"></span>';
+  return (
+    '<label class="feature-field-row" for="' + inputId + '">' +
+    '<span class="feature-field-label">' + escapeHtml(field.label) + "</span>" +
+    '<span class="feature-field-control">' +
+    renderFeatureControl(field, inputId) +
+    unit +
+    "</span>" +
+    desc +
+    "</label>"
+  );
+}
+
+function renderFeatureControl(field, inputId) {
+  const path = escapeHtml(field.path);
+  const value = fieldCurrentValue(field);
+  const common = ' id="' + inputId + '" data-feature-path="' + path + '"';
+  if (field.path === "grid_meter.type") {
+    return renderGridTypeSelect(field, inputId);
+  }
+  if (field.type === "boolean") {
+    return (
+      '<input type="checkbox"' + common + ' class="feature-input"' +
+      (value ? " checked" : "") + ">"
+    );
+  }
+  if (field.type === "select" && Array.isArray(field.options)) {
+    const current = String(value == null ? "" : value);
+    const options = field.options
+      .map((option) => {
+        const opt = String(option);
+        return (
+          '<option value="' + escapeHtml(opt) + '"' +
+          (opt === current ? " selected" : "") + ">" +
+          escapeHtml(opt) + "</option>"
+        );
+      })
+      .join("");
+    return "<select" + common + ' class="feature-input">' + options + "</select>";
+  }
+  const inputType = field.secret
+    ? "password"
+    : field.type === "number" || field.type === "integer"
+    ? "number"
+    : "text";
+  return (
+    '<input type="' + inputType + '"' + common + ' class="feature-input"' +
+    ' value="' + escapeHtml(formatFeatureValue(value)) + '">'
+  );
+}
+
+function renderGridTypeSelect(field, inputId, selectedValue) {
+  const variants = gridMeterVariants();
+  const current = selectedValue || selectedGridMeterType();
+  const options = Object.keys(variants)
+    .map((key) => {
+      return (
+        '<option value="' + escapeHtml(key) + '"' +
+        (key === current ? " selected" : "") + ">" +
+        escapeHtml(variants[key].label) + "</option>"
+      );
+    })
+    .join("");
+  return (
+    '<select id="' + inputId + '" data-feature-path="grid_meter.type"' +
+    ' data-feature-variant-select class="feature-input">' + options + "</select>"
+  );
+}
+
+function formatFeatureValue(value) {
+  if (value === null || value === undefined) return "";
+  if (Array.isArray(value)) return value.join(", ");
+  return String(value);
+}
+
+function updateFeatureValue(path, value) {
+  featureValues[path] = value;
+  saveFeatureValues();
+  renderConfigPreview();
+}
+
+function handleFeatureListClick(event) {
+  const toggle = event.target.closest("[data-feature-toggle]");
+  if (!toggle) return;
+  const id = toggle.getAttribute("data-feature-toggle");
+  if (openFeatures.has(id)) openFeatures.delete(id);
+  else openFeatures.add(id);
+  renderFeatureSettings();
+}
+
+function handleFeatureListChange(event) {
+  const target = event.target;
+  if (target.matches("[data-feature-enable]")) {
+    const id = target.getAttribute("data-feature-enable");
+    const section = featureSections().find((item) => item.id === id);
+    const path = section ? featureEnabledPath(section) : null;
+    if (!path) return;
+    featureValues[path] = target.checked;
+    saveFeatureValues();
+    renderFeatureSettings();
+    renderConfigPreview();
+    return;
+  }
+  if (target.matches("[data-feature-variant-select]")) {
+    featureValues["grid_meter.type"] = target.value;
+    saveFeatureValues();
+    renderFeatureSettings();
+    renderConfigPreview();
+    return;
+  }
+  if (target.matches("[data-feature-path]")) {
+    const path = target.getAttribute("data-feature-path");
+    updateFeatureValue(path, target.type === "checkbox" ? target.checked : target.value);
+  }
+}
+
+function handleFeatureListInput(event) {
+  const target = event.target;
+  if (
+    !target.matches("[data-feature-path]") ||
+    target.matches("[data-feature-variant-select]") ||
+    target.type === "checkbox"
+  ) {
+    return;
+  }
+  featureValues[target.getAttribute("data-feature-path")] = target.value;
+  saveFeatureValues();
+  renderConfigPreview();
+}
+
+function initFeatureSettings() {
+  const lists = Object.values(configEls.featureLists || {}).filter(Boolean);
+  if (!lists.length) return;
+  for (const list of lists) {
+    list.addEventListener("click", handleFeatureListClick);
+    list.addEventListener("change", handleFeatureListChange);
+    list.addEventListener("input", handleFeatureListInput);
+  }
+  renderFeatureSettings();
 }
 
 function renderConfigValidation() {
@@ -1725,13 +2534,35 @@ function cloneConfigValue(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
+const GRID_METER_TYPE_CHOICES = new Set([
+  "shelly",
+  "shelly_3em_gen1",
+  "ecotracker",
+  "tasmota_http",
+  "zendure_smartmeter_d0",
+  "mqtt",
+  "ha",
+]);
+
+// An explicit meter type (chosen manually) wins over discovery inference so a
+// manual grid meter never has to be guessed from IP/port.
 function gridMeterType(item, fallback) {
+  const explicit = String(item.grid_meter_type || "").trim().toLowerCase();
+  if (GRID_METER_TYPE_CHOICES.has(explicit)) return explicit;
   const description = (item.device_type + " " + item.api_family).toLowerCase();
   if (description.includes("ecotracker")) return "ecotracker";
   if (description.includes("3em") && description.includes("gen1")) {
     return "shelly_3em_gen1";
   }
   return fallback || "shelly";
+}
+
+function syncGridMeterFeatureValues(item) {
+  const type = gridMeterType(item, "shelly");
+  item.grid_meter_type = type;
+  featureValues["grid_meter.type"] = type;
+  featureValues["grid_meter.ip"] = item.ip || "";
+  saveFeatureValues();
 }
 
 function configDraftPreview() {
@@ -1797,6 +2628,7 @@ async function requestConfigPreview() {
       body: JSON.stringify({
         devices: configDraftItems,
         supported_grid_meter_count: supportedGridMeters().length,
+        features: featureValues,
       }),
     });
     const data = await res.json();
@@ -1847,6 +2679,7 @@ function configExportBody(overwrite) {
   return {
     devices: configDraftItems,
     supported_grid_meter_count: supportedGridMeters().length,
+    features: featureValues,
     overwrite: Boolean(overwrite),
   };
 }
@@ -1961,9 +2794,72 @@ if (configEls.availableList) {
 
 if (configEls.gridMeterSelection) {
   configEls.gridMeterSelection.addEventListener("click", (event) => {
-    const button = event.target.closest(".config-grid-use");
-    if (!button) return;
-    selectGridMeter(button.getAttribute("data-source-id"));
+    const toggle = event.target.closest("[data-grid-toggle]");
+    if (toggle) {
+      const sourceId = toggle.getAttribute("data-grid-toggle");
+      if (openHardwareCards.has(sourceId)) openHardwareCards.delete(sourceId);
+      else openHardwareCards.add(sourceId);
+      renderGridMeterSelection();
+      return;
+    }
+    const use = event.target.closest(".config-grid-use");
+    if (use) {
+      selectGridMeter(use.getAttribute("data-source-id"));
+      return;
+    }
+    const remove = event.target.closest(".config-grid-remove");
+    if (remove) {
+      const card = remove.closest("[data-source-id]");
+      if (card) removeDraftItem(card.getAttribute("data-source-id"));
+    }
+  });
+  configEls.gridMeterSelection.addEventListener("change", (event) => {
+    const target = event.target;
+    const card = target.closest("[data-source-id]");
+    const meter = card && findDraftItem(card.getAttribute("data-source-id"));
+    if (!meter) return;
+    if (target.matches("[data-grid-enable]")) {
+      meter.enabled = target.checked;
+      saveConfigDraft();
+      renderConfigDraft();
+      renderConfigAvailable();
+      return;
+    }
+    if (target.matches("[data-feature-variant-select]")) {
+      meter.grid_meter_type = target.value;
+      featureValues["grid_meter.type"] = target.value;
+      saveConfigDraft();
+      saveFeatureValues();
+      renderGridMeterSelection();
+      renderConfigPreview();
+      return;
+    }
+    if (target.matches("[data-feature-path]")) {
+      handleFeatureListChange(event);
+    }
+  });
+  configEls.gridMeterSelection.addEventListener("input", (event) => {
+    const target = event.target;
+    const card = target.closest("[data-source-id]");
+    const meter = card && findDraftItem(card.getAttribute("data-source-id"));
+    if (!meter) return;
+    const key = target.getAttribute("data-grid-field");
+    if (key) {
+      meter[key] = target.value;
+      if (key === "ip") {
+        featureValues["grid_meter.ip"] = target.value;
+        saveFeatureValues();
+      }
+      saveConfigDraft();
+      const meta = card.querySelector(".hardware-card-meta");
+      if (meta) {
+        meta.textContent =
+          String(meter.ip || "") + (meter.port ? ":" + String(meter.port) : "");
+      }
+      renderConfigPreview();
+      return;
+    }
+    handleFeatureListInput(event);
   });
 }
 
@@ -1972,6 +2868,15 @@ if (configEls.manualForm) {
     event.preventDefault();
     addManualDevice();
   });
+}
+
+if (configEls.manualRole) {
+  configEls.manualRole.addEventListener("change", resetManualTypeForRole);
+  resetManualTypeForRole();
+}
+
+if (configEls.manualType) {
+  configEls.manualType.addEventListener("change", () => syncManualTypeDetails(true));
 }
 
 if (configEls.download) {
@@ -1984,9 +2889,17 @@ if (configEls.apply) {
 
 if (configEls.draftList) {
   configEls.draftList.addEventListener("click", (event) => {
-    const card = event.target.closest(".config-draft-card");
-    if (!card) return;
-    const sourceId = card.getAttribute("data-source-id");
+    const toggle = event.target.closest("[data-inverter-toggle]");
+    if (toggle) {
+      const sourceId = toggle.getAttribute("data-inverter-toggle");
+      if (openHardwareCards.has(sourceId)) openHardwareCards.delete(sourceId);
+      else openHardwareCards.add(sourceId);
+      renderInverterList();
+      return;
+    }
+    const row = event.target.closest("[data-source-id]");
+    if (!row) return;
+    const sourceId = row.getAttribute("data-source-id");
     if (event.target.closest(".config-draft-remove")) {
       removeDraftItem(sourceId);
     } else if (event.target.closest(".config-draft-reset")) {
@@ -1999,46 +2912,48 @@ if (configEls.draftList) {
     }
   });
 
-  // Text inputs update state without redraw so focus is kept while typing;
-  // only the preview and validation refresh. Role changes redraw (badge/order).
+  // Text/number inputs update state without a full redraw so focus is kept
+  // while typing; only the preview, validation, and collapsed summary refresh.
   configEls.draftList.addEventListener("input", (event) => {
-    const field = event.target.getAttribute("data-field");
-    if (!field || field === "role" || field === "enabled") return;
-    const card = event.target.closest(".config-draft-card");
-    const item = card && findDraftItem(card.getAttribute("data-source-id"));
-    if (!item) return;
-    item[field] = event.target.value;
+    const target = event.target;
+    const fieldPath = target.getAttribute("data-device-field");
+    if (!fieldPath || target.type === "checkbox") return;
+    const row = target.closest("[data-source-id]");
+    const item = row && findDraftItem(row.getAttribute("data-source-id"));
+    const field = item && deviceCatalogField(fieldPath);
+    if (!field) return;
+    updateDraftDeviceField(item, field, target.value);
     saveConfigDraft();
     renderConfigPreview();
     renderConfigValidation();
-    if (field === "display_name") {
-      const title = card.querySelector(".config-draft-title");
-      if (title) title.textContent = item.display_name || item.device_type || item.config_name;
-    }
+    updateInverterSummary(row, item);
   });
 
   configEls.draftList.addEventListener("change", (event) => {
-    const field = event.target.getAttribute("data-field");
-    const card = event.target.closest(".config-draft-card");
-    const item = card && findDraftItem(card.getAttribute("data-source-id"));
-    if (!item || !field) return;
-    if (field === "enabled") {
-      item.enabled = event.target.checked;
+    const target = event.target;
+    const row = target.closest("[data-source-id]");
+    const item = row && findDraftItem(row.getAttribute("data-source-id"));
+    if (!item) return;
+    if (target.matches("[data-inverter-enable]")) {
+      item.enabled = target.checked;
       saveConfigDraft();
+      renderInverterList();
       renderConfigPreview();
-    } else if (field === "role") {
-      if (event.target.value === "grid_meter") {
-        // Keep a single primary grid meter: demote any other one to nothing by
-        // removing it before this item takes the grid_meter role.
-        configDraftItems = configDraftItems.filter(
-          (entry) => entry === item || entry.role !== "grid_meter"
-        );
-        item.config_name = "grid_meter";
-        item.auto_selected = false;
-      }
-      item.role = event.target.value;
-      commitDraftChange();
+      return;
     }
+    const fieldPath = target.getAttribute("data-device-field");
+    if (!fieldPath) return;
+    // Text/number inputs already committed on input; only checkboxes/selects
+    // need their final value applied here.
+    if (target.tagName !== "SELECT" && target.type !== "checkbox") return;
+    const field = deviceCatalogField(fieldPath);
+    if (!field) return;
+    const value = target.type === "checkbox" ? target.checked : target.value;
+    updateDraftDeviceField(item, field, value);
+    saveConfigDraft();
+    renderConfigPreview();
+    renderConfigValidation();
+    updateInverterSummary(row, item);
   });
 }
 
@@ -3451,6 +4366,9 @@ async function loadActiveConfigTemplate(expectedTag) {
     configEls.templatePreview.textContent = JSON.stringify(data.template, null, 2);
   }
   renderConfigPreview();
+  // Device rows fall back to template prototype defaults for unset values, so
+  // refresh them once the prepared template is available.
+  renderInverterList();
   return data;
 }
 
@@ -3616,7 +4534,9 @@ function initSetupWizard() {
     saved = null;
   }
   setActiveStep(saved || "release");
+  initFeatureSettings();
   loadReleases();
+  loadSetupCatalog();
   refreshDeploymentStatus();
 }
 

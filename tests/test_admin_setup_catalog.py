@@ -5,13 +5,72 @@ import json
 
 import pytest
 
-from admin.setup_config import apply_setup_features, build_setup_catalog
+from admin.setup_config import (
+    _setup_field_index,
+    apply_device_config_values,
+    apply_setup_features,
+    build_setup_catalog,
+)
+from ems.config_catalog import get_config_feature_field_index
 
 pytestmark = pytest.mark.simulation
 
 
 def _sections():
     return {section["id"]: section for section in build_setup_catalog()["sections"]}
+
+
+def test_catalog_exposes_top_level_setup_groups_in_order():
+    catalog = build_setup_catalog()
+
+    assert [group["id"] for group in catalog["groups"]] == [
+        "hardware",
+        "features",
+        "advanced",
+    ]
+    for group in catalog["groups"]:
+        assert group["title"].strip()
+
+
+def test_hardware_group_contains_grid_meter_and_devices():
+    sections = _sections()
+
+    assert sections["grid_meter"]["setup_group"] == "hardware"
+    assert sections["grid_meter"]["kind"] == "hardware"
+    assert sections["devices"]["setup_group"] == "hardware"
+    assert sections["devices"]["kind"] == "hardware"
+
+
+def test_optional_features_stay_in_the_features_group():
+    sections = _sections()
+
+    for feature in (
+        "winter",
+        "battery_full_charge_assist",
+        "energy_savings",
+        "dashboard",
+        "influxdb",
+    ):
+        assert sections[feature]["setup_group"] == "features"
+        assert sections[feature]["kind"] == "feature"
+
+
+def test_system_section_is_grouped_as_advanced():
+    assert _sections()["system"]["setup_group"] == "advanced"
+
+
+def test_device_output_limit_is_configured_per_device():
+    fields = get_config_feature_field_index()
+
+    device_limit = fields["devices[].max_power"]
+    assert device_limit["label"] == "Device output limit"
+
+    global_cap = fields["system.max_device_power"]
+    # The global cap must not masquerade as the normal per-device output setting.
+    assert global_cap["label"] == "Global per-device cap"
+    assert global_cap["label"] != "Per-device output limit"
+    assert global_cap["level"] in ("advanced", "expert")
+    assert global_cap["level"] != "normal"
 
 
 def test_catalog_reports_setup_mode_and_expected_section_order():
@@ -71,6 +130,25 @@ def test_grid_meter_variants_are_exposed_for_setup():
     )
     assert variants["mqtt"]["fields"]
     assert "grid_meter.mqtt.host" in variants["mqtt"]["fields"]
+
+
+def test_manual_hardware_variants_are_role_specific():
+    variants = build_setup_catalog()["hardware_variants"]
+
+    assert [item["id"] for item in variants["inverter"]] == ["zendure_local_api"]
+    assert variants["inverter"][0]["default_port"] == 80
+    assert variants["inverter"][0]["default"] is True
+    assert variants["inverter"][0]["required_fields"] == ["host", "port", "serial"]
+    assert {item["id"] for item in variants["grid_meter"]} == {
+        "shelly",
+        "shelly_3em_gen1",
+        "ecotracker",
+        "tasmota_http",
+    }
+    assert not ({item["id"] for item in variants["inverter"]} & {
+        item["id"] for item in variants["grid_meter"]
+    })
+    assert next(item for item in variants["grid_meter"] if item["default"])["id"] == "shelly"
 
 
 def test_secret_fields_are_marked_and_never_carry_a_value():
@@ -144,6 +222,81 @@ def test_apply_setup_features_ignores_hidden_and_device_paths():
     assert config == {}
 
 
+def test_apply_setup_features_ignores_maintenance_only_ha_field():
+    config = {"ha": {"enabled": False}}
+    applied = apply_setup_features(config, {"ha.enabled": True})
+
+    assert applied == []
+    assert config == {"ha": {"enabled": False}}
+
+
+def test_apply_setup_features_ignores_config_upgrade_field():
+    config = {"config_upgrade": {"on_startup": "check"}}
+    applied = apply_setup_features(config, {"config_upgrade.on_startup": "apply"})
+
+    assert applied == []
+    assert config == {"config_upgrade": {"on_startup": "check"}}
+
+
+def test_apply_setup_features_applies_normal_setup_fields():
+    config = {"winter": {"enabled": False}, "grid_meter": {"type": "shelly"}}
+    applied = apply_setup_features(
+        config,
+        {"winter.enabled": "true", "grid_meter.type": "ecotracker"},
+    )
+
+    assert set(applied) == {"winter.enabled", "grid_meter.type"}
+    assert config["winter"]["enabled"] is True
+    assert config["grid_meter"]["type"] == "ecotracker"
+
+
+def test_setup_field_index_excludes_maintenance_and_deprecated_fields():
+    index = _setup_field_index()
+
+    assert "ha.enabled" not in index
+    assert "ha.control_enabled" not in index
+    assert "config_upgrade.on_startup" not in index
+    assert "winter.enabled" in index
+    assert "grid_meter.type" in index
+
+
 def test_apply_setup_features_accepts_empty_or_missing():
     assert apply_setup_features({}, None) == []
+
+
+def test_apply_device_config_values_coerces_known_device_fields():
+    device = {"name": "WR1", "ip": "192.0.2.1", "sn": "SN1"}
+    applied = apply_device_config_values(
+        device,
+        {"max_power": "800", "min_soc": "15", "pv_kwp": "1.5"},
+    )
+
+    assert set(applied) == {"max_power", "min_soc", "pv_kwp"}
+    assert device["max_power"] == 800
+    assert device["min_soc"] == 15
+    assert device["pv_kwp"] == 1.5
+
+
+def test_apply_device_config_values_ignores_unknown_and_identity_keys():
+    device = {"name": "WR1", "ip": "192.0.2.1", "sn": "SN1"}
+    applied = apply_device_config_values(
+        device,
+        {
+            "name": "evil",
+            "ip": "10.0.0.1",
+            "sn": "hacked",
+            "bogus_key": 1,
+            "system.max_total_power": 99,
+        },
+    )
+
+    # Identity fields and unknown/non-device paths are never applied.
+    assert applied == []
+    assert device == {"name": "WR1", "ip": "192.0.2.1", "sn": "SN1"}
+
+
+def test_apply_device_config_values_accepts_empty_or_missing():
+    assert apply_device_config_values({}, None) == []
+    assert apply_device_config_values({}, {}) == []
+    assert apply_device_config_values(None, {"max_power": 1}) == []
     assert apply_setup_features({}, {}) == []

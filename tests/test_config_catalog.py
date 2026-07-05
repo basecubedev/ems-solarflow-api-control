@@ -65,6 +65,14 @@ def test_catalog_contains_all_supported_grid_meter_variants():
     assert variants["ha"]["level"] == "deprecated"
 
 
+def test_catalog_defines_local_api_inverter_connection():
+    variants = get_config_catalog()["inverter_connection_variants"]
+
+    assert set(variants) == {"zendure_local_api"}
+    assert variants["zendure_local_api"]["default_port"] == 80
+    assert variants["zendure_local_api"]["manual_setup"] is True
+
+
 def test_default_template_order_and_legacy_ha_defaults():
     template = build_default_template()
     assert list(template) == [

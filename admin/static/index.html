@@ -337,59 +337,107 @@
               <span>Base: <strong id="config-preview-base">Release template</strong></span>
             </div>
           </section>
-          <div id="config-grid-meter-selection" class="config-grid-selection" role="group" aria-live="polite" hidden></div>
-          <h3 class="config-section-title">Active EMS devices</h3>
-          <div id="config-draft-empty" class="results-empty">
-            No devices in the draft yet. Verified inverters and a single grid meter
-            are added automatically once discovered.
-          </div>
-          <div id="config-draft-list" class="config-draft-list" hidden></div>
-
-          <details class="advanced-details" id="config-available-details">
-            <summary>Add more devices <span id="config-available-count" class="pill muted">0 ready</span></summary>
-            <p class="future-note">
-              Devices found by discovery. Verified inverters are added to the draft
-              automatically; a grid meter is auto-selected only when exactly one is
-              found. MQTT brokers and unsupported devices are not shown.
-            </p>
-            <div id="config-available-empty" class="results-empty">
-              No EMS-ready devices discovered yet.
-            </div>
-            <div id="config-available-list" class="results-list" hidden></div>
-
-            <details class="config-manual" id="config-manual">
-              <summary>Add a device manually</summary>
+          <div id="config-feature-settings" class="config-feature-settings">
+            <section class="setup-group" data-setup-group="hardware" aria-label="Hardware">
+              <h3 class="config-section-title">Hardware</h3>
               <p class="future-note">
-                For devices discovery cannot reach — enter the connection details by
-                hand. Added straight to the draft above.
+                The core building blocks EMS reads and controls. Set up your grid
+                meter and inverters here first.
               </p>
-              <form id="config-manual-form" class="config-manual-form" autocomplete="off">
-                <label class="field"><span class="field-label">Display name</span>
-                  <input id="config-manual-name" type="text" placeholder="SolarFlow 800 Pro">
-                </label>
-                <label class="field"><span class="field-label">Role</span>
-                  <select id="config-manual-role">
-                    <option value="inverter">inverter</option>
-                    <option value="grid_meter">grid_meter</option>
-                  </select>
-                </label>
-                <label class="field"><span class="field-label">Host / IP</span>
-                  <input id="config-manual-host" type="text" inputmode="text"
-                         placeholder="192.168.1.50" required>
-                </label>
-                <label class="field"><span class="field-label">Port</span>
-                  <input id="config-manual-port" type="text" inputmode="numeric" placeholder="80">
-                </label>
-                <label class="field"><span class="field-label">Serial (optional)</span>
-                  <input id="config-manual-serial" type="text" placeholder="e.g. AO1234…">
-                </label>
-                <button id="config-manual-add" type="submit" class="primary-button compact">
-                  Add to draft
-                </button>
-              </form>
-              <p id="config-manual-error" class="scan-error" role="alert" hidden></p>
+              <div class="hardware-grid-meter">
+                <h4 class="config-subsection-title">Grid meter</h4>
+                <p class="future-note">
+                  Configure the meter EMS uses to read grid import and export.
+                </p>
+                <div id="config-grid-meter-selection" class="config-grid-selection"
+                     role="group" aria-live="polite" hidden></div>
+              </div>
+
+              <div class="hardware-devices">
+                <h4 class="config-subsection-title">Inverters / devices</h4>
+                <p class="future-note">
+                  Configure the Zendure devices EMS should control.
+                </p>
+                <div id="config-draft-empty" class="results-empty">
+                  No inverters in the draft yet. Verified inverters are added
+                  automatically once discovered.
+                </div>
+                <div id="config-draft-list" class="config-draft-list" hidden></div>
+
+                <details class="advanced-details" id="config-available-details">
+                  <summary>Add more devices <span id="config-available-count" class="pill muted">0 ready</span></summary>
+                  <p class="future-note">
+                    Devices found by discovery. Verified inverters are added to the draft
+                    automatically; a grid meter is auto-selected only when exactly one is
+                    found. MQTT brokers and unsupported devices are not shown.
+                  </p>
+                  <div id="config-available-empty" class="results-empty">
+                    No EMS-ready devices discovered yet.
+                  </div>
+                  <div id="config-available-list" class="results-list" hidden></div>
+
+                  <details class="config-manual" id="config-manual">
+                    <summary>Add a device manually</summary>
+                    <p class="future-note">
+                      For hardware discovery cannot reach — enter the connection details by
+                      hand. The available type options depend on the selected role.
+                    </p>
+                    <form id="config-manual-form" class="config-manual-form" autocomplete="off">
+                      <label class="field"><span class="field-label">Display name</span>
+                        <input id="config-manual-name" type="text" placeholder="SolarFlow 800 Pro">
+                      </label>
+                      <label class="field"><span class="field-label">Role</span>
+                        <select id="config-manual-role">
+                          <option value="inverter">Inverter</option>
+                          <option value="grid_meter">Grid meter</option>
+                        </select>
+                      </label>
+                      <label class="field" id="config-manual-type-field">
+                        <span class="field-label">Type</span>
+                        <select id="config-manual-type"></select>
+                      </label>
+                      <label class="field"><span class="field-label">Host / IP</span>
+                        <input id="config-manual-host" type="text" inputmode="text"
+                               placeholder="192.168.1.50" required>
+                      </label>
+                      <label class="field"><span class="field-label">Port</span>
+                        <input id="config-manual-port" type="text" inputmode="numeric" placeholder="80">
+                      </label>
+                      <label class="field"><span class="field-label">Serial (optional)</span>
+                        <input id="config-manual-serial" type="text" placeholder="e.g. AO1234…">
+                      </label>
+                      <button id="config-manual-add" type="submit" class="primary-button compact">
+                        Add to draft
+                      </button>
+                    </form>
+                    <p id="config-manual-error" class="scan-error" role="alert" hidden></p>
+                  </details>
+                </details>
+              </div>
+            </section>
+
+            <section class="setup-group" data-setup-group="features" aria-label="Features">
+              <h3 class="config-section-title">Features</h3>
+              <p class="future-note">
+                Turn on only the features you need. Everything else keeps safe
+                defaults. Open a feature to review its settings.
+              </p>
+              <div id="config-feature-list-features" class="feature-list" role="list"></div>
+            </section>
+
+            <details class="advanced-details setup-group" data-setup-group="advanced"
+                     id="config-advanced-settings">
+              <summary>Advanced / System settings</summary>
+              <p class="future-note">
+                System-level and expert tuning. Most users can keep the defaults.
+              </p>
+              <div id="config-feature-list-advanced" class="feature-list" role="list"></div>
             </details>
-          </details>
+
+            <p id="config-feature-empty" class="results-empty">
+              Prepare release resources to load setup feature settings.
+            </p>
+          </div>
 
           <details class="advanced-details" id="config-preview-details">
             <summary>Advanced: generated config.json preview &amp; apply</summary>

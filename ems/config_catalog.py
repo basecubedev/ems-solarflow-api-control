@@ -8,6 +8,26 @@ import re
 
 LEVELS = {"normal", "advanced", "expert", "deprecated", "internal"}
 SCOPES = {"setup", "maintenance", "both", "hidden"}
+SETUP_GROUPS = (
+    {
+        "id": "hardware",
+        "title": "Hardware",
+        "description": "Core building blocks EMS reads and controls.",
+        "order": 1,
+    },
+    {
+        "id": "features",
+        "title": "Features",
+        "description": "Optional behaviors you can turn on when you need them.",
+        "order": 2,
+    },
+    {
+        "id": "advanced",
+        "title": "Advanced / System settings",
+        "description": "System-level and expert tuning. Most users can keep the defaults.",
+        "order": 3,
+    },
+)
 RISKS = {
     "none",
     "restart_required",
@@ -87,6 +107,8 @@ def _section(
     enabled_path=None,
     collapsible=True,
     groups=None,
+    setup_group="features",
+    kind="feature",
 ):
     item = {
         "id": section_id,
@@ -98,6 +120,8 @@ def _section(
         "scope": scope,
         "order": order,
         "collapsible": collapsible,
+        "setup_group": setup_group,
+        "kind": kind,
         "fields": fields,
     }
     if enabled_path is not None:
@@ -149,21 +173,30 @@ GRID_METER_VARIANTS = {
         "label": "Shelly Pro/Plus Gen2/Gen3",
         "description": "Read power from a local Shelly Pro/Plus meter.",
         "fields": ("grid_meter.ip", "grid_meter.channels"),
+        "manual_setup": True,
+        "default_port": 80,
+        "default_manual": True,
     },
     "shelly_3em_gen1": {
         "label": "Shelly 3EM Gen1",
         "description": "Read power from the older Shelly 3EM /status endpoint.",
         "fields": ("grid_meter.ip", "grid_meter.channels"),
+        "manual_setup": True,
+        "default_port": 80,
     },
     "ecotracker": {
         "label": "everHome EcoTracker",
         "description": "Read power from an EcoTracker local API.",
         "fields": ("grid_meter.ip",),
+        "manual_setup": True,
+        "default_port": 80,
     },
     "tasmota_http": {
         "label": "Tasmota HTTP / SmartMeter reader",
         "description": "Read power from a Tasmota HTTP JSON endpoint.",
         "fields": ("grid_meter.ip", "grid_meter.url", "grid_meter.power_path"),
+        "manual_setup": True,
+        "default_port": 80,
     },
     "zendure_smartmeter_d0": {
         "label": "Zendure SmartMeter D0 over MQTT",
@@ -199,6 +232,17 @@ GRID_METER_VARIANTS = {
         "level": "deprecated",
         "scope": "maintenance",
         "risk": "deprecated",
+    },
+}
+
+INVERTER_CONNECTION_VARIANTS = {
+    "zendure_local_api": {
+        "label": "Zendure Local API",
+        "description": "Zendure SolarFlow devices reachable through the local HTTP API.",
+        "default_port": 80,
+        "required_fields": ("host", "port", "serial"),
+        "manual_setup": True,
+        "default_manual": True,
     },
 }
 
@@ -313,9 +357,11 @@ _SECTIONS = [
             ),
             _field(
                 "system.max_device_power",
-                "Per-device output limit",
-                "Maximum AC output EMS may request from one device.",
+                "Global per-device cap",
+                "Upper safety cap applied to each device. Most users should "
+                "configure the device output limit in the Devices section instead.",
                 "number",
+                level="advanced",
                 unit="W",
                 minimum=0,
                 risk="control_stability",
@@ -598,6 +644,8 @@ _SECTIONS = [
             ),
         ],
         collapsible=False,
+        setup_group="advanced",
+        kind="system",
         groups=[
             _group(
                 "output_control",
@@ -719,6 +767,8 @@ _SECTIONS = [
             ),
         ],
         collapsible=False,
+        setup_group="hardware",
+        kind="hardware",
     ),
     _section(
         "devices",
@@ -760,8 +810,8 @@ _SECTIONS = [
             ),
             _field(
                 "devices[].max_power",
-                "Device power limit",
-                "Maximum output EMS may request from this device.",
+                "Device output limit",
+                "Maximum output this inverter may provide.",
                 "number",
                 unit="W",
                 minimum=0,
@@ -818,6 +868,8 @@ _SECTIONS = [
             ),
         ],
         collapsible=False,
+        setup_group="hardware",
+        kind="hardware",
     ),
     _section(
         "winter",
@@ -1442,6 +1494,8 @@ _SECTIONS = [
         level="deprecated",
         scope="maintenance",
         enabled_path="ha.enabled",
+        setup_group="advanced",
+        kind="deprecated",
     ),
     _section(
         "config_upgrade",
@@ -1492,6 +1546,8 @@ _SECTIONS = [
         ],
         level="advanced",
         scope="maintenance",
+        setup_group="advanced",
+        kind="system",
     ),
 ]
 
@@ -1657,6 +1713,7 @@ def get_config_catalog():
         "root_fields": copy.deepcopy(_ROOT_FIELDS),
         "sections": copy.deepcopy(_SECTIONS),
         "grid_meter_variants": copy.deepcopy(GRID_METER_VARIANTS),
+        "inverter_connection_variants": copy.deepcopy(INVERTER_CONNECTION_VARIANTS),
         "legacy_paths": copy.deepcopy(LEGACY_CONFIG_PATHS),
         "runtime_device_fields": copy.deepcopy(RUNTIME_DEVICE_FIELDS),
         "template": copy.deepcopy(_DEFAULT_TEMPLATE),

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from admin.install_context import detect_install_context
 from admin.releases import ReleaseError
-from admin.setup_config import apply_setup_features
+from admin.setup_config import apply_device_config_values, apply_setup_features
 
 
 _HOST_LABEL = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
@@ -18,6 +18,17 @@ _GRID_TYPES = {
     "shelly_3em_gen1": "shelly_3em_gen1",
     "ecotracker": "ecotracker",
     "tasmota_http": "tasmota_http",
+}
+# Explicit meter types a manual (non-discovered) grid meter may declare. A manual
+# entry has no api_family/device_type, so its type must be chosen, not inferred.
+_GRID_TYPE_CHOICES = {
+    "shelly",
+    "shelly_3em_gen1",
+    "ecotracker",
+    "tasmota_http",
+    "zendure_smartmeter_d0",
+    "mqtt",
+    "ha",
 }
 
 
@@ -38,6 +49,12 @@ def _valid_host(value):
 
 
 def _grid_type(item, fallback):
+    # An explicit meter type (chosen manually) always wins over inference so the
+    # system never has to guess a manual meter's hardware from IP/port.
+    for key in ("grid_meter_type", "meter_type"):
+        explicit = str(item.get(key) or "").strip().lower()
+        if explicit in _GRID_TYPE_CHOICES:
+            return explicit
     family = str(item.get("api_family") or "").lower()
     device_type = str(item.get("device_type") or "").lower()
     if family in _GRID_TYPES:
@@ -297,6 +314,7 @@ class ConfigPreviewGenerator:
                         _issue("device_serial_missing", f"{label} requires a serial number.")
                     )
             _apply_typed_fields(device, item)
+            apply_device_config_values(device, item.get("config_values"))
             generated_devices.append(device)
         preview["devices"] = generated_devices
 
@@ -333,6 +351,7 @@ class ConfigPreviewGenerator:
                 if serial:
                     match["sn"] = serial
                 _apply_typed_fields(match, item)
+                apply_device_config_values(match, item.get("config_values"))
                 if "sn" in match and not str(match.get("sn") or "").strip():
                     validation["errors"].append(
                         _issue("device_serial_missing", f"{label} requires a serial number.")
@@ -349,6 +368,7 @@ class ConfigPreviewGenerator:
                         _issue("device_serial_missing", f"{label} requires a serial number.")
                     )
             _apply_typed_fields(device, item)
+            apply_device_config_values(device, item.get("config_values"))
             devices.append(device)
 
     def _apply_grid_meter(

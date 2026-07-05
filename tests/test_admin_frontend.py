@@ -921,37 +921,85 @@ def test_config_validation_is_a_distinct_status_card():
     )
 
 
-def test_config_draft_cards_have_compact_identity_headers():
+def test_config_inverters_use_shared_hardware_cards():
     js = _read("admin.js")
-    css = _read("admin.css")
-    card = js.split("function renderConfigDraftCard", 1)[1].split(
+    row = js.split("function renderInverterDraftRow", 1)[1].split(
         "\nfunction ", 1
     )[0]
 
-    assert '"Grid meter" : "Inverter " + (inverterIndex + 1)' in card
-    assert "config-draft-identity" in card
-    assert "config-draft-kind" in card
-    assert "config-draft-title" in card
-    assert "escapeHtml(title)" in card
-    assert ".config-draft-card" in css
-    assert "padding: 10px" in css.split(".config-draft-card", 1)[1][:500]
+    assert "renderHardwareCard({" in row
+    assert 'kind: "inverter"' in row
+    assert 'removeClass: "config-draft-remove"' in row
+    assert "inverterModelText(item)" in row
+    assert "data-inverter-toggle" in row
+    assert '"Inverter " + (index + 1)' in row
+    # Enabled is edited in the body, not through a leading header checkbox.
+    assert "data-inverter-enable" not in row
+    assert "feature-enable" not in row
+    assert "function renderConfigDraftCard" not in js
+    assert "config-draft-card" not in js
+    assert "config-draft-fields" not in js
 
 
-def test_config_device_metadata_is_collapsed_but_preserved():
+def test_config_inverter_rows_use_device_catalog_fields():
     js = _read("admin.js")
-    css = _read("admin.css")
-    card = js.split("function renderConfigDraftCard", 1)[1].split(
+    section = js.split("function deviceCatalogSection", 1)[1].split(
         "\nfunction ", 1
     )[0]
+    assert 'section.id === "devices"' in section
+    fields = js.split("function renderInverterFields", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    assert "deviceCatalogFields()" in fields
+    # Advanced/expert device fields stay in nested collapsed areas.
+    assert "<summary>Advanced settings</summary>" in fields
+    assert "Developer / expert settings" in fields
+    # Each device field renders as a compact settings row, not a stacked tile.
+    field = js.split("function renderDeviceField", 1)[1].split("\nfunction ", 1)[0]
+    assert 'class="feature-field-row"' in field
+    assert 'class="feature-field-label"' in field
+    assert 'class="feature-field-control"' in field
 
-    assert '<details class="config-device-details">' in card
-    assert "<summary><span>Device details</span>" in card
-    assert "config-device-meta-preview" in card
-    for label in ("IP", "Port", "Serial", "Type", "API family", "Source"):
-        assert f'"{label}"' in card
-    assert '<details class="config-device-details" open' not in card
-    assert ".config-device-details-grid" in css
-    assert "config-draft-readonly" not in card
+
+def test_config_inverter_maps_identity_fields_and_stores_overrides():
+    js = _read("admin.js")
+    mapped = js.split("DEVICE_MAPPED_FIELD_KEYS = {", 1)[1].split("}", 1)[0]
+    assert 'name: "config_name"' in mapped
+    assert 'ip: "ip"' in mapped
+    assert 'sn: "serial_number"' in mapped
+    update = js.split("function updateDraftDeviceField", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    # Non-identity device values are stored as per-device overrides.
+    assert "item.config_values" in update
+
+
+def test_config_inverter_summary_shows_key_facts():
+    js = _read("admin.js")
+    fn = js.split("function inverterSummaryText", 1)[1].split("\nfunction ", 1)[0]
+    assert "item.config_name" in fn
+    assert "item.ip" in fn
+    assert "Serial missing" in fn
+    # The per-device output limit is surfaced in the collapsed summary.
+    assert '"devices[].max_power"' in fn
+    assert '" W"' in fn
+
+
+def test_config_inverter_list_excludes_grid_meter_items():
+    js = _read("admin.js")
+    fn = js.split("function renderInverterList", 1)[1].split("\nfunction ", 1)[0]
+    # Only inverters render as rows; the grid meter is a separate hardware concept.
+    assert "inverterItems()" in fn
+    draft = js.split("function renderConfigDraft(", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    assert "renderInverterList()" in draft
+    # A selected grid meter keeps a compact change/remove path in its own area.
+    selected = js.split("function renderSelectedGridMeter", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    assert "config-grid-remove" in selected
+    assert "config-auto-badge" in selected
 
 
 def test_config_advanced_rows_use_secondary_caret_style():
@@ -1110,10 +1158,21 @@ def test_js_config_escapes_dynamic_device_values():
     assert "escapeHtml(device.serial_number)" in config
     assert "escapeHtml(sourceId)" in config
     assert "escapeHtml(device.ip)" in js
-    draft = js.split("renderConfigDraftCard", 1)[1]
-    assert "escapeHtml(item.config_name)" in draft
-    assert "escapeHtml(item.display_name)" in draft
-    assert "escapeHtml(item.serial_number)" in draft
+    inverter = js.split("function renderInverterDraftRow", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    assert "renderHardwareCard({" in inverter
+    hardware = js.split("function renderHardwareCard", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    assert "escapeHtml(card.sourceId)" in hardware
+    assert "escapeHtml(card.model)" in hardware
+    assert "escapeHtml(card.meta)" in hardware
+    assert "meta: inverterSummaryText(item)" in inverter
+    control = js.split("function renderDeviceControl", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    assert "escapeHtml(formatFeatureValue(value))" in control
 
 
 def test_js_scan_confirmed_devices_are_not_stale():
@@ -1223,7 +1282,7 @@ def test_js_config_auto_select_respects_existing_selection():
 def test_js_config_grid_meter_use_action_selects_manually():
     js = _read("admin.js")
     assert "config-grid-use" in js
-    assert "selectGridMeter(button.getAttribute" in js
+    assert "selectGridMeter(use.getAttribute" in js
     # A manual pick clears the auto flag and replaces any existing meter.
     assert "item.auto_selected = false" in js
 
@@ -1559,3 +1618,270 @@ console.log(JSON.stringify({ before, after }));
 """
     )
     assert out["before"] != out["after"]
+
+
+# --- catalog-driven feature settings -------------------------------------
+
+
+def test_config_stage_has_grouped_setup_settings():
+    html = _read("index.html")
+    config = _config_section(html)
+    assert 'id="config-feature-settings"' in config
+    # Setup settings are split into Hardware, Features and Advanced groups.
+    for group in ("hardware", "features", "advanced"):
+        assert 'data-setup-group="' + group + '"' in config
+    for group in ("features", "advanced"):
+        assert 'id="config-feature-list-' + group + '"' in config
+    assert ">Hardware<" in config
+    assert ">Features<" in config
+
+
+def test_config_stage_renders_hardware_group_before_features():
+    html = _read("index.html")
+    config = _config_section(html)
+    hardware = config.index('data-setup-group="hardware"')
+    features = config.index('data-setup-group="features"')
+    advanced = config.index('data-setup-group="advanced"')
+    assert hardware < features < advanced
+
+
+def test_config_hardware_group_contains_grid_meter_and_devices():
+    html = _read("index.html")
+    config = _config_section(html)
+    hardware = config.split('data-setup-group="hardware"', 1)[1].split(
+        'data-setup-group="features"', 1
+    )[0]
+    grid_heading = hardware.index(">Grid meter<")
+    grid_card = hardware.index('id="config-grid-meter-selection"')
+    inverter_heading = hardware.index(">Inverters / devices<")
+    assert grid_heading < grid_card < inverter_heading
+    assert "Inverters / devices" in hardware
+    assert 'id="config-draft-list"' in hardware
+    assert 'id="config-available-list"' in hardware
+
+
+def test_config_advanced_group_is_collapsed_by_default():
+    html = _read("index.html")
+    config = _config_section(html)
+    assert 'class="advanced-details setup-group" data-setup-group="advanced"' in config
+    assert 'id="config-advanced-settings" open' not in config
+
+
+def test_js_fetches_setup_config_catalog_endpoint():
+    js = _read("admin.js")
+    assert "/api/setup/config/catalog" in js
+    assert "loadSetupCatalog" in js
+    assert "renderFeatureSettings" in js
+
+
+def test_js_renders_feature_rows_into_group_lists():
+    js = _read("admin.js")
+    render = js.split("function renderFeatureSettings", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    # Sections are distributed into per-group list containers by setup_group.
+    assert "configEls.featureLists" in render
+    assert "sectionsForGroup" in render
+    group_fn = js.split("function sectionsForGroup", 1)[1].split("\nfunction ", 1)[0]
+    assert "section.setup_group" in group_fn
+    # Hardware renders first, then features, then advanced.
+    order = js.split("SETUP_GROUP_ORDER = [", 1)[1].split("]", 1)[0]
+    assert '"hardware"' in order
+    assert order.index('"hardware"') < order.index('"features"') < order.index(
+        '"advanced"'
+    )
+
+
+def test_js_renders_feature_rows_with_title_description_status_and_toggle():
+    js = _read("admin.js")
+    row = js.split("function renderFeatureRow", 1)[1].split("\nfunction ", 1)[0]
+    # Collapsed rows expose title, short description, status and expand affordance.
+    assert "feature-title" in row
+    assert "feature-desc" in row
+    assert "feature-status" in row
+    assert "data-feature-toggle" in row
+    assert 'aria-expanded="' in row
+    # Feature activation uses a real checkbox control in the row.
+    assert "data-feature-enable" in row
+    assert 'type="checkbox"' in row
+
+
+def test_js_only_renders_fields_when_feature_row_is_open():
+    js = _read("admin.js")
+    row = js.split("function renderFeatureRow", 1)[1].split("\nfunction ", 1)[0]
+    # The body is only populated when the row is in the open set.
+    assert "openFeatures.has(section.id)" in js
+    assert "open ? renderFeatureBody(section)" in row
+
+
+def test_js_separates_normal_advanced_and_expert_field_levels():
+    js = _read("admin.js")
+    body = js.split("function renderFeatureBody", 1)[1].split("\nfunction ", 1)[0]
+    # Normal fields render first; advanced and expert sit in nested collapsed
+    # <details> areas that stay closed by default.
+    assert "feature-advanced" in body
+    assert "feature-expert" in body
+    assert "<summary>Advanced settings</summary>" in body
+    assert "Developer / expert settings" in body
+    assert "control stability" in body
+
+
+def test_js_feature_fields_render_as_compact_rows_not_tiles():
+    js = _read("admin.js")
+    field = js.split("function renderFeatureField", 1)[1].split("\nfunction ", 1)[0]
+    # Each field is a single settings row (label | control | description), not a
+    # stacked card/tile.
+    assert 'class="feature-field-row"' in field
+    assert 'class="feature-field-label"' in field
+    assert 'class="feature-field-control"' in field
+    assert "feature-field field" not in field  # old tile class is gone
+
+
+def test_css_feature_fields_use_row_grid_with_mobile_stack():
+    css = _read("admin.css")
+    row = css.split(".feature-field-row {", 1)[1].split("}", 1)[0]
+    # Desktop: three-column grid so labels, controls and descriptions align.
+    assert "display: grid" in row
+    assert "grid-template-columns" in row
+    # Narrow viewports collapse the row into a single stacked column.
+    mobile = css.split("@media (max-width: 760px)", 1)[1]
+    assert ".feature-field-row { grid-template-columns: 1fr" in mobile
+
+
+def test_js_feature_values_and_dynamic_text_pass_through_escape_helper():
+    js = _read("admin.js")
+    field = js.split("function renderFeatureControl", 1)[1].split("\nfunction ", 1)[0]
+    assert "escapeHtml(" in field
+    rowfn = js.split("function renderFeatureRow", 1)[1].split("\nfunction ", 1)[0]
+    assert "escapeHtml(section.title)" in rowfn
+
+
+def test_js_grid_meter_variant_fields_change_with_selected_type():
+    js = _read("admin.js")
+    assert "gridVariantFields" in js
+    assert "selectedGridMeterType" in js
+    assert "data-feature-variant-select" in js
+    # Changing the meter type re-renders so variant-specific fields appear.
+    change = js.split("function handleFeatureListChange", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    assert "data-feature-variant-select" in change
+    assert "renderFeatureSettings()" in change
+
+
+def test_js_feature_values_flow_into_preview_and_export():
+    js = _read("admin.js")
+    assert "features: featureValues" in js
+
+
+def test_js_deprecated_levels_are_hidden_from_setup_features():
+    js = _read("admin.js")
+    assert 'FEATURE_LEVELS_HIDDEN' in js
+    const = js.split("const FEATURE_LEVELS_HIDDEN", 1)[1].split("\n", 1)[0]
+    assert '"deprecated"' in const
+
+
+def test_manual_form_offers_role_specific_type_selection():
+    html = _read("index.html")
+    config = _config_section(html)
+    assert 'id="config-manual-type"' in config
+    assert 'id="config-manual-type-description"' not in config
+    assert ">Type<" in config
+    assert ">Meter type<" not in config
+
+
+def test_js_manual_type_is_role_specific_and_stored():
+    js = _read("admin.js")
+    fn = js.split("function addManualDevice", 1)[1].split("\nfunction ", 1)[0]
+    assert "item.grid_meter_type = selectedType" in fn
+    assert "item.connection_type = selectedType" in fn
+    assert "syncGridMeterFeatureValues(item)" in fn
+    variants = js.split("function manualHardwareVariants", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    assert "setupCatalog.hardware_variants[role]" in variants
+    reset = js.split("function resetManualTypeForRole", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    assert "populateManualTypes(true)" in reset
+
+
+def test_js_grid_meter_type_prefers_explicit_field():
+    js = _read("admin.js")
+    fn = js.split("function gridMeterType", 1)[1].split("\nfunction ", 1)[0]
+    # Explicit type wins before discovery inference.
+    assert "item.grid_meter_type" in fn
+    assert "GRID_METER_TYPE_CHOICES.has(explicit)" in fn
+
+
+def test_js_inverter_body_exposes_enabled_field():
+    js = _read("admin.js")
+    body = js.split("function renderInverterBody", 1)[1].split("\nfunction ", 1)[0]
+    # Enabled is an explicit hardware field in the opened item, not only the
+    # header checkbox.
+    assert "renderHardwareEnabledRow" in body
+    assert '"data-inverter-enable"' in body
+    assert "Include this inverter" in body
+    row = js.split("function renderInverterDraftRow", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    assert 'removeClass: "config-draft-remove"' in row
+
+
+def test_js_grid_meter_card_uses_shared_hardware_controls():
+    js = _read("admin.js")
+    fn = js.split("function renderSelectedGridMeter", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    assert "renderHardwareCard({" in fn
+    assert 'kind: "grid-meter"' in fn
+    assert "gridMeterModelText(meter)" in fn
+    assert 'removeClass: "config-grid-remove"' in fn
+    body = js.split("function renderGridMeterBody", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    assert "renderHardwareEnabledRow" in body
+    assert '"data-grid-enable"' in body
+
+
+def test_js_shared_hardware_card_has_common_header_contract():
+    js = _read("admin.js")
+    card = js.split("function renderHardwareCard", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    for class_name in (
+        "hardware-card-title",
+        "hardware-card-model",
+        "hardware-card-meta",
+        "hardware-card-status",
+        "hardware-card-remove",
+        "hardware-card-toggle",
+    ):
+        assert class_name in card
+    assert ">Remove<" in card
+
+
+def test_js_hardware_remove_uses_shared_draft_action():
+    js = _read("admin.js")
+    # Both hardware item types remove through the same removeDraftItem path so the
+    # dismissed-source behavior stays consistent.
+    grid = js.split("configEls.gridMeterSelection.addEventListener", 1)[1].split(
+        "});", 1
+    )[0]
+    assert "removeDraftItem(" in grid
+    draft = js.split("configEls.draftList.addEventListener", 1)[1].split(
+        "renderConfigPreview", 1
+    )[0]
+    assert "removeDraftItem(sourceId)" in draft
+    fn = js.split("function removeDraftItem", 1)[1].split("\nfunction ", 1)[0]
+    # Removal still dismisses the source so discovery does not re-add it.
+    assert "configDismissed.add(sourceId)" in fn
+
+
+def test_css_hardware_role_accents_are_grid_and_output():
+    css = _read("admin.css")
+    grid = css.split(".hardware-card-grid-meter {", 1)[1].split("}", 1)[0]
+    inverter = css.split(".hardware-card-inverter {", 1)[1].split("}", 1)[0]
+    assert "var(--grid)" in grid
+    assert "var(--pv)" not in grid
+    assert "var(--output)" in inverter

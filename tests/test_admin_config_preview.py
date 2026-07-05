@@ -116,11 +116,109 @@ def test_extra_inverters_reuse_template_defaults():
     assert result["config"]["devices"][2]["name"] == "inverter_3"
 
 
+def test_device_config_values_apply_to_generated_device():
+    result = ConfigPreviewGenerator(_ReleaseManager()).generate(
+        [
+            _device(
+                1,
+                config_values={"max_power": "600", "min_soc": "20", "max_soc": "95"},
+            ),
+            _meter(),
+        ],
+        1,
+    )
+    device = result["config"]["devices"][0]
+
+    assert device["max_power"] == 600
+    assert device["min_soc"] == 20
+    assert device["max_soc"] == 95
+
+
+def test_device_config_values_ignore_unknown_and_identity_keys():
+    result = ConfigPreviewGenerator(_ReleaseManager()).generate(
+        [
+            _device(
+                1,
+                config_values={
+                    "name": "hijack",
+                    "sn": "hijack",
+                    "bogus": 1,
+                    "system.max_total_power": 5,
+                },
+            ),
+            _meter(),
+        ],
+        1,
+    )
+    device = result["config"]["devices"][0]
+
+    # Identity fields come from the mapped draft properties, never config_values.
+    assert device["name"] == "inverter_1"
+    assert device["sn"] == "SN1"
+    assert "bogus" not in device
+    # Device values can never write outside their own device object.
+    assert result["config"]["system"]["max_total_power"] == 1600
+
+
+def test_device_config_values_merge_into_existing_device(tmp_path):
+    path = _write_config(tmp_path, EXISTING_CONFIG)
+    result = _existing_generator(path).generate(
+        [
+            _device(
+                1,
+                config_name="WR1",
+                config_values={"max_power": "500"},
+            )
+        ]
+    )
+    wr1 = next(d for d in result["config"]["devices"] if d["name"] == "WR1")
+
+    assert wr1["max_power"] == 500
+    # Unrelated existing device keys are preserved through the merge.
+    assert wr1["custom"] == "keep"
+
+
 def test_grid_meter_type_comes_from_discovery_metadata():
     result = ConfigPreviewGenerator(_ReleaseManager()).generate(
         [_device(), _meter(api_family="shelly_3em_gen1")], 1
     )
     assert result["config"]["grid_meter"]["type"] == "shelly_3em_gen1"
+
+
+def test_manual_grid_meter_type_is_used_over_inference():
+    # A manually added meter has no discovery metadata, so the explicitly chosen
+    # type must drive the generated grid_meter.type.
+    meter = _meter(
+        api_family="",
+        device_type="",
+        grid_meter_type="shelly_3em_gen1",
+    )
+    result = ConfigPreviewGenerator(_ReleaseManager()).generate([_device(), meter], 1)
+    assert result["config"]["grid_meter"]["type"] == "shelly_3em_gen1"
+
+
+def test_manual_local_api_connection_uses_current_device_config_shape():
+    result = ConfigPreviewGenerator(_ReleaseManager()).generate(
+        [_device(connection_type="zendure_local_api"), _meter()], 1
+    )
+    device = result["config"]["devices"][0]
+
+    assert result["ready"] is True
+    assert device["ip"] == "192.168.1.1"
+    assert device["sn"] == "SN1"
+    assert "connection_type" not in device
+
+
+def test_manual_grid_meter_without_type_falls_back_to_shelly():
+    meter = _meter(api_family="", device_type="", grid_meter_type="")
+    result = ConfigPreviewGenerator(_ReleaseManager()).generate([_device(), meter], 1)
+    assert result["config"]["grid_meter"]["type"] == "shelly"
+
+
+def test_explicit_grid_meter_type_wins_over_conflicting_discovery():
+    meter = _meter(api_family="shelly_gen2", grid_meter_type="ecotracker")
+    result = ConfigPreviewGenerator(_ReleaseManager()).generate([_device(), meter], 1)
+    assert result["config"]["grid_meter"]["type"] == "ecotracker"
 
 
 def test_validation_reports_ambiguous_meter_and_bad_device_values():
