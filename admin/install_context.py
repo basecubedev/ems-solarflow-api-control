@@ -32,6 +32,7 @@ class AdminInstallContext:
     data_dir_exists: bool
     compose_path: Path
     compose_exists: bool
+    config_layout_state: str
 
     @property
     def install_root(self):
@@ -52,6 +53,7 @@ class AdminInstallContext:
             "compose_path": str(self.compose_path),
             "compose_exists": self.compose_exists,
             "install_root": str(self.install_root),
+            "config_layout_state": self.config_layout_state,
         }
 
 
@@ -87,6 +89,7 @@ def detect_install_context(base_dir=None):
         data_dir_exists=data_dir.is_dir(),
         compose_path=compose_path,
         compose_exists=compose_path.is_file(),
+        config_layout_state=paths.detect_config_layout_state(base_dir=base_dir),
     )
 
 

@@ -29,6 +29,12 @@ from admin.discovery import (
 )
 from admin.gateway_probe import probe_gateway_candidates
 from admin.install_context import detect_install_context
+from admin.install_state import (
+    LegacyMigrationError,
+    detect_install_state,
+    migrate_legacy_root_config,
+    select_start_path,
+)
 from admin.mdns import MdnsProvider
 from admin.mqtt_discovery import MqttBrokerDiscovery
 from admin.models import utc_now_iso
@@ -179,6 +185,9 @@ class AdminHandler(BaseHTTPRequestHandler):
         if path == "/api/admin/status":
             self._send_json(self._status_payload())
             return
+        if path == "/api/admin/install-state":
+            self._send_json(detect_install_state().as_dict())
+            return
         if path == "/api/setup/releases":
             self._send_json(self.server.release_manager.list_releases())
             return
@@ -237,6 +246,12 @@ class AdminHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.split("?", 1)[0]
+        if path == "/api/admin/start-path":
+            self._handle_start_path()
+            return
+        if path == "/api/admin/config/migrate-legacy":
+            self._handle_migrate_legacy()
+            return
         if path == "/api/setup/releases/prepare":
             self._handle_release_prepare()
             return
@@ -307,6 +322,8 @@ class AdminHandler(BaseHTTPRequestHandler):
             "service": "ems-solarflow-admin",
             "version": "mvp",
             "capabilities": [
+                "install_state_routing",
+                "legacy_config_migration",
                 "discovery",
                 "release_resources",
                 "config_preview",
@@ -320,6 +337,54 @@ class AdminHandler(BaseHTTPRequestHandler):
             "active_device_list": "planned",
             "time": utc_now_iso(),
         }
+
+    def _handle_start_path(self):
+        body = self._read_json_body()
+        if body is None:
+            return
+        if not isinstance(body, dict):
+            self._send_json({"error": "expected a JSON object"}, status=400)
+            return
+        choice = body.get("choice")
+        confirm = body.get("confirm", False)
+        if not isinstance(confirm, bool):
+            self._send_json({"error": "confirm must be a boolean"}, status=400)
+            return
+        try:
+            result = select_start_path(choice, confirm=confirm)
+        except ValueError as exc:
+            self._send_json({"error": str(exc)}, status=400)
+            return
+        status = 409 if result.get("requires_confirmation") else 200
+        self._send_json(result, status=status)
+
+    def _handle_migrate_legacy(self):
+        body = self._read_optional_json_body()
+        if body is None:
+            return
+        overwrite = body.get("overwrite", False)
+        if not isinstance(overwrite, bool):
+            self._send_json({"error": "overwrite must be a boolean"}, status=400)
+            return
+        try:
+            result = migrate_legacy_root_config(overwrite=overwrite)
+        except LegacyMigrationError as exc:
+            self._send_json(
+                {"ok": False, "reason": exc.reason, "message": exc.message},
+                status=exc.status,
+            )
+            return
+        except OSError as exc:
+            self._send_json(
+                {
+                    "ok": False,
+                    "reason": "migration_failed",
+                    "message": f"Could not migrate the legacy config: {exc}",
+                },
+                status=500,
+            )
+            return
+        self._send_json(result)
 
     def _handle_release_prepare(self):
         body = self._read_json_body()

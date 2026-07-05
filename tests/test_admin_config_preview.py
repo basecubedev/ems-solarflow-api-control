@@ -187,6 +187,7 @@ def _context(config_path, config_exists=True):
         data_dir_exists=True,
         compose_path="/app/docker-compose.yml",
         compose_exists=True,
+        config_layout_state="standard_only",
     )
 
 

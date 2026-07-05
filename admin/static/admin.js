@@ -3620,10 +3620,182 @@ function initSetupWizard() {
   refreshDeploymentStatus();
 }
 
-setAdminView(currentHashView());
-initSetupWizard();
+// --- start gate ----------------------------------------------------------
+// The Admin UI opens on a router screen that detects the install state and
+// recommends the safest of the only two flows (set up new / manage existing).
+// The setup wizard must not auto-run when an install already exists, so its
+// network-touching init is deferred until the user chooses "Set up a new
+// system". Every server-provided path/message passes through escapeHtml.
 
-syncConfigFromDiscovery();
+const RECOMMEND_LABELS = {
+  setup_new: "Set up a new system",
+  manage_existing: "Manage my existing system",
+};
+
+const startEls = {
+  gate: document.getElementById("view-start"),
+  tabs: document.querySelector(".admin-view-tabs"),
+  recommend: document.getElementById("start-recommend"),
+  form: document.getElementById("start-path-form"),
+  error: document.getElementById("start-path-error"),
+  continue: document.getElementById("start-continue"),
+};
+
+let workspaceRevealed = false;
+
+function selectedStartChoice() {
+  const checked = startEls.form.querySelector('input[name="start-path"]:checked');
+  return checked ? checked.value : null;
+}
+
+function setStartError(message) {
+  if (!startEls.error) return;
+  if (!message) {
+    startEls.error.hidden = true;
+    startEls.error.textContent = "";
+    return;
+  }
+  startEls.error.hidden = false;
+  startEls.error.textContent = message;
+}
+
+function renderRecommendation(state) {
+  const recommended = state.recommended_path;
+  const label = escapeHtml(RECOMMEND_LABELS[recommended] || "Manage my existing system");
+  const notes = []
+    .concat(Array.isArray(state.reasons) ? state.reasons : [])
+    .concat(Array.isArray(state.warnings) ? state.warnings : []);
+  let html = '<p class="start-recommend-line">Recommended: <strong>' + label + "</strong></p>";
+  if (notes.length) {
+    html +=
+      '<ul class="start-recommend-notes">' +
+      notes.map((note) => "<li>" + escapeHtml(note) + "</li>").join("") +
+      "</ul>";
+  }
+  startEls.recommend.innerHTML = html;
+
+  const preselect = startEls.form.querySelector(
+    'input[name="start-path"][value="' + recommended + '"]'
+  );
+  if (preselect) preselect.checked = true;
+  if (startEls.continue) startEls.continue.disabled = false;
+}
+
+async function loadInstallState() {
+  try {
+    const resp = await fetch("/api/admin/install-state");
+    if (!resp.ok) throw new Error("install-state request failed");
+    const state = await resp.json();
+    renderRecommendation(state);
+  } catch (err) {
+    startEls.recommend.textContent =
+      "Could not detect the current installation. Choose an option to continue.";
+    if (startEls.continue) startEls.continue.disabled = false;
+  }
+}
+
+function revealWorkspace() {
+  if (startEls.gate) startEls.gate.hidden = true;
+  if (startEls.tabs) startEls.tabs.hidden = false;
+  workspaceRevealed = true;
+}
+
+function enterSetup() {
+  revealWorkspace();
+  if (!setupInitialized) initSetupWizard();
+  window.location.hash = "setup";
+  setAdminView("setup");
+}
+
+function enterMaintenance() {
+  revealWorkspace();
+  window.location.hash = "advanced";
+  setAdminView("advanced");
+}
+
+async function migrateLegacyConfig() {
+  const resp = await fetch("/api/admin/config/migrate-legacy", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  });
+  const result = await resp.json().catch(() => ({}));
+  if (!resp.ok || !result.ok) {
+    const message = result.message || "Could not migrate the legacy config.json.";
+    setStartError(message);
+    return false;
+  }
+  return true;
+}
+
+async function postStartPath(choice, confirm) {
+  const resp = await fetch("/api/admin/start-path", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ choice, confirm: Boolean(confirm) }),
+  });
+  const result = await resp.json().catch(() => ({}));
+  return { status: resp.status, result };
+}
+
+async function submitStartPath(event) {
+  event.preventDefault();
+  setStartError("");
+  const choice = selectedStartChoice();
+  if (!choice) {
+    setStartError("Choose how you want to continue.");
+    return;
+  }
+  startEls.continue.disabled = true;
+  try {
+    let { result } = await postStartPath(choice, false);
+    if (result.requires_confirmation) {
+      const proceed = window.confirm(
+        "An existing installation was detected. Setting up a new system can " +
+          "replace its configuration. Continue anyway?"
+      );
+      if (!proceed) return;
+      ({ result } = await postStartPath(choice, true));
+      if (result.requires_confirmation || !result.ok) {
+        setStartError(result.message || "Could not start setup.");
+        return;
+      }
+    }
+    if (!result.ok) {
+      setStartError(result.message || "Could not continue.");
+      return;
+    }
+    if (result.route === "setup") {
+      enterSetup();
+      return;
+    }
+    if (result.migrate_legacy_config) {
+      const proceed = window.confirm(
+        "A previous root config.json was found. Migrate it to the standard " +
+          "config/config.json layout now? A backup is created first."
+      );
+      if (proceed) {
+        const migrated = await migrateLegacyConfig();
+        if (!migrated) return;
+      }
+    }
+    enterMaintenance();
+  } finally {
+    if (!workspaceRevealed) startEls.continue.disabled = false;
+  }
+}
+
+if (startEls.form) {
+  startEls.form.addEventListener("submit", submitStartPath);
+  startEls.form.querySelectorAll('input[name="start-path"]').forEach((input) => {
+    input.addEventListener("change", () => setStartError(""));
+  });
+}
+
+loadInstallState();
+
+// Discovery pollers can run before the workspace is revealed; they only feed the
+// devices step once setup is entered.
 pollMdns();
 loadMqttBrokers();
 window.setInterval(pollMdns, MDNS_POLL_INTERVAL_MS);

@@ -17,9 +17,12 @@ from dashboard import auth as dashboard_auth
 
 from ems.paths import (
     BASE_DIR,
+    LAYOUT_LEGACY_ROOT_ONLY,
+    detect_config_layout_state,
     resolve_config_path as resolve_ems_config_path,
     resolve_runtime_path,
     resolve_dashboard_auth_path,
+    standard_config_path,
 )
 
 from ems.diagnostics import (
@@ -3816,7 +3819,31 @@ def resolve_config_init_backup_policy(args, plan):
     return bool(args.backup), "ok"
 
 
+def notify_legacy_root_config(args):
+    """Warn when config init targets the legacy root config by default.
+
+    New setups should live in the standard ``config/config.json`` layout. When
+    only the legacy root config exists and no explicit ``--config`` was given,
+    the resolver keeps editing it (so native installs keep working) but the user
+    is told so the legacy file is never changed silently.
+    """
+
+    if getattr(args, "config_explicit", False):
+        return
+    if detect_config_layout_state(base_dir=BASE_DIR) != LAYOUT_LEGACY_ROOT_ONLY:
+        return
+    standard = standard_config_path(base_dir=BASE_DIR)
+    print("Legacy root config.json detected.")
+    print(f"The standard Docker/Admin layout uses {standard}.")
+    print(
+        "Editing the legacy config.json. To create a standard-layout config "
+        "instead, pass an explicit output path (--config)."
+    )
+    print()
+
+
 def handle_config_init_command(args, config):
+    notify_legacy_root_config(args)
     config_exists = os.path.exists(args.config)
     if args.yes and not args.dry_run and config_exists:
         kind = config_init_mod.classify_config(config, config_exists, BASE_DIR)
@@ -3947,6 +3974,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     try:
+        args.config_explicit = args.config is not None
         args.config = resolve_config_path(args)
 
         if args.command == "diagnose":

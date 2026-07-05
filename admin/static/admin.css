@@ -893,3 +893,20 @@ code {
   .config-export-buttons { justify-content: stretch; }
   .config-export-buttons button { flex: 1 1 100%; }
 }
+
+/* --- start gate (Admin router) ------------------------------------------- */
+.start-gate { gap: 14px; }
+.start-gate-recommend { padding: 12px 14px; border: 1px solid rgba(34, 211, 238, 0.32); border-radius: 12px; background: linear-gradient(180deg, rgba(34, 211, 238, 0.10), rgba(139, 92, 246, 0.06)); color: var(--text); }
+.start-recommend-line { margin: 0; font-size: 14px; }
+.start-recommend-notes { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 12px; }
+.start-choices { display: flex; flex-direction: column; gap: 10px; border: none; margin: 0; padding: 0; }
+.start-choices-legend { padding: 0; margin: 0 0 4px; color: var(--muted); font-size: 12px; font-weight: 850; text-transform: uppercase; letter-spacing: .04em; }
+.start-choice { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border: 1px solid rgba(148,163,184,.20); border-radius: 12px; background: rgba(255,255,255,.03); cursor: pointer; transition: border-color .16s ease, background .16s ease; }
+.start-choice:hover { border-color: var(--border-strong); }
+.start-choice:has(input:checked) { border-color: rgba(34, 211, 238, 0.55); background: linear-gradient(180deg, rgba(34, 211, 238, 0.12), rgba(139, 92, 246, 0.08)); }
+.start-choice input { margin-top: 3px; }
+.start-choice-body { display: flex; flex-direction: column; gap: 3px; }
+.start-choice-title { font-size: 14px; font-weight: 850; color: var(--text); }
+.start-choice-desc { font-size: 12px; color: var(--muted); }
+.start-gate-actions { display: flex; }
+.start-gate-hint { margin: 4px 0 0; color: var(--muted); font-size: 12px; }

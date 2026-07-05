@@ -739,6 +739,54 @@ def test_config_init_missing_config_creates_valid_config_when_confirmed(
     assert created["system"]["max_total_power"] == 900
 
 
+def test_config_init_fresh_creates_standard_config_layout(tmp_path, monkeypatch):
+    patch_emsctl_base(monkeypatch, tmp_path)
+    shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")
+
+    code = emsctl.main(["config", "init", "--yes", "--analytics"])
+
+    assert code == 0
+    standard = tmp_path / "config" / "config.json"
+    assert standard.exists()
+    assert (tmp_path / "config").is_dir()
+    assert not (tmp_path / "config.json").exists()
+
+
+def test_config_init_legacy_root_only_warns_before_editing(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    patch_emsctl_base(monkeypatch, tmp_path)
+    shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")
+    legacy = tmp_path / "config.json"
+    shutil.copy(ROOT / "config.template.json", legacy)
+
+    code = emsctl.main(["config", "init", "--dry-run"])
+
+    output = capsys.readouterr()
+    assert code == 0
+    assert "Legacy root config.json detected." in output.out
+    assert str(tmp_path / "config" / "config.json") in output.out
+    # Dry run must not create the standard-layout config as a side effect.
+    assert not (tmp_path / "config" / "config.json").exists()
+
+
+def test_config_init_standard_layout_does_not_warn_about_legacy(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    patch_emsctl_base(monkeypatch, tmp_path)
+    shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")
+
+    code = emsctl.main(["config", "init", "--dry-run"])
+
+    output = capsys.readouterr()
+    assert code == 0
+    assert "Legacy root config.json detected." not in output.out
+
+
 def test_config_init_template_config_uses_first_run_continue_wording(
     tmp_path,
     monkeypatch,

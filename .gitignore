@@ -16,10 +16,10 @@ runtime-state.json
 runtime-state.json.tmp
 runtime-state.json.*.tmp
 
-# local config
+# local config (the versioned template stays tracked)
 /config.json
-/config/
-/config/**
+/config/*
+!/config/config.template.json
 
 # Docker-first enduser .env (PUID/PGID, COMPOSE_PROFILES)
 /.env

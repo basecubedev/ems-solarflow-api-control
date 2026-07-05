@@ -17,12 +17,45 @@
       </p>
     </header>
 
-    <nav class="admin-view-tabs" role="tablist" aria-label="Admin sections">
+    <section class="admin-view start-gate" id="view-start" aria-label="Choose how to continue">
+      <div class="start-gate-recommend" id="start-recommend" role="status" aria-live="polite">
+        Checking the current installation…
+      </div>
+      <form id="start-path-form" class="start-gate-form" autocomplete="off">
+        <fieldset class="start-choices">
+          <legend class="start-choices-legend">How do you want to continue?</legend>
+          <label class="start-choice">
+            <input type="radio" name="start-path" value="setup_new">
+            <span class="start-choice-body">
+              <span class="start-choice-title">Set up a new system</span>
+              <span class="start-choice-desc">For first-time setup or a clean reinstall.</span>
+            </span>
+          </label>
+          <label class="start-choice">
+            <input type="radio" name="start-path" value="manage_existing">
+            <span class="start-choice-body">
+              <span class="start-choice-title">Manage my existing system</span>
+              <span class="start-choice-desc">For updates, backups, diagnostics, changing settings, and migrating an existing config.</span>
+            </span>
+          </label>
+        </fieldset>
+        <p id="start-path-error" class="scan-error" role="alert" hidden></p>
+        <div class="start-gate-actions">
+          <button type="submit" id="start-continue" class="primary-button" disabled>Continue</button>
+        </div>
+        <p class="start-gate-hint">
+          Prefer shell-based Docker setup or a local developer checkout?
+          See the setup paths in the documentation.
+        </p>
+      </form>
+    </section>
+
+    <nav class="admin-view-tabs" role="tablist" aria-label="Admin sections" hidden>
       <button type="button" class="active" data-admin-view="setup" role="tab" aria-selected="true">Setup</button>
       <button type="button" data-admin-view="advanced" role="tab" aria-selected="false">Diagnostics / Advanced</button>
     </nav>
 
-    <div class="admin-view" id="view-setup" data-admin-view-panel="setup">
+    <div class="admin-view" id="view-setup" data-admin-view-panel="setup" hidden>
 
       <div class="setup-stepper" role="tablist" aria-label="Setup steps">
         <button type="button" class="setup-step active" data-setup-step="release" role="tab" aria-selected="true">

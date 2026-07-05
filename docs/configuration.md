@@ -7,14 +7,13 @@ the file is:
 config/config.json
 ```
 
-On first Docker start, the container creates that file from
-`config.template.json` if it does not exist. Existing Docker configs are not
-overwritten.
+On first Docker start, the container creates that file from the versioned
+template if it does not exist. Existing Docker configs are not overwritten.
 
-Native Python installations normally use:
+New native/developer setups use the same standard layout:
 
 ```text
-config.json
+config/config.json
 ```
 
 You can also pass an explicit path with `--config`.
@@ -22,8 +21,14 @@ You can also pass an explicit path with `--config`.
 For native/manual setups, create the config from the versioned template:
 
 ```bash
-cp config.template.json config.json
+mkdir -p config data
+cp config/config.template.json config/config.json
 ```
+
+Older native checkouts may still use a root `config.json`. That legacy layout is
+still read as a fallback, but new setups should use `config/config.json`. See
+[setup/config-layout.md](setup/config-layout.md) for the full layout and legacy
+migration states.
 
 `config.json` and `config/config.json` are local and ignored by Git. Do not
 commit real Home Assistant tokens, Zendure serial numbers, or local IP
@@ -32,7 +37,7 @@ addresses.
 ## Quick Start
 
 1. Start Docker once so it creates `config/config.json`, or copy
-   `config.template.json` to `config.json` for native Python.
+   `config/config.template.json` to `config/config.json` for native Python.
 2. Configure the real grid meter IP.
 3. Configure one or more real Zendure device IPs and serial numbers.
 4. Review power, SOC, battery, and PV limits for the installation.

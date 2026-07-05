@@ -13,6 +13,14 @@ from pathlib import Path
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DOCKER_TEMPLATE_PATH = Path("/app/config.template.json")
 
+# Config layout states describe how the standard (``config/config.json``) and
+# legacy (``config.json``) locations coexist in an install root.
+LAYOUT_NONE = "none"
+LAYOUT_LEGACY_ROOT_ONLY = "legacy_root_only"
+LAYOUT_STANDARD_ONLY = "standard_only"
+LAYOUT_BOTH_SAME = "both_same"
+LAYOUT_BOTH_DIFFERENT = "both_different"
+
 
 def _base_path(base_dir=None):
     return Path(BASE_DIR if base_dir is None else base_dir)
@@ -36,6 +44,46 @@ def resolve_config_path(explicit_path=None, *, base_dir=None):
     if legacy.exists():
         return legacy
     return canonical
+
+
+def standard_config_path(base_dir=None):
+    """The canonical Docker/Admin config location, regardless of existence."""
+
+    return _base_path(base_dir) / "config" / "config.json"
+
+
+def legacy_config_path(base_dir=None):
+    """The legacy native root config location, regardless of existence."""
+
+    return _base_path(base_dir) / "config.json"
+
+
+def detect_config_layout_state(base_dir=None):
+    """Classify how the standard and legacy config locations coexist.
+
+    Returns one of ``LAYOUT_NONE``, ``LAYOUT_LEGACY_ROOT_ONLY``,
+    ``LAYOUT_STANDARD_ONLY``, ``LAYOUT_BOTH_SAME`` or ``LAYOUT_BOTH_DIFFERENT``.
+    ``both_*`` compares file contents so callers can tell an in-progress
+    migration (identical) from two diverged configs.
+    """
+
+    standard = standard_config_path(base_dir)
+    legacy = legacy_config_path(base_dir)
+    standard_exists = standard.exists()
+    legacy_exists = legacy.exists()
+
+    if not standard_exists and not legacy_exists:
+        return LAYOUT_NONE
+    if standard_exists and not legacy_exists:
+        return LAYOUT_STANDARD_ONLY
+    if legacy_exists and not standard_exists:
+        return LAYOUT_LEGACY_ROOT_ONLY
+
+    try:
+        same = standard.read_bytes() == legacy.read_bytes()
+    except OSError:
+        same = False
+    return LAYOUT_BOTH_SAME if same else LAYOUT_BOTH_DIFFERENT
 
 
 def resolve_template_path(explicit_path=None, *, base_dir=None):

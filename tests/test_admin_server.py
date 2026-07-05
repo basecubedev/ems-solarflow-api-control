@@ -1048,3 +1048,186 @@ def test_mqtt_probe_api_rejects_unsafe_network():
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def _write_json(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data))
+    return path
+
+
+def test_install_state_endpoint_returns_contract_keys():
+    srv, base = _serve()
+    try:
+        status, _, payload = _request(f"{base}/api/admin/install-state")
+        assert status == 200
+        for key in (
+            "state",
+            "recommended_path",
+            "paths",
+            "reasons",
+            "warnings",
+            "legacy_migration_available",
+            "setup_requires_confirmation",
+        ):
+            assert key in payload
+        assert payload["recommended_path"] in ("setup_new", "manage_existing")
+        for key in ("legacy_config", "standard_config", "compose", "data"):
+            assert key in payload["paths"]
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_start_path_rejects_unknown_choice():
+    srv, base = _serve()
+    try:
+        status, _, payload = _request(
+            f"{base}/api/admin/start-path",
+            method="POST",
+            body={"choice": "docker_bootstrap"},
+        )
+        assert status == 400
+        assert "error" in payload
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_start_path_setup_requires_confirmation_on_existing(monkeypatch, tmp_path):
+    from ems import paths
+
+    monkeypatch.setattr(paths, "BASE_DIR", str(tmp_path))
+    _write_json(tmp_path / "config" / "config.json", {"a": 1})
+
+    srv, base = _serve()
+    try:
+        status, _, payload = _request(
+            f"{base}/api/admin/start-path",
+            method="POST",
+            body={"choice": "setup_new"},
+        )
+        assert status == 409
+        assert payload["requires_confirmation"] is True
+
+        status, _, confirmed = _request(
+            f"{base}/api/admin/start-path",
+            method="POST",
+            body={"choice": "setup_new", "confirm": True},
+        )
+        assert status == 200
+        assert confirmed["ok"] is True
+        assert confirmed["route"] == "setup"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_start_path_manage_routes_legacy_to_migration(monkeypatch, tmp_path):
+    from ems import paths
+
+    monkeypatch.setattr(paths, "BASE_DIR", str(tmp_path))
+    _write_json(tmp_path / "config.json", {"a": 1})
+
+    srv, base = _serve()
+    try:
+        status, _, payload = _request(
+            f"{base}/api/admin/start-path",
+            method="POST",
+            body={"choice": "manage_existing"},
+        )
+        assert status == 200
+        assert payload["route"] == "maintenance"
+        assert payload["migrate_legacy_config"] is True
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_migrate_legacy_endpoint_migrates_and_backs_up(monkeypatch, tmp_path):
+    from ems import paths
+
+    monkeypatch.setattr(paths, "BASE_DIR", str(tmp_path))
+    _write_json(tmp_path / "config.json", {"a": 1})
+    (tmp_path / "data").mkdir()
+
+    srv, base = _serve()
+    try:
+        status, _, payload = _request(
+            f"{base}/api/admin/config/migrate-legacy", method="POST"
+        )
+        assert status == 200
+        assert payload["ok"] is True and payload["migrated"] is True
+        assert (tmp_path / "config" / "config.json").exists()
+        assert (tmp_path / "config.json").exists(), "legacy source preserved"
+        assert (tmp_path / "data").is_dir(), "runtime data preserved"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_migrate_legacy_endpoint_missing_source_returns_404(monkeypatch, tmp_path):
+    from ems import paths
+
+    monkeypatch.setattr(paths, "BASE_DIR", str(tmp_path))
+    _write_json(tmp_path / "config" / "config.json", {"a": 1})
+
+    srv, base = _serve()
+    try:
+        status, _, payload = _request(
+            f"{base}/api/admin/config/migrate-legacy", method="POST"
+        )
+        assert status == 404
+        assert payload["reason"] == "legacy_config_missing"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_install_state_endpoint_uses_env_install_dir(monkeypatch, tmp_path):
+    from ems import paths
+
+    monkeypatch.setattr(paths, "BASE_DIR", str(tmp_path / "app"))
+    (tmp_path / "app").mkdir()
+    root = tmp_path / "install"
+    _write_json(root / "config" / "config.json", {"a": 1})
+    (root / "docker-compose.yml").write_text("services: {}")
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(root))
+
+    srv, base = _serve()
+    try:
+        status, _, payload = _request(f"{base}/api/admin/install-state")
+        assert status == 200
+        assert payload["state"] == "standard_install"
+        assert payload["paths"]["install_root"] == str(root)
+        assert payload["paths"]["standard_config"] == str(
+            root / "config" / "config.json"
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_migrate_legacy_endpoint_uses_env_install_dir(monkeypatch, tmp_path):
+    from ems import paths
+
+    monkeypatch.setattr(paths, "BASE_DIR", str(tmp_path / "app"))
+    (tmp_path / "app").mkdir()
+    root = tmp_path / "install"
+    _write_json(root / "config.json", {"a": 1})
+    (root / "data").mkdir()
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(root))
+
+    srv, base = _serve()
+    try:
+        status, _, payload = _request(
+            f"{base}/api/admin/config/migrate-legacy", method="POST"
+        )
+        assert status == 200
+        assert payload["migrated"] is True
+        assert payload["target"] == str(root / "config" / "config.json")
+        assert (root / "config" / "config.json").exists()
+        assert (root / "config.json").exists(), "legacy source preserved"
+    finally:
+        srv.shutdown()
+        srv.server_close()

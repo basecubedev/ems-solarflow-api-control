@@ -134,3 +134,32 @@ def test_install_root_is_the_standard_layout_root(tmp_path):
     assert context.install_root == tmp_path
     assert context.config_path.parent.parent == context.install_root
     assert context.data_dir.parent == context.install_root
+
+
+def test_legacy_root_only_layout_state_is_surfaced(tmp_path):
+    (tmp_path / "config.json").write_text("{}")
+
+    context = detect_install_context(base_dir=tmp_path)
+    assert context.config_source == SOURCE_LEGACY
+    assert context.config_layout_state == "legacy_root_only"
+    assert context.as_dict()["config_layout_state"] == "legacy_root_only"
+
+
+def test_standard_only_layout_state_is_surfaced(tmp_path):
+    standard = tmp_path / "config" / "config.json"
+    standard.parent.mkdir()
+    standard.write_text("{}")
+
+    context = detect_install_context(base_dir=tmp_path)
+    assert context.config_layout_state == "standard_only"
+
+
+def test_both_configs_present_prefers_standard_but_reports_difference(tmp_path):
+    standard = tmp_path / "config" / "config.json"
+    standard.parent.mkdir()
+    standard.write_text('{"a": 1}')
+    (tmp_path / "config.json").write_text('{"a": 2}')
+
+    context = detect_install_context(base_dir=tmp_path)
+    assert context.config_source == SOURCE_CANONICAL
+    assert context.config_layout_state == "both_different"

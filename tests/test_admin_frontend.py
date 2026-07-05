@@ -376,15 +376,29 @@ def test_index_renders_two_top_level_tabs():
     assert 'data-admin-view="config"' not in html
 
 
-def test_setup_tab_is_default_and_active():
+def test_start_gate_is_the_default_screen():
     html = _read("index.html")
-    # The Setup tab button is the pre-selected one.
-    assert '<button type="button" class="active" data-admin-view="setup"' in html
-    # Its panel is visible (not hidden); the advanced panel starts hidden.
+    # The router/start screen is shown first; the workspace (tabs + panels) is
+    # hidden until the user chooses a path so the setup wizard never auto-runs.
+    assert 'id="view-start"' in html
+    assert 'class="admin-view-tabs" role="tablist" aria-label="Admin sections" hidden' in html
     assert (
-        '<div class="admin-view" id="view-setup" data-admin-view-panel="setup">' in html
+        '<div class="admin-view" id="view-setup" data-admin-view-panel="setup" hidden>'
+        in html
     )
     assert 'data-admin-view-panel="advanced" hidden' in html
+
+
+def test_start_gate_has_exactly_two_choices():
+    html = _read("index.html")
+    assert html.count('name="start-path"') == 2
+    assert 'value="setup_new"' in html
+    assert 'value="manage_existing"' in html
+    assert "Set up a new system" in html
+    assert "Manage my existing system" in html
+    # Docker bootstrap / developer setup stay documentation-only paths.
+    assert "Docker bootstrap" not in html
+    assert "Developer setup" not in html
 
 
 def test_setup_tab_has_release_devices_config_stages():

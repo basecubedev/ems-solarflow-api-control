@@ -38,24 +38,32 @@ python -m pip install -r requirements.txt
 
 ## Create Config
 
+New setups use the standard `config/config.json` layout:
+
 ```bash
-cp config.template.json config.json
+mkdir -p config data
+cp config/config.template.json config/config.json
 ```
 
-Edit only your local `config.json`:
+Edit only your local `config/config.json`:
 
 ```bash
-nano config.json
+nano config/config.json
 ```
 
 Set real grid meter and Zendure values, then review power, SOC, battery, and PV
 limits. Template placeholder values force safe mode until replaced.
 
-You can also run the optional setup assistant:
+You can also run the optional setup assistant, which now writes
+`config/config.json`:
 
 ```bash
 python3 emsctl.py config init
 ```
+
+Older checkouts may still use a root `config.json`. That legacy layout is still
+read as a fallback, but new setups should use `config/config.json`. See
+[setup/config-layout.md](setup/config-layout.md).
 
 ## First Checks
 

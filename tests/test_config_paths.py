@@ -100,3 +100,59 @@ def test_data_and_compose_defaults_follow_base_dir(tmp_path):
     assert paths.resolve_compose_path(base_dir=tmp_path) == (
         tmp_path / "docker-compose.yml"
     )
+
+
+def test_layout_state_none_when_no_config(tmp_path):
+    assert paths.detect_config_layout_state(base_dir=tmp_path) == paths.LAYOUT_NONE
+
+
+def test_layout_state_legacy_root_only(tmp_path):
+    (tmp_path / "config.json").write_text("{}")
+
+    assert paths.detect_config_layout_state(base_dir=tmp_path) == (
+        paths.LAYOUT_LEGACY_ROOT_ONLY
+    )
+
+
+def test_layout_state_standard_only(tmp_path):
+    standard = tmp_path / "config" / "config.json"
+    standard.parent.mkdir()
+    standard.write_text("{}")
+
+    assert paths.detect_config_layout_state(base_dir=tmp_path) == (
+        paths.LAYOUT_STANDARD_ONLY
+    )
+
+
+def test_layout_state_both_same(tmp_path):
+    standard = tmp_path / "config" / "config.json"
+    standard.parent.mkdir()
+    standard.write_text('{"a": 1}')
+    (tmp_path / "config.json").write_text('{"a": 1}')
+
+    assert paths.detect_config_layout_state(base_dir=tmp_path) == (
+        paths.LAYOUT_BOTH_SAME
+    )
+
+
+def test_layout_state_both_different(tmp_path):
+    standard = tmp_path / "config" / "config.json"
+    standard.parent.mkdir()
+    standard.write_text('{"a": 1}')
+    (tmp_path / "config.json").write_text('{"a": 2}')
+
+    assert paths.detect_config_layout_state(base_dir=tmp_path) == (
+        paths.LAYOUT_BOTH_DIFFERENT
+    )
+
+
+def test_repo_template_copies_stay_in_sync():
+    # The standard config/config.template.json is the preferred location; the
+    # legacy root config.template.json is kept for Docker build and old
+    # checkouts. Guard against the two copies drifting.
+    root = Path(paths.BASE_DIR)
+    standard = root / "config" / "config.template.json"
+    legacy = root / "config.template.json"
+    assert standard.exists()
+    assert legacy.exists()
+    assert standard.read_bytes() == legacy.read_bytes()

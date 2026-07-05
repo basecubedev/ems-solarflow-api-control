@@ -22,6 +22,29 @@ and provides a local dashboard without requiring Home Assistant.
 - works without Home Assistant
 - includes dashboard, diagnostics, backups, and optional InfluxDB analytics
 
+## Choose Your Setup Path
+
+Pick one path and follow its guide. All three converge on the same standard
+layout, so you can switch later.
+
+| Path | Best for | Start here | Config layout |
+| --- | --- | --- | --- |
+| Guided Admin setup | Normal users: browser-based setup, discovery and maintenance | [docs/setup/admin-setup.md](docs/setup/admin-setup.md) | `config/config.json` |
+| Docker bootstrap | Users comfortable with shell commands and Docker | [docs/setup/docker-bootstrap.md](docs/setup/docker-bootstrap.md) | `config/config.json` |
+| Developer setup | Development, debugging and contributing from a Git checkout | [docs/setup/developer-setup.md](docs/setup/developer-setup.md) | `config/config.json` |
+
+Shared target layout:
+
+```text
+./config/config.json
+./data/
+./docker-compose.yml
+```
+
+Older native checkouts may still use a root `./config.json`. It is kept only as
+legacy compatibility; new setups should use `config/config.json`. See
+[docs/setup/config-layout.md](docs/setup/config-layout.md).
+
 ## Recommended Setup: Docker
 
 Docker is the recommended setup for normal users. It keeps Python dependencies
@@ -241,6 +264,10 @@ Short beginner answers are in [docs/faq.md](docs/faq.md).
 
 | Topic | Link |
 | --- | --- |
+| Setup: Guided Admin | [docs/setup/admin-setup.md](docs/setup/admin-setup.md) |
+| Setup: Docker bootstrap | [docs/setup/docker-bootstrap.md](docs/setup/docker-bootstrap.md) |
+| Setup: Developer | [docs/setup/developer-setup.md](docs/setup/developer-setup.md) |
+| Setup: Config layout | [docs/setup/config-layout.md](docs/setup/config-layout.md) |
 | Beginner quickstart | [docs/quickstart.md](docs/quickstart.md) |
 | Supported setups | [docs/supported-setups.md](docs/supported-setups.md) |
 | First-run checklist | [docs/first-run-checklist.md](docs/first-run-checklist.md) |
