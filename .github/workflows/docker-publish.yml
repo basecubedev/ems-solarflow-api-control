@@ -73,6 +73,30 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Resolve build identity
+        id: build_identity
+        run: |
+          # `latest` is a channel, not a version. Resolve a monotonic build
+          # identity so Admin can compare a running `latest` image against
+          # stable/rc tags by image labels, not tag name alone.
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            release_tag="${GITHUB_REF#refs/tags/}"
+            if [[ "${release_tag}" == *-* ]]; then
+              channel="rc"        # refs/tags/vX.Y.Z-...  (pre-release)
+            else
+              channel="stable"    # refs/tags/vX.Y.Z
+            fi
+          else
+            channel="latest"      # main / schedule / workflow_dispatch
+            release_tag="latest"
+          fi
+          {
+            echo "channel=${channel}"
+            echo "release_tag=${release_tag}"
+            echo "build_serial=${GITHUB_RUN_NUMBER}"
+            echo "build_id=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          } >> "${GITHUB_OUTPUT}"
+
       - name: Generate Docker metadata
         id: meta
         uses: docker/metadata-action@v6
@@ -86,6 +110,12 @@ jobs:
             org.opencontainers.image.description=Local EMS controller for Zendure SolarFlow. Docker images include automatic first-run config bootstrap. See README for Quick Start and docs/docker.md for full setup.
             org.opencontainers.image.source=https://github.com/basecubedev/ems-solarflow-api-control
             org.opencontainers.image.documentation=https://github.com/basecubedev/ems-solarflow-api-control/blob/main/docs/docker.md
+            org.opencontainers.image.version=${{ steps.build_identity.outputs.release_tag }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            de.basecubedev.ems.channel=${{ steps.build_identity.outputs.channel }}
+            de.basecubedev.ems.build_serial=${{ steps.build_identity.outputs.build_serial }}
+            de.basecubedev.ems.build_id=${{ steps.build_identity.outputs.build_id }}
+            de.basecubedev.ems.release_tag=${{ steps.build_identity.outputs.release_tag }}
 
       - name: Build local Docker image for content validation
         run: |
