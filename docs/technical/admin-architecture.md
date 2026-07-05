@@ -139,6 +139,49 @@ Only the per-listener transport flag differs: the HTTPS listener wraps its
 socket with the `SSLContext` and sets `https_active=True`, which adds the
 `Secure` attribute to Admin session cookies.
 
+## Admin container update
+
+Admin update is a two-phase flow. The running Admin process writes a pending
+state file, starts an updater outside the current HTTP request, returns a
+reconnect response, and the replacement Admin resumes from `data/admin/state/`.
+
+Admin image update decisions are made by digest/build identity, not by tag name
+alone.
+
+Concretely:
+
+- **Server-side target.** The browser only ever sends a release *tag*. The target
+  Admin image is derived server-side as
+  `ghcr.io/basecubedev/ems-solarflow-admin:<tag>` (`admin/admin_update.py`); an
+  arbitrary image reference, path, or shell metacharacter in the "tag" is
+  rejected. The browser never supplies an image ref, a compose path, or a
+  command.
+- **Digest decision.** `decide_admin_update` compares the running Admin image
+  identity (`EMS_ADMIN_CONTAINER_NAME` / `EMS_ADMIN_IMAGE`+`EMS_ADMIN_TAG`, plus
+  `docker image inspect`) against the target by digest. Equal digests mean the
+  release only retagged an unchanged Admin image (no update). Unknown digests are
+  treated as uncertain and require explicit confirmation.
+- **Pending state.** `data/admin/state/pending-admin-update.json` is written
+  atomically (temp file + fsync + rename), tolerates a missing file, and surfaces
+  a clear recovery error for corrupt JSON instead of crashing. It holds no
+  passwords or secrets.
+- **Out-of-request updater.** `POST …/admin-update/execute` writes the pending
+  state, launches `admin/update_apply.py` (a local delayed worker thread, or the
+  `python -m admin.update_apply --plan-id <id>` sidecar), and returns
+  `admin_update_started` with a reconnect hint *before* any pull or recreate. The
+  updater pulls the target image, repoints the Admin compose/env tag, and runs
+  `docker compose … up -d --no-deps --force-recreate` on the Admin service only.
+- **Resume.** After the restart (which drops the in-memory Admin session), the new
+  Admin proves success by observing that its own running image now matches the
+  plan target, moves the pending state to `admin_update_succeeded`, and the
+  browser resumes the EMS upgrade via `…/admin-update/resume`.
+
+The updater only touches the Admin image, the Admin compose/env tag, and the
+Admin service. It never pulls or recreates the EMS/InfluxDB containers and never
+touches EMS config or data — those changes belong to the Guided EMS Upgrade,
+after user confirmation. All Admin update APIs require a valid Admin session and,
+for POST, the `X-CSRF-Token`.
+
 ## Why this split matters
 
 - A single source of truth (EMS/Core) means the Admin Console, the CLI and the

@@ -29,6 +29,9 @@ two flows. It never acts silently.
 Mutating actions preview the change and ask for confirmation. Config apply,
 guided upgrade and restore back up what they replace first.
 
+When Admin updates itself, the browser may briefly show a reconnect screen. See
+[Updating the Admin Console](admin-maintenance.md#updating-the-admin-console).
+
 ## It does not replace EMS
 
 - EMS still runs the control loop and remains the source of truth.

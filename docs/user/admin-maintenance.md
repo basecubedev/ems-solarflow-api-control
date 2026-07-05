@@ -52,6 +52,34 @@ The Admin Console asks for confirmation before changing config, compose files,
 containers, or data. If you change config without also taking a backup, the run
 records a warning.
 
+### Updating the Admin Console
+
+During Guided upgrade, the Admin Console may update itself before updating EMS.
+The page will show a reconnect screen and then continue from the saved plan.
+
+If you are asked to log in again after the Admin Console restart, use the same
+EMS Dashboard/Admin password. The pending upgrade will be shown again after login.
+
+The plan shows whether an Admin update is needed for the selected release:
+
+- **Admin Console image unchanged for this release** — nothing to do; the EMS
+  upgrade can proceed.
+- **Admin Console update required before EMS upgrade** — click **Update Admin
+  Console**. The page shows a reconnect screen while the Admin Console restarts
+  on the new image, then offers **Continue EMS upgrade?**.
+
+The Admin update only replaces the Admin Console container. It never touches your
+EMS config, EMS data, or the EMS container — those changes only happen later in
+the Guided EMS Upgrade, after you confirm them.
+
+If the new Admin Console does not come back on its own, check its logs and start
+it again:
+
+```bash
+docker compose -f docker-compose.admin.yml logs
+docker compose -f docker-compose.admin.yml up -d
+```
+
 ## Manual configuration
 
 This path inspects and edits an existing installation.
