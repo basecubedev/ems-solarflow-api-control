@@ -97,10 +97,17 @@ bundle-metadata.json
 {
   "bundle_version": 1,
   "generated_at": "ISO-8601 timestamp",
-  "ems_version": "0.6.0",
+  "ems_version": null,
+  "build_label": "v0.6.3-12-gabcdef-dirty",
   "schema_version": 1
 }
 ```
+
+`ems_version` is a real release tag (e.g. `"v0.6.3"`) only for official release
+builds; it is `null` for `latest`/local builds. `build_label` is a best-effort
+build/revision label (from `EMS_GIT_DESCRIBE` / `git describe` / commit / build
+id) or `null`. Both are derived at runtime by `ems.build_info.collect_build_info`
+from CI build env vars or the local Git checkout — never hardcoded.
 
 Secret redaction is applied to common token, password, dashboard auth, MQTT,
 API, serial, and credential fields. The bundle intentionally excludes logs and

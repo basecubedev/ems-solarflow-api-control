@@ -5894,7 +5894,7 @@ function renderBackupDetails(data) {
     backupFact("Purpose", manifest.backup_purpose || "—"),
     backupFact("Created", manifest.created_at || "—"),
     backupFact("Source version", source.ems_version || "—"),
-    backupFact("Source build", source.git_describe || source.git_commit_short || "—"),
+    backupFact("Source build", source.build_label || source.git_describe || source.git_commit_short || "—"),
     backupFact("Source branch", source.git_branch || "—"),
     backupFact("Files", String(manifest.files_count || 0)),
     backupFact("Sensitive files", String(manifest.sensitive_count || 0)),

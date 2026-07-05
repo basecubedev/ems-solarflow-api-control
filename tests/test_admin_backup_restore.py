@@ -158,9 +158,11 @@ def test_list_backups_returns_valid_ems_archives(tmp_path):
     assert record["size_bytes"] > 0
     assert record["mtime"]
     assert "path" not in record
-    # Source version and a build/revision label are surfaced for the row facts.
-    assert record["source_version"]
-    assert "source_build" in record and "source_commit" in record
+    # A local/dev build has no release version, but a build/revision label and a
+    # short commit are still surfaced for the row facts.
+    assert record["source_version"] is None
+    assert record["source_build"]
+    assert record["source_commit"]
 
 
 def test_list_backups_ignores_non_backup_files(tmp_path):
@@ -192,6 +194,23 @@ def test_record_exposes_source_version_and_build():
     assert data["source_commit"] == "abcdef123456"
 
 
+def test_record_source_build_prefers_build_label():
+    record = BackupRecord(id="x", name="ems-config-manual.tar.gz", path="/x")
+    BackupStore._apply_manifest(record, {
+        "source": {
+            "ems_version": None,
+            "build_label": "v0.6.3-12-gabcdef-dirty",
+            "git_describe": "ignored-when-build-label-present",
+            "git_commit_short": "abcdef123456",
+        },
+        "files": [],
+    })
+    # New-style manifest: build_label is the honest compact build identity, and
+    # a non-release build carries no historic version.
+    assert record.source_build == "v0.6.3-12-gabcdef-dirty"
+    assert record.source_version is None
+
+
 def test_record_source_build_falls_back_to_commit_and_drops_unknown():
     record = BackupRecord(id="x", name="ems-config-manual.tar.gz", path="/x")
     BackupStore._apply_manifest(record, {
@@ -202,7 +221,11 @@ def test_record_source_build_falls_back_to_commit_and_drops_unknown():
 
     blank = BackupRecord(id="y", name="ems-config-manual.tar.gz", path="/y")
     BackupStore._apply_manifest(blank, {
-        "source": {"git_commit_short": "unknown", "git_describe": "unknown"},
+        "source": {
+            "build_label": None,
+            "git_commit_short": "null",
+            "git_describe": "unknown",
+        },
         "files": [],
     })
     assert blank.source_build is None
@@ -213,12 +236,14 @@ def test_inspect_summary_exposes_git_describe_and_dirty():
     summary = BackupInspector._summarize({
         "source": {
             "ems_version": "0.6.3",
+            "build_label": "v0.6.3-2-gabcdef1",
             "git_commit_short": "abcdef123456",
             "git_describe": "v0.6.3-2-gabcdef1",
             "git_dirty": True,
         },
         "files": [],
     })
+    assert summary["source"]["build_label"] == "v0.6.3-2-gabcdef1"
     assert summary["source"]["git_describe"] == "v0.6.3-2-gabcdef1"
     assert summary["source"]["git_commit_short"] == "abcdef123456"
     assert summary["source"]["git_dirty"] is True

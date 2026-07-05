@@ -100,16 +100,24 @@ def _parse_archive_name(name):
     return backup_type, backup_purpose
 
 
-def _clean_build_meta(value):
-    """Treat empty and ``"unknown"`` build fields as absent."""
+# Placeholders older/foreign manifests used for "no value".
+_ABSENT_BUILD_META = {"", "unknown", "none", "null", "-"}
 
-    return value if value and value != "unknown" else None
+
+def _clean_build_meta(value):
+    """Treat empty and placeholder build fields (``unknown``/``none``/...) as absent."""
+
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text if text and text.lower() not in _ABSENT_BUILD_META else None
 
 
 def _source_build(source):
-    """Compact build label: a git describe if available, else the short commit."""
+    """Compact build label: prefer the honest build label, then describe/commit."""
 
-    return (_clean_build_meta(source.get("git_describe"))
+    return (_clean_build_meta(source.get("build_label"))
+            or _clean_build_meta(source.get("git_describe"))
             or _clean_build_meta(source.get("git_commit_short")))
 
 
@@ -488,6 +496,7 @@ class BackupInspector:
             "encryption": manifest.get("encryption") or {"enabled": False},
             "source": {
                 "ems_version": source.get("ems_version"),
+                "build_label": source.get("build_label"),
                 "git_commit_short": source.get("git_commit_short"),
                 "git_branch": source.get("git_branch"),
                 "git_describe": source.get("git_describe"),

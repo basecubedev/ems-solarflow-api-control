@@ -63,7 +63,6 @@ COPY ems/__init__.py ./ems/__init__.py
 COPY ems/paths.py ./ems/paths.py
 COPY ems/config_catalog.py ./ems/config_catalog.py
 COPY ems/config.py ./ems/config.py
-COPY ems/version.py ./ems/version.py
 COPY ems/backup.py ./ems/backup.py
 COPY ems/backup_crypto.py ./ems/backup_crypto.py
 COPY ems/influx_setup.py ./ems/influx_setup.py

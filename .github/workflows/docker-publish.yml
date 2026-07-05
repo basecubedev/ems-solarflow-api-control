@@ -81,6 +81,9 @@ jobs:
           # stable/rc tags by image labels, not tag name alone.
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             release_tag="${GITHUB_REF#refs/tags/}"
+            # Only a real release tag becomes the runtime ems_version; `latest`
+            # stays empty so a channel never poses as a release version.
+            ems_release_tag="${release_tag}"
             if [[ "${release_tag}" == *-* ]]; then
               channel="rc"        # refs/tags/vX.Y.Z-...  (pre-release)
             else
@@ -89,10 +92,22 @@ jobs:
           else
             channel="latest"      # main / schedule / workflow_dispatch
             release_tag="latest"
+            ems_release_tag=""
+          fi
+          git_describe="$(git describe --tags --always --dirty 2>/dev/null || true)"
+          git_commit_short="${GITHUB_SHA::12}"
+          if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
+            git_dirty="true"
+          else
+            git_dirty="false"
           fi
           {
             echo "channel=${channel}"
             echo "release_tag=${release_tag}"
+            echo "ems_release_tag=${ems_release_tag}"
+            echo "git_describe=${git_describe}"
+            echo "git_commit_short=${git_commit_short}"
+            echo "git_dirty=${git_dirty}"
             echo "build_serial=${GITHUB_RUN_NUMBER}"
             echo "build_id=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           } >> "${GITHUB_OUTPUT}"
@@ -119,7 +134,17 @@ jobs:
 
       - name: Build local Docker image for content validation
         run: |
-          docker build -t ems-solarflow-api-control:ci .
+          docker build \
+            --build-arg EMS_RELEASE_TAG="${{ steps.build_identity.outputs.ems_release_tag }}" \
+            --build-arg EMS_GIT_COMMIT="${{ github.sha }}" \
+            --build-arg EMS_GIT_COMMIT_SHORT="${{ steps.build_identity.outputs.git_commit_short }}" \
+            --build-arg EMS_GIT_DESCRIBE="${{ steps.build_identity.outputs.git_describe }}" \
+            --build-arg EMS_GIT_BRANCH="${{ github.ref_name }}" \
+            --build-arg EMS_GIT_DIRTY="${{ steps.build_identity.outputs.git_dirty }}" \
+            --build-arg EMS_BUILD_ID="${{ steps.build_identity.outputs.build_id }}" \
+            --build-arg EMS_BUILD_SERIAL="${{ steps.build_identity.outputs.build_serial }}" \
+            --build-arg EMS_CHANNEL="${{ steps.build_identity.outputs.channel }}" \
+            -t ems-solarflow-api-control:ci .
 
       - name: Validate Docker image runtime content
         run: |
@@ -149,5 +174,15 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            EMS_RELEASE_TAG=${{ steps.build_identity.outputs.ems_release_tag }}
+            EMS_GIT_COMMIT=${{ github.sha }}
+            EMS_GIT_COMMIT_SHORT=${{ steps.build_identity.outputs.git_commit_short }}
+            EMS_GIT_DESCRIBE=${{ steps.build_identity.outputs.git_describe }}
+            EMS_GIT_BRANCH=${{ github.ref_name }}
+            EMS_GIT_DIRTY=${{ steps.build_identity.outputs.git_dirty }}
+            EMS_BUILD_ID=${{ steps.build_identity.outputs.build_id }}
+            EMS_BUILD_SERIAL=${{ steps.build_identity.outputs.build_serial }}
+            EMS_CHANNEL=${{ steps.build_identity.outputs.channel }}
           annotations: |
             index:org.opencontainers.image.description=Local EMS controller for Zendure SolarFlow. Docker images include automatic first-run config bootstrap. See README for Quick Start and docs/docker.md for full setup.
