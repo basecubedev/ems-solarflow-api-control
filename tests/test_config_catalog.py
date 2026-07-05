@@ -57,12 +57,14 @@ def test_catalog_contains_all_supported_grid_meter_variants():
         "shelly",
         "shelly_3em_gen1",
         "ecotracker",
+        "zendure_smartmeter_3ct_http",
         "tasmota_http",
         "zendure_smartmeter_d0",
         "mqtt",
         "ha",
     }
     assert variants["ha"]["level"] == "deprecated"
+    assert variants["zendure_smartmeter_3ct_http"]["fields"] == ("grid_meter.ip",)
 
 
 def test_catalog_defines_local_api_inverter_connection():

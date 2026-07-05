@@ -1819,6 +1819,15 @@ def test_js_grid_meter_type_prefers_explicit_field():
     assert "GRID_METER_TYPE_CHOICES.has(explicit)" in fn
 
 
+def test_js_grid_meter_type_allows_and_infers_zendure_3ct_http():
+    js = _read("admin.js")
+    choices = js.split("const GRID_METER_TYPE_CHOICES", 1)[1].split("]", 1)[0]
+    assert "zendure_smartmeter_3ct_http" in choices
+    fn = js.split("function gridMeterType", 1)[1].split("\nfunction ", 1)[0]
+    assert '"3ct"' in fn
+    assert "zendure_smartmeter_3ct_http" in fn
+
+
 def test_js_inverter_body_exposes_enabled_field():
     js = _read("admin.js")
     body = js.split("function renderInverterBody", 1)[1].split("\nfunction ", 1)[0]

@@ -159,6 +159,66 @@ def test_preview_validates_bad_host(tmp_path):
     assert any(e["code"] == "device_host_invalid" for e in preview["validation"]["errors"])
 
 
+def test_load_and_preview_zendure_3ct_http_grid_meter(tmp_path):
+    data = _config()
+    data["grid_meter"] = {"type": "zendure_smartmeter_3ct_http", "ip": "192.168.1.60"}
+    _write_config(tmp_path, data)
+
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    assert loaded["summary"]["grid_meter_type"] == "zendure_smartmeter_3ct_http"
+    draft = loaded["draft"]
+    assert draft["grid_meter"]["type"] == "zendure_smartmeter_3ct_http"
+    assert draft["grid_meter"]["ip"] == "192.168.1.60"
+
+    preview = preview_maintenance_config(draft, base_dir=str(tmp_path))
+    assert preview["validation"]["ok"] is True
+    assert preview["preview"]["grid_meter"] == {
+        "type": "zendure_smartmeter_3ct_http",
+        "ip": "192.168.1.60",
+    }
+
+
+def test_preview_requires_ip_for_zendure_3ct_http_grid_meter(tmp_path):
+    _write_config(tmp_path, _config())
+    draft = load_maintenance_config(base_dir=str(tmp_path))["draft"]
+    draft["grid_meter"]["type"] = "zendure_smartmeter_3ct_http"
+    draft["grid_meter"]["ip"] = ""
+
+    preview = preview_maintenance_config(draft, base_dir=str(tmp_path))
+    assert preview["validation"]["ok"] is False
+    assert any(
+        e["code"] == "grid_meter_host_invalid" for e in preview["validation"]["errors"]
+    )
+
+
+def test_switch_to_zendure_3ct_http_drops_stale_tasmota_and_mqtt_keys(tmp_path):
+    data = _config()
+    data["grid_meter"] = {
+        "type": "tasmota_http",
+        "ip": "192.168.1.60",
+        "url": "http://192.168.1.60/cm?cmnd=Status%2010",
+        "power_path": "StatusSNS.SML.Power_curr",
+        "mqtt": {"host": "mqtt.local", "topic": "meter/grid"},
+        "topic": "meter/grid",
+    }
+    _write_config(tmp_path, data)
+    draft = load_maintenance_config(base_dir=str(tmp_path))["draft"]
+    draft["grid_meter"] = {
+        "present": True,
+        "type": "zendure_smartmeter_3ct_http",
+        "ip": "192.168.1.60",
+    }
+
+    preview = preview_maintenance_config(draft, base_dir=str(tmp_path))
+    grid = preview["preview"]["grid_meter"]
+    assert grid["type"] == "zendure_smartmeter_3ct_http"
+    assert grid["ip"] == "192.168.1.60"
+    assert "url" not in grid
+    assert "power_path" not in grid
+    assert "mqtt" not in grid
+    assert "topic" not in grid
+
+
 def test_preview_does_not_write_config(tmp_path):
     path = _write_config(tmp_path, _config())
     original = path.read_text(encoding="utf-8")

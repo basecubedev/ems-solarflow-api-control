@@ -77,10 +77,12 @@
     "_comment": [
       "Household or grid power meter used as the EMS load signal.",
       "Supported types: shelly, shelly_3em_gen1, ecotracker, tasmota_http,",
-      "zendure_smartmeter_d0, mqtt.",
+      "zendure_smartmeter_3ct_http, zendure_smartmeter_d0, mqtt.",
       "Shelly reads total power by default.",
       "Use channels like [c] or [a,c] for selected clamps or phases.",
       "Tasmota needs url or ip plus power_path.",
+      "Zendure Smart Meter 3CT HTTP reads total_power from /properties/report",
+      "and needs only grid_meter.ip.",
       "Zendure SmartMeter D0 and MQTT use grid_meter.mqtt with host, port, topic,",
       "payload_format and max_age_seconds."
     ],

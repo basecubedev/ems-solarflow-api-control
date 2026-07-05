@@ -2723,6 +2723,7 @@ const GRID_METER_TYPE_CHOICES = new Set([
   "shelly",
   "shelly_3em_gen1",
   "ecotracker",
+  "zendure_smartmeter_3ct_http",
   "tasmota_http",
   "zendure_smartmeter_d0",
   "mqtt",
@@ -2736,6 +2737,7 @@ function gridMeterType(item, fallback) {
   if (GRID_METER_TYPE_CHOICES.has(explicit)) return explicit;
   const description = (item.device_type + " " + item.api_family).toLowerCase();
   if (description.includes("ecotracker")) return "ecotracker";
+  if (description.includes("3ct")) return "zendure_smartmeter_3ct_http";
   if (description.includes("3em") && description.includes("gen1")) {
     return "shelly_3em_gen1";
   }

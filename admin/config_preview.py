@@ -17,6 +17,7 @@ _GRID_TYPES = {
     "shelly_gen2": "shelly",
     "shelly_3em_gen1": "shelly_3em_gen1",
     "ecotracker": "ecotracker",
+    "zendure_smartmeter_3ct_http": "zendure_smartmeter_3ct_http",
     "tasmota_http": "tasmota_http",
 }
 # Explicit meter types a manual (non-discovered) grid meter may declare. A manual
@@ -25,6 +26,7 @@ _GRID_TYPE_CHOICES = {
     "shelly",
     "shelly_3em_gen1",
     "ecotracker",
+    "zendure_smartmeter_3ct_http",
     "tasmota_http",
     "zendure_smartmeter_d0",
     "mqtt",
@@ -62,6 +64,8 @@ def _grid_type(item, fallback):
     description = f"{family} {device_type}"
     if "ecotracker" in description:
         return "ecotracker"
+    if "3ct" in description:
+        return "zendure_smartmeter_3ct_http"
     if "3em" in description and "gen1" in description:
         return "shelly_3em_gen1"
     if "tasmota" in description:

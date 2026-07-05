@@ -125,11 +125,18 @@ def test_grid_meter_variants_are_exposed_for_setup():
     catalog = build_setup_catalog()
     variants = catalog["grid_meter_variants"]
 
-    assert {"shelly", "shelly_3em_gen1", "ecotracker", "tasmota_http", "zendure_smartmeter_d0", "mqtt"} == set(
-        variants
-    )
+    assert {
+        "shelly",
+        "shelly_3em_gen1",
+        "ecotracker",
+        "zendure_smartmeter_3ct_http",
+        "tasmota_http",
+        "zendure_smartmeter_d0",
+        "mqtt",
+    } == set(variants)
     assert variants["mqtt"]["fields"]
     assert "grid_meter.mqtt.host" in variants["mqtt"]["fields"]
+    assert list(variants["zendure_smartmeter_3ct_http"]["fields"]) == ["grid_meter.ip"]
 
 
 def test_manual_hardware_variants_are_role_specific():
@@ -143,6 +150,7 @@ def test_manual_hardware_variants_are_role_specific():
         "shelly",
         "shelly_3em_gen1",
         "ecotracker",
+        "zendure_smartmeter_3ct_http",
         "tasmota_http",
     }
     assert not ({item["id"] for item in variants["inverter"]} & {

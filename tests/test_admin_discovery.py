@@ -46,6 +46,15 @@ SHELLY_3EM_GEN1_STATUS = {
     "mac": "112233445566",
 }
 ECOTRACKER_JSON = {"power": 133.7, "id": "eco-1"}
+ZENDURE_3CT_REPORT = {
+    "timestamp": 1783163312,
+    "messageId": 12,
+    "deviceId": "rhRkw909",
+    "a_aprt_power": 0,
+    "b_aprt_power": 0,
+    "c_aprt_power": -798,
+    "total_power": -798,
+}
 
 
 class _FakeDeviceHandler(BaseHTTPRequestHandler):
@@ -189,6 +198,24 @@ def test_ecotracker_detected_as_grid_meter():
     assert device is not None
     assert device.api_family == "ecotracker"
     assert device.role_suggestion == "grid_meter"
+
+
+def test_zendure_3ct_detected_as_grid_meter_not_inverter():
+    device = _probe_single({"/properties/report": ZENDURE_3CT_REPORT})
+    assert device is not None
+    assert device.api_family == "zendure_smartmeter_3ct_http"
+    assert device.device_type == "zendure_smartmeter_3ct"
+    assert device.role_suggestion == "grid_meter"
+    assert device.serial_number == "rhRkw909"
+    assert device.config_ready is True
+
+
+def test_zendure_inverter_report_not_classified_as_3ct_meter():
+    # A nested ``properties`` payload is the inverter; it must keep its inverter
+    # role even though the 3CT meter shares the /properties/report path.
+    device = _probe_single({"/properties/report": ZENDURE_REPORT})
+    assert device.api_family == "zendure_local_http"
+    assert device.role_suggestion == "inverter"
 
 
 def test_unknown_http_device_is_ignored():

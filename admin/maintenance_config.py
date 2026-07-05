@@ -30,8 +30,26 @@ _DEVICE_NUMERIC_FIELDS = (
     "battery_kwh",
     "pv_priority_factor",
 )
-_GRID_HOST_TYPES = ("shelly", "shelly_3em_gen1", "ecotracker", "tasmota_http")
+_GRID_HOST_TYPES = (
+    "shelly",
+    "shelly_3em_gen1",
+    "ecotracker",
+    "zendure_smartmeter_3ct_http",
+    "tasmota_http",
+)
 _HOST_GRID_METER_TYPES = frozenset(_GRID_HOST_TYPES)
+_MQTT_GRID_METER_TYPES = ("mqtt", "zendure_smartmeter_d0")
+# Flat MQTT keys that may linger under grid_meter from a legacy/other meter type.
+_MQTT_GRID_METER_FLAT_KEYS = (
+    "host",
+    "port",
+    "username",
+    "password",
+    "topic",
+    "payload_format",
+    "value_path",
+    "max_age_seconds",
+)
 
 _SERIAL_PLACEHOLDER = "YOUR_SN"
 _MAX_STRING_LEN = 160
@@ -414,6 +432,28 @@ def _merge_grid_meter(merged, grid_meter):
     channels = grid_meter.get("channels")
     if isinstance(channels, list):
         target["channels"] = [str(item).strip() for item in channels if str(item).strip()]
+    _strip_stale_grid_meter_keys(target)
+
+
+def _strip_stale_grid_meter_keys(target):
+    """Drop keys that do not belong to the selected grid meter type.
+
+    Keeps a type switch clean, e.g. moving from Tasmota/MQTT to a plain HTTP/IP
+    meter must not leave ``url``/``power_path``/``mqtt`` (or flat MQTT keys) behind.
+    """
+    meter_type = str(target.get("type") or "").strip().lower()
+    if meter_type in _MQTT_GRID_METER_TYPES:
+        for key in ("ip", "url", "power_path", "channels", *_MQTT_GRID_METER_FLAT_KEYS):
+            target.pop(key, None)
+        return
+    target.pop("mqtt", None)
+    for key in _MQTT_GRID_METER_FLAT_KEYS:
+        target.pop(key, None)
+    if meter_type != "tasmota_http":
+        target.pop("url", None)
+        target.pop("power_path", None)
+    if meter_type not in ("shelly", "shelly_3em_gen1"):
+        target.pop("channels", None)
 
 
 def _merge_features(merged, features):

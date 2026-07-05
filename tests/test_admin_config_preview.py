@@ -221,6 +221,32 @@ def test_explicit_grid_meter_type_wins_over_conflicting_discovery():
     assert result["config"]["grid_meter"]["type"] == "ecotracker"
 
 
+def test_grid_meter_type_from_zendure_3ct_discovery_metadata():
+    meter = _meter(
+        api_family="zendure_smartmeter_3ct_http",
+        device_type="zendure_smartmeter_3ct",
+        display_name="Zendure Smart Meter 3CT",
+        ip="192.0.2.80",
+    )
+    result = ConfigPreviewGenerator(_ReleaseManager()).generate([_device(), meter], 1)
+    grid = result["config"]["grid_meter"]
+    assert grid["type"] == "zendure_smartmeter_3ct_http"
+    assert grid["ip"] == "192.0.2.80"
+
+
+def test_manual_zendure_3ct_grid_meter_type_is_accepted():
+    meter = _meter(
+        api_family="",
+        device_type="",
+        grid_meter_type="zendure_smartmeter_3ct_http",
+        ip="192.0.2.81",
+    )
+    result = ConfigPreviewGenerator(_ReleaseManager()).generate([_device(), meter], 1)
+    grid = result["config"]["grid_meter"]
+    assert grid["type"] == "zendure_smartmeter_3ct_http"
+    assert grid["ip"] == "192.0.2.81"
+
+
 def test_validation_reports_ambiguous_meter_and_bad_device_values():
     result = ConfigPreviewGenerator(_ReleaseManager()).generate(
         [

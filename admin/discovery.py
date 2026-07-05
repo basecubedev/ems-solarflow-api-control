@@ -169,6 +169,45 @@ def probe_zendure(session, ip, timeout_s, port=80, failure_details=None):
     )
 
 
+def probe_zendure_smartmeter_3ct(session, ip, timeout_s, port=80, failure_details=None):
+    """Probe the Zendure Smart Meter 3CT local REST endpoint at ``/properties/report``.
+
+    The inverter probe owns payloads with a nested ``properties`` object; the 3CT
+    meter reports a flat top-level ``total_power`` and must never be classified as
+    an inverter.
+    """
+
+    data = _get_json(
+        session, ip, "/properties/report", timeout_s, port=port,
+        failure_details=failure_details,
+    )
+    if not isinstance(data, dict):
+        return None
+    if isinstance(data.get("properties"), dict):
+        return None
+    if not _is_number(data.get("total_power")):
+        _record_failure(
+            failure_details,
+            "Zendure Smart Meter 3CT response missing numeric total_power",
+        )
+        return None
+
+    return DiscoveredDevice(
+        ip=ip,
+        api_family="zendure_smartmeter_3ct_http",
+        device_type="zendure_smartmeter_3ct",
+        role_suggestion=ROLE_GRID_METER,
+        port=port,
+        display_name="Zendure Smart Meter 3CT",
+        serial_number=_first_str(
+            data.get("deviceId"), data.get("sn"), data.get("serialNumber")
+        ),
+        confidence=0.9,
+        config_ready=True,
+        missing_config_fields=[],
+    )
+
+
 def _zendure_device_type(product):
     """Derive a stable device_type slug from the Zendure ``product`` model.
 
@@ -274,6 +313,7 @@ def probe_ecotracker(session, ip, timeout_s):
 
 PROBES = (
     probe_zendure,
+    probe_zendure_smartmeter_3ct,
     probe_shelly_gen2,
     probe_shelly_3em_gen1,
     probe_ecotracker,
