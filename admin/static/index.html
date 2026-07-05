@@ -7,6 +7,26 @@
   <link rel="stylesheet" href="/admin.css">
 </head>
 <body>
+  <!-- Global reconnect overlay for Admin Console self-update. It lives outside
+       every view panel so it survives the Admin restart dropping the page back
+       to the login gate. -->
+  <div id="admin-update-overlay" class="admin-update-overlay" hidden
+       role="alertdialog" aria-live="assertive"
+       aria-label="Admin Console reconnecting">
+    <div class="admin-update-overlay-card">
+      <span class="admin-update-overlay-spinner" aria-hidden="true"></span>
+      <h2 class="admin-update-overlay-title" id="admin-update-overlay-title">
+        Reconnecting to the Admin Console…
+      </h2>
+      <p class="admin-update-overlay-message" id="admin-update-overlay-message">
+        Admin Console update started. This page will reconnect automatically.
+      </p>
+      <p class="admin-update-overlay-hint muted" id="admin-update-overlay-hint" hidden>
+        If this page does not reconnect automatically, reload it manually.
+      </p>
+    </div>
+  </div>
+
   <main class="admin-shell">
     <header class="admin-header">
       <p class="eyebrow">ems-solarflow-api-control</p>
@@ -1285,9 +1305,41 @@
           </div>
         </section>
 
-        <section class="control-pipeline-stage guided-upgrade-stage" aria-label="Upgrade validation">
+        <section class="control-pipeline-stage guided-upgrade-stage" aria-label="Admin Console">
           <div class="control-stage-head">
             <span class="control-stage-step">03</span>
+            <div class="control-stage-title-block">
+              <span class="control-stage-title">Admin Console</span>
+              <span class="control-stage-subtitle">Update the Admin Console first when this release needs it</span>
+            </div>
+          </div>
+          <div class="maintenance-facts">
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Current Admin</span>
+              <span class="maintenance-fact-value" id="admin-update-current">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Target Admin</span>
+              <span class="maintenance-fact-value muted" id="admin-update-target">…</span>
+            </div>
+          </div>
+          <p id="admin-update-status" class="scan-status" role="status" aria-live="polite">
+            Checking whether the Admin Console needs an update…
+          </p>
+          <p id="admin-update-warning" class="scan-error" role="alert" hidden></p>
+          <p id="admin-update-resume-note" class="maintenance-note" role="status" aria-live="polite" hidden>
+            Admin Console updated. Continue EMS upgrade?
+          </p>
+          <div class="mconfig-actions">
+            <button type="button" id="admin-update-execute-btn" class="primary-button compact" hidden>
+              Update Admin Console
+            </button>
+          </div>
+        </section>
+
+        <section class="control-pipeline-stage guided-upgrade-stage" aria-label="Upgrade validation">
+          <div class="control-stage-head">
+            <span class="control-stage-step">04</span>
             <div class="control-stage-title-block">
               <span class="control-stage-title">Upgrade validation</span>
               <span class="control-stage-subtitle">Review the plan — nothing is changed yet</span>
