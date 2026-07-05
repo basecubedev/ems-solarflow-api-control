@@ -61,6 +61,13 @@ On first start, create the shared EMS/Admin password in the browser.
 Default mode uses host networking for reliable local discovery.
 Use `--bridge` only if you need Docker bridge networking.
 
+The Admin Console provides guided setup, maintenance, backup/restore and guided
+upgrades. Short demo videos (fresh install with hardware discovery, and a guided
+software update) are in the
+[Admin Console user guide](docs/user/admin-console.md#what-the-admin-console-looks-like).
+
+![Admin Console start page](docs/assets/screenshots/admin/admin-landing.png)
+
 Full guide: [docs/user/admin-console.md](docs/user/admin-console.md)
 
 ## Documentation

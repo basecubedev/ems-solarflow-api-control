@@ -1,0 +1,83 @@
+{
+  "_note": "Deterministic, non-secret demo responses shared by every Admin Console docs-preview screen. All values are fake (see docs/assets/screenshots/admin/README.md).",
+  "auth_status": {
+    "auth_configured": true,
+    "authenticated": true,
+    "requires_initial_password": false,
+    "recovery_required": false,
+    "csrf_token": "demo-csrf-token"
+  },
+  "install_state": {
+    "state": "standard_install",
+    "recommended_path": "manage_existing",
+    "reasons": [
+      "A standard config/config.json and docker-compose.yml were found.",
+      "The EMS container is running."
+    ],
+    "warnings": []
+  },
+  "mdns_status": {
+    "state": "ready",
+    "enabled": true,
+    "message": "Automatic mDNS discovery is listening on the local network.",
+    "devices_found": 2,
+    "last_error": null
+  },
+  "mdns_devices": {
+    "ok": true,
+    "devices": [
+      {
+        "display_name": "SolarFlow 800 (demo)",
+        "device_type": "solarflow_800",
+        "api_family": "zendure_local",
+        "role_suggestion": "inverter",
+        "ip": "192.168.1.50",
+        "port": 80,
+        "serial_number": "DEMO-SF800-001",
+        "confidence": 0.97,
+        "usable_for_config": true,
+        "verified": true,
+        "stale": false,
+        "sources": ["mdns", "network_scan"]
+      },
+      {
+        "display_name": "SolarFlow 800 (demo)",
+        "device_type": "solarflow_800",
+        "api_family": "zendure_local",
+        "role_suggestion": "inverter",
+        "ip": "192.168.1.51",
+        "port": 80,
+        "serial_number": "DEMO-SF800-002",
+        "confidence": 0.95,
+        "usable_for_config": true,
+        "verified": true,
+        "stale": false,
+        "sources": ["mdns", "network_scan"]
+      },
+      {
+        "display_name": "Smart meter (3-phase CT, demo)",
+        "device_type": "smartmeter_3ct",
+        "api_family": "shelly",
+        "role_suggestion": "grid_meter",
+        "ip": "192.168.1.52",
+        "port": 80,
+        "serial_number": "DEMO-SMARTMETER-3CT",
+        "confidence": 0.91,
+        "usable_for_config": true,
+        "verified": true,
+        "stale": false,
+        "sources": ["network_scan"]
+      }
+    ],
+    "ignored_devices": []
+  },
+  "mqtt_brokers": {
+    "ok": true,
+    "candidates": []
+  },
+  "admin_update_resume": {
+    "ok": true,
+    "resume_available": false,
+    "pending": null
+  }
+}

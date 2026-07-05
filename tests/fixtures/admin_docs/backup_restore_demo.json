@@ -1,0 +1,43 @@
+{
+  "_note": "Demo backup list. Fake backup filenames only (no real hostnames).",
+  "backups_list": {
+    "ok": true,
+    "backup_dir": "/opt/ems/data/backups",
+    "safe_location": true,
+    "warnings": [],
+    "summary": { "total": 2, "latest_created_at": "2026-07-05 09:12 UTC" },
+    "influxdb": {
+      "supported": false,
+      "message": "Bundled InfluxDB is not enabled — skipped."
+    },
+    "sets": [],
+    "backups": [
+      {
+        "id": "demo-backup-1",
+        "name": "demo-backup-2026-07-05.emsbackup",
+        "backup_type": "config",
+        "created_at": "2026-07-05 09:12 UTC",
+        "size_bytes": 48213,
+        "files_count": 7,
+        "source_version": "v0.7.0-RC",
+        "source_build": "a1b2c3d",
+        "encrypted": false,
+        "valid": true,
+        "locked": false
+      },
+      {
+        "id": "demo-backup-2",
+        "name": "demo-backup-2026-07-04.emsbackup",
+        "backup_type": "config",
+        "created_at": "2026-07-04 21:03 UTC",
+        "size_bytes": 47180,
+        "files_count": 7,
+        "source_version": "v0.7.0-RC",
+        "source_build": "a1b2c3d",
+        "encrypted": true,
+        "valid": true,
+        "locked": true
+      }
+    ]
+  }
+}

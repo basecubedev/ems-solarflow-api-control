@@ -32,6 +32,53 @@ guided upgrade and restore back up what they replace first.
 When Admin updates itself, the browser may briefly show a reconnect screen. See
 [Updating the Admin Console](admin-maintenance.md#updating-the-admin-console).
 
+## What the Admin Console looks like
+
+Two short demos (no audio, demo data only — fake devices, IPs, serials and
+versions) show the main Admin Console workflows. Each demo ships in two formats —
+MP4/H.264 (best for forums and mobile browsers) preferred, with WebM as a
+fallback. If your Markdown viewer does not play a video inline, use a download
+link under it — a static screenshot of the same workflow is shown as a fallback.
+
+### Fresh install — Guided Setup with hardware discovery
+
+Start page → pick a release → discover devices → review the generated config and
+feature settings → start EMS and open the dashboard.
+
+<video poster="../assets/screenshots/admin/admin-landing.png" controls muted playsinline width="880">
+  <source src="../assets/videos/admin/admin-guided-setup-demo.mp4" type="video/mp4">
+  <source src="../assets/videos/admin/admin-guided-setup-demo.webm" type="video/webm">
+  Your browser does not support embedded videos.
+</video>
+
+[Download MP4](../assets/videos/admin/admin-guided-setup-demo.mp4) ·
+[Download WebM](../assets/videos/admin/admin-guided-setup-demo.webm)
+
+![Admin Console landing page with Setup and Maintenance choices](../assets/screenshots/admin/admin-landing.png)
+
+### Software update — Guided Upgrade with live validation
+
+Upgrade plan → run the EMS upgrade → the "Upgrade validation" box ticks off each
+step (backup, config-key add, image pull, container recreate) with a green check
+until the upgrade completes.
+
+<video poster="../assets/screenshots/admin/admin-guided-upgrade-plan.png" controls muted playsinline width="880">
+  <source src="../assets/videos/admin/admin-guided-upgrade-demo.mp4" type="video/mp4">
+  <source src="../assets/videos/admin/admin-guided-upgrade-demo.webm" type="video/webm">
+  Your browser does not support embedded videos.
+</video>
+
+[Download MP4](../assets/videos/admin/admin-guided-upgrade-demo.mp4) ·
+[Download WebM](../assets/videos/admin/admin-guided-upgrade-demo.webm)
+
+![Guided Upgrade plan showing backup, config check and container recreate steps](../assets/screenshots/admin/admin-guided-upgrade-plan.png)
+
+Individual per-screen images live in
+[docs/assets/screenshots/admin/](../assets/screenshots/admin/). To refresh the
+videos or screenshots for a new release, see the
+[capture guide](../assets/screenshots/admin/README.md) and
+[docs/assets/videos/admin/README.md](../assets/videos/admin/README.md).
+
 ## It does not replace EMS
 
 - EMS still runs the control loop and remains the source of truth.
