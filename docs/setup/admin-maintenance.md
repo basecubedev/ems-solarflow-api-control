@@ -23,7 +23,7 @@ The Maintenance hub presents three paths:
 |---|---|---|
 | **Guided upgrade** | Planned upgrade workflow with backup and diagnostics | Recommended |
 | **Manual configuration / existing system** | Inspect, edit, and restart an existing EMS setup | Available |
-| **Backup / restore** | EMS-owned backup and restore workflow | Planned |
+| **Backup / restore** | EMS-owned backup and restore workflow | Available |
 
 ## Guided upgrade (recommended)
 
@@ -129,17 +129,23 @@ atomically. Apply touches only `config.json` — it never moves `data/`,
 
 ## Backup / restore
 
-A dedicated EMS-owned backup/restore workflow is **planned** and not yet a
-selectable action inside the Admin UI. Today, the pieces that write files back
-up the single file they replace before writing it:
+The Maintenance hub's **Backup / restore** path is a full, preview-first
+workflow that orchestrates the EMS-owned backup tooling. It lets you create
+config / database / system backups, inspect what is inside a backup, preview a
+restore before anything is written, and restore behind an automatic rollback
+backup. See [admin-backup-restore.md](admin-backup-restore.md) for the full
+reference.
 
-- Guided upgrade's optional backup step creates a real EMS Core backup.
-- Config apply and deployment prepare/upgrade back up the file they replace to
-  `data/admin/backups/`.
+Admin restore currently supports **config** and **database** archives. InfluxDB
+backups can be created, listed, inspected and deleted, but **InfluxDB restore is
+intentionally blocked in Admin** until the dedicated EMS InfluxDB restore runner
+is wired in — use the EMS CLI to restore InfluxDB backups for now. A system set
+that contains an InfluxDB member is blocked for restore as a whole; restore its
+config/database members separately.
 
-There is no full snapshot/rollback yet. For the current, supported backup and
-restore procedure (including encrypted backups and dry-run restore checks), use
-the EMS CLI as described in [../backup-restore.md](../backup-restore.md).
+Admin never invents a new archive format: every backup is a normal EMS backup
+archive created through the EMS Core helpers. The CLI equivalents are documented
+in [../backup-restore.md](../backup-restore.md).
 
 ## Safety
 
@@ -148,6 +154,10 @@ the EMS CLI as described in [../backup-restore.md](../backup-restore.md).
   root-equivalent control of the host — run Admin only on a trusted local
   machine and never expose the Admin UI to the internet (see the security notes
   in [../admin-discovery.md](../admin-discovery.md)).
-- The overview is strictly read-only. The only maintenance actions that change
-  anything are an explicit config **apply** and a confirmed **guided upgrade**,
-  and both back up what they replace before writing.
+- The overview is strictly read-only. The maintenance actions that change
+  anything are an explicit config **apply**, a confirmed **guided upgrade**, and
+  the **Backup / restore** actions — **create backup**, **delete backup**, and a
+  confirmed **restore** of a config/database backup. Config apply, guided upgrade
+  and restore all back up what they replace before writing. Restore is
+  preview-first and confirmed; InfluxDB restore is blocked in Admin (see
+  [admin-backup-restore.md](admin-backup-restore.md)).

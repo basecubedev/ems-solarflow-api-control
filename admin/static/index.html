@@ -1281,21 +1281,154 @@
           <button type="button" class="workspace-back" data-back="maintenance-hub">← Maintenance</button>
           <div class="maintenance-head-titles">
             <h2 class="maintenance-title">Backup / restore</h2>
-            <p class="maintenance-subtitle">EMS-owned backup and restore workflow</p>
+            <p class="maintenance-subtitle">Create, inspect and restore EMS-owned backups safely</p>
           </div>
         </header>
 
-        <section class="control-pipeline-stage maintenance-card" aria-label="Backup restore planned">
-          <div class="control-stage-head maintenance-card-head">
+        <p id="backup-message" class="maintenance-warnings" role="status" aria-live="polite" hidden></p>
+
+        <section class="control-pipeline-stage backup-stage" aria-label="Backup status">
+          <div class="control-stage-head">
             <span class="control-stage-step">01</span>
             <div class="control-stage-title-block">
-              <span class="control-stage-title">Backup / restore planning</span>
-              <span class="control-stage-subtitle">Backup actions will be orchestrated through EMS tooling</span>
+              <span class="control-stage-title">Backup status</span>
+              <span class="control-stage-subtitle">Where backups live and what is available</span>
             </div>
           </div>
-          <p class="future-note">
-            Backup / restore is planned for a follow-up task. Backup semantics must stay EMS-owned.
+          <div class="control-pipeline-values">
+            <div class="control-pipeline-fact">
+              <span class="maintenance-fact-label">Backup directory</span>
+              <span class="maintenance-fact-value" id="backup-dir">…</span>
+            </div>
+            <div class="control-pipeline-fact">
+              <span class="maintenance-fact-label">Backups</span>
+              <span class="maintenance-fact-value" id="backup-count">…</span>
+            </div>
+            <div class="control-pipeline-fact">
+              <span class="maintenance-fact-label">Latest</span>
+              <span class="maintenance-fact-value" id="backup-latest">…</span>
+            </div>
+          </div>
+          <div id="backup-status-warnings" class="config-validation-list" role="status" aria-live="polite"></div>
+          <div class="mconfig-actions">
+            <button type="button" id="backup-refresh" class="secondary-button compact">Refresh</button>
+          </div>
+        </section>
+
+        <section class="control-pipeline-stage backup-stage" aria-label="Create backup">
+          <div class="control-stage-head">
+            <span class="control-stage-step">02</span>
+            <div class="control-stage-title-block">
+              <span class="control-stage-title">Create backup</span>
+              <span class="control-stage-subtitle">Pick a scope — safety verification runs automatically</span>
+            </div>
+          </div>
+          <div class="feature-fields" role="group" aria-label="Backup scope">
+            <label class="feature-field-row">
+              <span class="feature-field-label">Config / runtime state / dashboard auth</span>
+              <span class="feature-field-control">
+                <input class="feature-input" type="checkbox" data-backup-scope="config" checked>
+              </span>
+              <span class="feature-field-desc">config.json, runtime state and dashboard auth/cert files.</span>
+            </label>
+            <label class="feature-field-row">
+              <span class="feature-field-label">Local SQLite databases</span>
+              <span class="feature-field-control">
+                <input class="feature-input" type="checkbox" data-backup-scope="databases" checked>
+              </span>
+              <span class="feature-field-desc">Consistent snapshots of the local history/state databases.</span>
+            </label>
+            <label class="feature-field-row" id="backup-scope-influxdb-row">
+              <span class="feature-field-label">Bundled InfluxDB data</span>
+              <span class="feature-field-control">
+                <input class="feature-input" type="checkbox" data-backup-scope="influxdb" disabled>
+              </span>
+              <span class="feature-field-desc" id="backup-scope-influxdb-desc">Only available when bundled InfluxDB is enabled.</span>
+            </label>
+          </div>
+          <p class="maintenance-note" id="backup-encrypt-note">
+            Encrypted backup creation from Admin will follow later. Existing encrypted
+            backups can be inspected and restored with a password.
           </p>
+          <div class="mconfig-actions">
+            <button type="button" id="backup-create" class="primary-button compact">Create backup</button>
+          </div>
+          <div id="backup-create-steps" class="config-validation-list" role="status" aria-live="polite"></div>
+        </section>
+
+        <section class="control-pipeline-stage backup-stage" aria-label="Backup management">
+          <div class="control-stage-head">
+            <span class="control-stage-step">03</span>
+            <div class="control-stage-title-block">
+              <span class="control-stage-title">Backup management</span>
+              <span class="control-stage-subtitle">Inspect, preview a restore or delete a backup</span>
+            </div>
+          </div>
+          <div id="backup-list" class="backup-list" role="list"></div>
+        </section>
+
+        <section class="control-pipeline-stage backup-stage" id="backup-details-stage" aria-label="Backup details" hidden>
+          <div class="control-stage-head">
+            <span class="control-stage-step">04</span>
+            <div class="control-stage-title-block">
+              <span class="control-stage-title">Backup details</span>
+              <span class="control-stage-subtitle">Manifest summary and contained files</span>
+            </div>
+          </div>
+          <form id="backup-password-form" class="scan-form" autocomplete="off" hidden>
+            <label class="field">
+              <span class="field-label">Backup password</span>
+              <input id="backup-password-input" class="feature-input" type="password" autocomplete="off">
+            </label>
+            <button type="submit" class="secondary-button compact">Unlock</button>
+          </form>
+          <div class="control-pipeline-values" id="backup-details-facts"></div>
+          <div id="backup-details-files" class="backup-file-list" role="list"></div>
+        </section>
+
+        <section class="control-pipeline-stage backup-stage" id="backup-restore-stage" aria-label="Restore preview" hidden>
+          <div class="control-stage-head">
+            <span class="control-stage-step">05</span>
+            <div class="control-stage-title-block">
+              <span class="control-stage-title">Restore preview</span>
+              <span class="control-stage-subtitle">Nothing is written until you confirm</span>
+            </div>
+          </div>
+          <div class="feature-fields" role="group" aria-label="Restore options">
+            <label class="feature-field-row">
+              <span class="feature-field-label">On conflict</span>
+              <span class="feature-field-control">
+                <select id="backup-conflict-policy" class="feature-input">
+                  <option value="abort">Abort on conflicts</option>
+                  <option value="replace">Replace conflicting files</option>
+                  <option value="keep">Keep existing files</option>
+                </select>
+              </span>
+              <span class="feature-field-desc">How to handle files that already exist and differ.</span>
+            </label>
+            <label class="feature-field-row">
+              <span class="feature-field-label">Create rollback backup first</span>
+              <span class="feature-field-control">
+                <input class="feature-input" type="checkbox" id="backup-rollback" checked>
+              </span>
+              <span class="feature-field-desc">Capture the current state before applying the restore.</span>
+            </label>
+            <label class="feature-field-row">
+              <span class="feature-field-label">Automatically roll back on failure</span>
+              <span class="feature-field-control">
+                <input class="feature-input" type="checkbox" id="backup-auto-rollback" checked>
+              </span>
+              <span class="feature-field-desc">Undo the restore if a post-restore check fails.</span>
+            </label>
+          </div>
+          <div class="control-pipeline-values" id="backup-restore-summary"></div>
+          <div id="backup-restore-files" class="backup-file-list" role="list"></div>
+          <p id="backup-rollback-warning" class="maintenance-note" hidden></p>
+          <div class="mconfig-actions">
+            <button type="button" id="backup-preview" class="secondary-button compact">Preview restore</button>
+            <button type="button" id="backup-execute" class="primary-button compact" disabled>Restore</button>
+          </div>
+          <div id="backup-restore-steps" class="config-validation-list" role="status" aria-live="polite"></div>
         </section>
       </div>
     </div>

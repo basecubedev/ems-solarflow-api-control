@@ -3225,3 +3225,141 @@ def test_js_container_sync_renders_all_expected_step_labels():
     js = _read("admin.js")
     for label in ("InfluxDB init", "InfluxDB start", "InfluxDB sync", "EMS recreate"):
         assert label in js, label
+
+
+# --- backup / restore ------------------------------------------------------
+
+def test_backup_restore_placeholder_is_replaced():
+    html = _read("index.html")
+    assert "planned for a follow-up task" not in html
+    panel = html.split('id="maintenance-backup-panel"', 1)[1].split(
+        'id="view-advanced"', 1
+    )[0]
+    assert 'id="backup-create"' in panel
+    assert 'id="backup-list"' in panel
+
+
+def test_backup_restore_uses_control_stage_style():
+    html = _read("index.html")
+    panel = html.split('id="maintenance-backup-panel"', 1)[1].split(
+        'id="view-advanced"', 1
+    )[0]
+    assert "control-pipeline-stage" in panel
+    assert "control-stage-title" in panel
+    assert "control-stage-step" in panel
+    # No new card world is introduced for backups.
+    assert "backup-card-world" not in panel
+
+
+def test_backup_restore_buttons_and_sections_exist():
+    html = _read("index.html")
+    for element_id in (
+        "backup-create",
+        "backup-refresh",
+        "backup-preview",
+        "backup-execute",
+        "backup-details-stage",
+        "backup-restore-stage",
+    ):
+        assert 'id="' + element_id + '"' in html, element_id
+    # Per-backup Details/Restore/Delete actions are rendered by JS.
+    js = _read("admin.js")
+    for action in ('data-backup-action="details"', 'data-backup-action="restore"',
+                   'data-backup-action="delete"'):
+        assert action in js, action
+
+
+def test_backup_restore_frontend_references_expected_endpoints():
+    js = _read("admin.js")
+    for endpoint in (
+        "/api/admin/maintenance/backups",
+        "/api/admin/maintenance/backups/create",
+        "/api/admin/maintenance/backups/jobs/",
+        "/api/admin/maintenance/backups/inspect",
+        "/api/admin/maintenance/backups/restore/preview",
+        "/api/admin/maintenance/backups/restore/execute",
+        "/api/admin/maintenance/backups/delete",
+    ):
+        assert endpoint in js, endpoint
+
+
+def test_backup_restore_dynamic_rendering_uses_escape_html():
+    js = _read("admin.js")
+    # The shared helpers are the escaping choke points for backup markup.
+    for fn_name in ("backupValidationItem", "backupFact"):
+        assert "escapeHtml(" in _extract_fn(js, fn_name), fn_name
+    # Row/detail renderers escape dynamic names/paths directly; job steps route
+    # their dynamic text through the escaping helper.
+    for fn_name in ("renderBackupRow", "renderBackupDetails"):
+        assert "escapeHtml(" in _extract_fn(js, fn_name), fn_name
+    assert "backupValidationItem(" in _extract_fn(js, "renderBackupJobSteps")
+
+
+def test_backup_restore_does_not_downgrade_docker_image():
+    js = _read("admin.js")
+    backup_block = js.split("// --- backup / restore", 1)[1].split(
+        "// --- EMS diagnostics", 1
+    )[0]
+    for forbidden in ("docker pull", "compose", "image:"):
+        assert forbidden not in backup_block, forbidden
+
+
+def test_backup_influxdb_row_disables_restore_but_keeps_details_and_delete():
+    js = _read("admin.js")
+    row = _extract_fn(js, "renderBackupRow")
+    # InfluxDB rows are never hidden: Details and Delete stay available.
+    assert 'data-backup-action="details"' in row
+    assert 'data-backup-action="delete"' in row
+    # Restore preview is disabled for InfluxDB archives, with a marker so the
+    # busy-state toggle cannot silently re-enable it.
+    assert 'backup.backup_type === "influxdb"' in row
+    assert 'data-backup-restore-disabled="true"' in row
+    # The warning tells the user to use the EMS CLI instead.
+    assert "InfluxDB restore not supported in Admin yet" in row
+    assert "EMS CLI" in row
+
+
+def test_backup_set_with_influxdb_member_disables_restore_preview():
+    js = _read("admin.js")
+    row = _extract_fn(js, "renderBackupSetRow")
+    assert 'a.type === "influxdb"' in row
+    assert 'data-backup-restore-disabled="true"' in row
+    assert "Admin restore not supported yet" in row
+
+
+def test_backup_busy_state_keeps_unsupported_restore_buttons_disabled():
+    js = _read("admin.js")
+    busy = _extract_fn(js, "setBackupBusy")
+    assert "backupRestoreDisabled" in busy
+
+
+def test_backup_list_uses_compact_rows_not_tiles():
+    js = _read("admin.js")
+    css = _read("admin.css")
+    for fn_name in ("renderBackupRow", "renderBackupSetRow"):
+        markup = _extract_fn(js, fn_name)
+        assert 'class="backup-row' in markup, fn_name
+        assert "backup-item" not in markup, fn_name
+    assert 'class="backup-row backup-row-set"' in _extract_fn(js, "renderBackupSetRow")
+    for selector in (".backup-row", ".backup-row-set", ".backup-row-meta",
+                     ".backup-row-fact", ".backup-row-actions", ".backup-row-flags"):
+        assert selector in css, selector
+    assert ".backup-item" not in css
+
+
+def test_backup_list_preserves_list_roles():
+    html = _read("index.html")
+    js = _read("admin.js")
+    # The list container keeps role="list"; rows keep role="listitem".
+    assert '<div id="backup-list" class="backup-list" role="list">' in html
+    for fn_name in ("renderBackupRow", "renderBackupSetRow"):
+        assert 'role="listitem"' in _extract_fn(js, fn_name), fn_name
+
+
+def test_backup_row_shows_ems_version_and_build():
+    js = _read("admin.js")
+    row = _extract_fn(js, "renderBackupRow")
+    assert 'backupRowFact("EMS", backup.source_version' in row
+    assert "backup.source_build || backup.source_commit" in row
+    # Dynamic values still flow through the escaping fact helper.
+    assert "escapeHtml(" in _extract_fn(js, "backupRowFact")

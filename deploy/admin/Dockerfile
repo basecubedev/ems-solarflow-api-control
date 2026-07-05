@@ -55,13 +55,25 @@ COPY dashboard/__init__.py ./dashboard/__init__.py
 COPY dashboard/static_files.py ./dashboard/static_files.py
 # Admin install-context detection reuses the central EMS path resolver, the
 # setup config UI reads the central config catalog, and the guided upgrade reuses
-# the EMS config upgrade/render helpers; copy just those (not the whole EMS core,
-# and never the crypto-backed backup module) so the orchestration image stays
-# small. The EMS-format backup runs inside the EMS container via emsctl instead.
+# the EMS config upgrade/render helpers. The Admin backup/restore workflow drives
+# the EMS backup core directly against the mounted standard layout (it never
+# invents a new archive format), so the EMS backup module and its import chain are
+# copied too. Still not the whole EMS core (no controller/target-control/MQTT).
 COPY ems/__init__.py ./ems/__init__.py
 COPY ems/paths.py ./ems/paths.py
 COPY ems/config_catalog.py ./ems/config_catalog.py
 COPY ems/config.py ./ems/config.py
+COPY ems/version.py ./ems/version.py
+COPY ems/backup.py ./ems/backup.py
+COPY ems/backup_crypto.py ./ems/backup_crypto.py
+COPY ems/influx_setup.py ./ems/influx_setup.py
+COPY ems/build_info.py ./ems/build_info.py
+COPY ems/diagnostics.py ./ems/diagnostics.py
+COPY ems/health.py ./ems/health.py
+COPY ems/clients.py ./ems/clients.py
+COPY ems/models.py ./ems/models.py
+COPY ems/logging_utils.py ./ems/logging_utils.py
+COPY dashboard/auth.py ./dashboard/auth.py
 
 USER admin
 

@@ -3203,6 +3203,9 @@ function setMaintenancePath(path) {
   if (next === "upgrade") {
     loadUpgradePlanning();
   }
+  if (next === "backup") {
+    loadBackups();
+  }
 }
 
 function currentHashView() {
@@ -5584,6 +5587,594 @@ if (upgradeEls.planBtn) {
 }
 if (upgradeEls.executeBtn) {
   upgradeEls.executeBtn.addEventListener("click", executeUpgrade);
+}
+
+// --- backup / restore ----------------------------------------------------
+// Admin orchestrates EMS-owned backups: it lists/inspects/verifies normal EMS
+// archives, previews restores (dry-run first) and applies them behind a rollback
+// backup. Every dynamic value (names, paths, messages) is escaped before it is
+// written into innerHTML so backup content can never inject markup.
+
+const backupEls = {
+  message: document.getElementById("backup-message"),
+  dir: document.getElementById("backup-dir"),
+  count: document.getElementById("backup-count"),
+  latest: document.getElementById("backup-latest"),
+  statusWarnings: document.getElementById("backup-status-warnings"),
+  refreshBtn: document.getElementById("backup-refresh"),
+  scopeInputs: Array.from(document.querySelectorAll("[data-backup-scope]")),
+  influxDesc: document.getElementById("backup-scope-influxdb-desc"),
+  createBtn: document.getElementById("backup-create"),
+  createSteps: document.getElementById("backup-create-steps"),
+  list: document.getElementById("backup-list"),
+  detailsStage: document.getElementById("backup-details-stage"),
+  passwordForm: document.getElementById("backup-password-form"),
+  passwordInput: document.getElementById("backup-password-input"),
+  detailsFacts: document.getElementById("backup-details-facts"),
+  detailsFiles: document.getElementById("backup-details-files"),
+  restoreStage: document.getElementById("backup-restore-stage"),
+  conflictPolicy: document.getElementById("backup-conflict-policy"),
+  rollback: document.getElementById("backup-rollback"),
+  autoRollback: document.getElementById("backup-auto-rollback"),
+  restoreSummary: document.getElementById("backup-restore-summary"),
+  restoreFiles: document.getElementById("backup-restore-files"),
+  rollbackWarning: document.getElementById("backup-rollback-warning"),
+  previewBtn: document.getElementById("backup-preview"),
+  executeBtn: document.getElementById("backup-execute"),
+  restoreSteps: document.getElementById("backup-restore-steps"),
+};
+
+const backupState = {
+  backups: [],
+  sets: [],
+  selectedId: null,
+  selectedKind: null,
+  selectedType: null,
+  selectedDetails: null,
+  restorePlan: null,
+  running: false,
+};
+
+const BACKUP_POLL_INTERVAL_MS = 1200;
+const BACKUP_STEP_ICON = {
+  done: "✓", failed: "×", running: "…", skipped: "–", pending: "○",
+};
+let backupPollTimer = null;
+
+function backupValidationItem(tone, text, icon) {
+  const mark = icon || (tone === "error" ? "×" : tone === "warn" ? "!" : "✓");
+  return (
+    '<div class="config-validation-item config-validation-item-' + tone +
+    '"><span class="config-validation-icon" aria-hidden="true">' + mark +
+    "</span><span>" + escapeHtml(text) + "</span></div>"
+  );
+}
+
+function backupFact(label, value) {
+  return (
+    '<div class="control-pipeline-fact"><span class="maintenance-fact-label">' +
+    escapeHtml(label) + '</span><span class="maintenance-fact-value">' +
+    escapeHtml(value) + "</span></div>"
+  );
+}
+
+function backupRowFact(label, value) {
+  return (
+    '<span class="backup-row-fact"><span>' + escapeHtml(label) +
+    "</span><strong>" + escapeHtml(value) + "</strong></span>"
+  );
+}
+
+function formatBackupBytes(bytes) {
+  const value = Number(bytes) || 0;
+  if (value < 1024) return value + " B";
+  if (value < 1024 * 1024) return (value / 1024).toFixed(1) + " KB";
+  return (value / (1024 * 1024)).toFixed(1) + " MB";
+}
+
+function renderBackupMessage(items) {
+  if (!backupEls.message) return;
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) {
+    backupEls.message.hidden = true;
+    backupEls.message.textContent = "";
+    return;
+  }
+  backupEls.message.hidden = false;
+  backupEls.message.innerHTML = list
+    .map((item) => backupValidationItem(item.tone || "info", item.text))
+    .join("");
+}
+
+function setBackupBusy(running) {
+  backupState.running = running;
+  const buttons = [backupEls.refreshBtn, backupEls.createBtn, backupEls.previewBtn];
+  for (const btn of buttons) if (btn) btn.disabled = running;
+  if (backupEls.executeBtn) {
+    backupEls.executeBtn.disabled = running || !backupState.restorePlan ||
+      backupState.restorePlan.blocked;
+  }
+  backupEls.list.querySelectorAll("button[data-backup-action]").forEach((btn) => {
+    // Restore buttons disabled by markup (invalid or InfluxDB archive) stay
+    // disabled after a busy state clears; they only re-enable on a list reload.
+    btn.disabled = running || btn.dataset.backupRestoreDisabled === "true";
+  });
+}
+
+async function loadBackups() {
+  try {
+    const res = await fetch("/api/admin/maintenance/backups");
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      throw new Error((data && data.error) || "Backup list unavailable.");
+    }
+    backupState.backups = Array.isArray(data.backups) ? data.backups : [];
+    backupState.sets = Array.isArray(data.sets) ? data.sets : [];
+    renderBackupSummary(data);
+    renderBackupList(data);
+    renderBackupMessage([]);
+  } catch (err) {
+    renderBackupMessage([{ tone: "error", text: err.message || String(err) }]);
+  }
+}
+
+function renderBackupSummary(data) {
+  const summary = data.summary || {};
+  backupEls.dir.textContent = data.backup_dir || "unknown";
+  backupEls.count.textContent = String(summary.total || 0);
+  backupEls.latest.textContent = summary.latest_created_at || "—";
+
+  const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+  if (data.safe_location === false) {
+    warnings.push("The backup directory is outside the EMS install root.");
+  }
+  backupEls.statusWarnings.innerHTML = warnings
+    .map((text) => backupValidationItem("warn", text))
+    .join("");
+
+  const influx = data.influxdb || {};
+  const influxInput = backupEls.scopeInputs.find(
+    (el) => el.dataset.backupScope === "influxdb"
+  );
+  if (influxInput) {
+    influxInput.disabled = !influx.supported;
+    if (!influx.supported) influxInput.checked = false;
+  }
+  if (backupEls.influxDesc) {
+    backupEls.influxDesc.textContent = influx.supported
+      ? "Bundled InfluxDB data will be included."
+      : influx.message || "Bundled InfluxDB is not enabled — skipped.";
+  }
+}
+
+function backupSelectedScope() {
+  const selected = backupEls.scopeInputs
+    .filter((el) => el.checked && !el.disabled)
+    .map((el) => el.dataset.backupScope);
+  if (!selected.length) return null;
+  if (selected.length === 1) return selected[0];
+  return "system";
+}
+
+function renderBackupList(data) {
+  const sets = Array.isArray(data.sets) ? data.sets : [];
+  const backups = Array.isArray(data.backups) ? data.backups : [];
+  if (!sets.length && !backups.length) {
+    backupEls.list.innerHTML =
+      '<p class="maintenance-note">No backups yet. Create one above.</p>';
+    return;
+  }
+  const rows = [];
+  for (const set of sets) rows.push(renderBackupSetRow(set));
+  for (const backup of backups) rows.push(renderBackupRow(backup));
+  backupEls.list.innerHTML = rows.join("");
+}
+
+function renderBackupRow(backup) {
+  const facts = [
+    backupRowFact("Created", backup.created_at || backup.mtime || "—"),
+    backupRowFact("Size", formatBackupBytes(backup.size_bytes)),
+    backupRowFact("Files", String(backup.files_count || 0)),
+    backupRowFact("EMS", backup.source_version || "—"),
+    backupRowFact("Build", backup.source_build || backup.source_commit || "—"),
+    backupRowFact("Enc", backup.encrypted ? "yes" : "no"),
+  ];
+  const isInfluxRestoreUnsupported = backup.backup_type === "influxdb";
+  const flags = [];
+  if (!backup.valid) flags.push(backupValidationItem("error", backup.error || "invalid archive"));
+  if (backup.locked) flags.push(backupValidationItem("warn", "encrypted — password required"));
+  if (isInfluxRestoreUnsupported) {
+    flags.push(backupValidationItem(
+      "warn", "InfluxDB restore not supported in Admin yet — use EMS CLI"
+    ));
+  }
+  const id = escapeHtml(backup.id);
+  // An invalid or InfluxDB archive cannot be restored from Admin; the marker
+  // keeps the button disabled through the busy-state toggle (see setBackupBusy).
+  const restoreDisabled = !backup.valid || isInfluxRestoreUnsupported;
+  const restoreAttrs = restoreDisabled
+    ? ' disabled data-backup-restore-disabled="true"' : "";
+  return (
+    '<div class="backup-row" role="listitem">' +
+    '<div class="backup-row-main"><span class="backup-row-name">' +
+    escapeHtml(backup.name) + '</span><span class="source-badge source-mdns">' +
+    escapeHtml(backup.backup_type || "backup") + "</span></div>" +
+    '<div class="backup-row-meta" aria-label="Backup metadata">' + facts.join("") + "</div>" +
+    '<div class="backup-row-actions">' +
+    '<button type="button" class="secondary-button compact" data-backup-action="details" data-backup-id="' + id + '" data-backup-kind="archive">Details</button>' +
+    '<button type="button" class="secondary-button compact" data-backup-action="restore" data-backup-id="' + id + '" data-backup-kind="archive" data-backup-type="' + escapeHtml(backup.backup_type || "config") + '"' + restoreAttrs + ">Restore preview</button>" +
+    '<button type="button" class="secondary-button compact" data-backup-action="delete" data-backup-id="' + id + '" data-backup-kind="archive" data-backup-name="' + escapeHtml(backup.name) + '">Delete</button>' +
+    "</div>" +
+    (flags.length ? '<div class="backup-row-flags config-validation-list">' + flags.join("") + "</div>" : "") +
+    "</div>"
+  );
+}
+
+function renderBackupSetRow(set) {
+  const members = (set.archives || [])
+    .map((a) => escapeHtml(a.type || "") + (a.present ? "" : " (missing)"))
+    .join(", ");
+  const id = escapeHtml(set.id);
+  // A set with an InfluxDB member cannot be restored until member exclusion
+  // exists; block the whole set rather than silently skipping the member.
+  const hasInflux = (set.archives || []).some((a) => a.type === "influxdb");
+  const flags = hasInflux
+    ? backupValidationItem(
+        "warn", "Set contains InfluxDB backup — Admin restore not supported yet"
+      )
+    : "";
+  const restoreAttrs = hasInflux
+    ? ' disabled data-backup-restore-disabled="true"' : "";
+  return (
+    '<div class="backup-row backup-row-set" role="listitem">' +
+    '<div class="backup-row-main"><span class="backup-row-name">' +
+    escapeHtml(set.label || set.id) + '</span><span class="source-badge source-scan">set</span></div>' +
+    '<div class="backup-row-meta" aria-label="Backup metadata">' +
+    backupRowFact("Created", set.created_at || "—") +
+    backupRowFact("Status", set.status || "—") +
+    backupRowFact("Members", members || "—") +
+    "</div>" +
+    '<div class="backup-row-actions">' +
+    '<button type="button" class="secondary-button compact" data-backup-action="restore" data-backup-id="' + id + '" data-backup-kind="set" data-backup-type="system"' + restoreAttrs + ">Restore preview</button>" +
+    '<button type="button" class="secondary-button compact" data-backup-action="delete" data-backup-id="' + id + '" data-backup-kind="set" data-backup-name="' + escapeHtml(set.label || set.id) + '">Delete</button>' +
+    "</div>" +
+    (flags ? '<div class="backup-row-flags config-validation-list">' + flags + "</div>" : "") +
+    "</div>"
+  );
+}
+
+function selectBackup(id, kind, type) {
+  backupState.selectedId = id;
+  backupState.selectedKind = kind || "archive";
+  backupState.selectedType = type || "config";
+  backupState.selectedDetails = null;
+  backupState.restorePlan = null;
+  // Clear the restore stage content without forcing it open; the restore action
+  // opens it, the details action does not.
+  backupEls.restoreSummary.innerHTML = "";
+  backupEls.restoreFiles.innerHTML = "";
+  backupEls.restoreSteps.innerHTML = "";
+  backupEls.rollbackWarning.hidden = true;
+  backupEls.executeBtn.disabled = true;
+}
+
+async function inspectSelectedBackup(password) {
+  if (!backupState.selectedId) return;
+  backupEls.detailsStage.hidden = false;
+  try {
+    const res = await fetch("/api/admin/maintenance/backups/inspect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: backupState.selectedId, password: password || null }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      throw new Error((data && data.error) || "Backup could not be inspected.");
+    }
+    backupState.selectedDetails = data;
+    renderBackupDetails(data);
+  } catch (err) {
+    renderBackupMessage([{ tone: "error", text: err.message || String(err) }]);
+  }
+}
+
+function renderBackupDetails(data) {
+  const locked = Boolean(data.locked);
+  backupEls.passwordForm.hidden = !locked;
+  if (locked) {
+    backupEls.detailsFacts.innerHTML = "";
+    backupEls.detailsFiles.innerHTML =
+      '<p class="maintenance-note">This backup is encrypted. Enter its password to inspect it.</p>';
+    return;
+  }
+  const manifest = data.manifest || {};
+  const source = manifest.source || {};
+  const facts = [
+    backupFact("Type", manifest.backup_type || "—"),
+    backupFact("Purpose", manifest.backup_purpose || "—"),
+    backupFact("Created", manifest.created_at || "—"),
+    backupFact("Source version", source.ems_version || "—"),
+    backupFact("Source build", source.git_describe || source.git_commit_short || "—"),
+    backupFact("Source branch", source.git_branch || "—"),
+    backupFact("Files", String(manifest.files_count || 0)),
+    backupFact("Sensitive files", String(manifest.sensitive_count || 0)),
+  ];
+  backupEls.detailsFacts.innerHTML = facts.join("");
+  const files = Array.isArray(manifest.files) ? manifest.files : [];
+  backupEls.detailsFiles.innerHTML = files
+    .map((file) => {
+      const tags = [];
+      if (file.sensitive) tags.push("sensitive");
+      if (file.privacy_relevant) tags.push("privacy");
+      if (!file.has_checksum) tags.push("no checksum");
+      const suffix = tags.length ? " — " + tags.join(", ") : "";
+      return (
+        '<div class="backup-file" role="listitem"><span class="backup-file-path">' +
+        escapeHtml(file.path) + '</span><span class="backup-file-kind">' +
+        escapeHtml((file.kind || "") + suffix) + "</span></div>"
+      );
+    })
+    .join("");
+}
+
+async function createBackup() {
+  if (backupState.running) return;
+  const scope = backupSelectedScope();
+  if (!scope) {
+    renderBackupMessage([{ tone: "warn", text: "Select at least one backup scope." }]);
+    return;
+  }
+  setBackupBusy(true);
+  backupEls.createSteps.innerHTML = "";
+  renderBackupMessage([{ tone: "info", text: "Creating backup…" }]);
+  try {
+    const res = await fetch("/api/admin/maintenance/backups/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope: scope }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.job_id) {
+      throw new Error((data && data.error) || "Backup could not be started.");
+    }
+    renderBackupJobSteps(data.steps, backupEls.createSteps);
+    pollBackupJob(data.job_id, "create");
+  } catch (err) {
+    renderBackupMessage([{ tone: "error", text: err.message || String(err) }]);
+    setBackupBusy(false);
+  }
+}
+
+async function previewRestore() {
+  if (!backupState.selectedId) {
+    renderBackupMessage([{ tone: "warn", text: "Select a backup first." }]);
+    return;
+  }
+  setBackupBusy(true);
+  renderBackupMessage([]);
+  try {
+    const res = await fetch("/api/admin/maintenance/backups/restore/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id: backupState.selectedId,
+        scope: backupState.selectedType || "config",
+        password: (backupEls.passwordInput && backupEls.passwordInput.value) || null,
+        conflict_policy: backupEls.conflictPolicy.value,
+        rollback: backupEls.rollback.checked,
+        auto_rollback: backupEls.autoRollback.checked,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      throw new Error((data && data.error) || "Restore preview failed.");
+    }
+    backupState.restorePlan = data;
+    renderRestorePlan(data);
+  } catch (err) {
+    backupState.restorePlan = null;
+    renderRestorePlan(null);
+    renderBackupMessage([{ tone: "error", text: err.message || String(err) }]);
+  } finally {
+    setBackupBusy(false);
+  }
+}
+
+function renderRestorePlan(plan) {
+  backupEls.restoreStage.hidden = false;
+  if (!plan) {
+    backupEls.restoreSummary.innerHTML = "";
+    backupEls.restoreFiles.innerHTML = "";
+    backupEls.rollbackWarning.hidden = true;
+    backupEls.executeBtn.disabled = true;
+    return;
+  }
+  const summary = plan.summary || {};
+  backupEls.restoreSummary.innerHTML = [
+    backupFact("Will restore", String(summary.would_restore || 0)),
+    backupFact("Will replace", String(summary.would_replace || 0)),
+    backupFact("Will skip", String(summary.would_skip || 0)),
+  ].join("");
+  const files = Array.isArray(plan.files) ? plan.files : [];
+  backupEls.restoreFiles.innerHTML = files
+    .map((file) => (
+      '<div class="backup-file" role="listitem"><span class="backup-file-path">' +
+      escapeHtml(file.path) + '</span><span class="backup-file-kind">' +
+      escapeHtml(file.action || "") + "</span></div>"
+    ))
+    .join("");
+
+  const notes = [];
+  if (plan.blocked) {
+    notes.push("Restore is blocked: " + (plan.block_reason || "resolve the issues above") + ".");
+  }
+  if (!backupEls.rollback.checked) {
+    notes.push("Rollback backup is disabled — the current state will not be captured.");
+  }
+  (plan.warnings || []).forEach((warning) => notes.push(warning));
+  if (notes.length) {
+    backupEls.rollbackWarning.hidden = false;
+    backupEls.rollbackWarning.innerHTML = notes.map(escapeHtml).join("<br>");
+  } else {
+    backupEls.rollbackWarning.hidden = true;
+  }
+  backupEls.executeBtn.disabled = Boolean(plan.blocked) || backupState.running;
+}
+
+async function executeRestore() {
+  const plan = backupState.restorePlan;
+  if (!plan || plan.blocked || !plan.plan_id) return;
+  if (!window.confirm(
+    "Restore this backup? Existing files may be overwritten. A rollback backup " +
+    "is created first when enabled."
+  )) return;
+  setBackupBusy(true);
+  backupEls.restoreSteps.innerHTML = "";
+  renderBackupMessage([{ tone: "info", text: "Restoring…" }]);
+  try {
+    const res = await fetch("/api/admin/maintenance/backups/restore/execute", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ plan_id: plan.plan_id, confirm: true }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.job_id) {
+      throw new Error((data && data.error) || "Restore could not be started.");
+    }
+    renderBackupJobSteps(data.steps, backupEls.restoreSteps);
+    pollBackupJob(data.job_id, "restore");
+  } catch (err) {
+    renderBackupMessage([{ tone: "error", text: err.message || String(err) }]);
+    setBackupBusy(false);
+  }
+}
+
+function renderBackupJobSteps(steps, container) {
+  if (!container) return;
+  const list = Array.isArray(steps) ? steps : [];
+  container.innerHTML = list
+    .map((step) => {
+      const state = step.state || "pending";
+      const icon = BACKUP_STEP_ICON[state] || "○";
+      const tone = state === "failed" ? "error" : state === "skipped" ? "warn" : "info";
+      const label = step.label || step.key || "";
+      const text = step.message ? label + " — " + step.message : label;
+      return backupValidationItem(tone, text, icon);
+    })
+    .join("");
+}
+
+function stopBackupPolling() {
+  if (backupPollTimer) {
+    clearTimeout(backupPollTimer);
+    backupPollTimer = null;
+  }
+}
+
+async function pollBackupJob(jobId, kind) {
+  const container = kind === "restore" ? backupEls.restoreSteps : backupEls.createSteps;
+  try {
+    const res = await fetch(
+      "/api/admin/maintenance/backups/jobs/" + encodeURIComponent(jobId)
+    );
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      throw new Error((data && data.error) || "Backup status unavailable.");
+    }
+    renderBackupJobSteps(data.steps, container);
+    if (data.status === "running") {
+      backupPollTimer = setTimeout(() => pollBackupJob(jobId, kind), BACKUP_POLL_INTERVAL_MS);
+      return;
+    }
+    stopBackupPolling();
+    const result = data.result || {};
+    renderBackupJobResult(result, kind);
+    setBackupBusy(false);
+    loadBackups();
+  } catch (err) {
+    stopBackupPolling();
+    renderBackupMessage([{ tone: "error", text: err.message || String(err) }]);
+    setBackupBusy(false);
+  }
+}
+
+function renderBackupJobResult(result, kind) {
+  if (result.ok) {
+    const text = kind === "restore"
+      ? "Restore completed. EMS may need a restart/recreate to use restored files."
+      : "Backup created and verified.";
+    renderBackupMessage([{ tone: "info", text: text }]);
+    if (kind === "restore") backupState.restorePlan = null;
+    return;
+  }
+  const tone = result.status === "rollback_failed" ? "error" : "warn";
+  renderBackupMessage([
+    { tone: tone, text: result.message || "The backup job did not complete." },
+  ]);
+}
+
+async function deleteBackup(id, kind, name) {
+  if (backupState.running) return;
+  const label = name || "this backup";
+  if (!window.confirm("Delete " + label + "? This cannot be undone.")) return;
+  const body = { id: id, confirm: true };
+  if (kind === "set") {
+    const alsoArchives = window.confirm(
+      "Also delete the backup archive files in this set?\n\n" +
+      "OK = delete metadata and archives, Cancel = delete metadata only."
+    );
+    body.mode = alsoArchives ? "metadata_and_archives" : "metadata_only";
+  }
+  try {
+    const res = await fetch("/api/admin/maintenance/backups/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      throw new Error((data && data.error) || "Backup could not be deleted.");
+    }
+    if (backupState.selectedId === id) {
+      backupState.selectedId = null;
+      backupEls.detailsStage.hidden = true;
+      backupEls.restoreStage.hidden = true;
+    }
+    renderBackupMessage([{ tone: "info", text: "Deleted " + label + "." }]);
+    loadBackups();
+  } catch (err) {
+    renderBackupMessage([{ tone: "error", text: err.message || String(err) }]);
+  }
+}
+
+if (backupEls.list) {
+  backupEls.list.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-backup-action]");
+    if (!button) return;
+    const id = button.dataset.backupId;
+    const kind = button.dataset.backupKind;
+    const action = button.dataset.backupAction;
+    if (action === "details") {
+      selectBackup(id, kind, button.dataset.backupType);
+      inspectSelectedBackup(null);
+    } else if (action === "restore") {
+      selectBackup(id, kind, button.dataset.backupType);
+      backupEls.restoreStage.hidden = false;
+      previewRestore();
+    } else if (action === "delete") {
+      deleteBackup(id, kind, button.dataset.backupName);
+    }
+  });
+}
+if (backupEls.refreshBtn) backupEls.refreshBtn.addEventListener("click", loadBackups);
+if (backupEls.createBtn) backupEls.createBtn.addEventListener("click", createBackup);
+if (backupEls.previewBtn) backupEls.previewBtn.addEventListener("click", previewRestore);
+if (backupEls.executeBtn) backupEls.executeBtn.addEventListener("click", executeRestore);
+if (backupEls.passwordForm) {
+  backupEls.passwordForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    inspectSelectedBackup(backupEls.passwordInput.value || null);
+  });
 }
 
 // --- EMS diagnostics (read-only) -----------------------------------------

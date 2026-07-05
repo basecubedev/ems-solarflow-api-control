@@ -28,6 +28,16 @@ from admin.discovery import (
     validate_cidr,
 )
 from admin.ems_cli import EmsCliDiagnostics
+from admin.backup_restore import (
+    BackupJob,
+    BackupJobRegistry,
+    BackupRestoreError,
+    BackupRestoreService,
+    CONFLICT_POLICIES,
+    CREATE_SCOPES,
+    RESTORE_SCOPES,
+    admin_restore_block_reason,
+)
 from admin.gateway_probe import probe_gateway_candidates
 from admin.guided_upgrade import (
     GuidedUpgradeExecutor,
@@ -169,7 +179,7 @@ class AdminServer(ThreadingHTTPServer):
                  network_detector=None, gateway_prober=None, mdns_provider=None,
                  mqtt_discovery=None, release_manager=None, config_export=None,
                  config_apply=None, deployment=None, ems_cli=None,
-                 guided_upgrade=None):
+                 guided_upgrade=None, backup_service=None):
         super().__init__(server_address, handler)
         self.registry = registry or ScanRegistry()
         self.network_detector = network_detector or detect_network_suggestions
@@ -205,6 +215,8 @@ class AdminServer(ThreadingHTTPServer):
             ems_cli=self.ems_cli,
         )
         self.upgrade_jobs = UpgradeJobRegistry()
+        self.backup_service = backup_service or BackupRestoreService()
+        self.backup_jobs = BackupJobRegistry()
         self.static_assets = (
             static_assets
             if static_assets is not None
@@ -239,6 +251,14 @@ class AdminHandler(BaseHTTPRequestHandler):
             self._send_upgrade_job(
                 path[len("/api/admin/maintenance/upgrade/jobs/"):]
             )
+            return
+        if path.startswith("/api/admin/maintenance/backups/jobs/"):
+            self._send_backup_job(
+                path[len("/api/admin/maintenance/backups/jobs/"):]
+            )
+            return
+        if path == "/api/admin/maintenance/backups":
+            self._handle_backups_list()
             return
         if path == "/api/setup/releases":
             # Guided Setup (fresh install) lists every supported release; the
@@ -328,6 +348,24 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/admin/maintenance/upgrade/execute":
             self._handle_maintenance_upgrade_execute()
+            return
+        if path == "/api/admin/maintenance/backups/create":
+            self._handle_backup_create()
+            return
+        if path == "/api/admin/maintenance/backups/inspect":
+            self._handle_backup_inspect()
+            return
+        if path == "/api/admin/maintenance/backups/diff":
+            self._handle_backup_diff()
+            return
+        if path == "/api/admin/maintenance/backups/restore/preview":
+            self._handle_backup_restore_preview()
+            return
+        if path == "/api/admin/maintenance/backups/restore/execute":
+            self._handle_backup_restore_execute()
+            return
+        if path == "/api/admin/maintenance/backups/delete":
+            self._handle_backup_delete()
             return
         if path == "/api/setup/releases/prepare":
             self._handle_release_prepare()
@@ -679,6 +717,186 @@ class AdminHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": False, "error": "unknown job_id"}, status=404)
             return
         self._send_json({"ok": True, **job})
+
+    # --- backup / restore ------------------------------------------------
+
+    def _handle_backups_list(self):
+        try:
+            result = self.server.backup_service.list_backups()
+        except BackupRestoreError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=400)
+            return
+        except Exception:  # a listing fault must not 500 the read-only route
+            self._send_json(
+                {"ok": False, "error": "The backup list could not be read."},
+                status=500,
+            )
+            return
+        self._send_json(result)
+
+    def _handle_backup_create(self):
+        body = self._read_json_body()
+        if body is None:
+            return
+        if not isinstance(body, dict):
+            self._send_json({"error": "expected a JSON object"}, status=400)
+            return
+        if set(body) - {"scope", "encrypt", "password", "label", "confirm"}:
+            self._send_json({"error": "unsupported backup field"}, status=400)
+            return
+        if body.get("scope") not in CREATE_SCOPES:
+            self._send_json({"error": "unsupported backup scope"}, status=400)
+            return
+        service = self.server.backup_service
+        job = BackupJob(uuid.uuid4().hex, service.plan_create_steps(body["scope"]))
+
+        def runner(handle):
+            try:
+                result = service.create_backup(body, progress=handle)
+            except BackupRestoreError as exc:
+                result = {"ok": False, "status": "failed", "message": str(exc)}
+            handle.finish(result)
+
+        self.server.backup_jobs.submit(job, runner)
+        snapshot = job.snapshot()
+        self._send_json(
+            {"ok": True, "job_id": job.job_id, "status": snapshot["status"],
+             "steps": snapshot["steps"]},
+            status=202,
+        )
+
+    def _send_backup_job(self, job_id):
+        job = self.server.backup_jobs.get(job_id.strip("/"))
+        if job is None:
+            self._send_json({"ok": False, "error": "unknown job_id"}, status=404)
+            return
+        self._send_json({"ok": True, **job})
+
+    def _handle_backup_inspect(self):
+        body = self._read_json_body()
+        if body is None:
+            return
+        if not isinstance(body, dict) or set(body) - {"id", "password"}:
+            self._send_json({"error": "unsupported inspect field"}, status=400)
+            return
+        try:
+            result = self.server.backup_service.inspect_backup(
+                body.get("id"), password=body.get("password")
+            )
+        except BackupRestoreError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=400)
+            return
+        self._send_json(result)
+
+    def _handle_backup_diff(self):
+        body = self._read_json_body()
+        if body is None:
+            return
+        if not isinstance(body, dict) or set(body) - {"id", "file", "password"}:
+            self._send_json({"error": "unsupported diff field"}, status=400)
+            return
+        try:
+            result = self.server.backup_service.diff_backup_file(
+                body.get("id"), body.get("file"), password=body.get("password")
+            )
+        except BackupRestoreError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=400)
+            return
+        self._send_json(result)
+
+    def _handle_backup_restore_preview(self):
+        body = self._read_json_body()
+        if body is None:
+            return
+        allowed = {"id", "scope", "password", "conflict_policy", "rollback",
+                   "auto_rollback"}
+        if not isinstance(body, dict) or set(body) - allowed:
+            self._send_json({"error": "unsupported preview field"}, status=400)
+            return
+        if body.get("scope") not in RESTORE_SCOPES:
+            self._send_json({"error": "unsupported restore scope"}, status=400)
+            return
+        if body.get("conflict_policy", "abort") not in CONFLICT_POLICIES:
+            self._send_json({"error": "unsupported conflict policy"}, status=400)
+            return
+        try:
+            result = self.server.backup_service.create_restore_plan(body)
+        except BackupRestoreError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=400)
+            return
+        self._send_json(result)
+
+    def _handle_backup_restore_execute(self):
+        body = self._read_json_body()
+        if body is None:
+            return
+        if not isinstance(body, dict) or set(body) - {"plan_id", "confirm"}:
+            self._send_json({"error": "unsupported execute field"}, status=400)
+            return
+        if body.get("confirm") is not True:
+            self._send_json(
+                {"error": "explicit restore confirmation is required"}, status=400
+            )
+            return
+        plan_id = body.get("plan_id")
+        service = self.server.backup_service
+        plan = service.plans.get(plan_id) if isinstance(plan_id, str) else None
+        if plan is None:
+            self._send_json(
+                {"ok": False, "error": "unknown or expired restore plan"}, status=409
+            )
+            return
+        if plan.blocked:
+            self._send_json(
+                {"ok": False, "error": plan.block_reason or "the restore plan is blocked"},
+                status=409,
+            )
+            return
+        unsupported = admin_restore_block_reason(plan.targets)
+        if unsupported:
+            self._send_json({"ok": False, "error": unsupported}, status=409)
+            return
+        job = BackupJob(uuid.uuid4().hex, service.plan_restore_steps(plan))
+
+        def runner(handle):
+            try:
+                result = service.restore_from_plan(plan_id, confirm=True, progress=handle)
+            except BackupRestoreError as exc:
+                result = {"ok": False, "status": "failed", "message": str(exc)}
+            handle.finish(result)
+
+        self.server.backup_jobs.submit(job, runner)
+        snapshot = job.snapshot()
+        self._send_json(
+            {"ok": True, "job_id": job.job_id, "status": snapshot["status"],
+             "steps": snapshot["steps"]},
+            status=202,
+        )
+
+    def _handle_backup_delete(self):
+        body = self._read_json_body()
+        if body is None:
+            return
+        if not isinstance(body, dict) or set(body) - {"id", "confirm", "mode"}:
+            self._send_json({"error": "unsupported delete field"}, status=400)
+            return
+        if body.get("confirm") is not True:
+            self._send_json(
+                {"error": "explicit delete confirmation is required"}, status=400
+            )
+            return
+        mode = body.get("mode", "archive")
+        if not isinstance(mode, str):
+            self._send_json({"error": "mode must be a string"}, status=400)
+            return
+        try:
+            result = self.server.backup_service.delete_backup(
+                body.get("id"), confirm=True, mode=mode
+            )
+        except BackupRestoreError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=400)
+            return
+        self._send_json(result)
 
     def _handle_release_prepare(self):
         body = self._read_json_body()
@@ -1109,11 +1327,12 @@ def create_server(host="127.0.0.1", port=8090, registry=None, static_assets=None
                   network_detector=None, gateway_prober=None, mdns_provider=None,
                   mqtt_discovery=None, release_manager=None, config_export=None,
                   config_apply=None, deployment=None, ems_cli=None,
-                  guided_upgrade=None):
+                  guided_upgrade=None, backup_service=None):
     """Create (but do not start) an ``AdminServer`` bound to ``host:port``."""
 
     return AdminServer(
         (host, int(port)), AdminHandler, registry, static_assets, network_detector,
         gateway_prober, mdns_provider, mqtt_discovery, release_manager,
         config_export, config_apply, deployment, ems_cli, guided_upgrade,
+        backup_service,
     )
