@@ -2218,12 +2218,12 @@ def _upgrade_panel(html):
     )[0]
 
 
-def test_guided_upgrade_planning_has_three_numbered_stages():
+def test_guided_upgrade_planning_has_four_numbered_stages():
     html = _read("index.html")
     panel = _upgrade_panel(html)
-    for label in ("EMS release", "Upgrade options", "Upgrade validation"):
+    for label in ("EMS release", "Upgrade options", "Admin Console", "Upgrade validation"):
         assert 'aria-label="' + label + '"' in panel
-    for step in ("01", "02", "03"):
+    for step in ("01", "02", "03", "04"):
         assert ">" + step + "<" in panel
     # Current version + a target selector are shown.
     assert 'id="upgrade-current-version"' in panel
@@ -2238,8 +2238,9 @@ def test_guided_upgrade_uses_clean_stage_style_not_maintenance_card():
     # language (which draws the blue accent line and form-style option rows).
     for cls in ("maintenance-card", "maintenance-card-head", "mconfig-backup-choice"):
         assert cls not in panel
-    # Its stages are plain control-pipeline stages carrying the guided marker.
-    assert panel.count("control-pipeline-stage guided-upgrade-stage") == 3
+    # Its stages are plain control-pipeline stages carrying the guided marker
+    # (EMS release, options, Admin Console update, and validation).
+    assert panel.count("control-pipeline-stage guided-upgrade-stage") == 4
     # Options reuse the shared settings-list rows instead of inline checkboxes.
     assert "feature-fields upgrade-options" in panel
     assert "feature-field-row" in panel
@@ -2329,6 +2330,140 @@ def test_guided_upgrade_execute_button_enabled_only_when_ready():
     assert "upgradeState.selected" in fn
     assert "upgradeState.running" in fn
     assert "executeBtn.disabled = !allowed" in fn
+
+
+# --- Admin Console self-update UI ----------------------------------------
+
+
+def test_admin_update_stage_has_identity_facts_and_button():
+    html = _read("index.html")
+    panel = _upgrade_panel(html)
+    admin_stage = panel.split('aria-label="Admin Console"', 1)[1].split(
+        "</section>", 1
+    )[0]
+    assert 'id="admin-update-current"' in admin_stage
+    assert 'id="admin-update-target"' in admin_stage
+    assert 'id="admin-update-status"' in admin_stage
+    assert 'id="admin-update-execute-btn"' in admin_stage
+    assert "Update Admin Console" in admin_stage
+
+
+def test_admin_update_reconnect_overlay_text_exists():
+    html = _read("index.html")
+    assert 'id="admin-update-overlay"' in html
+    assert "Reconnecting to the Admin Console" in html
+    assert "reconnect automatically" in html
+    assert 'id="admin-update-overlay-hint"' in html
+
+
+def test_admin_update_ui_text_present():
+    html = _read("index.html")
+    js = _read("admin.js")
+    # Static labels ship in the HTML; the state strings are rendered from JS.
+    assert "Update the Admin Console first when this release needs it" in html
+    assert "Continue EMS upgrade?" in html
+    assert "Admin Console update required before EMS upgrade" in js
+    assert "Admin Console image unchanged for this release" in js
+
+
+def _admin_update_js(js):
+    return js.split("Admin Console self-update UI", 1)[1].split(
+        "// --- backup / restore", 1
+    )[0]
+
+
+def test_admin_update_js_reconnects_via_auth_status():
+    js = _read("admin.js")
+    block = _admin_update_js(js)
+    # The reconnect loop polls the public auth status endpoint.
+    assert "/api/admin/auth/status" in block
+    assert "waitForAdminReconnect" in block
+
+
+def test_admin_update_js_resumes_via_resume_endpoint():
+    js = _read("admin.js")
+    block = _admin_update_js(js)
+    assert "/api/admin/maintenance/admin-update/resume" in block
+    # Execute is the confirmed, CSRF-guarded mutation; plan derives the target.
+    assert "/api/admin/maintenance/admin-update/execute" in block
+    assert "/api/admin/maintenance/admin-update/plan" in block
+    assert "confirm: true" in block
+
+
+def test_admin_update_ui_has_no_arbitrary_image_input():
+    html = _read("index.html")
+    panel = _upgrade_panel(html)
+    admin_stage = panel.split('aria-label="Admin Console"', 1)[1].split(
+        "</section>", 1
+    )[0]
+    # The browser never types an image ref: no text/url input in the Admin stage.
+    assert "<input" not in admin_stage
+    js = _read("admin.js")
+    block = _admin_update_js(js)
+    # Only a release tag / plan id is ever sent; never an image ref from the
+    # browser. The request bodies carry target_release and plan_id, not image_ref.
+    assert "target_release" in block
+    assert 'body: JSON.stringify({ image_ref' not in block
+
+
+def test_admin_update_uses_status_endpoint():
+    # Fix 7: the planning flow checks /status so a Docker-unavailable Admin never
+    # shows an update button that cannot succeed.
+    js = _read("admin.js")
+    assert "/api/admin/maintenance/admin-update/status" in js
+    assert "loadAdminUpdateStatus" in js
+
+
+def test_admin_update_renders_docker_access_message():
+    # Fix 7: unsupported (Docker-unavailable) status renders an actionable note.
+    js = _read("admin.js")
+    render = js.split("function renderAdminUpdate", 1)[1].split("\nasync function", 1)[0]
+    assert "Admin update requires Docker access." in render
+    # The button is hidden in the unsupported branch.
+    assert "supported === false" in render
+
+
+def test_admin_update_blocks_ems_when_support_unavailable():
+    # A Docker-unavailable Admin cannot self-update, so the EMS upgrade gate must
+    # block in the UI rather than offering a button the backend will refuse.
+    js = _read("admin.js")
+    fn = js.split("function adminUpdateBlocksEms", 1)[1].split("\n}", 1)[0]
+    assert "adminUpdateState.supported === false" in fn
+
+
+def test_execute_button_text_flags_docker_requirement():
+    js = _read("admin.js")
+    fn = js.split("function updateExecuteButton", 1)[1].split("\n}", 1)[0]
+    assert "supported === false" in fn
+    assert "Admin Docker access required" in fn
+
+
+def test_admin_update_plan_failure_does_not_mark_completed():
+    # A planning failure must not soft-allow the EMS upgrade: the backend blocks
+    # on the same uncertainty.
+    js = _read("admin.js")
+    fn = js.split("async function loadAdminUpdatePlan", 1)[1].split(
+        "\nfunction sleep", 1
+    )[0]
+    catch = fn.split("} catch (err) {", 1)[1].split("} finally {", 1)[0]
+    assert "adminUpdateState.completed = true" not in catch
+    assert "adminUpdateState.completed = false" in catch
+    assert "adminUpdateState.required = true" in catch
+
+
+def test_admin_update_planning_preserves_resume_release():
+    # Fix 2: a valid resume selects its own release and does not fall through to
+    # planning a (possibly different) default release.
+    js = _read("admin.js")
+    fn = js.split("async function loadUpgradePlanning", 1)[1].split(
+        "\nasync function ", 1
+    )[0]
+    assert "adminUpdateState.resumeRelease" in fn
+    assert "upgradeState.selected = adminUpdateState.resumeRelease" in fn
+    # The resume branch early-returns before loadAdminUpdatePlan is reached.
+    resume_head, _, tail = fn.partition("upgradeState.selected = adminUpdateState.resumeRelease")
+    assert "loadAdminUpdatePlan" not in resume_head
+    assert "return;" in tail.split("loadAdminUpdatePlan", 1)[0]
 
 
 def test_maintenance_view_has_three_overview_sections():

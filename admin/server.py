@@ -19,6 +19,7 @@ from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from admin import auth as admin_auth
+from admin.admin_update import AdminUpdateService
 from admin.config_apply import ConfigApplyService, ConfigChangedError
 from admin.config_export import ConfigExportService, ConfigExportValidationError
 from admin.config_preview import ConfigPreviewGenerator
@@ -122,6 +123,19 @@ _UPGRADE_STATUS_CODES = {
     "target_not_prepared": 409,
     "config_missing": 409,
     "compose_missing": 409,
+}
+
+# Admin self-update execute() error codes -> HTTP status. A missing/mismatched
+# plan is a conflict; a failed updater launch is a server error; everything else
+# (confirm/plan validation) is a bad request.
+_ADMIN_UPDATE_STATUS_CODES = {
+    "confirm_required": 400,
+    "plan_required": 400,
+    "admin_update_not_required": 409,
+    "unknown_plan": 409,
+    "state_corrupt": 409,
+    "state_unreadable": 409,
+    "updater_start_failed": 500,
 }
 
 SECURITY_HEADERS = {
@@ -236,6 +250,7 @@ class AdminRuntime:
     ems_cli: EmsCliDiagnostics
     guided_upgrade: GuidedUpgradeExecutor
     upgrade_jobs: UpgradeJobRegistry
+    admin_update: AdminUpdateService
     backup_service: BackupRestoreService
     backup_jobs: BackupJobRegistry
     auth_sessions: SessionStore
@@ -261,6 +276,7 @@ def create_admin_runtime(
     deployment=None,
     ems_cli=None,
     guided_upgrade=None,
+    admin_update=None,
     backup_service=None,
 ):
     """Build the shared Admin service graph once, for one or more listeners."""
@@ -289,6 +305,13 @@ def create_admin_runtime(
     guided_upgrade = guided_upgrade or GuidedUpgradeExecutor(
         release_manager=release_manager, ems_cli=ems_cli
     )
+    # Admin self-update: read-only status/plan plus an out-of-request updater. It
+    # reuses the release manager's Admin data dir for the pending-state file and a
+    # read-only Docker inspector for build identity; both degrade safely when the
+    # daemon is absent.
+    admin_update = admin_update or AdminUpdateService(
+        docker=DockerCli(), release_manager=release_manager
+    )
     static_assets = (
         static_assets
         if static_assets is not None
@@ -308,6 +331,7 @@ def create_admin_runtime(
         ems_cli=ems_cli,
         guided_upgrade=guided_upgrade,
         upgrade_jobs=UpgradeJobRegistry(),
+        admin_update=admin_update,
         backup_service=backup_service or BackupRestoreService(),
         backup_jobs=BackupJobRegistry(),
         # Shared password, separate Admin session. Setup can be hammered but only
@@ -342,6 +366,7 @@ class AdminServer(ThreadingHTTPServer):
         self.ems_cli = runtime.ems_cli
         self.guided_upgrade = runtime.guided_upgrade
         self.upgrade_jobs = runtime.upgrade_jobs
+        self.admin_update = runtime.admin_update
         self.backup_service = runtime.backup_service
         self.backup_jobs = runtime.backup_jobs
         self.auth_sessions = runtime.auth_sessions
@@ -400,6 +425,12 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/admin/maintenance/backups":
             self._handle_backups_list()
+            return
+        if path == "/api/admin/maintenance/admin-update/status":
+            self._handle_admin_update_status()
+            return
+        if path == "/api/admin/maintenance/admin-update/resume":
+            self._handle_admin_update_resume()
             return
         if path == "/api/setup/releases":
             # Guided Setup (fresh install) lists every supported release; the
@@ -501,6 +532,12 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/admin/maintenance/upgrade/execute":
             self._handle_maintenance_upgrade_execute()
+            return
+        if path == "/api/admin/maintenance/admin-update/plan":
+            self._handle_admin_update_plan()
+            return
+        if path == "/api/admin/maintenance/admin-update/execute":
+            self._handle_admin_update_execute()
             return
         if path == "/api/admin/maintenance/backups/create":
             self._handle_backup_create()
@@ -821,6 +858,7 @@ class AdminHandler(BaseHTTPRequestHandler):
                 "deployment_prepare",
                 "deployment_start",
                 "guided_upgrade",
+                "admin_container_update",
                 "backup_restore",
                 "backup_delete",
                 "restore_preview",
@@ -1045,6 +1083,36 @@ class AdminHandler(BaseHTTPRequestHandler):
             status = 500
         self._send_json(result, status=status)
 
+    def _ems_upgrade_admin_gate(self, target_release):
+        # Ask the Admin self-update service whether the current Admin may run this
+        # EMS upgrade. Any fault is treated as "block" — never proceed on doubt.
+        service = getattr(self.server, "admin_update", None)
+        checker = getattr(service, "ems_upgrade_allowed", None)
+        if not callable(checker):
+            return {
+                "allowed": False,
+                "error": "admin_update_required",
+                "message": "The Admin update status could not be determined. "
+                "Update the Admin Console before running this EMS upgrade.",
+            }
+        try:
+            result = checker(target_release)
+        except Exception:
+            return {
+                "allowed": False,
+                "error": "admin_update_required",
+                "message": "The Admin update status could not be determined. "
+                "Update the Admin Console before running this EMS upgrade.",
+            }
+        if not isinstance(result, dict) or "allowed" not in result:
+            return {
+                "allowed": False,
+                "error": "admin_update_required",
+                "message": "The Admin update status could not be determined. "
+                "Update the Admin Console before running this EMS upgrade.",
+            }
+        return result
+
     def _handle_maintenance_upgrade_execute(self):
         # Confirmed mutation: bump the EMS image and force-recreate only the EMS
         # service. The target is resolved from the prepared release, not the body.
@@ -1079,6 +1147,20 @@ class AdminHandler(BaseHTTPRequestHandler):
                 status=_UPGRADE_STATUS_CODES.get(rejection.get("reason"), 400),
             )
             return
+        # A required-but-incomplete Admin self-update blocks the EMS upgrade
+        # server-side too (frontend blocking alone is bypassable by a direct POST).
+        gate = self._ems_upgrade_admin_gate(run_context.target_release)
+        if not gate["allowed"]:
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": gate["error"],
+                    "message": gate["message"],
+                    "admin_update": gate,
+                },
+                status=409,
+            )
+            return
         # Real (slow) upgrade work runs on a job thread; the UI polls for live
         # step progress. Guard checks already passed synchronously above.
         executor = self.server.guided_upgrade
@@ -1103,6 +1185,102 @@ class AdminHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": False, "error": "unknown job_id"}, status=404)
             return
         self._send_json({"ok": True, **job})
+
+    # --- Admin Console self-update ---------------------------------------
+
+    def _handle_admin_update_status(self):
+        # Read-only: current Admin identity and any pending update. Docker being
+        # unavailable is a valid (unsupported) status, never a 500.
+        try:
+            payload = self.server.admin_update.status()
+        except Exception:  # a status fault must never 500 the read-only route
+            self._send_json(
+                {
+                    "ok": False,
+                    "supported": False,
+                    "reason": "status_unavailable",
+                    "message": "Could not read the Admin update status.",
+                    "current_admin": None,
+                    "pending": None,
+                },
+                status=200,
+            )
+            return
+        self._send_json(payload)
+
+    def _handle_admin_update_resume(self):
+        try:
+            payload = self.server.admin_update.resume()
+        except Exception:
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": "resume_unavailable",
+                    "message": "Could not read the pending Admin update.",
+                    "pending": None,
+                    "resume_available": False,
+                },
+                status=200,
+            )
+            return
+        self._send_json(payload)
+
+    def _handle_admin_update_plan(self):
+        body = self._read_json_body()
+        if body is None:
+            return
+        if not isinstance(body, dict):
+            self._send_json({"error": "expected a JSON object"}, status=400)
+            return
+        if set(body) - {"target_release"}:
+            self._send_json({"error": "unsupported admin-update field"}, status=400)
+            return
+        target_release = body.get("target_release")
+        try:
+            payload = self.server.admin_update.plan(target_release)
+        except ValueError as exc:
+            # An invalid tag or a smuggled image ref is rejected server-side.
+            self._send_json(
+                {"ok": False, "error": "invalid_release", "message": str(exc)},
+                status=400,
+            )
+            return
+        except Exception:
+            self._send_json(
+                {"ok": False, "error": "plan_failed",
+                 "message": "Could not plan the Admin Console update."},
+                status=500,
+            )
+            return
+        self._send_json(payload)
+
+    def _handle_admin_update_execute(self):
+        body = self._read_json_body()
+        if body is None:
+            return
+        if not isinstance(body, dict):
+            self._send_json({"error": "expected a JSON object"}, status=400)
+            return
+        if set(body) - {"plan_id", "confirm"}:
+            self._send_json({"error": "unsupported admin-update field"}, status=400)
+            return
+        try:
+            result = self.server.admin_update.execute(
+                body.get("plan_id"), body.get("confirm") is True
+            )
+        except Exception:
+            self._send_json(
+                {"ok": False, "error": "execute_failed",
+                 "message": "The Admin Console update failed unexpectedly."},
+                status=500,
+            )
+            return
+        if result.get("ok"):
+            self._send_json(result, status=202)
+            return
+        self._send_json(
+            result, status=_ADMIN_UPDATE_STATUS_CODES.get(result.get("error"), 400)
+        )
 
     # --- backup / restore ------------------------------------------------
 
@@ -1714,8 +1892,8 @@ def create_server(host="127.0.0.1", port=8090, registry=None, static_assets=None
                   network_detector=None, gateway_prober=None, mdns_provider=None,
                   mqtt_discovery=None, release_manager=None, config_export=None,
                   config_apply=None, deployment=None, ems_cli=None,
-                  guided_upgrade=None, backup_service=None, runtime=None,
-                  https_active=False):
+                  guided_upgrade=None, admin_update=None, backup_service=None,
+                  runtime=None, https_active=False):
     """Create (but do not start) an ``AdminServer`` bound to ``host:port``.
 
     Pass a shared ``runtime`` to bind a second (HTTPS) listener to the same
@@ -1736,6 +1914,7 @@ def create_server(host="127.0.0.1", port=8090, registry=None, static_assets=None
             deployment=deployment,
             ems_cli=ems_cli,
             guided_upgrade=guided_upgrade,
+            admin_update=admin_update,
             backup_service=backup_service,
         )
     return AdminServer(

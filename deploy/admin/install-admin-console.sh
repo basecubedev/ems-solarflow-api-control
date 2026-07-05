@@ -28,6 +28,8 @@ set -eu
 
 IMAGE="ghcr.io/basecubedev/ems-solarflow-admin"
 TAG="latest"
+CONTAINER_NAME="ems-solarflow-admin" # stable name so Admin can update itself
+COMPOSE_SERVICE="ems-solarflow-admin" # compose service name for `docker compose up`
 MODE="deployment" # deployment | discovery
 NETWORK="host"     # host | bridge
 BIND="127.0.0.1"   # bridge-mode publish address
@@ -138,12 +140,12 @@ run() {
     "$@"
 }
 
-# Missing/unsupported prerequisite: fatal for a real install, only a warning in
-# --dry-run since no Docker command is executed then.
+# Missing/unsupported prerequisite: fatal for a real install (starts a container),
+# only a warning when no container is started now (--dry-run / --no-start).
 prereq_problem() {
-    if [ "$DRY_RUN" -eq 1 ]; then
+    if [ "$DRY_RUN" -eq 1 ] || [ "$START" -eq 0 ]; then
         warn "$1"
-        log "Dry-run continues because no Docker command will be executed."
+        log "Continuing because the Admin Console will not be started now."
         return 0
     fi
     err "$1"
@@ -185,21 +187,29 @@ require_docker() {
         prereq_problem "Docker Compose v$MIN_COMPOSE_VERSION or newer is required (found v$version)."
         return 0
     fi
-    if [ "$DRY_RUN" -ne 1 ] && ! docker info >/dev/null 2>&1; then
+    # A live daemon is only needed to actually start the container. --dry-run and
+    # --no-start write files without touching the daemon.
+    if [ "$START" -eq 1 ] && [ "$DRY_RUN" -ne 1 ] && ! docker info >/dev/null 2>&1; then
         err "Cannot talk to the Docker daemon. Is it running and can this user access it?"
         exit 1
     fi
 }
 
 # The container runs non-root and same-path mounts share the invoking user's
-# identity, so a real non-root PUID/PGID is required.
+# identity, so a real non-root PUID/PGID is required to start. When only writing
+# files (--dry-run / --no-start) this is a warning so config can be generated in
+# CI/root sandboxes; a real start still refuses root.
 resolve_ids() {
     PUID="${PUID:-$(id -u)}"
     PGID="${PGID:-$(id -g)}"
-    if ! is_positive_id "$PUID" || ! is_positive_id "$PGID"; then
+    if is_positive_id "$PUID" && is_positive_id "$PGID"; then
+        return 0
+    fi
+    if [ "$START" -eq 1 ] && [ "$DRY_RUN" -ne 1 ]; then
         err "The Admin Console needs a non-root numeric user. Run it as a normal user, not root."
         exit 1
     fi
+    warn "Non-root PUID/PGID are required before starting; run as a normal user before 'docker compose up'."
 }
 
 # Deployment mode joins the host Docker socket group; discovery-only never
@@ -285,6 +295,7 @@ EOF
 services:
   ems-solarflow-admin:
     image: ${IMAGE}:${TAG}
+    container_name: ${CONTAINER_NAME}
     user: "${PUID}:${PGID}"
 EOF
     if [ "$MODE" = "deployment" ]; then
@@ -318,6 +329,15 @@ EOF
       EMS_ADMIN_DATA_DIR: "${admin_data_dir}"
       PUID: "${PUID}"
       PGID: "${PGID}"
+      # Non-secret Admin identity so the Admin Console can update itself before a
+      # Guided EMS Upgrade (target image derived from a trusted release tag).
+      EMS_ADMIN_IMAGE: "${IMAGE}"
+      EMS_ADMIN_TAG: "${TAG}"
+      EMS_ADMIN_COMPOSE_FILE: "${install_dir}/${COMPOSE_FILE}"
+      # Compose service name (docker compose up) is separate from the container
+      # name (Docker inspect identity); they default to the same value.
+      EMS_ADMIN_COMPOSE_SERVICE: "${COMPOSE_SERVICE}"
+      EMS_ADMIN_CONTAINER_NAME: "${CONTAINER_NAME}"
 EOF
     if [ "$MODE" = "deployment" ]; then
         cat <<EOF
@@ -387,7 +407,10 @@ write_env() {
         printf '# Resolved Admin Console identity (baked into %s).\n' "$COMPOSE_FILE"
         printf 'EMS_INSTALL_DIR=%s\n' "$install_dir"
         printf 'EMS_ADMIN_DATA_DIR=%s\n' "$admin_data_dir"
+        printf 'EMS_ADMIN_IMAGE=%s\n' "$IMAGE"
         printf 'EMS_ADMIN_TAG=%s\n' "$TAG"
+        printf 'EMS_ADMIN_COMPOSE_SERVICE=%s\n' "$COMPOSE_SERVICE"
+        printf 'EMS_ADMIN_CONTAINER_NAME=%s\n' "$CONTAINER_NAME"
         printf 'PUID=%s\n' "$PUID"
         printf 'PGID=%s\n' "$PGID"
         if [ "$MODE" = "deployment" ]; then

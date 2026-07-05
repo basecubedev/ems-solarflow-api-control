@@ -5206,6 +5206,56 @@ const upgradeState = {
   running: false,
 };
 
+// --- Admin Console self-update (step 03 of the guided upgrade) ------------
+// Before an EMS upgrade the Admin Console may need to replace itself with a
+// release-compatible version. The server derives the target image from the
+// release tag, decides by digest identity, and (on execute) restarts the Admin
+// container out of band; the browser then reconnects and resumes.
+const adminUpdateEls = {
+  current: document.getElementById("admin-update-current"),
+  target: document.getElementById("admin-update-target"),
+  status: document.getElementById("admin-update-status"),
+  warning: document.getElementById("admin-update-warning"),
+  resumeNote: document.getElementById("admin-update-resume-note"),
+  executeBtn: document.getElementById("admin-update-execute-btn"),
+};
+
+const adminUpdateOverlayEls = {
+  overlay: document.getElementById("admin-update-overlay"),
+  title: document.getElementById("admin-update-overlay-title"),
+  message: document.getElementById("admin-update-overlay-message"),
+  hint: document.getElementById("admin-update-overlay-hint"),
+};
+
+const adminUpdateState = {
+  planId: null,
+  required: false,
+  reason: null,
+  warning: null,
+  current: null,
+  target: null,
+  // completed = the update finished / resumed, or was never required. While
+  // required && !completed the EMS upgrade execute button stays disabled.
+  completed: false,
+  // The release a resumable pending update belongs to, so a stale "resume" note
+  // is never shown for a different target release.
+  resumeRelease: null,
+  // Admin self-update needs Docker; false in discovery-only mode (no button).
+  supported: true,
+  loading: false,
+  running: false,
+};
+
+// A required-but-not-yet-done Admin update blocks the EMS upgrade so the upgrade
+// is never run by an incompatible Admin version. Unsupported (no Docker) or an
+// unresolved warning also blocks — the backend refuses these too, so keep the UI
+// honest rather than offering a button that cannot succeed.
+function adminUpdateBlocksEms() {
+  if (adminUpdateState.supported === false) return true;
+  if (adminUpdateState.warning && adminUpdateState.completed !== true) return true;
+  return adminUpdateState.required && !adminUpdateState.completed;
+}
+
 function renderUpgradeBadges(release) {
   if (!upgradeEls.badges) return;
   upgradeEls.badges.replaceChildren();
@@ -5375,9 +5425,16 @@ function updateExecuteButton() {
     upgradeState.planned &&
     Boolean(upgradeState.selected) &&
     upgradeTargetPrepared() &&
-    !upgradeState.running;
+    !upgradeState.running &&
+    !adminUpdateBlocksEms();
   upgradeEls.executeBtn.disabled = !allowed;
-  upgradeEls.executeBtn.textContent = upgradeState.running ? "Upgrading…" : "Upgrade EMS";
+  upgradeEls.executeBtn.textContent = upgradeState.running
+    ? "Upgrading…"
+    : adminUpdateState.supported === false
+    ? "Admin Docker access required"
+    : adminUpdateBlocksEms()
+    ? "Update Admin Console first"
+    : "Upgrade EMS";
 }
 
 function setUpgradeRunning(running) {
@@ -5595,7 +5652,56 @@ async function loadUpgradePlanning() {
   } finally {
     upgradeState.loading = false;
   }
+  // Admin self-update needs Docker; in discovery-only mode it is unsupported and
+  // the "Update Admin Console" button must not appear (a plan would only degrade
+  // to an uncertain identity and a button that cannot succeed).
+  const supported = await loadAdminUpdateStatus();
+  if (!supported) {
+    renderAdminUpdate();
+    renderUpgradePlan();
+    return;
+  }
+  // A pending Admin update waiting to resume takes precedence: select its own
+  // release so a fresh plan never overwrites the resume, even if the release
+  // list defaulted to a different tag after the restart.
+  const resumed = await loadAdminUpdateResume();
+  if (resumed && adminUpdateState.resumeRelease) {
+    const release = upgradeState.releases.find(
+      (item) => item.tag === adminUpdateState.resumeRelease
+    );
+    if (release && release.selectable !== false) {
+      upgradeState.selected = adminUpdateState.resumeRelease;
+      if (upgradeEls.select) upgradeEls.select.value = adminUpdateState.resumeRelease;
+      upgradeState.prepared = upgradeState.preparedTag === upgradeState.selected;
+      renderUpgradeBadges(release);
+      setUpgradeReleaseStatus();
+    }
+    renderAdminUpdate();
+    renderUpgradePlan();
+    return;
+  }
+  if (upgradeState.selected) {
+    await loadAdminUpdatePlan(upgradeState.selected);
+  } else {
+    renderAdminUpdate();
+  }
   renderUpgradePlan();
+}
+
+// Read whether Admin self-update is supported (Docker available). Discovery-only
+// mode reports unsupported so the button stays hidden and the EMS upgrade is not
+// offered a self-update that cannot run.
+async function loadAdminUpdateStatus() {
+  try {
+    const res = await fetch("/api/admin/maintenance/admin-update/status", {
+      cache: "no-store",
+    });
+    const data = await res.json();
+    adminUpdateState.supported = Boolean(res.ok && data && data.supported !== false);
+  } catch (_) {
+    adminUpdateState.supported = false;
+  }
+  return adminUpdateState.supported;
 }
 
 function onUpgradeReleaseChange() {
@@ -5605,6 +5711,11 @@ function onUpgradeReleaseChange() {
   upgradeState.error = null;
   renderUpgradeBadges(upgradeSelectedRelease());
   setUpgradeReleaseStatus();
+  // Picking a different target supersedes any prior Admin update plan/resume.
+  // Skip planning when the Admin cannot self-update (Docker unavailable).
+  if (upgradeState.selected && adminUpdateState.supported !== false) {
+    loadAdminUpdatePlan(upgradeState.selected);
+  }
   renderUpgradePlan();
 }
 
@@ -5666,6 +5777,231 @@ if (upgradeEls.planBtn) {
 }
 if (upgradeEls.executeBtn) {
   upgradeEls.executeBtn.addEventListener("click", executeUpgrade);
+}
+
+// --- Admin Console self-update UI ----------------------------------------
+
+function adminImageLabel(identity) {
+  if (!identity || typeof identity !== "object") return "Unknown";
+  const ref = identity.image_ref;
+  const digest = identity.digest;
+  if (ref && digest && typeof digest === "string") {
+    return ref + " (" + digest.slice(0, 19) + "…)";
+  }
+  return ref || "Unknown";
+}
+
+function renderAdminUpdate() {
+  const els = adminUpdateEls;
+  if (els.current) els.current.textContent = adminUpdateState.current || "Unknown";
+  if (els.target) els.target.textContent = adminUpdateState.target || "Not selected";
+  // Docker unavailable (discovery-only): the Admin cannot update itself, so show
+  // an actionable note and never offer the update button.
+  if (adminUpdateState.supported === false) {
+    if (els.warning) {
+      els.warning.hidden = true;
+      els.warning.textContent = "";
+    }
+    if (els.status) els.status.textContent = "Admin update requires Docker access.";
+    if (els.executeBtn) els.executeBtn.hidden = true;
+    if (els.resumeNote) els.resumeNote.hidden = true;
+    updateExecuteButton();
+    return;
+  }
+  if (els.warning) {
+    els.warning.hidden = !adminUpdateState.warning;
+    els.warning.textContent = adminUpdateState.warning || "";
+  }
+  let statusText;
+  if (adminUpdateState.loading) {
+    statusText = "Checking whether the Admin Console needs an update…";
+  } else if (adminUpdateState.running) {
+    statusText = "Admin Console update started. This page will reconnect automatically.";
+  } else if (adminUpdateState.required && !adminUpdateState.completed) {
+    statusText =
+      "Admin Console update required before EMS upgrade. The page will " +
+      "reconnect automatically after the Admin Console restarts.";
+  } else if (adminUpdateState.required && adminUpdateState.completed) {
+    statusText = "Admin Console updated.";
+  } else {
+    statusText = "Admin Console image unchanged for this release.";
+  }
+  if (els.status) els.status.textContent = statusText;
+  if (els.executeBtn) {
+    const show = adminUpdateState.required && !adminUpdateState.completed;
+    els.executeBtn.hidden = !show;
+    els.executeBtn.disabled = adminUpdateState.running;
+    els.executeBtn.textContent = adminUpdateState.running
+      ? "Updating…"
+      : "Update Admin Console";
+  }
+  if (els.resumeNote) {
+    els.resumeNote.hidden = !(adminUpdateState.required && adminUpdateState.completed);
+  }
+  updateExecuteButton();
+}
+
+// Plan the Admin update for the selected release. The browser sends only the
+// release tag; the server derives the trusted target image and decides by
+// digest identity. A failed check soft-fails (a warning, not a hard block).
+async function loadAdminUpdatePlan(tag) {
+  if (!tag) return;
+  adminUpdateState.loading = true;
+  adminUpdateState.warning = null;
+  adminUpdateState.completed = false;
+  // A fresh plan supersedes any earlier resumable pending update.
+  adminUpdateState.resumeRelease = null;
+  renderAdminUpdate();
+  try {
+    const res = await fetch("/api/admin/maintenance/admin-update/plan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target_release: tag }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      throw new Error((data && data.message) || "Admin update check failed.");
+    }
+    adminUpdateState.planId = data.plan_id || null;
+    adminUpdateState.required = Boolean(data.update_required);
+    adminUpdateState.reason = data.reason || null;
+    adminUpdateState.warning = data.warning || null;
+    adminUpdateState.current = adminImageLabel(data.current_admin);
+    adminUpdateState.target = adminImageLabel(data.target_admin);
+    // Not required => nothing blocks the EMS upgrade.
+    adminUpdateState.completed = !adminUpdateState.required;
+  } catch (err) {
+    // Could not determine: block the EMS upgrade until it is resolved. The
+    // backend refuses on the same uncertainty, so do not soft-allow here.
+    adminUpdateState.required = true;
+    adminUpdateState.completed = false;
+    adminUpdateState.warning = err.message || String(err);
+    if (!adminUpdateState.target) adminUpdateState.target = tag;
+  } finally {
+    adminUpdateState.loading = false;
+  }
+  renderAdminUpdate();
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function showReconnectOverlay(message) {
+  const els = adminUpdateOverlayEls;
+  if (els.title) els.title.textContent = "Reconnecting to the Admin Console…";
+  if (els.message && message) els.message.textContent = message;
+  if (els.hint) els.hint.hidden = true;
+  if (els.overlay) els.overlay.hidden = false;
+}
+
+function hideReconnectOverlay() {
+  if (adminUpdateOverlayEls.overlay) adminUpdateOverlayEls.overlay.hidden = true;
+}
+
+function showManualReloadHint() {
+  if (adminUpdateOverlayEls.hint) adminUpdateOverlayEls.hint.hidden = false;
+}
+
+async function executeAdminUpdate() {
+  if (!adminUpdateState.planId || adminUpdateState.running) return;
+  adminUpdateState.running = true;
+  renderAdminUpdate();
+  try {
+    const res = await fetch("/api/admin/maintenance/admin-update/execute", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ plan_id: adminUpdateState.planId, confirm: true }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      throw new Error((data && data.message) || "Admin Console update could not start.");
+    }
+    // Update started before any replacement: reconnect once the new Admin is up.
+    showReconnectOverlay(
+      data.message ||
+        "Admin Console update started. This page will reconnect automatically."
+    );
+    waitForAdminReconnect();
+  } catch (err) {
+    adminUpdateState.running = false;
+    adminUpdateState.warning = err.message || String(err);
+    renderAdminUpdate();
+  }
+}
+
+// Poll the (public) auth status endpoint until the replacement Admin answers,
+// then refresh auth (the container restart drops in-memory sessions, so this may
+// land on the login gate) and pick the pending update back up.
+async function waitForAdminReconnect() {
+  showReconnectOverlay();
+  const deadline = Date.now() + 120000;
+  while (Date.now() < deadline) {
+    try {
+      const res = await rawFetch("/api/admin/auth/status", { cache: "no-store" });
+      if (res.ok) {
+        await refreshAuthStatus();
+        const resumed = await loadAdminUpdateResume();
+        hideReconnectOverlay();
+        adminUpdateState.running = false;
+        if (resumed && authState.authenticated) {
+          navigateToUpgradeForResume();
+        } else {
+          renderAdminUpdate();
+        }
+        return;
+      }
+    } catch (_) {
+      // Admin is still restarting.
+    }
+    await sleep(1500);
+  }
+  showManualReloadHint();
+}
+
+// Read the pending update after a restart/login. When a resume is available the
+// Admin update counts as done and the EMS upgrade unblocks. Pure: it only
+// updates state and returns whether a resume is available; the caller renders
+// and/or navigates.
+async function loadAdminUpdateResume() {
+  try {
+    const res = await fetch("/api/admin/maintenance/admin-update/resume", {
+      cache: "no-store",
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) return false;
+    if (data.resume_available && data.pending) {
+      adminUpdateState.required = true;
+      adminUpdateState.completed = true;
+      adminUpdateState.running = false;
+      adminUpdateState.planId = data.pending.id || adminUpdateState.planId;
+      adminUpdateState.resumeRelease = data.pending.target_release || null;
+      if (data.pending.current_admin) {
+        adminUpdateState.current = adminImageLabel(data.pending.current_admin);
+      }
+      if (data.pending.target_admin) {
+        adminUpdateState.target = adminImageLabel(data.pending.target_admin);
+      }
+      return true;
+    }
+  } catch (_) {
+    // Resume is best-effort; ignore transient failures.
+  }
+  return false;
+}
+
+// Reveal the workspace and open the guided upgrade so the operator can continue
+// the EMS upgrade after the Admin Console restart (opening the panel re-checks
+// the pending resume and renders the "Continue EMS upgrade?" note).
+function navigateToUpgradeForResume() {
+  revealWorkspace();
+  window.location.hash = "maintenance-upgrade";
+  setAdminView("maintenance");
+  setMaintenancePath("upgrade");
+}
+
+if (adminUpdateEls.executeBtn) {
+  adminUpdateEls.executeBtn.addEventListener("click", executeAdminUpdate);
 }
 
 // --- backup / restore ----------------------------------------------------
@@ -8453,6 +8789,12 @@ function showAuthenticatedApp() {
     loadMqttBrokers();
     window.setInterval(pollMdns, MDNS_POLL_INTERVAL_MS);
   }
+  // After (re)authentication — e.g. the Admin restarted for a self-update and
+  // dropped the in-memory session — surface any pending update so the operator
+  // can resume the EMS upgrade.
+  loadAdminUpdateResume().then((resumed) => {
+    if (resumed) navigateToUpgradeForResume();
+  });
 }
 
 function applyAuthStatus(status) {

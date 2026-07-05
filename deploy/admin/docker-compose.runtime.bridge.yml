@@ -22,6 +22,8 @@
 services:
   ems-solarflow-admin:
     image: ghcr.io/basecubedev/ems-solarflow-admin:${EMS_ADMIN_TAG:-latest}
+    # Stable name so the Admin Console can recreate itself during a self-update.
+    container_name: ${EMS_ADMIN_CONTAINER_NAME:-ems-solarflow-admin}
     user: "${PUID:-1000}:${PGID:-1000}"
     # Join the host Docker socket group so the non-root user can reach the
     # socket; the installer discovers DOCKER_GID for you.
@@ -43,6 +45,14 @@ services:
       PUID: "${PUID:-1000}"
       PGID: "${PGID:-1000}"
       DOCKER_CONFIG: /tmp/docker
+      # Non-secret Admin identity for the Admin Console self-update flow. The
+      # target image is always derived server-side from a trusted release tag.
+      EMS_ADMIN_IMAGE: "${EMS_ADMIN_IMAGE:-ghcr.io/basecubedev/ems-solarflow-admin}"
+      EMS_ADMIN_TAG: "${EMS_ADMIN_TAG:-latest}"
+      EMS_ADMIN_COMPOSE_FILE: "${EMS_ADMIN_COMPOSE_FILE:-${EMS_INSTALL_DIR}/docker-compose.admin.yml}"
+      # Compose service name (docker compose up) vs container name (inspect).
+      EMS_ADMIN_COMPOSE_SERVICE: "${EMS_ADMIN_COMPOSE_SERVICE:-ems-solarflow-admin}"
+      EMS_ADMIN_CONTAINER_NAME: "${EMS_ADMIN_CONTAINER_NAME:-ems-solarflow-admin}"
       # Optional parallel HTTPS listener (HTTP on 8090 stays available). Generated
       # cert/key default to config/admin.crt|key under the EMS install root.
       EMS_ADMIN_HTTPS_ENABLED: "${EMS_ADMIN_HTTPS_ENABLED:-false}"

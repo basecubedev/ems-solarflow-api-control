@@ -6,6 +6,7 @@ the Docker publish workflow honest without a real daemon. The one test that
 generates and validates Compose is gated behind Docker availability.
 """
 
+import os
 import shutil
 import stat
 import subprocess
@@ -161,6 +162,50 @@ def test_admin_installer_declares_https_env_keys():
     assert "config/admin.key" in text
 
 
+def test_admin_installer_declares_admin_update_metadata():
+    # Non-secret identity so the Admin Console can update itself before a Guided
+    # EMS Upgrade. The target image is always derived server-side from a tag.
+    text = read(INSTALLER)
+    for key in (
+        "EMS_ADMIN_IMAGE",
+        "EMS_ADMIN_TAG",
+        "EMS_ADMIN_COMPOSE_FILE",
+        "EMS_ADMIN_COMPOSE_SERVICE",
+        "EMS_ADMIN_CONTAINER_NAME",
+    ):
+        assert key in text, key
+    # A stable container name so the self-update can recreate the Admin service,
+    # and a distinct compose service name for `docker compose up <service>`.
+    assert "container_name:" in text
+    assert 'CONTAINER_NAME="ems-solarflow-admin"' in text
+    assert 'COMPOSE_SERVICE="ems-solarflow-admin"' in text
+
+
+def test_admin_installer_generates_admin_update_metadata(tmp_path):
+    # --no-start writes the compose without needing a Docker daemon.
+    work = tmp_path / "work"
+    work.mkdir()
+    result = subprocess.run(
+        ["sh", str(INSTALLER), "--no-start", "--install-dir", str(work)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    text = read(work / "docker-compose.admin.yml")
+    assert "container_name: ems-solarflow-admin" in text
+    assert 'EMS_ADMIN_IMAGE: "' + ADMIN_IMAGE + '"' in text
+    assert 'EMS_ADMIN_TAG: "latest"' in text
+    assert "EMS_ADMIN_COMPOSE_FILE:" in text
+    assert "docker-compose.admin.yml" in text
+    assert 'EMS_ADMIN_COMPOSE_SERVICE: "ems-solarflow-admin"' in text
+    assert 'EMS_ADMIN_CONTAINER_NAME: "ems-solarflow-admin"' in text
+    # The recorded env file also carries the reference identity.
+    env_text = read(work / ".env.admin")
+    assert "EMS_ADMIN_IMAGE=" + ADMIN_IMAGE in env_text
+    assert "EMS_ADMIN_COMPOSE_SERVICE=ems-solarflow-admin" in env_text
+    assert "EMS_ADMIN_CONTAINER_NAME=ems-solarflow-admin" in env_text
+
+
 def test_admin_installer_https_dry_run_mentions_browser_warning(tmp_path):
     # Dry-run degrades without Docker and still prints the HTTPS/self-signed note.
     result = subprocess.run(
@@ -187,6 +232,51 @@ def test_admin_installer_dry_run_writes_nothing(tmp_path):
     assert "DRY-RUN" in result.stdout
     assert not (tmp_path / "docker-compose.admin.yml").exists()
     assert not (tmp_path / "config").exists()
+
+
+def test_admin_installer_dry_run_ok_with_root_ids(tmp_path):
+    # Root/zero ids must not fail --dry-run (it writes nothing anyway).
+    env = dict(os.environ, PUID="0", PGID="0")
+    result = subprocess.run(
+        ["sh", str(INSTALLER), "--dry-run"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not (tmp_path / "docker-compose.admin.yml").exists()
+
+
+def test_admin_installer_no_start_ok_with_root_ids(tmp_path):
+    # --no-start writes config even with root ids (warns, does not fail); this is
+    # what lets a root/no-Docker CI sandbox exercise config generation.
+    work = tmp_path / "work"
+    work.mkdir()
+    env = dict(os.environ, PUID="0", PGID="0")
+    result = subprocess.run(
+        ["sh", str(INSTALLER), "--no-start", "--install-dir", str(work)],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (work / "docker-compose.admin.yml").is_file()
+
+
+def test_admin_installer_real_install_still_refuses_root(tmp_path):
+    # A real install (START=1) must still refuse to proceed with root ids.
+    work = tmp_path / "work"
+    work.mkdir()
+    env = dict(os.environ, PUID="0", PGID="0")
+    result = subprocess.run(
+        ["sh", str(INSTALLER), "--install-dir", str(work)],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode != 0
+    assert not (work / "docker-compose.admin.yml").exists()
 
 
 # --- Runtime Compose contract ---------------------------------------------
@@ -230,6 +320,18 @@ def test_admin_runtime_compose_files_declare_optional_https_env():
         assert 'EMS_ADMIN_HTTPS_ENABLED: "${EMS_ADMIN_HTTPS_ENABLED:-false}"' in text
         assert 'EMS_ADMIN_HTTPS_PORT: "${EMS_ADMIN_HTTPS_PORT:-8091}"' in text
         assert "EMS_ADMIN_HTTPS_AUTO_GENERATE" in text
+
+
+def test_admin_runtime_compose_files_declare_admin_update_metadata():
+    for compose in (RUNTIME_COMPOSE, RUNTIME_BRIDGE):
+        text = read(compose)
+        # Stable container name + non-secret identity for the self-update flow.
+        assert "container_name: ${EMS_ADMIN_CONTAINER_NAME:-ems-solarflow-admin}" in text
+        assert "EMS_ADMIN_IMAGE:" in text
+        assert 'EMS_ADMIN_TAG: "${EMS_ADMIN_TAG:-latest}"' in text
+        assert "EMS_ADMIN_COMPOSE_FILE:" in text
+        assert "EMS_ADMIN_COMPOSE_SERVICE:" in text
+        assert "EMS_ADMIN_CONTAINER_NAME:" in text
 
 
 def test_admin_runtime_bridge_compose_maps_optional_https_port():
