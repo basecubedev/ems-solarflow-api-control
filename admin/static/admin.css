@@ -55,13 +55,6 @@ body {
 }
 .admin-title { margin: 0; font-size: 22px; font-weight: 850; letter-spacing: .01em; }
 
-/* Mirrors the EMS dashboard .flow-view-tabs pill bar (same tokens, radius,
-   gradient, hover/active states). Kept as an admin class only to avoid pulling
-   in the dashboard stylesheet. */
-.admin-view-tabs { display: flex; align-items: center; gap: 3px; padding: 3px; border: 1px solid rgba(148,163,184,.16); border-radius: 999px; background: rgba(255,255,255,.035); flex-wrap: wrap; row-gap: 3px; }
-.admin-view-tabs button { min-width: 78px; height: 26px; border: 1px solid transparent; border-radius: 999px; background: transparent; color: var(--muted); font: inherit; font-size: 11px; font-weight: 850; cursor: pointer; transition: transform .16s ease, border-color .16s ease, background .16s ease; }
-.admin-view-tabs button:hover { transform: translateY(-1px); border-color: var(--border-strong); }
-.admin-view-tabs button.active { border-color: rgba(34, 211, 238, 0.46); background: linear-gradient(180deg, rgba(34, 211, 238, 0.18), rgba(139, 92, 246, 0.12)); color: var(--text); }
 .admin-view { display: flex; flex-direction: column; gap: 16px; }
 /* Must win over the flex rule above, else every tab panel renders at once. */
 .admin-view[hidden] { display: none; }
@@ -117,6 +110,136 @@ code {
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: .08em;
+}
+
+.maintenance-view { display: flex; flex-direction: column; gap: 10px; }
+.maintenance-head { display: flex; align-items: flex-start; gap: 10px; }
+.maintenance-head-titles { display: flex; flex-direction: column; gap: 2px; flex: 1 1 auto; min-width: 0; }
+.maintenance-head .refresh-button { margin-left: auto; flex: 0 0 auto; }
+.maintenance-title { margin: 0; font-size: 18px; font-weight: 800; }
+.maintenance-subtitle { margin: 0; color: var(--muted); font-size: 12px; }
+
+.maintenance-status-strip {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  padding: 10px 12px;
+}
+.maintenance-status-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+.maintenance-status-value {
+  font-size: 13px;
+  font-weight: 700;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+/* Compact collapsible cards mirror the Setup feature-row: a clickable summary
+   header (title + one-line status + caret) over a body that stays hidden until
+   expanded. */
+.maintenance-card { padding: 0; box-shadow: none; }
+.maintenance-card-head { margin-bottom: 0; padding: 10px 12px; }
+.maintenance-card-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.maintenance-card-summary .control-stage-title { flex: 0 0 auto; }
+.maintenance-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.maintenance-summary[data-tone="ok"] { color: var(--output); }
+.maintenance-summary[data-tone="warn"] { color: var(--danger); }
+.maintenance-caret { flex: 0 0 auto; color: var(--muted); font-size: 14px; }
+.maintenance-card-body { padding: 0 12px 12px; }
+.maintenance-warnings {
+  margin: 0;
+  border: 1px solid var(--danger);
+  border-radius: 12px;
+  padding: 10px 12px;
+  color: var(--danger);
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.maintenance-facts { display: flex; flex-direction: column; gap: 6px; }
+.maintenance-fact {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 13px;
+}
+.maintenance-fact-label { color: var(--muted); }
+.maintenance-fact-value { font-weight: 700; text-align: right; word-break: break-word; }
+.maintenance-fact-value[data-tone="ok"] { color: var(--output); }
+.maintenance-fact-value[data-tone="warn"] { color: var(--danger); }
+.maintenance-fact-value[data-tone="muted"], .maintenance-fact-value.muted { color: var(--muted); font-weight: 400; }
+.maintenance-dashboard-link { color: var(--output); text-decoration: underline; }
+.maintenance-note { margin: 10px 0 0; color: var(--muted); font-size: 12px; }
+.maintenance-note:empty { display: none; }
+
+/* EMS diagnostics reuses the compact fact rhythm: one row per check with a
+   status pill, a duration, and a collapsed raw-output drawer. */
+.maintenance-diagnostics-checks { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.maintenance-diagnostics-checks:empty { display: none; }
+.maintenance-check { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; }
+.maintenance-check-head { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.maintenance-check-label { font-weight: 700; flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.maintenance-check-duration { color: var(--muted); font-size: 11px; flex: 0 0 auto; }
+.maintenance-check-pill {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.maintenance-check-pill[data-tone="ok"] { color: var(--output); border-color: color-mix(in srgb, var(--output) 45%, var(--border)); }
+.maintenance-check-pill[data-tone="warn"] { color: var(--pv); border-color: color-mix(in srgb, var(--pv) 45%, var(--border)); }
+.maintenance-check-pill[data-tone="error"] { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); }
+.maintenance-check-pill[data-tone="info"] { color: var(--muted); border-color: var(--border); }
+.maintenance-check-message { margin: 6px 0 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.maintenance-check-message:empty { display: none; }
+.maintenance-check-raw { margin: 6px 0 0; }
+.maintenance-check-raw > summary { cursor: pointer; color: var(--muted); font-size: 11px; }
+.maintenance-check-raw pre {
+  margin: 6px 0 0;
+  max-height: 220px;
+  overflow: auto;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .stage-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
@@ -878,7 +1001,6 @@ code {
   .network-row { flex-wrap: wrap; }
   .network-meta { white-space: normal; }
   .network-scan { width: 100%; }
-  .admin-view-tabs button { flex: 1 1 auto; min-width: 0; }
   .setup-step-arrow { display: none; }
   .setup-step { flex-basis: 100%; }
   .config-export-buttons { justify-content: stretch; }

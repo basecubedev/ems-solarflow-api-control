@@ -27,6 +27,7 @@ from admin.discovery import (
     scan_network,
     validate_cidr,
 )
+from admin.ems_cli import EmsCliDiagnostics
 from admin.gateway_probe import probe_gateway_candidates
 from admin.install_context import detect_install_context
 from admin.install_state import (
@@ -35,6 +36,7 @@ from admin.install_state import (
     migrate_legacy_root_config,
     select_start_path,
 )
+from admin.maintenance import run_maintenance_overview
 from admin.mdns import MdnsProvider
 from admin.mqtt_discovery import MqttBrokerDiscovery
 from admin.models import utc_now_iso
@@ -141,7 +143,7 @@ class AdminServer(ThreadingHTTPServer):
     def __init__(self, server_address, handler, registry=None, static_assets=None,
                  network_detector=None, gateway_prober=None, mdns_provider=None,
                  mqtt_discovery=None, release_manager=None, config_export=None,
-                 config_apply=None, deployment=None):
+                 config_apply=None, deployment=None, ems_cli=None):
         super().__init__(server_address, handler)
         self.registry = registry or ScanRegistry()
         self.network_detector = network_detector or detect_network_suggestions
@@ -168,6 +170,7 @@ class AdminServer(ThreadingHTTPServer):
             self.config_export,
             admin_data_dir=admin_data_dir,
         )
+        self.ems_cli = ems_cli or EmsCliDiagnostics()
         self.static_assets = (
             static_assets
             if static_assets is not None
@@ -188,6 +191,9 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/admin/install-state":
             self._send_json(detect_install_state().as_dict())
+            return
+        if path == "/api/admin/maintenance/overview":
+            self._send_json(run_maintenance_overview())
             return
         if path == "/api/setup/releases":
             self._send_json(self.server.release_manager.list_releases())
@@ -255,6 +261,9 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/admin/config/migrate-legacy":
             self._handle_migrate_legacy()
+            return
+        if path == "/api/admin/maintenance/diagnostics/run":
+            self._handle_maintenance_diagnostics()
             return
         if path == "/api/setup/releases/prepare":
             self._handle_release_prepare()
@@ -328,6 +337,8 @@ class AdminHandler(BaseHTTPRequestHandler):
             "capabilities": [
                 "install_state_routing",
                 "legacy_config_migration",
+                "maintenance_overview",
+                "ems_cli_diagnostics",
                 "discovery",
                 "release_resources",
                 "config_preview",
@@ -386,6 +397,34 @@ class AdminHandler(BaseHTTPRequestHandler):
                     "message": f"Could not migrate the legacy config: {exc}",
                 },
                 status=500,
+            )
+            return
+        self._send_json(result)
+
+    def _handle_maintenance_diagnostics(self):
+        # User-triggered read-only EMS checks. The body carries no command input;
+        # any accidental payload is drained so the allowlist is the only surface.
+        body = self._read_optional_json_body()
+        if body is None:
+            return
+        try:
+            result = self.server.ems_cli.run()
+        except Exception:  # a check-runner fault must not 500 the Admin route
+            self._send_json(
+                {
+                    "available": False,
+                    "mode": "unavailable",
+                    "container": None,
+                    "checks": [],
+                    "summary": {
+                        "status": "unavailable",
+                        "ok": 0,
+                        "warning": 0,
+                        "failed": 0,
+                        "unavailable": 0,
+                    },
+                    "message": "EMS CLI diagnostics could not be run.",
+                }
             )
             return
         self._send_json(result)
@@ -818,11 +857,11 @@ def _result_view(record):
 def create_server(host="127.0.0.1", port=8090, registry=None, static_assets=None,
                   network_detector=None, gateway_prober=None, mdns_provider=None,
                   mqtt_discovery=None, release_manager=None, config_export=None,
-                  config_apply=None, deployment=None):
+                  config_apply=None, deployment=None, ems_cli=None):
     """Create (but do not start) an ``AdminServer`` bound to ``host:port``."""
 
     return AdminServer(
         (host, int(port)), AdminHandler, registry, static_assets, network_detector,
         gateway_prober, mdns_provider, mqtt_discovery, release_manager,
-        config_export, config_apply, deployment,
+        config_export, config_apply, deployment, ems_cli,
     )

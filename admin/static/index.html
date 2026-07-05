@@ -50,11 +50,6 @@
       </form>
     </section>
 
-    <nav class="admin-view-tabs" role="tablist" aria-label="Admin sections" hidden>
-      <button type="button" class="active" data-admin-view="setup" role="tab" aria-selected="true">Setup</button>
-      <button type="button" data-admin-view="advanced" role="tab" aria-selected="false">Diagnostics / Advanced</button>
-    </nav>
-
     <div class="admin-view" id="view-setup" data-admin-view-panel="setup" hidden>
 
       <div class="setup-stepper" role="tablist" aria-label="Setup steps">
@@ -714,6 +709,158 @@
         <p id="setup-nav-error" class="scan-error" role="alert" hidden></p>
         <button id="setup-next" type="button" class="primary-button compact" disabled>Next</button>
       </div>
+    </div>
+
+    <div class="admin-view maintenance-view" id="view-maintenance" data-admin-view-panel="maintenance" hidden>
+      <header class="maintenance-head">
+        <div class="maintenance-head-titles">
+          <h2 class="maintenance-title">Maintenance</h2>
+          <p class="maintenance-subtitle">Existing EMS installation overview</p>
+        </div>
+        <button type="button" id="maintenance-refresh" class="refresh-button">Refresh</button>
+      </header>
+      <p id="maintenance-warnings" class="maintenance-warnings" role="status" aria-live="polite" hidden></p>
+
+      <div class="maintenance-status-strip">
+        <span class="maintenance-status-label">System status</span>
+        <span class="maintenance-status-value" id="maintenance-system-status">…</span>
+      </div>
+
+      <section class="control-pipeline-stage maintenance-card" id="maintenance-layout" aria-label="Installation layout" data-open="false">
+        <div class="control-stage-head maintenance-card-head">
+          <span class="control-stage-step">01</span>
+          <button type="button" class="maintenance-card-summary" data-maintenance-toggle="maintenance-layout" aria-expanded="false" aria-controls="maintenance-layout-body">
+            <span class="control-stage-title">Installation layout</span>
+            <span class="maintenance-summary" id="maintenance-layout-summary">…</span>
+            <span class="maintenance-caret" aria-hidden="true">▸</span>
+          </button>
+        </div>
+        <div class="maintenance-card-body" id="maintenance-layout-body" hidden>
+          <div class="maintenance-facts">
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">config/config.json</span>
+              <span class="maintenance-fact-value" id="maintenance-config">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">config path</span>
+              <span class="maintenance-fact-value muted" id="maintenance-config-path">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">data/</span>
+              <span class="maintenance-fact-value" id="maintenance-data">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">data path</span>
+              <span class="maintenance-fact-value muted" id="maintenance-data-path">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">docker-compose.yml</span>
+              <span class="maintenance-fact-value" id="maintenance-compose">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">compose path</span>
+              <span class="maintenance-fact-value muted" id="maintenance-compose-path">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">install state</span>
+              <span class="maintenance-fact-value" id="maintenance-state">…</span>
+            </div>
+          </div>
+          <p class="maintenance-note" id="maintenance-state-message"></p>
+        </div>
+      </section>
+
+      <section class="control-pipeline-stage maintenance-card" id="maintenance-containers" aria-label="Runtime containers" data-open="false">
+        <div class="control-stage-head maintenance-card-head">
+          <span class="control-stage-step">02</span>
+          <button type="button" class="maintenance-card-summary" data-maintenance-toggle="maintenance-containers" aria-expanded="false" aria-controls="maintenance-containers-body">
+            <span class="control-stage-title">Runtime containers</span>
+            <span class="maintenance-summary" id="maintenance-containers-summary">…</span>
+            <span class="maintenance-caret" aria-hidden="true">▸</span>
+          </button>
+        </div>
+        <div class="maintenance-card-body" id="maintenance-containers-body" hidden>
+          <div class="maintenance-facts">
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">EMS</span>
+              <span class="maintenance-fact-value" id="maintenance-ems">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">EMS container</span>
+              <span class="maintenance-fact-value muted" id="maintenance-ems-name">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">InfluxDB</span>
+              <span class="maintenance-fact-value" id="maintenance-influx">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">InfluxDB container</span>
+              <span class="maintenance-fact-value muted" id="maintenance-influx-name">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Docker access</span>
+              <span class="maintenance-fact-value" id="maintenance-docker">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Docker server</span>
+              <span class="maintenance-fact-value muted" id="maintenance-docker-server">…</span>
+            </div>
+          </div>
+          <p class="maintenance-note" id="maintenance-docker-note"></p>
+        </div>
+      </section>
+
+      <section class="control-pipeline-stage maintenance-card" id="maintenance-versions" aria-label="Versions and links" data-open="false">
+        <div class="control-stage-head maintenance-card-head">
+          <span class="control-stage-step">03</span>
+          <button type="button" class="maintenance-card-summary" data-maintenance-toggle="maintenance-versions" aria-expanded="false" aria-controls="maintenance-versions-body">
+            <span class="control-stage-title">Versions and links</span>
+            <span class="maintenance-summary" id="maintenance-versions-summary">…</span>
+            <span class="maintenance-caret" aria-hidden="true">▸</span>
+          </button>
+        </div>
+        <div class="maintenance-card-body" id="maintenance-versions-body" hidden>
+          <div class="maintenance-facts">
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">EMS image</span>
+              <span class="maintenance-fact-value" id="maintenance-ems-image">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">InfluxDB image</span>
+              <span class="maintenance-fact-value" id="maintenance-influx-image">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Dashboard</span>
+              <a class="maintenance-fact-value maintenance-dashboard-link" id="maintenance-dashboard-link" target="_blank" rel="noopener" hidden>Open dashboard</a>
+              <span class="maintenance-fact-value" id="maintenance-dashboard">…</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="control-pipeline-stage maintenance-card" id="maintenance-diagnostics" aria-label="EMS diagnostics" data-open="false">
+        <div class="control-stage-head maintenance-card-head">
+          <span class="control-stage-step">04</span>
+          <button type="button" class="maintenance-card-summary" data-maintenance-toggle="maintenance-diagnostics" aria-expanded="false" aria-controls="maintenance-diagnostics-body">
+            <span class="control-stage-title">EMS diagnostics</span>
+            <span class="maintenance-summary" id="maintenance-diagnostics-summary">Diagnostics have not been run yet.</span>
+            <span class="maintenance-caret" aria-hidden="true">▸</span>
+          </button>
+        </div>
+        <div class="maintenance-card-body" id="maintenance-diagnostics-body" hidden>
+          <p class="maintenance-note">Read-only EMS checks from the installed system.</p>
+          <div class="maintenance-facts">
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Execution mode</span>
+              <span class="maintenance-fact-value" id="maintenance-diagnostics-mode">not run</span>
+            </div>
+          </div>
+          <div class="maintenance-diagnostics-checks" id="maintenance-diagnostics-checks"></div>
+          <p class="maintenance-note" id="maintenance-diagnostics-note">Diagnostics have not been run yet.</p>
+          <p class="maintenance-note">Config upgrade is checked in dry-run mode only. No config file is changed.</p>
+          <button type="button" id="maintenance-diagnostics-run" class="primary-button compact">Run diagnostics</button>
+        </div>
+      </section>
     </div>
 
     <div class="admin-view" id="view-advanced" data-admin-view-panel="advanced" hidden>

@@ -365,12 +365,12 @@ def _advanced_panel(html):
     return html.split('id="view-advanced"', 1)[1]
 
 
-def test_index_renders_two_top_level_tabs():
+def test_index_has_no_top_level_tab_bar():
     html = _read("index.html")
-    assert '<nav class="admin-view-tabs"' in html
-    assert ">Setup<" in html
-    for view in ("setup", "advanced"):
-        assert 'data-admin-view="' + view + '"' in html
+    # The start gate's two choices are the only router; the redundant top-level
+    # tab strip (Setup / Maintenance / Diagnostics) has been removed.
+    assert '<nav class="admin-view-tabs"' not in html
+    assert 'role="tablist" aria-label="Admin sections"' not in html
     # The old five-tab layout is gone: Discovery and Config are not primary tabs.
     assert 'data-admin-view="discovery"' not in html
     assert 'data-admin-view="config"' not in html
@@ -378,14 +378,14 @@ def test_index_renders_two_top_level_tabs():
 
 def test_start_gate_is_the_default_screen():
     html = _read("index.html")
-    # The router/start screen is shown first; the workspace (tabs + panels) is
-    # hidden until the user chooses a path so the setup wizard never auto-runs.
+    # The router/start screen is shown first; the workspace panels stay hidden
+    # until the user chooses a path so the setup wizard never auto-runs.
     assert 'id="view-start"' in html
-    assert 'class="admin-view-tabs" role="tablist" aria-label="Admin sections" hidden' in html
     assert (
         '<div class="admin-view" id="view-setup" data-admin-view-panel="setup" hidden>'
         in html
     )
+    assert 'data-admin-view-panel="maintenance" hidden' in html
     assert 'data-admin-view-panel="advanced" hidden' in html
 
 
@@ -1885,3 +1885,281 @@ def test_css_hardware_role_accents_are_grid_and_output():
     assert "var(--grid)" in grid
     assert "var(--pv)" not in grid
     assert "var(--output)" in inverter
+
+
+# --- maintenance overview (read-only) ------------------------------------
+
+
+def _maintenance_section(html):
+    return html.split('id="view-maintenance"', 1)[1].split(
+        'id="view-advanced"', 1
+    )[0]
+
+
+def test_index_has_maintenance_view_panel():
+    html = _read("index.html")
+    assert 'id="view-maintenance"' in html
+    assert 'data-admin-view-panel="maintenance" hidden' in html
+    # The maintenance view is reached from the start gate, not a top-level tab.
+    assert 'data-admin-view="maintenance"' not in html
+
+
+def test_maintenance_view_has_three_numbered_sections():
+    html = _read("index.html")
+    maintenance = _maintenance_section(html)
+    for label in ("Installation layout", "Runtime containers", "Versions and links"):
+        assert 'aria-label="' + label + '"' in maintenance
+        assert label in maintenance
+    for step in ("01", "02", "03"):
+        assert ">" + step + "<" in maintenance
+    assert "Existing EMS installation overview" in maintenance
+
+
+def test_maintenance_view_has_layout_container_and_version_facts():
+    html = _read("index.html")
+    maintenance = _maintenance_section(html)
+    for marker in (
+        'id="maintenance-config"',
+        'id="maintenance-data"',
+        'id="maintenance-compose"',
+        'id="maintenance-state"',
+        'id="maintenance-ems"',
+        'id="maintenance-influx"',
+        'id="maintenance-docker"',
+        'id="maintenance-ems-image"',
+        'id="maintenance-influx-image"',
+        'id="maintenance-dashboard"',
+        'id="maintenance-warnings"',
+    ):
+        assert marker in maintenance
+
+
+def test_maintenance_exposes_no_mutating_actions():
+    html = _read("index.html")
+    js = _read("admin.js")
+    maintenance = _maintenance_section(html)
+    # This MVP is read-only: no update/restart/backup/restore/apply controls.
+    for forbidden in (
+        "Update",
+        "Restart",
+        "Backup",
+        "Restore",
+        "Stop EMS",
+        "Start EMS",
+    ):
+        assert forbidden not in maintenance
+    # The only maintenance control is a read-only refresh.
+    assert 'id="maintenance-refresh"' in maintenance
+    # No mutating Docker/compose calls are wired from the maintenance renderer.
+    render = js.split("function renderMaintenance", 1)[1].split(
+        "\nfunction renderMaintenanceError", 1
+    )[0]
+    for mutating in ("compose up", "docker rm", "docker stop", "/prepare", "/start"):
+        assert mutating not in render
+
+
+def test_js_defines_maintenance_overview_renderer():
+    js = _read("admin.js")
+    assert "function renderMaintenance" in js
+    assert "async function loadMaintenanceOverview" in js
+    assert "/api/admin/maintenance/overview" in js
+
+
+def test_js_manage_existing_routes_to_maintenance_overview():
+    js = _read("admin.js")
+    fn = js.split("function enterMaintenance", 1)[1].split("\n}", 1)[0]
+    assert 'setAdminView("maintenance")' in fn
+    assert "loadMaintenanceOverview()" in fn
+    # The admin view registry includes maintenance so hash routing works.
+    assert '"maintenance"' in js.split("const ADMIN_VIEWS =", 1)[1].split("]", 1)[0]
+    # Navigating to the maintenance view (re)loads the overview.
+    switch = js.split("function setAdminView", 1)[1].split("\nfunction ", 1)[0]
+    assert 'next === "maintenance"' in switch
+    assert "loadMaintenanceOverview()" in switch
+
+
+def test_js_maintenance_dynamic_values_are_escaped_or_text_only():
+    js = _read("admin.js")
+    render = js.split("function renderMaintenance", 1)[1].split(
+        "\nfunction renderMaintenanceError", 1
+    )[0]
+    # Fact values (image refs, dashboard URL, state labels) are written via
+    # textContent through the shared setter, never innerHTML.
+    assert "setMaintenanceFact" in render
+    setter = js.split("function setMaintenanceFact", 1)[1].split("\nfunction ", 1)[0]
+    assert "el.textContent = text" in setter
+    assert "innerHTML" not in setter
+    # Warnings are the only innerHTML path and pass through escapeHtml.
+    warnings = js.split("function renderMaintenanceWarnings", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    assert "escapeHtml(note)" in warnings
+
+
+def test_maintenance_cards_are_collapsed_by_default_with_summaries():
+    html = _read("index.html")
+    maintenance = _maintenance_section(html)
+    # Each card starts collapsed: closed state + hidden body + a toggle button
+    # carrying a one-line summary in the header.
+    assert maintenance.count('data-open="false"') == 4
+    for card in (
+        "maintenance-layout",
+        "maintenance-containers",
+        "maintenance-versions",
+        "maintenance-diagnostics",
+    ):
+        assert 'data-maintenance-toggle="' + card + '"' in maintenance
+        assert 'id="' + card + '-body"' in maintenance
+    for summary in (
+        'id="maintenance-system-status"',
+        'id="maintenance-layout-summary"',
+        'id="maintenance-containers-summary"',
+        'id="maintenance-versions-summary"',
+    ):
+        assert summary in maintenance
+    # The detailed bodies stay hidden until expanded.
+    assert 'id="maintenance-layout-body" hidden' in maintenance
+
+
+def test_maintenance_expanded_body_carries_resolved_paths_and_names():
+    html = _read("index.html")
+    maintenance = _maintenance_section(html)
+    for marker in (
+        'id="maintenance-config-path"',
+        'id="maintenance-data-path"',
+        'id="maintenance-compose-path"',
+        'id="maintenance-ems-name"',
+        'id="maintenance-influx-name"',
+        'id="maintenance-docker-server"',
+    ):
+        assert marker in maintenance
+
+
+def test_maintenance_dashboard_link_is_a_real_anchor():
+    html = _read("index.html")
+    js = _read("admin.js")
+    maintenance = _maintenance_section(html)
+    assert 'id="maintenance-dashboard-link"' in maintenance
+    assert 'target="_blank"' in maintenance
+    assert 'rel="noopener"' in maintenance
+    # href is set through the DOM property, never via innerHTML/markup.
+    fn = js.split("function renderMaintenanceDashboard", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    assert "link.href = url" in fn
+    assert "innerHTML" not in fn
+
+
+def test_maintenance_toggle_expands_and_collapses_card():
+    js = _read("admin.js")
+    fn = js.split("function toggleMaintenanceCard", 1)[1].split("\nfunction ", 1)[0]
+    assert 'setAttribute("data-open"' in fn
+    assert "body.hidden = !open" in fn
+    assert 'setAttribute("aria-expanded"' in fn
+    # A delegated click handler drives the collapse/expand.
+    assert "[data-maintenance-toggle]" in js
+
+
+# --- EMS diagnostics card ------------------------------------------------
+
+
+def test_maintenance_has_collapsed_diagnostics_card():
+    html = _read("index.html")
+    maintenance = _maintenance_section(html)
+    card = maintenance.split('id="maintenance-diagnostics"', 1)
+    assert len(card) == 2, "diagnostics card missing"
+    # It is the fourth numbered stage and starts collapsed.
+    assert 'aria-label="EMS diagnostics"' in maintenance
+    assert ">04<" in maintenance
+    assert 'data-open="false"' in card[1].split(">", 1)[0]
+    body = maintenance.split('id="maintenance-diagnostics-body"', 1)[1].split(">", 1)[0]
+    assert "hidden" in body
+    # The collapsed header carries a useful default summary.
+    assert "Diagnostics have not been run yet." in maintenance
+    assert "Read-only EMS checks from the installed system" in maintenance
+
+
+def test_maintenance_diagnostics_has_run_button_and_no_forbidden_actions():
+    html = _read("index.html")
+    maintenance = _maintenance_section(html)
+    assert 'id="maintenance-diagnostics-run"' in maintenance
+    assert "Run diagnostics" in maintenance
+    # Dry-run framing is explicit; no config is written.
+    assert "Config upgrade is checked in dry-run mode only" in maintenance
+    # No mutating maintenance actions are introduced by this card.
+    diagnostics = maintenance.split('id="maintenance-diagnostics"', 1)[1]
+    for forbidden in ("Restart", "Restore", "Update", "Upgrade EMS", "Apply config", "Backup"):
+        assert forbidden not in diagnostics
+
+
+def test_js_diagnostics_posts_to_run_endpoint_without_command_input():
+    js = _read("admin.js")
+    fn = js.split("async function runDiagnostics", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    assert '"/api/admin/maintenance/diagnostics/run"' in fn
+    assert 'method: "POST"' in fn
+    # The button is disabled and relabelled while running; no raw command is sent.
+    assert "button.disabled = true" in fn
+    assert "Running…" in fn
+
+
+def test_js_diagnostics_renders_output_with_safe_dom_text():
+    js = _read("admin.js")
+    render = js.split("function renderDiagnosticsCheck", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    # Every dynamic value goes through createElement/textContent, never innerHTML.
+    assert "document.createElement" in render
+    assert "textContent" in render
+    assert "innerHTML" not in render
+    # Raw output lives in a collapsed <details> drawer, not dumped inline.
+    assert 'document.createElement("details")' in render
+    assert 'document.createElement("pre")' in render
+
+
+def test_js_diagnostics_summary_reflects_available_and_unavailable_states():
+    js = _read("admin.js")
+    fn = js.split("function diagnosticsSummaryLine", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    assert "EMS CLI available" in fn
+    assert "EMS CLI unavailable" in fn
+    assert "ok" in fn and "warning" in fn and "failed" in fn
+    # A disabled subsystem is surfaced in the summary but keeps the ok tone.
+    assert "summary.disabled" in fn
+
+
+def test_js_diagnostics_disabled_status_is_neutral_not_warning():
+    js = _read("admin.js")
+    tones = js.split("const DIAGNOSTICS_STATUS_TONE", 1)[1].split("};", 1)[0]
+    # Disabled-by-config is neutral (info), never warn/error.
+    assert "disabled:" in tones
+    assert 'disabled: "info"' in tones
+    assert 'disabled: "warn"' not in tones
+    assert 'disabled: "error"' not in tones
+
+
+def test_js_diagnostics_prefers_backend_message_over_raw_stderr():
+    js = _read("admin.js")
+    fn = js.split("function diagnosticsCheckMessage", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    # The friendly backend message (e.g. disabled InfluxDB) is the visible text;
+    # raw stderr stays in the raw-output drawer.
+    assert "check.message" in fn
+
+
+def test_css_diagnostics_info_tone_is_muted():
+    css = _read("admin.css")
+    assert '.maintenance-check-pill[data-tone="info"]' in css
+
+
+def test_js_diagnostics_is_not_auto_run_on_view_switch():
+    js = _read("admin.js")
+    # Switching to maintenance only loads the read-only overview; diagnostics are
+    # user-triggered via the Run button, never auto-run.
+    switch = js.split("function setAdminView", 1)[1].split("\nfunction ", 1)[0]
+    assert "loadMaintenanceOverview()" in switch
+    assert "runDiagnostics()" not in switch
+    assert 'diagnosticsEls.run.addEventListener("click", runDiagnostics)' in js

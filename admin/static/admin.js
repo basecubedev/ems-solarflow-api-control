@@ -2976,7 +2976,7 @@ if (configEls.clearDraft) {
   });
 }
 
-const ADMIN_VIEWS = ["setup", "advanced"];
+const ADMIN_VIEWS = ["setup", "maintenance", "advanced"];
 
 function setAdminView(view) {
   const next = ADMIN_VIEWS.includes(view) ? view : "setup";
@@ -2991,17 +2991,17 @@ function setAdminView(view) {
   if (next === "setup") {
     syncConfigFromDiscovery();
   }
+  if (next === "maintenance") {
+    loadMaintenanceOverview();
+  }
 }
 
 function currentHashView() {
   return (window.location.hash || "").replace(/^#/, "");
 }
 
-document.querySelectorAll("[data-admin-view]").forEach((button) => {
-  button.addEventListener("click", () => {
-    window.location.hash = button.dataset.adminView;
-  });
-});
+// Deep links (#maintenance / #advanced) still resolve to the right panel once
+// the start gate has revealed the workspace.
 window.addEventListener("hashchange", () => setAdminView(currentHashView()));
 
 // --- setup wizard --------------------------------------------------------
@@ -4541,6 +4541,475 @@ function initSetupWizard() {
 }
 
 // --- start gate ----------------------------------------------------------
+// --- maintenance overview (read-only) ------------------------------------
+// Manage-existing routes here: a read-only snapshot of the installed layout,
+// container status and versions. Compact collapsible cards show a one-line
+// summary in the header and keep detailed rows behind an expand. Every dynamic
+// value is written via textContent (or escapeHtml for the warnings list); no
+// mutating action is exposed yet.
+
+const maintenanceEls = {
+  warnings: document.getElementById("maintenance-warnings"),
+  systemStatus: document.getElementById("maintenance-system-status"),
+  layoutSummary: document.getElementById("maintenance-layout-summary"),
+  containersSummary: document.getElementById("maintenance-containers-summary"),
+  versionsSummary: document.getElementById("maintenance-versions-summary"),
+  config: document.getElementById("maintenance-config"),
+  configPath: document.getElementById("maintenance-config-path"),
+  data: document.getElementById("maintenance-data"),
+  dataPath: document.getElementById("maintenance-data-path"),
+  compose: document.getElementById("maintenance-compose"),
+  composePath: document.getElementById("maintenance-compose-path"),
+  state: document.getElementById("maintenance-state"),
+  stateMessage: document.getElementById("maintenance-state-message"),
+  ems: document.getElementById("maintenance-ems"),
+  emsName: document.getElementById("maintenance-ems-name"),
+  influx: document.getElementById("maintenance-influx"),
+  influxName: document.getElementById("maintenance-influx-name"),
+  docker: document.getElementById("maintenance-docker"),
+  dockerServer: document.getElementById("maintenance-docker-server"),
+  dockerNote: document.getElementById("maintenance-docker-note"),
+  emsImage: document.getElementById("maintenance-ems-image"),
+  influxImage: document.getElementById("maintenance-influx-image"),
+  dashboard: document.getElementById("maintenance-dashboard"),
+  dashboardLink: document.getElementById("maintenance-dashboard-link"),
+  refresh: document.getElementById("maintenance-refresh"),
+};
+
+const MAINTENANCE_HEALTHY_STATES = ["standard_install", "admin_prepared_install"];
+
+function setMaintenanceFact(el, text, tone) {
+  if (!el) return;
+  el.textContent = text;
+  if (tone) el.dataset.tone = tone;
+  else delete el.dataset.tone;
+}
+
+function maintenancePathFact(entry) {
+  const exists = Boolean(entry && entry.exists);
+  return { text: exists ? "found" : "missing", tone: exists ? "ok" : "warn" };
+}
+
+function maintenanceContainerFact(container, dockerAvailable) {
+  if (!dockerAvailable || !container) return { text: "unknown", tone: "muted" };
+  if (!container.found) {
+    return { text: container.status === "missing" ? "missing" : "unknown", tone: "warn" };
+  }
+  if (container.running) return { text: "running", tone: "ok" };
+  return { text: container.status || "stopped", tone: "warn" };
+}
+
+function renderMaintenanceWarnings(warnings) {
+  const el = maintenanceEls.warnings;
+  if (!el) return;
+  const list = Array.isArray(warnings) ? warnings.filter(Boolean) : [];
+  if (!list.length) {
+    el.hidden = true;
+    el.innerHTML = "";
+    return;
+  }
+  el.hidden = false;
+  el.innerHTML = list.map((note) => "<span>" + escapeHtml(note) + "</span>").join("<br>");
+}
+
+function renderMaintenanceImage(el, image) {
+  setMaintenanceFact(el, image || "unavailable", image ? null : "muted");
+}
+
+function renderMaintenance(data) {
+  const paths = data.paths || {};
+  const config = maintenancePathFact(paths.config);
+  setMaintenanceFact(maintenanceEls.config, config.text, config.tone);
+  setMaintenanceFact(maintenanceEls.configPath, (paths.config && paths.config.path) || "—", "muted");
+  const dataDir = maintenancePathFact(paths.data);
+  setMaintenanceFact(maintenanceEls.data, dataDir.text, dataDir.tone);
+  setMaintenanceFact(maintenanceEls.dataPath, (paths.data && paths.data.path) || "—", "muted");
+  const compose = maintenancePathFact(paths.compose);
+  setMaintenanceFact(maintenanceEls.compose, compose.text, compose.tone);
+  setMaintenanceFact(maintenanceEls.composePath, (paths.compose && paths.compose.path) || "—", "muted");
+
+  const state = data.install_state || {};
+  const healthy = MAINTENANCE_HEALTHY_STATES.includes(state.state);
+  setMaintenanceFact(
+    maintenanceEls.state,
+    state.label || state.state || "unknown",
+    healthy ? "ok" : "warn"
+  );
+  if (maintenanceEls.stateMessage) {
+    maintenanceEls.stateMessage.textContent = state.message || "";
+  }
+
+  const docker = data.docker || {};
+  const containers = data.containers || {};
+  const emsFact = maintenanceContainerFact(containers.ems, docker.available);
+  setMaintenanceFact(maintenanceEls.ems, emsFact.text, emsFact.tone);
+  setMaintenanceFact(
+    maintenanceEls.emsName,
+    (containers.ems && containers.ems.name) || "—",
+    "muted"
+  );
+  const influxFact = maintenanceContainerFact(containers.influxdb, docker.available);
+  setMaintenanceFact(maintenanceEls.influx, influxFact.text, influxFact.tone);
+  setMaintenanceFact(
+    maintenanceEls.influxName,
+    (containers.influxdb && containers.influxdb.name) || "—",
+    "muted"
+  );
+  setMaintenanceFact(
+    maintenanceEls.docker,
+    docker.available ? "ok" : "unavailable",
+    docker.available ? "ok" : "warn"
+  );
+  setMaintenanceFact(
+    maintenanceEls.dockerServer,
+    docker.server_version || "unknown",
+    "muted"
+  );
+  if (maintenanceEls.dockerNote) {
+    maintenanceEls.dockerNote.textContent = docker.available ? "" : docker.error || "";
+  }
+
+  renderMaintenanceImage(maintenanceEls.emsImage, containers.ems && containers.ems.image);
+  renderMaintenanceImage(
+    maintenanceEls.influxImage,
+    containers.influxdb && containers.influxdb.image
+  );
+
+  const dashboard = data.links && data.links.dashboard_url;
+  renderMaintenanceDashboard(dashboard);
+  renderMaintenanceSummaries(data);
+  renderMaintenanceWarnings(data.warnings);
+}
+
+// The dashboard link href is set through the DOM property (never innerHTML) so
+// the config-derived URL cannot inject markup.
+function renderMaintenanceDashboard(url) {
+  const link = maintenanceEls.dashboardLink;
+  const label = maintenanceEls.dashboard;
+  if (link) {
+    if (url) {
+      link.href = url;
+      link.hidden = false;
+    } else {
+      link.removeAttribute("href");
+      link.hidden = true;
+    }
+  }
+  if (label) {
+    label.hidden = Boolean(url);
+    setMaintenanceFact(label, url ? "" : "unavailable", "muted");
+  }
+}
+
+function maintenanceContainerSummary(container, dockerAvailable, name) {
+  return name + " " + maintenanceContainerFact(container, dockerAvailable).text;
+}
+
+// Collapsed headers must stay informative: each summary condenses the card's key
+// facts into one line so the state is readable without expanding.
+function renderMaintenanceSummaries(data) {
+  const state = data.install_state || {};
+  const healthy = MAINTENANCE_HEALTHY_STATES.includes(state.state);
+  const paths = data.paths || {};
+  const docker = data.docker || {};
+  const containers = data.containers || {};
+
+  const present = ["config", "data", "compose"].filter(
+    (key) => paths[key] && paths[key].exists
+  );
+  const layoutText =
+    present.length === 3
+      ? "OK · config/data/compose found"
+      : (state.label || "Partial") + " · " + present.length + "/3 paths found";
+  setMaintenanceFact(maintenanceEls.layoutSummary, layoutText, healthy ? "ok" : "warn");
+
+  const containersText = docker.available
+    ? maintenanceContainerSummary(containers.ems, true, "EMS") +
+      " · " +
+      maintenanceContainerSummary(containers.influxdb, true, "InfluxDB")
+    : "Docker unavailable";
+  const containersTone =
+    docker.available && containers.ems && containers.ems.running ? "ok" : "warn";
+  setMaintenanceFact(maintenanceEls.containersSummary, containersText, containersTone);
+
+  const emsTag = containers.ems && containers.ems.tag;
+  const dashboard = data.links && data.links.dashboard_url;
+  const versionsText =
+    (emsTag ? "EMS " + emsTag : "EMS version unknown") +
+    " · " +
+    (dashboard ? "Dashboard " + dashboard : "Dashboard unavailable");
+  setMaintenanceFact(maintenanceEls.versionsSummary, versionsText, null);
+
+  const systemText =
+    (state.label || state.state || "Unknown") +
+    " · " +
+    (docker.available
+      ? containers.ems && containers.ems.running
+        ? "EMS running"
+        : "EMS not running"
+      : "Docker unavailable") +
+    (emsTag ? " · " + emsTag : "");
+  setMaintenanceFact(maintenanceEls.systemStatus, systemText, healthy ? "ok" : "warn");
+}
+
+function renderMaintenanceError() {
+  [
+    maintenanceEls.config,
+    maintenanceEls.configPath,
+    maintenanceEls.data,
+    maintenanceEls.dataPath,
+    maintenanceEls.compose,
+    maintenanceEls.composePath,
+    maintenanceEls.state,
+    maintenanceEls.ems,
+    maintenanceEls.emsName,
+    maintenanceEls.influx,
+    maintenanceEls.influxName,
+    maintenanceEls.docker,
+    maintenanceEls.dockerServer,
+    maintenanceEls.emsImage,
+    maintenanceEls.influxImage,
+    maintenanceEls.dashboard,
+    maintenanceEls.layoutSummary,
+    maintenanceEls.containersSummary,
+    maintenanceEls.versionsSummary,
+    maintenanceEls.systemStatus,
+  ].forEach((el) => setMaintenanceFact(el, "unavailable", "muted"));
+  renderMaintenanceDashboard(null);
+  if (maintenanceEls.stateMessage) maintenanceEls.stateMessage.textContent = "";
+  renderMaintenanceWarnings([
+    "Could not load the Maintenance overview. The Admin server may be unavailable.",
+  ]);
+}
+
+function toggleMaintenanceCard(id) {
+  const section = document.getElementById(id);
+  if (!section) return;
+  const open = section.getAttribute("data-open") !== "true";
+  section.setAttribute("data-open", open ? "true" : "false");
+  const body = document.getElementById(id + "-body");
+  if (body) body.hidden = !open;
+  const button = section.querySelector("[data-maintenance-toggle]");
+  if (button) button.setAttribute("aria-expanded", open ? "true" : "false");
+  const caret = section.querySelector(".maintenance-caret");
+  if (caret) caret.textContent = open ? "▾" : "▸";
+}
+
+document.addEventListener("click", (event) => {
+  const toggle = event.target.closest("[data-maintenance-toggle]");
+  if (!toggle) return;
+  toggleMaintenanceCard(toggle.getAttribute("data-maintenance-toggle"));
+});
+
+let maintenanceLoading = false;
+
+async function loadMaintenanceOverview() {
+  if (maintenanceLoading) return;
+  maintenanceLoading = true;
+  try {
+    const resp = await fetch("/api/admin/maintenance/overview");
+    if (!resp.ok) throw new Error("maintenance overview request failed");
+    renderMaintenance(await resp.json());
+  } catch (err) {
+    renderMaintenanceError();
+  } finally {
+    maintenanceLoading = false;
+  }
+}
+
+if (maintenanceEls.refresh) {
+  maintenanceEls.refresh.addEventListener("click", loadMaintenanceOverview);
+}
+
+// --- EMS diagnostics (read-only) -----------------------------------------
+// User-triggered allowlisted read-only checks from the installed EMS, run via
+// the backend bridge. The frontend only POSTs to the run endpoint (it never
+// sends command input) and renders every value through textContent/createElement
+// so EMS output cannot inject markup. No Apply/Fix/Restart/Upgrade action is
+// exposed here; the card stays collapsed and is never auto-run.
+
+const diagnosticsEls = {
+  summary: document.getElementById("maintenance-diagnostics-summary"),
+  mode: document.getElementById("maintenance-diagnostics-mode"),
+  checks: document.getElementById("maintenance-diagnostics-checks"),
+  note: document.getElementById("maintenance-diagnostics-note"),
+  run: document.getElementById("maintenance-diagnostics-run"),
+};
+
+const DIAGNOSTICS_MODE_LABELS = {
+  container: "container mode",
+  local: "local emsctl.py",
+  unavailable: "unavailable",
+};
+
+const DIAGNOSTICS_STATUS_TONE = {
+  ok: "ok",
+  // A subsystem disabled by config is expected, not a problem: neutral tone.
+  disabled: "info",
+  warning: "warn",
+  failed: "error",
+  timeout: "error",
+  unavailable: null,
+  not_run: null,
+};
+
+function diagnosticsFirstLine(text) {
+  if (!text) return "";
+  const lines = String(text).split("\n").map((line) => line.trim()).filter(Boolean);
+  return lines.length ? lines[0] : "";
+}
+
+function diagnosticsCheckMessage(check) {
+  // A backend-supplied message (e.g. the disabled-InfluxDB note) is the
+  // user-facing text; the raw stderr stays behind the raw-output toggle.
+  if (check.message) return check.message;
+  if (check.status === "timeout") return "Check timed out.";
+  if (check.status === "unavailable") {
+    return diagnosticsFirstLine(check.stderr) || "Check could not run.";
+  }
+  if (check.status === "ok") return "";
+  return (
+    diagnosticsFirstLine(check.stderr) ||
+    diagnosticsFirstLine(check.stdout) ||
+    (typeof check.exit_code === "number" ? "Exit code " + check.exit_code : "")
+  );
+}
+
+function diagnosticsRawText(check) {
+  const parts = [];
+  if (check.stdout) parts.push(String(check.stdout));
+  if (check.stderr) parts.push("stderr:\n" + String(check.stderr));
+  return parts.join("\n\n");
+}
+
+function renderDiagnosticsCheck(check) {
+  const row = document.createElement("div");
+  row.className = "maintenance-check";
+
+  const head = document.createElement("div");
+  head.className = "maintenance-check-head";
+
+  const label = document.createElement("span");
+  label.className = "maintenance-check-label";
+  label.textContent = check.label || check.id || "check";
+  head.appendChild(label);
+
+  if (typeof check.duration_ms === "number") {
+    const duration = document.createElement("span");
+    duration.className = "maintenance-check-duration";
+    duration.textContent = check.duration_ms + " ms";
+    head.appendChild(duration);
+  }
+
+  const pill = document.createElement("span");
+  pill.className = "maintenance-check-pill";
+  pill.textContent = check.status || "not_run";
+  const tone = DIAGNOSTICS_STATUS_TONE[check.status];
+  if (tone) pill.dataset.tone = tone;
+  head.appendChild(pill);
+  row.appendChild(head);
+
+  const message = diagnosticsCheckMessage(check);
+  if (message) {
+    const note = document.createElement("p");
+    note.className = "maintenance-check-message";
+    note.textContent = message;
+    row.appendChild(note);
+  }
+
+  const raw = diagnosticsRawText(check);
+  if (raw) {
+    const details = document.createElement("details");
+    details.className = "maintenance-check-raw";
+    const summary = document.createElement("summary");
+    summary.textContent = "Raw output" + (check.truncated ? " (truncated)" : "");
+    details.appendChild(summary);
+    const pre = document.createElement("pre");
+    pre.textContent = raw;
+    details.appendChild(pre);
+    row.appendChild(details);
+  }
+  return row;
+}
+
+function diagnosticsSummaryLine(data) {
+  const modeLabel = DIAGNOSTICS_MODE_LABELS[data.mode] || data.mode || "unavailable";
+  if (!data.available) {
+    return { text: "EMS CLI unavailable · " + modeLabel, tone: "warn" };
+  }
+  const summary = data.summary || {};
+  const parts = ["EMS CLI available", modeLabel];
+  if (summary.ok) parts.push(summary.ok + " ok");
+  if (summary.disabled) parts.push(summary.disabled + " disabled");
+  if (summary.warning) parts.push(summary.warning + " warning");
+  if (summary.failed) parts.push(summary.failed + " failed");
+  if (summary.unavailable) parts.push(summary.unavailable + " unavailable");
+  return { text: parts.join(" · "), tone: summary.status === "ok" ? "ok" : "warn" };
+}
+
+function renderDiagnostics(data) {
+  const available = Boolean(data.available);
+  const modeLabel = DIAGNOSTICS_MODE_LABELS[data.mode] || data.mode || "unavailable";
+  setMaintenanceFact(diagnosticsEls.mode, modeLabel, available ? null : "muted");
+
+  if (diagnosticsEls.checks) {
+    diagnosticsEls.checks.textContent = "";
+    const checks = Array.isArray(data.checks) ? data.checks : [];
+    for (const check of checks) {
+      diagnosticsEls.checks.appendChild(renderDiagnosticsCheck(check));
+    }
+  }
+
+  if (diagnosticsEls.note) {
+    diagnosticsEls.note.textContent = available
+      ? ""
+      : data.message ||
+        "EMS CLI diagnostics are not available for this installation state.";
+  }
+
+  const line = diagnosticsSummaryLine(data);
+  setMaintenanceFact(diagnosticsEls.summary, line.text, line.tone);
+}
+
+function renderDiagnosticsError() {
+  if (diagnosticsEls.note) {
+    diagnosticsEls.note.textContent =
+      "Could not run EMS diagnostics. The Admin server may be unavailable.";
+  }
+  setMaintenanceFact(diagnosticsEls.summary, "EMS CLI diagnostics failed", "warn");
+}
+
+let diagnosticsRunning = false;
+
+async function runDiagnostics() {
+  if (diagnosticsRunning) return;
+  diagnosticsRunning = true;
+  const button = diagnosticsEls.run;
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Running…";
+  }
+  try {
+    const resp = await fetch("/api/admin/maintenance/diagnostics/run", {
+      method: "POST",
+    });
+    if (!resp.ok) throw new Error("diagnostics request failed");
+    renderDiagnostics(await resp.json());
+  } catch (err) {
+    renderDiagnosticsError();
+  } finally {
+    diagnosticsRunning = false;
+    if (button) {
+      button.disabled = false;
+      button.textContent = "Run diagnostics";
+    }
+  }
+}
+
+if (diagnosticsEls.run) {
+  diagnosticsEls.run.addEventListener("click", runDiagnostics);
+}
+
 // The Admin UI opens on a router screen that detects the install state and
 // recommends the safest of the only two flows (set up new / manage existing).
 // The setup wizard must not auto-run when an install already exists, so its
@@ -4554,7 +5023,6 @@ const RECOMMEND_LABELS = {
 
 const startEls = {
   gate: document.getElementById("view-start"),
-  tabs: document.querySelector(".admin-view-tabs"),
   recommend: document.getElementById("start-recommend"),
   form: document.getElementById("start-path-form"),
   error: document.getElementById("start-path-error"),
@@ -4616,7 +5084,6 @@ async function loadInstallState() {
 
 function revealWorkspace() {
   if (startEls.gate) startEls.gate.hidden = true;
-  if (startEls.tabs) startEls.tabs.hidden = false;
   workspaceRevealed = true;
 }
 
@@ -4629,8 +5096,9 @@ function enterSetup() {
 
 function enterMaintenance() {
   revealWorkspace();
-  window.location.hash = "advanced";
-  setAdminView("advanced");
+  window.location.hash = "maintenance";
+  setAdminView("maintenance");
+  loadMaintenanceOverview();
 }
 
 async function migrateLegacyConfig() {
