@@ -16,6 +16,9 @@ This directory contains the public project documentation.
 
 | Topic | Document | Use |
 |---|---|---|
+| Guided Admin setup | [setup/admin-setup.md](setup/admin-setup.md) | Browser-based "Set up a new system" flow with device discovery, release selection, and config apply. |
+| Admin maintenance | [setup/admin-maintenance.md](setup/admin-maintenance.md) | "Manage my existing system" flow: guided upgrade, read-only overview, config editor, and backup. |
+| Admin discovery (detail) | [admin-discovery.md](admin-discovery.md) | Full Admin reference: wizard, release/build-identity gating, network discovery, Docker setup, and security. |
 | Install Docker | [install-docker.md](install-docker.md) | Practical Docker Engine and Compose plugin install help for Debian, Ubuntu, and Raspberry Pi OS. |
 | Common commands | [common-commands.md](common-commands.md) | Daily Docker-first command sheet with native Python equivalents. |
 | Docker | [docker.md](docker.md) | Compose reference, first-run config bootstrap, persisted data, permissions, and v0.6.0 release scope. |

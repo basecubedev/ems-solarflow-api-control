@@ -5264,6 +5264,10 @@ function renderUpgradePlan() {
   if (!cur.tag && !cur.image) {
     items.push({ tone: "warn", text: "Current version unknown" });
   }
+  items.push({ tone: "info", text: "Verify the target image identity" });
+  if (release && release.upgrade_warning) {
+    items.push({ tone: "warn", text: release.upgrade_warning });
+  }
 
   const options = readUpgradeOptions();
   for (const opt of UPGRADE_OPTIONS) {
@@ -5453,7 +5457,8 @@ async function loadUpgradeReleases() {
   upgradeState.error = null;
   setUpgradeReleaseStatus();
   try {
-    const res = await fetch("/api/setup/releases");
+    // Maintenance/upgrade flow: apply the upgrade-only build-identity gate.
+    const res = await fetch("/api/setup/releases?flow=upgrade");
     const data = await res.json();
     if (!res.ok) {
       throw new Error(data && data.error ? data.error : "release list unavailable");

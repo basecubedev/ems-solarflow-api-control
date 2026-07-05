@@ -23,7 +23,8 @@ state and recommends the safest of exactly **two** flows:
 
 - **Set up a new system** — for first-time setup or a clean reinstall.
 - **Manage my existing system** — for updates, backups, diagnostics, changing
-  settings, and migrating an existing config.
+  settings, and migrating an existing config (see
+  [admin-maintenance.md](admin-maintenance.md)).
 
 The Docker bootstrap and developer/manual paths are documentation-level
 alternatives ([docker-bootstrap.md](docker-bootstrap.md),

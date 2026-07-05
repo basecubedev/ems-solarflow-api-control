@@ -16,10 +16,50 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote
 
+from admin.image_identity import (
+    ALREADY_CURRENT,
+    DOWNGRADE_BLOCKED,
+    IDENTITY_UNKNOWN,
+    OLDER_THAN_RUNNING_BUILD,
+    UPGRADE_AVAILABLE,
+    ImageIdentity,
+    assess_upgrade,
+    identify_image,
+)
+
 
 REPO = "basecubedev/ems-solarflow-api-control"
 DOCKER_IMAGE_REPOSITORY = f"ghcr.io/{REPO}"
 GITHUB_RELEASES_URL = f"https://api.github.com/repos/{REPO}/releases?per_page=50"
+# Canonical EMS container name; the running container's build identity is
+# preferred over the compose-declared image when deciding real upgrades.
+DEFAULT_EMS_CONTAINER = "ems-solarflow-api-control"
+# EMS image reference in a compose file; group 1 is the tag (may be ``latest``).
+COMPOSE_IMAGE_RE = re.compile(
+    rf"ghcr\.io/{re.escape(REPO)}:([^\s\"'{{}}]+)",
+    re.IGNORECASE,
+)
+# User-facing copy for the two identity-based blocks (kept short for the UI).
+OLDER_THAN_RUNNING_BUILD_REASON = (
+    "Target is older than the running EMS build. Guided Upgrade only supports "
+    "upgrades. Use Backup/Restore for recovery flows."
+)
+IDENTITY_UNKNOWN_REASON = (
+    "Guided Upgrade cannot verify this release is newer than the running EMS "
+    "build. Use Backup/Restore for recovery flows."
+)
+# Shown while the target image is not local yet: selection stays allowed and the
+# real check runs (pulling the image) during prepare / Guided Upgrade.
+IDENTITY_UNVERIFIED_REASON = (
+    "Guided Upgrade verifies this target's build identity (pulling the image if "
+    "needed) before making any changes."
+)
+ALREADY_CURRENT_REASON = "Already running this EMS build."
+# Test/development escape hatch: allow a legacy target with no build-identity
+# labels through the ``identity_unknown`` gate (e.g. a running ``latest`` whose
+# build cannot be compared to a pre-labels stable release). Never relaxes a
+# SemVer-proven downgrade — see ``assess_upgrade(allow_unverified=...)``.
+LEGACY_UNVERIFIED_ENV = "ADMIN_ALLOW_LEGACY_UNVERIFIED_UPGRADES"
 TAG_PATTERN = re.compile(r"^v?[0-9A-Za-z][0-9A-Za-z._-]{0,127}$")
 VERSION_PATTERN = re.compile(
     r"^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$"
@@ -108,6 +148,23 @@ def _downgrade_baseline(active, prepared):
     return active or prepared
 
 
+def _has_build_identity(identity):
+    """True when an image identity carries a comparable build signal."""
+
+    return identity.build_serial is not None or bool(identity.digest)
+
+
+def _legacy_unverified_override():
+    """True when the legacy-unverified test override env var is truthy."""
+
+    return os.environ.get(LEGACY_UNVERIFIED_ENV, "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
 def _safe_tag(tag):
     value = str(tag or "").strip()
     if not TAG_PATTERN.fullmatch(value):
@@ -151,6 +208,7 @@ class ReleaseManager:
         project_dir=None,
         urlopen=None,
         resource_checker=None,
+        docker=None,
     ):
         self.data_dir = Path(data_dir) if data_dir else default_admin_data_dir()
         self.releases_dir = self.data_dir / "releases"
@@ -160,11 +218,25 @@ class ReleaseManager:
         )
         self._urlopen = urlopen or urllib.request.urlopen
         self._resource_checker = resource_checker or self._check_remote_resources
+        # Read-only Docker inspector (``inspect_container``/``inspect_image``) used
+        # to read build identity. ``None`` disables identity checks entirely, so
+        # release selection falls back to SemVer/tag reasoning only.
+        self._docker = docker
+        self._identity_cache = {}
         self._known_downloads = {}
         self._resource_checks = {}
         self._prepare_lock = threading.Lock()
 
-    def list_releases(self):
+    def list_releases(self, *, for_upgrade=True):
+        """Return the release catalogue.
+
+        ``for_upgrade`` (the default) applies the upgrade-only safety gate: the
+        running EMS build identity is inspected and proven downgrades / older
+        builds are marked non-selectable. Guided **Setup** (a fresh install) has
+        no running build to protect, so it calls with ``for_upgrade=False`` and
+        every supported release with available Docker resources stays selectable.
+        """
+
         cached = self._cached_manifests()
         warnings = []
         remote = []
@@ -203,6 +275,10 @@ class ReleaseManager:
         active = self.detect_active_release()
         prepared = self._selected_release(cached)
         baseline = _downgrade_baseline(active, prepared)
+        # A fresh install has no running build to compare against: skip the
+        # (Docker-touching) identity read and let every supported release stand.
+        running = self._running_identity() if for_upgrade else ImageIdentity()
+        running_known = _has_build_identity(running) if for_upgrade else False
         for item in by_tag.values():
             tag = item["tag"]
             item.setdefault("prepared", False)
@@ -223,7 +299,34 @@ class ReleaseManager:
                 if eligible
                 else False
             )
-            downgrade = self._is_downgrade(baseline, tag)
+            # Setup offers every supported release; only the upgrade flow applies
+            # the downgrade / build-identity gate against the running build.
+            downgrade = for_upgrade and self._is_downgrade(baseline, tag)
+            # SemVer downgrade stays authoritative; the build-identity verdict
+            # only adds blocks when the running build is actually known.
+            assessment = (
+                self._assess_upgrade(tag, running, running_known, baseline)
+                if for_upgrade and not downgrade
+                else None
+            )
+            state = (
+                DOWNGRADE_BLOCKED if downgrade
+                else assessment.state if assessment
+                else None
+            )
+            warning = assessment.warning if assessment else None
+            item["upgrade_state"] = state
+            item["upgrade_warning"] = warning
+            # Only a proven-older target blocks selection. An unverifiable target
+            # (image not local yet) stays selectable; prepare / Guided Upgrade
+            # pull and verify it before any change. ``latest`` is a rolling
+            # channel and is never blocked as older/already-current here.
+            identity_block = (
+                running_known and state == OLDER_THAN_RUNNING_BUILD and tag != "latest"
+            )
+            identity_noop = (
+                running_known and state == ALREADY_CURRENT and tag != "latest"
+            )
             item["channel"] = (
                 "latest"
                 if tag == "latest"
@@ -240,7 +343,11 @@ class ReleaseManager:
             item["admin_supported"] = eligible
             item["docker_supported"] = bool(eligible and resources is True)
             item["selectable"] = bool(
-                item["admin_supported"] and item["docker_supported"] and not downgrade
+                item["admin_supported"]
+                and item["docker_supported"]
+                and not downgrade
+                and not identity_block
+                and not identity_noop
             )
             if not eligible:
                 item["reason"] = (
@@ -257,6 +364,14 @@ class ReleaseManager:
                     "Downgrades are not supported by the setup assistant. "
                     "Use Backup/Restore flow instead."
                 )
+            elif identity_block:
+                item["reason"] = OLDER_THAN_RUNNING_BUILD_REASON
+            elif identity_noop:
+                item["reason"] = ALREADY_CURRENT_REASON
+            elif running_known and state == IDENTITY_UNKNOWN:
+                item["reason"] = IDENTITY_UNVERIFIED_REASON
+            elif warning:
+                item["reason"] = warning
             elif tag == "latest":
                 item["reason"] = (
                     "Rolling Docker channel, not a stable release"
@@ -276,8 +391,10 @@ class ReleaseManager:
                 "The current release cannot be compared safely; no downgrade claim "
                 "was made."
             )
+        # Pre-v0.6.0 versioned releases (channel "legacy") are unsupported and
+        # never selectable; hide them from Setup and Guided Upgrade entirely.
         releases = sorted(
-            by_tag.values(),
+            (item for item in by_tag.values() if item["channel"] != "legacy"),
             key=self._release_sort_key,
         )
         stable = next(
@@ -317,12 +434,25 @@ class ReleaseManager:
         cached = self._cached_manifests()
         active = self.detect_active_release()
         prepared = self._selected_release(cached)
-        if self._is_downgrade(_downgrade_baseline(active, prepared), tag):
+        baseline = _downgrade_baseline(active, prepared)
+        if self._is_downgrade(baseline, tag):
             raise ReleaseError(
                 "Downgrades are not supported by the setup assistant. "
                 "Use Backup/Restore flow instead.",
                 status=409,
             )
+        # Block preparing a release the running build identity proves is not an
+        # upgrade (older serial) or cannot be proven newer at all. Only enforced
+        # when the running build is actually known — never on a fresh install.
+        running = self._running_identity()
+        if _has_build_identity(running):
+            state = self._assess_upgrade(
+                tag, running, True, baseline, pull=self._pull_callable()
+            ).state
+            if state == OLDER_THAN_RUNNING_BUILD:
+                raise ReleaseError(OLDER_THAN_RUNNING_BUILD_REASON, status=409)
+            if state == IDENTITY_UNKNOWN:
+                raise ReleaseError(IDENTITY_UNKNOWN_REASON, status=409)
         if not _is_admin_version(tag):
             raise ReleaseError(
                 "Admin Setup supports Docker releases from v0.6.0 onward.", 400
@@ -388,21 +518,147 @@ class ReleaseManager:
         return self._selected_release(self._cached_manifests())
 
     def detect_active_release(self):
+        match = self._compose_image_match()
+        if match and match.group(1).lower() != "latest":
+            tag = match.group(1)
+            return tag if TAG_PATTERN.fullmatch(tag) else None
+        return None
+
+    def _compose_image_match(self):
         for name in ("docker-compose.yml", "compose.yml"):
             path = self.project_dir / name
             try:
                 text = path.read_text(encoding="utf-8")
             except OSError:
                 continue
-            match = re.search(
-                r"ghcr\.io/basecubedev/ems-solarflow-api-control:([^\s\"'{}]+)",
-                text,
-                re.IGNORECASE,
-            )
-            if match and match.group(1).lower() != "latest":
-                tag = match.group(1)
-                return tag if TAG_PATTERN.fullmatch(tag) else None
+            match = COMPOSE_IMAGE_RE.search(text)
+            if match:
+                return match
         return None
+
+    def _compose_image_ref(self):
+        """Full EMS image ref declared in the compose file (incl. ``latest``)."""
+
+        match = self._compose_image_match()
+        return match.group(0) if match else None
+
+    def _running_identity(self):
+        """Build identity of the running EMS system, or an all-``None`` identity.
+
+        Prefers the running container's image (its actual bits) and falls back
+        to the compose-declared image ref when no container is running. Returns
+        an all-``None`` :class:`ImageIdentity` when Docker is unavailable or
+        nothing can be inspected, which disables identity-based blocking.
+        """
+
+        if self._docker is None:
+            return ImageIdentity()
+        container = self._safe_inspect_container()
+        if container and str(container.get("status") or "").lower() == "running":
+            image = str(container.get("image") or "").strip()
+            if image:
+                return self._identify(image)
+        ref = self._compose_image_ref()
+        if ref:
+            return self._identify(ref)
+        return ImageIdentity()
+
+    def _safe_inspect_container(self):
+        inspect = getattr(self._docker, "inspect_container", None)
+        if not callable(inspect):
+            return None
+        try:
+            return inspect(DEFAULT_EMS_CONTAINER)
+        except Exception:  # a read-only view must never fail on Docker state
+            return None
+
+    def _identify(self, image_ref):
+        ref = str(image_ref or "").strip()
+        if not ref:
+            return ImageIdentity()
+        if ref not in self._identity_cache:
+            self._identity_cache[ref] = identify_image(self._docker, ref)
+        return self._identity_cache[ref]
+
+    def _target_identity(self, tag, pull=None):
+        if self._docker is None:
+            return ImageIdentity()
+        return self._resolve_target_identity(self._docker_image(tag), pull)
+
+    def _resolve_target_identity(self, target_image, pull):
+        """Inspect the target image, pulling once via ``pull`` when not local.
+
+        ``pull`` is an optional ``callable(image_ref)`` (a not-local target has
+        no build identity to compare, so pulling resolves it). Pull/inspect
+        failures degrade to the last known identity rather than raising.
+        """
+
+        identity = self._identify(target_image)
+        if pull is None or _has_build_identity(identity):
+            return identity
+        try:
+            pull(target_image)
+        except Exception:  # a pull failure just leaves the target unverifiable
+            return identity
+        self._identity_cache.pop(target_image, None)
+        return self._identify(target_image)
+
+    def _pull_callable(self):
+        """The injected Docker's image pull, or ``None`` when it cannot pull."""
+
+        pull = getattr(self._docker, "pull", None)
+        return pull if callable(pull) else None
+
+    def _assess_upgrade(self, tag, running, running_known, baseline, *, pull=None):
+        """Assess moving from the running build to ``tag`` (see ``assess_upgrade``).
+
+        The target image is only inspected when SemVer cannot settle the move (a
+        ``latest`` side) and the running build is known, so a normal
+        stable->stable listing never shells out to Docker per release. When
+        ``pull`` is given, a not-yet-local target is pulled once so its build
+        serial/digest can settle the decision instead of defaulting to unknown.
+
+        The ``ADMIN_ALLOW_LEGACY_UNVERIFIED_UPGRADES`` test override is applied
+        only for a supported concrete release target — never ``latest`` and never
+        a SemVer-proven downgrade — so unlabeled legacy ``v0.6.x`` images stay
+        testable while normal safety is unchanged.
+        """
+
+        target_version = None if tag == "latest" else _version(tag)
+        current_version = _version(baseline) if baseline else None
+        need_serial = running_known and (
+            current_version is None or target_version is None
+        )
+        target = self._target_identity(tag, pull) if need_serial else ImageIdentity()
+        allow_unverified = (
+            target_version is not None
+            and _is_admin_version(tag)
+            and _legacy_unverified_override()
+        )
+        return assess_upgrade(
+            running,
+            target,
+            current_version=current_version,
+            target_version=target_version,
+            allow_unverified=allow_unverified,
+            target_rolling=tag == "latest",
+        )
+
+    def verify_upgrade_target(self, tag, *, pull=None):
+        """Assess the move from the running EMS build to ``tag`` for Guided Upgrade.
+
+        Unlike the release listing this compares against the *running* release
+        only (never the prepared target) and, when ``pull`` is given, pulls a
+        not-yet-local target so its build identity settles the decision. Returns
+        an :class:`~admin.image_identity.UpgradeAssessment`; the caller blocks on
+        anything that is not a proven upgrade before making changes.
+        """
+
+        tag = _safe_tag(tag)
+        running = self._running_identity()
+        running_known = _has_build_identity(running)
+        active = self.detect_active_release()
+        return self._assess_upgrade(tag, running, running_known, active, pull=pull)
 
     def _fetch_release_metadata(self):
         request = urllib.request.Request(
@@ -493,8 +749,8 @@ class ReleaseManager:
     @staticmethod
     def _release_sort_key(item):
         channel_order = {
-            "stable": 0,
-            "latest": 1,
+            "latest": 0,
+            "stable": 1,
             "rc": 2,
             "legacy": 3,
             "unknown": 4,

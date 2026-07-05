@@ -22,11 +22,37 @@ from ems import config as ems_config
 from admin.deployment import DockerCli, DockerCompose, DockerError
 from admin.ems_cli import EmsCliDiagnostics
 from admin.ems_tool import EmsToolRunner, mode_detail
+from admin.image_identity import (
+    ALREADY_CURRENT,
+    DOWNGRADE_BLOCKED,
+    IDENTITY_UNKNOWN,
+    OLDER_THAN_RUNNING_BUILD,
+)
 from admin.install_context import detect_install_context
 from admin.models import utc_now_iso
 from admin.releases import DOCKER_IMAGE_REPOSITORY, ReleaseManager
 
 EMS_SERVICE = "ems"
+
+# Target-image verification copy, keyed by the assessment state that blocks the
+# run before any mutating step.
+_VERIFY_OK_DETAIL = "Target image identity verified."
+_VERIFY_UNVERIFIABLE = (
+    "Target image identity could not be verified. Guided Upgrade is blocked "
+    "before making changes."
+)
+_VERIFY_BLOCK_MESSAGES = {
+    ALREADY_CURRENT: "This EMS build is already installed; there is nothing to upgrade.",
+    OLDER_THAN_RUNNING_BUILD: (
+        "This target is older than the running EMS build and cannot be "
+        "installed through Guided Upgrade."
+    ),
+    DOWNGRADE_BLOCKED: (
+        "This target is older than the running EMS build and cannot be "
+        "installed through Guided Upgrade."
+    ),
+    IDENTITY_UNKNOWN: _VERIFY_UNVERIFIABLE,
+}
 # Matches the published EMS image ref; the bundled InfluxDB image never matches.
 EMS_IMAGE_RE = re.compile(
     r"ghcr\.io/basecubedev/ems-solarflow-api-control:[^\s\"'{}]+"
@@ -48,6 +74,7 @@ _RunContext = namedtuple(
 
 # Live-step labels, kept in sync with the steps emitted in _run below.
 _PLAN_LABELS = {
+    "verify_image": "Verify target image",
     "preflight": "Preflight checks",
     "backup": "Create backup",
     "config_check": "Check config",
@@ -76,7 +103,7 @@ def plan_upgrade_steps(options):
     """
     options = {key: bool(options.get(key)) for key in ALL_OPTIONS}
     want_config_write = options["config_add_keys"] or options["config_comments"]
-    keys = ["preflight"]
+    keys = ["verify_image", "preflight"]
     if options["backup"]:
         keys.append("backup")
     if options["config_check"] or want_config_write:
@@ -306,14 +333,24 @@ class GuidedUpgradeExecutor:
     def _run(self, context, release_dir, target_release, target_image, options,
              progress=None):
         steps = _ProgressSteps(progress)
-        steps.append(_step("preflight", "ok", "Preflight checks"))
         warnings = []
         config_path = Path(context.config_path)
-        current_config = self._load_config(config_path)
-        want_config_write = options["config_add_keys"] or options["config_comments"]
 
         def failed():
             return self._failed(target_release, target_image, list(steps), warnings)
+
+        # 01 verify target image — pull/prepare then inspect labels so a
+        # downgrade / no-op / unverifiable target aborts before any mutation.
+        verify = self._verify_target(target_release)
+        steps.append(verify)
+        if verify["status"] == "error":
+            return failed()
+        if verify.get("warning"):
+            warnings.append(verify["warning"])
+
+        steps.append(_step("preflight", "ok", "Preflight checks"))
+        current_config = self._load_config(config_path)
+        want_config_write = options["config_add_keys"] or options["config_comments"]
 
         # 02 backup — run the EMS Core backup through the best EMS tool context
         # (running container, else one-off compose container) so the real
@@ -415,6 +452,40 @@ class GuidedUpgradeExecutor:
             "warnings": warnings,
             "diagnostics": diagnostics,
         }
+
+    def _verify_target(self, target_release):
+        """Verify the target image identity before any mutating step.
+
+        Reuses the release manager's build-identity assessment, pulling a
+        not-yet-local target so ``latest`` vs stable is decided by build serial.
+        Only a proven upgrade passes; older / already-current / unverifiable
+        targets return an error step that aborts the run.
+        """
+        verify = getattr(self.release_manager, "verify_upgrade_target", None)
+        if not callable(verify):
+            return _step("verify_image", "ok", "Verify target image",
+                         detail=_VERIFY_OK_DETAIL)
+        try:
+            assessment = verify(target_release, pull=self._pull_target)
+        except Exception:  # never leak a traceback; treat as unverifiable
+            return _step("verify_image", "error", "Verify target image",
+                         detail=_VERIFY_UNVERIFIABLE)
+        if getattr(assessment, "is_upgrade", False):
+            # A legacy metadata fallback (SemVer or the unverified test override)
+            # is allowed but carries a warning the run surfaces to the operator.
+            warning = getattr(assessment, "warning", None)
+            step = _step("verify_image", "ok", "Verify target image",
+                         detail=warning or _VERIFY_OK_DETAIL)
+            if warning:
+                step["warning"] = warning
+            return step
+        detail = _VERIFY_BLOCK_MESSAGES.get(
+            getattr(assessment, "state", None), _VERIFY_UNVERIFIABLE
+        )
+        return _step("verify_image", "error", "Verify target image", detail=detail)
+
+    def _pull_target(self, image):
+        self.docker_cli.pull(image)
 
     def _run_backup(self, context):
         try:

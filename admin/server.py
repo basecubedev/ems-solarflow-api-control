@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from admin.config_apply import ConfigApplyService, ConfigChangedError
 from admin.config_export import ConfigExportService, ConfigExportValidationError
 from admin.config_preview import ConfigPreviewGenerator
-from admin.deployment import DeploymentService
+from admin.deployment import DeploymentService, DockerCli
 from admin.discovery import (
     CidrValidationError,
     DEFAULT_PORTS,
@@ -178,7 +178,10 @@ class AdminServer(ThreadingHTTPServer):
         self.mdns_provider = mdns_provider or MdnsProvider(
             mqtt_handler=self.mqtt_discovery.add_mdns_candidate
         )
-        self.release_manager = release_manager or ReleaseManager()
+        # Give the release manager a read-only Docker inspector so it can compare
+        # a running build's identity against release targets; harmless when the
+        # daemon is absent (all inspections degrade to an unknown identity).
+        self.release_manager = release_manager or ReleaseManager(docker=DockerCli())
         self.config_preview = ConfigPreviewGenerator(self.release_manager)
         admin_data_dir = getattr(
             self.release_manager, "data_dir", default_admin_data_dir()
@@ -238,7 +241,14 @@ class AdminHandler(BaseHTTPRequestHandler):
             )
             return
         if path == "/api/setup/releases":
-            self._send_json(self.server.release_manager.list_releases())
+            # Guided Setup (fresh install) lists every supported release; the
+            # maintenance/upgrade flow passes ?flow=upgrade to apply the
+            # upgrade-only build-identity gate against the running EMS build.
+            query = self.path.split("?", 1)[1] if "?" in self.path else ""
+            for_upgrade = "flow=upgrade" in query
+            self._send_json(
+                self.server.release_manager.list_releases(for_upgrade=for_upgrade)
+            )
             return
         if path == "/api/setup/config-template":
             self._handle_config_template()

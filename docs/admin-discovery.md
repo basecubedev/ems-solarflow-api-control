@@ -40,6 +40,51 @@ the newest supported stable release as the default. If stable resources cannot
 be found, `latest` is the fallback. Resource availability is checked again
 during preparation before the strict extraction whitelist is applied.
 
+The build-identity gate only applies to the **maintenance/upgrade** flow, which
+requests the release list with `?flow=upgrade` (`list_releases(for_upgrade=True)`).
+**Guided Setup** is a fresh install with no running build to protect, so it lists
+releases without the gate (`for_upgrade=False`): every supported release
+(`>= v0.6.0`) with available Docker resources is selectable, including legacy
+`v0.6.x` images that predate the build-identity labels. Only the running-build
+comparison below is skipped for Setup — the `< v0.6.0` filter and `latest`-first
+ordering are unchanged.
+
+In the upgrade flow, release selection only ever allows real upgrades; downgrades
+belong to the Backup/Restore flow. When the running EMS build can be inspected
+(the running container's image, or the compose-declared image when it is stopped),
+each target is compared by build identity rather than tag name alone, because
+`latest` is a channel, not a version. In order: an identical image digest is
+`already_current`; a `latest` **target** is a rolling channel switch and is always
+`upgrade_available` (basis `channel`) unless it is that same image — it is never
+blocked as older-than-running or already-current, so the list never dead-ends when
+the running build is the newest stable; two comparable SemVer tags require the
+target to be `>=` current (a lower target is `downgrade_blocked`, even if its build
+serial is higher); when a running `latest` makes SemVer incomparable the monotonic
+`build_serial` decides (`upgrade_available` or `older_than_running_build`); and
+when the target image is not local yet its identity cannot be settled from the
+listing alone, so it is `identity_unknown`. Each release carries its
+`upgrade_state`. Proven non-upgrades (`older_than_running_build`,
+`downgrade_blocked`, `already_current`) are non-selectable with a short reason
+(`latest` excepted, as above). An `identity_unknown` target stays selectable:
+preparation and Guided Upgrade pull the target image and re-inspect its labels,
+then refuse it only if it is genuinely older or still unverifiable — so the guard
+lives in the backend, not only the UI, and a not-yet-local stable target is not
+blocked prematurely.
+
+Older published images (`v0.6.x`) predate the build-identity labels. When both
+sides lack a `build_serial` but carry comparable supported SemVer tags, the
+SemVer comparison is authoritative on its own: `v0.6.0 -> v0.6.1` is a normal
+upgrade (still `upgrade_available`), `v0.6.1 -> v0.6.0` is `downgrade_blocked`,
+and each such upgrade carries an `upgrade_warning` noting the SemVer fallback.
+Only the unprovable case — a running `latest` whose build cannot be ordered
+against an unlabeled stable — stays `identity_unknown` and blocked. Setting
+`ADMIN_ALLOW_LEGACY_UNVERIFIED_UPGRADES=true` is a test/development override that
+lets such an unlabeled, supported legacy target through with a clear warning
+(`upgrade_state=upgrade_available`, basis `legacy_unverified`). The override only
+applies to that unprovable fallback: a SemVer-proven downgrade and a
+`build_serial`-proven older build are never relaxed, and build identity remains
+preferred whenever the labels are present.
+
 The Admin does not duplicate installer behavior: the cached files are the same
 Docker install and Compose resources shipped in normal EMS releases. This step
 does not run either installer, start Docker, or write `config.json`. The cached

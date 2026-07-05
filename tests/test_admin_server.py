@@ -173,7 +173,8 @@ class _FakeReleaseManager:
         self.data_dir = Path(data_dir or "/unused-admin-data")
         self.template = template if template is not None else {"devices": []}
 
-    def list_releases(self):
+    def list_releases(self, *, for_upgrade=True):
+        self.last_for_upgrade = for_upgrade
         return {
             "active_release": None,
             "prepared_release": "v0.6.0",
@@ -208,6 +209,24 @@ class _FakeReleaseManager:
             "template": self.template,
             "source": "/cache/v0.6.0/config.template.json",
         }
+
+
+def test_release_endpoint_defaults_to_setup_flow_and_honours_upgrade_flag():
+    # Guided Setup (no query) lists releases without the upgrade gate; the
+    # maintenance flow passes ?flow=upgrade to enable it.
+    manager = _FakeReleaseManager()
+    srv, base = _serve(release_manager=manager)
+    try:
+        status, _, _ = _request(f"{base}/api/setup/releases")
+        assert status == 200
+        assert manager.last_for_upgrade is False
+
+        status, _, _ = _request(f"{base}/api/setup/releases?flow=upgrade")
+        assert status == 200
+        assert manager.last_for_upgrade is True
+    finally:
+        srv.shutdown()
+        srv.server_close()
 
 
 def test_release_setup_endpoints_use_release_manager():

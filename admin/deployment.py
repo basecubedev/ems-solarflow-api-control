@@ -227,6 +227,42 @@ class DockerCli:
                 }
         return None
 
+    def inspect_image(self, image_ref):
+        """Return a sanitized identity view of one local image, or ``None``.
+
+        Reads build-identity labels and digests from ``docker image inspect``.
+        Unlike :meth:`inspect_container`, this is used by read-only Admin
+        release views, so it never raises for a missing Docker CLI, an
+        unreachable daemon, or an absent image — all of those return ``None``
+        and let the caller degrade to an all-unknown identity. It only inspects
+        an image that is already present locally; it never pulls.
+        """
+
+        ref = str(image_ref or "").strip()
+        if not ref:
+            return None
+        try:
+            result = self._run(
+                ["docker", "image", "inspect", ref],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except (FileNotFoundError, OSError, subprocess.SubprocessError):
+            return None
+        if result.returncode != 0:
+            return None
+        try:
+            payload = json.loads(result.stdout or "")
+        except ValueError:
+            return None
+        if not isinstance(payload, list) or not payload:
+            return None
+        entry = payload[0]
+        if not isinstance(entry, dict):
+            return None
+        return _sanitize_image_inspect(entry, ref)
+
     def remove_container(self, container_name):
         """Remove one container without deleting its volumes."""
 
@@ -782,6 +818,41 @@ def _safe_command_detail(tail, max_lines=8, max_chars=1600):
     if len(detail) > max_chars:
         detail = "…" + detail[-(max_chars - 1) :]
     return detail or None
+
+
+def _string_list(values):
+    return [item for item in (values or []) if isinstance(item, str)]
+
+
+def _primary_repo_digest(repo_digests):
+    """Return the registry content digest (``sha256:...``) from repo digests."""
+
+    for item in repo_digests:
+        _, sep, digest = item.partition("@")
+        if sep and digest.startswith("sha256:"):
+            return digest
+    return None
+
+
+def _sanitize_image_inspect(entry, image_ref):
+    """Reduce one ``docker image inspect`` object to labels + digests we trust."""
+
+    config = entry.get("Config")
+    raw_labels = config.get("Labels") if isinstance(config, dict) else None
+    labels = {
+        str(key): (value if isinstance(value, str) else str(value))
+        for key, value in raw_labels.items()
+        if isinstance(key, str) and value is not None
+    } if isinstance(raw_labels, dict) else {}
+    repo_digests = _string_list(entry.get("RepoDigests"))
+    return {
+        "image_ref": image_ref,
+        "id": str(entry.get("Id") or "") or None,
+        "digest": _primary_repo_digest(repo_digests),
+        "repo_digests": repo_digests,
+        "repo_tags": _string_list(entry.get("RepoTags")),
+        "labels": labels,
+    }
 
 
 def _read_env_file(path):

@@ -13,6 +13,13 @@ import pytest
 
 from admin.ems_tool import EmsToolRunner
 from admin.guided_upgrade import GuidedUpgradeExecutor
+from admin.image_identity import (
+    ALREADY_CURRENT,
+    IDENTITY_UNKNOWN,
+    OLDER_THAN_RUNNING_BUILD,
+    UPGRADE_AVAILABLE,
+    UpgradeAssessment,
+)
 from admin.install_context import detect_install_context
 from admin.server import ScanRegistry, create_server
 
@@ -53,6 +60,21 @@ class FakeReleaseManager:
 
     def prepared_release(self):
         return self._prepared
+
+
+class VerifyingReleaseManager(FakeReleaseManager):
+    """FakeReleaseManager that scripts the target-image verification verdict."""
+
+    def __init__(self, releases_dir, prepared=TAG, assessment=None):
+        super().__init__(releases_dir, prepared=prepared)
+        self._assessment = assessment or UpgradeAssessment(UPGRADE_AVAILABLE, "build_serial")
+        self.verified = []
+        self.pull_arg = None
+
+    def verify_upgrade_target(self, tag, *, pull=None):
+        self.verified.append(tag)
+        self.pull_arg = pull
+        return self._assessment
 
 
 class FakeCompose:
@@ -309,6 +331,109 @@ def test_backup_failure_aborts_before_recreate(tmp_path):
     assert result["ok"] is False and result["status"] == "failed"
     assert next(s for s in result["steps"] if s["id"] == "backup")["status"] == "error"
     assert docker.pulled == [] and compose.calls == []
+
+
+# --- target-image verification (before any mutating step) -----------------
+
+
+def _make_verifying_executor(tmp_path, assessment):
+    install = _install(tmp_path)
+    releases = _prepared_release(tmp_path)
+    compose = FakeCompose()
+    docker = FakeDockerCli()
+    release_manager = VerifyingReleaseManager(releases, prepared=TAG, assessment=assessment)
+    executor = GuidedUpgradeExecutor(
+        release_manager=release_manager,
+        compose=compose,
+        docker_cli=docker,
+        ems_cli=FakeEmsCli("ok"),
+        install_context_provider=lambda: detect_install_context(base_dir=str(install)),
+    )
+    return executor, install, compose, docker, release_manager
+
+
+def test_verify_upgrade_available_allows_run(tmp_path):
+    executor, install, compose, docker, rm = _make_verifying_executor(
+        tmp_path, UpgradeAssessment(UPGRADE_AVAILABLE, "build_serial")
+    )
+    result = executor.execute(TAG, ALL_OPTIONS, confirm=True)
+
+    assert result["ok"] is True and result["status"] == "completed"
+    verify = next(s for s in result["steps"] if s["id"] == "verify_image")
+    assert verify["status"] == "ok"
+    assert verify["detail"] == "Target image identity verified."
+    # The verify step runs first and receives a working pull callable.
+    assert rm.verified == [TAG] and callable(rm.pull_arg)
+    assert result["steps"][0]["id"] == "verify_image"
+    # The run proceeds through the mutating steps only after verification.
+    assert compose.calls and compose.calls[0]["services"] == ("ems",)
+
+
+def test_verify_lower_build_serial_blocks_before_mutation(tmp_path):
+    executor, install, compose, docker, rm = _make_verifying_executor(
+        tmp_path, UpgradeAssessment(OLDER_THAN_RUNNING_BUILD, "build_serial")
+    )
+    original_config = (install / "config" / "config.json").read_text(encoding="utf-8")
+    result = executor.execute(TAG, ALL_OPTIONS, confirm=True)
+
+    assert result["ok"] is False and result["status"] == "failed"
+    verify = next(s for s in result["steps"] if s["id"] == "verify_image")
+    assert verify["status"] == "error"
+    assert "older than the running EMS build" in verify["detail"]
+    # No backup / config / pull / compose / recreate happened.
+    assert [s["id"] for s in result["steps"]] == ["verify_image"]
+    assert docker.pulled == [] and compose.calls == [] and compose.oneoff_calls == []
+    assert (install / "config" / "config.json").read_text(encoding="utf-8") == original_config
+
+
+def test_verify_same_digest_blocks_as_noop(tmp_path):
+    executor, _install, compose, docker, _rm = _make_verifying_executor(
+        tmp_path, UpgradeAssessment(ALREADY_CURRENT, "digest")
+    )
+    result = executor.execute(TAG, ALL_OPTIONS, confirm=True)
+
+    assert result["ok"] is False and result["status"] == "failed"
+    verify = next(s for s in result["steps"] if s["id"] == "verify_image")
+    assert verify["status"] == "error"
+    assert "already installed" in verify["detail"]
+    assert docker.pulled == [] and compose.calls == [] and compose.oneoff_calls == []
+
+
+def test_verify_legacy_unverified_allows_and_surfaces_warning(tmp_path):
+    executor, install, compose, docker, rm = _make_verifying_executor(
+        tmp_path,
+        UpgradeAssessment(
+            UPGRADE_AVAILABLE,
+            "legacy_unverified",
+            warning="Legacy image metadata missing. Allowed by admin test override.",
+        ),
+    )
+    result = executor.execute(TAG, ALL_OPTIONS, confirm=True)
+
+    assert result["ok"] is True and result["status"] == "completed"
+    verify = next(s for s in result["steps"] if s["id"] == "verify_image")
+    assert verify["status"] == "ok"
+    assert "Legacy image metadata missing" in verify["detail"]
+    # The legacy warning is surfaced to the operator on the run result.
+    assert any("Legacy image metadata missing" in w for w in result["warnings"])
+    # The run still proceeds through the mutating steps after verification.
+    assert compose.calls and compose.calls[0]["services"] == ("ems",)
+
+
+def test_verify_unknown_identity_blocks_before_mutation(tmp_path):
+    executor, install, compose, docker, _rm = _make_verifying_executor(
+        tmp_path, UpgradeAssessment(IDENTITY_UNKNOWN, "none")
+    )
+    original_config = (install / "config" / "config.json").read_text(encoding="utf-8")
+    result = executor.execute(TAG, ALL_OPTIONS, confirm=True)
+
+    assert result["ok"] is False and result["status"] == "failed"
+    verify = next(s for s in result["steps"] if s["id"] == "verify_image")
+    assert verify["status"] == "error"
+    assert "could not be verified" in verify["detail"]
+    assert [s["id"] for s in result["steps"]] == ["verify_image"]
+    assert docker.pulled == [] and compose.calls == [] and compose.oneoff_calls == []
+    assert (install / "config" / "config.json").read_text(encoding="utf-8") == original_config
 
 
 # --- endpoint wiring ------------------------------------------------------
