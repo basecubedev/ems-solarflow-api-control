@@ -1,0 +1,79 @@
+{
+  "_note": "Demo Maintenance overview (read-only). Fake paths, versions and container names only.",
+  "overview": {
+    "install_state": {
+      "state": "standard_install",
+      "label": "Standard installation",
+      "message": "A standard EMS installation was found.",
+      "recommended_path": "manage_existing",
+      "reasons": []
+    },
+    "paths": {
+      "config": { "path": "/opt/ems/config/config.json", "exists": true },
+      "data": { "path": "/opt/ems/data", "exists": true },
+      "compose": { "path": "/opt/ems/docker-compose.yml", "exists": true }
+    },
+    "docker": {
+      "available": true,
+      "state": "ready",
+      "error": null,
+      "server_version": "27.1.1"
+    },
+    "containers": {
+      "ems": {
+        "found": true,
+        "running": true,
+        "name": "ems-solarflow-api-control",
+        "image": "ghcr.io/example/ems-solarflow-api-control:v0.7.0-RC",
+        "tag": "v0.7.0-RC",
+        "status": "running"
+      },
+      "influxdb": {
+        "found": false,
+        "running": false,
+        "name": "ems-influxdb",
+        "image": null,
+        "tag": null,
+        "status": "missing"
+      }
+    },
+    "links": { "dashboard_url": "http://localhost:8080" },
+    "warnings": []
+  },
+  "config": {
+    "status": "ok",
+    "config_path": "/opt/ems/config/config.json",
+    "revision": "demo-rev-1",
+    "summary": { "device_count": 2, "grid_meter_type": "shelly" },
+    "catalog": { "feature_sections": [], "grid_meter_types": ["shelly", "ecotracker", "tasmota"] },
+    "draft": {
+      "devices": [
+        { "name": "sf800-living", "ip": "192.168.1.50", "sn": "DEMO-SF800-001" },
+        { "name": "sf800-garage", "ip": "192.168.1.51", "sn": "DEMO-SF800-002" }
+      ],
+      "grid_meter": { "type": "shelly", "ip": "192.168.1.52" }
+    }
+  },
+  "containers_plan": {
+    "ok": true,
+    "available": true,
+    "summary": "No action required",
+    "status_summary": "EMS running · InfluxDB disabled",
+    "message": "",
+    "actions": [{ "action": "none", "service": "ems" }],
+    "services": {
+      "ems": {
+        "desired_state": "running",
+        "display_label": "Running",
+        "display_detail": "ems-solarflow-api-control · v0.7.0-RC",
+        "tone": "ok"
+      },
+      "influxdb": {
+        "desired_state": "stopped",
+        "display_label": "Disabled",
+        "display_detail": "Bundled InfluxDB is not enabled",
+        "tone": "muted"
+      }
+    }
+  }
+}

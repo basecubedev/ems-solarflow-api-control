@@ -1,0 +1,78 @@
+{
+  "_note": "Demo Guided Setup data: release list, prepared config template, discovery networks and generated config preview. Fake devices/IPs/serials only.",
+  "releases_setup": {
+    "ok": true,
+    "default_release": "v0.7.0-RC",
+    "prepared_release": "v0.7.0-RC",
+    "warnings": [],
+    "releases": [
+      {
+        "tag": "v0.7.0-RC",
+        "name": "v0.7.0-RC",
+        "channel": "latest",
+        "prerelease": true,
+        "docker_supported": true,
+        "prepared": true,
+        "active": false,
+        "selectable": true,
+        "reason": "Recommended release for a fresh install."
+      },
+      {
+        "tag": "v0.6.4",
+        "name": "v0.6.4",
+        "channel": "stable",
+        "prerelease": false,
+        "docker_supported": true,
+        "prepared": false,
+        "active": false,
+        "selectable": true,
+        "reason": "Previous stable release."
+      }
+    ]
+  },
+  "config_template": {
+    "tag": "v0.7.0-RC",
+    "docker_image": "ghcr.io/example/ems-solarflow-api-control:v0.7.0-RC",
+    "template": {
+      "devices": [
+        {
+          "name": "solarflow",
+          "ip": "192.168.1.50",
+          "sn": "",
+          "type": "solarflow_800",
+          "min_output_limit": 30
+        }
+      ],
+      "grid_meter": { "type": "shelly", "ip": "192.168.1.52" },
+      "control": { "update_interval_seconds": 5, "pv_priority_factor": 1.0 },
+      "dashboard": { "port": 8080, "ssl_enabled": false }
+    }
+  },
+  "config_catalog": { "feature_sections": [], "grid_meter_types": ["shelly", "ecotracker", "tasmota"] },
+  "networks": {
+    "ok": true,
+    "networks": [
+      { "cidr": "192.168.1.0/24", "label": "Local network (demo)", "recommended": true }
+    ]
+  },
+  "config_preview": {
+    "ready": true,
+    "release": "v0.7.0-RC",
+    "base": { "source": "release_template" },
+    "summary": { "inverters": 2, "grid_meters": 1 },
+    "validation": {
+      "errors": [],
+      "warnings": [],
+      "info": [{ "message": "Configuration looks complete and ready to export." }]
+    },
+    "config": {
+      "devices": [
+        { "name": "sf800-living", "ip": "192.168.1.50", "sn": "DEMO-SF800-001", "type": "solarflow_800", "min_output_limit": 30 },
+        { "name": "sf800-garage", "ip": "192.168.1.51", "sn": "DEMO-SF800-002", "type": "solarflow_800", "min_output_limit": 30 }
+      ],
+      "grid_meter": { "type": "shelly", "ip": "192.168.1.52" },
+      "control": { "update_interval_seconds": 5, "pv_priority_factor": 1.0 },
+      "dashboard": { "port": 8080, "ssl_enabled": false }
+    }
+  }
+}

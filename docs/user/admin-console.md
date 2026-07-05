@@ -32,6 +32,69 @@ guided upgrade and restore back up what they replace first.
 When Admin updates itself, the browser may briefly show a reconnect screen. See
 [Updating the Admin Console](admin-maintenance.md#updating-the-admin-console).
 
+## What the Admin Console looks like
+
+The Admin Console guides setup and maintenance through visible steps. The
+screenshots below use demo data (fake devices, IPs, serials and versions) and do
+not show a real installation.
+
+### Start page
+
+Detects the current install state and recommends the safer of the two flows.
+
+![Admin Console start page with Guided setup and Maintenance choices](../assets/screenshots/admin/admin-landing.png)
+
+### Guided Setup
+
+A stepped wizard: pick a release, discover devices, generate config, then deploy.
+
+![Guided Setup release step showing prepared resources and the step plan](../assets/screenshots/admin/admin-guided-setup-start.png)
+
+Discovery lists detected devices with type, confidence and config-readiness
+before anything is written:
+
+![Guided Setup device discovery with two demo inverters and one demo grid meter](../assets/screenshots/admin/admin-discovery-preview.png)
+
+The generated config is shown for review, with validation, before it is applied:
+
+![Guided Setup config step showing the generated config, validation and apply](../assets/screenshots/admin/admin-guided-setup-config-preview.png)
+
+### Maintenance Overview
+
+A read-only overview of the existing installation: install layout, runtime
+containers, versions and links.
+
+![Maintenance overview showing EMS running, InfluxDB disabled, image tag and Docker status](../assets/screenshots/admin/admin-maintenance-overview.png)
+
+### Backup / Restore
+
+Backups are visible before risky actions; safety verification runs
+automatically and demo backups can be inspected or restored.
+
+![Backup and restore view showing backup scope options and a list of demo backups](../assets/screenshots/admin/admin-backup-restore.png)
+
+### Guided Upgrade
+
+The full upgrade plan — backup, config check, image pull, container recreate and
+diagnostics — is shown before anything is changed.
+
+![Guided Upgrade plan showing current and target versions, safety options and the step plan](../assets/screenshots/admin/admin-guided-upgrade-plan.png)
+
+When the release needs a newer Admin Console, Admin updates itself first and the
+browser reconnects automatically:
+
+![Admin Console reconnect overlay shown while the Admin Console updates itself](../assets/screenshots/admin/admin-admin-update-reconnect.png)
+
+### Demo videos
+
+Demo videos are planned for the first public Admin Console release. The
+screenshots above show the current workflow layout. See
+[docs/assets/videos/admin/README.md](../assets/videos/admin/README.md) for the
+planned recordings.
+
+To refresh these screenshots for a new release, see the
+[capture guide](../assets/screenshots/admin/README.md).
+
 ## It does not replace EMS
 
 - EMS still runs the control loop and remains the source of truth.

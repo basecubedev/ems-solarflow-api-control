@@ -1,0 +1,49 @@
+{
+  "_note": "Demo Guided Upgrade planning data. Fake image refs and digests only.",
+  "releases_upgrade": {
+    "ok": true,
+    "default_release": "v0.7.0",
+    "prepared_release": "v0.7.0",
+    "warnings": [],
+    "releases": [
+      {
+        "tag": "v0.7.0",
+        "name": "v0.7.0",
+        "channel": "stable",
+        "prerelease": false,
+        "docker_supported": true,
+        "prepared": true,
+        "active": false,
+        "selectable": true,
+        "reason": "Latest stable release."
+      },
+      {
+        "tag": "v0.7.0-RC",
+        "name": "v0.7.0-RC",
+        "channel": "latest",
+        "prerelease": true,
+        "docker_supported": true,
+        "prepared": false,
+        "active": true,
+        "selectable": true,
+        "reason": "Currently running release."
+      }
+    ]
+  },
+  "admin_update_status": { "supported": true },
+  "admin_update_plan": {
+    "ok": true,
+    "plan_id": "demo-admin-plan",
+    "update_required": false,
+    "reason": "image_unchanged",
+    "warning": null,
+    "current_admin": {
+      "image_ref": "ghcr.io/example/ems-admin:v0.7.0",
+      "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "target_admin": {
+      "image_ref": "ghcr.io/example/ems-admin:v0.7.0",
+      "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    }
+  }
+}
