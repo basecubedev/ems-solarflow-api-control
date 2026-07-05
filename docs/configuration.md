@@ -573,6 +573,7 @@ the physical device is installed or reports values differently. Run
 | Shelly Pro/Plus Gen2/Gen3 | `shelly` | `ip` | Uses `/rpc/Shelly.GetStatus` |
 | Shelly 3EM Gen1 | `shelly_3em_gen1` | `ip` | Uses `/status` |
 | everHome EcoTracker | `ecotracker` | `ip` | Uses `/v1/json` |
+| Zendure Smart Meter 3CT HTTP | `zendure_smartmeter_3ct_http` | `ip` | Local REST `/properties/report`, reads `total_power` |
 | Tasmota HTTP / SmartMeter | `tasmota_http` | `ip` or `url`, `power_path` | Uses `Status 10` JSON |
 | Zendure SmartMeter D0 (MQTT) | `zendure_smartmeter_d0` | `mqtt.host`, `mqtt.topic` | D0 preset, numeric payload |
 | Generic MQTT grid meter | `mqtt` | `mqtt.host`, `mqtt.topic`, `mqtt.payload_format` | Numeric or JSON payload |
@@ -666,6 +667,25 @@ Example: everHome EcoTracker:
   "grid_meter": {
     "type": "ecotracker",
     "ip": "192.0.2.60"
+  }
+}
+```
+
+### Zendure Smart Meter 3CT HTTP (`zendure_smartmeter_3ct_http`)
+
+The EMS reads `http://<ip>/properties/report` and uses the flat JSON
+`total_power` field. This is a local REST endpoint that needs no MQTT broker and
+no app MQTT configuration; current known firmware exposes it without
+authentication. The sign is used as reported by the device. Per-phase fields
+(`a_aprt_power`, `b_aprt_power`, `c_aprt_power`) are ignored for now.
+
+Example: Zendure Smart Meter 3CT via local HTTP:
+
+```json
+{
+  "grid_meter": {
+    "type": "zendure_smartmeter_3ct_http",
+    "ip": "192.168.1.50"
   }
 }
 ```

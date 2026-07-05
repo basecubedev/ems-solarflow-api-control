@@ -559,6 +559,50 @@ class TasmotaHttpClient:
         return self.last_value
 
 
+class ZendureSmartMeter3CTHttpClient:
+    """Client for the Zendure Smart Meter 3CT local REST endpoint."""
+
+    provider = "Zendure Smart Meter 3CT"
+
+    def __init__(self, ip, session):
+        self.ip = ip
+        self.session = session
+        self.last_value = 0
+        self.health = CommHealth(self.provider, kind="read")
+
+    def get_power(self):
+        """Return current household/grid power usage."""
+
+        start = time.monotonic()
+        try:
+            r = self.session.get(
+                f"http://{self.ip}/properties/report",
+                timeout=3
+            )
+
+            self.last_value = round(
+                _parse_zendure_smartmeter_3ct_power(r.json()),
+                1
+            )
+            self.health.record_success((time.monotonic() - start) * 1000.0)
+
+        except Exception as e:
+            self.health.record_failure(
+                error=e,
+                latency_ms=(time.monotonic() - start) * 1000.0,
+                stale_used=True,
+            )
+            log_event(
+                logging.WARNING,
+                "zendure_smartmeter_3ct_http_read_error",
+                ip=self.ip,
+                error=e,
+                stale_value=self.last_value
+            )
+
+        return self.last_value
+
+
 class MqttGridMeterClient:
     """Non-blocking MQTT subscriber for grid power values."""
 
@@ -780,6 +824,13 @@ def create_grid_meter_client(config, session):
 
     if meter_type == "ecotracker":
         return EcoTrackerClient(ip, session)
+
+    if meter_type == cfg.ZENDURE_SMARTMETER_3CT_HTTP_GRID_METER_TYPE:
+        if not ip:
+            raise ValueError(
+                "Zendure Smart Meter 3CT HTTP grid meter requires ip"
+            )
+        return ZendureSmartMeter3CTHttpClient(ip, session)
 
     if meter_type == "tasmota_http":
         power_path = config.get("power_path")
@@ -1045,6 +1096,26 @@ def _parse_tasmota_http_power(data, power_path):
         return float(value)
 
     raise ValueError(f"Tasmota power path is not numeric: {power_path}")
+
+
+def _parse_zendure_smartmeter_3ct_power(data):
+    """Extract grid power from a Zendure Smart Meter 3CT payload.
+
+    Only ``total_power`` is read for now; the reported sign is preserved.
+    """
+
+    if not isinstance(data, dict):
+        raise ValueError(
+            "Unsupported Zendure Smart Meter 3CT payload: expected object"
+        )
+
+    value = data.get("total_power")
+    if _is_numeric(value):
+        return float(value)
+
+    raise ValueError(
+        "Unsupported Zendure Smart Meter 3CT payload: missing numeric total_power"
+    )
 
 
 def _mqtt_rc_success(rc):
