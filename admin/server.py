@@ -131,9 +131,13 @@ SECURITY_HEADERS = {
         "style-src 'self'; "
         "img-src 'self' data:; "
         "connect-src 'self'; "
+        "object-src 'none'; "
         "frame-ancestors 'none'; "
         "base-uri 'none'; "
         "form-action 'self'"
+    ),
+    "Permissions-Policy": (
+        "geolocation=(), microphone=(), camera=(), payment=(), usb=()"
     ),
 }
 

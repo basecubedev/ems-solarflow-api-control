@@ -17,8 +17,8 @@ from admin.install_context import detect_install_context
 from admin.models import DiscoveredDevice
 from admin.mqtt_discovery import MqttBrokerDiscovery
 from admin.releases import ReleaseError
-from admin.server import ScanRegistry, create_server
-from tests.admin_auth_helpers import auth_headers, authenticate
+from admin.server import SECURITY_HEADERS, ScanRegistry, create_server
+from tests.admin_auth_helpers import auth_headers, authenticate, raw_request
 
 pytestmark = pytest.mark.simulation
 
@@ -120,6 +120,63 @@ def test_static_assets_have_content_types(server):
 def test_path_traversal_blocked(server):
     status, _, _ = _request(f"{server}/..%2f..%2fadmin/server.py")
     assert status == 404
+
+
+def test_admin_security_headers_are_hardened():
+    assert SECURITY_HEADERS["X-Content-Type-Options"] == "nosniff"
+    assert SECURITY_HEADERS["X-Frame-Options"] == "DENY"
+    assert SECURITY_HEADERS["Referrer-Policy"] == "no-referrer"
+
+    csp = SECURITY_HEADERS["Content-Security-Policy"]
+    assert "default-src 'self'" in csp
+    assert "script-src 'self'" in csp
+    assert "style-src 'self'" in csp
+    assert "img-src 'self' data:" in csp
+    assert "connect-src 'self'" in csp
+    assert "object-src 'none'" in csp
+    assert "frame-ancestors 'none'" in csp
+    assert "base-uri 'none'" in csp
+    assert "form-action 'self'" in csp
+
+    assert (
+        SECURITY_HEADERS["Permissions-Policy"]
+        == "geolocation=(), microphone=(), camera=(), payment=(), usb=()"
+    )
+
+
+def test_admin_auth_status_response_has_security_headers():
+    # A genuinely unauthenticated public request must still carry the hardening
+    # headers, so raw_request (no session attached) is used deliberately.
+    srv, base = _serve()
+    try:
+        status, headers, _ = raw_request(f"{base}/api/admin/auth/status")
+        assert status == 200
+        assert headers["X-Content-Type-Options"] == "nosniff"
+        assert headers["X-Frame-Options"] == "DENY"
+        assert headers["Referrer-Policy"] == "no-referrer"
+        assert "object-src 'none'" in headers["Content-Security-Policy"]
+        assert (
+            headers["Permissions-Policy"]
+            == "geolocation=(), microphone=(), camera=(), payment=(), usb=()"
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_admin_unauthenticated_error_has_security_headers():
+    # Auth failures and JSON error responses must be hardened too; raw_request
+    # skips the cached session so the protected endpoint rejects the request.
+    srv, base = _serve()
+    try:
+        status, headers, _ = raw_request(f"{base}/api/admin/install-state")
+        assert status in (401, 403)
+        assert headers["X-Content-Type-Options"] == "nosniff"
+        assert "object-src 'none'" in headers["Content-Security-Policy"]
+        assert "Permissions-Policy" in headers
+    finally:
+        srv.shutdown()
+        srv.server_close()
 
 
 def test_status_endpoint_reports_config_apply_capability(server):

@@ -99,6 +99,22 @@ The password file lives under the mounted install layout
 (`config/dashboard-auth.json`), never only inside the Admin container image, so
 EMS reuses the same password later.
 
+### Web hardening headers
+
+The Admin Console sends browser hardening headers on every UI and API response
+(including auth failures and JSON errors):
+
+- `X-Content-Type-Options: nosniff`
+- `X-Frame-Options: DENY`
+- `Referrer-Policy: no-referrer`
+- a self-only Content Security Policy with `object-src 'none'`
+- `Permissions-Policy` disabling geolocation, microphone, camera, payment and USB
+
+HTTPS is not forced by default because the Admin Console is designed for trusted
+local networks and self-signed certificates are confusing for many users. If
+HTTPS support is added later, it should be an optional parallel listener rather
+than a forced redirect.
+
 ## Why this split matters
 
 - A single source of truth (EMS/Core) means the Admin Console, the CLI and the
