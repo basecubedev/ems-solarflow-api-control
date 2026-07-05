@@ -478,13 +478,56 @@ def _wait_job(base, job_id, timeout=5.0):
     raise AssertionError("guided upgrade job did not finish in time")
 
 
-def _server(guided_upgrade):
+class _AllowAdminUpdate:
+    """Admin update stub that never blocks the EMS upgrade (self-update is a
+    separate concern, covered by tests/test_admin_update.py)."""
+
+    def ems_upgrade_allowed(self, target_release):
+        return {"allowed": True, "reason": "admin_update_not_required"}
+
+
+def _server(guided_upgrade, admin_update=None):
     registry = ScanRegistry(scan_runner=lambda *a, **k: ([], []))
-    srv = create_server("127.0.0.1", 0, registry=registry, guided_upgrade=guided_upgrade)
+    srv = create_server(
+        "127.0.0.1",
+        0,
+        registry=registry,
+        guided_upgrade=guided_upgrade,
+        admin_update=admin_update or _AllowAdminUpdate(),
+    )
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{srv.server_address[1]}"
     authenticate(base)
     return srv, base
+
+
+class _BlockAdminUpdate:
+    """Admin update stub that blocks the EMS upgrade (Admin update required)."""
+
+    def ems_upgrade_allowed(self, target_release):
+        return {
+            "allowed": False,
+            "error": "admin_update_required",
+            "message": "Update the Admin Console before running this EMS upgrade.",
+        }
+
+
+def test_execute_blocked_when_admin_update_required(tmp_path):
+    # A direct authenticated POST is refused server-side, not just in the UI.
+    executor, _install_dir, _compose, docker = _make_executor(tmp_path)
+    srv, base = _server(executor, admin_update=_BlockAdminUpdate())
+    try:
+        status, body = _post(
+            base + "/api/admin/maintenance/upgrade/execute",
+            {"confirm": True, "target_release": TAG, "options": ALL_OPTIONS},
+        )
+    finally:
+        srv.shutdown()
+    assert status == 409
+    assert body["error"] == "admin_update_required"
+    assert body["admin_update"]["allowed"] is False
+    # Gated before any job runs, so the EMS image was never pulled.
+    assert docker.pulled == []
 
 
 def test_endpoint_requires_confirm(tmp_path):

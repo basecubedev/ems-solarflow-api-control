@@ -1,23 +1,22 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Plan Admin Console self-updates and own the pending-update state.
 
-Before a Guided EMS Upgrade the Admin Console may need to replace *itself* with a
-version compatible with the selected release. This module derives the target
-Admin image server-side from a trusted release tag, reads the current Admin image
-identity, decides whether an update is required (by digest/build identity, never
-by tag name alone), and persists a small pending-update record so the replacement
-Admin can resume the upgrade after it restarts.
+Before a Guided EMS Upgrade the Admin Console may need to replace *itself*. This
+module derives the target Admin image server-side from a trusted release *tag*
+(the browser never sends an image ref), decides whether an update is required by
+digest/build identity (never by tag name alone), and persists a small pending
+record so the replacement Admin can resume the upgrade after it restarts.
 
-Everything here is planning and state: the disruptive pull/recreate work lives in
-``admin.update_apply`` and runs outside the HTTP request. The module never stops
-the running Admin, never touches the EMS container/config/data, and never accepts
-an image reference from the browser — callers pass a release *tag* only and the
-image is derived from :data:`ADMIN_IMAGE_REPO`.
+The disruptive pull/recreate work lives in ``admin.update_apply`` and runs out of
+the HTTP request. Nothing here stops the running Admin or touches the EMS
+container/config/data.
 """
 
 import json
 import os
+import re
 import socket
+import subprocess
 import tempfile
 import threading
 import uuid
@@ -26,6 +25,7 @@ from pathlib import Path
 
 from admin.image_identity import ImageIdentity, identify_image
 from admin.models import utc_now_iso
+from admin.releases import TAG_PATTERN
 
 # Trusted image repositories. The browser never supplies an image ref; the target
 # is always ``<repo>:<validated-tag>`` derived here.
@@ -35,8 +35,11 @@ EMS_IMAGE_REPO = "ghcr.io/basecubedev/ems-solarflow-api-control"
 PENDING_ADMIN_UPDATE_FILE = "pending-admin-update.json"
 PENDING_SCHEMA_VERSION = 1
 
-# Canonical Admin service/container name (compose service == container_name).
+# Canonical Admin identifiers. The compose *service* name (used by
+# ``docker compose up <service>``) and the *container* name (used for Docker
+# inspect identity) default to the same value but are configured separately.
 DEFAULT_ADMIN_CONTAINER = "ems-solarflow-admin"
+DEFAULT_ADMIN_COMPOSE_SERVICE = "ems-solarflow-admin"
 DEFAULT_ADMIN_COMPOSE_FILE = "docker-compose.admin.yml"
 
 # Lifecycle stages for one pending update. The happy path is
@@ -68,6 +71,16 @@ RESUMABLE_STAGES = frozenset({STAGE_SUCCEEDED, STAGE_RESUME_READY})
 
 NEXT_STEP_RESUME_EMS = "resume_ems_upgrade"
 
+# Server-side EMS-upgrade gate outcomes.
+GATE_NOT_REQUIRED = "admin_update_not_required"
+GATE_COMPLETED = "admin_update_completed"
+GATE_BLOCKED = "admin_update_required"
+_EMS_BLOCK_MESSAGE = "Update the Admin Console before running this EMS upgrade."
+_EMS_BLOCK_UNKNOWN = (
+    "The Admin update status could not be determined. Update the Admin Console "
+    "before running this EMS upgrade."
+)
+
 # Decision reason codes (stable; surfaced to the UI and tests).
 REASON_DIGEST_MATCH = "digest_match"
 REASON_DIGEST_CHANGED = "digest_changed"
@@ -84,36 +97,33 @@ _TARGET_DIGEST_UNKNOWN_WARNING = (
 )
 
 
-def target_admin_image_for_release(release_tag: str) -> str:
-    """Derive the target Admin image reference from a trusted release tag.
+def validate_release_tag(release_tag: str) -> str:
+    """Return the trimmed tag or raise ``ValueError`` for anything unsafe.
 
-    Accepts a bare tag (``v0.7.0``/``latest``/``main``) and returns
-    ``<ADMIN_IMAGE_REPO>:<tag>``. Rejects anything that looks like a full image
-    reference, a path, or carries whitespace/shell metacharacters so the browser
-    can never smuggle an arbitrary image ref through a "release tag".
+    Enforces the same strict pattern as the release catalogue
+    (:data:`admin.releases.TAG_PATTERN`), so shell/metacharacter strings
+    (``v0.7.0;rm``, ``v0.7.0$(x)``, ``../v0.7.0``) are rejected even without
+    whitespace, and the browser can never smuggle an image ref through a tag.
     """
 
     tag = str(release_tag or "").strip()
     if not tag:
         raise ValueError("release tag is required")
-    if "/" in tag or ":" in tag or any(ch.isspace() for ch in tag):
-        raise ValueError("release tag must not be an image reference")
-    if tag.startswith("-"):
+    if not TAG_PATTERN.fullmatch(tag):
         raise ValueError("release tag is invalid")
-    return f"{ADMIN_IMAGE_REPO}:{tag}"
+    return tag
+
+
+def target_admin_image_for_release(release_tag: str) -> str:
+    """Derive the target Admin image ref ``<ADMIN_IMAGE_REPO>:<validated-tag>``."""
+
+    return f"{ADMIN_IMAGE_REPO}:{validate_release_tag(release_tag)}"
 
 
 def target_ems_image_for_release(release_tag: str) -> str:
-    """Derive the EMS image reference for the same release tag (metadata only)."""
+    """Derive the EMS image ref for the same tag (metadata only)."""
 
-    tag = str(release_tag or "").strip()
-    if not tag:
-        raise ValueError("release tag is required")
-    if "/" in tag or ":" in tag or any(ch.isspace() for ch in tag):
-        raise ValueError("release tag must not be an image reference")
-    if tag.startswith("-"):
-        raise ValueError("release tag is invalid")
-    return f"{EMS_IMAGE_REPO}:{tag}"
+    return f"{EMS_IMAGE_REPO}:{validate_release_tag(release_tag)}"
 
 
 @dataclass(frozen=True)
@@ -175,6 +185,17 @@ def _identity_view(identity: ImageIdentity) -> dict:
     }
 
 
+def _plan_summary(pending: dict) -> dict:
+    """Compact view of a pending record for the EMS-upgrade gate response."""
+
+    return {
+        "target_release": pending.get("target_release"),
+        "stage": pending.get("stage"),
+        "update_required": pending.get("update_required"),
+        "reason": pending.get("reason"),
+    }
+
+
 def admin_image_ref_from_env(environ=None) -> str | None:
     """Build the current Admin image ref from ``EMS_ADMIN_IMAGE``/``EMS_ADMIN_TAG``.
 
@@ -208,12 +229,11 @@ def _safe_inspect_container(docker, name):
 def detect_current_admin_identity(docker=None, environ=None, hostname=None):
     """Detect the running Admin image identity and how it was found.
 
-    Order: a configured container name (``EMS_ADMIN_CONTAINER_NAME``) inspected
-    via Docker, then the container's own hostname (its short id) as a best-effort
-    Docker lookup, then the ``EMS_ADMIN_IMAGE``/``EMS_ADMIN_TAG`` env fallback.
-    Whatever image ref is found is enriched with digest/labels by inspecting the
-    local image. Never raises: an undetectable identity comes back all-``None``
-    with source ``unknown`` so the status endpoint still answers.
+    Tries, in order: the configured container name (``EMS_ADMIN_CONTAINER_NAME``)
+    via Docker inspect, the container hostname (short id), then the
+    ``EMS_ADMIN_IMAGE``/``EMS_ADMIN_TAG`` env fallback; the ref is enriched with
+    digest/labels from the local image. Never raises — an undetectable identity
+    is all-``None`` with source ``unknown``.
     """
 
     environ = os.environ if environ is None else environ
@@ -444,6 +464,35 @@ class AdminUpdateService:
     def _current_identity(self):
         return detect_current_admin_identity(docker=self._docker, environ=self._env())
 
+    def _validate_target_release(self, target_release):
+        """Return the trimmed tag or raise ``ValueError`` for an unsafe target.
+
+        Syntax is always enforced. When a release catalogue is available it is
+        authoritative: an unknown or non-selectable tag is rejected. A transient
+        catalogue failure falls back to syntax-only so a GitHub outage never
+        blocks a legitimate update.
+        """
+
+        tag = validate_release_tag(target_release)
+        if self._release_manager is None:
+            return tag
+        list_releases = getattr(self._release_manager, "list_releases", None)
+        if not callable(list_releases):
+            return tag
+        try:
+            listing = list_releases(for_upgrade=True)
+            releases = listing.get("releases") if isinstance(listing, dict) else None
+        except Exception:
+            return tag  # catalogue unavailable: rely on syntax + digest decision
+        if not releases:
+            return tag
+        match = next((item for item in releases if item.get("tag") == tag), None)
+        if match is None:
+            raise ValueError(f"release tag is not an available release: {tag}")
+        if match.get("selectable") is False:
+            raise ValueError(f"release tag is not a selectable release: {tag}")
+        return tag
+
     def _ems_target_view(self, release_tag):
         try:
             image_ref = target_ems_image_for_release(release_tag)
@@ -506,16 +555,84 @@ class AdminUpdateService:
             "next_step": pending.get("next_step", NEXT_STEP_RESUME_EMS),
         }
 
+    # --- EMS-upgrade gate ------------------------------------------------
+
+    def ems_upgrade_allowed(self, target_release):
+        """Server-side gate: may the EMS upgrade for ``target_release`` proceed?
+
+        Frontend blocking is not enough — a direct authenticated POST must also
+        be refused while a required Admin update for this release is not
+        complete. Never raises and never proceeds on uncertainty.
+        """
+
+        try:
+            tag = validate_release_tag(target_release)
+        except ValueError as exc:
+            return {"allowed": False, "error": "invalid_release", "message": str(exc)}
+
+        # A pending update for THIS release settles the gate directly.
+        try:
+            pending = self._reconcile_pending(self._store.read())
+        except PendingUpdateStateError:
+            pending = None
+        if isinstance(pending, dict) and pending.get("target_release") == tag:
+            if pending.get("stage") in RESUMABLE_STAGES:
+                return {"allowed": True, "reason": GATE_COMPLETED}
+            # planned / started / failed for this release: not done yet.
+            return {
+                "allowed": False,
+                "error": GATE_BLOCKED,
+                "message": _EMS_BLOCK_MESSAGE,
+                "plan": _plan_summary(pending),
+            }
+
+        # No settled pending state for this release: decide from image identity.
+        if not self._docker_supported():
+            return {
+                "allowed": False,
+                "error": GATE_BLOCKED,
+                "message": _EMS_BLOCK_UNKNOWN,
+            }
+        try:
+            target = resolve_admin_image_target(tag, docker=self._docker)
+            current, _source = self._current_identity()
+        except Exception:
+            return {
+                "allowed": False,
+                "error": GATE_BLOCKED,
+                "message": _EMS_BLOCK_UNKNOWN,
+            }
+        decision = decide_admin_update(
+            current,
+            ImageIdentity(
+                image_ref=target.image_ref,
+                digest=target.digest,
+                revision=target.revision,
+                build_serial=target.build_serial,
+            ),
+        )
+        if not decision.update_required:
+            return {"allowed": True, "reason": GATE_NOT_REQUIRED}
+        # update_required (including the uncertain digest/current-unknown cases)
+        # blocks: do not silently proceed with a possibly-incompatible Admin.
+        return {
+            "allowed": False,
+            "error": GATE_BLOCKED,
+            "message": _EMS_BLOCK_MESSAGE,
+            "plan": decision.as_dict(),
+        }
+
     # --- planning --------------------------------------------------------
 
     def plan(self, target_release):
         """Create a pending plan for ``target_release`` and return its summary.
 
-        Raises ``ValueError`` for an invalid/absent release tag (the caller maps
-        that to a 400). The target image is derived server-side; the browser only
-        ever sends a tag.
+        Raises ``ValueError`` for an invalid/absent/unknown release tag (the
+        caller maps that to a 400). The tag is validated against the release
+        catalogue when available; the target image is always derived server-side.
         """
 
+        target_release = self._validate_target_release(target_release)
         target = resolve_admin_image_target(target_release, docker=self._docker)
         current, source = self._current_identity()
         target_identity = ImageIdentity(
@@ -588,6 +705,14 @@ class AdminUpdateService:
                 "error": "unknown_plan",
                 "message": "No matching Admin update plan was found. Plan again.",
             }
+        # A no-op plan (image unchanged for this release) must not launch the
+        # updater, even if the button was bypassed and confirm was posted.
+        if pending.get("update_required") is False:
+            return {
+                "ok": False,
+                "error": "admin_update_not_required",
+                "message": "Admin Console image is unchanged for this release.",
+            }
 
         pending["stage"] = STAGE_STARTED
         pending["updated_at"] = utc_now_iso()
@@ -623,9 +748,8 @@ class AdminUpdateService:
     def _reconcile_pending(self, pending):
         """Promote a started update to succeeded once the new Admin is running.
 
-        The MVP local updater replaces the container that issued the request, so
-        the *new* Admin proves success by observing that its own running image
-        now matches the plan target (by digest when known, else image ref).
+        Success is proven by the running image matching the plan target (by
+        digest when known, else image ref) — never by tag name alone.
         """
 
         if not isinstance(pending, dict) or pending.get("stage") != STAGE_STARTED:
@@ -652,16 +776,131 @@ class AdminUpdateService:
         return pending
 
     def _default_launch(self, plan_id):
-        """Spawn the local delayed updater worker on a daemon thread.
+        """Launch the updater out of the request, preferring a sidecar container."""
 
-        The worker returns the HTTP response first, then pulls the target image
-        and recreates the Admin service out of band (that recreate replaces this
-        very process in a real deployment).
+        AdminUpdateLauncher(
+            store=self._store,
+            docker=self._docker,
+            release_manager=self._release_manager,
+            environ=self._env(),
+        ).launch(plan_id)
+
+
+def _flag(value) -> bool:
+    return str(value or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _safe_container_suffix(plan_id) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", str(plan_id))[:64] or "unknown"
+
+
+class AdminUpdateLauncher:
+    """Start the out-of-request Admin updater, preferring a sidecar container.
+
+    The default runs a short-lived ``docker run --rm`` sidecar (detached) that
+    survives the Admin recreate, so the process running ``docker compose up`` is
+    never the container being replaced. The target image comes from the pending
+    state (created server-side), never the browser. The same-process thread
+    worker is only used when explicitly enabled via
+    ``EMS_ADMIN_UPDATE_LOCAL_WORKER=1`` (dev/tests), where recreating the running
+    container is acceptable.
+    """
+
+    def __init__(self, *, store, docker=None, release_manager=None,
+                 environ=None, run=None):
+        self._store = store
+        self._docker = docker
+        self._release_manager = release_manager
+        self._environ = environ
+        self._run = run or subprocess.run
+
+    def _env(self):
+        return os.environ if self._environ is None else self._environ
+
+    def launch(self, plan_id):
+        if _flag(self._env().get("EMS_ADMIN_UPDATE_LOCAL_WORKER")):
+            self._launch_local(plan_id)
+            return
+        self._launch_sidecar(plan_id)
+
+    def _pending_target_ref(self, plan_id):
+        pending = self._store.read()
+        if not isinstance(pending, dict) or pending.get("id") != plan_id:
+            raise ValueError("no matching pending Admin update plan")
+        target = pending.get("target_admin") or {}
+        image_ref = _clean(target.get("image_ref"))
+        if not image_ref:
+            # Derive from the trusted release tag as a fallback (never the browser).
+            image_ref = target_admin_image_for_release(pending.get("target_release"))
+        return image_ref
+
+    def build_sidecar_argv(self, plan_id, *, image_ref):
+        """Build the ``docker run`` argv for the updater sidecar (no shell)."""
+
+        env = self._env()
+        install_root = self._install_root(env)
+        admin_data_dir = self._admin_data_dir(env)
+        compose_file = _clean(env.get("EMS_ADMIN_COMPOSE_FILE")) or str(
+            install_root / DEFAULT_ADMIN_COMPOSE_FILE
+        )
+        service = _clean(env.get("EMS_ADMIN_COMPOSE_SERVICE")) or DEFAULT_ADMIN_COMPOSE_SERVICE
+        container = _clean(env.get("EMS_ADMIN_CONTAINER_NAME")) or DEFAULT_ADMIN_CONTAINER
+        return [
+            "docker", "run", "--rm", "-d",
+            "--name", f"ems-admin-updater-{_safe_container_suffix(plan_id)}",
+            "-v", "/var/run/docker.sock:/var/run/docker.sock",
+            "-v", f"{install_root}:{install_root}",
+            "-v", f"{admin_data_dir}:{admin_data_dir}",
+            "-e", f"EMS_INSTALL_DIR={install_root}",
+            "-e", f"EMS_ADMIN_DATA_DIR={admin_data_dir}",
+            "-e", f"EMS_ADMIN_COMPOSE_FILE={compose_file}",
+            "-e", f"EMS_ADMIN_COMPOSE_SERVICE={service}",
+            "-e", f"EMS_ADMIN_CONTAINER_NAME={container}",
+            image_ref,
+            "python", "-m", "admin.update_apply",
+            "--plan-id", str(plan_id), "--delay-seconds", "0",
+        ]
+
+    def _install_root(self, env):
+        configured = _clean(env.get("EMS_INSTALL_DIR"))
+        if configured:
+            return Path(configured)
+        from admin.install_context import detect_install_context
+
+        return Path(detect_install_context().install_root)
+
+    def _admin_data_dir(self, env):
+        configured = _clean(env.get("EMS_ADMIN_DATA_DIR"))
+        if configured:
+            return Path(configured)
+        data_dir = getattr(self._release_manager, "data_dir", None)
+        if data_dir is not None:
+            return Path(data_dir)
+        from admin.releases import default_admin_data_dir
+
+        return default_admin_data_dir()
+
+    def _launch_sidecar(self, plan_id):
+        image_ref = self._pending_target_ref(plan_id)  # raises if target missing
+        argv = self.build_sidecar_argv(plan_id, image_ref=image_ref)
+        try:
+            result = self._run(argv, capture_output=True, text=True, timeout=60)
+        except FileNotFoundError as exc:
+            raise RuntimeError("the docker CLI is not available") from exc
+        if getattr(result, "returncode", 0) != 0:
+            raise RuntimeError(
+                f"docker run failed: {getattr(result, 'stderr', '') or 'unknown error'}"
+            )
+
+    def _launch_local(self, plan_id):
+        """Same-process daemon-thread worker (dev/tests only).
+
+        Recreates the very container it runs in, which is why it is opt-in.
         """
 
         from admin import update_apply
 
-        thread = threading.Thread(
+        threading.Thread(
             target=update_apply.apply_admin_update,
             kwargs={
                 "plan_id": plan_id,
@@ -671,5 +910,4 @@ class AdminUpdateService:
                 "release_manager": self._release_manager,
             },
             daemon=True,
-        )
-        thread.start()
+        ).start()

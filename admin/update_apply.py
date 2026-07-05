@@ -1,23 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Apply a planned Admin Console self-update, out of the HTTP request.
 
-The running Admin process must never stop itself inside a request handler, so
-``AdminUpdateService.execute`` writes the pending state, returns a reconnect
-response, and hands off to this module. Here we (optionally sleep so the response
-reaches the browser, then) pull the target Admin image, repoint the Admin compose
-tag, and recreate only the Admin service. In a real deployment the recreate step
-replaces the very container this code runs in; the *new* Admin then resumes the
-upgrade from the pending state.
-
-Runs two ways:
-
-* Local delayed worker (MVP): a daemon thread spawned by ``AdminUpdateService``.
-* Sidecar: ``python -m admin.update_apply --plan-id <id>`` inside a short-lived
-  updater container that survives the Admin replacement.
-
-It only ever touches the Admin image, the Admin compose/env tag, and the Admin
-service. It never pulls or recreates the EMS container and never touches EMS
-config or data.
+Pulls the target Admin image, repoints the Admin compose/env tag, and recreates
+only the Admin service. Runs as a sidecar container (default) or a local worker
+(dev/tests). It only ever touches the Admin image/compose/service — never the EMS
+container, config, or data. See ``docs/technical/admin-architecture.md``.
 """
 
 import argparse
@@ -29,7 +16,7 @@ from pathlib import Path
 
 from admin.admin_update import (
     DEFAULT_ADMIN_COMPOSE_FILE,
-    DEFAULT_ADMIN_CONTAINER,
+    DEFAULT_ADMIN_COMPOSE_SERVICE,
     NEXT_STEP_RESUME_EMS,
     STAGE_FAILED,
     STAGE_STARTED,
@@ -150,44 +137,66 @@ def _write_env_tag(env_file, tag):
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def update_admin_image_reference(compose_file, target_ref, *, env_file=None):
-    """Repoint the Admin image tag to ``target_ref``.
+# A literal ``EMS_ADMIN_TAG: "value"`` line in the compose environment. Anchored
+# to the line start so the ``${EMS_ADMIN_TAG:-latest}`` inside an image ref (a
+# variable substitution, not a key) is never mistaken for it.
+COMPOSE_ENV_TAG_RE = re.compile(r'(?m)^(\s*EMS_ADMIN_TAG:\s*")([^"${}]+)(")')
 
-    A literal Admin image ref in the compose file is rewritten in place (with a
-    ``.bak``). A variable-driven compose (``${EMS_ADMIN_TAG...}``) is updated via
-    the env file instead. Returns ``True`` when a reference was located and
-    updated (or already current), ``False`` when none could be found.
+
+def _sync_compose_env_tag(text, target_tag):
+    """Update a literal compose ``EMS_ADMIN_TAG`` value; return (text, changed)."""
+
+    if not COMPOSE_ENV_TAG_RE.search(text):
+        return text, False
+    updated = COMPOSE_ENV_TAG_RE.sub(
+        lambda m: f"{m.group(1)}{target_tag}{m.group(3)}", text
+    )
+    return updated, updated != text
+
+
+def update_admin_image_reference(compose_file, target_ref, *, env_file=None):
+    """Repoint the Admin image to ``target_ref`` and keep tag metadata in sync.
+
+    Updates, where present: a literal ``image:`` ref, a literal compose
+    ``EMS_ADMIN_TAG`` value, and the ``EMS_ADMIN_TAG`` line in the env file
+    (``.env.admin``). A variable-driven image (``${EMS_ADMIN_TAG...}``) is
+    repointed via the env file. Compose edits are backed up (``.bak``). Returns
+    ``True`` when at least one reference was located, ``False`` otherwise.
     """
 
     compose_file = Path(compose_file)
     target_tag = target_ref.rsplit(":", 1)[-1]
+    default_env = compose_file.parent / ".env.admin"
+    located = False
+
     try:
-        text = compose_file.read_text(encoding="utf-8")
+        original = compose_file.read_text(encoding="utf-8")
     except OSError:
-        text = None
+        original = None
 
-    # Variable-driven tag: never rewrite the literal; update the env file.
-    if text is not None and "${EMS_ADMIN_TAG" in text:
-        target_env = env_file or (compose_file.parent / ".env.admin")
+    if original is not None:
+        text = original
+        if ADMIN_IMAGE_RE.search(text):
+            located = True
+            text = ADMIN_IMAGE_RE.sub(lambda _m: target_ref, text)
+        text, tag_synced = _sync_compose_env_tag(text, target_tag)
+        located = located or tag_synced
+        if "${EMS_ADMIN_TAG" in original:
+            # Variable-driven image tag: resolved from the env file below.
+            located = True
+        if text != original:
+            compose_file.with_name(compose_file.name + ".bak").write_text(
+                original, encoding="utf-8"
+            )
+            compose_file.write_text(text, encoding="utf-8")
+
+    # Keep the recorded env tag correct when the env file is provided/exists.
+    target_env = env_file or (default_env if default_env.exists() else None)
+    if target_env is not None:
         _write_env_tag(target_env, target_tag)
-        return True
+        located = True
 
-    if text is not None:
-        matches = ADMIN_IMAGE_RE.findall(text)
-        if matches:
-            if matches[0] != target_ref:
-                updated = ADMIN_IMAGE_RE.sub(lambda _m: target_ref, text)
-                compose_file.with_name(compose_file.name + ".bak").write_text(
-                    text, encoding="utf-8"
-                )
-                compose_file.write_text(updated, encoding="utf-8")
-            return True
-
-    # No compose reference; fall back to an existing env file if present.
-    if env_file and Path(env_file).exists():
-        _write_env_tag(env_file, target_tag)
-        return True
-    return False
+    return located
 
 
 def _resolve_compose_file(environ):
@@ -201,8 +210,12 @@ def _resolve_compose_file(environ):
     return Path(context.install_root) / DEFAULT_ADMIN_COMPOSE_FILE
 
 
-def _resolve_service_name(environ):
-    return (environ.get("EMS_ADMIN_CONTAINER_NAME") or "").strip() or DEFAULT_ADMIN_CONTAINER
+def _resolve_compose_service(environ):
+    # The compose *service* name for ``docker compose up <service>`` — not the
+    # container name (``EMS_ADMIN_CONTAINER_NAME``), which is inspect-only.
+    return (
+        environ.get("EMS_ADMIN_COMPOSE_SERVICE") or ""
+    ).strip() or DEFAULT_ADMIN_COMPOSE_SERVICE
 
 
 def _resolve_env_file(environ, compose_file):
@@ -272,7 +285,7 @@ def apply_admin_update(
 
     target_ref = _derive_target_ref(pending)
     compose_file = _resolve_compose_file(environ)
-    service = _resolve_service_name(environ)
+    service = _resolve_compose_service(environ)
     env_file = _resolve_env_file(environ, compose_file)
 
     def fail(code, message):

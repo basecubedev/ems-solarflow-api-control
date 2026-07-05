@@ -66,7 +66,12 @@ The plan shows whether an Admin update is needed for the selected release:
   upgrade can proceed.
 - **Admin Console update required before EMS upgrade** — click **Update Admin
   Console**. The page shows a reconnect screen while the Admin Console restarts
-  on the new image, then offers **Continue EMS upgrade?**.
+  on the new image, then offers **Continue EMS upgrade?**. A required Admin update
+  blocks the EMS upgrade until it completes — the block is enforced by the server,
+  not only hidden in the page.
+- **Admin update requires Docker access** — the Admin Console is running in
+  discovery-only mode (no Docker socket) and cannot update itself. Reinstall it in
+  deployment mode to enable Guided upgrade.
 
 The Admin update only replaces the Admin Console container. It never touches your
 EMS config, EMS data, or the EMS container — those changes only happen later in

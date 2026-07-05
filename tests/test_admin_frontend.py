@@ -2406,6 +2406,38 @@ def test_admin_update_ui_has_no_arbitrary_image_input():
     assert 'body: JSON.stringify({ image_ref' not in block
 
 
+def test_admin_update_uses_status_endpoint():
+    # Fix 7: the planning flow checks /status so a Docker-unavailable Admin never
+    # shows an update button that cannot succeed.
+    js = _read("admin.js")
+    assert "/api/admin/maintenance/admin-update/status" in js
+    assert "loadAdminUpdateStatus" in js
+
+
+def test_admin_update_renders_docker_access_message():
+    # Fix 7: unsupported (Docker-unavailable) status renders an actionable note.
+    js = _read("admin.js")
+    render = js.split("function renderAdminUpdate", 1)[1].split("\nasync function", 1)[0]
+    assert "Admin update requires Docker access." in render
+    # The button is hidden in the unsupported branch.
+    assert "supported === false" in render
+
+
+def test_admin_update_planning_preserves_resume_release():
+    # Fix 2: a valid resume selects its own release and does not fall through to
+    # planning a (possibly different) default release.
+    js = _read("admin.js")
+    fn = js.split("async function loadUpgradePlanning", 1)[1].split(
+        "\nasync function ", 1
+    )[0]
+    assert "adminUpdateState.resumeRelease" in fn
+    assert "upgradeState.selected = adminUpdateState.resumeRelease" in fn
+    # The resume branch early-returns before loadAdminUpdatePlan is reached.
+    resume_head, _, tail = fn.partition("upgradeState.selected = adminUpdateState.resumeRelease")
+    assert "loadAdminUpdatePlan" not in resume_head
+    assert "return;" in tail.split("loadAdminUpdatePlan", 1)[0]
+
+
 def test_maintenance_view_has_three_overview_sections():
     html = _read("index.html")
     maintenance = _maintenance_section(html)

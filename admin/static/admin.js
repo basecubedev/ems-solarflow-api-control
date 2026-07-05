@@ -5240,6 +5240,8 @@ const adminUpdateState = {
   // The release a resumable pending update belongs to, so a stale "resume" note
   // is never shown for a different target release.
   resumeRelease: null,
+  // Admin self-update needs Docker; false in discovery-only mode (no button).
+  supported: true,
   loading: false,
   running: false,
 };
@@ -5644,18 +5646,56 @@ async function loadUpgradePlanning() {
   } finally {
     upgradeState.loading = false;
   }
-  // A pending Admin update waiting to resume takes precedence, but only for the
-  // release it belongs to; otherwise plan the Admin update for the selected
-  // target release (which also clears a stale resume from an older release).
-  const resumed = await loadAdminUpdateResume();
-  if (resumed && adminUpdateState.resumeRelease === upgradeState.selected) {
+  // Admin self-update needs Docker; in discovery-only mode it is unsupported and
+  // the "Update Admin Console" button must not appear (a plan would only degrade
+  // to an uncertain identity and a button that cannot succeed).
+  const supported = await loadAdminUpdateStatus();
+  if (!supported) {
     renderAdminUpdate();
-  } else if (upgradeState.selected) {
+    renderUpgradePlan();
+    return;
+  }
+  // A pending Admin update waiting to resume takes precedence: select its own
+  // release so a fresh plan never overwrites the resume, even if the release
+  // list defaulted to a different tag after the restart.
+  const resumed = await loadAdminUpdateResume();
+  if (resumed && adminUpdateState.resumeRelease) {
+    const release = upgradeState.releases.find(
+      (item) => item.tag === adminUpdateState.resumeRelease
+    );
+    if (release && release.selectable !== false) {
+      upgradeState.selected = adminUpdateState.resumeRelease;
+      if (upgradeEls.select) upgradeEls.select.value = adminUpdateState.resumeRelease;
+      upgradeState.prepared = upgradeState.preparedTag === upgradeState.selected;
+      renderUpgradeBadges(release);
+      setUpgradeReleaseStatus();
+    }
+    renderAdminUpdate();
+    renderUpgradePlan();
+    return;
+  }
+  if (upgradeState.selected) {
     await loadAdminUpdatePlan(upgradeState.selected);
   } else {
     renderAdminUpdate();
   }
   renderUpgradePlan();
+}
+
+// Read whether Admin self-update is supported (Docker available). Discovery-only
+// mode reports unsupported so the button stays hidden and the EMS upgrade is not
+// offered a self-update that cannot run.
+async function loadAdminUpdateStatus() {
+  try {
+    const res = await fetch("/api/admin/maintenance/admin-update/status", {
+      cache: "no-store",
+    });
+    const data = await res.json();
+    adminUpdateState.supported = Boolean(res.ok && data && data.supported !== false);
+  } catch (_) {
+    adminUpdateState.supported = false;
+  }
+  return adminUpdateState.supported;
 }
 
 function onUpgradeReleaseChange() {
@@ -5666,7 +5706,10 @@ function onUpgradeReleaseChange() {
   renderUpgradeBadges(upgradeSelectedRelease());
   setUpgradeReleaseStatus();
   // Picking a different target supersedes any prior Admin update plan/resume.
-  if (upgradeState.selected) loadAdminUpdatePlan(upgradeState.selected);
+  // Skip planning when the Admin cannot self-update (Docker unavailable).
+  if (upgradeState.selected && adminUpdateState.supported !== false) {
+    loadAdminUpdatePlan(upgradeState.selected);
+  }
   renderUpgradePlan();
 }
 
@@ -5746,6 +5789,19 @@ function renderAdminUpdate() {
   const els = adminUpdateEls;
   if (els.current) els.current.textContent = adminUpdateState.current || "Unknown";
   if (els.target) els.target.textContent = adminUpdateState.target || "Not selected";
+  // Docker unavailable (discovery-only): the Admin cannot update itself, so show
+  // an actionable note and never offer the update button.
+  if (adminUpdateState.supported === false) {
+    if (els.warning) {
+      els.warning.hidden = true;
+      els.warning.textContent = "";
+    }
+    if (els.status) els.status.textContent = "Admin update requires Docker access.";
+    if (els.executeBtn) els.executeBtn.hidden = true;
+    if (els.resumeNote) els.resumeNote.hidden = true;
+    updateExecuteButton();
+    return;
+  }
   if (els.warning) {
     els.warning.hidden = !adminUpdateState.warning;
     els.warning.textContent = adminUpdateState.warning || "";

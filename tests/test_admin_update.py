@@ -6,6 +6,7 @@ worker is driven with fake pull/compose callables.
 """
 
 import threading
+import time
 
 import pytest
 
@@ -17,8 +18,10 @@ from admin.admin_update import (
     REASON_DIGEST_MATCH,
     REASON_DIGEST_UNKNOWN,
     STAGE_FAILED,
+    STAGE_PLANNED,
     STAGE_STARTED,
     STAGE_SUCCEEDED,
+    AdminUpdateLauncher,
     AdminUpdateService,
     PendingAdminUpdateStore,
     PendingUpdateStateError,
@@ -26,6 +29,7 @@ from admin.admin_update import (
     detect_current_admin_identity,
     resolve_admin_image_target,
     target_admin_image_for_release,
+    validate_release_tag,
 )
 from admin.image_identity import ImageIdentity
 from admin.server import ScanRegistry, create_server
@@ -69,9 +73,10 @@ def _image(ref, digest):
 # --- target image derivation ---------------------------------------------
 
 
-@pytest.mark.parametrize("tag", ["v0.7.0", "latest", "main"])
+@pytest.mark.parametrize("tag", ["v0.7.0", "v0.7.0-rc.1", "latest", "main"])
 def test_target_admin_image_accepts_release_tags(tag):
     assert target_admin_image_for_release(tag) == f"{ADMIN_IMAGE_REPO}:{tag}"
+    assert validate_release_tag(tag) == tag
 
 
 @pytest.mark.parametrize(
@@ -84,11 +89,19 @@ def test_target_admin_image_accepts_release_tags(tag):
         "-leading-dash",
         "",
         "   ",
+        # Shell/metacharacter strings without whitespace must also be rejected.
+        "v0.7.0;rm",
+        "v0.7.0$(id)",
+        "v0.7.0|",
+        "v0.7.0&&x",
+        "../v0.7.0",
     ],
 )
 def test_target_admin_image_rejects_arbitrary_refs(bad):
     with pytest.raises(ValueError):
         target_admin_image_for_release(bad)
+    with pytest.raises(ValueError):
+        validate_release_tag(bad)
 
 
 # --- current identity detection ------------------------------------------
@@ -608,3 +621,363 @@ def test_admin_update_resume_recovers_from_corrupt_state(admin_update_server):
     assert status == 200
     assert payload["ok"] is False
     assert payload["error"] == "state_corrupt"
+
+
+# --- release catalogue validation (Fix 5) --------------------------------
+
+
+class FakeReleaseCatalogue:
+    """A ReleaseManager double exposing only the upgrade release listing."""
+
+    def __init__(self, releases, data_dir=None):
+        self._releases = releases
+        self.data_dir = data_dir
+
+    def list_releases(self, *, for_upgrade=True):
+        return {"releases": list(self._releases)}
+
+
+def _catalogue_service(tmp_path, releases):
+    docker = FakeDocker(
+        images={
+            CURRENT_REF: _image(CURRENT_REF, "sha256:aaa"),
+            TARGET_REF: _image(TARGET_REF, "sha256:ccc"),
+        },
+        container_image=CURRENT_REF,
+    )
+    store = PendingAdminUpdateStore(tmp_path / "state")
+    return AdminUpdateService(
+        docker=docker,
+        release_manager=FakeReleaseCatalogue(releases, data_dir=tmp_path),
+        store=store,
+        environ={"EMS_ADMIN_CONTAINER_NAME": "ems-solarflow-admin"},
+        worker_launcher=lambda plan_id: None,
+    )
+
+
+def test_plan_rejects_unknown_release_when_catalogue_present(tmp_path):
+    svc = _catalogue_service(tmp_path, [{"tag": "v0.7.0", "selectable": True}])
+    with pytest.raises(ValueError):
+        svc.plan("v9.9.9")  # syntactically valid, absent from the catalogue
+
+
+def test_plan_accepts_selectable_known_release(tmp_path):
+    svc = _catalogue_service(tmp_path, [{"tag": "v0.7.0", "selectable": True}])
+    plan = svc.plan("v0.7.0")
+    assert plan["ok"] is True
+
+
+def test_plan_rejects_non_selectable_release(tmp_path):
+    svc = _catalogue_service(tmp_path, [{"tag": "v0.7.0", "selectable": False}])
+    with pytest.raises(ValueError):
+        svc.plan("v0.7.0")
+
+
+def test_plan_syntax_only_without_catalogue(tmp_path):
+    # No release manager: keep the syntax-only behavior (no catalogue lookup).
+    images = {
+        CURRENT_REF: _image(CURRENT_REF, "sha256:aaa"),
+        TARGET_REF: _image(TARGET_REF, "sha256:ccc"),
+    }
+    svc, _store, _docker = _service(tmp_path, images)
+    assert svc.plan("v0.7.0")["ok"] is True
+
+
+# --- execute refuses a no-op plan (Fix 6) --------------------------------
+
+
+def test_execute_refuses_when_update_not_required(tmp_path):
+    # Digests match -> update_required False -> execute must not launch the worker.
+    images = {
+        CURRENT_REF: _image(CURRENT_REF, "sha256:same"),
+        TARGET_REF: _image(TARGET_REF, "sha256:same"),
+    }
+    launched = []
+    svc, _store, _docker = _service(tmp_path, images, launched=launched)
+    plan = svc.plan("v0.7.0")
+    assert plan["update_required"] is False
+    result = svc.execute(plan["plan_id"], True)
+    assert result["ok"] is False
+    assert result["error"] == "admin_update_not_required"
+    assert launched == []  # no updater started
+
+
+# --- EMS-upgrade gate (Fix 1) --------------------------------------------
+
+
+def test_ems_gate_allows_when_update_not_required(tmp_path):
+    images = {
+        CURRENT_REF: _image(CURRENT_REF, "sha256:same"),
+        TARGET_REF: _image(TARGET_REF, "sha256:same"),
+    }
+    svc, _store, _docker = _service(tmp_path, images)
+    gate = svc.ems_upgrade_allowed("v0.7.0")
+    assert gate["allowed"] is True
+    assert gate["reason"] == "admin_update_not_required"
+
+
+def test_ems_gate_blocks_when_update_required(tmp_path):
+    images = {
+        CURRENT_REF: _image(CURRENT_REF, "sha256:aaa"),
+        TARGET_REF: _image(TARGET_REF, "sha256:ccc"),
+    }
+    svc, _store, _docker = _service(tmp_path, images)
+    gate = svc.ems_upgrade_allowed("v0.7.0")
+    assert gate["allowed"] is False
+    assert gate["error"] == "admin_update_required"
+
+
+def test_ems_gate_allows_when_pending_same_target_succeeded(tmp_path):
+    images = {TARGET_REF: _image(TARGET_REF, "sha256:ccc")}
+    svc, store, _docker = _service(tmp_path, images, container_image=TARGET_REF)
+    store.write(
+        {
+            "schema_version": 1,
+            "id": "plan-1",
+            "stage": STAGE_SUCCEEDED,
+            "target_release": "v0.7.0",
+            "target_admin": {"image_ref": TARGET_REF, "digest": "sha256:ccc"},
+        }
+    )
+    gate = svc.ems_upgrade_allowed("v0.7.0")
+    assert gate["allowed"] is True
+    assert gate["reason"] == "admin_update_completed"
+
+
+def test_ems_gate_blocks_when_pending_target_differs(tmp_path):
+    images = {
+        CURRENT_REF: _image(CURRENT_REF, "sha256:aaa"),
+        TARGET_REF: _image(TARGET_REF, "sha256:ccc"),
+    }
+    svc, store, _docker = _service(tmp_path, images)
+    # A succeeded update for a *different* release does not authorize this one.
+    store.write(
+        {
+            "schema_version": 1,
+            "id": "plan-other",
+            "stage": STAGE_SUCCEEDED,
+            "target_release": "v0.9.9",
+            "target_admin": {"image_ref": f"{ADMIN_IMAGE_REPO}:v0.9.9"},
+        }
+    )
+    gate = svc.ems_upgrade_allowed("v0.7.0")
+    assert gate["allowed"] is False
+    assert gate["error"] == "admin_update_required"
+
+
+def test_ems_gate_blocks_when_pending_same_target_started(tmp_path):
+    images = {
+        CURRENT_REF: _image(CURRENT_REF, "sha256:aaa"),
+        TARGET_REF: _image(TARGET_REF, "sha256:ccc"),
+    }
+    svc, store, _docker = _service(tmp_path, images)
+    store.write(
+        {
+            "schema_version": 1,
+            "id": "plan-p",
+            "stage": STAGE_PLANNED,
+            "target_release": "v0.7.0",
+            "target_admin": {"image_ref": TARGET_REF, "digest": "sha256:ccc"},
+        }
+    )
+    gate = svc.ems_upgrade_allowed("v0.7.0")
+    assert gate["allowed"] is False
+    assert gate["error"] == "admin_update_required"
+
+
+def test_ems_gate_blocks_when_docker_unavailable(tmp_path):
+    store = PendingAdminUpdateStore(tmp_path / "state")
+    svc = AdminUpdateService(docker=None, store=store, environ={})
+    gate = svc.ems_upgrade_allowed("v0.7.0")
+    assert gate["allowed"] is False
+    assert gate["error"] == "admin_update_required"
+
+
+def test_ems_gate_rejects_invalid_release(tmp_path):
+    images = {CURRENT_REF: _image(CURRENT_REF, "sha256:aaa")}
+    svc, _store, _docker = _service(tmp_path, images)
+    gate = svc.ems_upgrade_allowed("v0.7.0;rm")
+    assert gate["allowed"] is False
+    assert gate["error"] == "invalid_release"
+
+
+# --- updater launcher: sidecar by default (Fix 3) ------------------------
+
+
+class _FakeStore:
+    def __init__(self, pending):
+        self._pending = pending
+        self.state_dir = "/tmp/state"
+
+    def read(self):
+        return self._pending
+
+
+def _launcher_env():
+    return {
+        "EMS_INSTALL_DIR": "/opt/ems",
+        "EMS_ADMIN_DATA_DIR": "/opt/ems/data/admin",
+        "EMS_ADMIN_COMPOSE_FILE": "/opt/ems/docker-compose.admin.yml",
+        "EMS_ADMIN_COMPOSE_SERVICE": "ems-solarflow-admin",
+        "EMS_ADMIN_CONTAINER_NAME": "ems-solarflow-admin",
+    }
+
+
+def test_launcher_builds_docker_run_argv_no_shell():
+    pending = {
+        "id": "abc123",
+        "target_release": "v0.7.0",
+        "target_admin": {"image_ref": TARGET_REF},
+    }
+    launcher = AdminUpdateLauncher(store=_FakeStore(pending), environ=_launcher_env())
+    argv = launcher.build_sidecar_argv("abc123", image_ref=TARGET_REF)
+    assert isinstance(argv, list) and all(isinstance(a, str) for a in argv)
+    assert argv[:3] == ["docker", "run", "--rm"]
+    assert "--name" in argv and "ems-admin-updater-abc123" in argv
+    # Target image (server-derived) is the sidecar image; no shell string.
+    assert TARGET_REF in argv
+    assert not any(";" in a or "&&" in a or "|" in a for a in argv)
+    # Mounts for the install root and Admin data dir (same-path).
+    assert "/opt/ems:/opt/ems" in argv
+    assert "/opt/ems/data/admin:/opt/ems/data/admin" in argv
+    assert "/var/run/docker.sock:/var/run/docker.sock" in argv
+    # Compose service passed distinctly from the container name.
+    assert "EMS_ADMIN_COMPOSE_SERVICE=ems-solarflow-admin" in argv
+    assert "EMS_ADMIN_CONTAINER_NAME=ems-solarflow-admin" in argv
+    # Runs the module updater with the plan id and no delay.
+    assert argv[-7:] == [
+        "python", "-m", "admin.update_apply",
+        "--plan-id", "abc123", "--delay-seconds", "0",
+    ]
+
+
+def test_launcher_uses_target_ref_from_pending_and_runs():
+    pending = {
+        "id": "p1",
+        "target_release": "v0.7.0",
+        "target_admin": {"image_ref": TARGET_REF},
+    }
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return type("R", (), {"returncode": 0, "stderr": ""})()
+
+    launcher = AdminUpdateLauncher(
+        store=_FakeStore(pending), environ=_launcher_env(), run=fake_run
+    )
+    launcher.launch("p1")
+    assert calls and calls[0][:2] == ["docker", "run"]
+    assert TARGET_REF in calls[0]
+
+
+def test_launcher_rejects_missing_target_image():
+    pending = {"id": "p1", "target_release": None, "target_admin": {}}
+    launcher = AdminUpdateLauncher(
+        store=_FakeStore(pending), environ={}, run=lambda *a, **k: None
+    )
+    with pytest.raises(ValueError):
+        launcher.launch("p1")
+
+
+def test_launcher_local_worker_only_when_configured(monkeypatch):
+    pending = {
+        "id": "p1",
+        "target_release": "v0.7.0",
+        "target_admin": {"image_ref": TARGET_REF},
+    }
+    worker_calls = []
+    monkeypatch.setattr(
+        update_apply, "apply_admin_update", lambda **kw: worker_calls.append(kw)
+    )
+    run_calls = []
+    env = dict(_launcher_env(), EMS_ADMIN_UPDATE_LOCAL_WORKER="1")
+    launcher = AdminUpdateLauncher(
+        store=_FakeStore(pending),
+        environ=env,
+        run=lambda *a, **k: run_calls.append(a),
+    )
+    launcher.launch("p1")
+    # The sidecar docker run is never used when the local worker is enabled.
+    assert run_calls == []
+    deadline = time.time() + 2.0
+    while not worker_calls and time.time() < deadline:
+        time.sleep(0.02)
+    assert worker_calls  # the local thread worker ran instead
+
+
+# --- compose/env tag sync + service name (Fix 8, Fix 9) ------------------
+
+
+def test_update_reference_syncs_literal_image_and_tags(tmp_path):
+    compose = tmp_path / "docker-compose.admin.yml"
+    compose.write_text(
+        "services:\n"
+        "  ems-solarflow-admin:\n"
+        f"    image: {CURRENT_REF}\n"
+        "    environment:\n"
+        '      EMS_ADMIN_TAG: "v0.6.2"\n',
+        encoding="utf-8",
+    )
+    env_file = tmp_path / ".env.admin"
+    env_file.write_text("EMS_ADMIN_TAG=v0.6.2\n", encoding="utf-8")
+    located = update_apply.update_admin_image_reference(
+        compose, TARGET_REF, env_file=env_file
+    )
+    assert located is True
+    text = compose.read_text(encoding="utf-8")
+    assert TARGET_REF in text
+    assert 'EMS_ADMIN_TAG: "v0.7.0"' in text
+    assert "EMS_ADMIN_TAG=v0.7.0" in env_file.read_text(encoding="utf-8")
+
+
+def test_update_reference_updates_default_env_admin(tmp_path):
+    compose = tmp_path / "docker-compose.admin.yml"
+    compose.write_text(f"    image: {CURRENT_REF}\n", encoding="utf-8")
+    env_file = tmp_path / ".env.admin"
+    env_file.write_text("EMS_ADMIN_TAG=v0.6.2\n", encoding="utf-8")
+    # No env_file argument: the adjacent .env.admin must still be synced.
+    located = update_apply.update_admin_image_reference(compose, TARGET_REF)
+    assert located is True
+    assert "EMS_ADMIN_TAG=v0.7.0" in env_file.read_text(encoding="utf-8")
+    assert TARGET_REF in compose.read_text(encoding="utf-8")
+
+
+def test_resolve_compose_service_prefers_service_env():
+    assert (
+        update_apply._resolve_compose_service(
+            {"EMS_ADMIN_COMPOSE_SERVICE": "custom-svc", "EMS_ADMIN_CONTAINER_NAME": "ctr"}
+        )
+        == "custom-svc"
+    )
+
+
+def test_resolve_compose_service_ignores_container_name():
+    # The container name must never be used as the compose service name.
+    assert (
+        update_apply._resolve_compose_service({"EMS_ADMIN_CONTAINER_NAME": "custom-ctr"})
+        == "ems-solarflow-admin"
+    )
+
+
+def test_worker_recreate_uses_compose_service(tmp_path):
+    store = PendingAdminUpdateStore(tmp_path / "state")
+    plan_id = _seed_started(store)
+    compose = tmp_path / "docker-compose.admin.yml"
+    compose.write_text(f"    image: {CURRENT_REF}\n", encoding="utf-8")
+    recreated = []
+    result = update_apply.apply_admin_update(
+        plan_id,
+        store=store,
+        docker=FakeDocker(),
+        environ={
+            "EMS_ADMIN_COMPOSE_FILE": str(compose),
+            "EMS_ADMIN_COMPOSE_SERVICE": "custom-service",
+            "EMS_ADMIN_CONTAINER_NAME": "custom-container",
+        },
+        compose_recreate=lambda cf, svc: recreated.append(svc),
+        delay_seconds=0,
+    )
+    assert result["ok"] is True
+    # Recreate targets the compose service, not the container name.
+    assert recreated == ["custom-service"]

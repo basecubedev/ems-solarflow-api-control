@@ -152,29 +152,43 @@ Concretely:
 
 - **Server-side target.** The browser only ever sends a release *tag*. The target
   Admin image is derived server-side as
-  `ghcr.io/basecubedev/ems-solarflow-admin:<tag>` (`admin/admin_update.py`); an
-  arbitrary image reference, path, or shell metacharacter in the "tag" is
-  rejected. The browser never supplies an image ref, a compose path, or a
-  command.
+  `ghcr.io/basecubedev/ems-solarflow-admin:<tag>` (`admin/admin_update.py`). The
+  tag must match the strict release pattern (`admin.releases.TAG_PATTERN`), so an
+  image reference, path, or shell metacharacter — even without whitespace
+  (`v0.7.0;rm`, `v0.7.0$(x)`, `../v0.7.0`) — is rejected. When a release catalogue
+  is available the tag must also be a known, selectable release. The browser never
+  supplies an image ref, a compose path, or a command.
 - **Digest decision.** `decide_admin_update` compares the running Admin image
   identity (`EMS_ADMIN_CONTAINER_NAME` / `EMS_ADMIN_IMAGE`+`EMS_ADMIN_TAG`, plus
   `docker image inspect`) against the target by digest. Equal digests mean the
   release only retagged an unchanged Admin image (no update). Unknown digests are
   treated as uncertain and require explicit confirmation.
+- **EMS-upgrade gate.** `ems_upgrade_allowed` enforces the "required Admin update
+  blocks the EMS upgrade" rule server-side, not just in the UI: `POST
+  …/upgrade/execute` is refused with `409 admin_update_required` while a required
+  update for the selected release is planned/started/failed, and when Docker is
+  unavailable or identity is uncertain (it never proceeds on doubt). A succeeded
+  update for *that* release, or "no update required", allows the upgrade.
 - **Pending state.** `data/admin/state/pending-admin-update.json` is written
   atomically (temp file + fsync + rename), tolerates a missing file, and surfaces
   a clear recovery error for corrupt JSON instead of crashing. It holds no
-  passwords or secrets.
+  passwords or secrets. `execute` refuses a no-op plan (`update_required=false`).
 - **Out-of-request updater.** `POST …/admin-update/execute` writes the pending
-  state, launches `admin/update_apply.py` (a local delayed worker thread, or the
-  `python -m admin.update_apply --plan-id <id>` sidecar), and returns
-  `admin_update_started` with a reconnect hint *before* any pull or recreate. The
-  updater pulls the target image, repoints the Admin compose/env tag, and runs
-  `docker compose … up -d --no-deps --force-recreate` on the Admin service only.
+  state, launches the updater, and returns `admin_update_started` with a reconnect
+  hint *before* any pull or recreate. The default launcher (`AdminUpdateLauncher`)
+  runs a detached `docker run --rm` sidecar built from the pending target image so
+  the process running `docker compose up` is never the container being replaced;
+  the same-process thread worker is opt-in via `EMS_ADMIN_UPDATE_LOCAL_WORKER=1`
+  (dev/tests). The updater pulls the target image, keeps the Admin image and tag
+  metadata in sync (`image:`, compose `EMS_ADMIN_TAG`, `.env.admin`), and runs
+  `docker compose … up -d --no-deps --force-recreate` on the Admin **compose
+  service** (`EMS_ADMIN_COMPOSE_SERVICE`, distinct from the inspect-only
+  `EMS_ADMIN_CONTAINER_NAME`).
 - **Resume.** After the restart (which drops the in-memory Admin session), the new
   Admin proves success by observing that its own running image now matches the
   plan target, moves the pending state to `admin_update_succeeded`, and the
-  browser resumes the EMS upgrade via `…/admin-update/resume`.
+  browser resumes the EMS upgrade via `…/admin-update/resume` (selecting the
+  resumed release so a fresh plan cannot overwrite it).
 
 The updater only touches the Admin image, the Admin compose/env tag, and the
 Admin service. It never pulls or recreates the EMS/InfluxDB containers and never

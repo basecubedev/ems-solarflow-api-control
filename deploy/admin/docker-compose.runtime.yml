@@ -46,6 +46,8 @@ services:
       EMS_ADMIN_IMAGE: "${EMS_ADMIN_IMAGE:-ghcr.io/basecubedev/ems-solarflow-admin}"
       EMS_ADMIN_TAG: "${EMS_ADMIN_TAG:-latest}"
       EMS_ADMIN_COMPOSE_FILE: "${EMS_ADMIN_COMPOSE_FILE:-${EMS_INSTALL_DIR}/docker-compose.admin.yml}"
+      # Compose service name (docker compose up) vs container name (inspect).
+      EMS_ADMIN_COMPOSE_SERVICE: "${EMS_ADMIN_COMPOSE_SERVICE:-ems-solarflow-admin}"
       EMS_ADMIN_CONTAINER_NAME: "${EMS_ADMIN_CONTAINER_NAME:-ems-solarflow-admin}"
       # Optional parallel HTTPS listener (HTTP on 8090 stays available). With
       # host networking the server binds 8091 directly when enabled; no port

@@ -129,6 +129,7 @@ _UPGRADE_STATUS_CODES = {
 _ADMIN_UPDATE_STATUS_CODES = {
     "confirm_required": 400,
     "plan_required": 400,
+    "admin_update_not_required": 409,
     "unknown_plan": 409,
     "state_corrupt": 409,
     "state_unreadable": 409,
@@ -1080,6 +1081,36 @@ class AdminHandler(BaseHTTPRequestHandler):
             status = 500
         self._send_json(result, status=status)
 
+    def _ems_upgrade_admin_gate(self, target_release):
+        # Ask the Admin self-update service whether the current Admin may run this
+        # EMS upgrade. Any fault is treated as "block" — never proceed on doubt.
+        service = getattr(self.server, "admin_update", None)
+        checker = getattr(service, "ems_upgrade_allowed", None)
+        if not callable(checker):
+            return {
+                "allowed": False,
+                "error": "admin_update_required",
+                "message": "The Admin update status could not be determined. "
+                "Update the Admin Console before running this EMS upgrade.",
+            }
+        try:
+            result = checker(target_release)
+        except Exception:
+            return {
+                "allowed": False,
+                "error": "admin_update_required",
+                "message": "The Admin update status could not be determined. "
+                "Update the Admin Console before running this EMS upgrade.",
+            }
+        if not isinstance(result, dict) or "allowed" not in result:
+            return {
+                "allowed": False,
+                "error": "admin_update_required",
+                "message": "The Admin update status could not be determined. "
+                "Update the Admin Console before running this EMS upgrade.",
+            }
+        return result
+
     def _handle_maintenance_upgrade_execute(self):
         # Confirmed mutation: bump the EMS image and force-recreate only the EMS
         # service. The target is resolved from the prepared release, not the body.
@@ -1112,6 +1143,20 @@ class AdminHandler(BaseHTTPRequestHandler):
             self._send_json(
                 rejection,
                 status=_UPGRADE_STATUS_CODES.get(rejection.get("reason"), 400),
+            )
+            return
+        # A required-but-incomplete Admin self-update blocks the EMS upgrade
+        # server-side too (frontend blocking alone is bypassable by a direct POST).
+        gate = self._ems_upgrade_admin_gate(run_context.target_release)
+        if not gate["allowed"]:
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": gate["error"],
+                    "message": gate["message"],
+                    "admin_update": gate,
+                },
+                status=409,
             )
             return
         # Real (slow) upgrade work runs on a job thread; the UI polls for live
