@@ -263,6 +263,7 @@ Short beginner answers are in [docs/faq.md](docs/faq.md).
 | Troubleshooting | [docs/troubleshooting.md](docs/troubleshooting.md) |
 | Runtime state | [docs/runtime-state.md](docs/runtime-state.md) |
 | Development | [docs/development.md](docs/development.md) |
+| Admin discovery (MVP) | [docs/admin-discovery.md](docs/admin-discovery.md) |
 
 ## Optional Analytics
 

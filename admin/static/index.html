@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EMS SolarFlow Control Admin</title>
+  <link rel="stylesheet" href="/admin.css">
+</head>
+<body>
+  <main class="admin-shell">
+    <header class="admin-header">
+      <p class="eyebrow">EMS SolarFlow Control</p>
+      <h1 class="admin-title">Admin</h1>
+      <p class="admin-subtitle">
+        Guided local setup: pick a release, discover devices, generate config,
+        and deploy EMS with Docker.
+      </p>
+    </header>
+
+    <nav class="admin-view-tabs" role="tablist" aria-label="Admin sections">
+      <button type="button" class="active" data-admin-view="setup" role="tab" aria-selected="true">Setup</button>
+      <button type="button" data-admin-view="advanced" role="tab" aria-selected="false">Diagnostics / Advanced</button>
+    </nav>
+
+    <div class="admin-view" id="view-setup" data-admin-view-panel="setup">
+
+      <div class="setup-stepper" role="tablist" aria-label="Setup steps">
+        <button type="button" class="setup-step active" data-setup-step="release" role="tab" aria-selected="true">
+          <span class="setup-step-index">01</span>
+          <span class="setup-step-label">Release</span>
+          <span class="setup-step-status" id="step-status-release">Not started</span>
+        </button>
+        <span class="setup-step-arrow" aria-hidden="true">→</span>
+        <button type="button" class="setup-step" data-setup-step="devices" role="tab" aria-selected="false" disabled>
+          <span class="setup-step-index">02</span>
+          <span class="setup-step-label">Devices</span>
+          <span class="setup-step-status" id="step-status-devices">Locked</span>
+        </button>
+        <span class="setup-step-arrow" aria-hidden="true">→</span>
+        <button type="button" class="setup-step" data-setup-step="config" role="tab" aria-selected="false" disabled>
+          <span class="setup-step-index">03</span>
+          <span class="setup-step-label">Config</span>
+          <span class="setup-step-status" id="step-status-config">Locked</span>
+        </button>
+        <span class="setup-step-arrow" aria-hidden="true">→</span>
+        <button type="button" class="setup-step" data-setup-step="deployment" role="tab" aria-selected="false" disabled>
+          <span class="setup-step-index">04</span>
+          <span class="setup-step-label">Prepare deployment</span>
+          <span class="setup-step-status" id="step-status-deployment">Locked</span>
+        </button>
+        <span class="setup-step-arrow" aria-hidden="true">→</span>
+        <button type="button" class="setup-step" data-setup-step="start" role="tab" aria-selected="false" disabled>
+          <span class="setup-step-index">05</span>
+          <span class="setup-step-label">Start EMS</span>
+          <span class="setup-step-status" id="step-status-start">Locked</span>
+        </button>
+      </div>
+
+      <div class="setup-step-panel" data-setup-step-panel="release">
+        <section class="control-pipeline-stage" aria-label="Release">
+          <div class="control-stage-head">
+            <span class="control-stage-step">01</span>
+            <span class="control-stage-dot" aria-hidden="true">⤓</span>
+            <div class="control-stage-title-block">
+              <span class="control-stage-title">Release</span>
+              <span class="control-stage-subtitle">Select EMS version and prepare Docker setup resources</span>
+            </div>
+          </div>
+          <p class="future-note">
+            This assistant prepares Docker-based EMS installations. Admin Setup
+            supports Docker releases from v0.6.0 onward; older releases remain
+            visible for reference.
+          </p>
+          <div class="setup-summary">
+            <div class="setup-summary-row">
+              <span class="setup-summary-key">Selected release</span>
+              <span id="release-selected-val" class="setup-summary-val">Latest stable</span>
+            </div>
+            <div class="setup-summary-row">
+              <span class="setup-summary-key">Status</span>
+              <span id="release-status-val" class="setup-summary-val">Not started</span>
+            </div>
+          </div>
+          <div id="release-badges" class="device-sources" aria-label="Release classification"></div>
+          <form id="release-form" class="scan-form" autocomplete="off">
+            <label class="field">
+              <span class="field-label">EMS release</span>
+              <select id="release-select" disabled>
+                <option value="">Loading releases…</option>
+              </select>
+            </label>
+            <button id="release-download" type="submit" class="primary-button compact" disabled>
+              Prepare resources
+            </button>
+          </form>
+          <p id="release-status" class="scan-status" role="status" aria-live="polite">
+            Loading EMS releases…
+          </p>
+          <p id="release-error" class="scan-error" role="alert" hidden></p>
+          <div id="release-ready-summary" class="setup-summary" hidden>
+            <div class="setup-summary-row">
+              <span class="setup-summary-key">✓ Release resources prepared</span>
+              <span class="setup-summary-val">Ready</span>
+            </div>
+            <div class="setup-summary-row">
+              <span class="setup-summary-key">✓ config.template.json loaded</span>
+              <span id="release-template-loaded" class="setup-summary-val">Ready</span>
+            </div>
+            <div class="setup-summary-row">
+              <span class="setup-summary-key">✓ Docker install resources found</span>
+              <span id="release-docker-resources" class="setup-summary-val">Ready</span>
+            </div>
+            <div class="setup-summary-row">
+              <span class="setup-summary-key">Docker image planned</span>
+              <span id="release-docker-image" class="setup-summary-val">Not prepared</span>
+            </div>
+          </div>
+          <details class="advanced-details" id="release-resource-details">
+            <summary>Advanced details</summary>
+            <div class="setup-summary">
+              <div class="setup-summary-row">
+                <span class="setup-summary-key">Config template</span>
+                <span id="release-resource-config" class="setup-summary-val">Not prepared</span>
+              </div>
+              <div class="setup-summary-row">
+                <span class="setup-summary-key">Docker installers</span>
+                <span id="release-resource-install" class="setup-summary-val">Not prepared</span>
+              </div>
+              <div class="setup-summary-row">
+                <span class="setup-summary-key">Compose / deploy</span>
+                <span id="release-resource-compose" class="setup-summary-val">Not prepared</span>
+              </div>
+              <div class="setup-summary-row">
+                <span class="setup-summary-key">Cache manifest</span>
+                <span id="release-resource-manifest" class="setup-summary-val">Not prepared</span>
+              </div>
+            </div>
+          </details>
+        </section>
+      </div>
+
+      <div class="setup-step-panel" data-setup-step-panel="devices" hidden>
+        <section class="control-pipeline-stage" aria-label="Devices">
+          <div class="control-stage-head">
+            <span class="control-stage-step">02</span>
+            <span class="control-stage-dot" aria-hidden="true">◎</span>
+            <div class="control-stage-title-block">
+              <span class="control-stage-title">Devices</span>
+              <span class="control-stage-subtitle">Find EMS devices and grid meters</span>
+            </div>
+            <div class="stage-actions">
+              <button id="networks-scan-all" type="button" class="primary-button compact" disabled>
+                Scan all
+              </button>
+              <button id="networks-refresh" type="button" class="primary-button compact refresh-button">
+                Refresh discovery
+              </button>
+            </div>
+          </div>
+
+          <div class="setup-summary">
+            <div class="setup-summary-row">
+              <span class="setup-summary-key">Detected devices</span>
+              <span id="setup-summary-devices" class="setup-summary-val">none yet</span>
+            </div>
+            <div class="setup-summary-row">
+              <span class="setup-summary-key">Networks</span>
+              <span id="setup-summary-networks" class="setup-summary-val">detecting…</span>
+            </div>
+            <div class="setup-summary-row">
+              <span class="setup-summary-key">mDNS</span>
+              <span id="setup-summary-mdns" class="setup-summary-val">checking…</span>
+            </div>
+            <div class="setup-summary-row">
+              <span class="setup-summary-key">MQTT brokers</span>
+              <span id="setup-summary-mqtt" class="setup-summary-val">0 candidates</span>
+            </div>
+          </div>
+
+          <div class="results-head">
+            <h2 class="section-title">Discovered devices</h2>
+            <label class="accumulate-label">
+              <input id="results-accumulate" type="checkbox" checked>
+              <span>Keep previous results</span>
+            </label>
+            <span id="results-count" class="pill muted">0 found</span>
+          </div>
+          <div id="results-empty" class="results-empty">
+            No devices yet. Discovery runs automatically.
+          </div>
+          <div id="results-list" class="results-list" hidden></div>
+
+          <details class="advanced-details" id="networks-details">
+            <summary>Detected networks</summary>
+            <div id="networks-warnings" class="networks-warnings" hidden></div>
+            <div id="networks-empty" class="networks-empty">Detecting local networks…</div>
+            <div id="networks-list" class="networks-list" role="list" hidden></div>
+            <details id="networks-docker-details" class="advanced-details" hidden>
+              <summary>Advanced: Docker/container networks</summary>
+              <div id="networks-docker-list" class="networks-list" role="list"></div>
+            </details>
+            <p id="gateway-probe-status" class="gateway-probe-hint" role="status" aria-live="polite">
+              Common router gateways are probed automatically; reachable networks are
+              added above (discovered indirectly, not directly connected to this host).
+            </p>
+          </details>
+
+          <details class="advanced-details" id="manual-scan-details">
+            <summary>Advanced manual scan</summary>
+            <form id="scan-form" class="scan-form" autocomplete="off">
+              <label class="field">
+                <span class="field-label">Manual CIDR</span>
+                <input id="cidr-input" name="cidr" type="text" inputmode="text"
+                       placeholder="192.168.178.0/24" required>
+              </label>
+              <button id="scan-button" type="submit" class="primary-button compact">
+                Scan manually
+              </button>
+            </form>
+            <p id="scan-status" class="scan-status" role="status" aria-live="polite">
+              Detecting networks, then scanning them automatically…
+            </p>
+            <p id="scan-error" class="scan-error" role="alert" hidden></p>
+          </details>
+
+          <details class="advanced-details" id="mdns-details">
+            <summary>Automatic mDNS discovery</summary>
+            <div class="mdns-control" aria-label="Automatic mDNS discovery">
+              <div class="mdns-control-copy">
+                <div class="mdns-control-title">
+                  <span>Automatic mDNS discovery</span>
+                  <span id="mdns-state" class="network-badge badge-advanced">checking…</span>
+                </div>
+                <p id="mdns-message" class="mdns-message" role="status" aria-live="polite">
+                  Checking automatic discovery…
+                </p>
+              </div>
+              <span id="mdns-count" class="pill muted">0 found</span>
+              <button id="mdns-refresh" type="button" class="secondary-button compact">
+                Refresh mDNS now
+              </button>
+              <button id="mdns-toggle" type="button" class="secondary-button compact" disabled>
+                Disable
+              </button>
+            </div>
+          </details>
+
+          <details id="ignored-devices" class="ignored-devices" hidden>
+            <summary id="ignored-summary">Ignored devices (0)</summary>
+            <div id="ignored-list" class="ignored-list"></div>
+          </details>
+
+          <details class="advanced-details" id="mqtt-details">
+            <summary>MQTT broker candidates <span id="mqtt-count" class="pill muted">0 found</span></summary>
+            <div class="mdns-control">
+              <div class="mdns-control-copy">
+                <p id="mqtt-message" class="mdns-message" role="status" aria-live="polite">
+                  MQTT broker candidates are checked automatically when you scan a
+                  network. Broker candidates only; topic discovery is not implemented yet.
+                </p>
+              </div>
+              <button id="mqtt-refresh" type="button" class="secondary-button compact">
+                Refresh broker discovery
+              </button>
+            </div>
+            <div id="mqtt-empty" class="results-empty">
+              No MQTT broker candidates found.
+            </div>
+            <div id="mqtt-list" class="results-list" hidden></div>
+          </details>
+        </section>
+      </div>
+
+      <div class="setup-step-panel" data-setup-step-panel="config" hidden>
+        <section class="control-pipeline-stage" aria-label="Config">
+          <div class="control-stage-head">
+            <span class="control-stage-step">03</span>
+            <span class="control-stage-dot" aria-hidden="true">≡</span>
+            <div class="control-stage-title-block">
+              <span class="control-stage-title">Config</span>
+              <span class="control-stage-subtitle">Review device names and options, then continue</span>
+            </div>
+            <button id="config-clear-draft" type="button" class="secondary-button compact">
+              Clear draft
+            </button>
+          </div>
+
+          <section id="config-validation-card" class="config-validation-card" data-tone="pending">
+            <div class="config-validation-head">
+              <div>
+                <h3>Config validation</h3>
+                <p id="config-template-status" class="config-validation-source"
+                   role="status" aria-live="polite">
+                  Prepare release resources to load config.template.json.
+                </p>
+              </div>
+              <span id="config-preview-ready" class="config-validation-state">Needs attention</span>
+            </div>
+            <div id="config-validation" class="config-validation-list"
+                 role="status" aria-live="polite"></div>
+            <div class="config-validation-facts">
+              <span id="config-preview-devices">0 inverters · no grid meter</span>
+              <span>Release: <strong id="config-preview-release">Not prepared</strong></span>
+              <span>Base: <strong id="config-preview-base">Release template</strong></span>
+            </div>
+          </section>
+          <div id="config-grid-meter-selection" class="config-grid-selection" role="group" aria-live="polite" hidden></div>
+          <h3 class="config-section-title">Active EMS devices</h3>
+          <div id="config-draft-empty" class="results-empty">
+            No devices in the draft yet. Verified inverters and a single grid meter
+            are added automatically once discovered.
+          </div>
+          <div id="config-draft-list" class="config-draft-list" hidden></div>
+
+          <details class="advanced-details" id="config-available-details">
+            <summary>Add more devices <span id="config-available-count" class="pill muted">0 ready</span></summary>
+            <p class="future-note">
+              Devices found by discovery. Verified inverters are added to the draft
+              automatically; a grid meter is auto-selected only when exactly one is
+              found. MQTT brokers and unsupported devices are not shown.
+            </p>
+            <div id="config-available-empty" class="results-empty">
+              No EMS-ready devices discovered yet.
+            </div>
+            <div id="config-available-list" class="results-list" hidden></div>
+
+            <details class="config-manual" id="config-manual">
+              <summary>Add a device manually</summary>
+              <p class="future-note">
+                For devices discovery cannot reach — enter the connection details by
+                hand. Added straight to the draft above.
+              </p>
+              <form id="config-manual-form" class="config-manual-form" autocomplete="off">
+                <label class="field"><span class="field-label">Display name</span>
+                  <input id="config-manual-name" type="text" placeholder="SolarFlow 800 Pro">
+                </label>
+                <label class="field"><span class="field-label">Role</span>
+                  <select id="config-manual-role">
+                    <option value="inverter">inverter</option>
+                    <option value="grid_meter">grid_meter</option>
+                  </select>
+                </label>
+                <label class="field"><span class="field-label">Host / IP</span>
+                  <input id="config-manual-host" type="text" inputmode="text"
+                         placeholder="192.168.1.50" required>
+                </label>
+                <label class="field"><span class="field-label">Port</span>
+                  <input id="config-manual-port" type="text" inputmode="numeric" placeholder="80">
+                </label>
+                <label class="field"><span class="field-label">Serial (optional)</span>
+                  <input id="config-manual-serial" type="text" placeholder="e.g. AO1234…">
+                </label>
+                <button id="config-manual-add" type="submit" class="primary-button compact">
+                  Add to draft
+                </button>
+              </form>
+              <p id="config-manual-error" class="scan-error" role="alert" hidden></p>
+            </details>
+          </details>
+
+          <details class="advanced-details" id="config-preview-details">
+            <summary>Advanced: generated config.json preview &amp; apply</summary>
+            <p class="future-note">
+              Preview and download stay non-destructive. Apply writes the
+              generated config to the resolved EMS installation and backs up an
+              existing config first; no deployment is started here.
+            </p>
+            <pre id="config-preview" class="config-preview">{}</pre>
+            <div class="config-export-buttons">
+              <button id="config-download" type="button"
+                      class="secondary-button compact" disabled>
+                Download config.json
+              </button>
+              <button id="config-apply" type="button"
+                      class="primary-button compact" disabled>
+                Apply to EMS installation
+              </button>
+            </div>
+            <p class="future-note">
+              Apply writes the config to the resolved EMS config path
+              (<code id="config-apply-target">./config/config.json</code>).
+              An existing config is backed up first.
+            </p>
+            <p id="config-export-status" class="config-export-status"
+               role="status" aria-live="polite" hidden></p>
+            <p id="config-apply-status" class="config-export-status"
+               role="status" aria-live="polite" hidden></p>
+          </details>
+          <details class="advanced-details" id="config-template-details">
+            <summary>Show template details</summary>
+            <p class="future-note">Raw release template — read-only.</p>
+            <pre id="config-template-preview" class="config-preview">{}</pre>
+          </details>
+        </section>
+      </div>
+
+      <div class="setup-step-panel" data-setup-step-panel="deployment" hidden>
+        <section class="control-pipeline-stage" aria-label="Prepare deployment">
+          <div class="control-stage-head">
+            <span class="control-stage-step">04</span>
+            <span class="control-stage-dot" aria-hidden="true">▤</span>
+            <div class="control-stage-title-block">
+              <span class="control-stage-title">Prepare deployment</span>
+              <span class="control-stage-subtitle">Prepare the workspace and download images — EMS is not started yet</span>
+            </div>
+          </div>
+          <div class="setup-summary">
+            <div class="setup-summary-row">
+              <span class="setup-summary-key" id="deployment-config-state">Generated config pending</span>
+              <span id="deployment-config-status" class="setup-summary-val">Not saved</span>
+            </div>
+            <div class="setup-summary-row">
+              <span class="setup-summary-key">Generated config path</span>
+              <span id="deployment-config-path" class="setup-summary-val">/data/generated/config.json</span>
+            </div>
+            <div class="setup-summary-row">
+              <span class="setup-summary-key">Deployment workspace</span>
+              <span id="deployment-workspace" class="setup-summary-val">—</span>
+            </div>
+            <div class="setup-summary-row">
+              <span class="setup-summary-key">Bootstrap source</span>
+              <span id="deployment-bootstrap-source" class="setup-summary-val">—</span>
+            </div>
+          </div>
+
+          <div id="deployment-docker" class="deployment-docker">
+            <div class="deployment-docker-head">
+              <h3 class="config-section-title">Docker access</h3>
+              <span id="deployment-docker-state" class="source-badge" hidden></span>
+            </div>
+            <p class="future-note">
+              Admin Setup controls the Docker engine on this host. EMS and
+              InfluxDB will run as normal containers next to this Admin container.
+            </p>
+            <p class="future-note">
+              Admin Setup can control Docker on this host to prepare and start
+              EMS containers. Only run it on a trusted local machine and do not
+              expose the Admin UI to the internet.
+            </p>
+            <p id="deployment-docker-note" class="scan-status" role="status" aria-live="polite"></p>
+            <div class="setup-summary">
+              <div class="setup-summary-row">
+                <span class="setup-summary-key">Mode</span>
+                <span id="deployment-docker-mode" class="setup-summary-val">Checking…</span>
+              </div>
+              <div class="setup-summary-row">
+                <span class="setup-summary-key">Docker server</span>
+                <span id="deployment-docker-version" class="setup-summary-val">—</span>
+              </div>
+            </div>
+            <button id="deployment-docker-recheck" type="button" class="secondary-button compact">
+              Re-check Docker
+            </button>
+          </div>
+
+          <h3 class="config-section-title">Images to download</h3>
+          <div id="deployment-images-empty" class="results-empty">
+            Prepare release resources and save a config to plan the images.
+          </div>
+          <div id="deployment-images" class="config-draft-list" hidden></div>
+          <p id="deployment-influx-note" class="future-note" hidden>
+            InfluxDB is not included because Analytics is disabled in the generated config.
+          </p>
+
+          <div id="deployment-progress" class="deployment-progress" hidden>
+            <h3 class="config-section-title">Progress</h3>
+            <div id="deployment-steps" class="deployment-steps"></div>
+          </div>
+
+          <div class="setup-nav-inline">
+            <button id="deployment-prepare" type="button" class="secondary-button compact" hidden>
+              Retry preparation
+            </button>
+            <div id="deployment-ready-summary" class="deployment-overwrite" hidden>
+              <strong>Deployment ready</strong>
+              <span>Workspace and images are prepared for the selected release and config.</span>
+            </div>
+          </div>
+          <p id="deployment-status" class="scan-status" role="status" aria-live="polite"></p>
+          <p id="deployment-error" class="scan-error" role="alert" hidden></p>
+          <div id="deployment-overwrite" class="deployment-overwrite" hidden>
+            <p class="future-note">
+              A deployment workspace already exists for a different release or
+              config. Re-prepare to replace it.
+            </p>
+            <button id="deployment-overwrite-confirm" type="button" class="secondary-button compact">
+              Replace existing workspace
+            </button>
+          </div>
+          <div id="deployment-existing-install" class="deployment-overwrite" role="alert" hidden>
+            <strong>Existing EMS installation detected</strong>
+            <p class="future-note">
+              This will replace config/config.json and docker-compose.yml in the
+              current EMS installation. A backup of the existing files will be
+              created first. Runtime data under data/ will not be deleted.
+            </p>
+            <button id="deployment-existing-replace" type="button" class="secondary-button compact">
+              Continue and replace these files
+            </button>
+          </div>
+
+          <details class="advanced-details" id="deployment-log-details" hidden>
+            <summary>Advanced: preparation details</summary>
+            <div class="setup-summary">
+              <div class="setup-summary-row">
+                <span class="setup-summary-key">Start command (Step 05)</span>
+                <span class="setup-summary-val">docker compose up -d</span>
+              </div>
+            </div>
+            <p class="future-note">
+              This step ran <code>install-docker.sh --no-start</code> from the
+              selected release and pulled the planned images. Starting EMS is done
+              in the next step.
+            </p>
+          </details>
+        </section>
+      </div>
+
+      <div class="setup-step-panel" data-setup-step-panel="start" hidden>
+        <section class="control-pipeline-stage" aria-label="Start EMS">
+          <div class="control-stage-head">
+            <span class="control-stage-step">05</span>
+            <span class="control-stage-dot" aria-hidden="true">▶</span>
+            <div class="control-stage-title-block">
+              <span class="control-stage-title">Start EMS</span>
+              <span class="control-stage-subtitle">Start the prepared Docker deployment and verify EMS is reachable</span>
+            </div>
+          </div>
+
+          <p id="start-blocked" class="scan-status" role="status" hidden>
+            Prepare deployment first before starting EMS.
+          </p>
+
+          <div class="setup-summary">
+            <div class="setup-summary-row">
+              <span class="setup-summary-key">Deployment workspace</span>
+              <span id="start-workspace" class="setup-summary-val">—</span>
+            </div>
+            <div class="setup-summary-row">
+              <span class="setup-summary-key">Prepared config</span>
+              <span id="start-prepared" class="setup-summary-val">Not prepared</span>
+            </div>
+            <div class="setup-summary-row">
+              <span class="setup-summary-key">Selected release</span>
+              <span id="start-release" class="setup-summary-val">—</span>
+            </div>
+            <div class="setup-summary-row">
+              <span class="setup-summary-key">Docker access</span>
+              <span id="start-docker" class="setup-summary-val">Checking…</span>
+            </div>
+          </div>
+
+          <h3 class="config-section-title">Services</h3>
+          <div id="start-services-empty" class="results-empty">
+            No container status yet. Start EMS or re-check status.
+          </div>
+          <div id="start-services" class="config-draft-list" hidden></div>
+
+          <div id="start-progress" class="deployment-progress" hidden>
+            <h3 class="config-section-title">Progress</h3>
+            <div id="start-steps" class="deployment-steps"></div>
+          </div>
+
+          <div class="setup-nav-inline">
+            <button id="start-button" type="button" class="primary-button compact" disabled>
+              Start EMS
+            </button>
+            <button id="start-recheck" type="button" class="secondary-button compact">
+              Re-check status
+            </button>
+            <span id="start-running-badge" class="source-badge source-mdns" hidden>Running</span>
+          </div>
+          <p id="start-status" class="scan-status" role="status" aria-live="polite"></p>
+          <p id="start-error" class="scan-error" role="alert" hidden></p>
+
+          <div id="start-permission-error" class="deployment-overwrite" hidden>
+            <h3 class="config-section-title">Deployment workspace is not writable by EMS</h3>
+            <p class="future-note">
+              The prepared config/ or data/ folder cannot be written by the EMS runtime user.
+              Repair permissions and try again.
+            </p>
+            <div class="setup-summary">
+              <div class="setup-summary-row">
+                <span class="setup-summary-key">PUID / PGID</span>
+                <span id="start-permission-identity" class="setup-summary-val">—</span>
+              </div>
+            </div>
+            <button id="start-permission-repair" type="button" class="primary-button compact">
+              Repair permissions and continue
+            </button>
+          </div>
+
+          <div id="start-container-conflict" class="deployment-overwrite" hidden>
+            <h3 id="start-conflict-title" class="config-section-title">
+              Existing EMS container found
+            </h3>
+            <p id="start-conflict-message" class="future-note"></p>
+            <div class="setup-summary">
+              <div class="setup-summary-row">
+                <span class="setup-summary-key">Container name</span>
+                <span id="start-conflict-name" class="setup-summary-val">—</span>
+              </div>
+              <div class="setup-summary-row">
+                <span class="setup-summary-key">Existing image</span>
+                <span id="start-conflict-image" class="setup-summary-val">—</span>
+              </div>
+              <div class="setup-summary-row">
+                <span class="setup-summary-key">Selected image</span>
+                <span id="start-conflict-selected-image" class="setup-summary-val">—</span>
+              </div>
+            </div>
+            <button id="start-conflict-resolve" type="button" class="primary-button compact">
+              Continue
+            </button>
+          </div>
+
+          <details id="start-error-details" class="advanced-details" hidden>
+            <summary>Show details</summary>
+            <pre id="start-error-detail" class="config-preview"></pre>
+          </details>
+
+          <div id="start-success" class="deployment-overwrite" hidden>
+            <p class="future-note">EMS is running. Open the dashboard to sign in and control your system.</p>
+            <a id="start-dashboard-link" class="primary-button compact" href="http://localhost:8080" target="_blank" rel="noopener">
+              Open EMS Dashboard
+            </a>
+          </div>
+        </section>
+      </div>
+
+      <div class="setup-nav">
+        <button id="setup-back" type="button" class="secondary-button compact" hidden>Back</button>
+        <p id="setup-nav-error" class="scan-error" role="alert" hidden></p>
+        <button id="setup-next" type="button" class="primary-button compact" disabled>Next</button>
+      </div>
+    </div>
+
+    <div class="admin-view" id="view-advanced" data-admin-view-panel="advanced" hidden>
+      <section class="control-pipeline-stage future-stage" id="advanced-deployment" aria-label="Deployment">
+        <div class="control-stage-head">
+          <span class="control-stage-step">＊</span>
+          <span class="control-stage-dot" aria-hidden="true">▤</span>
+          <div class="control-stage-title-block">
+            <span class="control-stage-title">Deployment</span>
+            <span class="control-stage-subtitle">Planned for next phase</span>
+          </div>
+        </div>
+        <p class="future-note">
+          A later phase will manage the EMS and InfluxDB deployment from here:
+          status, start, stop, update and bootstrap functions. Not available
+          yet — no container or Docker socket access is used.
+        </p>
+      </section>
+
+      <section class="control-pipeline-stage future-stage" id="advanced-system" aria-label="System">
+        <div class="control-stage-head">
+          <span class="control-stage-step">＊</span>
+          <span class="control-stage-dot" aria-hidden="true">◈</span>
+          <div class="control-stage-title-block">
+            <span class="control-stage-title">System</span>
+            <span class="control-stage-subtitle">Planned for next phase</span>
+          </div>
+        </div>
+        <p class="future-note">
+          A later phase will surface diagnostics, logs, version info and support
+          bundle entry points here. Not available yet — no backend diagnostics
+          run from this tool.
+        </p>
+      </section>
+
+      <section class="control-pipeline-stage future-stage" id="advanced-network" aria-label="Network / WiFi">
+        <div class="control-stage-head">
+          <span class="control-stage-step">＊</span>
+          <span class="control-stage-dot" aria-hidden="true">✶</span>
+          <div class="control-stage-title-block">
+            <span class="control-stage-title">Network / WiFi</span>
+            <span class="control-stage-subtitle">Not available in local Docker mode</span>
+          </div>
+        </div>
+        <p class="future-note">
+          WiFi configuration is not available in local Docker mode. This may
+          later become available in Raspberry Pi appliance mode.
+        </p>
+      </section>
+    </div>
+  </main>
+  <script src="/admin.js"></script>
+</body>
+</html>

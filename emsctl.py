@@ -17,6 +17,7 @@ from dashboard import auth as dashboard_auth
 
 from ems.paths import (
     BASE_DIR,
+    resolve_config_path as resolve_ems_config_path,
     resolve_runtime_path,
     resolve_dashboard_auth_path,
 )
@@ -38,8 +39,6 @@ from ems import config as config_mod
 from ems import config_init as config_init_mod
 from ems.cli_privilege import PrivilegeDropError, maybe_drop_privileges
 
-DEFAULT_CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
-DOCKER_CONFIG_PATH = os.path.join(BASE_DIR, "config", "config.json")
 DEFAULT_RUNTIME_STATE_PATH = os.path.join(BASE_DIR, "runtime-state.json")
 OFFGRID_SOCKET_MODES = ("off", "eco", "standard")
 TOP_LEVEL_COMMANDS = (
@@ -305,7 +304,7 @@ def build_parser():
         "--config",
         help=(
             "Path to config.json. Default discovery: EMS_CONFIG_FILE, "
-            "config.json next to emsctl.py, then config/config.json."
+            "config/config.json, then legacy config.json."
         )
     )
     parser.add_argument(
@@ -970,24 +969,7 @@ def load_config(path):
 
 
 def resolve_config_path(args):
-    if args.config:
-        return args.config
-
-    env_path = os.environ.get("EMS_CONFIG_FILE")
-    if env_path:
-        return env_path
-
-    in_container = str(os.environ.get("EMS_IN_CONTAINER", "")).strip().lower()
-    if in_container in ("1", "true", "yes") and os.path.exists(DOCKER_CONFIG_PATH):
-        return DOCKER_CONFIG_PATH
-
-    if os.path.exists(DEFAULT_CONFIG_PATH):
-        return DEFAULT_CONFIG_PATH
-
-    if os.path.exists(DOCKER_CONFIG_PATH):
-        return DOCKER_CONFIG_PATH
-
-    return DEFAULT_CONFIG_PATH
+    return str(resolve_ems_config_path(args.config, base_dir=BASE_DIR))
 
 
 def print_diagnose_text(report):

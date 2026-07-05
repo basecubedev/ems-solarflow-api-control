@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# EMS SolarFlow Control Admin — restricted discovery-only mode.
+#
+#   deploy/admin/start-admin-setup.sh --discovery-only
+#   # or:
+#   docker compose -f deploy/admin/docker-compose.discovery-only.yml up --build
+#
+# Then open http://127.0.0.1:8090
+#
+# This is the intentionally restricted setup path: it runs device discovery and
+# builds a config draft but has NO Docker access. No Docker socket is mounted, so
+# Step 04 reports that the Admin container was started in restricted mode and the
+# wizard stays read-only through config generation. Use the default
+# docker-compose.yml (or the launcher) when you want Step 04 to prepare and
+# download the deployment images.
+#
+# Security: this exposes a device-discovery scanner. Publish it only on trusted
+# local networks, never to the internet.
+services:
+  ems-solarflow-admin:
+    build:
+      context: ../..
+      dockerfile: deploy/admin/Dockerfile
+    image: ems-solarflow-control-admin:local
+    user: "${PUID:-1000}:${PGID:-1000}"
+    # Bind published port to loopback so the scanner is not reachable off-host by
+    # default. To scan the LAN from a Raspberry Pi, use the host-network
+    # override documented in docker-compose.hostnet.yml.
+    ports:
+      - "127.0.0.1:8090:8090"
+    environment:
+      # Same-path mounting keeps install-context resolution consistent with the
+      # deployment compose even though this restricted mode mounts no socket.
+      EMS_INSTALL_DIR: "${EMS_INSTALL_DIR}"
+      EMS_ADMIN_DATA_DIR: "${EMS_ADMIN_DATA_DIR}"
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
+    volumes:
+      - "${EMS_INSTALL_DIR}:${EMS_INSTALL_DIR}"
+      - "${EMS_ADMIN_DATA_DIR}:${EMS_ADMIN_DATA_DIR}"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"

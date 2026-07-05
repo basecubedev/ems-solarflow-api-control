@@ -37,9 +37,11 @@ runtime-state.json.*.tmp
 /backup/
 /backup/**
 
-# Dashboard local SQLite history
-/data/
-/data/**
+# Dashboard local SQLite history and Admin runtime cache
+/data/*
+!/data/admin/
+/data/admin/*
+!/data/admin/.gitkeep
 *.sqlite-wal
 *.sqlite-shm
 

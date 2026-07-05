@@ -182,16 +182,6 @@ def patch_emsctl_base(monkeypatch, base_dir):
     # resolve_runtime_path / resolve_dashboard_auth_path now live in ems.paths
     # and read its module-level BASE_DIR.
     monkeypatch.setattr(ems_paths, "BASE_DIR", str(base_dir))
-    monkeypatch.setattr(
-        emsctl,
-        "DEFAULT_CONFIG_PATH",
-        str(base_dir / "config.json"),
-    )
-    monkeypatch.setattr(
-        emsctl,
-        "DOCKER_CONFIG_PATH",
-        str(base_dir / "config" / "config.json"),
-    )
 
 
 def config_args(config=None, runtime_state=None, dashboard_auth=None):

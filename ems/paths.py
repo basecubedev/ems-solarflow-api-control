@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Project path resolution shared by the CLI and the diagnose service layer.
+"""Central path resolution shared by EMS core and its management tools.
 
 This module is intentionally tiny and import-side-effect-free so that both
 ``emsctl.py`` and ``ems.diagnostics`` can depend on it without creating an
@@ -7,9 +7,73 @@ import cycle (``ems.diagnostics`` must never import ``emsctl``).
 """
 
 import os
+from pathlib import Path
 
 # Project root = the directory that contains this ``ems/`` package.
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DOCKER_TEMPLATE_PATH = Path("/app/config.template.json")
+
+
+def _base_path(base_dir=None):
+    return Path(BASE_DIR if base_dir is None else base_dir)
+
+
+def resolve_config_path(explicit_path=None, *, base_dir=None):
+    """Resolve the active EMS config or its canonical creation target."""
+
+    if explicit_path:
+        return Path(explicit_path)
+
+    env_path = os.environ.get("EMS_CONFIG_FILE")
+    if env_path:
+        return Path(env_path)
+
+    base = _base_path(base_dir)
+    canonical = base / "config" / "config.json"
+    legacy = base / "config.json"
+    if canonical.exists():
+        return canonical
+    if legacy.exists():
+        return legacy
+    return canonical
+
+
+def resolve_template_path(explicit_path=None, *, base_dir=None):
+    """Resolve the EMS template, including the Docker image fallback."""
+
+    if explicit_path:
+        return Path(explicit_path)
+
+    env_path = os.environ.get("EMS_TEMPLATE_FILE")
+    if env_path:
+        return Path(env_path)
+
+    base = _base_path(base_dir)
+    canonical = base / "config" / "config.template.json"
+    legacy = base / "config.template.json"
+    if canonical.exists():
+        return canonical
+    if legacy.exists():
+        return legacy
+    if DOCKER_TEMPLATE_PATH.exists():
+        return DOCKER_TEMPLATE_PATH
+    return canonical
+
+
+def resolve_data_dir(explicit_path=None, *, base_dir=None):
+    """Resolve the EMS mutable-data directory."""
+
+    return Path(explicit_path) if explicit_path else _base_path(base_dir) / "data"
+
+
+def resolve_compose_path(explicit_path=None, *, base_dir=None):
+    """Resolve the EMS Compose file."""
+
+    return (
+        Path(explicit_path)
+        if explicit_path
+        else _base_path(base_dir) / "docker-compose.yml"
+    )
 
 
 def resolve_project_path(path):

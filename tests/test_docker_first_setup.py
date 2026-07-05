@@ -457,6 +457,8 @@ def test_ems_only_no_start_generates_files_and_skips_influx(tmp_path):
     assert (work / ".env").is_file()
     assert (work / "config").is_dir()
     assert (work / "data").is_dir()
+    generated_compose = read(work / "docker-compose.yml")
+    assert 'user: "${PUID}:${PGID}"' in generated_compose
     assert not (work / "data" / "influxdb").exists()
     assert not (work / "config" / "influxdb.env").exists()
 

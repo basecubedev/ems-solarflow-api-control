@@ -150,6 +150,7 @@ services:
   ems:
     image: ghcr.io/basecubedev/ems-solarflow-api-control:latest
     container_name: ems-solarflow-api-control
+    user: "${PUID}:${PGID}"
     restart: unless-stopped
     environment:
       PUID: "${PUID:-}"

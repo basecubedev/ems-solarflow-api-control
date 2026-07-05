@@ -1,3 +1,5 @@
 requests>=2.34.2
 paho-mqtt>=2.1.0
 cryptography
+# Optional: live mDNS discovery in the admin UI. Absence degrades gracefully.
+zeroconf>=0.132

@@ -8,6 +8,8 @@ import sys
 import stat
 from urllib.parse import urlparse
 
+from ems.paths import resolve_config_path, resolve_template_path
+
 LATEST_CONFIG_SCHEMA_VERSION = 3
 CURRENT_CONFIG_SCHEMA_VERSION = LATEST_CONFIG_SCHEMA_VERSION
 
@@ -511,7 +513,7 @@ def _is_comment_key(key):
 
 def _load_template_upgrade_data(base_dir=None):
     base_dir = base_dir or BASE_DIR or os.getcwd()
-    path = os.path.join(base_dir, "config.template.json")
+    path = resolve_template_path(base_dir=base_dir)
     with open(path) as f:
         raw_template = f.read()
     template = json.loads(raw_template)
@@ -1335,7 +1337,8 @@ GRID_METER_CONFIG = {
 def load_config(args=None, base_dir=None):
     args = args or ARGS
     base_dir = base_dir or BASE_DIR or os.getcwd()
-    path = args.config or os.path.join(base_dir, "config.json")
+    path = str(resolve_config_path(args.config, base_dir=base_dir))
+    args.config = path
 
     try:
         raw_config = _read_raw_config(path)
@@ -1575,10 +1578,11 @@ def runtime_state_path():
 def config_path():
     """Return the path to the static config file the EMS was started with."""
 
-    path = (ARGS.config if ARGS else None) or os.path.join(
-        BASE_DIR or os.getcwd(), "config.json"
+    path = resolve_config_path(
+        ARGS.config if ARGS else None,
+        base_dir=BASE_DIR or os.getcwd(),
     )
-    return path
+    return str(path)
 
 
 def dashboard_database_path():

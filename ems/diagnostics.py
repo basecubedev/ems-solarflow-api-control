@@ -42,6 +42,7 @@ from ems.paths import (
     resolve_project_path,
     resolve_runtime_path,
     resolve_dashboard_auth_path,
+    resolve_template_path,
 )
 from ems.version import __version__
 
@@ -2816,7 +2817,7 @@ def diagnose_collect(args):
         diagnose_add(checks, "environment", root_level, "process_root", "Process runs as root" if uid == 0 else "Process does not run as root", uid=uid)
 
     config_path = args.config
-    template_path = os.path.join(BASE_DIR, "config.template.json")
+    template_path = str(resolve_template_path(base_dir=BASE_DIR))
     data_dir = os.path.join(BASE_DIR, "data")
 
     for code, path, label, required in (

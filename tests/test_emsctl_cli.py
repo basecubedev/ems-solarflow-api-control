@@ -32,7 +32,7 @@ def visible_input(responses):
     return read
 
 
-def test_emsctl_config_discovery_prefers_legacy_config(tmp_path, monkeypatch):
+def test_emsctl_config_discovery_prefers_canonical_config(tmp_path, monkeypatch):
     patch_emsctl_base(monkeypatch, tmp_path)
     write_discovery_config(tmp_path / "config.json", "runtime-state.json")
     write_discovery_config(
@@ -44,9 +44,9 @@ def test_emsctl_config_discovery_prefers_legacy_config(tmp_path, monkeypatch):
     selected = emsctl.resolve_config_path(args)
     config = emsctl.load_config(selected)
 
-    assert selected == str(tmp_path / "config.json")
+    assert selected == str(tmp_path / "config" / "config.json")
     assert emsctl.resolve_runtime_path(args, config) == str(
-        tmp_path / "runtime-state.json"
+        tmp_path / "data" / "runtime-state.json"
     )
 
 
@@ -253,9 +253,9 @@ def test_emsctl_dashboard_auth_path_comes_from_selected_config(
     selected = emsctl.resolve_config_path(args)
     config = emsctl.load_config(selected)
 
-    assert selected == str(tmp_path / "config.json")
+    assert selected == str(tmp_path / "config" / "config.json")
     assert emsctl.resolve_dashboard_auth_path(args, config) == str(
-        tmp_path / "dashboard-auth.json"
+        tmp_path / "config" / "dashboard-auth.json"
     )
 
 
