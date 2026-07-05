@@ -126,7 +126,7 @@ code {
 /* Guided upgrade reads as a clean staged workflow: plain control stages with
    even spacing, no maintenance status accent line ([hidden] keeps priority). */
 #maintenance-upgrade-panel { display: flex; flex-direction: column; gap: 10px; }
-.maintenance-path-card { padding: 14px 16px; }
+.maintenance-path-card { padding: 18px 16px; min-height: 74px; }
 .maintenance-path-card .control-stage-head { margin-bottom: 10px; }
 .maintenance-path-card .source-badge { margin-left: auto; }
 .maintenance-path-card .future-note { margin: 0; }
@@ -161,7 +161,7 @@ code {
   font: inherit;
   transition: border-color .15s ease, transform .1s ease;
 }
-.maintenance-path-nav .control-stage-head { margin-bottom: 0; }
+.maintenance-path-nav .control-stage-head { margin-bottom: 0; min-height: 42px; }
 .maintenance-path-nav:hover { border-color: var(--output); }
 .maintenance-path-nav:active { transform: translateY(1px); }
 .maintenance-path-nav:focus-visible { outline: 2px solid var(--output); outline-offset: 2px; }
@@ -233,13 +233,13 @@ code {
   background: var(--accent2);
   opacity: 0.7;
 }
-.maintenance-card-head { margin-bottom: 0; padding: 14px 16px; }
+.maintenance-card-head { margin-bottom: 0; padding: 12px 14px; }
 .maintenance-card-summary {
-  display: flex;
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(150px, 0.9fr) minmax(160px, 1.6fr) auto auto;
   align-items: center;
-  gap: 12px;
-  flex: 1 1 auto;
-  min-width: 0;
+  gap: 10px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -248,26 +248,37 @@ code {
   text-align: left;
   cursor: pointer;
 }
-.maintenance-card-summary .control-stage-title { flex: 0 0 auto; font-size: 12px; }
-.maintenance-card .control-stage-step {
-  width: 30px;
-  height: 30px;
-  border-radius: 11px;
-  background: rgba(56, 213, 255, 0.16);
-  box-shadow: 0 0 18px rgba(56, 213, 255, 0.12);
-}
+.maintenance-card-summary .control-stage-title { min-width: 0; font-size: 12px; }
 .maintenance-summary {
-  flex: 1 1 auto;
   min-width: 0;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.35;
   font-weight: 700;
   text-align: right;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .maintenance-summary[data-tone="ok"] { color: var(--output); }
 .maintenance-summary[data-tone="warn"] { color: var(--danger); }
+.maintenance-card-status {
+  justify-self: end;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 850;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+.maintenance-card-status::before { content: "Ready"; }
+.maintenance-card[data-tone="ok"] .maintenance-card-status::before { content: "OK"; }
+.maintenance-card[data-tone="warn"] .maintenance-card-status::before { content: "Warning"; }
+.maintenance-card[data-tone="info"] .maintenance-card-status::before { content: "Info"; }
+.maintenance-card[data-tone="action"] .maintenance-card-status::before { content: "Action"; }
 .maintenance-caret {
   flex: 0 0 auto;
   width: 26px;
@@ -288,24 +299,21 @@ code {
 .maintenance-card[data-tone="info"]::before { background: var(--output); }
 .maintenance-card[data-tone="action"]::before { background: var(--accent); }
 
-.maintenance-card[data-tone="ok"] .control-stage-step {
+.maintenance-card[data-tone="ok"] .maintenance-card-status {
   color: var(--battery);
-  background: rgba(57, 229, 140, 0.14);
-  box-shadow: 0 0 18px rgba(57, 229, 140, 0.10);
+  border-color: color-mix(in srgb, var(--battery) 45%, var(--border));
 }
-.maintenance-card[data-tone="warn"] .control-stage-step {
+.maintenance-card[data-tone="warn"] .maintenance-card-status {
   color: var(--danger);
-  background: rgba(255, 107, 122, 0.14);
-  box-shadow: 0 0 18px rgba(255, 107, 122, 0.10);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
 }
-.maintenance-card[data-tone="info"] .control-stage-step {
+.maintenance-card[data-tone="info"] .maintenance-card-status {
   color: var(--output);
-  background: rgba(56, 213, 255, 0.14);
+  border-color: color-mix(in srgb, var(--output) 45%, var(--border));
 }
-.maintenance-card[data-tone="action"] .control-stage-step {
+.maintenance-card[data-tone="action"] .maintenance-card-status {
   color: var(--accent2);
-  background: rgba(139, 92, 246, 0.18);
-  box-shadow: 0 0 18px rgba(139, 92, 246, 0.12);
+  border-color: color-mix(in srgb, var(--accent2) 45%, var(--border));
 }
 
 .maintenance-card[data-tone="ok"] .maintenance-summary { color: var(--battery); }
@@ -323,6 +331,18 @@ code {
   color: var(--text);
   background: rgba(56, 213, 255, 0.12);
   border-color: rgba(56, 213, 255, 0.20);
+}
+@media (max-width: 720px) {
+  .maintenance-card-summary {
+    grid-template-columns: 1fr auto auto;
+  }
+  .maintenance-summary {
+    grid-column: 1 / -1;
+    text-align: left;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+  }
 }
 .maintenance-warnings {
   margin: 0;
@@ -1303,14 +1323,18 @@ code {
 .start-recommend-notes { margin: 8px 0 0; padding-left: 18px; color: var(--muted); font-size: 12px; }
 .start-choices { display: flex; flex-direction: column; gap: 10px; border: none; margin: 0; padding: 0; }
 .start-choices-legend { padding: 0; margin: 0 0 4px; color: var(--muted); font-size: 12px; font-weight: 850; text-transform: uppercase; letter-spacing: .04em; }
-.start-choice { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border: 1px solid rgba(148,163,184,.20); border-radius: 12px; background: rgba(255,255,255,.03); cursor: pointer; transition: border-color .16s ease, background .16s ease; }
+/* Landing paths are full-width navigation cards: the whole card is a button that
+   opens the flow, mirroring the maintenance hub (.maintenance-path-nav). */
+.start-choice { display: flex; gap: 12px; align-items: center; padding: 12px 14px; border: 1px solid rgba(148,163,184,.20); border-radius: 12px; background: rgba(255,255,255,.03); cursor: pointer; transition: border-color .16s ease, background .16s ease, transform .1s ease; }
+.start-choice-nav { appearance: none; width: 100%; text-align: left; color: inherit; font: inherit; }
 .start-choice:hover { border-color: var(--border-strong); }
-.start-choice:has(input:checked) { border-color: rgba(34, 211, 238, 0.55); background: linear-gradient(180deg, rgba(34, 211, 238, 0.12), rgba(139, 92, 246, 0.08)); }
-.start-choice input { margin-top: 3px; }
+.start-choice-nav:active { transform: translateY(1px); }
+.start-choice-nav:focus-visible { outline: 2px solid var(--output); outline-offset: 2px; }
+.start-choice.is-recommended { border-color: rgba(34, 211, 238, 0.55); background: linear-gradient(180deg, rgba(34, 211, 238, 0.12), rgba(139, 92, 246, 0.08)); }
 .start-choice-body { display: flex; flex-direction: column; gap: 3px; }
 .start-choice-title { font-size: 14px; font-weight: 850; color: var(--text); }
 .start-choice-desc { font-size: 12px; color: var(--muted); }
-.start-gate-actions { display: flex; }
+.start-choice-arrow { margin-left: auto; font-size: 18px; color: var(--output); }
 .start-gate-hint { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
 
 /* Catalog-driven setup feature accordion. Reuses the Control/Energy stage
@@ -1451,6 +1475,41 @@ code {
 
 /* Backup / restore — reuses the Control / Energy stage style. */
 .backup-stage { margin-top: 14px; }
+/* Backup facts render as compact Control/Energy stage pill rows (label/value
+   pairs), not plain text. */
+.backup-stage .control-pipeline-values {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 6px;
+  margin-top: 10px;
+}
+.backup-stage .control-pipeline-fact {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 34px;
+  padding: 7px 11px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+}
+.backup-stage .control-pipeline-fact .maintenance-fact-label {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.backup-stage .control-pipeline-fact .maintenance-fact-value {
+  min-width: 0;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
 .backup-list {
   display: flex;
   flex-direction: column;
@@ -1460,18 +1519,28 @@ code {
 }
 .backup-row {
   display: grid;
-  grid-template-columns: minmax(200px, 1.4fr) minmax(300px, 2fr) auto;
+  grid-template-columns: minmax(260px, 1.8fr) minmax(300px, 2fr) auto;
   gap: 6px 12px;
   align-items: center;
   padding: 8px 0;
   border-bottom: 1px solid var(--border);
 }
 .backup-row-set { border-left: 2px dashed var(--border-strong); padding-left: 8px; }
-.backup-row-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.backup-row-main {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  min-width: 0;
+}
+.backup-row-type { max-width: 100%; line-height: 1; }
 .backup-row-name {
+  display: block;
   font-weight: 750;
   font-size: 12px;
   color: var(--text);
+  min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1490,7 +1559,6 @@ code {
 .backup-row-flags { grid-column: 1 / -1; margin-top: 2px; }
 @media (max-width: 860px) {
   .backup-row { grid-template-columns: 1fr; align-items: stretch; }
-  .backup-row-name { white-space: normal; overflow-wrap: anywhere; }
   .backup-row-actions { justify-content: flex-start; }
 }
 .backup-file-list {

@@ -3163,7 +3163,7 @@ if (configEls.clearDraft) {
   });
 }
 
-const ADMIN_VIEWS = ["setup", "maintenance", "advanced"];
+const ADMIN_VIEWS = ["setup", "maintenance"];
 
 // Maintenance is a small hub with three nested paths. Only "manual" opens the
 // detailed editor and touches the backend; the placeholders never do.
@@ -3224,7 +3224,7 @@ function maintenancePathForHash(hash) {
   return "hub";
 }
 
-// Deep links (#maintenance, #maintenance-manual, #advanced) still resolve to the
+// Deep links (#maintenance, #maintenance-manual) still resolve to the
 // right panel, but only once the start gate has revealed the workspace — while
 // the landing gate is showing, hash changes must not un-hide a workspace panel.
 function applyHashRoute() {
@@ -4826,7 +4826,7 @@ function setMaintenanceFact(el, text, tone) {
   else delete el.dataset.tone;
 }
 
-// Card tone drives the collapsed tile's left accent and step badge color.
+// Card tone drives the collapsed row's left accent and status badge.
 function setMaintenanceCardTone(cardId, tone) {
   const card = document.getElementById(cardId);
   if (!card) return;
@@ -5620,7 +5620,6 @@ const backupEls = {
   restoreSummary: document.getElementById("backup-restore-summary"),
   restoreFiles: document.getElementById("backup-restore-files"),
   rollbackWarning: document.getElementById("backup-rollback-warning"),
-  previewBtn: document.getElementById("backup-preview"),
   executeBtn: document.getElementById("backup-execute"),
   restoreSteps: document.getElementById("backup-restore-steps"),
 };
@@ -5634,6 +5633,9 @@ const backupState = {
   selectedDetails: null,
   restorePlan: null,
   running: false,
+  // Bumped per preview request so a slower earlier preview can never overwrite a
+  // newer one after restore options changed.
+  previewToken: 0,
 };
 
 const BACKUP_POLL_INTERVAL_MS = 1200;
@@ -5689,7 +5691,7 @@ function renderBackupMessage(items) {
 
 function setBackupBusy(running) {
   backupState.running = running;
-  const buttons = [backupEls.refreshBtn, backupEls.createBtn, backupEls.previewBtn];
+  const buttons = [backupEls.refreshBtn, backupEls.createBtn];
   for (const btn of buttons) if (btn) btn.disabled = running;
   if (backupEls.executeBtn) {
     backupEls.executeBtn.disabled = running || !backupState.restorePlan ||
@@ -5790,6 +5792,8 @@ function renderBackupRow(backup) {
     ));
   }
   const id = escapeHtml(backup.id);
+  const backupName = backup.name || backup.id || "backup";
+  const backupType = backup.backup_type || "backup";
   // An invalid or InfluxDB archive cannot be restored from Admin; the marker
   // keeps the button disabled through the busy-state toggle (see setBackupBusy).
   const restoreDisabled = !backup.valid || isInfluxRestoreUnsupported;
@@ -5797,9 +5801,11 @@ function renderBackupRow(backup) {
     ? ' disabled data-backup-restore-disabled="true"' : "";
   return (
     '<div class="backup-row" role="listitem">' +
-    '<div class="backup-row-main"><span class="backup-row-name">' +
-    escapeHtml(backup.name) + '</span><span class="source-badge source-mdns">' +
-    escapeHtml(backup.backup_type || "backup") + "</span></div>" +
+    '<div class="backup-row-main">' +
+    '<span class="backup-row-type source-badge source-mdns">' +
+    escapeHtml(backupType) + "</span>" +
+    '<span class="backup-row-name" title="' + escapeHtml(backupName) + '">' +
+    escapeHtml(backupName) + "</span></div>" +
     '<div class="backup-row-meta" aria-label="Backup metadata">' + facts.join("") + "</div>" +
     '<div class="backup-row-actions">' +
     '<button type="button" class="secondary-button compact" data-backup-action="details" data-backup-id="' + id + '" data-backup-kind="archive">Details</button>' +
@@ -5826,10 +5832,13 @@ function renderBackupSetRow(set) {
     : "";
   const restoreAttrs = hasInflux
     ? ' disabled data-backup-restore-disabled="true"' : "";
+  const setName = set.label || set.id || "backup set";
   return (
     '<div class="backup-row backup-row-set" role="listitem">' +
-    '<div class="backup-row-main"><span class="backup-row-name">' +
-    escapeHtml(set.label || set.id) + '</span><span class="source-badge source-scan">set</span></div>' +
+    '<div class="backup-row-main">' +
+    '<span class="backup-row-type source-badge source-scan">set</span>' +
+    '<span class="backup-row-name" title="' + escapeHtml(setName) + '">' +
+    escapeHtml(setName) + "</span></div>" +
     '<div class="backup-row-meta" aria-label="Backup metadata">' +
     backupRowFact("Created", set.created_at || "—") +
     backupRowFact("Status", set.status || "—") +
@@ -5951,6 +5960,7 @@ async function previewRestore() {
     renderBackupMessage([{ tone: "warn", text: "Select a backup first." }]);
     return;
   }
+  const token = ++backupState.previewToken;
   setBackupBusy(true);
   renderBackupMessage([]);
   try {
@@ -5967,18 +5977,31 @@ async function previewRestore() {
       }),
     });
     const data = await res.json();
+    // A newer preview (options changed mid-flight) already superseded this one.
+    if (token !== backupState.previewToken) return;
     if (!res.ok || !data.ok) {
       throw new Error((data && data.error) || "Restore preview failed.");
     }
     backupState.restorePlan = data;
     renderRestorePlan(data);
   } catch (err) {
+    if (token !== backupState.previewToken) return;
     backupState.restorePlan = null;
     renderRestorePlan(null);
     renderBackupMessage([{ tone: "error", text: err.message || String(err) }]);
   } finally {
-    setBackupBusy(false);
+    if (token === backupState.previewToken) setBackupBusy(false);
   }
+}
+
+// Restore options changed, so any existing preview no longer matches the request
+// the user would apply. Drop the plan (and its plan_id) and re-preview so Restore
+// stays disabled until a fresh, matching preview succeeds.
+function refreshRestorePreviewFromOptions() {
+  if (!backupState.selectedId || backupEls.restoreStage.hidden) return;
+  backupState.restorePlan = null;
+  backupEls.executeBtn.disabled = true;
+  previewRestore();
 }
 
 function renderRestorePlan(plan) {
@@ -6169,7 +6192,8 @@ if (backupEls.list) {
 }
 if (backupEls.refreshBtn) backupEls.refreshBtn.addEventListener("click", loadBackups);
 if (backupEls.createBtn) backupEls.createBtn.addEventListener("click", createBackup);
-if (backupEls.previewBtn) backupEls.previewBtn.addEventListener("click", previewRestore);
+if (backupEls.rollback) backupEls.rollback.addEventListener("change", refreshRestorePreviewFromOptions);
+if (backupEls.autoRollback) backupEls.autoRollback.addEventListener("change", refreshRestorePreviewFromOptions);
 if (backupEls.executeBtn) backupEls.executeBtn.addEventListener("click", executeRestore);
 if (backupEls.passwordForm) {
   backupEls.passwordForm.addEventListener("submit", (event) => {
@@ -8090,17 +8114,11 @@ const RECOMMEND_LABELS = {
 const startEls = {
   gate: document.getElementById("view-start"),
   recommend: document.getElementById("start-recommend"),
-  form: document.getElementById("start-path-form"),
   error: document.getElementById("start-path-error"),
-  continue: document.getElementById("start-continue"),
 };
 
 let workspaceRevealed = false;
-
-function selectedStartChoice() {
-  const checked = startEls.form.querySelector('input[name="start-path"]:checked');
-  return checked ? checked.value : null;
-}
+let startPathBusy = false;
 
 function setStartError(message) {
   if (!startEls.error) return;
@@ -8127,12 +8145,17 @@ function renderRecommendation(state) {
       "</ul>";
   }
   startEls.recommend.innerHTML = html;
+  highlightRecommendedChoice(recommended);
+}
 
-  const preselect = startEls.form.querySelector(
-    'input[name="start-path"][value="' + recommended + '"]'
-  );
-  if (preselect) preselect.checked = true;
-  if (startEls.continue) startEls.continue.disabled = false;
+// Highlight the recommended landing card. Falls back to leaving the static
+// default (Guided setup) highlighted if the recommendation is unknown.
+function highlightRecommendedChoice(recommended) {
+  const cards = document.querySelectorAll(".start-choice-nav");
+  if (!cards.length || !RECOMMEND_LABELS[recommended]) return;
+  cards.forEach((card) => {
+    card.classList.toggle("is-recommended", card.dataset.startPath === recommended);
+  });
 }
 
 async function loadInstallState() {
@@ -8144,7 +8167,6 @@ async function loadInstallState() {
   } catch (err) {
     startEls.recommend.textContent =
       "Could not detect the current installation. Choose an option to continue.";
-    if (startEls.continue) startEls.continue.disabled = false;
   }
 }
 
@@ -8160,7 +8182,6 @@ function showLanding() {
     panel.hidden = true;
   });
   if (startEls.gate) startEls.gate.hidden = false;
-  if (startEls.continue) startEls.continue.disabled = false;
   workspaceRevealed = false;
   if (window.location.hash) {
     history.replaceState(null, "", window.location.pathname + window.location.search);
@@ -8230,15 +8251,12 @@ async function postStartPath(choice, confirm) {
   return { status: resp.status, result };
 }
 
-async function submitStartPath(event) {
-  event.preventDefault();
+// Open a landing path (Guided setup / Maintenance) directly from its card. The
+// busy guard prevents a double-click from firing two start-path requests.
+async function startPath(choice) {
+  if (startPathBusy || !choice) return;
   setStartError("");
-  const choice = selectedStartChoice();
-  if (!choice) {
-    setStartError("Choose how you want to continue.");
-    return;
-  }
-  startEls.continue.disabled = true;
+  startPathBusy = true;
   try {
     let { result } = await postStartPath(choice, false);
     if (result.requires_confirmation) {
@@ -8273,16 +8291,13 @@ async function submitStartPath(event) {
     }
     enterMaintenance();
   } finally {
-    if (!workspaceRevealed) startEls.continue.disabled = false;
+    startPathBusy = false;
   }
 }
 
-if (startEls.form) {
-  startEls.form.addEventListener("submit", submitStartPath);
-  startEls.form.querySelectorAll('input[name="start-path"]').forEach((input) => {
-    input.addEventListener("change", () => setStartError(""));
-  });
-}
+document.querySelectorAll("[data-start-path]").forEach((card) => {
+  card.addEventListener("click", () => startPath(card.dataset.startPath));
+});
 
 loadInstallState();
 

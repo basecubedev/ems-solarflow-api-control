@@ -435,7 +435,7 @@ class AdminHandler(BaseHTTPRequestHandler):
     def _status_payload(self):
         return {
             "service": "ems-solarflow-admin",
-            "version": "mvp",
+            "version": "admin",
             "capabilities": [
                 "install_state_routing",
                 "legacy_config_migration",
@@ -449,10 +449,13 @@ class AdminHandler(BaseHTTPRequestHandler):
                 "config_apply",
                 "deployment_prepare",
                 "deployment_start",
+                "guided_upgrade",
+                "backup_restore",
+                "backup_delete",
+                "restore_preview",
             ],
             "writes_config": True,
             "writes_generated_config": True,
-            "active_device_list": "planned",
             "time": utc_now_iso(),
         }
 

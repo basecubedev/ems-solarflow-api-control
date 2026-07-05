@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# Start the EMS SolarFlow Control Admin Setup wizard.
+# Start the EMS SolarFlow Admin Setup wizard.
 #
 # Default mode is deployment-capable: the Admin container controls the host
 # Docker engine through /var/run/docker.sock. No Docker daemon runs inside the

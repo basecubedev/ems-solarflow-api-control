@@ -3,17 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>EMS SolarFlow Control Admin</title>
+  <title>EMS SolarFlow Admin</title>
   <link rel="stylesheet" href="/admin.css">
 </head>
 <body>
   <main class="admin-shell">
     <header class="admin-header">
-      <p class="eyebrow">EMS SolarFlow Control</p>
-      <h1 class="admin-title">Admin</h1>
+      <p class="eyebrow">ems-solarflow-api-control</p>
+      <h1 class="admin-title">EMS SolarFlow Admin</h1>
       <p class="admin-subtitle">
-        Guided local setup: pick a release, discover devices, generate config,
-        and deploy EMS with Docker.
+        Guided Docker setup for local EMS deployments.
+        Pick a release, discover devices, generate config, and deploy safely.
       </p>
     </header>
 
@@ -21,33 +21,30 @@
       <div class="start-gate-recommend" id="start-recommend" role="status" aria-live="polite">
         Checking the current installation…
       </div>
-      <form id="start-path-form" class="start-gate-form" autocomplete="off">
-        <fieldset class="start-choices">
-          <legend class="start-choices-legend">How do you want to continue?</legend>
-          <label class="start-choice">
-            <input type="radio" name="start-path" value="setup_new">
+      <div class="start-gate-form">
+        <div class="start-choices" role="group" aria-label="How do you want to continue?">
+          <p class="start-choices-legend">How do you want to continue?</p>
+          <button type="button" class="start-choice start-choice-nav is-recommended" data-start-path="setup_new">
             <span class="start-choice-body">
               <span class="start-choice-title">Guided setup</span>
               <span class="start-choice-desc">Fresh install or clean Docker setup. Recommended for first-time users.</span>
             </span>
-          </label>
-          <label class="start-choice">
-            <input type="radio" name="start-path" value="manage_existing">
+            <span class="start-choice-arrow" aria-hidden="true">→</span>
+          </button>
+          <button type="button" class="start-choice start-choice-nav" data-start-path="manage_existing">
             <span class="start-choice-body">
               <span class="start-choice-title">Maintenance</span>
               <span class="start-choice-desc">Manage, update, repair or back up an existing EMS installation.</span>
             </span>
-          </label>
-        </fieldset>
-        <p id="start-path-error" class="scan-error" role="alert" hidden></p>
-        <div class="start-gate-actions">
-          <button type="submit" id="start-continue" class="primary-button" disabled>Continue</button>
+            <span class="start-choice-arrow" aria-hidden="true">→</span>
+          </button>
         </div>
+        <p id="start-path-error" class="scan-error" role="alert" hidden></p>
         <p class="start-gate-hint">
           Prefer shell-based Docker setup or a local developer checkout?
           See the setup paths in the documentation.
         </p>
-      </form>
+      </div>
     </section>
 
     <div class="admin-view" id="view-setup" data-admin-view-panel="setup" hidden>
@@ -736,10 +733,9 @@
 
         <button type="button" class="control-pipeline-stage maintenance-path-card maintenance-path-nav is-primary" data-maintenance-path="upgrade" data-open-maintenance-path="upgrade" aria-label="Open guided upgrade (recommended)">
           <span class="control-stage-head">
-            <span class="control-stage-step">01</span>
             <span class="control-stage-title-block">
               <span class="control-stage-title">Guided upgrade</span>
-              <span class="control-stage-subtitle">Planned upgrade workflow with backup and diagnostics</span>
+              <span class="control-stage-subtitle">Plan and validate an EMS update</span>
             </span>
             <span class="maintenance-recommended-badge">Recommended path</span>
             <span class="maintenance-path-arrow" aria-hidden="true">→</span>
@@ -748,7 +744,6 @@
 
         <button type="button" class="control-pipeline-stage maintenance-path-card maintenance-path-nav" data-maintenance-path="manual" data-open-maintenance-path="manual" id="maintenance-open-manual" aria-label="Open manual configuration / existing system">
           <span class="control-stage-head">
-            <span class="control-stage-step">02</span>
             <span class="control-stage-title-block">
               <span class="control-stage-title">Manual configuration / existing system</span>
               <span class="control-stage-subtitle">Inspect, edit and restart an existing EMS setup</span>
@@ -759,12 +754,10 @@
 
         <button type="button" class="control-pipeline-stage maintenance-path-card maintenance-path-nav" data-maintenance-path="backup" data-open-maintenance-path="backup" aria-label="Open backup / restore">
           <span class="control-stage-head">
-            <span class="control-stage-step">03</span>
             <span class="control-stage-title-block">
               <span class="control-stage-title">Backup / restore</span>
-              <span class="control-stage-subtitle">Planned EMS-owned backup and restore workflow</span>
+              <span class="control-stage-subtitle">Create, inspect, restore or delete EMS backups</span>
             </span>
-            <span class="source-badge">Planned</span>
             <span class="maintenance-path-arrow" aria-hidden="true">→</span>
           </span>
         </button>
@@ -788,10 +781,10 @@
 
       <section class="control-pipeline-stage maintenance-card" id="maintenance-layout" aria-label="Installation layout" data-open="false">
         <div class="control-stage-head maintenance-card-head">
-          <span class="control-stage-step">01</span>
           <button type="button" class="maintenance-card-summary" data-maintenance-toggle="maintenance-layout" aria-expanded="false" aria-controls="maintenance-layout-body">
             <span class="control-stage-title">Installation layout</span>
             <span class="maintenance-summary" id="maintenance-layout-summary">…</span>
+            <span class="maintenance-card-status" aria-hidden="true"></span>
             <span class="maintenance-caret" aria-hidden="true">▸</span>
           </button>
         </div>
@@ -832,10 +825,10 @@
 
       <section class="control-pipeline-stage maintenance-card" id="maintenance-containers" aria-label="Runtime containers" data-open="false">
         <div class="control-stage-head maintenance-card-head">
-          <span class="control-stage-step">02</span>
           <button type="button" class="maintenance-card-summary" data-maintenance-toggle="maintenance-containers" aria-expanded="false" aria-controls="maintenance-containers-body">
             <span class="control-stage-title">Runtime containers</span>
             <span class="maintenance-summary" id="maintenance-containers-summary">…</span>
+            <span class="maintenance-card-status" aria-hidden="true"></span>
             <span class="maintenance-caret" aria-hidden="true">▸</span>
           </button>
         </div>
@@ -909,10 +902,10 @@
 
       <section class="control-pipeline-stage maintenance-card" id="maintenance-versions" aria-label="Versions and links" data-open="false">
         <div class="control-stage-head maintenance-card-head">
-          <span class="control-stage-step">03</span>
           <button type="button" class="maintenance-card-summary" data-maintenance-toggle="maintenance-versions" aria-expanded="false" aria-controls="maintenance-versions-body">
-            <span class="control-stage-title">Versions and links</span>
+            <span class="control-stage-title">Versions &amp; links</span>
             <span class="maintenance-summary" id="maintenance-versions-summary">…</span>
+            <span class="maintenance-card-status" aria-hidden="true"></span>
             <span class="maintenance-caret" aria-hidden="true">▸</span>
           </button>
         </div>
@@ -937,10 +930,10 @@
 
       <section class="control-pipeline-stage maintenance-card" id="maintenance-diagnostics" aria-label="EMS diagnostics" data-open="false">
         <div class="control-stage-head maintenance-card-head">
-          <span class="control-stage-step">04</span>
           <button type="button" class="maintenance-card-summary" data-maintenance-toggle="maintenance-diagnostics" aria-expanded="false" aria-controls="maintenance-diagnostics-body">
             <span class="control-stage-title">EMS diagnostics</span>
             <span class="maintenance-summary" id="maintenance-diagnostics-summary">Diagnostics have not been run yet.</span>
+            <span class="maintenance-card-status" aria-hidden="true"></span>
             <span class="maintenance-caret" aria-hidden="true">▸</span>
           </button>
         </div>
@@ -961,10 +954,10 @@
 
       <section class="control-pipeline-stage maintenance-card" id="maintenance-config-card" aria-label="Configuration and hardware" data-open="false">
         <div class="control-stage-head maintenance-card-head">
-          <span class="control-stage-step">05</span>
           <button type="button" class="maintenance-card-summary" data-maintenance-toggle="maintenance-config-card" aria-expanded="false" aria-controls="maintenance-config-card-body">
             <span class="control-stage-title">Configuration &amp; hardware</span>
             <span class="maintenance-summary" id="maintenance-config-summary">Not loaded yet.</span>
+            <span class="maintenance-card-status" aria-hidden="true"></span>
             <span class="maintenance-caret" aria-hidden="true">▸</span>
           </button>
         </div>
@@ -1414,61 +1407,11 @@
           <div id="backup-restore-files" class="backup-file-list" role="list"></div>
           <p id="backup-rollback-warning" class="maintenance-note" hidden></p>
           <div class="mconfig-actions">
-            <button type="button" id="backup-preview" class="secondary-button compact">Preview restore</button>
             <button type="button" id="backup-execute" class="primary-button compact" disabled>Restore</button>
           </div>
           <div id="backup-restore-steps" class="config-validation-list" role="status" aria-live="polite"></div>
         </section>
       </div>
-    </div>
-
-    <div class="admin-view" id="view-advanced" data-admin-view-panel="advanced" hidden>
-      <section class="control-pipeline-stage future-stage" id="advanced-deployment" aria-label="Deployment">
-        <div class="control-stage-head">
-          <span class="control-stage-step">＊</span>
-          <span class="control-stage-dot" aria-hidden="true">▤</span>
-          <div class="control-stage-title-block">
-            <span class="control-stage-title">Deployment</span>
-            <span class="control-stage-subtitle">Planned for next phase</span>
-          </div>
-        </div>
-        <p class="future-note">
-          A later phase will manage the EMS and InfluxDB deployment from here:
-          status, start, stop, update and bootstrap functions. Not available
-          yet — no container or Docker socket access is used.
-        </p>
-      </section>
-
-      <section class="control-pipeline-stage future-stage" id="advanced-system" aria-label="System">
-        <div class="control-stage-head">
-          <span class="control-stage-step">＊</span>
-          <span class="control-stage-dot" aria-hidden="true">◈</span>
-          <div class="control-stage-title-block">
-            <span class="control-stage-title">System</span>
-            <span class="control-stage-subtitle">Planned for next phase</span>
-          </div>
-        </div>
-        <p class="future-note">
-          A later phase will surface diagnostics, logs, version info and support
-          bundle entry points here. Not available yet — no backend diagnostics
-          run from this tool.
-        </p>
-      </section>
-
-      <section class="control-pipeline-stage future-stage" id="advanced-network" aria-label="Network / WiFi">
-        <div class="control-stage-head">
-          <span class="control-stage-step">＊</span>
-          <span class="control-stage-dot" aria-hidden="true">✶</span>
-          <div class="control-stage-title-block">
-            <span class="control-stage-title">Network / WiFi</span>
-            <span class="control-stage-subtitle">Not available in local Docker mode</span>
-          </div>
-        </div>
-        <p class="future-note">
-          WiFi configuration is not available in local Docker mode. This may
-          later become available in Raspberry Pi appliance mode.
-        </p>
-      </section>
     </div>
   </main>
   <script src="/admin.js"></script>

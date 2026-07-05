@@ -810,3 +810,20 @@ def test_delete_backup_set_with_archives_requires_explicit_mode(tmp_path):
     remaining = {r["name"] for r in service.list_backups()["backups"]}
     assert not (member_names & remaining)
     assert service.list_backups()["sets"] == []
+
+
+def test_delete_backup_set_with_archives_removes_only_member_archives(tmp_path):
+    root = _build_install(tmp_path)
+    service = _service(root)
+    created = service.create_backup({"scope": "system"})
+    set_id = created["backup_set"]["id"]
+    member_names = {a["name"] for a in created["archives"]}
+    # A standalone archive that does not belong to the set must be left alone.
+    outsider = os.path.basename(_make_config_archive(root, backup_purpose="manual"))
+    assert outsider not in member_names
+
+    service.delete_backup(set_id, confirm=True, mode="metadata_and_archives")
+
+    remaining = {r["name"] for r in service.list_backups()["backups"]}
+    assert not (member_names & remaining)
+    assert outsider in remaining

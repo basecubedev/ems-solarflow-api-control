@@ -104,8 +104,8 @@ def test_root_serves_html(server):
         assert resp.headers["Content-Type"].startswith("text/html")
         assert resp.headers["X-Content-Type-Options"] == "nosniff"
         body = resp.read().decode("utf-8")
-        assert "EMS SolarFlow Control Admin" in body
-        assert "Guided local setup" in body
+        assert "EMS SolarFlow Admin" in body
+        assert "Guided Docker setup for local EMS deployments." in body
 
 
 def test_static_assets_have_content_types(server):
@@ -131,6 +131,21 @@ def test_status_endpoint_reports_config_apply_capability(server):
     assert "config_apply" in payload["capabilities"]
     assert "deployment_start" in payload["capabilities"]
     assert payload["writes_generated_config"] is True
+
+
+def test_status_endpoint_reports_current_capabilities_not_mvp(server):
+    status, _, payload = _request(f"{server}/api/admin/status")
+    assert status == 200
+    # The status metadata no longer advertises MVP/planned placeholder state.
+    assert payload["version"] != "mvp"
+    assert "active_device_list" not in payload
+    for capability in (
+        "guided_upgrade",
+        "backup_restore",
+        "backup_delete",
+        "restore_preview",
+    ):
+        assert capability in payload["capabilities"], capability
 
 
 def test_setup_config_catalog_endpoint_returns_setup_sections(server):

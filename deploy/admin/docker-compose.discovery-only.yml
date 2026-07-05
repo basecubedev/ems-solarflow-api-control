@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# EMS SolarFlow Control Admin — restricted discovery-only mode.
+# EMS SolarFlow Admin — restricted discovery-only mode.
 #
 #   deploy/admin/start-admin-setup.sh --discovery-only
 #   # or:

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# EMS SolarFlow Control Admin — default, deployment-capable setup.
+# EMS SolarFlow Admin — default, deployment-capable setup.
 #
 # Recommended: let the launcher discover the Docker socket group id for you.
 #

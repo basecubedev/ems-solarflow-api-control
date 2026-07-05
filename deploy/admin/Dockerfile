@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# EMS SolarFlow Control Admin device-discovery container. Stdlib http.server,
+# EMS SolarFlow Admin device-discovery container. Stdlib http.server,
 # requests, and zeroconf: no Node, no build toolchain, no database.
 # Copies just the files needed for discovery so the image stays small enough for
 # a Raspberry Pi. mDNS needs host networking to see LAN devices.

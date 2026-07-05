@@ -216,6 +216,42 @@ def test_delete_endpoint_requires_confirm(server, install):
     assert listing["summary"]["total"] == 1
 
 
+def test_delete_endpoint_rejects_unknown_id(server, install):
+    _make_config_archive(install)
+    status, data = _request(
+        server + "/api/admin/maintenance/backups/delete",
+        method="POST",
+        body={"id": "does-not-exist", "confirm": True},
+    )
+    assert status == 400
+    assert isinstance(data, dict)
+    assert data.get("ok") is False
+    assert "error" in data
+    assert "Traceback" not in json.dumps(data)
+    # The real archive is untouched by the rejected delete.
+    status, listing = _request(server + "/api/admin/maintenance/backups")
+    assert listing["summary"]["total"] == 1
+
+
+def test_delete_endpoint_removes_archive_and_refreshed_list_is_empty(server, install):
+    _make_config_archive(install)
+    backup_id = _first_backup_id(server)
+    status, data = _request(
+        server + "/api/admin/maintenance/backups/delete",
+        method="POST",
+        body={"id": backup_id, "confirm": True},
+    )
+    assert status == 200
+    assert data["ok"] is True
+    assert data["mode"] == "archive"
+    assert data["deleted"]
+    # A fresh listing no longer shows the deleted archive.
+    status, listing = _request(server + "/api/admin/maintenance/backups")
+    assert status == 200
+    assert listing["summary"]["total"] == 0
+    assert listing["backups"] == []
+
+
 def test_api_errors_are_json_not_tracebacks(server, install):
     _make_config_archive(install)
     status, data = _request(

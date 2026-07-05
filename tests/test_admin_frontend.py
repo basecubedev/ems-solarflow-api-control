@@ -38,9 +38,16 @@ def test_index_references_admin_assets():
     assert "/admin.js" in html
 
 
-def test_index_marks_active_list_as_planned():
+def test_index_has_no_top_level_advanced_view():
     html = _read("index.html")
-    assert "Planned for next phase" in html
+    # The obsolete top-level Advanced placeholder view has been removed; only the
+    # nested advanced-details/feature-advanced sections remain valid.
+    assert 'id="view-advanced"' not in html
+    assert 'data-admin-view-panel="advanced"' not in html
+    assert 'id="advanced-deployment"' not in html
+    assert 'id="advanced-system"' not in html
+    assert 'id="advanced-network"' not in html
+    assert "Planned for next phase" not in html
 
 
 def test_js_defines_escape_helper_before_rendering():
@@ -348,7 +355,7 @@ def test_ui_has_separate_mqtt_broker_candidates_section():
 
 
 def _setup_panel(html):
-    return html.split('id="view-setup"', 1)[1].split('id="view-advanced"', 1)[0]
+    return html.split('id="view-setup"', 1)[1].split('id="view-maintenance"', 1)[0]
 
 
 def _config_section(html):
@@ -359,10 +366,6 @@ def _devices_section(html):
     return _setup_panel(html).split('aria-label="Devices"', 1)[1].split(
         'aria-label="Config"', 1
     )[0]
-
-
-def _advanced_panel(html):
-    return html.split('id="view-advanced"', 1)[1]
 
 
 def test_index_has_no_top_level_tab_bar():
@@ -386,24 +389,70 @@ def test_start_gate_is_the_default_screen():
         in html
     )
     assert 'data-admin-view-panel="maintenance" hidden' in html
-    assert 'data-admin-view-panel="advanced" hidden' in html
 
 
 def test_start_gate_has_exactly_two_choices():
     html = _read("index.html")
-    assert html.count('name="start-path"') == 2
-    assert 'value="setup_new"' in html
-    assert 'value="manage_existing"' in html
+    assert html.count("data-start-path=") == 2
+    assert 'data-start-path="setup_new"' in html
+    assert 'data-start-path="manage_existing"' in html
     assert "Guided setup" in html
     assert "Maintenance" in html
     # Guided setup is the primary, first option.
-    assert html.index('value="setup_new"') < html.index('value="manage_existing"')
+    assert html.index('data-start-path="setup_new"') < html.index(
+        'data-start-path="manage_existing"'
+    )
     assert html.index("Guided setup") < html.index(
         '<span class="start-choice-title">Maintenance</span>'
     )
     # Docker bootstrap / developer setup stay documentation-only paths.
     assert "Docker bootstrap" not in html
     assert "Developer setup" not in html
+
+
+def test_start_gate_paths_are_clickable_cards_without_next_button():
+    html = _read("index.html")
+    # The landing page opens each path directly from its card; there is no
+    # separate submit/Next action between the cards and the docs hint.
+    assert 'id="start-continue"' not in html
+    assert ">Next<" not in html.split('id="view-setup"', 1)[0]
+    # Both paths are real, keyboard-accessible button controls.
+    assert (
+        '<button type="button" class="start-choice start-choice-nav is-recommended" '
+        'data-start-path="setup_new">' in html
+    )
+    assert (
+        '<button type="button" class="start-choice start-choice-nav" '
+        'data-start-path="manage_existing">' in html
+    )
+    # Each card carries a navigation affordance.
+    assert html.count('class="start-choice-arrow"') == 2
+    # The docs hint stays visible and secondary below the cards.
+    assert "See the setup paths in the documentation." in html
+
+
+def test_start_gate_cards_open_via_post_start_path_safety_flow():
+    js = _read("admin.js")
+    fn = js.split("async function startPath(", 1)[1].split("\nfunction ", 1)[0]
+    # Card clicks reuse the existing safety flow (unconfirmed post first, then a
+    # confirmation retry for an existing installation).
+    assert "postStartPath(choice, false)" in fn
+    assert "result.requires_confirmation" in fn
+    assert "postStartPath(choice, true)" in fn
+    assert "migrate_legacy_config" in fn
+    # Clicking a card routes through startPath with the card's chosen path.
+    assert 'document.querySelectorAll("[data-start-path]")' in js
+    assert "startPath(card.dataset.startPath)" in js
+
+
+def test_setup_wizard_keeps_its_own_next_button():
+    html = _read("index.html")
+    # The landing Next button is gone, but the setup wizard keeps its own Next
+    # control (and its "Continue to deployment" label logic in admin.js).
+    setup_html = html.split('id="view-setup"', 1)[1]
+    assert 'id="setup-next"' in setup_html
+    assert ">Next<" in setup_html
+    assert "Continue to deployment" in _read("admin.js")
 
 
 def test_setup_tab_has_release_devices_config_stages():
@@ -460,23 +509,6 @@ def test_setup_manual_scan_is_collapsed_advanced():
     assert manual[0].rstrip().endswith("<details class=\"advanced-details\"")
     assert 'id="cidr-input"' in manual[1]
     assert "Advanced manual scan" in devices
-
-
-def test_advanced_panel_preserves_deployment_system_network():
-    html = _read("index.html")
-    advanced = _advanced_panel(html)
-    assert "Deployment" in advanced
-    assert "bootstrap" in advanced
-    assert "System" in advanced
-    assert "diagnostics" in advanced and "support" in advanced and "logs" in advanced
-    assert "Planned for next phase" in advanced
-
-
-def test_advanced_panel_states_wifi_unavailable_in_docker():
-    html = _read("index.html")
-    network = _advanced_panel(html).split('id="advanced-network"', 1)[1]
-    assert "WiFi configuration is not available in local Docker mode" in network
-    assert "Raspberry Pi appliance mode" in network
 
 
 def test_config_stage_shows_draft_and_preview():
@@ -890,7 +922,7 @@ def test_admin_header_copy_describes_docker_deployment():
     header = html.split('<header class="admin-header">', 1)[1].split(
         "</header>", 1
     )[0]
-    assert "deploy EMS with Docker" in header
+    assert "Guided Docker setup for local EMS deployments." in header
     assert "Read-only" not in header
 
 
@@ -1347,6 +1379,27 @@ def test_js_tab_switching_supports_hash_navigation():
     assert 'window.addEventListener("hashchange"' in js
     # Setup is the fallback when the hash is empty or unknown.
     assert 'ADMIN_VIEWS.includes(view) ? view : "setup"' in js
+
+
+def test_js_admin_views_are_setup_and_maintenance_only():
+    js = _read("admin.js")
+    registry = js.split("const ADMIN_VIEWS =", 1)[1].split("]", 1)[0]
+    assert '"setup"' in registry
+    assert '"maintenance"' in registry
+    # The obsolete top-level advanced view is no longer a routable admin view.
+    assert '"advanced"' not in registry
+
+
+def test_js_advanced_hash_falls_back_to_setup():
+    js = _read("admin.js")
+    # #advanced is no longer a known view, so it resolves to the setup fallback
+    # like any other unknown hash rather than opening a placeholder page.
+    assert '"advanced"' not in js.split("const ADMIN_VIEWS =", 1)[1].split("]", 1)[0]
+    resolve = js.split("function adminViewForHash", 1)[1].split("\n}", 1)[0]
+    # Only the maintenance family is special-cased; everything else (including
+    # #advanced) passes through to the setup fallback in setAdminView.
+    assert 'hash === "maintenance"' in resolve
+    assert '"advanced"' not in resolve
 
 
 # --- setup wizard --------------------------------------------------------
@@ -1905,9 +1958,7 @@ def test_css_hardware_role_accents_are_grid_and_output():
 
 
 def _maintenance_section(html):
-    return html.split('id="view-maintenance"', 1)[1].split(
-        'id="view-advanced"', 1
-    )[0]
+    return html.split('id="view-maintenance"', 1)[1].split("</main>", 1)[0]
 
 
 def test_index_has_maintenance_view_panel():
@@ -1948,8 +1999,8 @@ def test_maintenance_hub_exposes_three_user_paths():
     assert open_tag.startswith("button")
     assert "maintenance-path-nav" in hub
     assert "Open manual maintenance" not in hub
-    # Guided upgrade is the recommended default path; only backup stays "Planned".
-    assert hub.count('class="source-badge">Planned') == 1
+    # Backup / restore is a shipped workflow now; no "Planned" badge remains.
+    assert hub.count('class="source-badge">Planned') == 0
     assert "/api/admin/" not in hub
 
 
@@ -1965,10 +2016,6 @@ def test_maintenance_hub_orders_guided_upgrade_first():
         hub.index('data-maintenance-path="backup"'),
     ]
     assert order == sorted(order)
-    # Step numbers follow the order.
-    for path, step in (("upgrade", "01"), ("manual", "02"), ("backup", "03")):
-        card = hub.split('data-maintenance-path="' + path + '"', 1)[1]
-        assert card.split("control-stage-step\">", 1)[1].startswith(step)
     # Guided upgrade is a navigation button with the recommended/primary treatment.
     upgrade_tag = hub.split('data-maintenance-path="upgrade"', 1)[0].rsplit("<", 1)[1]
     assert upgrade_tag.startswith("button")
@@ -1977,6 +2024,48 @@ def test_maintenance_hub_orders_guided_upgrade_first():
         'data-maintenance-path="manual"', 1
     )[0]
     assert "Recommended path" in upgrade
+
+
+def _maintenance_hub(html):
+    return html.split('id="maintenance-hub"', 1)[1].split(
+        'id="maintenance-manual-panel"', 1
+    )[0]
+
+
+def test_maintenance_hub_cards_are_navigation_without_step_numbers():
+    hub = _maintenance_hub(_read("index.html"))
+    # Choosing a maintenance section is navigation, not a numbered workflow step.
+    assert "control-stage-step" not in hub
+    for badge in ("01", "02", "03"):
+        assert ">" + badge + "<" not in hub
+    # Each card stays a full-card clickable navigation control with an arrow.
+    for path in ("upgrade", "manual", "backup"):
+        card = hub.split('data-maintenance-path="' + path + '"', 1)[1].split(
+            "</button>", 1
+        )[0]
+        assert 'data-open-maintenance-path="' + path + '"' in card
+        assert "maintenance-path-arrow" in card
+
+
+def test_maintenance_hub_copy_is_current_and_drops_planned():
+    hub = _maintenance_hub(_read("index.html"))
+    assert "Plan and validate an EMS update" in hub
+    assert "Planned upgrade workflow" not in hub
+    assert "Planned" not in hub
+    # Backup / restore keeps active wording.
+    backup = hub.split('data-maintenance-path="backup"', 1)[1]
+    assert "Create, inspect, restore or delete EMS backups" in backup
+
+
+def test_true_maintenance_workflows_keep_numbered_steps():
+    html = _read("index.html")
+    # Guided upgrade execution and backup / restore are real workflows and must
+    # keep their numbered control stages.
+    upgrade = _upgrade_panel(html)
+    backup = html.split('id="maintenance-backup-panel"', 1)[1]
+    for section in (upgrade, backup):
+        assert "control-stage-step" in section
+        assert ">01<" in section
 
 
 def test_workspace_pages_have_back_navigation():
@@ -1990,7 +2079,7 @@ def test_workspace_pages_have_back_navigation():
     )[0]
     assert 'data-back="landing"' in hub
     manual = html.split('id="maintenance-manual-panel"', 1)[1].split(
-        'id="view-advanced"', 1
+        "</main>", 1
     )[0]
     assert 'data-back="maintenance-hub"' in manual
     assert 'id="maintenance-back-hub"' in manual
@@ -2019,7 +2108,7 @@ def test_js_back_navigation_returns_to_landing_and_hub():
 def test_maintenance_manual_panel_keeps_detailed_markup():
     html = _read("index.html")
     manual = html.split('id="maintenance-manual-panel"', 1)[1].split(
-        'id="view-advanced"', 1
+        "</main>", 1
     )[0]
     for marker in (
         'id="maintenance-refresh"',
@@ -2229,14 +2318,12 @@ def test_guided_upgrade_execute_button_enabled_only_when_ready():
     assert "executeBtn.disabled = !allowed" in fn
 
 
-def test_maintenance_view_has_three_numbered_sections():
+def test_maintenance_view_has_three_overview_sections():
     html = _read("index.html")
     maintenance = _maintenance_section(html)
     for label in ("Installation layout", "Runtime containers", "Versions and links"):
         assert 'aria-label="' + label + '"' in maintenance
         assert label in maintenance
-    for step in ("01", "02", "03"):
-        assert ">" + step + "<" in maintenance
     assert "Existing EMS installation overview" in maintenance
 
 
@@ -2382,6 +2469,59 @@ def test_maintenance_card_has_tone_accent_styles():
         assert '.maintenance-card[data-tone="' + tone + '"]::before' in css
 
 
+MAINTENANCE_OVERVIEW_CARDS = (
+    ("maintenance-layout", "maintenance-layout-summary"),
+    ("maintenance-containers", "maintenance-containers-summary"),
+    ("maintenance-versions", "maintenance-versions-summary"),
+    ("maintenance-diagnostics", "maintenance-diagnostics-summary"),
+    ("maintenance-config-card", "maintenance-config-summary"),
+)
+
+
+def _maintenance_manual_panel(html):
+    return (
+        _maintenance_section(html)
+        .split('id="maintenance-manual-panel"', 1)[1]
+        .split('id="maintenance-upgrade-panel"', 1)[0]
+    )
+
+
+def _overview_card_head(panel, card_id):
+    section = panel.split('id="' + card_id + '"', 1)[1]
+    return section.split("maintenance-card-body", 1)[0]
+
+
+def test_maintenance_overview_rows_are_finished_status_accordions():
+    html = _read("index.html")
+    assert 'id="maintenance-manual-panel"' in _maintenance_section(html)
+    panel = _maintenance_manual_panel(html)
+    for card_id, summary_id in MAINTENANCE_OVERVIEW_CARDS:
+        head = _overview_card_head(panel, card_id)
+        # The overview rows are not numbered process steps.
+        assert "control-stage-step" not in head
+        # One-line accordion row: toggle button, live summary, status, caret.
+        assert 'data-maintenance-toggle="' + card_id + '"' in head
+        assert 'id="' + summary_id + '"' in head
+        assert "maintenance-card-status" in head
+        assert "maintenance-caret" in head
+
+
+def test_maintenance_overview_css_is_one_line_grid_without_step_badge():
+    css = _read("admin.css")
+    summary = css.split(".maintenance-card-summary {", 1)[1].split("}", 1)[0]
+    assert "display: grid" in summary
+    assert "grid-template-columns" in summary
+    # The overview no longer styles a numbered step badge.
+    assert ".maintenance-card .control-stage-step" not in css
+    # Tone now drives a compact status badge instead.
+    assert ".maintenance-card-status" in css
+    for tone in ("ok", "warn", "info", "action"):
+        assert (
+            '.maintenance-card[data-tone="' + tone + '"] .maintenance-card-status'
+            in css
+        )
+
+
 def test_maintenance_cards_are_collapsed_by_default_with_summaries():
     html = _read("index.html")
     maintenance = _maintenance_section(html)
@@ -2454,9 +2594,8 @@ def test_maintenance_has_collapsed_diagnostics_card():
     maintenance = _maintenance_section(html)
     card = maintenance.split('id="maintenance-diagnostics"', 1)
     assert len(card) == 2, "diagnostics card missing"
-    # It is the fourth numbered stage and starts collapsed.
+    # The overview row is a status accordion, not a numbered process stage.
     assert 'aria-label="EMS diagnostics"' in maintenance
-    assert ">04<" in maintenance
     assert 'data-open="false"' in card[1].split(">", 1)[0]
     body = maintenance.split('id="maintenance-diagnostics-body"', 1)[1].split(">", 1)[0]
     assert "hidden" in body
@@ -3242,7 +3381,7 @@ def test_backup_restore_placeholder_is_replaced():
     html = _read("index.html")
     assert "planned for a follow-up task" not in html
     panel = html.split('id="maintenance-backup-panel"', 1)[1].split(
-        'id="view-advanced"', 1
+        "</main>", 1
     )[0]
     assert 'id="backup-create"' in panel
     assert 'id="backup-list"' in panel
@@ -3251,7 +3390,7 @@ def test_backup_restore_placeholder_is_replaced():
 def test_backup_restore_uses_control_stage_style():
     html = _read("index.html")
     panel = html.split('id="maintenance-backup-panel"', 1)[1].split(
-        'id="view-advanced"', 1
+        "</main>", 1
     )[0]
     assert "control-pipeline-stage" in panel
     assert "control-stage-title" in panel
@@ -3265,7 +3404,6 @@ def test_backup_restore_buttons_and_sections_exist():
     for element_id in (
         "backup-create",
         "backup-refresh",
-        "backup-preview",
         "backup-execute",
         "backup-details-stage",
         "backup-restore-stage",
@@ -3278,10 +3416,58 @@ def test_backup_restore_buttons_and_sections_exist():
         assert action in js, action
 
 
+def test_restore_stage_has_no_redundant_preview_button():
+    html = _read("index.html")
+    js = _read("admin.js")
+    restore_stage = html.split('id="backup-restore-stage"', 1)[1].split(
+        "</main>", 1
+    )[0]
+    # The archive/set is already chosen from Backup management, so the stage-level
+    # "Preview restore" button is redundant and must be gone.
+    assert 'id="backup-preview"' not in html
+    assert "Preview restore" not in restore_stage
+    # The destructive Restore action stays.
+    assert 'id="backup-execute"' in restore_stage
+    # The frontend no longer wires or references the removed button.
+    assert "backupEls.previewBtn" not in js
+    assert "backup-preview" not in js
+    # The row-level "Restore preview" action still selects/opens stage 05.
+    assert 'data-backup-action="restore"' in js
+    assert "Restore preview" in js
+
+
+def test_restore_option_changes_auto_refresh_preview():
+    js = _read("admin.js")
+    # Toggling rollback / auto-rollback re-runs the preview automatically.
+    assert (
+        'backupEls.rollback.addEventListener("change", refreshRestorePreviewFromOptions)'
+        in js
+    )
+    assert (
+        'backupEls.autoRollback.addEventListener("change", refreshRestorePreviewFromOptions)'
+        in js
+    )
+    refresh = _extract_fn(js, "refreshRestorePreviewFromOptions")
+    # Options changed: drop the stale plan, block Restore, then re-preview so no
+    # restore can run against an old preview.
+    assert "backupState.restorePlan = null" in refresh
+    assert "backupEls.executeBtn.disabled = true" in refresh
+    assert "previewRestore()" in refresh
+
+
+def test_previewRestore_ignores_superseded_responses():
+    js = _read("admin.js")
+    fn = _extract_fn(js, "previewRestore")
+    # A per-request token guards against an earlier, slower preview overwriting a
+    # newer one after the user changed options.
+    assert "++backupState.previewToken" in fn
+    assert "token !== backupState.previewToken" in fn
+
+
 def test_backup_restore_has_no_conflict_policy_selector():
     html = _read("index.html")
     restore_stage = html.split('id="backup-restore-stage"', 1)[1].split(
-        'id="advanced-deployment"', 1
+        "</main>", 1
     )[0]
     assert 'id="backup-conflict-policy"' not in html
     assert "Existing files" not in restore_stage
@@ -3356,6 +3542,17 @@ def test_backup_influxdb_row_disables_restore_but_keeps_details_and_delete():
     assert "EMS CLI" in row
 
 
+def test_backup_set_row_renders_delete_action():
+    js = _read("admin.js")
+    row = _extract_fn(js, "renderBackupSetRow")
+    # Set rows expose a Delete action (kind=set) so the second confirm can offer
+    # metadata-only vs metadata-and-archives deletion.
+    assert 'data-backup-action="delete"' in row
+    assert 'data-backup-kind="set"' in row
+    # The unrelated Restore preview action is still present on set rows.
+    assert 'data-backup-action="restore"' in row
+
+
 def test_backup_set_with_influxdb_member_disables_restore_preview():
     js = _read("admin.js")
     row = _extract_fn(js, "renderBackupSetRow")
@@ -3400,3 +3597,104 @@ def test_backup_row_shows_ems_version_and_build():
     assert "backup.source_build || backup.source_commit" in row
     # Dynamic values still flow through the escaping fact helper.
     assert "escapeHtml(" in _extract_fn(js, "backupRowFact")
+
+
+def test_backup_row_has_single_created_fact():
+    js = _read("admin.js")
+    row = _extract_fn(js, "renderBackupRow")
+    # A duplicated Created pill regressed the row before; keep exactly one.
+    assert row.count('backupRowFact("Created"') == 1
+
+
+def test_restore_preview_summary_uses_spaced_facts():
+    js = _read("admin.js")
+    html = _read("index.html")
+    plan = _extract_fn(js, "renderRestorePlan")
+    # Summary counts render as control-pipeline facts so the label and value do
+    # not touch (the old "Will restore0" glue).
+    for label in (
+        'backupFact("Will restore"',
+        'backupFact("Will replace"',
+        'backupFact("Will skip"',
+    ):
+        assert label in plan, label
+    assert 'class="control-pipeline-fact"' in _extract_fn(js, "backupFact")
+    # The summary container is a backup-stage control-pipeline value grid, so the
+    # backup-scoped spacing rules apply to it.
+    assert 'class="control-pipeline-values" id="backup-restore-summary"' in html
+
+
+def test_backup_stage_control_pipeline_fact_css():
+    css = _read("admin.css")
+    for selector in (
+        ".backup-stage .control-pipeline-values",
+        ".backup-stage .control-pipeline-fact",
+        ".backup-stage .control-pipeline-fact .maintenance-fact-label",
+        ".backup-stage .control-pipeline-fact .maintenance-fact-value",
+    ):
+        assert selector in css, selector
+    fact_rule = css.split(".backup-stage .control-pipeline-fact {", 1)[1].split("}", 1)[0]
+    # space-between is what pushes the value off the label so they never touch.
+    assert "justify-content: space-between" in fact_rule
+
+
+def test_backup_row_metadata_uses_compact_fact_css():
+    css = _read("admin.css")
+    meta_rule = css.split(".backup-row-meta {", 1)[1].split("}", 1)[0]
+    # Metadata stays a compact wrapping row of pills, not full-width stacked cards.
+    assert "flex-wrap: wrap" in meta_rule
+    fact_rule = css.split(".backup-row-fact {", 1)[1].split("}", 1)[0]
+    assert "inline-flex" in fact_rule
+    assert "font-size" in fact_rule
+    assert ".backup-row-fact strong" in css
+
+
+def test_backup_row_type_label_sits_above_filename():
+    js = _read("admin.js")
+    row = _extract_fn(js, "renderBackupRow")
+    # The type label carries its own class and stays a source badge, and it is
+    # emitted before the filename span so it stacks above it.
+    assert 'class="backup-row-type source-badge source-mdns"' in row
+    type_idx = row.index('class="backup-row-type source-badge source-mdns"')
+    name_idx = row.index('class="backup-row-name"')
+    assert type_idx < name_idx
+    # The label reuses the existing displayed value and is not special-cased to
+    # "config" (that would hide non-config backup types such as databases).
+    assert 'backup.backup_type || "backup"' in row
+    assert '"config"' not in _backup_row_type_label(row)
+    # The filename keeps a title attribute holding the full name for hover.
+    assert 'title="' in row
+    assert "backup.name || backup.id" in row
+
+
+def _backup_row_type_label(row):
+    # Isolate the type-label span so the assertion cannot be fooled by an
+    # unrelated "config" default elsewhere in the row (e.g. the restore button's
+    # data-backup-type fallback).
+    start = row.index('class="backup-row-type source-badge source-mdns"')
+    return row[start:row.index("backup-row-name", start)]
+
+
+def test_backup_set_row_type_label_sits_above_name():
+    js = _read("admin.js")
+    row = _extract_fn(js, "renderBackupSetRow")
+    assert 'class="backup-row-type source-badge source-scan"' in row
+    type_idx = row.index('class="backup-row-type source-badge source-scan"')
+    name_idx = row.index('class="backup-row-name"')
+    assert type_idx < name_idx
+    # The set label is still "set" and the name span carries a hover title.
+    assert ">set</span>" in row
+    assert 'title="' in row
+    assert "set.label || set.id" in row
+
+
+def test_backup_row_main_stacks_vertically_and_name_never_wraps():
+    css = _read("admin.css")
+    main_rule = css.split(".backup-row-main {", 1)[1].split("}", 1)[0]
+    assert "flex-direction: column" in main_rule
+    name_rule = css.split(".backup-row-name {", 1)[1].split("}", 1)[0]
+    assert "white-space: nowrap" in name_rule
+    # The mobile media query must no longer relax the filename to wrap.
+    mobile = css.split("@media (max-width: 860px) {", 1)[1].split("\n}", 1)[0]
+    assert "white-space: normal" not in mobile
+    assert "overflow-wrap: anywhere" not in mobile
