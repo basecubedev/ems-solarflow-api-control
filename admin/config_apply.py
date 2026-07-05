@@ -5,10 +5,12 @@ Preview and export stay non-destructive; this is the explicit step where Admin
 writes the generated config to the resolved EMS config path
 (``<install>/config/config.json``). The EMS config layout remains the source of
 truth: the target is resolved through the shared install context, never
-hardcoded, so Admin cannot introduce a second runtime layout. An existing config
-is always copied to an Admin-owned backup before it is replaced.
+hardcoded, so Admin cannot introduce a second runtime layout. Setup apply always
+backs up an existing config; Maintenance apply can skip that backup only after
+the UI's explicit warning and confirmation.
 """
 
+import hashlib
 import os
 import tempfile
 import threading
@@ -50,6 +52,36 @@ class ConfigApplyService:
             "config_source": context.config_source,
             "backup_path": str(backup_path) if backup_path else None,
             "release": preview["release"],
+            "applied_at": utc_now_iso(),
+        }
+
+    def apply_maintenance(self, payload, expected_revision, create_backup=True):
+        """Atomically apply an already validated Maintenance config payload."""
+
+        context = self.install_context_provider()
+        target = Path(context.config_path)
+        with self._write_lock:
+            current = target.read_bytes()
+            revision = hashlib.sha256(current).hexdigest()
+            if revision != expected_revision:
+                raise ConfigChangedError(
+                    "config/config.json changed while the draft was being reviewed"
+                )
+            # A no-op apply must report changed=False so the UI does not push a
+            # container restart the user does not need. Skip the backup/write too:
+            # backing up identical content only adds noise.
+            changed = current != payload
+            backup_path = None
+            if changed:
+                backup_path = self._backup(target) if create_backup else None
+                _atomic_write(target, payload)
+        return {
+            "ok": True,
+            "created": False,
+            "changed": changed,
+            "path": str(target),
+            "config_source": context.config_source,
+            "backup_path": str(backup_path) if backup_path else None,
             "applied_at": utc_now_iso(),
         }
 
@@ -101,3 +133,7 @@ def _fsync_directory(directory):
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+class ConfigChangedError(RuntimeError):
+    pass

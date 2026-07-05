@@ -5,8 +5,8 @@ Stdlib ``http.server`` only, no framework, no database. Scan state is kept in a
 small in-memory registry; each scan runs on a bounded background thread so the
 POST returns immediately and the UI polls the result endpoint. The server never
 reads secrets. It only writes the real EMS ``config.json`` on the explicit
-``config/apply`` action (backing up any existing config first); preview and
-export stay non-destructive.
+``config/apply`` action; preview and export stay non-destructive. Maintenance
+offers a backup by default and requires explicit confirmation before apply.
 """
 
 import json
@@ -15,7 +15,7 @@ import threading
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from admin.config_apply import ConfigApplyService
+from admin.config_apply import ConfigApplyService, ConfigChangedError
 from admin.config_export import ConfigExportService, ConfigExportValidationError
 from admin.config_preview import ConfigPreviewGenerator
 from admin.deployment import DeploymentService
@@ -36,7 +36,16 @@ from admin.install_state import (
     migrate_legacy_root_config,
     select_start_path,
 )
+from admin.container_actions import (
+    build_maintenance_container_plan,
+    run_maintenance_container_sync,
+)
 from admin.maintenance import run_maintenance_overview
+from admin.maintenance_config import (
+    load_maintenance_config,
+    prepare_maintenance_config_apply,
+    preview_maintenance_config,
+)
 from admin.mdns import MdnsProvider
 from admin.mqtt_discovery import MqttBrokerDiscovery
 from admin.models import utc_now_iso
@@ -195,6 +204,12 @@ class AdminHandler(BaseHTTPRequestHandler):
         if path == "/api/admin/maintenance/overview":
             self._send_json(run_maintenance_overview())
             return
+        if path == "/api/admin/maintenance/config":
+            self._send_json(load_maintenance_config())
+            return
+        if path == "/api/admin/maintenance/containers/plan":
+            self._handle_maintenance_container_plan()
+            return
         if path == "/api/setup/releases":
             self._send_json(self.server.release_manager.list_releases())
             return
@@ -264,6 +279,15 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/admin/maintenance/diagnostics/run":
             self._handle_maintenance_diagnostics()
+            return
+        if path == "/api/admin/maintenance/config/preview":
+            self._handle_maintenance_config_preview()
+            return
+        if path == "/api/admin/maintenance/config/apply":
+            self._handle_maintenance_config_apply()
+            return
+        if path == "/api/admin/maintenance/containers/sync":
+            self._handle_maintenance_container_sync()
             return
         if path == "/api/setup/releases/prepare":
             self._handle_release_prepare()
@@ -338,6 +362,7 @@ class AdminHandler(BaseHTTPRequestHandler):
                 "install_state_routing",
                 "legacy_config_migration",
                 "maintenance_overview",
+                "maintenance_config_preview",
                 "ems_cli_diagnostics",
                 "discovery",
                 "release_resources",
@@ -428,6 +453,133 @@ class AdminHandler(BaseHTTPRequestHandler):
             )
             return
         self._send_json(result)
+
+    def _handle_maintenance_config_preview(self):
+        # Preview only: the merge never writes, and the config path is resolved
+        # from the install context, so the request must not carry a target path.
+        body = self._read_json_body(MAX_CONFIG_PREVIEW_BODY_BYTES)
+        if body is None:
+            return
+        if not isinstance(body, dict):
+            self._send_json({"error": "expected a JSON object"}, status=400)
+            return
+        if "path" in body or "config_path" in body:
+            self._send_json(
+                {"error": "custom config paths are not supported"}, status=400
+            )
+            return
+        draft = body.get("draft", body)
+        if not isinstance(draft, dict):
+            self._send_json({"error": "draft must be a JSON object"}, status=400)
+            return
+        self._send_json(preview_maintenance_config(draft))
+
+    def _handle_maintenance_config_apply(self):
+        body = self._read_json_body(MAX_CONFIG_PREVIEW_BODY_BYTES)
+        if body is None:
+            return
+        if not isinstance(body, dict):
+            self._send_json({"error": "expected a JSON object"}, status=400)
+            return
+        if set(body) - {"draft", "revision", "confirm", "backup"}:
+            self._send_json({"error": "unsupported apply field"}, status=400)
+            return
+        if body.get("confirm") is not True:
+            self._send_json(
+                {"error": "explicit apply confirmation is required"}, status=400
+            )
+            return
+        draft = body.get("draft")
+        revision = body.get("revision")
+        backup = body.get("backup", True)
+        if not isinstance(draft, dict) or not isinstance(revision, str):
+            self._send_json({"error": "draft and revision are required"}, status=400)
+            return
+        if not isinstance(backup, bool):
+            self._send_json({"error": "backup must be a boolean"}, status=400)
+            return
+        prepared = prepare_maintenance_config_apply(draft, revision)
+        if prepared.get("status") != "ok":
+            status = 409 if prepared.get("status") == "conflict" else 400
+            self._send_json(prepared, status=status)
+            return
+        try:
+            result = self.server.config_apply.apply_maintenance(
+                prepared["payload"], revision, create_backup=backup
+            )
+        except ConfigChangedError as exc:
+            self._send_json(
+                {"ok": False, "status": "conflict", "message": str(exc)},
+                status=409,
+            )
+            return
+        except OSError as exc:
+            self._send_json(
+                {"ok": False, "status": "error", "message": f"Apply failed: {exc}"},
+                status=500,
+            )
+            return
+        result["validation"] = prepared["validation"]
+        result["diff"] = prepared["diff"]
+        self._send_json(result)
+
+    def _handle_maintenance_container_plan(self):
+        # Read-only: derive the desired/current/action plan from the live config
+        # and Docker state. Docker being unavailable is a valid (degraded) plan.
+        try:
+            plan = build_maintenance_container_plan()
+        except Exception:  # a plan fault must never 500 the read-only route
+            self._send_json(
+                {
+                    "ok": False,
+                    "available": False,
+                    "message": "Could not read the container sync plan.",
+                },
+                status=200,
+            )
+            return
+        self._send_json(plan)
+
+    def _handle_maintenance_container_sync(self):
+        # Confirmed mutation: recreate EMS and start/stop the optional bundled
+        # InfluxDB. The config path is resolved from the install context, so the
+        # request must not carry a target path.
+        body = self._read_json_body()
+        if body is None:
+            return
+        if not isinstance(body, dict):
+            self._send_json({"error": "expected a JSON object"}, status=400)
+            return
+        if set(body) - {"confirm", "reason"}:
+            self._send_json({"error": "unsupported sync field"}, status=400)
+            return
+        if body.get("confirm") is not True:
+            self._send_json(
+                {"error": "explicit sync confirmation is required"}, status=400
+            )
+            return
+        reason = body.get("reason", "config_apply")
+        if not isinstance(reason, str):
+            self._send_json({"error": "reason must be a string"}, status=400)
+            return
+        try:
+            result = run_maintenance_container_sync()
+        except Exception:  # never leak a traceback to the UI
+            self._send_json(
+                {
+                    "ok": False,
+                    "status": "error",
+                    "message": "Container sync failed unexpectedly.",
+                },
+                status=500,
+            )
+            return
+        status = 200
+        if result.get("status") == "unavailable":
+            status = 409
+        elif not result.get("ok"):
+            status = 500
+        self._send_json(result, status=status)
 
     def _handle_release_prepare(self):
         body = self._read_json_body()

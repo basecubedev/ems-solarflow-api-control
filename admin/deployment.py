@@ -396,11 +396,14 @@ class DockerCompose:
         self._run = run or subprocess.run
         self._popen = popen or subprocess.Popen
 
-    def up(self, workspace, profiles=(), on_line=None):
+    def up(self, workspace, profiles=(), services=(), force_recreate=False, on_line=None):
         command = ["docker", "compose"]
         for profile in profiles:
             command += ["--profile", str(profile)]
         command += ["up", "-d"]
+        if force_recreate:
+            command.append("--force-recreate")
+        command += [str(service) for service in services]
         try:
             process = self._popen(
                 command,
@@ -425,6 +428,74 @@ class DockerCompose:
                     on_line(line)
         if process.wait() != 0:
             raise _compose_start_error("\n".join(tail))
+
+    def stop(self, workspace, services, profiles=(), on_line=None):
+        """Stop feature services without removing containers, volumes or data."""
+
+        command = ["docker", "compose"]
+        for profile in profiles:
+            command += ["--profile", str(profile)]
+        command += ["stop", "--time", "20"]
+        command += [str(service) for service in services]
+        try:
+            process = self._popen(
+                command,
+                cwd=str(workspace),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+        except FileNotFoundError as exc:
+            raise DockerError(
+                "docker_cli_missing", _DOCKER_MESSAGES["client_missing"]
+            ) from exc
+        tail = []
+        stdout = process.stdout
+        if stdout is not None:
+            for line in stdout:
+                line = line.rstrip("\n")
+                tail.append(line)
+                del tail[:-60]
+                if on_line is not None:
+                    on_line(line)
+        if process.wait() != 0:
+            raise DockerError(
+                "docker_compose_stop_failed",
+                "Could not stop the optional feature container.",
+                _safe_command_detail("\n".join(tail)),
+            )
+
+    def run_oneoff(self, workspace, service, command, timeout=180):
+        """Run a one-off ``docker compose run --rm`` command.
+
+        Returns ``(returncode, detail)`` where ``detail`` is a redacted output
+        tail. Callers must never surface raw output because it may carry secrets.
+        """
+
+        argv = ["docker", "compose", "run", "--rm", str(service)]
+        argv += [str(part) for part in command]
+        try:
+            result = self._run(
+                argv,
+                cwd=str(workspace),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except FileNotFoundError as exc:
+            raise DockerError(
+                "docker_cli_missing", _DOCKER_MESSAGES["client_missing"]
+            ) from exc
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise DockerError(
+                "docker_compose_run_failed",
+                "Could not run the one-off container command.",
+            ) from exc
+        detail = _safe_command_detail(
+            "\n".join(part for part in (result.stdout, result.stderr) if part)
+        )
+        return result.returncode, detail
 
     def ps(self, workspace):
         try:

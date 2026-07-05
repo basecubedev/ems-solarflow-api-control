@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Vanilla admin discovery UI: list detected networks, scan one or several on
-// demand, and render discovered devices. Every server-provided value passes
-// through escapeHtml before it reaches the DOM. Polling runs only while a scan
-// is active.
+// Vanilla admin discovery UI for retained Setup and Maintenance scan sessions.
+// Every server-provided value passes through escapeHtml or text-only DOM APIs.
 "use strict";
 
 const POLL_INTERVAL_MS = 1200;
@@ -43,6 +41,10 @@ const els = {
   summaryNetworks: document.getElementById("setup-summary-networks"),
   summaryMdns: document.getElementById("setup-summary-mdns"),
   summaryMqtt: document.getElementById("setup-summary-mqtt"),
+  discoveryProgress: document.getElementById("setup-discovery-progress"),
+  discoveryProgressBar: document.getElementById("setup-discovery-progress-bar"),
+  discoveryProgressText: document.getElementById("setup-discovery-progress-text"),
+  discoveryReset: document.getElementById("setup-discovery-reset"),
 };
 
 // Compact Setup summary lines. Counts and fixed labels only, written with
@@ -57,15 +59,9 @@ function plural(count, singular) {
 
 const MDNS_POLL_INTERVAL_MS = 20000;
 
-let scanSessions = [];
-let scanPollTimer = null;
-let scanStartedAt = 0;
 let scanning = false;
-// Detected direct-route networks plus reachable gateway-probe networks share one
-// selectable list. Devices kept across scans when "Keep previous results" is on.
 let directNetworks = [];
 let gatewayNetworks = [];
-const keptDevices = new Map();
 // mDNS is its own source: always merged, never cleared by manual scans.
 const mdnsDevices = new Map();
 const ignoredMdnsDevices = new Map();
@@ -96,21 +92,254 @@ function showError(text) {
   els.error.textContent = text;
 }
 
-function firstErrorMessage(errors) {
-  if (Array.isArray(errors) && errors.length && errors[0] && errors[0].error) {
-    return errors[0].error;
+const DISCOVERY_SOURCE_LABELS = {
+  mdns: "mDNS",
+  http_probe: "active scan",
+  network_scan: "active scan",
+  active_scan: "active scan",
+  manual: "manual scan",
+  manual_scan: "manual scan",
+  configured: "configured",
+};
+
+function createDiscoverySession(mode) {
+  return {
+    active: false,
+    startedAt: null,
+    mode,
+    devices: new Map(),
+    networks: new Map(),
+    scanQueue: [],
+    scans: [],
+    scanKeys: new Set(),
+    generation: 0,
+    progress: { total: 0, done: 0, failed: 0, active: 0 },
+  };
+}
+
+const discoverySessions = {
+  setup: createDiscoverySession("setup"),
+  maintenance: createDiscoverySession("maintenance"),
+};
+const keptDevices = discoverySessions.setup.devices;
+
+function discoveryDeviceType(device) {
+  return String(
+    device.device_type || device.api_family || device.role_suggestion || "device"
+  ).toLowerCase();
+}
+
+function discoveryDeviceMatch(existing, incoming) {
+  const serialA = String(existing.serial_number || "").trim().toLowerCase();
+  const serialB = String(incoming.serial_number || "").trim().toLowerCase();
+  if (serialA && serialB) return serialA === serialB;
+  if (discoveryDeviceType(existing) !== discoveryDeviceType(incoming)) return false;
+  const ipA = String(existing.ip || "").trim().toLowerCase();
+  const ipB = String(incoming.ip || "").trim().toLowerCase();
+  if (ipA && ipB) return ipA === ipB;
+  const hostA = String(existing.host || existing.hostname || "").trim().toLowerCase();
+  const hostB = String(incoming.host || incoming.hostname || "").trim().toLowerCase();
+  return Boolean(hostA && hostB && hostA === hostB);
+}
+
+function normalizeDiscoverySource(source) {
+  const value = String(source || "network_scan").toLowerCase();
+  if (value === "manual") return "manual_scan";
+  if (value === "http_probe") return "active_scan";
+  if (value === "network_scan") return "active_scan";
+  return value;
+}
+
+function discoveryRoleClass(role) {
+  return "role-" + String(role || "unknown").replace(/[^a-z_]/gi, "");
+}
+
+function mergeDiscoveryDevice(session, device, source) {
+  if (!device || typeof device !== "object") return null;
+  const incoming = Object.assign({}, device);
+  const incomingSources = source
+    ? [normalizeDiscoverySource(source)]
+    : sourcesOf(incoming).map(normalizeDiscoverySource);
+  let matchKey = null;
+  let existing = null;
+  for (const [key, candidate] of session.devices) {
+    if (discoveryDeviceMatch(candidate, incoming)) {
+      matchKey = key;
+      existing = candidate;
+      break;
+    }
   }
-  return "Unknown error.";
+  const sources = Array.from(
+    new Set((existing ? sourcesOf(existing) : []).map(normalizeDiscoverySource).concat(incomingSources))
+  );
+  const merged = Object.assign({}, existing || {}, incoming, { sources });
+  [
+    "model",
+    "device_type",
+    "api_family",
+    "role_suggestion",
+    "host",
+    "hostname",
+  ].forEach((field) => {
+    if (!incoming[field] && existing && existing[field]) merged[field] = existing[field];
+  });
+  merged.serial_number = incoming.serial_number || (existing && existing.serial_number) || null;
+  merged.display_name =
+    incoming.display_name || incoming.model ||
+    (existing && (existing.display_name || existing.model)) || "";
+  const reachableSource = incomingSources.some(
+    (value) => value === "active_scan" || value === "manual_scan"
+  );
+  if (incoming.ip && (reachableSource || !existing || !existing.ip)) {
+    merged.ip = incoming.ip;
+  }
+  if (!(Number(incoming.port) > 0 && Number(incoming.port) <= 65535)) {
+    if (existing && Number(existing.port) > 0 && Number(existing.port) <= 65535) {
+      merged.port = existing.port;
+    } else {
+      delete merged.port;
+    }
+  }
+  const key = matchKey || deviceKey(merged);
+  session.devices.set(key, merged);
+  return merged;
+}
+
+function resetDiscoverySession(session) {
+  session.generation += 1;
+  session.active = false;
+  session.startedAt = null;
+  session.devices.clear();
+  session.networks.clear();
+  session.scanQueue.length = 0;
+  session.scans.length = 0;
+  session.scanKeys.clear();
+  session.progress = { total: 0, done: 0, failed: 0, active: 0 };
+}
+
+function validateManualScanInput(raw) {
+  const input = String(raw || "").trim();
+  if (!input) return { error: "Enter an IPv4 address or CIDR range." };
+  const parts = input.split("/");
+  if (parts.length > 2) return { error: "Enter a valid IPv4 address or CIDR range." };
+  const octets = parts[0].split(".");
+  if (
+    octets.length !== 4 ||
+    octets.some((part) => !/^\d{1,3}$/.test(part) || Number(part) > 255)
+  ) {
+    return { error: "Enter a valid IPv4 address or CIDR range." };
+  }
+  let prefix = 32;
+  if (parts.length === 2) {
+    if (!/^\d{1,2}$/.test(parts[1])) {
+      return { error: "Enter a valid IPv4 CIDR prefix." };
+    }
+    prefix = Number(parts[1]);
+    if (prefix < 24 || prefix > 32) {
+      return { error: "Scan ranges must be /24 or smaller." };
+    }
+  }
+  const numbers = octets.map(Number);
+  const allowed =
+    numbers[0] === 10 ||
+    (numbers[0] === 172 && numbers[1] >= 16 && numbers[1] <= 31) ||
+    (numbers[0] === 192 && numbers[1] === 168) ||
+    (numbers[0] === 169 && numbers[1] === 254) ||
+    numbers[0] === 127;
+  if (!allowed) {
+    return { error: "Only private, link-local, or loopback IPv4 ranges can be scanned." };
+  }
+  if (prefix < 32) {
+    const value =
+      (((numbers[0] << 24) >>> 0) |
+        (numbers[1] << 16) |
+        (numbers[2] << 8) |
+        numbers[3]) >>> 0;
+    const mask = (0xffffffff << (32 - prefix)) >>> 0;
+    const network = (value & mask) >>> 0;
+    return {
+      cidr:
+        [network >>> 24, (network >>> 16) & 255, (network >>> 8) & 255, network & 255]
+          .join(".") +
+        "/" +
+        prefix,
+    };
+  }
+  return { cidr: numbers.join(".") + "/" + prefix };
+}
+
+function discoveryProgressPercent(session) {
+  const completed = session.progress.done + session.progress.failed;
+  return session.progress.total
+    ? Math.min(100, Math.round((completed / session.progress.total) * 100))
+    : 0;
+}
+
+async function queueDiscoveryScans(session, cidrs, source, onUpdate) {
+  const queued = [];
+  (cidrs || []).forEach((raw) => {
+    const checked = validateManualScanInput(raw);
+    if (checked.error || session.scanKeys.has(checked.cidr)) return;
+    session.scanKeys.add(checked.cidr);
+    const scan = {
+      cidr: checked.cidr,
+      source: normalizeDiscoverySource(source),
+      status: "queued",
+      devices: [],
+      error: null,
+      generation: session.generation,
+    };
+    session.scanQueue.push(scan);
+    session.scans.push(scan);
+    session.progress.total += 1;
+    queued.push(scan);
+  });
+  if (!queued.length) {
+    if (onUpdate) onUpdate(session);
+    return [];
+  }
+  session.active = true;
+  session.startedAt = session.startedAt || Date.now();
+  if (onUpdate) onUpdate(session);
+  const results = await Promise.all(
+    queued.map(async (scan) => {
+      scan.status = "running";
+      session.progress.active += 1;
+      if (onUpdate) onUpdate(session);
+      try {
+        scan.devices = await maintenanceScanNetwork(scan.cidr);
+        if (scan.generation !== session.generation) {
+          scan.status = "cancelled";
+          return scan;
+        }
+        scan.devices.forEach((device) =>
+          mergeDiscoveryDevice(session, device, scan.source)
+        );
+        scan.status = "done";
+        session.progress.done += 1;
+      } catch (err) {
+        if (scan.generation !== session.generation) {
+          scan.status = "cancelled";
+          return scan;
+        }
+        scan.status = "failed";
+        scan.error = err.message || String(err);
+        session.progress.failed += 1;
+      } finally {
+        if (scan.generation !== session.generation) return;
+        session.progress.active -= 1;
+        const index = session.scanQueue.indexOf(scan);
+        if (index >= 0) session.scanQueue.splice(index, 1);
+        session.active = session.progress.active > 0 || session.scanQueue.length > 0;
+        if (onUpdate) onUpdate(session);
+      }
+      return scan;
+    })
+  );
+  return results;
 }
 
 // --- scanning (one or several networks) ----------------------------------
-
-function cancelPolling() {
-  if (scanPollTimer) {
-    window.clearTimeout(scanPollTimer);
-    scanPollTimer = null;
-  }
-}
 
 function updateBusy() {
   els.button.disabled = scanning;
@@ -151,107 +380,46 @@ function runInitialScan() {
   runScans(cidrs);
 }
 
-async function runScans(cidrs) {
+async function runScans(cidrs, source) {
   const unique = [...new Set(cidrs.filter(Boolean))];
   if (!unique.length) {
     showError("Select at least one network, or enter a CIDR.");
     return;
   }
-  cancelPolling();
   showError("");
-  if (!els.accumulate || !els.accumulate.checked) {
-    keptDevices.clear();
-  }
   scanning = true;
-  scanStartedAt = Date.now();
-  scanSessions = unique.map((cidr) => ({
-    cidr,
-    scanId: null,
-    status: "starting",
-    devices: [],
-    errors: [],
-  }));
+  const setupSession = discoverySessions.setup;
+  const generation = setupSession.generation;
   updateBusy();
   setStatus("Starting scan of " + unique.length + " network(s)…", "is-running");
   renderAggregate();
   probeMqttNetworks(unique);
-  await Promise.all(scanSessions.map(startSession));
-  pollSessions();
-}
-
-async function startSession(session) {
-  try {
-    const res = await fetch("/api/discovery/scan", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cidr: session.cidr }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data && data.error ? data.error : "scan request failed");
+  const beforeFailed = setupSession.progress.failed;
+  const scans = await queueDiscoveryScans(
+    setupSession,
+    unique,
+    source || "active_scan",
+    () => {
+      renderSetupDiscoveryProgress();
+      renderAggregate();
     }
-    session.scanId = data.scan_id;
-    session.status = "running";
-  } catch (err) {
-    session.status = "failed";
-    session.errors = [{ error: err.message || String(err) }];
-  }
-}
-
-async function pollSessions() {
-  const running = scanSessions.filter((s) => s.status === "running" && s.scanId);
-  await Promise.all(
-    running.map(async (session) => {
-      try {
-        const res = await fetch(
-          "/api/discovery/result/" + encodeURIComponent(session.scanId)
-        );
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data && data.error ? data.error : "result unavailable");
-        }
-        session.status = data.status;
-        session.devices = Array.isArray(data.devices) ? data.devices : [];
-        session.errors = Array.isArray(data.errors) ? data.errors : [];
-      } catch (err) {
-        session.status = "failed";
-        session.errors = [{ error: err.message || String(err) }];
-      }
-    })
   );
-  renderAggregate();
-
-  const stillRunning = scanSessions.some((s) => s.status === "running");
-  if (stillRunning && Date.now() - scanStartedAt < POLL_MAX_MS) {
-    scanPollTimer = window.setTimeout(pollSessions, POLL_INTERVAL_MS);
-    return;
-  }
-  finishScans(stillRunning);
-}
-
-function finishScans(timedOut) {
-  scanning = false;
+  scanning = setupSession.active;
   updateBusy();
-  commitDevices();
-  const devices = aggregateDevices();
-  const failed = scanSessions.filter((s) => s.status === "failed");
-  if (timedOut) {
-    setStatus("Scan timed out while polling.", null);
-  } else {
-    setStatus(
-      "Scan finished: " +
-        devices.length +
-        " device(s) across " +
-        scanSessions.length +
-        " network(s).",
-      "is-done"
-    );
-  }
-  if (failed.length) {
+  if (generation !== setupSession.generation) return;
+  const failed = setupSession.progress.failed - beforeFailed;
+  setStatus(
+    "Discovery completed" + (failed ? " with warnings" : "") + ": " +
+      setupSession.devices.size + " device(s) retained.",
+    failed ? null : "is-done"
+  );
+  if (failed) {
+    const first = scans.find((scan) => scan.status === "failed");
     showError(
-      failed.length + " network(s) failed: " + firstErrorMessage(failed[0].errors)
+      failed + " network(s) failed" + (first && first.error ? ": " + first.error : ".")
     );
   }
+  runInitialScan();
 }
 
 function deviceKey(device) {
@@ -300,20 +468,16 @@ function mergeDevice(map, device, fresh) {
 function aggregateDevices() {
   const seen = new Map();
   for (const device of mdnsDevices.values()) mergeDevice(seen, device);
-  // Network-scan hits (kept + current session) are confirmed reachable now.
-  for (const device of keptDevices.values()) mergeDevice(seen, device, true);
-  for (const session of scanSessions) {
-    for (const device of session.devices) mergeDevice(seen, device, true);
+  for (const device of discoverySessions.setup.devices.values()) {
+    mergeDevice(seen, device, true);
   }
   return [...seen.values()];
 }
 
-function commitDevices() {
-  for (const session of scanSessions) {
-    for (const device of session.devices) {
-      keptDevices.set(deviceKey(device), device);
-    }
-  }
+function commitDevices(devices, source) {
+  (devices || []).forEach((device) =>
+    mergeDiscoveryDevice(discoverySessions.setup, device, source || "active_scan")
+  );
 }
 
 // Fingerprint of the discovery state that actually affects the Config draft.
@@ -346,6 +510,19 @@ function buildDiscoverySignature(devices, ignored) {
 
 let lastDiscoverySignature = null;
 
+function renderSetupDiscoveryProgress() {
+  const session = discoverySessions.setup;
+  if (!els.discoveryProgress) return;
+  const progress = session.progress;
+  const completed = progress.done + progress.failed;
+  els.discoveryProgress.hidden = progress.total === 0;
+  els.discoveryProgressBar.style.width = discoveryProgressPercent(session) + "%";
+  els.discoveryProgressText.textContent =
+    completed + " of " + progress.total + " scans checked · Found: " +
+    session.devices.size + " · Failed: " + progress.failed +
+    " · Active: " + progress.active;
+}
+
 function renderAggregate() {
   const devices = aggregateDevices();
   els.count.textContent = devices.length + " found";
@@ -361,12 +538,10 @@ function renderAggregate() {
     lastDiscoverySignature = signature;
     syncConfigFromDiscovery();
   }
-  const running = scanSessions.some(
-    (s) => s.status === "running" || s.status === "starting"
-  );
+  const running = discoverySessions.setup.active;
   if (running) {
     setStatus(
-      "Scanning " + scanSessions.length + " network(s)… " + devices.length + " found",
+      "Scanning… " + devices.length + " found",
       "is-running"
     );
   }
@@ -401,17 +576,13 @@ function updateDeviceSummary(devices) {
   notifySetupStatus();
 }
 
-const SOURCE_LABELS = {
-  mdns: "mDNS",
-  http_probe: "Network scan",
-  network_scan: "Network scan",
-  manual: "Manual scan",
-};
+const SOURCE_LABELS = DISCOVERY_SOURCE_LABELS;
 
 function sourceBadges(device) {
   return sourcesOf(device)
     .map((source) => {
-      const label = SOURCE_LABELS[source] || source;
+      const normalized = normalizeDiscoverySource(source);
+      const label = SOURCE_LABELS[normalized] || source;
       const cls = source === "mdns" ? "source-mdns" : "source-scan";
       return '<span class="source-badge ' + cls + '">' + escapeHtml(label) + "</span>";
     })
@@ -420,7 +591,7 @@ function sourceBadges(device) {
 
 function renderDeviceCard(device) {
   const role = String(device.role_suggestion || "unknown");
-  const roleClass = "role-" + role.replace(/[^a-z_]/gi, "");
+  const roleClass = discoveryRoleClass(role);
   const serial = device.serial_number
     ? '<span class="v">' + escapeHtml(device.serial_number) + "</span>"
     : '<span class="v missing">missing</span>';
@@ -713,20 +884,34 @@ els.networksDockerList.addEventListener("click", handleScanButtonClick);
 els.networksScanAll.addEventListener("click", () => runScans(lanCidrs()));
 
 els.networksRefresh.addEventListener("click", () => {
-  loadNetworks();
+  loadNetworks().then(runInitialScan);
   refreshMdns();
   loadMqttBrokers();
 });
 
 els.form.addEventListener("submit", (event) => {
   event.preventDefault();
-  const cidr = els.cidr.value.trim();
-  if (!cidr) {
-    showError("Enter a CIDR range, e.g. 192.168.178.0/24");
+  const checked = validateManualScanInput(els.cidr.value);
+  if (checked.error) {
+    showError(checked.error);
     return;
   }
-  runScans([cidr]);
+  runScans([checked.cidr], "manual_scan");
 });
+
+if (els.discoveryReset) {
+  els.discoveryReset.addEventListener("click", () => {
+    resetDiscoverySession(discoverySessions.setup);
+    keptDevices.clear();
+    mdnsDevices.clear();
+    autoScannedCidrs.clear();
+    lastDiscoverySignature = null;
+    showError("");
+    setStatus("Discovery results reset.", "is-done");
+    renderSetupDiscoveryProgress();
+    renderAggregate();
+  });
+}
 
 // --- live mDNS discovery -------------------------------------------------
 
@@ -815,9 +1000,9 @@ async function pollMdns() {
       throw new Error(status.last_error || result.error || "discovery status failed");
     }
     renderMdnsStatus(status);
-    mdnsDevices.clear();
     for (const device of Array.isArray(result.devices) ? result.devices : []) {
       mdnsDevices.set(deviceKey(device), device);
+      mergeDiscoveryDevice(discoverySessions.setup, device, "mdns");
     }
     ignoredMdnsDevices.clear();
     for (const device of Array.isArray(result.ignored_devices) ? result.ignored_devices : []) {
@@ -2978,6 +3163,10 @@ if (configEls.clearDraft) {
 
 const ADMIN_VIEWS = ["setup", "maintenance", "advanced"];
 
+// Maintenance is a small hub with three nested paths. Only "manual" opens the
+// detailed editor and touches the backend; the placeholders never do.
+const MAINTENANCE_PATHS = ["hub", "manual", "upgrade", "backup"];
+
 function setAdminView(view) {
   const next = ADMIN_VIEWS.includes(view) ? view : "setup";
   document.querySelectorAll("[data-admin-view]").forEach((button) => {
@@ -2991,7 +3180,24 @@ function setAdminView(view) {
   if (next === "setup") {
     syncConfigFromDiscovery();
   }
-  if (next === "maintenance") {
+}
+
+// Each maintenance path maps to exactly one full-page panel; only "manual"
+// loads the read-only overview.
+const MAINTENANCE_PANEL_IDS = {
+  hub: "maintenance-hub",
+  manual: "maintenance-manual-panel",
+  upgrade: "maintenance-upgrade-panel",
+  backup: "maintenance-backup-panel",
+};
+
+function setMaintenancePath(path) {
+  const next = MAINTENANCE_PATHS.includes(path) ? path : "hub";
+  Object.entries(MAINTENANCE_PANEL_IDS).forEach(([key, id]) => {
+    const panel = document.getElementById(id);
+    if (panel) panel.hidden = key !== next;
+  });
+  if (next === "manual") {
     loadMaintenanceOverview();
   }
 }
@@ -3000,9 +3206,27 @@ function currentHashView() {
   return (window.location.hash || "").replace(/^#/, "");
 }
 
-// Deep links (#maintenance / #advanced) still resolve to the right panel once
-// the start gate has revealed the workspace.
-window.addEventListener("hashchange", () => setAdminView(currentHashView()));
+function adminViewForHash(hash) {
+  if (hash === "maintenance" || hash.startsWith("maintenance-")) return "maintenance";
+  return hash;
+}
+
+function maintenancePathForHash(hash) {
+  if (hash.startsWith("maintenance-")) return hash.slice("maintenance-".length);
+  return "hub";
+}
+
+// Deep links (#maintenance, #maintenance-manual, #advanced) still resolve to the
+// right panel, but only once the start gate has revealed the workspace — while
+// the landing gate is showing, hash changes must not un-hide a workspace panel.
+function applyHashRoute() {
+  if (!workspaceRevealed) return;
+  const hash = currentHashView();
+  const view = adminViewForHash(hash);
+  setAdminView(view);
+  if (view === "maintenance") setMaintenancePath(maintenancePathForHash(hash));
+}
+window.addEventListener("hashchange", applyHashRoute);
 
 // --- setup wizard --------------------------------------------------------
 // Compact stepper: only the active step's panel is shown. Devices and Config
@@ -4563,8 +4787,10 @@ const maintenanceEls = {
   state: document.getElementById("maintenance-state"),
   stateMessage: document.getElementById("maintenance-state-message"),
   ems: document.getElementById("maintenance-ems"),
+  emsDetail: document.getElementById("maintenance-ems-detail"),
   emsName: document.getElementById("maintenance-ems-name"),
   influx: document.getElementById("maintenance-influx"),
+  influxDetail: document.getElementById("maintenance-influx-detail"),
   influxName: document.getElementById("maintenance-influx-name"),
   docker: document.getElementById("maintenance-docker"),
   dockerServer: document.getElementById("maintenance-docker-server"),
@@ -4574,6 +4800,13 @@ const maintenanceEls = {
   dashboard: document.getElementById("maintenance-dashboard"),
   dashboardLink: document.getElementById("maintenance-dashboard-link"),
   refresh: document.getElementById("maintenance-refresh"),
+  runtimeEmsDesired: document.getElementById("maintenance-runtime-ems-desired"),
+  runtimeInfluxDesired: document.getElementById("maintenance-runtime-influx-desired"),
+  runtimeActionSummary: document.getElementById("maintenance-runtime-action-summary"),
+  runtimeContainersSync: document.getElementById("maintenance-runtime-containers-sync"),
+  runtimeContainersRecheck: document.getElementById("maintenance-runtime-containers-recheck"),
+  runtimeDiagnostics: document.getElementById("maintenance-runtime-diagnostics"),
+  runtimeContainersStatus: document.getElementById("maintenance-runtime-containers-status"),
 };
 
 const MAINTENANCE_HEALTHY_STATES = ["standard_install", "admin_prepared_install"];
@@ -4585,18 +4818,17 @@ function setMaintenanceFact(el, text, tone) {
   else delete el.dataset.tone;
 }
 
+// Card tone drives the collapsed tile's left accent and step badge color.
+function setMaintenanceCardTone(cardId, tone) {
+  const card = document.getElementById(cardId);
+  if (!card) return;
+  if (tone) card.dataset.tone = tone;
+  else delete card.dataset.tone;
+}
+
 function maintenancePathFact(entry) {
   const exists = Boolean(entry && entry.exists);
   return { text: exists ? "found" : "missing", tone: exists ? "ok" : "warn" };
-}
-
-function maintenanceContainerFact(container, dockerAvailable) {
-  if (!dockerAvailable || !container) return { text: "unknown", tone: "muted" };
-  if (!container.found) {
-    return { text: container.status === "missing" ? "missing" : "unknown", tone: "warn" };
-  }
-  if (container.running) return { text: "running", tone: "ok" };
-  return { text: container.status || "stopped", tone: "warn" };
 }
 
 function renderMaintenanceWarnings(warnings) {
@@ -4641,15 +4873,14 @@ function renderMaintenance(data) {
 
   const docker = data.docker || {};
   const containers = data.containers || {};
-  const emsFact = maintenanceContainerFact(containers.ems, docker.available);
-  setMaintenanceFact(maintenanceEls.ems, emsFact.text, emsFact.tone);
+  // The main EMS/InfluxDB status labels (and the collapsed summary) are owned by
+  // the container plan, which knows the config feature-state; the overview only
+  // fills the raw docker container name here.
   setMaintenanceFact(
     maintenanceEls.emsName,
     (containers.ems && containers.ems.name) || "—",
     "muted"
   );
-  const influxFact = maintenanceContainerFact(containers.influxdb, docker.available);
-  setMaintenanceFact(maintenanceEls.influx, influxFact.text, influxFact.tone);
   setMaintenanceFact(
     maintenanceEls.influxName,
     (containers.influxdb && containers.influxdb.name) || "—",
@@ -4701,10 +4932,6 @@ function renderMaintenanceDashboard(url) {
   }
 }
 
-function maintenanceContainerSummary(container, dockerAvailable, name) {
-  return name + " " + maintenanceContainerFact(container, dockerAvailable).text;
-}
-
 // Collapsed headers must stay informative: each summary condenses the card's key
 // facts into one line so the state is readable without expanding.
 function renderMaintenanceSummaries(data) {
@@ -4717,20 +4944,16 @@ function renderMaintenanceSummaries(data) {
   const present = ["config", "data", "compose"].filter(
     (key) => paths[key] && paths[key].exists
   );
-  const layoutText =
-    present.length === 3
-      ? "OK · config/data/compose found"
-      : (state.label || "Partial") + " · " + present.length + "/3 paths found";
-  setMaintenanceFact(maintenanceEls.layoutSummary, layoutText, healthy ? "ok" : "warn");
+  const layoutOk = present.length === 3;
+  const layoutText = layoutOk
+    ? "OK · config/data/compose found"
+    : (state.label || "Partial") + " · " + present.length + "/3 paths found";
+  setMaintenanceFact(maintenanceEls.layoutSummary, layoutText, layoutOk ? "ok" : "warn");
+  setMaintenanceCardTone("maintenance-layout", layoutOk ? "ok" : "warn");
 
-  const containersText = docker.available
-    ? maintenanceContainerSummary(containers.ems, true, "EMS") +
-      " · " +
-      maintenanceContainerSummary(containers.influxdb, true, "InfluxDB")
-    : "Docker unavailable";
-  const containersTone =
-    docker.available && containers.ems && containers.ems.running ? "ok" : "warn";
-  setMaintenanceFact(maintenanceEls.containersSummary, containersText, containersTone);
+  const emsRunning = !!(containers.ems && containers.ems.running);
+  // The Runtime containers summary + tone are owned by renderRuntimeServiceStatus
+  // (driven by the plan, which knows the config feature-state).
 
   const emsTag = containers.ems && containers.ems.tag;
   const dashboard = data.links && data.links.dashboard_url;
@@ -4738,13 +4961,16 @@ function renderMaintenanceSummaries(data) {
     (emsTag ? "EMS " + emsTag : "EMS version unknown") +
     " · " +
     (dashboard ? "Dashboard " + dashboard : "Dashboard unavailable");
-  setMaintenanceFact(maintenanceEls.versionsSummary, versionsText, null);
+  setMaintenanceFact(maintenanceEls.versionsSummary, versionsText, dashboard ? "info" : "warn");
+  setMaintenanceCardTone("maintenance-versions", dashboard ? "info" : "warn");
+
+  setMaintenanceCardTone("maintenance-diagnostics", "info");
 
   const systemText =
     (state.label || state.state || "Unknown") +
     " · " +
     (docker.available
-      ? containers.ems && containers.ems.running
+      ? emsRunning
         ? "EMS running"
         : "EMS not running"
       : "Docker unavailable") +
@@ -4762,8 +4988,10 @@ function renderMaintenanceError() {
     maintenanceEls.composePath,
     maintenanceEls.state,
     maintenanceEls.ems,
+    maintenanceEls.emsDetail,
     maintenanceEls.emsName,
     maintenanceEls.influx,
+    maintenanceEls.influxDetail,
     maintenanceEls.influxName,
     maintenanceEls.docker,
     maintenanceEls.dockerServer,
@@ -4803,7 +5031,11 @@ document.addEventListener("click", (event) => {
 
 let maintenanceLoading = false;
 
-async function loadMaintenanceOverview() {
+async function loadMaintenanceOverview(options = {}) {
+  const refreshConfig = options.refreshConfig !== false;
+  const refreshContainerPlan = options.refreshContainerPlan !== false;
+  const showPostApply = options.showPostApply === true;
+
   if (maintenanceLoading) return;
   maintenanceLoading = true;
   try {
@@ -4814,6 +5046,15 @@ async function loadMaintenanceOverview() {
     renderMaintenanceError();
   } finally {
     maintenanceLoading = false;
+  }
+
+  // Awaited follow-ups: an unawaited config reload would re-run
+  // renderMaintenanceConfig later and hide a just-revealed post-apply panel.
+  if (refreshConfig) {
+    await loadMaintenanceConfig();
+  }
+  if (refreshContainerPlan) {
+    await loadMaintenanceContainerPlan({ showPostApply });
   }
 }
 
@@ -5010,6 +5251,1715 @@ if (diagnosticsEls.run) {
   diagnosticsEls.run.addEventListener("click", runDiagnostics);
 }
 
+// --- maintenance config & hardware ---------------------------------------
+// Loads the real resolved config, lets the operator edit an in-memory draft,
+// and previews a validation + diff. No Apply/Save/Backup/Restart control is
+// wired: this step never writes. Every dynamic value is inserted via
+// textContent/DOM nodes so config-derived text cannot inject markup.
+
+const mconfigEls = {
+  summary: document.getElementById("maintenance-config-summary"),
+  source: document.getElementById("maintenance-config-source"),
+  message: document.getElementById("maintenance-config-message"),
+  editor: document.getElementById("maintenance-config-editor"),
+  gridMeter: document.getElementById("maintenance-config-gridmeter"),
+  inverters: document.getElementById("maintenance-config-inverters"),
+  addInverter: document.getElementById("maintenance-config-add-inverter"),
+  discoveryStart: document.getElementById("maintenance-discovery-start"),
+  discoveryCancel: document.getElementById("maintenance-discovery-cancel"),
+  discoveryStatus: document.getElementById("maintenance-discovery-status"),
+  discoveryReview: document.getElementById("maintenance-discovery-review"),
+  discoveryResults: document.getElementById("maintenance-discovery-results"),
+  discoveryReset: document.getElementById("maintenance-discovery-reset"),
+  discoveryManualForm: document.getElementById("maintenance-discovery-manual-form"),
+  discoveryManualInput: document.getElementById("maintenance-discovery-manual-input"),
+  discoveryManualScan: document.getElementById("maintenance-discovery-manual-scan"),
+  discoveryError: document.getElementById("maintenance-discovery-error"),
+  discoveryProgress: document.getElementById("maintenance-discovery-progress"),
+  discoveryProgressBar: document.getElementById("maintenance-discovery-progress-bar"),
+  discoveryProgressText: document.getElementById("maintenance-discovery-progress-text"),
+  features: document.getElementById("maintenance-config-features"),
+  advanced: document.getElementById("maintenance-config-advanced"),
+  previewBtn: document.getElementById("maintenance-config-preview-btn"),
+  resetBtn: document.getElementById("maintenance-config-reset-btn"),
+  result: document.getElementById("maintenance-config-result"),
+  validation: document.getElementById("maintenance-config-validation"),
+  changeSummary: document.getElementById("maintenance-config-change-summary"),
+  changes: document.getElementById("maintenance-config-changes"),
+  warnings: document.getElementById("maintenance-config-warnings"),
+  raw: document.getElementById("maintenance-config-raw"),
+  rawPre: document.getElementById("maintenance-config-raw-pre"),
+  applyPanel: document.getElementById("maintenance-config-apply-panel"),
+  backup: document.getElementById("maintenance-config-backup"),
+  applyBtn: document.getElementById("maintenance-config-apply-btn"),
+  applyStatus: document.getElementById("maintenance-config-apply-status"),
+  postApply: document.getElementById("maintenance-config-post-apply"),
+  postEmsDesired: document.getElementById("maintenance-post-ems-desired"),
+  postInfluxDesired: document.getElementById("maintenance-post-influx-desired"),
+  postActionSummary: document.getElementById("maintenance-post-action-summary"),
+  containersSync: document.getElementById("maintenance-containers-sync"),
+  containersRecheck: document.getElementById("maintenance-containers-recheck"),
+  postDiagnostics: document.getElementById("maintenance-post-diagnostics"),
+  containersSyncStatus: document.getElementById("maintenance-containers-sync-status"),
+};
+
+const mconfigState = {
+  loaded: false,
+  draft: null,
+  pristine: null,
+  catalog: null,
+  revision: null,
+  previewFingerprint: null,
+  summaryLine: "",
+  openHardware: new Set(),
+  openFeatures: new Set(),
+  discoveryDraftChanges: 0,
+};
+
+function mconfigClone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function mconfigLabelRow(labelText, control, description, unit) {
+  const row = document.createElement("label");
+  row.className = "feature-field-row";
+  const label = document.createElement("span");
+  label.className = "feature-field-label";
+  label.textContent = labelText;
+  row.appendChild(label);
+  const controlWrap = document.createElement("span");
+  controlWrap.className = "feature-field-control";
+  controlWrap.appendChild(control);
+  if (unit) {
+    const unitNode = document.createElement("span");
+    unitNode.className = "feature-unit";
+    unitNode.textContent = unit;
+    controlWrap.appendChild(unitNode);
+  }
+  row.appendChild(controlWrap);
+  const help = document.createElement("span");
+  help.className = "feature-field-desc";
+  help.textContent = description || "";
+  row.appendChild(help);
+  return row;
+}
+
+function mconfigTextControl(value, onChange, type) {
+  const input = document.createElement("input");
+  input.type = type || "text";
+  input.className = "feature-input";
+  input.value = value == null ? "" : String(value);
+  input.addEventListener("input", () => onChange(input.value));
+  return input;
+}
+
+function mconfigCheckboxControl(checked, onChange) {
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.className = "feature-input";
+  input.checked = Boolean(checked);
+  input.addEventListener("change", () => onChange(input.checked));
+  return input;
+}
+
+function mconfigSelectControl(value, options, onChange) {
+  const select = document.createElement("select");
+  select.className = "feature-input";
+  for (const option of options) {
+    const node = document.createElement("option");
+    node.value = option.value;
+    node.textContent = option.label;
+    if (String(option.value) === String(value)) node.selected = true;
+    select.appendChild(node);
+  }
+  select.addEventListener("change", () => onChange(select.value));
+  return select;
+}
+
+function mconfigSetExpanded(card, body, caret, buttons, open) {
+  card.dataset.open = open ? "true" : "false";
+  body.hidden = !open;
+  caret.textContent = open ? "▾" : "▸";
+  buttons.forEach((button) => button.setAttribute("aria-expanded", open ? "true" : "false"));
+}
+
+function mconfigHardwareCard(options) {
+  const card = document.createElement("article");
+  card.className = "hardware-card hardware-card-" + options.kind;
+  card.dataset.sourceId = options.id;
+
+  const head = document.createElement("div");
+  head.className = "hardware-card-head";
+  const summary = document.createElement("button");
+  summary.type = "button";
+  summary.className = "hardware-card-summary";
+  const title = document.createElement("span");
+  title.className = "hardware-card-title";
+  title.textContent = options.title;
+  const model = document.createElement("span");
+  model.className = "hardware-card-model";
+  model.textContent = options.model;
+  const meta = document.createElement("span");
+  meta.className = "hardware-card-meta";
+  meta.textContent = options.meta;
+  summary.append(title, model, meta);
+
+  const actions = document.createElement("div");
+  actions.className = "hardware-card-actions";
+  const status = document.createElement("span");
+  status.className = "hardware-card-status";
+  status.textContent = options.enabled ? "Enabled" : "Disabled";
+  actions.appendChild(status);
+  if (options.onRemove) {
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "hardware-card-remove secondary-button compact";
+    remove.textContent = "Remove";
+    remove.addEventListener("click", options.onRemove);
+    actions.appendChild(remove);
+  }
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "hardware-card-toggle";
+  toggle.setAttribute("aria-label", "Expand " + options.title);
+  const caret = document.createElement("span");
+  caret.setAttribute("aria-hidden", "true");
+  toggle.appendChild(caret);
+  actions.appendChild(toggle);
+  head.append(summary, actions);
+  card.appendChild(head);
+
+  const body = document.createElement("div");
+  body.className = "hardware-card-body";
+  body.id = "maintenance-hardware-body-" + options.id.replace(/[^a-z0-9]/gi, "-");
+  body.appendChild(options.body);
+  card.appendChild(body);
+  summary.setAttribute("aria-controls", body.id);
+  toggle.setAttribute("aria-controls", body.id);
+  const buttons = [summary, toggle];
+  const setOpen = (open) => {
+    if (open) mconfigState.openHardware.add(options.id);
+    else mconfigState.openHardware.delete(options.id);
+    toggle.setAttribute("aria-label", (open ? "Collapse " : "Expand ") + options.title);
+    mconfigSetExpanded(card, body, caret, buttons, open);
+  };
+  buttons.forEach((button) =>
+    button.addEventListener("click", () => setOpen(card.dataset.open !== "true"))
+  );
+  setOpen(mconfigState.openHardware.has(options.id));
+  return { element: card, model, meta, status };
+}
+
+// --- grid meter -----------------------------------------------------------
+
+function renderMaintenanceGridMeter() {
+  const host = mconfigEls.gridMeter;
+  if (!host) return;
+  const cardId = "maintenance-grid-meter";
+  host.textContent = "";
+  const meter = mconfigState.draft.grid_meter || (mconfigState.draft.grid_meter = {});
+  const types = (mconfigState.catalog && mconfigState.catalog.grid_meter_types) || [];
+  const options = [{ value: "", label: "— none —" }].concat(
+    types.map((t) => ({ value: t.id, label: t.label }))
+  );
+  const fields = document.createElement("div");
+  fields.className = "mconfig-fields feature-fields";
+  let card;
+
+  fields.appendChild(
+    mconfigLabelRow(
+      "Type",
+      mconfigSelectControl(meter.type || "", options, (v) => {
+        meter.type = v;
+        meter.present = Boolean(v);
+        if (v) mconfigState.openHardware.add(cardId);
+        else mconfigState.openHardware.delete(cardId);
+        renderMaintenanceGridMeter();
+      }),
+      "Meter/API family used to read grid import and export."
+    )
+  );
+  fields.appendChild(
+    mconfigLabelRow(
+      "IP / host",
+      mconfigTextControl(meter.ip || "", (v) => {
+        meter.ip = v;
+        card.meta.textContent = mconfigGridMeterMeta(meter);
+      }),
+      "Local address of the configured grid meter."
+    )
+  );
+  fields.appendChild(
+    mconfigLabelRow(
+      "Port",
+      mconfigTextControl(meter.port == null ? "" : meter.port, (v) => {
+        if (v.trim() === "") delete meter.port;
+        else meter.port = v;
+        card.meta.textContent = mconfigGridMeterMeta(meter);
+      }, "number")
+    )
+  );
+  const channels = Array.isArray(meter.channels) ? meter.channels.join(", ") : "";
+  fields.appendChild(
+    mconfigLabelRow(
+      "Channels",
+      mconfigTextControl(channels, (v) => {
+        const parts = v.split(",").map((p) => p.trim()).filter(Boolean);
+        if (parts.length) meter.channels = parts;
+        else delete meter.channels;
+      }),
+      "Optional Shelly channels or phases, separated by commas."
+    )
+  );
+  const selected = types.find((type) => type.id === meter.type);
+  card = mconfigHardwareCard({
+    kind: "grid-meter",
+    id: cardId,
+    title: "Grid meter",
+    model: selected ? selected.label : "No grid meter configured",
+    meta: mconfigGridMeterMeta(meter),
+    enabled: Boolean(meter.type),
+    body: fields,
+    onRemove:
+      meter.present || meter.type || meter.ip
+        ? () => {
+            mconfigState.openHardware.delete(cardId);
+            mconfigState.draft.grid_meter = { present: false, type: "", ip: "" };
+            renderMaintenanceGridMeter();
+          }
+        : null,
+  });
+  host.appendChild(card.element);
+}
+
+function mconfigGridMeterMeta(meter) {
+  if (!meter.ip) return meter.type ? "Address missing" : "Not configured";
+  return String(meter.ip) + (meter.port ? ":" + String(meter.port) : "");
+}
+
+// --- inverters ------------------------------------------------------------
+
+const MCONFIG_DEVICE_NUMBERS = [
+  ["max_power", "Max power (W)"],
+  ["min_soc", "Min SoC (%)"],
+  ["max_soc", "Max SoC (%)"],
+  ["pv_kwp", "PV kWp"],
+  ["battery_kwh", "Battery kWh"],
+  ["pv_priority_factor", "PV priority factor"],
+];
+
+function mconfigInverterSummary(device) {
+  const endpoint = String(device.ip || "") + (device.port ? ":" + String(device.port) : "");
+  const parts = [device.name || "(unnamed)", endpoint || "Address missing"];
+  parts.push(device.sn ? "SN " + device.sn : "Serial missing");
+  if (device.max_power != null && device.max_power !== "") {
+    parts.push(device.max_power + " W");
+  }
+  return parts.join(" · ");
+}
+
+function renderMaintenanceInverter(device, index) {
+  const body = document.createElement("div");
+  body.className = "mconfig-fields feature-fields";
+  let card;
+
+  body.appendChild(
+    mconfigLabelRow(
+      "Name",
+      mconfigTextControl(device.name || "", (v) => {
+        device.name = v;
+        card.meta.textContent = mconfigInverterSummary(device);
+      }),
+      "Stable identifier used for this inverter in the EMS config."
+    )
+  );
+  body.appendChild(
+    mconfigLabelRow(
+      "IP / host",
+      mconfigTextControl(device.ip || "", (v) => {
+        device.ip = v;
+        card.meta.textContent = mconfigInverterSummary(device);
+      }),
+      "Local address of the inverter API."
+    )
+  );
+  body.appendChild(
+    mconfigLabelRow(
+      "Serial number",
+      mconfigTextControl(device.sn || "", (v) => {
+        device.sn = v;
+        card.meta.textContent = mconfigInverterSummary(device);
+      }),
+      "Device serial used for local API requests."
+    )
+  );
+  for (const [key, label] of MCONFIG_DEVICE_NUMBERS) {
+    body.appendChild(
+      mconfigLabelRow(
+        label,
+        mconfigTextControl(device[key] == null ? "" : device[key], (v) => {
+          if (v.trim() === "") delete device[key];
+          else device[key] = v;
+          card.meta.textContent = mconfigInverterSummary(device);
+        }, "number"),
+        key === "max_power" ? "Maximum AC output configured for this inverter." : ""
+      )
+    );
+  }
+  body.appendChild(
+    mconfigLabelRow(
+      "Enabled in draft",
+      mconfigCheckboxControl(device.enabled !== false, (checked) => {
+        device.enabled = checked;
+        card.element.dataset.disabled = checked ? "false" : "true";
+        card.status.textContent = checked ? "Enabled" : "Disabled";
+      }),
+      "Include this inverter in the generated config preview."
+    )
+  );
+
+  const id = "maintenance-inverter-" + index;
+  card = mconfigHardwareCard({
+    kind: "inverter",
+    id,
+    title: "Inverter " + (index + 1),
+    model: "Zendure SolarFlow inverter",
+    meta: mconfigInverterSummary(device),
+    enabled: device.enabled !== false,
+    body,
+    onRemove: () => {
+      mconfigState.openHardware.delete(id);
+      mconfigState.draft.devices.splice(index, 1);
+      renderMaintenanceInverters();
+    },
+  });
+  card.element.dataset.disabled = device.enabled === false ? "true" : "false";
+  return card.element;
+}
+
+function renderMaintenanceInverters() {
+  const host = mconfigEls.inverters;
+  if (!host) return;
+  host.textContent = "";
+  const devices = mconfigState.draft.devices || (mconfigState.draft.devices = []);
+  devices.forEach((device, index) => {
+    host.appendChild(renderMaintenanceInverter(device, index));
+  });
+}
+
+function mconfigAddInverter() {
+  const devices = mconfigState.draft.devices || (mconfigState.draft.devices = []);
+  const template = devices.length ? devices[0] : {};
+  const device = { original_name: null, name: "", ip: "", sn: "", enabled: true };
+  for (const [key] of MCONFIG_DEVICE_NUMBERS) {
+    if (template[key] != null) device[key] = template[key];
+  }
+  devices.push(device);
+  mconfigState.openHardware.add("maintenance-inverter-" + (devices.length - 1));
+  renderMaintenanceInverters();
+}
+
+// --- discovery review ----------------------------------------------------
+
+function mconfigIdentity(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function mconfigDiscoveryRole(device) {
+  return String(device.role_suggestion || "unknown");
+}
+
+function mconfigFindInverterMatch(configured, discovered, used) {
+  const serial = mconfigIdentity(configured.sn);
+  if (serial) {
+    const bySerial = discovered.find(
+      (device) =>
+        !used.has(deviceKey(device)) &&
+        mconfigDiscoveryRole(device) === "inverter" &&
+        mconfigIdentity(device.serial_number) === serial
+    );
+    if (bySerial) return { device: bySerial, match: "serial" };
+  }
+  const ip = mconfigIdentity(configured.ip);
+  const byIp = discovered.find(
+    (device) =>
+      !used.has(deviceKey(device)) &&
+      mconfigDiscoveryRole(device) === "inverter" &&
+      mconfigIdentity(device.ip) === ip
+  );
+  return byIp ? { device: byIp, match: "ip" } : null;
+}
+
+function buildMaintenanceDiscoveryReview(discovered) {
+  const supported = (discovered || []).filter(isConfigCandidate);
+  const used = new Set();
+  const results = [];
+  const devices = (mconfigState.draft && mconfigState.draft.devices) || [];
+  devices.forEach((configured, index) => {
+    const match = mconfigFindInverterMatch(configured, supported, used);
+    if (!match) {
+      results.push({ role: "inverter", state: "missing", configured, index });
+      return;
+    }
+    used.add(deviceKey(match.device));
+    const ipChanged =
+      match.match === "serial" &&
+      mconfigIdentity(configured.ip) !== mconfigIdentity(match.device.ip);
+    results.push({
+      role: "inverter",
+      state: ipChanged ? "conflict" : "found",
+      configured,
+      discovered: match.device,
+      index,
+    });
+  });
+
+  const meter =
+    mconfigState.draft &&
+    mconfigState.draft.grid_meter &&
+    mconfigState.draft.grid_meter.present
+      ? mconfigState.draft.grid_meter
+      : null;
+  if (meter) {
+    const found = supported.find(
+      (device) =>
+        !used.has(deviceKey(device)) &&
+        mconfigDiscoveryRole(device) === "grid_meter" &&
+        mconfigIdentity(device.ip) === mconfigIdentity(meter.ip)
+    );
+    if (found) used.add(deviceKey(found));
+    results.push({
+      role: "grid_meter",
+      state: found ? "found" : "missing",
+      configured: meter,
+      discovered: found || null,
+    });
+  }
+
+  supported.forEach((device) => {
+    if (!used.has(deviceKey(device))) {
+      results.push({
+        role: mconfigDiscoveryRole(device),
+        state: "new",
+        discovered: device,
+      });
+    }
+  });
+  return results;
+}
+
+function mconfigDiscoveryLabel(item) {
+  if (item.role === "grid_meter") return "Grid meter";
+  if (item.configured) return item.configured.name || "Configured inverter";
+  return item.discovered.display_name || item.discovered.model || "Zendure SolarFlow inverter";
+}
+
+const MCONFIG_DISCOVERY_BADGES = {
+  found: "FOUND",
+  new: "NEW",
+  missing: "NOT FOUND",
+  conflict: "CONFLICT",
+};
+
+function mconfigDiscoveredAlreadyInDraft(item) {
+  const found = item && item.discovered;
+  if (!found || !mconfigState.draft) return false;
+
+  if ((item.role || mconfigDiscoveryRole(found)) === "grid_meter") {
+    const meter = mconfigState.draft.grid_meter || {};
+    return Boolean(
+      meter.present &&
+      found.ip &&
+      mconfigIdentity(meter.ip) === mconfigIdentity(found.ip)
+    );
+  }
+
+  const serial = mconfigIdentity(found.serial_number);
+  const ip = mconfigIdentity(found.ip);
+  const devices = mconfigState.draft.devices || [];
+  return devices.some(
+    (device) =>
+      (serial && mconfigIdentity(device.sn) === serial) ||
+      (!serial && ip && mconfigIdentity(device.ip) === ip)
+  );
+}
+
+function mconfigDiscoveryActionState(item) {
+  if (item.state === "found") {
+    return { text: "In config", disabled: true, cssClass: "is-in-config" };
+  }
+
+  if (item.state === "missing") {
+    return {
+      text: "Configured",
+      disabled: true,
+      cssClass: "is-configured-missing",
+    };
+  }
+
+  if (mconfigDiscoveredAlreadyInDraft(item)) {
+    return { text: "Added to draft", disabled: true, cssClass: "is-added" };
+  }
+
+  if (item.state === "conflict") {
+    return { text: "Update draft", disabled: false, cssClass: "is-update" };
+  }
+
+  return { text: "Add to draft", disabled: false, cssClass: "is-add" };
+}
+
+function mconfigMarkDraftChanged(source) {
+  mconfigState.previewFingerprint = null;
+  if (mconfigEls.result) mconfigEls.result.hidden = true;
+  if (mconfigEls.applyPanel) mconfigEls.applyPanel.hidden = true;
+  setMaintenanceFact(mconfigEls.summary, "Draft changed · preview required", "warn");
+  if (source === "discovery") {
+    mconfigState.discoveryDraftChanges += 1;
+    const count = mconfigState.discoveryDraftChanges;
+    if (mconfigEls.discoveryStatus) {
+      mconfigEls.discoveryStatus.textContent =
+        count + " discovery " + (count === 1 ? "change" : "changes") +
+        " added to the draft. Preview changes before applying.";
+    }
+  }
+}
+
+function mconfigAddDiscovered(item) {
+  const found = item.discovered;
+  if (!found) return false;
+  if (item.role === "grid_meter") {
+    const gridMeter = {
+      present: true,
+      type: gridMeterType(
+        {
+          device_type: found.device_type || "",
+          api_family: found.api_family || "",
+        },
+        "shelly"
+      ),
+      ip: found.ip || "",
+    };
+    if (found.port != null && found.port !== "") {
+      gridMeter.port = found.port;
+    }
+    mconfigState.draft.grid_meter = gridMeter;
+    renderMaintenanceGridMeter();
+    mconfigMarkDraftChanged("discovery");
+    return true;
+  }
+  const devices = mconfigState.draft.devices || (mconfigState.draft.devices = []);
+  const serial = mconfigIdentity(found.serial_number);
+  if (
+    devices.some(
+      (device) =>
+        (serial && mconfigIdentity(device.sn) === serial) ||
+        (!serial && mconfigIdentity(device.ip) === mconfigIdentity(found.ip))
+    )
+  ) return false;
+  const usedNames = new Set(devices.map((device) => device.name));
+  let number = 1;
+  while (usedNames.has("inverter_" + number)) number += 1;
+  devices.push({
+    original_name: null,
+    name: "inverter_" + number,
+    ip: found.ip || "",
+    sn: found.serial_number || "",
+    enabled: true,
+  });
+  renderMaintenanceInverters();
+  mconfigMarkDraftChanged("discovery");
+  return true;
+}
+
+function mconfigAppendSourceBadge(host, label, cssClass) {
+  const badge = document.createElement("span");
+  badge.className = "source-badge " + cssClass;
+  badge.textContent = label;
+  host.appendChild(badge);
+}
+
+function mconfigAppendSourceBadges(host, device) {
+  sourcesOf(device).forEach((source) => {
+    const normalized = normalizeDiscoverySource(source);
+    const label = DISCOVERY_SOURCE_LABELS[normalized] || normalized;
+    const cssClass = normalized === "mdns" ? "source-mdns" : "source-scan";
+    mconfigAppendSourceBadge(host, label, cssClass);
+  });
+}
+
+function mconfigAppendDeviceFact(host, label, value) {
+  const fact = document.createElement("span");
+  fact.className = "device-fact";
+  const key = document.createElement("span");
+  key.className = "k";
+  key.textContent = label;
+  const val = document.createElement("span");
+  val.className = value ? "v" : "v missing";
+  val.textContent = value || "missing";
+  fact.append(key, val);
+  host.appendChild(fact);
+}
+
+function renderMaintenanceDiscoveryCard(item) {
+  const found = item.discovered || {};
+  const configured = item.configured || {};
+  const role = item.role || mconfigDiscoveryRole(found) || "unknown";
+  const stateLabel = MCONFIG_DISCOVERY_BADGES[item.state] || "CONFIGURED";
+
+  const card = document.createElement("article");
+  card.className = "device-card mconfig-discovery-device-card";
+  card.dataset.state = item.state;
+  card.dataset.role = role;
+
+  const head = document.createElement("div");
+  head.className = "device-card-head";
+  const name = document.createElement("span");
+  name.className = "device-name";
+  name.textContent = mconfigDiscoveryLabel(item);
+  const rolePill = document.createElement("span");
+  rolePill.className = "device-role " + discoveryRoleClass(role);
+  rolePill.textContent = role;
+  head.append(name, rolePill);
+  card.appendChild(head);
+
+  const sources = document.createElement("div");
+  sources.className = "device-sources";
+  if (item.configured) {
+    mconfigAppendSourceBadge(sources, "configured", "source-scan");
+  }
+  if (item.discovered) {
+    mconfigAppendSourceBadges(sources, item.discovered);
+  }
+  if (item.state === "missing") {
+    mconfigAppendSourceBadge(sources, "not found", "source-scan");
+  }
+  card.appendChild(sources);
+
+  const facts = document.createElement("div");
+  facts.className = "device-facts";
+  mconfigAppendDeviceFact(facts, "IP", found.ip || configured.ip || "");
+  mconfigAppendDeviceFact(
+    facts,
+    "Serial",
+    found.serial_number || configured.sn || ""
+  );
+  mconfigAppendDeviceFact(
+    facts,
+    "API family",
+    found.api_family || configured.api_family || ""
+  );
+  mconfigAppendDeviceFact(
+    facts,
+    "Type",
+    found.device_type || configured.type || configured.grid_meter_type || ""
+  );
+  card.appendChild(facts);
+
+  const foot = document.createElement("div");
+  foot.className = "device-card-foot";
+  const readiness = document.createElement("span");
+  readiness.className =
+    "readiness " +
+    (item.state === "missing" || item.state === "conflict"
+      ? "not-ready"
+      : "ready");
+  readiness.textContent = stateLabel;
+  const state = document.createElement("span");
+  state.className = "mconfig-discovery-badge";
+  state.textContent = stateLabel;
+  foot.append(readiness, state);
+  card.appendChild(foot);
+
+  const actions = document.createElement("div");
+  actions.className = "mconfig-discovery-item-actions";
+
+  const actionState = mconfigDiscoveryActionState(item);
+  const accept = document.createElement("button");
+  accept.type = "button";
+  accept.className =
+    "primary-button compact " +
+    "mconfig-discovery-add-button " + actionState.cssClass;
+  accept.textContent = actionState.text;
+  accept.disabled = actionState.disabled;
+
+  if (!actionState.disabled) {
+    accept.addEventListener("click", () => {
+      let changed = false;
+      if (item.state === "conflict") {
+        const target = mconfigState.draft.devices[item.index];
+        if (target) {
+          target.ip = item.discovered.ip || target.ip;
+          renderMaintenanceInverters();
+          mconfigMarkDraftChanged("discovery");
+          changed = true;
+        }
+      } else {
+        changed = mconfigAddDiscovered(item);
+      }
+      if (!changed) return;
+
+      accept.disabled = true;
+      accept.classList.remove("is-add", "is-update");
+      accept.classList.add("is-added");
+      accept.textContent = "Added to draft";
+      mconfigAppendSourceBadge(sources, "selected", "source-mdns");
+
+      const ignore = actions.querySelector(".mconfig-discovery-ignore-button");
+      if (ignore) ignore.disabled = true;
+    });
+  }
+
+  actions.appendChild(accept);
+
+  if (item.state === "new" || item.state === "conflict") {
+    const ignore = document.createElement("button");
+    ignore.type = "button";
+    ignore.className =
+      "secondary-button compact mconfig-discovery-ignore-button";
+    ignore.textContent = "Ignore";
+    ignore.disabled = actionState.disabled;
+    ignore.addEventListener("click", () => {
+      accept.disabled = true;
+      ignore.disabled = true;
+      accept.classList.remove("is-add", "is-update");
+      accept.classList.add("is-ignored");
+      accept.textContent = "Ignored";
+      mconfigAppendSourceBadge(sources, "ignored", "source-scan");
+    });
+    actions.appendChild(ignore);
+  }
+
+  card.appendChild(actions);
+
+  return card;
+}
+
+function renderMaintenanceDiscoveryReview(results) {
+  if (!mconfigEls.discoveryResults || !mconfigEls.discoveryReview) return;
+  mconfigEls.discoveryResults.textContent = "";
+  mconfigEls.discoveryResults.className = "mconfig-discovery-results";
+  const counts = { found: 0, new: 0, missing: 0, conflict: 0 };
+  results.forEach((item) => {
+    counts[item.state] = (counts[item.state] || 0) + 1;
+  });
+  const configured = counts.found + counts.missing + counts.conflict;
+  const summary = document.createElement("div");
+  summary.className = "mconfig-discovery-summary";
+  const summaryTitle = document.createElement("strong");
+  const session = discoverySessions.maintenance;
+  summaryTitle.textContent = session.active
+    ? "Scanning…"
+    : session.progress.failed
+    ? "Discovery completed with warnings"
+    : "Discovery completed";
+  const summaryCounts = document.createElement("span");
+  summaryCounts.textContent =
+    "Configured: " + configured +
+    " · Found: " + counts.found +
+    " · New: " + counts.new +
+    " · Not found: " + counts.missing +
+    " · Conflict: " + counts.conflict +
+    " · Failed scans: " + session.progress.failed;
+  const summaryNote = document.createElement("span");
+  const supportedFound = results.some((item) => Boolean(item.discovered));
+  summaryNote.textContent =
+    (supportedFound
+      ? counts.new === 0
+        ? "No new devices found. "
+        : ""
+      : "No supported devices found. ") +
+    "Configured devices were kept in the draft. No changes applied yet.";
+  summary.append(summaryTitle, summaryCounts, summaryNote);
+  mconfigEls.discoveryResults.appendChild(summary);
+
+  const grid = document.createElement("div");
+  grid.className = "results-list mconfig-discovery-grid";
+  results.forEach((item) => {
+    grid.appendChild(renderMaintenanceDiscoveryCard(item));
+  });
+  mconfigEls.discoveryResults.appendChild(grid);
+  mconfigEls.discoveryReview.hidden = false;
+}
+
+let mconfigDiscovering = false;
+
+async function maintenanceScanNetwork(cidr) {
+  const start = await fetch("/api/discovery/scan", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cidr }),
+  });
+  const started = await start.json();
+  if (!start.ok || !started.scan_id) {
+    throw new Error(started.error || "scan request failed");
+  }
+  const deadline = Date.now() + POLL_MAX_MS;
+  while (Date.now() < deadline) {
+    const response = await fetch(
+      "/api/discovery/result/" + encodeURIComponent(started.scan_id)
+    );
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "scan result unavailable");
+    if (result.status !== "running") {
+      return Array.isArray(result.devices) ? result.devices : [];
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, POLL_INTERVAL_MS));
+  }
+  throw new Error("scan timed out");
+}
+
+function renderMaintenanceDiscoveryProgress(session) {
+  if (!mconfigEls.discoveryProgress) return;
+  const progress = session.progress;
+  const completed = progress.done + progress.failed;
+  mconfigEls.discoveryProgress.hidden = progress.total === 0;
+  mconfigEls.discoveryProgressBar.style.width =
+    discoveryProgressPercent(session) + "%";
+  mconfigEls.discoveryProgressText.textContent =
+    completed + " of " + progress.total + " work units checked · Found: " +
+    session.devices.size + " · Failed: " + progress.failed +
+    " · Active: " + progress.active;
+  if (mconfigState.loaded && (session.devices.size || progress.total)) {
+    renderMaintenanceDiscoveryReview(
+      buildMaintenanceDiscoveryReview(Array.from(session.devices.values()))
+    );
+  }
+}
+
+function maintenanceConfiguredCidrs() {
+  if (!mconfigState.draft) return [];
+  const addresses = (mconfigState.draft.devices || []).map((device) => device.ip);
+  if (mconfigState.draft.grid_meter && mconfigState.draft.grid_meter.present) {
+    addresses.push(mconfigState.draft.grid_meter.ip);
+  }
+  return addresses
+    .map((address) => validateManualScanInput(String(address || "") + "/24"))
+    .filter((result) => !result.error)
+    .map((result) => result.cidr);
+}
+
+function completeDiscoveryWork(session, failed, generation) {
+  if (generation !== undefined && generation !== session.generation) return;
+  session.progress.active = Math.max(0, session.progress.active - 1);
+  if (failed) session.progress.failed += 1;
+  else session.progress.done += 1;
+  session.active = session.progress.active > 0;
+  renderMaintenanceDiscoveryProgress(session);
+}
+
+async function startMaintenanceDiscovery() {
+  if (mconfigDiscovering) return;
+  mconfigDiscovering = true;
+  mconfigEls.discoveryStart.disabled = true;
+  mconfigEls.discoveryStart.textContent = "Discovering…";
+  mconfigEls.discoveryCancel.hidden = true;
+  mconfigEls.discoveryStatus.textContent =
+    "Searching mDNS and recommended LAN networks…";
+  try {
+    if (!mconfigState.loaded) {
+      const loaded = await loadMaintenanceConfig();
+      if (!loaded || loaded.status !== "ok") throw new Error("config unavailable");
+    }
+    mconfigState.discoveryDraftChanges = 0;
+    const session = discoverySessions.maintenance;
+    const generation = session.generation;
+    session.active = true;
+    session.startedAt = session.startedAt || Date.now();
+    session.progress.total += 2;
+    session.progress.active += 2;
+    renderMaintenanceDiscoveryProgress(session);
+
+    const knownScans = queueDiscoveryScans(
+      session,
+      maintenanceConfiguredCidrs(),
+      "active_scan",
+      renderMaintenanceDiscoveryProgress
+    );
+    const mdnsWork = (async () => {
+      let failed = false;
+      try {
+        const refresh = await fetch("/api/discovery/mdns/refresh", { method: "POST" });
+        if (!refresh.ok) throw new Error("mDNS refresh failed");
+        const response = await fetch("/api/discovery/devices");
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "mDNS results unavailable");
+        if (generation !== session.generation) return;
+        (Array.isArray(data.devices) ? data.devices : []).forEach((device) =>
+          mergeDiscoveryDevice(session, device, "mdns")
+        );
+      } catch (err) {
+        failed = true;
+      }
+      completeDiscoveryWork(session, failed, generation);
+    })();
+    const networkWork = (async () => {
+      let failed = false;
+      try {
+        const response = await fetch("/api/discovery/networks");
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "network discovery failed");
+        if (generation !== session.generation) return;
+        const cidrs = (Array.isArray(data.networks) ? data.networks : [])
+          .filter((network) => network.scan_recommended && !network.is_docker_like)
+          .map((network) => network.cidr)
+          .filter(Boolean);
+        cidrs.forEach((cidr) => session.networks.set(cidr, { cidr }));
+        completeDiscoveryWork(session, false, generation);
+        await queueDiscoveryScans(
+          session,
+          cidrs,
+          "active_scan",
+          renderMaintenanceDiscoveryProgress
+        );
+        return;
+      } catch (err) {
+        failed = true;
+      }
+      completeDiscoveryWork(session, failed, generation);
+    })();
+    await Promise.all([knownScans, mdnsWork, networkWork]);
+    if (generation !== session.generation) return;
+
+    const results = buildMaintenanceDiscoveryReview(
+      Array.from(session.devices.values())
+    );
+    renderMaintenanceDiscoveryReview(results);
+    mconfigEls.discoveryCancel.hidden = false;
+    mconfigEls.discoveryStatus.textContent = session.progress.failed
+      ? "Discovery completed with warnings. Retained results and the in-memory draft are unchanged."
+      : "Discovery completed. Results are retained until you reset them.";
+  } catch (err) {
+    mconfigEls.discoveryStatus.textContent =
+      "Discovery failed. The current in-memory draft and config.json are unchanged.";
+  } finally {
+    mconfigDiscovering = false;
+    mconfigEls.discoveryStart.disabled = false;
+    mconfigEls.discoveryStart.textContent = "Start discovery";
+  }
+}
+
+async function runMaintenanceManualScan(event) {
+  event.preventDefault();
+  const checked = validateManualScanInput(mconfigEls.discoveryManualInput.value);
+  if (checked.error) {
+    mconfigEls.discoveryError.hidden = false;
+    mconfigEls.discoveryError.textContent = checked.error;
+    return;
+  }
+  if (!mconfigState.loaded) {
+    const loaded = await loadMaintenanceConfig();
+    if (!loaded || loaded.status !== "ok") return;
+  }
+  mconfigEls.discoveryError.hidden = true;
+  mconfigEls.discoveryError.textContent = "";
+  mconfigEls.discoveryManualScan.disabled = true;
+  mconfigEls.discoveryStatus.textContent = "Running manual scan…";
+  const generation = discoverySessions.maintenance.generation;
+  await queueDiscoveryScans(
+    discoverySessions.maintenance,
+    [checked.cidr],
+    "manual_scan",
+    renderMaintenanceDiscoveryProgress
+  );
+  mconfigEls.discoveryManualScan.disabled = false;
+  if (generation !== discoverySessions.maintenance.generation) return;
+  renderMaintenanceDiscoveryProgress(discoverySessions.maintenance);
+  mconfigEls.discoveryStatus.textContent = discoverySessions.maintenance.progress.failed
+    ? "Manual scan completed with warnings. Previous results were retained."
+    : "Manual scan completed. Previous results were retained.";
+  mconfigEls.discoveryCancel.hidden = false;
+}
+
+function resetMaintenanceDiscovery() {
+  resetDiscoverySession(discoverySessions.maintenance);
+  if (mconfigEls.discoveryReview) mconfigEls.discoveryReview.hidden = true;
+  if (mconfigEls.discoveryCancel) mconfigEls.discoveryCancel.hidden = true;
+  if (mconfigEls.discoveryProgress) mconfigEls.discoveryProgress.hidden = true;
+  if (mconfigEls.discoveryError) mconfigEls.discoveryError.hidden = true;
+  mconfigEls.discoveryStatus.textContent =
+    "Discovery results reset. The in-memory config draft was not changed.";
+}
+
+function closeMaintenanceDiscovery() {
+  if (mconfigEls.discoveryReview) mconfigEls.discoveryReview.hidden = true;
+  if (mconfigEls.discoveryCancel) mconfigEls.discoveryCancel.hidden = true;
+  if (mconfigEls.discoveryStatus) {
+    mconfigEls.discoveryStatus.textContent =
+      "Discovery result closed. The current in-memory draft was kept.";
+  }
+}
+
+async function addManualMaintenanceInverter() {
+  if (!mconfigState.loaded) {
+    const loaded = await loadMaintenanceConfig();
+    if (!loaded || loaded.status !== "ok") return;
+  }
+  mconfigAddInverter();
+  mconfigMarkDraftChanged("manual");
+  if (mconfigEls.discoveryReview) mconfigEls.discoveryReview.hidden = true;
+  if (mconfigEls.discoveryCancel) mconfigEls.discoveryCancel.hidden = true;
+  if (mconfigEls.discoveryStatus) {
+    mconfigEls.discoveryStatus.textContent =
+      "Manual inverter added to the in-memory draft. Complete its fields, then preview the changes.";
+  }
+}
+
+// --- features -------------------------------------------------------------
+
+function mconfigFeatureControl(field, path) {
+  const features = mconfigState.draft.features || (mconfigState.draft.features = {});
+  const value = features[path];
+  if (field.type === "boolean") {
+    return mconfigCheckboxControl(value, (checked) => {
+      features[path] = checked;
+    });
+  }
+  if (Array.isArray(field.options) && field.options.length) {
+    const options = field.options.map((opt) => ({ value: opt, label: String(opt) }));
+    return mconfigSelectControl(value == null ? "" : value, options, (v) => {
+      features[path] = v;
+    });
+  }
+  const numeric = field.type === "integer" || field.type === "number";
+  const display = Array.isArray(value) ? value.join(", ") : value;
+  return mconfigTextControl(display, (v) => {
+    features[path] = v;
+  }, numeric ? "number" : "text");
+}
+
+function mconfigFeatureFields(fields) {
+  const list = document.createElement("div");
+  list.className = "mconfig-fields feature-fields";
+  fields.forEach((field) => {
+    list.appendChild(
+      mconfigLabelRow(
+        field.label || field.path,
+        mconfigFeatureControl(field, field.path),
+        field.description || "",
+        field.unit || ""
+      )
+    );
+  });
+  return list;
+}
+
+function mconfigFeatureBody(section) {
+  const body = document.createElement("div");
+  const enabledPath = featureEnabledPath(section);
+  const levels = { normal: [], advanced: [], expert: [] };
+  (section.fields || []).forEach((field) => {
+    if (field.path === enabledPath || FEATURE_LEVELS_HIDDEN.has(field.level)) return;
+    const level =
+      field.level === "advanced" || field.level === "expert" ? field.level : "normal";
+    levels[level].push(field);
+  });
+  body.appendChild(mconfigFeatureFields(levels.normal));
+  [
+    ["advanced", "Advanced settings"],
+    ["expert", "Developer / expert settings"],
+  ].forEach(([level, label]) => {
+    if (!levels[level].length) return;
+    const details = document.createElement("details");
+    details.className = level === "expert" ? "feature-expert" : "feature-advanced";
+    const summary = document.createElement("summary");
+    summary.textContent = label;
+    details.append(summary, mconfigFeatureFields(levels[level]));
+    body.appendChild(details);
+  });
+  return body;
+}
+
+function renderMaintenanceFeatureSection(section) {
+  const id = String(section.id || "feature");
+  const enabledPath = featureEnabledPath(section);
+  const features = mconfigState.draft.features || (mconfigState.draft.features = {});
+  const enabled = enabledPath ? Boolean(features[enabledPath]) : null;
+  const card = document.createElement("div");
+  card.className = "feature-row mconfig-feature";
+  card.setAttribute("role", "listitem");
+  card.dataset.featureId = id;
+  if (enabled === false) card.dataset.disabled = "true";
+  const head = document.createElement("div");
+  head.className = "feature-row-head";
+  let status;
+  if (enabledPath) {
+    const checkbox = mconfigCheckboxControl(enabled, (checked) => {
+      features[enabledPath] = checked;
+      status.textContent = checked ? "Enabled" : "Disabled";
+      card.dataset.disabled = checked ? "false" : "true";
+    });
+    checkbox.className = "feature-enable";
+    checkbox.setAttribute("aria-label", "Enable " + (section.title || id));
+    head.appendChild(checkbox);
+  }
+  const summary = document.createElement("button");
+  summary.type = "button";
+  summary.className = "feature-row-summary";
+  const title = document.createElement("span");
+  title.className = "feature-title";
+  title.textContent = section.title || id;
+  const description = document.createElement("span");
+  description.className = "feature-desc";
+  description.textContent = section.description || section.summary || "";
+  status = document.createElement("span");
+  status.className = "feature-status";
+  status.textContent = enabled === null ? "Configured" : enabled ? "Enabled" : "Disabled";
+  const caret = document.createElement("span");
+  caret.className = "feature-caret";
+  caret.setAttribute("aria-hidden", "true");
+  summary.append(title, description, status, caret);
+  head.appendChild(summary);
+  card.appendChild(head);
+  const body = document.createElement("div");
+  body.className = "feature-body";
+  body.id = "maintenance-feature-body-" + id.replace(/[^a-z0-9]/gi, "-");
+  body.appendChild(mconfigFeatureBody(section));
+  card.appendChild(body);
+  summary.setAttribute("aria-controls", body.id);
+  const setOpen = (open) => {
+    if (open) mconfigState.openFeatures.add(id);
+    else mconfigState.openFeatures.delete(id);
+    mconfigSetExpanded(card, body, caret, [summary], open);
+  };
+  summary.addEventListener("click", () => setOpen(card.dataset.open !== "true"));
+  setOpen(mconfigState.openFeatures.has(id));
+  return card;
+}
+
+function renderMaintenanceFeatures() {
+  const sections = (mconfigState.catalog && mconfigState.catalog.feature_sections) || [];
+  if (mconfigEls.features) mconfigEls.features.textContent = "";
+  if (mconfigEls.advanced) mconfigEls.advanced.textContent = "";
+  for (const section of sections) {
+    const target = section.setup_group === "advanced" ? mconfigEls.advanced : mconfigEls.features;
+    if (target) target.appendChild(renderMaintenanceFeatureSection(section));
+  }
+}
+
+// --- load / render --------------------------------------------------------
+
+function mconfigSummaryLine(summary) {
+  const devices = summary.device_count || 0;
+  const parts = [devices + (devices === 1 ? " inverter" : " inverters")];
+  parts.push(summary.grid_meter_type ? summary.grid_meter_type + " grid meter" : "grid meter missing");
+  return parts.join(" · ");
+}
+
+function renderMaintenanceConfig(data) {
+  if (data.status !== "ok") {
+    mconfigState.loaded = false;
+    if (mconfigEls.editor) mconfigEls.editor.hidden = true;
+    setMaintenanceFact(mconfigEls.source, data.config_path || "—", "muted");
+    if (mconfigEls.message) mconfigEls.message.textContent = data.message || "";
+    const label = data.status === "missing" ? "Config not found" : "Config invalid";
+    setMaintenanceFact(mconfigEls.summary, label, "warn");
+    setMaintenanceCardTone("maintenance-config-card", "warn");
+    return;
+  }
+
+  mconfigState.loaded = true;
+  mconfigState.catalog = data.catalog || { feature_sections: [], grid_meter_types: [] };
+  mconfigState.revision = data.revision || null;
+  mconfigState.previewFingerprint = null;
+  mconfigState.discoveryDraftChanges = 0;
+  mconfigState.pristine = mconfigClone(data.draft || {});
+  mconfigState.draft = mconfigClone(data.draft || {});
+  mconfigState.openHardware.clear();
+  mconfigState.openFeatures.clear();
+
+  setMaintenanceFact(mconfigEls.source, data.config_path || "—", "muted");
+  if (mconfigEls.message) mconfigEls.message.textContent = "";
+  if (mconfigEls.editor) mconfigEls.editor.hidden = false;
+  if (mconfigEls.result) mconfigEls.result.hidden = true;
+  if (mconfigEls.applyPanel) mconfigEls.applyPanel.hidden = true;
+  if (mconfigEls.applyBtn) mconfigEls.applyBtn.hidden = false;
+  if (mconfigEls.applyStatus) mconfigEls.applyStatus.textContent = "";
+  if (mconfigEls.postApply) mconfigEls.postApply.hidden = true;
+  if (mconfigEls.containersSyncStatus) mconfigEls.containersSyncStatus.textContent = "";
+
+  renderMaintenanceGridMeter();
+  renderMaintenanceInverters();
+  renderMaintenanceFeatures();
+
+  const line = mconfigSummaryLine(data.summary || {});
+  mconfigState.summaryLine = line;
+  setMaintenanceFact(mconfigEls.summary, line + " · preview not run", null);
+  setMaintenanceCardTone("maintenance-config-card", "ok");
+}
+
+let mconfigLoading = false;
+
+async function loadMaintenanceConfig() {
+  if (mconfigLoading) return null;
+  mconfigLoading = true;
+  try {
+    const resp = await fetch("/api/admin/maintenance/config");
+    if (!resp.ok) throw new Error("maintenance config request failed");
+    const data = await resp.json();
+    renderMaintenanceConfig(data);
+    return data;
+  } catch (err) {
+    if (mconfigEls.editor) mconfigEls.editor.hidden = true;
+    setMaintenanceFact(mconfigEls.summary, "Could not load config", "warn");
+    if (mconfigEls.message) {
+      mconfigEls.message.textContent =
+        "Could not load the current config. The Admin server may be unavailable.";
+    }
+    return null;
+  } finally {
+    mconfigLoading = false;
+  }
+}
+
+// --- preview --------------------------------------------------------------
+
+function renderMaintenanceConfigChange(entry, kind) {
+  const row = document.createElement("div");
+  row.className = "mconfig-change";
+  row.dataset.kind = kind;
+  const path = document.createElement("span");
+  path.className = "mconfig-change-path";
+  path.textContent = entry.path;
+  row.appendChild(path);
+  const value = document.createElement("span");
+  value.className = "mconfig-change-value";
+  if (kind === "changed") {
+    value.textContent = mconfigDisplayValue(entry.before) + " → " + mconfigDisplayValue(entry.after);
+  } else if (kind === "added") {
+    value.textContent = "+ " + mconfigDisplayValue(entry.after);
+  } else {
+    value.textContent = "− " + mconfigDisplayValue(entry.before);
+  }
+  row.appendChild(value);
+  return row;
+}
+
+function mconfigDisplayValue(value) {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "boolean") return value ? "true" : "false";
+  return String(value);
+}
+
+function renderMaintenanceConfigPreview(data) {
+  if (!mconfigEls.result) return;
+  if (data.status !== "ok") {
+    mconfigState.previewFingerprint = null;
+    if (mconfigEls.applyPanel) mconfigEls.applyPanel.hidden = true;
+    mconfigEls.result.hidden = false;
+    setMaintenanceFact(mconfigEls.validation, data.status || "error", "warn");
+    setMaintenanceFact(mconfigEls.changeSummary, "—", "muted");
+    if (mconfigEls.changes) mconfigEls.changes.textContent = "";
+    if (mconfigEls.warnings) mconfigEls.warnings.textContent = data.message || "";
+    if (mconfigEls.raw) mconfigEls.raw.hidden = true;
+    return;
+  }
+
+  mconfigEls.result.hidden = false;
+  const validation = data.validation || {};
+  const ok = Boolean(validation.ok);
+  mconfigState.previewFingerprint = ok
+    ? JSON.stringify(mconfigState.draft)
+    : null;
+  if (mconfigEls.applyPanel) {
+    mconfigEls.applyPanel.hidden = !ok || !data.changed;
+  }
+  setMaintenanceFact(
+    mconfigEls.validation,
+    ok ? "valid" : (validation.errors || []).length + " error(s)",
+    ok ? "ok" : "warn"
+  );
+
+  const diff = data.diff || { changes: [], added: [], removed: [] };
+  const total = (diff.changes || []).length + (diff.added || []).length + (diff.removed || []).length;
+  setMaintenanceFact(
+    mconfigEls.changeSummary,
+    data.changed ? total + " change(s)" : "no changes",
+    data.changed ? "ok" : "muted"
+  );
+
+  if (mconfigEls.changes) {
+    mconfigEls.changes.textContent = "";
+    (diff.changes || []).forEach((e) => mconfigEls.changes.appendChild(renderMaintenanceConfigChange(e, "changed")));
+    (diff.added || []).forEach((e) => mconfigEls.changes.appendChild(renderMaintenanceConfigChange(e, "added")));
+    (diff.removed || []).forEach((e) => mconfigEls.changes.appendChild(renderMaintenanceConfigChange(e, "removed")));
+  }
+
+  if (mconfigEls.warnings) {
+    const notes = []
+      .concat((validation.errors || []).map((i) => i.message))
+      .concat((validation.warnings || []).map((i) => i.message))
+      .filter(Boolean);
+    mconfigEls.warnings.textContent = notes.join(" · ");
+  }
+
+  if (mconfigEls.raw && mconfigEls.rawPre) {
+    if (data.preview) {
+      mconfigEls.rawPre.textContent = JSON.stringify(data.preview, null, 2);
+      mconfigEls.raw.hidden = false;
+    } else {
+      mconfigEls.raw.hidden = true;
+    }
+  }
+
+  setMaintenanceFact(
+    mconfigEls.summary,
+    (ok ? "config valid" : "config invalid") + " · " + (data.changed ? total + " change(s)" : "no changes"),
+    ok ? "ok" : "warn"
+  );
+}
+
+let mconfigPreviewing = false;
+
+async function previewMaintenanceConfig() {
+  if (mconfigPreviewing || !mconfigState.loaded) return;
+  mconfigPreviewing = true;
+  const button = mconfigEls.previewBtn;
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Previewing…";
+  }
+  try {
+    const resp = await fetch("/api/admin/maintenance/config/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ draft: mconfigState.draft }),
+    });
+    if (!resp.ok) throw new Error("preview request failed");
+    renderMaintenanceConfigPreview(await resp.json());
+  } catch (err) {
+    if (mconfigEls.result) mconfigEls.result.hidden = false;
+    setMaintenanceFact(mconfigEls.validation, "preview failed", "warn");
+    if (mconfigEls.warnings) {
+      mconfigEls.warnings.textContent = "Could not preview the config draft.";
+    }
+  } finally {
+    mconfigPreviewing = false;
+    if (button) {
+      button.disabled = false;
+      button.textContent = "Preview changes";
+    }
+  }
+}
+
+function resetMaintenanceConfigDraft() {
+  if (!mconfigState.pristine) return;
+  mconfigState.draft = mconfigClone(mconfigState.pristine);
+  renderMaintenanceGridMeter();
+  renderMaintenanceInverters();
+  renderMaintenanceFeatures();
+  if (mconfigEls.result) mconfigEls.result.hidden = true;
+  if (mconfigEls.applyPanel) mconfigEls.applyPanel.hidden = true;
+  mconfigState.previewFingerprint = null;
+  setMaintenanceFact(
+    mconfigEls.summary,
+    (mconfigState.summaryLine || "Config loaded") + " · preview not run",
+    null
+  );
+}
+
+if (mconfigEls.addInverter) {
+  mconfigEls.addInverter.addEventListener("click", addManualMaintenanceInverter);
+}
+if (mconfigEls.discoveryStart) {
+  mconfigEls.discoveryStart.addEventListener("click", startMaintenanceDiscovery);
+}
+if (mconfigEls.discoveryCancel) {
+  mconfigEls.discoveryCancel.addEventListener("click", closeMaintenanceDiscovery);
+}
+if (mconfigEls.discoveryManualForm) {
+  mconfigEls.discoveryManualForm.addEventListener("submit", runMaintenanceManualScan);
+}
+if (mconfigEls.discoveryReset) {
+  mconfigEls.discoveryReset.addEventListener("click", resetMaintenanceDiscovery);
+}
+if (mconfigEls.previewBtn) mconfigEls.previewBtn.addEventListener("click", previewMaintenanceConfig);
+if (mconfigEls.resetBtn) mconfigEls.resetBtn.addEventListener("click", resetMaintenanceConfigDraft);
+
+let mconfigApplying = false;
+
+async function applyMaintenanceConfig() {
+  if (mconfigApplying || !mconfigState.loaded) return;
+  if (JSON.stringify(mconfigState.draft) !== mconfigState.previewFingerprint) {
+    mconfigEls.applyStatus.textContent =
+      "The draft changed after preview. Preview the current draft before applying.";
+    return;
+  }
+  const backup = !mconfigEls.backup || mconfigEls.backup.checked;
+  const warning = backup
+    ? "Apply the reviewed draft to config/config.json? A backup will be created first."
+    : "Apply without a backup? You will not have an Admin rollback copy for this change.";
+  if (!window.confirm(warning)) return;
+  mconfigApplying = true;
+  mconfigEls.applyBtn.disabled = true;
+  mconfigEls.applyBtn.textContent = "Applying…";
+  mconfigEls.applyStatus.textContent = "Validating and applying the reviewed draft…";
+  try {
+    const resp = await fetch("/api/admin/maintenance/config/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        draft: mconfigState.draft,
+        revision: mconfigState.revision,
+        confirm: true,
+        backup,
+      }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data.ok) {
+      throw new Error(data.message || data.error || "Could not apply the config draft.");
+    }
+    const successMessage =
+      "Config updated at " + data.path +
+      (data.backup_path ? " · backup: " + data.backup_path : " · no backup created");
+    await loadMaintenanceConfig();
+    // Refresh the overview facts only: config + container plan are handled
+    // explicitly below so the guided post-apply panel is not reset.
+    await loadMaintenanceOverview({
+      refreshConfig: false,
+      refreshContainerPlan: false,
+    });
+    if (mconfigEls.result) mconfigEls.result.hidden = false;
+    mconfigEls.applyPanel.hidden = false;
+    mconfigEls.applyBtn.hidden = true;
+    if (data.changed === false) {
+      // A no-op apply must not push the guided restart step: nothing was written.
+      if (mconfigEls.postApply) mconfigEls.postApply.hidden = true;
+      mconfigEls.applyStatus.textContent =
+        "No config changes were written. Container restart is not required.";
+      setMaintenanceFact(mconfigEls.summary, "No config changes written", "muted");
+    } else {
+      mconfigEls.applyStatus.textContent = successMessage;
+      setMaintenanceFact(mconfigEls.summary, "Config updated · container sync recommended", "ok");
+      setMaintenanceCardTone("maintenance-config-card", "action");
+      // Do not auto-run diagnostics here: they would still hit the old container
+      // and config. The user runs diagnostics after the container sync.
+      await loadMaintenanceContainerPlan({ showPostApply: true });
+      if (mconfigEls.postApply) {
+        mconfigEls.postApply.hidden = false;
+        mconfigEls.postApply.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }
+    }
+  } catch (err) {
+    mconfigEls.applyStatus.textContent = err.message || String(err);
+  } finally {
+    mconfigApplying = false;
+    mconfigEls.applyBtn.disabled = false;
+    mconfigEls.applyBtn.textContent = "Apply reviewed draft";
+  }
+}
+
+const CONTAINER_SYNC_LABEL = "Restart / sync containers";
+const CONTAINER_SYNC_CONFIRM =
+  "Restart / sync containers with the current config? This may recreate EMS and " +
+  "start or stop optional feature containers. It will not delete config, data, " +
+  "containers, volumes, or backups.";
+
+// Both host panels (post-apply completion block and the always-visible Runtime
+// containers section) render from the same plan; keep their target handles here.
+function containerPlanTargets() {
+  return [
+    {
+      emsDesired: mconfigEls.postEmsDesired,
+      influxDesired: mconfigEls.postInfluxDesired,
+      actionSummary: mconfigEls.postActionSummary,
+      syncButton: mconfigEls.containersSync,
+    },
+    {
+      emsDesired: maintenanceEls.runtimeEmsDesired,
+      influxDesired: maintenanceEls.runtimeInfluxDesired,
+      actionSummary: maintenanceEls.runtimeActionSummary,
+      syncButton: maintenanceEls.runtimeContainersSync,
+    },
+  ];
+}
+
+async function loadMaintenanceContainerPlan(options = {}) {
+  const showPostApply = options.showPostApply === true;
+  if (showPostApply && mconfigEls.postApply) {
+    mconfigEls.postApply.hidden = false;
+  }
+  containerPlanTargets().forEach((targets) => {
+    if (targets.actionSummary) targets.actionSummary.textContent = "Checking container state…";
+  });
+  try {
+    const resp = await fetch("/api/admin/maintenance/containers/plan");
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data.ok) {
+      setContainerPlanUnavailable(data.message || "Container plan unavailable");
+      return;
+    }
+    renderMaintenanceContainerPlan(data);
+  } catch (err) {
+    setContainerPlanUnavailable("Container plan unavailable");
+  }
+}
+
+function setContainerPlanUnavailable(message) {
+  containerPlanTargets().forEach((targets) => {
+    setMaintenanceFact(targets.actionSummary, message, "warn");
+    if (targets.syncButton) targets.syncButton.disabled = true;
+  });
+  setMaintenanceFact(maintenanceEls.ems, "unavailable", "muted");
+  setMaintenanceFact(maintenanceEls.emsDetail, "", "muted");
+  setMaintenanceFact(maintenanceEls.influx, "unavailable", "muted");
+  setMaintenanceFact(maintenanceEls.influxDetail, "", "muted");
+  setMaintenanceFact(maintenanceEls.containersSummary, message, "warn");
+  setMaintenanceCardTone("maintenance-containers", "warn");
+}
+
+function renderContainerPlanInto(plan, targets) {
+  const services = plan.services || {};
+  const ems = services.ems || {};
+  const influx = services.influxdb || {};
+  const emsDesired = ems.desired_state || "unknown";
+  const influxDesired = influx.desired_state || "unknown";
+  setMaintenanceFact(
+    targets.emsDesired,
+    emsDesired,
+    emsDesired === "running" ? "ok" : "muted"
+  );
+  setMaintenanceFact(
+    targets.influxDesired,
+    influxDesired,
+    influxDesired === "running" ? "ok" : "muted"
+  );
+  setMaintenanceFact(targets.actionSummary, plan.summary || "No action required", null);
+  const hasActions =
+    Array.isArray(plan.actions) && plan.actions.some((item) => item.action !== "none");
+  if (targets.syncButton) {
+    targets.syncButton.disabled = !hasActions || !plan.available;
+  }
+}
+
+// The Runtime containers card (02) surfaces the derived feature/container status
+// so a disabled feature reads as "Disabled", not a broken "missing" container.
+function renderRuntimeServiceStatus(plan) {
+  const services = plan.services || {};
+  const ems = services.ems || {};
+  const influx = services.influxdb || {};
+  setMaintenanceFact(maintenanceEls.ems, ems.display_label || "unknown", ems.tone || "muted");
+  setMaintenanceFact(maintenanceEls.emsDetail, ems.display_detail || "", "muted");
+  setMaintenanceFact(
+    maintenanceEls.influx,
+    influx.display_label || "unknown",
+    influx.tone || "muted"
+  );
+  setMaintenanceFact(maintenanceEls.influxDetail, influx.display_detail || "", "muted");
+
+  const summaryText = plan.available
+    ? plan.status_summary || "Container status unavailable"
+    : plan.message || "Docker unavailable";
+  const tone = !plan.available
+    ? "warn"
+    : containerSummaryTone(ems.tone, influx.tone);
+  setMaintenanceFact(maintenanceEls.containersSummary, summaryText, tone);
+  setMaintenanceCardTone("maintenance-containers", tone);
+}
+
+function containerSummaryTone(...tones) {
+  if (tones.includes("warn")) return "warn";
+  if (tones.includes("info")) return "info";
+  if (tones.includes("ok")) return "ok";
+  return "muted";
+}
+
+function renderMaintenanceContainerPlan(plan) {
+  containerPlanTargets().forEach((targets) => renderContainerPlanInto(plan, targets));
+  renderRuntimeServiceStatus(plan);
+}
+
+const CONTAINER_STEP_LABELS = {
+  "influxdb:init": "InfluxDB init",
+  "influxdb:start": "InfluxDB start",
+  "influxdb:stop": "InfluxDB stop",
+  "influxdb:sync": "InfluxDB sync",
+  "ems:recreate": "EMS recreate",
+};
+
+function formatContainerSyncSteps(steps) {
+  if (!Array.isArray(steps) || steps.length === 0) return "";
+  return steps
+    .map((step) => {
+      const label =
+        CONTAINER_STEP_LABELS[`${step.service}:${step.action}`] ||
+        `${step.service} ${step.action}`;
+      return `${label} ${step.status}`;
+    })
+    .join(", ");
+}
+
+function setContainerSyncBusy(isBusy) {
+  const buttons = [mconfigEls.containersSync, maintenanceEls.runtimeContainersSync].filter(Boolean);
+  buttons.forEach((button) => {
+    button.disabled = isBusy;
+    button.textContent = isBusy ? "Syncing…" : CONTAINER_SYNC_LABEL;
+  });
+}
+
+async function syncMaintenanceContainers(statusEl, reason = "manual") {
+  if (!window.confirm(CONTAINER_SYNC_CONFIRM)) return;
+  setContainerSyncBusy(true);
+  if (statusEl) statusEl.textContent = "Synchronizing containers…";
+  try {
+    const resp = await fetch("/api/admin/maintenance/containers/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm: true, reason }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data.ok) {
+      throw new Error(data.message || data.error || "Container sync failed.");
+    }
+    const stepSummary = formatContainerSyncSteps(data.steps);
+    if (statusEl) {
+      statusEl.textContent = stepSummary
+        ? `Container sync completed: ${stepSummary}.`
+        : "Container sync completed.";
+    }
+    // Refresh facts only; the container plan (and any visible post-apply panel)
+    // is reloaded explicitly so the guided view is preserved.
+    const keepPostApply = Boolean(mconfigEls.postApply && !mconfigEls.postApply.hidden);
+    await loadMaintenanceOverview({ refreshConfig: false, refreshContainerPlan: false });
+    await loadMaintenanceContainerPlan({ showPostApply: keepPostApply });
+  } catch (err) {
+    if (statusEl) statusEl.textContent = err.message || String(err);
+  } finally {
+    setContainerSyncBusy(false);
+  }
+}
+
+if (mconfigEls.applyBtn) {
+  mconfigEls.applyBtn.addEventListener("click", applyMaintenanceConfig);
+}
+if (mconfigEls.containersSync) {
+  mconfigEls.containersSync.addEventListener("click", () =>
+    syncMaintenanceContainers(mconfigEls.containersSyncStatus, "config_apply")
+  );
+}
+if (mconfigEls.containersRecheck) {
+  mconfigEls.containersRecheck.addEventListener("click", async () => {
+    await loadMaintenanceOverview({ refreshConfig: false, refreshContainerPlan: false });
+    await loadMaintenanceContainerPlan({ showPostApply: true });
+  });
+}
+if (mconfigEls.postDiagnostics) {
+  mconfigEls.postDiagnostics.addEventListener("click", runDiagnostics);
+}
+if (maintenanceEls.runtimeContainersSync) {
+  maintenanceEls.runtimeContainersSync.addEventListener("click", () =>
+    syncMaintenanceContainers(maintenanceEls.runtimeContainersStatus, "manual")
+  );
+}
+if (maintenanceEls.runtimeContainersRecheck) {
+  maintenanceEls.runtimeContainersRecheck.addEventListener("click", async () => {
+    await loadMaintenanceOverview({ refreshConfig: false, refreshContainerPlan: false });
+    await loadMaintenanceContainerPlan({ showPostApply: false });
+  });
+}
+if (maintenanceEls.runtimeDiagnostics) {
+  maintenanceEls.runtimeDiagnostics.addEventListener("click", runDiagnostics);
+}
+
 // The Admin UI opens on a router screen that detects the install state and
 // recommends the safest of the only two flows (set up new / manage existing).
 // The setup wizard must not auto-run when an install already exists, so its
@@ -5017,8 +6967,8 @@ if (diagnosticsEls.run) {
 // system". Every server-provided path/message passes through escapeHtml.
 
 const RECOMMEND_LABELS = {
-  setup_new: "Set up a new system",
-  manage_existing: "Manage my existing system",
+  setup_new: "Guided setup",
+  manage_existing: "Maintenance",
 };
 
 const startEls = {
@@ -5049,7 +6999,7 @@ function setStartError(message) {
 
 function renderRecommendation(state) {
   const recommended = state.recommended_path;
-  const label = escapeHtml(RECOMMEND_LABELS[recommended] || "Manage my existing system");
+  const label = escapeHtml(RECOMMEND_LABELS[recommended] || "Maintenance");
   const notes = []
     .concat(Array.isArray(state.reasons) ? state.reasons : [])
     .concat(Array.isArray(state.warnings) ? state.warnings : []);
@@ -5087,6 +7037,20 @@ function revealWorkspace() {
   workspaceRevealed = true;
 }
 
+// Return to the landing gate from any workspace page. Clears the hash without a
+// route so applyHashRoute (guarded on workspaceRevealed) can't re-open a panel.
+function showLanding() {
+  document.querySelectorAll("[data-admin-view-panel]").forEach((panel) => {
+    panel.hidden = true;
+  });
+  if (startEls.gate) startEls.gate.hidden = false;
+  if (startEls.continue) startEls.continue.disabled = false;
+  workspaceRevealed = false;
+  if (window.location.hash) {
+    history.replaceState(null, "", window.location.pathname + window.location.search);
+  }
+}
+
 function enterSetup() {
   revealWorkspace();
   if (!setupInitialized) initSetupWizard();
@@ -5098,8 +7062,32 @@ function enterMaintenance() {
   revealWorkspace();
   window.location.hash = "maintenance";
   setAdminView("maintenance");
-  loadMaintenanceOverview();
+  setMaintenancePath("hub");
 }
+
+// Forward navigation only sets the hash; applyHashRoute drives the panel switch
+// and the single overview load so opening a panel never double-fetches.
+document.querySelectorAll("[data-open-maintenance-path]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const path = button.dataset.openMaintenancePath;
+    if (!MAINTENANCE_PATHS.includes(path) || path === "hub") return;
+    window.location.hash = "maintenance-" + path;
+  });
+});
+
+// Shared "← Back" navigation: landing returns to the start gate, maintenance-hub
+// returns to the hub. Every workspace page carries one of these controls.
+function navigateBack(target) {
+  if (target === "maintenance-hub") {
+    window.location.hash = "maintenance";
+    return;
+  }
+  showLanding();
+}
+
+document.querySelectorAll("[data-back]").forEach((button) => {
+  button.addEventListener("click", () => navigateBack(button.dataset.back));
+});
 
 async function migrateLegacyConfig() {
   const resp = await fetch("/api/admin/config/migrate-legacy", {

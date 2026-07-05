@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Apply a validated Admin setup config to the resolved real EMS config path."""
 
+import hashlib
 import json
 
 import pytest
@@ -125,6 +126,43 @@ def test_apply_rejects_invalid_config_and_keeps_existing(tmp_path):
         service.apply([], 0)
 
     assert target.read_bytes() == original
+
+
+def test_apply_maintenance_reports_changed_on_real_write(tmp_path):
+    install_root = tmp_path / "ems"
+    target = install_root / "config" / "config.json"
+    target.parent.mkdir(parents=True)
+    current = b'{"system": {"max_total_power": 111}, "devices": []}\n'
+    target.write_bytes(current)
+    revision = hashlib.sha256(current).hexdigest()
+
+    service = _service(tmp_path / "admin", install_root)
+    payload = b'{"system": {"max_total_power": 222}, "devices": []}\n'
+    result = service.apply_maintenance(payload, revision)
+
+    assert result["ok"] is True
+    assert result["changed"] is True
+    assert result["backup_path"] is not None
+    assert target.read_bytes() == payload
+
+
+def test_apply_maintenance_reports_unchanged_on_noop_apply(tmp_path):
+    install_root = tmp_path / "ems"
+    target = install_root / "config" / "config.json"
+    target.parent.mkdir(parents=True)
+    current = b'{"system": {"max_total_power": 111}, "devices": []}\n'
+    target.write_bytes(current)
+    revision = hashlib.sha256(current).hexdigest()
+
+    service = _service(tmp_path / "admin", install_root)
+    result = service.apply_maintenance(current, revision)
+
+    assert result["ok"] is True
+    assert result["changed"] is False
+    # A no-op apply must not create a backup or rewrite the target.
+    assert result["backup_path"] is None
+    assert not (tmp_path / "admin" / "backups" / "config").exists()
+    assert target.read_bytes() == current
 
 
 def test_apply_failure_leaves_existing_config_unchanged(tmp_path):

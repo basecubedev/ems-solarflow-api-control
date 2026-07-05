@@ -113,6 +113,65 @@ code {
 }
 
 .maintenance-view { display: flex; flex-direction: column; gap: 10px; }
+.maintenance-hub { display: flex; flex-direction: column; gap: 10px; }
+.maintenance-path-card { padding: 14px 16px; }
+.maintenance-path-card .control-stage-head { margin-bottom: 10px; }
+.maintenance-path-card .source-badge { margin-left: auto; }
+.maintenance-path-card .future-note { margin: 0; }
+
+/* The guided upgrade is the recommended default path: a subtle accent border
+   and matching badge, without introducing a new colour. */
+.maintenance-path-card.is-primary {
+  border-color: color-mix(in srgb, var(--output) 55%, var(--border));
+  background: color-mix(in srgb, var(--output) 6%, transparent);
+}
+.maintenance-recommended-badge {
+  margin-left: auto;
+  font-size: 9px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  padding: 1px 7px;
+  border-radius: 999px;
+  color: var(--output);
+  border: 1px solid color-mix(in srgb, var(--output) 55%, var(--border));
+}
+
+/* The manual path is a full-width navigation button (like choosing a landing
+   option): the whole card is clickable and drills into the manual page. */
+.maintenance-path-nav {
+  appearance: none;
+  display: block;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  transition: border-color .15s ease, transform .1s ease;
+}
+.maintenance-path-nav .control-stage-head { margin-bottom: 0; }
+.maintenance-path-nav:hover { border-color: var(--output); }
+.maintenance-path-nav:active { transform: translateY(1px); }
+.maintenance-path-nav:focus-visible { outline: 2px solid var(--output); outline-offset: 2px; }
+.maintenance-path-arrow { margin-left: auto; font-size: 18px; color: var(--output); }
+
+.workspace-nav { margin-bottom: 12px; }
+.workspace-back {
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 12px;
+  cursor: pointer;
+  flex: 0 0 auto;
+  transition: border-color .15s ease, color .15s ease;
+}
+.workspace-back:hover { color: var(--text); border-color: var(--output); }
+.workspace-back:focus-visible { outline: 2px solid var(--output); outline-offset: 2px; }
+.maintenance-head .workspace-back { margin-right: 4px; }
 .maintenance-head { display: flex; align-items: flex-start; gap: 10px; }
 .maintenance-head-titles { display: flex; flex-direction: column; gap: 2px; flex: 1 1 auto; min-width: 0; }
 .maintenance-head .refresh-button { margin-left: auto; flex: 0 0 auto; }
@@ -145,13 +204,28 @@ code {
 
 /* Compact collapsible cards mirror the Setup feature-row: a clickable summary
    header (title + one-line status + caret) over a body that stays hidden until
-   expanded. */
-.maintenance-card { padding: 0; box-shadow: none; }
-.maintenance-card-head { margin-bottom: 0; padding: 10px 12px; }
+   expanded. Tone (set from live data) drives the left accent, step badge, and
+   summary color so the collapsed overview reads as status tiles. */
+.maintenance-card {
+  position: relative;
+  overflow: hidden;
+  padding: 0;
+  min-height: 58px;
+  border-color: var(--border);
+}
+.maintenance-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--accent2);
+  opacity: 0.7;
+}
+.maintenance-card-head { margin-bottom: 0; padding: 14px 16px; }
 .maintenance-card-summary {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   flex: 1 1 auto;
   min-width: 0;
   padding: 0;
@@ -162,20 +236,82 @@ code {
   text-align: left;
   cursor: pointer;
 }
-.maintenance-card-summary .control-stage-title { flex: 0 0 auto; }
+.maintenance-card-summary .control-stage-title { flex: 0 0 auto; font-size: 12px; }
+.maintenance-card .control-stage-step {
+  width: 30px;
+  height: 30px;
+  border-radius: 11px;
+  background: rgba(56, 213, 255, 0.16);
+  box-shadow: 0 0 18px rgba(56, 213, 255, 0.12);
+}
 .maintenance-summary {
   flex: 1 1 auto;
   min-width: 0;
   color: var(--muted);
   font-size: 12px;
+  line-height: 1.35;
   font-weight: 700;
   text-align: right;
   overflow-wrap: anywhere;
 }
 .maintenance-summary[data-tone="ok"] { color: var(--output); }
 .maintenance-summary[data-tone="warn"] { color: var(--danger); }
-.maintenance-caret { flex: 0 0 auto; color: var(--muted); font-size: 14px; }
-.maintenance-card-body { padding: 0 12px 12px; }
+.maintenance-caret {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  color: var(--muted);
+  font-size: 14px;
+  background: rgba(148, 163, 184, 0.08);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+}
+.maintenance-card-body { padding: 0 16px 14px; }
+
+.maintenance-card[data-tone="ok"]::before { background: var(--battery); }
+.maintenance-card[data-tone="warn"]::before { background: var(--danger); }
+.maintenance-card[data-tone="info"]::before { background: var(--output); }
+.maintenance-card[data-tone="action"]::before { background: var(--accent); }
+
+.maintenance-card[data-tone="ok"] .control-stage-step {
+  color: var(--battery);
+  background: rgba(57, 229, 140, 0.14);
+  box-shadow: 0 0 18px rgba(57, 229, 140, 0.10);
+}
+.maintenance-card[data-tone="warn"] .control-stage-step {
+  color: var(--danger);
+  background: rgba(255, 107, 122, 0.14);
+  box-shadow: 0 0 18px rgba(255, 107, 122, 0.10);
+}
+.maintenance-card[data-tone="info"] .control-stage-step {
+  color: var(--output);
+  background: rgba(56, 213, 255, 0.14);
+}
+.maintenance-card[data-tone="action"] .control-stage-step {
+  color: var(--accent2);
+  background: rgba(139, 92, 246, 0.18);
+  box-shadow: 0 0 18px rgba(139, 92, 246, 0.12);
+}
+
+.maintenance-card[data-tone="ok"] .maintenance-summary { color: var(--battery); }
+.maintenance-card[data-tone="warn"] .maintenance-summary { color: var(--danger); }
+.maintenance-card[data-tone="info"] .maintenance-summary { color: var(--output); }
+.maintenance-card[data-tone="action"] .maintenance-summary { color: var(--accent2); }
+
+.maintenance-card-summary:focus-visible {
+  outline: 2px solid var(--accent2);
+  outline-offset: 4px;
+  border-radius: 12px;
+}
+.maintenance-card:hover .maintenance-caret,
+.maintenance-card[data-open="true"] .maintenance-caret {
+  color: var(--text);
+  background: rgba(56, 213, 255, 0.12);
+  border-color: rgba(56, 213, 255, 0.20);
+}
 .maintenance-warnings {
   margin: 0;
   border: 1px solid var(--danger);
@@ -242,6 +378,144 @@ code {
   overflow-wrap: anywhere;
 }
 
+/* Maintenance uses the same hardware and feature cards as Setup while keeping
+   its separate, preview-only draft state. */
+.mconfig-editor { margin-top: 10px; }
+.mconfig-group { margin-top: 14px; }
+.mconfig-hardware-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+.mconfig-fields { display: flex; flex-direction: column; }
+.mconfig-discovery-card { margin-top: 12px; padding: 12px; }
+.mconfig-discovery-head { align-items: flex-start; margin-bottom: 8px; }
+.mconfig-discovery-head .future-note { margin: 3px 0 0; }
+.mconfig-discovery-manual { margin-top: 10px; }
+.discovery-progress {
+  display: grid;
+  grid-template-columns: minmax(100px, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  margin-top: 9px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.discovery-progress[hidden] { display: none; }
+.discovery-progress-track {
+  height: 7px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+}
+.discovery-progress-track span {
+  display: block;
+  width: 0;
+  height: 100%;
+  background: var(--output);
+  transition: width .2s ease;
+}
+.mconfig-discovery-review { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
+.mconfig-discovery-review h5 { margin: 0 0 8px; font-size: 12px; }
+.mconfig-discovery-results { display: flex; flex-direction: column; gap: 7px; }
+.mconfig-discovery-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 8px 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.mconfig-discovery-summary strong { color: var(--text); font-size: 12px; }
+.mconfig-discovery-grid { margin-top: 8px; }
+.mconfig-discovery-device-card[data-state="missing"] { opacity: .82; }
+.mconfig-discovery-device-card[data-state="conflict"] {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+.mconfig-discovery-badge {
+  align-self: start;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 6px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .04em;
+}
+.mconfig-discovery-device-card[data-state="new"] .mconfig-discovery-badge,
+.mconfig-discovery-device-card[data-state="found"] .mconfig-discovery-badge { color: var(--output); }
+.mconfig-discovery-device-card[data-state="conflict"] .mconfig-discovery-badge,
+.mconfig-discovery-device-card[data-state="missing"] .mconfig-discovery-badge { color: var(--danger); }
+.mconfig-discovery-item-actions { display: flex; flex-wrap: wrap; gap: 6px; grid-column: 1 / -1; }
+.mconfig-discovery-device-card .mconfig-discovery-item-actions { margin-top: 0; }
+.mconfig-discovery-add-button:disabled {
+  cursor: default;
+}
+.mconfig-discovery-add-button.is-in-config:disabled,
+.mconfig-discovery-add-button.is-added:disabled {
+  opacity: .72;
+  color: color-mix(in srgb, #041018 78%, var(--text));
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--output) 58%, var(--panel)),
+    color-mix(in srgb, var(--accent2) 52%, var(--panel))
+  );
+  border-color: color-mix(in srgb, var(--accent2) 35%, var(--border));
+}
+.mconfig-discovery-add-button.is-configured-missing:disabled,
+.mconfig-discovery-add-button.is-ignored:disabled {
+  opacity: .58;
+  color: var(--muted);
+  background: var(--panel-strong);
+  border-color: var(--border);
+}
+.mconfig-apply { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
+.mconfig-post-apply { margin-top: 10px; }
+.mconfig-sync-card {
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(34, 211, 238, 0.10), rgba(15, 23, 42, 0.72));
+}
+.maintenance-container-actions { margin-top: 10px; }
+.mconfig-backup-choice { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 700; }
+.mconfig-feature[data-disabled="true"] .feature-body { opacity: .72; }
+.mconfig-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.mconfig-result { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px; }
+.mconfig-changes { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.mconfig-changes:empty { display: none; }
+.mconfig-change {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.mconfig-change-path { color: var(--muted); overflow-wrap: anywhere; }
+.mconfig-change-value { font-weight: 700; text-align: right; overflow-wrap: anywhere; }
+.mconfig-change[data-kind="added"] .mconfig-change-value { color: var(--output); }
+.mconfig-change[data-kind="removed"] .mconfig-change-value { color: var(--danger); }
+.mconfig-raw { margin-top: 8px; }
+.mconfig-raw > summary { cursor: pointer; color: var(--muted); font-size: 11px; }
+.mconfig-raw pre {
+  margin: 6px 0 0;
+  max-height: 240px;
+  overflow: auto;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .stage-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 .refresh-button {
   background: rgba(255, 255, 255, 0.06);
@@ -1083,6 +1357,8 @@ code {
 }
 .feature-caret { grid-area: caret; color: var(--muted); font-size: 14px; }
 .feature-body { padding: 0 12px 12px 12px; display: flex; flex-direction: column; gap: 10px; }
+.hardware-card-body[hidden],
+.feature-body[hidden] { display: none; }
 /* Compact settings-list layout: one row per field (label | control | desc)
    instead of wrapping card-like tiles, so fields are easy to scan vertically. */
 .feature-fields { display: flex; flex-direction: column; }

@@ -27,15 +27,15 @@
           <label class="start-choice">
             <input type="radio" name="start-path" value="setup_new">
             <span class="start-choice-body">
-              <span class="start-choice-title">Set up a new system</span>
-              <span class="start-choice-desc">For first-time setup or a clean reinstall.</span>
+              <span class="start-choice-title">Guided setup</span>
+              <span class="start-choice-desc">Fresh install or clean Docker setup. Recommended for first-time users.</span>
             </span>
           </label>
           <label class="start-choice">
             <input type="radio" name="start-path" value="manage_existing">
             <span class="start-choice-body">
-              <span class="start-choice-title">Manage my existing system</span>
-              <span class="start-choice-desc">For updates, backups, diagnostics, changing settings, and migrating an existing config.</span>
+              <span class="start-choice-title">Maintenance</span>
+              <span class="start-choice-desc">Manage, update, repair or back up an existing EMS installation.</span>
             </span>
           </label>
         </fieldset>
@@ -51,6 +51,10 @@
     </section>
 
     <div class="admin-view" id="view-setup" data-admin-view-panel="setup" hidden>
+
+      <div class="workspace-nav">
+        <button type="button" class="workspace-back" data-back="landing">← Back</button>
+      </div>
 
       <div class="setup-stepper" role="tablist" aria-label="Setup steps">
         <button type="button" class="setup-step active" data-setup-step="release" role="tab" aria-selected="true">
@@ -181,7 +185,7 @@
                 Scan all
               </button>
               <button id="networks-refresh" type="button" class="primary-button compact refresh-button">
-                Refresh discovery
+                Start discovery
               </button>
             </div>
           </div>
@@ -207,11 +211,20 @@
 
           <div class="results-head">
             <h2 class="section-title">Discovered devices</h2>
-            <label class="accumulate-label">
+            <button id="setup-discovery-reset" type="button"
+                    class="secondary-button compact">Reset discovery results</button>
+            <span hidden>
               <input id="results-accumulate" type="checkbox" checked>
-              <span>Keep previous results</span>
-            </label>
+              Keep previous results
+            </span>
             <span id="results-count" class="pill muted">0 found</span>
+          </div>
+          <div id="setup-discovery-progress" class="discovery-progress"
+               role="status" aria-live="polite" hidden>
+            <div class="discovery-progress-track" aria-hidden="true">
+              <span id="setup-discovery-progress-bar"></span>
+            </div>
+            <span id="setup-discovery-progress-text"></span>
           </div>
           <div id="results-empty" class="results-empty">
             No devices yet. Discovery runs automatically.
@@ -237,7 +250,7 @@
             <summary>Advanced manual scan</summary>
             <form id="scan-form" class="scan-form" autocomplete="off">
               <label class="field">
-                <span class="field-label">Manual CIDR</span>
+                <span class="field-label">Manual CIDR or single IPv4 address</span>
                 <input id="cidr-input" name="cidr" type="text" inputmode="text"
                        placeholder="192.168.178.0/24" required>
               </label>
@@ -712,7 +725,54 @@
     </div>
 
     <div class="admin-view maintenance-view" id="view-maintenance" data-admin-view-panel="maintenance" hidden>
+      <div id="maintenance-hub" class="maintenance-hub">
+        <header class="maintenance-head">
+          <button type="button" class="workspace-back" data-back="landing">← Back</button>
+          <div class="maintenance-head-titles">
+            <h2 class="maintenance-title">Maintenance</h2>
+            <p class="maintenance-subtitle">Manage, update, repair or back up an existing EMS installation</p>
+          </div>
+        </header>
+
+        <button type="button" class="control-pipeline-stage maintenance-path-card maintenance-path-nav is-primary" data-maintenance-path="upgrade" data-open-maintenance-path="upgrade" aria-label="Open guided upgrade (recommended)">
+          <span class="control-stage-head">
+            <span class="control-stage-step">01</span>
+            <span class="control-stage-title-block">
+              <span class="control-stage-title">Guided upgrade</span>
+              <span class="control-stage-subtitle">Planned upgrade workflow with backup and diagnostics</span>
+            </span>
+            <span class="maintenance-recommended-badge">Recommended path</span>
+            <span class="maintenance-path-arrow" aria-hidden="true">→</span>
+          </span>
+        </button>
+
+        <button type="button" class="control-pipeline-stage maintenance-path-card maintenance-path-nav" data-maintenance-path="manual" data-open-maintenance-path="manual" id="maintenance-open-manual" aria-label="Open manual configuration / existing system">
+          <span class="control-stage-head">
+            <span class="control-stage-step">02</span>
+            <span class="control-stage-title-block">
+              <span class="control-stage-title">Manual configuration / existing system</span>
+              <span class="control-stage-subtitle">Inspect, edit and restart an existing EMS setup</span>
+            </span>
+            <span class="maintenance-path-arrow" aria-hidden="true">→</span>
+          </span>
+        </button>
+
+        <button type="button" class="control-pipeline-stage maintenance-path-card maintenance-path-nav" data-maintenance-path="backup" data-open-maintenance-path="backup" aria-label="Open backup / restore">
+          <span class="control-stage-head">
+            <span class="control-stage-step">03</span>
+            <span class="control-stage-title-block">
+              <span class="control-stage-title">Backup / restore</span>
+              <span class="control-stage-subtitle">Planned EMS-owned backup and restore workflow</span>
+            </span>
+            <span class="source-badge">Planned</span>
+            <span class="maintenance-path-arrow" aria-hidden="true">→</span>
+          </span>
+        </button>
+      </div>
+
+      <div id="maintenance-manual-panel" hidden>
       <header class="maintenance-head">
+        <button type="button" id="maintenance-back-hub" class="workspace-back" data-back="maintenance-hub">← Maintenance</button>
         <div class="maintenance-head-titles">
           <h2 class="maintenance-title">Maintenance</h2>
           <p class="maintenance-subtitle">Existing EMS installation overview</p>
@@ -786,12 +846,20 @@
               <span class="maintenance-fact-value" id="maintenance-ems">…</span>
             </div>
             <div class="maintenance-fact">
+              <span class="maintenance-fact-label">EMS status</span>
+              <span class="maintenance-fact-value muted" id="maintenance-ems-detail">…</span>
+            </div>
+            <div class="maintenance-fact">
               <span class="maintenance-fact-label">EMS container</span>
               <span class="maintenance-fact-value muted" id="maintenance-ems-name">…</span>
             </div>
             <div class="maintenance-fact">
               <span class="maintenance-fact-label">InfluxDB</span>
               <span class="maintenance-fact-value" id="maintenance-influx">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">InfluxDB status</span>
+              <span class="maintenance-fact-value muted" id="maintenance-influx-detail">…</span>
             </div>
             <div class="maintenance-fact">
               <span class="maintenance-fact-label">InfluxDB container</span>
@@ -807,6 +875,35 @@
             </div>
           </div>
           <p class="maintenance-note" id="maintenance-docker-note"></p>
+
+          <div class="maintenance-container-actions" id="maintenance-runtime-container-actions">
+            <div class="maintenance-facts">
+              <div class="maintenance-fact">
+                <span class="maintenance-fact-label">EMS desired</span>
+                <span class="maintenance-fact-value" id="maintenance-runtime-ems-desired">…</span>
+              </div>
+              <div class="maintenance-fact">
+                <span class="maintenance-fact-label">InfluxDB desired</span>
+                <span class="maintenance-fact-value" id="maintenance-runtime-influx-desired">…</span>
+              </div>
+              <div class="maintenance-fact">
+                <span class="maintenance-fact-label">Action plan</span>
+                <span class="maintenance-fact-value" id="maintenance-runtime-action-summary">…</span>
+              </div>
+            </div>
+
+            <div class="mconfig-actions">
+              <button type="button" id="maintenance-runtime-containers-sync"
+                      class="primary-button compact">Restart / sync containers</button>
+              <button type="button" id="maintenance-runtime-containers-recheck"
+                      class="secondary-button compact">Re-check status</button>
+              <button type="button" id="maintenance-runtime-diagnostics"
+                      class="secondary-button compact">Run diagnostics</button>
+            </div>
+
+            <p class="maintenance-note" id="maintenance-runtime-containers-status"
+               role="status" aria-live="polite"></p>
+          </div>
         </div>
       </section>
 
@@ -861,6 +958,232 @@
           <button type="button" id="maintenance-diagnostics-run" class="primary-button compact">Run diagnostics</button>
         </div>
       </section>
+
+      <section class="control-pipeline-stage maintenance-card" id="maintenance-config-card" aria-label="Configuration and hardware" data-open="false">
+        <div class="control-stage-head maintenance-card-head">
+          <span class="control-stage-step">05</span>
+          <button type="button" class="maintenance-card-summary" data-maintenance-toggle="maintenance-config-card" aria-expanded="false" aria-controls="maintenance-config-card-body">
+            <span class="control-stage-title">Configuration &amp; hardware</span>
+            <span class="maintenance-summary" id="maintenance-config-summary">Not loaded yet.</span>
+            <span class="maintenance-caret" aria-hidden="true">▸</span>
+          </button>
+        </div>
+        <div class="maintenance-card-body" id="maintenance-config-card-body" hidden>
+          <p class="maintenance-note">Edit the current installation config as an in-memory draft, then preview the diff. Nothing is written by this step.</p>
+          <div class="maintenance-facts">
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Source</span>
+              <span class="maintenance-fact-value muted" id="maintenance-config-source">…</span>
+            </div>
+          </div>
+          <p class="maintenance-note" id="maintenance-config-message"></p>
+
+          <div class="mconfig-editor" id="maintenance-config-editor" hidden>
+            <div class="setup-group mconfig-group" id="maintenance-config-hardware"
+                 role="group" aria-label="Hardware">
+              <h3 class="config-section-title">Hardware</h3>
+              <p class="future-note">The grid meter and inverters configured for this installation.</p>
+              <div class="mconfig-hardware-list" id="maintenance-config-gridmeter"></div>
+              <div class="mconfig-hardware-list" id="maintenance-config-inverters"></div>
+              <div class="control-pipeline-stage mconfig-discovery-card"
+                   id="maintenance-config-discovery" role="group"
+                   aria-label="Discover and add hardware">
+                <div class="control-stage-head mconfig-discovery-head">
+                  <span class="control-stage-step">＋</span>
+                  <div>
+                    <h4 class="control-stage-title">Discover &amp; add hardware</h4>
+                    <p class="future-note">Find supported devices and prepare a safe config update.</p>
+                  </div>
+                </div>
+                <p class="maintenance-note" id="maintenance-discovery-status">
+                  Start discovery to search for supported devices. Nothing is written until you review and apply the draft.
+                </p>
+                <div class="mconfig-actions">
+                  <button type="button" id="maintenance-discovery-start"
+                          class="primary-button compact">Start discovery</button>
+                  <button type="button" id="maintenance-config-add-inverter"
+                          class="secondary-button compact">Add manually</button>
+                  <button type="button" id="maintenance-discovery-cancel"
+                          class="secondary-button compact" hidden>Close result</button>
+                  <button type="button" id="maintenance-discovery-reset"
+                          class="secondary-button compact">Reset discovery results</button>
+                </div>
+                <form id="maintenance-discovery-manual-form"
+                      class="scan-form mconfig-discovery-manual" autocomplete="off">
+                  <label class="field">
+                    <span class="field-label">Manual scan</span>
+                    <input id="maintenance-discovery-manual-input" type="text"
+                           inputmode="text"
+                           placeholder="192.168.178.81 or 192.168.178.0/24" required>
+                  </label>
+                  <button type="submit" id="maintenance-discovery-manual-scan"
+                          class="secondary-button compact">Scan</button>
+                </form>
+                <p id="maintenance-discovery-error" class="scan-error"
+                   role="alert" hidden></p>
+                <div id="maintenance-discovery-progress" class="discovery-progress"
+                     role="status" aria-live="polite" hidden>
+                  <div class="discovery-progress-track" aria-hidden="true">
+                    <span id="maintenance-discovery-progress-bar"></span>
+                  </div>
+                  <span id="maintenance-discovery-progress-text"></span>
+                </div>
+                <div class="mconfig-discovery-review" id="maintenance-discovery-review"
+                     aria-live="polite" hidden>
+                  <h5>Discovery result</h5>
+                  <div id="maintenance-discovery-results"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="setup-group mconfig-group" id="maintenance-config-features-section"
+                 role="group" aria-label="Features">
+              <h3 class="config-section-title">Features</h3>
+              <p class="future-note">Turn features on or off, or open a card to review its settings.</p>
+              <div class="feature-list" id="maintenance-config-features" role="list"></div>
+            </div>
+
+            <details class="advanced-details setup-group mconfig-group"
+                     id="maintenance-config-advanced-section">
+              <summary>Advanced / System settings</summary>
+              <p class="future-note">System-level and expert tuning. Most users can keep the current values.</p>
+              <div class="feature-list" id="maintenance-config-advanced" role="list"></div>
+            </details>
+
+            <div class="mconfig-actions">
+              <button type="button" id="maintenance-config-preview-btn" class="primary-button compact">Preview changes</button>
+              <button type="button" id="maintenance-config-reset-btn" class="secondary-button compact">Reset draft</button>
+            </div>
+
+            <div class="mconfig-result" id="maintenance-config-result" role="status" aria-live="polite" hidden>
+              <div class="maintenance-facts">
+                <div class="maintenance-fact">
+                  <span class="maintenance-fact-label">Validation</span>
+                  <span class="maintenance-fact-value" id="maintenance-config-validation">…</span>
+                </div>
+                <div class="maintenance-fact">
+                  <span class="maintenance-fact-label">Changes</span>
+                  <span class="maintenance-fact-value" id="maintenance-config-change-summary">…</span>
+                </div>
+              </div>
+              <div class="mconfig-changes" id="maintenance-config-changes"></div>
+              <p class="maintenance-note" id="maintenance-config-warnings"></p>
+              <div class="mconfig-apply" id="maintenance-config-apply-panel" hidden>
+                <label class="mconfig-backup-choice">
+                  <input type="checkbox" id="maintenance-config-backup" checked>
+                  Create a backup before applying (recommended)
+                </label>
+                <p class="maintenance-note">This will update config/config.json from the reviewed draft.</p>
+                <button type="button" id="maintenance-config-apply-btn"
+                        class="primary-button compact">Apply reviewed draft</button>
+                <p class="maintenance-note" id="maintenance-config-apply-status"
+                   role="status" aria-live="polite"></p>
+                <div class="mconfig-post-apply" id="maintenance-config-post-apply" hidden>
+                  <div class="mconfig-sync-card" data-container-sync-card="post-apply">
+                    <div class="control-stage-head control-stage-header">
+                      <div class="control-stage-kicker">
+                        <span class="control-stage-step">✓</span>
+                        <span class="control-stage-dot" aria-hidden="true">↻</span>
+                      </div>
+                      <div class="control-stage-title-block">
+                        <h3 class="control-stage-title">Config applied</h3>
+                        <span class="control-stage-subtitle">Reload containers to use the new config</span>
+                      </div>
+                    </div>
+
+                    <p class="maintenance-note" id="maintenance-post-apply-message">
+                      The new config was written successfully. EMS should be recreated to load it.
+                      Optional feature containers will be started or stopped based on the config.
+                    </p>
+
+                    <div class="maintenance-facts">
+                      <div class="maintenance-fact">
+                        <span class="maintenance-fact-label">EMS desired</span>
+                        <span class="maintenance-fact-value" id="maintenance-post-ems-desired">…</span>
+                      </div>
+                      <div class="maintenance-fact">
+                        <span class="maintenance-fact-label">InfluxDB desired</span>
+                        <span class="maintenance-fact-value" id="maintenance-post-influx-desired">…</span>
+                      </div>
+                      <div class="maintenance-fact">
+                        <span class="maintenance-fact-label">Action plan</span>
+                        <span class="maintenance-fact-value" id="maintenance-post-action-summary">…</span>
+                      </div>
+                    </div>
+
+                    <div class="mconfig-actions">
+                      <button type="button" id="maintenance-containers-sync"
+                              class="primary-button compact">Restart / sync containers</button>
+                      <button type="button" id="maintenance-containers-recheck"
+                              class="secondary-button compact">Re-check status</button>
+                      <button type="button" id="maintenance-post-diagnostics"
+                              class="secondary-button compact">Run diagnostics</button>
+                      <a href="/" target="_blank" rel="noopener" class="secondary-button compact">
+                        Open dashboard
+                      </a>
+                    </div>
+
+                    <p class="maintenance-note" id="maintenance-containers-sync-status"
+                       role="status" aria-live="polite"></p>
+                  </div>
+                </div>
+              </div>
+              <details class="mconfig-raw" id="maintenance-config-raw" hidden>
+                <summary>Generated config preview</summary>
+                <pre id="maintenance-config-raw-pre"></pre>
+              </details>
+            </div>
+          </div>
+        </div>
+      </section>
+      </div>
+
+      <div id="maintenance-upgrade-panel" hidden>
+        <header class="maintenance-head">
+          <button type="button" class="workspace-back" data-back="maintenance-hub">← Maintenance</button>
+          <div class="maintenance-head-titles">
+            <h2 class="maintenance-title">Guided upgrade</h2>
+            <p class="maintenance-subtitle">Plan a safe EMS upgrade with backup and diagnostics</p>
+          </div>
+        </header>
+
+        <section class="control-pipeline-stage maintenance-card" aria-label="Guided upgrade planned">
+          <div class="control-stage-head maintenance-card-head">
+            <span class="control-stage-step">01</span>
+            <div class="control-stage-title-block">
+              <span class="control-stage-title">Upgrade planning</span>
+              <span class="control-stage-subtitle">Version selection and safety checks will appear here</span>
+            </div>
+          </div>
+          <p class="future-note">
+            Guided upgrade will let users choose a target EMS version, keep backup enabled by default,
+            validate config changes, update the Docker image, recreate containers and run diagnostics.
+          </p>
+        </section>
+      </div>
+
+      <div id="maintenance-backup-panel" hidden>
+        <header class="maintenance-head">
+          <button type="button" class="workspace-back" data-back="maintenance-hub">← Maintenance</button>
+          <div class="maintenance-head-titles">
+            <h2 class="maintenance-title">Backup / restore</h2>
+            <p class="maintenance-subtitle">EMS-owned backup and restore workflow</p>
+          </div>
+        </header>
+
+        <section class="control-pipeline-stage maintenance-card" aria-label="Backup restore planned">
+          <div class="control-stage-head maintenance-card-head">
+            <span class="control-stage-step">01</span>
+            <div class="control-stage-title-block">
+              <span class="control-stage-title">Backup / restore planning</span>
+              <span class="control-stage-subtitle">Backup actions will be orchestrated through EMS tooling</span>
+            </div>
+          </div>
+          <p class="future-note">
+            Backup / restore is planned for a follow-up task. Backup semantics must stay EMS-owned.
+          </p>
+        </section>
+      </div>
     </div>
 
     <div class="admin-view" id="view-advanced" data-admin-view-panel="advanced" hidden>

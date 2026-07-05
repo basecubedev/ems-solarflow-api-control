@@ -1317,3 +1317,149 @@ def test_migrate_legacy_endpoint_uses_env_install_dir(monkeypatch, tmp_path):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_maintenance_container_plan_endpoint_returns_plan(monkeypatch):
+    from admin import server as server_module
+
+    fake_plan = {
+        "ok": True,
+        "available": True,
+        "install_root": "/install",
+        "compose_path": "/install/docker-compose.yml",
+        "requires_confirmation": True,
+        "desired": {
+            "ems": {"service": "ems", "desired": "running", "reason": "present"},
+            "influxdb": {"service": "influxdb", "desired": "running", "reason": "on"},
+        },
+        "current": {"ems": {}, "influxdb": {}},
+        "actions": [{"service": "ems", "action": "recreate", "label": "Recreate EMS", "reason": "x"}],
+        "summary": "EMS will be recreated so it reads the new config.",
+    }
+    monkeypatch.setattr(server_module, "build_maintenance_container_plan", lambda: fake_plan)
+    srv, base = _serve()
+    try:
+        status, _, payload = _request(f"{base}/api/admin/maintenance/containers/plan")
+        assert status == 200
+        assert payload["ok"] is True
+        assert payload["desired"]["ems"]["desired"] == "running"
+        assert payload["actions"][0]["action"] == "recreate"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_maintenance_container_sync_requires_confirm(monkeypatch):
+    from admin import server as server_module
+
+    called = {"count": 0}
+
+    def _fake_sync():
+        called["count"] += 1
+        return {"ok": True, "status": "completed", "steps": [], "plan": {}}
+
+    monkeypatch.setattr(server_module, "run_maintenance_container_sync", _fake_sync)
+    srv, base = _serve()
+    try:
+        status, _, payload = _request(
+            f"{base}/api/admin/maintenance/containers/sync",
+            method="POST",
+            body={"reason": "config_apply"},
+        )
+        assert status == 400
+        assert called["count"] == 0
+
+        status, _, ok = _request(
+            f"{base}/api/admin/maintenance/containers/sync",
+            method="POST",
+            body={"confirm": True, "reason": "config_apply"},
+        )
+        assert status == 200
+        assert ok["ok"] is True
+        assert called["count"] == 1
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_maintenance_container_sync_rejects_unsupported_fields(monkeypatch):
+    from admin import server as server_module
+
+    monkeypatch.setattr(
+        server_module,
+        "run_maintenance_container_sync",
+        lambda: pytest.fail("sync must not run for a rejected request"),
+    )
+    srv, base = _serve()
+    try:
+        status, _, payload = _request(
+            f"{base}/api/admin/maintenance/containers/sync",
+            method="POST",
+            body={"confirm": True, "path": "/custom/config.json"},
+        )
+        assert status == 400
+        assert "unsupported" in payload["error"]
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_maintenance_container_sync_returns_409_when_unavailable(monkeypatch):
+    from admin import server as server_module
+
+    monkeypatch.setattr(
+        server_module,
+        "run_maintenance_container_sync",
+        lambda: {
+            "ok": False,
+            "status": "unavailable",
+            "message": "Docker/Compose is not available. Re-check the Admin deployment.",
+            "plan": {},
+            "steps": [],
+        },
+    )
+    srv, base = _serve()
+    try:
+        status, _, payload = _request(
+            f"{base}/api/admin/maintenance/containers/sync",
+            method="POST",
+            body={"confirm": True, "reason": "config_apply"},
+        )
+        assert status == 409
+        assert payload["status"] == "unavailable"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_maintenance_container_sync_relays_influx_schema_step(monkeypatch):
+    from admin import server as server_module
+
+    monkeypatch.setattr(
+        server_module,
+        "run_maintenance_container_sync",
+        lambda: {
+            "ok": True,
+            "status": "completed",
+            "plan": {},
+            "steps": [
+                {"service": "influxdb", "action": "init", "status": "ok"},
+                {"service": "influxdb", "action": "start", "status": "ok"},
+                {"service": "influxdb", "action": "sync", "status": "ok"},
+                {"service": "ems", "action": "recreate", "status": "ok"},
+            ],
+        },
+    )
+    srv, base = _serve()
+    try:
+        status, _, payload = _request(
+            f"{base}/api/admin/maintenance/containers/sync",
+            method="POST",
+            body={"confirm": True, "reason": "config_apply"},
+        )
+        assert status == 200
+        assert payload["ok"] is True
+        assert {"service": "influxdb", "action": "sync", "status": "ok"} in payload["steps"]
+    finally:
+        srv.shutdown()
+        srv.server_close()

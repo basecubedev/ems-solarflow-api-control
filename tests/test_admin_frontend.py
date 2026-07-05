@@ -394,8 +394,13 @@ def test_start_gate_has_exactly_two_choices():
     assert html.count('name="start-path"') == 2
     assert 'value="setup_new"' in html
     assert 'value="manage_existing"' in html
-    assert "Set up a new system" in html
-    assert "Manage my existing system" in html
+    assert "Guided setup" in html
+    assert "Maintenance" in html
+    # Guided setup is the primary, first option.
+    assert html.index('value="setup_new"') < html.index('value="manage_existing"')
+    assert html.index("Guided setup") < html.index(
+        '<span class="start-choice-title">Maintenance</span>'
+    )
     # Docker bootstrap / developer setup stay documentation-only paths.
     assert "Docker bootstrap" not in html
     assert "Developer setup" not in html
@@ -1904,6 +1909,181 @@ def test_index_has_maintenance_view_panel():
     assert 'data-admin-view="maintenance"' not in html
 
 
+def test_maintenance_opens_hub_before_manual_editor():
+    html = _read("index.html")
+    maintenance = _maintenance_section(html)
+    # The hub is shown first; the detailed editor lives in a hidden nested panel.
+    assert 'id="maintenance-hub"' in maintenance
+    assert 'id="maintenance-manual-panel" hidden' in maintenance
+    assert maintenance.index('id="maintenance-hub"') < maintenance.index(
+        'id="maintenance-manual-panel"'
+    )
+
+
+def test_maintenance_hub_exposes_three_user_paths():
+    html = _read("index.html")
+    hub = _read("index.html").split('id="maintenance-hub"', 1)[1].split(
+        'id="maintenance-manual-panel"', 1
+    )[0]
+    for path, label in (
+        ("manual", "Manual configuration / existing system"),
+        ("upgrade", "Guided upgrade"),
+        ("backup", "Backup / restore"),
+    ):
+        assert 'data-maintenance-path="' + path + '"' in hub
+        assert label in hub
+    # The manual path is a full-page navigation button (drills into its own page),
+    # not an inline "open" toggle.
+    assert 'id="maintenance-open-manual"' in hub
+    open_tag = hub.split('id="maintenance-open-manual"', 1)[0].rsplit("<", 1)[1]
+    assert open_tag.startswith("button")
+    assert "maintenance-path-nav" in hub
+    assert "Open manual maintenance" not in hub
+    # Guided upgrade is the recommended default path; only backup stays "Planned".
+    assert hub.count('class="source-badge">Planned') == 1
+    assert "/api/admin/" not in hub
+
+
+def test_maintenance_hub_orders_guided_upgrade_first():
+    html = _read("index.html")
+    hub = html.split('id="maintenance-hub"', 1)[1].split(
+        'id="maintenance-manual-panel"', 1
+    )[0]
+    # DOM order (not CSS): guided upgrade, then manual config, then backup.
+    order = [
+        hub.index('data-maintenance-path="upgrade"'),
+        hub.index('data-maintenance-path="manual"'),
+        hub.index('data-maintenance-path="backup"'),
+    ]
+    assert order == sorted(order)
+    # Step numbers follow the order.
+    for path, step in (("upgrade", "01"), ("manual", "02"), ("backup", "03")):
+        card = hub.split('data-maintenance-path="' + path + '"', 1)[1]
+        assert card.split("control-stage-step\">", 1)[1].startswith(step)
+    # Guided upgrade is a navigation button with the recommended/primary treatment.
+    upgrade_tag = hub.split('data-maintenance-path="upgrade"', 1)[0].rsplit("<", 1)[1]
+    assert upgrade_tag.startswith("button")
+    assert "is-primary" in upgrade_tag
+    upgrade = hub.split('data-maintenance-path="upgrade"', 1)[1].split(
+        'data-maintenance-path="manual"', 1
+    )[0]
+    assert "Recommended path" in upgrade
+
+
+def test_workspace_pages_have_back_navigation():
+    html = _read("index.html")
+    # Setup and the maintenance hub go back to the landing gate; the manual page
+    # goes back to the maintenance hub.
+    setup = _setup_panel(html)
+    assert 'data-back="landing"' in setup
+    hub = html.split('id="maintenance-hub"', 1)[1].split(
+        'id="maintenance-manual-panel"', 1
+    )[0]
+    assert 'data-back="landing"' in hub
+    manual = html.split('id="maintenance-manual-panel"', 1)[1].split(
+        'id="view-advanced"', 1
+    )[0]
+    assert 'data-back="maintenance-hub"' in manual
+    assert 'id="maintenance-back-hub"' in manual
+    # Back controls are real buttons, never clickable divs.
+    for segment in (setup, hub, manual):
+        marker = segment.split('data-back="', 1)[0].rsplit("<", 1)[1]
+        assert marker.startswith("button")
+
+
+def test_js_back_navigation_returns_to_landing_and_hub():
+    js = _read("admin.js")
+    nav = js.split("function navigateBack", 1)[1].split("\n}", 1)[0]
+    assert 'target === "maintenance-hub"' in nav
+    assert "showLanding()" in nav
+    landing = js.split("function showLanding", 1)[1].split("\n}", 1)[0]
+    # Returning to landing re-shows the gate and drops workspace routing.
+    assert "startEls.gate" in landing
+    assert "workspaceRevealed = false" in landing
+    # Hash routing is inert while the landing gate is showing.
+    route = js.split("function applyHashRoute", 1)[1].split("\n}", 1)[0]
+    assert "if (!workspaceRevealed) return" in route
+    # The back controls are wired from the shared data-back attribute.
+    assert '[data-back]' in js
+
+
+def test_maintenance_manual_panel_keeps_detailed_markup():
+    html = _read("index.html")
+    manual = html.split('id="maintenance-manual-panel"', 1)[1].split(
+        'id="view-advanced"', 1
+    )[0]
+    for marker in (
+        'id="maintenance-refresh"',
+        'id="maintenance-config"',
+        'id="maintenance-ems"',
+        'id="maintenance-diagnostics"',
+        'id="maintenance-config-card"',
+        'id="maintenance-back-hub"',
+    ):
+        assert marker in manual
+
+
+def test_maintenance_endpoints_are_unchanged():
+    js = _read("admin.js")
+    for endpoint in (
+        "/api/admin/maintenance/overview",
+        "/api/admin/maintenance/diagnostics/run",
+        "/api/admin/maintenance/config",
+        "/api/admin/maintenance/config/preview",
+        "/api/admin/maintenance/config/apply",
+        "/api/admin/maintenance/containers/plan",
+        "/api/admin/maintenance/containers/sync",
+    ):
+        assert endpoint in js
+
+
+def test_js_maintenance_path_helper_only_manual_loads_overview():
+    js = _read("admin.js")
+    assert 'const MAINTENANCE_PATHS = ["hub", "manual", "upgrade", "backup"]' in js
+    # Every path maps to exactly one panel via a registry, not manual-only toggling.
+    registry = js.split("const MAINTENANCE_PANEL_IDS = {", 1)[1].split("};", 1)[0]
+    for key, panel in (
+        ("hub", "maintenance-hub"),
+        ("manual", "maintenance-manual-panel"),
+        ("upgrade", "maintenance-upgrade-panel"),
+        ("backup", "maintenance-backup-panel"),
+    ):
+        assert key + ': "' + panel + '"' in registry
+    path = js.split("function setMaintenancePath", 1)[1].split("\nfunction ", 1)[0]
+    # The helper drives panels from the registry; only manual loads the overview.
+    assert "MAINTENANCE_PANEL_IDS" in path
+    assert 'next === "manual"' in path
+    assert "loadMaintenanceOverview()" in path
+
+
+def test_js_maintenance_cards_use_generic_open_navigation():
+    js = _read("admin.js")
+    # Card navigation is wired from a shared data attribute, not a manual-only id.
+    assert "[data-open-maintenance-path]" in js
+    handler = js.split("[data-open-maintenance-path]", 1)[1].split("});", 1)[0]
+    assert "openMaintenancePath" in handler
+    assert 'window.location.hash = "maintenance-" + path' in handler
+
+
+def test_maintenance_subpages_are_full_page_siblings_of_hub():
+    html = _read("index.html")
+    maintenance = _maintenance_section(html)
+    # Each path has its own full-page panel, all hidden by default and siblings
+    # of the hub under view-maintenance (never rendered below the hub).
+    for panel in (
+        "maintenance-manual-panel",
+        "maintenance-upgrade-panel",
+        "maintenance-backup-panel",
+    ):
+        assert 'id="' + panel + '" hidden' in maintenance
+    # Every subpage carries a back button to the maintenance hub and stays a
+    # non-mutating placeholder (no backend calls).
+    for panel in ("maintenance-upgrade-panel", "maintenance-backup-panel"):
+        head = maintenance.split('id="' + panel + '"', 1)[1].split("</header>", 1)[0]
+        assert 'data-back="maintenance-hub"' in head
+        assert "/api/admin/" not in maintenance.split('id="' + panel + '"', 1)[1]
+
+
 def test_maintenance_view_has_three_numbered_sections():
     html = _read("index.html")
     maintenance = _maintenance_section(html)
@@ -1938,7 +2118,16 @@ def test_maintenance_exposes_no_mutating_actions():
     html = _read("index.html")
     js = _read("admin.js")
     maintenance = _maintenance_section(html)
-    # This MVP is read-only: no update/restart/backup/restore/apply controls.
+    # The detailed controls live in the manual panel; the hub only holds planned
+    # placeholders (verified separately to carry no endpoints), whose descriptive
+    # text mentions backup/restore/upgrade without exposing any action.
+    manual = maintenance.split('id="maintenance-manual-panel"', 1)[1].split(
+        'id="maintenance-upgrade-panel"', 1
+    )[0]
+    # The guided container-sync workflow is the one sanctioned mutating action
+    # (explicit confirm, no delete). Exclude its label before asserting that no
+    # other arbitrary EMS lifecycle controls exist.
+    guarded = manual.replace("Restart / sync containers", "")
     for forbidden in (
         "Update",
         "Restart",
@@ -1947,7 +2136,7 @@ def test_maintenance_exposes_no_mutating_actions():
         "Stop EMS",
         "Start EMS",
     ):
-        assert forbidden not in maintenance
+        assert forbidden not in guarded
     # The only maintenance control is a read-only refresh.
     assert 'id="maintenance-refresh"' in maintenance
     # No mutating Docker/compose calls are wired from the maintenance renderer.
@@ -1965,17 +2154,22 @@ def test_js_defines_maintenance_overview_renderer():
     assert "/api/admin/maintenance/overview" in js
 
 
-def test_js_manage_existing_routes_to_maintenance_overview():
+def test_js_maintenance_routes_to_hub_not_overview():
     js = _read("admin.js")
     fn = js.split("function enterMaintenance", 1)[1].split("\n}", 1)[0]
     assert 'setAdminView("maintenance")' in fn
-    assert "loadMaintenanceOverview()" in fn
+    # Entering maintenance shows the hub; it must not load the overview.
+    assert 'setMaintenancePath("hub")' in fn
+    assert "loadMaintenanceOverview()" not in fn
     # The admin view registry includes maintenance so hash routing works.
     assert '"maintenance"' in js.split("const ADMIN_VIEWS =", 1)[1].split("]", 1)[0]
-    # Navigating to the maintenance view (re)loads the overview.
+    # Switching the admin panel no longer auto-loads the overview.
     switch = js.split("function setAdminView", 1)[1].split("\nfunction ", 1)[0]
-    assert 'next === "maintenance"' in switch
-    assert "loadMaintenanceOverview()" in switch
+    assert "loadMaintenanceOverview()" not in switch
+    # Only opening the manual path loads the detailed overview.
+    path = js.split("function setMaintenancePath", 1)[1].split("\nfunction ", 1)[0]
+    assert 'next === "manual"' in path
+    assert "loadMaintenanceOverview()" in path
 
 
 def test_js_maintenance_dynamic_values_are_escaped_or_text_only():
@@ -1996,12 +2190,59 @@ def test_js_maintenance_dynamic_values_are_escaped_or_text_only():
     assert "escapeHtml(note)" in warnings
 
 
+def test_js_maintenance_card_tone_helper_uses_dataset():
+    js = _read("admin.js")
+    helper = js.split("function setMaintenanceCardTone", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    # Tone is applied via data-tone and cleared when empty, never via innerHTML.
+    assert "card.dataset.tone = tone" in helper
+    assert "delete card.dataset.tone" in helper
+    assert "innerHTML" not in helper
+
+
+def test_js_maintenance_summaries_set_card_tones():
+    js = _read("admin.js")
+    fn = js.split("function renderMaintenanceSummaries", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    assert 'setMaintenanceCardTone("maintenance-layout", layoutOk ? "ok" : "warn")' in fn
+    assert 'setMaintenanceCardTone("maintenance-versions", dashboard ? "info" : "warn")' in fn
+    # The Runtime containers summary + tone are owned by the plan renderer, which
+    # knows the config feature-state; the overview summary no longer derives them.
+    assert "maintenance-containers" not in fn
+    plan = js.split("function renderRuntimeServiceStatus", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    assert 'setMaintenanceCardTone("maintenance-containers", tone)' in plan
+    assert "plan.status_summary" in plan
+
+
+def test_js_config_apply_sets_action_tone_only_when_changed():
+    js = _read("admin.js")
+    # The changed branch flags the config card for the follow-up container sync.
+    changed = js.split("Config updated · container sync recommended", 1)[1].split(
+        "await loadMaintenanceContainerPlan", 1
+    )[0]
+    assert 'setMaintenanceCardTone("maintenance-config-card", "action")' in changed
+    # A no-op apply (changed === false) must not raise the action tone.
+    noop = js.split("if (data.changed === false) {", 1)[1].split("} else {", 1)[0]
+    assert "setMaintenanceCardTone" not in noop
+
+
+def test_maintenance_card_has_tone_accent_styles():
+    css = _read("admin.css")
+    assert ".maintenance-card::before" in css
+    for tone in ("ok", "warn", "info", "action"):
+        assert '.maintenance-card[data-tone="' + tone + '"]::before' in css
+
+
 def test_maintenance_cards_are_collapsed_by_default_with_summaries():
     html = _read("index.html")
     maintenance = _maintenance_section(html)
     # Each card starts collapsed: closed state + hidden body + a toggle button
     # carrying a one-line summary in the header.
-    assert maintenance.count('data-open="false"') == 4
+    assert maintenance.count('data-open="false"') == 5
     for card in (
         "maintenance-layout",
         "maintenance-containers",
@@ -2086,8 +2327,11 @@ def test_maintenance_diagnostics_has_run_button_and_no_forbidden_actions():
     assert "Run diagnostics" in maintenance
     # Dry-run framing is explicit; no config is written.
     assert "Config upgrade is checked in dry-run mode only" in maintenance
-    # No mutating maintenance actions are introduced by this card.
-    diagnostics = maintenance.split('id="maintenance-diagnostics"', 1)[1]
+    # No mutating maintenance actions are introduced by the diagnostics card
+    # itself (scope to its own section, not the later config/sync cards).
+    diagnostics = maintenance.split('id="maintenance-diagnostics"', 1)[1].split(
+        "</section>", 1
+    )[0]
     for forbidden in ("Restart", "Restore", "Update", "Upgrade EMS", "Apply config", "Backup"):
         assert forbidden not in diagnostics
 
@@ -2157,9 +2401,691 @@ def test_css_diagnostics_info_tone_is_muted():
 
 def test_js_diagnostics_is_not_auto_run_on_view_switch():
     js = _read("admin.js")
-    # Switching to maintenance only loads the read-only overview; diagnostics are
-    # user-triggered via the Run button, never auto-run.
+    # Opening the manual maintenance path loads the read-only overview; diagnostics
+    # are user-triggered via the Run button, never auto-run.
+    path = js.split("function setMaintenancePath", 1)[1].split("\nfunction ", 1)[0]
+    assert "loadMaintenanceOverview()" in path
+    assert "runDiagnostics()" not in path
     switch = js.split("function setAdminView", 1)[1].split("\nfunction ", 1)[0]
-    assert "loadMaintenanceOverview()" in switch
     assert "runDiagnostics()" not in switch
     assert 'diagnosticsEls.run.addEventListener("click", runDiagnostics)' in js
+
+
+def test_index_has_config_and_hardware_card_collapsed_by_default():
+    html = _read("index.html")
+    assert 'id="maintenance-config-card"' in html
+    assert "Configuration &amp; hardware" in html
+    # collapsed by default: the card body is hidden and the toggle is not expanded
+    card = html.split('id="maintenance-config-card"', 1)[1].split("</section>", 1)[0]
+    assert 'data-open="false"' in card
+    assert 'id="maintenance-config-card-body"' in card
+    assert 'aria-expanded="false"' in card
+    body_tag = card.split('id="maintenance-config-card-body"', 1)[1].split(">", 1)[0]
+    assert "hidden" in body_tag
+
+
+def test_index_config_card_shows_safe_preview_and_apply_actions():
+    html = _read("index.html")
+    card = html.split('id="maintenance-config-card"', 1)[1].split("</section>", 1)[0]
+    assert 'id="maintenance-config-source"' in card
+    assert "Preview changes" in card
+    assert "Reset draft" in card
+    assert "Apply reviewed draft" in card
+    assert "Create a backup before applying (recommended)" in card
+    for banned in (">Save<", ">Restart<", ">Restore<", ">Upgrade<"):
+        assert banned not in card, f"unexpected write control {banned}"
+
+
+def test_maintenance_config_uses_setup_hardware_and_feature_groups():
+    html = _read("index.html")
+    card = html.split('id="maintenance-config-card"', 1)[1].split("</section>", 1)[0]
+    assert 'id="maintenance-config-hardware"' in card
+    assert 'class="mconfig-hardware-list"' in card
+    assert "Discover &amp; add hardware" in card
+    assert "Start discovery" in card
+    assert "Add manually" in card
+    assert 'id="maintenance-config-features"' in card
+    assert 'class="feature-list"' in card
+    assert "Advanced / System settings" in card
+    advanced = card.split('id="maintenance-config-advanced-section"', 1)[0]
+    assert " open" not in advanced.rsplit("<details", 1)[-1]
+    assert "maintenance-config-apply-hint" not in card
+
+
+def test_js_maintenance_config_renders_setup_style_cards():
+    js = _read("admin.js")
+    hardware = js.split("function mconfigHardwareCard", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    assert "hardware-card hardware-card-" in hardware
+    assert "hardware-card-status" in hardware
+    assert "hardware-card-model" in hardware
+    expanded = js.split("function mconfigSetExpanded", 1)[1].split("\nfunction ", 1)[0]
+    assert "aria-expanded" in expanded
+    feature = js.split("function renderMaintenanceFeatureSection", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    assert "feature-row mconfig-feature" in feature
+    assert "feature-enable" in feature
+    assert "feature-status" in feature
+    assert "feature-desc" in feature
+    assert "aria-controls" in feature
+
+
+def test_hardware_and_feature_card_bodies_respect_hidden_state():
+    css = _read("admin.css")
+    assert ".hardware-card-body[hidden]" in css
+    assert ".feature-body[hidden]" in css
+    rule = css.split(".hardware-card-body[hidden]", 1)[1].split("}", 1)[0]
+    assert "display: none" in rule
+
+
+def test_maintenance_grid_meter_has_draft_only_remove_action():
+    js = _read("admin.js")
+    grid = js.split("function renderMaintenanceGridMeter", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    assert "onRemove:" in grid
+    assert "present: false" in grid
+    assert "renderMaintenanceGridMeter()" in grid
+    assert "/api/" not in grid
+
+
+def test_js_config_editor_uses_safe_dom_and_no_innerhtml():
+    js = _read("admin.js")
+    fn = js.split("function renderMaintenanceConfig", 1)[1].split(
+        "\n// --- ", 1
+    )[0]
+    assert "innerHTML" not in fn
+    # dynamic labels/paths/values go through textContent
+    assert "textContent" in js.split("function renderMaintenanceConfigChange", 1)[1][:600]
+
+
+def test_js_config_preview_posts_no_custom_path():
+    js = _read("admin.js")
+    fn = js.split("async function previewMaintenanceConfig", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    assert "/api/admin/maintenance/config/preview" in fn
+    assert "draft: mconfigState.draft" in fn
+    assert "path:" not in fn
+
+
+def test_js_config_reset_restores_pristine_draft():
+    js = _read("admin.js")
+    fn = js.split("function resetMaintenanceConfigDraft", 1)[1].split(
+        "\nif (", 1
+    )[0]
+    assert "mconfigState.pristine" in fn
+    assert "renderMaintenanceInverters()" in fn
+
+
+def test_maintenance_discovery_is_first_class_review_workflow():
+    html = _read("index.html")
+    card = html.split('id="maintenance-config-card"', 1)[1].split("</section>", 1)[0]
+    assert 'id="maintenance-config-discovery"' in card
+    assert 'id="maintenance-discovery-results"' in card
+    assert "Close result" in card
+    assert ">Cancel</button>" not in card
+    assert "Nothing is written until you review and apply the draft." in card
+    js = _read("admin.js")
+    start = js.split("async function startMaintenanceDiscovery", 1)[1].split(
+        "\nasync function ", 1
+    )[0]
+    assert "if (!mconfigState.loaded)" in start
+    assert "await loadMaintenanceConfig()" in start
+    assert 'fetch("/api/discovery/mdns/refresh"' in start
+    assert 'fetch("/api/discovery/networks"' in start
+    assert 'fetch("/api/discovery/scan"' in js
+    assert '"/api/discovery/result/"' in js
+    assert "buildMaintenanceDiscoveryReview" in start
+    assert "/api/admin/maintenance/config/apply" not in start
+
+    close = js.split("function closeMaintenanceDiscovery", 1)[1].split(
+        "\nasync function ", 1
+    )[0]
+    assert "loadMaintenanceConfig" not in close
+
+    manual = js.split("async function addManualMaintenanceInverter", 1)[1].split(
+        "\n// --- ", 1
+    )[0]
+    assert "if (!mconfigState.loaded)" in manual
+    assert "await loadMaintenanceConfig()" in manual
+
+
+def test_maintenance_discovery_matches_serial_before_ip_and_keeps_missing():
+    js = _read("admin.js")
+    match = js.split("function mconfigFindInverterMatch", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    assert match.index("serial_number") < match.index("configured.ip")
+    review = js.split("function buildMaintenanceDiscoveryReview", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    assert "mconfigState.draft" in review
+    assert "mconfigState.pristine" not in review
+    assert 'state: "missing"' in review
+    assert 'state: ipChanged ? "conflict" : "found"' in review
+    add = js.split("function mconfigAddDiscovered", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    assert "mconfigIdentity(device.sn) === serial" in add
+    assert "port: found.port ||" not in add
+    assert 'gridMeter.port = found.port' in add
+
+
+def test_maintenance_discovery_always_renders_summary_and_pending_status():
+    js = _read("admin.js")
+    render = js.split("function renderMaintenanceDiscoveryReview", 1)[1].split(
+        "\nlet mconfigDiscovering", 1
+    )[0]
+    card = js.split("function renderMaintenanceDiscoveryCard", 1)[1].split(
+        "\nfunction renderMaintenanceDiscoveryReview", 1
+    )[0]
+    assert "Discovery completed" in render
+    assert "Configured:" in render
+    assert "No supported devices found." in render
+    assert "No new devices found." in render
+    assert "Configured devices were kept in the draft." in render
+    assert "textContent" in render
+    assert "innerHTML" not in render
+
+    add = js.split("function mconfigAddDiscovered", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    review = js.split("function renderMaintenanceDiscoveryReview", 1)[1].split(
+        "\nlet mconfigDiscovering", 1
+    )[0]
+    assert "mconfigMarkDraftChanged" in add
+    assert "mconfigMarkDraftChanged" in card
+
+
+def test_maintenance_config_global_preview_button_remains_bottom_action():
+    html = _read("index.html")
+    card = html.split('id="maintenance-config-card"', 1)[1].split("</section>", 1)[0]
+    assert 'id="maintenance-config-preview-btn"' in card
+    assert "Preview changes" in card
+
+
+def test_maintenance_discovery_cards_keep_add_actions_not_local_preview():
+    js = _read("admin.js")
+    card = js.split("function renderMaintenanceDiscoveryCard", 1)[1].split(
+        "\nfunction renderMaintenanceDiscoveryReview", 1
+    )[0]
+    review = js.split("function renderMaintenanceDiscoveryReview", 1)[1].split(
+        "\nlet mconfigDiscovering", 1
+    )[0]
+
+    assert '"device-card mconfig-discovery-device-card"' in card
+    assert '"device-role " + discoveryRoleClass(role)' in card
+    assert '"mconfig-discovery-add-button " + actionState.cssClass' in card
+    assert "mconfigDiscoveryActionState(item)" in card
+    assert "mconfigAddDiscovered(item)" in card
+    assert "Update draft" in js
+    assert "Added to draft" in js
+    assert "In config" in js
+
+    assert "previewMaintenanceConfig" not in review
+    assert "mconfig-discovery-next" not in review
+
+
+def test_maintenance_discovery_disabled_add_buttons_are_scoped():
+    css = _read("admin.css")
+    assert ".mconfig-discovery-add-button:disabled" in css
+    assert ".mconfig-discovery-add-button.is-in-config:disabled" in css
+    assert ".mconfig-discovery-add-button.is-added:disabled" in css
+    assert ".mconfig-discovery-add-button.is-configured-missing:disabled" in css
+
+
+def test_maintenance_discovery_reuses_setup_device_cards_and_badges():
+    js = _read("admin.js")
+    css = _read("admin.css")
+    card = js.split("function renderMaintenanceDiscoveryCard", 1)[1].split(
+        "\nfunction renderMaintenanceDiscoveryReview", 1
+    )[0]
+    review = js.split("function renderMaintenanceDiscoveryReview", 1)[1].split(
+        "\nlet mconfigDiscovering", 1
+    )[0]
+
+    assert '"device-card mconfig-discovery-device-card"' in card
+    assert '"device-role " + discoveryRoleClass(role)' in card
+    assert '"device-sources"' in card
+    assert "mconfigAppendSourceBadges" in card
+    assert '"device-facts"' in card
+    assert '"device-card-foot"' in card
+    assert '"results-list mconfig-discovery-grid"' in review
+    assert "Labels:" not in review
+    assert ".mconfig-discovery-device-card[data-state=\"conflict\"]" in css
+
+
+def _run_maintenance_discovery_node(setup):
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is required for the maintenance discovery behavior test")
+    js = _read("admin.js")
+    helpers = "\n".join(
+        _extract_fn(js, name)
+        for name in (
+            "deviceKey",
+            "isConfigCandidate",
+            "mconfigIdentity",
+            "mconfigDiscoveryRole",
+            "mconfigFindInverterMatch",
+            "buildMaintenanceDiscoveryReview",
+        )
+    )
+    result = subprocess.run(
+        [node, "-e", helpers + "\n" + setup],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def test_maintenance_discovery_behavior_preserves_missing_and_deduplicates_serial():
+    result = _run_maintenance_discovery_node(
+        """
+const pristine = {
+  devices: [
+    {name: "WR1", ip: "192.168.1.77", sn: "AAA"},
+    {name: "WR2", ip: "192.168.1.78", sn: "BBB"},
+  ],
+  grid_meter: {present: true, type: "shelly", ip: "192.168.1.50"},
+};
+const mconfigState = {
+  pristine: {devices: [], grid_meter: {}},
+  draft: JSON.parse(JSON.stringify(pristine)),
+};
+const before = JSON.stringify(mconfigState.draft);
+const discovered = [
+  {
+    id: "zendure:AAA", api_family: "zendure", role_suggestion: "inverter",
+    ip: "192.168.1.81", serial_number: "AAA",
+  },
+  {
+    id: "zendure:CCC", api_family: "zendure", role_suggestion: "inverter",
+    ip: "192.168.1.82", serial_number: "CCC",
+  },
+  {
+    id: "shelly:meter", api_family: "shelly", role_suggestion: "grid_meter",
+    ip: "192.168.1.50",
+  },
+];
+const review = buildMaintenanceDiscoveryReview(discovered);
+console.log(JSON.stringify({
+  states: review.map((item) => item.state),
+  conflictName: review.find((item) => item.state === "conflict").configured.name,
+  conflictIp: review.find((item) => item.state === "conflict").discovered.ip,
+  unchanged: before === JSON.stringify(mconfigState.draft),
+}));
+"""
+    )
+    assert result["states"] == ["conflict", "missing", "found", "new"]
+    assert result["conflictName"] == "WR1"
+    assert result["conflictIp"] == "192.168.1.81"
+    assert result["unchanged"] is True
+
+
+def test_maintenance_discovery_grid_meter_without_port_omits_port():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is required for the maintenance discovery behavior test")
+    js = _read("admin.js")
+    helpers = "\n".join(
+        _extract_fn(js, name)
+        for name in (
+            "mconfigIdentity",
+            "mconfigMarkDraftChanged",
+            "mconfigAddDiscovered",
+        )
+    )
+    script = (
+        "function gridMeterType() { return 'shelly'; }\n"
+        "function renderMaintenanceGridMeter() {}\n"
+        "function renderMaintenanceInverters() {}\n"
+        "function setMaintenanceFact() {}\n"
+        "const mconfigEls = {result: null, applyPanel: null, discoveryStatus: null, summary: null};\n"
+        "const mconfigState = {draft: {devices: [], grid_meter: {}}, previewFingerprint: null};\n"
+        + helpers
+        + """
+const item = {
+  role: "grid_meter",
+  discovered: {ip: "192.168.1.50", api_family: "shelly_gen2"},
+};
+mconfigAddDiscovered(item);
+console.log(JSON.stringify(mconfigState.draft.grid_meter));
+"""
+    )
+    result = subprocess.run(
+        [node, "-e", script],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    meter = json.loads(result.stdout)
+    assert meter["ip"] == "192.168.1.50"
+    assert "port" not in meter
+
+
+def test_maintenance_apply_requires_preview_confirmation_and_offers_backup():
+    html = _read("index.html")
+    assert 'id="maintenance-config-backup" checked' in html
+    assert 'id="maintenance-config-apply-btn"' in html
+    js = _read("admin.js")
+    apply = js.split("async function applyMaintenanceConfig", 1)[1].split(
+        "\nif (mconfigEls.applyBtn)", 1
+    )[0]
+    assert "previewFingerprint" in apply
+    assert "window.confirm" in apply
+    assert "/api/admin/maintenance/config/apply" in apply
+    assert "confirm: true" in apply
+
+
+def test_shared_discovery_sessions_merge_sources_and_isolate_modes():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is required for the shared discovery behavior test")
+    js = _read("admin.js")
+    helpers = "\n".join(
+        _extract_fn(js, name)
+        for name in (
+            "createDiscoverySession",
+            "discoveryDeviceType",
+            "discoveryDeviceMatch",
+            "normalizeDiscoverySource",
+            "mergeDiscoveryDevice",
+        )
+    )
+    script = (
+        "function sourcesOf(device) { return device.sources || [device.source || 'network_scan']; }\n"
+        "function deviceKey(device) { return device.serial_number || device.ip; }\n"
+        + helpers
+        + """
+const setup = createDiscoverySession("setup");
+const maintenance = createDiscoverySession("maintenance");
+mergeDiscoveryDevice(setup, {
+  source: "mdns", serial_number: "ABC", ip: "192.168.1.20",
+  device_type: "inverter", display_name: "Device"
+}, "mdns");
+mergeDiscoveryDevice(setup, {
+  source: "network_scan", serial_number: "ABC", ip: "192.168.1.21",
+  device_type: "inverter"
+}, "manual_scan");
+console.log(JSON.stringify({
+  setupSize: setup.devices.size,
+  maintenanceSize: maintenance.devices.size,
+  device: Array.from(setup.devices.values())[0]
+}));
+"""
+    )
+    result = subprocess.run(
+        [node, "-e", script], text=True, capture_output=True, check=False
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["setupSize"] == 1
+    assert payload["maintenanceSize"] == 0
+    assert payload["device"]["ip"] == "192.168.1.21"
+    assert payload["device"]["sources"] == ["mdns", "manual_scan"]
+
+
+def test_manual_scan_validation_accepts_host_and_rejects_large_range():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is required for the manual scan validation test")
+    js = _read("admin.js")
+    helper = _extract_fn(js, "validateManualScanInput")
+    script = helper + """
+console.log(JSON.stringify([
+  validateManualScanInput("192.168.178.81"),
+  validateManualScanInput("192.168.178.81/24"),
+  validateManualScanInput("192.168.178.0/23"),
+  validateManualScanInput("")
+]));
+"""
+    result = subprocess.run(
+        [node, "-e", script], text=True, capture_output=True, check=False
+    )
+    assert result.returncode == 0, result.stderr
+    values = json.loads(result.stdout)
+    assert values[0]["cidr"] == "192.168.178.81/32"
+    assert values[1]["cidr"] == "192.168.178.0/24"
+    assert "/24 or smaller" in values[2]["error"]
+    assert "IPv4 address" in values[3]["error"]
+
+
+def test_setup_and_maintenance_expose_shared_discovery_controls():
+    html = _read("index.html")
+    js = _read("admin.js")
+    for marker in (
+        'id="setup-discovery-reset"',
+        'id="setup-discovery-progress"',
+        'id="maintenance-discovery-manual-form"',
+        'id="maintenance-discovery-reset"',
+        'id="maintenance-discovery-progress"',
+    ):
+        assert marker in html
+    assert "queueDiscoveryScans(" in js
+    assert "discoverySessions.setup" in js
+    assert "discoverySessions.maintenance" in js
+
+
+def test_index_has_container_sync_post_apply_panel():
+    html = _read("index.html")
+    for marker in (
+        'id="maintenance-config-post-apply"',
+        'id="maintenance-post-ems-desired"',
+        'id="maintenance-post-influx-desired"',
+        'id="maintenance-post-action-summary"',
+        'id="maintenance-containers-sync"',
+        'id="maintenance-containers-recheck"',
+        'id="maintenance-post-diagnostics"',
+        'id="maintenance-containers-sync-status"',
+    ):
+        assert marker in html, marker
+    assert "Restart / sync containers" in html
+
+
+def test_index_runtime_containers_has_plan_and_action_hosts():
+    html = _read("index.html")
+    for marker in (
+        'id="maintenance-runtime-container-actions"',
+        'id="maintenance-runtime-ems-desired"',
+        'id="maintenance-runtime-influx-desired"',
+        'id="maintenance-runtime-action-summary"',
+        'id="maintenance-runtime-containers-sync"',
+        'id="maintenance-runtime-containers-recheck"',
+        'id="maintenance-runtime-diagnostics"',
+        'id="maintenance-runtime-containers-status"',
+    ):
+        assert marker in html, marker
+    # The Runtime containers section (02) carries its own plan/action host so the
+    # sync plan is visible without applying config first.
+    containers = html.split('id="maintenance-containers"', 1)[1].split(
+        "</section>", 1
+    )[0]
+    assert 'id="maintenance-runtime-container-actions"' in containers
+    assert "Restart / sync containers" in containers
+
+
+def test_runtime_container_card_has_display_detail_hosts():
+    html = _read("index.html")
+    containers = html.split('id="maintenance-containers"', 1)[1].split(
+        "</section>", 1
+    )[0]
+    for marker in ("maintenance-ems-detail", "maintenance-influx-detail"):
+        assert 'id="' + marker + '"' in containers
+
+
+def test_js_runtime_service_status_uses_display_label_and_detail():
+    js = _read("admin.js")
+    fn = js.split("function renderRuntimeServiceStatus", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    # Main labels come from the derived display fields, not raw container state.
+    assert "ems.display_label" in fn
+    assert "ems.display_detail" in fn
+    assert "influx.display_label" in fn
+    assert "influx.display_detail" in fn
+    # The collapsed summary is driven by the plan's status_summary.
+    assert "plan.status_summary" in fn
+    # Values are written via the textContent setter, never innerHTML.
+    assert "setMaintenanceFact" in fn
+    assert "innerHTML" not in fn
+
+
+def test_js_disabled_influx_does_not_render_raw_missing_label():
+    js = _read("admin.js")
+    # The overview renderer no longer maps InfluxDB to a raw "missing" label; the
+    # feature-aware display comes from the plan.
+    render = js.split("function renderMaintenance", 1)[1].split(
+        "\nfunction renderMaintenanceError", 1
+    )[0]
+    assert "maintenanceContainerFact" not in render
+    assert "maintenanceEls.influx," not in render
+
+
+def test_js_post_apply_panel_uses_service_desired_state():
+    js = _read("admin.js")
+    fn = js.split("function renderContainerPlanInto", 1)[1].split(
+        "\n// ", 1
+    )[0]
+    # Both hosts (post-apply + runtime) render desired from the derived service
+    # display fields so the two panels stay consistent.
+    assert "plan.services" in fn
+    assert "desired_state" in fn
+
+
+def test_js_uses_container_plan_and_sync_endpoints():
+    js = _read("admin.js")
+    assert "/api/admin/maintenance/containers/plan" in js
+    assert "/api/admin/maintenance/containers/sync" in js
+    assert "loadMaintenanceContainerPlan(" in js
+    assert "syncMaintenanceContainers(" in js
+
+
+def test_js_container_plan_loads_with_maintenance_overview():
+    js = _read("admin.js")
+    # The plan is no longer post-apply-only: the overview load flow refreshes it.
+    overview = js.split("async function loadMaintenanceOverview", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    assert "loadMaintenanceContainerPlan(" in overview
+
+
+def test_js_runtime_and_post_apply_sync_buttons_are_wired():
+    js = _read("admin.js")
+    # Both hosts drive the shared sync handler.
+    assert 'maintenanceEls.runtimeContainersSync.addEventListener("click"' in js
+    assert 'mconfigEls.containersSync.addEventListener("click"' in js
+    assert "syncMaintenanceContainers(" in js
+
+
+def test_js_config_apply_defers_diagnostics_until_after_container_sync():
+    js = _read("admin.js")
+    apply_start = js.find("async function applyMaintenanceConfig")
+    apply_end = js.find("const CONTAINER_SYNC_LABEL")
+    assert apply_start != -1 and apply_end != -1 and apply_start < apply_end
+    apply_body = js[apply_start:apply_end]
+    # The config apply flow must not auto-run diagnostics before the container
+    # sync (they would otherwise hit the old container/config).
+    assert "runDiagnostics()" not in apply_body
+    # After a real write (changed === true) the guided completion block is
+    # revealed; a no-op apply (changed === false) hides it instead.
+    assert "loadMaintenanceContainerPlan({ showPostApply: true })" in apply_body
+    assert "data.changed === false" in apply_body
+    assert "No config changes were written. Container restart is not required." in apply_body
+    assert "mconfigEls.postApply.hidden = true" in apply_body
+
+
+def test_js_maintenance_overview_is_deterministic():
+    js = _read("admin.js")
+    overview = js.split("async function loadMaintenanceOverview", 1)[1].split(
+        "\nif (maintenanceEls.refresh)", 1
+    )[0]
+    # Options gate the follow-up refreshes; defaults preserve the old behavior.
+    assert "options.refreshConfig !== false" in overview
+    assert "options.refreshContainerPlan !== false" in overview
+    assert "options.showPostApply === true" in overview
+    # Follow-ups are awaited so a late config reload cannot hide the post-apply
+    # panel after it was revealed.
+    assert "await loadMaintenanceConfig()" in overview
+    assert "await loadMaintenanceContainerPlan({ showPostApply })" in overview
+    # No unawaited fire-and-forget reloads remain.
+    assert "\n  loadMaintenanceConfig();" not in overview
+    assert "loadMaintenanceContainerPlan({ showPostApply: false })" not in overview
+
+
+def test_js_config_apply_does_not_reset_post_apply_via_overview():
+    js = _read("admin.js")
+    apply_start = js.find("async function applyMaintenanceConfig")
+    apply_end = js.find("const CONTAINER_SYNC_LABEL")
+    apply_body = js[apply_start:apply_end]
+    # The success path refreshes overview facts only; config + container plan are
+    # driven explicitly so the guided post-apply panel is not reset/hidden.
+    assert "refreshConfig: false" in apply_body
+    assert "refreshContainerPlan: false" in apply_body
+    # A bare overview reload (old behavior) would re-run renderMaintenanceConfig
+    # and hide the panel.
+    assert "await loadMaintenanceOverview();" not in apply_body
+    # The changed === true branch keeps the panel visible.
+    assert "mconfigEls.postApply.hidden = false" in apply_body
+
+
+def test_js_container_recheck_and_sync_preserve_config_view():
+    js = _read("admin.js")
+    # Rechecks and syncs refresh facts only and reload the plan themselves, so a
+    # visible post-apply / config-result view is not reset by renderMaintenanceConfig.
+    for marker in (
+        'mconfigEls.containersRecheck.addEventListener("click"',
+        'maintenanceEls.runtimeContainersRecheck.addEventListener("click"',
+    ):
+        block = js.split(marker, 1)[1].split("});", 1)[0]
+        assert "refreshConfig: false" in block
+        assert "refreshContainerPlan: false" in block
+    sync = _extract_fn(js, "syncMaintenanceContainers")
+    assert "refreshConfig: false" in sync
+    assert "refreshContainerPlan: false" in sync
+    # The post-apply host stays shown across a sync when it was already visible.
+    assert "keepPostApply" in sync
+
+
+def test_js_container_sync_reports_reason_per_host():
+    js = _read("admin.js")
+    sync = _extract_fn(js, "syncMaintenanceContainers")
+    # The shared sync helper forwards the caller's reason to the mutating endpoint.
+    assert "confirm: true, reason }" in sync
+    # The post-apply host reports config_apply; the runtime host reports manual.
+    assert (
+        'syncMaintenanceContainers(mconfigEls.containersSyncStatus, "config_apply")' in js
+    )
+    assert (
+        'syncMaintenanceContainers(maintenanceEls.runtimeContainersStatus, "manual")' in js
+    )
+
+
+def test_js_container_sync_avoids_forbidden_commands():
+    js = _read("admin.js")
+    html = _read("index.html")
+    for forbidden in ("down -v", "docker rm -v", "clean install", "Reinstall", "Reset stack"):
+        assert forbidden not in js, forbidden
+        assert forbidden not in html, forbidden
+
+
+def test_js_container_sync_renders_influx_schema_step():
+    js = _read("admin.js")
+    # The sync result surfaces the returned steps, including the InfluxDB schema sync.
+    assert '"influxdb:sync": "InfluxDB sync"' in js
+    fmt = _extract_fn(js, "formatContainerSyncSteps")
+    assert "step.service" in fmt and "step.action" in fmt and "step.status" in fmt
+    sync = _extract_fn(js, "syncMaintenanceContainers")
+    assert "formatContainerSyncSteps(data.steps)" in sync
+
+
+def test_js_container_sync_renders_all_expected_step_labels():
+    js = _read("admin.js")
+    for label in ("InfluxDB init", "InfluxDB start", "InfluxDB sync", "EMS recreate"):
+        assert label in js, label
