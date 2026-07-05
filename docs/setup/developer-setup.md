@@ -1,7 +1,8 @@
-# Option C: Developer Setup
+# Developer Setup
 
-Best for development, debugging and contributing from a Git checkout with a local
-Python environment.
+Only for development, debugging and contributing from a Git checkout with a local
+Python environment. This is not the normal user path — for a home install, use
+the [Admin Console](admin-setup.md) or [Docker Bootstrap](docker-bootstrap.md).
 
 ## Layout
 

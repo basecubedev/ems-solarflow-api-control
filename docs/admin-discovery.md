@@ -1,10 +1,19 @@
-# EMS SolarFlow Control Admin (MVP)
+# EMS SolarFlow Admin Console Technical Reference
 
-EMS SolarFlow Control Admin is a lightweight device-discovery and local setup
-helper that sits next to the EMS. It is **not** part of the control loop and
-does not replace any EMS logic. This first MVP does one thing: **discover
-supported EMS devices on a local network** and show them in the EMS dashboard
-style.
+This is the technical reference for the Admin Console. For a short user overview, see
+[admin.md](admin.md); for the two guided flows, see
+[setup/admin-setup.md](setup/admin-setup.md) (Set up a new system) and
+[setup/admin-maintenance.md](setup/admin-maintenance.md) (Manage my existing
+system). This page documents the internals: the setup wizard, release and
+build-identity gating, network discovery, deployment-capable Docker setup, and
+security.
+
+Admin sits next to EMS. It is **not** part of the control loop and does not
+replace any EMS logic — EMS remains the source of truth. Admin covers device
+discovery, config generation and apply, guided upgrades, deployment, and
+backup/restore, all through EMS-owned tooling. Device discovery — finding
+supported EMS devices on the local network and showing them in the EMS dashboard
+style — is described in detail below.
 
 ## Layout
 
@@ -126,7 +135,7 @@ preview) live in collapsed details so the page stays short. **Diagnostics /
 Advanced** holds the Deployment, System, and Network / WiFi placeholders for
 later phases.
 
-## What it does (MVP)
+## Discovery capabilities
 
 - Serves a small local admin web UI (stdlib `http.server`, vanilla JS).
 - Suggests detected private/local networks so you can start a scan without
@@ -147,18 +156,21 @@ later phases.
 - Shows each device with IP, API family/type, suggested role, serial (or
   `missing`), confidence, and config readiness.
 
-## What it does not do yet
+## Current limitations
 
-- No general backup/restore flow yet (config apply and deployment apply back up
-  the single file they replace, but there is no full snapshot/rollback).
-- No login/auth on the Admin UI.
+- No login/auth on the Admin Console. Run it only on a trusted local network (see
+  [Security note](#security-note)).
+- InfluxDB restore is not available in Admin. InfluxDB backups can be created,
+  inspected, listed and deleted, but restore uses the EMS CLI (see
+  [setup/admin-backup-restore.md](setup/admin-backup-restore.md)).
 - No SSDP/ARP discovery and no `ping`/`nmap`/`arp` shell-outs.
 - MQTT discovery is endpoint-only: no credentials, login, subscriptions, topic
   scanning, or device extraction from topics.
 
-These are planned for later phases. The discovery result model is already shaped
-so a future config assistant can promote a device (config name, display name,
-role, per-device parameters) without a schema change.
+Config generation/apply, guided upgrade, deployment, and a full preview-first
+backup/restore flow are implemented (see the setup and maintenance guides). The
+discovery result model is shaped so a device can be promoted (config name,
+display name, role, per-device parameters) without a schema change.
 
 ## Network suggestions
 
@@ -314,7 +326,7 @@ container and mounted workspace use the same non-root identity.
 
 > **Security:** mounting `/var/run/docker.sock` grants effectively
 > root-equivalent control of the host through the Docker API. Run Admin Setup
-> only on a trusted local machine and never expose the Admin UI to the internet.
+> only on a trusted local machine and never expose the Admin Console to the internet.
 
 Verify the status APIs:
 

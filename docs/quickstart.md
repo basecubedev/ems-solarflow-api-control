@@ -10,8 +10,8 @@ installer output, a guided `config init` with example values, and the running
 dashboard. It is also available as video: [MP4](assets/install-demo.mp4) ·
 [WebM](assets/install-demo.webm).
 
-Home Assistant is optional. Native Python setup is documented separately in
-[native-python.md](native-python.md).
+Home Assistant is optional. The advanced native Python path is documented
+separately in [native-python.md](native-python.md).
 
 ## 1. Requirements
 

@@ -1,15 +1,16 @@
-# Admin Backup / Restore
+# Admin Console: Backup / restore
 
 The **Backup / restore** path under Maintenance (see
 [admin-maintenance.md](admin-maintenance.md)) is a preview-first workflow for
-creating, inspecting and restoring backups from the Admin UI. It is a
-*maintenance* flow for an existing system — not part of Fresh Install.
+creating, inspecting and restoring backups from the Admin Console. It is a
+*maintenance* flow for an existing system — not part of Set up a new system.
 
-Admin is orchestration/UI only. It never invents a new backup format: every
-archive is a normal EMS backup archive created and read through the EMS Core
+The Admin Console is orchestration/UI only. It never invents a new backup format:
+every archive is a normal EMS backup archive created and read through the EMS Core
 helpers (the same ones behind `emsctl.py backup`, documented in
-[../backup-restore.md](../backup-restore.md)). Optional Admin "backup set"
-metadata only groups existing EMS archives — it is not a new artifact.
+[../backup-restore.md](../backup-restore.md)). A **backup set** is optional Admin
+metadata that groups existing EMS archives (config + databases, plus bundled
+InfluxDB when supported) — it is not a new artifact.
 
 ## Backup types
 
@@ -29,20 +30,28 @@ of the requested type, and pass its internal checksums.
 
 ## Where backups live
 
-Backups live in the EMS backup directory, `data/backups/`, by default. Admin
-backup-set metadata lives under `data/admin/backups/sets/`. The status stage
-warns if the backup directory is outside the install root or if archives are
-locked (encrypted) or invalid.
+The actual backup archives live in the EMS backup directory, `data/backups/`, by
+default. The Admin Console keeps only its own metadata under `data/admin/`.
 
-## What Admin can restore
+| Path | What it holds |
+| --- | --- |
+| `data/backups/` | EMS backup archives (the real `.tar.gz` / `.tar.gz.enc` files) |
+| `data/admin/` | Admin Console state, release cache, staging, logs and backup-set metadata |
 
-Admin restore currently supports **config** and **database** archives. InfluxDB
-backups can be created, listed, inspected and deleted from Admin, but **InfluxDB
-restore is intentionally blocked** in the Admin UI: InfluxDB has a dedicated
-EMS/CLI restore flow and must never be pushed through the generic file restore
-path. Until an EMS-tool-backed InfluxDB restore runner is wired in, use the EMS
-CLI (`emsctl.py backup`, see [../backup-restore.md](../backup-restore.md)) to
-restore InfluxDB backups.
+Admin backup-set metadata lives under `data/admin/backups/sets/`; the archives it
+references still live in `data/backups/`. The status stage warns if the backup
+directory is outside the install root or if archives are locked (encrypted) or
+invalid.
+
+## What the Admin Console can restore
+
+Admin Console restore currently supports **config** and **database** archives.
+InfluxDB backups can be created, listed, inspected and deleted from the Admin
+Console, but **InfluxDB restore is intentionally blocked** in the Admin Console:
+InfluxDB has a dedicated EMS/CLI restore flow and must never be pushed through the
+generic file restore path. Until an EMS-tool-backed InfluxDB restore runner is
+wired in, use the EMS CLI (`emsctl.py backup`, see
+[../backup-restore.md](../backup-restore.md)) to restore InfluxDB backups.
 
 The block is enforced in the backend, not just hidden in the UI: an InfluxDB
 archive cannot enter a restore preview, no restore plan containing an InfluxDB
@@ -53,17 +62,18 @@ members individually instead.
 
 ## Restore is preview-first
 
-A restore always starts with a **preview** (a dry run). The preview reports,
-per file, whether the restore would create a new file, replace a conflicting
-file, or skip an identical file, and blocks up front on invalid checksums. No
-files are written during a preview.
+**Preview-first** means a restore always starts with a **preview** (a dry run).
+The preview reports, per file, whether the restore would create a new file,
+replace a conflicting file, or skip an identical file, and blocks up front on
+invalid checksums. No files are written during a preview.
 
-Because a restore normally replaces the current state with the backup state,
-Admin restore always treats differing files as replace candidates. The preview
-lists those files and counts them under "Will replace". Nothing is written until
-you explicitly confirm the restore. The lower-level EMS restore tooling (`emsctl.py
-backup`, see [../backup-restore.md](../backup-restore.md)) still supports stricter
-conflict policies for CLI/advanced workflows.
+**Replace-on-conflict**: because a restore normally replaces the current state
+with the backup state, Admin Console restore treats differing files as replace
+candidates. The preview lists those files and counts them under "Will replace".
+Nothing is written until you explicitly confirm the restore. The lower-level EMS
+restore tooling (`emsctl.py backup`, see
+[../backup-restore.md](../backup-restore.md)) still supports stricter conflict
+policies for CLI/advanced workflows.
 
 ## Rollback and automatic rollback
 
@@ -77,11 +87,12 @@ conflict policies for CLI/advanced workflows.
 
 ## Encrypted backups
 
-Encrypted backups appear **locked** in the list and details until you supply a
-password. Inspecting or restoring an encrypted backup requires the password;
-it is used for that request only and is never logged or persisted. (Creating a
-new encrypted backup from Admin is planned; existing encrypted backups can be
-inspected and restored today.)
+Yes — the Admin Console can **create** encrypted backups: supply an encryption password when you
+create the backup. Encrypted backups then appear **locked** in the list and
+details until you supply the password again. Inspecting or restoring an encrypted
+backup requires the password; it is used for that request only and is never
+logged or persisted. Without the password, an encrypted backup cannot be
+restored.
 
 ## Delete
 

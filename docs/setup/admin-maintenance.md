@@ -1,29 +1,39 @@
-# Manage My Existing System (Admin Maintenance)
+# Admin Console: Manage my existing system
 
-The Admin UI offers exactly two flows. This page covers the second one,
-**Manage my existing system** — the counterpart to
-[admin-setup.md](admin-setup.md) (Set up a new system). Use it to update,
-inspect, edit, or back up an installation that already exists.
+Use Maintenance for an existing EMS installation. The Admin Console offers
+exactly two flows; this page covers the second one, **Manage my existing
+system** — the counterpart to [admin-setup.md](admin-setup.md) (Set up a new
+system). Use it to update, inspect, edit, or back up an installation that already
+exists.
 
-Admin is orchestration/UI only; the EMS core stays the source of truth. All
-maintenance actions reuse the same EMS Core helpers and the standard
-`config/config.json` layout — Admin never invents a second config.
+Maintenance reads the real system state. It can inspect Docker, config, backups
+and diagnostics. It never silently replaces config or deletes data.
+
+The Admin Console is orchestration/UI only; the EMS core stays the source of
+truth. All maintenance actions reuse the same EMS Core helpers and the standard
+`config/config.json` layout — the Admin Console never invents a second config.
 
 ## Opening Maintenance
 
-The Admin start/router screen detects the current install state and recommends
-the safest flow. Any existing, legacy, partial, or Admin-prepared install is
-routed to **Manage my existing system** and never auto-starts the setup wizard
-(see [admin-setup.md](admin-setup.md)). A legacy root `config.json` is offered a
+Start the Admin Console and open `http://127.0.0.1:8090` (see
+[admin-setup.md](admin-setup.md#start)). The start/router screen detects the
+current install state and recommends the safest flow. Any existing, legacy,
+partial, or Admin-prepared install is routed to **Manage my existing system** and
+never auto-starts the setup wizard. A legacy root `config.json` is offered a
 migration to `config/config.json` first (see [config-layout.md](config-layout.md)).
 
 The Maintenance hub presents three paths:
 
 | Path | What it is | Status |
 |---|---|---|
-| **Guided upgrade** | Planned upgrade workflow with backup and diagnostics | Recommended |
+| **Guided upgrade** | Plan and validate an EMS update | Recommended |
 | **Manual configuration / existing system** | Inspect, edit, and restart an existing EMS setup | Available |
-| **Backup / restore** | EMS-owned backup and restore workflow | Available |
+| **Backup / restore** | Create, inspect, restore or delete EMS backups | Available |
+
+Maintenance is for existing systems and is conservative by default. It reads the
+host Docker state, your `docker-compose.yml`, and `config/config.json`. It can
+update EMS, edit config, run diagnostics, and manage backups. It never silently
+deletes runtime data.
 
 ## Guided upgrade (recommended)
 
@@ -37,16 +47,13 @@ runs `docker compose down`/`rm`/`down -v`.
 
 The planning page lets you choose which optional steps run; the fixed order is:
 
-1. **Verify target image** — always runs, before any mutating step. Resolves the
-   target image's build identity (pulling it if it is not local yet) and
-   compares it against the running EMS build. A target that is the same image
-   (no-op), older than the running build (downgrade), or whose identity cannot be
-   verified aborts the run here — no backup, config, compose or container change
-   is made. Older `v0.6.x` images without build-identity labels are still allowed
-   when SemVer proves the upgrade (the step records a SemVer-fallback warning);
-   only a genuinely unprovable move (a running `latest` versus an unlabeled
-   stable) is blocked, unless the `ADMIN_ALLOW_LEGACY_UNVERIFIED_UPGRADES=true`
-   test override is set, which allows it with a clear warning.
+1. **Verify target image** — always runs, before any mutating step. It confirms
+   the target is a real upgrade of the running EMS build (pulling the target
+   image first if it is not local yet). A target that is the same image (no-op),
+   older than the running build (downgrade), or whose identity cannot be verified
+   aborts the run here — no backup, config, compose or container change is made.
+   For the full build-identity and SemVer-fallback rules, see the release
+   selection section in [../admin-discovery.md](../admin-discovery.md).
 2. **Preflight checks** — always runs. Confirms the target is the currently
    prepared release, and that `config/config.json` and `docker-compose.yml`
    exist. Fast, side-effect-free — a failed check rejects the upgrade before any
@@ -81,16 +88,11 @@ Progress is reported live per step (pending → running → done/skipped/failed)
 ### Upgrade-only guarantee
 
 Guided upgrade only ever moves **forward**. The target must be the release you
-prepared in the setup/release step, and the same build-identity gate that
-governs release selection applies here — a target that is not a real upgrade is
-refused in the backend, not just hidden in the UI. Because a stable target may
-not be pulled locally yet when the running EMS is `latest`, the **Verify target
-image** step pulls and inspects it before any change, so the `latest`-vs-stable
-decision uses the build serial rather than defaulting to blocked. Downgrades
-belong to the Backup/restore flow. For the full upgrade-vs-downgrade and build-identity gating
-rules (`already_current`, `downgrade_blocked`, `upgrade_available`,
-`identity_unknown`, and how `latest` is treated as a channel), see the release
-selection section in [../admin-discovery.md](../admin-discovery.md).
+prepared in the setup/release step, and a target that is not a real upgrade is
+refused in the backend, not just hidden in the UI. Downgrades belong to the
+Backup / restore flow. For the full upgrade-vs-downgrade and build-identity
+gating rules, see the release selection section in
+[../admin-discovery.md](../admin-discovery.md).
 
 ## Manual configuration / existing system
 
@@ -136,23 +138,23 @@ restore before anything is written, and restore behind an automatic rollback
 backup. See [admin-backup-restore.md](admin-backup-restore.md) for the full
 reference.
 
-Admin restore currently supports **config** and **database** archives. InfluxDB
-backups can be created, listed, inspected and deleted, but **InfluxDB restore is
-intentionally blocked in Admin** until the dedicated EMS InfluxDB restore runner
-is wired in — use the EMS CLI to restore InfluxDB backups for now. A system set
-that contains an InfluxDB member is blocked for restore as a whole; restore its
-config/database members separately.
+Admin Console restore currently supports **config** and **database** archives.
+InfluxDB backups can be created, listed, inspected and deleted, but **InfluxDB
+restore is intentionally blocked in the Admin Console** until the dedicated EMS
+InfluxDB restore runner is wired in — use the EMS CLI to restore InfluxDB backups
+for now. A system set that contains an InfluxDB member is blocked for restore as a
+whole; restore its config/database members separately.
 
-Admin never invents a new archive format: every backup is a normal EMS backup
-archive created through the EMS Core helpers. The CLI equivalents are documented
-in [../backup-restore.md](../backup-restore.md).
+The Admin Console never invents a new archive format: every backup is a normal
+EMS backup archive created through the EMS Core helpers. The CLI equivalents are
+documented in [../backup-restore.md](../backup-restore.md).
 
 ## Safety
 
 - The deployment-capable Admin container controls the **host** Docker engine
   over the mounted `/var/run/docker.sock`. That grants effectively
   root-equivalent control of the host — run Admin only on a trusted local
-  machine and never expose the Admin UI to the internet (see the security notes
+  machine and never expose the Admin Console to the internet (see the security notes
   in [../admin-discovery.md](../admin-discovery.md)).
 - The overview is strictly read-only. The maintenance actions that change
   anything are an explicit config **apply**, a confirmed **guided upgrade**, and

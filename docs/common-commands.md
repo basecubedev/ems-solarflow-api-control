@@ -2,6 +2,10 @@
 
 Run Docker commands from the directory that contains `docker-compose.yml`.
 
+Prefer a browser? The [Admin Console](admin.md) runs these maintenance actions —
+updates, backups, restore and diagnostics — with previews and confirmations. This
+page is the copy/paste equivalent for shell users.
+
 ## Docker
 
 Start:

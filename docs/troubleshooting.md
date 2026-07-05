@@ -16,6 +16,7 @@
 
 Daily command sheet: [common-commands.md](common-commands.md).
 First-run validation: [first-run-checklist.md](first-run-checklist.md).
+Guided diagnostics in the browser: [Admin Console](admin.md).
 
 ## Start Here With Docker
 

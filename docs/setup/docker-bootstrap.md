@@ -1,7 +1,8 @@
-# Option B: Docker Bootstrap
+# Docker Bootstrap
 
-Best for users comfortable with shell commands who want a direct, script-based
-Docker setup.
+Best for shell users who want a copy/paste Docker install without the browser
+wizard. For a browser-guided setup instead, use the
+[Admin Console](admin-setup.md).
 
 ## Layout
 
