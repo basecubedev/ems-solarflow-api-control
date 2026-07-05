@@ -28,6 +28,7 @@ set -eu
 
 IMAGE="ghcr.io/basecubedev/ems-solarflow-admin"
 TAG="latest"
+CONTAINER_NAME="ems-solarflow-admin" # stable name so Admin can update itself
 MODE="deployment" # deployment | discovery
 NETWORK="host"     # host | bridge
 BIND="127.0.0.1"   # bridge-mode publish address
@@ -285,6 +286,7 @@ EOF
 services:
   ems-solarflow-admin:
     image: ${IMAGE}:${TAG}
+    container_name: ${CONTAINER_NAME}
     user: "${PUID}:${PGID}"
 EOF
     if [ "$MODE" = "deployment" ]; then
@@ -318,6 +320,12 @@ EOF
       EMS_ADMIN_DATA_DIR: "${admin_data_dir}"
       PUID: "${PUID}"
       PGID: "${PGID}"
+      # Non-secret Admin identity so the Admin Console can update itself before a
+      # Guided EMS Upgrade (target image derived from a trusted release tag).
+      EMS_ADMIN_IMAGE: "${IMAGE}"
+      EMS_ADMIN_TAG: "${TAG}"
+      EMS_ADMIN_COMPOSE_FILE: "${install_dir}/${COMPOSE_FILE}"
+      EMS_ADMIN_CONTAINER_NAME: "${CONTAINER_NAME}"
 EOF
     if [ "$MODE" = "deployment" ]; then
         cat <<EOF
@@ -387,7 +395,9 @@ write_env() {
         printf '# Resolved Admin Console identity (baked into %s).\n' "$COMPOSE_FILE"
         printf 'EMS_INSTALL_DIR=%s\n' "$install_dir"
         printf 'EMS_ADMIN_DATA_DIR=%s\n' "$admin_data_dir"
+        printf 'EMS_ADMIN_IMAGE=%s\n' "$IMAGE"
         printf 'EMS_ADMIN_TAG=%s\n' "$TAG"
+        printf 'EMS_ADMIN_CONTAINER_NAME=%s\n' "$CONTAINER_NAME"
         printf 'PUID=%s\n' "$PUID"
         printf 'PGID=%s\n' "$PGID"
         if [ "$MODE" = "deployment" ]; then

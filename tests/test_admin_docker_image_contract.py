@@ -21,6 +21,11 @@ pytestmark = pytest.mark.simulation
 
 ROOT = Path(__file__).resolve().parent.parent
 DOCKERFILE = ROOT / "deploy" / "admin" / "Dockerfile"
+DEPLOY_ADMIN_DIR = ROOT / "deploy" / "admin"
+RUNTIME_COMPOSE_FILES = (
+    DEPLOY_ADMIN_DIR / "docker-compose.runtime.yml",
+    DEPLOY_ADMIN_DIR / "docker-compose.runtime.bridge.yml",
+)
 
 _COPY = re.compile(r"^COPY\s+(?!--)(\S+)\s+(\S+)\s*$")
 
@@ -76,6 +81,47 @@ def test_admin_image_contains_https_helper():
     text = DOCKERFILE.read_text(encoding="utf-8")
     assert "COPY dashboard/https.py ./dashboard/https.py" in text
     assert "EXPOSE 8090 8091" in text or "EXPOSE 8091" in text
+
+
+def test_admin_image_ships_no_docker_daemon():
+    # Docker-out-of-Docker: the Admin container controls the *host* engine over
+    # the mounted socket. It must never ship a daemon (the self-update recreate
+    # runs against the host daemon, not one inside the container).
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    # No daemon package and no privileged/dind installation is present.
+    assert "docker.io" not in text
+    assert "--privileged" not in text
+    assert "install -m 0755 /tmp/docker/dockerd" not in text
+    # It installs only the static Docker CLI binary, not a daemon; the daemon
+    # binary from the static tarball is never extracted or installed.
+    assert "docker/docker" in text
+    assert "docker/dockerd" not in text
+
+
+def test_admin_image_keeps_docker_cli_and_compose_plugin():
+    # The Admin self-update recreates the Admin service with `docker compose`, so
+    # the CLI and the Compose plugin must remain in the image.
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    assert "/usr/local/bin/docker" in text
+    assert "cli-plugins/docker-compose" in text
+    assert "docker compose version" in text
+
+
+def test_admin_image_runs_as_non_root():
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    assert "USER admin" in text
+    # The non-root user is created before it is selected.
+    assert "adduser --system --ingroup admin" in text
+
+
+def test_admin_runtime_compose_keeps_hardening():
+    # The self-update recreates the Admin service from these compose files; the
+    # hardened runtime settings must survive.
+    for compose in RUNTIME_COMPOSE_FILES:
+        text = compose.read_text(encoding="utf-8")
+        assert "read_only: true" in text, compose.name
+        assert "no-new-privileges:true" in text, compose.name
+        assert "cap_drop:" in text and "- ALL" in text, compose.name
 
 
 def test_copied_files_are_sufficient_for_admin_startup(tmp_path):
