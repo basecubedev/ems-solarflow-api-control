@@ -5247,8 +5247,12 @@ const adminUpdateState = {
 };
 
 // A required-but-not-yet-done Admin update blocks the EMS upgrade so the upgrade
-// is never run by an incompatible Admin version.
+// is never run by an incompatible Admin version. Unsupported (no Docker) or an
+// unresolved warning also blocks — the backend refuses these too, so keep the UI
+// honest rather than offering a button that cannot succeed.
 function adminUpdateBlocksEms() {
+  if (adminUpdateState.supported === false) return true;
+  if (adminUpdateState.warning && adminUpdateState.completed !== true) return true;
   return adminUpdateState.required && !adminUpdateState.completed;
 }
 
@@ -5426,6 +5430,8 @@ function updateExecuteButton() {
   upgradeEls.executeBtn.disabled = !allowed;
   upgradeEls.executeBtn.textContent = upgradeState.running
     ? "Upgrading…"
+    : adminUpdateState.supported === false
+    ? "Admin Docker access required"
     : adminUpdateBlocksEms()
     ? "Update Admin Console first"
     : "Upgrade EMS";
@@ -5865,10 +5871,10 @@ async function loadAdminUpdatePlan(tag) {
     // Not required => nothing blocks the EMS upgrade.
     adminUpdateState.completed = !adminUpdateState.required;
   } catch (err) {
-    // Could not determine: surface a warning but do not hard-block the EMS
-    // upgrade UI on a transient check failure.
-    adminUpdateState.required = false;
-    adminUpdateState.completed = true;
+    // Could not determine: block the EMS upgrade until it is resolved. The
+    // backend refuses on the same uncertainty, so do not soft-allow here.
+    adminUpdateState.required = true;
+    adminUpdateState.completed = false;
     adminUpdateState.warning = err.message || String(err);
     if (!adminUpdateState.target) adminUpdateState.target = tag;
   } finally {

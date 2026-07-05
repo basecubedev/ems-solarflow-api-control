@@ -2423,6 +2423,34 @@ def test_admin_update_renders_docker_access_message():
     assert "supported === false" in render
 
 
+def test_admin_update_blocks_ems_when_support_unavailable():
+    # A Docker-unavailable Admin cannot self-update, so the EMS upgrade gate must
+    # block in the UI rather than offering a button the backend will refuse.
+    js = _read("admin.js")
+    fn = js.split("function adminUpdateBlocksEms", 1)[1].split("\n}", 1)[0]
+    assert "adminUpdateState.supported === false" in fn
+
+
+def test_execute_button_text_flags_docker_requirement():
+    js = _read("admin.js")
+    fn = js.split("function updateExecuteButton", 1)[1].split("\n}", 1)[0]
+    assert "supported === false" in fn
+    assert "Admin Docker access required" in fn
+
+
+def test_admin_update_plan_failure_does_not_mark_completed():
+    # A planning failure must not soft-allow the EMS upgrade: the backend blocks
+    # on the same uncertainty.
+    js = _read("admin.js")
+    fn = js.split("async function loadAdminUpdatePlan", 1)[1].split(
+        "\nfunction sleep", 1
+    )[0]
+    catch = fn.split("} catch (err) {", 1)[1].split("} finally {", 1)[0]
+    assert "adminUpdateState.completed = true" not in catch
+    assert "adminUpdateState.completed = false" in catch
+    assert "adminUpdateState.required = true" in catch
+
+
 def test_admin_update_planning_preserves_resume_release():
     # Fix 2: a valid resume selects its own release and does not fall through to
     # planning a (possibly different) default release.

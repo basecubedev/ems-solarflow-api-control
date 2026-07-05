@@ -229,11 +229,10 @@ def _safe_inspect_container(docker, name):
 def detect_current_admin_identity(docker=None, environ=None, hostname=None):
     """Detect the running Admin image identity and how it was found.
 
-    Tries, in order: the configured container name (``EMS_ADMIN_CONTAINER_NAME``)
-    via Docker inspect, the container hostname (short id), then the
-    ``EMS_ADMIN_IMAGE``/``EMS_ADMIN_TAG`` env fallback; the ref is enriched with
-    digest/labels from the local image. Never raises — an undetectable identity
-    is all-``None`` with source ``unknown``.
+    Tries Docker inspect (container name, then hostname), then the
+    ``EMS_ADMIN_IMAGE``/``EMS_ADMIN_TAG`` env fallback, enriching the ref with the
+    local image digest/labels. Never raises — an undetectable identity is
+    all-``None`` with source ``unknown``.
     """
 
     environ = os.environ if environ is None else environ
@@ -576,6 +575,9 @@ class AdminUpdateService:
         except PendingUpdateStateError:
             pending = None
         if isinstance(pending, dict) and pending.get("target_release") == tag:
+            # A no-op plan (image unchanged for this release) never blocks.
+            if pending.get("update_required") is False:
+                return {"allowed": True, "reason": GATE_NOT_REQUIRED}
             if pending.get("stage") in RESUMABLE_STAGES:
                 return {"allowed": True, "reason": GATE_COMPLETED}
             # planned / started / failed for this release: not done yet.
@@ -840,6 +842,17 @@ class AdminUpdateLauncher:
         env = self._env()
         install_root = self._install_root(env)
         admin_data_dir = self._admin_data_dir(env)
+        # The bind mounts use same-path semantics, so the Docker daemon needs
+        # host-valid absolute paths; a relative path would produce an unsafe or
+        # invalid -v argument.
+        if not install_root.is_absolute():
+            raise RuntimeError(
+                "EMS_INSTALL_DIR must be an absolute host path for Admin update"
+            )
+        if not admin_data_dir.is_absolute():
+            raise RuntimeError(
+                "EMS_ADMIN_DATA_DIR must be an absolute host path for Admin update"
+            )
         compose_file = _clean(env.get("EMS_ADMIN_COMPOSE_FILE")) or str(
             install_root / DEFAULT_ADMIN_COMPOSE_FILE
         )

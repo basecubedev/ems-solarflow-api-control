@@ -716,6 +716,23 @@ def test_ems_gate_allows_when_update_not_required(tmp_path):
     assert gate["reason"] == "admin_update_not_required"
 
 
+def test_ems_gate_allows_when_pending_same_target_update_not_required(tmp_path):
+    # A persisted no-op plan (digests match) must not block the EMS upgrade even
+    # though its stage is only "planned".
+    images = {
+        CURRENT_REF: _image(CURRENT_REF, "sha256:same"),
+        TARGET_REF: _image(TARGET_REF, "sha256:same"),
+    }
+    svc, _store, _docker = _service(tmp_path, images)
+    plan = svc.plan("v0.7.0")
+    assert plan["update_required"] is False
+
+    gate = svc.ems_upgrade_allowed("v0.7.0")
+
+    assert gate["allowed"] is True
+    assert gate["reason"] == "admin_update_not_required"
+
+
 def test_ems_gate_blocks_when_update_required(tmp_path):
     images = {
         CURRENT_REF: _image(CURRENT_REF, "sha256:aaa"),
@@ -880,6 +897,21 @@ def test_launcher_rejects_missing_target_image():
         launcher.launch("p1")
 
 
+def test_launcher_rejects_relative_install_dir():
+    # A relative install root would produce an unsafe/invalid same-path -v mount.
+    env = dict(_launcher_env(), EMS_INSTALL_DIR="relative/ems")
+    launcher = AdminUpdateLauncher(store=_FakeStore({}), environ=env)
+    with pytest.raises(RuntimeError, match="EMS_INSTALL_DIR"):
+        launcher.build_sidecar_argv("abc123", image_ref=TARGET_REF)
+
+
+def test_launcher_rejects_relative_admin_data_dir():
+    env = dict(_launcher_env(), EMS_ADMIN_DATA_DIR="relative/data/admin")
+    launcher = AdminUpdateLauncher(store=_FakeStore({}), environ=env)
+    with pytest.raises(RuntimeError, match="EMS_ADMIN_DATA_DIR"):
+        launcher.build_sidecar_argv("abc123", image_ref=TARGET_REF)
+
+
 def test_launcher_local_worker_only_when_configured(monkeypatch):
     pending = {
         "id": "p1",
@@ -941,6 +973,22 @@ def test_update_reference_updates_default_env_admin(tmp_path):
     assert located is True
     assert "EMS_ADMIN_TAG=v0.7.0" in env_file.read_text(encoding="utf-8")
     assert TARGET_REF in compose.read_text(encoding="utf-8")
+
+
+def test_variable_driven_compose_without_env_creates_env_tag(tmp_path):
+    # A runtime-template compose points at ${EMS_ADMIN_TAG}. With no .env.admin,
+    # the tag would stay at its default; the env file must be created so the
+    # update actually takes effect.
+    compose = tmp_path / "docker-compose.admin.yml"
+    compose.write_text(
+        "services:\n"
+        "  ems-solarflow-admin:\n"
+        "    image: ghcr.io/basecubedev/ems-solarflow-admin:${EMS_ADMIN_TAG:-latest}\n",
+        encoding="utf-8",
+    )
+
+    assert update_apply.update_admin_image_reference(compose, TARGET_REF) is True
+    assert (tmp_path / ".env.admin").read_text(encoding="utf-8") == "EMS_ADMIN_TAG=v0.7.0\n"
 
 
 def test_resolve_compose_service_prefers_service_env():

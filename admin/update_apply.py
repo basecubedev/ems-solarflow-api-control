@@ -168,6 +168,7 @@ def update_admin_image_reference(compose_file, target_ref, *, env_file=None):
     target_tag = target_ref.rsplit(":", 1)[-1]
     default_env = compose_file.parent / ".env.admin"
     located = False
+    variable_driven = False
 
     try:
         original = compose_file.read_text(encoding="utf-8")
@@ -184,14 +185,19 @@ def update_admin_image_reference(compose_file, target_ref, *, env_file=None):
         if "${EMS_ADMIN_TAG" in original:
             # Variable-driven image tag: resolved from the env file below.
             located = True
+            variable_driven = True
         if text != original:
             compose_file.with_name(compose_file.name + ".bak").write_text(
                 original, encoding="utf-8"
             )
             compose_file.write_text(text, encoding="utf-8")
 
-    # Keep the recorded env tag correct when the env file is provided/exists.
+    # Keep the recorded env tag correct. A variable-driven compose needs the env
+    # file created when it is absent, or Compose keeps using the default tag and
+    # nothing actually changes despite located=True.
     target_env = env_file or (default_env if default_env.exists() else None)
+    if target_env is None and variable_driven:
+        target_env = default_env
     if target_env is not None:
         _write_env_tag(target_env, target_tag)
         located = True
