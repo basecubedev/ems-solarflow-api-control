@@ -1181,7 +1181,10 @@ def test_config_upgrade_dry_run_reports_missing_keys(tmp_path):
     assert "2 -> 3" in result.stdout
     assert "dashboard.animation_mode" in result.stdout
     assert "grid_meter.ip" in result.stdout
-    assert "No existing user values will be overwritten." in result.stdout
+    assert (
+        "Only values listed under Schema migrations will be overwritten."
+        in result.stdout
+    )
     assert "Missing keys will be added from config.template.json." in result.stdout
     assert "Review live-write settings before restarting EMS." in result.stdout
 
@@ -1293,7 +1296,7 @@ def test_config_upgrade_interactive_can_write_without_backup(
     assert code == 0
     assert calls == []
     output = capsys.readouterr().out
-    assert "No existing user values will be overwritten." in output
+    assert "Only values listed under Schema migrations will be overwritten." in output
     assert "Missing keys will be added from config.template.json." in output
     assert "Review live-write settings before restarting EMS." in output
     assert "Continuing without backup" in output

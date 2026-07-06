@@ -554,6 +554,87 @@ def test_absolute_path_rejected(tmp_path):
         backup.inspect_backup(path)
 
 
+@pytest.mark.parametrize("path", ["", "bad\x00archive.tar.gz"])
+def test_inspect_rejects_invalid_archive_path(path):
+    with pytest.raises(backup.BackupError, match="invalid backup path"):
+        backup.inspect_backup(path)
+
+
+def test_inspect_rejects_missing_and_symlink_archive_paths(tmp_path):
+    missing = tmp_path / "missing.tar.gz"
+    with pytest.raises(backup.BackupError, match="backup not found"):
+        backup.inspect_backup(missing)
+
+    archive = tmp_path / "valid.tar.gz"
+    manifest = {"backup_format": 1, "files": []}
+    _write_manifest_tar(str(archive), manifest, {})
+    link = tmp_path / "linked.tar.gz"
+    link.symlink_to(archive)
+    with pytest.raises(backup.BackupError, match="symlink"):
+        backup.inspect_backup(link)
+
+
+def test_archive_path_validation_confines_to_allowed_root(tmp_path):
+    allowed = tmp_path / "backups"
+    allowed.mkdir()
+    inside = allowed / "inside.tar.gz"
+    inside.write_bytes(b"archive")
+    outside = tmp_path / "outside.tar.gz"
+    outside.write_bytes(b"archive")
+
+    assert backup._validated_existing_archive_path(
+        inside, allowed_root=allowed
+    ) == str(inside)
+    with pytest.raises(backup.BackupError, match="outside allowed"):
+        backup._validated_existing_archive_path(outside, allowed_root=allowed)
+    with pytest.raises(backup.BackupError, match="invalid backup path"):
+        backup._validated_existing_archive_path(
+            "bad\x00archive.tar.gz", allowed_root=allowed
+        )
+
+    link = allowed / "linked.tar.gz"
+    link.symlink_to(inside)
+    with pytest.raises(backup.BackupError, match="symlink"):
+        backup._validated_existing_archive_path(link, allowed_root=allowed)
+
+
+def test_inspect_with_allowed_root_rejects_archive_outside_backup_dir(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("EMS_IN_CONTAINER", "0")
+    allowed = tmp_path / "data" / "backups"
+    allowed.mkdir(parents=True)
+    outside = tmp_path / "outside.tar.gz"
+    _write_manifest_tar(
+        str(outside), {"backup_format": 1, "files": []}, {}
+    )
+
+    with pytest.raises(backup.BackupError, match="outside allowed"):
+        backup.inspect_backup(outside, allowed_root=str(allowed))
+
+
+def test_encrypted_inspect_with_allowed_root_accepts_archive_in_backup_dir(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("EMS_IN_CONTAINER", "0")
+    backup_dir = tmp_path / "data" / "backups"
+    backup_dir.mkdir(parents=True)
+    plain = backup_dir / "ems-config-manual-test.tar.gz"
+    encrypted = backup_dir / "ems-config-manual-test.tar.gz.enc"
+    _write_manifest_tar(
+        str(plain), {"backup_format": 1, "files": []}, {}
+    )
+    backup_crypto.encrypt_file(str(plain), str(encrypted), "password")
+    plain.unlink()
+
+    result = backup.inspect_backup(
+        encrypted, password="password", allowed_root=str(backup_dir)
+    )
+
+    assert result["encrypted"] is True
+    assert result["manifest"]["backup_format"] == 1
+
+
 def test_missing_manifest_rejected(tmp_path):
     path = str(tmp_path / "nomanifest.tar.gz")
     with tarfile.open(path, "w:gz") as tar:

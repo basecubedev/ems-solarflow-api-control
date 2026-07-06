@@ -1039,7 +1039,9 @@ def create_influxdb_rollback_backup(
     )
 
 
-def extract_influxdb_payload(archive_path, dest_dir, *, password=None):
+def extract_influxdb_payload(
+    archive_path, dest_dir, *, password=None, allowed_root=None
+):
     """Validate and extract the ``influxdb/`` payload of an InfluxDB backup.
 
     Returns ``(manifest, influx_dir)`` where ``influx_dir`` holds the official
@@ -1047,7 +1049,12 @@ def extract_influxdb_payload(archive_path, dest_dir, *, password=None):
     verified before anything is written.
     """
 
-    with open_backup_archive(archive_path, password=password) as tar:
+    archive_path = _validated_existing_archive_path(
+        archive_path, allowed_root=allowed_root
+    )
+    with open_backup_archive(
+        archive_path, password=password, allowed_root=allowed_root
+    ) as tar:
         manifest = read_manifest(tar)
         if manifest.get("backup_type") != "influxdb":
             raise BackupError(
@@ -1081,6 +1088,7 @@ def restore_influxdb_backup(
     password=None,
     restore_runner=None,
     dry_run=False,
+    allowed_root=None,
 ):
     """Restore a bundled InfluxDB backup (replace strategy).
 
@@ -1091,6 +1099,9 @@ def restore_influxdb_backup(
     validated (structure + checksums) but nothing is restored.
     """
 
+    archive_path = _validated_existing_archive_path(
+        archive_path, allowed_root=allowed_root
+    )
     if not dry_run and restore_runner is None:
         raise BackupError("InfluxDB restore requires a restore_runner")
 
@@ -1102,7 +1113,10 @@ def restore_influxdb_backup(
     staging = tempfile.mkdtemp(prefix="ems-influx-restore-")
     try:
         manifest, influx_dir = extract_influxdb_payload(
-            archive_path, staging, password=password
+            archive_path,
+            staging,
+            password=password,
+            allowed_root=allowed_root,
         )
         if dry_run:
             return {
@@ -1122,19 +1136,86 @@ def restore_influxdb_backup(
 # Archive access / validation
 # ---------------------------------------------------------------------------
 
-def is_encrypted(path):
-    return backup_crypto.is_encrypted_backup(path)
+def _validated_existing_archive_path(archive_path, allowed_root=None):
+    """Return a canonical, existing regular-file archive path."""
+
+    if not isinstance(archive_path, (str, os.PathLike)):
+        raise BackupError("invalid backup path")
+    try:
+        archive_path = os.fspath(archive_path)
+    except TypeError as exc:
+        raise BackupError("invalid backup path") from exc
+    if (
+        not isinstance(archive_path, str)
+        or not archive_path
+        or "\x00" in archive_path
+    ):
+        raise BackupError("invalid backup path")
+
+    # Reject the symlink identity before realpath() canonicalizes it away, so a
+    # symlinked archive can never be followed (O_NOFOLLOW only guards the final
+    # component).
+    if os.path.islink(archive_path):
+        raise BackupError("backup path must not be a symlink")
+    archive_path = os.path.realpath(archive_path)
+    if allowed_root is not None:
+        if not isinstance(allowed_root, (str, os.PathLike)):
+            raise BackupError("invalid allowed backup directory")
+        try:
+            allowed_root = os.fspath(allowed_root)
+        except TypeError as exc:
+            raise BackupError("invalid allowed backup directory") from exc
+        if (
+            not isinstance(allowed_root, str)
+            or not allowed_root
+            or "\x00" in allowed_root
+            or os.path.islink(allowed_root)
+        ):
+            raise BackupError("invalid allowed backup directory")
+        allowed_root = os.path.realpath(allowed_root)
+        if not os.path.isdir(allowed_root):
+            raise BackupError("allowed backup directory not found")
+        try:
+            inside_allowed_root = (
+                os.path.commonpath([allowed_root, archive_path]) == allowed_root
+            )
+        except ValueError:
+            inside_allowed_root = False
+        if not inside_allowed_root:
+            raise BackupError("backup path is outside allowed directory")
+
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(archive_path, flags)
+    except OSError as exc:
+        raise BackupError(f"backup not found: {archive_path}") from exc
+    try:
+        st = os.fstat(fd)
+    finally:
+        os.close(fd)
+    if not os.path.stat.S_ISREG(st.st_mode):
+        raise BackupError(f"backup not found: {archive_path}")
+    return archive_path
+
+
+def is_encrypted(path, allowed_root=None):
+    return backup_crypto.is_encrypted_backup(path, allowed_root=allowed_root)
 
 
 @contextmanager
-def open_backup_archive(archive_path, password=None):
+def open_backup_archive(archive_path, password=None, allowed_root=None):
     """Yield an open ``tarfile`` for ``archive_path``, decrypting if needed."""
 
-    if not os.path.isfile(archive_path):
-        raise BackupError(f"backup not found: {archive_path}")
+    archive_path = _validated_existing_archive_path(
+        archive_path, allowed_root=allowed_root
+    )
 
     tmp_path = None
-    encrypted = backup_crypto.is_encrypted_backup(archive_path)
+    encrypted = backup_crypto.is_encrypted_backup(
+        archive_path, allowed_root=allowed_root
+    )
     try:
         if encrypted:
             if not password:
@@ -1143,7 +1224,7 @@ def open_backup_archive(archive_path, password=None):
                 )
             try:
                 tmp_path = backup_crypto.decrypt_file_to_temp(
-                    archive_path, password
+                    archive_path, password, allowed_root=allowed_root
                 )
             except backup_crypto.BackupFormatError as exc:
                 raise BackupError(f"cannot read encrypted backup: {exc}") from exc
@@ -1228,21 +1309,30 @@ def _read_member_bytes(tar, name):
 # Inspect
 # ---------------------------------------------------------------------------
 
-def inspect_backup(archive_path, password=None):
+def inspect_backup(archive_path, password=None, base_dir=None, allowed_root=None):
     """Return a description of a backup.
 
     ``{"encrypted": bool, "manifest": dict|None, "path": str}``. For an
     encrypted backup with no password, ``manifest`` is ``None``.
+
+    Confinement to a directory only happens when the caller passes
+    ``allowed_root`` explicitly (the dashboard does); ``base_dir`` is the
+    restore target, not the archive-source allowlist.
     """
 
-    if not os.path.isfile(archive_path):
-        raise BackupError(f"backup not found: {archive_path}")
+    archive_path = _validated_existing_archive_path(
+        archive_path, allowed_root=allowed_root
+    )
 
-    encrypted = backup_crypto.is_encrypted_backup(archive_path)
+    encrypted = backup_crypto.is_encrypted_backup(
+        archive_path, allowed_root=allowed_root
+    )
     if encrypted and not password:
         return {"encrypted": True, "manifest": None, "path": archive_path}
 
-    with open_backup_archive(archive_path, password=password) as tar:
+    with open_backup_archive(
+        archive_path, password=password, allowed_root=allowed_root
+    ) as tar:
         manifest = read_manifest(tar)
     return {"encrypted": encrypted, "manifest": manifest, "path": archive_path}
 
@@ -1292,11 +1382,18 @@ def _build_restore_entries(tar, manifest, base_dir):
     return entries
 
 
-def plan_restore(archive_path, base_dir=None, password=None):
+def plan_restore(
+    archive_path, base_dir=None, password=None, allowed_root=None
+):
     """Return restore plan entries (without file payloads) for display."""
 
+    archive_path = _validated_existing_archive_path(
+        archive_path, allowed_root=allowed_root
+    )
     base_dir = base_dir or BASE_DIR
-    with open_backup_archive(archive_path, password=password) as tar:
+    with open_backup_archive(
+        archive_path, password=password, allowed_root=allowed_root
+    ) as tar:
         manifest = read_manifest(tar)
         entries = _build_restore_entries(tar, manifest, base_dir)
 
@@ -1339,6 +1436,7 @@ def restore_backup(
     on_conflict="abort",
     conflict_resolver=None,
     dry_run=False,
+    allowed_root=None,
 ):
     """Restore files from a backup archive.
 
@@ -1349,13 +1447,18 @@ def restore_backup(
     Returns a result dict with per-file ``actions``.
     """
 
+    archive_path = _validated_existing_archive_path(
+        archive_path, allowed_root=allowed_root
+    )
     if on_conflict not in ("abort", "keep", "replace"):
         raise BackupError(f"invalid on_conflict policy: {on_conflict}")
 
     base_dir = base_dir or BASE_DIR
     actions = []
 
-    with open_backup_archive(archive_path, password=password) as tar:
+    with open_backup_archive(
+        archive_path, password=password, allowed_root=allowed_root
+    ) as tar:
         manifest = read_manifest(tar)
         entries = _build_restore_entries(tar, manifest, base_dir)
 
@@ -1411,17 +1514,28 @@ def restore_backup(
 # Diff
 # ---------------------------------------------------------------------------
 
-def diff_backup_file(archive_path, filename, base_dir=None, password=None):
+def diff_backup_file(
+    archive_path,
+    filename,
+    base_dir=None,
+    password=None,
+    allowed_root=None,
+):
     """Return a unified diff between the current file and its backup version.
 
     Returns ``{"binary": bool, "text": str, "path": str}``. For binary files
     ``binary`` is ``True`` and ``text`` holds an explanatory message.
     """
 
+    archive_path = _validated_existing_archive_path(
+        archive_path, allowed_root=allowed_root
+    )
     base_dir = base_dir or BASE_DIR
     wanted = filename.replace(os.sep, "/")
 
-    with open_backup_archive(archive_path, password=password) as tar:
+    with open_backup_archive(
+        archive_path, password=password, allowed_root=allowed_root
+    ) as tar:
         manifest = read_manifest(tar)
         match = None
         for entry in manifest["files"]:

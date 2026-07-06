@@ -64,6 +64,19 @@ const state = {
     serviceLevel: "INFO",
     timerId: null,
   },
+  maintenance: {
+    status: null,
+    backups: [],
+    configUpgrade: null,
+    running: false,
+    message: "",
+    loaded: false,
+    restore: {
+      file: "",
+      plan: null,
+      previewed: false,
+    },
+  },
 };
 
 const MAX_LOG_ROWS = 1000;
@@ -2372,7 +2385,7 @@ function renderDeviceFirmwareStatus(device) {
 }
 
 function setFlowView(view, persist = true) {
-  const nextView = ["aggregated", "devices", "energy", "analytics", "control", "diagnose", "logs"].includes(view)
+  const nextView = ["aggregated", "devices", "energy", "analytics", "control", "diagnose", "logs", "maintenance"].includes(view)
     ? view
     : "aggregated";
   const previousView = state.flowView;
@@ -2384,6 +2397,7 @@ function setFlowView(view, persist = true) {
   const energyView = $("energyStatsView");
   const diagnoseView = $("diagnoseView");
   const logsView = $("logsView");
+  const maintenanceView = $("maintenanceView");
   const analyticsView = $("analyticsView");
   const wrap = document.querySelector ? document.querySelector(".flow-wrap") : null;
   const shell = document.querySelector ? document.querySelector(".shell") : null;
@@ -2394,6 +2408,7 @@ function setFlowView(view, persist = true) {
   if (energyView) energyView.hidden = nextView !== "energy";
   if (diagnoseView) diagnoseView.hidden = nextView !== "diagnose";
   if (logsView) logsView.hidden = nextView !== "logs";
+  if (maintenanceView) maintenanceView.hidden = nextView !== "maintenance";
   if (analyticsView) analyticsView.hidden = nextView !== "analytics";
   if (wrap?.classList) {
     wrap.classList.toggle("view-devices", nextView === "devices");
@@ -2403,12 +2418,14 @@ function setFlowView(view, persist = true) {
     wrap.classList.toggle("view-energy", nextView === "energy");
     wrap.classList.toggle("view-diagnose", nextView === "diagnose");
     wrap.classList.toggle("view-logs", nextView === "logs");
+    wrap.classList.toggle("view-maintenance", nextView === "maintenance");
   }
   if (shell?.classList) {
     shell.classList.toggle("view-analytics", nextView === "analytics");
     shell.classList.toggle("view-energy", nextView === "energy");
     shell.classList.toggle("view-diagnose", nextView === "diagnose");
     shell.classList.toggle("view-logs", nextView === "logs");
+    shell.classList.toggle("view-maintenance", nextView === "maintenance");
   }
 
   // The lightweight SQLite History panel only belongs to the operational views.
@@ -2463,6 +2480,10 @@ function setFlowView(view, persist = true) {
     startLogsPolling();
   } else {
     stopLogsPolling();
+  }
+
+  if (nextView === "maintenance") {
+    enterMaintenanceView();
   }
 }
 
@@ -3076,6 +3097,620 @@ function initLogs() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Maintenance view (backup, restore, config upgrade)
+// ---------------------------------------------------------------------------
+
+function maintenanceAuthState() {
+  if (!state.auth.configured) {
+    return `<div class="maintenance-empty">Configure a dashboard password to use maintenance tools.</div>`;
+  }
+  if (!state.auth.authenticated) {
+    return `<div class="maintenance-empty">Login required to use maintenance tools.</div>`;
+  }
+  return "";
+}
+
+function maintenanceStage(number, title, subtitle, body) {
+  return `
+    <section class="maintenance-stage">
+      <div class="maintenance-stage-head">
+        <span class="maintenance-stage-number">${escapeHtml(number)}</span>
+        <div class="maintenance-stage-headings">
+          <h3 class="maintenance-stage-title">${escapeHtml(title)}</h3>
+          ${subtitle ? `<span class="maintenance-stage-subtitle">${escapeHtml(subtitle)}</span>` : ""}
+        </div>
+      </div>
+      <div class="maintenance-stage-body">${body}</div>
+    </section>`;
+}
+
+function maintenanceFact(label, value) {
+  return `
+    <span class="maintenance-fact">
+      <span class="maintenance-fact-label">${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value == null || value === "" ? "—" : String(value))}</strong>
+    </span>`;
+}
+
+function maintenanceButton(action, label, options = {}) {
+  const disabled = state.maintenance.running || options.disabled ? " disabled" : "";
+  const arg = options.arg ? ` data-maintenance-arg="${escapeHtml(options.arg)}"` : "";
+  const id = options.id ? ` id="${escapeHtml(options.id)}"` : "";
+  const variant = options.variant ? ` ${escapeHtml(options.variant)}` : "";
+  return `<button type="button"${id} class="primary-button compact maintenance-action${variant}" data-maintenance-action="${escapeHtml(action)}"${arg}${disabled}>${escapeHtml(label)}</button>`;
+}
+
+const MAINTENANCE_BACKUP_TYPE_LABELS = {
+  config: "Config + state",
+  databases: "Local SQLite DBs",
+  influxdb: "Analytics (InfluxDB)",
+};
+
+function maintenanceBackupTypeLabel(type) {
+  return MAINTENANCE_BACKUP_TYPE_LABELS[type] || type || "—";
+}
+
+function maintenanceStatusStage() {
+  const status = state.maintenance.status;
+  if (!status) {
+    return maintenanceStage("01", "Maintenance Status", "Loading…",
+      `<div class="maintenance-empty compact">Loading status…</div>`);
+  }
+  const influx = status.influxdb || {};
+  const influxValue = influx.enabled
+    ? `${influx.mode || "enabled"}${influx.backup_supported ? "" : " (backup n/a)"}`
+    : "disabled";
+  const facts = [
+    maintenanceFact("Config", status.config_path),
+    maintenanceFact("Backup dir", status.backup_dir),
+    maintenanceFact("Backup types", (status.backup_types || []).map(maintenanceBackupTypeLabel).join(", ")),
+    maintenanceFact("InfluxDB", influxValue),
+    maintenanceFact("Restore", status.restore_available_in_dashboard ? "available" : "CLI only"),
+  ].join("");
+  return maintenanceStage("01", "Maintenance Status", "Current backup and upgrade environment.",
+    `<div class="maintenance-facts">${facts}</div>`);
+}
+
+function maintenanceBackupRows() {
+  const backups = state.maintenance.backups || [];
+  if (!backups.length) {
+    return `<div class="maintenance-empty compact">No backups found yet.</div>`;
+  }
+  const rows = backups
+    .map((item) => {
+      const size = typeof item.size_bytes === "number"
+        ? `${Math.max(1, Math.round(item.size_bytes / 1024))} KiB`
+        : "—";
+      return `
+        <div class="maintenance-backup-row">
+          <span class="maintenance-backup-name">${escapeHtml(item.name)}</span>
+          <span class="maintenance-backup-meta">${escapeHtml(maintenanceBackupTypeLabel(item.backup_type))}</span>
+          <span class="maintenance-backup-meta">${escapeHtml(item.modified_at || "—")}</span>
+          <span class="maintenance-backup-meta">${escapeHtml(size)}</span>
+          <span class="maintenance-backup-meta">${item.encrypted ? "encrypted" : "plain"}</span>
+          <span class="maintenance-backup-meta">${escapeHtml(item.ems_version || "—")}</span>
+          ${maintenanceButton("inspect", "Details", { arg: item.name, variant: "maintenance-mini" })}
+        </div>`;
+    })
+    .join("");
+  return `
+    <div class="maintenance-backup-list">
+      <div class="maintenance-backup-row maintenance-backup-head">
+        <span>Name</span><span>Type</span><span>Modified</span><span>Size</span><span>Enc</span><span>EMS</span><span>Actions</span>
+      </div>
+      ${rows}
+    </div>
+    <div id="maintenanceBackupDetail" class="maintenance-detail"></div>`;
+}
+
+function maintenanceBackupStage() {
+  const actions = [
+    maintenanceButton("backup-config", "Config + state"),
+    maintenanceButton("backup-databases", "Local SQLite DBs"),
+    maintenanceButton("backup-influxdb", "Analytics (InfluxDB)"),
+  ].join("");
+  return maintenanceStage("02", "Backup", "Create and inspect local backups.", `
+    <div class="maintenance-warning">Backups may contain secrets and private energy data. Download and store them safely.</div>
+    <div class="maintenance-legend">
+      <span><strong>Config + state</strong> — config.json, runtime state and dashboard auth.</span>
+      <span><strong>Local SQLite DBs</strong> — the dashboard's local history snapshots and runtime state databases.</span>
+      <span><strong>Analytics (InfluxDB)</strong> — the bundled InfluxDB long-term analytics time-series database.</span>
+    </div>
+    ${maintenanceBackupRows()}
+    <div class="maintenance-actions">${actions}</div>`);
+}
+
+function maintenanceRestoreOptions() {
+  const backups = state.maintenance.backups || [];
+  const selected = state.maintenance.restore.file;
+  const options = [`<option value="">Select a backup…</option>`]
+    .concat(backups.map((item) => {
+      const sel = item.name === selected ? " selected" : "";
+      return `<option value="${escapeHtml(item.name)}"${sel}>${escapeHtml(item.name)}</option>`;
+    }))
+    .join("");
+  return options;
+}
+
+function renderRestorePlan(plan) {
+  if (!plan) return "";
+  const actions = (plan.actions || [])
+    .map((action) => `
+      <div class="maintenance-plan-row">
+        <span class="maintenance-plan-action">${escapeHtml(action.action || "")}</span>
+        <span class="maintenance-plan-path">${escapeHtml(action.path || "")}</span>
+      </div>`)
+    .join("") || `<div class="maintenance-empty compact">No file changes reported.</div>`;
+  const warnings = (plan.warnings || [])
+    .map((warning) => `<div class="maintenance-note">${escapeHtml(warning)}</div>`)
+    .join("");
+  const hints = [];
+  if (plan.requires_restart) hints.push("Restart required after restore.");
+  if (plan.requires_relogin) hints.push("Re-login may be required after restart.");
+  const hintLine = hints.length
+    ? `<div class="maintenance-note">${escapeHtml(hints.join(" "))}</div>`
+    : "";
+  return `
+    <div class="maintenance-plan">
+      <div class="maintenance-plan-summary">Preview for ${escapeHtml(plan.file || "")} (${escapeHtml(plan.backup_type || "?")})</div>
+      <div class="maintenance-plan-actions">${actions}</div>
+      ${warnings}
+      ${hintLine}
+    </div>`;
+}
+
+function maintenanceRestoreStage() {
+  const restore = state.maintenance.restore;
+  const previewDisabled = state.maintenance.running || !restore.file;
+  const confirmDisabled = state.maintenance.running || !restore.previewed;
+  return maintenanceStage("03", "Restore", "Select a backup, preview, then confirm.", `
+    <div class="maintenance-restore-controls">
+      <label class="maintenance-field">
+        <span>Backup</span>
+        <select id="restoreFile" data-maintenance-restore-file>${maintenanceRestoreOptions()}</select>
+      </label>
+      <label class="maintenance-field">
+        <span>Password (encrypted only)</span>
+        <input id="restorePassword" type="password" autocomplete="off" placeholder="leave empty if not encrypted">
+      </label>
+    </div>
+    <div class="maintenance-actions">
+      ${maintenanceButton("restore-preview", "Preview restore", { id: "restorePreview", disabled: previewDisabled })}
+      ${maintenanceButton("restore-confirm", "Confirm restore", { id: "restoreConfirm", disabled: confirmDisabled, variant: "maintenance-danger" })}
+    </div>
+    <div id="restorePlanArea" class="maintenance-plan-area">${renderRestorePlan(restore.plan)}</div>`);
+}
+
+function maintenanceConfigUpgradeStage() {
+  const plan = state.maintenance.configUpgrade;
+  let body = `<div class="maintenance-empty compact">Press “Check config” to look for available upgrades.</div>`;
+  let applyLabel = "Apply with backup";
+  if (plan) {
+    const items = Array.isArray(plan.items) ? plan.items : [];
+    const sections = [
+      ["add", "Added keys"],
+      ["migrate", "Migrated values"],
+      ["comment_add", "New explanatory comments"],
+      ["comment_refresh", "Comment refresh"],
+    ].map(([kind, title]) => {
+      const rows = items
+        .filter((item) => item.kind === kind)
+        .map((item) => {
+          let detail = "";
+          if (kind === "add") detail = ` = ${JSON.stringify(item.value)}`;
+          if (kind === "migrate") {
+            detail = `: ${JSON.stringify(item.old_value)} → ${JSON.stringify(item.value)}`;
+          }
+          return `<div class="maintenance-upgrade-row"><code>${escapeHtml(item.path || "")}</code><span>${escapeHtml(detail)}</span></div>`;
+        })
+        .join("");
+      if (!rows) return "";
+      const note = kind === "comment_refresh"
+        ? `<div class="maintenance-note">${escapeHtml(String(plan.comment_refresh_count))} explanatory comments can be refreshed from the template.</div>`
+        : "";
+      return `<div class="maintenance-upgrade-section"><div class="maintenance-detail-subhead">${escapeHtml(title)}</div>${rows}${note}</div>`;
+    }).join("");
+    const format = plan.format_changed
+      ? `<div class="maintenance-upgrade-section"><div class="maintenance-detail-subhead">Format</div><div class="maintenance-note">config.json will be rewritten using the template layout.</div></div>`
+      : "";
+    const valueCount = Number(plan.add_count || 0) + Number(plan.migration_count || 0);
+    const commentCount = Number(plan.comment_add_count || 0) + Number(plan.comment_refresh_count || 0);
+    if (plan.apply_available) {
+      const valueStatus = valueCount
+        ? `${valueCount} config value change${valueCount === 1 ? "" : "s"} planned.`
+        : "Config values are up to date.";
+      body = `
+        <div class="maintenance-upgrade-summary">${escapeHtml(valueStatus)}</div>
+        <div class="maintenance-upgrade-plan">${sections}${format}</div>
+        <div class="maintenance-note">A config backup is created before writing. Restart EMS after applying.</div>`;
+      if (!valueCount && commentCount && !plan.format_changed) {
+        applyLabel = "Refresh comments with backup";
+      }
+    } else {
+      body = `<div class="maintenance-upgrade-summary">Config is already up to date.</div>`;
+    }
+  }
+  const applyDisabled = !plan || !plan.apply_available;
+  return maintenanceStage("04", "Config Upgrade", "Add new keys and comments from the template.", `
+    ${body}
+    <div class="maintenance-actions">
+      ${maintenanceButton("config-check", "Check config")}
+      ${maintenanceButton("config-apply", applyLabel, { disabled: applyDisabled })}
+    </div>`);
+}
+
+function maintenanceSafetyNotesStage() {
+  return maintenanceStage("05", "Safety Notes", "What this view does and does not do.", `
+    <div class="maintenance-note">Every restore creates a rollback backup first and requires an explicit preview before it runs.</div>
+    <div class="maintenance-note">Config restore can replace dashboard auth files — you may need to re-login after restart.</div>
+    <div class="maintenance-note">Bundled InfluxDB restore replaces analytics data (replace-style). External InfluxDB is not supported here.</div>
+    <div class="maintenance-note">EMS version downgrade, image switching and container restart are intentionally not run from the live dashboard. Use the CLI for controlled offline operations.</div>`);
+}
+
+function renderMaintenanceView() {
+  const results = $("maintenanceResults");
+  const status = $("maintenanceStatus");
+  if (!results) return;
+
+  const authState = maintenanceAuthState();
+  if (authState) {
+    results.innerHTML = authState;
+    if (status) status.textContent = "";
+    return;
+  }
+
+  results.innerHTML = [
+    maintenanceStatusStage(),
+    maintenanceBackupStage(),
+    maintenanceRestoreStage(),
+    maintenanceConfigUpgradeStage(),
+    maintenanceSafetyNotesStage(),
+  ].join("");
+  if (status) status.textContent = state.maintenance.message || "";
+}
+
+function setMaintenanceMessage(message) {
+  state.maintenance.message = message || "";
+  const status = $("maintenanceStatus");
+  if (status) status.textContent = state.maintenance.message;
+}
+
+function resetRestoreFlow() {
+  state.maintenance.restore.plan = null;
+  state.maintenance.restore.previewed = false;
+}
+
+function clearRestorePassword() {
+  const input = $("restorePassword");
+  if (input) input.value = "";
+}
+
+function enterMaintenanceView() {
+  renderMaintenanceView();
+  if (!state.auth.authenticated) return;
+  loadMaintenanceStatus();
+  loadBackupList();
+  loadConfigUpgradePlan();
+  state.maintenance.loaded = true;
+}
+
+async function loadMaintenanceStatus() {
+  if (!state.auth.authenticated) return;
+  try {
+    const response = await fetch("/api/maintenance/status", { credentials: "same-origin" });
+    if (!response.ok) return;
+    state.maintenance.status = await response.json();
+    renderMaintenanceView();
+  } catch {
+    // Leave the previous status in place; the message area shows errors.
+  }
+}
+
+async function loadBackupList() {
+  if (!state.auth.authenticated) return;
+  try {
+    const response = await fetch("/api/maintenance/backups", { credentials: "same-origin" });
+    if (!response.ok) return;
+    const payload = await response.json();
+    state.maintenance.backups = Array.isArray(payload.items) ? payload.items : [];
+    renderMaintenanceView();
+  } catch {
+    // Keep the last known list.
+  }
+}
+
+async function loadConfigUpgradePlan() {
+  if (!state.auth.authenticated) return;
+  try {
+    const response = await fetch("/api/maintenance/config-upgrade", { credentials: "same-origin" });
+    if (!response.ok) return;
+    state.maintenance.configUpgrade = await response.json();
+    renderMaintenanceView();
+  } catch {
+    // Keep the last known plan.
+  }
+}
+
+function maintenanceWriteHeaders() {
+  return {
+    "Content-Type": "application/json",
+    "X-CSRF-Token": state.auth.csrfToken,
+  };
+}
+
+async function createMaintenanceBackup(type) {
+  if (state.maintenance.running) return;
+  if (!state.auth.authenticated || !state.auth.csrfToken) return;
+  state.maintenance.running = true;
+  setMaintenanceMessage(`Creating ${type} backup…`);
+  renderMaintenanceView();
+  try {
+    const response = await fetch("/api/maintenance/backups/create", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: maintenanceWriteHeaders(),
+      body: JSON.stringify({ type }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setMaintenanceMessage(`Backup failed (${response.status}${payload.error ? `: ${payload.error}` : ""}).`);
+    } else if (payload.created) {
+      setMaintenanceMessage(`Created ${payload.backup?.name || type}.`);
+      await loadBackupList();
+    } else {
+      setMaintenanceMessage(payload.message || "Backup not created.");
+    }
+  } catch {
+    setMaintenanceMessage("Backup request failed.");
+  } finally {
+    state.maintenance.running = false;
+    renderMaintenanceView();
+  }
+}
+
+async function inspectMaintenanceBackup(name) {
+  if (!state.auth.authenticated || !state.auth.csrfToken) return;
+  setMaintenanceMessage(`Inspecting ${name}…`);
+  try {
+    const response = await fetch("/api/maintenance/backups/inspect", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: maintenanceWriteHeaders(),
+      body: JSON.stringify({ file: name }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    const detail = $("maintenanceBackupDetail");
+    if (!response.ok) {
+      setMaintenanceMessage(`Inspect failed (${response.status}${payload.error ? `: ${payload.error}` : ""}).`);
+      return;
+    }
+    setMaintenanceMessage("");
+    if (detail) detail.innerHTML = renderBackupManifest(name, payload);
+  } catch {
+    setMaintenanceMessage("Inspect request failed.");
+  }
+}
+
+const FILE_KIND_LABELS = {
+  config: "Config",
+  runtime_state: "Runtime state",
+  dashboard_auth: "Dashboard auth",
+  sqlite: "SQLite database",
+  influxdb: "InfluxDB data",
+};
+
+function readableFileKind(kind) {
+  if (!kind) return "File";
+  return (
+    FILE_KIND_LABELS[kind] ||
+    String(kind).replaceAll("_", " ").replace(/^\w/, (c) => c.toUpperCase())
+  );
+}
+
+function renderBackupManifest(name, payload) {
+  if (!payload.manifest_available || !payload.manifest) {
+    const reason = payload.encrypted
+      ? "encrypted backup details are locked. Use restore preview with the backup password, or inspect the backup through emsctl with the password."
+      : "manifest not available.";
+    return `<div class="maintenance-empty compact">${escapeHtml(name)}: ${escapeHtml(reason)}</div>`;
+  }
+  const m = payload.manifest;
+  // The list above already shows name/type/modified/size/encrypted/EMS version,
+  // so Details adds what the row cannot: provenance and the exact contents.
+  const fileCount = (m.files || []).length;
+  const files = (m.files || [])
+    .map((file) => {
+      const badges = [];
+      if (file.sensitive) badges.push(`<span class="maintenance-badge badge-secret">secret</span>`);
+      if (file.privacy_relevant) badges.push(`<span class="maintenance-badge badge-privacy">privacy</span>`);
+      return `
+        <div class="maintenance-file-row">
+          <span class="maintenance-file-path">${escapeHtml(file.path || "")}</span>
+          <span class="maintenance-file-kind">${escapeHtml(readableFileKind(file.kind))}</span>
+          <span class="maintenance-file-badges">${badges.join("")}</span>
+        </div>`;
+    })
+    .join("") || `<div class="maintenance-empty compact">No files recorded in this backup.</div>`;
+  const source = [m.git_branch, m.git_commit_short ? `@ ${m.git_commit_short}` : ""]
+    .filter(Boolean)
+    .join(" ");
+  const facts = [
+    maintenanceFact("Purpose", m.backup_purpose),
+    maintenanceFact("Created", m.created_at),
+    maintenanceFact("Source EMS", m.ems_version),
+    maintenanceFact("Source revision", source),
+    maintenanceFact("Archive format", m.backup_format),
+    maintenanceFact("Encryption", m.encrypted ? (m.encryption_method || "yes") : "none"),
+    maintenanceFact("Files in archive", fileCount),
+  ];
+  if (m.rollback_for) facts.push(maintenanceFact("Rollback of", m.rollback_for));
+  if (m.skipped_count) facts.push(maintenanceFact("Skipped (missing)", m.skipped_count));
+  return `
+    <div class="maintenance-detail-card">
+      <div class="maintenance-detail-head">Provenance — ${escapeHtml(name)}</div>
+      <div class="maintenance-facts">${facts.join("")}</div>
+      <div class="maintenance-detail-subhead">Archive contents (${escapeHtml(String(fileCount))})</div>
+      <div class="maintenance-file-list">${files}</div>
+    </div>`;
+}
+
+async function previewRestore() {
+  if (state.maintenance.running) return;
+  if (!state.auth.authenticated || !state.auth.csrfToken) return;
+  const select = $("restoreFile");
+  const file = select ? select.value : state.maintenance.restore.file;
+  if (!file) return;
+  state.maintenance.restore.file = file;
+  const passwordInput = $("restorePassword");
+  const password = passwordInput ? passwordInput.value : "";
+  setMaintenanceMessage(`Previewing restore of ${file}…`);
+  try {
+    const response = await fetch("/api/maintenance/backups/restore-plan", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: maintenanceWriteHeaders(),
+      body: JSON.stringify({ file, password: password || null }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setMaintenanceMessage(`Restore preview failed (${response.status}${payload.error ? `: ${payload.error}` : ""}).`);
+      return;
+    }
+    state.maintenance.restore.plan = payload;
+    state.maintenance.restore.previewed = true;
+    setMaintenanceMessage("Preview ready. Review the plan, then confirm restore.");
+    const planArea = $("restorePlanArea");
+    if (planArea) planArea.innerHTML = renderRestorePlan(payload);
+    const confirmButton = $("restoreConfirm");
+    if (confirmButton) confirmButton.disabled = false;
+  } catch {
+    setMaintenanceMessage("Restore preview request failed.");
+  }
+}
+
+async function confirmRestore() {
+  if (state.maintenance.running) return;
+  if (!state.auth.authenticated || !state.auth.csrfToken) return;
+  const restore = state.maintenance.restore;
+  if (!restore.file || !restore.previewed) return;
+  const passwordInput = $("restorePassword");
+  const password = passwordInput ? passwordInput.value : "";
+  state.maintenance.running = true;
+  setMaintenanceMessage(`Restoring ${restore.file}…`);
+  renderMaintenanceView();
+  try {
+    const response = await fetch("/api/maintenance/backups/restore", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: maintenanceWriteHeaders(),
+      body: JSON.stringify({
+        file: restore.file,
+        password: password || null,
+        confirm_preview: true,
+        confirm_restore: true,
+        confirm_replace: true,
+      }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setMaintenanceMessage(`Restore failed (${response.status}${payload.error ? `: ${payload.error}` : ""}).`);
+    } else if (payload.restored) {
+      const hints = [];
+      if (payload.requires_restart) hints.push("Restart EMS.");
+      if (payload.requires_relogin) hints.push("Re-login may be required.");
+      setMaintenanceMessage(`${payload.message || "Restore completed."} ${hints.join(" ")}`.trim());
+      await loadBackupList();
+    } else {
+      setMaintenanceMessage(payload.message || "Restore not completed.");
+    }
+  } catch {
+    setMaintenanceMessage("Restore request failed.");
+  } finally {
+    clearRestorePassword();
+    resetRestoreFlow();
+    state.maintenance.running = false;
+    renderMaintenanceView();
+  }
+}
+
+async function applyConfigUpgrade() {
+  if (state.maintenance.running) return;
+  if (!state.auth.authenticated || !state.auth.csrfToken) return;
+  const plan = state.maintenance.configUpgrade;
+  if (!plan || !plan.plan_id || !plan.apply_available) return;
+  if (typeof window !== "undefined" && typeof window.confirm === "function") {
+    const confirmed = window.confirm(
+      "Apply the config changes shown in the preview? A backup will be created first."
+    );
+    if (!confirmed) return;
+  }
+  state.maintenance.running = true;
+  setMaintenanceMessage("Applying config upgrade…");
+  renderMaintenanceView();
+  try {
+    const response = await fetch("/api/maintenance/config-upgrade/apply", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: maintenanceWriteHeaders(),
+      body: JSON.stringify({
+        refresh_comments: true,
+        confirm_apply: true,
+        plan_id: plan.plan_id,
+      }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setMaintenanceMessage(`Config upgrade failed (${response.status}${payload.error ? `: ${payload.error}` : ""}).`);
+    } else if (payload.changed) {
+      const backup = payload.backup_name ? ` Backup: ${payload.backup_name}.` : "";
+      const restart = payload.requires_restart ? " Restart EMS." : "";
+      setMaintenanceMessage(`${payload.message || "Config upgraded."}${backup}${restart}`.trim());
+      await loadConfigUpgradePlan();
+      await loadBackupList();
+    } else {
+      setMaintenanceMessage(payload.message || "Config already up to date.");
+    }
+  } catch {
+    setMaintenanceMessage("Config upgrade request failed.");
+  } finally {
+    state.maintenance.running = false;
+    renderMaintenanceView();
+  }
+}
+
+function initMaintenance() {
+  const container = $("maintenanceResults");
+  if (!container) return;
+  container.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-maintenance-action]");
+    if (!button) return;
+    const action = button.dataset.maintenanceAction;
+    const arg = button.dataset.maintenanceArg;
+    if (action === "backup-config") createMaintenanceBackup("config");
+    else if (action === "backup-databases") createMaintenanceBackup("databases");
+    else if (action === "backup-influxdb") createMaintenanceBackup("influxdb");
+    else if (action === "inspect") inspectMaintenanceBackup(arg);
+    else if (action === "restore-preview") previewRestore();
+    else if (action === "restore-confirm") confirmRestore();
+    else if (action === "config-check") loadConfigUpgradePlan();
+    else if (action === "config-apply") applyConfigUpgrade();
+  });
+  container.addEventListener("change", (event) => {
+    const select = event.target.closest("[data-maintenance-restore-file]");
+    if (!select) return;
+    state.maintenance.restore.file = select.value;
+    // Changing the selected backup invalidates any previous preview.
+    resetRestoreFlow();
+    const planArea = $("restorePlanArea");
+    if (planArea) planArea.innerHTML = "";
+    const confirmButton = $("restoreConfirm");
+    if (confirmButton) confirmButton.disabled = true;
+    const previewButton = $("restorePreview");
+    if (previewButton) previewButton.disabled = !select.value;
+  });
+}
+
 function runtimeControlPanel() {
   const runtime = state.runtime || {};
   if (!state.auth.configured) {
@@ -3448,6 +4083,14 @@ function renderAuthState() {
       resetLogs();
     } else if (!state.logs.timerId) {
       startLogsPolling();
+    }
+  }
+  if (state.flowView === "maintenance") {
+    if (!state.auth.authenticated) {
+      state.maintenance.loaded = false;
+      renderMaintenanceView();
+    } else if (!state.maintenance.loaded) {
+      enterMaintenanceView();
     }
   }
 }
@@ -4903,6 +5546,7 @@ function initDashboardApp() {
   initRuntimeForms();
   initDiagnose();
   initLogs();
+  initMaintenance();
   initSessionHeartbeat();
   applyAnimationMode();
   if (state.demoMode) {
@@ -5009,6 +5653,27 @@ if (typeof module !== "undefined") {
     trimLogRows,
     logsAuthState,
     setServiceLogLevel,
+    renderAuthState,
+    maintenanceAuthState,
+    maintenanceBackupTypeLabel,
+    renderMaintenanceView,
+    maintenanceStage,
+    maintenanceBackupRows,
+    maintenanceRestoreStage,
+    maintenanceConfigUpgradeStage,
+    maintenanceSafetyNotesStage,
+    renderRestorePlan,
+    renderBackupManifest,
+    enterMaintenanceView,
+    loadMaintenanceStatus,
+    loadBackupList,
+    createMaintenanceBackup,
+    inspectMaintenanceBackup,
+    previewRestore,
+    confirmRestore,
+    loadConfigUpgradePlan,
+    applyConfigUpgrade,
+    initMaintenance,
     shouldSendHeartbeat,
     sendSessionHeartbeat,
     runtimeControlPanel,

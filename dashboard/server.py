@@ -2,6 +2,7 @@
 import json
 import logging
 import os
+import re
 import tempfile
 import threading
 import time
@@ -31,6 +32,7 @@ from dashboard.sqlite_store import SUPPORTED_RANGES
 from dashboard.static_files import build_static_asset_index, static_asset_key
 
 
+BACKUP_FILE_RE = re.compile(r"^ems-[A-Za-z0-9._-]+\.tar\.gz(?:\.enc)?$")
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 STATIC_ASSETS = build_static_asset_index(STATIC_DIR)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -177,6 +179,9 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         # Single-flight guard so diagnose runs (esp. the hardware profile, which
         # makes network probes) cannot be hammered concurrently.
         self.diagnose_lock = threading.Lock()
+        # Serializes maintenance ops (backup/restore/config upgrade) so they
+        # never run concurrently and corrupt files mid-write.
+        self.maintenance_lock = threading.Lock()
         self.sessions = SessionStore(
             timeout_seconds=session_timeout_seconds,
             absolute_max_seconds=session_absolute_max_seconds,
@@ -339,6 +344,18 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self._handle_logs(parse_qs(parsed.query))
             return
 
+        if parsed.path == "/api/maintenance/status":
+            self._handle_maintenance_status()
+            return
+
+        if parsed.path == "/api/maintenance/backups":
+            self._handle_maintenance_backups()
+            return
+
+        if parsed.path == "/api/maintenance/config-upgrade":
+            self._handle_maintenance_config_upgrade()
+            return
+
         self._send_static(parsed.path)
 
     def do_POST(self):
@@ -358,6 +375,26 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/logs/level":
             self._handle_set_log_level()
+            return
+
+        if parsed.path == "/api/maintenance/backups/create":
+            self._handle_maintenance_backup_create()
+            return
+
+        if parsed.path == "/api/maintenance/backups/inspect":
+            self._handle_maintenance_backup_inspect()
+            return
+
+        if parsed.path == "/api/maintenance/backups/restore-plan":
+            self._handle_maintenance_restore_plan()
+            return
+
+        if parsed.path == "/api/maintenance/backups/restore":
+            self._handle_maintenance_restore()
+            return
+
+        if parsed.path == "/api/maintenance/config-upgrade/apply":
+            self._handle_maintenance_config_upgrade_apply()
             return
 
         self._send_json({"error": "read_only"}, status=405)
@@ -854,6 +891,245 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         if minimum is not None and value < minimum:
             raise ValueError(f"{name} must be >= {minimum}")
         return value
+
+    def _maintenance_paths(self):
+        return {
+            "base_dir": BASE_DIR,
+            "config_path": self.server.config_path,
+            "runtime_state_path": self.server.runtime_state_path,
+            "dashboard_auth_path": self.server.auth_file,
+        }
+
+    def _handle_maintenance_status(self):
+        auth_error = self._require_read_auth()
+        if auth_error:
+            self._send_json(auth_error[0], status=auth_error[1])
+            return
+        from dashboard import maintenance
+
+        try:
+            payload = maintenance.maintenance_status(self.server.config_path, BASE_DIR)
+        except maintenance.MaintenanceError as exc:
+            self._send_json({"error": exc.code, "message": str(exc)}, status=exc.status)
+            return
+        self._send_json(payload)
+
+    def _handle_maintenance_backups(self):
+        auth_error = self._require_read_auth()
+        if auth_error:
+            self._send_json(auth_error[0], status=auth_error[1])
+            return
+        from dashboard import maintenance
+
+        try:
+            payload = maintenance.list_backups(BASE_DIR)
+        except maintenance.MaintenanceError as exc:
+            self._send_json({"error": exc.code, "message": str(exc)}, status=exc.status)
+            return
+        self._send_json(payload)
+
+    def _handle_maintenance_config_upgrade(self):
+        auth_error = self._require_read_auth()
+        if auth_error:
+            self._send_json(auth_error[0], status=auth_error[1])
+            return
+        from dashboard import maintenance
+
+        try:
+            config = maintenance.load_config(self.server.config_path)
+            payload = maintenance.config_upgrade_plan(
+                config, BASE_DIR, self.server.config_path
+            )
+        except maintenance.MaintenanceError as exc:
+            self._send_json({"error": exc.code, "message": str(exc)}, status=exc.status)
+            return
+        self._send_json(payload)
+
+    def _validated_backup_file_name(self, value):
+        if (
+            not isinstance(value, str)
+            or not value
+            or os.path.basename(value) != value
+            or "/" in value
+            or "\\" in value
+            or ".." in value
+            or os.path.isabs(value)
+            or not BACKUP_FILE_RE.match(value)
+        ):
+            raise ValueError("invalid backup file name")
+        return value
+
+    def _handle_maintenance_backup_inspect(self):
+        # POST (not GET) so an encrypted backup's password can travel in the
+        # JSON body instead of the URL. Reads no state, but takes the full
+        # write-auth path because it may carry a password.
+        payload = self._maintenance_write_body()
+        if payload is None:
+            return
+        from dashboard import maintenance
+
+        try:
+            file_name = self._validated_backup_file_name(payload.get("file"))
+        except ValueError as exc:
+            self._send_json(
+                {"error": "invalid_backup_name", "message": str(exc)},
+                status=400,
+            )
+            return
+        password = payload.get("password") or None
+        try:
+            result = maintenance.inspect_backup(BASE_DIR, file_name, password=password)
+        except maintenance.MaintenanceError as exc:
+            self._send_json({"error": exc.code, "message": str(exc)}, status=exc.status)
+            return
+        self._send_json(result)
+
+    def _handle_maintenance_backup_create(self):
+        from dashboard import maintenance
+
+        payload = self._maintenance_write_body()
+        if payload is None:
+            return
+        backup_type = payload.get("type")
+        if not isinstance(backup_type, str) or backup_type not in maintenance.BACKUP_TYPES:
+            self._send_json(
+                {"error": "unknown_backup_type", "supported": list(maintenance.BACKUP_TYPES)},
+                status=400,
+            )
+            return
+
+        def run():
+            config = maintenance.load_config(self.server.config_path)
+            return maintenance.create_backup(
+                backup_type, config, **self._maintenance_paths()
+            )
+
+        self._run_maintenance_locked(run, error_code="backup_failed")
+
+    def _handle_maintenance_restore_plan(self):
+        from dashboard import maintenance
+
+        payload = self._maintenance_write_body()
+        if payload is None:
+            return
+        file_name = payload.get("file")
+        password = payload.get("password") or None
+
+        def run():
+            config = maintenance.load_config(self.server.config_path)
+            return maintenance.restore_plan(
+                file_name=file_name,
+                password=password,
+                config=config,
+                **self._maintenance_paths(),
+            )
+
+        self._run_maintenance_locked(run, error_code="restore_plan_failed")
+
+    def _handle_maintenance_restore(self):
+        from dashboard import maintenance
+
+        payload = self._maintenance_write_body()
+        if payload is None:
+            return
+        file_name = payload.get("file")
+        password = payload.get("password") or None
+
+        def run():
+            config = maintenance.load_config(self.server.config_path)
+            return maintenance.restore(
+                BASE_DIR,
+                file_name,
+                password,
+                config,
+                confirm_preview=bool(payload.get("confirm_preview")),
+                confirm_restore=bool(payload.get("confirm_restore")),
+                confirm_replace=bool(payload.get("confirm_replace")),
+                config_path=self.server.config_path,
+                runtime_state_path=self.server.runtime_state_path,
+                dashboard_auth_path=self.server.auth_file,
+                store=self.server.store,
+            )
+
+        self._run_maintenance_locked(run, error_code="restore_failed")
+
+    def _handle_maintenance_config_upgrade_apply(self):
+        from dashboard import maintenance
+
+        payload = self._maintenance_write_body()
+        if payload is None:
+            return
+        refresh_comments = payload.get("refresh_comments", True)
+        if not isinstance(refresh_comments, bool):
+            self._send_json(
+                {
+                    "error": "bad_request",
+                    "message": "refresh_comments must be a boolean",
+                },
+                status=400,
+            )
+            return
+
+        def run():
+            config = maintenance.load_config(self.server.config_path)
+            return maintenance.apply_config_upgrade(
+                config,
+                confirm_apply=payload.get("confirm_apply") is True,
+                refresh_comments=refresh_comments,
+                expected_plan_id=payload.get("plan_id"),
+                **self._maintenance_paths(),
+            )
+
+        self._run_maintenance_locked(run, error_code="config_upgrade_failed")
+
+    def _run_maintenance_locked(self, run, *, error_code):
+        """Run a maintenance op under the single-flight lock and serialise JSON.
+
+        ``run()`` returns the success payload or raises ``MaintenanceError`` for
+        a clean user-facing failure; any other exception becomes a 500.
+        """
+        from dashboard import maintenance
+
+        if not self.server.maintenance_lock.acquire(blocking=False):
+            self._send_json({"error": "maintenance_busy"}, status=429)
+            return
+        try:
+            result = run()
+        except maintenance.MaintenanceError as exc:
+            self._send_json({"error": exc.code, "message": str(exc)}, status=exc.status)
+            return
+        except Exception as exc:  # noqa: BLE001 - surface a clean 500 to the UI
+            logging.exception("dashboard_maintenance_failed code=%s", error_code)
+            self._send_json({"error": error_code, "message": str(exc)}, status=500)
+            return
+        finally:
+            self.server.maintenance_lock.release()
+        self._send_json(result)
+
+    def _maintenance_write_body(self):
+        """Shared write-auth + JSON body parse for maintenance POSTs.
+
+        Returns the parsed body dict, or ``None`` after already sending the
+        appropriate error response.
+        """
+        body_error = self._json_body_preflight()
+        if body_error:
+            self._send_json(body_error[0], status=body_error[1])
+            return None
+
+        auth_error = self._require_write_auth()
+        if auth_error:
+            self._send_json(auth_error[0], status=auth_error[1])
+            return None
+
+        try:
+            return self._read_json_body()
+        except JsonBodyTooLarge as exc:
+            self._send_json({"error": "request_too_large", "message": str(exc)}, status=413)
+            return None
+        except (JsonBodyLengthError, ValueError) as exc:
+            self._send_json({"error": "bad_request", "message": str(exc)}, status=400)
+            return None
 
     def _handle_runtime_patch(self, path):
         body_error = self._json_body_preflight()

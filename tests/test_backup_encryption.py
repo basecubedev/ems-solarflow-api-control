@@ -79,6 +79,59 @@ def test_wrong_password_fails(tmp_path):
         backup_crypto.decrypt_file_to_temp(str(enc), "wrong")
 
 
+@pytest.mark.parametrize("path", [None, "", "bad\x00backup.enc", "missing.enc"])
+def test_invalid_encrypted_backup_paths_fail_cleanly(path):
+    assert backup_crypto.is_encrypted_backup(path) is False
+    with pytest.raises(backup_crypto.BackupFormatError):
+        backup_crypto.decrypt_file_to_temp(path, "pw")
+
+
+def test_encrypted_backup_symlink_is_rejected(tmp_path):
+    enc = _roundtrip(tmp_path, b"payload")
+    link = tmp_path / "linked.enc"
+    link.symlink_to(enc)
+
+    assert backup_crypto.is_encrypted_backup(link) is False
+    with pytest.raises(backup_crypto.BackupFormatError, match="symlink"):
+        backup_crypto.decrypt_file_to_temp(link, "pw")
+
+
+def test_file_path_validation_confines_to_allowed_root(tmp_path):
+    allowed = tmp_path / "backups"
+    allowed.mkdir()
+    inside = allowed / "inside.enc"
+    inside.write_bytes(b"data")
+    outside = tmp_path / "outside.enc"
+    outside.write_bytes(b"data")
+
+    assert backup_crypto._validated_existing_file_path(
+        inside, allowed_root=allowed
+    ) == str(inside)
+    with pytest.raises(backup_crypto.BackupFormatError, match="outside allowed"):
+        backup_crypto._validated_existing_file_path(
+            outside, allowed_root=allowed
+        )
+
+    link = allowed / "linked.enc"
+    link.symlink_to(inside)
+    with pytest.raises(backup_crypto.BackupFormatError, match="symlink"):
+        backup_crypto._validated_existing_file_path(link, allowed_root=allowed)
+
+
+def test_encrypted_detection_honors_allowed_root(tmp_path):
+    allowed = tmp_path / "backups"
+    allowed.mkdir()
+    plain = tmp_path / "plain.bin"
+    plain.write_bytes(b"payload")
+    inside = allowed / "inside.enc"
+    outside = tmp_path / "outside.enc"
+    backup_crypto.encrypt_file(str(plain), str(inside), "pw")
+    backup_crypto.encrypt_file(str(plain), str(outside), "pw")
+
+    assert backup_crypto.is_encrypted_backup(inside, allowed_root=allowed)
+    assert not backup_crypto.is_encrypted_backup(outside, allowed_root=allowed)
+
+
 def test_tampered_chunk_fails(tmp_path):
     plain = tmp_path / "p.bin"
     plain.write_bytes(b"x" * 50)

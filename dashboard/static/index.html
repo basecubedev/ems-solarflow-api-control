@@ -60,6 +60,7 @@
               <button type="button" data-flow-view="control" role="tab" aria-selected="false">Control</button>
               <button type="button" data-flow-view="diagnose" role="tab" aria-selected="false">Diagnose</button>
               <button type="button" data-flow-view="logs" role="tab" aria-selected="false">Logs</button>
+              <button type="button" data-flow-view="maintenance" role="tab" aria-selected="false">Maintenance</button>
             </div>
           </div>
         </div>
@@ -263,6 +264,18 @@
               </div>
               <p id="logsStatus" class="logs-status" role="status"></p>
               <div id="logsOutput" class="logs-output" role="log" aria-live="polite"></div>
+            </section>
+          </div>
+          <div id="maintenanceView" class="maintenance-view" hidden>
+            <section class="maintenance-panel" aria-label="Maintenance">
+              <div class="section-heading maintenance-heading">
+                <div>
+                  <h2>Maintenance</h2>
+                  <p>Create backups and review config upgrades from the browser.</p>
+                </div>
+              </div>
+              <p id="maintenanceStatus" class="maintenance-status" role="status"></p>
+              <div id="maintenanceResults" class="maintenance-results"></div>
             </section>
           </div>
           <div id="analyticsView" class="analytics-view" hidden>
