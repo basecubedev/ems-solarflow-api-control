@@ -10,6 +10,7 @@ from pathlib import Path
 from admin.install_context import detect_install_context
 from admin.releases import ReleaseError
 from admin.setup_config import apply_device_config_values, apply_setup_features
+from ems.influx_setup import DOCKER_FIRST_SECRET_FILE
 
 
 _HOST_LABEL = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
@@ -103,6 +104,22 @@ def _build_grid_meter(meter, defaults, validation):
     if "port" in grid and meter.get("port"):
         grid["port"] = meter["port"]
     return grid
+
+
+def _normalize_bundled_influx_secret(config):
+    """Point bundled InfluxDB secrets at the mounted ``config/`` volume.
+
+    Admin deployments are always Docker-first, where only ``/app/config`` and
+    ``/app/data`` are writable. The template default (``deploy/docker/...``)
+    lives in the read-only image, so bundled ``influx init`` cannot write there.
+    External InfluxDB keeps its own secret path.
+    """
+
+    influx = config.get("influxdb")
+    if not isinstance(influx, dict):
+        return
+    if influx.get("enabled") is True and influx.get("mode") == "bundled":
+        influx["secret_file"] = DOCKER_FIRST_SECRET_FILE
 
 
 def _load_existing_config(path):
@@ -245,6 +262,8 @@ class ConfigPreviewGenerator:
                     f"Applied {len(applied_features)} setup feature value(s).",
                 )
             )
+
+        _normalize_bundled_influx_secret(preview)
 
         duplicate_names = sorted({name for name in names if name and names.count(name) > 1})
         if any(not name for name in names):

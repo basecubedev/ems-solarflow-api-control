@@ -592,6 +592,41 @@ def test_prepare_installer_skips_analytics_when_influx_disabled(tmp_path):
     assert docker.pulled == ["ghcr.io/basecubedev/ems-solarflow-api-control:v0.6.0"]
 
 
+def test_prepare_forwards_installer_output_to_job_log(tmp_path):
+    service = _service(tmp_path, influx=BUNDLED, installer=_FakeInstaller())
+    _, job = _run_prepare(service)
+
+    # Installer stdout must reach the job log through the on_line callback.
+    assert "Wrote docker-compose.yml" in job["log"]
+
+
+def test_failed_bootstrap_job_surfaces_real_cause(tmp_path):
+    tail = (
+        "  File \"/app/ems/influx_setup.py\", line 198, in write_env_file\n"
+        "    os.makedirs(directory, exist_ok=True)\n"
+        "PermissionError: [Errno 13] Permission denied: '/app/deploy'"
+    )
+    installer = _FakeInstaller(error=deployment._bootstrap_error(tail))
+    service = _service(tmp_path, influx=BUNDLED, installer=installer)
+    _, job = _run_prepare(service)
+
+    assert job["status"] == "failed"
+    error = job["error"]
+    # High-level message stays short, but the real cause is not collapsed away.
+    assert error["message"].startswith("The bootstrap installer failed")
+    assert "PermissionError" in error["detail"]
+    assert "/app/deploy" in error["detail"]
+
+
+def test_bootstrap_error_attaches_tail_and_redacts_secrets(tmp_path):
+    tail = "password=hunter2\nPermissionError: [Errno 13] Permission denied: '/app/deploy'"
+    error = deployment._bootstrap_error(tail)
+
+    assert error.code == "bootstrap_failed"
+    assert "PermissionError" in error.detail
+    assert "hunter2" not in error.detail
+
+
 def test_docker_unavailable_returns_clean_error(tmp_path):
     docker = _FakeDocker(
         check_error=DockerError("docker_cli_missing", "Docker CLI was not found.")
