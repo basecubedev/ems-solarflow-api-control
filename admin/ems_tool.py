@@ -12,7 +12,6 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from admin.deployment import DockerCli, DockerCompose, DockerError, _safe_command_detail
 from admin.maintenance import DEFAULT_EMS_CONTAINER
@@ -65,9 +64,9 @@ class EmsToolResult:
 
     mode: str
     blocked: bool
-    returncode: Optional[int]
-    detail: Optional[str]
-    message: Optional[str]
+    returncode: int | None
+    detail: str | None
+    message: str | None
 
 
 def ems_container_name(context):

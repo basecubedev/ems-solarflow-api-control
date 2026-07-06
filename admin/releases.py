@@ -21,7 +21,6 @@ from admin.image_identity import (
     DOWNGRADE_BLOCKED,
     IDENTITY_UNKNOWN,
     OLDER_THAN_RUNNING_BUILD,
-    UPGRADE_AVAILABLE,
     ImageIdentity,
     assess_upgrade,
     identify_image,

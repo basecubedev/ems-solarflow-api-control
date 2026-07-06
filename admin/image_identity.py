@@ -16,7 +16,6 @@ together for callers that just want an ``ImageIdentity``.
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 LABEL_VERSION = "org.opencontainers.image.version"
@@ -37,14 +36,14 @@ class ImageIdentity:
     parsed cleanly, else ``None``.
     """
 
-    image_ref: Optional[str] = None
-    digest: Optional[str] = None
-    version_label: Optional[str] = None
-    revision: Optional[str] = None
-    channel: Optional[str] = None
-    build_serial: Optional[int] = None
-    build_id: Optional[str] = None
-    release_tag: Optional[str] = None
+    image_ref: str | None = None
+    digest: str | None = None
+    version_label: str | None = None
+    revision: str | None = None
+    channel: str | None = None
+    build_serial: int | None = None
+    build_id: str | None = None
+    release_tag: str | None = None
     labels: dict = field(default_factory=dict)
 
     def as_dict(self):
@@ -202,7 +201,7 @@ class UpgradeAssessment:
 
     state: str
     basis: str = "none"
-    warning: Optional[str] = None
+    warning: str | None = None
 
     @property
     def is_upgrade(self):

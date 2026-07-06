@@ -13,7 +13,6 @@ import copy
 import json
 import re
 import threading
-import uuid
 from collections import namedtuple
 from pathlib import Path
 
