@@ -315,12 +315,13 @@ installation.
 
 ## Optional Battery Full-Charge Assist
 
-The template keeps EMS full-charge assist disabled by default:
+The template enables EMS full-charge assist by default. Set `enabled` to
+`false` in `config.json` to opt out:
 
 ```json
 {
   "battery_full_charge_assist": {
-    "enabled": false,
+    "enabled": true,
     "interval_days": 28,
     "assist_window_days": 7,
     "assist_start_soc": 80,

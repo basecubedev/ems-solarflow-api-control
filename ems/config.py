@@ -37,7 +37,7 @@ OUTPUT_CONTROL_DEFAULTS = {
 }
 
 WINTER_DEFAULTS = {
-    "enabled": False,
+    "enabled": True,
     "months": [10, 11, 12, 1, 2, 3],
     "summer_min_soc": 15,
     "winter_min_soc": 40,
@@ -80,7 +80,7 @@ ENERGY_SAVINGS_DEFAULTS = {
 }
 
 BATTERY_FULL_CHARGE_ASSIST_DEFAULTS = {
-    "enabled": False,
+    "enabled": True,
     "interval_days": 28,
     "assist_window_days": 7,
     "assist_start_soc": 80,
@@ -100,7 +100,7 @@ CONFIG_UPGRADE_STARTUP_MODES = ("disabled", "check", "apply")
 CONFIG_UPGRADE_BACKUP_FAILURE_POLICIES = ("continue_without_upgrade",)
 
 INFLUXDB_DEFAULTS = {
-    "enabled": False,
+    "enabled": True,
     # "bundled" = the bundled docker-compose InfluxDB managed by the setup
     # helpers (emsctl influx init / stack up). "external" = a pre-existing
     # InfluxDB the operator runs and provides a token for; setup helpers do not

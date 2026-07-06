@@ -262,7 +262,7 @@ def test_emsctl_diagnose_json_contains_v2_structure(tmp_path):
     assert payload["status"] in ("ok", "warning", "error")
     assert payload["mode"] in ("native", "container")
     assert "mode_sources" in payload
-    assert payload["battery_full_charge_assist"]["enabled"] is False
+    assert payload["battery_full_charge_assist"]["enabled"] is True
     assert payload["battery_full_charge_assist"]["interval_days"] == 28
     assert not (tmp_path / "ems_state.sqlite").exists()
 

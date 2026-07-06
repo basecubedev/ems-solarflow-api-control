@@ -48,7 +48,7 @@ from ems.build_info import collect_build_info
 
 
 BATTERY_FULL_CHARGE_ASSIST_DEFAULTS = {
-    "enabled": False,
+    "enabled": True,
     "interval_days": 28,
     "assist_window_days": 7,
     "assist_start_soc": 80,
