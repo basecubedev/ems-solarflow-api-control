@@ -1057,7 +1057,8 @@ class BackupRestoreService:
         else:
             targets, kind = [self._archive_target(store, backup_id)], "archive"
 
-        # Keep InfluxDB last; its rollback is owned by EMS CLI.
+        # Keep InfluxDB last so Admin can roll back already-applied generic members
+        # if the later EMS-CLI-owned InfluxDB restore fails.
         targets.sort(key=lambda t: t.backup_type == INFLUXDB_BACKUP_TYPE)
 
         files, summary, warnings, blocked, block_reason, manifest_summary = \
@@ -1359,6 +1360,7 @@ class BackupRestoreService:
         else:
             args += ["--on-conflict", "replace",
                      "--rollback" if rollback_enabled else "--no-rollback"]
+        # Passwords are piped via stdin and never placed in argv.
         input_text = f"{password}\n" if password else None
         result = tool.run(
             context, tuple(args), timeout=BACKUP_RESTORE_TIMEOUT,
