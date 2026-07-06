@@ -522,6 +522,61 @@ def test_influxdb_enable_and_mode_feature_changes_preview():
     assert influx["mode"] == "external"
 
 
+INFLUX_TEMPLATE = {
+    "system": {"max_total_power": 1600, "dry_run": False},
+    "devices": [{"name": "WR1", "ip": "192.0.2.1", "sn": "YOUR_SN", "max_power": 800}],
+    "grid_meter": {"type": "shelly", "ip": "192.0.2.3"},
+    "influxdb": {
+        "enabled": False,
+        "mode": "bundled",
+        "auto_init": True,
+        "auto_sync": True,
+        "secret_file": "deploy/docker/influxdb.env",
+    },
+}
+
+
+def _influx_generator():
+    return ConfigPreviewGenerator(_ReleaseManager(copy.deepcopy(INFLUX_TEMPLATE)))
+
+
+def test_bundled_influx_normalizes_secret_file_to_config_volume():
+    # Docker-first Admin deployments only mount config/ and data/ as writable, so
+    # bundled secrets must live in config/, never the read-only deploy/docker tree.
+    result = _influx_generator().generate(
+        [_device(1), _meter()],
+        1,
+        features={"influxdb.enabled": True, "influxdb.mode": "bundled"},
+    )
+
+    influx = result["config"]["influxdb"]
+    assert influx["secret_file"] == "config/influxdb.env"
+    assert influx["enabled"] is True
+    assert influx["mode"] == "bundled"
+    assert influx["auto_init"] is True
+    assert influx["auto_sync"] is True
+
+
+def test_external_influx_secret_file_is_not_normalized():
+    result = _influx_generator().generate(
+        [_device(1), _meter()],
+        1,
+        features={"influxdb.enabled": True, "influxdb.mode": "external"},
+    )
+
+    influx = result["config"]["influxdb"]
+    assert influx["mode"] == "external"
+    assert influx["secret_file"] == "deploy/docker/influxdb.env"
+
+
+def test_disabled_bundled_influx_secret_file_is_not_normalized():
+    result = _influx_generator().generate([_device(1), _meter()], 1)
+
+    influx = result["config"]["influxdb"]
+    assert influx["enabled"] is False
+    assert influx["secret_file"] == "deploy/docker/influxdb.env"
+
+
 def test_grid_meter_variant_feature_overrides_draft_type():
     result = _feature_generator().generate(
         [_device(1), _meter()],

@@ -7,6 +7,7 @@ import json
 import os
 
 from ems import config as config_mod
+from ems.influx_setup import DOCKER_FIRST_SECRET_FILE
 from ems.paths import resolve_template_path
 
 
@@ -615,11 +616,6 @@ def apply_system_basics(
             noninteractive=noninteractive,
             allow_placeholder_default=allow_placeholder_defaults,
         )
-
-
-# Docker-first secret path: secrets live next to config.json under the mounted
-# config/ folder, not the repo-only deploy/docker/ tree.
-DOCKER_FIRST_SECRET_FILE = "config/influxdb.env"
 
 
 def apply_analytics(config):

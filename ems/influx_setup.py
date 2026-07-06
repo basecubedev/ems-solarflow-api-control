@@ -17,6 +17,10 @@ DEFAULT_HOST_URL = "http://127.0.0.1:8086"
 # Must match the env_file path used by the bundled compose overlays.
 DEFAULT_SECRET_FILE = "deploy/docker/influxdb.env"
 
+# Docker-first secret path: secrets live next to config.json under the mounted
+# config/ folder, the only writable location in the EMS/Admin container images.
+DOCKER_FIRST_SECRET_FILE = "config/influxdb.env"
+
 # Must match the bundled InfluxDB bind mount.
 DEFAULT_DATA_DIR = "data/influxdb"
 

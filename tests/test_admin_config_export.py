@@ -74,6 +74,31 @@ def test_serialize_returns_pretty_valid_config_from_release_template(tmp_path):
     assert config["grid_meter"]["ip"] == "192.168.1.20"
 
 
+def test_bundled_influx_export_uses_docker_first_secret_path(tmp_path):
+    manager = _ReleaseManager()
+    manager.config_template = lambda: {
+        "tag": "v0.6.0",
+        "template": {
+            **TEMPLATE,
+            "influxdb": {
+                "enabled": False,
+                "mode": "bundled",
+                "secret_file": "deploy/docker/influxdb.env",
+            },
+        },
+    }
+    service = ConfigExportService(ConfigPreviewGenerator(manager), tmp_path)
+
+    payload, preview = service.serialize(
+        _draft(), 1, features={"influxdb.enabled": True, "influxdb.mode": "bundled"}
+    )
+    config = json.loads(payload)
+
+    assert config["influxdb"]["secret_file"] == "config/influxdb.env"
+    # The serialized bytes and the preview config must describe the same secret.
+    assert config["influxdb"] == preview["config"]["influxdb"]
+
+
 def test_serialize_blocks_invalid_preview(tmp_path):
     with pytest.raises(ConfigExportValidationError) as exc:
         _service(tmp_path).serialize([], 0)

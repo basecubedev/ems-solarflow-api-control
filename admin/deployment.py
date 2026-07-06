@@ -34,6 +34,7 @@ from admin.releases import DOCKER_IMAGE_REPOSITORY, ReleaseError, default_admin_
 
 INSTALL_SCRIPT = "install-docker.sh"
 INFLUX_COMPOSE_RESOURCE = "deploy/docker/compose.influxdb.yml"
+_JOB_LOG_MAX_LINES = 200
 
 _INFLUX_IMAGE_RE = re.compile(r"^\s*image:\s*(influxdb:\S+)", re.MULTILINE)
 _CONTAINER_NAME_RE = re.compile(
@@ -654,21 +655,27 @@ def _docker_pull_error(tail):
 
 def _bootstrap_error(tail):
     text = (tail or "").lower()
+    detail = _safe_command_detail(tail)
     if "docker is not installed" in text or "docker cli" in text:
-        return DockerError("docker_cli_missing", _DOCKER_MESSAGES["client_missing"])
+        return DockerError(
+            "docker_cli_missing", _DOCKER_MESSAGES["client_missing"], detail
+        )
     if "cannot talk to the docker daemon" in text or "daemon" in text:
         return DockerError(
             "docker_daemon_unreachable",
             "The Docker daemon is not reachable. Start Docker and try again.",
+            detail,
         )
     if "compose" in text and ("newer is required" in text or "not available" in text):
         return DockerError(
             "docker_compose_unsupported",
             "Docker Compose v2.24.0 or newer is required. Update Docker Compose.",
+            detail,
         )
     return DockerError(
         "bootstrap_failed",
         "The bootstrap installer failed. See the deployment log for details.",
+        detail,
     )
 
 
@@ -989,6 +996,7 @@ class DeploymentJob:
             "error": None,
             "prepared": False,
             "backups": [],
+            "log": [],
             "workspace": workspace,
             "started_at": utc_now_iso(),
             "finished_at": None,
@@ -1005,6 +1013,11 @@ class DeploymentJob:
     def note_backups(self, backups):
         with self._lock:
             self._state["backups"] = [str(path) for path in backups]
+
+    def log_line(self, line):
+        with self._lock:
+            self._state["log"].append(line)
+            del self._state["log"][:-_JOB_LOG_MAX_LINES]
 
     def start_step(self, key, label):
         with self._lock:
@@ -1829,6 +1842,7 @@ class DeploymentService:
             release["resource_dir"] / INSTALL_SCRIPT,
             analytics=context["analytics"],
             tag=release["tag"],
+            on_line=job.log_line,
         )
         # The installer keeps an existing config.json; re-assert ours to guarantee
         # the deployment uses the wizard-generated config.
