@@ -3354,6 +3354,7 @@ const setupState = {
     job_id: null,
     status: "idle",
     error: null,
+    error_detail: null,
     conflict: false,
     existing_conflict: null,
     docker: null,
@@ -3417,6 +3418,8 @@ const setupEls = {
   deploymentInfluxNote: document.getElementById("deployment-influx-note"),
   deploymentStatusLine: document.getElementById("deployment-status"),
   deploymentErrorLine: document.getElementById("deployment-error"),
+  deploymentErrorDetails: document.getElementById("deployment-error-details"),
+  deploymentErrorDetail: document.getElementById("deployment-error-detail"),
   deploymentOverwrite: document.getElementById("deployment-overwrite"),
   deploymentOverwriteConfirm: document.getElementById("deployment-overwrite-confirm"),
   deploymentExistingInstall: document.getElementById("deployment-existing-install"),
@@ -3838,6 +3841,12 @@ function renderDeploymentControls() {
     setupEls.deploymentErrorLine.hidden = !dep.error;
     setupEls.deploymentErrorLine.textContent = dep.error || "";
   }
+  if (setupEls.deploymentErrorDetails) {
+    setupEls.deploymentErrorDetails.hidden = !dep.error_detail;
+    if (setupEls.deploymentErrorDetail) {
+      setupEls.deploymentErrorDetail.textContent = dep.error_detail || "";
+    }
+  }
   if (setupEls.deploymentOverwrite) {
     setupEls.deploymentOverwrite.hidden = !dep.conflict;
   }
@@ -3932,6 +3941,7 @@ async function prepareDeployment(overwrite) {
   const dep = setupState.deployment;
   dep.status = "running";
   dep.error = null;
+  dep.error_detail = null;
   dep.conflict = false;
   dep.existing_conflict = null;
   dep.auto_prepare_attempted = true;
@@ -3982,9 +3992,11 @@ function applyDeploymentJob(job) {
   if (job.status === "succeeded") {
     dep.prepared = true;
     dep.error = null;
+    dep.error_detail = null;
   } else if (job.status === "failed") {
     dep.prepared = false;
     dep.error = (job.error && job.error.message) || "Preparation failed.";
+    dep.error_detail = (job.error && job.error.detail) || null;
   }
   renderDeployment();
   notifySetupStatus();

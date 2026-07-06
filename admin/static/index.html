@@ -632,6 +632,10 @@
           </div>
           <p id="deployment-status" class="scan-status" role="status" aria-live="polite"></p>
           <p id="deployment-error" class="scan-error" role="alert" hidden></p>
+          <details id="deployment-error-details" class="advanced-details" hidden>
+            <summary>Error details</summary>
+            <pre id="deployment-error-detail" class="config-preview"></pre>
+          </details>
           <div id="deployment-overwrite" class="deployment-overwrite" hidden>
             <p class="future-note">
               A deployment workspace already exists for a different release or
