@@ -118,6 +118,81 @@ docker compose exec ems python3 emsctl.py backup create --type config
 docker compose exec ems python3 emsctl.py diagnose
 ```
 
+### How do I make sure EMS and the Admin Console really use the latest Docker image?
+
+Pull the newest image **and** recreate the container. A pull alone does not
+restart a running container, so it keeps running the old image.
+
+Update EMS:
+
+```bash
+docker compose pull
+docker compose up -d --force-recreate
+```
+
+Or, if your Compose version supports it, in one step:
+
+```bash
+docker compose up -d --pull always --force-recreate
+```
+
+Update the Admin Console separately, using its own compose file:
+
+```bash
+docker compose -f docker-compose.admin.yml pull
+docker compose -f docker-compose.admin.yml up -d --force-recreate
+```
+
+What these do:
+
+- `docker compose pull` downloads the latest image for the configured tag.
+- `docker compose up -d --force-recreate` recreates the container so it actually
+  uses the newly pulled image.
+
+If you use `:latest`, the tag name stays the same while the image digest may
+change. Pulling alone is not enough — the container must be recreated.
+
+### Why do I see "Found orphan containers ([ems-solarflow-admin])"?
+
+This happens when EMS and the Admin Console are managed by **separate compose
+files**. Running `docker compose up -d` from the EMS `docker-compose.yml` does
+not know about the Admin Console container, so Compose reports it as an orphan:
+
+```text
+WARN Found orphan containers ([ems-solarflow-admin]) for this project.
+```
+
+It does not automatically mean something is broken.
+
+Do **not** run `--remove-orphans` unless you intentionally want Compose to remove
+containers that are not part of the current compose file. If the Admin Console is
+listed as an orphan and you still want to keep it, leave it alone and update it
+separately with `docker-compose.admin.yml` (see the previous entry).
+
+### How do I check which image a container is actually running?
+
+List running containers with their image and status:
+
+```bash
+docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
+```
+
+Show the images used by the current compose project:
+
+```bash
+docker compose images
+```
+
+Compare the configured image tag with the resolved image digest per container:
+
+```bash
+docker inspect ems-solarflow-api-control --format '{{.Config.Image}} {{.Image}}'
+docker inspect ems-solarflow-admin --format '{{.Config.Image}} {{.Image}}'
+```
+
+If a container still shows an old image digest after an update, recreate it with
+`--force-recreate` as shown above.
+
 ### Are Admin Console backups normal EMS backups?
 
 Yes. The Admin Console uses the EMS backup tooling. Backup archives live in
