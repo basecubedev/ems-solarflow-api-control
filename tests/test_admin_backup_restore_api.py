@@ -2,7 +2,6 @@
 """HTTP tests for the admin backup/restore API endpoints."""
 
 import json
-import os
 import threading
 import time
 import urllib.error
@@ -10,18 +9,12 @@ import urllib.request
 
 import pytest
 
-from datetime import datetime, timedelta, timezone
-
-from ems import backup as backup_mod
-from admin.backup_restore import (
-    BackupRestoreService,
-    RestorePlan,
-    RestorePlanTarget,
-)
+from admin.backup_restore import BackupRestoreService
 from admin.install_context import detect_install_context
 from admin.server import create_server
 from tests.admin_auth_helpers import auth_headers, authenticate
 from tests.test_admin_backup_restore import (
+    _FakeEmsTool,
     _build_install,
     _make_config_archive,
     _make_influxdb_archive,
@@ -71,6 +64,27 @@ def backup_server(install):
     authenticate(base)
     try:
         yield base, service
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+@pytest.fixture()
+def influx_server(install):
+    """A running server whose backup service uses a fake EMS CLI runner."""
+
+    fake = _FakeEmsTool(dry_run_rc=0, restore_rc=0)
+    service = BackupRestoreService(
+        context_provider=lambda: detect_install_context(base_dir=str(install)),
+        ems_tool=fake,
+    )
+    srv = create_server("127.0.0.1", 0, backup_service=service)
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    authenticate(base)
+    try:
+        yield base, fake
     finally:
         srv.shutdown()
         srv.server_close()
@@ -268,46 +282,71 @@ def test_api_errors_are_json_not_tracebacks(server, install):
     assert "Traceback" not in json.dumps(data)
 
 
-def test_restore_preview_endpoint_blocks_influxdb_archive(server, install):
+def test_restore_preview_endpoint_creates_influxdb_plan(influx_server, install):
+    base, fake = influx_server
     _make_influxdb_archive(install)
-    backup_id = _first_backup_id(server)
+    backup_id = _first_backup_id(base)
     status, data = _request(
-        server + "/api/admin/maintenance/backups/restore/preview",
+        base + "/api/admin/maintenance/backups/restore/preview",
         method="POST",
         body={"id": backup_id, "scope": "influxdb"},
     )
-    assert status == 400
-    assert "InfluxDB restore" in data["error"]
-    assert "plan_id" not in data
-    assert "Traceback" not in json.dumps(data)
+    assert status == 200
+    assert data["ok"] is True
+    assert data["blocked"] is False
+    assert data["plan_id"]
+    assert any("--dry-run" in c["args"] for c in fake.calls)
 
 
-def test_restore_execute_endpoint_blocks_influxdb_plan(backup_server, install):
-    base, service = backup_server
-    path = _make_influxdb_archive(install)
-    backup_id = service.list_backups()["backups"][0]["id"]
-
-    now = datetime.now(timezone.utc)
-    target = RestorePlanTarget(
-        archive_id=backup_id, name=os.path.basename(path),
-        backup_type="influxdb", archive_sha256=backup_mod._sha256_file(path),
+def test_restore_execute_endpoint_runs_influxdb_via_cli(influx_server, install):
+    base, fake = influx_server
+    _make_influxdb_archive(install)
+    backup_id = _first_backup_id(base)
+    status, preview = _request(
+        base + "/api/admin/maintenance/backups/restore/preview",
+        method="POST",
+        body={"id": backup_id, "scope": "influxdb", "rollback": True},
     )
-    plan = RestorePlan(
-        plan_id="crafted", kind="archive", backup_id=backup_id, scope="influxdb",
-        conflict_policy="replace", rollback_enabled=False,
-        auto_rollback_enabled=False, password=None,
-        created_at=now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        expires_at=(now + timedelta(seconds=600)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        targets=[target], manifest_summary=None, files=[], summary={},
-        warnings=[], blocked=False, block_reason=None,
-    )
-    service.plans.put(plan)
+    assert status == 200
+    assert preview["plan_id"]
 
     status, data = _request(
         base + "/api/admin/maintenance/backups/restore/execute",
         method="POST",
-        body={"plan_id": "crafted", "confirm": True},
+        body={"plan_id": preview["plan_id"], "confirm": True},
     )
-    assert status == 409
-    assert "InfluxDB restore" in data["error"]
+    assert status == 202
+    job = _poll_job(base, data["job_id"])
+    assert job["result"]["ok"] is True
+
+    execute_calls = [c for c in fake.calls if "--dry-run" not in c["args"]]
+    assert execute_calls
+    args = execute_calls[-1]["args"]
+    assert "--on-conflict" in args
+    assert args[args.index("--on-conflict") + 1] == "replace"
+    assert "--rollback" in args
+
+
+def test_restore_preview_endpoint_rejects_raw_command_args(server, install):
+    _make_influxdb_archive(install)
+    backup_id = _first_backup_id(server)
+    # No frontend field can smuggle raw argv into the EMS CLI runner.
+    status, data = _request(
+        server + "/api/admin/maintenance/backups/restore/preview",
+        method="POST",
+        body={"id": backup_id, "scope": "influxdb", "args": ["rm", "-rf", "/"]},
+    )
+    assert status == 400
+    assert "error" in data
+    assert "plan_id" not in data
+
+
+def test_restore_execute_endpoint_rejects_raw_command_args(server, install):
+    status, data = _request(
+        server + "/api/admin/maintenance/backups/restore/execute",
+        method="POST",
+        body={"plan_id": "anything", "confirm": True, "command": "influx restore"},
+    )
+    assert status == 400
+    assert "error" in data
     assert "job_id" not in data

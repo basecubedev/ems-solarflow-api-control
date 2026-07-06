@@ -134,17 +134,20 @@ class EmsToolRunner:
             return {"mode": "compose", "workspace": Path(context.install_root)}
         return {"mode": "blocked"}
 
-    def run(self, context, args, timeout=DEFAULT_TIMEOUT):
+    def run(self, context, args, timeout=DEFAULT_TIMEOUT, input_text=None):
         """Run ``emsctl.py <args>`` against the current install.
 
         ``args`` is an internal allowlisted argv suffix, never frontend input.
+        ``input_text``, when set, is written to the command's stdin (used to feed
+        a backup password to a non-interactive restore). It is never placed in
+        argv and never logged.
         """
 
         mode = self.resolve_mode(context)
         if mode["mode"] == "container":
-            return self._exec_in_container(mode["container"], args, timeout)
+            return self._exec_in_container(mode["container"], args, timeout, input_text)
         if mode["mode"] == "compose":
-            return self._run_via_compose(mode["workspace"], args, timeout)
+            return self._run_via_compose(mode["workspace"], args, timeout, input_text)
         return EmsToolResult("blocked", True, None, None, BLOCKED_MESSAGE)
 
     def build_target_image_command(self, context, target_image, args):
@@ -170,10 +173,11 @@ class EmsToolRunner:
 
     # --- execution -------------------------------------------------------
 
-    def _exec_in_container(self, container, args, timeout):
-        argv = [
-            "docker",
-            "exec",
+    def _exec_in_container(self, container, args, timeout, input_text=None):
+        argv = ["docker", "exec"]
+        if input_text is not None:
+            argv.append("-i")  # keep stdin open so a password can be piped in
+        argv += [
             container,
             "python3",
             CONTAINER_EMSCTL_PATH,
@@ -181,7 +185,8 @@ class EmsToolRunner:
         ]
         try:
             result = self._run(
-                argv, capture_output=True, text=True, timeout=timeout
+                argv, capture_output=True, text=True, timeout=timeout,
+                input=input_text,
             )
         except subprocess.TimeoutExpired:
             return EmsToolResult("container", False, None, "The EMS command timed out.", None)
@@ -198,11 +203,14 @@ class EmsToolRunner:
         )
         return EmsToolResult("container", False, int(result.returncode), detail, None)
 
-    def _run_via_compose(self, workspace, args, timeout):
+    def _run_via_compose(self, workspace, args, timeout, input_text=None):
         command = ["python3", "emsctl.py", *[str(part) for part in args]]
+        kwargs = {"timeout": timeout}
+        if input_text is not None:
+            kwargs["input_text"] = input_text
         try:
             returncode, detail = self._compose.run_oneoff(
-                str(workspace), EMS_COMPOSE_SERVICE, command, timeout=timeout
+                str(workspace), EMS_COMPOSE_SERVICE, command, **kwargs
             )
         except DockerError as exc:
             return EmsToolResult("compose", False, None, exc.message, None)

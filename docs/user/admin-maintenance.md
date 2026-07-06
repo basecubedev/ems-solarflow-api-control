@@ -107,9 +107,10 @@ inspects what is inside a backup, previews a restore before anything is written,
 and restores behind an automatic rollback backup. See
 [Backup and restore](admin-backup-restore.md) for the full workflow.
 
-Restore currently supports **config** and **database** backups. InfluxDB backups
-can be created, listed, inspected, and deleted, but InfluxDB restore is done with
-the EMS CLI for now.
+Restore supports **config**, **database** and **bundled InfluxDB** backups. The
+InfluxDB restore is orchestrated through the existing EMS CLI restore flow
+(replace-style, preview and confirmation required); external InfluxDB is not
+covered. See [Backup and restore](admin-backup-restore.md).
 
 ## Safety
 

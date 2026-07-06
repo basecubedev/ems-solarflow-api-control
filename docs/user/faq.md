@@ -136,9 +136,11 @@ requires confirmation and only removes archives inside the backup directory.
 
 ### Can I restore InfluxDB from the Admin Console?
 
-Not yet. The Admin Console can create, inspect, list and delete InfluxDB backups,
-but InfluxDB restore is blocked in the Admin Console. Use the EMS CLI restore flow
-for InfluxDB.
+Yes, for **bundled** InfluxDB. The Admin Console orchestrates the existing EMS
+CLI restore flow (`emsctl.py backup restore`) instead of implementing a separate
+InfluxDB restore engine: it previews with the EMS CLI dry-run, replaces bundled
+analytics data on explicit confirmation, and lets the EMS CLI own the rollback.
+External InfluxDB is not covered by EMS backup/restore.
 
 ## Security
 

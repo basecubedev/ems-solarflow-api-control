@@ -41,7 +41,6 @@ from admin.backup_restore import (
     CONFLICT_POLICIES,
     CREATE_SCOPES,
     RESTORE_SCOPES,
-    admin_restore_block_reason,
 )
 from admin.gateway_probe import probe_gateway_candidates
 from admin.guided_upgrade import (
@@ -1415,10 +1414,6 @@ class AdminHandler(BaseHTTPRequestHandler):
                 {"ok": False, "error": plan.block_reason or "the restore plan is blocked"},
                 status=409,
             )
-            return
-        unsupported = admin_restore_block_reason(plan.targets)
-        if unsupported:
-            self._send_json({"ok": False, "error": unsupported}, status=409)
             return
         job = BackupJob(uuid.uuid4().hex, service.plan_restore_steps(plan))
 

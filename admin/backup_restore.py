@@ -42,13 +42,9 @@ RESTORE_SCOPES = ("config", "databases", "influxdb", "system")
 CONFLICT_POLICIES = ("abort", "keep", "replace")
 
 # InfluxDB has a dedicated EMS/CLI restore flow; its archives must never go
-# through the generic EMS file restore path. Admin blocks InfluxDB restore until
-# an EMS-tool-backed runner is wired in (see docs/user/admin-backup-restore.md).
-UNSUPPORTED_ADMIN_RESTORE_TYPES = ("influxdb",)
-ADMIN_RESTORE_UNSUPPORTED_MESSAGE = (
-    "InfluxDB restore is not available in the Admin UI yet. Use EMS CLI restore "
-    "for InfluxDB backups, or restore config/database backups separately."
-)
+# through the generic EMS file restore path (backup_mod.restore_backup). Admin
+# orchestrates the EMS CLI restore instead (see docs/user/admin-backup-restore.md).
+INFLUXDB_BACKUP_TYPE = "influxdb"
 
 # Executor step status -> live job step state (mirrors admin.guided_upgrade).
 _STEP_STATE = {"ok": "done", "skipped": "skipped", "warning": "done", "error": "failed"}
@@ -125,22 +121,28 @@ def _step(key, status, label, detail=None):
     return {"key": key, "status": status, "label": label, "detail": detail}
 
 
-def _unsupported_admin_restore_type(backup_type):
-    return backup_type in UNSUPPORTED_ADMIN_RESTORE_TYPES
+def resolve_ems_cli_backup_path(env, archive_path, mode):
+    """Container-visible path for an Admin-resolved backup archive.
 
+    Only archives inside Admin's backup directory are mapped and only their
+    basename is reused, so no caller-supplied path can reach the EMS CLI. Both
+    EMS contexts (``container`` exec, ``compose`` one-off) run the published EMS
+    image with host ``data/`` bind-mounted at ``/app/data``.
+    """
 
-def admin_restore_block_reason(targets):
-    """User-facing message if any target cannot be restored by Admin, else None."""
+    from admin.ems_tool import CONTAINER_DATA_DIR
 
-    if any(_unsupported_admin_restore_type(t.backup_type) for t in targets):
-        return ADMIN_RESTORE_UNSUPPORTED_MESSAGE
-    return None
-
-
-def _assert_restore_supported_by_admin(targets):
-    reason = admin_restore_block_reason(targets)
-    if reason:
-        raise BackupRestoreError(reason)
+    backup_dir = os.path.realpath(env.backup_dir)
+    resolved = os.path.realpath(archive_path)
+    if os.path.dirname(resolved) != backup_dir:
+        raise BackupRestoreError(
+            "the backup archive is outside the Admin backup directory"
+        )
+    if mode not in ("container", "compose"):
+        raise BackupRestoreError(
+            "no EMS context is available to run the InfluxDB restore"
+        )
+    return f"{CONTAINER_DATA_DIR}/backups/{os.path.basename(resolved)}"
 
 
 # ---------------------------------------------------------------------------
@@ -1056,9 +1058,10 @@ class BackupRestoreService:
         else:
             targets, kind = [self._archive_target(store, backup_id)], "archive"
 
-        # Block unsupported target types before any plan is stored so an
-        # InfluxDB restore can never reach preview, execute or a rollback write.
-        _assert_restore_supported_by_admin(targets)
+        # Apply generic (config/database) members before the InfluxDB member so a
+        # failed InfluxDB restore can be reconciled by rolling back the generic
+        # members Admin already applied (InfluxDB rollback stays owned by EMS CLI).
+        targets.sort(key=lambda t: t.backup_type == INFLUXDB_BACKUP_TYPE)
 
         files, summary, warnings, blocked, block_reason, manifest_summary = \
             self._preview_targets(env, store, targets, conflict_policy, password)
@@ -1130,6 +1133,27 @@ class BackupRestoreService:
                 raise BackupRestoreError(
                     "this backup is encrypted; a password is required to preview it"
                 )
+            if target.backup_type == INFLUXDB_BACKUP_TYPE:
+                ok, message = self._run_influx_restore_cli(
+                    env, store, target, password, dry_run=True
+                )
+                files.append({
+                    "path": "bundled InfluxDB data",
+                    "action": "would_restore_influxdb",
+                    "kind": INFLUXDB_BACKUP_TYPE,
+                    "archive": target.name,
+                })
+                if ok:
+                    would_restore += 1
+                    warnings.append(
+                        "Bundled InfluxDB analytics data will be replaced with "
+                        "this backup."
+                    )
+                else:
+                    blocked = True
+                    block_reason = message or "influxdb_preview_failed"
+                    warnings.append(message or "InfluxDB restore preview failed.")
+                continue
             try:
                 plan = backup_mod.plan_restore(path, base_dir=env.base_dir,
                                                password=password)
@@ -1191,6 +1215,11 @@ class BackupRestoreService:
         for idx, target in enumerate(plan.targets):
             suffix = f"_{idx}" if len(plan.targets) > 1 else ""
             label = target.backup_type or "archive"
+            # EMS CLI owns the InfluxDB rollback + restore, so it is one step.
+            if target.backup_type == INFLUXDB_BACKUP_TYPE:
+                steps.append({"key": f"apply{suffix}",
+                              "label": "Restore InfluxDB (EMS CLI)"})
+                continue
             if plan.rollback_enabled:
                 steps.append({"key": f"rollback{suffix}",
                               "label": f"Create {label} rollback backup"})
@@ -1210,8 +1239,6 @@ class BackupRestoreService:
             raise BackupRestoreError(
                 plan.block_reason or "the restore plan is blocked"
             )
-        # A stale or hand-crafted plan must not bypass the preview guard.
-        _assert_restore_supported_by_admin(plan.targets)
 
         env = self._env()
         store = BackupStore(env)
@@ -1229,10 +1256,14 @@ class BackupRestoreService:
 
     def _execute_restore(self, env, store, plan, steps):
         rollbacks = []
-        # Create every rollback backup before any file is written so a failure to
-        # capture the current state aborts the restore before it starts.
+        # Create every generic rollback backup before any file is written so a
+        # failure to capture the current state aborts the restore before it
+        # starts. InfluxDB rollback is owned by EMS CLI, not created here.
         if plan.rollback_enabled:
             for idx, target in enumerate(plan.targets):
+                if target.backup_type == INFLUXDB_BACKUP_TYPE:
+                    rollbacks.append((target, None))
+                    continue
                 suffix = f"_{idx}" if len(plan.targets) > 1 else ""
                 try:
                     rollback_path = self._create_rollback(env, target)
@@ -1252,6 +1283,13 @@ class BackupRestoreService:
         actions = []
         for idx, target in enumerate(plan.targets):
             suffix = f"_{idx}" if len(plan.targets) > 1 else ""
+            if target.backup_type == INFLUXDB_BACKUP_TYPE:
+                outcome = self._apply_influx_target(
+                    env, store, plan, target, steps, suffix, rollbacks, idx, actions
+                )
+                if outcome is not None:
+                    return outcome
+                continue
             path = store.resolve(target.archive_id)
             try:
                 result = self._apply_archive(env, path, plan, target)
@@ -1280,6 +1318,68 @@ class BackupRestoreService:
         return {"ok": True, "status": "restored", "steps": list(steps),
                 "actions": actions, "rollback_backup": rollback_name}
 
+    def _apply_influx_target(self, env, store, plan, target, steps, suffix,
+                             rollbacks, idx, actions):
+        """Restore one bundled InfluxDB member through the EMS CLI.
+
+        Returns a failure result dict, or ``None`` on success. EMS CLI creates
+        and applies the InfluxDB rollback; on failure Admin only rolls back the
+        generic members it applied before this one.
+        """
+
+        ok, message = self._run_influx_restore_cli(
+            env, store, target, plan.password,
+            dry_run=False, rollback_enabled=plan.rollback_enabled,
+        )
+        if ok:
+            steps.append(_step(f"apply{suffix}", "ok", "Restore InfluxDB",
+                               detail=target.name))
+            return None
+        steps.append(_step(f"apply{suffix}", "error", "Restore InfluxDB",
+                           detail=message))
+        message = f"InfluxDB restore failed: {message}"
+        if any(t.backup_type != INFLUXDB_BACKUP_TYPE for t in plan.targets[:idx]):
+            return self._maybe_auto_rollback(
+                env, plan, steps, rollbacks, applied_index=idx,
+                message=message, actions=actions)
+        return {"ok": False, "status": "failed", "message": message,
+                "steps": list(steps), "actions": actions,
+                "rollback_backup": None}
+
+    def _run_influx_restore_cli(self, env, store, target, password, *,
+                                dry_run, rollback_enabled=True):
+        """Run ``emsctl backup restore`` for a bundled InfluxDB archive.
+
+        EMS CLI owns the InfluxDB restore + rollback; Admin only orchestrates it
+        and never pushes InfluxDB through the generic file restore path. Returns
+        ``(ok, message)``. The password, when set, is piped via stdin and never
+        placed in argv or logged.
+        """
+
+        from admin.ems_tool import BLOCKED_MESSAGE, EmsToolRunner
+
+        tool = self._ems_tool or EmsToolRunner()
+        context = self._context_provider()
+        mode = tool.resolve_mode(context)["mode"]
+        if mode == "blocked":
+            return False, BLOCKED_MESSAGE
+        ems_path = resolve_ems_cli_backup_path(
+            env, store.resolve(target.archive_id), mode
+        )
+        args = ["backup", "restore", ems_path]
+        if dry_run:
+            args.append("--dry-run")
+        else:
+            args += ["--on-conflict", "replace",
+                     "--rollback" if rollback_enabled else "--no-rollback"]
+        input_text = f"{password}\n" if password else None
+        result = tool.run(context, tuple(args), input_text=input_text)
+        if getattr(result, "blocked", False):
+            return False, result.message or BLOCKED_MESSAGE
+        if getattr(result, "returncode", 1) != 0:
+            return False, result.detail or "the InfluxDB restore command failed"
+        return True, None
+
     def _maybe_auto_rollback(self, env, plan, steps, rollbacks, applied_index,
                              message, actions=None):
         actions = actions or []
@@ -1290,10 +1390,13 @@ class BackupRestoreService:
             return {"ok": False, "status": "failed", "message": message,
                     "steps": list(steps), "actions": actions,
                     "rollback_backup": rollback_name}
-        # Roll back every archive that was (or was being) applied, newest first.
+        # Roll back every generic archive that was (or was being) applied, newest
+        # first. InfluxDB rollback is owned by EMS CLI, so it is skipped here.
         try:
             for idx in range(applied_index, -1, -1):
                 _target, rollback_path = rollbacks[idx]
+                if _target.backup_type == INFLUXDB_BACKUP_TYPE:
+                    continue
                 if rollback_path is None:
                     raise BackupRestoreError("no rollback backup was created")
                 self._apply_rollback(env, rollback_path, plan.password)
@@ -1332,8 +1435,13 @@ class BackupRestoreService:
         )
 
     def _apply_archive(self, env, path, plan, target):
-        # Final guard: never push an InfluxDB archive through generic file restore.
-        _assert_restore_supported_by_admin([target])
+        # Final guard: never push an InfluxDB archive through generic file
+        # restore; InfluxDB is restored only through the EMS CLI path.
+        if target.backup_type == INFLUXDB_BACKUP_TYPE:
+            raise BackupRestoreError(
+                "InfluxDB archives must be restored through the EMS CLI, not the "
+                "generic file restore path"
+            )
         return backup_mod.restore_backup(
             path, base_dir=env.base_dir, password=plan.password,
             on_conflict=plan.conflict_policy,

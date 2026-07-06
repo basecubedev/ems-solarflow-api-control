@@ -3671,19 +3671,19 @@ def test_backup_restore_does_not_downgrade_docker_image():
         assert forbidden not in backup_block, forbidden
 
 
-def test_backup_influxdb_row_disables_restore_but_keeps_details_and_delete():
+def test_backup_influxdb_row_allows_restore_via_ems_cli_flow():
     js = _read("admin.js")
     row = _extract_fn(js, "renderBackupRow")
-    # InfluxDB rows are never hidden: Details and Delete stay available.
+    # InfluxDB rows keep Details and Delete, and now also offer Restore preview.
     assert 'data-backup-action="details"' in row
     assert 'data-backup-action="delete"' in row
-    # Restore preview is disabled for InfluxDB archives, with a marker so the
-    # busy-state toggle cannot silently re-enable it.
+    assert 'data-backup-action="restore"' in row
+    # The info flag explains the EMS CLI restore flow instead of blocking.
     assert 'backup.backup_type === "influxdb"' in row
-    assert 'data-backup-restore-disabled="true"' in row
-    # The warning tells the user to use the EMS CLI instead.
-    assert "InfluxDB restore not supported in Admin yet" in row
-    assert "EMS CLI" in row
+    assert "EMS CLI restore flow" in row
+    assert "InfluxDB restore not supported" not in row
+    # Only invalid archives keep the restore button force-disabled by markup.
+    assert "const restoreDisabled = !backup.valid;" in row
 
 
 def test_backup_set_row_renders_delete_action():
@@ -3697,12 +3697,24 @@ def test_backup_set_row_renders_delete_action():
     assert 'data-backup-action="restore"' in row
 
 
-def test_backup_set_with_influxdb_member_disables_restore_preview():
+def test_backup_set_with_influxdb_member_allows_restore_preview():
     js = _read("admin.js")
     row = _extract_fn(js, "renderBackupSetRow")
     assert 'a.type === "influxdb"' in row
-    assert 'data-backup-restore-disabled="true"' in row
-    assert "Admin restore not supported yet" in row
+    # The set is no longer force-disabled just because it contains InfluxDB.
+    assert "Admin restore not supported yet" not in row
+    assert 'data-backup-restore-disabled="true"' not in row
+    assert 'data-backup-action="restore"' in row
+    assert "EMS CLI flow" in row
+
+
+def test_backup_restore_confirm_mentions_influxdb_when_applicable():
+    js = _read("admin.js")
+    fn = _extract_fn(js, "executeRestore")
+    # The confirm dialog warns about bundled InfluxDB data when the plan includes
+    # an InfluxDB member.
+    assert 'backup_type === "influxdb"' in fn
+    assert "Bundled InfluxDB analytics data may be replaced" in fn
 
 
 def test_backup_busy_state_keeps_unsupported_restore_buttons_disabled():

@@ -502,14 +502,19 @@ class DockerCompose:
                 _safe_command_detail("\n".join(tail)),
             )
 
-    def run_oneoff(self, workspace, service, command, timeout=180):
+    def run_oneoff(self, workspace, service, command, timeout=180, input_text=None):
         """Run a one-off ``docker compose run --rm`` command.
 
         Returns ``(returncode, detail)`` where ``detail`` is a redacted output
         tail. Callers must never surface raw output because it may carry secrets.
+        ``input_text``, when set, is piped to stdin (``-T`` disables the pseudo-TTY
+        so the command reads it non-interactively); it is never placed in argv.
         """
 
-        argv = ["docker", "compose", "run", "--rm", str(service)]
+        argv = ["docker", "compose", "run", "--rm"]
+        if input_text is not None:
+            argv.append("-T")
+        argv.append(str(service))
         argv += [str(part) for part in command]
         try:
             result = self._run(
@@ -518,6 +523,7 @@ class DockerCompose:
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                input=input_text,
             )
         except FileNotFoundError as exc:
             raise DockerError(

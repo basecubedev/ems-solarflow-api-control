@@ -6111,8 +6111,8 @@ function setBackupBusy(running) {
       backupState.restorePlan.blocked;
   }
   backupEls.list.querySelectorAll("button[data-backup-action]").forEach((btn) => {
-    // Restore buttons disabled by markup (invalid or InfluxDB archive) stay
-    // disabled after a busy state clears; they only re-enable on a list reload.
+    // Restore buttons disabled by markup (invalid archive) stay disabled after a
+    // busy state clears; they only re-enable on a list reload.
     btn.disabled = running || btn.dataset.backupRestoreDisabled === "true";
   });
 }
@@ -6195,21 +6195,23 @@ function renderBackupRow(backup) {
     backupRowFact("Build", backup.source_build || backup.source_commit || "—"),
     backupRowFact("Enc", backup.encrypted ? "yes" : "no"),
   ];
-  const isInfluxRestoreUnsupported = backup.backup_type === "influxdb";
+  const isInflux = backup.backup_type === "influxdb";
   const flags = [];
   if (!backup.valid) flags.push(backupValidationItem("error", backup.error || "invalid archive"));
   if (backup.locked) flags.push(backupValidationItem("warn", "encrypted — password required"));
-  if (isInfluxRestoreUnsupported) {
+  if (isInflux) {
     flags.push(backupValidationItem(
-      "warn", "InfluxDB restore not supported in Admin yet — use EMS CLI"
+      "info",
+      "InfluxDB restore uses the EMS CLI restore flow and replaces bundled " +
+      "analytics data after confirmation."
     ));
   }
   const id = escapeHtml(backup.id);
   const backupName = backup.name || backup.id || "backup";
   const backupType = backup.backup_type || "backup";
-  // An invalid or InfluxDB archive cannot be restored from Admin; the marker
-  // keeps the button disabled through the busy-state toggle (see setBackupBusy).
-  const restoreDisabled = !backup.valid || isInfluxRestoreUnsupported;
+  // An invalid archive cannot be restored; the marker keeps the button disabled
+  // through the busy-state toggle (see setBackupBusy).
+  const restoreDisabled = !backup.valid;
   const restoreAttrs = restoreDisabled
     ? ' disabled data-backup-restore-disabled="true"' : "";
   return (
@@ -6235,16 +6237,17 @@ function renderBackupSetRow(set) {
     .map((a) => escapeHtml(a.type || "") + (a.present ? "" : " (missing)"))
     .join(", ");
   const id = escapeHtml(set.id);
-  // A set with an InfluxDB member cannot be restored until member exclusion
-  // exists; block the whole set rather than silently skipping the member.
+  // A set may include an InfluxDB member; its restore runs through the EMS CLI
+  // flow (the preview validates it) rather than the generic file restore path.
   const hasInflux = (set.archives || []).some((a) => a.type === "influxdb");
   const flags = hasInflux
     ? backupValidationItem(
-        "warn", "Set contains InfluxDB backup — Admin restore not supported yet"
+        "info",
+        "Includes InfluxDB — restore uses the EMS CLI flow and replaces " +
+        "bundled analytics data after confirmation."
       )
     : "";
-  const restoreAttrs = hasInflux
-    ? ' disabled data-backup-restore-disabled="true"' : "";
+  const restoreAttrs = "";
   const setName = set.label || set.id || "backup set";
   return (
     '<div class="backup-row backup-row-set" role="listitem">' +
@@ -6461,10 +6464,15 @@ function renderRestorePlan(plan) {
 async function executeRestore() {
   const plan = backupState.restorePlan;
   if (!plan || plan.blocked || !plan.plan_id) return;
-  if (!window.confirm(
-    "Restore this backup? Existing files may be overwritten. A rollback backup " +
-    "is created first when enabled."
-  )) return;
+  const involvesInflux = (plan.targets || []).some(
+    (t) => t.backup_type === "influxdb"
+  );
+  const confirmMessage = involvesInflux
+    ? "Restore this backup? Bundled InfluxDB analytics data may be replaced. " +
+      "A rollback backup is created first when enabled."
+    : "Restore this backup? Existing files may be overwritten. A rollback " +
+      "backup is created first when enabled.";
+  if (!window.confirm(confirmMessage)) return;
   setBackupBusy(true);
   backupEls.restoreSteps.innerHTML = "";
   renderBackupMessage([{ tone: "info", text: "Restoring…" }]);

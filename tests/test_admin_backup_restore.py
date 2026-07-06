@@ -13,8 +13,6 @@ import tarfile
 
 import pytest
 
-from datetime import datetime, timedelta, timezone
-
 from ems import backup as backup_mod
 from admin.backup_restore import (
     BackupInspector,
@@ -22,10 +20,9 @@ from admin.backup_restore import (
     BackupRestoreError,
     BackupRestoreService,
     BackupStore,
-    RestorePlan,
-    RestorePlanTarget,
     resolve_env,
 )
+from admin.ems_tool import EmsToolResult
 from admin.install_context import detect_install_context
 
 pytestmark = pytest.mark.simulation
@@ -68,10 +65,43 @@ def _build_install(tmp_path, *, influx=None):
     return root
 
 
-def _service(root):
+def _service(root, ems_tool=None):
     return BackupRestoreService(
-        context_provider=lambda: detect_install_context(base_dir=str(root))
+        context_provider=lambda: detect_install_context(base_dir=str(root)),
+        ems_tool=ems_tool,
     )
+
+
+class _FakeEmsTool:
+    """Minimal EmsToolRunner stand-in for InfluxDB restore orchestration.
+
+    Records each ``run`` call (args + stdin) and returns canned results so tests
+    never need Docker. A backup password is expected via ``input_text``, never in
+    argv.
+    """
+
+    def __init__(self, *, mode="container", dry_run_rc=0, restore_rc=0,
+                 blocked=False, detail=None):
+        self.mode = mode
+        self.dry_run_rc = dry_run_rc
+        self.restore_rc = restore_rc
+        self.blocked = blocked
+        self.detail = detail
+        self.calls = []
+
+    def resolve_mode(self, context):
+        if self.mode == "compose":
+            return {"mode": "compose", "workspace": "/workspace"}
+        if self.mode == "blocked":
+            return {"mode": "blocked"}
+        return {"mode": "container", "container": "ems-x"}
+
+    def run(self, context, args, timeout=None, input_text=None):
+        self.calls.append({"args": tuple(args), "input_text": input_text})
+        if self.blocked:
+            return EmsToolResult("blocked", True, None, None, "no EMS context")
+        rc = self.dry_run_rc if "--dry-run" in args else self.restore_rc
+        return EmsToolResult(self.mode, False, rc, self.detail, None)
 
 
 def _backup_dir(root):
@@ -625,76 +655,14 @@ def test_restore_does_not_switch_docker_image_from_manifest(tmp_path):
     assert (root / "docker-compose.yml").read_text() == compose_before
 
 
-# --- InfluxDB restore is blocked in Admin -----------------------------------
+# --- InfluxDB restore via EMS CLI -------------------------------------------
 
-def _future_plan_times():
-    now = datetime.now(timezone.utc)
-    return (
-        now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        (now + timedelta(seconds=600)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    )
+def _influx_set(root):
+    """Write a system set of config + databases + influxdb archives, return id."""
 
-
-def test_restore_preview_blocks_influxdb_archive_without_writing(tmp_path):
-    root = _build_install(tmp_path)
-    _make_influxdb_archive(root)
-    service = _service(root)
-    backup_id = service.list_backups()["backups"][0]["id"]
-
-    config_before = (root / "config" / "config.json").read_text()
-    runtime_before = (root / "data" / "runtime-state.json").read_text()
-
-    with pytest.raises(BackupRestoreError) as exc:
-        service.create_restore_plan({"id": backup_id, "scope": "influxdb"})
-    message = str(exc.value)
-    assert "InfluxDB restore" in message
-    assert "Admin" in message
-
-    # No plan is ever stored, so execute stays naturally safe.
-    assert service.plans._plans == {}
-    # Preview must not write anything to the live install.
-    assert (root / "config" / "config.json").read_text() == config_before
-    assert (root / "data" / "runtime-state.json").read_text() == runtime_before
-
-
-def test_restore_execute_rejects_plan_containing_influxdb_target(tmp_path, monkeypatch):
-    root = _build_install(tmp_path)
-    path = _make_influxdb_archive(root)
-    service = _service(root)
-    backup_id = service.list_backups()["backups"][0]["id"]
-
-    # A hand-crafted plan must not bypass the preview guard.
-    created_at, expires_at = _future_plan_times()
-    target = RestorePlanTarget(
-        archive_id=backup_id, name=os.path.basename(path),
-        backup_type="influxdb", archive_sha256=backup_mod._sha256_file(path),
-    )
-    plan = RestorePlan(
-        plan_id="crafted", kind="archive", backup_id=backup_id, scope="influxdb",
-        conflict_policy="replace", rollback_enabled=False,
-        auto_rollback_enabled=False, password=None, created_at=created_at,
-        expires_at=expires_at, targets=[target], manifest_summary=None, files=[],
-        summary={}, warnings=[], blocked=False, block_reason=None,
-    )
-    service.plans.put(plan)
-
-    def fail_generic_restore(*args, **kwargs):
-        raise AssertionError("generic restore must not be used for influxdb")
-
-    monkeypatch.setattr(backup_mod, "restore_backup", fail_generic_restore)
-
-    with pytest.raises(BackupRestoreError) as exc:
-        service.restore_from_plan("crafted", confirm=True)
-    assert "InfluxDB restore" in str(exc.value)
-
-
-def test_system_set_restore_blocks_when_influxdb_member_is_present(tmp_path):
-    root = _build_install(tmp_path)
     config_path = _make_config_archive(root)
     db_path = _make_database_archive(root)
     influx_path = _make_influxdb_archive(root)
-    service = _service(root)
-
     store = BackupStore(resolve_env(detect_install_context(base_dir=str(root))))
     set_record = {
         "id": "2026-01-01-000000-system",
@@ -713,16 +681,195 @@ def test_system_set_restore_blocks_when_influxdb_member_is_present(tmp_path):
         "warnings": [],
     }
     store.write_set(set_record)
+    return set_record["id"]
+
+
+def _execute_calls(fake):
+    return [c for c in fake.calls if "--dry-run" not in c["args"]]
+
+
+def test_restore_preview_influxdb_creates_plan_when_dry_run_succeeds(tmp_path):
+    root = _build_install(tmp_path)
+    influx_path = _make_influxdb_archive(root)
+    fake = _FakeEmsTool(dry_run_rc=0)
+    service = _service(root, ems_tool=fake)
+    backup_id = service.list_backups()["backups"][0]["id"]
+
+    config_before = (root / "config" / "config.json").read_text()
+    plan = service.create_restore_plan({"id": backup_id, "scope": "influxdb"})
+
+    assert plan["ok"] is True
+    assert plan["blocked"] is False
+    assert plan["plan_id"]
+    # The preview validated through the EMS CLI dry-run, not a file restore.
+    dry_runs = [c for c in fake.calls if "--dry-run" in c["args"]]
+    assert dry_runs
+    assert dry_runs[0]["args"][:3] == (
+        "backup", "restore", f"/app/data/backups/{os.path.basename(influx_path)}"
+    )
+    assert any(f["kind"] == "influxdb" for f in plan["files"])
+    assert plan["summary"]["would_restore"] >= 1
+    # Preview writes nothing.
+    assert (root / "config" / "config.json").read_text() == config_before
+
+
+def test_restore_preview_influxdb_blocks_when_dry_run_fails(tmp_path):
+    root = _build_install(tmp_path)
+    _make_influxdb_archive(root)
+    fake = _FakeEmsTool(dry_run_rc=1, detail="external InfluxDB is not covered")
+    service = _service(root, ems_tool=fake)
+    backup_id = service.list_backups()["backups"][0]["id"]
+
+    plan = service.create_restore_plan({"id": backup_id, "scope": "influxdb"})
+    assert plan["ok"] is True
+    assert plan["blocked"] is True
+    assert "external InfluxDB" in (plan["block_reason"] or "")
+
+    # A blocked plan cannot be executed.
+    with pytest.raises(BackupRestoreError):
+        service.restore_from_plan(plan["plan_id"], confirm=True)
+
+
+def test_restore_execute_influxdb_calls_ems_cli_with_replace_and_rollback(tmp_path):
+    root = _build_install(tmp_path)
+    influx_path = _make_influxdb_archive(root)
+    fake = _FakeEmsTool(dry_run_rc=0, restore_rc=0)
+    service = _service(root, ems_tool=fake)
+    backup_id = service.list_backups()["backups"][0]["id"]
+
+    plan = service.create_restore_plan(
+        {"id": backup_id, "scope": "influxdb", "rollback": True}
+    )
+    result = service.restore_from_plan(plan["plan_id"], confirm=True)
+
+    assert result["ok"] is True
+    calls = _execute_calls(fake)
+    assert len(calls) == 1
+    args = calls[0]["args"]
+    assert args[:3] == (
+        "backup", "restore", f"/app/data/backups/{os.path.basename(influx_path)}"
+    )
+    assert "--on-conflict" in args
+    assert args[args.index("--on-conflict") + 1] == "replace"
+    assert "--rollback" in args
+    assert "--no-rollback" not in args
+
+
+def test_restore_execute_influxdb_passes_no_rollback_when_disabled(tmp_path):
+    root = _build_install(tmp_path)
+    _make_influxdb_archive(root)
+    fake = _FakeEmsTool(dry_run_rc=0, restore_rc=0)
+    service = _service(root, ems_tool=fake)
+    backup_id = service.list_backups()["backups"][0]["id"]
+
+    plan = service.create_restore_plan(
+        {"id": backup_id, "scope": "influxdb", "rollback": False}
+    )
+    result = service.restore_from_plan(plan["plan_id"], confirm=True)
+
+    assert result["ok"] is True
+    args = _execute_calls(fake)[0]["args"]
+    assert "--no-rollback" in args
+    assert "--rollback" not in args
+
+
+def test_restore_execute_influxdb_encrypted_passes_password_via_stdin(tmp_path):
+    root = _build_install(tmp_path)
+    _make_influxdb_archive(
+        root, password="hunter2",
+        encryption_options=backup_mod.build_encryption_options(),
+    )
+    fake = _FakeEmsTool(dry_run_rc=0, restore_rc=0)
+    service = _service(root, ems_tool=fake)
+    backup_id = service.list_backups()["backups"][0]["id"]
+
+    plan = service.create_restore_plan(
+        {"id": backup_id, "scope": "influxdb", "password": "hunter2"}
+    )
+    result = service.restore_from_plan(plan["plan_id"], confirm=True)
+
+    assert result["ok"] is True
+    # The password is fed to the EMS CLI via stdin and never appears in argv.
+    for call in fake.calls:
+        assert call["input_text"] == "hunter2\n"
+        assert all("hunter2" not in str(part) for part in call["args"])
+
+
+def test_restore_execute_influxdb_never_calls_generic_restore(tmp_path, monkeypatch):
+    root = _build_install(tmp_path)
+    _make_influxdb_archive(root)
+    fake = _FakeEmsTool(dry_run_rc=0, restore_rc=0)
+    service = _service(root, ems_tool=fake)
+    backup_id = service.list_backups()["backups"][0]["id"]
+
+    def fail_generic_restore(*args, **kwargs):
+        raise AssertionError("generic restore must not be used for influxdb")
+
+    monkeypatch.setattr(backup_mod, "restore_backup", fail_generic_restore)
+
+    plan = service.create_restore_plan({"id": backup_id, "scope": "influxdb"})
+    result = service.restore_from_plan(plan["plan_id"], confirm=True)
+    assert result["ok"] is True
+
+
+def test_restore_execute_influxdb_reports_cli_failure(tmp_path):
+    root = _build_install(tmp_path)
+    _make_influxdb_archive(root)
+    fake = _FakeEmsTool(dry_run_rc=0, restore_rc=1, detail="influx restore failed")
+    service = _service(root, ems_tool=fake)
+    backup_id = service.list_backups()["backups"][0]["id"]
+
+    plan = service.create_restore_plan({"id": backup_id, "scope": "influxdb"})
+    result = service.restore_from_plan(plan["plan_id"], confirm=True)
+    assert result["ok"] is False
+    assert "InfluxDB restore failed" in result["message"]
+
+
+def test_system_set_restore_previews_when_all_members_pass(tmp_path):
+    root = _build_install(tmp_path)
+    set_id = _influx_set(root)
+    fake = _FakeEmsTool(dry_run_rc=0)
+    service = _service(root, ems_tool=fake)
 
     (root / "config" / "config.json").write_text('{"changed": true}')
+    plan = service.create_restore_plan({"id": set_id, "scope": "system"})
 
-    with pytest.raises(BackupRestoreError) as exc:
-        service.create_restore_plan({"id": set_record["id"], "scope": "system"})
-    assert "InfluxDB restore is not available" in str(exc.value)
+    assert plan["blocked"] is False
+    types = [t["backup_type"] for t in plan["targets"]]
+    assert set(types) == {"config", "databases", "influxdb"}
+    # The InfluxDB member is applied last and previewed via the EMS CLI dry-run.
+    assert types[-1] == "influxdb"
+    assert any("--dry-run" in c["args"] for c in fake.calls)
+    # Preview writes nothing.
+    assert (root / "config" / "config.json").read_text() == '{"changed": true}'
+
+
+def test_system_set_restore_blocks_when_influxdb_dry_run_fails(tmp_path):
+    root = _build_install(tmp_path)
+    set_id = _influx_set(root)
+    fake = _FakeEmsTool(dry_run_rc=1, detail="influx preview failed")
+    service = _service(root, ems_tool=fake)
+
+    (root / "config" / "config.json").write_text('{"changed": true}')
+    plan = service.create_restore_plan({"id": set_id, "scope": "system"})
+    assert plan["blocked"] is True
 
     # The whole set is blocked; no config/database member is restored partially.
-    assert service.plans._plans == {}
+    with pytest.raises(BackupRestoreError):
+        service.restore_from_plan(plan["plan_id"], confirm=True)
     assert (root / "config" / "config.json").read_text() == '{"changed": true}'
+
+
+def test_restore_execute_influxdb_blocked_without_ems_context(tmp_path):
+    root = _build_install(tmp_path)
+    _make_influxdb_archive(root)
+    fake = _FakeEmsTool(mode="blocked")
+    service = _service(root, ems_tool=fake)
+    backup_id = service.list_backups()["backups"][0]["id"]
+
+    # Preview blocks because no EMS context is available to run the dry-run.
+    plan = service.create_restore_plan({"id": backup_id, "scope": "influxdb"})
+    assert plan["blocked"] is True
 
 
 def test_influxdb_backup_can_still_be_listed_inspected_and_deleted(tmp_path):

@@ -164,9 +164,10 @@ editing remains a placeholder for a later phase.
 
 - The Admin Console requires a password, but is still LAN-only by design. Run it
   only on a trusted local network (see [Security note](#security-note)).
-- InfluxDB restore is not available in Admin. InfluxDB backups can be created,
-  inspected, listed and deleted, but restore uses the EMS CLI (see
-  [setup/admin-backup-restore.md](../user/admin-backup-restore.md)).
+- InfluxDB restore in Admin is limited to **bundled** InfluxDB and is
+  orchestrated through the EMS CLI restore flow (Admin never implements a
+  separate InfluxDB restore engine). External InfluxDB is not covered (see
+  [admin-backup-restore.md](../user/admin-backup-restore.md)).
 - No SSDP/ARP discovery and no `ping`/`nmap`/`arp` shell-outs.
 - MQTT discovery is endpoint-only: no credentials, login, subscriptions, topic
   scanning, or device extraction from topics.

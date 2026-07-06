@@ -204,6 +204,10 @@ for POST, the `X-CSRF-Token`.
   semantics, because those live in EMS/Core.
 - Backups and restores behave identically whether triggered from the Admin
   Console or the CLI, because both use the EMS backup/restore implementation.
+  Bundled InfluxDB restore is the clearest case: the Admin Console orchestrates
+  the existing EMS CLI restore flow (`emsctl.py backup restore`) instead of
+  implementing a separate InfluxDB restore engine, and never pushes an InfluxDB
+  archive through the generic file restore path.
 
 ## Related references
 

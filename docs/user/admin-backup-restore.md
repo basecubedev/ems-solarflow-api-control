@@ -50,20 +50,43 @@ local backups. Export important backups before a manual reset.
 
 ## What the Admin Console can restore
 
-Admin Console restore currently supports **config** and **database** archives.
-InfluxDB backups can be created, listed, inspected and deleted from the Admin
-Console, but **InfluxDB restore is intentionally blocked** in the Admin Console:
-InfluxDB has a dedicated EMS/CLI restore flow and must never be pushed through the
-generic file restore path. Until an EMS-tool-backed InfluxDB restore runner is
-wired in, use the EMS CLI (`emsctl.py backup`, see
-[../backup-restore.md](../technical/backup-restore.md)) to restore InfluxDB backups.
+Admin Console restore supports **config**, **database** and **bundled InfluxDB**
+archives.
 
-The block is enforced in the backend, not just hidden in the UI: an InfluxDB
-archive cannot enter a restore preview, no restore plan containing an InfluxDB
-target can execute, and a **system set** that contains an InfluxDB member is
-blocked as a whole (the UI does not yet offer per-member exclusion, so blocking
-is safer than silently skipping a member). Restore the set's config/database
-members individually instead.
+Config and database archives are restored directly through the EMS backup core
+(the generic file restore path). **Bundled InfluxDB** archives are different:
+InfluxDB has a dedicated restore flow that must never be pushed through the
+generic file restore path. The Admin Console does not reimplement it — it
+**orchestrates the existing EMS CLI restore flow** (`emsctl.py backup restore`,
+see [../backup-restore.md](../technical/backup-restore.md)) instead. Admin runs the
+EMS CLI in the current EMS context (the running EMS container, or a one-off
+compose container) and lets the EMS CLI own the InfluxDB restore and its
+rollback.
+
+- **External InfluxDB** is not covered by EMS backup/restore. Only bundled
+  InfluxDB can be backed up and restored; an external InfluxDB restore is
+  rejected with a clear message.
+- **Restore is replace-style.** A bundled InfluxDB restore replaces the current
+  bundled analytics data (`--on-conflict replace`).
+- **Preview and confirmation are required.** The preview runs the EMS CLI
+  dry-run (`emsctl.py backup restore … --dry-run`); if it fails, the plan is
+  blocked and the EMS CLI error is shown. Nothing is restored until you
+  explicitly confirm.
+- **Rollback is enabled by default.** When rollback is selected, Admin passes
+  `--rollback` and the EMS CLI creates and owns the InfluxDB rollback backup
+  before restoring. Selecting "no rollback" passes `--no-rollback`. Admin never
+  copies InfluxDB files to build its own rollback.
+- **Encrypted InfluxDB archives** are restored by entering the backup password;
+  Admin feeds it to the EMS CLI over stdin for that one command and never logs
+  or persists it. If the password cannot be handled safely the restore is
+  blocked with a clear message.
+
+A **system set** that contains config + databases + a bundled InfluxDB member is
+no longer blocked as a whole. Each member is restored through the right path:
+config and databases through the generic restore path, and the InfluxDB member
+through the EMS CLI restore flow. The InfluxDB member is applied last. If the
+InfluxDB dry-run preview fails, the whole system-set restore is blocked rather
+than silently skipping the member.
 
 ## Restore is preview-first
 
@@ -89,6 +112,10 @@ policies for CLI/advanced workflows.
   restore if a post-restore check fails, returning the system to its
   pre-restore state. If the automatic rollback itself fails, the job reports
   that manual recovery is required and names the rollback archive.
+- For **bundled InfluxDB** the rollback is owned by the EMS CLI: Admin passes
+  `--rollback`/`--no-rollback` and the EMS CLI creates the InfluxDB rollback and
+  restores it if the InfluxDB restore fails. Admin never rolls InfluxDB back by
+  copying files.
 
 ## Encrypted backups
 
