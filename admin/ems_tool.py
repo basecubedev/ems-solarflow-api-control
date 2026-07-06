@@ -27,10 +27,7 @@ EMS_COMPOSE_SERVICE = "ems"
 # Default timeout (seconds) for a normal EMS tool command.
 DEFAULT_TIMEOUT = 180
 
-# Longer timeout (seconds) for backup/restore flows. Bundled InfluxDB
-# backup/restore streams the whole analytics volume and can take much longer on
-# slow hardware (e.g. a Raspberry Pi), so those flows opt into this instead of
-# the normal command timeout.
+# Long-running backup/restore jobs may stream large InfluxDB archives.
 BACKUP_RESTORE_TIMEOUT = 1800
 
 BLOCKED_MESSAGE = (

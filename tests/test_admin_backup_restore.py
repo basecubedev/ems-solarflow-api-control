@@ -73,12 +73,7 @@ def _service(root, ems_tool=None):
 
 
 class _FakeEmsTool:
-    """Minimal EmsToolRunner stand-in for InfluxDB restore orchestration.
-
-    Records each ``run`` call (args + stdin) and returns canned results so tests
-    never need Docker. A backup password is expected via ``input_text``, never in
-    argv.
-    """
+    """Minimal EmsToolRunner stand-in for InfluxDB restore tests."""
 
     def __init__(self, *, mode="container", dry_run_rc=0, restore_rc=0,
                  blocked=False, detail=None):
