@@ -24,8 +24,14 @@ CONTAINER_DATA_DIR = "/app/data"
 # The compose service name of the EMS container in the standard install.
 EMS_COMPOSE_SERVICE = "ems"
 
-# Default timeout (seconds) for an EMS tool command such as backup create.
+# Default timeout (seconds) for a normal EMS tool command.
 DEFAULT_TIMEOUT = 180
+
+# Longer timeout (seconds) for backup/restore flows. Bundled InfluxDB
+# backup/restore streams the whole analytics volume and can take much longer on
+# slow hardware (e.g. a Raspberry Pi), so those flows opt into this instead of
+# the normal command timeout.
+BACKUP_RESTORE_TIMEOUT = 1800
 
 BLOCKED_MESSAGE = (
     "No running EMS container and no Docker Compose context were found, so the "

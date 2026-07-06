@@ -97,7 +97,9 @@ class _FakeEmsTool:
         return {"mode": "container", "container": "ems-x"}
 
     def run(self, context, args, timeout=None, input_text=None):
-        self.calls.append({"args": tuple(args), "input_text": input_text})
+        self.calls.append(
+            {"args": tuple(args), "input_text": input_text, "timeout": timeout}
+        )
         if self.blocked:
             return EmsToolResult("blocked", True, None, None, "no EMS context")
         rc = self.dry_run_rc if "--dry-run" in args else self.restore_rc
@@ -753,6 +755,47 @@ def test_restore_execute_influxdb_calls_ems_cli_with_replace_and_rollback(tmp_pa
     assert args[args.index("--on-conflict") + 1] == "replace"
     assert "--rollback" in args
     assert "--no-rollback" not in args
+
+
+def test_influxdb_backup_create_uses_longer_backup_restore_timeout(tmp_path):
+    # The bundled InfluxDB backup-create call must also use the longer
+    # backup/restore timeout rather than the normal EMS command timeout.
+    from admin.ems_tool import BACKUP_RESTORE_TIMEOUT, DEFAULT_TIMEOUT
+
+    root = _build_install(tmp_path)
+    fake = _FakeEmsTool(mode="container")
+    service = _service(root, ems_tool=fake)
+
+    # _run_influx_backup_tool only issues the tool call; the archive-collection
+    # side effect is tested elsewhere. A rc=0 fake exercises just the call.
+    service._run_influx_backup_tool()
+
+    assert BACKUP_RESTORE_TIMEOUT > DEFAULT_TIMEOUT
+    assert len(fake.calls) == 1
+    call = fake.calls[0]
+    assert call["args"] == ("backup", "create", "--type", "influxdb")
+    assert call["timeout"] == BACKUP_RESTORE_TIMEOUT
+
+
+def test_restore_influxdb_uses_longer_backup_restore_timeout(tmp_path):
+    # Bundled InfluxDB restore can be slow on constrained hardware, so both the
+    # preview (dry-run) and the apply must use the longer backup/restore timeout
+    # rather than the normal EMS command timeout.
+    from admin.ems_tool import BACKUP_RESTORE_TIMEOUT, DEFAULT_TIMEOUT
+
+    root = _build_install(tmp_path)
+    _make_influxdb_archive(root)
+    fake = _FakeEmsTool(dry_run_rc=0, restore_rc=0)
+    service = _service(root, ems_tool=fake)
+    backup_id = service.list_backups()["backups"][0]["id"]
+
+    plan = service.create_restore_plan({"id": backup_id, "scope": "influxdb"})
+    result = service.restore_from_plan(plan["plan_id"], confirm=True)
+
+    assert result["ok"] is True
+    assert BACKUP_RESTORE_TIMEOUT > DEFAULT_TIMEOUT
+    assert fake.calls
+    assert all(call["timeout"] == BACKUP_RESTORE_TIMEOUT for call in fake.calls)
 
 
 def test_restore_execute_influxdb_passes_no_rollback_when_disabled(tmp_path):

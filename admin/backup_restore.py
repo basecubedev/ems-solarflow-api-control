@@ -982,9 +982,14 @@ class BackupRestoreService:
         return os.path.join(env.backup_dir, new[-1])
 
     def _run_influx_backup_tool(self):
-        from admin.ems_tool import EmsToolRunner
+        from admin.ems_tool import BACKUP_RESTORE_TIMEOUT, EmsToolRunner
         tool = self._ems_tool or EmsToolRunner()
-        result = tool.run(self._context_provider(), ("backup", "create", "--type", "influxdb"))
+        # Bundled InfluxDB backup can be slow on constrained hardware, so use the
+        # longer backup/restore timeout rather than the normal command timeout.
+        result = tool.run(
+            self._context_provider(), ("backup", "create", "--type", "influxdb"),
+            timeout=BACKUP_RESTORE_TIMEOUT,
+        )
         if getattr(result, "blocked", False):
             raise BackupRestoreError(result.message or "no EMS context for InfluxDB backup")
         if getattr(result, "returncode", 1) != 0:
@@ -1356,7 +1361,11 @@ class BackupRestoreService:
         placed in argv or logged.
         """
 
-        from admin.ems_tool import BLOCKED_MESSAGE, EmsToolRunner
+        from admin.ems_tool import (
+            BACKUP_RESTORE_TIMEOUT,
+            BLOCKED_MESSAGE,
+            EmsToolRunner,
+        )
 
         tool = self._ems_tool or EmsToolRunner()
         context = self._context_provider()
@@ -1373,7 +1382,12 @@ class BackupRestoreService:
             args += ["--on-conflict", "replace",
                      "--rollback" if rollback_enabled else "--no-rollback"]
         input_text = f"{password}\n" if password else None
-        result = tool.run(context, tuple(args), input_text=input_text)
+        # Restoring the bundled InfluxDB volume can be slow on constrained
+        # hardware, so use the longer backup/restore timeout here too.
+        result = tool.run(
+            context, tuple(args), timeout=BACKUP_RESTORE_TIMEOUT,
+            input_text=input_text,
+        )
         if getattr(result, "blocked", False):
             return False, result.message or BLOCKED_MESSAGE
         if getattr(result, "returncode", 1) != 0:
