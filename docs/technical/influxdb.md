@@ -6,8 +6,12 @@ feature.
 
 > InfluxDB is not required for normal EMS operation. The controller writes power
 > targets to hardware regardless, and the dashboard keeps a built-in SQLite
-> history when InfluxDB is disabled. Enable InfluxDB only if you want the
-> Analytics tab backed by long-range downsampled history.
+> history when InfluxDB is disabled. `influxdb.enabled` defaults to `true` for
+> new configs so long-term analytics support is available out of the box; set it
+> to `false` in `config.json` to opt out. Enabling the flag does not start
+> anything by itself — bundled InfluxDB still needs the normal Docker/Admin/`emsctl`
+> setup flow (secrets, schema, container startup), and the EMS control loop never
+> starts Docker on its own.
 
 Config is the source of truth: the `influxdb` block in `config.json` defines the
 org, bucket prefix, retention and downsampling tasks, and `emsctl.py influx
@@ -152,8 +156,11 @@ the filesystem supports it.
 
 ### What `enabled`, `auto_init` and `auto_sync` mean
 
-- **`enabled: true`** turns on InfluxDB/Analytics usage. While disabled,
-  `influx init` exits with a clear message and does nothing else.
+- **`enabled: true`** turns on InfluxDB/Analytics usage and is the default for
+  new configs. It only enables support; the bundled backend still relies on the
+  Docker/Admin/`emsctl` setup/init flow for secrets, schema and container
+  startup. While disabled, `influx init` exits with a clear message and does
+  nothing else.
 - **`auto_init: true`** lets the `emsctl` **setup commands** bootstrap the
   bundled InfluxDB backend automatically (this is what makes `stack up` prepare
   secrets and start InfluxDB for you). It does **not** mean the EMS controller

@@ -67,7 +67,8 @@ replay mode, `allow_hardware_writes`, and
 }
 ```
 
-`enabled` defaults to `false`.
+`enabled` defaults to `true` for new configs. Set it to `false` in
+`config.json` to opt out.
 
 `interval_days` defines when a new assist is required after the last
 firmware-reported Max-SoC event.

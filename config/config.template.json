@@ -148,7 +148,7 @@
       "Enable it when batteries need a higher winter reserve.",
       "See docs/configuration-examples.md before changing advanced values."
     ],
-    "enabled": false,
+    "enabled": true,
     "months": [10, 11, 12, 1, 2, 3],
     "summer_min_soc": 15,
     "winter_min_soc": 40,
@@ -163,7 +163,7 @@
       "Temporarily raises device Max-SoC to 100%.",
       "Use it when devices should reach firmware Max-SoC periodically."
     ],
-    "enabled": false,
+    "enabled": true,
     "interval_days": 28,
     "assist_window_days": 7,
     "assist_start_soc": 80,
@@ -224,7 +224,7 @@
       "Bundled mode is the supported zero-config Docker setup.",
       "Run 'python3 emsctl.py influx sync' after changing schema settings."
     ],
-    "enabled": false,
+    "enabled": true,
     "_comment_mode": [
       "'bundled' uses the docker-compose InfluxDB managed by this project.",
       "Run 'python3 emsctl.py influx init' for the complete setup.",

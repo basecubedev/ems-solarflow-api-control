@@ -323,10 +323,10 @@ Manual no-write validation flags:
 
 ## Battery Full-Charge Assist
 
-`battery_full_charge_assist.enabled` defaults to `false`. When enabled, EMS
-tracks battery-backed devices in the core state database and can temporarily
-request `socSet=1000` so firmware reaches its Max-SoC state within
-`interval_days`.
+`battery_full_charge_assist.enabled` defaults to `true` for new configs; set it
+to `false` in `config.json` to opt out. When enabled, EMS tracks battery-backed
+devices in the core state database and can temporarily request `socSet=1000` so
+firmware reaches its Max-SoC state within `interval_days`.
 
 On first enable with an empty EMS state database, EMS assumes the battery was
 recently full and schedules the first assist for `now + interval_days`. It does
@@ -488,7 +488,8 @@ pulled toward `raw_load` during a sign-change mismatch. `1.0` resets directly to
 
 ## Winter Settings
 
-Winter mode is optional.
+Winter mode is optional but enabled by default for new configs; set
+`winter.enabled` to `false` in `config.json` to opt out.
 
 `winter.enabled` enables the static winter feature default. The runtime winter
 toggle can still enable or disable winter behavior through runtime-state.

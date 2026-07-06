@@ -161,11 +161,11 @@ def event_types(store):
         ]
 
 
-def test_config_defaults_keep_full_charge_assist_disabled():
+def test_config_defaults_enable_full_charge_assist():
     safe = cfg.default_safe_config()
     assist = safe["battery_full_charge_assist"]
 
-    assert assist["enabled"] is False
+    assert assist["enabled"] is True
     assert assist["interval_days"] == 28
     assert assist["state_database_path"] == "data/ems_state.sqlite"
 
@@ -186,7 +186,7 @@ def test_config_normalization_clamps_safe_numeric_values():
         "ac_charge_power": -10,
     })
 
-    assert assist["enabled"] is False
+    assert assist["enabled"] is True
     assert assist["interval_days"] == 1
     assert assist["assist_window_days"] == 0
     assert assist["assist_start_soc"] == 100
