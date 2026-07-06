@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Host-network override for admin discovery on the real LAN (Linux / Raspberry Pi).
+#
+# Layer it on either base to detect the host's real interfaces and scan the LAN
+# (in plain bridge mode the container usually only sees Docker networks):
+#
+#   deploy/admin/start-admin-setup.sh --hostnet             # default + host net
+#   deploy/admin/start-admin-setup.sh --discovery-only --hostnet
+#   # or manually, e.g. on top of the default deployment-capable base:
+#   docker compose \
+#     -f deploy/admin/docker-compose.yml \
+#     -f deploy/admin/docker-compose.hostnet.yml up --build
+#
+# Use host networking only on a trusted local machine — the admin UI is then
+# reachable on the host's real addresses. This override adds no Docker socket of
+# its own; socket access comes from the base compose file it is layered on.
+services:
+  ems-solarflow-admin:
+    network_mode: host
+    # The server binds directly to every host address on port 8090. Compose's
+    # reset tag removes the loopback-only mapping inherited from the base file.
+    ports: !reset []

@@ -321,8 +321,61 @@ def test_create_writes_valid_manifest_and_checksums(tmp_path):
     assert manifest["created_at"].endswith("Z")
     assert manifest["encryption"]["enabled"] is False
     assert "config_backup_format_version" in manifest["contracts"]
-    assert manifest["source"]["ems_version"] == "0.6.0"
+    # A local/dev build never records a fake release version, but does record an
+    # honest build label and commit derived from the checkout.
+    assert manifest["source"]["ems_version"] is None
+    assert manifest["source"]["build_label"]
     assert "git_commit" in manifest["source"]
+
+
+def test_manifest_source_uses_release_tag_when_present(tmp_path, monkeypatch):
+    base, config, config_path = write_project(tmp_path)
+    monkeypatch.setattr(backup, "collect_build_info", lambda base_dir=None: {
+        "ems_version": "v0.6.3",
+        "release_version": "v0.6.3",
+        "build_label": "v0.6.3",
+        "git_commit": "abcdef1234567890",
+        "git_commit_short": "abcdef123456",
+        "git_branch": "main",
+        "git_describe": "v0.6.3",
+        "git_dirty": False,
+        "build_id": "99-1",
+        "build_serial": "99",
+        "channel": "stable",
+    })
+    path = create(tmp_path, config, base, config_path)
+    with tarfile.open(path, "r:gz") as tar:
+        source = json.loads(
+            tar.extractfile(backup.MANIFEST_NAME).read().decode()
+        )["source"]
+    assert source["ems_version"] == "v0.6.3"
+    assert source["build_label"] == "v0.6.3"
+    assert source["channel"] == "stable"
+
+
+def test_manifest_source_absent_metadata_serializes_as_null(tmp_path, monkeypatch):
+    base, config, config_path = write_project(tmp_path)
+    monkeypatch.setattr(backup, "collect_build_info", lambda base_dir=None: {
+        "ems_version": None,
+        "release_version": None,
+        "build_label": None,
+        "git_commit": None,
+        "git_commit_short": None,
+        "git_branch": None,
+        "git_describe": None,
+        "git_dirty": None,
+        "build_id": None,
+        "build_serial": None,
+        "channel": None,
+    })
+    path = create(tmp_path, config, base, config_path)
+    with tarfile.open(path, "r:gz") as tar:
+        raw = tar.extractfile(backup.MANIFEST_NAME).read().decode()
+        source = json.loads(raw)["source"]
+    assert source["ems_version"] is None
+    assert source["build_label"] is None
+    # Absent values must be JSON null, never the string "unknown".
+    assert '"unknown"' not in raw
 
 
 def test_inspect_unencrypted(tmp_path):

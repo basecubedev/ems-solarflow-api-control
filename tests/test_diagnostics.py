@@ -36,7 +36,11 @@ def test_emsctl_diagnose_service_entry_points(tmp_path):
         report = service_function(args)
 
         assert report["schema_version"] == 1
-        assert report["ems_version"] == "0.6.0"
+        # No hardcoded release version: a local/dev diagnose reports None, and
+        # build identity is surfaced under a dedicated "build" block.
+        assert report["ems_version"] is None
+        assert "build" in report
+        assert "build_label" in report["build"]
         assert report["diagnosis"]["version"] == 1
         if enabled_option:
             assert report["options"][enabled_option] is True

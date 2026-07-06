@@ -1,0 +1,148 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""The Admin image must copy every file its startup import chain needs.
+
+`admin/install_context.py` imports `ems.paths`, so the Admin runtime reaches the
+EMS package during startup. This test rebuilds the exact file set that
+`deploy/admin/Dockerfile` copies into `/app` and asserts `python -m admin`
+still imports, catching a Dockerfile that forgets a runtime dependency again.
+No Docker, network, ports, or device discovery are required.
+"""
+
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+pytestmark = pytest.mark.simulation
+
+ROOT = Path(__file__).resolve().parent.parent
+DOCKERFILE = ROOT / "deploy" / "admin" / "Dockerfile"
+DEPLOY_ADMIN_DIR = ROOT / "deploy" / "admin"
+RUNTIME_COMPOSE_FILES = (
+    DEPLOY_ADMIN_DIR / "docker-compose.runtime.yml",
+    DEPLOY_ADMIN_DIR / "docker-compose.runtime.bridge.yml",
+)
+
+_COPY = re.compile(r"^COPY\s+(?!--)(\S+)\s+(\S+)\s*$")
+
+
+def _dockerfile_app_copies():
+    """Yield (src, dest) pairs for COPY directives that land under /app."""
+
+    for line in DOCKERFILE.read_text(encoding="utf-8").splitlines():
+        match = _COPY.match(line.strip())
+        if not match:
+            continue
+        src, dest = match.group(1), match.group(2)
+        if dest.startswith("./") or dest == ".":
+            yield src, dest.lstrip("./")
+
+
+def _mirror_image_files(app_root):
+    copied = []
+    for src, dest in _dockerfile_app_copies():
+        source = ROOT / src
+        target = app_root / (dest or src)
+        if source.is_dir():
+            shutil.copytree(
+                source,
+                target,
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+            )
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+        copied.append(dest)
+    return copied
+
+
+def test_dockerfile_copies_the_ems_path_resolver():
+    copies = dict(
+        (dest, src) for src, dest in _dockerfile_app_copies()
+    )
+    assert "ems/__init__.py" in copies
+    assert "ems/paths.py" in copies
+
+
+def test_admin_image_contains_dashboard_auth_helper():
+    # Admin shares the EMS Dashboard password; the auth helper must ship in the
+    # image so the Admin server can hash/verify against config/dashboard-auth.json.
+    dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+    assert "COPY dashboard/auth.py ./dashboard/auth.py" in dockerfile
+
+
+def test_admin_image_contains_https_helper():
+    # The optional Admin HTTPS listener reuses dashboard/https.py; it must ship in
+    # the image (certificate generation lives there, never duplicated in admin/).
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    assert "COPY dashboard/https.py ./dashboard/https.py" in text
+    assert "EXPOSE 8090 8091" in text or "EXPOSE 8091" in text
+
+
+def test_admin_image_ships_no_docker_daemon():
+    # Docker-out-of-Docker: the Admin container controls the *host* engine over
+    # the mounted socket. It must never ship a daemon (the self-update recreate
+    # runs against the host daemon, not one inside the container).
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    # No daemon package and no privileged/dind installation is present.
+    assert "docker.io" not in text
+    assert "--privileged" not in text
+    assert "install -m 0755 /tmp/docker/dockerd" not in text
+    # It installs only the static Docker CLI binary, not a daemon; the daemon
+    # binary from the static tarball is never extracted or installed.
+    assert "docker/docker" in text
+    assert "docker/dockerd" not in text
+
+
+def test_admin_image_keeps_docker_cli_and_compose_plugin():
+    # The Admin self-update recreates the Admin service with `docker compose`, so
+    # the CLI and the Compose plugin must remain in the image.
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    assert "/usr/local/bin/docker" in text
+    assert "cli-plugins/docker-compose" in text
+    assert "docker compose version" in text
+
+
+def test_admin_image_runs_as_non_root():
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    assert "USER admin" in text
+    # The non-root user is created before it is selected.
+    assert "adduser --system --ingroup admin" in text
+
+
+def test_admin_runtime_compose_keeps_hardening():
+    # The self-update recreates the Admin service from these compose files; the
+    # hardened runtime settings must survive.
+    for compose in RUNTIME_COMPOSE_FILES:
+        text = compose.read_text(encoding="utf-8")
+        assert "read_only: true" in text, compose.name
+        assert "no-new-privileges:true" in text, compose.name
+        assert "cap_drop:" in text and "- ALL" in text, compose.name
+
+
+def test_copied_files_are_sufficient_for_admin_startup(tmp_path):
+    app_root = tmp_path / "app"
+    app_root.mkdir()
+    _mirror_image_files(app_root)
+
+    # Drop PYTHONPATH so imports resolve only against the mirrored image layout,
+    # not the real repo checkout — otherwise a missing COPY would go unnoticed.
+    env = dict(os.environ)
+    env.pop("PYTHONPATH", None)
+
+    result = subprocess.run(
+        [sys.executable, "-B", "-m", "admin", "--help"],
+        cwd=app_root,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 0, (
+        f"admin --help failed inside the mirrored image layout:\n{result.stderr}"
+    )
+    assert "usage" in result.stdout.lower()

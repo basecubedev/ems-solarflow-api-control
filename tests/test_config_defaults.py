@@ -42,7 +42,7 @@ def restore_config_module(snapshot):
 
 
 def test_config_template_output_control_matches_code_defaults():
-    template = json.loads(Path("config.template.json").read_text())
+    template = json.loads(Path("config/config.template.json").read_text())
 
     assert (
         without_comment_keys(template["system"]["output_control"])
@@ -51,13 +51,13 @@ def test_config_template_output_control_matches_code_defaults():
 
 
 def test_config_template_winter_matches_code_defaults():
-    template = json.loads(Path("config.template.json").read_text())
+    template = json.loads(Path("config/config.template.json").read_text())
 
     assert without_comment_keys(template["winter"]) == WINTER_DEFAULTS
 
 
 def test_config_template_dashboard_matches_code_defaults():
-    template = json.loads(Path("config.template.json").read_text())
+    template = json.loads(Path("config/config.template.json").read_text())
 
     assert without_comment_keys(template["dashboard"]) == DASHBOARD_DEFAULTS
 
@@ -79,13 +79,13 @@ def test_dashboard_animation_mode_default_and_normalization():
 
 
 def test_config_template_energy_savings_matches_code_defaults():
-    template = json.loads(Path("config.template.json").read_text())
+    template = json.loads(Path("config/config.template.json").read_text())
 
     assert without_comment_keys(template["energy_savings"]) == ENERGY_SAVINGS_DEFAULTS
 
 
 def test_config_template_standalone_live_control_defaults():
-    template = json.loads(Path("config.template.json").read_text())
+    template = json.loads(Path("config/config.template.json").read_text())
 
     assert template["ha"]["enabled"] is False
     assert template["ha"]["control_enabled"] is False
@@ -105,7 +105,7 @@ def test_config_template_standalone_live_control_defaults():
 
 
 def test_config_template_uses_persisted_data_paths():
-    template = json.loads(Path("config.template.json").read_text())
+    template = json.loads(Path("config/config.template.json").read_text())
 
     docker_only_flag = "_config" + "_initialized"
     assert docker_only_flag not in json.dumps(template)
@@ -114,13 +114,13 @@ def test_config_template_uses_persisted_data_paths():
 
 
 def test_config_template_contains_startup_upgrade_defaults():
-    template = json.loads(Path("config.template.json").read_text())
+    template = json.loads(Path("config/config.template.json").read_text())
 
     assert without_comment_keys(template["config_upgrade"]) == CONFIG_UPGRADE_DEFAULTS
 
 
 def test_config_template_comments_are_readable_values():
-    template = json.loads(Path("config.template.json").read_text())
+    template = json.loads(Path("config/config.template.json").read_text())
     failures = []
 
     def walk(value, path):
@@ -556,7 +556,7 @@ def test_config_upgrade_render_does_not_fill_missing_device_identity():
 
 
 def test_config_upgrade_render_blank_lines_are_template_driven(tmp_path):
-    template_text = Path("config.template.json").read_text()
+    template_text = Path("config/config.template.json").read_text()
     template_text = template_text.replace(
         '      "max_power": 800,\n'
         '      "pv_kwp": 1.0,',
@@ -583,7 +583,7 @@ def test_config_upgrade_render_uses_first_template_device_shape(tmp_path):
         '      "max_power": 800,\n'
         '      "pv_kwp": 1.0,'
     )
-    template_text = Path("config.template.json").read_text()
+    template_text = Path("config/config.template.json").read_text()
     first = template_text.index(needle)
     second = template_text.index(needle, first + len(needle))
     template_text = (
@@ -837,7 +837,7 @@ def test_runtime_load_does_not_rewrite_config_file(tmp_path):
 
 
 def prepare_startup_upgrade_fixture(tmp_path, values=None):
-    shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")
+    shutil.copy(ROOT / "config" / "config.template.json", tmp_path / "config.template.json")
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps(values or minimal_upgrade_config()))
     return config_path
@@ -1019,8 +1019,8 @@ def test_runtime_load_preserves_user_values(tmp_path):
 
 def test_runtime_load_forces_safe_mode_for_template_placeholders(tmp_path, caplog):
     snapshot = snapshot_config_module()
-    shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")
-    values = json.loads((ROOT / "config.template.json").read_text())
+    shutil.copy(ROOT / "config" / "config.template.json", tmp_path / "config.template.json")
+    values = json.loads((ROOT / "config" / "config.template.json").read_text())
 
     try:
         initialize_config_from_dict(tmp_path, values)
@@ -1052,8 +1052,8 @@ def test_template_placeholder_url_detection_uses_hostname(value, expected):
 
 def test_runtime_load_keeps_live_mode_after_required_values_are_configured(tmp_path):
     snapshot = snapshot_config_module()
-    shutil.copy(ROOT / "config.template.json", tmp_path / "config.template.json")
-    values = json.loads((ROOT / "config.template.json").read_text())
+    shutil.copy(ROOT / "config" / "config.template.json", tmp_path / "config.template.json")
+    values = json.loads((ROOT / "config" / "config.template.json").read_text())
     values["grid_meter"]["ip"] = "192.0.2.50"
     values["devices"] = [{
         **values["devices"][0],

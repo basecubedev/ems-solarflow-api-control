@@ -28,7 +28,10 @@ COPY dashboard/ ./dashboard/
 # Runtime dependency of ems/history (Analytics influx sync/status); the rest of
 # scripts/ is dev tooling and intentionally not shipped.
 COPY scripts/influx_utils.py ./scripts/influx_utils.py
-COPY ems-solarflow-api-control.py emsctl.py config.template.json README.md ./
+COPY ems-solarflow-api-control.py emsctl.py README.md ./
+# Runtime and entrypoint expect the template at /app/config.template.json; the
+# canonical source lives in config/ and is copied to that image path here.
+COPY config/config.template.json /app/config.template.json
 COPY docker-entrypoint.sh ./
 COPY LICENSE THIRD_PARTY_LICENSES.md ./
 COPY docs/ ./docs/
@@ -36,6 +39,31 @@ COPY docs/ ./docs/
 RUN mkdir -p /app/config /app/data \
     && chmod +x /app/docker-entrypoint.sh \
     && chown -R ems:ems /app
+
+# Runtime-visible build identity. Python cannot reliably read its own image's OCI
+# labels, so CI passes the same identity in as build args (see docker-publish.yml)
+# and it is exported as env for ems.build_info. Kept last so changing per-build
+# metadata never invalidates the dependency layer above. Empty by default: a
+# plain local ``docker build`` then falls back to honest ``None`` values.
+ARG EMS_RELEASE_TAG=
+ARG EMS_GIT_COMMIT=
+ARG EMS_GIT_COMMIT_SHORT=
+ARG EMS_GIT_DESCRIBE=
+ARG EMS_GIT_BRANCH=
+ARG EMS_GIT_DIRTY=
+ARG EMS_BUILD_ID=
+ARG EMS_BUILD_SERIAL=
+ARG EMS_CHANNEL=
+
+ENV EMS_RELEASE_TAG=$EMS_RELEASE_TAG
+ENV EMS_GIT_COMMIT=$EMS_GIT_COMMIT
+ENV EMS_GIT_COMMIT_SHORT=$EMS_GIT_COMMIT_SHORT
+ENV EMS_GIT_DESCRIBE=$EMS_GIT_DESCRIBE
+ENV EMS_GIT_BRANCH=$EMS_GIT_BRANCH
+ENV EMS_GIT_DIRTY=$EMS_GIT_DIRTY
+ENV EMS_BUILD_ID=$EMS_BUILD_ID
+ENV EMS_BUILD_SERIAL=$EMS_BUILD_SERIAL
+ENV EMS_CHANNEL=$EMS_CHANNEL
 
 EXPOSE 8080
 VOLUME ["/app/config", "/app/data"]

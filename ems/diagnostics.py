@@ -5,7 +5,7 @@ Extracted verbatim from emsctl.py so that both the CLI (emsctl.py) and the
 dashboard can consume the same diagnosis functions without importing the CLI.
 This module is import-side-effect-free and must never import emsctl.
 
-The report shape is a versioned public contract (see docs/developer.md and
+The report shape is a versioned public contract (see docs/developer/developer.md and
 tests/test_emsctl_diagnose_contract.py); do not change it incompatibly without
 bumping DIAGNOSE_SCHEMA_VERSION / SUPPORT_BUNDLE_VERSION.
 """
@@ -42,8 +42,9 @@ from ems.paths import (
     resolve_project_path,
     resolve_runtime_path,
     resolve_dashboard_auth_path,
+    resolve_template_path,
 )
-from ems.version import __version__
+from ems.build_info import collect_build_info
 
 
 BATTERY_FULL_CHARGE_ASSIST_DEFAULTS = {
@@ -286,8 +287,21 @@ def diagnose_finalize_report(report):
         errors=errors,
     )
 
+    build = collect_build_info()
     report["schema_version"] = DIAGNOSE_SCHEMA_VERSION
-    report["ems_version"] = __version__
+    report["ems_version"] = build["ems_version"]
+    # ``build_serial`` is intentionally omitted: the diagnose output is run
+    # through secret redaction, which treats any ``*serial*`` field as sensitive.
+    report["build"] = {
+        "release_version": build["release_version"],
+        "build_label": build["build_label"],
+        "git_commit_short": build["git_commit_short"],
+        "git_branch": build["git_branch"],
+        "git_describe": build["git_describe"],
+        "git_dirty": build["git_dirty"],
+        "channel": build["channel"],
+        "build_id": build["build_id"],
+    }
     report["diagnosis"] = asdict(model)
     report["sections"] = sections
     report["metrics"] = report.get("summary", {})
@@ -2661,10 +2675,12 @@ def diagnose_write_support_bundle(report, args, config_data, runtime_path):
 
     control_report = report.get("control") or {}
     control_quality_report = report.get("control_quality") or {}
+    build = report.get("build") or {}
     metadata = {
         "bundle_version": SUPPORT_BUNDLE_VERSION,
         "generated_at": report.get("generated_at"),
-        "ems_version": report.get("ems_version", __version__),
+        "ems_version": report.get("ems_version"),
+        "build_label": build.get("build_label"),
         "schema_version": report.get("schema_version", DIAGNOSE_SCHEMA_VERSION),
     }
 
@@ -2821,7 +2837,7 @@ def diagnose_collect(args):
         diagnose_add(checks, "environment", root_level, "process_root", "Process runs as root" if uid == 0 else "Process does not run as root", uid=uid)
 
     config_path = args.config
-    template_path = os.path.join(BASE_DIR, "config.template.json")
+    template_path = str(resolve_template_path(base_dir=BASE_DIR))
     data_dir = os.path.join(BASE_DIR, "data")
 
     for code, path, label, required in (

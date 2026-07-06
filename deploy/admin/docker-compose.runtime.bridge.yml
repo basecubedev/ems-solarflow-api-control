@@ -1,0 +1,74 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# EMS SolarFlow Admin — end-user runtime, deployment-capable (bridge networking).
+#
+# Optional counterpart to docker-compose.runtime.yml for restricted environments
+# where host networking is not available or not wanted. Runs the published GHCR
+# image on Docker bridge networking and publishes the UI on a host port. Normal
+# users get this through the installer's bridge mode:
+#
+#   sh install-admin-console.sh --bridge
+#
+# Bridge networking isolates the container from the host network, so automatic
+# LAN device discovery is less reliable than with host networking; enter your LAN
+# CIDR manually if a scan sees only Docker networks.
+#
+# The Admin container controls the *host* Docker engine over the mounted
+# /var/run/docker.sock (Docker-out-of-Docker); it ships only the Docker client,
+# never a daemon. For the local-build developer path use docker-compose.yml.
+#
+# SECURITY: mounting /var/run/docker.sock grants effectively root-equivalent
+# control of the host through the Docker API. Run this only on a trusted local
+# machine and never expose the Admin UI to the internet.
+services:
+  ems-solarflow-admin:
+    image: ghcr.io/basecubedev/ems-solarflow-admin:${EMS_ADMIN_TAG:-latest}
+    # Stable name so the Admin Console can recreate itself during a self-update.
+    container_name: ${EMS_ADMIN_CONTAINER_NAME:-ems-solarflow-admin}
+    user: "${PUID:-1000}:${PGID:-1000}"
+    # Join the host Docker socket group so the non-root user can reach the
+    # socket; the installer discovers DOCKER_GID for you.
+    group_add:
+      - "${DOCKER_GID:-999}"
+    # Bridge networking: publish the UI on the chosen host address/port. Defaults
+    # to loopback so the UI is not reachable off-host unless you set EMS_ADMIN_BIND.
+    # The optional HTTPS port is always mapped (loopback by default); the server
+    # only listens on it when EMS_ADMIN_HTTPS_ENABLED=true.
+    ports:
+      - "${EMS_ADMIN_BIND:-127.0.0.1}:${EMS_ADMIN_PORT:-8090}:8090"
+      - "${EMS_ADMIN_HTTPS_BIND:-127.0.0.1}:${EMS_ADMIN_HTTPS_PORT:-8091}:8091"
+    environment:
+      # Same-path mounting: point at the real host install root and Admin data
+      # dir so any bind mount Admin forwards to the host Docker daemon stays a
+      # valid host path.
+      EMS_INSTALL_DIR: "${EMS_INSTALL_DIR}"
+      EMS_ADMIN_DATA_DIR: "${EMS_ADMIN_DATA_DIR}"
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
+      DOCKER_CONFIG: /tmp/docker
+      # Non-secret Admin identity for the Admin Console self-update flow. The
+      # target image is always derived server-side from a trusted release tag.
+      EMS_ADMIN_IMAGE: "${EMS_ADMIN_IMAGE:-ghcr.io/basecubedev/ems-solarflow-admin}"
+      EMS_ADMIN_TAG: "${EMS_ADMIN_TAG:-latest}"
+      EMS_ADMIN_COMPOSE_FILE: "${EMS_ADMIN_COMPOSE_FILE:-${EMS_INSTALL_DIR}/docker-compose.admin.yml}"
+      # Compose service name (docker compose up) vs container name (inspect).
+      EMS_ADMIN_COMPOSE_SERVICE: "${EMS_ADMIN_COMPOSE_SERVICE:-ems-solarflow-admin}"
+      EMS_ADMIN_CONTAINER_NAME: "${EMS_ADMIN_CONTAINER_NAME:-ems-solarflow-admin}"
+      # Optional parallel HTTPS listener (HTTP on 8090 stays available). Generated
+      # cert/key default to config/admin.crt|key under the EMS install root.
+      EMS_ADMIN_HTTPS_ENABLED: "${EMS_ADMIN_HTTPS_ENABLED:-false}"
+      EMS_ADMIN_HTTPS_PORT: "${EMS_ADMIN_HTTPS_PORT:-8091}"
+      EMS_ADMIN_HTTPS_CERT_FILE: "${EMS_ADMIN_HTTPS_CERT_FILE:-config/admin.crt}"
+      EMS_ADMIN_HTTPS_KEY_FILE: "${EMS_ADMIN_HTTPS_KEY_FILE:-config/admin.key}"
+      EMS_ADMIN_HTTPS_AUTO_GENERATE: "${EMS_ADMIN_HTTPS_AUTO_GENERATE:-true}"
+    volumes:
+      - "${EMS_INSTALL_DIR}:${EMS_INSTALL_DIR}"
+      - "${EMS_ADMIN_DATA_DIR}:${EMS_ADMIN_DATA_DIR}"
+      - /var/run/docker.sock:/var/run/docker.sock
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"

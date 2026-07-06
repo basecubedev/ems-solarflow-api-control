@@ -5,7 +5,7 @@
 > **not** the production analytics deployment. For running the dashboard
 > Analytics tab on InfluxDB, use the official assets under `deploy/docker/`
 > (`compose.influxdb.yml`, `influxdb.env.example`) and see
-> [docs/influxdb.md](../../docs/influxdb.md).
+> [docs/influxdb.md](../../docs/technical/influxdb.md).
 
 This workspace is for long-running, read-only telemetry capture and compact
 event discovery. It is not part of the normal EMS control loop.

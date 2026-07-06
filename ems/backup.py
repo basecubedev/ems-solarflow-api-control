@@ -477,11 +477,15 @@ def build_manifest(
         "app": APP_NAME,
         "source": {
             "ems_version": build["ems_version"],
+            "build_label": build["build_label"],
             "git_commit": build["git_commit"],
             "git_commit_short": build["git_commit_short"],
             "git_branch": build["git_branch"],
             "git_describe": build["git_describe"],
             "git_dirty": build["git_dirty"],
+            "build_id": build["build_id"],
+            "build_serial": build["build_serial"],
+            "channel": build["channel"],
         },
         "contracts": {
             "config_backup_format_version": CONFIG_BACKUP_FORMAT_VERSION,

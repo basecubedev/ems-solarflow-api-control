@@ -38,6 +38,31 @@ def test_password_file_writes_hash_only_and_restricts_permissions(tmp_path):
         assert path.stat().st_mode & 0o777 == 0o600
 
 
+def test_create_password_file_if_missing_creates_parent_and_restricts_permissions(tmp_path):
+    path = tmp_path / "config" / "dashboard-auth.json"
+
+    auth.create_password_file_if_missing(path, "secret-password")
+
+    assert auth.verify_password_file(path, "secret-password")
+    assert "secret-password" not in path.read_text()
+    if os.name == "posix":
+        assert path.stat().st_mode & 0o777 == 0o600
+
+
+def test_create_password_file_if_missing_never_overwrites(tmp_path):
+    import pytest
+
+    path = tmp_path / "config" / "dashboard-auth.json"
+    auth.write_password_file(path, "first-password")
+
+    with pytest.raises(FileExistsError):
+        auth.create_password_file_if_missing(path, "second-password")
+
+    # The original password is untouched by the refused create.
+    assert auth.verify_password_file(path, "first-password")
+    assert not auth.verify_password_file(path, "second-password")
+
+
 def test_session_expiry_removes_session():
     now = [100.0]
     store = auth.SessionStore(timeout_seconds=30, time_fn=lambda: now[0])

@@ -544,7 +544,7 @@ or recovering a broken installation without copying files by hand.
 
 > For a beginner-friendly, step-by-step workflow (backup before an update,
 > dry-run restore checks, full local restore order) see the
-> [Backup and Restore Guide](backup-restore.md). This page is the detailed
+> [Backup and Restore Guide](technical/backup-restore.md). This page is the detailed
 > command reference.
 
 ```bash

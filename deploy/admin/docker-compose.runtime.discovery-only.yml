@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# EMS SolarFlow Admin — end-user runtime, restricted discovery-only mode (host
+# networking).
+#
+# Runs the published GHCR image with NO Docker access: no socket is mounted, so
+# discovery and config drafting work but deployment actions stay disabled. Use
+# the installer's --discovery-only flag to get this, or run directly:
+#
+#   docker compose -f deploy/admin/docker-compose.runtime.discovery-only.yml up -d
+#
+# Host networking is the default so discovery can see the real LAN. For the
+# local-build developer path use docker-compose.discovery-only.yml.
+#
+# Security: this exposes a device-discovery scanner. Publish it only on trusted
+# local networks, never to the internet.
+services:
+  ems-solarflow-admin:
+    image: ghcr.io/basecubedev/ems-solarflow-admin:${EMS_ADMIN_TAG:-latest}
+    user: "${PUID:-1000}:${PGID:-1000}"
+    # Host networking: the UI binds 8090 on every host address and discovery
+    # sees the real LAN. No Docker port mapping applies.
+    network_mode: host
+    environment:
+      # Same-path mounting keeps install-context resolution consistent with the
+      # deployment runtime even though this restricted mode mounts no socket.
+      EMS_INSTALL_DIR: "${EMS_INSTALL_DIR}"
+      EMS_ADMIN_DATA_DIR: "${EMS_ADMIN_DATA_DIR}"
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
+    volumes:
+      - "${EMS_INSTALL_DIR}:${EMS_INSTALL_DIR}"
+      - "${EMS_ADMIN_DATA_DIR}:${EMS_ADMIN_DATA_DIR}"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"

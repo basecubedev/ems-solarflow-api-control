@@ -105,7 +105,7 @@ local in `config/influxdb.env` (gitignored) and are never printed.
 The single `docker-compose.yml` keeps EMS-only simple (`docker compose up -d`)
 and adds Analytics behind the `with-analytics` profile — no overlay `-f` chain
 and no host-side `python3 emsctl.py stack up`. `stack up` remains a
-repo/native poweruser helper; see [influxdb.md](influxdb.md).
+repo/native poweruser helper; see [influxdb.md](technical/influxdb.md).
 
 ## Verifying a Docker-first install
 

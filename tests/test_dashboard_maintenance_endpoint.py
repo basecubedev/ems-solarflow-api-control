@@ -54,7 +54,7 @@ def maint_server(tmp_path, monkeypatch, *, configured=True, **config_kwargs):
     write_config(config_path, **config_kwargs)
     runtime_path.write_text(json.dumps({"system": {}, "devices": {}}))
     shutil.copy(
-        os.path.join(ROOT, "config.template.json"),
+        os.path.join(ROOT, "config", "config.template.json"),
         str(tmp_path / "config.template.json"),
     )
     if configured:

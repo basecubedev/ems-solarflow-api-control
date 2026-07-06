@@ -7,6 +7,7 @@ import json
 import os
 
 from ems import config as config_mod
+from ems.paths import resolve_template_path
 
 
 GRID_METER_CHOICES = (
@@ -43,7 +44,7 @@ def _zendure_d0_serial_from_topic(topic):
 
 
 def _load_template(base_dir):
-    path = os.path.join(base_dir, "config.template.json")
+    path = resolve_template_path(base_dir=base_dir)
     with open(path) as f:
         return json.load(f)
 
