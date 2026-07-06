@@ -5,6 +5,7 @@ import io
 import json
 import urllib.error
 import zipfile
+from urllib.parse import urlparse
 
 import pytest
 
@@ -75,6 +76,10 @@ def _github_payload():
     ]
 
 
+def _is_github_api_url(url):
+    return urlparse(url).hostname == "api.github.com"
+
+
 def _opener(archive=None):
     def open_url(request, timeout=None):
         url = request.full_url
@@ -93,7 +98,7 @@ def _opener(archive=None):
                     {"tree": [{"path": path, "type": "blob"} for path in paths]}
                 ).encode()
             )
-        if "api.github.com" in url:
+        if _is_github_api_url(url):
             return _Response(json.dumps(_github_payload()).encode())
         return _Response(archive or _archive())
 
@@ -904,3 +909,13 @@ def test_list_keeps_not_local_target_selectable_and_latest_first(tmp_path):
     assert "v0.5.9" not in by_tag
     assert by_tag["v0.6.1"]["upgrade_state"] == "identity_unknown"
     assert by_tag["v0.6.1"]["selectable"] is True
+
+
+# --- mocked opener host matching -----------------------------------------
+
+
+def test_github_api_url_matching_uses_parsed_host_not_substring():
+    # Only the real API host counts; a look-alike path or subdomain must not.
+    assert _is_github_api_url("https://api.github.com/repos/x/y/releases")
+    assert not _is_github_api_url("https://evil.example/api.github.com/releases")
+    assert not _is_github_api_url("https://api.github.com.evil.example/releases")
