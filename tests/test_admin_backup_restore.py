@@ -274,7 +274,7 @@ def test_backup_id_resolution_rejects_symlink(tmp_path):
 
 def test_inspect_backup_returns_manifest_and_file_list(tmp_path):
     root = _build_install(tmp_path)
-    path = _make_config_archive(root)
+    _make_config_archive(root)
     service = _service(root)
     backup_id = service.list_backups()["backups"][0]["id"]
 

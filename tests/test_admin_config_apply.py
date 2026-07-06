@@ -55,7 +55,9 @@ def _draft():
 
 
 def _service(admin_data_dir, install_root):
-    provider = lambda: detect_install_context(base_dir=str(install_root))
+    def provider():
+        return detect_install_context(base_dir=str(install_root))
+
     preview = ConfigPreviewGenerator(_ReleaseManager(), install_context_provider=provider)
     export = ConfigExportService(preview, admin_data_dir)
     return ConfigApplyService(export, admin_data_dir, install_context_provider=provider)

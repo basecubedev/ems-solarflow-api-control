@@ -1994,7 +1994,6 @@ def test_maintenance_opens_hub_before_manual_editor():
 
 
 def test_maintenance_hub_exposes_three_user_paths():
-    html = _read("index.html")
     hub = _read("index.html").split('id="maintenance-hub"', 1)[1].split(
         'id="maintenance-manual-panel"', 1
     )[0]
@@ -3024,9 +3023,6 @@ def test_maintenance_discovery_always_renders_summary_and_pending_status():
 
     add = js.split("function mconfigAddDiscovered", 1)[1].split(
         "\nfunction ", 1
-    )[0]
-    review = js.split("function renderMaintenanceDiscoveryReview", 1)[1].split(
-        "\nlet mconfigDiscovering", 1
     )[0]
     assert "mconfigMarkDraftChanged" in add
     assert "mconfigMarkDraftChanged" in card

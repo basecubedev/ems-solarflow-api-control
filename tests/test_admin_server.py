@@ -668,7 +668,9 @@ def test_config_preview_endpoint_ignores_local_repo_config(tmp_path, monkeypatch
 
 
 def _apply_service(manager, admin_data_dir, install_root):
-    provider = lambda: detect_install_context(base_dir=str(install_root))
+    def provider():
+        return detect_install_context(base_dir=str(install_root))
+
     preview = ConfigPreviewGenerator(manager, install_context_provider=provider)
     export = ConfigExportService(preview, admin_data_dir)
     return ConfigApplyService(export, admin_data_dir, install_context_provider=provider)

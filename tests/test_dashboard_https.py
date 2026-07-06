@@ -52,8 +52,8 @@ def test_ssl_context_treats_string_false_auto_generate_as_disabled(tmp_path):
 
 pytest.importorskip("cryptography")
 
-from cryptography import x509
-from cryptography.x509.oid import NameOID
+from cryptography import x509  # noqa: E402
+from cryptography.x509.oid import NameOID  # noqa: E402
 
 
 def test_self_signed_certificate_generation_restricts_private_key(tmp_path):
