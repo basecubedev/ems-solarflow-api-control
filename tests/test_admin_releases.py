@@ -381,8 +381,8 @@ def test_release_preparation_does_not_pull_docker_image(tmp_path):
     manager.list_releases()
     result = manager.prepare("v0.6.0")
 
-    assert result["docker_image"].startswith("ghcr.io/")
-    assert all("ghcr.io" not in url for url in urls)
+    assert result["docker_image"] == "ghcr.io/basecubedev/ems-solarflow-api-control:v0.6.0"
+    assert all(urlparse(url).hostname != "ghcr.io" for url in urls)
 
 
 def test_prepared_newer_release_also_blocks_downgrade(tmp_path):
