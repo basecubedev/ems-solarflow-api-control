@@ -40,32 +40,9 @@ jobs:
             exit 1
           fi
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-          python -m pip install -r requirements-dev.txt
-
-      - name: Run Ruff lint
-        run: |
-          ruff check .
-
-      - name: Compile Python files
-        run: |
-          python -m compileall ems dashboard scripts tests emsctl.py ems-solarflow-api-control.py
-
       - name: Validate example Compose file
         run: |
           docker compose -f docker-compose.example.yml config
-
-      - name: Run full test suite (excludes real-Docker e2e, covered by CI workflow)
-        run: |
-          pytest -q -m "not docker" tests/
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4

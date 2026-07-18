@@ -20,10 +20,14 @@ def test_full_suite_excludes_docker_marked_tests():
     assert "pytest -q tests/" not in _stripped_lines(CI_WORKFLOW)
 
 
-def test_publish_full_suite_excludes_docker_marked_tests():
+def test_publish_workflow_delegates_testing_to_ci():
+    # The release publish workflow no longer re-runs the Python suite: every
+    # image it builds is a commit on main (tags are verified against main),
+    # already gated by the CI workflow. Guard that no pytest run creeps back in
+    # and that the main-only safety gate the delegation relies on stays.
     text = PUBLISH_WORKFLOW.read_text(encoding="utf-8")
-    assert 'pytest -q -m "not docker" tests/' in text
-    assert "pytest -q tests/" not in _stripped_lines(PUBLISH_WORKFLOW)
+    assert "pytest" not in text
+    assert "Verify tag commit is on main" in text
 
 
 def test_dedicated_job_runs_docker_marked_tests():
