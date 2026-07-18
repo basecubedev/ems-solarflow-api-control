@@ -1,0 +1,965 @@
+name: Docker Feature Publish
+
+# Manual, testing-only image builds from a feature branch. This path never
+# touches `latest`, `v*`, `stable`, or `rc` — see docker-publish.yml for the
+# stable release path.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag, or ref to build (e.g. feature/example)"
+        required: true
+        type: string
+
+# Least privilege: gates only read; GHCR and catalogue jobs receive separate
+# scoped write permissions.
+permissions:
+  contents: read
+
+concurrency:
+  group: development-build-catalogue
+  cancel-in-progress: false
+
+jobs:
+  resolve-source:
+    name: Resolve immutable source revision
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+      ref: ${{ steps.resolve.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.ref }}
+      - name: Reject protected release refs
+        env:
+          INPUT_REF: ${{ inputs.ref }}
+        run: |
+          # Development builds are for feature/fix/develop refs only. A protected
+          # release ref (a release branch, or a v*/latest/stable/rc tag) must never
+          # be published through this development-only path — not as the dispatch
+          # input, and not reached indirectly by a commit a release tag also points
+          # at. Validate the operator input and the resolved checkout context here,
+          # before any gate runs or any package/catalogue write can happen.
+          shopt -s nocasematch
+          ref="${INPUT_REF#refs/heads/}"
+          ref="${ref#refs/tags/}"
+          reject() {
+            echo "Refusing to publish a development build from protected release ref: $1" >&2
+            exit 1
+          }
+          for protected in main master latest stable rc; do
+            if [[ "${ref}" == "${protected}" ]]; then
+              reject "${INPUT_REF}"
+            fi
+          done
+          if [[ "${ref}" =~ ^v[0-9] ]]; then
+            reject "${INPUT_REF}"
+          fi
+          if [[ "${INPUT_REF}" =~ ^refs/tags/v ]]; then
+            reject "${INPUT_REF}"
+          fi
+          for tag in $(git tag --points-at HEAD 2>/dev/null || true); do
+            if [[ "${tag}" =~ ^v[0-9] ]]; then
+              reject "release tag ${tag} at HEAD"
+            fi
+            for protected in latest stable rc; do
+              if [[ "${tag}" == "${protected}" ]]; then
+                reject "release tag ${tag} at HEAD"
+              fi
+            done
+          done
+          shopt -u nocasematch
+          echo "Development ref '${INPUT_REF}' is allowed."
+      - name: Resolve source revision
+        id: resolve
+        env:
+          INPUT_REF: ${{ inputs.ref }}
+        run: |
+          # Every gate and the publish job build this exact commit. A branch
+          # moving while the workflow runs cannot change the published source;
+          # the original ref stays available for display metadata only.
+          sha="$(git rev-parse --verify HEAD)"
+          if [[ ! "${sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "The selected ref did not resolve to a full lowercase Git SHA." >&2
+            exit 1
+          fi
+          {
+            echo "sha=${sha}"
+            echo "ref=${INPUT_REF}"
+          } >> "${GITHUB_OUTPUT}"
+          echo "Resolved '${INPUT_REF}' to ${sha}"
+
+  static:
+    name: Static release gates
+    needs: resolve-source
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.resolve-source.outputs.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+          npm ci
+      - name: Run static and generated-file checks
+        run: |
+          ruff check .
+          python -m compileall -q admin ems dashboard scripts tests emsctl.py ems-solarflow-api-control.py
+          node --check admin/static/admin.js
+          python tools/build_config_template.py --check
+          docker compose -f docker-compose.example.yml config
+
+  non-docker-regression:
+    name: Full non-Docker regression
+    needs: [resolve-source, static]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve-source.outputs.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+      - run: pytest -q -m "not docker" tests/
+
+  mqtt-release:
+    name: Focused MQTT release gate
+    needs: [resolve-source, static]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve-source.outputs.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+      - run: pytest -q -m mqtt_release tests/
+
+  system-build:
+    name: Focused System Build gate
+    needs: [resolve-source, static]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve-source.outputs.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+      - run: pytest -q -m system_build tests/
+
+  playwright:
+    name: Playwright ${{ matrix.browser }} critical smoke
+    needs: [resolve-source, static]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve-source.outputs.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+          npm ci
+          npx playwright install --with-deps ${{ matrix.browser }}
+      - name: Run critical browser workflows
+        env:
+          CI: "1"
+        run: npx playwright test --project=${{ matrix.browser }}
+      - name: Upload browser report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: development-playwright-${{ matrix.browser }}
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
+
+  system_build_browser_gate:
+    name: System Build browser gate (${{ matrix.browser }})
+    needs: [resolve-source, system-build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve-source.outputs.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install System Build browser dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+          npm ci
+          npx playwright install --with-deps ${{ matrix.browser }}
+      - name: Run authoritative System Build action matrix
+        env:
+          CI: "1"
+        run: npx playwright test tests/e2e/system-build-action-gating.spec.ts --project=${{ matrix.browser }}
+      - name: Upload System Build browser diagnostics
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: system-build-browser-gate-${{ matrix.browser }}
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
+
+  packaged-system-build-smoke:
+    name: Packaged Admin System Build smoke
+    needs: [resolve-source, system-build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve-source.outputs.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install packaged browser dependencies
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Run built Admin three-build smoke
+        env:
+          CI: "1"
+        run: npm run test:e2e:system-build-packaged
+      - name: Upload packaged browser diagnostics
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: packaged-system-build-browser-gate
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
+
+  mosquitto-lifecycle:
+    name: Real Mosquitto lifecycle
+    needs: [resolve-source, static]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve-source.outputs.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+      - name: Verify Docker and Mosquitto environment
+        run: |
+          docker version
+          docker info
+          docker pull eclipse-mosquitto:2
+          docker image inspect eclipse-mosquitto:2 --format 'Mosquitto image: {{.Id}}'
+      - name: Run real broker lifecycle contracts
+        env:
+          EMS_REQUIRE_REAL_MQTT_TESTS: "1"
+        run: |
+          set -o pipefail
+          pytest -q -rs tests/test_zendure_mqtt_broker_mosquitto.py tests/test_mqtt_real_legacy_flow.py \
+            | tee mosquitto-gate.log
+          grep -E "[1-9][0-9]* passed" mosquitto-gate.log >/dev/null || {
+            echo "No real Mosquitto lifecycle test executed." >&2
+            exit 1
+          }
+
+  package-smoke:
+    name: Admin and EMS package smoke
+    needs: [resolve-source, static]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.resolve-source.outputs.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+      - name: Build and smoke real packages
+        run: |
+          revision="$(git rev-parse HEAD)"
+          build_id="dev-ci-gate-${revision:0:7}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          docker build -t ems-solarflow-api-control:package-smoke .
+          docker build -f deploy/admin/Dockerfile \
+            --build-arg EMS_REVISION="$revision" \
+            --build-arg EMS_BUILD_ID="$build_id" \
+            --build-arg EMS_CHANNEL=development \
+            --build-arg EMS_RELEASE_TAG="$build_id" \
+            --build-arg EMS_SYSTEM_TAG="$build_id" \
+            -t ems-solarflow-admin:package-smoke .
+          docker run --rm ems-solarflow-api-control:package-smoke python3 emsctl.py --help
+          docker run --rm ems-solarflow-api-control:package-smoke test -f /app/config.template.json
+          docker run --rm ems-solarflow-admin:package-smoke python -m admin --help
+          docker run --rm ems-solarflow-admin:package-smoke test -f /app/release-resources/system-build.json
+      - name: Run paired package startup contract
+        run: pytest -q -rs tests/test_system_build_docker_contract.py
+
+  publish-feature-ghcr:
+    name: Build and publish feature Docker image
+    needs:
+      - resolve-source
+      - static
+      - non-docker-regression
+      - mqtt-release
+      - system-build
+      - playwright
+      - system_build_browser_gate
+      - packaged-system-build-smoke
+      - mosquitto-lifecycle
+      - package-smoke
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      immutable_tag: ${{ steps.build_identity.outputs.immutable_tag }}
+      display_name: ${{ steps.build_identity.outputs.display_name }}
+      revision: ${{ steps.build_identity.outputs.git_commit }}
+      build_id: ${{ steps.build_identity.outputs.build_id }}
+      admin_digest: ${{ steps.published_pair.outputs.admin_digest }}
+      ems_digest: ${{ steps.published_pair.outputs.ems_digest }}
+
+    steps:
+      - name: Checkout resolved source
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.resolve-source.outputs.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install -r requirements-dev.txt
+
+      - name: Resolve feature build identity
+        id: build_identity
+        env:
+          INPUT_REF: ${{ inputs.ref }}
+          RESOLVED_SHA: ${{ needs.resolve-source.outputs.sha }}
+        run: |
+          # Sanitize the ref into a Docker-tag-safe slug. This same logic must
+          # stay in sync with docker-feature-cleanup.yml so deletion targets the
+          # tags this workflow publishes.
+          safe_ref="$(printf '%s' "${INPUT_REF}" \
+            | tr '[:upper:]' '[:lower:]' \
+            | sed 's#[^a-z0-9._-]#-#g' \
+            | sed 's#^[._-]*##; s#[._-]*$##' \
+            | cut -c1-80 \
+            | sed 's#[._-]*$##')"
+          if [[ -z "${safe_ref}" ]]; then
+            echo "The selected ref does not contain a Docker-tag-safe name." >&2
+            exit 1
+          fi
+          ref_hash="$(printf '%s' "${INPUT_REF}" | sha256sum | cut -c1-10)"
+          feature_tag_prefix="dev-${safe_ref}-${ref_hash}"
+          git_commit="$(git rev-parse --verify HEAD)"
+          if [[ ! "${git_commit}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "The checked-out ref did not resolve to a full lowercase Git SHA." >&2
+            exit 1
+          fi
+          if [[ "${git_commit}" != "${RESOLVED_SHA}" ]]; then
+            echo "Checked-out revision ${git_commit} does not match the resolved source ${RESOLVED_SHA}." >&2
+            exit 1
+          fi
+          git_commit_short="${git_commit::7}"
+          git_describe="$(git describe --tags --always --dirty 2>/dev/null || true)"
+          # The canonical install target identifies one exact workflow attempt.
+          # The floating dev-<branch> alias stays published for convenience but is
+          # not a canonical install target (SystemBuildResolver rejects it).
+          immutable_tag="${feature_tag_prefix}-${git_commit_short}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if (( ${#immutable_tag} > 128 )); then
+            echo "Canonical development tag exceeds Docker's 128-character limit." >&2
+            exit 1
+          fi
+          {
+            echo "safe_ref=${safe_ref}"
+            echo "display_name=Feature ${safe_ref#feature-}"
+            echo "feature_tag_prefix=${feature_tag_prefix}"
+            echo "immutable_tag=${immutable_tag}"
+            echo "git_commit=${git_commit}"
+            echo "git_commit_short=${git_commit_short}"
+            echo "git_describe=${git_describe}"
+            echo "build_serial=${GITHUB_RUN_NUMBER}"
+            echo "build_id=${immutable_tag}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate EMS Docker metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/basecubedev/ems-solarflow-api-control
+          tags: |
+            type=raw,value=${{ steps.build_identity.outputs.feature_tag_prefix }}
+            type=raw,value=${{ steps.build_identity.outputs.feature_tag_prefix }}-${{ steps.build_identity.outputs.git_commit_short }}
+            type=raw,value=${{ steps.build_identity.outputs.immutable_tag }}
+          labels: |
+            org.opencontainers.image.title=ems-solarflow-api-control
+            org.opencontainers.image.description=Feature test build of the local EMS controller for Zendure SolarFlow. Not a release image.
+            org.opencontainers.image.source=https://github.com/basecubedev/ems-solarflow-api-control
+            org.opencontainers.image.version=${{ steps.build_identity.outputs.immutable_tag }}
+            org.opencontainers.image.revision=${{ steps.build_identity.outputs.git_commit }}
+            de.basecubedev.ems.channel=development
+            de.basecubedev.ems.branch=${{ inputs.ref }}
+            de.basecubedev.ems.release_tag=${{ steps.build_identity.outputs.immutable_tag }}
+            de.basecubedev.ems.build_serial=${{ steps.build_identity.outputs.build_serial }}
+            de.basecubedev.ems.build_id=${{ steps.build_identity.outputs.build_id }}
+
+      - name: Build local EMS image for content validation
+        run: |
+          docker build \
+            --build-arg EMS_RELEASE_TAG="${{ steps.build_identity.outputs.immutable_tag }}" \
+            --build-arg EMS_GIT_COMMIT="${{ steps.build_identity.outputs.git_commit }}" \
+            --build-arg EMS_GIT_COMMIT_SHORT="${{ steps.build_identity.outputs.git_commit_short }}" \
+            --build-arg EMS_GIT_DESCRIBE="${{ steps.build_identity.outputs.git_describe }}" \
+            --build-arg EMS_GIT_BRANCH="${{ inputs.ref }}" \
+            --build-arg EMS_GIT_DIRTY="false" \
+            --build-arg EMS_BUILD_ID="${{ steps.build_identity.outputs.build_id }}" \
+            --build-arg EMS_BUILD_SERIAL="${{ steps.build_identity.outputs.build_serial }}" \
+            --build-arg EMS_CHANNEL="development" \
+            -t ems-solarflow-api-control:ci .
+
+      - name: Validate EMS image runtime content
+        run: |
+          docker run --rm ems-solarflow-api-control:ci python3 emsctl.py --help
+          docker run --rm ems-solarflow-api-control:ci test -f /app/config.template.json
+
+      - name: Build and push EMS Docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            EMS_RELEASE_TAG=${{ steps.build_identity.outputs.immutable_tag }}
+            EMS_GIT_COMMIT=${{ steps.build_identity.outputs.git_commit }}
+            EMS_GIT_COMMIT_SHORT=${{ steps.build_identity.outputs.git_commit_short }}
+            EMS_GIT_DESCRIBE=${{ steps.build_identity.outputs.git_describe }}
+            EMS_GIT_BRANCH=${{ inputs.ref }}
+            EMS_GIT_DIRTY=false
+            EMS_BUILD_ID=${{ steps.build_identity.outputs.build_id }}
+            EMS_BUILD_SERIAL=${{ steps.build_identity.outputs.build_serial }}
+            EMS_CHANNEL=development
+
+      - name: Generate Admin Docker metadata
+        id: meta_admin
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/basecubedev/ems-solarflow-admin
+          tags: |
+            type=raw,value=${{ steps.build_identity.outputs.feature_tag_prefix }}
+            type=raw,value=${{ steps.build_identity.outputs.feature_tag_prefix }}-${{ steps.build_identity.outputs.git_commit_short }}
+            type=raw,value=${{ steps.build_identity.outputs.immutable_tag }}
+          labels: |
+            org.opencontainers.image.title=ems-solarflow-admin
+            org.opencontainers.image.description=Feature test build of the EMS SolarFlow Admin Console. Not a release image.
+            org.opencontainers.image.source=https://github.com/basecubedev/ems-solarflow-api-control
+            org.opencontainers.image.version=${{ steps.build_identity.outputs.immutable_tag }}
+            org.opencontainers.image.revision=${{ steps.build_identity.outputs.git_commit }}
+            de.basecubedev.ems.channel=development
+            de.basecubedev.ems.branch=${{ inputs.ref }}
+            de.basecubedev.ems.release_tag=${{ steps.build_identity.outputs.immutable_tag }}
+            de.basecubedev.ems.build_serial=${{ steps.build_identity.outputs.build_serial }}
+            de.basecubedev.ems.build_id=${{ steps.build_identity.outputs.build_id }}
+
+      - name: Build local Admin image for startup validation
+        run: |
+          # Embed matching Setup resources + labels for the immutable dev build,
+          # so a feature build installs through the normal paired-system flow.
+          docker build -f deploy/admin/Dockerfile \
+            --build-arg EMS_REVISION="${{ steps.build_identity.outputs.git_commit }}" \
+            --build-arg EMS_BUILD_ID="${{ steps.build_identity.outputs.build_id }}" \
+            --build-arg EMS_CHANNEL="development" \
+            --build-arg EMS_RELEASE_TAG="${{ steps.build_identity.outputs.immutable_tag }}" \
+            --build-arg EMS_SYSTEM_TAG="${{ steps.build_identity.outputs.immutable_tag }}" \
+            -t ems-solarflow-admin:ci .
+          docker run --rm ems-solarflow-admin:ci python -m admin --help
+
+      - name: Verify Admin/EMS feature-build pair metadata
+        run: |
+          set -euo pipefail
+          expected_system_tag="${{ steps.build_identity.outputs.immutable_tag }}"
+          expected_channel="development"
+          expected_rev="${{ steps.build_identity.outputs.git_commit }}"
+          expected_build_id="${{ steps.build_identity.outputs.build_id }}"
+          expected_release_tag="${{ steps.build_identity.outputs.immutable_tag }}"
+          expected_admin_image="ghcr.io/basecubedev/ems-solarflow-admin:${expected_system_tag}"
+          expected_ems_image="ghcr.io/basecubedev/ems-solarflow-api-control:${expected_system_tag}"
+
+          fail() { echo "SYSTEM BUILD PAIR MISMATCH: $1" >&2; exit 1; }
+          expect() { [ "$1" = "$2" ] || fail "$3=$1 != $2"; }
+          label() { docker inspect --format "{{ index .Config.Labels \"$1\" }}" "$2"; }
+
+          admin_version="$(label org.opencontainers.image.version ems-solarflow-admin:ci)"
+          admin_rev="$(label org.opencontainers.image.revision ems-solarflow-admin:ci)"
+          admin_channel="$(label de.basecubedev.ems.channel ems-solarflow-admin:ci)"
+          admin_build_id="$(label de.basecubedev.ems.build_id ems-solarflow-admin:ci)"
+          admin_release_tag="$(label de.basecubedev.ems.release_tag ems-solarflow-admin:ci)"
+          ems_version="$(label org.opencontainers.image.version ems-solarflow-api-control:ci)"
+          ems_oci_rev="$(label org.opencontainers.image.revision ems-solarflow-api-control:ci)"
+          ems_oci_channel="$(label de.basecubedev.ems.channel ems-solarflow-api-control:ci)"
+          ems_oci_build_id="$(label de.basecubedev.ems.build_id ems-solarflow-api-control:ci)"
+          ems_oci_release_tag="$(label de.basecubedev.ems.release_tag ems-solarflow-api-control:ci)"
+
+          sb="$(docker run --rm ems-solarflow-admin:ci cat /app/release-resources/system-build.json)"
+          rm="$(docker run --rm ems-solarflow-admin:ci cat /app/release-resources/resource-manifest.json)"
+          jq_get() { printf '%s' "$1" | python3 -c "import sys,json;print(json.load(sys.stdin)$2)"; }
+
+          sb_format_version="$(jq_get "$sb" "['format_version']")"
+          sb_system_tag="$(jq_get "$sb" "['system_tag']")"
+          sb_channel="$(jq_get "$sb" "['channel']")"
+          sb_rev="$(jq_get "$sb" "['revision']")"
+          sb_build_id="$(jq_get "$sb" "['build_id']")"
+          sb_release_tag="$(jq_get "$sb" "['release_tag']")"
+          sb_admin_image="$(jq_get "$sb" "['admin_image']")"
+          sb_ems_image="$(jq_get "$sb" "['ems_image']")"
+          rm_format_version="$(jq_get "$rm" "['format_version']")"
+          rm_system_tag="$(jq_get "$rm" "['system_tag']")"
+          rm_channel="$(jq_get "$rm" "['channel']")"
+          rm_rev="$(jq_get "$rm" "['revision']")"
+          rm_build_id="$(jq_get "$rm" "['build_id']")"
+          rm_release_tag="$(jq_get "$rm" "['release_tag']")"
+          rm_admin_image="$(jq_get "$rm" "['admin_image']")"
+          rm_ems_image="$(jq_get "$rm" "['ems_image']")"
+
+          ems_rev="$(docker run --rm ems-solarflow-api-control:ci printenv EMS_GIT_COMMIT)"
+          ems_build_id="$(docker run --rm ems-solarflow-api-control:ci printenv EMS_BUILD_ID)"
+          ems_channel="$(docker run --rm ems-solarflow-api-control:ci printenv EMS_CHANNEL)"
+          ems_release_tag="$(docker run --rm ems-solarflow-api-control:ci printenv EMS_RELEASE_TAG)"
+
+          for name in admin_version ems_version sb_system_tag rm_system_tag; do
+            expect "${!name}" "$expected_system_tag" "$name"
+          done
+          for name in admin_rev ems_oci_rev ems_rev sb_rev rm_rev; do
+            expect "${!name}" "$expected_rev" "$name"
+          done
+          for name in admin_channel ems_oci_channel ems_channel sb_channel rm_channel; do
+            expect "${!name}" "$expected_channel" "$name"
+          done
+          for name in admin_build_id ems_oci_build_id ems_build_id sb_build_id rm_build_id; do
+            expect "${!name}" "$expected_build_id" "$name"
+          done
+          for name in admin_release_tag ems_oci_release_tag ems_release_tag sb_release_tag rm_release_tag; do
+            expect "${!name}" "$expected_release_tag" "$name"
+          done
+          for name in sb_admin_image rm_admin_image; do
+            expect "${!name}" "$expected_admin_image" "$name"
+          done
+          for name in sb_ems_image rm_ems_image; do
+            expect "${!name}" "$expected_ems_image" "$name"
+          done
+          expect "$sb_format_version" "1" "system-build format_version"
+          expect "$rm_format_version" "1" "resource-manifest format_version"
+
+          required_resources=(
+            config.template.json
+            docker-compose.example.yml
+            install-docker.sh
+            install-docker.ps1
+          )
+          while IFS= read -r resource; do
+            required_resources+=("$resource")
+          done < <(find deploy/docker -type f -print | sort)
+          for resource in "${required_resources[@]}"; do
+            resource_hash="$(printf '%s' "$rm" | RESOURCE="$resource" python3 -c \
+              'import json,os,sys; print(json.load(sys.stdin)["files"].get(os.environ["RESOURCE"], ""))')"
+            [[ "$resource_hash" =~ ^sha256:[0-9a-f]{64}$ ]] \
+              || fail "resource-manifest hash missing or invalid for $resource"
+            actual_hash="$(docker run --rm ems-solarflow-admin:ci python -c \
+              'import hashlib,sys; print("sha256:" + hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' \
+              "/app/release-resources/$resource")"
+            expect "$actual_hash" "$resource_hash" "embedded resource hash ($resource)"
+          done
+
+          echo "Admin/EMS feature-build pair verified for $expected_system_tag"
+
+      - name: Build and push Admin Docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./deploy/admin/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta_admin.outputs.tags }}
+          labels: ${{ steps.meta_admin.outputs.labels }}
+          build-args: |
+            EMS_REVISION=${{ steps.build_identity.outputs.git_commit }}
+            EMS_BUILD_ID=${{ steps.build_identity.outputs.build_id }}
+            EMS_CHANNEL=development
+            EMS_RELEASE_TAG=${{ steps.build_identity.outputs.immutable_tag }}
+            EMS_SYSTEM_TAG=${{ steps.build_identity.outputs.immutable_tag }}
+
+      - name: Verify published Admin/EMS image pair
+        id: published_pair
+        env:
+          ADMIN_IMAGE: ghcr.io/basecubedev/ems-solarflow-admin:${{ steps.build_identity.outputs.immutable_tag }}
+          EMS_IMAGE: ghcr.io/basecubedev/ems-solarflow-api-control:${{ steps.build_identity.outputs.immutable_tag }}
+          EXPECTED_REVISION: ${{ steps.build_identity.outputs.git_commit }}
+          EXPECTED_BUILD_ID: ${{ steps.build_identity.outputs.build_id }}
+        run: |
+          set -euo pipefail
+
+          image_digest() {
+            docker buildx imagetools inspect "$1" \
+              | awk '$1 == "Digest:" { print $2; exit }'
+          }
+          image_labels() {
+            docker buildx imagetools inspect "$1" \
+              --format '{{json .Image.Config.Labels}}'
+          }
+          verify_identity() {
+            image="$1"
+            labels="$(image_labels "$image")"
+            jq -e \
+              --arg revision "$EXPECTED_REVISION" \
+              --arg build_id "$EXPECTED_BUILD_ID" \
+              '."org.opencontainers.image.revision" == $revision and
+               ."de.basecubedev.ems.build_id" == $build_id and
+               ."de.basecubedev.ems.channel" == "development"' \
+              <<< "$labels" >/dev/null
+          }
+
+          verify_identity "$ADMIN_IMAGE"
+          verify_identity "$EMS_IMAGE"
+          admin_digest="$(image_digest "$ADMIN_IMAGE")"
+          ems_digest="$(image_digest "$EMS_IMAGE")"
+          [[ "$admin_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$ems_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          {
+            echo "admin_digest=$admin_digest"
+            echo "ems_digest=$ems_digest"
+          } >> "$GITHUB_OUTPUT"
+
+  remote-image-pullback:
+    name: Pull back and inspect remote image pair
+    needs: publish-feature-ghcr
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.publish-feature-ghcr.outputs.revision }}
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull exact remote digests and inspect runnable content
+        env:
+          ADMIN_IMAGE: ghcr.io/basecubedev/ems-solarflow-admin
+          EMS_IMAGE: ghcr.io/basecubedev/ems-solarflow-api-control
+          ADMIN_DIGEST: ${{ needs.publish-feature-ghcr.outputs.admin_digest }}
+          EMS_DIGEST: ${{ needs.publish-feature-ghcr.outputs.ems_digest }}
+          EXPECTED_TAG: ${{ needs.publish-feature-ghcr.outputs.immutable_tag }}
+          EXPECTED_REVISION: ${{ needs.publish-feature-ghcr.outputs.revision }}
+          EXPECTED_BUILD_ID: ${{ needs.publish-feature-ghcr.outputs.build_id }}
+          PLATFORM: linux/amd64
+        run: bash scripts/verify_remote_system_build.sh
+
+  remote-packaged-browser-canary:
+    name: Remote packaged Admin Chromium canary
+    needs: [publish-feature-ghcr, remote-image-pullback]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.publish-feature-ghcr.outputs.revision }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install remote browser dependencies
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Write production-format canary catalogue
+        env:
+          TAG: ${{ needs.publish-feature-ghcr.outputs.immutable_tag }}
+          DISPLAY_NAME: ${{ needs.publish-feature-ghcr.outputs.display_name }}
+          REVISION: ${{ needs.publish-feature-ghcr.outputs.revision }}
+          BUILD_ID: ${{ needs.publish-feature-ghcr.outputs.build_id }}
+          ADMIN_DIGEST: ${{ needs.publish-feature-ghcr.outputs.admin_digest }}
+          EMS_DIGEST: ${{ needs.publish-feature-ghcr.outputs.ems_digest }}
+        run: |
+          jq -n \
+            --arg tag "$TAG" --arg display_name "$DISPLAY_NAME" \
+            --arg revision "$REVISION" --arg build_id "$BUILD_ID" \
+            --arg run_id "${{ github.run_id }}" \
+            --argjson run_attempt "${{ github.run_attempt }}" \
+            --arg created_at "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+            --arg admin_image "ghcr.io/basecubedev/ems-solarflow-admin:${TAG}" \
+            --arg admin_digest "$ADMIN_DIGEST" \
+            --arg ems_image "ghcr.io/basecubedev/ems-solarflow-api-control:${TAG}" \
+            --arg ems_digest "$EMS_DIGEST" \
+            '{builds: [{tag: $tag, display_name: $display_name, channel: "development",
+              revision: $revision, build_id: $build_id, run_id: $run_id,
+              run_attempt: $run_attempt, created_at: $created_at,
+              admin_image: $admin_image, admin_digest: $admin_digest,
+              ems_image: $ems_image, ems_digest: $ems_digest, installable: true}]}' \
+            > remote-development-builds.json
+      - name: Run Chromium against the pulled production Admin
+        env:
+          REMOTE_ADMIN_IMAGE: ghcr.io/basecubedev/ems-solarflow-admin@${{ needs.publish-feature-ghcr.outputs.admin_digest }}
+          REMOTE_CATALOGUE_SOURCE: ${{ github.workspace }}/remote-development-builds.json
+          CANARY_TAG: ${{ needs.publish-feature-ghcr.outputs.immutable_tag }}
+          CANARY_DISPLAY_NAME: ${{ needs.publish-feature-ghcr.outputs.display_name }}
+          CANARY_REVISION: ${{ needs.publish-feature-ghcr.outputs.revision }}
+          CANARY_BUILD_ID: ${{ needs.publish-feature-ghcr.outputs.build_id }}
+          CANARY_ADMIN_DIGEST: ${{ needs.publish-feature-ghcr.outputs.admin_digest }}
+          CANARY_EMS_DIGEST: ${{ needs.publish-feature-ghcr.outputs.ems_digest }}
+        run: npm run test:e2e:system-build-remote
+      - name: Upload remote browser diagnostics
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: remote-packaged-system-build-browser-gate
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
+
+  publish-development-catalogue:
+    name: Publish verified development catalogue entry
+    needs: [publish-feature-ghcr, remote-packaged-browser-canary]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.publish-feature-ghcr.outputs.revision }}
+      - name: Publish development build catalogue entry
+        if: ${{ success() }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CATALOGUE_BRANCH: development-build-catalogue
+          CATALOGUE_FILE: development-builds.json
+          TAG: ${{ needs.publish-feature-ghcr.outputs.immutable_tag }}
+          DISPLAY_NAME: ${{ needs.publish-feature-ghcr.outputs.display_name }}
+          REVISION: ${{ needs.publish-feature-ghcr.outputs.revision }}
+          BUILD_ID: ${{ needs.publish-feature-ghcr.outputs.build_id }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          ADMIN_DIGEST: ${{ needs.publish-feature-ghcr.outputs.admin_digest }}
+          EMS_DIGEST: ${{ needs.publish-feature-ghcr.outputs.ems_digest }}
+        run: |
+          set -euo pipefail
+          api="repos/${GITHUB_REPOSITORY}/contents/${CATALOGUE_FILE}"
+          if ! gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${CATALOGUE_BRANCH}" >/dev/null 2>&1; then
+            base_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${{ github.event.repository.default_branch }}" --jq .object.sha)"
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/heads/${CATALOGUE_BRANCH}" -f sha="$base_sha" >/dev/null \
+              || gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${CATALOGUE_BRANCH}" >/dev/null
+          fi
+          created_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          jq -n \
+            --arg tag "$TAG" --arg display_name "$DISPLAY_NAME" \
+            --arg revision "$REVISION" --arg build_id "$BUILD_ID" \
+            --arg run_id "$RUN_ID" --argjson run_attempt "$RUN_ATTEMPT" \
+            --arg created_at "$created_at" \
+            --arg admin_image "ghcr.io/basecubedev/ems-solarflow-admin:${TAG}" \
+            --arg admin_digest "$ADMIN_DIGEST" \
+            --arg ems_image "ghcr.io/basecubedev/ems-solarflow-api-control:${TAG}" \
+            --arg ems_digest "$EMS_DIGEST" \
+            '{tag: $tag, display_name: $display_name, channel: "development",
+              revision: $revision, build_id: $build_id, run_id: $run_id,
+              run_attempt: $run_attempt, created_at: $created_at,
+              admin_image: $admin_image, admin_digest: $admin_digest,
+              ems_image: $ems_image, ems_digest: $ems_digest, installable: true}' \
+            > catalogue-entry.json
+          for retry in 1 2 3 4 5; do
+            metadata="$(gh api "${api}?ref=${CATALOGUE_BRANCH}" 2>/dev/null || true)"
+            if [[ -n "$metadata" ]]; then
+              sha="$(jq -r .sha <<< "$metadata")"
+              jq -r .content <<< "$metadata" | base64 --decode > "$CATALOGUE_FILE"
+            else
+              sha=""
+              printf '{"builds": []}\n' > "$CATALOGUE_FILE"
+            fi
+            python3 scripts/development_catalogue.py \
+              --catalogue "$CATALOGUE_FILE" upsert --entry catalogue-entry.json
+            content="$(base64 -w0 "$CATALOGUE_FILE")"
+            args=(--method PUT "$api" -f "message=ci: publish ${TAG}" \
+              -f "content=${content}" -f "branch=${CATALOGUE_BRANCH}")
+            [[ -z "$sha" ]] || args+=(-f "sha=${sha}")
+            if gh api "${args[@]}" >/dev/null; then
+              exit 0
+            fi
+            sleep "$retry"
+          done
+          echo "Could not update the development catalogue after retries." >&2
+          exit 1
+
+  public-catalogue-verification:
+    name: Verify public development catalogue and browser
+    needs: [publish-feature-ghcr, publish-development-catalogue]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.publish-feature-ghcr.outputs.revision }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify exact public catalogue entry
+        env:
+          SOURCE: https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/development-build-catalogue/development-builds.json
+          TAG: ${{ needs.publish-feature-ghcr.outputs.immutable_tag }}
+          REVISION: ${{ needs.publish-feature-ghcr.outputs.revision }}
+          BUILD_ID: ${{ needs.publish-feature-ghcr.outputs.build_id }}
+          ADMIN_DIGEST: ${{ needs.publish-feature-ghcr.outputs.admin_digest }}
+          EMS_DIGEST: ${{ needs.publish-feature-ghcr.outputs.ems_digest }}
+        run: |
+          python3 scripts/verify_development_catalogue.py \
+            --source "${SOURCE}?run=${{ github.run_id }}-${{ github.run_attempt }}" \
+            --tag "$TAG" --revision "$REVISION" --build-id "$BUILD_ID" \
+            --admin-image "ghcr.io/basecubedev/ems-solarflow-admin:${TAG}" \
+            --admin-digest "$ADMIN_DIGEST" \
+            --ems-image "ghcr.io/basecubedev/ems-solarflow-api-control:${TAG}" \
+            --ems-digest "$EMS_DIGEST" --attempts 12 --delay-seconds 5
+      - name: Run read-only public-source browser canary
+        env:
+          REMOTE_ADMIN_IMAGE: ghcr.io/basecubedev/ems-solarflow-admin@${{ needs.publish-feature-ghcr.outputs.admin_digest }}
+          REMOTE_CATALOGUE_SOURCE: https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/development-build-catalogue/development-builds.json?run=${{ github.run_id }}-${{ github.run_attempt }}&browser=1
+          CANARY_TAG: ${{ needs.publish-feature-ghcr.outputs.immutable_tag }}
+          CANARY_DISPLAY_NAME: ${{ needs.publish-feature-ghcr.outputs.display_name }}
+          CANARY_REVISION: ${{ needs.publish-feature-ghcr.outputs.revision }}
+          CANARY_BUILD_ID: ${{ needs.publish-feature-ghcr.outputs.build_id }}
+          CANARY_ADMIN_DIGEST: ${{ needs.publish-feature-ghcr.outputs.admin_digest }}
+          CANARY_EMS_DIGEST: ${{ needs.publish-feature-ghcr.outputs.ems_digest }}
+          PUBLIC_CATALOGUE_READ_ONLY: "1"
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run test:e2e:system-build-remote
+      - name: Remove failed public catalogue entry
+        if: ${{ failure() }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CATALOGUE_BRANCH: development-build-catalogue
+          CATALOGUE_FILE: development-builds.json
+          TAG: ${{ needs.publish-feature-ghcr.outputs.immutable_tag }}
+        run: |
+          set -euo pipefail
+          api="repos/${GITHUB_REPOSITORY}/contents/${CATALOGUE_FILE}"
+          for retry in 1 2 3 4 5; do
+            metadata="$(gh api "${api}?ref=${CATALOGUE_BRANCH}")"
+            sha="$(jq -r .sha <<< "$metadata")"
+            jq -r .content <<< "$metadata" | base64 --decode > "$CATALOGUE_FILE"
+            python3 scripts/development_catalogue.py \
+              --catalogue "$CATALOGUE_FILE" remove-tag --tag "$TAG"
+            content="$(base64 -w0 "$CATALOGUE_FILE")"
+            if gh api --method PUT "$api" -f "message=ci: remove failed ${TAG}" \
+              -f "content=${content}" -f "branch=${CATALOGUE_BRANCH}" \
+              -f "sha=${sha}" >/dev/null; then
+              exit 0
+            fi
+            sleep "$retry"
+          done
+          echo "Could not remove the failed catalogue entry." >&2
+          exit 1
