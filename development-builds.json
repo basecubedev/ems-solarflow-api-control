@@ -1,6 +1,21 @@
 {
   "builds": [
     {
+      "admin_digest": "sha256:ba6543f4a331a66626498672dba30d9d94c8bd7f20705e1be712ab8605eba6d4",
+      "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feature-zendure-mqtt-device-support-c05292c331-e4dd479-29837699391-1",
+      "build_id": "dev-feature-zendure-mqtt-device-support-c05292c331-e4dd479-29837699391-1",
+      "channel": "development",
+      "created_at": "2026-07-21T14:18:15Z",
+      "display_name": "Feature zendure-mqtt-device-support",
+      "ems_digest": "sha256:a2d5a9af9c3418ab0f9be09c600bc1ac3fbd3096fca67924357d0fa3abbe5800",
+      "ems_image": "ghcr.io/basecubedev/ems-solarflow-api-control:dev-feature-zendure-mqtt-device-support-c05292c331-e4dd479-29837699391-1",
+      "installable": true,
+      "revision": "e4dd4798a364234102fdeff3fce363d71e933fa6",
+      "run_attempt": 1,
+      "run_id": "29837699391",
+      "tag": "dev-feature-zendure-mqtt-device-support-c05292c331-e4dd479-29837699391-1"
+    },
+    {
       "admin_digest": "sha256:d735ebbc7b8e941c0a06c658268253f8483a37fb5556e0f7dc019aadd4f0c11f",
       "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feature-zendure-mqtt-device-support-c05292c331-5431b08-29774945867-1",
       "build_id": "dev-feature-zendure-mqtt-device-support-c05292c331-5431b08-29774945867-1",
@@ -14,21 +29,6 @@
       "run_attempt": 1,
       "run_id": "29774945867",
       "tag": "dev-feature-zendure-mqtt-device-support-c05292c331-5431b08-29774945867-1"
-    },
-    {
-      "admin_digest": "sha256:45a43189e05c931c41d83d71b048d8d30e8f0057f7df6cd7596b08b6cb1e2c66",
-      "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feature-zendure-mqtt-device-support-c05292c331-3867318-29766384547-1",
-      "build_id": "dev-feature-zendure-mqtt-device-support-c05292c331-3867318-29766384547-1",
-      "channel": "development",
-      "created_at": "2026-07-20T18:16:31Z",
-      "display_name": "Feature zendure-mqtt-device-support",
-      "ems_digest": "sha256:b80fca69fab5b4a92bcff817ccdbf98c5dd8b2f1f6e4e66d4111b9e5e229965c",
-      "ems_image": "ghcr.io/basecubedev/ems-solarflow-api-control:dev-feature-zendure-mqtt-device-support-c05292c331-3867318-29766384547-1",
-      "installable": true,
-      "revision": "3867318440811c94624425d0e2f6f526936205a9",
-      "run_attempt": 1,
-      "run_id": "29766384547",
-      "tag": "dev-feature-zendure-mqtt-device-support-c05292c331-3867318-29766384547-1"
     }
   ]
 }
