@@ -1,0 +1,7 @@
+{
+  "messageId": 1,
+  "deviceId": "DEVICE_ID",
+  "function": "deviceAutomation",
+  "output": "success",
+  "success": 1
+}

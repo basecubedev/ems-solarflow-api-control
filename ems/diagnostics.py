@@ -45,6 +45,7 @@ from ems.paths import (
     resolve_template_path,
 )
 from ems.build_info import collect_build_info
+from ems.zendure_mqtt import config_entries as zendure_mqtt_entries
 
 
 BATTERY_FULL_CHARGE_ASSIST_DEFAULTS = {
@@ -774,20 +775,31 @@ def diagnose_config_plausibility(checks, args, config_data):
         diagnose_add(checks, "config", "error", "devices_empty", "devices must contain at least one device")
     else:
         diagnose_add(checks, "config", "ok", "devices_non_empty", "devices contains at least one device")
+        if zendure_mqtt_entries.has_runtime_control_device(config_data):
+            diagnose_add(checks, "config", "ok", "control_devices_present", "at least one API or MQTT output-control device can join the EMS control loop")
+        else:
+            diagnose_add(checks, "config", "error", "no_control_devices", "devices contains only telemetry-only or disabled MQTT entries; add an API inverter or enable output control on a supported MQTT inverter")
 
-    seen = {}
+    broker_sources = {
+        ref: view.source
+        for ref, view in zendure_mqtt_entries.zendure_mqtt_broker_profile_views(
+            config_data.get("zendure_mqtt")
+        ).items()
+    }
+
     for index, item in enumerate(devices):
         if not isinstance(item, dict):
             diagnose_add(checks, "config", "error", "device_not_object", f"devices.{index} must be an object", index=index)
+            continue
+        if zendure_mqtt_entries.is_zendure_mqtt_device_config(item):
+            diagnose_zendure_mqtt_device_config(
+                checks, index, item, broker_sources=broker_sources
+            )
             continue
         name = item.get("name")
         path = f"devices.{index}"
         if not isinstance(name, str) or not name.strip():
             diagnose_add(checks, "config", "error", "device_name_missing", f"{path}.name must be non-empty", index=index)
-        elif name in seen:
-            diagnose_add(checks, "config", "error", "device_name_duplicate", f"Duplicate device name: {name}", name=name)
-        else:
-            seen[name] = index
         max_power = diagnose_float(item.get("max_power", 0))
         if max_power is None or max_power < 0:
             diagnose_add(checks, "config", "error", "device_max_power_invalid", f"{path}.max_power must be numeric and non-negative", index=index)
@@ -800,6 +812,14 @@ def diagnose_config_plausibility(checks, args, config_data):
                 diagnose_add(checks, "config", "error", "device_pv_priority_factor_invalid", f"{path}.pv_priority_factor must be numeric", index=index)
             elif parsed <= 0:
                 diagnose_add(checks, "config", "warning", "device_pv_priority_factor_non_positive", f"{path}.pv_priority_factor should be positive", index=index)
+
+    # Name uniqueness spans every transport (API and MQTT entries alike); the
+    # shared helper keeps diagnose in parity with the startup guard.
+    for issue in zendure_mqtt_entries.find_duplicate_device_names(devices):
+        diagnose_add(checks, "config", "error", issue["code"], issue["message"])
+
+    for issue in zendure_mqtt_entries.find_duplicate_zendure_device_identities(devices):
+        diagnose_add(checks, "config", "error", issue["code"], issue["message"])
 
     dashboard = config_data.get("dashboard", {})
     if isinstance(dashboard, dict) and dashboard.get("enabled", False):
@@ -846,7 +866,284 @@ def diagnose_config_plausibility(checks, args, config_data):
             diagnose_add(checks, "config", "warning", "ha_control_without_ha", "ha.control_enabled=true while ha.enabled=false")
 
     diagnose_grid_meter_config(checks, config_data)
+    diagnose_zendure_mqtt_runtime(checks, config_data)
     diagnose_deprecated_keys(checks, config_data)
+
+
+def diagnose_zendure_mqtt_device_config(checks, index, item, *, broker_sources=None):
+    path = f"devices.{index}"
+    name = item.get("name") if isinstance(item.get("name"), str) else f"device-{index}"
+    control = zendure_mqtt_entries.is_control_zendure_mqtt_device_config(item)
+    if control:
+        issues = zendure_mqtt_entries.validate_zendure_mqtt_control_device_config(
+            item, broker_sources=broker_sources
+        )
+    else:
+        issues = zendure_mqtt_entries.validate_zendure_mqtt_device_config(
+            item, broker_sources=broker_sources
+        )
+    if not issues:
+        if control:
+            diagnose_add(
+                checks,
+                "config",
+                "ok",
+                "zendure_mqtt_control_capable",
+                f"{name} is a control-capable Zendure MQTT device; output write is enabled",
+                index=index,
+            )
+        else:
+            diagnose_add(
+                checks,
+                "config",
+                "ok",
+                "zendure_mqtt_telemetry_only",
+                f"{name} is a telemetry-only Zendure MQTT device; output write is disabled",
+                index=index,
+            )
+        return
+    for issue in issues:
+        diagnose_add(
+            checks,
+            "config",
+            "error" if issue["severity"] == "error" else "warning",
+            f"zendure_mqtt_{issue['code']}",
+            f"{path}: {issue['message']}",
+            index=index,
+        )
+
+
+def diagnose_zendure_mqtt_runtime(checks, config_data):
+    """Read-only report on the telemetry-only Zendure MQTT runtime config.
+
+    Reports how many valid telemetry-only devices are configured and whether the
+    broker runtime is inactive, misconfigured or ready. The feature itself is
+    always on; without a broker host it is simply inactive. Broker credentials
+    are never echoed; only the sanitized host:port endpoint is shown.
+    """
+
+    if not isinstance(config_data, dict):
+        return
+
+    from ems.zendure_mqtt.config_entries import DEFAULT_BROKER_REF
+    from ems.zendure_mqtt.runtime import (
+        classify_zendure_mqtt_devices,
+        load_zendure_mqtt_broker_configs,
+        load_zendure_mqtt_runtime_config,
+    )
+
+    raw = config_data.get("zendure_mqtt")
+    brokers, broker_errors, _stale = load_zendure_mqtt_broker_configs(raw)
+    known_refs = set(brokers) | {DEFAULT_BROKER_REF}
+    brokers_defined = isinstance(raw, dict) and isinstance(raw.get("brokers"), dict) and bool(raw["brokers"])
+    valid, invalid = classify_zendure_mqtt_devices(
+        config_data.get("devices"),
+        known_broker_refs=known_refs,
+        brokers_defined=brokers_defined,
+    )
+    runtime_config, config_error = load_zendure_mqtt_runtime_config(raw)
+
+    feature_in_use = bool(valid) or bool(invalid) or bool(raw) or config_error
+    if not feature_in_use:
+        return
+
+    diagnose_add(
+        checks,
+        "config",
+        "ok" if valid else "info",
+        "zendure_mqtt_telemetry_device_count",
+        f"{len(valid)} telemetry-only Zendure MQTT device(s) configured; output write disabled",
+        count=len(valid),
+    )
+
+    if invalid:
+        diagnose_add(
+            checks,
+            "config",
+            "warning",
+            "zendure_mqtt_invalid_device_count",
+            f"{len(invalid)} Zendure MQTT device entry(ies) failed validation and are excluded from telemetry",
+            count=len(invalid),
+        )
+        for device in invalid:
+            for issue in device.issues:
+                if not isinstance(issue, dict) or not issue.get("code"):
+                    continue
+                diagnose_add(
+                    checks,
+                    "config",
+                    "error" if issue.get("severity") == "error" else "warning",
+                    f"zendure_mqtt_{issue['code']}",
+                    f"{device.name}: {issue.get('message', issue['code'])}",
+                    broker_ref=device.broker_ref,
+                )
+
+    # ``default`` is reserved for the implicit legacy top-level broker; a named
+    # zendure_mqtt.brokers.default is a config error the runtime would not honour.
+    for issue in zendure_mqtt_entries.find_reserved_mqtt_broker_ref_issues(
+        config_data
+    ):
+        diagnose_add(
+            checks,
+            "config",
+            "error",
+            issue["code"],
+            issue["message"],
+        )
+
+    # Enabled telemetry devices must reference a usable broker profile. Codes are
+    # already sanitized (index + broker ref only, no serials/hosts/credentials).
+    for issue in zendure_mqtt_entries.find_zendure_mqtt_broker_profile_issues(
+        config_data
+    ):
+        diagnose_add(
+            checks,
+            "config",
+            "error",
+            issue["code"],
+            issue["message"],
+        )
+
+    # Every configured MQTT credentials_ref (broker profile or grid meter) must
+    # be canonical and belong to one credential source — the same contract
+    # Admin Preview and Apply enforce, so diagnose agrees with them. Messages
+    # carry only the non-secret reference/source names.
+    from ems.mqtt_credentials import find_mqtt_credential_consumer_issues
+
+    for issue in find_mqtt_credential_consumer_issues(config_data):
+        diagnose_add(
+            checks,
+            "config",
+            "error",
+            issue["code"],
+            issue["message"],
+        )
+
+    # Per-device snapshot status. Diagnose runs offline with no broker, so live
+    # devices report "unseen"; identifiers are reduced to set/missing so no
+    # serial or device id leaks into the report.
+    for device in valid:
+        diagnose_add(
+            checks,
+            "config",
+            "info",
+            "zendure_mqtt_telemetry_device",
+            f"{device.name}: telemetry-only Zendure MQTT device "
+            f"(topic_family={device.topic_family or 'unknown'}); no live telemetry observed",
+            name=device.name,
+            topic_family=device.topic_family,
+            identifier="set" if device.identifier else "missing",
+            broker_ref=device.broker_ref,
+            source=device.source,
+            status="unseen",
+            write_output_limit=False,
+        )
+
+    if brokers_defined:
+        for ref in sorted(broker_errors):
+            diagnose_add(
+                checks,
+                "config",
+                "error",
+                "zendure_mqtt_broker_config_invalid",
+                f"Zendure MQTT broker '{ref}' config is invalid: {broker_errors[ref]}",
+                broker_ref=ref,
+            )
+        for ref in sorted(brokers):
+            cfg = brokers[ref]
+            endpoint = zendure_mqtt_entries.format_mqtt_endpoint(cfg.host, cfg.port)
+            if not cfg.host:
+                diagnose_add(
+                    checks,
+                    "config",
+                    "warning",
+                    "zendure_mqtt_broker_endpoint_missing",
+                    f"Zendure MQTT broker '{ref}' has no broker host configured; it will not start",
+                    broker_ref=ref,
+                )
+            elif endpoint is None:
+                # Host present but not a bare hostname/IP: never echo it, a
+                # credential could be smuggled through the host field.
+                diagnose_add(
+                    checks,
+                    "config",
+                    "error",
+                    "zendure_mqtt_broker_host_invalid",
+                    f"Zendure MQTT broker '{ref}' has an invalid broker host; it will not start",
+                    broker_ref=ref,
+                )
+            elif not cfg.enabled:
+                diagnose_add(
+                    checks,
+                    "config",
+                    "info",
+                    "zendure_mqtt_broker_disabled",
+                    f"Zendure MQTT broker '{ref}' is disabled",
+                    broker_ref=ref,
+                    source=cfg.source,
+                )
+            else:
+                diagnose_add(
+                    checks,
+                    "config",
+                    "ok",
+                    "zendure_mqtt_broker_configured",
+                    f"Zendure MQTT broker '{ref}' configured for {endpoint} "
+                    f"({cfg.source or 'unknown source'}); read-only",
+                    broker_ref=ref,
+                    source=cfg.source,
+                    endpoint=endpoint,
+                )
+        return
+
+    if config_error:
+        diagnose_add(
+            checks,
+            "config",
+            "error",
+            "zendure_mqtt_runtime_config_invalid",
+            f"Zendure MQTT telemetry runtime config is invalid: {config_error}",
+        )
+        return
+
+    if not runtime_config.enabled:
+        # The feature is always on; an active config requires a broker host, so
+        # "not enabled" here means exactly "no broker host configured".
+        diagnose_add(
+            checks,
+            "config",
+            "info",
+            "zendure_mqtt_runtime_inactive",
+            "Zendure MQTT telemetry is inactive: no broker host is configured",
+        )
+        return
+
+    endpoint = zendure_mqtt_entries.format_mqtt_endpoint(
+        runtime_config.host, runtime_config.port
+    )
+    if endpoint is None:
+        # Host present but not a bare hostname/IP: never echo it, a credential
+        # could be smuggled through the host field.
+        diagnose_add(
+            checks,
+            "config",
+            "error",
+            "zendure_mqtt_runtime_host_invalid",
+            "Zendure MQTT telemetry runtime has an invalid broker host; it will not start",
+        )
+        return
+
+    subscriptions = runtime_config.client_config().resolved_subscriptions()
+    diagnose_add(
+        checks,
+        "config",
+        "ok",
+        "zendure_mqtt_runtime_configured",
+        f"Zendure MQTT telemetry runtime configured for broker {endpoint} "
+        f"({len(subscriptions)} subscription filter(s)); read-only",
+        endpoint=endpoint,
+        subscription_count=len(subscriptions),
+    )
 
 
 def diagnose_grid_meter_config(checks, config_data):
@@ -860,12 +1157,27 @@ def diagnose_grid_meter_config(checks, config_data):
             return
 
     meter_type = str(grid_meter.get("type", "shelly")).strip().lower()
-    diagnose_add(checks, "config", "ok", "grid_meter_type", f"Grid meter type: {meter_type}", type=meter_type)
+    model, transport = config_mod.grid_meter_model_transport(meter_type)
+    type_message = f"Grid meter type: {meter_type}"
+    if model and transport:
+        type_message = f"{type_message} ({model} via {transport})"
+    diagnose_add(
+        checks,
+        "config",
+        "ok",
+        "grid_meter_type",
+        type_message,
+        type=meter_type,
+        model=model,
+        transport=transport,
+    )
     if meter_type in (
         "shelly",
         "shelly_3em_gen1",
         "ecotracker",
+        config_mod.ZENDURE_GRID_METER_HTTP_GRID_METER_TYPE,
         config_mod.ZENDURE_SMARTMETER_3CT_HTTP_GRID_METER_TYPE,
+        config_mod.ZENDURE_SMARTMETER_D0_HTTP_GRID_METER_TYPE,
     ):
         if grid_meter.get("ip"):
             diagnose_add(checks, "config", "ok", "grid_meter_ip_present", f"{meter_type} grid meter IP is configured")
@@ -881,12 +1193,32 @@ def diagnose_grid_meter_config(checks, config_data):
         else:
             diagnose_add(checks, "config", "error", "grid_meter_power_path_missing", "Tasmota HTTP grid meter requires grid_meter.power_path")
     elif meter_type in config_mod.MQTT_GRID_METER_TYPES:
-        mqtt_settings = config_mod.grid_meter_mqtt_settings(grid_meter)
+        raw_settings = config_mod.grid_meter_mqtt_settings(grid_meter)
         label = (
             "Zendure SmartMeter D0"
             if meter_type == config_mod.ZENDURE_SMARTMETER_D0_GRID_METER_TYPE
             else "MQTT grid meter"
         )
+        broker_ref = raw_settings.get("broker_ref")
+        mqtt_settings = raw_settings
+        if isinstance(broker_ref, str) and broker_ref.strip():
+            try:
+                # Resolving surfaces the effective connection and validates the
+                # ref (unknown/disabled/incomplete/cloud source) without secrets.
+                mqtt_settings = config_mod.resolve_grid_meter_mqtt_settings(config_data)
+                diagnose_add(
+                    checks, "config", "ok", "grid_meter_broker_ref",
+                    f"{label} uses broker profile '{broker_ref.strip()}'",
+                    broker_ref=broker_ref.strip(),
+                    resolved_host=mqtt_settings.get("host"),
+                    resolved_port=mqtt_settings.get("port"),
+                )
+            except ValueError as exc:
+                diagnose_add(
+                    checks, "config", "error", "grid_meter_broker_ref_invalid",
+                    str(exc), broker_ref=broker_ref.strip(),
+                )
+                return
         if mqtt_settings.get("host"):
             diagnose_add(checks, "config", "ok", "grid_meter_mqtt_host_present", f"{label} broker host is configured")
         else:
@@ -904,6 +1236,20 @@ def diagnose_grid_meter_config(checks, config_data):
             diagnose_add(checks, "config", "error", "grid_meter_mqtt_payload_format_invalid", "Zendure SmartMeter D0 requires payload_format number", payload_format=payload_format)
         if payload_format == "json" and not mqtt_settings.get("value_path"):
             diagnose_add(checks, "config", "error", "grid_meter_mqtt_value_path_missing", "MQTT JSON grid meter requires grid_meter.mqtt.value_path")
+        tls_enabled = config_mod.safe_bool(mqtt_settings.get("tls"), False)
+        tls_insecure = config_mod.safe_bool(mqtt_settings.get("tls_insecure"), False)
+        if tls_enabled and tls_insecure:
+            diagnose_add(
+                checks, "config", "warning", "grid_meter_mqtt_tls_insecure",
+                f"{label} uses TLS with certificate verification disabled (tls_insecure)",
+                tls=True, tls_insecure=True,
+            )
+        else:
+            diagnose_add(
+                checks, "config", "ok", "grid_meter_mqtt_tls",
+                f"{label} TLS: {'enabled' if tls_enabled else 'disabled'}",
+                tls=tls_enabled, tls_insecure=False,
+            )
     elif meter_type in ("ha", "homeassistant", "home_assistant"):
         diagnose_add(checks, "config", "ok", "grid_meter_ha_config", "Home Assistant grid meter type detected; only config completeness is checked by diagnose")
     else:
@@ -1439,6 +1785,8 @@ def diagnose_hardware(checks, config_data):
 
     for index, device in enumerate(config_data.get("devices", [])):
         if not isinstance(device, dict):
+            continue
+        if zendure_mqtt_entries.is_zendure_mqtt_device_config(device):
             continue
         name = str(device.get("name") or f"device-{index}")
         read_tracker = CommHealth(name, kind="read")

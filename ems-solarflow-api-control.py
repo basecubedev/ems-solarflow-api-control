@@ -6,7 +6,14 @@ import sys
 import time
 
 from ems import config as cfg
-from ems.clients import HAClient, ZendureClient, create_grid_meter_client, create_session
+from ems import paths
+from ems.clients import (
+    HAClient,
+    ZendureClient,
+    close_grid_meter_client,
+    create_grid_meter_client,
+    create_session,
+)
 from ems.controller import EMSController
 from ems.logging_utils import log_event, setup_logging
 from ems.runtime_state import RuntimeState, build_runtime_defaults
@@ -16,6 +23,10 @@ from ems.simulation import (
     run_frames,
     run_live_preflight,
     run_self_tests,
+)
+from ems.zendure_mqtt.config_entries import (
+    duplicate_device_name_startup_error,
+    duplicate_zendure_identity_startup_error,
 )
 
 # =====================
@@ -136,6 +147,34 @@ def main():
         run_frames(replay_frames, args.replay)
         sys.exit(0)
 
+    # A physical Zendure device must be configured only once. Refuse to start
+    # rather than let two entries (e.g. an API device and an MQTT telemetry
+    # entry for the same serial) drive conflicting state.
+    duplicate_identity = duplicate_zendure_identity_startup_error(
+        cfg.CONFIG.get("devices")
+    )
+    if duplicate_identity:
+        log_event(
+            logging.ERROR,
+            "startup_abort",
+            reason="duplicate_zendure_device_identity",
+            **duplicate_identity,
+        )
+        sys.exit(1)
+
+    # Device names are the runtime identity key for controller state,
+    # runtime-state.json and history: two active devices sharing a name would
+    # silently merge, so refusing to start is the safe behavior.
+    duplicate_name = duplicate_device_name_startup_error(cfg.CONFIG.get("devices"))
+    if duplicate_name:
+        log_event(
+            logging.ERROR,
+            "startup_abort",
+            reason="duplicate_device_name",
+            **duplicate_name,
+        )
+        sys.exit(1)
+
     session = create_session()
 
     ha = None
@@ -162,8 +201,88 @@ def main():
             d.get("battery_kwh", 1.0),
             d.get("pv_priority_factor", 1.0)
         )
-        for d in cfg.ZENDURE_CONFIG
+        for d in cfg.http_control_device_configs()
     ]
+
+    # An unsafe, unmigrated MQTT control config must not be silently rewritten at
+    # startup: refuse to run the control runtime and point the operator at the
+    # EMS-owned migration (emsctl config migrate-zendure-mqtt). Telemetry-only and
+    # already-pinned control devices never block.
+    from ems.zendure_mqtt.migration import (
+        zendure_mqtt_control_migration_startup_error,
+    )
+
+    migration_required = zendure_mqtt_control_migration_startup_error(cfg.CONFIG)
+    if migration_required and not (
+        cfg.SIMULATION_MODE or args.replay
+    ):
+        log_event(
+            logging.ERROR,
+            "startup_abort",
+            reason=migration_required["code"],
+            control_devices_needing_migration=migration_required["count"],
+        )
+        sys.exit(1)
+
+    # Write-capable Zendure MQTT devices join the same control loop as HTTP
+    # devices. Publishing is additionally guarded by the MQTT write gates.
+    zendure_mqtt_control_runtime = None
+    from ems.zendure_mqtt.control_runtime import (
+        MqttControlStartupError,
+        build_zendure_mqtt_control_runtime_or_abort,
+    )
+
+    try:
+        zendure_mqtt_control_runtime = build_zendure_mqtt_control_runtime_or_abort(
+            cfg.CONFIG
+        )
+    except MqttControlStartupError as e:
+        # MQTT control is configured but its runtime could not be built. Aborting
+        # is safer than silently running with fewer controllable inverters than
+        # configured.
+        log_event(
+            logging.ERROR,
+            "startup_abort",
+            reason="mqtt_control_runtime_build_failed",
+            error=e.__cause__ or e,
+        )
+        sys.exit(1)
+
+    if zendure_mqtt_control_runtime is not None:
+        accepted = len(zendure_mqtt_control_runtime.devices)
+        rejected = zendure_mqtt_control_runtime.rejected
+        configured = accepted + len(rejected)
+        # An enabled but invalid control device must not be silently skipped:
+        # starting with fewer controllable inverters than configured is unsafe.
+        if rejected:
+            codes = sorted(
+                {
+                    issue["code"]
+                    for entry in rejected
+                    for issue in entry.issues
+                    if issue.get("code")
+                }
+            )
+            log_event(
+                logging.ERROR,
+                "startup_abort",
+                reason="invalid_mqtt_control_device",
+                configured_control_devices=configured,
+                accepted_control_devices=accepted,
+                rejected_control_devices=len(rejected),
+                issue_codes=",".join(codes),
+            )
+            sys.exit(1)
+        if zendure_mqtt_control_runtime.devices:
+            zendure_mqtt_control_runtime.start()
+            devices = devices + zendure_mqtt_control_runtime.devices
+            log_event(
+                logging.INFO,
+                "zendure_mqtt_control_runtime",
+                configured_control_devices=configured,
+                accepted_control_devices=accepted,
+                rejected_control_devices=len(rejected),
+            )
 
     if not devices:
         log_event(logging.ERROR, "startup_abort", reason="no_devices")
@@ -266,10 +385,9 @@ def main():
             )
 
     if args.preflight:
-        if run_live_preflight(devices, shelly, ha):
-            sys.exit(0)
-
-        sys.exit(2)
+        ok = run_live_preflight(devices, shelly, ha)
+        close_grid_meter_client(shelly)
+        sys.exit(0 if ok else 2)
 
     # Native InfluxDB telemetry writer: active only when influxdb is enabled and
     # we are reading real hardware (not simulation/replay). Started lazily and
@@ -290,6 +408,50 @@ def main():
             log_event(logging.WARNING, "influx_writer_start_failed", error=e)
             influx_writer = None
 
+    # Zendure MQTT telemetry runtime. It reads snapshots and drives no writes;
+    # any control device shares its broker service so a broker used by both keeps
+    # a single connection and snapshot cache.
+    zendure_mqtt_runtime = None
+    zendure_mqtt_status_path = None
+
+    def _mqtt_control_status():
+        if zendure_mqtt_control_runtime is None:
+            return None
+        return zendure_mqtt_control_runtime.status()
+
+    try:
+        from ems.zendure_mqtt.runtime import build_zendure_mqtt_runtime
+
+        shared_services = (
+            zendure_mqtt_control_runtime.services_by_ref
+            if zendure_mqtt_control_runtime is not None
+            else None
+        )
+        zendure_mqtt_runtime = build_zendure_mqtt_runtime(
+            cfg.CONFIG, shared_services=shared_services
+        )
+        zendure_mqtt_runtime.start()
+        status = zendure_mqtt_runtime.status()
+        log_event(
+            logging.INFO,
+            "zendure_mqtt_runtime",
+            enabled=status["enabled"],
+            broker_configured=status["broker_configured"],
+            broker_count=status.get("broker_count", 0),
+            running=status["running"],
+            configured_devices=status["configured_device_count"],
+            invalid_devices=status["invalid_device_count"],
+        )
+        # Persist a live status snapshot Admin can prefer over its config-derived
+        # fallback. Read-only: no broker publish is involved. Control devices are
+        # merged in so they appear in runtime status too.
+        zendure_mqtt_status_path = paths.resolve_zendure_mqtt_status_path()
+        zendure_mqtt_runtime.write_status_file(
+            zendure_mqtt_status_path, control_status=_mqtt_control_status()
+        )
+    except Exception as e:
+        log_event(logging.WARNING, "zendure_mqtt_runtime_start_failed", error=e)
+
     ems = EMSController(
         devices,
         shelly,
@@ -308,6 +470,19 @@ def main():
         while True:
             ems.run_once()
             cycles += 1
+
+            # Self-heal: re-attempt broker connections that failed at boot.
+            # start() is idempotent, never raises on connection failure and
+            # throttles failed attempts internally.
+            if zendure_mqtt_control_runtime is not None:
+                zendure_mqtt_control_runtime.start()
+            if zendure_mqtt_runtime is not None:
+                zendure_mqtt_runtime.start()
+
+            if zendure_mqtt_runtime is not None and zendure_mqtt_status_path is not None:
+                zendure_mqtt_runtime.write_status_file(
+                    zendure_mqtt_status_path, control_status=_mqtt_control_status()
+                )
 
             if args.once:
                 log_event(
@@ -337,8 +512,16 @@ def main():
                 )
                 break
     finally:
+        # Release the grid-meter client's runtime resources (the MQTT grid meter
+        # owns a network loop/connection/thread; HTTP clients own none). Safe and
+        # idempotent, and never masks a primary shutdown error.
+        close_grid_meter_client(shelly)
         if influx_writer:
             influx_writer.stop()
+        if zendure_mqtt_runtime is not None:
+            zendure_mqtt_runtime.stop()
+        if zendure_mqtt_control_runtime is not None:
+            zendure_mqtt_control_runtime.stop()
 
 
 if __name__ == "__main__":

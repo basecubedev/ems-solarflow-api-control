@@ -28,6 +28,8 @@ class SimulatedShellyClient:
 class SimulatedZendureClient:
     """Zendure-compatible source for simulation and replay."""
 
+    control_gate = "api"
+
     def __init__(
         self,
         name,
@@ -53,12 +55,19 @@ class SimulatedZendureClient:
         self.battery_kwh = battery_kwh
         self.pv_priority_factor = pv_priority_factor
         self.state = zero_device_state()
+        self.last_output_limit = None
 
     def set_state(self, state):
         self.state = state
 
     def fetch(self):
         return self.state
+
+    def write_output_limit(self, value):
+        """Record the virtual outputLimit write; return success."""
+
+        self.last_output_limit = int(value)
+        return True
 
 
 class SimulatedHAClient:

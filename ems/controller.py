@@ -11,6 +11,7 @@ from ems.clients import (
     zero_device_state,
 )
 from ems.logging_utils import log_event
+from ems.mqtt_control.dispatch import WriteDispatchStatus, dispatch_device_write
 from ems.models import DeviceCapabilities
 from ems.runtime_intents import (
     DeviceRuntimeIntent,
@@ -96,6 +97,13 @@ class EMSController:
         self._last_influx_publish = 0
         self.last_control_explanation = None
         self.runtime_intents = {}
+        for device in self.devices:
+            set_observer = getattr(device, "set_dispatch_observer", None)
+            if callable(set_observer):
+                def observe(result, observed_device=device):
+                    self._observe_deferred_write_dispatch(observed_device, result)
+
+                set_observer(observe)
 
     def build_battery_full_charge_store(self):
         if not cfg.BASE_DIR:
@@ -1087,6 +1095,9 @@ class EMSController:
     def reconcile_ac_mode_intent(self, dev, state, intent):
         """Write acMode only when telemetry differs from desired runtime intent."""
 
+        if not getattr(dev, "supports_state_reconciliation", True):
+            return True
+
         if intent.desired_ac_mode is None:
             return True
 
@@ -1239,6 +1250,9 @@ class EMSController:
 
     def reconcile_runtime_ac_charge_power(self, dev, state, intent):
         """Write inputLimit when runtime AC input intent requests a new value."""
+
+        if not getattr(dev, "supports_state_reconciliation", True):
+            return True
 
         desired_input_limit = self.desired_runtime_input_limit(dev, intent)
         if desired_input_limit is None:
@@ -1960,39 +1974,25 @@ class EMSController:
             self.runtime_state.save_atomic()
 
     def set_output_limit(self, dev, value):
-        """Write output limit to device."""
+        """Write output limit to the device via its transport, behind its gate."""
 
-        if not cfg.hardware_writes_allowed():
+        gate = cfg.resolve_device_write_gate(dev)
+
+        if not gate.allowed:
             log_event(
                 logging.INFO,
                 "dry_run_output_limit",
                 device=dev.name,
                 target_w=value,
+                control_gate=gate.transport,
                 dry_run=cfg.DRY_RUN,
                 simulation=cfg.SIMULATION_MODE,
-                allow_hardware_writes=cfg.ALLOW_HARDWARE_WRITES
+                **gate.as_log_fields(),
             )
             return
 
         try:
-            ok = zendure_write(
-                dev,
-                "outputLimit",
-                {"outputLimit": int(value)},
-                "write_output_limit_error",
-                target_w=value
-            )
-
-            if not ok:
-                return
-
-            log_event(
-                logging.INFO,
-                "write_output_limit",
-                device=dev.name,
-                target_w=value
-            )
-
+            result = dispatch_device_write(dev, int(value))
         except Exception as e:
             log_event(
                 logging.WARNING,
@@ -2000,6 +2000,80 @@ class EMSController:
                 device=dev.name,
                 error=e
             )
+            return
+
+        self._log_write_dispatch(dev, gate, result)
+
+    def _log_write_dispatch(self, dev, gate, result):
+        """Log a structured write dispatch under its honest, distinct event.
+
+        A queued or coalesced target was NOT published to hardware, so it never
+        borrows the ``write_output_limit_published`` event. Credentials never
+        appear here — only the device name, target and gate metadata.
+        """
+
+        common = {
+            "device": dev.name,
+            "target_w": result.target_w,
+            "control_gate": gate.transport,
+            "write_gate": gate.gate_name,
+        }
+        if result.correlation_id is not None:
+            common["correlation_id"] = result.correlation_id
+        status = result.status
+        if status is WriteDispatchStatus.PUBLISHED:
+            log_event(
+                logging.INFO,
+                "write_output_limit_published",
+                message_id=result.message_id,
+                command_state=result.command_state,
+                **common,
+            )
+        elif status is WriteDispatchStatus.QUEUED_LATEST:
+            log_event(
+                logging.INFO,
+                "write_output_limit_queued",
+                command_state=result.command_state,
+                **common,
+            )
+        elif status is WriteDispatchStatus.COALESCED_ACTIVE:
+            log_event(
+                logging.DEBUG,
+                "write_output_limit_coalesced",
+                command_state=result.command_state,
+                **common,
+            )
+        elif status is WriteDispatchStatus.SUPERSEDED:
+            log_event(
+                logging.INFO,
+                "write_output_limit_superseded",
+                reason=result.reason,
+                **common,
+            )
+        elif status is WriteDispatchStatus.REJECTED:
+            log_event(
+                logging.WARNING,
+                "write_output_limit_rejected",
+                reason=result.reason,
+                **common,
+            )
+        else:
+            # A transport failure is already surfaced by the transport/health
+            # layer (and, for HTTP, its own error event), so the controller keeps
+            # only a debug breadcrumb — no duplicate WARNING mislabeled as a
+            # rejection.
+            log_event(
+                logging.DEBUG,
+                "write_output_limit_failed",
+                reason=result.reason,
+                **common,
+            )
+
+    def _observe_deferred_write_dispatch(self, dev, result):
+        """Receive the later outcome of a target initially logged as queued."""
+
+        gate = cfg.resolve_device_write_gate(dev)
+        self._log_write_dispatch(dev, gate, result)
 
     def apply_soc_limits(
         self,
@@ -2010,6 +2084,9 @@ class EMSController:
         reason="soc_reconcile"
     ):
         """Apply configured SOC limits if required."""
+
+        if not getattr(dev, "supports_state_reconciliation", True):
+            return True
 
         effective_min_soc = (
             cfg.safe_int(desired_min_soc, dev.min_soc, minimum=0)
@@ -2220,6 +2297,9 @@ class EMSController:
     def run_startup_ac_mode_reconcile_once(self, dev, state):
         """Compatibility wrapper for legacy startup acMode reconciliation."""
 
+        if not getattr(dev, "supports_state_reconciliation", True):
+            return
+
         if self.initial_ac_mode_reconciled.get(dev.name, False):
             return
 
@@ -2377,6 +2457,9 @@ class EMSController:
 
     def apply_runtime_device_state(self, dev, state):
         """Apply runtime-state device intents through safe reconciliation."""
+
+        if not getattr(dev, "supports_state_reconciliation", True):
+            return
 
         if not self.runtime_state:
             return

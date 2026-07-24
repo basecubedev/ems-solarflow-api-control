@@ -969,10 +969,14 @@ def test_config_init_grid_meter_choices_are_runtime_supported():
         "shelly",
         "shelly_3em_gen1",
         "ecotracker",
-        "zendure_smartmeter_3ct_http",
+        "zendure_grid_meter_http",
         "tasmota_http",
         "zendure_smartmeter_d0",
         "mqtt",
+        # Backward-compatible local-HTTP aliases accepted from existing configs;
+        # both share the generic Zendure local-HTTP reader.
+        "zendure_smartmeter_3ct_http",
+        "zendure_smartmeter_d0_http",
     )
 
 
