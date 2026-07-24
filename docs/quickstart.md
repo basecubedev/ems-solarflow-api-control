@@ -21,14 +21,18 @@ You need:
   `docker-compose`). On macOS/Windows use Docker Desktop; Windows must use Linux
   containers.
 - network access from the EMS host to the grid meter
-- network access from the EMS host to each Zendure device
-- Zendure device IP address and serial number
+- network access from the EMS host to each Zendure device (or to the MQTT broker)
+- the credentials or network identifiers for your chosen Zendure connection —
+  a device IP address and serial for the **Local API**, or the broker profile /
+  Zendure API key for **Local MQTT** / **Zendure cloud MQTT**
 - grid meter type and endpoint settings
 
-Zendure Local API must be available and enabled for local EMS control. Do not
-run Zendure HEMS, Home Assistant automations, MQTT writers, or any other
-controller in parallel if they write Zendure `outputLimit`. EMS assumes
-exclusive write control over `outputLimit` while active.
+At least one supported Zendure connection — Local API, Local MQTT, or Zendure
+cloud MQTT — must be available for EMS control; the Local API is recommended for
+ZenSDK models because it is local and low-latency. Do not run Zendure HEMS, Home
+Assistant automations, MQTT writers, or any other controller in parallel if they
+write Zendure `outputLimit`. EMS assumes exclusive write control over
+`outputLimit` while active.
 
 ## 2. Install Docker
 

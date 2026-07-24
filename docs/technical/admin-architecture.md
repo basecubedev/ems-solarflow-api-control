@@ -5,7 +5,9 @@ layout, and EMS/Core relate to each other. It is the architecture reference for
 the Admin path. For the full Admin internals (wizard, release/build-identity
 gating, network discovery, Docker setup and security) see
 [admin-discovery.md](admin-discovery.md). For the user-facing guide see
-[../user/admin-console.md](../user/admin-console.md).
+[../user/admin-console.md](../user/admin-console.md). For how Admin and EMS are
+resolved, aligned and installed as one paired **system build**, see
+[system-build-pairing.md](system-build-pairing.md).
 
 ## Roles and boundaries
 
@@ -141,9 +143,12 @@ socket with the `SSLContext` and sets `https_active=True`, which adds the
 
 ## Admin container update
 
-Admin update is a two-phase flow. The running Admin process writes a pending
-state file, starts an updater outside the current HTTP request, returns a
-reconnect response, and the replacement Admin resumes from `data/admin/state/`.
+Admin and EMS are managed as one strict paired system build through
+`SystemAlignmentService` (`admin/system_alignment.py`). The running Admin process
+writes a staged transition, starts an updater outside the current HTTP request,
+returns a reconnect response, and the replacement Admin resumes from
+`data/admin/state/`. Reconnect proves only the Admin stage; it does not complete
+the EMS operation or write known-good state.
 
 Admin image update decisions are made by digest/build identity, not by tag name
 alone.
@@ -163,12 +168,11 @@ Concretely:
   `docker image inspect`) against the target by digest. Equal digests mean the
   release only retagged an unchanged Admin image (no update). Unknown digests are
   treated as uncertain and require explicit confirmation.
-- **EMS-upgrade gate.** `ems_upgrade_allowed` enforces the "required Admin update
-  blocks the EMS upgrade" rule server-side, not just in the UI: `POST
-  …/upgrade/execute` is refused with `409 admin_update_required` while a required
-  update for the selected release is planned/started/failed, and when Docker is
-  unavailable or identity is uncertain (it never proceeds on doubt). A succeeded
-  update for *that* release, or "no update required", allows the upgrade.
+- **Strict EMS-upgrade gate.** Fresh Setup, Automated Setup and Guided Upgrade
+  resolve the same Admin/EMS pair and call `SystemAlignmentService`. Config and
+  EMS mutations remain blocked until the transition reaches
+  `resources_verified`; an uncertain or mismatched Admin identity is a hard
+  alignment failure, not a compatibility warning.
 - **Pending state.** `data/admin/state/pending-admin-update.json` is written
   atomically (temp file + fsync + rename), tolerates a missing file, and surfaces
   a clear recovery error for corrupt JSON instead of crashing. It holds no
@@ -195,6 +199,45 @@ Admin service. It never pulls or recreates the EMS/InfluxDB containers and never
 touches EMS config or data — those changes belong to the Guided EMS Upgrade,
 after user confirmation. All Admin update APIs require a valid Admin session and,
 for POST, the `X-CSRF-Token`.
+
+## System Build compatibility modes
+
+A resolved System Build has one compatibility mode
+(`admin/system_build.py: system_build_compatibility`), decided purely by its
+build-id kind, and one resource strategy derived from it
+(`system_build_resource_strategy`):
+
+- **`modern_paired` → `embedded`.** A modern release/RC/latest/dev build ships a
+  verified embedded resource bundle inside the running Admin image. The Admin is
+  aligned to the selected build; Step 1 readiness requires the embedded bundle to
+  verify.
+- **`local` → `embedded`.** A local checkout bakes its own bundle and verifies it
+  the same way.
+- **`legacy_release` → `release_archive`.** A pre-contract CI build id
+  (`<run>-<attempt>`, e.g. `123456789-1`) predates the embedded bundle and the
+  modern transition/resume protocol. The running **modern Admin is kept** as the
+  orchestration layer (never downgraded to the historical Admin image), and the
+  selected EMS image's resources are prepared from the **exact historical
+  tag/revision** through `ReleaseManager.prepare` (`ReleaseArchiveResources`) —
+  never the running Admin's embedded bundle and never `main`.
+
+`validate()` exposes `resource_strategy`, `embedded_resources_applicable` and an
+`embedded_resources_valid` that is `null` (not `false`) when embedded resources
+do not apply, so a legacy release is never blocked by a match it cannot satisfy.
+Step 1 readiness gates on the selected strategy, so selecting a legacy release
+never leaves both *Update Admin Server* and *Continue* disabled while reporting
+ready.
+
+**Identity separation.** For a legacy release the durable transition and the
+known-good record store the running **orchestrator Admin** identity (modern)
+separately from the **selected EMS build** (historical): the transition's
+`orchestrator_admin` block and the known-good `admin_*` fields hold the modern
+Admin, while the flat/`ems_*`/`selected_ems_build` fields hold the historical
+EMS. Setup discovery authorization and resume compare the running Admin to the
+orchestrator identity, not the selected build id. The legacy CI build id is
+accepted by the transition parser on its validated format alone (the modern
+revision-embedding integrity check still applies to modern build ids). Recovery
+never downgrades the Admin to the historical release.
 
 ## Why this split matters
 

@@ -27,7 +27,7 @@ cp config/config.template.json config/config.json
 
 Older native checkouts may still use a root `config.json`. That legacy layout is
 still read as a fallback, but new setups should use `config/config.json`. See
-[setup/config-layout.md](../user/config-layout.md) for the full layout and legacy
+[Config Layout](../user/config-layout.md) for the full layout and legacy
 migration states.
 
 `config.json` and `config/config.json` are local and ignored by Git. Do not
@@ -260,11 +260,16 @@ per-cycle control-loop traces (`output_control_state`,
 reconciliation events, repeated `winter_mode_state`) are emitted at `debug`;
 set `log_level` to `debug` to see them.
 
-`system.max_total_power` is the default maximum combined EMS target in watts.
+`system.max_total_power` is the default maximum combined EMS target in watts
+(Admin label: **Maximum system output**). New configurations default to 800 W.
 
 `system.max_device_power` is the default per-device maximum in watts.
 
-`system.deadband` is the general legacy target deadband in watts.
+`system.deadband` is the per-device write-suppression deadband in watts (Admin
+label: **Device deadband**). EMS skips sending a new `outputLimit` to a device
+while the new target is within this many watts of the value the device already
+holds; it is distinct from `system.output_control.target_deadband_w`, which acts
+on the total system target. New configurations default to 2 W.
 
 `system.runtime_state_path` is the path to temporary mutable runtime state. The
 default for new generated configs is `data/runtime-state.json`. Older
@@ -278,7 +283,8 @@ present but no active online device has export capacity, and the standby/wakeup
 value used by strict night/minSoc idle. Use `0` to disable this floor and the
 idle parking behavior.
 
-`system.loop_interval` is the control loop interval in seconds.
+`system.loop_interval` is the control loop interval in seconds (Admin label:
+**Loop interval**). New configurations default to 5 seconds.
 
 `system.redistribute_clamped_power` redistributes target power when one device
 is clamped by limits.
@@ -437,12 +443,18 @@ statistics and period lookups such as Today and Yesterday. It defaults to
 ## Output Control
 
 `system.output_control` is advanced tuning for fast control loops. Most users
-should keep the defaults.
+should keep the defaults. The ramp and target-deadband knobs below are surfaced
+as primary Admin fields (they no longer require opening Advanced settings); the
+remaining smoothing and bypass fields stay expert-level. All defaults listed
+here apply to newly created configurations only — an existing `config.json`
+keeps whatever it already sets.
 
-`load_deadband_w` ignores very small load changes before target calculation.
+`load_deadband_w` ignores very small load changes before target calculation
+(default 5 W).
 
-`target_deadband_w` avoids writes when the new target is close to the current
-commanded target.
+`target_deadband_w` holds the total system target when the newly desired total
+is only slightly different (Admin label: **System deadband**). New
+configurations default to 5 W.
 
 `filter_enabled` enables load filtering.
 
@@ -466,15 +478,23 @@ pulled toward `raw_load` during a sign-change mismatch. `1.0` resets directly to
 
 `ramp_enabled` limits total target changes per cycle.
 
-`ramp_up_w_per_cycle` limits how fast the total target can rise.
+`ramp_up_w_per_cycle` limits how fast the total target can rise (Admin label:
+**System ramp up**). New configurations default to 500 W per cycle.
 
-`ramp_down_w_per_cycle` limits how fast the total target can fall.
+`ramp_down_w_per_cycle` limits how fast the total target can fall (Admin label:
+**System ramp down**). New configurations default to 300 W per cycle — the
+slower down-ramp helps prevent undershoot when inverter output reacts more
+slowly than the EMS control target.
 
 `device_ramp_enabled` limits per-device target changes.
 
-`device_ramp_up_w_per_cycle` limits per-device upward changes.
+`device_ramp_up_w_per_cycle` limits per-device upward changes (Admin label:
+**Device ramp up**). New configurations default to 400 W per cycle.
 
-`device_ramp_down_w_per_cycle` limits per-device downward changes.
+`device_ramp_down_w_per_cycle` limits per-device downward changes (Admin label:
+**Device ramp down**). New configurations default to 200 W per cycle — the
+reduced down-ramp avoids repeatedly lowering the target while the inverter is
+still reacting to an earlier command.
 
 `large_import_bypass_w` can bypass normal smoothing during large imports.
 
@@ -518,7 +538,7 @@ Each Zendure device entry defines static installation data:
 
 ```json
 {
-  "name": "WR1",
+  "name": "INV_1",
   "ip": "192.168.1.100",
   "sn": "YOUR_SN",
   "smart_mode": 1,
@@ -574,9 +594,11 @@ the physical device is installed or reports values differently. Run
 | Shelly Pro/Plus Gen2/Gen3 | `shelly` | `ip` | Uses `/rpc/Shelly.GetStatus` |
 | Shelly 3EM Gen1 | `shelly_3em_gen1` | `ip` | Uses `/status` |
 | everHome EcoTracker | `ecotracker` | `ip` | Uses `/v1/json` |
-| Zendure Smart Meter 3CT HTTP | `zendure_smartmeter_3ct_http` | `ip` | Local REST `/properties/report`, reads `total_power` |
+| Zendure Grid Meter via local HTTP | `zendure_grid_meter_http` | `ip` (opt. `port`) | Internal/discovery generic type. Local REST `/properties/report`, reads `total_power`. Works for both D0 and Smart Meter 3CT. Manual setup offers the concrete 3CT/D0 local-API types below. |
+| Zendure Smart Meter 3CT — Local API | `zendure_smartmeter_3ct_http` | `ip` (opt. `port`) | Local REST `/properties/report`, reads `total_power`. Shares the Zendure local-HTTP reader with the D0 local-API meter. |
+| Zendure Smart Meter D0 — Local API | `zendure_smartmeter_d0_http` | `ip` (opt. `port`) | Local REST `/properties/report`, reads `total_power`. Same shared reader as the 3CT; a distinct type so a D0 is never stored as a 3CT. |
 | Tasmota HTTP / SmartMeter | `tasmota_http` | `ip` or `url`, `power_path` | Uses `Status 10` JSON |
-| Zendure SmartMeter D0 (MQTT) | `zendure_smartmeter_d0` | `mqtt.host`, `mqtt.topic` | D0 preset, numeric payload |
+| Zendure Smart Meter D0 — Local MQTT | `zendure_smartmeter_d0` | `mqtt.topic` + (`mqtt.broker_ref` or `mqtt.host`) | Optional alternative; D0 preset, numeric payload |
 | Generic MQTT grid meter | `mqtt` | `mqtt.host`, `mqtt.topic`, `mqtt.payload_format` | Numeric or JSON payload |
 
 ### Shelly Pro/Plus Gen2/Gen3 (`shelly`)
@@ -672,24 +694,58 @@ Example: everHome EcoTracker:
 }
 ```
 
-### Zendure Smart Meter 3CT HTTP (`zendure_smartmeter_3ct_http`)
+### Zendure Grid Meter via local HTTP (`zendure_grid_meter_http`)
 
-The EMS reads `http://<ip>/properties/report` and uses the flat JSON
-`total_power` field. This is a local REST endpoint that needs no MQTT broker and
-no app MQTT configuration; current known firmware exposes it without
-authentication. The sign is used as reported by the device. Per-phase fields
-(`a_aprt_power`, `b_aprt_power`, `c_aprt_power`) are ignored for now.
+The **recommended** Zendure grid-meter connection. The EMS reads
+`http://<ip>:<port>/properties/report` (port defaults to 80 and the discovered
+port is preserved) and uses the flat JSON `total_power` field. This is a local
+REST endpoint that needs no MQTT broker and no app MQTT configuration; current
+known firmware exposes it without authentication.
 
-Example: Zendure Smart Meter 3CT via local HTTP:
+Both a Zendure D0 and a Smart Meter 3CT serve the same flat report, so numeric
+`total_power` alone makes the meter usable and its sign is used as reported. The
+per-phase fields (`a_aprt_power`, `b_aprt_power`, `c_aprt_power`) are **not** used
+to identify the model — a D0 reports the same fields — and `meterType` /
+`protocolType` are **not** treated as proven D0 identifiers.
+
+The older `zendure_smartmeter_3ct_http` type is accepted as a backward-compatible
+alias for the same client, so existing configs keep working.
+
+Example: Zendure grid meter via local HTTP:
 
 ```json
 {
   "grid_meter": {
-    "type": "zendure_smartmeter_3ct_http",
+    "type": "zendure_grid_meter_http",
     "ip": "192.168.1.50"
   }
 }
 ```
+
+### Zendure Smart Meter 3CT / D0 — Local API (`zendure_smartmeter_3ct_http`, `zendure_smartmeter_d0_http`)
+
+When you know the model, use the concrete local-API type instead of the generic
+one. Both read the same flat `total_power` from `/properties/report` through the
+**shared** Zendure local-HTTP reader (there is no second HTTP client); only the
+config type and the user-facing label differ, so a manually added D0 is never
+stored or shown as a 3CT. Each needs only `grid_meter.ip` (the discovered port
+is preserved). The D0 stays read-only regardless of transport, and the sign is
+used as reported (positive import, negative export).
+
+```json
+{
+  "grid_meter": {
+    "type": "zendure_smartmeter_d0_http",
+    "ip": "192.168.1.60"
+  }
+}
+```
+
+The Local API (`zendure_smartmeter_d0_http`) and Local MQTT
+(`zendure_smartmeter_d0`) D0 entries are strictly separate: the HTTP entry
+carries only `ip`/`port`, the MQTT entry carries only the `grid_meter.mqtt`
+block. Switching a meter between them drops the fields that do not belong to the
+selected transport.
 
 ### Tasmota HTTP / SmartMeter (`tasmota_http`)
 
@@ -725,20 +781,82 @@ Example: Tasmota with an explicit URL and OBIS-style key:
 
 ### Zendure SmartMeter D0 (MQTT) (`zendure_smartmeter_d0`)
 
-The EMS subscribes to an existing MQTT broker; it does not run a broker or
-write to the D0. The default topic is `Zendure/sensor/<serial>/totalPower`, and
-the payload is numeric watts:
+An **optional alternative** to local HTTP, for a D0 already publishing to a
+broker. The EMS subscribes to an existing MQTT broker; it does not run a broker,
+never publishes, and never writes to the D0. The default topic is
+`Zendure/sensor/<serial>/totalPower`, and the payload is numeric watts:
 
 ```text
 positive = grid import
 negative = grid export
 ```
 
-Configure MQTT under `grid_meter.mqtt`. A username and password may be required
-by the broker. TLS is not supported here. Live D0 validation currently depends
-on external tester feedback.
+Configure the topic (and `payload_format`, `max_age_seconds`) under
+`grid_meter.mqtt`. For the connection, prefer a named broker profile with
+`broker_ref` so host, port, TLS and credentials live once in
+`zendure_mqtt.brokers` and the broker password is never duplicated into the
+`grid_meter` block:
 
-Example: Zendure SmartMeter D0 via MQTT:
+```json
+{
+  "grid_meter": {
+    "type": "zendure_smartmeter_d0",
+    "mqtt": {
+      "broker_ref": "local_mqtt",
+      "topic": "Zendure/sensor/D0DEMO123456/totalPower",
+      "payload_format": "number",
+      "max_age_seconds": 15
+    }
+  },
+  "zendure_mqtt": {
+    "brokers": {
+      "local_mqtt": {
+        "enabled": true,
+        "source": "local_mqtt",
+        "host": "192.0.2.10",
+        "port": 1883,
+        "tls": false,
+        "username": "YOUR_MQTT_USER",
+        "password": "YOUR_MQTT_PASSWORD"
+      }
+    }
+  }
+}
+```
+
+Rules:
+
+- The D0 topic must be exactly `Zendure/sensor/<serial>/totalPower` — four
+  segments, a non-empty serial, and no MQTT wildcards (`+`/`#`). Extra path
+  segments, the `number` write channel, a foreign/cloud prefix, or a
+  leading/trailing separator are rejected. The canonical topic is generated from
+  the serial, so entering the serial in guided setup is enough.
+- The referenced broker profile must **exist**, be **enabled**, use
+  `source: local_mqtt`, and carry a valid **host** and **port**. Admin preview
+  validates the broker through the same EMS Core resolver used at startup, so a
+  preview that is `ready` will not be rejected at runtime. Zendure Cloud MQTT D0
+  grid meters are not supported (cloud topic prefixes carry the secret account
+  app key).
+- The MQTT port must be an integer in the range **1–65535**. An explicit invalid
+  port (`0`, `-1`, `70000`, `"broken"`, a boolean, …) is **rejected**, never
+  silently replaced or clamped. When the port is omitted, the protocol default
+  applies (`1883` plain, `8883` for TLS).
+- TLS is supported via the broker profile (`"tls": true`; use
+  `"tls_insecure": true` only when you explicitly accept unverified
+  certificates — it skips certificate-chain *and* hostname verification, which
+  is required for brokers with self-signed certificates such as the Zendure
+  cloud broker). The grid-meter MQTT client applies TLS before connecting and
+  never publishes.
+- Several local brokers stay separate: each discovered broker keeps its own
+  profile and `broker_ref`, so credentials and TLS settings never cross broker
+  boundaries.
+- The legacy inline form (host/port/username/password directly under
+  `grid_meter.mqtt`, no `broker_ref`) still works. Do **not** combine `broker_ref`
+  with inline connection fields — that is rejected as ambiguous.
+
+Live D0 validation currently depends on external tester feedback.
+
+Example: legacy inline broker configuration:
 
 ```json
 {
@@ -797,6 +915,206 @@ Legacy configs with only `shelly.ip` still work. New configs should use
 If your meter returns a different JSON structure, please open a GitHub issue
 and include the meter type, relevant config, logs, and an anonymized example
 payload if possible.
+
+## Zendure MQTT Telemetry and Control
+
+Telemetry from one or more MQTT brokers. The feature is **always on** and has
+no enable toggle: a broker runs as soon as its host is configured (a Zendure
+cloud broker additionally needs a stored runtime credential), and without any
+broker the runtime is simply inactive — never a config error. A legacy
+top-level `zendure_mqtt.enabled` key in existing configs is ignored;
+per-profile `enabled` flags under `brokers` still apply. Telemetry is read-only
+by default: telemetry-only devices (`capabilities.write_output_limit=false`)
+never publish and never write `outputLimit`. Publishing happens for control
+devices — those with `capabilities.write_output_limit=true`, a supported write
+method and an enabled write gate — see
+[Zendure MQTT output control](#zendure-mqtt-output-control)
+below. A discovered device is controllable only where an **exact supported
+hardware model** resolves to a verified write method on a compatible transport;
+a topic family or hardware generation alone never authorizes writes, and unknown
+or conflicting model evidence stays telemetry-only.
+
+Each MQTT device names exactly one broker profile via `mqtt.broker_ref`. There
+is no fallback and no implicit runtime priority: a device assigned to a broker is
+only ever satisfied by that broker's telemetry. Define profiles under
+`zendure_mqtt.brokers` so mixed installs are explicit:
+
+```json
+{
+  "zendure_mqtt": {
+    "stale_after_seconds": 60,
+    "brokers": {
+      "zendure_cloud": {
+        "enabled": true,
+        "source": "zendure_cloud_mqtt",
+        "host": "mqtteu.zen-iot.com",
+        "port": 8883,
+        "tls": true,
+        "tls_insecure": true,
+        "credentials_ref": "zendure-cloud"
+      },
+      "local_mqtt": {
+        "enabled": true,
+        "source": "local_mqtt",
+        "host": "192.168.20.10",
+        "port": 1883
+      }
+    }
+  },
+  "devices": [
+    {
+      "name": "INV_1",
+      "type": "zendure_mqtt",
+      "enabled": true,
+      "serial_number": "…",
+      "mqtt": {
+        "broker_ref": "zendure_cloud",
+        "topic_family": "zensdk_ha_scalar",
+        "device_id": "…"
+      },
+      "capabilities": { "read_power": true, "read_soc": true, "write_output_limit": false }
+    }
+  ]
+}
+```
+
+The Admin Fresh Install and Maintenance flows assign new inverters compact
+operational names (`INV_1`, `INV_2`, …) across Local API and MQTT transports.
+That `name` is the stable key used by runtime state, logs, dashboard devices,
+and the EMS Flowchart. Model, address, serial/device ID, transport, maximum
+power, and hardware generation remain separate metadata. Existing config names
+are not migrated automatically, and the proposed compact name can be edited
+before applying.
+
+Notes:
+
+- Broker credentials (`username`, `password`, `app_key`, tokens) never live in
+  `config.json`. A profile carries a non-secret `credentials_ref` and the secret
+  is resolved from the external secret store at runtime. Credentials are never
+  returned through status, diagnostics or the Admin UI. This holds for local
+  discovery, manual local-broker setup, the Zendure cloud runtime record and
+  Maintenance alike.
+- A Zendure **cloud** profile needs a Core-resolvable runtime credential record
+  (the encrypted `mqtt-<credentials_ref>.json` under `config/secrets/`) holding
+  the complete four-field contract — MQTT `username`, `password`, `client_id`
+  and `app_key`. The runtime builds the cloud connection from `client_id` and
+  its subscriptions from `app_key`, so a record missing or blanking any of the
+  four fields is invalid. Setup and Maintenance apply provision this record
+  automatically when the config references it: the credentials are fetched
+  from the Zendure deviceList (a response lacking any required field is
+  rejected), persisted atomically, verified to resolve back to the complete
+  contract through the Core resolver, and rolled back from a raw pre-change
+  byte snapshot (a rotated — even malformed — record is restored byte for
+  byte, a new one removed) if a later apply step fails. Existing records are
+  validated through the Core resolver at apply time — file existence alone is
+  never trusted. A valid record is reused with no network call by both Setup
+  and Maintenance (they share one staging service); a record that no longer
+  decrypts or is incomplete is reprovisioned when the Zendure API key is
+  saved, and otherwise blocks the apply with the stable
+  `credential_provisioning_failed` code (a partly failed rollback additionally
+  reports a high-severity `credential_rollback` section naming the affected
+  refs, never secret values). Local broker records follow the same contract
+  against the discovery credential pool, including in-place rotation when the
+  discovered credentials changed; a local `credentials_ref` stands for real
+  authentication and must resolve to a complete username/password pair — an
+  empty record never downgrades the broker to anonymous access (anonymous
+  brokers simply carry no `credentials_ref`). Credential staging and the
+  config write run as one serialized apply transaction shared by Setup and
+  Maintenance. Should the record be missing at runtime anyway, the broker
+  reports `broker_auth_missing` and is never connected (it will not dial the
+  cloud broker anonymously).
+- An enabled `zendure_mqtt` device must reference a **usable** broker profile:
+  the profile must exist, be enabled, carry a host/port and a supported
+  `source`, and a cloud profile must have an external credential reference.
+  Otherwise config validation blocks with a sanitized code
+  (`zendure_mqtt_broker_ref_unknown` / `_disabled` / `_incomplete` /
+  `zendure_mqtt_broker_auth_missing`) that never leaks serials, hosts or secrets.
+- The broker profile is authoritative for the transport `source` (local vs
+  Zendure cloud), which also selects the MQTT write gate. Omit `mqtt.source` on
+  the device; a device `source` that contradicts its broker profile is rejected
+  (`mqtt_source_mismatch`) so device config can never pick a different gate.
+- Disabled broker profiles may exist as long as no enabled device references them.
+- `capabilities.write_output_limit=true` opts a device in to **MQTT output
+  control** (see below). Without it, the device stays telemetry-only.
+- Backward compatible: an old single-broker block (top-level `host`/`port` with
+  no `brokers`) maps to an implicit `default` broker, and devices without a
+  `mqtt.broker_ref` use it. API-only devices need no migration.
+
+### Zendure MQTT output control
+
+A `zendure_mqtt` device with `capabilities.write_output_limit=true` is a
+**control** device: it joins the same control loop, target calculation,
+distribution and safety gates as API devices. The EMS controller stays the
+source of truth for demand, distribution and write decisions; MQTT is a
+first-class control transport that builds the write topic and payload.
+
+Output control is enabled per device by capability: it is available where the
+pinned hardware profile resolves to a **verified write method** on a compatible
+topic family, decided by the shared helper
+`ems.zendure_mqtt.capability.mqtt_output_control_capability`. Admin Setup,
+Maintenance and manual entry all create a controllable device for a supported
+model without hand-editing `config.json`.
+
+**Scope of MQTT control.** Output-limit control is supported where the resolved
+hardware profile carries an implemented write method: `zensdk_properties_write`
+(ZenSDK `properties/write`) or the `legacy_hub_device_automation` /
+`legacy_object_device_automation` `function/invoke` automation commands.
+Full API state reconciliation — Smart Mode, AC Mode, SoC setting, winter/full-
+charge assist — is **API-only** and is not available over MQTT
+(`supports_state_reconciliation=False` for MQTT control devices). Some older
+Zendure generations and topic families have not been validated on the
+maintainer's own hardware; please report anonymized MQTT traces and results.
+
+Each control device must resolve to an explicit, supported **write method**
+before it can publish. The pinned `hardware_profile` selects it
+(registry: `ems/mqtt_control/zendure_profiles.py`); a topic family never does:
+
+| Hardware profile | Write method | Notes |
+| --- | --- | --- |
+| SolarFlow 800 / 800 Plus / 800 Pro / 800 Pro 2 / 1600 AC+ / 2400 AC / 2400 AC+ / 2400 Pro / 4000 AC+ | `zensdk_properties_write` | Publishes `{deviceId, messageId, timestamp, properties:{outputLimit}}` to `iot/<productKey>/<deviceId>/properties/write` (leading-slash variant on the `legacy_zendure_json_alt` family). Needs `mqtt.product_key`. |
+| Hyper 2000 / AIO 2400 | `legacy_object_device_automation` | Publishes a `deviceAutomation` `function/invoke` command to `iot/<productKey>/<deviceId>/function/invoke`; acknowledged on `function/invoke/reply`. Needs `mqtt.product_key`. |
+| Hub 1200 / Hub 2000 | `legacy_hub_device_automation` | Same `function/invoke` topic with a scalar watt value; acknowledged on `function/invoke/reply`. Needs `mqtt.product_key`. |
+| ACE 1500 / SuperBase V4600 / SuperBase V6400 | `telemetry_only` — **read-only** | Never publishes. |
+| none pinned | none — **read-only** | A topic family or hardware generation alone never selects a write method; only the explicit escape hatch below can. |
+| none pinned, with explicit topic | `custom_properties_write` | Explicit advanced escape hatch: `mqtt.write_protocol` set to `custom_properties_write` plus an explicit valid `mqtt.write_topic`; publishes the same properties payload to that topic. |
+
+All built-in write methods are transport-bound to the JSON-report families
+(`legacy_zendure_json` / `legacy_zendure_json_alt`); on the scalar families
+(`zensdk_ha_scalar` / `zendure_cloud_scalar`) and `unknown`, a writable profile
+is transport-incompatible and the device stays read-only over MQTT. See
+`docs/technical/zendure-mqtt-power-control.md` for the full capability model.
+
+Pin `hardware_profile` to a supported model to make a device controllable;
+`mqtt.write_protocol` accepts only the explicit `custom_properties_write` escape
+hatch, never a built-in write method name. An enabled control device that does
+not resolve to a supported write method (or is otherwise unaddressable) fails
+config validation, and startup aborts rather than silently controlling fewer
+inverters.
+
+MQTT control writes are gated separately from API writes by transport:
+
+| `system` flag | Default | Gates |
+| --- | --- | --- |
+| `allow_mqtt_local_control_writes` | `true` | devices on a `local_mqtt` broker |
+| `allow_mqtt_zendure_control_writes` | `true` | devices on a `zendure_cloud_mqtt` broker |
+
+All gates default on in the template; switch a gate off for read-only
+validation of its transport. Configs missing the `system` keys resolve to the
+same release defaults (all gates on) at load time, while the simulation/replay
+safe config and template placeholder safety force every gate off until real
+values are configured.
+
+Both still require the shared precondition (`dry_run=false`,
+`simulation_mode=false`, not replay). Control devices are output-only: they are
+excluded from the read-only telemetry runtime and from every state
+reconciliation writer. Their telemetry is subject to freshness: a stale or
+missing snapshot (broker disconnect / stalled updates) is treated as an
+unavailable read, so the controller never acts on disconnected devices.
+
+Mock and in-process broker tests verify EMS integration and broker isolation.
+They do **not** prove that every Zendure firmware accepts the generated write
+command. Please open a GitHub issue for both successful and unsuccessful device
+tests, including model, firmware, topic family and anonymized diagnostics.
 
 ## First-Run Validation
 

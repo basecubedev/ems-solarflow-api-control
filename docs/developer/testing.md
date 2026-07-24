@@ -8,6 +8,17 @@ secrets, or network access are required.
 See also [developer-setup.md](developer-setup.md) for the source checkout and
 environment, and [ci-release.md](ci-release.md) for how these run in CI.
 
+## Development approach
+
+This project develops complex and risky features **contract-first** with
+test-driven development: for control logic, write gates, safety reconciliation,
+config validation and the Admin apply/credential paths, a failing contract test
+is written and shown to fail before the production change is made. Bugs get a
+reproducing test before the fix. Small UI tweaks and exploratory prototypes may
+stay pragmatic and gain tests as they settle. This is a working policy for the
+areas that can write to real hardware, not a claim that every historical line of
+the project was produced under strict test-driven development.
+
 ## Quick local loop
 
 Compile check (run after any change to the entry script, `ems/`, `emsctl.py` or

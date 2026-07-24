@@ -16,22 +16,39 @@ orchestration only; it never runs the control loop and never writes control
 state directly. It calls the same EMS tools a shell user would run. See
 [admin-architecture.md](admin-architecture.md).
 
-Zendure Local API must be available and enabled for local EMS control. Do not
-run Zendure HEMS, Home Assistant automations, MQTT writers, or any other
-controller in parallel if they write Zendure `outputLimit`. EMS assumes
-exclusive write control over `outputLimit` while active. The EMS must not run in
-parallel with another controller writing Zendure `outputLimit`.
+At least one supported Zendure connection — Local API, Local MQTT, or Zendure
+cloud MQTT — must be available for EMS control (the Local API also does full
+state reconciliation; the MQTT transports are output-only). Do not run Zendure
+HEMS, Home Assistant automations, MQTT writers, or any other controller in
+parallel if they write Zendure `outputLimit`. EMS assumes exclusive write control
+over `outputLimit` while active. The EMS must not run in parallel with another
+controller writing Zendure `outputLimit`.
 
 ## Write gates
 
-Runtime output writes require all of:
+Runtime `outputLimit` writes share the same safety precondition — `dry_run=false`,
+`simulation_mode=false`, not replay — and then require the **named gate for the
+device's transport**:
 
 ```text
-dry_run=false
-simulation_mode=false
-not replay
-allow_hardware_writes=true
+API device (local HTTP)      -> allow_hardware_writes=true
+Local MQTT broker device     -> allow_mqtt_local_control_writes=true
+Zendure cloud MQTT device    -> allow_mqtt_zendure_control_writes=true
 ```
+
+All three gates default to `true` in the template: whether a transport actually
+writes is decided by configuration presence (a per-device `write_output_limit`
+opt-in, a configured broker, an API key), and each gate stays editable for
+read-only validation. A normal config that omits the gate keys resolves them to
+the release defaults at load time — the same effective values a config upgrade
+would write — without rewriting the file. Explicit `false` values always win,
+the simulation/replay safe config keeps every gate off, and template
+placeholder safety forces every gate off. Some hardware generations have not
+been validated on physical hardware by the maintainer (see
+[supported-setups](../user/supported-setups.md)). A device's transport is
+chosen from its broker `source`; the write is published to
+`iot/<productKey>/<deviceId>/properties/write` (or an explicit
+`mqtt.write_topic`).
 
 State reconciliation writes (`minSoc`, `socSet`, `smartMode`, `gridOffMode`,
 winter `inputLimit`, full-charge-assist `socSet`/`acMode`/`inputLimit`)
@@ -68,9 +85,11 @@ acMode/inputLimit during battery full-charge assist only through runtime intent
 ```
 
 Runtime output writes and persistent state reconciliation writes are separate
-write paths. Output-limit writes require normal hardware writes to be enabled;
-state reconciliation writes additionally require
-`allow_state_reconciliation_writes=true`.
+write paths. Output-limit writes require the device's transport gate to be
+enabled; state reconciliation writes additionally require
+`allow_state_reconciliation_writes=true`. State reconciliation is API-only:
+Zendure MQTT control devices are output-only and are skipped by every state
+reconciliation writer.
 
 ## Zendure outputLimit
 
@@ -82,8 +101,11 @@ devices and while inside the configured deadband.
 Expected events:
 
 ```text
-event=dry_run_output_limit   (no-write, dry-run/simulation/replay/safe mode)
-event=write_output_limit     (live write)
+event=dry_run_output_limit         (no-write, dry-run/simulation/replay/safe mode)
+event=write_output_limit_published (live write published to the device transport)
+event=write_output_limit_queued    (target queued behind an in-flight MQTT command)
+event=write_output_limit_coalesced (repeat of the in-flight target; not republished)
+event=write_output_limit_rejected  (write refused: capability/limit/validation)
 ```
 
 Other relevant events:

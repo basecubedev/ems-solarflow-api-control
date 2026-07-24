@@ -1,0 +1,78 @@
+name: Device compatibility report
+description: Report whether a device works or has problems with EMS SolarFlow API Control.
+title: "[Device compatibility]: "
+labels:
+  - hardware
+  - compatibility
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve hardware compatibility. Reports about devices
+        that **work** are just as welcome as reports about problems.
+
+        Please remove serial numbers, tokens, passwords, public IPs and exact
+        location data before posting.
+  - type: dropdown
+    id: report_type
+    attributes:
+      label: Report type
+      options:
+        - Device works
+        - Device has problems
+        - Device not detected
+        - Documentation update
+    validations:
+      required: true
+  - type: input
+    id: device_model
+    attributes:
+      label: Device model
+      placeholder: "Example: Zendure SolarFlow 800 Pro 2"
+    validations:
+      required: true
+  - type: input
+    id: firmware_version
+    attributes:
+      label: Firmware version
+      placeholder: "If known"
+    validations:
+      required: false
+  - type: dropdown
+    id: connection_type
+    attributes:
+      label: Connection type
+      options:
+        - ZenSDK local HTTP API
+        - Local MQTT
+        - Zendure cloud MQTT
+        - Zendure Smart Meter HTTP
+        - Shelly
+        - EcoTracker HTTP
+        - Tasmota HTTP
+        - Home Assistant entity
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: What happened?
+      description: Describe whether the device worked, was detected, or failed.
+    validations:
+      required: true
+  - type: textarea
+    id: sanitized_logs
+    attributes:
+      label: Sanitized logs or payload examples
+      description: Remove serial numbers, tokens, passwords, public IPs and exact location data before posting.
+      render: text
+    validations:
+      required: false
+  - type: checkboxes
+    id: privacy_check
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed tokens, passwords, serial numbers and other sensitive data.
+          required: true

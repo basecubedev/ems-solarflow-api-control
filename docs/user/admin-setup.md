@@ -92,13 +92,71 @@ The router recommends and preselects a flow but never acts silently:
 
 ## Steps (Set up a new system)
 
-1. Start the Admin Console (see **Start** above) and open
-   `http://127.0.0.1:8090`.
-2. Pick **Set up a new system**, and work through **01 Release**, **02 Devices**,
-   **03 Config**.
-3. Apply the generated config. The Admin Console writes it to the standard
-   `config/config.json` and backs up any existing config first.
-4. Start EMS and run `emsctl.py diagnose`.
+The wizard runs in **five stages**, shown in the stepper: **01 Release**,
+**02 Devices**, **03 Config**, **04 Prepare deployment**, **05 Start EMS**. Start
+the Admin Console (see **Start** above), open `http://127.0.0.1:8090`, and pick
+**Set up a new system**.
+
+1. **01 Release** — select one paired Admin + EMS **System Build**, then verify
+   it. The catalogue is grouped **Latest**, **Stable**, **Unstable** and
+   **Experimental**; selecting an Experimental build is itself the explicit
+   decision, with no separate acknowledgement checkbox. **Selecting a build does
+   not download anything** — it only previews the build, so you can browse
+   several releases without contacting the container registry. **Verify System
+   Build** then downloads (or reuses) the Admin and EMS images and verifies the
+   pair; the embedded Admin + EMS resources are verified **before any config** is
+   written. A successful verification is reused for the rest of this setup — if
+   the running Admin does not match the selected build, **Update Admin Server**
+   aligns it first; otherwise **Continue** to discovery. Changing the selected
+   build clears the previous verification, so you verify the new build once.
+   If the download stops with a *GitHub Container Registry rate limit reached*
+   message, no changes were made — wait and select **Verify System Build** again
+   (see [troubleshooting](../technical/troubleshooting-reference.md)).
+2. **02 Devices** — run discovery. One physical device may be reachable over
+   several transports (Local API, local MQTT, Zendure Cloud MQTT). **Discovery
+   priority** picks the preferred transport automatically: raising Zendure MQTT
+   above Local API and rescanning reconfigures a device that was auto-added over
+   Local API to use MQTT instead — the same physical device is never listed
+   twice. Discovery priority chooses the transport only; it never enables output
+   control by itself (see step 3 and **04**).
+3. **03 Config** — review and complete the generated config. The selected
+   transport shows on each device card (e.g. *Transport: Zendure Cloud MQTT*).
+   Every newly added inverter receives a short sequential EMS name such as
+   `INV_1`, `INV_2`, and so on. This is the operational identifier used in
+   `config.json`, logs, the dashboard, and the Flowchart; model, address,
+   serial number, hardware generation, and transport remain separate details on
+   the card. You may edit the default before applying the config. Switching a
+   physical inverter between Local API and MQTT preserves its current EMS name.
+   A device also reachable over another transport offers *Use … instead* to
+   switch manually — a manual choice is kept even if you later change discovery
+   priority — and **Add more devices** lists unconfigured MQTT devices too.
+   *Add a device
+   manually* also lets you add a read-only **Zendure MQTT broker** and one or
+   more **Zendure MQTT devices** telemetry discovery could not reach. Pick a
+   friendly *Hardware generation* (telemetry/topic grouping), then an *Exact
+   hardware model* from the EMS/Core registry. The model's write protocol,
+   supported operations, and validation maturity are displayed before control
+   can be enabled. Choosing **Unknown / telemetry only**, omitting the model, or
+   receiving conflicting model evidence always keeps the device read-only;
+   generation or topic family alone never authorizes writes. A supported exact
+   model on a compatible transport exposes **Enable EMS output control over
+   MQTT** and joins the same control loop as a local API device — without
+   hand-editing the config file (see
+   [Zendure MQTT output control](../technical/configuration.md#zendure-mqtt-output-control)).
+
+   For the **grid meter**, a Zendure D0 or Smart Meter 3CT found over local HTTP
+   is the simplest choice ("Zendure Grid Meter via local HTTP", no MQTT setup).
+   If instead a D0 is discovered on a local MQTT broker, the proposal offers
+   **"Use as grid meter"**: choosing it maps the D0's
+   `Zendure/sensor/<serial>/totalPower` topic to the central grid meter, reusing
+   the selected broker profile. Only one grid meter can be active, and an
+   existing grid meter is only replaced when you explicitly confirm it.
+4. **04 Prepare deployment** — the Admin Console writes the generated config to
+   the standard `config/config.json` (backing up any existing config first) and
+   prepares the EMS deployment: the Compose file plus the target EMS image and
+   resources.
+5. **05 Start EMS** — start (or restart) EMS, wait for the health check, then run
+   `emsctl.py diagnose` to confirm the install.
 
 After setup, open the dashboard at `http://<host-ip>:8080`, work through the
 [first-run checklist](../first-run-checklist.md), and use

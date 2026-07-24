@@ -6,9 +6,13 @@ The EMS includes an optional standalone dashboard at:
 http://<ems-host>:8080
 ```
 
-The dashboard is read-only by default. Runtime write mode is unavailable until
-a local dashboard admin password is configured with `emsctl`. There is no
-default password and password setup is not available from the web UI.
+The dashboard is read-only by default. Runtime write mode is unavailable until a
+local dashboard password is configured. There is no default password. The
+password can be created two ways: on the **Admin Console** first start (in the
+browser — it is the shared EMS/Admin password), or with
+`emsctl.py dashboard set-password` (see [Dashboard Write Mode](#dashboard-write-mode)).
+Both write the same `config/dashboard-auth.json`; the EMS Dashboard's own web UI
+does not create it.
 
 ## Control Explain View
 
@@ -100,9 +104,8 @@ deployments (raw by default for authenticated operators).
 
 ## Maintenance View
 
-The Maintenance tab exposes the v0.6.0 operator maintenance tools (backup,
-restore and config upgrade) so a Docker-first user never has to drop to a
-terminal. It uses the Control/Energy stage style with five numbered stage
+The Maintenance tab exposes the operator maintenance tools (backup, restore and
+config upgrade) so a Docker-first user never has to drop to a terminal. It uses the Control/Energy stage style with five numbered stage
 cards: **01 Maintenance Status**, **02 Backup**, **03 Restore**, **04 Config
 Upgrade**, **05 Safety Notes**. The Maintenance view hides the live-flow chrome
 (the top live metrics strip and the "Live Flow" heading) because it is not a
@@ -238,7 +241,11 @@ the Control tab. Live metric tiles remain read-only.
 Dashboard write mode can change live EMS behavior. Enable it only on trusted
 networks and only for operators who should be able to change runtime settings.
 
-Enable write mode by setting a local admin password:
+Enable write mode by setting a local dashboard password. If you installed with
+the **Admin Console**, this password already exists — it is the shared EMS/Admin
+password created on first start, stored in the same `config/dashboard-auth.json`.
+The `emsctl.py` command is the CLI alternative (and how you set it on a
+non-Admin install):
 
 ```bash
 python3 emsctl.py dashboard set-password
@@ -407,8 +414,8 @@ SQLite dashboard history    = dashboard.write_interval_seconds
 ```
 
 The native writer enqueues one raw sample **every EMS control loop**, so the raw
-bucket represents the highest available EMS sampling resolution (with a 3s loop,
-~3s resolution). The SQLite dashboard history keeps its own, typically lower,
+bucket represents the highest available EMS sampling resolution (with a 5s loop,
+~5s resolution). The SQLite dashboard history keeps its own, typically lower,
 cadence from `dashboard.write_interval_seconds` and is unchanged — you do **not**
 need to set `write_interval_seconds = 0` to get full-resolution InfluxDB data.
 

@@ -45,9 +45,9 @@ def test_readme_is_router_not_manual():
 
 
 def test_readme_is_router_sized():
-    # Router target: short. 120 lines is the hard ceiling.
+    # Router target: short. 105 lines is the hard ceiling.
     lines = read(ROOT / "README.md").splitlines()
-    assert len(lines) <= 120, len(lines)
+    assert len(lines) <= 105, len(lines)
 
 
 def test_readme_routes_to_three_setup_paths():
@@ -99,15 +99,27 @@ def test_readme_links_the_three_audience_doc_areas():
 def test_readme_has_supported_hardware_summary():
     text = read(ROOT / "README.md")
     assert "## Supported hardware at a glance" in text
-    assert "SolarFlow 800" in text
-    assert "SolarFlow 2400 Pro" in text
-    assert "Shelly 3EM Gen1" in text
-    assert "Zendure Smart Meter 3CT HTTP" in text
-    assert "generic MQTT grid" in text or "Generic MQTT grid" in text
+    # The README carries a compact grouped summary, not the full compatibility
+    # matrix: important hardware families stay discoverable by exact name, and
+    # the detailed table is owned by docs/user/supported-setups.md.
+    for model in (
+        "SolarFlow 800 Pro 2",
+        "SolarFlow 2400 Pro",
+        "Hyper 2000",
+        "Smart Meter 3CT",
+        "Smart Meter D0",
+        "Shelly Pro",
+    ):
+        assert model in text, model
+    # The four-tier vocabulary is summarised (defined in full in the linked page).
+    assert "Validated" in text
+    assert "Family-supported" in text
     assert (
         "docs/user/supported-setups.md" in text
         or "docs/supported-setups.md" in text
     )
+    # The real-hardware safety warning must stay in the README.
+    assert "real power hardware" in text
 
 
 def test_readme_marks_mqtt_device_control_as_roadmap():
@@ -129,6 +141,39 @@ def test_supported_setups_page_lives_under_user_docs():
     assert "Not Supported" in text or "not supported" in text
     # The page has one home under docs/user/; no stale top-level copy.
     assert not (ROOT / "docs" / "supported-setups.md").exists()
+
+
+def _validated_devices_rows(text):
+    # Return the data rows of the "## Validated devices" ledger table as lists
+    # of trimmed cell strings.
+    section = text.split("## Validated devices", 1)[1].split("\n## ", 1)[0]
+    rows = []
+    for line in section.splitlines():
+        line = line.strip()
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if set("".join(cells)) <= set("-: "):
+            continue  # separator row
+        rows.append(cells)
+    return rows
+
+
+def test_validated_devices_ledger_ties_each_row_to_evidence():
+    text = read(ROOT / "docs" / "user" / "supported-setups.md")
+    rows = _validated_devices_rows(text)
+    assert rows, "Validated devices ledger table not found"
+    header = [h.lower() for h in rows[0]]
+    assert "validated by" in header
+    assert "evidence" in header
+    evidence_col = header.index("evidence")
+    validated_by_col = header.index("validated by")
+    # Every Validated claim must carry a non-empty "Validated by" and "Evidence"
+    # statement — a device only earns a ledger row with real evidence behind it.
+    for row in rows[1:]:
+        device = row[0]
+        assert row[validated_by_col], f"{device}: missing 'Validated by'"
+        assert row[evidence_col], f"{device}: missing 'Evidence'"
 
 
 # --- Docs are split by audience -------------------------------------------
@@ -348,7 +393,7 @@ def test_readme_stays_compact_router():
     assert "git clone" not in text
     assert "docker compose exec ems python3 emsctl.py diagnose" not in text
     assert '"dry_run"' not in text
-    assert len(text.splitlines()) <= 120
+    assert len(text.splitlines()) <= 105
 
 
 # --- User docs stay simple; technical detail keeps its home ---------------

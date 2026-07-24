@@ -58,6 +58,7 @@ Normal users choose one of these two; both converge on the same standard
 | Common commands | [common-commands.md](common-commands.md) | Daily Docker-first command sheet with native equivalents. |
 | Config layout | [user/config-layout.md](user/config-layout.md) | Standard `config/config.json` layout and legacy migration. |
 | Supported setups | [user/supported-setups.md](user/supported-setups.md) | Whether your grid meter and devices fit EMS. |
+| Connection types | [user/connection-types.md](user/connection-types.md) | Local API, Local MQTT and Zendure cloud MQTT — which hardware fits which. |
 | FAQ | [user/faq.md](user/faq.md) | Short answers for Admin, Docker, config, dashboard, backups and updates. |
 | Troubleshooting | [user/troubleshooting.md](user/troubleshooting.md) | Short, Admin-first guide for common problems. |
 | Safety | [user/safety.md](user/safety.md) | Simple pre-live checklist for hardware writes. |
@@ -84,6 +85,7 @@ Architecture, internals and reference. You do not need this for a normal setup.
 | Architecture | [technical/architecture.md](technical/architecture.md) | Project structure and runtime component boundaries. |
 | Admin architecture | [technical/admin-architecture.md](technical/admin-architecture.md) | Admin Console = UI/orchestration, Docker Bootstrap layout, EMS/Core as source of truth. |
 | Admin discovery | [technical/admin-discovery.md](technical/admin-discovery.md) | Full Admin Console internals: wizard, release/build identity, discovery, Docker setup, security. |
+| System-build pairing | [technical/system-build-pairing.md](technical/system-build-pairing.md) | Admin and EMS as one paired system build: pair identity, alignment, embedded resources, known-good. |
 | Configuration | [technical/configuration.md](technical/configuration.md) | Static `config.json` keys, safety flags, devices, grid meters and winter settings. |
 | Configuration examples | [configuration-examples.md](configuration-examples.md) | Copy/paste starting points for standalone, HA, dry-run and live writes. |
 | Control logic | [technical/control-logic.md](technical/control-logic.md) | Target calculation, filtering, allocation and write suppression. |

@@ -45,10 +45,11 @@ Common first fixes:
 - Home Assistant not configured: Home Assistant is optional and not required
   for standalone EMS control.
 
-Zendure Local API must be available and enabled for local EMS control. Do not
-run Zendure HEMS, Home Assistant automations, MQTT writers, or any other
-controller in parallel if they write Zendure `outputLimit`. EMS assumes
-exclusive write control over `outputLimit` while active.
+At least one supported Zendure connection — Local API, Local MQTT, or Zendure
+cloud MQTT — must be available for EMS control. Do not run Zendure HEMS, Home
+Assistant automations, MQTT writers, or any other controller in parallel if they
+write Zendure `outputLimit`. EMS assumes exclusive write control over
+`outputLimit` while active.
 
 The EMS uses structured logs:
 
@@ -612,7 +613,7 @@ target_calculation
 Symptoms:
 
 - target jumps up and down every cycle
-- many repeated `write_output_limit` events
+- many repeated `write_output_limit_published` events
 - actual output never settles
 - grid import/export alternates quickly
 
@@ -645,7 +646,7 @@ Tuning hints:
 | devices fight each other | disable other controllers | check Zendure app, HEMS, HA automations |
 
 Relevant events (`output_control_deadband_hold` is a `debug` trace; the actual
-write `write_output_limit` stays at `info`):
+write `write_output_limit_published` stays at `info`):
 
 ```text
 output_control_deadband_hold
@@ -765,7 +766,7 @@ event=dry_run_output_limit
 Expected live-write event:
 
 ```text
-event=write_output_limit
+event=write_output_limit_published
 ```
 
 Other relevant events:
@@ -1047,6 +1048,15 @@ rewrites the EMS image reference in `docker-compose.yml`, and force-recreates th
 detection, build-identity gating, SemVer fallback, release cache and Docker
 execution details, see [admin-discovery.md](admin-discovery.md).
 
+If **Upgrade system** stops with *System Build verification is no longer current*
+(HTTP 409 `system_build_verification_stale`, or `system_build_verification_required`
+when no verification was sent), the target image or build metadata changed after
+you verified it — most often a mutable tag such as `latest` re-pushed to a new
+digest. No preflight, backup, migration, or deployment ran. Select **Verify System
+Build** again to re-resolve and re-verify the current pair, then re-plan and
+retry. This check is deliberate: it guarantees the executed System Build is
+exactly the one you verified.
+
 For Docker Bootstrap or advanced shell use, the equivalent manual recreate is:
 
 ```bash
@@ -1057,6 +1067,68 @@ docker compose exec ems python3 emsctl.py diagnose
 
 Roll back a bad update by restoring a backup; see the backup and restore
 diagnostics above and [backup-restore.md](backup-restore.md).
+
+### Installed release shows as unknown
+
+The Maintenance Overview treats a **running** EMS container as the active
+baseline and reads its release from the immutable image identity. If a running
+container's identity cannot be established (for example a digest-pinned image
+whose build labels are missing), the overview shows the current release as
+**unknown** and adds a short warning instead of borrowing the Compose or
+last-known-good release. This is intentional: the Compose file and known-good
+record describe the desired or last-successful state, not the bits that are
+actually running. They are used only when no EMS container is active (absent,
+stopped, or Docker unavailable). Recreate the EMS container from the verified
+System Build to restore a readable release. The custom container name honored
+here is `EMS_CONTAINER_NAME` (falling back to the Compose `container_name`, then
+the canonical `ems-solarflow-api-control`).
+
+### Guided upgrade digest pull failed
+
+When the exact verified EMS digest is missing locally, guided upgrade pulls
+`ghcr.io/basecubedev/ems-solarflow-api-control@sha256:<digest>`. If that pull
+fails, the typed failure is preserved through the complete upgrade job — the
+executor step, the job result, the transition record, and the UI all keep the
+stable error code:
+
+- `image_pull_rate_limited` / `system_build_registry_rate_limited` — a GHCR
+  throttle (see the rate-limit section below);
+- `image_pull_network_error` — a network problem reaching the registry;
+- `image_pull_failed` — a generic pull failure (tag/repository/registry);
+- `target_digest_mismatch` — the pulled content digest did not equal the verified
+  digest (a moved or re-pushed image).
+
+In every case **no Compose change is written and the EMS container is not
+recreated**. Any backup or config steps that already ran before the pull are
+reported honestly in the step list. The verified target stays selected and you
+can retry. (Untrusted or unknown executor reasons are normalized to
+`ems_upgrade_failed` and never copied verbatim into the transition record.)
+
+### GitHub Container Registry rate limit reached
+
+When you select **Verify System Build** (or **Update Admin Server**) and the
+System Build images are downloaded, GitHub Container Registry (GHCR) may throttle
+the request. The Admin Console reports this as a distinct, actionable error:
+
+```text
+GitHub Container Registry rate limit reached.
+
+No installation changes were made. Wait before retrying, or authenticate
+Docker with a GitHub account to increase the available request quota.
+```
+
+What it means and what to do:
+
+- **Nothing was installed or changed.** The build is left unverified, Continue and
+  Update Admin Server stay disabled, and no deployment starts. The full Docker
+  output is in the expandable diagnostics area (credentials are never shown).
+- **Just wait and retry.** Selecting **Verify System Build** again after a short
+  wait is the normal fix — anonymous GHCR pulls share a per-IP quota that
+  replenishes over time. Simply *browsing* builds never consumes GHCR requests, so
+  the wait only applies to the verify/download step.
+- **Optional:** if you download builds often, authenticating Docker with a GitHub
+  account (`docker login ghcr.io`) raises the available quota. This is a
+  convenience, **not** a requirement — normal operation needs no GitHub token.
 
 ## Support bundle and issue reports
 

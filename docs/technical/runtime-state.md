@@ -33,7 +33,7 @@ Example:
   "system": {
     "enabled": true,
     "max_total_power": 800,
-    "loop_interval": 3,
+    "loop_interval": 5,
     "min_output_limit": 35
   },
   "ha": {

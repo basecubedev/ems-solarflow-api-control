@@ -2,8 +2,10 @@
 
 Home Assistant is optional.
 
-The EMS can run standalone with `config.json` and `runtime-state.json`.
-The template default keeps Home Assistant disabled with `ha.enabled=false` and
+The EMS can run standalone with `config/config.json` and
+`data/runtime-state.json` (the canonical current paths; a legacy root-level
+`config.json` / `runtime-state.json` is still read as a fallback). The template
+default keeps Home Assistant disabled with `ha.enabled=false` and
 `ha.control_enabled=false`.
 
 This page documents the optional Home Assistant integration and the optional HA
@@ -21,7 +23,7 @@ Home Assistant is not a safety authority. If helper sync fails, times out, or
 raises an error, the EMS logs the failure and continues the control loop with
 the current local runtime-state values.
 
-`runtime-state.json` remains the local control state. Home Assistant helpers can
+`data/runtime-state.json` remains the local control state. Home Assistant helpers can
 change only the runtime fields documented below, and only when both static and
 runtime HA control are enabled.
 
