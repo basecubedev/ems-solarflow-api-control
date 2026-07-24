@@ -200,14 +200,115 @@ def test_ecotracker_detected_as_grid_meter():
     assert device.role_suggestion == "grid_meter"
 
 
-def test_zendure_3ct_detected_as_grid_meter_not_inverter():
+def test_zendure_3ct_report_detected_as_generic_http_grid_meter():
+    # The real 3CT sample carries the per-clamp apparent powers, but a D0 exposes
+    # the same fields, so they are NOT model proof. Numeric total_power alone
+    # makes it a config-ready generic local-HTTP grid meter.
     device = _probe_single({"/properties/report": ZENDURE_3CT_REPORT})
     assert device is not None
-    assert device.api_family == "zendure_smartmeter_3ct_http"
-    assert device.device_type == "zendure_smartmeter_3ct"
+    assert device.api_family == "zendure_grid_meter_http"
     assert device.role_suggestion == "grid_meter"
     assert device.serial_number == "rhRkw909"
     assert device.config_ready is True
+    assert device.missing_config_fields == []
+
+
+def test_zendure_explicit_3ct_model_enriches_label_but_keeps_generic_family():
+    device = _probe_single(
+        {"/properties/report": {"total_power": 321, "sn": "3CTSN", "product": "SmartMeter3CT"}}
+    )
+    assert device is not None
+    # The config type stays generic; the model only enriches the display detail.
+    assert device.api_family == "zendure_grid_meter_http"
+    assert device.device_type == "zendure_smartmeter_3ct"
+    assert device.role_suggestion == "grid_meter"
+    assert device.serial_number == "3CTSN"
+    assert device.config_ready is True
+    assert "3CT" in device.display_name
+
+
+@pytest.mark.parametrize(
+    "product",
+    ["smart_meter_3ct", "smart-meter-3ct", "Smart Meter 3CT"],
+)
+def test_zendure_3ct_model_evidence_is_case_and_separator_insensitive(product):
+    device = _probe_single(
+        {"/properties/report": {"total_power": 5, "sn": "S", "productName": product}}
+    )
+    assert device is not None
+    assert device.api_family == "zendure_grid_meter_http"
+    assert device.device_type == "zendure_smartmeter_3ct"
+
+
+@pytest.mark.parametrize(
+    "product",
+    ["Zendure SmartMeter 3CT", "ZENDURE  smartmeter  3CT"],
+)
+def test_zendure_prefixed_3ct_model_is_recognized(product):
+    device = _probe_single(
+        {"/properties/report": {"total_power": 5, "sn": "S", "model": product}}
+    )
+    assert device is not None
+    assert device.api_family == "zendure_grid_meter_http"
+    assert device.device_type == "zendure_smartmeter_3ct"
+
+
+@pytest.mark.parametrize(
+    "product",
+    ["not3ct", "device3ctcompatible", "abc3ctxyz", "3ct-emulator"],
+)
+def test_zendure_3ct_substring_false_positives_stay_generic(product):
+    # A model string that merely contains "3ct" is not a supported identifier;
+    # the device is still a config-ready generic HTTP grid meter, not a 3CT.
+    device = _probe_single(
+        {"/properties/report": {"total_power": 321, "sn": "SN", "product": product}}
+    )
+    assert device is not None
+    assert device.api_family == "zendure_grid_meter_http"
+    assert device.device_type == "zendure_grid_meter_http"
+    assert device.config_ready is True
+    assert "3CT" not in device.display_name
+
+
+def test_zendure_flat_total_power_without_model_is_config_ready_generic_meter():
+    # A flat total_power with no model evidence (e.g. a D0 reader) is a
+    # config-ready generic local-HTTP grid meter; it is never claimed as a 3CT.
+    device = _probe_single({"/properties/report": {"total_power": 321, "sn": "D0SN"}})
+    assert device is not None
+    assert device.role_suggestion == "grid_meter"
+    assert device.serial_number == "D0SN"
+    assert device.api_family == "zendure_grid_meter_http"
+    assert device.device_type == "zendure_grid_meter_http"
+    assert device.config_ready is True
+    assert device.missing_config_fields == []
+    assert "3CT" not in device.display_name
+    assert "Smart Meter" not in device.display_name
+
+
+def test_zendure_complete_clamp_triplet_is_not_3ct_evidence():
+    # The D0 sample also carries an all-zero clamp triplet, so the triplet must
+    # never be treated as 3CT proof.
+    device = _probe_single(
+        {
+            "/properties/report": {
+                "total_power": 300,
+                "a_aprt_power": 100,
+                "b_aprt_power": 100,
+                "c_aprt_power": 100,
+            }
+        }
+    )
+    assert device is not None
+    assert device.api_family == "zendure_grid_meter_http"
+    assert device.device_type == "zendure_grid_meter_http"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{"total_power": "321"}, {"total_power": True}, {}, {"total_power": None}],
+)
+def test_zendure_grid_meter_rejects_non_numeric_total_power(payload):
+    assert _probe_single({"/properties/report": payload}) is None
 
 
 def test_zendure_inverter_report_not_classified_as_3ct_meter():
@@ -220,6 +321,143 @@ def test_zendure_inverter_report_not_classified_as_3ct_meter():
 
 def test_unknown_http_device_is_ignored():
     assert _probe_single({"/properties/report": {"hello": "world"}}) is None
+
+
+# --- mDNS endpoint verification ------------------------------------------
+
+class _FakeResponse:
+    def __init__(self, payload, status_code=200):
+        self._payload = payload
+        self.status_code = status_code
+
+    def json(self):
+        return self._payload
+
+
+class _RecordingSession:
+    """Minimal requests.Session stand-in that records requested URLs."""
+
+    def __init__(self, payload, status_code=200):
+        self._payload = payload
+        self._status_code = status_code
+        self.requests = []
+
+    def get(self, url, timeout=None, headers=None):
+        self.requests.append(url)
+        return _FakeResponse(self._payload, self._status_code)
+
+    def close(self):
+        pass
+
+
+def _verify_mdns(payload, ip="192.168.1.80", port=8080, model_hint=None):
+    session = _RecordingSession(payload)
+    device = discovery.verify_zendure_endpoint(
+        ip, port, session=session, model_hint=model_hint
+    )
+    return device, session
+
+
+def test_verify_mdns_zendure_inverter_candidate():
+    device, _ = _verify_mdns(
+        {
+            "product": "solarFlow800Pro",
+            "sn": "INV123",
+            "properties": {"electricLevel": 50, "outputHomePower": 100},
+        }
+    )
+    assert device is not None
+    assert device.api_family == "zendure_local_http"
+    assert device.role_suggestion == "inverter"
+    assert device.serial_number == "INV123"
+    assert device.ip == "192.168.1.80"
+    assert device.port == 8080
+
+
+def test_verify_mdns_explicit_3ct_candidate():
+    device, _ = _verify_mdns(
+        {"product": "SmartMeter3CT", "sn": "3CT123", "total_power": 321}
+    )
+    assert device is not None
+    assert device.api_family == "zendure_grid_meter_http"
+    assert device.device_type == "zendure_smartmeter_3ct"
+    assert "3CT" in device.display_name
+    assert device.config_ready is True
+    assert device.ip == "192.168.1.80"
+    assert device.port == 8080
+
+
+def test_verify_mdns_clamp_triplet_is_generic_not_3ct():
+    device, _ = _verify_mdns(
+        {
+            "sn": "3CT123",
+            "total_power": 300,
+            "a_aprt_power": 100,
+            "b_aprt_power": 90,
+            "c_aprt_power": 110,
+        }
+    )
+    assert device is not None
+    assert device.api_family == "zendure_grid_meter_http"
+    assert device.device_type == "zendure_grid_meter_http"
+
+
+def test_verify_mdns_flat_grid_meter_is_config_ready_generic():
+    device, _ = _verify_mdns({"sn": "D0SN", "total_power": 321})
+    assert device is not None
+    assert device.device_type == "zendure_grid_meter_http"
+    assert device.display_name == "Zendure Grid Meter via local HTTP"
+    assert device.config_ready is True
+    assert device.role_suggestion == "grid_meter"
+    assert device.serial_number == "D0SN"
+    assert device.ip == "192.168.1.80"
+    assert device.port == 8080
+    # A flat D0-like reading must never be pre-claimed as another type.
+    assert "3CT" not in device.display_name
+    assert device.api_family == "zendure_grid_meter_http"
+
+
+@pytest.mark.parametrize(
+    "hint",
+    ["SmartMeter3CT", "Smart Meter 3CT", "smart_meter_3ct", "smart-meter-3ct",
+     "Zendure SmartMeter 3CT"],
+)
+def test_verify_mdns_accepted_model_hint_enriches_label(hint):
+    device, _ = _verify_mdns({"sn": "S", "total_power": 5}, model_hint=hint)
+    assert device is not None
+    assert device.api_family == "zendure_grid_meter_http"
+    assert device.device_type == "zendure_smartmeter_3ct"
+
+
+@pytest.mark.parametrize(
+    "hint",
+    ["not3ct", "abc3ctxyz", "device3ctcompatible", "3ct-emulator"],
+)
+def test_verify_mdns_rejected_model_hint_stays_generic(hint):
+    device, _ = _verify_mdns({"sn": "S", "total_power": 5}, model_hint=hint)
+    assert device is not None
+    assert device.api_family == "zendure_grid_meter_http"
+    assert device.device_type == "zendure_grid_meter_http"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{}, {"total_power": True}, {"total_power": None}, {"total_power": {}}],
+)
+def test_verify_mdns_invalid_grid_meter_payload_is_rejected(payload):
+    device, _ = _verify_mdns(payload)
+    assert device is None
+
+
+def test_verify_mdns_uses_advertised_port():
+    device, session = _verify_mdns({"sn": "D0SN", "total_power": 321})
+    assert session.requests == ["http://192.168.1.80:8080/properties/report"]
+    assert device.port == 8080
+
+
+def test_verify_mdns_requests_report_only_once():
+    _, session = _verify_mdns({"sn": "D0SN", "total_power": 321})
+    assert len(session.requests) == 1
 
 
 # --- scan resilience -----------------------------------------------------
@@ -235,3 +473,17 @@ def test_unreachable_hosts_do_not_fail_scan():
     devices, errors = scan_network("127.0.0.0/30", timeout_ms=200, max_workers=4)
     assert devices == []
     assert isinstance(errors, list)
+
+
+def test_scan_network_reports_progress_callback_per_host():
+    # A /30 has two probeable hosts; the callback must fire once per finished
+    # host with a monotonically rising checked count and a stable total.
+    updates = []
+    scan_network(
+        "127.0.0.0/30", timeout_ms=200, max_workers=4,
+        progress_callback=updates.append,
+    )
+    assert len(updates) == 2
+    assert [u["checked_hosts"] for u in updates] == [1, 2]
+    assert all(u["total_hosts"] == 2 for u in updates)
+    assert all("current_ip" in u for u in updates)

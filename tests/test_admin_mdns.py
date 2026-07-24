@@ -192,7 +192,7 @@ def test_default_verifier_stores_specific_http_failure(
 ):
     import admin.mdns as mdns
 
-    def fail(ip, port, timeout_ms, failure_details):
+    def fail(ip, port, timeout_ms, failure_details, model_hint=None):
         failure_details.append(failure_reason)
         return None
 
