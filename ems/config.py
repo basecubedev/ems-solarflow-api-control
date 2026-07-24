@@ -4,8 +4,10 @@ import json
 import logging
 import os
 import re
+import ssl
 import sys
 import stat
+from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from ems.paths import resolve_config_path, resolve_template_path
@@ -15,7 +17,7 @@ CURRENT_CONFIG_SCHEMA_VERSION = LATEST_CONFIG_SCHEMA_VERSION
 
 OUTPUT_CONTROL_DEFAULTS = {
     "load_deadband_w": 5,
-    "target_deadband_w": 10,
+    "target_deadband_w": 5,
     "filter_enabled": True,
     "filter_method": "median_ema",
     "median_window": 2,
@@ -25,10 +27,12 @@ OUTPUT_CONTROL_DEFAULTS = {
     "sign_change_filter_reset_factor": 1.0,
     "ramp_enabled": True,
     "ramp_up_w_per_cycle": 500,
-    "ramp_down_w_per_cycle": 500,
+    # Slower down-ramp reduces undershoot when inverter output reacts more
+    # slowly than the EMS target.
+    "ramp_down_w_per_cycle": 300,
     "device_ramp_enabled": True,
     "device_ramp_up_w_per_cycle": 400,
-    "device_ramp_down_w_per_cycle": 400,
+    "device_ramp_down_w_per_cycle": 200,
     "large_import_bypass_w": 600,
     "large_export_bypass_w": 600,
     "bypass_ramp_multiplier": 1.5,
@@ -159,10 +163,126 @@ INFLUXDB_RETENTION_KEY_BY_BUCKET = {
 
 ZENDURE_SMARTMETER_D0_GRID_METER_TYPE = "zendure_smartmeter_d0"
 ZENDURE_SMARTMETER_3CT_HTTP_GRID_METER_TYPE = "zendure_smartmeter_3ct_http"
+ZENDURE_SMARTMETER_D0_HTTP_GRID_METER_TYPE = "zendure_smartmeter_d0_http"
+# Canonical generic local-HTTP grid-meter type. A Zendure D0, a Smart Meter 3CT
+# and the generic type all expose a flat numeric ``total_power`` at
+# ``/properties/report``, so one shared client serves them all. The concrete D0
+# and 3CT local-API types are kept distinct (a D0 is never stored as a 3CT); the
+# generic type stays a backward-compatible/discovery alias so existing configs
+# keep working.
+ZENDURE_GRID_METER_HTTP_GRID_METER_TYPE = "zendure_grid_meter_http"
+ZENDURE_HTTP_GRID_METER_TYPES = frozenset(
+    {
+        ZENDURE_GRID_METER_HTTP_GRID_METER_TYPE,
+        ZENDURE_SMARTMETER_3CT_HTTP_GRID_METER_TYPE,
+        ZENDURE_SMARTMETER_D0_HTTP_GRID_METER_TYPE,
+    }
+)
 MQTT_GRID_METER_TYPES = ("mqtt", ZENDURE_SMARTMETER_D0_GRID_METER_TYPE)
+
+# Single source of truth mapping a grid-meter ``type`` to a user-facing hardware
+# model name and a transport label. Diagnostics and status surfaces read this so
+# a D0 always reports as a D0 (never a 3CT) and each transport is named
+# correctly. Unknown types fall back to ``(None, None)``.
+_LOCAL_HTTP_TRANSPORT = "local HTTP API"
+_LOCAL_MQTT_TRANSPORT = "local MQTT"
+GRID_METER_MODEL_TRANSPORTS = {
+    "shelly": ("Shelly Pro/Plus", _LOCAL_HTTP_TRANSPORT),
+    "shelly_3em_gen1": ("Shelly 3EM Gen1", _LOCAL_HTTP_TRANSPORT),
+    "ecotracker": ("everHome EcoTracker", _LOCAL_HTTP_TRANSPORT),
+    "tasmota_http": ("Tasmota HTTP reader", _LOCAL_HTTP_TRANSPORT),
+    ZENDURE_GRID_METER_HTTP_GRID_METER_TYPE: ("Zendure grid meter", _LOCAL_HTTP_TRANSPORT),
+    ZENDURE_SMARTMETER_3CT_HTTP_GRID_METER_TYPE: (
+        "Zendure Smart Meter 3CT",
+        _LOCAL_HTTP_TRANSPORT,
+    ),
+    ZENDURE_SMARTMETER_D0_HTTP_GRID_METER_TYPE: (
+        "Zendure Smart Meter D0",
+        _LOCAL_HTTP_TRANSPORT,
+    ),
+    ZENDURE_SMARTMETER_D0_GRID_METER_TYPE: ("Zendure Smart Meter D0", _LOCAL_MQTT_TRANSPORT),
+    "mqtt": ("Generic MQTT meter", "MQTT"),
+    "ha": ("Home Assistant (legacy)", "Home Assistant"),
+}
+
+
+def grid_meter_model_transport(meter_type):
+    """Return ``(model, transport)`` labels for a grid-meter ``type``.
+
+    Reuses the shared :data:`GRID_METER_MODEL_TRANSPORTS` table so status and
+    diagnostics stay consistent and a D0 is never surfaced as a 3CT. Unknown
+    types yield ``(None, None)``.
+    """
+
+    return GRID_METER_MODEL_TRANSPORTS.get(str(meter_type or "").strip().lower(), (None, None))
+
+_ZENDURE_D0_TOPIC_PREFIX = "Zendure/sensor/"
+_ZENDURE_D0_TOPIC_SUFFIX = "/totalPower"
+_ZENDURE_D0_TOPIC_ROOT = "Zendure"
+_ZENDURE_D0_TOPIC_ENTITY = "sensor"
+_ZENDURE_D0_TOPIC_METRIC = "totalPower"
+_MQTT_TOPIC_WILDCARDS = ("+", "#")
+
+
+def zendure_smartmeter_d0_topic(serial_number):
+    """Return the canonical D0 grid-meter MQTT topic for a serial number.
+
+    This is the single source of truth shared by the CLI setup assistant and the
+    Admin guided setup so both produce ``Zendure/sensor/<serial>/totalPower``. An
+    empty or whitespace-only serial (or one carrying a path/wildcard character) is
+    rejected rather than yielding a topic with a hole or an extra segment in it.
+    """
+
+    serial = str(serial_number or "").strip()
+    if not serial:
+        raise ValueError("Zendure SmartMeter D0 requires a serial number")
+    if "/" in serial or any(w in serial for w in _MQTT_TOPIC_WILDCARDS):
+        raise ValueError(
+            "Zendure SmartMeter D0 serial must not contain '/', '+' or '#'"
+        )
+    return f"{_ZENDURE_D0_TOPIC_PREFIX}{serial}{_ZENDURE_D0_TOPIC_SUFFIX}"
+
+
+def zendure_smartmeter_d0_serial_from_topic(topic):
+    """Extract the serial from a canonical D0 topic, or ``""`` when it is not one.
+
+    Strict canonical shape, the single accepted form for a D0 grid-meter topic::
+
+        Zendure/sensor/<serial>/totalPower
+
+    Exactly four segments, exact ``Zendure`` root, exact ``sensor`` entity, exact
+    ``totalPower`` metric, a non-empty serial and no MQTT wildcards. Anything else
+    (extra/missing segments, a foreign or cloud prefix, the ``number`` write
+    channel, a leading/trailing separator, ``+``/``#``) yields ``""``.
+    """
+
+    text = str(topic or "").strip()
+    if not text:
+        return ""
+    segments = text.split("/")
+    if len(segments) != 4:
+        return ""
+    root, entity, serial, metric = segments
+    if root != _ZENDURE_D0_TOPIC_ROOT or entity != _ZENDURE_D0_TOPIC_ENTITY:
+        return ""
+    if metric != _ZENDURE_D0_TOPIC_METRIC:
+        return ""
+    if not serial or any(w in serial for w in _MQTT_TOPIC_WILDCARDS):
+        return ""
+    return serial
+
+
+def is_zendure_smartmeter_d0_topic(topic):
+    """True when ``topic`` is exactly ``Zendure/sensor/<serial>/totalPower``."""
+
+    return bool(zendure_smartmeter_d0_serial_from_topic(topic))
+
+
 MQTT_GRID_METER_KEYS = (
     "host",
     "port",
+    "tls",
+    "tls_insecure",
     "username",
     "password",
     "topic",
@@ -171,6 +291,56 @@ MQTT_GRID_METER_KEYS = (
     "max_age_seconds",
     "_mqtt_client_factory",
 )
+
+# Broker-owned connection fields. When a component selects a named broker profile
+# via ``broker_ref``, the profile is the single source of truth for these, so
+# inlining any of them alongside ``broker_ref`` is ambiguous. One central list so
+# the grid meter and any future MQTT consumer reject the same fields.
+MQTT_BROKER_CONNECTION_FIELDS = frozenset(
+    {
+        "host",
+        "port",
+        "tls",
+        "tls_mode",
+        "tls_insecure",
+        "username",
+        "password",
+        "credentials_ref",
+    }
+)
+
+
+class MqttBrokerReferenceAmbiguousError(ValueError):
+    """A component sets ``broker_ref`` and also inlines broker connection fields.
+
+    Carries the stable ``code``, the config ``path`` and the sorted conflicting
+    field names (never a secret value) so every validator surfaces one contract.
+    """
+
+    code = "mqtt_broker_reference_ambiguous"
+
+    def __init__(self, fields, *, path):
+        self.fields = tuple(sorted(fields))
+        self.path = path
+        super().__init__(
+            f"{path} uses broker_ref but also inlines connection field(s): "
+            + ", ".join(self.fields)
+            + ". Keep connection settings in the broker profile only."
+        )
+
+
+def mqtt_broker_reference_conflict_fields(mqtt_settings):
+    """Sorted broker-owned fields inlined in a ``broker_ref`` mqtt block, or ()."""
+
+    if not isinstance(mqtt_settings, dict):
+        return ()
+    return tuple(
+        sorted(
+            field
+            for field in MQTT_BROKER_CONNECTION_FIELDS
+            if mqtt_settings.get(field) not in (None, "")
+        )
+    )
 
 
 class ConfigUpgradeError(Exception):
@@ -425,12 +595,14 @@ def default_safe_config():
             "dry_run": True,
             "simulation_mode": True,
             "allow_hardware_writes": False,
+            "allow_mqtt_local_control_writes": False,
+            "allow_mqtt_zendure_control_writes": False,
             "allow_state_reconciliation_writes": False,
             "reconcile_ac_mode_on_start": True,
             "reconcile_smart_mode": True,
             "max_total_power": 800,
             "max_device_power": 800,
-            "deadband": 10,
+            "deadband": 2,
             "runtime_state_path": "runtime-state.json",
             "min_output_limit": 0,
             "loop_interval": 5,
@@ -454,6 +626,7 @@ def default_safe_config():
         "config_upgrade": copy.deepcopy(CONFIG_UPGRADE_DEFAULTS),
         "influxdb": copy.deepcopy(INFLUXDB_DEFAULTS),
         "devices": [],
+        "zendure_mqtt": {},
         "grid_meter": {
             "type": "shelly",
             "ip": ""
@@ -465,8 +638,17 @@ def default_safe_config():
 
 
 def default_runtime_config():
+    """Missing-key defaults for a normal (non-simulation) config load.
+
+    Starts from the explicit safe defaults, then switches simulation off and
+    applies the canonical release write-gate defaults so a normal config that
+    omits the gate keys resolves the same effective values with or without a
+    config-upgrade file rewrite. Safe-mode paths keep ``default_safe_config``.
+    """
+
     config = default_safe_config()
     config["system"]["simulation_mode"] = False
+    config["system"].update(RELEASE_WRITE_GATE_DEFAULTS)
     return config
 
 
@@ -779,12 +961,120 @@ def grid_meter_mqtt_settings(grid_meter):
     return settings
 
 
+def _zendure_mqtt_broker_connection(config, broker_ref):
+    """Return raw connection settings for an effective broker profile, or None.
+
+    Resolves ``broker_ref`` through the shared effective-profile resolver so the
+    grid meter, the runtime and the credential scanner agree on which broker a
+    ref names: ``default`` addresses the implicit legacy top-level broker even
+    when other named brokers exist. Returns a dict with
+    host/port/tls/tls_insecure/username/password/source/enabled, or ``None`` when
+    the ref resolves to no effective broker.
+    """
+
+    from ems.zendure_mqtt.config_entries import (
+        effective_broker_enabled,
+        get_effective_mqtt_broker_profile,
+    )
+
+    effective = get_effective_mqtt_broker_profile(config, broker_ref)
+    if effective is None:
+        return None
+    profile = effective.config
+    tls = safe_bool(profile.get("tls"), False)
+    port = parse_mqtt_port(
+        profile.get("port"), default=default_mqtt_port(tls)
+    )
+    return {
+        "host": str(profile.get("host") or "").strip(),
+        "port": port,
+        "tls": tls,
+        "tls_insecure": safe_bool(profile.get("tls_insecure"), False),
+        "username": str(profile.get("username") or ""),
+        "password": str(profile.get("password") or ""),
+        "credentials_ref": profile.get("credentials_ref"),
+        "source": str(profile.get("source") or "local_mqtt").strip().lower(),
+        "enabled": effective_broker_enabled(effective),
+    }
+
+
+def resolve_grid_meter_mqtt_settings(config):
+    """Resolve the MQTT grid-meter connection, honoring a named broker profile.
+
+    - ``grid_meter.mqtt.broker_ref`` present: the broker profile owns host, port,
+      TLS and credentials; the grid-meter block keeps topic, payload format,
+      value path and staleness. Inlining a conflicting connection value alongside
+      ``broker_ref`` is rejected as ambiguous.
+    - No ``broker_ref``: the existing inline ``grid_meter.mqtt`` settings are used
+      unchanged (legacy configs keep working).
+
+    Returns the merged MQTT settings dict (never mutates ``config``). Raises
+    ``ValueError`` for an unknown/disabled broker ref or a conflicting inline
+    connection value. Broker secrets are never copied into the grid-meter block
+    on disk; they are only merged into the in-memory runtime settings here.
+    """
+
+    grid_meter = config.get("grid_meter") if isinstance(config, dict) else None
+    settings = grid_meter_mqtt_settings(grid_meter)
+    broker_ref = settings.get("broker_ref")
+    if not (isinstance(broker_ref, str) and broker_ref.strip()):
+        return settings
+
+    broker_ref = broker_ref.strip()
+    conflicting = mqtt_broker_reference_conflict_fields(settings)
+    if conflicting:
+        raise MqttBrokerReferenceAmbiguousError(conflicting, path="grid_meter.mqtt")
+
+    connection = _zendure_mqtt_broker_connection(config, broker_ref)
+    if connection is None:
+        raise ValueError(
+            f"grid_meter.mqtt.broker_ref '{broker_ref}' is not a configured "
+            "zendure_mqtt broker profile"
+        )
+    if not connection["enabled"]:
+        raise ValueError(
+            f"grid_meter.mqtt.broker_ref '{broker_ref}' is disabled"
+        )
+    if connection["source"] != "local_mqtt":
+        raise ValueError(
+            f"grid_meter.mqtt.broker_ref '{broker_ref}' is not a local_mqtt broker; "
+            "Zendure Cloud MQTT grid meters are not supported"
+        )
+
+    resolved = dict(settings)
+    resolved.pop("broker_ref", None)
+    resolved["host"] = connection["host"]
+    resolved["port"] = connection["port"]
+    resolved["tls"] = connection["tls"]
+    resolved["tls_insecure"] = connection["tls_insecure"]
+    resolved["username"] = connection["username"]
+    resolved["password"] = connection["password"]
+    resolved["credentials_ref"] = connection["credentials_ref"]
+    return resolved
+
+
 def normalize_mqtt_grid_meter_settings(grid_meter, *, meter_type=None):
     meter_type = str(
         meter_type
         or (grid_meter.get("type") if isinstance(grid_meter, dict) else "mqtt")
     ).strip().lower()
     settings = grid_meter_mqtt_settings(grid_meter)
+
+    credentials_ref = settings.get("credentials_ref")
+    if isinstance(credentials_ref, str):
+        credentials_ref = credentials_ref.strip() or None
+    elif credentials_ref is not None:
+        raise ValueError("MQTT grid meter credentials_ref must be a string")
+    if credentials_ref and any(
+        settings.get(key) not in (None, "") for key in ("username", "password")
+    ):
+        raise ValueError(
+            "MQTT grid meter credentials_ref conflicts with inline credentials"
+        )
+    if credentials_ref:
+        settings["credentials_ref"] = credentials_ref
+    else:
+        settings.pop("credentials_ref", None)
 
     for key in (
         "host",
@@ -802,11 +1092,18 @@ def normalize_mqtt_grid_meter_settings(grid_meter, *, meter_type=None):
     if not str(settings.get("topic") or "").strip():
         raise ValueError("MQTT grid meter requires grid_meter.mqtt.topic")
 
+    tls, tls_insecure = resolve_mqtt_tls_metadata(
+        tls_mode=settings.get("tls_mode"),
+        tls=settings.get("tls"),
+        tls_insecure=settings.get("tls_insecure"),
+    )
     try:
-        settings["port"] = max(1, int(float(settings.get("port", 1883))))
-    except (TypeError, ValueError) as exc:
+        settings["port"] = parse_mqtt_port(
+            settings.get("port"), default=default_mqtt_port(tls)
+        )
+    except ValueError as exc:
         raise ValueError(
-            "MQTT grid meter requires numeric grid_meter.mqtt.port"
+            f"MQTT grid meter has an invalid grid_meter.mqtt.port: {exc}"
         ) from exc
 
     payload_format = str(settings.get("payload_format") or "number").strip().lower()
@@ -826,6 +1123,10 @@ def normalize_mqtt_grid_meter_settings(grid_meter, *, meter_type=None):
         1,
         safe_int(settings.get("max_age_seconds", 15), 15, minimum=1),
     )
+    # TLS mirrors the Zendure MQTT read client: plain by default, insecure only
+    # when explicitly enabled.
+    settings["tls"] = tls
+    settings["tls_insecure"] = tls_insecure
     return settings
 
 
@@ -836,6 +1137,8 @@ def template_placeholder_paths(config):
         return []
 
     paths = []
+    from ems.zendure_mqtt.config_entries import is_zendure_mqtt_device_config
+
     devices = config.get("devices")
     configured_devices = []
     if isinstance(devices, list):
@@ -844,6 +1147,9 @@ def template_placeholder_paths(config):
             if isinstance(device, dict)
         ]
         for index, device in enumerate(configured_devices):
+            # Telemetry-only Zendure MQTT entries have no ip/sn by design.
+            if is_zendure_mqtt_device_config(device):
+                continue
             if _missing_or_placeholder(device.get("ip")):
                 paths.append(f"devices[{index}].ip")
             if _missing_or_placeholder(device.get("sn")):
@@ -854,7 +1160,27 @@ def template_placeholder_paths(config):
         meter_type = str(grid_meter.get("type") or "shelly").strip().lower()
         if meter_type in MQTT_GRID_METER_TYPES:
             mqtt_settings = grid_meter_mqtt_settings(grid_meter)
-            if _missing_or_placeholder(mqtt_settings.get("host")):
+            broker_ref = mqtt_settings.get("broker_ref")
+            if isinstance(broker_ref, str) and broker_ref.strip():
+                # A named broker profile owns the connection, so the inline host
+                # is intentionally absent — validate the profile's host instead of
+                # demanding an inline one. An unknown/disabled/non-local ref is a
+                # genuine misconfiguration rejected by
+                # resolve_grid_meter_mqtt_settings at load time, not a template
+                # placeholder, so it is not flagged here.
+                try:
+                    connection = _zendure_mqtt_broker_connection(
+                        config, broker_ref.strip()
+                    )
+                except ValueError:
+                    # An invalid broker port (etc.) is rejected with an explicit
+                    # error by resolve_grid_meter_mqtt_settings at load time.
+                    connection = None
+                if connection is not None and _missing_or_placeholder(
+                    connection.get("host")
+                ):
+                    paths.append(f"zendure_mqtt.brokers.{broker_ref.strip()}.host")
+            elif _missing_or_placeholder(mqtt_settings.get("host")):
                 paths.append("grid_meter.mqtt.host")
             if _missing_or_placeholder(mqtt_settings.get("topic")):
                 paths.append("grid_meter.mqtt.topic")
@@ -889,6 +1215,8 @@ def apply_template_placeholder_safety(config, *, emit_message=None):
     system["enabled"] = False
     system["dry_run"] = True
     system["allow_hardware_writes"] = False
+    system["allow_mqtt_local_control_writes"] = False
+    system["allow_mqtt_zendure_control_writes"] = False
     system["allow_state_reconciliation_writes"] = False
 
     if emit_message:
@@ -1302,7 +1630,27 @@ REMAINING_TIME_MAX_HOURS = 999
 MIN_OUTPUT_LIMIT = 0
 DRY_RUN = True
 SIMULATION_MODE = False
+
+# Canonical release defaults for the three output-control write gates. Local API
+# and both MQTT transports default on; whether a transport actually writes is
+# decided by its configuration presence (API key, broker host, per-device opt-in)
+# and the runtime safety preconditions (dry_run/simulation/replay). The release
+# template (config/config.template.json and config_catalog._DEFAULT_TEMPLATE),
+# config upgrade and the normal runtime missing-key defaults
+# (default_runtime_config) all resolve from this one definition, so a normal
+# config that omits the gate keys behaves the same with or without a file
+# rewrite. Safe paths (default_safe_config, template-placeholder safety) force
+# every gate off, and the parser below keeps a fail-safe False fallback for a
+# config that bypasses the defaults merge entirely.
+RELEASE_WRITE_GATE_DEFAULTS = {
+    "allow_hardware_writes": True,
+    "allow_mqtt_local_control_writes": True,
+    "allow_mqtt_zendure_control_writes": True,
+}
+
 ALLOW_HARDWARE_WRITES = False
+ALLOW_MQTT_LOCAL_CONTROL_WRITES = False
+ALLOW_MQTT_ZENDURE_CONTROL_WRITES = False
 ALLOW_STATE_RECONCILIATION_WRITES = False
 RECONCILE_AC_MODE_ON_START = True
 RECONCILE_SMART_MODE = True
@@ -1328,6 +1676,7 @@ OFFGRID_SOCKET_MODES = {
     "off": 2
 }
 ZENDURE_CONFIG = []
+ZENDURE_MQTT_CONFIG = {}
 SHELLY_IP = ""
 GRID_METER_CONFIG = {
     "type": "shelly",
@@ -1363,6 +1712,7 @@ def initialize(args, base_dir):
     global MAX_TOTAL_POWER, MAX_DEVICE_POWER, DEADBAND, LOOP_INTERVAL
     global OUTPUT_CONTROL_CONFIG, RUNTIME_STATE_PATH, MIN_OUTPUT_LIMIT
     global DRY_RUN, SIMULATION_MODE, ALLOW_HARDWARE_WRITES
+    global ALLOW_MQTT_LOCAL_CONTROL_WRITES, ALLOW_MQTT_ZENDURE_CONTROL_WRITES
     global ALLOW_STATE_RECONCILIATION_WRITES, RECONCILE_AC_MODE_ON_START
     global RECONCILE_SMART_MODE, HA_ENABLED, HA_CONTROL_ENABLED, LOG_LEVEL
     global REDISTRIBUTE_CLAMPED_POWER, PV_KWP_WEIGHTING
@@ -1372,7 +1722,7 @@ def initialize(args, base_dir):
     global SOC_RECONCILE_INTERVAL, WINTER_CONFIG, DASHBOARD_CONFIG
     global INFLUXDB_CONFIG
     global ENERGY_SAVINGS_CONFIG, BATTERY_FULL_CHARGE_ASSIST_CONFIG
-    global ZENDURE_CONFIG, SHELLY_IP, GRID_METER_CONFIG
+    global ZENDURE_CONFIG, ZENDURE_MQTT_CONFIG, SHELLY_IP, GRID_METER_CONFIG
 
     ARGS = args
     BASE_DIR = base_dir
@@ -1406,6 +1756,14 @@ def initialize(args, base_dir):
     DRY_RUN = CONFIG["system"].get("dry_run", True) or args.dry_run
     SIMULATION_MODE = CONFIG["system"].get("simulation_mode", False) or args.simulate
     ALLOW_HARDWARE_WRITES = CONFIG["system"].get("allow_hardware_writes", False)
+    ALLOW_MQTT_LOCAL_CONTROL_WRITES = CONFIG["system"].get(
+        "allow_mqtt_local_control_writes",
+        False
+    )
+    ALLOW_MQTT_ZENDURE_CONTROL_WRITES = CONFIG["system"].get(
+        "allow_mqtt_zendure_control_writes",
+        False
+    )
     ALLOW_STATE_RECONCILIATION_WRITES = CONFIG["system"].get(
         "allow_state_reconciliation_writes",
         False
@@ -1485,6 +1843,8 @@ def initialize(args, base_dir):
         CONFIG.get("battery_full_charge_assist", {})
     )
     ZENDURE_CONFIG = CONFIG["devices"]
+    zendure_mqtt_config = CONFIG.get("zendure_mqtt", {})
+    ZENDURE_MQTT_CONFIG = zendure_mqtt_config if isinstance(zendure_mqtt_config, dict) else {}
     legacy_shelly_config = CONFIG.get("shelly", {})
     if not isinstance(legacy_shelly_config, dict):
         legacy_shelly_config = {}
@@ -1508,8 +1868,11 @@ def initialize(args, base_dir):
             if key in GRID_METER_CONFIG and GRID_METER_CONFIG[key] is not None:
                 GRID_METER_CONFIG[key] = str(GRID_METER_CONFIG[key])
         if GRID_METER_CONFIG["type"] in MQTT_GRID_METER_TYPES:
+            # Resolve a named broker profile (if any) before validation so the
+            # runtime settings carry the broker's host/port/TLS/credentials.
+            resolved_mqtt = resolve_grid_meter_mqtt_settings(CONFIG)
             GRID_METER_CONFIG["mqtt"] = normalize_mqtt_grid_meter_settings(
-                GRID_METER_CONFIG,
+                {"type": GRID_METER_CONFIG["type"], "mqtt": resolved_mqtt},
                 meter_type=GRID_METER_CONFIG["type"],
             )
             for stale_key in (
@@ -1519,6 +1882,8 @@ def initialize(args, base_dir):
                 "channels",
                 "host",
                 "port",
+                "tls",
+                "tls_insecure",
                 "username",
                 "password",
                 "topic",
@@ -1551,13 +1916,152 @@ def initialize(args, base_dir):
 
     return CONFIG
 
-def hardware_writes_allowed():
+
+def http_control_device_configs(devices=None):
+    """Return devices[] entries that build an HTTP-controllable ZendureClient.
+
+    Telemetry-only Zendure MQTT entries carry no ip/sn and are not controlled;
+    they are excluded so startup never passes them to ZendureClient.
+    """
+
+    from ems.zendure_mqtt.config_entries import is_zendure_mqtt_device_config
+
+    if devices is None:
+        devices = ZENDURE_CONFIG
+    if not isinstance(devices, list):
+        return []
+    return [
+        item
+        for item in devices
+        if isinstance(item, dict) and not is_zendure_mqtt_device_config(item)
+    ]
+
+
+def mqtt_control_device_configs(devices=None):
+    """Return devices[] entries that build a write-capable MQTT control device.
+
+    These are ``zendure_mqtt`` entries that opt in to output control via
+    ``capabilities.write_output_limit=true``. Telemetry-only MQTT entries and
+    HTTP/API devices are excluded.
+    """
+
+    from ems.zendure_mqtt.config_entries import (
+        is_control_zendure_mqtt_device_config,
+    )
+
+    if devices is None:
+        devices = ZENDURE_CONFIG
+    if not isinstance(devices, list):
+        return []
+    return [
+        item
+        for item in devices
+        if isinstance(item, dict) and is_control_zendure_mqtt_device_config(item)
+    ]
+
+
+def _writes_enabled():
+    """Shared safety precondition for every control-write gate."""
+
     return (
         not DRY_RUN
         and not SIMULATION_MODE
         and not ARGS.replay
-        and ALLOW_HARDWARE_WRITES
     )
+
+
+def hardware_writes_allowed():
+    """API (local HTTP) outputLimit write gate."""
+
+    return _writes_enabled() and ALLOW_HARDWARE_WRITES
+
+
+def mqtt_local_control_writes_allowed():
+    """Local MQTT broker outputLimit write gate."""
+
+    return _writes_enabled() and ALLOW_MQTT_LOCAL_CONTROL_WRITES
+
+
+def mqtt_zendure_control_writes_allowed():
+    """Zendure cloud MQTT outputLimit write gate."""
+
+    return _writes_enabled() and ALLOW_MQTT_ZENDURE_CONTROL_WRITES
+
+
+@dataclass(frozen=True)
+class WriteGateDecision:
+    """Effective write-gate outcome for one device transport.
+
+    Single source of truth for whether an ``outputLimit`` write may proceed and
+    why it is blocked, shared by the controller, logs, diagnostics and tests.
+    """
+
+    allowed: bool
+    transport: str
+    gate_name: str
+    gate_enabled: bool
+    blocked_by: tuple
+
+    def as_log_fields(self) -> dict:
+        return {
+            "transport": self.transport,
+            "write_gate": self.gate_name,
+            "write_gate_enabled": self.gate_enabled,
+            "blocked_by": ",".join(self.blocked_by),
+        }
+
+
+# control_gate -> (transport, gate_name). Local API and both MQTT transports are
+# equal control transports; the per-transport gate is an operational safety
+# control, never an experimental classification.
+_CONTROL_GATE_TRANSPORT = {
+    "api": ("http", "allow_hardware_writes"),
+    "mqtt_local": ("mqtt_local", "allow_mqtt_local_control_writes"),
+    "mqtt_zendure": ("mqtt_zendure", "allow_mqtt_zendure_control_writes"),
+}
+
+
+def resolve_write_gate(control_gate) -> WriteGateDecision:
+    """Resolve the effective write-gate decision for a device's transport."""
+
+    transport, gate_name = _CONTROL_GATE_TRANSPORT.get(
+        control_gate, _CONTROL_GATE_TRANSPORT["api"]
+    )
+    gate_enabled = {
+        "allow_hardware_writes": ALLOW_HARDWARE_WRITES,
+        "allow_mqtt_local_control_writes": ALLOW_MQTT_LOCAL_CONTROL_WRITES,
+        "allow_mqtt_zendure_control_writes": ALLOW_MQTT_ZENDURE_CONTROL_WRITES,
+    }[gate_name]
+
+    blocked = []
+    if DRY_RUN:
+        blocked.append("dry_run")
+    if SIMULATION_MODE:
+        blocked.append("simulation_mode")
+    if getattr(ARGS, "replay", False):
+        blocked.append("replay_mode")
+    if not gate_enabled:
+        blocked.append(gate_name)
+
+    return WriteGateDecision(
+        allowed=not blocked,
+        transport=transport,
+        gate_name=gate_name,
+        gate_enabled=bool(gate_enabled),
+        blocked_by=tuple(blocked),
+    )
+
+
+def resolve_device_write_gate(device) -> WriteGateDecision:
+    """Resolve the write-gate decision for a control-loop device."""
+
+    return resolve_write_gate(getattr(device, "control_gate", "api"))
+
+
+def control_writes_allowed(control_gate):
+    """Dispatch the write decision to the gate named by ``control_gate``."""
+
+    return resolve_write_gate(control_gate).allowed
 
 
 def state_reconciliation_writes_allowed():
@@ -1639,6 +2143,183 @@ def safe_int(value, default=0, minimum=None):
         parsed = max(minimum, parsed)
 
     return parsed
+
+
+MQTT_PORT_MIN = 1
+MQTT_PORT_MAX = 65535
+MQTT_DEFAULT_PORT = 1883
+MQTT_DEFAULT_TLS_PORT = 8883
+
+
+def default_mqtt_port(tls=False):
+    """Protocol default MQTT port: 8883 for TLS, 1883 for plain."""
+
+    return MQTT_DEFAULT_TLS_PORT if tls else MQTT_DEFAULT_PORT
+
+
+def parse_mqtt_port(value, *, default=None):
+    """Strictly validate an MQTT broker port, or raise ``ValueError``.
+
+    The single shared MQTT port validator used by config loading, broker-profile
+    parsing, Admin preview, discovery and diagnostics so preview and runtime never
+    disagree. Rules:
+
+    - an integer (a bool is not an integer) in ``[1, 65535]`` is accepted;
+    - a string form of such an integer is accepted;
+    - an absent value (``None`` or ``""``) yields ``default`` when one is given,
+      else raises;
+    - every other value — a bool, an out-of-range number, a non-numeric or
+      fractional string, a fractional float — raises. An explicit invalid port is
+      never silently replaced with a default or clamped into range.
+    """
+
+    if value is None or (isinstance(value, str) and not value.strip()):
+        if default is not None:
+            return default
+        raise ValueError("MQTT port is required")
+
+    if isinstance(value, bool):
+        raise ValueError("MQTT port must be an integer, not a boolean")
+
+    if isinstance(value, int):
+        port = value
+    elif isinstance(value, float):
+        if not value.is_integer():
+            raise ValueError(f"MQTT port must be a whole number, got {value!r}")
+        port = int(value)
+    elif isinstance(value, str):
+        text = value.strip()
+        try:
+            port = int(text)
+        except ValueError:
+            raise ValueError(
+                f"MQTT port must be an integer, got {value!r}"
+            ) from None
+    else:
+        raise ValueError(f"MQTT port must be an integer, got {value!r}")
+
+    if not (MQTT_PORT_MIN <= port <= MQTT_PORT_MAX):
+        raise ValueError(
+            f"MQTT port must be between {MQTT_PORT_MIN} and {MQTT_PORT_MAX}, "
+            f"got {port}"
+        )
+    return port
+
+
+# Canonical MQTT TLS modes shared across discovery, proposal building, config
+# preview and Core. A mode is authoritative for the ``tls``/``tls_insecure``
+# pair, so a TLS broker can never be silently downgraded to plain MQTT.
+MQTT_TLS_MODE_PLAIN = "plaintext"
+MQTT_TLS_MODE_SYSTEM_CA = "system_ca"
+MQTT_TLS_MODE_INSECURE = "insecure_no_verify"
+
+# Aliases accepted for backward compatibility with older stored broker records.
+_MQTT_TLS_PLAIN_ALIASES = frozenset(
+    {"", "plaintext", "plain", "disabled", "none", "tcp"}
+)
+_MQTT_TLS_SYSTEM_CA_ALIASES = frozenset({"system_ca", "tls", "mqtts", "ssl", "secure"})
+
+
+def normalize_mqtt_tls_mode(tls_mode):
+    """Map an MQTT TLS mode string to a ``(tls, tls_insecure)`` pair.
+
+    The single shared TLS-mode normalizer. Plain modes yield ``(False, False)``,
+    ``system_ca`` yields ``(True, False)`` and ``insecure_no_verify`` yields
+    ``(True, True)``. An unknown mode raises ``ValueError`` rather than defaulting
+    to plain, so an unrecognized mode can never downgrade a TLS broker.
+    """
+
+    mode = str(tls_mode or "").strip().lower()
+    if mode in _MQTT_TLS_PLAIN_ALIASES:
+        return False, False
+    if mode in _MQTT_TLS_SYSTEM_CA_ALIASES:
+        return True, False
+    if mode == MQTT_TLS_MODE_INSECURE:
+        return True, True
+    raise ValueError(f"unknown MQTT TLS mode: {tls_mode!r}")
+
+
+def resolve_mqtt_tls_metadata(*, tls_mode=None, tls=None, tls_insecure=None):
+    """Reconcile TLS metadata into a canonical ``(tls, tls_insecure)`` pair.
+
+    When a ``tls_mode`` is present it is authoritative; any explicit
+    ``tls``/``tls_insecure`` flag that contradicts it is rejected. Without a mode
+    the explicit flags are used, but ``tls_insecure`` without ``tls`` is rejected.
+    Raises ``ValueError`` on any contradiction so a TLS broker is never
+    downgraded to plain MQTT by a stray flag.
+    """
+
+    if tls is not None:
+        tls = require_json_bool(tls, "tls")
+    if tls_insecure is not None:
+        tls_insecure = require_json_bool(tls_insecure, "tls_insecure")
+
+    mode_present = tls_mode is not None and str(tls_mode).strip() != ""
+    if mode_present:
+        mode_tls, mode_insecure = normalize_mqtt_tls_mode(tls_mode)
+        if tls is not None and tls != mode_tls:
+            raise ValueError(
+                f"tls={tls!r} contradicts tls_mode={tls_mode!r}"
+            )
+        if tls_insecure is not None and tls_insecure != mode_insecure:
+            raise ValueError(
+                f"tls_insecure={tls_insecure!r} contradicts tls_mode={tls_mode!r}"
+            )
+        return mode_tls, mode_insecure
+
+    resolved_tls = tls if tls is not None else False
+    resolved_insecure = tls_insecure if tls_insecure is not None else False
+    if resolved_insecure and not resolved_tls:
+        raise ValueError("tls_insecure is set but TLS is disabled")
+    return resolved_tls, resolved_insecure
+
+
+def configure_mqtt_client_tls(client, *, tls, tls_insecure, ca_certs=None):
+    """Apply the resolved TLS mode to a paho-style MQTT client, before connect.
+
+    The single shared TLS application: ``tls_insecure`` skips certificate-chain
+    AND hostname verification (paho's ``tls_insecure_set`` alone only disables
+    the hostname check, which still rejects self-signed broker chains such as
+    the Zendure cloud broker). A ``ca_certs`` bundle pins the chain to that CA
+    while tolerating hostname mismatches. Plain TLS keeps full verification and
+    ``tls=False`` never touches the client.
+    """
+
+    if not tls:
+        if tls_insecure:
+            raise ValueError("tls_insecure is set but TLS is disabled")
+        return
+    if ca_certs:
+        client.tls_set(ca_certs=str(ca_certs))
+        client.tls_insecure_set(True)
+    elif tls_insecure:
+        client.tls_set(cert_reqs=ssl.CERT_NONE)
+        client.tls_insecure_set(True)
+    else:
+        client.tls_set()
+
+
+def require_json_bool(value, field_name):
+    """Return ``value`` when it is a real JSON boolean, else raise ``ValueError``.
+
+    Strict on purpose: strings like ``"false"`` and numbers like ``0`` are
+    rejected rather than coerced, so a security- or safety-relevant flag can
+    never be enabled by string truthiness.
+    """
+
+    if isinstance(value, bool):
+        return value
+    raise ValueError(
+        f"{field_name} must be a JSON boolean (true or false), got {value!r}"
+    )
+
+
+def optional_json_bool(value, field_name, *, default=False):
+    """Strict boolean that treats an absent value (``None``) as ``default``."""
+
+    if value is None:
+        return default
+    return require_json_bool(value, field_name)
 
 
 def safe_session_timeout(value, default):

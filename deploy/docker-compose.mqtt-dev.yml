@@ -1,0 +1,22 @@
+# Optional throwaway MQTT broker for local development only.
+#
+# NOT for production and NOT wired into any EMS/Admin compose file. It runs
+# Mosquitto on 1883 with anonymous access so the mock publisher
+# (tools/zendure_mqtt_mock_service.py) has a broker to talk to. Production users
+# must run their own secured broker instead.
+#
+#   docker compose -f deploy/docker-compose.mqtt-dev.yml up -d
+
+services:
+  mqtt-dev:
+    image: eclipse-mosquitto:2
+    container_name: ems-mqtt-dev
+    restart: "no"
+    ports:
+      - "127.0.0.1:1883:1883"
+    command:
+      - sh
+      - -c
+      - |
+        printf 'listener 1883\nallow_anonymous true\n' > /mosquitto/config/mosquitto.conf
+        exec /usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf

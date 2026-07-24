@@ -12,6 +12,7 @@ from ems.clients import (
     Shelly3EMGen1Client,
     TasmotaHttpClient,
     ZendureClient,
+    ZendureGridMeterHttpClient,
     ZendureSmartMeter3CTHttpClient,
     create_grid_meter_client,
     create_session,
@@ -68,12 +69,28 @@ class FakeMqttClient:
         self.loop_started = False
         self.loop_stopped = False
         self.disconnected = False
+        self.tls_set_called = False
+        self.tls_set_calls = []
+        self.tls_insecure = None
+        self.published = []
+        # TLS must be configured before connect; record ordering to prove it.
+        self._connected = False
+        self.tls_before_connect = None
 
     def username_pw_set(self, username, password=None):
         self.username_password = (username, password)
 
+    def tls_set(self, *args, **kwargs):
+        self.tls_set_called = True
+        self.tls_set_calls.append((args, kwargs))
+
+    def tls_insecure_set(self, value):
+        self.tls_insecure = bool(value)
+
     def connect_async(self, host, port, keepalive=60):
+        self.tls_before_connect = self.tls_set_called
         self.connect_calls.append((host, port, keepalive))
+        self._connected = True
 
     def loop_start(self):
         self.loop_started = True
@@ -86,6 +103,9 @@ class FakeMqttClient:
 
     def subscribe(self, topic):
         self.subscriptions.append(topic)
+
+    def publish(self, *args, **kwargs):
+        self.published.append((args, kwargs))
 
 
 def test_create_session_configures_retrying_http_adapters():
@@ -857,8 +877,8 @@ def test_parse_zendure_smartmeter_3ct_power_rejects_non_object():
         _parse_zendure_smartmeter_3ct_power([{"total_power": -798}])
 
 
-def test_zendure_smartmeter_3ct_http_client_reads_report_and_preserves_last_value():
-    client = ZendureSmartMeter3CTHttpClient(
+def test_zendure_grid_meter_http_client_reads_report_and_preserves_last_value():
+    client = ZendureGridMeterHttpClient(
         "192.0.2.80",
         SessionStub(
             get_response=ResponseStub(payload={"total_power": -798.44})
@@ -866,14 +886,24 @@ def test_zendure_smartmeter_3ct_http_client_reads_report_and_preserves_last_valu
     )
 
     assert client.get_power() == -798.4
-    assert client.session.calls[0][1] == "http://192.0.2.80/properties/report"
+    assert client.session.calls[0][1] == "http://192.0.2.80:80/properties/report"
 
     client.session = SessionStub(get_response=ValueError("offline"))
     assert client.get_power() == -798.4
 
 
-def test_zendure_smartmeter_3ct_http_client_logs_read_error(caplog):
-    client = ZendureSmartMeter3CTHttpClient(
+def test_zendure_grid_meter_http_client_uses_discovered_port():
+    client = ZendureGridMeterHttpClient(
+        "192.0.2.80",
+        SessionStub(get_response=ResponseStub(payload={"total_power": -43})),
+        port=8080,
+    )
+    assert client.get_power() == -43.0
+    assert client.session.calls[0][1] == "http://192.0.2.80:8080/properties/report"
+
+
+def test_zendure_grid_meter_http_client_logs_read_error(caplog):
+    client = ZendureGridMeterHttpClient(
         "192.0.2.80",
         SessionStub(get_response=ResponseStub(payload={"total_power": 120.0})),
     )
@@ -883,24 +913,82 @@ def test_zendure_smartmeter_3ct_http_client_logs_read_error(caplog):
     client.session = SessionStub(get_response=ResponseStub(payload={"foo": 1}))
 
     assert client.get_power() == 120.0
-    assert "event=zendure_smartmeter_3ct_http_read_error" in caplog.text
+    assert "event=zendure_grid_meter_http_read_error" in caplog.text
     assert "stale_value=120.0" in caplog.text
 
 
-def test_create_grid_meter_client_supports_zendure_smartmeter_3ct_http():
+def test_zendure_smartmeter_3ct_http_client_is_a_backward_compatible_alias():
+    assert ZendureSmartMeter3CTHttpClient is ZendureGridMeterHttpClient
+
+
+@pytest.mark.parametrize(
+    "meter_type",
+    [
+        "zendure_grid_meter_http",
+        "zendure_smartmeter_3ct_http",
+        "zendure_smartmeter_d0_http",
+    ],
+)
+def test_create_grid_meter_client_supports_zendure_http_types(meter_type):
     client = create_grid_meter_client(
-        {"type": "zendure_smartmeter_3ct_http", "ip": "192.0.2.80"},
+        {"type": meter_type, "ip": "192.0.2.80"},
         SessionStub(),
     )
-    assert isinstance(client, ZendureSmartMeter3CTHttpClient)
+    assert isinstance(client, ZendureGridMeterHttpClient)
     assert client.ip == "192.0.2.80"
-    assert client.provider == "Zendure Smart Meter 3CT"
+    assert client.port == 80
+    assert client.provider == "Zendure Grid Meter (HTTP)"
 
 
-def test_create_grid_meter_client_rejects_zendure_smartmeter_3ct_http_missing_ip():
+def test_d0_http_and_3ct_http_use_the_same_shared_reader():
+    # The D0 local-API meter must reuse the shared Zendure local-HTTP reader
+    # rather than gain a second near-identical client. Both types build the same
+    # class from the same factory and parse total_power identically.
+    from ems.clients import _parse_zendure_grid_meter_http_power
+
+    d0 = create_grid_meter_client(
+        {"type": "zendure_smartmeter_d0_http", "ip": "192.0.2.81"},
+        SessionStub(get_response=ResponseStub(payload={"total_power": 512.0})),
+    )
+    ct = create_grid_meter_client(
+        {"type": "zendure_smartmeter_3ct_http", "ip": "192.0.2.82"},
+        SessionStub(get_response=ResponseStub(payload={"total_power": 512.0})),
+    )
+    assert type(d0) is type(ct) is ZendureGridMeterHttpClient
+    # total_power is the single value both read at /properties/report.
+    assert _parse_zendure_grid_meter_http_power({"total_power": 512.0}) == 512.0
+
+
+def test_d0_http_reader_preserves_grid_power_sign_semantics():
+    # Positive total_power stays import (grid draw); negative stays export
+    # (feed-in). The D0 local-API meter is read-only regardless of transport.
+    imp = create_grid_meter_client(
+        {"type": "zendure_smartmeter_d0_http", "ip": "192.0.2.83"},
+        SessionStub(get_response=ResponseStub(payload={"total_power": 240.0})),
+    )
+    assert imp.get_power() == 240.0
+
+    exp = create_grid_meter_client(
+        {"type": "zendure_smartmeter_d0_http", "ip": "192.0.2.83"},
+        SessionStub(get_response=ResponseStub(payload={"total_power": -180.0})),
+    )
+    assert exp.get_power() == -180.0
+    # The shared reader carries no writer surface.
+    assert not hasattr(exp, "write_output_limit")
+
+
+def test_create_grid_meter_client_preserves_zendure_http_port():
+    client = create_grid_meter_client(
+        {"type": "zendure_grid_meter_http", "ip": "192.0.2.80", "port": 8080},
+        SessionStub(),
+    )
+    assert client.port == 8080
+
+
+def test_create_grid_meter_client_rejects_zendure_http_missing_ip():
     with pytest.raises(ValueError, match="requires ip"):
         create_grid_meter_client(
-            {"type": "zendure_smartmeter_3ct_http"},
+            {"type": "zendure_grid_meter_http"},
             SessionStub(),
         )
 
@@ -984,6 +1072,120 @@ def test_mqtt_grid_meter_client_reports_missing_and_stale_values():
 
     assert client.get_power() == 12.0
     assert client.health.failure_count == 2
+
+
+def test_mqtt_grid_meter_client_configures_tls_before_connect():
+    fake = FakeMqttClient()
+    MqttGridMeterClient(
+        "mqtt.local",
+        8883,
+        "Zendure/sensor/SN/totalPower",
+        tls=True,
+        client_factory=lambda: fake,
+    )
+    assert fake.tls_set_called is True
+    # Certificate verification stays on unless explicitly disabled.
+    assert fake.tls_set_calls == [((), {})]
+    assert fake.tls_insecure is None
+    # TLS is applied before the connection is opened.
+    assert fake.tls_before_connect is True
+
+
+def test_mqtt_grid_meter_client_tls_insecure_only_when_enabled():
+    import ssl
+
+    fake = FakeMqttClient()
+    MqttGridMeterClient(
+        "mqtt.local",
+        8883,
+        "Zendure/sensor/SN/totalPower",
+        tls=True,
+        tls_insecure=True,
+        client_factory=lambda: fake,
+    )
+    assert fake.tls_set_called is True
+    assert fake.tls_insecure is True
+    # Insecure must skip chain verification too (self-signed broker chains),
+    # not only the hostname check.
+    assert fake.tls_set_calls == [((), {"cert_reqs": ssl.CERT_NONE})]
+
+
+def test_mqtt_grid_meter_client_without_tls_does_not_configure_tls():
+    fake = FakeMqttClient()
+    MqttGridMeterClient(
+        "mqtt.local",
+        1883,
+        "Zendure/sensor/SN/totalPower",
+        client_factory=lambda: fake,
+    )
+    assert fake.tls_set_called is False
+    assert fake.tls_insecure is None
+
+
+def test_mqtt_grid_meter_client_never_publishes():
+    fake = FakeMqttClient()
+    client = MqttGridMeterClient(
+        "mqtt.local",
+        1883,
+        "Zendure/sensor/SN/totalPower",
+        client_factory=lambda: fake,
+    )
+    fake.on_connect(fake, None, None, 0)
+    fake.on_message(
+        fake,
+        None,
+        SimpleNamespace(topic="Zendure/sensor/SN/totalPower", payload=b"-6"),
+    )
+    client.get_power()
+    client.close()
+    assert fake.published == []
+
+
+def test_mqtt_grid_meter_client_malformed_payload_keeps_previous_value():
+    fake = FakeMqttClient()
+    client = MqttGridMeterClient(
+        "mqtt.local",
+        1883,
+        "Zendure/sensor/SN/totalPower",
+        client_factory=lambda: fake,
+    )
+    fake.on_connect(fake, None, None, 0)
+    fake.on_message(
+        fake,
+        None,
+        SimpleNamespace(topic="Zendure/sensor/SN/totalPower", payload=b"-6"),
+    )
+    assert client.get_power() == -6.0
+    before = client.health.failure_count
+    fake.on_message(
+        fake,
+        None,
+        SimpleNamespace(topic="Zendure/sensor/SN/totalPower", payload=b"OFF"),
+    )
+    # The last good value is preserved and a parse failure is recorded.
+    assert client.last_value == -6.0
+    assert client.health.failure_count == before + 1
+
+
+def test_create_grid_meter_client_applies_tls_from_config():
+    fake = FakeMqttClient()
+    create_grid_meter_client(
+        {
+            "type": "zendure_smartmeter_d0",
+            "mqtt": {
+                "host": "mqtt.local",
+                "port": 8883,
+                "topic": "Zendure/sensor/SN/totalPower",
+                "payload_format": "number",
+                "tls": True,
+                "tls_insecure": False,
+                "_mqtt_client_factory": lambda: fake,
+            },
+        },
+        SessionStub(),
+    )
+    assert fake.tls_set_called is True
+    assert fake.tls_insecure is None
 
 
 def test_create_grid_meter_client_supports_mqtt_with_factory():

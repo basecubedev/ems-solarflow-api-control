@@ -99,9 +99,21 @@ def test_config_template_standalone_live_control_defaults():
     assert removed_key not in template["grid_meter"]
     assert template["system"]["dry_run"] is False
     assert template["system"]["allow_hardware_writes"] is True
+    # All three write gates default on: whether a transport actually writes is
+    # decided by its configuration presence (API key, broker host, devices).
+    assert template["system"]["allow_mqtt_local_control_writes"] is True
+    assert template["system"]["allow_mqtt_zendure_control_writes"] is True
     assert template["system"]["allow_state_reconciliation_writes"] is True
     assert template["system"]["reconcile_ac_mode_on_start"] is True
     assert template["system"]["reconcile_smart_mode"] is True
+
+
+def test_config_template_zendure_mqtt_has_no_enabled_key():
+    template = json.loads(Path("config/config.template.json").read_text())
+
+    # The telemetry feature is always on; whether a broker runs is decided by
+    # configuration presence (host / credentials), not by an opt-in flag.
+    assert "enabled" not in template["zendure_mqtt"]
 
 
 def test_config_template_uses_persisted_data_paths():
@@ -367,6 +379,47 @@ def test_config_template_upgrade_adds_missing_template_comments():
     assert "_comment_docs" in result
     assert "_comment" in result["dashboard"]
     assert "_comment_animation_mode" in result["dashboard"]
+
+
+def test_release_write_gate_defaults_are_the_single_authoritative_source():
+    # The template, the catalog default template and the runtime canonical
+    # constant must all agree on the release write-gate defaults, so they never
+    # drift out of sync.
+    import ems.config as cfg
+    from ems.config_catalog import build_default_template
+
+    canonical = cfg.RELEASE_WRITE_GATE_DEFAULTS
+    assert canonical == {
+        "allow_hardware_writes": True,
+        "allow_mqtt_local_control_writes": True,
+        "allow_mqtt_zendure_control_writes": True,
+    }
+    file_template = json.loads(Path("config/config.template.json").read_text())
+    catalog_template = build_default_template()
+    for key, value in canonical.items():
+        assert file_template["system"][key] is value
+        assert catalog_template["system"][key] is value
+
+
+def test_upgrade_fills_missing_write_gates_with_canonical_defaults():
+    # A normal user config missing the write-gate keys receives the canonical
+    # release defaults (all enabled) from the single authoritative template.
+    result = upgrade(minimal_upgrade_config())
+    assert result["system"]["allow_hardware_writes"] is True
+    assert result["system"]["allow_mqtt_local_control_writes"] is True
+    assert result["system"]["allow_mqtt_zendure_control_writes"] is True
+
+
+def test_upgrade_preserves_explicitly_disabled_write_gates():
+    # An explicit user choice must never disappear during config upgrade.
+    user = minimal_upgrade_config()
+    user["system"]["allow_mqtt_local_control_writes"] = False
+    user["system"]["allow_hardware_writes"] = False
+    result = upgrade(user)
+    assert result["system"]["allow_mqtt_local_control_writes"] is False
+    assert result["system"]["allow_hardware_writes"] is False
+    # Unspecified gates still receive the canonical default.
+    assert result["system"]["allow_mqtt_zendure_control_writes"] is True
 
 
 def test_config_template_upgrade_does_not_add_sample_devices():
@@ -776,7 +829,7 @@ def test_legacy_shelly_ip_fallback_populates_grid_meter(tmp_path):
         restore_config_module(snapshot)
 
 
-def test_runtime_load_applies_conservative_missing_defaults_in_memory(tmp_path):
+def test_runtime_load_applies_release_gate_defaults_in_memory(tmp_path):
     snapshot = snapshot_config_module()
     values = {
         "system": {
@@ -792,9 +845,17 @@ def test_runtime_load_applies_conservative_missing_defaults_in_memory(tmp_path):
     try:
         initialize_config_from_dict(tmp_path, values)
 
+        # Missing safety mode keys stay conservative (dry_run on)...
         assert cfg.DRY_RUN is True
         assert cfg.SIMULATION_MODE is False
-        assert cfg.ALLOW_HARDWARE_WRITES is False
+        # ...but a normal config missing the three output write-gate keys
+        # resolves them to the release defaults (all on), matching what the
+        # template and config upgrade would produce.
+        assert cfg.ALLOW_HARDWARE_WRITES is True
+        assert cfg.ALLOW_MQTT_LOCAL_CONTROL_WRITES is True
+        assert cfg.ALLOW_MQTT_ZENDURE_CONTROL_WRITES is True
+        # The state-reconciliation gate is not part of the release write-gate
+        # trio and keeps its conservative missing-key default.
         assert cfg.ALLOW_STATE_RECONCILIATION_WRITES is False
         assert cfg.LOOP_INTERVAL == 5
         assert cfg.GRID_METER_CONFIG == {
@@ -803,6 +864,137 @@ def test_runtime_load_applies_conservative_missing_defaults_in_memory(tmp_path):
         }
     finally:
         restore_config_module(snapshot)
+
+
+def normal_config_without_write_gates():
+    """A realistic normal live-control config that predates the gate keys."""
+
+    return {
+        "config_upgrade": {"on_startup": "check"},
+        "system": {
+            "enabled": True,
+            "dry_run": False,
+            "simulation_mode": False,
+            "max_total_power": 1600,
+            "max_device_power": 800,
+            "deadband": 10,
+            "loop_interval": 5,
+        },
+        "devices": [
+            {"name": "WR1", "ip": "192.0.2.20", "sn": "SN123", "max_power": 800}
+        ],
+        "grid_meter": {"type": "shelly", "ip": "192.0.2.50"},
+    }
+
+
+def test_normal_config_missing_gates_resolves_release_defaults_without_rewrite(
+    tmp_path,
+):
+    snapshot = snapshot_config_module()
+    config_path = tmp_path / "config.json"
+    original_text = json.dumps(normal_config_without_write_gates())
+    config_path.write_text(original_text)
+    args = SimpleNamespace(
+        config=str(config_path),
+        dry_run=False,
+        simulate=False,
+        replay=None,
+        self_test=False,
+        no_ha=False,
+    )
+
+    try:
+        cfg.initialize(args, str(tmp_path))
+
+        assert cfg.DRY_RUN is False
+        assert cfg.SIMULATION_MODE is False
+        assert cfg.ALLOW_HARDWARE_WRITES is True
+        assert cfg.ALLOW_MQTT_LOCAL_CONTROL_WRITES is True
+        assert cfg.ALLOW_MQTT_ZENDURE_CONTROL_WRITES is True
+        # check mode reports only: the user's file is never rewritten to obtain
+        # the effective defaults.
+        assert config_path.read_text() == original_text
+    finally:
+        restore_config_module(snapshot)
+
+
+def test_explicitly_disabled_gate_stays_false_at_runtime(tmp_path):
+    snapshot = snapshot_config_module()
+    values = normal_config_without_write_gates()
+    values["system"]["allow_mqtt_local_control_writes"] = False
+
+    try:
+        initialize_config_from_dict(tmp_path, values)
+
+        assert cfg.ALLOW_MQTT_LOCAL_CONTROL_WRITES is False
+        # The other, unspecified gates still resolve to the release defaults.
+        assert cfg.ALLOW_HARDWARE_WRITES is True
+        assert cfg.ALLOW_MQTT_ZENDURE_CONTROL_WRITES is True
+    finally:
+        restore_config_module(snapshot)
+
+
+def test_safe_config_paths_keep_all_write_gates_disabled(tmp_path):
+    for gate in (
+        "allow_hardware_writes",
+        "allow_mqtt_local_control_writes",
+        "allow_mqtt_zendure_control_writes",
+        "allow_state_reconciliation_writes",
+    ):
+        assert cfg.default_safe_config()["system"][gate] is False
+
+    # A missing config under --simulate loads the explicit safe defaults, not
+    # the release defaults.
+    args = SimpleNamespace(
+        config=str(tmp_path / "does-not-exist.json"),
+        dry_run=False,
+        simulate=True,
+        replay=None,
+        self_test=False,
+        no_ha=False,
+    )
+    loaded = cfg.load_config(args, str(tmp_path))
+    assert loaded["system"]["allow_hardware_writes"] is False
+    assert loaded["system"]["allow_mqtt_local_control_writes"] is False
+    assert loaded["system"]["allow_mqtt_zendure_control_writes"] is False
+    assert loaded["system"]["simulation_mode"] is True
+
+
+def test_upgrade_and_runtime_load_resolve_equivalent_gate_values(tmp_path):
+    # The same old normal config must resolve the same effective gate values
+    # whether the upgrade is applied to the file or the runtime loads it as-is.
+    user = {
+        "system": {
+            "enabled": True,
+            "dry_run": False,
+            "simulation_mode": False,
+            "max_total_power": 1234,
+            "max_device_power": 900,
+            "deadband": 10,
+            "loop_interval": 5,
+        },
+        "devices": [{"name": "USER", "ip": "192.0.2.20", "sn": "USER_SN"}],
+        "shelly": {"ip": "192.0.2.50"},
+    }
+    upgraded = upgrade(copy.deepcopy(user))
+
+    effective = {}
+    snapshot = snapshot_config_module()
+    try:
+        for label, values in (("runtime", user), ("upgraded", upgraded)):
+            initialize_config_from_dict(tmp_path, values)
+            effective[label] = {
+                "allow_hardware_writes": cfg.ALLOW_HARDWARE_WRITES,
+                "allow_mqtt_local_control_writes": cfg.ALLOW_MQTT_LOCAL_CONTROL_WRITES,
+                "allow_mqtt_zendure_control_writes": (
+                    cfg.ALLOW_MQTT_ZENDURE_CONTROL_WRITES
+                ),
+            }
+    finally:
+        restore_config_module(snapshot)
+
+    assert effective["runtime"] == effective["upgraded"]
+    assert effective["runtime"] == cfg.RELEASE_WRITE_GATE_DEFAULTS
 
 
 def test_runtime_load_does_not_rewrite_config_file(tmp_path):
@@ -1028,6 +1220,10 @@ def test_runtime_load_forces_safe_mode_for_template_placeholders(tmp_path, caplo
         assert cfg.SYSTEM_ENABLED is False
         assert cfg.DRY_RUN is True
         assert cfg.ALLOW_HARDWARE_WRITES is False
+        # Placeholder safety must keep forcing every gate off even though the
+        # template now ships all three gates enabled.
+        assert cfg.ALLOW_MQTT_LOCAL_CONTROL_WRITES is False
+        assert cfg.ALLOW_MQTT_ZENDURE_CONTROL_WRITES is False
         assert cfg.ALLOW_STATE_RECONCILIATION_WRITES is False
         assert "Config still contains template placeholder values" in caplog.text
         assert "devices[0].sn" in caplog.text
@@ -1224,6 +1420,8 @@ def test_mqtt_grid_meter_config_preserves_and_normalizes_fields(tmp_path):
                 "topic": "Zendure/sensor/SN/totalPower",
                 "payload_format": "number",
                 "max_age_seconds": 15,
+                "tls": False,
+                "tls_insecure": False,
             },
         }
     finally:
@@ -1259,8 +1457,165 @@ def test_zendure_smartmeter_d0_grid_meter_config_uses_mqtt_backend(tmp_path):
                 "topic": "Zendure/sensor/SN/totalPower",
                 "payload_format": "number",
                 "max_age_seconds": 10,
+                "tls": False,
+                "tls_insecure": False,
             },
         }
+    finally:
+        restore_config_module(snapshot)
+
+
+def test_d0_grid_meter_resolves_broker_ref_connection(tmp_path):
+    snapshot = snapshot_config_module()
+    values = base_minimal_config()
+    values["grid_meter"] = {
+        "type": "zendure_smartmeter_d0",
+        "mqtt": {
+            "broker_ref": "local_mqtt",
+            "topic": "Zendure/sensor/SN/totalPower",
+            "payload_format": "number",
+            "max_age_seconds": 15,
+        },
+    }
+    values["zendure_mqtt"] = {
+        "enabled": True,
+        "brokers": {
+            "local_mqtt": {
+                "enabled": True,
+                "source": "local_mqtt",
+                "host": "10.0.0.9",
+                "port": 8883,
+                "tls": True,
+                "username": "user",
+                "password": "secret",
+            }
+        },
+    }
+
+    try:
+        initialize_config_from_dict(tmp_path, values)
+        mqtt = cfg.GRID_METER_CONFIG["mqtt"]
+        # The broker profile owns the connection; the grid-meter block owns topic.
+        assert mqtt["host"] == "10.0.0.9"
+        assert mqtt["port"] == 8883
+        assert mqtt["tls"] is True
+        assert mqtt["username"] == "user"
+        assert mqtt["password"] == "secret"
+        assert mqtt["topic"] == "Zendure/sensor/SN/totalPower"
+        # The broker password is never persisted back into the grid_meter block
+        # on disk (only merged into runtime settings).
+        assert "password" not in cfg.CONFIG["grid_meter"]["mqtt"]
+    finally:
+        restore_config_module(snapshot)
+
+
+def test_d0_grid_meter_broker_ref_ignores_legacy_top_level_enabled(tmp_path):
+    # The telemetry feature is always on: a legacy ``zendure_mqtt.enabled:
+    # false`` must not block resolving an otherwise enabled broker profile.
+    snapshot = snapshot_config_module()
+    values = base_minimal_config()
+    values["grid_meter"] = {
+        "type": "zendure_smartmeter_d0",
+        "mqtt": {
+            "broker_ref": "local_mqtt",
+            "topic": "Zendure/sensor/SN/totalPower",
+        },
+    }
+    values["zendure_mqtt"] = {
+        "enabled": False,
+        "brokers": {
+            "local_mqtt": {
+                "enabled": True,
+                "source": "local_mqtt",
+                "host": "10.0.0.9",
+                "port": 1883,
+            }
+        },
+    }
+
+    try:
+        initialize_config_from_dict(tmp_path, values)
+        mqtt = cfg.GRID_METER_CONFIG["mqtt"]
+        assert mqtt["host"] == "10.0.0.9"
+        assert mqtt["port"] == 1883
+    finally:
+        restore_config_module(snapshot)
+
+
+def test_d0_grid_meter_unknown_broker_ref_is_rejected(tmp_path):
+    snapshot = snapshot_config_module()
+    values = base_minimal_config()
+    values["grid_meter"] = {
+        "type": "zendure_smartmeter_d0",
+        "mqtt": {
+            "broker_ref": "does_not_exist",
+            "topic": "Zendure/sensor/SN/totalPower",
+        },
+    }
+    values["zendure_mqtt"] = {"enabled": True, "brokers": {}}
+
+    try:
+        with pytest.raises(ValueError, match="not a configured"):
+            initialize_config_from_dict(tmp_path, values)
+    finally:
+        restore_config_module(snapshot)
+
+
+def test_d0_grid_meter_disabled_broker_ref_is_rejected(tmp_path):
+    snapshot = snapshot_config_module()
+    values = base_minimal_config()
+    values["grid_meter"] = {
+        "type": "zendure_smartmeter_d0",
+        "mqtt": {
+            "broker_ref": "local_mqtt",
+            "topic": "Zendure/sensor/SN/totalPower",
+        },
+    }
+    values["zendure_mqtt"] = {
+        "enabled": True,
+        "brokers": {
+            "local_mqtt": {
+                "enabled": False,
+                "source": "local_mqtt",
+                "host": "10.0.0.9",
+                "port": 1883,
+            }
+        },
+    }
+
+    try:
+        with pytest.raises(ValueError, match="disabled"):
+            initialize_config_from_dict(tmp_path, values)
+    finally:
+        restore_config_module(snapshot)
+
+
+def test_d0_grid_meter_broker_ref_with_inline_host_conflicts(tmp_path):
+    snapshot = snapshot_config_module()
+    values = base_minimal_config()
+    values["grid_meter"] = {
+        "type": "zendure_smartmeter_d0",
+        "mqtt": {
+            "broker_ref": "local_mqtt",
+            "host": "10.0.0.1",
+            "topic": "Zendure/sensor/SN/totalPower",
+        },
+    }
+    values["zendure_mqtt"] = {
+        "enabled": True,
+        "brokers": {
+            "local_mqtt": {
+                "enabled": True,
+                "source": "local_mqtt",
+                "host": "10.0.0.9",
+                "port": 1883,
+            }
+        },
+    }
+
+    try:
+        with pytest.raises(ValueError, match="inlines connection"):
+            initialize_config_from_dict(tmp_path, values)
     finally:
         restore_config_module(snapshot)
 

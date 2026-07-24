@@ -27,23 +27,25 @@
     "dry_run": false,
     "simulation_mode": false,
     "allow_hardware_writes": true,
+    "allow_mqtt_local_control_writes": true,
+    "allow_mqtt_zendure_control_writes": true,
     "allow_state_reconciliation_writes": true,
     "reconcile_ac_mode_on_start": true,
     "reconcile_smart_mode": true,
     "log_level": "info",
     "max_total_power": 800,
     "max_device_power": 800,
-    "deadband": 10,
+    "deadband": 2,
     "runtime_state_path": "data/runtime-state.json",
     "min_output_limit": 35,
-    "loop_interval": 3,
+    "loop_interval": 5,
     "output_control": {
       "_comment_output_control": [
         "Advanced output smoothing and ramp tuning.",
         "Most installations should keep these defaults."
       ],
       "load_deadband_w": 5,
-      "target_deadband_w": 10,
+      "target_deadband_w": 5,
       "filter_enabled": true,
       "filter_method": "median_ema",
       "median_window": 2,
@@ -53,10 +55,10 @@
       "sign_change_filter_reset_factor": 1.0,
       "ramp_enabled": true,
       "ramp_up_w_per_cycle": 500,
-      "ramp_down_w_per_cycle": 500,
+      "ramp_down_w_per_cycle": 300,
       "device_ramp_enabled": true,
       "device_ramp_up_w_per_cycle": 400,
-      "device_ramp_down_w_per_cycle": 400,
+      "device_ramp_down_w_per_cycle": 200,
       "large_import_bypass_w": 600,
       "large_export_bypass_w": 600,
       "bypass_ramp_multiplier": 1.5,
@@ -77,14 +79,16 @@
     "_comment": [
       "Household or grid power meter used as the EMS load signal.",
       "Supported types: shelly, shelly_3em_gen1, ecotracker, tasmota_http,",
-      "zendure_smartmeter_3ct_http, zendure_smartmeter_d0, mqtt.",
+      "zendure_grid_meter_http, zendure_smartmeter_d0, mqtt.",
       "Shelly reads total power by default.",
       "Use channels like [c] or [a,c] for selected clamps or phases.",
       "Tasmota needs url or ip plus power_path.",
-      "Zendure Smart Meter 3CT HTTP reads total_power from /properties/report",
-      "and needs only grid_meter.ip.",
-      "Zendure SmartMeter D0 and MQTT use grid_meter.mqtt with host, port, topic,",
-      "payload_format and max_age_seconds."
+      "Zendure grid meter via local HTTP reads total_power from",
+      "/properties/report and needs only grid_meter.ip (recommended; covers",
+      "both D0 and Smart Meter 3CT). zendure_smartmeter_3ct_http is a",
+      "backward-compatible alias.",
+      "Zendure SmartMeter D0 and MQTT use grid_meter.mqtt with topic and",
+      "either mqtt.broker_ref or host/port; payload_format and max_age_seconds."
     ],
     "type": "shelly",
     "ip": "192.168.1.50"
@@ -97,7 +101,7 @@
   ],
   "devices": [
     {
-      "name": "WR1",
+      "name": "INV_1",
       "ip": "192.168.1.100",
       "sn": "YOUR_SN",
 
@@ -119,7 +123,7 @@
       "max_soc": 100
     },
     {
-      "name": "WR2",
+      "name": "INV_2",
       "ip": "192.168.1.101",
       "sn": "YOUR_SN",
 
@@ -141,6 +145,30 @@
       "max_soc": 100
     }
   ],
+
+  "zendure_mqtt": {
+    "_comment": [
+      "MQTT telemetry is always on: set host to subscribe to Zendure telemetry",
+      "from a local or cloud MQTT broker.",
+      "Supported inverters can be controlled over MQTT using the same EMS",
+      "control loop as the local API, when the topic family has a verified",
+      "write method. A control device sets capabilities.write_output_limit=true",
+      "and publishes only behind its write gate (allow_mqtt_local_control_writes",
+      "/ allow_mqtt_zendure_control_writes).",
+      "Devices whose topic family has no verified write method stay telemetry-only.",
+      "Zendure MQTT devices live in 'devices' with type 'zendure_mqtt'.",
+      "Leave host empty if no broker is available; EMS still starts normally."
+    ],
+    "host": "",
+    "port": 1883,
+    "tls": false,
+    "tls_insecure": false,
+    "username": "",
+    "password": "",
+    "app_key": "",
+    "connect_timeout_seconds": 10.0,
+    "keepalive_seconds": 30
+  },
 
   "winter": {
     "_comment": [
