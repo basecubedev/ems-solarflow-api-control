@@ -95,6 +95,32 @@ _DOCKER_MESSAGES = {
 }
 
 
+# Registry (GHCR / Docker Hub) pull-rate-limit signals. A pull hitting these does
+# not mean the tag is missing or the network is down; it is throttling that a
+# retry (or an authenticated Docker login) resolves, so it maps to its own code.
+REGISTRY_RATE_LIMIT_MARKERS = (
+    "toomanyrequests",
+    "too many requests",
+    "rate limit exceeded",
+    "pull rate limit",
+    "reached your pull rate limit",
+    "denied due to rate limit",
+)
+
+REGISTRY_RATE_LIMIT_MESSAGE = (
+    "GitHub Container Registry rate limit reached.\n\n"
+    "No installation changes were made. Wait before retrying, or authenticate "
+    "Docker with a GitHub account to increase the available request quota."
+)
+
+
+def is_registry_rate_limit_text(text):
+    """True when pull output signals a registry pull-rate-limit (429/throttle)."""
+
+    lowered = (text or "").lower()
+    return any(marker in lowered for marker in REGISTRY_RATE_LIMIT_MARKERS)
+
+
 class DockerError(Exception):
     """A user-facing Docker/bootstrap failure with a stable ``code``."""
 
@@ -227,6 +253,38 @@ class DockerCli:
                     "status_detail": str(row.get("Status") or ""),
                 }
         return None
+
+    def inspect_container_image_id(self, container_name):
+        """Return the immutable image ID used by an exact running container.
+
+        ``docker ps`` exposes the mutable tag string. Recovery/finalization must
+        inspect ``docker container inspect .Image`` so a tag moved after the
+        container started cannot make old or different content look current.
+        """
+
+        name = str(container_name or "").strip()
+        if not name:
+            return None
+        try:
+            result = self._run(
+                [
+                    "docker",
+                    "container",
+                    "inspect",
+                    "--format",
+                    "{{.Image}}",
+                    name,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except (FileNotFoundError, OSError, subprocess.SubprocessError):
+            return None
+        if result.returncode != 0:
+            return None
+        image_id = str(result.stdout or "").strip()
+        return image_id if image_id.startswith("sha256:") else None
 
     def inspect_image(self, image_ref):
         """Return a sanitized identity view of one local image, or ``None``.
@@ -630,6 +688,12 @@ def _docker_status(state, socket_path, server_version=None):
 
 def _docker_pull_error(tail):
     text = (tail or "").lower()
+    if is_registry_rate_limit_text(text):
+        return DockerError(
+            "image_pull_rate_limited",
+            REGISTRY_RATE_LIMIT_MESSAGE,
+            _safe_command_detail(tail),
+        )
     if any(
         marker in text
         for marker in (
@@ -858,10 +922,13 @@ def _sanitize_image_inspect(entry, image_ref):
         if isinstance(key, str) and value is not None
     } if isinstance(raw_labels, dict) else {}
     repo_digests = _string_list(entry.get("RepoDigests"))
+    image_id = str(entry.get("Id") or "") or None
     return {
         "image_ref": image_ref,
-        "id": str(entry.get("Id") or "") or None,
-        "digest": _primary_repo_digest(repo_digests),
+        "id": image_id,
+        # Registry content digests are preferred. A source-built image has no
+        # RepoDigest, so its immutable Docker image ID is the local equivalent.
+        "digest": _primary_repo_digest(repo_digests) or image_id,
         "repo_digests": repo_digests,
         "repo_tags": _string_list(entry.get("RepoTags")),
         "labels": labels,
@@ -1161,13 +1228,17 @@ class DeploymentJobRegistry:
         self._order = []
         self._max_jobs = max_jobs
 
-    def submit(self, job, runner):
+    def submit(self, job, runner, *, on_complete=None):
         with self._lock:
             self._jobs[job.job_id] = job
             self._order.append(job.job_id)
             while len(self._order) > self._max_jobs:
                 self._jobs.pop(self._order.pop(0), None)
-        thread = threading.Thread(target=self._run, args=(job, runner), daemon=True)
+        thread = threading.Thread(
+            target=self._run,
+            args=(job, runner, on_complete),
+            daemon=True,
+        )
         thread.start()
         return job
 
@@ -1177,7 +1248,7 @@ class DeploymentJobRegistry:
         return job.snapshot() if job is not None else None
 
     @staticmethod
-    def _run(job, runner):
+    def _run(job, runner, on_complete=None):
         try:
             runner(job)
         except DockerError as exc:
@@ -1199,6 +1270,14 @@ class DeploymentJobRegistry:
                 job.fail("start_failed", "Starting EMS failed unexpectedly.")
             else:
                 job.fail("prepare_failed", "Deployment preparation failed unexpectedly.")
+        finally:
+            if on_complete is not None:
+                try:
+                    on_complete(job.snapshot())
+                except Exception:
+                    # Completion observers update a separate durable state
+                    # machine; an observer fault must not corrupt this job.
+                    pass
 
 
 class DeploymentService:
@@ -1363,7 +1442,7 @@ class DeploymentService:
 
     # --- start -----------------------------------------------------------
 
-    def start(self):
+    def start(self, *, on_complete=None, on_healthcheck=None):
         rejection = self._verify_start_ready()
         if rejection is not None:
             return rejection
@@ -1390,7 +1469,20 @@ class DeploymentService:
             self._pending_resolution_log.clear()
             job = StartJob(uuid.uuid4().hex, str(self.workspace_dir))
             self._active_start_job = job.job_id
-            self.start_registry.submit(job, lambda handle: self._run_start(handle, context))
+
+            def runner(handle):
+                self._run_start(
+                    handle,
+                    context,
+                    on_healthcheck=on_healthcheck,
+                )
+
+            if on_complete is None:
+                self.start_registry.submit(job, runner)
+            else:
+                self.start_registry.submit(
+                    job, runner, on_complete=on_complete
+                )
             return {"ok": True, "job": job.snapshot(), "status": 202}
 
     def repair_workspace_permissions(self):
@@ -1567,11 +1659,13 @@ class DeploymentService:
                     "(volumes preserved)"
                 )
             self._pending_resolution_log.append(message)
+        next_conflict = self._find_container_conflict()
         return {
             "ok": True,
             "removed": container_name,
             "replaced": action == "replace_running_and_continue",
-            "continue": True,
+            "conflict": next_conflict,
+            "continue": next_conflict is None,
         }
 
     def _verify_start_ready(self):
@@ -1632,7 +1726,7 @@ class DeploymentService:
             return result
         return None
 
-    def _run_start(self, job, context):
+    def _run_start(self, job, context, *, on_healthcheck=None):
         for index, message in enumerate(context["resolution_log"]):
             key = f"resolved_container_conflict_{index}"
             job.start_step(key, message)
@@ -1684,6 +1778,11 @@ class DeploymentService:
             )
         job.finish_step("checking_containers")
 
+        # Container recreation has completed. Hand the durable System Build
+        # transition to its explicit health stage before the dashboard probe can
+        # retry/sleep, so browser polling can display step 07 live.
+        if on_healthcheck is not None:
+            on_healthcheck(job.snapshot())
         job.start_step("checking_dashboard", "Checking dashboard availability")
         url = context["dashboard_url"]
         reachable = False

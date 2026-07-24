@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Release discovery and setup-resource caching for the Admin wizard."""
 
+import hashlib
 import io
 import json
 import os
@@ -16,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote
 
+from admin.container_names import resolve_ems_container_name
 from admin.image_identity import (
     ALREADY_CURRENT,
     DOWNGRADE_BLOCKED,
@@ -30,12 +32,11 @@ from admin.image_identity import (
 REPO = "basecubedev/ems-solarflow-api-control"
 DOCKER_IMAGE_REPOSITORY = f"ghcr.io/{REPO}"
 GITHUB_RELEASES_URL = f"https://api.github.com/repos/{REPO}/releases?per_page=50"
-# Canonical EMS container name; the running container's build identity is
-# preferred over the compose-declared image when deciding real upgrades.
-DEFAULT_EMS_CONTAINER = "ems-solarflow-api-control"
-# EMS image reference in a compose file; group 1 is the tag (may be ``latest``).
+# EMS image reference in a compose file; group 1 is the tag (may be ``latest``)
+# or, when the ref is digest-pinned, the ``sha256:...`` digest. A digest ref has
+# no detectable release tag, so identity comes from the image's OCI labels.
 COMPOSE_IMAGE_RE = re.compile(
-    rf"ghcr\.io/{re.escape(REPO)}:([^\s\"'{{}}]+)",
+    rf"ghcr\.io/{re.escape(REPO)}[@:]([^\s\"'{{}}]+)",
     re.IGNORECASE,
 )
 # User-facing copy for the two identity-based blocks (kept short for the UI).
@@ -60,6 +61,12 @@ ALREADY_CURRENT_REASON = "Already running this EMS build."
 # SemVer-proven downgrade — see ``assess_upgrade(allow_unverified=...)``.
 LEGACY_UNVERIFIED_ENV = "ADMIN_ALLOW_LEGACY_UNVERIFIED_UPGRADES"
 TAG_PATTERN = re.compile(r"^v?[0-9A-Za-z][0-9A-Za-z._-]{0,127}$")
+# The git revision embedded in an immutable dev tag's ``-<sha>-<run>-<attempt>``.
+_DEV_TAG_REVISION_PATTERN = re.compile(r"-([0-9a-f]{7,40})-[1-9][0-9]*-[1-9][0-9]*$")
+# A standalone git revision (short or full) used to pin a historical rolling
+# ``latest`` image's resources to its exact build.
+_REVISION_PATTERN = re.compile(r"^[0-9a-f]{7,40}$")
+_FULL_REVISION_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 VERSION_PATTERN = re.compile(
     r"^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$"
 )
@@ -87,6 +94,7 @@ REQUIRED_FILES = {
     "install-docker.sh",
     "install-docker.ps1",
 }
+SOURCE_ARCHIVE_NAME = ".source-archive"
 
 
 class ReleaseError(Exception):
@@ -95,6 +103,40 @@ class ReleaseError(Exception):
     def __init__(self, message, status=400):
         super().__init__(message)
         self.status = status
+
+
+def legacy_release_resource_ref(*, tag, channel, revision):
+    """Return the exact git ref a legacy release's resources load from.
+
+    A versioned legacy release (``v0.7.0``) loads from its exact tag; a
+    historical rolling ``latest`` image loads from its exact OCI git revision,
+    never the moving ``main`` branch. Combining an old image revision with the
+    current ``main`` config template is refused by pinning here. Returns a ref
+    usable both for the git-tree resource check and for the archive URL.
+    """
+
+    tag = str(tag or "").strip()
+    if channel == "latest" or tag == "latest":
+        revision = str(revision or "").strip()
+        if not _REVISION_PATTERN.fullmatch(revision):
+            raise ReleaseError(
+                "A historical latest image needs a pinned git revision for its "
+                "resources.",
+                422,
+            )
+        return revision
+    if not tag:
+        raise ReleaseError("A legacy release needs a tag for its resources.", 422)
+    return tag
+
+
+def legacy_release_resource_url(*, tag, channel, revision):
+    """codeload archive URL for a legacy release, pinned to tag or revision."""
+
+    ref = legacy_release_resource_ref(tag=tag, channel=channel, revision=revision)
+    if _REVISION_PATTERN.fullmatch(ref):
+        return f"https://codeload.github.com/{REPO}/zip/{ref}"
+    return f"https://codeload.github.com/{REPO}/zip/refs/tags/{ref}"
 
 
 def default_admin_data_dir():
@@ -107,6 +149,14 @@ def default_admin_data_dir():
 
 def _utc_now():
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(64 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _version(tag):
@@ -129,6 +179,13 @@ def _version_text(tag):
     return str(tag)[1:] if str(tag).startswith("v") else str(tag)
 
 
+def _development_tag_revision(tag):
+    """Return the git revision embedded in an immutable dev tag, or ``""``."""
+
+    match = _DEV_TAG_REVISION_PATTERN.search(str(tag or ""))
+    return match.group(1) if match else ""
+
+
 def _is_admin_version(tag):
     return tag == "latest" or bool(
         _version(tag) and _version(tag) >= MIN_ADMIN_VERSION
@@ -141,6 +198,12 @@ def _is_release_candidate(tag, github_prerelease=False):
 
 
 def _downgrade_baseline(active, prepared):
+    # A concrete installed release is the authoritative downgrade baseline; a
+    # prepared (downloaded, not installed) release never raises it above the
+    # installed one. Only with no concrete installed release (fresh install or a
+    # rolling ``latest``) does the prepared download gate re-preparing an older one.
+    if active and _version(active):
+        return active
     concrete = [tag for tag in (active, prepared) if _version(tag)]
     if concrete:
         return max(concrete, key=_version)
@@ -207,20 +270,41 @@ class ReleaseManager:
         project_dir=None,
         urlopen=None,
         resource_checker=None,
+        revision_resolver=None,
         docker=None,
+        development_source=None,
+        known_good=None,
     ):
-        self.data_dir = Path(data_dir) if data_dir else default_admin_data_dir()
+        explicit_data_dir = data_dir is not None
+        self.data_dir = Path(data_dir) if explicit_data_dir else default_admin_data_dir()
         self.releases_dir = self.data_dir / "releases"
         self.state_dir = self.data_dir / "state"
+        # An explicitly isolated data directory (tests and offline tooling) must
+        # not accidentally treat the developer checkout's compose image as its
+        # active deployment. Production construction omits ``data_dir`` and
+        # continues to inspect the real project root.
         self.project_dir = (
-            Path(project_dir) if project_dir else Path(__file__).resolve().parent.parent
+            Path(project_dir)
+            if project_dir is not None
+            else self.data_dir.parent
+            if explicit_data_dir
+            else Path(__file__).resolve().parent.parent
         )
         self._urlopen = urlopen or urllib.request.urlopen
         self._resource_checker = resource_checker or self._check_remote_resources
+        self._revision_resolver = revision_resolver or self._resolve_remote_revision
+        # Optional callable that returns candidate development-build descriptors
+        # (from a registry/CI index). ``None`` keeps the catalogue release-only.
+        self._development_source = development_source
         # Read-only Docker inspector (``inspect_container``/``inspect_image``) used
         # to read build identity. ``None`` disables identity checks entirely, so
         # release selection falls back to SemVer/tag reasoning only.
         self._docker = docker
+        # Known-good store (``.current()`` → the installed baseline record) used
+        # only as a digest-matched fallback for the installed release tag when a
+        # digest-pinned Compose image is not locally inspectable. Lazily defaults
+        # to the state directory's store.
+        self._known_good = known_good
         self._identity_cache = {}
         self._known_downloads = {}
         self._resource_checks = {}
@@ -258,7 +342,13 @@ class ReleaseManager:
             self._known_downloads["latest"] = (
                 f"https://codeload.github.com/{REPO}/zip/refs/heads/main"
             )
+        from admin.system_build import classify_channel
+
         for tag, manifest in cached.items():
+            # Development builds come only from the live catalogue; never
+            # resurrect a pruned one from a stale local cache as a ghost entry.
+            if classify_channel(tag) == "development":
+                continue
             item = by_tag.setdefault(
                 tag,
                 {
@@ -396,6 +486,14 @@ class ReleaseManager:
             (item for item in by_tag.values() if item["channel"] != "legacy"),
             key=self._release_sort_key,
         )
+        # Development builds are a distinct, always-last group in the same
+        # catalogue (never mixed into the versioned sort above).
+        releases.extend(self._development_release_items())
+        # A valid locally-built pair is offered as its own explicit Experimental
+        # entry — never merged into or presented as the rolling ``latest`` tag.
+        local_item = self._local_release_item()
+        if local_item is not None:
+            releases.append(local_item)
         stable = next(
             (
                 item["tag"]
@@ -418,18 +516,18 @@ class ReleaseManager:
             "warnings": warnings,
         }
 
-    def prepare(self, tag):
+    def prepare(self, tag, *, revision=None):
         tag = _safe_tag(tag)
         try:
             with self._prepare_lock:
                 self._ensure_data_directories()
-                return self._prepare_locked(tag)
+                return self._prepare_locked(tag, revision=revision)
         except ReleaseError:
             raise
         except OSError as exc:
             raise self._data_directory_error() from exc
 
-    def _prepare_locked(self, tag):
+    def _prepare_locked(self, tag, *, revision=None):
         cached = self._cached_manifests()
         active = self.detect_active_release()
         prepared = self._selected_release(cached)
@@ -458,6 +556,10 @@ class ReleaseManager:
             )
 
         manifest = cached.get(tag)
+        if revision:
+            return self._prepare_revision_bound(
+                tag, revision=revision, manifest=manifest
+            )
         if manifest and self._cache_complete(tag, manifest):
             manifest = self._normalized_manifest(tag, manifest)
             self._write_json(self.releases_dir / tag / "manifest.json", manifest)
@@ -468,7 +570,9 @@ class ReleaseManager:
             try:
                 self._fetch_release_metadata()
             except (OSError, ValueError, urllib.error.URLError) as exc:
-                raise ReleaseError(f"Could not validate release {tag}: {exc}", 503) from exc
+                raise ReleaseError(
+                    f"Could not validate release {tag}: {exc}", 503
+                ) from exc
         archive_url = self._known_downloads.get(tag)
         if not archive_url:
             raise ReleaseError(f"Unknown EMS release tag: {tag}", 404)
@@ -481,9 +585,137 @@ class ReleaseManager:
             )
 
         archive = self._download(archive_url)
-        manifest = self._extract(tag, archive)
+        manifest = self._extract(
+            tag,
+            archive,
+            identity={
+                "identity_verification": "unverified",
+                "resource_ref": (
+                    "refs/heads/main" if tag == "latest" else f"refs/tags/{tag}"
+                ),
+                "resolved_revision": None,
+                "expected_ems_revision": None,
+            },
+        )
         self._write_selected(tag)
         return self._ready_payload(tag, manifest, reused=False)
+
+    def _prepare_revision_bound(self, tag, *, revision, manifest):
+        """Prepare legacy resources bound to the selected EMS OCI revision.
+
+        A live tag resolution detects moved tags. When GitHub is unavailable, a
+        fully verified cache for the same tag and EMS revision remains usable;
+        any incomplete, tampered or differently-bound cache fails closed.
+        """
+
+        reported_revision = str(revision or "").strip().lower()
+        if not _REVISION_PATTERN.fullmatch(reported_revision):
+            raise ReleaseError(
+                "The selected legacy EMS image has an invalid OCI revision.", 422
+            )
+        resource_ref = (
+            reported_revision if tag == "latest" else f"refs/tags/{tag}"
+        )
+        resolved_revision = None
+        resolution_error = None
+        try:
+            if tag == "latest" and _FULL_REVISION_PATTERN.fullmatch(
+                reported_revision
+            ):
+                resolved_revision = reported_revision
+            else:
+                resolved_revision = self._revision_resolver(resource_ref)
+        except (OSError, ValueError, urllib.error.URLError) as exc:
+            resolution_error = exc
+
+        if resolved_revision is not None:
+            resolved_revision = str(resolved_revision).strip().lower()
+            if not _FULL_REVISION_PATTERN.fullmatch(resolved_revision):
+                raise ReleaseError(
+                    "GitHub returned an invalid legacy resource revision.", 502
+                )
+            if not resolved_revision.startswith(reported_revision):
+                raise ReleaseError(
+                    "Legacy release resource revision does not match the selected "
+                    "EMS image revision.",
+                    409,
+                )
+            if self._verified_cache_matches(
+                tag,
+                manifest,
+                resource_ref=resource_ref,
+                resolved_revision=resolved_revision,
+                reported_revision=reported_revision,
+            ):
+                manifest = self._normalized_manifest(tag, manifest)
+                self._write_json(
+                    self.releases_dir / tag / "manifest.json", manifest
+                )
+                self._write_selected(tag)
+                return self._ready_payload(tag, manifest, reused=True)
+        elif self._verified_cache_matches(
+            tag,
+            manifest,
+            resource_ref=resource_ref,
+            resolved_revision=None,
+            reported_revision=reported_revision,
+        ):
+            manifest = self._normalized_manifest(tag, manifest)
+            self._write_selected(tag)
+            return self._ready_payload(tag, manifest, reused=True)
+        else:
+            raise ReleaseError(
+                f"Could not resolve the exact legacy release revision: "
+                f"{resolution_error or 'revision unavailable'}",
+                503,
+            )
+
+        if self._resource_status(resolved_revision, check_remote=True) is not True:
+            raise ReleaseError(
+                "Docker setup resources are missing or could not be verified "
+                "for the selected EMS image revision.",
+                422,
+            )
+        archive_url = f"https://codeload.github.com/{REPO}/zip/{resolved_revision}"
+        archive = self._download(archive_url)
+        manifest = self._extract(
+            tag,
+            archive,
+            identity={
+                "identity_verification": "verified",
+                "resource_ref": resource_ref,
+                "resolved_revision": resolved_revision,
+                # A matching short image label is expanded only after the exact
+                # tag commit has been resolved and compared.
+                "expected_ems_revision": resolved_revision,
+                "reported_ems_revision": reported_revision,
+            },
+        )
+        self._write_selected(tag)
+        return self._ready_payload(tag, manifest, reused=False)
+
+    def _verified_cache_matches(
+        self,
+        tag,
+        manifest,
+        *,
+        resource_ref,
+        resolved_revision,
+        reported_revision,
+    ):
+        if not manifest or not self._cache_complete(tag, manifest):
+            return False
+        cached_revision = manifest.get("resolved_revision")
+        expected_revision = manifest.get("expected_ems_revision")
+        if not (
+            manifest.get("identity_verification") == "verified"
+            and manifest.get("resource_ref") == resource_ref
+            and _FULL_REVISION_PATTERN.fullmatch(str(cached_revision or ""))
+            and cached_revision == expected_revision
+            and cached_revision.startswith(reported_revision)
+        ):
+            return False
+        return resolved_revision is None or cached_revision == resolved_revision
 
     def config_template(self):
         tag = self._selected_release_tag()
@@ -517,11 +749,48 @@ class ReleaseManager:
         return self._selected_release(self._cached_manifests())
 
     def detect_active_release(self):
-        match = self._compose_image_match()
-        if match and match.group(1).lower() != "latest":
-            tag = match.group(1)
-            return tag if TAG_PATTERN.fullmatch(tag) else None
-        return None
+        """Return the installed release tag, or ``None`` when it is not concrete.
+
+        Resolves the readable installed release through the shared source-of-truth
+        order (running container OCI labels → digest-pinned Compose image labels →
+        digest-matched known-good → legacy concrete Compose tag). A digest-pinned
+        Compose ref no longer loses the installed tag, and a prepared release is
+        never treated as installed. ``latest`` stays non-concrete.
+        """
+
+        from admin.installed_release import resolve_installed_release
+
+        installed = resolve_installed_release(
+            docker=self._docker,
+            compose_ref=self._compose_image_ref(),
+            known_good=self._current_known_good(),
+            container_name=self._ems_container_name(),
+        )
+        return installed.tag
+
+    def _ems_container_name(self):
+        return resolve_ems_container_name(
+            compose_text=self._compose_text(), env=os.environ
+        )
+
+    def _compose_text(self):
+        for name in ("docker-compose.yml", "compose.yml"):
+            try:
+                return (self.project_dir / name).read_text(encoding="utf-8")
+            except OSError:
+                continue
+        return ""
+
+    def _current_known_good(self):
+        store = self._known_good
+        if store is None:
+            from admin.known_good import KnownGoodStore
+
+            store = self._known_good = KnownGoodStore(self.state_dir)
+        try:
+            return store.current()
+        except Exception:  # a read-only view must never fail on a bad record
+            return None
 
     def _compose_image_match(self):
         for name in ("docker-compose.yml", "compose.yml"):
@@ -544,32 +813,23 @@ class ReleaseManager:
     def _running_identity(self):
         """Build identity of the running EMS system, or an all-``None`` identity.
 
-        Prefers the running container's image (its actual bits) and falls back
-        to the compose-declared image ref when no container is running. Returns
-        an all-``None`` :class:`ImageIdentity` when Docker is unavailable or
-        nothing can be inspected, which disables identity-based blocking.
+        Prefers the running container's immutable image id (its actual bits, via
+        the shared probe) so a moved tag cannot alter it, and falls back to the
+        compose-declared image ref when no container is running. Returns an
+        all-``None`` :class:`ImageIdentity` when Docker is unavailable or nothing
+        can be inspected, which disables identity-based blocking.
         """
 
         if self._docker is None:
             return ImageIdentity()
-        container = self._safe_inspect_container()
-        if container and str(container.get("status") or "").lower() == "running":
-            image = str(container.get("image") or "").strip()
-            if image:
-                return self._identify(image)
-        ref = self._compose_image_ref()
+        from admin.installed_release import running_image_ref
+
+        ref = running_image_ref(self._docker, self._ems_container_name())
+        if not ref:
+            ref = self._compose_image_ref()
         if ref:
             return self._identify(ref)
         return ImageIdentity()
-
-    def _safe_inspect_container(self):
-        inspect = getattr(self._docker, "inspect_container", None)
-        if not callable(inspect):
-            return None
-        try:
-            return inspect(DEFAULT_EMS_CONTAINER)
-        except Exception:  # a read-only view must never fail on Docker state
-            return None
 
     def _identify(self, image_ref):
         ref = str(image_ref or "").strip()
@@ -745,14 +1005,179 @@ class ReleaseManager:
             and any(str(path).startswith("deploy/docker/") for path in paths)
         )
 
+    def _resolve_remote_revision(self, ref):
+        """Resolve a tag/ref to the full commit SHA through GitHub's commit API."""
+
+        url = (
+            f"https://api.github.com/repos/{REPO}/commits/"
+            f"{quote(str(ref), safe='')}"
+        )
+        request = urllib.request.Request(
+            url,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "ems-solarflow-admin",
+            },
+        )
+        with self._urlopen(request, timeout=10) as response:
+            raw = response.read(1024 * 1024 + 1)
+        if len(raw) > 1024 * 1024:
+            raise ValueError("GitHub commit response is too large")
+        payload = json.loads(raw.decode("utf-8"))
+        revision = payload.get("sha") if isinstance(payload, dict) else None
+        if not isinstance(revision, str) or not _FULL_REVISION_PATTERN.fullmatch(
+            revision.lower()
+        ):
+            raise ValueError("GitHub returned an invalid commit revision")
+        return revision.lower()
+
+    def _development_release_items(self):
+        """Return normalized, installable development-build catalogue items.
+
+        Only immutable canonical ``dev-<branch>-<sha>-<run>-<attempt>`` tags whose
+        Admin/EMS pair is complete (``installable``) are surfaced; floating
+        aliases, incomplete pairs and failed builds are dropped. Reuses the
+        canonical dev-tag rules from ``system_build`` (imported lazily to avoid a
+        module import cycle). A failing source never breaks the catalogue.
+        """
+
+        source = self._development_source
+        if source is None:
+            return []
+        from admin.system_build import classify_channel, is_immutable_dev_tag
+
+        try:
+            raw = list(source())
+        except Exception:
+            return []
+
+        items = []
+        seen = set()
+        for entry in raw:
+            if not isinstance(entry, dict):
+                continue
+            tag = str(entry.get("tag") or "").strip()
+            if not tag or not TAG_PATTERN.fullmatch(tag):
+                continue
+            if classify_channel(tag) != "development" or not is_immutable_dev_tag(tag):
+                continue
+            if entry.get("installable") is not True or tag in seen:
+                continue
+            seen.add(tag)
+            revision = str(entry.get("revision") or "") or _development_tag_revision(tag)
+            display_name = str(entry.get("display_name") or "").strip() or tag
+            items.append(
+                {
+                    "tag": tag,
+                    "name": display_name,
+                    "display_name": display_name,
+                    "published_at": entry.get("created_at"),
+                    "created_at": entry.get("created_at"),
+                    "revision": revision or None,
+                    "revision_short": revision[:7] if revision else None,
+                    "build_id": entry.get("build_id") or tag,
+                    "run_id": entry.get("run_id"),
+                    "run_attempt": entry.get("run_attempt"),
+                    "admin_image": entry.get("admin_image"),
+                    "admin_digest": entry.get("admin_digest"),
+                    "ems_image": entry.get("ems_image"),
+                    "ems_digest": entry.get("ems_digest"),
+                    "kind": "development",
+                    "channel": "development",
+                    "version": None,
+                    "stable": False,
+                    "prerelease": False,
+                    "prepared": False,
+                    "active": False,
+                    "admin_supported": True,
+                    "docker_supported": True,
+                    "installable": True,
+                    "selectable": True,
+                    "upgrade_state": None,
+                    "upgrade_warning": None,
+                    "reason": None,
+                }
+            )
+        items.sort(key=lambda it: (it.get("created_at") or "", it["tag"]), reverse=True)
+        return items
+
+    def development_build(self, tag):
+        """Return the complete installable catalogue descriptor for ``tag``."""
+
+        source = self._development_source
+        if source is None:
+            return None
+        try:
+            entries = source()
+        except Exception:
+            return None
+        for entry in entries:
+            if (
+                isinstance(entry, dict)
+                and entry.get("tag") == tag
+                and entry.get("installable") is True
+            ):
+                return dict(entry)
+        return None
+
+    def _local_release_item(self):
+        """Discover a valid locally-built System Build, offered under Experimental.
+
+        Returns a release item for the local Admin+EMS pair the official local
+        launcher builds and tags ``:local``, or ``None`` when no valid local
+        pair is present. Resolution inspects only local images and never pulls
+        from a registry.
+        """
+
+        if self._docker is None:
+            return None
+        from admin.system_build import SystemBuildResolver
+
+        try:
+            build = SystemBuildResolver(docker=self._docker).resolve("local")
+        except Exception:
+            # Best-effort discovery: an absent local pair or a Docker daemon that
+            # raises on inspection must never break the release catalogue.
+            return None
+        dirty = build.build_id.endswith("-dirty")
+        return {
+            "tag": "local",
+            "name": "local · current checkout",
+            "display_name": "local · current checkout",
+            "published_at": None,
+            "created_at": None,
+            "revision": build.revision,
+            "revision_short": build.revision[:7],
+            "build_id": build.build_id,
+            "dirty": dirty,
+            "kind": "development",
+            "channel": "development",
+            "version": None,
+            "stable": False,
+            "prerelease": False,
+            "prepared": False,
+            "active": False,
+            "admin_supported": True,
+            "docker_supported": True,
+            "installable": True,
+            "selectable": True,
+            "upgrade_state": None,
+            "upgrade_warning": None,
+            "reason": (
+                "Local development build from the current checkout"
+                + (" with uncommitted changes" if dirty else "")
+            ),
+        }
+
     @staticmethod
     def _release_sort_key(item):
         channel_order = {
             "latest": 0,
             "stable": 1,
             "rc": 2,
-            "legacy": 3,
-            "unknown": 4,
+            "development": 3,
+            "legacy": 4,
+            "unknown": 5,
         }
         parsed = _version(item["tag"])
         core = parsed[:3] if parsed else (0, 0, 0)
@@ -787,7 +1212,7 @@ class ReleaseManager:
             raise ReleaseError(f"Could not download release archive: {exc}", 502) from exc
         return b"".join(chunks)
 
-    def _extract(self, tag, archive):
+    def _extract(self, tag, archive, *, identity=None):
         self.releases_dir.mkdir(parents=True, exist_ok=True)
         staging = Path(tempfile.mkdtemp(prefix=f".{tag}-", dir=self.releases_dir))
         try:
@@ -805,13 +1230,24 @@ class ReleaseManager:
             if not isinstance(template, dict):
                 raise ReleaseError("Release config.template.json is invalid.")
 
-            manifest = self._normalized_manifest(tag, {
-                "tag": tag,
-                "source": "github",
-                "downloaded_at": _utc_now(),
-                "repo": REPO,
-                "resources": dict(RESOURCE_PATHS),
-            })
+            (staging / SOURCE_ARCHIVE_NAME).write_bytes(archive)
+            resource_hashes = {
+                relative: _sha256_file(staging / relative)
+                for relative in sorted(extracted)
+            }
+            manifest = self._normalized_manifest(
+                tag,
+                {
+                    "tag": tag,
+                    "source": "github",
+                    "downloaded_at": _utc_now(),
+                    "repo": REPO,
+                    "resources": dict(RESOURCE_PATHS),
+                    "archive_sha256": hashlib.sha256(archive).hexdigest(),
+                    "resource_hashes": resource_hashes,
+                    **(identity or {}),
+                },
+            )
             self._write_json(staging / "manifest.json", manifest)
             target = self.releases_dir / tag
             if target.exists():
@@ -924,7 +1360,64 @@ class ReleaseManager:
             )
         except (OSError, ValueError):
             return False
-        return isinstance(template, dict)
+        if not isinstance(template, dict):
+            return False
+
+        # New manifests bind both the source archive and every extracted file.
+        # Older caches remain readable only as explicitly unverified legacy
+        # compatibility data; they can never satisfy revision-bound reuse.
+        verification = manifest.get("identity_verification")
+        if verification not in {"verified", "unverified"}:
+            return True
+        archive_hash = manifest.get("archive_sha256")
+        archive_path = root / SOURCE_ARCHIVE_NAME
+        try:
+            archive_valid = (
+                isinstance(archive_hash, str)
+                and re.fullmatch(r"[0-9a-f]{64}", archive_hash)
+                and archive_path.is_file()
+                and not archive_path.is_symlink()
+                and _sha256_file(archive_path) == archive_hash
+            )
+        except OSError:
+            archive_valid = False
+        if not archive_valid:
+            return False
+        resource_hashes = manifest.get("resource_hashes")
+        if not isinstance(resource_hashes, dict):
+            return False
+        if not REQUIRED_FILES.issubset(resource_hashes) or not any(
+            str(path).startswith("deploy/docker/") for path in resource_hashes
+        ):
+            return False
+        for relative, expected_hash in resource_hashes.items():
+            path = PurePosixPath(str(relative))
+            if (
+                path.is_absolute()
+                or ".." in path.parts
+                or not isinstance(expected_hash, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", expected_hash)
+            ):
+                return False
+            resource = root.joinpath(*path.parts)
+            if not resource.is_file() or resource.is_symlink():
+                return False
+            try:
+                actual_hash = _sha256_file(resource)
+            except OSError:
+                return False
+            if actual_hash != expected_hash:
+                return False
+        if verification == "verified":
+            resolved = manifest.get("resolved_revision")
+            expected = manifest.get("expected_ems_revision")
+            if not (
+                _FULL_REVISION_PATTERN.fullmatch(str(resolved or ""))
+                and resolved == expected
+                and isinstance(manifest.get("resource_ref"), str)
+            ):
+                return False
+        return True
 
     def _selected_release_tag(self):
         try:
@@ -1010,6 +1503,14 @@ class ReleaseManager:
     def _ready_payload(self, tag, manifest, reused):
         root = self.releases_dir / tag
         config_template_loaded = self._valid_cached_template(root)
+        identity_verified = manifest.get("identity_verification") == "verified"
+        warnings = []
+        if not identity_verified:
+            warnings.append(
+                "Legacy resource identity is unverified because the selected EMS "
+                "image revision was unavailable; only an explicit compatibility "
+                "workflow may use these resources."
+            )
         return {
             "status": "ready",
             "tag": tag,
@@ -1031,7 +1532,8 @@ class ReleaseManager:
                 ),
             },
             "reused": reused,
-            "warnings": [],
+            "legacy_identity_verified": identity_verified,
+            "warnings": warnings,
         }
 
     @staticmethod

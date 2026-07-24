@@ -6,8 +6,14 @@ must degrade to file/config/compose facts, never break the overview.
 """
 
 import json
+import os
 import re
 
+from admin.admin_update import admin_image_ref_from_env
+from admin.container_names import (
+    DEFAULT_INFLUX_CONTAINER,
+    resolve_ems_container_name,
+)
 from admin.install_context import detect_install_context
 from admin.install_state import (
     STATE_ADMIN_PREPARED_INSTALL,
@@ -20,12 +26,15 @@ from admin.install_state import (
     detect_install_state,
 )
 
-DEFAULT_EMS_CONTAINER = "ems-solarflow-api-control"
-DEFAULT_INFLUX_CONTAINER = "ems-influxdb"
-
 _CONTAINER_NAME_RE = re.compile(
     r"^\s*container_name:\s*[\"']?([A-Za-z0-9][A-Za-z0-9_.-]*)[\"']?\s*(?:#.*)?$",
     re.MULTILINE,
+)
+
+EMS_RUNNING_IDENTITY_UNKNOWN_WARNING = (
+    "EMS is running but its image identity could not be verified; the installed "
+    "release is unknown. The Compose or last-known-good release is not shown as "
+    "the running one."
 )
 _IMAGE_RE = re.compile(
     r"^\s*image:\s*[\"']?(\S+?)[\"']?\s*(?:#.*)?$", re.MULTILINE
@@ -82,7 +91,7 @@ _DOCKER_UNAVAILABLE_MESSAGE = (
 )
 
 
-def run_maintenance_overview(base_dir=None, docker=None):
+def run_maintenance_overview(base_dir=None, docker=None, admin_image=None):
     """Assemble the read-only Maintenance overview for the current install root."""
 
     context = detect_install_context(base_dir=base_dir)
@@ -101,6 +110,11 @@ def run_maintenance_overview(base_dir=None, docker=None):
     if install_state.state in _PARTIAL_STATES:
         warnings.append(PARTIAL_INSTALL_WARNING)
 
+    ems_view = containers["ems"]
+    if ems_view.get("running") and ems_view.get("tag") is None:
+        warnings.append(EMS_RUNNING_IDENTITY_UNKNOWN_WARNING)
+
+    admin_image = admin_image or admin_image_ref_from_env()
     return {
         "install_state": {
             "state": install_state.state,
@@ -125,6 +139,16 @@ def run_maintenance_overview(base_dir=None, docker=None):
         },
         "docker": docker_info,
         "containers": containers,
+        "components": {
+            "admin": {
+                "image": admin_image,
+                "tag": _image_tag(admin_image),
+            },
+            "ems": {
+                "image": containers["ems"].get("image"),
+                "tag": containers["ems"].get("tag"),
+            },
+        },
         "links": {"dashboard_url": _dashboard_url(context)},
         "warnings": warnings,
     }
@@ -149,7 +173,9 @@ def _container_specs(compose_text):
     images = _IMAGE_RE.findall(compose_text)
     return {
         "ems": {
-            "name": _classify_name(names, want_influx=False) or DEFAULT_EMS_CONTAINER,
+            "name": resolve_ems_container_name(
+                compose_text=compose_text, env=os.environ
+            ),
             "declared_image": _classify_image(images, want_influx=False),
         },
         "influxdb": {
@@ -177,6 +203,7 @@ def _inspect_containers(docker, specs):
     docker = docker if docker is not None else _default_docker()
     probe = getattr(docker, "probe", None)
     inspect = getattr(docker, "inspect_container", None)
+    inspect_image = getattr(docker, "inspect_image", None)
 
     state = None
     if callable(probe):
@@ -194,21 +221,26 @@ def _inspect_containers(docker, specs):
     }
 
     containers = {
-        role: _container_status(available, inspect, spec["name"], spec["declared_image"])
+        role: _container_status(
+            available, inspect, inspect_image, spec["name"], spec["declared_image"]
+        )
         for role, spec in specs.items()
     }
     return docker_info, containers
 
 
-def _container_status(available, inspect, name, declared_image):
+def _container_status(available, inspect, inspect_image, name, declared_image):
     if not available or not callable(inspect):
-        return _container_view(False, False, name, declared_image, "unknown")
+        return _container_view(False, False, name, declared_image, "unknown",
+                               inspect_image)
     try:
         existing = inspect(name)
     except Exception:  # a failed inspect is reported as unknown, never a 500
-        return _container_view(False, False, name, declared_image, "unknown")
+        return _container_view(False, False, name, declared_image, "unknown",
+                               inspect_image)
     if existing is None:
-        return _container_view(False, False, name, declared_image, "missing")
+        return _container_view(False, False, name, declared_image, "missing",
+                               inspect_image)
     status = str(existing.get("status") or "unknown").lower() or "unknown"
     return _container_view(
         True,
@@ -216,16 +248,17 @@ def _container_status(available, inspect, name, declared_image):
         existing.get("container_name") or name,
         existing.get("image") or declared_image,
         status,
+        inspect_image,
     )
 
 
-def _container_view(found, running, name, image, status):
+def _container_view(found, running, name, image, status, inspect_image=None):
     return {
         "found": found,
         "running": running,
         "name": name,
         "image": image,
-        "tag": _image_tag(image),
+        "tag": _image_version_tag(image, inspect_image),
         "status": status,
     }
 
@@ -237,6 +270,30 @@ def _image_tag(image):
         return None
     last = image.split("@", 1)[0].rsplit("/", 1)[-1]
     return last.rsplit(":", 1)[1] if ":" in last else None
+
+
+def _image_version_tag(image, inspect_image=None):
+    """Return a readable version for an image ref.
+
+    A ``:tag`` ref yields its tag directly. A digest-pinned ref carries no tag,
+    so the readable release is recovered from the image's OCI build labels via the
+    shared helper (release_tag, then version) — the same recovery ReleaseManager
+    uses, so the two never disagree — rather than shown as a bare digest.
+    """
+
+    from admin.installed_release import release_tag_from_labels
+
+    tag = _image_tag(image)
+    if tag is not None:
+        return tag
+    if not image or not callable(inspect_image):
+        return None
+    try:
+        info = inspect_image(image)
+    except Exception:
+        return None
+    labels = (info or {}).get("labels") if isinstance(info, dict) else None
+    return release_tag_from_labels(labels)
 
 
 def _docker_error_message(state):

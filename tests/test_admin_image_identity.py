@@ -157,14 +157,14 @@ def test_inspect_image_returns_sanitized_labels_and_digest():
     assert identity.digest == DIGEST
 
 
-def test_inspect_image_without_repo_digests_reports_none_digest():
+def test_inspect_image_without_repo_digests_uses_immutable_image_id():
     docker, _ = _docker_returning(
         json.dumps([_inspect_object(repo_digests=[])])
     )
 
     result = docker.inspect_image(IMAGE_REF)
 
-    assert result["digest"] is None
+    assert result["digest"] == DIGEST
     assert result["repo_digests"] == []
     assert result["id"] == DIGEST
 

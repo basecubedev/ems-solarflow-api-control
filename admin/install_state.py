@@ -90,8 +90,34 @@ def _config_is_damaged(config_path):
     return not isinstance(data, dict)
 
 
-def detect_install_state(base_dir=None):
-    """Classify the current install root and recommend the safest Admin path."""
+def _recommended_path(state, ems_container_probe):
+    if state == STATE_NONE:
+        return PATH_SETUP_NEW
+    if ems_container_probe is not None:
+        try:
+            evidence = ems_container_probe() or {}
+        except Exception:
+            evidence = {}
+        if evidence.get("available"):
+            # A real EMS container (running or stopped) is a deployed system;
+            # without one nothing was deployed yet, whatever files exist.
+            return (
+                PATH_MANAGE_EXISTING
+                if evidence.get("container_exists")
+                else PATH_SETUP_NEW
+            )
+    # No probe, or Docker unreachable: a lone wizard config is still a fresh
+    # install; every other on-disk state is treated as an existing system.
+    return PATH_SETUP_NEW if state == STATE_STANDARD_CONFIG_ONLY else PATH_MANAGE_EXISTING
+
+
+def detect_install_state(base_dir=None, *, ems_container_probe=None):
+    """Classify the current install root and recommend the safest Admin path.
+
+    ``ems_container_probe`` (optional, e.g. ``default_runtime_state_fingerprint``)
+    supplies live EMS-container evidence; when Docker is reachable a deployed
+    container decides maintenance vs setup, otherwise the on-disk heuristic wins.
+    """
 
     context, install_root = _resolved_base_dir(base_dir)
     standard = paths.standard_config_path(install_root)
@@ -152,7 +178,7 @@ def detect_install_state(base_dir=None):
     else:
         state = STATE_NONE
 
-    recommended_path = PATH_SETUP_NEW if state == STATE_NONE else PATH_MANAGE_EXISTING
+    recommended_path = _recommended_path(state, ems_container_probe)
     # Only the pure legacy state (no standard config yet) is offered a one-step
     # migration. When both configs exist and differ, the standard config is
     # already active and the divergence is surfaced as a warning for an explicit

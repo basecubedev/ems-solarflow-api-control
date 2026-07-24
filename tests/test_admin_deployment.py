@@ -2,6 +2,7 @@
 """Deployment preparation service tests (no real Docker daemon)."""
 
 import json
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,9 +11,11 @@ import pytest
 from admin.deployment import (
     BootstrapInstaller,
     DeploymentService,
+    DeploymentJobRegistry,
     DockerCli,
     DockerCompose,
     DockerError,
+    StartJob,
     parse_pull_progress,
 )
 from admin import deployment
@@ -281,6 +284,42 @@ def _service_default_workspace(tmp_path, install_root):
             install_root=Path(install_root)
         ),
     )
+
+
+def test_job_completion_callback_observes_terminal_success_without_polling(tmp_path):
+    registry = DeploymentJobRegistry()
+    job = StartJob("start-success", str(tmp_path))
+    completed = threading.Event()
+    snapshots = []
+
+    registry.submit(
+        job,
+        lambda handle: handle.succeed(),
+        on_complete=lambda snapshot: (snapshots.append(snapshot), completed.set()),
+    )
+
+    assert completed.wait(2)
+    assert [snapshot["status"] for snapshot in snapshots] == ["succeeded"]
+
+
+def test_job_completion_callback_observes_terminal_failure_without_polling(tmp_path):
+    registry = DeploymentJobRegistry()
+    job = StartJob("start-failure", str(tmp_path))
+    completed = threading.Event()
+    snapshots = []
+
+    def fail(_handle):
+        raise DockerError("compose_start_failed", "compose failed")
+
+    registry.submit(
+        job,
+        fail,
+        on_complete=lambda snapshot: (snapshots.append(snapshot), completed.set()),
+    )
+
+    assert completed.wait(2)
+    assert [snapshot["status"] for snapshot in snapshots] == ["failed"]
+    assert snapshots[0]["error"]["code"] == "compose_start_failed"
 
 
 # --- standard layout / transitional path guard ---------------------------
@@ -841,6 +880,27 @@ def test_start_runs_compose_in_prepared_workspace_with_analytics_profile(tmp_pat
     assert job["dashboard_reachable"] is True
 
 
+def test_start_announces_healthcheck_before_dashboard_probe(tmp_path):
+    events = []
+
+    def dashboard_probe(_url):
+        events.append("probe")
+        return True
+
+    service = _service(tmp_path, dashboard_probe=dashboard_probe)
+    _run_prepare(service)
+
+    result = service.start(
+        on_healthcheck=lambda snapshot: events.append(
+            ("healthcheck", snapshot["steps"][-1]["key"])
+        )
+    )
+    job = service.start_job(result["job"]["job_id"])
+
+    assert job["status"] == "succeeded"
+    assert events == [("healthcheck", "checking_containers"), "probe"]
+
+
 def test_start_fails_when_only_non_ems_service_is_running(tmp_path):
     compose = _FakeCompose(
         services=[
@@ -922,6 +982,17 @@ def test_start_retries_dashboard_probe_without_restarting_containers(tmp_path):
 def _set_fixed_ems_container(service):
     (service.workspace_dir / "docker-compose.yml").write_text(
         "services:\n  ems:\n    container_name: ems-solarflow-api-control\n",
+        encoding="utf-8",
+    )
+
+
+def _set_fixed_ems_and_influx_containers(service):
+    (service.workspace_dir / "docker-compose.yml").write_text(
+        "services:\n"
+        "  ems:\n"
+        "    container_name: ems-solarflow-api-control\n"
+        "  influxdb:\n"
+        "    container_name: ems-influxdb\n",
         encoding="utf-8",
     )
 
@@ -1152,6 +1223,50 @@ def test_resolve_conflict_removes_only_known_stopped_container_without_volumes(t
     assert docker.removed == ["ems-solarflow-api-control"]
     assert job["status"] == "succeeded"
     assert job["steps"][0]["key"].startswith("resolved_container_conflict")
+
+
+def test_resolve_conflicts_reports_each_stack_container_before_start(tmp_path):
+    docker = _FakeDocker(
+        containers={
+            "ems-solarflow-api-control": {
+                "container_name": "ems-solarflow-api-control",
+                "container_id": "ems-old",
+                "image": "ems:old",
+                "status": "exited",
+            },
+            "ems-influxdb": {
+                "container_name": "ems-influxdb",
+                "container_id": "influx-old",
+                "image": "influxdb:2.7",
+                "status": "exited",
+            },
+        }
+    )
+    compose = _FakeCompose()
+    service = _service(tmp_path, influx=BUNDLED, docker=docker, compose=compose)
+    _run_prepare(service)
+    _set_fixed_ems_and_influx_containers(service)
+
+    first = service.resolve_container_conflict(
+        "ems-solarflow-api-control", "remove_stopped_and_continue"
+    )
+
+    assert first["ok"] is True
+    assert first["continue"] is False
+    assert first["conflict"]["container_name"] == "ems-influxdb"
+    assert docker.removed == ["ems-solarflow-api-control"]
+    assert compose.up_calls == []
+
+    second = service.resolve_container_conflict(
+        "ems-influxdb", "remove_stopped_and_continue"
+    )
+    _, job = _run_start(service)
+
+    assert second["ok"] is True
+    assert second["continue"] is True
+    assert second["conflict"] is None
+    assert docker.removed == ["ems-solarflow-api-control", "ems-influxdb"]
+    assert job["status"] == "succeeded"
 
 
 def test_status_keeps_structured_conflict_visible(tmp_path):

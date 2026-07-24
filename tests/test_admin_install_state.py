@@ -41,12 +41,50 @@ def test_fresh_install_recommends_setup(tmp_path):
     assert state.legacy_migration_available is False
 
 
-def test_standard_config_only_recommends_manage(tmp_path):
+def test_standard_config_only_recommends_setup_but_still_confirms(tmp_path):
+    # The wizard writes config/config.json before anything is deployed; a lone
+    # config is still a fresh install, not an existing system to maintain.
     _write_json(_standard(tmp_path), {"a": 1})
     state = istate.detect_install_state(base_dir=tmp_path)
     assert state.state == istate.STATE_STANDARD_CONFIG_ONLY
-    assert state.recommended_path == istate.PATH_MANAGE_EXISTING
+    assert state.recommended_path == istate.PATH_SETUP_NEW
     assert state.setup_requires_confirmation is True
+
+
+def _probe(*, available=True, container_exists=False):
+    evidence = (
+        {"available": True, "container_exists": container_exists}
+        if available
+        else {"available": False}
+    )
+    return lambda: evidence
+
+
+def test_running_ems_container_recommends_maintenance(tmp_path):
+    _write_json(_standard(tmp_path), {"a": 1})
+    state = istate.detect_install_state(
+        base_dir=tmp_path, ems_container_probe=_probe(container_exists=True)
+    )
+    assert state.recommended_path == istate.PATH_MANAGE_EXISTING
+
+
+def test_prepared_but_no_ems_container_recommends_setup(tmp_path):
+    _write_json(_standard(tmp_path), {"a": 1})
+    (tmp_path / "docker-compose.yml").write_text("services: {}")
+    state = istate.detect_install_state(
+        base_dir=tmp_path, ems_container_probe=_probe(container_exists=False)
+    )
+    assert state.state == istate.STATE_STANDARD_INSTALL
+    assert state.recommended_path == istate.PATH_SETUP_NEW
+
+
+def test_docker_unavailable_falls_back_to_filesystem(tmp_path):
+    _write_json(_standard(tmp_path), {"a": 1})
+    (tmp_path / "docker-compose.yml").write_text("services: {}")
+    state = istate.detect_install_state(
+        base_dir=tmp_path, ems_container_probe=_probe(available=False)
+    )
+    assert state.recommended_path == istate.PATH_MANAGE_EXISTING
 
 
 def test_compose_only_recommends_manage(tmp_path):

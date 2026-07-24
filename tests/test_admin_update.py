@@ -5,14 +5,18 @@ No real Docker daemon is used anywhere: docker access is faked, and the updater
 worker is driven with fake pull/compose callables.
 """
 
+import json
 import threading
 import time
+from datetime import datetime, timezone
 
 import pytest
 
 from admin import update_apply
+from admin import admin_update as admin_update_module
 from admin.admin_update import (
     ADMIN_IMAGE_REPO,
+    PENDING_TRANSITION_FILE,
     REASON_CURRENT_UNKNOWN,
     REASON_DIGEST_CHANGED,
     REASON_DIGEST_MATCH,
@@ -21,12 +25,17 @@ from admin.admin_update import (
     STAGE_PLANNED,
     STAGE_STARTED,
     STAGE_SUCCEEDED,
+    SUPPORTED_TRANSITION_MODES,
+    TRANSITION_SCHEMA_VERSION,
     AdminUpdateLauncher,
     AdminUpdateService,
     PendingAdminUpdateStore,
+    PendingTransitionStore,
     PendingUpdateStateError,
+    TransitionStateError,
     decide_admin_update,
     detect_current_admin_identity,
+    make_transition_record,
     resolve_admin_image_target,
     target_admin_image_for_release,
     validate_release_tag,
@@ -452,6 +461,182 @@ def test_worker_updates_env_tag_for_variable_compose(tmp_path):
     assert not (tmp_path / "docker-compose.admin.yml.bak").exists()
 
 
+# --- Block 1.3 transactional compose/env updates -------------------------
+
+
+def _seed_compose(tmp_path, body=None):
+    store = PendingAdminUpdateStore(tmp_path / "state")
+    plan_id = _seed_started(store)
+    compose = tmp_path / "docker-compose.admin.yml"
+    compose.write_text(
+        body or "services:\n  ems-solarflow-admin:\n    image: " + CURRENT_REF + "\n",
+        encoding="utf-8",
+    )
+    return store, plan_id, compose
+
+
+def test_env_write_failure_restores_compose_byte_for_byte(tmp_path, monkeypatch):
+    # Compose is rewritten first, then the env write fails: the compose file must
+    # be rolled back to its exact original bytes so the old Admin stays valid.
+    store, plan_id, compose = _seed_compose(tmp_path)
+    env_file = tmp_path / ".env.admin"
+    env_file.write_text("EMS_ADMIN_TAG=v0.6.2\n", encoding="utf-8")
+    original_compose = compose.read_bytes()
+    original_env = env_file.read_bytes()
+
+    def _boom_env(*a, **k):
+        raise OSError("disk full while writing env")
+
+    monkeypatch.setattr(update_apply, "_write_env_tag", _boom_env)
+    result = update_apply.apply_admin_update(
+        plan_id,
+        store=store,
+        docker=FakeDocker(),
+        environ={"EMS_ADMIN_COMPOSE_FILE": str(compose)},
+        compose_recreate=lambda cf, svc: None,
+        delay_seconds=0,
+    )
+    assert result["ok"] is False
+    assert compose.read_bytes() == original_compose
+    assert env_file.read_bytes() == original_env
+    assert store.read()["stage"] == STAGE_FAILED
+
+
+def test_recreate_failure_restores_compose_and_env(tmp_path):
+    store, plan_id, compose = _seed_compose(tmp_path)
+    env_file = tmp_path / ".env.admin"
+    env_file.write_text("EMS_ADMIN_TAG=v0.6.2\n", encoding="utf-8")
+    original_compose = compose.read_bytes()
+    original_env = env_file.read_bytes()
+
+    def _fail_recreate(cf, svc):
+        raise update_apply.AdminUpdateApplyError("recreate_failed", "boom")
+
+    result = update_apply.apply_admin_update(
+        plan_id,
+        store=store,
+        docker=FakeDocker(),
+        environ={"EMS_ADMIN_COMPOSE_FILE": str(compose)},
+        compose_recreate=_fail_recreate,
+        delay_seconds=0,
+    )
+    assert result["ok"] is False
+    assert result["error"] == "recreate_failed"
+    # Both persistent files are back to the old Admin build.
+    assert compose.read_bytes() == original_compose
+    assert env_file.read_bytes() == original_env
+    assert CURRENT_REF in compose.read_text(encoding="utf-8")
+
+
+def test_verification_failure_rolls_back(tmp_path):
+    store, plan_id, compose = _seed_compose(tmp_path)
+    original_compose = compose.read_bytes()
+    result = update_apply.apply_admin_update(
+        plan_id,
+        store=store,
+        docker=FakeDocker(),
+        environ={"EMS_ADMIN_COMPOSE_FILE": str(compose)},
+        compose_recreate=lambda cf, svc: None,
+        verify=lambda: False,
+        delay_seconds=0,
+    )
+    assert result["ok"] is False
+    assert result["error"] == "verify_failed"
+    assert compose.read_bytes() == original_compose
+    assert store.read()["stage"] == STAGE_FAILED
+
+
+def test_unusual_formatting_restored_byte_for_byte(tmp_path):
+    # CRLF line endings, tabs, no trailing newline, extra blank lines: rollback
+    # must reproduce the raw bytes exactly (never reserialize/normalize).
+    weird = (
+        "services:\r\n\tems-solarflow-admin:\r\n\t\timage: "
+        + CURRENT_REF
+        + "\r\n\r\n# trailing comment no newline"
+    )
+    store, plan_id, compose = _seed_compose(tmp_path, body=weird)
+    original = compose.read_bytes()
+    assert original.endswith(b"no newline")  # sanity: no trailing newline
+
+    result = update_apply.apply_admin_update(
+        plan_id,
+        store=store,
+        docker=FakeDocker(),
+        environ={"EMS_ADMIN_COMPOSE_FILE": str(compose)},
+        compose_recreate=lambda cf, svc: (_ for _ in ()).throw(RuntimeError("x")),
+        delay_seconds=0,
+    )
+    assert result["ok"] is False
+    assert compose.read_bytes() == original
+
+
+def test_files_absent_before_update_removed_on_rollback(tmp_path):
+    # Variable-driven compose with NO .env.admin present: the update creates the
+    # env file; a failed recreate must delete the file that did not exist before.
+    body = "image: ghcr.io/basecubedev/ems-solarflow-admin:${EMS_ADMIN_TAG:-latest}\n"
+    store, plan_id, compose = _seed_compose(tmp_path, body=body)
+    env_file = tmp_path / ".env.admin"
+    assert not env_file.exists()
+
+    result = update_apply.apply_admin_update(
+        plan_id,
+        store=store,
+        docker=FakeDocker(),
+        environ={"EMS_ADMIN_COMPOSE_FILE": str(compose)},
+        compose_recreate=lambda cf, svc: (_ for _ in ()).throw(RuntimeError("x")),
+        delay_seconds=0,
+    )
+    assert result["ok"] is False
+    assert not env_file.exists()  # created during update, removed on rollback
+    assert not (tmp_path / "docker-compose.admin.yml.bak").exists()
+
+
+def test_rollback_failure_reports_affected_paths(tmp_path, monkeypatch):
+    store, plan_id, compose = _seed_compose(tmp_path)
+
+    def _boom_restore(path, raw):
+        raise OSError("cannot restore")
+
+    monkeypatch.setattr(update_apply, "_atomic_write_bytes", _boom_restore)
+    result = update_apply.apply_admin_update(
+        plan_id,
+        store=store,
+        docker=FakeDocker(),
+        environ={"EMS_ADMIN_COMPOSE_FILE": str(compose)},
+        compose_recreate=lambda cf, svc: (_ for _ in ()).throw(RuntimeError("x")),
+        delay_seconds=0,
+    )
+    assert result["ok"] is False
+    rollback = result.get("rollback")
+    assert isinstance(rollback, list) and rollback
+    affected = {entry["path"] for entry in rollback}
+    assert str(compose) in affected
+
+
+def test_rollback_metadata_never_leaks_env_secrets(tmp_path, monkeypatch):
+    secret = "SUPER_SECRET_BROKER_PASSWORD_9f3a"
+    store, plan_id, compose = _seed_compose(tmp_path)
+    env_file = tmp_path / ".env.admin"
+    env_file.write_text(f"EMS_ADMIN_TAG=v0.6.2\nBROKER_PASSWORD={secret}\n", encoding="utf-8")
+    log_path = tmp_path / "update.log"
+    logger = update_apply._FileLogger(log_path)
+
+    result = update_apply.apply_admin_update(
+        plan_id,
+        store=store,
+        docker=FakeDocker(),
+        environ={"EMS_ADMIN_COMPOSE_FILE": str(compose)},
+        compose_recreate=lambda cf, svc: (_ for _ in ()).throw(RuntimeError("x")),
+        log=logger,
+        delay_seconds=0,
+    )
+    assert result["ok"] is False
+    import json as _json
+
+    assert secret not in _json.dumps(result)
+    assert secret not in log_path.read_text(encoding="utf-8")
+
+
 # --- HTTP API: auth, CSRF, and gating ------------------------------------
 
 
@@ -733,15 +918,18 @@ def test_ems_gate_allows_when_pending_same_target_update_not_required(tmp_path):
     assert gate["reason"] == "admin_update_not_required"
 
 
-def test_ems_gate_blocks_when_update_required(tmp_path):
+def test_ems_gate_warns_when_update_required(tmp_path):
+    # A newer Admin image is recommended, not required: the EMS upgrade may still
+    # proceed with a warning.
     images = {
         CURRENT_REF: _image(CURRENT_REF, "sha256:aaa"),
         TARGET_REF: _image(TARGET_REF, "sha256:ccc"),
     }
     svc, _store, _docker = _service(tmp_path, images)
     gate = svc.ems_upgrade_allowed("v0.7.0")
-    assert gate["allowed"] is False
-    assert gate["error"] == "admin_update_required"
+    assert gate["allowed"] is True
+    assert gate["severity"] == "warning"
+    assert gate["reason"] == "admin_update_recommended"
 
 
 def test_ems_gate_allows_when_pending_same_target_succeeded(tmp_path):
@@ -761,7 +949,7 @@ def test_ems_gate_allows_when_pending_same_target_succeeded(tmp_path):
     assert gate["reason"] == "admin_update_completed"
 
 
-def test_ems_gate_blocks_when_pending_target_differs(tmp_path):
+def test_ems_gate_warns_when_pending_target_differs(tmp_path):
     images = {
         CURRENT_REF: _image(CURRENT_REF, "sha256:aaa"),
         TARGET_REF: _image(TARGET_REF, "sha256:ccc"),
@@ -778,11 +966,15 @@ def test_ems_gate_blocks_when_pending_target_differs(tmp_path):
         }
     )
     gate = svc.ems_upgrade_allowed("v0.7.0")
-    assert gate["allowed"] is False
-    assert gate["error"] == "admin_update_required"
+    # The differing release does not match this tag, so the gate falls back to
+    # image identity (aaa != ccc): recommend an update, do not block.
+    assert gate["allowed"] is True
+    assert gate["severity"] == "warning"
+    assert gate["reason"] == "admin_update_recommended"
 
 
-def test_ems_gate_blocks_when_pending_same_target_started(tmp_path):
+def test_ems_gate_warns_when_pending_same_target_planned(tmp_path):
+    # A planned (not yet running) Admin update recommends, but does not block.
     images = {
         CURRENT_REF: _image(CURRENT_REF, "sha256:aaa"),
         TARGET_REF: _image(TARGET_REF, "sha256:ccc"),
@@ -798,16 +990,39 @@ def test_ems_gate_blocks_when_pending_same_target_started(tmp_path):
         }
     )
     gate = svc.ems_upgrade_allowed("v0.7.0")
+    assert gate["allowed"] is True
+    assert gate["severity"] == "warning"
+    assert gate["reason"] == "admin_update_recommended"
+
+
+def test_ems_gate_blocks_when_pending_same_target_running(tmp_path):
+    # An actively running Admin self-update must not overlap the EMS upgrade.
+    images = {
+        CURRENT_REF: _image(CURRENT_REF, "sha256:aaa"),
+        TARGET_REF: _image(TARGET_REF, "sha256:ccc"),
+    }
+    svc, store, _docker = _service(tmp_path, images)
+    store.write(
+        {
+            "schema_version": 1,
+            "id": "plan-r",
+            "stage": STAGE_STARTED,
+            "target_release": "v0.7.0",
+            "target_admin": {"image_ref": TARGET_REF, "digest": "sha256:ccc"},
+        }
+    )
+    gate = svc.ems_upgrade_allowed("v0.7.0")
     assert gate["allowed"] is False
-    assert gate["error"] == "admin_update_required"
+    assert gate["error"] == "admin_update_in_progress"
 
 
-def test_ems_gate_blocks_when_docker_unavailable(tmp_path):
+def test_ems_gate_warns_when_docker_unavailable(tmp_path):
     store = PendingAdminUpdateStore(tmp_path / "state")
     svc = AdminUpdateService(docker=None, store=store, environ={})
     gate = svc.ems_upgrade_allowed("v0.7.0")
-    assert gate["allowed"] is False
-    assert gate["error"] == "admin_update_required"
+    assert gate["allowed"] is True
+    assert gate["severity"] == "warning"
+    assert gate["reason"] == "admin_update_unavailable"
 
 
 def test_ems_gate_rejects_invalid_release(tmp_path):
@@ -837,6 +1052,14 @@ def _launcher_env():
         "EMS_ADMIN_COMPOSE_FILE": "/opt/ems/docker-compose.admin.yml",
         "EMS_ADMIN_COMPOSE_SERVICE": "ems-solarflow-admin",
         "EMS_ADMIN_CONTAINER_NAME": "ems-solarflow-admin",
+        # The currently running Admin image (installer-stamped, non-secret). The
+        # updater sidecar runs from THIS build, never the target tag.
+        "EMS_ADMIN_IMAGE": ADMIN_IMAGE_REPO,
+        "EMS_ADMIN_TAG": "v0.6.2",
+        # Host permission metadata mirrored from the normal Admin container.
+        "PUID": "1000",
+        "PGID": "1000",
+        "DOCKER_GID": "999",
     }
 
 
@@ -847,12 +1070,14 @@ def test_launcher_builds_docker_run_argv_no_shell():
         "target_admin": {"image_ref": TARGET_REF},
     }
     launcher = AdminUpdateLauncher(store=_FakeStore(pending), environ=_launcher_env())
-    argv = launcher.build_sidecar_argv("abc123", image_ref=TARGET_REF)
+    argv = launcher.build_sidecar_argv("abc123")
     assert isinstance(argv, list) and all(isinstance(a, str) for a in argv)
     assert argv[:3] == ["docker", "run", "--rm"]
     assert "--name" in argv and "ems-admin-updater-abc123" in argv
-    # Target image (server-derived) is the sidecar image; no shell string.
-    assert TARGET_REF in argv
+    # The sidecar runs from the CURRENT Admin build, never the target tag, so the
+    # updater understands the pending-state format it was handed.
+    assert CURRENT_REF in argv
+    assert TARGET_REF not in argv
     assert not any(";" in a or "&&" in a or "|" in a for a in argv)
     # Mounts for the install root and Admin data dir (same-path).
     assert "/opt/ems:/opt/ems" in argv
@@ -868,7 +1093,116 @@ def test_launcher_builds_docker_run_argv_no_shell():
     ]
 
 
-def test_launcher_uses_target_ref_from_pending_and_runs():
+# --- Block 1.1 host-safe sidecar permissions -----------------------------
+
+
+def _adjacent(argv, flag):
+    """Return the value that immediately follows ``flag`` in ``argv``."""
+
+    for index, item in enumerate(argv[:-1]):
+        if item == flag:
+            return argv[index + 1]
+    return None
+
+
+def test_sidecar_argv_runs_as_host_uid_gid():
+    launcher = AdminUpdateLauncher(store=_FakeStore({}), environ=_launcher_env())
+    argv = launcher.build_sidecar_argv("abc123")
+    assert _adjacent(argv, "--user") == "1000:1000"
+
+
+def test_sidecar_argv_adds_docker_socket_group():
+    launcher = AdminUpdateLauncher(store=_FakeStore({}), environ=_launcher_env())
+    argv = launcher.build_sidecar_argv("abc123")
+    assert _adjacent(argv, "--group-add") == "999"
+
+
+def test_sidecar_derives_docker_gid_from_socket_when_env_absent():
+    env = dict(_launcher_env())
+    env.pop("DOCKER_GID")
+    launcher = AdminUpdateLauncher(
+        store=_FakeStore({}),
+        environ=env,
+        socket_stat=lambda path: type("S", (), {"st_gid": 4242})(),
+    )
+    argv = launcher.build_sidecar_argv("abc123")
+    assert _adjacent(argv, "--group-add") == "4242"
+
+
+def test_sidecar_fails_on_missing_uid():
+    env = dict(_launcher_env())
+    env.pop("PUID")
+    launcher = AdminUpdateLauncher(store=_FakeStore({}), environ=env)
+    with pytest.raises(RuntimeError, match="PUID"):
+        launcher.build_sidecar_argv("abc123")
+
+
+@pytest.mark.parametrize("bad", ["root", "-1", "0", "1000; rm -rf /", "10 00", ""])
+def test_sidecar_fails_on_invalid_uid(bad):
+    env = dict(_launcher_env(), PUID=bad)
+    launcher = AdminUpdateLauncher(store=_FakeStore({}), environ=env)
+    with pytest.raises(RuntimeError, match="PUID"):
+        launcher.build_sidecar_argv("abc123")
+
+
+def test_sidecar_fails_on_root_uid():
+    # Root (0) is rejected for the sidecar file owner, independent of the host env.
+    env = dict(_launcher_env(), PUID="0")
+    launcher = AdminUpdateLauncher(store=_FakeStore({}), environ=env)
+    with pytest.raises(RuntimeError, match="PUID"):
+        launcher.build_sidecar_argv("abc123")
+
+
+def test_sidecar_fails_on_root_gid():
+    env = dict(_launcher_env(), PGID="0")
+    launcher = AdminUpdateLauncher(store=_FakeStore({}), environ=env)
+    with pytest.raises(RuntimeError, match="PGID"):
+        launcher.build_sidecar_argv("abc123")
+
+
+def test_sidecar_fails_when_docker_gid_unresolvable():
+    env = dict(_launcher_env())
+    env.pop("DOCKER_GID")
+
+    def _boom(path):
+        raise OSError("no socket")
+
+    launcher = AdminUpdateLauncher(
+        store=_FakeStore({}), environ=env, socket_stat=_boom
+    )
+    with pytest.raises(RuntimeError, match="[Dd]ocker"):
+        launcher.build_sidecar_argv("abc123")
+
+
+def test_sidecar_docker_socket_path_is_fixed_and_validated():
+    launcher = AdminUpdateLauncher(store=_FakeStore({}), environ=_launcher_env())
+    argv = launcher.build_sidecar_argv("abc123")
+    # Exactly one docker.sock mount, at the fixed canonical host path.
+    socket_mounts = [a for a in argv if "docker.sock" in a]
+    assert socket_mounts == ["/var/run/docker.sock:/var/run/docker.sock"]
+
+
+def test_sidecar_host_compose_paths_stay_host_visible():
+    launcher = AdminUpdateLauncher(store=_FakeStore({}), environ=_launcher_env())
+    argv = launcher.build_sidecar_argv("abc123")
+    # The compose file lives under the same-path install root mount, so the
+    # daemon sees a real host path (never a container-only path).
+    compose = _adjacent_env(argv, "EMS_ADMIN_COMPOSE_FILE")
+    assert compose == "/opt/ems/docker-compose.admin.yml"
+    assert compose.startswith("/opt/ems/")
+
+
+def _adjacent_env(argv, key):
+    for item in argv:
+        if item.startswith(f"{key}="):
+            return item.split("=", 1)[1]
+    return None
+
+
+# --- Block 1.2 updater runs from the current Admin build -----------------
+
+
+def test_launcher_runs_from_current_build_and_validates_target():
     pending = {
         "id": "p1",
         "target_release": "v0.7.0",
@@ -885,16 +1219,28 @@ def test_launcher_uses_target_ref_from_pending_and_runs():
     )
     launcher.launch("p1")
     assert calls and calls[0][:2] == ["docker", "run"]
-    assert TARGET_REF in calls[0]
+    # The container image is the current Admin build, not the target tag.
+    assert CURRENT_REF in calls[0]
+    assert TARGET_REF not in calls[0]
 
 
 def test_launcher_rejects_missing_target_image():
     pending = {"id": "p1", "target_release": None, "target_admin": {}}
+    env = dict(_launcher_env())
     launcher = AdminUpdateLauncher(
-        store=_FakeStore(pending), environ={}, run=lambda *a, **k: None
+        store=_FakeStore(pending), environ=env, run=lambda *a, **k: None
     )
     with pytest.raises(ValueError):
         launcher.launch("p1")
+
+
+def test_launcher_fails_when_current_build_unknown():
+    # Without a detectable current Admin image the sidecar has no safe base.
+    env = dict(_launcher_env())
+    env.pop("EMS_ADMIN_IMAGE")
+    launcher = AdminUpdateLauncher(store=_FakeStore({}), environ=env)
+    with pytest.raises(RuntimeError, match="[Cc]urrent Admin"):
+        launcher.build_sidecar_argv("abc123")
 
 
 def test_launcher_rejects_relative_install_dir():
@@ -902,14 +1248,68 @@ def test_launcher_rejects_relative_install_dir():
     env = dict(_launcher_env(), EMS_INSTALL_DIR="relative/ems")
     launcher = AdminUpdateLauncher(store=_FakeStore({}), environ=env)
     with pytest.raises(RuntimeError, match="EMS_INSTALL_DIR"):
-        launcher.build_sidecar_argv("abc123", image_ref=TARGET_REF)
+        launcher.build_sidecar_argv("abc123")
 
 
 def test_launcher_rejects_relative_admin_data_dir():
     env = dict(_launcher_env(), EMS_ADMIN_DATA_DIR="relative/data/admin")
     launcher = AdminUpdateLauncher(store=_FakeStore({}), environ=env)
     with pytest.raises(RuntimeError, match="EMS_ADMIN_DATA_DIR"):
-        launcher.build_sidecar_argv("abc123", image_ref=TARGET_REF)
+        launcher.build_sidecar_argv("abc123")
+
+
+def test_sidecar_permissions_match_real_owned_files(tmp_path):
+    # Filesystem-level check: with the process's own uid/gid stamped as the host
+    # permission metadata and a real compose file owned by that uid/gid, the
+    # sidecar argv must run as those ids and point at the real host paths, and
+    # the updater must be able to write those files.
+    import os
+
+    uid, gid = os.getuid(), os.getgid()
+    if uid == 0 or gid == 0:
+        # The production sidecar rules reject root ids; a root-run test env
+        # (Docker/CI) cannot satisfy them. Root rejection is covered separately
+        # by test_sidecar_fails_on_root_uid / test_sidecar_fails_on_root_gid.
+        pytest.skip("requires a non-root file owner")
+    install_root = tmp_path / "ems"
+    install_root.mkdir()
+    compose = install_root / "docker-compose.admin.yml"
+    compose.write_text(
+        "services:\n  ems-solarflow-admin:\n    image: " + CURRENT_REF + "\n",
+        encoding="utf-8",
+    )
+    st = compose.stat()
+    assert st.st_uid == uid and st.st_gid == gid  # sanity: we own it
+    env = {
+        "EMS_INSTALL_DIR": str(install_root),
+        "EMS_ADMIN_DATA_DIR": str(install_root / "data" / "admin"),
+        "EMS_ADMIN_COMPOSE_FILE": str(compose),
+        "EMS_ADMIN_COMPOSE_SERVICE": "ems-solarflow-admin",
+        "EMS_ADMIN_CONTAINER_NAME": "ems-solarflow-admin",
+        "EMS_ADMIN_IMAGE": ADMIN_IMAGE_REPO,
+        "EMS_ADMIN_TAG": "v0.6.2",
+        "PUID": str(uid),
+        "PGID": str(gid),
+        "DOCKER_GID": str(gid),
+    }
+    launcher = AdminUpdateLauncher(store=_FakeStore({}), environ=env)
+    argv = launcher.build_sidecar_argv("plan-fs")
+    assert _adjacent(argv, "--user") == f"{uid}:{gid}"
+    assert f"{install_root}:{install_root}" in argv
+
+    # The resolved paths are genuinely writable by this uid/gid: apply an update.
+    store = PendingAdminUpdateStore(install_root / "data" / "admin" / "state")
+    plan_id = _seed_started(store)
+    result = update_apply.apply_admin_update(
+        plan_id,
+        store=store,
+        docker=FakeDocker(),
+        environ={"EMS_ADMIN_COMPOSE_FILE": str(compose)},
+        compose_recreate=lambda cf, svc: None,
+        delay_seconds=0,
+    )
+    assert result["ok"] is True
+    assert TARGET_REF in compose.read_text(encoding="utf-8")
 
 
 def test_launcher_local_worker_only_when_configured(monkeypatch):
@@ -1029,3 +1429,770 @@ def test_worker_recreate_uses_compose_service(tmp_path):
     assert result["ok"] is True
     # Recreate targets the compose service, not the container name.
     assert recreated == ["custom-service"]
+
+
+# --- Phase 5 staged system-build transition lifecycle --------------------
+
+
+REVISION = "f7265fc747c2223f126f0ee7801e030c6226edf4"
+T0 = datetime(2026, 7, 14, 12, 0, 0, tzinfo=timezone.utc)
+
+TRANSITION_STAGE_ADMIN_UPDATE_PENDING = "admin_update_pending"
+TRANSITION_STAGE_ADMIN_RECONNECT_PENDING = "admin_reconnect_pending"
+TRANSITION_STAGE_ADMIN_ALIGNED = "admin_aligned"
+TRANSITION_STAGE_RESOURCES_VERIFIED = "resources_verified"
+TRANSITION_STAGE_EMS_OPERATION_PENDING = "ems_operation_pending"
+TRANSITION_STAGE_EMS_OPERATION_RUNNING = "ems_operation_running"
+TRANSITION_STAGE_HEALTHCHECK_PENDING = "healthcheck_pending"
+TRANSITION_STAGE_COMPLETED = "completed"
+TRANSITION_STAGE_FAILED_RECOVERABLE = "failed_recoverable"
+TRANSITION_STAGE_CANCELLED = "cancelled"
+
+REQUIRED_TRANSITION_STAGES = frozenset(
+    {
+        TRANSITION_STAGE_ADMIN_UPDATE_PENDING,
+        TRANSITION_STAGE_ADMIN_RECONNECT_PENDING,
+        TRANSITION_STAGE_ADMIN_ALIGNED,
+        TRANSITION_STAGE_RESOURCES_VERIFIED,
+        TRANSITION_STAGE_EMS_OPERATION_PENDING,
+        TRANSITION_STAGE_EMS_OPERATION_RUNNING,
+        TRANSITION_STAGE_HEALTHCHECK_PENDING,
+        TRANSITION_STAGE_COMPLETED,
+        TRANSITION_STAGE_FAILED_RECOVERABLE,
+        TRANSITION_STAGE_CANCELLED,
+    }
+)
+
+
+def _txn_kwargs(**over):
+    base = dict(
+        mode="guided_upgrade",
+        system_tag="v0.8.0",
+        build_id="v0.8.0-f7265fc",
+        revision=REVISION,
+        admin_image=f"{ADMIN_IMAGE_REPO}:v0.8.0",
+        admin_digest="sha256:admin-aaa",
+        ems_image="ghcr.io/basecubedev/ems-solarflow-api-control:v0.8.0",
+        ems_digest="sha256:ems-bbb",
+    )
+    base.update(over)
+    return base
+
+
+def _running(**over):
+    base = dict(
+        digest="sha256:admin-aaa", revision=REVISION, build_id="v0.8.0-f7265fc"
+    )
+    base.update(over)
+    return base
+
+
+def _txn_path(tmp_path):
+    return tmp_path / "state" / PENDING_TRANSITION_FILE
+
+
+def _tamper(tmp_path, **changes):
+    path = _txn_path(tmp_path)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw.update(changes)
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+
+def test_transition_record_has_bounded_ttl_and_fields():
+    record = make_transition_record(now=T0, **_txn_kwargs())
+    assert record.state_version == TRANSITION_SCHEMA_VERSION
+    assert record.operation_id  # unique id assigned
+    assert record.mode in SUPPORTED_TRANSITION_MODES
+    assert record.expires_at > record.created_at  # bounded TTL
+
+
+def test_transition_state_machine_exposes_every_required_stage():
+    assert admin_update_module.VALID_TRANSITION_STAGES == REQUIRED_TRANSITION_STAGES
+
+
+def test_transition_rejects_unknown_stage():
+    with pytest.raises(TransitionStateError) as exc:
+        make_transition_record(
+            now=T0,
+            stage="admin_update_pending; completed",
+            **_txn_kwargs(),
+        )
+    assert exc.value.reason == "invalid_stage"
+
+
+def test_transition_rejects_unsupported_mode():
+    with pytest.raises(TransitionStateError) as exc:
+        make_transition_record(now=T0, **_txn_kwargs(mode="rm_rf_slash"))
+    assert exc.value.reason in {"unsupported_mode", "state_malformed"}
+
+
+def test_admin_reconnect_advances_to_admin_aligned_idempotently(tmp_path):
+    store = PendingTransitionStore(tmp_path / "state")
+    pending = store.begin(make_transition_record(now=T0, **_txn_kwargs()), now=T0)
+    store.advance(
+        pending.operation_id,
+        expected_stage=TRANSITION_STAGE_ADMIN_UPDATE_PENDING,
+        new_stage=TRANSITION_STAGE_ADMIN_RECONNECT_PENDING,
+        now=T0,
+    )
+
+    resumed = store.resume_after_admin_reconnect(
+        pending.operation_id, running_admin=_running(), now=T0
+    )
+    assert resumed.stage == TRANSITION_STAGE_ADMIN_ALIGNED
+    assert store.read().stage == TRANSITION_STAGE_ADMIN_ALIGNED
+
+    # Reconnect polling is safe: observing the same verified Admin again neither
+    # rejects the request nor advances the operation past Admin alignment.
+    repeated = store.resume_after_admin_reconnect(
+        pending.operation_id, running_admin=_running(), now=T0
+    )
+    assert repeated == resumed
+    assert store.read().stage == TRANSITION_STAGE_ADMIN_ALIGNED
+
+
+def test_store_allows_only_legal_monotonic_transition_edges(tmp_path):
+    store = PendingTransitionStore(tmp_path / "state")
+    record = store.begin(make_transition_record(now=T0, **_txn_kwargs()), now=T0)
+    operation_id = record.operation_id
+
+    store.advance(
+        operation_id,
+        expected_stage=TRANSITION_STAGE_ADMIN_UPDATE_PENDING,
+        new_stage=TRANSITION_STAGE_ADMIN_RECONNECT_PENDING,
+        now=T0,
+    )
+    store.resume_after_admin_reconnect(
+        operation_id, running_admin=_running(), now=T0
+    )
+    legal_path = (
+        (TRANSITION_STAGE_ADMIN_ALIGNED, TRANSITION_STAGE_RESOURCES_VERIFIED),
+        (TRANSITION_STAGE_RESOURCES_VERIFIED, TRANSITION_STAGE_EMS_OPERATION_PENDING),
+        (TRANSITION_STAGE_EMS_OPERATION_PENDING, TRANSITION_STAGE_EMS_OPERATION_RUNNING),
+        (TRANSITION_STAGE_EMS_OPERATION_RUNNING, TRANSITION_STAGE_HEALTHCHECK_PENDING),
+        (TRANSITION_STAGE_HEALTHCHECK_PENDING, TRANSITION_STAGE_COMPLETED),
+    )
+    for expected, target in legal_path:
+        advanced = store.advance(
+            operation_id,
+            expected_stage=expected,
+            new_stage=target,
+            now=T0,
+        )
+        assert advanced.stage == target
+
+    assert store.read().stage == TRANSITION_STAGE_COMPLETED
+
+
+def test_store_rejects_illegal_stage_skip(tmp_path):
+    store = PendingTransitionStore(tmp_path / "state")
+    record = store.begin(make_transition_record(now=T0, **_txn_kwargs()), now=T0)
+
+    with pytest.raises(TransitionStateError) as exc:
+        store.advance(
+            record.operation_id,
+            expected_stage=TRANSITION_STAGE_ADMIN_UPDATE_PENDING,
+            new_stage=TRANSITION_STAGE_HEALTHCHECK_PENDING,
+            now=T0,
+        )
+    assert exc.value.reason == "invalid_transition"
+    assert store.read().stage == TRANSITION_STAGE_ADMIN_UPDATE_PENDING
+
+
+def test_store_repeating_same_stage_advance_is_idempotent(tmp_path):
+    store = PendingTransitionStore(tmp_path / "state")
+    record = store.begin(make_transition_record(now=T0, **_txn_kwargs()), now=T0)
+    first = store.advance(
+        record.operation_id,
+        expected_stage=TRANSITION_STAGE_ADMIN_UPDATE_PENDING,
+        new_stage=TRANSITION_STAGE_ADMIN_RECONNECT_PENDING,
+        now=T0,
+    )
+    second = store.advance(
+        record.operation_id,
+        expected_stage=TRANSITION_STAGE_ADMIN_UPDATE_PENDING,
+        new_stage=TRANSITION_STAGE_ADMIN_RECONNECT_PENDING,
+        now=T0,
+    )
+    assert second == first
+
+
+def test_idempotent_advance_still_requires_the_declared_legal_edge(tmp_path):
+    store = PendingTransitionStore(tmp_path / "state")
+    record = store.begin(make_transition_record(now=T0, **_txn_kwargs()), now=T0)
+    store.advance(
+        record.operation_id,
+        expected_stage=TRANSITION_STAGE_ADMIN_UPDATE_PENDING,
+        new_stage=TRANSITION_STAGE_ADMIN_RECONNECT_PENDING,
+        now=T0,
+    )
+    with pytest.raises(TransitionStateError) as exc:
+        store.advance(
+            record.operation_id,
+            expected_stage=TRANSITION_STAGE_HEALTHCHECK_PENDING,
+            new_stage=TRANSITION_STAGE_ADMIN_RECONNECT_PENDING,
+            now=T0,
+        )
+    assert exc.value.reason == "invalid_transition"
+
+
+def test_claim_is_atomic_across_independent_store_instances(tmp_path):
+    state_dir = tmp_path / "state"
+    seeded = PendingTransitionStore(state_dir)
+    record = seeded.begin(
+        make_transition_record(
+            now=T0,
+            stage=TRANSITION_STAGE_EMS_OPERATION_PENDING,
+            **_txn_kwargs(),
+        ),
+        now=T0,
+    )
+    start = threading.Barrier(3)
+    results = []
+
+    class SlowReadStore(PendingTransitionStore):
+        def _record_locked(self, operation_id=None):
+            current = super()._record_locked(operation_id)
+            time.sleep(0.1)
+            return current
+
+    def attempt_claim():
+        store = SlowReadStore(state_dir)
+        start.wait()
+        results.append(
+            store.claim(
+                record.operation_id,
+                expected_stage=TRANSITION_STAGE_EMS_OPERATION_PENDING,
+                new_stage=TRANSITION_STAGE_EMS_OPERATION_RUNNING,
+                now=T0,
+            )
+        )
+
+    workers = [threading.Thread(target=attempt_claim) for _ in range(2)]
+    for worker in workers:
+        worker.start()
+    start.wait()
+    for worker in workers:
+        worker.join(timeout=5)
+        assert not worker.is_alive()
+
+    assert sorted(results) == [False, True]
+
+
+def test_embedded_resource_import_has_one_durable_claim(tmp_path):
+    state_dir = tmp_path / "state"
+    store = PendingTransitionStore(state_dir)
+    record = store.begin(
+        make_transition_record(
+            now=T0,
+            stage=TRANSITION_STAGE_ADMIN_ALIGNED,
+            **_txn_kwargs(),
+        ),
+        now=T0,
+    )
+
+    assert store.claim_resource_verification(record.operation_id, now=T0) is True
+    assert (
+        PendingTransitionStore(state_dir).claim_resource_verification(
+            record.operation_id, now=T0
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    "stage",
+    (TRANSITION_STAGE_ADMIN_RECONNECT_PENDING, TRANSITION_STAGE_EMS_OPERATION_RUNNING),
+)
+def test_cancel_rejects_transition_while_external_mutation_is_running(tmp_path, stage):
+    store = PendingTransitionStore(tmp_path / "state")
+    record = store.begin(
+        make_transition_record(now=T0, stage=stage, **_txn_kwargs()), now=T0
+    )
+    with pytest.raises(TransitionStateError) as exc:
+        store.cancel(operation_id=record.operation_id, now=T0)
+    assert exc.value.reason == "mutation_in_progress"
+    assert store.read().stage == stage
+
+
+def test_expired_transition_cannot_claim_new_ems_mutation(tmp_path):
+    store = PendingTransitionStore(tmp_path / "state")
+    record = store.begin(
+        make_transition_record(
+            now=T0,
+            ttl_seconds=60,
+            stage=TRANSITION_STAGE_EMS_OPERATION_PENDING,
+            **_txn_kwargs(),
+        ),
+        now=T0,
+    )
+    later = datetime(2026, 7, 14, 13, 0, 0, tzinfo=timezone.utc)
+    with pytest.raises(TransitionStateError) as exc:
+        store.claim(
+            record.operation_id,
+            expected_stage=TRANSITION_STAGE_EMS_OPERATION_PENDING,
+            new_stage=TRANSITION_STAGE_EMS_OPERATION_RUNNING,
+            now=later,
+        )
+    assert exc.value.reason == "expired"
+
+
+def test_store_failure_records_recovery_stage_and_retry_is_explicit(tmp_path):
+    store = PendingTransitionStore(tmp_path / "state")
+    record = make_transition_record(
+        now=T0,
+        stage=TRANSITION_STAGE_EMS_OPERATION_RUNNING,
+        **_txn_kwargs(),
+    )
+    store.begin(record, now=T0)
+
+    failed = store.mark_failed(
+        record.operation_id,
+        error_code="ems_deployment_failed",
+        error_message="compose up failed",
+        resume_stage=TRANSITION_STAGE_EMS_OPERATION_PENDING,
+        now=T0,
+    )
+    assert failed.stage == TRANSITION_STAGE_FAILED_RECOVERABLE
+    assert failed.failed_stage == TRANSITION_STAGE_EMS_OPERATION_RUNNING
+    assert failed.resume_stage == TRANSITION_STAGE_EMS_OPERATION_PENDING
+    assert failed.error_code == "ems_deployment_failed"
+    assert failed.error_message == "compose up failed"
+
+    # Merely reading failed state never retries it; an explicit retry returns to
+    # the recorded safe stage and can happen only for this operation id.
+    assert store.read() == failed
+    retried = store.retry(record.operation_id, now=T0)
+    assert retried.stage == TRANSITION_STAGE_EMS_OPERATION_PENDING
+
+
+def test_recoverable_transition_rejects_tampered_resume_stage(tmp_path):
+    store = PendingTransitionStore(tmp_path / "state")
+    record = make_transition_record(
+        now=T0,
+        stage=TRANSITION_STAGE_EMS_OPERATION_RUNNING,
+        **_txn_kwargs(),
+    )
+    store.begin(record, now=T0)
+    store.mark_failed(
+        record.operation_id,
+        error_code="ems_deployment_failed",
+        error_message="compose up failed",
+        resume_stage=TRANSITION_STAGE_EMS_OPERATION_PENDING,
+        now=T0,
+    )
+    _tamper(tmp_path, resume_stage=TRANSITION_STAGE_COMPLETED)
+
+    with pytest.raises(TransitionStateError) as exc:
+        store.read()
+
+    assert exc.value.reason == "state_tampered"
+
+
+def test_v2_admin_update_is_claimed_once_and_replay_is_rejected(
+    tmp_path, monkeypatch
+):
+    store = PendingTransitionStore(tmp_path / "state")
+    record = store.begin(
+        make_transition_record(
+            now=T0,
+            stage=TRANSITION_STAGE_ADMIN_RECONNECT_PENDING,
+            **_txn_kwargs(),
+        ),
+        now=T0,
+    )
+    applied = []
+
+    def fake_apply(plan_id, **kwargs):
+        applied.append((plan_id, kwargs))
+        return {"ok": True, "status": STAGE_SUCCEEDED}
+
+    monkeypatch.setattr(update_apply, "apply_admin_update", fake_apply)
+    first = update_apply.apply_system_transition_admin_update(
+        record.operation_id, store=store, delay_seconds=0, now=T0
+    )
+    replay = update_apply.apply_system_transition_admin_update(
+        record.operation_id, store=store, delay_seconds=0, now=T0
+    )
+
+    assert first["ok"] is True
+    assert replay == {"ok": False, "error": "admin_update_already_claimed"}
+    assert len(applied) == 1
+    assert applied[0][1]["expected_target_digest"] == record.admin_digest
+
+
+def test_v2_admin_update_rejects_moved_tag_before_compose_mutation(tmp_path):
+    store = PendingTransitionStore(tmp_path / "state")
+    record = store.begin(
+        make_transition_record(
+            now=T0,
+            stage=TRANSITION_STAGE_ADMIN_RECONNECT_PENDING,
+            **_txn_kwargs(),
+        ),
+        now=T0,
+    )
+    compose = tmp_path / "docker-compose.admin.yml"
+    compose.write_text("image: " + CURRENT_REF + "\n", encoding="utf-8")
+    original = compose.read_bytes()
+    docker = FakeDocker(
+        images={record.admin_image: _image(record.admin_image, "sha256:moved")}
+    )
+
+    result = update_apply.apply_system_transition_admin_update(
+        record.operation_id,
+        store=store,
+        docker=docker,
+        environ={"EMS_ADMIN_COMPOSE_FILE": str(compose)},
+        compose_recreate=lambda *_args: pytest.fail("must not recreate moved tag"),
+        delay_seconds=0,
+        now=T0,
+    )
+
+    assert result["ok"] is False
+    assert result["error"] == "target_digest_mismatch"
+    assert compose.read_bytes() == original
+    assert store.read().stage == TRANSITION_STAGE_FAILED_RECOVERABLE
+
+
+def test_transition_status_reads_never_mutate_or_consume_state(tmp_path):
+    store = PendingTransitionStore(tmp_path / "state")
+    record = make_transition_record(
+        now=T0,
+        stage=TRANSITION_STAGE_EMS_OPERATION_RUNNING,
+        **_txn_kwargs(),
+    )
+    store.begin(record, now=T0)
+    before = _txn_path(tmp_path).read_bytes()
+
+    assert store.read() == record
+    assert store.read() == record
+    assert _txn_path(tmp_path).read_bytes() == before
+
+
+def test_transition_expired_rejected(tmp_path):
+    store = PendingTransitionStore(tmp_path / "state")
+    record = store.begin(
+        make_transition_record(now=T0, ttl_seconds=60, **_txn_kwargs()), now=T0
+    )
+    store.advance(
+        record.operation_id,
+        expected_stage=TRANSITION_STAGE_ADMIN_UPDATE_PENDING,
+        new_stage=TRANSITION_STAGE_ADMIN_RECONNECT_PENDING,
+        now=T0,
+    )
+    later = datetime(2026, 7, 14, 13, 0, 0, tzinfo=timezone.utc)  # +1h
+    with pytest.raises(TransitionStateError) as exc:
+        store.resume_after_admin_reconnect(
+            record.operation_id, running_admin=_running(), now=later
+        )
+    assert exc.value.reason == "expired"
+
+
+def test_transition_unknown_state_version_rejected(tmp_path):
+    store = PendingTransitionStore(tmp_path / "state")
+    store.begin(make_transition_record(now=T0, **_txn_kwargs()), now=T0)
+    _tamper(tmp_path, state_version=99)
+    with pytest.raises(TransitionStateError) as exc:
+        store.read()
+    assert exc.value.reason == "unsupported_state_version"
+
+
+def test_transition_malformed_rejected(tmp_path):
+    store = PendingTransitionStore(tmp_path / "state")
+    store.begin(make_transition_record(now=T0, **_txn_kwargs()), now=T0)
+    path = _txn_path(tmp_path)
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    del raw["revision"]
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(TransitionStateError) as exc:
+        store.read()
+    assert exc.value.reason == "state_malformed"
+
+
+def test_transition_tampered_digest_rejected(tmp_path):
+    store = PendingTransitionStore(tmp_path / "state")
+    record = store.begin(make_transition_record(now=T0, **_txn_kwargs()), now=T0)
+    store.advance(
+        record.operation_id,
+        expected_stage=TRANSITION_STAGE_ADMIN_UPDATE_PENDING,
+        new_stage=TRANSITION_STAGE_ADMIN_RECONNECT_PENDING,
+        now=T0,
+    )
+    _tamper(tmp_path, admin_digest="sha256:evil")
+    with pytest.raises(TransitionStateError) as exc:
+        store.resume_after_admin_reconnect(
+            record.operation_id, running_admin=_running(), now=T0
+        )
+    assert exc.value.reason == "admin_identity_mismatch"
+
+
+def test_transition_tampered_build_id_rejected(tmp_path):
+    store = PendingTransitionStore(tmp_path / "state")
+    store.begin(make_transition_record(now=T0, **_txn_kwargs()), now=T0)
+    # A build_id that no longer embeds the revision is structurally tampered.
+    _tamper(tmp_path, build_id="v9.9.9-deadbee")
+    with pytest.raises(TransitionStateError) as exc:
+        store.read()
+    assert exc.value.reason == "state_tampered"
+
+
+LEGACY_REVISION = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0"
+LEGACY_BUILD_ID = "123456789-1"
+
+
+def _legacy_txn_kwargs(**over):
+    base = _txn_kwargs(
+        system_tag="v0.7.0",
+        build_id=LEGACY_BUILD_ID,
+        revision=LEGACY_REVISION,
+        admin_image=f"{ADMIN_IMAGE_REPO}:v0.7.0",
+        ems_image="ghcr.io/basecubedev/ems-solarflow-api-control:v0.7.0",
+        mode="fresh_install",
+    )
+    base.update(over)
+    return base
+
+
+def test_transition_accepts_validated_legacy_ci_build_identity(tmp_path):
+    # A legacy CI build id (``<run>-<attempt>``) does not embed a git revision.
+    # It must persist and round-trip: its format is validated and the release
+    # identity is verified upstream, so the modern revision-embedding rule is not
+    # applied to it.
+    store = PendingTransitionStore(tmp_path / "state")
+    record = make_transition_record(now=T0, **_legacy_txn_kwargs())
+    assert record.build_id == LEGACY_BUILD_ID
+    store.begin(record, now=T0)
+    reread = store.read()
+    assert reread.build_id == LEGACY_BUILD_ID
+    assert reread.revision == LEGACY_REVISION
+
+
+def test_transition_tampered_legacy_build_id_rejected(tmp_path):
+    # Corrupting the legacy build id to an unrecognized shape is still rejected;
+    # the legacy exception never disables build-id format validation.
+    store = PendingTransitionStore(tmp_path / "state")
+    store.begin(make_transition_record(now=T0, **_legacy_txn_kwargs()), now=T0)
+    _tamper(tmp_path, build_id="123456789-1-evil")
+    with pytest.raises(TransitionStateError) as exc:
+        store.read()
+    assert exc.value.reason == "state_malformed"
+
+
+def test_transition_modern_revision_tamper_still_rejected(tmp_path):
+    # The modern revision-embedding integrity check is preserved: swapping the
+    # revision on a modern build id so it no longer embeds is structural tampering.
+    store = PendingTransitionStore(tmp_path / "state")
+    store.begin(make_transition_record(now=T0, **_txn_kwargs()), now=T0)
+    _tamper(tmp_path, revision="0" * 40)
+    with pytest.raises(TransitionStateError) as exc:
+        store.read()
+    assert exc.value.reason == "state_tampered"
+
+
+# --- orchestrator Admin vs selected EMS identity (Phase 6) -----------------
+
+MODERN_ADMIN = dict(
+    build_id="v0.8.0-f7265fc",
+    revision=REVISION,
+    image=f"{ADMIN_IMAGE_REPO}:v0.8.0",
+    digest="sha256:modern-admin",
+)
+
+
+def _legacy_with_orchestrator(**over):
+    base = _legacy_txn_kwargs(
+        compatibility_mode="legacy_release",
+        resource_strategy="release_archive",
+        orchestrator_admin=dict(MODERN_ADMIN),
+    )
+    base.update(over)
+    return base
+
+
+def test_modern_record_defaults_orchestrator_to_selected_admin(tmp_path):
+    # A modern paired record carries no separate orchestrator block: the running
+    # Admin *becomes* the selected Admin, so the orchestrator identity is the
+    # selected Admin identity. Old persisted records stay readable this way.
+    record = make_transition_record(now=T0, **_txn_kwargs())
+    orchestrator = record.orchestrator_admin
+    assert orchestrator["build_id"] == "v0.8.0-f7265fc"
+    assert orchestrator["revision"] == REVISION
+    assert orchestrator["digest"] == "sha256:admin-aaa"
+    assert record.compatibility_mode is None  # not set for legacy records
+
+
+def test_legacy_record_separates_orchestrator_admin_from_selected_ems(tmp_path):
+    store = PendingTransitionStore(tmp_path / "state")
+    record = make_transition_record(
+        now=T0, stage=TRANSITION_STAGE_RESOURCES_VERIFIED,
+        **_legacy_with_orchestrator(),
+    )
+    store.begin(record, now=T0)
+    reread = store.read()
+
+    # The orchestrator is the modern Admin; the selected build is the historical
+    # EMS. Their identities never collapse into one field.
+    assert reread.orchestrator_admin["digest"] == "sha256:modern-admin"
+    assert reread.orchestrator_admin["build_id"] == "v0.8.0-f7265fc"
+    assert reread.ems_digest == _legacy_txn_kwargs()["ems_digest"]
+    assert reread.build_id == LEGACY_BUILD_ID
+    assert reread.orchestrator_admin["digest"] != reread.ems_digest
+    assert reread.compatibility_mode == "legacy_release"
+    assert reread.resource_strategy == "release_archive"
+    as_dict = reread.as_dict()
+    assert as_dict["orchestrator_admin"]["digest"] == "sha256:modern-admin"
+    assert as_dict["selected_ems_build"]["digest"] == reread.ems_digest
+
+
+def test_resume_matches_orchestrator_admin_not_selected_admin(tmp_path):
+    # Resume authorization compares the running Admin to the orchestrator, not to
+    # the historical selected Admin image (which is never run for a legacy build).
+    record = make_transition_record(
+        now=T0, stage=TRANSITION_STAGE_EMS_OPERATION_PENDING,
+        **_legacy_with_orchestrator(),
+    )
+    # The running modern Admin matches the orchestrator identity.
+    ok = admin_update_module.validate_transition_for_resume(
+        record, now=T0, running_admin=dict(MODERN_ADMIN)
+    )
+    assert ok is record
+    # The historical selected Admin identity must NOT authorize resume.
+    with pytest.raises(TransitionStateError) as exc:
+        admin_update_module.validate_transition_for_resume(
+            record,
+            now=T0,
+            running_admin={
+                "build_id": LEGACY_BUILD_ID,
+                "revision": LEGACY_REVISION,
+                "digest": "sha256:oldems-admin",
+            },
+        )
+    assert exc.value.reason == "admin_identity_mismatch"
+
+
+def test_tampered_orchestrator_admin_build_id_rejected(tmp_path):
+    store = PendingTransitionStore(tmp_path / "state")
+    store.begin(
+        make_transition_record(
+            now=T0, stage=TRANSITION_STAGE_RESOURCES_VERIFIED,
+            **_legacy_with_orchestrator(),
+        ),
+        now=T0,
+    )
+    # The orchestrator is modern, so it must still embed its revision.
+    _tamper(
+        tmp_path,
+        orchestrator_admin={
+            **MODERN_ADMIN,
+            "build_id": "v9.9.9-deadbee",
+        },
+    )
+    with pytest.raises(TransitionStateError) as exc:
+        store.read()
+    assert exc.value.reason == "state_tampered"
+
+
+def test_old_record_without_orchestrator_block_remains_readable(tmp_path):
+    # A modern record persisted before the orchestrator block existed still reads.
+    store = PendingTransitionStore(tmp_path / "state")
+    store.begin(make_transition_record(now=T0, **_txn_kwargs()), now=T0)
+    # Simulate an old on-disk record: no orchestrator/compat/strategy keys.
+    reread = store.read()
+    assert reread.orchestrator_admin["digest"] == "sha256:admin-aaa"
+
+
+def test_transition_wrong_running_admin_rejected(tmp_path):
+    store = PendingTransitionStore(tmp_path / "state")
+    record = store.begin(make_transition_record(now=T0, **_txn_kwargs()), now=T0)
+    store.advance(
+        record.operation_id,
+        expected_stage=TRANSITION_STAGE_ADMIN_UPDATE_PENDING,
+        new_stage=TRANSITION_STAGE_ADMIN_RECONNECT_PENDING,
+        now=T0,
+    )
+    wrong = _running(
+        digest="sha256:old", revision="0000000old", build_id="v0.7.0-0000000"
+    )
+    with pytest.raises(TransitionStateError) as exc:
+        store.resume_after_admin_reconnect(
+            record.operation_id, running_admin=wrong, now=T0
+        )
+    assert exc.value.reason == "admin_identity_mismatch"
+
+
+def test_transition_partial_running_admin_identity_is_unverifiable(tmp_path):
+    store = PendingTransitionStore(tmp_path / "state")
+    record = store.begin(make_transition_record(now=T0, **_txn_kwargs()), now=T0)
+    store.advance(
+        record.operation_id,
+        expected_stage=TRANSITION_STAGE_ADMIN_UPDATE_PENDING,
+        new_stage=TRANSITION_STAGE_ADMIN_RECONNECT_PENDING,
+        now=T0,
+    )
+
+    with pytest.raises(TransitionStateError) as exc:
+        store.resume_after_admin_reconnect(
+            record.operation_id,
+            running_admin={"revision": REVISION},
+            now=T0,
+        )
+
+    assert exc.value.reason == "admin_unverifiable"
+
+
+def test_second_transition_cannot_overwrite_active(tmp_path):
+    store = PendingTransitionStore(tmp_path / "state")
+    store.begin(make_transition_record(now=T0, **_txn_kwargs()), now=T0)
+    with pytest.raises(TransitionStateError) as exc:
+        store.begin(
+            make_transition_record(now=T0, **_txn_kwargs(mode="fresh_install")),
+            now=T0,
+        )
+    assert exc.value.reason == "transition_active"
+
+
+def test_cancelled_transition_cannot_resume(tmp_path):
+    store = PendingTransitionStore(tmp_path / "state")
+    record = store.begin(make_transition_record(now=T0, **_txn_kwargs()), now=T0)
+    store.cancel(operation_id=record.operation_id, now=T0)
+    with pytest.raises(TransitionStateError) as exc:
+        store.resume_after_admin_reconnect(
+            record.operation_id, running_admin=_running(), now=T0
+        )
+    assert exc.value.reason == "not_resumable"
+
+
+@pytest.mark.parametrize(
+    "terminal_stage",
+    [TRANSITION_STAGE_COMPLETED, TRANSITION_STAGE_CANCELLED],
+)
+def test_terminal_transition_cannot_restart(tmp_path, terminal_stage):
+    store = PendingTransitionStore(tmp_path / "state")
+    record = store.begin(
+        make_transition_record(now=T0, stage=terminal_stage, **_txn_kwargs()),
+        now=T0,
+    )
+    with pytest.raises(TransitionStateError) as exc:
+        store.advance(
+            record.operation_id,
+            expected_stage=terminal_stage,
+            new_stage=TRANSITION_STAGE_ADMIN_UPDATE_PENDING,
+            now=T0,
+        )
+    assert exc.value.reason == "not_resumable"
+
+
+def test_expired_active_transition_cannot_be_silently_replaced(tmp_path):
+    store = PendingTransitionStore(tmp_path / "state")
+    store.begin(
+        make_transition_record(now=T0, ttl_seconds=60, **_txn_kwargs()), now=T0
+    )
+    later = datetime(2026, 7, 14, 14, 0, 0, tzinfo=timezone.utc)
+    # Expiry cannot silently discard a potentially partial Admin/EMS pairing.
+    replacement = make_transition_record(
+        now=later, **_txn_kwargs(mode="fresh_install")
+    )
+    with pytest.raises(TransitionStateError) as exc:
+        store.begin(replacement, now=later)
+    assert exc.value.reason == "transition_active"
+    assert store.read().mode == "guided_upgrade"

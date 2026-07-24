@@ -11,6 +11,7 @@ import argparse
 import os
 import re
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -22,9 +23,13 @@ from admin.admin_update import (
     STAGE_STARTED,
     STAGE_SUCCEEDED,
     PendingAdminUpdateStore,
+    PendingTransitionStore,
     PendingUpdateStateError,
+    TRANSITION_STAGE_ADMIN_UPDATE_PENDING,
+    TransitionStateError,
     target_admin_image_for_release,
 )
+from admin.image_identity import identify_image
 from admin.models import utc_now_iso
 
 # Give the HTTP response time to flush to the browser before the local worker
@@ -47,6 +52,70 @@ class AdminUpdateApplyError(Exception):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+def _atomic_write_bytes(path, raw):
+    """Restore ``raw`` bytes to ``path`` atomically (temp file + rename).
+
+    Used only for rollback, so the restored file is exactly the original bytes
+    (never a reserialized/normalized form).
+    """
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=".admin-rollback.", suffix=".tmp", dir=path.parent)
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(raw)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    finally:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+
+
+class ComposeEnvTransaction:
+    """Byte-for-byte snapshot/rollback for the files an Admin update rewrites.
+
+    Snapshots each path's raw bytes and whether it existed *before* any change.
+    ``rollback`` restores existed files to their exact original bytes and removes
+    files that did not exist before, so a failed pull/recreate/verify can never
+    leave the persistent Admin compose/env pointing at a target that is not
+    actually running. Rollback never raises: each failure is collected as a
+    ``{"path", "error"}`` record (paths and OS error text only — no file
+    contents, so no secret env values leak).
+    """
+
+    def __init__(self, paths):
+        self._entries = []
+        seen = set()
+        for raw_path in paths:
+            if raw_path is None:
+                continue
+            path = Path(raw_path)
+            key = str(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            existed = path.exists()
+            data = path.read_bytes() if existed else None
+            self._entries.append((path, existed, data))
+
+    def rollback(self):
+        failures = []
+        for path, existed, data in self._entries:
+            try:
+                if existed:
+                    _atomic_write_bytes(path, data)
+                elif path.exists():
+                    path.unlink()
+            except OSError as exc:
+                failures.append({"path": str(path), "error": str(exc)})
+        return failures
 
 
 class AdminComposeRunner:
@@ -243,6 +312,50 @@ def _derive_target_ref(pending):
     return target_admin_image_for_release(release)
 
 
+class _SystemTransitionApplyStore:
+    """Present a v2 transition through the narrow store shape used by v1 apply.
+
+    The file/config/Docker transaction is shared unchanged. Stage writes are
+    translated: updater failure becomes ``failed_recoverable``; updater success
+    deliberately remains ``admin_reconnect_pending`` until the new Admin verifies
+    its running identity through :class:`SystemAlignmentService`.
+    """
+
+    def __init__(self, store, transition_id):
+        self._store = store
+        self.transition_id = transition_id
+        self.state_dir = store.state_dir
+
+    def read(self):
+        record = self._store.read()
+        if (
+            record is None
+            or record.operation_id != self.transition_id
+            or record.stage != "admin_reconnect_pending"
+            or not record.admin_update_claimed_at
+        ):
+            return None
+        return {
+            "id": record.operation_id,
+            "stage": STAGE_STARTED,
+            "target_release": record.system_tag,
+            "target_admin": {"image_ref": record.admin_image},
+            "message": "Admin System Build alignment running.",
+        }
+
+    def write(self, pending):
+        stage = pending.get("stage")
+        if stage == STAGE_FAILED:
+            self._store.mark_failed(
+                self.transition_id,
+                error_code=pending.get("error_code") or "admin_update_failed",
+                error_message=pending.get("message") or "Admin update failed",
+                resume_stage=TRANSITION_STAGE_ADMIN_UPDATE_PENDING,
+            )
+        # STARTED/SUCCEEDED do not consume the reconnect stage.
+        return pending
+
+
 def apply_admin_update(
     plan_id,
     *,
@@ -252,16 +365,22 @@ def apply_admin_update(
     environ=None,
     release_manager=None,
     compose_recreate=None,
+    verify=None,
     sleep=None,
     delay_seconds=DEFAULT_DELAY_SECONDS,
     log=None,
+    expected_target_digest=None,
 ):
     """Pull, repoint, and recreate the Admin service for one pending plan.
 
-    Every failure before the recreate is captured in the pending state (stage
-    ``admin_update_failed``) and the per-plan log, leaving the current Admin
-    running. The recreate replaces this process in a real deployment; the new
-    Admin resumes from the pending state.
+    The target image is pulled *before* any persistent file changes, so a pull
+    failure leaves compose/env untouched. The compose/env rewrite, recreate and
+    optional ``verify`` then run inside a byte-for-byte transaction: any failure
+    restores the original compose/env exactly (removing files that did not exist
+    before), leaving the old Admin usable and reporting rollback failures
+    explicitly in the result (paths only — no secret env contents). The recreate
+    replaces this process in a real deployment; the new Admin resumes from the
+    pending state.
     """
 
     environ = os.environ if environ is None else environ
@@ -294,33 +413,64 @@ def apply_admin_update(
     service = _resolve_compose_service(environ)
     env_file = _resolve_env_file(environ, compose_file)
 
-    def fail(code, message):
+    def fail(code, message, *, rollback=None):
         pending["stage"] = STAGE_FAILED
         pending["updated_at"] = utc_now_iso()
+        pending["error_code"] = code
         pending["message"] = message
         store.write(pending)
         logger.write(f"FAILED[{code}]: {message}")
-        return {"ok": False, "error": code, "message": message}
+        result = {"ok": False, "error": code, "message": message}
+        if rollback:
+            # Paths + OS error text only; never file contents (no secret leak).
+            result["rollback"] = rollback
+            logger.write(
+                "ROLLBACK incomplete for: "
+                + ", ".join(entry["path"] for entry in rollback)
+            )
+        return result
 
     pending["stage"] = STAGE_STARTED
     pending["updated_at"] = utc_now_iso()
     store.write(pending)
     logger.write(f"pulling {target_ref}")
 
+    # Pull first: a pull failure must leave compose/env completely untouched.
     try:
         docker.pull(target_ref)
     except Exception as exc:
         return fail("pull_failed", f"Could not pull the target Admin image: {exc}")
+    if expected_target_digest:
+        pulled = identify_image(docker, target_ref)
+        if pulled.digest != expected_target_digest:
+            return fail(
+                "target_digest_mismatch",
+                "The pulled Admin image no longer matches the resolved System Build.",
+            )
     logger.write("pull complete; updating compose/env tag")
+
+    # Everything that mutates persistent files runs inside a byte-for-byte
+    # transaction. Snapshot the compose file, its env file (explicit or the
+    # default that a variable-driven compose may create), and the ``.bak`` the
+    # rewrite leaves behind, so rollback can restore/remove each exactly.
+    default_env = compose_file.parent / ".env.admin"
+    bak_file = compose_file.with_name(compose_file.name + ".bak")
+    txn = ComposeEnvTransaction([compose_file, env_file or default_env, bak_file])
+
+    def rollback_fail(code, message):
+        rollback_failures = txn.rollback()
+        return fail(code, message, rollback=rollback_failures or None)
 
     try:
         located = update_admin_image_reference(
             compose_file, target_ref, env_file=env_file
         )
     except OSError as exc:
-        return fail("compose_update_failed", f"Could not update the Admin compose/env: {exc}")
+        return rollback_fail(
+            "compose_update_failed", f"Could not update the Admin compose/env: {exc}"
+        )
     if not located:
-        return fail(
+        return rollback_fail(
             "image_reference_missing",
             "Could not locate the Admin image reference to update.",
         )
@@ -329,9 +479,23 @@ def apply_admin_update(
     try:
         compose_recreate(compose_file, service)
     except AdminUpdateApplyError as exc:
-        return fail(exc.code, exc.message)
+        return rollback_fail(exc.code, exc.message)
     except Exception as exc:  # never leak a traceback into the pending state
-        return fail("recreate_failed", f"Could not recreate the Admin Console: {exc}")
+        return rollback_fail("recreate_failed", f"Could not recreate the Admin Console: {exc}")
+
+    # Optionally verify the replacement Admin (the sidecar survives the recreate
+    # and can confirm the new build is actually running). A failed verification
+    # rolls the persistent files back to the previous Admin build.
+    if verify is not None:
+        logger.write("verifying replacement Admin")
+        try:
+            verified = verify()
+        except Exception as exc:
+            return rollback_fail("verify_failed", f"Admin verification failed: {exc}")
+        if verified is False:
+            return rollback_fail(
+                "verify_failed", "The replacement Admin Console failed verification."
+            )
 
     # In production the recreate already replaced this process; reaching here
     # (tests / a fast daemon) means the swap returned, so record success.
@@ -342,6 +506,55 @@ def apply_admin_update(
     store.write(pending)
     logger.write("SUCCESS: admin update applied")
     return {"ok": True, "status": STAGE_SUCCEEDED}
+
+
+def apply_system_transition_admin_update(
+    transition_id,
+    *,
+    store=None,
+    state_dir=None,
+    docker=None,
+    environ=None,
+    release_manager=None,
+    compose_recreate=None,
+    verify=None,
+    sleep=None,
+    delay_seconds=DEFAULT_DELAY_SECONDS,
+    log=None,
+    now=None,
+):
+    """Apply the Admin-image step for a persisted v2 System Build transition."""
+
+    environ = os.environ if environ is None else environ
+    if store is None:
+        resolved_state_dir = state_dir or _default_state_dir(release_manager, environ)
+        store = PendingTransitionStore(resolved_state_dir)
+    try:
+        record = store.read()
+    except TransitionStateError as exc:
+        return {"ok": False, "error": exc.reason, "message": exc.message}
+    if record is None or record.operation_id != transition_id:
+        return {"ok": False, "error": "unknown_transition"}
+    try:
+        claimed = store.claim_admin_update(transition_id, now=now)
+    except TransitionStateError as exc:
+        return {"ok": False, "error": exc.reason, "message": exc.message}
+    if not claimed:
+        return {"ok": False, "error": "admin_update_already_claimed"}
+    adapter = _SystemTransitionApplyStore(store, transition_id)
+    return apply_admin_update(
+        transition_id,
+        store=adapter,
+        docker=docker,
+        environ=environ,
+        release_manager=release_manager,
+        compose_recreate=compose_recreate,
+        verify=verify,
+        sleep=sleep,
+        delay_seconds=delay_seconds,
+        log=log,
+        expected_target_digest=record.admin_digest,
+    )
 
 
 def _default_state_dir(release_manager, environ):
@@ -358,7 +571,9 @@ def _default_state_dir(release_manager, environ):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Apply a pending Admin Console update.")
-    parser.add_argument("--plan-id", required=True)
+    operation = parser.add_mutually_exclusive_group(required=True)
+    operation.add_argument("--plan-id")
+    operation.add_argument("--transition-id")
     parser.add_argument(
         "--delay-seconds",
         type=float,
@@ -366,7 +581,12 @@ def main(argv=None):
         help="Delay before applying (sidecar mode passes 0).",
     )
     args = parser.parse_args(argv)
-    result = apply_admin_update(args.plan_id, delay_seconds=args.delay_seconds)
+    if args.transition_id:
+        result = apply_system_transition_admin_update(
+            args.transition_id, delay_seconds=args.delay_seconds
+        )
+    else:
+        result = apply_admin_update(args.plan_id, delay_seconds=args.delay_seconds)
     return 0 if result.get("ok") else 1
 
 

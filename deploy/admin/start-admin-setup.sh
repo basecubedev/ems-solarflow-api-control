@@ -20,7 +20,7 @@ set -eu
 
 here="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 project_root="$(CDPATH= cd -- "$here/../.." && pwd)"
-admin_data_dir="$project_root/data/admin"
+admin_data_dir="${EMS_ADMIN_DATA_DIR:-$project_root/data/admin}"
 
 # Same-path mounting: the Admin container drives the host Docker daemon, so bind
 # mount sources it forwards must be valid host paths. Exporting the real install
@@ -44,6 +44,49 @@ for arg in "$@"; do
       ;;
   esac
 done
+
+resolve_local_system_build_identity() {
+  if ! command -v git >/dev/null 2>&1; then
+    echo "Cannot derive local System Build metadata: git is not installed." >&2
+    exit 1
+  fi
+
+  if ! revision="$(git -C "$project_root" rev-parse --verify HEAD 2>/dev/null)"; then
+    echo "Cannot derive local System Build revision from the repository Git metadata." >&2
+    exit 1
+  fi
+  case "$revision" in
+    *[!0-9a-f]*|'')
+      echo "Local System Build revision is invalid: expected a full lowercase Git SHA." >&2
+      exit 1
+      ;;
+  esac
+  if [ "${#revision}" -ne 40 ]; then
+    echo "Local System Build revision is invalid: expected a full 40-character Git SHA." >&2
+    exit 1
+  fi
+
+  if ! git_status="$(git -C "$project_root" status --porcelain --untracked-files=normal 2>/dev/null)"; then
+    echo "Cannot determine whether the local repository is dirty." >&2
+    exit 1
+  fi
+  short_revision="$(printf '%s' "$revision" | cut -c1-7)"
+  short_revision_12="$(printf '%s' "$revision" | cut -c1-12)"
+
+  SYSTEM_TAG="local"
+  SYSTEM_CHANNEL="development"
+  SYSTEM_REVISION="$revision"
+  SYSTEM_BUILD_ID="local-$short_revision"
+  SYSTEM_GIT_DIRTY="false"
+  if [ -n "$git_status" ]; then
+    SYSTEM_BUILD_ID="$SYSTEM_BUILD_ID-dirty"
+    SYSTEM_GIT_DIRTY="true"
+  fi
+  SYSTEM_RELEASE_TAG="local"
+  SYSTEM_REVISION_SHORT="$short_revision_12"
+  export SYSTEM_TAG SYSTEM_CHANNEL SYSTEM_REVISION SYSTEM_REVISION_SHORT
+  export SYSTEM_BUILD_ID SYSTEM_GIT_DIRTY SYSTEM_RELEASE_TAG
+}
 
 is_positive_id() {
   case "${1:-}" in
@@ -130,11 +173,13 @@ prepare_admin_data_dir() {
   require_runtime_writable_dir "$admin_data_dir/backups"
 }
 
+resolve_local_system_build_identity
 id_pair_or_fail
 prepare_admin_data_dir
 
 echo "Using PUID=${PUID} PGID=${PGID} for the Admin and EMS deployment workspace." >&2
 echo "Using admin data directory ${admin_data_dir}." >&2
+echo "Using local System Build ${SYSTEM_BUILD_ID} (${SYSTEM_REVISION})." >&2
 
 socket="${EMS_ADMIN_DOCKER_SOCKET:-/var/run/docker.sock}"
 
@@ -154,5 +199,29 @@ if [ -n "$hostnet" ]; then
   files="$files -f $here/docker-compose.hostnet.yml"
 fi
 
+# Build both sides of the local System Build from the same Git-derived identity.
+# Compose owns the Admin build configuration; the additional fixed tag is the
+# server-side repository reference embedded in the Admin release resources.
+# The EMS image is built directly because it is intentionally not a service in
+# the Admin Setup Compose project.
 # shellcheck disable=SC2086
-exec docker compose $files up --build
+docker compose $files build
+docker image tag \
+  ems-solarflow-control-admin:local \
+  ghcr.io/basecubedev/ems-solarflow-admin:local
+
+docker build \
+  --build-arg EMS_RELEASE_TAG="$SYSTEM_RELEASE_TAG" \
+  --build-arg EMS_GIT_COMMIT="$SYSTEM_REVISION" \
+  --build-arg EMS_GIT_COMMIT_SHORT="$SYSTEM_REVISION_SHORT" \
+  --build-arg EMS_GIT_DESCRIBE="$SYSTEM_BUILD_ID" \
+  --build-arg EMS_GIT_BRANCH=local \
+  --build-arg EMS_GIT_DIRTY="$SYSTEM_GIT_DIRTY" \
+  --build-arg EMS_BUILD_ID="$SYSTEM_BUILD_ID" \
+  --build-arg EMS_BUILD_SERIAL=0 \
+  --build-arg EMS_CHANNEL="$SYSTEM_CHANNEL" \
+  --tag ghcr.io/basecubedev/ems-solarflow-api-control:local \
+  "$project_root"
+
+# shellcheck disable=SC2086
+exec docker compose $files up

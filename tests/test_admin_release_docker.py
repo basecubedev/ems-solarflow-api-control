@@ -40,7 +40,7 @@ def test_prepare_creates_missing_data_release_and_state_directories(
     monkeypatch.setattr(
         manager,
         "_prepare_locked",
-        lambda tag: {"status": "ready", "tag": tag},
+        lambda tag, *, revision=None: {"status": "ready", "tag": tag},
     )
 
     result = manager.prepare("v0.6.0")
