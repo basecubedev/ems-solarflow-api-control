@@ -14,9 +14,11 @@ import hashlib
 import os
 import tempfile
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+from admin.config_export import PreparedConfigChange
 from admin.install_context import detect_install_context
 from admin.models import utc_now_iso
 
@@ -31,59 +33,138 @@ class ConfigApplyService:
         self.config_export = config_export
         self.backup_dir = Path(admin_data_dir) / "backups" / "config"
         self.install_context_provider = install_context_provider
-        self._write_lock = threading.Lock()
+        # Reentrant: apply()/apply_maintenance() take the same lock inside an
+        # open apply_transaction().
+        self._write_lock = threading.RLock()
 
-    def apply(self, draft, supported_grid_meter_count=None, features=None):
-        payload, preview = self.config_export.serialize(
-            draft, supported_grid_meter_count, features
+    @contextmanager
+    def apply_transaction(self):
+        """The one apply transaction shared by Setup and Maintenance.
+
+        Serializes credential staging, the config write and any rollback as a
+        single unit, so a parallel Apply can never interleave its staging with
+        another request's commit or roll a snapshot back over another
+        request's successful result.
+        """
+
+        with self._write_lock:
+            yield
+
+    def apply(
+        self,
+        draft,
+        supported_grid_meter_count=None,
+        features=None,
+        zendure_mqtt_proposals=None,
+        zendure_mqtt_broker=None,
+        zendure_mqtt_manual_devices=None,
+        *,
+        prepared=None,
+    ):
+        """Apply a Setup config; serializes once unless a prepared change is given.
+
+        The server passes the ``prepared`` change it already staged credentials
+        against so the exact staged bytes are written; a direct caller without
+        one falls back to serializing here.
+        """
+
+        change = prepared or self.config_export.prepare(
+            draft,
+            supported_grid_meter_count,
+            features,
+            zendure_mqtt_proposals,
+            zendure_mqtt_broker,
+            zendure_mqtt_manual_devices,
         )
+        return self.apply_prepared(change)
+
+    def capture_config_revision(self):
+        """Return the target config's ``(expected_revision, expect_absent)`` now.
+
+        Read once through the same install context the write resolves, so a
+        fresh Setup apply commits against the exact filesystem state observed
+        when the draft was prepared. Expected absence is a revision state in its
+        own right: a config appearing before the commit is a conflict, not
+        something to overwrite silently.
+        """
+
         context = self.install_context_provider()
         target = Path(context.config_path)
         with self._write_lock:
-            existed = target.exists()
-            # Back up before touching the target: a failing backup must abort the
-            # apply so an existing config is never lost.
-            backup_path = self._backup(target) if existed else None
-            _atomic_write(target, payload)
-        return {
-            "ok": True,
-            "created": not existed,
-            "path": str(target),
-            "config_source": context.config_source,
-            "backup_path": str(backup_path) if backup_path else None,
-            "release": preview["release"],
-            "applied_at": utc_now_iso(),
-        }
+            if target.exists():
+                return hashlib.sha256(target.read_bytes()).hexdigest(), False
+            return None, True
 
     def apply_maintenance(self, payload, expected_revision, create_backup=True):
         """Atomically apply an already validated Maintenance config payload."""
 
+        return self.apply_prepared(
+            PreparedConfigChange(
+                payload=payload,
+                parsed_config=None,
+                preview=None,
+                expected_revision=expected_revision,
+            ),
+            create_backup=create_backup,
+        )
+
+    def apply_prepared(self, change, *, create_backup=True):
+        """Write one prepared payload atomically — the single exact-payload writer.
+
+        Never re-serializes: the exact ``change.payload`` the caller staged
+        credentials for is what is written. The current config is re-read under
+        the lock and matched against the state captured when the change was
+        prepared: ``change.expected_revision`` set (a config existed) requires an
+        unchanged hash; ``change.expect_absent`` (no config existed) requires the
+        config to still be absent. Either mismatch raises
+        :class:`ConfigChangedError` before any write, so a config edited or
+        created externally during staging is never overwritten; a no-op is
+        reported ``changed=False`` and skips the backup/write. A legacy call with
+        neither state set writes unconditionally.
+        """
+
         context = self.install_context_provider()
         target = Path(context.config_path)
         with self._write_lock:
-            current = target.read_bytes()
-            revision = hashlib.sha256(current).hexdigest()
-            if revision != expected_revision:
-                raise ConfigChangedError(
-                    "config/config.json changed while the draft was being reviewed"
-                )
-            # A no-op apply must report changed=False so the UI does not push a
-            # container restart the user does not need. Skip the backup/write too:
-            # backing up identical content only adds noise.
-            changed = current != payload
+            existed = target.exists()
+            current = target.read_bytes() if existed else b""
+            if change.expect_absent:
+                if existed:
+                    raise ConfigChangedError(
+                        "config/config.json was created while the draft was being reviewed"
+                    )
+                changed = True
+            elif change.expected_revision is not None:
+                revision = hashlib.sha256(current).hexdigest()
+                if revision != change.expected_revision:
+                    raise ConfigChangedError(
+                        "config/config.json changed while the draft was being reviewed"
+                    )
+                changed = current != change.payload
+            else:
+                # A legacy apply with no captured filesystem state writes the
+                # generated config unconditionally.
+                changed = True
             backup_path = None
             if changed:
-                backup_path = self._backup(target) if create_backup else None
-                _atomic_write(target, payload)
-        return {
+                # Back up before touching the target: a failing backup must abort
+                # the apply so an existing config is never lost.
+                backup_path = (
+                    self._backup(target) if existed and create_backup else None
+                )
+                _atomic_write(target, change.payload)
+        result = {
             "ok": True,
-            "created": False,
+            "created": not existed,
             "changed": changed,
             "path": str(target),
             "config_source": context.config_source,
             "backup_path": str(backup_path) if backup_path else None,
             "applied_at": utc_now_iso(),
         }
+        if isinstance(change.preview, dict) and "release" in change.preview:
+            result["release"] = change.preview["release"]
+        return result
 
     def _backup(self, target):
         self.backup_dir.mkdir(mode=0o700, parents=True, exist_ok=True)

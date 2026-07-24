@@ -14,9 +14,14 @@ from ems.config_catalog import (
     GRID_METER_VARIANTS,
     INVERTER_CONNECTION_VARIANTS,
     SETUP_GROUPS,
+    ZENDURE_MQTT_BROKER_FIELDS,
+    ZENDURE_MQTT_BROKER_HELP,
+    ZENDURE_MQTT_GENERATIONS,
     get_config_feature_field_index,
     get_config_feature_sections,
 )
+from ems.mqtt_control.zendure_profiles import hardware_profile_selector_options
+from admin.zendure_mqtt_config_draft import generation_supports_output_control
 
 
 def _is_secret(field):
@@ -30,6 +35,44 @@ def _annotate_secret(field):
         # Never surface a secret default value to the setup UI.
         field.pop("default", None)
     return field
+
+
+def grid_meter_variant_catalog():
+    """Serializable grid-meter variant map shared by Setup and Maintenance.
+
+    The per-variant ``fields`` list is the field-visibility contract the
+    hardware editors switch on. Deprecated/legacy variants stay out.
+    """
+
+    variants = {}
+    for key, variant in GRID_METER_VARIANTS.items():
+        if variant.get("scope") == "maintenance" or variant.get("level") == "deprecated":
+            continue
+        variants[key] = {
+            "id": key,
+            "label": variant["label"],
+            "description": variant["description"],
+            "fields": list(variant.get("fields", ())),
+            "level": variant.get("level", "normal"),
+        }
+    return variants
+
+
+def hardware_section_catalog(mode):
+    """Hardware (grid_meter/devices) catalog sections for an Admin flow.
+
+    Secret fields are marked and never carry a value, mirroring the setup
+    catalog annotation, so no flow can surface a stored secret.
+    """
+
+    sections = []
+    for section in get_config_feature_sections(mode=mode):
+        if section.get("setup_group") != "hardware":
+            continue
+        for field in section["fields"]:
+            _annotate_secret(field)
+        sections.append(section)
+    return sections
 
 
 def build_setup_catalog():
@@ -46,17 +89,7 @@ def build_setup_catalog():
         for field in section["fields"]:
             _annotate_secret(field)
 
-    variants = {}
-    for key, variant in GRID_METER_VARIANTS.items():
-        if variant.get("scope") == "maintenance" or variant.get("level") == "deprecated":
-            continue
-        variants[key] = {
-            "id": key,
-            "label": variant["label"],
-            "description": variant["description"],
-            "fields": list(variant.get("fields", ())),
-            "level": variant.get("level", "normal"),
-        }
+    variants = grid_meter_variant_catalog()
 
     hardware_variants = {
         "inverter": [
@@ -89,12 +122,45 @@ def build_setup_catalog():
 
     groups = [copy.deepcopy(group) for group in SETUP_GROUPS]
 
+    broker_fields = [_annotate_secret(dict(field)) for field in ZENDURE_MQTT_BROKER_FIELDS]
+    generations = [
+        {
+            "id": key,
+            "label": profile["label"],
+            "description": profile["description"],
+            "product_key": profile["product_key"],
+            "default": profile["default"],
+            "supports_output_control": generation_supports_output_control(key),
+        }
+        for key, profile in ZENDURE_MQTT_GENERATIONS.items()
+    ]
+
     return {
         "mode": "setup",
         "groups": groups,
         "sections": sections,
         "grid_meter_variants": variants,
         "hardware_variants": hardware_variants,
+        "zendure_mqtt_broker": {"help": ZENDURE_MQTT_BROKER_HELP, "fields": broker_fields},
+        "zendure_mqtt_generations": generations,
+        "zendure_mqtt_hardware_models": [
+            {
+                key: value
+                for key, value in option.items()
+                if key
+                in {
+                    "id",
+                    "label",
+                    "generation",
+                    "compatible_generations",
+                    "control_supported",
+                    "supported_operations",
+                    "power_write_profile",
+                    "validation_maturity",
+                }
+            }
+            for option in hardware_profile_selector_options()
+        ],
     }
 
 
