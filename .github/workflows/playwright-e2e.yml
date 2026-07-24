@@ -1,0 +1,121 @@
+name: Playwright E2E
+
+on:
+  pull_request:
+    paths:
+      - "admin/**"
+      - "ems/zendure_mqtt/**"
+      - "ems/mqtt_control/**"
+      - "ems/config.py"
+      - "ems/config_catalog.py"
+      - "ems/paths.py"
+      - "deploy/admin/**"
+      - "tests/e2e/**"
+      - "playwright.config.ts"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/playwright-e2e.yml"
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Chromium runs the whole critical suite; Firefox runs the same set because the
+  # project already carries Firefox-specific reports. Both are required on PRs.
+  playwright:
+    name: playwright-${{ matrix.browser }}-smoke
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps ${{ matrix.browser }}
+
+      - name: Run Playwright tests
+        env:
+          CI: "1"
+        run: npx playwright test --project=${{ matrix.browser }}
+
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: playwright-report-${{ matrix.browser }}
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
+
+  # WebKit is not required per PR: run the same smoke set on demand and before a
+  # release. Kept separate so a WebKit-only flake never blocks a PR.
+  playwright-webkit:
+    name: playwright-webkit-pre-release
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Install Playwright WebKit
+        run: npx playwright install --with-deps webkit
+
+      - name: Run Playwright tests (WebKit)
+        env:
+          CI: "1"
+        run: npx playwright test --project=webkit
+
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: playwright-report-webkit
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14

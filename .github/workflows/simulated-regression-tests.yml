@@ -101,6 +101,39 @@ jobs:
         run: |
           pytest -q tests/ -m "simulation and power_control"
 
+  system-build-compatibility:
+    name: System Build compatibility gate (paired + legacy Fresh Install)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install -r requirements-dev.txt
+
+      # Focused regression gate covering paired/legacy resource strategy, Admin
+      # alignment and Continue gating, transition persistence, discovery
+      # authorization, resource preparation and Known-Good — including the
+      # original v0.7.0 deadlock reproduction.
+      - name: Run System Build compatibility gate
+        run: |
+          pytest -q -m system_build tests/
+
+      - name: Check the admin.js frontend parses
+        run: |
+          node --check admin/static/admin.js
+
   docker-smoke-test:
     name: Docker smoke test
     runs-on: ubuntu-latest

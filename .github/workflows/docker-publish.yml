@@ -14,6 +14,12 @@ permissions:
   contents: read
   packages: write
 
+# Owned cache scopes, disjoint from the feature scopes so a feature build can
+# never write a release cache. Bump `-v1` to reset.
+env:
+  EMS_RELEASE_CACHE_SCOPE: ems-release-v1
+  ADMIN_RELEASE_CACHE_SCOPE: admin-release-v1
+
 jobs:
   publish-ghcr:
     name: Build and publish Docker image
@@ -44,6 +50,10 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
 
       - name: Install dependencies
         run: |
@@ -66,6 +76,10 @@ jobs:
       - name: Run full test suite (excludes real-Docker e2e, covered by CI workflow)
         run: |
           pytest -q -m "not docker" tests/
+
+      - name: Run paired System Build Docker/startup contract
+        run: |
+          pytest -q -rs tests/test_system_build_docker_contract.py
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -98,8 +112,13 @@ jobs:
             release_tag="latest"
             ems_release_tag=""
           fi
+          git_commit="$(git rev-parse --verify HEAD)"
+          if [[ ! "${git_commit}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "The checked-out release ref did not resolve to a full lowercase Git SHA." >&2
+            exit 1
+          fi
           git_describe="$(git describe --tags --always --dirty 2>/dev/null || true)"
-          git_commit_short="${GITHUB_SHA::12}"
+          git_commit_short="${git_commit::12}"
           if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
             git_dirty="true"
           else
@@ -110,10 +129,11 @@ jobs:
             echo "release_tag=${release_tag}"
             echo "ems_release_tag=${ems_release_tag}"
             echo "git_describe=${git_describe}"
+            echo "git_commit=${git_commit}"
             echo "git_commit_short=${git_commit_short}"
             echo "git_dirty=${git_dirty}"
             echo "build_serial=${GITHUB_RUN_NUMBER}"
-            echo "build_id=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            echo "build_id=${release_tag}-${git_commit_short}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           } >> "${GITHUB_OUTPUT}"
 
       - name: Generate Docker metadata
@@ -130,25 +150,41 @@ jobs:
             org.opencontainers.image.source=https://github.com/basecubedev/ems-solarflow-api-control
             org.opencontainers.image.documentation=https://github.com/basecubedev/ems-solarflow-api-control/blob/main/docs/docker.md
             org.opencontainers.image.version=${{ steps.build_identity.outputs.release_tag }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ steps.build_identity.outputs.git_commit }}
             de.basecubedev.ems.channel=${{ steps.build_identity.outputs.channel }}
             de.basecubedev.ems.build_serial=${{ steps.build_identity.outputs.build_serial }}
             de.basecubedev.ems.build_id=${{ steps.build_identity.outputs.build_id }}
             de.basecubedev.ems.release_tag=${{ steps.build_identity.outputs.release_tag }}
 
+      # Imports the release cache but never exports (the pushed build is the
+      # authoritative exporter). Explicit labels override the Dockerfile's
+      # EMS_RELEASE_TAG-derived version label, which is empty on latest.
       - name: Build local Docker image for content validation
-        run: |
-          docker build \
-            --build-arg EMS_RELEASE_TAG="${{ steps.build_identity.outputs.ems_release_tag }}" \
-            --build-arg EMS_GIT_COMMIT="${{ github.sha }}" \
-            --build-arg EMS_GIT_COMMIT_SHORT="${{ steps.build_identity.outputs.git_commit_short }}" \
-            --build-arg EMS_GIT_DESCRIBE="${{ steps.build_identity.outputs.git_describe }}" \
-            --build-arg EMS_GIT_BRANCH="${{ github.ref_name }}" \
-            --build-arg EMS_GIT_DIRTY="${{ steps.build_identity.outputs.git_dirty }}" \
-            --build-arg EMS_BUILD_ID="${{ steps.build_identity.outputs.build_id }}" \
-            --build-arg EMS_BUILD_SERIAL="${{ steps.build_identity.outputs.build_serial }}" \
-            --build-arg EMS_CHANNEL="${{ steps.build_identity.outputs.channel }}" \
-            -t ems-solarflow-api-control:ci .
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ems-solarflow-api-control:ci
+          build-args: |
+            EMS_RELEASE_TAG=${{ steps.build_identity.outputs.ems_release_tag }}
+            EMS_GIT_COMMIT=${{ steps.build_identity.outputs.git_commit }}
+            EMS_GIT_COMMIT_SHORT=${{ steps.build_identity.outputs.git_commit_short }}
+            EMS_GIT_DESCRIBE=${{ steps.build_identity.outputs.git_describe }}
+            EMS_GIT_BRANCH=${{ github.ref_name }}
+            EMS_GIT_DIRTY=${{ steps.build_identity.outputs.git_dirty }}
+            EMS_BUILD_ID=${{ steps.build_identity.outputs.build_id }}
+            EMS_BUILD_SERIAL=${{ steps.build_identity.outputs.build_serial }}
+            EMS_CHANNEL=${{ steps.build_identity.outputs.channel }}
+          labels: |
+            org.opencontainers.image.version=${{ steps.build_identity.outputs.release_tag }}
+            org.opencontainers.image.revision=${{ steps.build_identity.outputs.git_commit }}
+            de.basecubedev.ems.channel=${{ steps.build_identity.outputs.channel }}
+            de.basecubedev.ems.build_id=${{ steps.build_identity.outputs.build_id }}
+            de.basecubedev.ems.release_tag=${{ steps.build_identity.outputs.release_tag }}
+          cache-from: type=gha,scope=${{ env.EMS_RELEASE_CACHE_SCOPE }}
 
       - name: Validate Docker image runtime content
         run: |
@@ -169,6 +205,7 @@ jobs:
             test -z "$(find /app/data -mindepth 1 -maxdepth 1 -print -quit)"
           '
 
+      # Authoritative EMS release cache exporter.
       - name: Build and push Docker image
         uses: docker/build-push-action@v7
         with:
@@ -180,7 +217,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             EMS_RELEASE_TAG=${{ steps.build_identity.outputs.ems_release_tag }}
-            EMS_GIT_COMMIT=${{ github.sha }}
+            EMS_GIT_COMMIT=${{ steps.build_identity.outputs.git_commit }}
             EMS_GIT_COMMIT_SHORT=${{ steps.build_identity.outputs.git_commit_short }}
             EMS_GIT_DESCRIBE=${{ steps.build_identity.outputs.git_describe }}
             EMS_GIT_BRANCH=${{ github.ref_name }}
@@ -188,6 +225,8 @@ jobs:
             EMS_BUILD_ID=${{ steps.build_identity.outputs.build_id }}
             EMS_BUILD_SERIAL=${{ steps.build_identity.outputs.build_serial }}
             EMS_CHANNEL=${{ steps.build_identity.outputs.channel }}
+          cache-from: type=gha,scope=${{ env.EMS_RELEASE_CACHE_SCOPE }}
+          cache-to: type=gha,mode=max,scope=${{ env.EMS_RELEASE_CACHE_SCOPE }}
           annotations: |
             index:org.opencontainers.image.description=Local EMS controller for Zendure SolarFlow. Docker images include automatic first-run config bootstrap. See README for Quick Start and docs/docker.md for full setup.
 
@@ -209,17 +248,140 @@ jobs:
             org.opencontainers.image.source=https://github.com/basecubedev/ems-solarflow-api-control
             org.opencontainers.image.documentation=https://github.com/basecubedev/ems-solarflow-api-control/blob/main/docs/user/admin-console.md
             org.opencontainers.image.version=${{ steps.build_identity.outputs.release_tag }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ steps.build_identity.outputs.git_commit }}
             de.basecubedev.ems.channel=${{ steps.build_identity.outputs.channel }}
             de.basecubedev.ems.build_serial=${{ steps.build_identity.outputs.build_serial }}
             de.basecubedev.ems.build_id=${{ steps.build_identity.outputs.build_id }}
             de.basecubedev.ems.release_tag=${{ steps.build_identity.outputs.release_tag }}
 
+      # Imports the Admin release cache but never exports; the Dockerfile derives
+      # the identity labels from these build args.
       - name: Build local Admin image for content validation
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./deploy/admin/Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ems-solarflow-admin:ci
+          build-args: |
+            EMS_REVISION=${{ steps.build_identity.outputs.git_commit }}
+            EMS_BUILD_ID=${{ steps.build_identity.outputs.build_id }}
+            EMS_CHANNEL=${{ steps.build_identity.outputs.channel }}
+            EMS_RELEASE_TAG=${{ steps.build_identity.outputs.release_tag }}
+            EMS_SYSTEM_TAG=${{ steps.build_identity.outputs.release_tag }}
+          cache-from: type=gha,scope=${{ env.ADMIN_RELEASE_CACHE_SCOPE }}
+
+      - name: Validate Admin image runtime content
         run: |
-          docker build -f deploy/admin/Dockerfile -t ems-solarflow-admin:ci .
           docker run --rm ems-solarflow-admin:ci python -m admin --help
 
+      - name: Verify Admin/EMS system-build pair metadata
+        run: |
+          # One paired system build: both images' OCI labels, EMS runtime ENV,
+          # and both embedded descriptors must agree on the complete identity.
+          # On latest, OCI/descriptors intentionally say "latest" while the EMS
+          # runtime release version stays empty because latest is a channel.
+          set -euo pipefail
+          expected_system_tag="${{ steps.build_identity.outputs.release_tag }}"
+          expected_channel="${{ steps.build_identity.outputs.channel }}"
+          expected_rev="${{ steps.build_identity.outputs.git_commit }}"
+          expected_build_id="${{ steps.build_identity.outputs.build_id }}"
+          expected_release_tag="${{ steps.build_identity.outputs.release_tag }}"
+          expected_runtime_release_tag="${{ steps.build_identity.outputs.ems_release_tag }}"
+          expected_admin_image="ghcr.io/basecubedev/ems-solarflow-admin:${expected_system_tag}"
+          expected_ems_image="ghcr.io/basecubedev/ems-solarflow-api-control:${expected_system_tag}"
+
+          fail() { echo "SYSTEM BUILD PAIR MISMATCH: $1" >&2; exit 1; }
+          expect() { [ "$1" = "$2" ] || fail "$3=$1 != $2"; }
+          label() { docker inspect --format "{{ index .Config.Labels \"$1\" }}" "$2"; }
+
+          admin_version="$(label org.opencontainers.image.version ems-solarflow-admin:ci)"
+          admin_rev="$(label org.opencontainers.image.revision ems-solarflow-admin:ci)"
+          admin_channel="$(label de.basecubedev.ems.channel ems-solarflow-admin:ci)"
+          admin_build_id="$(label de.basecubedev.ems.build_id ems-solarflow-admin:ci)"
+          admin_release_tag="$(label de.basecubedev.ems.release_tag ems-solarflow-admin:ci)"
+          ems_version="$(label org.opencontainers.image.version ems-solarflow-api-control:ci)"
+          ems_oci_rev="$(label org.opencontainers.image.revision ems-solarflow-api-control:ci)"
+          ems_oci_channel="$(label de.basecubedev.ems.channel ems-solarflow-api-control:ci)"
+          ems_oci_build_id="$(label de.basecubedev.ems.build_id ems-solarflow-api-control:ci)"
+          ems_oci_release_tag="$(label de.basecubedev.ems.release_tag ems-solarflow-api-control:ci)"
+
+          sb="$(docker run --rm ems-solarflow-admin:ci cat /app/release-resources/system-build.json)"
+          rm="$(docker run --rm ems-solarflow-admin:ci cat /app/release-resources/resource-manifest.json)"
+          jq_get() { printf '%s' "$1" | python3 -c "import sys,json;print(json.load(sys.stdin)$2)"; }
+
+          sb_format_version="$(jq_get "$sb" "['format_version']")"
+          sb_system_tag="$(jq_get "$sb" "['system_tag']")"
+          sb_channel="$(jq_get "$sb" "['channel']")"
+          sb_rev="$(jq_get "$sb" "['revision']")"
+          sb_build_id="$(jq_get "$sb" "['build_id']")"
+          sb_release_tag="$(jq_get "$sb" "['release_tag']")"
+          sb_admin_image="$(jq_get "$sb" "['admin_image']")"
+          sb_ems_image="$(jq_get "$sb" "['ems_image']")"
+          rm_format_version="$(jq_get "$rm" "['format_version']")"
+          rm_system_tag="$(jq_get "$rm" "['system_tag']")"
+          rm_channel="$(jq_get "$rm" "['channel']")"
+          rm_rev="$(jq_get "$rm" "['revision']")"
+          rm_build_id="$(jq_get "$rm" "['build_id']")"
+          rm_release_tag="$(jq_get "$rm" "['release_tag']")"
+          rm_admin_image="$(jq_get "$rm" "['admin_image']")"
+          rm_ems_image="$(jq_get "$rm" "['ems_image']")"
+
+          ems_rev="$(docker run --rm ems-solarflow-api-control:ci printenv EMS_GIT_COMMIT)"
+          ems_build_id="$(docker run --rm ems-solarflow-api-control:ci printenv EMS_BUILD_ID)"
+          ems_channel="$(docker run --rm ems-solarflow-api-control:ci printenv EMS_CHANNEL)"
+          ems_release_tag="$(docker run --rm ems-solarflow-api-control:ci printenv EMS_RELEASE_TAG)"
+
+          for name in admin_version ems_version sb_system_tag rm_system_tag; do
+            expect "${!name}" "$expected_system_tag" "$name"
+          done
+          for name in admin_rev ems_oci_rev ems_rev sb_rev rm_rev; do
+            expect "${!name}" "$expected_rev" "$name"
+          done
+          for name in admin_channel ems_oci_channel ems_channel sb_channel rm_channel; do
+            expect "${!name}" "$expected_channel" "$name"
+          done
+          for name in admin_build_id ems_oci_build_id ems_build_id sb_build_id rm_build_id; do
+            expect "${!name}" "$expected_build_id" "$name"
+          done
+          for name in admin_release_tag ems_oci_release_tag sb_release_tag rm_release_tag; do
+            expect "${!name}" "$expected_release_tag" "$name"
+          done
+          for name in sb_admin_image rm_admin_image; do
+            expect "${!name}" "$expected_admin_image" "$name"
+          done
+          for name in sb_ems_image rm_ems_image; do
+            expect "${!name}" "$expected_ems_image" "$name"
+          done
+          expect "$ems_release_tag" "$expected_runtime_release_tag" "EMS runtime release_tag"
+          expect "$sb_format_version" "1" "system-build format_version"
+          expect "$rm_format_version" "1" "resource-manifest format_version"
+
+          required_resources=(
+            config.template.json
+            docker-compose.example.yml
+            install-docker.sh
+            install-docker.ps1
+          )
+          while IFS= read -r resource; do
+            required_resources+=("$resource")
+          done < <(find deploy/docker -type f -print | sort)
+          for resource in "${required_resources[@]}"; do
+            resource_hash="$(printf '%s' "$rm" | RESOURCE="$resource" python3 -c \
+              'import json,os,sys; print(json.load(sys.stdin)["files"].get(os.environ["RESOURCE"], ""))')"
+            [[ "$resource_hash" =~ ^sha256:[0-9a-f]{64}$ ]] \
+              || fail "resource-manifest hash missing or invalid for $resource"
+            actual_hash="$(docker run --rm ems-solarflow-admin:ci python -c \
+              'import hashlib,sys; print("sha256:" + hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' \
+              "/app/release-resources/$resource")"
+            expect "$actual_hash" "$resource_hash" "embedded resource hash ($resource)"
+          done
+
+          echo "Admin/EMS system-build pair verified: tag=$expected_system_tag rev=$expected_rev build_id=$expected_build_id channel=$expected_channel"
+
+      # Authoritative Admin release cache exporter (separate scope from EMS).
       - name: Build and push Admin Docker image
         uses: docker/build-push-action@v7
         with:
@@ -229,5 +391,13 @@ jobs:
           push: true
           tags: ${{ steps.meta_admin.outputs.tags }}
           labels: ${{ steps.meta_admin.outputs.labels }}
+          build-args: |
+            EMS_REVISION=${{ steps.build_identity.outputs.git_commit }}
+            EMS_BUILD_ID=${{ steps.build_identity.outputs.build_id }}
+            EMS_CHANNEL=${{ steps.build_identity.outputs.channel }}
+            EMS_RELEASE_TAG=${{ steps.build_identity.outputs.release_tag }}
+            EMS_SYSTEM_TAG=${{ steps.build_identity.outputs.release_tag }}
+          cache-from: type=gha,scope=${{ env.ADMIN_RELEASE_CACHE_SCOPE }}
+          cache-to: type=gha,mode=max,scope=${{ env.ADMIN_RELEASE_CACHE_SCOPE }}
           annotations: |
             index:org.opencontainers.image.description=Browser-based Admin Console for EMS SolarFlow setup, maintenance, updates and backups.

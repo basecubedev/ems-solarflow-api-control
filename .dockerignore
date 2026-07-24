@@ -21,10 +21,43 @@ tests/
 scripts/
 # Keep the one runtime dependency of ems/history (Analytics influx sync/status).
 !scripts/influx_utils.py
+# Admin builds generate the embedded release bundle from this repository tool.
+!scripts/generate_release_resources.py
 tasks/
-docs/develop/tasks/
+docs/develop/
 runtime-traces/
 CODEX_AGENT_GUIDE.md
 
 .agents/
 .codex/
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+
+# Local secrets, credentials and runtime backups (may contain secrets). The
+# repository may be built from a real working installation, not only a clean
+# GitHub checkout, so these must be excluded even though the broad rules above
+# already cover config/ and data/.
+.env
+.env.*
+backup/
+deploy/docker/influxdb.env
+deploy/docker/data/
+
+# Local virtualenvs, Node modules and browser/test artifacts.
+.venv/
+venv/
+node_modules/
+reports/
+playwright-report/
+blob-report/
+.playwright/
+test-results/
+
+# Tooling caches and coverage output.
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+*.db

@@ -1,0 +1,86 @@
+name: Admin Replacement Canary
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Optional immutable Development tag (newest installable by default)"
+        required: false
+        type: string
+  schedule:
+    - cron: "23 3 * * 2"
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  admin-replacement-canary:
+    name: Real Admin replacement and browser reconnect
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve public Development target
+        id: target
+        env:
+          INPUT_TAG: ${{ inputs.tag || '' }}
+          SOURCE: https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/development-build-catalogue/development-builds.json
+        run: |
+          curl --fail --silent --show-error "${SOURCE}?run=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" > development-builds.json
+          entry="$(jq -c --arg tag "$INPUT_TAG" \
+            'first(.builds[] | select(.installable == true and (($tag == "") or .tag == $tag)))' \
+            development-builds.json)"
+          [[ "$entry" != "null" ]] || { echo "No matching installable Development build." >&2; exit 1; }
+          {
+            echo "tag=$(jq -r .tag <<< "$entry")"
+            echo "display_name=$(jq -r .display_name <<< "$entry")"
+            echo "revision=$(jq -r .revision <<< "$entry")"
+            echo "build_id=$(jq -r .build_id <<< "$entry")"
+            echo "admin_digest=$(jq -r .admin_digest <<< "$entry")"
+            echo "ems_digest=$(jq -r .ems_digest <<< "$entry")"
+          } >> "$GITHUB_OUTPUT"
+      - name: Verify selected public entry
+        run: |
+          python3 scripts/verify_development_catalogue.py \
+            --source development-builds.json \
+            --tag "${{ steps.target.outputs.tag }}" \
+            --revision "${{ steps.target.outputs.revision }}" \
+            --build-id "${{ steps.target.outputs.build_id }}" \
+            --admin-image "ghcr.io/basecubedev/ems-solarflow-admin:${{ steps.target.outputs.tag }}" \
+            --admin-digest "${{ steps.target.outputs.admin_digest }}" \
+            --ems-image "ghcr.io/basecubedev/ems-solarflow-api-control:${{ steps.target.outputs.tag }}" \
+            --ems-digest "${{ steps.target.outputs.ems_digest }}"
+      - name: Install Chromium dependencies
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Run real Docker replacement and reconnect
+        env:
+          ADMIN_REPLACEMENT_RUNTIME: ${{ runner.temp }}/ems-admin-replacement-${{ github.run_id }}-${{ github.run_attempt }}
+          ADMIN_REPLACEMENT_EVENTS: ${{ runner.temp }}/admin-replacement-events-${{ github.run_id }}-${{ github.run_attempt }}.log
+          CANARY_TAG: ${{ steps.target.outputs.tag }}
+          CANARY_REVISION: ${{ steps.target.outputs.revision }}
+          CANARY_BUILD_ID: ${{ steps.target.outputs.build_id }}
+          CANARY_ADMIN_DIGEST: ${{ steps.target.outputs.admin_digest }}
+          CANARY_EMS_DIGEST: ${{ steps.target.outputs.ems_digest }}
+        run: npx playwright test --config=playwright.admin-replacement.config.ts
+      - name: Upload replacement diagnostics
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: admin-replacement-canary
+          path: |
+            playwright-report/
+            test-results/
+            ${{ runner.temp }}/admin-replacement-events-*.log
+            ${{ runner.temp }}/ems-admin-replacement-*/install/data/admin/logs/
+          if-no-files-found: ignore
+          retention-days: 14
