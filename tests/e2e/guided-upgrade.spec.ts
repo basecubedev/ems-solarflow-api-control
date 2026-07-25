@@ -142,21 +142,8 @@ async function mockUpgradeJob(
 }
 
 async function confirmAndExecute(page: Page) {
-  page.once("dialog", (dialog) => dialog.accept());
   await page.locator("#upgrade-execute-btn").click();
   await expect(page.locator("#upgrade-execute-btn")).toHaveText("Upgrade system");
-}
-
-async function captureConfirmDialog(page: Page, trigger: () => Promise<void>) {
-  const message = new Promise<string>((resolve) => {
-    page.once("dialog", (dialog) => {
-      const text = dialog.message();
-      void dialog.dismiss();
-      resolve(text);
-    });
-  });
-  await trigger();
-  return message;
 }
 
 test.describe("Guided Upgrade", () => {
@@ -191,7 +178,7 @@ test.describe("Guided Upgrade", () => {
     expect(postPlanReviewRequests).toBe(0);
   });
 
-  test("a no-op migration is absent from the plan and the confirmation", async ({
+  test("a no-op migration is absent from the plan", async ({
     page,
     seedAdminScenario,
   }) => {
@@ -229,15 +216,7 @@ test.describe("Guided Upgrade", () => {
     await expect(page.locator("#upgrade-execute-btn")).toBeEnabled();
 
     await expect(page.locator("#upgrade-validation")).not.toContainText(/MQTT/i);
-
-    const message = await captureConfirmDialog(page, () =>
-      page.locator("#upgrade-execute-btn").click(),
-    );
-    expect(message).toContain("Confirm Guided Upgrade to v9.9.10.");
-    expect(message).toContain("Backup enabled");
-    expect(message).not.toMatch(/MQTT/i);
-    expect(message).not.toMatch(/lose control/i);
-    expect(message).not.toMatch(/0 affected/i);
+    await expect(page.locator("#upgrade-validation")).not.toContainText(/lose/i);
   });
 
   test("one plan click is busy immediately and produces one executable plan", async ({
@@ -1203,7 +1182,6 @@ test.describe("Guided Upgrade verified-fingerprint enforcement", () => {
       },
     );
 
-    page.once("dialog", (dialog) => dialog.accept());
     await page.locator("#upgrade-execute-btn").click();
 
     // 04-05: the job poll embeds the active worker — Abandon stays disabled.

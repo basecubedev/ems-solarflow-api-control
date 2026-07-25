@@ -458,7 +458,8 @@ def main():
         ha,
         runtime_state=runtime_state,
         dashboard_store=dashboard_store,
-        influx_writer=influx_writer
+        influx_writer=influx_writer,
+        zendure_mqtt_runtime=zendure_mqtt_runtime
     )
 
     log_event(logging.INFO, "ems_started")

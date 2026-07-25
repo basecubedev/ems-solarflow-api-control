@@ -12,6 +12,7 @@ import hashlib
 import json
 
 from admin.config_preview import _GRID_TYPE_CHOICES, _valid_host
+from admin.config_runtime_overlap import overlap_provenance_for_context
 from admin.inverter_names import next_compact_inverter_name
 from admin.install_context import detect_install_context
 from admin.setup_config import (
@@ -315,6 +316,7 @@ def load_maintenance_config(base_dir=None):
         "revision": hashlib.sha256(raw).hexdigest(),
         "summary": _summary(config, draft),
         "draft": redact_config_for_browser(copy.deepcopy(draft)),
+        "overrides": overlap_provenance_for_context(context, config),
         "catalog": _catalog(),
         "warnings": [],
     }

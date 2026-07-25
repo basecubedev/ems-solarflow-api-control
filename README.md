@@ -1,9 +1,13 @@
 # ems-solarflow-api-control
 
 [![Continuous Integration](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/simulated-regression-tests.yml/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/simulated-regression-tests.yml)
-![Python](https://img.shields.io/badge/python-3.11%20%7C%203.14-blue)
-![automated tests](https://img.shields.io/badge/automated%20tests-3700%2B-blue)
+[![Playwright E2E](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/playwright-e2e.yml/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/playwright-e2e.yml)
+[![CodeQL](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/github-code-scanning/codeql)
+[![Dependabot](https://img.shields.io/badge/Dependabot-enabled-brightgreen?logo=dependabot)](.github/dependabot.yml)
+![automated tests](https://img.shields.io/badge/automated%20tests-6400%2B-blue)
 [![Test-Driven Development](https://img.shields.io/badge/Test--Driven%20Development-contract--first-blue)](docs/developer/testing.md#development-approach)
+![Python](https://img.shields.io/badge/python-3.11%20%7C%203.14-blue)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue)](LICENSE)
 
 Local-first EMS control for Zendure SolarFlow systems.
 It reads local grid meter and Zendure telemetry, controls inverter output,
@@ -14,6 +18,8 @@ and provides a local dashboard.
 
 > EMS controls real power hardware.
 > Read the [safety guide](docs/user/safety.md) before enabling live writes.
+
+[![Local EMS dashboard — aggregated system view](docs/assets/preview-aggregated.jpg)](docs/dashboard.md)
 
 ## Supported hardware at a glance
 
@@ -43,31 +49,15 @@ protocol, the per-device control capability and the transport write gate.
 [Device compatibility reports](https://github.com/basecubedev/ems-solarflow-api-control/issues/new?template=device_compatibility_report.yml)
 (working *or* broken) are very welcome.
 
-## Choose your path
+## Get started
 
-Most users should start with the **Admin Console**. All three paths converge on
-the same standard `config/config.json` layout, so you can switch later.
+> [!TIP]
+> **New here? Start with the Admin Console — the recommended path for most
+> users.** Browser-guided setup, hardware discovery, updates, backups and
+> maintenance, with no shell or config-file editing. It finds your devices and
+> sets up the connection for you.
 
-| Path | Choose this if | Continue |
-| --- | --- | --- |
-| **Admin Console** | You want browser-guided setup, discovery, updates, backups and maintenance | [docs/user/admin-console.md](docs/user/admin-console.md) |
-| **Docker Bootstrap** | You want shell-only Docker setup | [docs/user/docker-bootstrap.md](docs/user/docker-bootstrap.md) |
-| **Developer Setup** | You want to develop, debug or build from source | [docs/developer/developer-setup.md](docs/developer/developer-setup.md) |
-
-## Choose your connection
-
-EMS reaches your Zendure devices over three connection types; any one supported
-connection is enough.
-
-| Connection | Works with | Continue |
-| --- | --- | --- |
-| **Local API (ZenSDK)** | Newer SolarFlow / ZenSDK models on your LAN — fastest, fully local control | [connection-types.md](docs/user/connection-types.md#local-api-zensdk) |
-| **Local MQTT** | Devices re-pointed to your own local broker — low latency, no cloud | [connection-types.md](docs/user/connection-types.md#local-mqtt) |
-| **Zendure MQTT (cloud)** | Any Zendure device via your Zendure API key; higher latency over the internet | [connection-types.md](docs/user/connection-types.md#zendure-mqtt-cloud) |
-
-## Recommended: Admin Console
-
-Install and start the Admin Console in a local EMS folder:
+Install and start it in a local EMS folder:
 
 ```bash
 mkdir -p ems-solarflow-api-control
@@ -76,20 +66,33 @@ curl -fsSLO https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-cont
 sh install-admin-console.sh
 ```
 
-Then open `http://127.0.0.1:8090`. On first start, create the
-shared EMS/Admin password in the browser.
-
-Default mode uses host networking for reliable local discovery.
-Use `--bridge` only if you need Docker bridge networking.
-
-It provides guided setup, maintenance, backup/restore and guided upgrades. The
-[Admin Console user guide](docs/user/admin-console.md#what-the-admin-console-looks-like)
-has demo videos of a fresh install with hardware discovery and a guided software
-update.
+Then open `http://127.0.0.1:8090` and create the shared EMS/Admin password in
+the browser. Host networking is the default (best for local discovery); add
+`--bridge` only if you need Docker bridge networking.
 
 ![Admin Console start page](docs/assets/screenshots/admin/admin-landing.png)
 
-Full guide: [docs/user/admin-console.md](docs/user/admin-console.md)
+Full guide with demo videos of a fresh install and a guided update:
+[docs/user/admin-console.md](docs/user/admin-console.md#what-the-admin-console-looks-like)
+
+### Other ways to install
+
+Prefer the shell? These converge on the same `config/config.json`, so you can
+switch later.
+
+| Path | Choose this if |
+| --- | --- |
+| [Docker Bootstrap](docs/user/docker-bootstrap.md) | Shell-only Docker setup |
+| [Developer Setup](docs/developer/developer-setup.md) | Develop, debug or build from source |
+
+### Connection types (reference)
+
+The Admin Console picks the right one during discovery — you don't choose
+upfront. EMS reaches your devices over any one of:
+
+- **[Local API (ZenSDK)](docs/user/connection-types.md#local-api-zensdk)** — newer SolarFlow / ZenSDK models on your LAN. Fastest, fully local.
+- **[Local MQTT](docs/user/connection-types.md#local-mqtt)** — devices re-pointed to your own broker. Low latency, no cloud.
+- **[Zendure MQTT (cloud)](docs/user/connection-types.md#zendure-mqtt-cloud)** — any Zendure device via your Zendure API key. Higher latency over the internet.
 
 ## Documentation
 

@@ -9167,6 +9167,7 @@ const UPGRADE_RELEASE_STATUS_TEXT = {
 
 const upgradeState = {
   current: { tag: null, image: null, state: null },
+  runningAdmin: { tag: null, image: null },
   releases: [],
   selected: null,
   prepared: false,
@@ -9247,6 +9248,7 @@ const UPGRADE_ALIGNMENT_STATUS_TEXT = {
   admin_reconnect_pending: "Waiting for the replacement Admin…",
   resources_verified: "Admin aligned and target resources verified.",
   failed_recoverable: "Admin alignment failed; recovery is required.",
+  completed: "Admin aligned to the target System Build.",
 };
 
 // Choose which alignment state to show: a live guided_upgrade transition stage
@@ -9266,6 +9268,8 @@ function renderUpgradeAdminAlignment() {
   const transition = upgradeState.alignmentTransition;
   const currentAdmin =
     (validation && validation.current_admin && validation.current_admin.system_tag) ||
+    (upgradeState.runningAdmin && upgradeState.runningAdmin.tag) ||
+    (upgradeState.runningAdmin && upgradeState.runningAdmin.image) ||
     "Unknown";
   const targetAdmin =
     (validation && validation.system_build && validation.system_build.canonical_tag) ||
@@ -9414,13 +9418,17 @@ function setUpgradeReleaseStatus() {
   }
   if (upgradeEls.prepareBtn) {
     const release = upgradeSelectedRelease();
+    const verifying = upgradeState.status === "preparing";
     upgradeEls.prepareBtn.disabled =
       upgradeState.status === "loading" ||
-      upgradeState.status === "preparing" ||
+      verifying ||
       upgradeTargetPrepared() ||
       !release ||
       release.selectable === false;
-    upgradeEls.prepareBtn.textContent = upgradeTargetPrepared()
+    upgradeEls.prepareBtn.classList.toggle("is-scanning", verifying);
+    upgradeEls.prepareBtn.textContent = verifying
+      ? "Verifying…"
+      : upgradeTargetPrepared()
       ? "System Build verified"
       : upgradeState.status === "failed"
       ? "Try again"
@@ -9821,15 +9829,6 @@ async function executeUpgrade() {
   const previousAdminInstanceId = authState.adminInstanceId;
   const target = upgradeState.preparedTag || upgradeState.selected;
   const options = readUpgradeOptions();
-  const mqttMigration = summarizeMqttMigration(upgradeState.migrationReview);
-  const confirmation =
-    "Confirm Guided Upgrade to " + target + ". " +
-    (mqttMigration.relevant ? mqttMigration.text + " " : "") +
-    "Backup " + (options.backup ? "enabled" : "disabled") + "; " +
-    "config changes " +
-    (options.config_add_keys || options.config_comments ? "enabled" : "check only") +
-    "; Admin/EMS container recreation required.";
-  if (!window.confirm(confirmation)) return;
   stopUpgradePolling();
   setUpgradeRunning(true);
   renderUpgradeValidation([{ tone: "info", text: "Upgrade running — applying steps…" }], false);
@@ -9921,14 +9920,20 @@ async function loadUpgradeCurrentVersion() {
     if (!resp.ok) throw new Error("overview request failed");
     const data = await resp.json();
     const ems = (data.containers && data.containers.ems) || {};
+    const admin = (data.components && data.components.admin) || {};
     const state = data.install_state || {};
     upgradeState.current = {
       tag: ems.tag || null,
       image: ems.image || null,
       state: state.label || state.state || null,
     };
+    upgradeState.runningAdmin = {
+      tag: admin.tag || null,
+      image: admin.image || null,
+    };
   } catch (err) {
     upgradeState.current = { tag: null, image: null, state: null };
+    upgradeState.runningAdmin = { tag: null, image: null };
   }
   renderUpgradeCurrent();
 }
@@ -11458,6 +11463,13 @@ const mconfigEls = {
   inverters: document.getElementById("maintenance-config-inverters"),
   addInverter: document.getElementById("maintenance-config-add-inverter"),
   addMqttDevice: document.getElementById("maintenance-config-add-mqtt-device"),
+  maintenanceManualBrokerForm: document.getElementById("maintenance-manual-mqtt-broker-form"),
+  maintenanceManualBrokerName: document.getElementById("maintenance-manual-mqtt-broker-name"),
+  maintenanceManualBrokerHost: document.getElementById("maintenance-manual-mqtt-broker-host"),
+  maintenanceManualBrokerPort: document.getElementById("maintenance-manual-mqtt-broker-port"),
+  maintenanceManualBrokerSecurity: document.getElementById("maintenance-manual-mqtt-broker-security"),
+  maintenanceManualBrokerUsername: document.getElementById("maintenance-manual-mqtt-broker-username"),
+  maintenanceManualBrokerPassword: document.getElementById("maintenance-manual-mqtt-broker-password"),
   brokerHelp: document.getElementById("maintenance-mqtt-broker-help"),
   brokerHost: document.getElementById("maintenance-mqtt-broker-host"),
   brokerPort: document.getElementById("maintenance-mqtt-broker-port"),
@@ -11488,6 +11500,7 @@ const mconfigEls = {
   advanced: document.getElementById("maintenance-config-advanced"),
   previewBtn: document.getElementById("maintenance-config-preview-btn"),
   resetBtn: document.getElementById("maintenance-config-reset-btn"),
+  resetRuntimeBtn: document.getElementById("maintenance-config-reset-runtime-btn"),
   result: document.getElementById("maintenance-config-result"),
   validation: document.getElementById("maintenance-config-validation"),
   changeSummary: document.getElementById("maintenance-config-change-summary"),
@@ -11515,6 +11528,7 @@ const mconfigState = {
   draft: null,
   pristine: null,
   catalog: null,
+  overrides: null,
   revision: null,
   previewFingerprint: null,
   summaryLine: "",
@@ -11628,6 +11642,49 @@ function mconfigCatalogRow(field, value, onChange, opts) {
     field.description || "",
     field.unit || ""
   );
+}
+
+function mconfigOverrideEntry(path) {
+  return (mconfigState.overrides && mconfigState.overrides[path]) || null;
+}
+
+function mconfigDeviceOverrideEntry(name, key) {
+  if (!name) return null;
+  const devices = mconfigState.overrides && mconfigState.overrides.devices;
+  const device = devices && devices[name];
+  return (device && device[key]) || null;
+}
+
+function mconfigFormatOverrideValue(value) {
+  if (value === true) return "on";
+  if (value === false) return "off";
+  return String(value);
+}
+
+function mconfigOverrideBadge(entry) {
+  if (!entry || entry.source !== "dashboard_override") return null;
+  const badge = document.createElement("span");
+  badge.className = "mconfig-override-badge";
+  badge.textContent =
+    "Live override · effective " + mconfigFormatOverrideValue(entry.effective_value);
+  badge.title =
+    "The live EMS currently uses " +
+    mconfigFormatOverrideValue(entry.effective_value) +
+    " for this setting (set from the Dashboard control tab), not the installed " +
+    "config value " +
+    mconfigFormatOverrideValue(entry.config_value) +
+    ". Applying this field makes the live value match the config again.";
+  return badge;
+}
+
+function mconfigAttachOverrideBadge(row, entry) {
+  const badge = mconfigOverrideBadge(entry);
+  if (badge) {
+    const desc = row.querySelector(".feature-field-desc");
+    if (desc) desc.insertBefore(badge, desc.firstChild);
+    else row.appendChild(badge);
+  }
+  return row;
 }
 
 // One shared level splitter for catalog-driven card bodies: normal fields
@@ -12303,6 +12360,7 @@ function renderMaintenanceZendureMqttDevice(device, index) {
   const controlReadiness = document.createElement("span");
   controlReadiness.className = "feature-readonly-value";
   let modelSelect;
+  let outputControlInput;
 
   const syncGenerationFields = () => {
     const generation = generations.find((g) => g.id === device.hardware_generation);
@@ -12317,6 +12375,18 @@ function renderMaintenanceZendureMqttDevice(device, index) {
     if (!supported && device.output_control) {
       device.output_control = false;
       if (device.capabilities) device.capabilities.write_output_limit = false;
+    }
+    const hasWriteTarget =
+      !!device.product_key || explicitWriteTopic || trustedWriteTarget;
+    if (mconfigMqttShouldDefaultControl(device, supported, hasWriteTarget)) {
+      device.output_control = true;
+      if (!device.capabilities) {
+        device.capabilities = { read_power: true, read_soc: true };
+      }
+      device.capabilities.write_output_limit = true;
+    }
+    if (outputControlInput) {
+      outputControlInput.checked = device.output_control === true;
     }
     writeProtocol.textContent = model && model.power_write_profile
       ? model.power_write_profile
@@ -12451,18 +12521,20 @@ function renderMaintenanceZendureMqttDevice(device, index) {
     )
   );
 
+  outputControlInput = mconfigCheckboxControl(device.output_control === true, (checked) => {
+    device.output_control = checked;
+    device.output_control_user_set = true;
+    if (!device.capabilities) {
+      device.capabilities = { read_power: true, read_soc: true };
+    }
+    device.capabilities.write_output_limit = checked;
+    syncGenerationFields();
+    mconfigMarkDraftChanged("manual");
+  });
   controlRow.appendChild(
     mconfigLabelRow(
       "Output control",
-      mconfigCheckboxControl(device.output_control === true, (checked) => {
-        device.output_control = checked;
-        if (!device.capabilities) {
-          device.capabilities = { read_power: true, read_soc: true };
-        }
-        device.capabilities.write_output_limit = checked;
-        syncGenerationFields();
-        mconfigMarkDraftChanged("manual");
-      }),
+      outputControlInput,
       "Let EMS send output control to this inverter over MQTT (needs a product key)."
     )
   );
@@ -12526,6 +12598,14 @@ function mconfigMqttControlSupported(device, generation, model) {
   return !!(generation && generation.supports_output_control);
 }
 
+function mconfigMqttShouldDefaultControl(device, supported, hasWriteTarget) {
+  if (!device) return false;
+  if (device.original_name) return false;
+  if (device.output_control_user_set === true) return false;
+  if (device.output_control === true) return false;
+  return supported === true && hasWriteTarget === true;
+}
+
 function mconfigAddZendureMqttDevice() {
   const devices = mconfigState.draft.devices || (mconfigState.draft.devices = []);
   const generations = mconfigGenerations();
@@ -12574,14 +12654,17 @@ function renderMaintenanceInverter(device, index) {
   const enabledWrap = document.createElement("div");
   enabledWrap.className = "mconfig-fields feature-fields";
   enabledWrap.appendChild(
-    mconfigLabelRow(
-      "Enabled",
-      mconfigCheckboxControl(device.enabled !== false, (checked) => {
-        device.enabled = checked;
-        card.element.dataset.disabled = checked ? "false" : "true";
-        card.status.textContent = checked ? "Enabled" : "Disabled";
-      }),
-      "Include this inverter in the generated EMS config."
+    mconfigAttachOverrideBadge(
+      mconfigLabelRow(
+        "Enabled",
+        mconfigCheckboxControl(device.enabled !== false, (checked) => {
+          device.enabled = checked;
+          card.element.dataset.disabled = checked ? "false" : "true";
+          card.status.textContent = checked ? "Enabled" : "Disabled";
+        }),
+        "Include this inverter in the generated EMS config."
+      ),
+      mconfigDeviceOverrideEntry(device.original_name, "enabled")
     )
   );
 
@@ -12590,15 +12673,18 @@ function renderMaintenanceInverter(device, index) {
   const fields = mconfigLevelledFields(mconfigDeviceCatalogFields(), (field) => {
     const key = deviceFieldKey(field.path);
     const identity = MCONFIG_DEVICE_IDENTITY_KEYS.has(key);
-    return mconfigCatalogRow(
-      field,
-      device[key],
-      (v) => {
-        if (!identity && String(v).trim() === "") delete device[key];
-        else device[key] = v;
-        card.meta.textContent = mconfigInverterSummary(device);
-      },
-      { allowUnset: !identity }
+    return mconfigAttachOverrideBadge(
+      mconfigCatalogRow(
+        field,
+        device[key],
+        (v) => {
+          if (!identity && String(v).trim() === "") delete device[key];
+          else device[key] = v;
+          card.meta.textContent = mconfigInverterSummary(device);
+        },
+        { allowUnset: !identity }
+      ),
+      mconfigDeviceOverrideEntry(device.original_name, key)
     );
   });
 
@@ -12695,6 +12781,7 @@ function buildMaintenanceDiscoveryReview(discovered) {
   const results = [];
   const devices = (mconfigState.draft && mconfigState.draft.devices) || [];
   devices.forEach((configured, index) => {
+    if (mconfigIsMqttDevice(configured)) return;
     const match = mconfigFindInverterMatch(configured, supported, used);
     if (!match) {
       results.push({ role: "inverter", state: "missing", configured, index });
@@ -12747,7 +12834,7 @@ function buildMaintenanceDiscoveryReview(discovered) {
 
   maintenanceMqttProposals().forEach((proposal) => {
     results.push({
-      role: "zendure_mqtt",
+      role: mqttSourceOfConnection(proposal.connection_source),
       state: mconfigMqttProposalState(proposal),
       mqttProposal: proposal,
     });
@@ -13021,7 +13108,8 @@ function renderMaintenanceMqttProposalCard(item) {
   const card = document.createElement("article");
   card.className = "device-card mconfig-discovery-device-card";
   card.dataset.state = item.state;
-  card.dataset.role = "zendure_mqtt";
+  const transportSource = mqttSourceOfConnection(proposal.connection_source);
+  card.dataset.role = transportSource;
 
   const head = document.createElement("div");
   head.className = "device-card-head";
@@ -13029,8 +13117,8 @@ function renderMaintenanceMqttProposalCard(item) {
   name.className = "device-name";
   name.textContent = proposal.display_name || "Zendure MQTT device";
   const rolePill = document.createElement("span");
-  rolePill.className = "device-role " + discoveryRoleClass("zendure_mqtt");
-  rolePill.textContent = "zendure mqtt";
+  rolePill.className = "device-role " + discoveryRoleClass(transportSource);
+  rolePill.textContent = mqttTransportLabel(proposal);
   head.append(name, rolePill);
   card.appendChild(head);
 
@@ -13542,17 +13630,149 @@ async function addManualMaintenanceInverter() {
   }
 }
 
+function deriveLocalBrokerRef(name) {
+  const slug = String(name == null ? "" : name)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, "")
+    .replace(/^[_-]+/, "")
+    .replace(/[_-]+$/, "");
+  if (!slug || slug === "local_mqtt") return "local_mqtt";
+  const suffix = (
+    slug.indexOf("local_mqtt_") === 0
+      ? slug.slice("local_mqtt_".length)
+      : slug
+  )
+    .replace(/^[_-]+/, "")
+    .replace(/[_-]+$/, "");
+  return suffix ? "local_mqtt_" + suffix : "local_mqtt";
+}
+
+function mconfigManualBrokerBlock() {
+  const els = mconfigEls;
+  const host = (
+    (els.maintenanceManualBrokerHost && els.maintenanceManualBrokerHost.value) || ""
+  ).trim();
+  if (!host) return null;
+  const ref = deriveLocalBrokerRef(
+    els.maintenanceManualBrokerName && els.maintenanceManualBrokerName.value
+  );
+  const tls = Boolean(
+    els.maintenanceManualBrokerSecurity &&
+      els.maintenanceManualBrokerSecurity.value === "tls"
+  );
+  let port = parseInt(
+    (
+      (els.maintenanceManualBrokerPort && els.maintenanceManualBrokerPort.value) || ""
+    ).trim(),
+    10
+  );
+  if (!Number.isFinite(port) || port <= 0) port = tls ? 8883 : 1883;
+  const username = (
+    (els.maintenanceManualBrokerUsername && els.maintenanceManualBrokerUsername.value) || ""
+  ).trim();
+  const password =
+    (els.maintenanceManualBrokerPassword && els.maintenanceManualBrokerPassword.value) || "";
+  return {
+    ref,
+    host,
+    port,
+    tls,
+    username,
+    password,
+    hasAuth: Boolean(username && password),
+    authPartial: Boolean(username) !== Boolean(password),
+  };
+}
+
+function mconfigManualBrokerError(text) {
+  if (!mconfigEls.discoveryError) return;
+  mconfigEls.discoveryError.hidden = !text;
+  mconfigEls.discoveryError.textContent = text || "";
+}
+
 async function addManualMaintenanceMqttDevice() {
   if (!mconfigState.loaded) {
     const loaded = await loadMaintenanceConfig();
     if (!loaded || loaded.status !== "ok") return;
   }
+  const broker = mconfigManualBrokerBlock();
+  if (broker && broker.authPartial) {
+    mconfigManualBrokerError(
+      "Enter both a username and password, or leave both blank."
+    );
+    return;
+  }
+  mconfigManualBrokerError("");
+  let credentialsRef = "";
+  if (broker && broker.hasAuth) {
+    if (mconfigEls.addMqttDevice) mconfigEls.addMqttDevice.disabled = true;
+    if (mconfigEls.discoveryStatus) {
+      mconfigEls.discoveryStatus.textContent = "Saving broker credential…";
+    }
+    try {
+      const res = await discoveryFetch(
+        "/api/discovery/connections/mqtt-credentials",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            label: broker.ref,
+            username: broker.username,
+            password: broker.password,
+          }),
+        },
+        discoveryContextFor(mconfigEls.maintenanceManualBrokerForm)
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || data.error || "credential save failed");
+      }
+      const credentials = (data.local_mqtt || {}).credentials || [];
+      const match = credentials.find((entry) => String(entry.id) === broker.ref);
+      if (!match) throw new Error("credential reference unresolved");
+      credentialsRef = String(match.id);
+    } catch (err) {
+      mconfigManualBrokerError(
+        "Could not save the broker credential: " + (err.message || String(err))
+      );
+      return;
+    } finally {
+      if (mconfigEls.addMqttDevice) mconfigEls.addMqttDevice.disabled = false;
+    }
+  }
   mconfigAddZendureMqttDevice();
+  const devices = mconfigState.draft.devices;
+  const device = devices[devices.length - 1];
+  if (broker) {
+    device.mqtt = {
+      broker_ref: broker.ref,
+      topic_family: "",
+      base_topic: null,
+      device_id: "",
+    };
+    device.broker = {
+      ref: broker.ref,
+      host: broker.host,
+      port: broker.port,
+      tls: broker.tls,
+      tls_insecure: false,
+      tls_mode: "",
+      source: "local_mqtt",
+    };
+    if (credentialsRef) device.broker.credentials_ref = credentialsRef;
+    if (mconfigEls.maintenanceManualBrokerForm) {
+      mconfigEls.maintenanceManualBrokerForm.reset();
+    }
+    renderMaintenanceInverters();
+  }
   mconfigMarkDraftChanged("manual");
   if (mconfigEls.discoveryStatus) {
-    mconfigEls.discoveryStatus.textContent =
-      "Zendure MQTT device added to the in-memory draft. " +
-      "Complete its fields on its card, then preview the changes.";
+    mconfigEls.discoveryStatus.textContent = broker
+      ? "Local MQTT device added to the in-memory draft. " +
+        "Complete its fields on its card, then preview the changes."
+      : "Zendure MQTT device added to the in-memory draft. " +
+        "Complete its fields on its card, then preview the changes.";
   }
 }
 
@@ -13565,9 +13785,12 @@ function mconfigFeatureBody(section) {
     (field) => field.path !== enabledPath
   );
   return mconfigLevelledFields(fields, (field) =>
-    mconfigCatalogRow(field, features[field.path], (v) => {
-      features[field.path] = v;
-    })
+    mconfigAttachOverrideBadge(
+      mconfigCatalogRow(field, features[field.path], (v) => {
+        features[field.path] = v;
+      }),
+      mconfigOverrideEntry(field.path)
+    )
   );
 }
 
@@ -13609,7 +13832,12 @@ function renderMaintenanceFeatureSection(section) {
   const caret = document.createElement("span");
   caret.className = "feature-caret";
   caret.setAttribute("aria-hidden", "true");
-  summary.append(title, description, status, caret);
+  const enabledBadge = enabledPath
+    ? mconfigOverrideBadge(mconfigOverrideEntry(enabledPath))
+    : null;
+  summary.append(title, description, status);
+  if (enabledBadge) summary.append(enabledBadge);
+  summary.append(caret);
   head.appendChild(summary);
   card.appendChild(head);
   const body = document.createElement("div");
@@ -13665,6 +13893,7 @@ function renderMaintenanceConfig(data) {
     hardware_sections: [],
     grid_meter_variants: {},
   };
+  mconfigState.overrides = data.overrides || {};
   mconfigState.revision = data.revision || null;
   mconfigState.previewFingerprint = null;
   mconfigState.discoveryDraftChanges = 0;
@@ -13692,6 +13921,7 @@ function renderMaintenanceConfig(data) {
   syncMaintenanceBrokerForm();
   renderMaintenanceInverters();
   renderMaintenanceFeatures();
+  mconfigUpdateResetRuntimeButton();
 
   const line = mconfigSummaryLine(data.summary || {});
   mconfigState.summaryLine = line;
@@ -13870,6 +14100,86 @@ function resetMaintenanceConfigDraft() {
   );
 }
 
+function mconfigCollectOverrideTargets() {
+  const overrides = mconfigState.overrides || {};
+  const targets = [];
+  for (const path of Object.keys(overrides)) {
+    if (path === "devices") continue;
+    const entry = overrides[path];
+    if (!entry || entry.source !== "dashboard_override") continue;
+    const dot = path.indexOf(".");
+    if (dot < 0) continue;
+    const head = path.slice(0, dot);
+    const key = path.slice(dot + 1);
+    if (head === "system") targets.push({ scope: "system", key });
+    else targets.push({ scope: "section", section: head, key });
+  }
+  const devices = overrides.devices || {};
+  for (const name of Object.keys(devices)) {
+    const fields = devices[name] || {};
+    for (const key of Object.keys(fields)) {
+      const entry = fields[key];
+      if (entry && entry.source === "dashboard_override") {
+        targets.push({ scope: "device", name, key });
+      }
+    }
+  }
+  return targets;
+}
+
+function mconfigUpdateResetRuntimeButton() {
+  if (mconfigEls.resetRuntimeBtn) {
+    mconfigEls.resetRuntimeBtn.hidden = mconfigCollectOverrideTargets().length === 0;
+  }
+}
+
+let mconfigResettingRuntime = false;
+
+async function resetMaintenanceRuntimeOverrides() {
+  if (mconfigResettingRuntime || !mconfigState.loaded) return;
+  const targets = mconfigCollectOverrideTargets();
+  if (!targets.length) return;
+  if (
+    !window.confirm(
+      "Reset " +
+        targets.length +
+        " live override(s) to the installed config values? This writes the " +
+        "config values into the live runtime state immediately."
+    )
+  ) {
+    return;
+  }
+  mconfigResettingRuntime = true;
+  const button = mconfigEls.resetRuntimeBtn;
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Resetting…";
+  }
+  try {
+    const resp = await fetch("/api/admin/maintenance/config/reset-runtime", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targets }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      throw new Error(data && data.error ? data.error : "reset failed");
+    }
+    await loadMaintenanceConfig();
+  } catch (err) {
+    if (mconfigEls.warnings) {
+      mconfigEls.warnings.textContent =
+        "Could not reset live overrides: " + (err && err.message ? err.message : err);
+    }
+  } finally {
+    mconfigResettingRuntime = false;
+    if (button) {
+      button.disabled = false;
+      button.textContent = "Reset live overrides";
+    }
+  }
+}
+
 if (mconfigEls.addInverter) {
   mconfigEls.addInverter.addEventListener("click", addManualMaintenanceInverter);
 }
@@ -13897,6 +14207,9 @@ document.querySelectorAll("[data-maintenance-source]").forEach((row) => {
 });
 if (mconfigEls.previewBtn) mconfigEls.previewBtn.addEventListener("click", previewMaintenanceConfig);
 if (mconfigEls.resetBtn) mconfigEls.resetBtn.addEventListener("click", resetMaintenanceConfigDraft);
+if (mconfigEls.resetRuntimeBtn) {
+  mconfigEls.resetRuntimeBtn.addEventListener("click", resetMaintenanceRuntimeOverrides);
+}
 
 let mconfigApplying = false;
 
@@ -15773,8 +16086,28 @@ function renderSystemAlignmentStatus(data) {
     systemAlignmentEls.emsImage.textContent = emsImage || "Unknown";
   }
   if (systemAlignmentEls.message) {
+    const stageMessage = {
+      selection_started: "Selecting the System Build…",
+      validation_running: "Verifying the Admin and EMS images…",
+      validation_failed: "System Build verification failed.",
+      validated: "System Build verified. Preparing to align…",
+      admin_update_pending: "Updating the Admin Console…",
+      admin_alignment_started: "Updating the Admin Console…",
+      admin_reconnect_pending:
+        "Restarting the Admin Console — this page reconnects automatically…",
+      admin_aligned: "Admin Console aligned. Verifying target resources…",
+      resources_verified: "Target resources verified. Preparing the EMS update…",
+      ems_operation_pending: "Preparing the EMS update…",
+      ems_operation_running:
+        "Installing EMS — this can take a few minutes while the image downloads…",
+      healthcheck_pending: "Verifying the running system…",
+      completed: "System Build complete.",
+      cancelled: "The System Build transition was cancelled.",
+      failed_recoverable: "The System Build transition needs recovery.",
+    };
     systemAlignmentEls.message.textContent =
-      errorMessage || (stage ? stage.replaceAll("_", " ") : "");
+      errorMessage ||
+      (stage ? stageMessage[stage] || stage.replaceAll("_", " ") : "");
   }
   if (systemAlignmentEls.warning) {
     systemAlignmentEls.warning.textContent = warning;
@@ -15790,7 +16123,11 @@ function renderSystemAlignmentStatus(data) {
     const label = row.querySelector("[data-system-alignment-state-label]");
     if (label) {
       label.textContent =
-        state === "skipped"
+        state === "active"
+          ? "Working…"
+          : state === "failed"
+          ? "Failed"
+          : state === "skipped"
           ? index === 2 || index === 3
             ? "Not required"
             : "Skipped"

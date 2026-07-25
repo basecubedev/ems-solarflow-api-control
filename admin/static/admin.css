@@ -756,6 +756,10 @@ code {
   border-radius: 50%;
   animation: admin-spin .7s linear infinite;
 }
+/* Reduced motion keeps the busy ring visible but stops it spinning. */
+@media (prefers-reduced-motion: reduce) {
+  .primary-button.is-scanning::before { animation: none; }
+}
 
 /* A busy scan button doubles as its own cancel control: the spinner still shows
    activity but the cursor and colour make it clearly clickable to stop. */
@@ -1796,6 +1800,23 @@ code {
   overflow-wrap: anywhere;
 }
 .feature-unit { color: var(--muted2); font-weight: 600; flex: 0 0 auto; }
+.mconfig-override-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  vertical-align: middle;
+  color: var(--pv);
+  border: 1px solid color-mix(in srgb, var(--pv) 45%, var(--border));
+  background: color-mix(in srgb, var(--pv) 12%, transparent);
+}
+.feature-status .mconfig-override-badge { margin-right: 0; margin-left: 6px; }
 
 @media (max-width: 760px) {
   .hardware-card-head { flex-direction: column; }
@@ -2013,10 +2034,20 @@ code {
   color: var(--muted2);
   font-size: 9px;
 }
+/* The one active stage breathes so a long-running step (e.g. an image pull)
+   never looks frozen; only ever one stage animates at a time. */
 .system-alignment-stages li[data-state="active"] {
   color: var(--output);
   border-color: color-mix(in srgb, var(--output) 45%, var(--border));
   background: color-mix(in srgb, var(--output) 8%, transparent);
+  animation: system-alignment-active-pulse 1.6s ease-in-out infinite;
+}
+@keyframes system-alignment-active-pulse {
+  0%, 100% { background: color-mix(in srgb, var(--output) 7%, transparent); }
+  50% { background: color-mix(in srgb, var(--output) 24%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .system-alignment-stages li[data-state="active"] { animation: none; }
 }
 .system-alignment-stages li[data-state="done"] {
   color: var(--battery);

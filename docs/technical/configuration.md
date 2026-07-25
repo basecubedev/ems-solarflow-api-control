@@ -412,10 +412,15 @@ The browser-level `prefers-reduced-motion` setting is always respected on top of
 this mode. The value is exposed read-only at `/api/ui-config` and applied as a
 root CSS class by the frontend.
 
-Dashboard write requests are constrained by the configured system and device
-power limits. For example, a runtime `max_total_power` update cannot exceed the
-configured `system.max_total_power`, and a device runtime `max_power` update
-cannot exceed that device's configured `max_power`.
+Dashboard and Admin runtime writes are constrained by the configured system and
+device power limits. For example, a runtime `max_total_power` update cannot
+exceed the configured `system.max_total_power`, and a device runtime `max_power`
+update cannot exceed that device's configured `max_power`. Admin maintenance
+Apply mirrors the overlapping keys it changed into runtime-state through this
+same whitelist; a mirrored value the runtime validator rejects is skipped with a
+warning while the config write stands. Pure-config keys (ports, credentials,
+`grid_meter.*`, `min_soc`, …) are not runtime-writable and still take effect only
+after an EMS restart.
 
 The dashboard also sends browser security headers, caps JSON request bodies,
 and limits concurrent Server-Sent Events connections. These protections are for

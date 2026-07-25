@@ -61,6 +61,10 @@ target once. If verification stops with a *GitHub Container Registry rate limit
 reached* message, no changes were made — wait and select **Verify System Build**
 again (see [troubleshooting](../technical/troubleshooting-reference.md)).
 
+While the images download and verify, the **Verify System Build** button shows a
+spinning progress ring and reads *Verifying…*; on the first run this can take a
+moment, so the spinner is your signal that it is working, not stuck.
+
 The installation-specific preflight (current state, Zendure MQTT migration review,
 backup readiness) does **not** run during Verify. It runs at **Upgrade system**,
 immediately before any change, together with a re-check of the selection
@@ -91,6 +95,12 @@ through this pipeline:
 11. Run the health check.
 12. Run diagnostics.
 13. Mark the Known-Good state.
+
+The live stage tracker highlights the current step, gently pulses it, and labels
+it *Working…*, so a long step (for example while the target image downloads, or
+during the health check) stays visibly active rather than looking frozen. If the
+Admin Console itself is replaced, a full-screen reconnect spinner takes over and
+the page reconnects on its own.
 
 The current-state preflight and the verified backup always run **under the
 Admin that is currently running**, before any Admin alignment. The target Admin
@@ -177,8 +187,15 @@ This path inspects and edits an existing installation.
 - **Config editor** loads your real config as a draft you can edit, then shows a
   preview of the changes. Nothing is written by editing or previewing. Applying
   the draft is the one action that writes config — it validates the change,
-  backs up the current config first, then writes it. Apply only touches
-  `config.json`; it never moves `data/`, `docker-compose.yml`, or databases.
+  backs up the current config first, then writes it. Apply writes `config.json`
+  and additionally mirrors the whitelisted overlapping values it changed (system
+  power/loop limits, winter enable, and per-device enabled/max power/PV priority)
+  into `data/runtime-state.json` so the change goes live immediately instead of
+  waiting for an EMS restart; it still never moves `data/` history,
+  `docker-compose.yml`, or databases. Fields that also carry a live override set
+  from the Dashboard show a badge with the effective value, and a **Reset live
+  overrides** button writes the installed config values back so the live EMS
+  matches the installed config again.
 
   The hardware section looks and works like the Fresh Install Config step.
   Configured hardware renders as collapsible cards — the grid meter, local-API
@@ -230,8 +247,11 @@ This path inspects and edits an existing installation.
   Output control is offered only for a supported exact model on a compatible
   transport; a topic family or generation alone never enables it. Conflicting
   discovery evidence stays telemetry-only until you review and correct the
-  model. An existing device's model and control setting are preserved on a
-  no-op apply and never silently changed (see
+  model. A newly added device that resolves to a control-ready model with a
+  write target enables output control by default, so a supported inverter you
+  add is controllable without a second step; clear the **Output control**
+  checkbox to keep it telemetry-only instead. An existing device's model and
+  control setting are preserved on a no-op apply and never silently changed (see
   [Zendure MQTT output control](../technical/configuration.md#zendure-mqtt-output-control)).
   Stored passwords (broker or MQTT grid meter) are never displayed; leave the
   password field blank to keep one, or use the clear checkbox to remove it.

@@ -9,8 +9,114 @@ from ems import config as cfg
 from ems.logging_utils import log_event
 
 
+def _clean_identity(value):
+    """Return a non-empty stable identity string, or None."""
+
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _sanitized_device(state):
+    """Copy a loaded device entry, dropping the legacy offgrid_socket key."""
+
+    if not isinstance(state, dict):
+        return state
+    entry = dict(state)
+    entry.pop("offgrid_socket", None)
+    return entry
+
+
+def reconcile_runtime_devices(loaded_devices, default_devices, *, prune):
+    """Reconcile loaded runtime device state against the configured devices.
+
+    Devices are matched to their config entry by stable identity (serial),
+    falling back to the device name for entries written before an identity was
+    stamped. A matched entry keeps its operator settings under the (possibly
+    new) config name, so renaming a device in config never loses its runtime
+    settings. Unmatched loaded entries are orphans: dropped when ``prune`` is
+    true (a device removed from config), kept otherwise.
+
+    Returns ``(devices, changes)`` where ``changes`` carries ``added``,
+    ``renamed``, ``pruned`` and ``rekeyed`` lists for auditing. When no
+    configured devices are known (empty/unreadable config) reconciliation is a
+    fail-closed no-op: the loaded devices are kept verbatim and never pruned.
+    """
+
+    if not isinstance(loaded_devices, dict):
+        loaded_devices = {}
+
+    changes = {"added": [], "renamed": [], "pruned": [], "rekeyed": []}
+
+    if not default_devices:
+        return {name: _sanitized_device(state) for name, state in loaded_devices.items()}, changes
+
+    loaded_by_identity = {}
+    for name, state in loaded_devices.items():
+        if isinstance(state, dict):
+            ident = _clean_identity(state.get("identity"))
+            if ident is not None:
+                loaded_by_identity.setdefault(ident, name)
+
+    merged = {}
+    consumed = set()
+
+    for cfg_name, device_defaults in default_devices.items():
+        ident = None
+        if isinstance(device_defaults, dict):
+            ident = _clean_identity(device_defaults.get("identity"))
+
+        match_name = None
+        if ident is not None and ident in loaded_by_identity:
+            match_name = loaded_by_identity[ident]
+        elif isinstance(loaded_devices.get(cfg_name), dict):
+            candidate_ident = _clean_identity(loaded_devices[cfg_name].get("identity"))
+            if candidate_ident is None or candidate_ident == ident:
+                match_name = cfg_name
+
+        if match_name is not None and match_name not in consumed:
+            operator_state = dict(loaded_devices[match_name])
+            prior_identity = _clean_identity(operator_state.pop("identity", None))
+            entry = {**device_defaults, **operator_state}
+            if ident is not None:
+                entry["identity"] = ident
+            else:
+                entry.pop("identity", None)
+            entry.pop("offgrid_socket", None)
+            merged[cfg_name] = entry
+            consumed.add(match_name)
+            if match_name != cfg_name:
+                changes["renamed"].append(
+                    {"from": match_name, "to": cfg_name, "identity": ident}
+                )
+            elif ident is not None and prior_identity != ident:
+                changes["rekeyed"].append({"name": cfg_name, "identity": ident})
+        else:
+            entry = dict(device_defaults) if isinstance(device_defaults, dict) else {}
+            entry.pop("offgrid_socket", None)
+            merged[cfg_name] = entry
+            changes["added"].append({"name": cfg_name, "identity": ident})
+
+    for name, state in loaded_devices.items():
+        if name in consumed:
+            continue
+        if prune:
+            ident = _clean_identity(state.get("identity")) if isinstance(state, dict) else None
+            changes["pruned"].append({"name": name, "identity": ident})
+        elif name not in merged:
+            merged[name] = _sanitized_device(state)
+
+    return merged, changes
+
+
 def merge_runtime_defaults(data, defaults):
-    """Merge runtime data over defaults while preserving unknown keys."""
+    """Merge runtime data over defaults while preserving unknown keys.
+
+    Non-destructive: orphaned device entries (present on disk but not in the
+    configured devices) are kept. Authoritative pruning of removed devices
+    happens only in :meth:`RuntimeState.load_or_create`.
+    """
 
     if not isinstance(data, dict):
         data = {}
@@ -40,25 +146,9 @@ def merge_runtime_defaults(data, defaults):
     if not isinstance(devices, dict):
         devices = {}
 
-    merged_devices = {}
-
-    for name, device_defaults in defaults.get("devices", {}).items():
-        device_state = devices.get(name)
-        if not isinstance(device_state, dict):
-            device_state = {}
-
-        merged_devices[name] = {
-            **device_defaults,
-            **device_state
-        }
-        merged_devices[name].pop("offgrid_socket", None)
-
-    for name, device_state in devices.items():
-        if name not in merged_devices:
-            merged_devices[name] = device_state
-            if isinstance(merged_devices[name], dict):
-                merged_devices[name].pop("offgrid_socket", None)
-
+    merged_devices, _changes = reconcile_runtime_devices(
+        devices, defaults.get("devices", {}), prune=False
+    )
     merged["devices"] = merged_devices
 
     return merged
@@ -87,7 +177,109 @@ class RuntimeState:
                 self.save_atomic()
                 return self.data
 
-            return self.load_if_changed(force=True)
+            return self._reconcile_on_load()
+
+    def _reconcile_on_load(self):
+        """Load the file and reconcile device entries against config (EMS-owned).
+
+        The EMS is authoritative for runtime device state: on load it migrates
+        renamed devices by identity, prunes devices removed from config, and
+        backfills identities. Destructive changes (rename/prune) first back up
+        the file and are audit-logged. Any device-level change is persisted so
+        the file converges to a clean state.
+        """
+
+        try:
+            mtime = os.path.getmtime(self.path)
+        except FileNotFoundError:
+            return self.load_or_create()
+
+        try:
+            with open(self.path) as f:
+                loaded = json.load(f)
+        except Exception as e:
+            log_event(
+                logging.WARNING,
+                "runtime_state_load_error",
+                path=self.path,
+                error=e
+            )
+            return self.data
+
+        merged = merge_runtime_defaults(loaded, self.defaults)
+        loaded_devices = loaded.get("devices") if isinstance(loaded, dict) else {}
+        reconciled_devices, changes = reconcile_runtime_devices(
+            loaded_devices if isinstance(loaded_devices, dict) else {},
+            self.defaults.get("devices", {}),
+            prune=True,
+        )
+        merged["devices"] = reconciled_devices
+
+        destructive = bool(changes["renamed"] or changes["pruned"])
+        changed = destructive or bool(changes["added"] or changes["rekeyed"])
+
+        if destructive:
+            self._backup_runtime_state()
+
+        for entry in changes["renamed"]:
+            log_event(
+                logging.INFO,
+                "runtime_device_renamed",
+                path=self.path,
+                device_from=entry["from"],
+                device_to=entry["to"],
+                identity=entry.get("identity"),
+            )
+        for entry in changes["pruned"]:
+            log_event(
+                logging.INFO,
+                "runtime_device_pruned",
+                path=self.path,
+                device=entry["name"],
+                identity=entry.get("identity"),
+            )
+        for entry in changes["added"]:
+            log_event(
+                logging.INFO,
+                "runtime_device_added",
+                path=self.path,
+                device=entry["name"],
+                identity=entry.get("identity"),
+            )
+
+        self.data = merged
+        self.last_mtime = mtime
+
+        log_event(
+            logging.INFO,
+            "runtime_state_loaded",
+            path=self.path
+        )
+
+        if changed:
+            self.save_atomic()
+
+        return self.data
+
+    def _backup_runtime_state(self):
+        """Best-effort one-step backup of the current file before pruning."""
+
+        try:
+            import shutil
+
+            shutil.copy2(self.path, f"{self.path}.bak")
+            log_event(
+                logging.INFO,
+                "runtime_state_backup_created",
+                path=f"{self.path}.bak"
+            )
+        except OSError as e:
+            log_event(
+                logging.WARNING,
+                "runtime_state_backup_failed",
+                path=self.path,
+                error=e
+            )
 
     def load_if_changed(self, force=False):
         with self.lock:
@@ -234,7 +426,7 @@ def build_runtime_defaults(devices):
     ha_config = cfg.CONFIG.get("ha", {})
 
     for dev in devices:
-        device_defaults[dev.name] = {
+        entry = {
             "enabled": True,
             "max_power": cfg.safe_int(
                 getattr(dev, "max_power", cfg.MAX_DEVICE_POWER),
@@ -248,6 +440,10 @@ def build_runtime_defaults(devices):
                 minimum=0.01
             )
         }
+        identity = _clean_identity(str(getattr(dev, "sn", "") or ""))
+        if identity is not None:
+            entry["identity"] = identity
+        device_defaults[dev.name] = entry
 
     return {
         "system": {

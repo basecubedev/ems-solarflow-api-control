@@ -1632,6 +1632,39 @@
                     meter and the Zendure MQTT broker need no add button:
                     configure them on their always-present cards above.
                   </p>
+                  <div class="config-manual-mqtt" id="maintenance-manual-mqtt">
+                    <h4 class="config-subhead">Local MQTT broker (optional)</h4>
+                    <p class="future-note">
+                      Fill this in to add the next Zendure MQTT device over a
+                      local broker. Leave the host blank for a cloud device.
+                      Username and password are required together for an
+                      authenticated broker.
+                    </p>
+                    <form id="maintenance-manual-mqtt-broker-form"
+                          class="config-manual-form" autocomplete="off">
+                      <label class="field"><span class="field-label">Broker name</span>
+                        <input id="maintenance-manual-mqtt-broker-name" type="text" placeholder="local_mqtt">
+                      </label>
+                      <label class="field"><span class="field-label">Host / IP address</span>
+                        <input id="maintenance-manual-mqtt-broker-host" type="text" placeholder="192.168.1.20">
+                      </label>
+                      <label class="field"><span class="field-label">Port</span>
+                        <input id="maintenance-manual-mqtt-broker-port" type="text" inputmode="numeric" placeholder="1883">
+                      </label>
+                      <label class="field"><span class="field-label">Connection security</span>
+                        <select id="maintenance-manual-mqtt-broker-security">
+                          <option value="plain">Plain MQTT</option>
+                          <option value="tls">MQTT over TLS</option>
+                        </select>
+                      </label>
+                      <label class="field"><span class="field-label">Username (optional)</span>
+                        <input id="maintenance-manual-mqtt-broker-username" type="text" autocomplete="off">
+                      </label>
+                      <label class="field"><span class="field-label">Password (optional)</span>
+                        <input id="maintenance-manual-mqtt-broker-password" type="password" autocomplete="new-password">
+                      </label>
+                    </form>
+                  </div>
                   <div class="mconfig-actions">
                     <button type="button" id="maintenance-config-add-inverter"
                             class="secondary-button compact">Add inverter</button>
@@ -1659,6 +1692,7 @@
             <div class="mconfig-actions">
               <button type="button" id="maintenance-config-preview-btn" class="primary-button compact">Preview changes</button>
               <button type="button" id="maintenance-config-reset-btn" class="secondary-button compact">Reset draft</button>
+              <button type="button" id="maintenance-config-reset-runtime-btn" class="secondary-button compact" hidden>Reset live overrides</button>
             </div>
 
             <div class="mconfig-result" id="maintenance-config-result" role="status" aria-live="polite" hidden>

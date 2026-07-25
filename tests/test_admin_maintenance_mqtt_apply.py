@@ -368,6 +368,143 @@ def test_maintenance_apply_promotes_local_broker_credentials(
         srv.server_close()
 
 
+def _manual_local_device(credentials_ref=None, ref="local_mqtt", host="10.0.0.11"):
+    """A manually-typed local MQTT device draft item (no proposal_id).
+
+    Mirrors the shape the Maintenance manual-add frontend produces: kind
+    zendure_mqtt with an mqtt.broker_ref and a browser-owned broker block. No
+    plaintext credential rides on the device — the secret is staged separately
+    into the discovery pool and only referenced here by credentials_ref.
+    """
+
+    device = {
+        "kind": "zendure_mqtt",
+        "original_name": None,
+        "enabled": True,
+        "has_enabled_key": True,
+        "serial_number": "SN-MANUAL1",
+        "device_id": "SN-MANUAL1",
+        "product_key": "",
+        "hardware_generation": "solarflow_zensdk",
+        "hardware_model": "",
+        "output_control": False,
+        "capabilities": {"read_power": True, "read_soc": True, "write_output_limit": False},
+        "mqtt": {"broker_ref": ref, "topic_family": "", "base_topic": None, "device_id": "SN-MANUAL1"},
+        "broker": {
+            "ref": ref,
+            "host": host,
+            "port": 1883,
+            "tls": False,
+            "tls_insecure": False,
+            "tls_mode": "",
+            "source": "local_mqtt",
+        },
+    }
+    if credentials_ref:
+        device["broker"]["credentials_ref"] = credentials_ref
+    return device
+
+
+def _maintenance_apply_with_manual_device(base, device):
+    status, loaded = _request(f"{base}/api/admin/maintenance/config")
+    assert status == 200 and loaded["status"] == "ok", loaded
+    draft = loaded["draft"]
+    names = [str(item.get("name") or "") for item in draft["devices"]]
+    device = dict(device)
+    device["name"] = next_compact_inverter_name(names, len(draft["devices"]))
+    draft["devices"].append(device)
+    return _request(
+        f"{base}/api/admin/maintenance/config/apply",
+        "POST",
+        {"draft": draft, "revision": loaded["revision"], "confirm": True},
+    )
+
+
+def test_maintenance_apply_provisions_manual_local_broker_with_auth(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
+    _write_config(tmp_path, _existing_config())
+    fetch = _CloudFetch()
+    fetch.fail = True  # no cloud device is involved in a manual local add
+    srv, base = _serve(tmp_path, fetch)
+    # The frontend mints the typed secret into the discovery pool before apply.
+    srv.credential_store.save_mqtt_discovery_secret(
+        "local_mqtt", "broker-user", "broker-pass"
+    )
+    try:
+        device = _manual_local_device(credentials_ref="local_mqtt")
+        status, payload = _maintenance_apply_with_manual_device(base, device)
+        assert status == 200 and payload.get("ok") is True, payload
+        assert fetch.calls == 0
+
+        config_path, secrets_dir = _paths(tmp_path)
+        raw = config_path.read_text(encoding="utf-8")
+        config = json.loads(raw)
+        broker = config["zendure_mqtt"]["brokers"]["local_mqtt"]
+        assert broker["host"] == "10.0.0.11"
+        assert broker["credentials_ref"] == "local_mqtt"
+        # The password never lands in config.json.
+        assert "broker-pass" not in raw
+
+        # The promoted runtime record resolves without Admin process memory.
+        credentials = FileMqttCredentialResolver(secrets_dir).resolve("local_mqtt")
+        assert credentials.username == "broker-user"
+        assert credentials.password == "broker-pass"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_maintenance_apply_provisions_manual_anonymous_local_broker(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
+    _write_config(tmp_path, _existing_config())
+    fetch = _CloudFetch()
+    fetch.fail = True
+    srv, base = _serve(tmp_path, fetch)
+    try:
+        device = _manual_local_device()  # no credentials_ref
+        status, payload = _maintenance_apply_with_manual_device(base, device)
+        assert status == 200 and payload.get("ok") is True, payload
+        assert fetch.calls == 0
+
+        config_path, secrets_dir = _paths(tmp_path)
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        broker = config["zendure_mqtt"]["brokers"]["local_mqtt"]
+        assert broker["host"] == "10.0.0.11"
+        assert "credentials_ref" not in broker
+        assert not (secrets_dir / "mqtt-local_mqtt.json").exists()
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_maintenance_apply_blocks_manual_local_broker_without_secret(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
+    config_path = _write_config(tmp_path, _existing_config())
+    original = config_path.read_bytes()
+    fetch = _CloudFetch()
+    fetch.fail = True
+    srv, base = _serve(tmp_path, fetch)
+    try:
+        # credentials_ref names a secret that was never staged into the pool.
+        device = _manual_local_device(credentials_ref="local_mqtt")
+        status, payload = _maintenance_apply_with_manual_device(base, device)
+        assert status >= 400, payload
+        assert payload.get("ok") is False
+
+        assert config_path.read_bytes() == original
+        _, secrets_dir = _paths(tmp_path)
+        assert not (secrets_dir / "mqtt-local_mqtt.json").exists()
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
 def test_maintenance_write_failure_rolls_back_promoted_credential(
     monkeypatch, tmp_path
 ):

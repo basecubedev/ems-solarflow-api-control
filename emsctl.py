@@ -1190,14 +1190,41 @@ def float_value(value, field, minimum=0.0):
     return parsed
 
 
+def _config_device_identity(item):
+    for key in ("sn", "serial_number"):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    mqtt = item.get("mqtt")
+    if isinstance(mqtt, dict):
+        value = mqtt.get("device_id")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 def config_device_defaults(config):
+    from ems.config import (
+        http_control_device_configs,
+        mqtt_control_device_configs,
+    )
+
     devices = {}
     max_device_power = (
         config.get("system", {})
         .get("max_device_power", 800)
     )
 
-    for item in config.get("devices", []):
+    device_list = config.get("devices", []) if isinstance(config, dict) else []
+    if not isinstance(device_list, list):
+        device_list = []
+
+    controllable = (
+        http_control_device_configs(device_list)
+        + mqtt_control_device_configs(device_list)
+    )
+
+    for item in controllable:
         if not isinstance(item, dict):
             continue
 
@@ -1205,7 +1232,7 @@ def config_device_defaults(config):
         if not name:
             continue
 
-        devices[name] = {
+        entry = {
             "enabled": True,
             "max_power": int_value(
                 item.get("max_power", max_device_power),
@@ -1219,6 +1246,10 @@ def config_device_defaults(config):
                 minimum=0.01
             )
         }
+        identity = _config_device_identity(item)
+        if identity:
+            entry["identity"] = identity
+        devices[name] = entry
 
     return devices
 
@@ -1497,23 +1528,11 @@ def merge_defaults(data, defaults):
     if not isinstance(devices, dict):
         devices = {}
 
-    merged_devices = {}
-    for name, default_device in defaults.get("devices", {}).items():
-        device = devices.get(name)
-        if not isinstance(device, dict):
-            device = {}
-        merged_devices[name] = {
-            **default_device,
-            **device
-        }
-        merged_devices[name].pop("offgrid_socket", None)
+    from ems.runtime_state import reconcile_runtime_devices
 
-    for name, device in devices.items():
-        if name not in merged_devices:
-            merged_devices[name] = device
-            if isinstance(merged_devices[name], dict):
-                merged_devices[name].pop("offgrid_socket", None)
-
+    merged_devices, _changes = reconcile_runtime_devices(
+        devices, defaults.get("devices", {}), prune=False
+    )
     merged["devices"] = merged_devices
     return merged
 

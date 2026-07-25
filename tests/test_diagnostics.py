@@ -630,6 +630,48 @@ def test_emsctl_diagnose_runtime_unknown_device_produces_warning(tmp_path):
     )
 
 
+def test_emsctl_diagnose_does_not_flag_telemetry_only_device_as_missing(tmp_path):
+    config = _base_diagnose_config(tmp_path)
+    config["devices"] = [
+        {"name": "WR1", "max_power": 800, "sn": "SER1", "ip": "10.0.0.1"},
+        _mqtt_device("INV_2", "DEV2"),
+    ]
+    (tmp_path / "runtime-state.json").write_text(json.dumps({
+        "system": {"enabled": True},
+        "devices": {"WR1": {"enabled": True, "max_power": 800}},
+    }))
+
+    _, codes = _diagnose_codes(tmp_path, config)
+
+    assert "runtime_device_missing" not in codes
+
+
+def test_diagnose_controllable_config_device_names_excludes_telemetry_only():
+    config = {
+        "devices": [
+            {"name": "WR1", "sn": "S1", "ip": "10.0.0.1"},
+            {
+                "type": "zendure_mqtt",
+                "name": "TEL",
+                "mqtt": {"topic_family": "zensdk_ha_scalar", "device_id": "D1"},
+            },
+            {
+                "type": "zendure_mqtt",
+                "name": "CTRL",
+                "hardware_profile": "solarflow_800_pro_2",
+                "mqtt": {"topic_family": "legacy_zendure_json_alt", "device_id": "D2", "product_key": "P2"},
+                "capabilities": {"write_output_limit": True},
+            },
+        ]
+    }
+
+    names = set(diagnostics.diagnose_controllable_config_device_names(config))
+
+    assert "WR1" in names
+    assert "CTRL" in names
+    assert "TEL" not in names
+
+
 def test_emsctl_diagnose_support_bundle_redacts_secrets(tmp_path):
     secret = "bundle-super-secret-token"
     serial = "SERIAL-SECRET-123456"

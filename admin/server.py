@@ -102,6 +102,10 @@ from admin.maintenance_config import (
     preview_maintenance_config,
     redact_config_for_browser,
 )
+from admin.runtime_convergence import (
+    mirror_changed_keys_to_runtime,
+    reset_targets_to_config,
+)
 from admin.mdns import MdnsProvider
 from admin.mqtt_discovery import MqttBrokerDiscovery
 from admin.mqtt_topic_discovery import default_topic_discoverer
@@ -936,6 +940,9 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/admin/maintenance/config/apply":
             self._handle_maintenance_config_apply()
+            return
+        if path == "/api/admin/maintenance/config/reset-runtime":
+            self._handle_maintenance_reset_runtime()
             return
         if path == "/api/admin/maintenance/zendure-mqtt/migration-apply":
             self._handle_zendure_mqtt_migration_apply()
@@ -2269,7 +2276,60 @@ class AdminHandler(BaseHTTPRequestHandler):
                 )
         result["validation"] = prepared["validation"]
         result["diff"] = prepared["diff"]
+        result["runtime_sync"] = self._mirror_runtime_after_apply(prepared)
         return result, 200
+
+    def _handle_maintenance_reset_runtime(self):
+        if self._reject_unrelated_transition_write():
+            return
+        body = self._read_json_body(MAX_CONFIG_PREVIEW_BODY_BYTES)
+        if body is None:
+            return
+        if not isinstance(body, dict):
+            self._send_json({"error": "expected a JSON object"}, status=400)
+            return
+        targets = body.get("targets")
+        if not isinstance(targets, list) or not targets:
+            self._send_json({"error": "targets must be a non-empty list"}, status=400)
+            return
+        context = self.server.config_apply.install_context_provider()
+        try:
+            config = json.loads(Path(context.config_path).read_bytes())
+        except (OSError, ValueError):
+            self._send_json({"error": "current config could not be read"}, status=409)
+            return
+        if not isinstance(config, dict):
+            self._send_json({"error": "current config is invalid"}, status=409)
+            return
+        try:
+            summary = reset_targets_to_config(context, config, targets)
+        except Exception as exc:
+            self._send_json({"error": f"reset failed: {exc}"}, status=500)
+            return
+        self._send_json({"ok": True, "runtime_sync": summary}, status=200)
+
+    def _mirror_runtime_after_apply(self, prepared):
+        """Mirror changed overlapping whitelisted keys into runtime-state.
+
+        Best-effort: the config write already committed, so any failure here is
+        surfaced as a warning without failing the apply. Only keys the operator
+        actually changed are mirrored, so an unrelated live Dashboard override is
+        left in place.
+        """
+
+        try:
+            merged = json.loads(prepared["payload"])
+            diff = prepared.get("diff") or {}
+            changed_paths = [
+                entry["path"]
+                for group in ("changes", "added")
+                for entry in diff.get(group, [])
+                if isinstance(entry, dict) and "path" in entry
+            ]
+            context = self.server.config_apply.install_context_provider()
+            return mirror_changed_keys_to_runtime(context, merged, changed_paths)
+        except Exception as exc:
+            return {"applied": [], "skipped": [], "warnings": [f"runtime sync skipped: {exc}"]}
 
     def _handle_maintenance_container_plan(self):
         # Read-only: derive the desired/current/action plan from the live config

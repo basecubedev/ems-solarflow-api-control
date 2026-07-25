@@ -2874,6 +2874,26 @@ def test_guided_upgrade_terminology_uses_system_build_language():
     assert "Loading EMS releases" not in status
 
 
+def test_guided_upgrade_waiting_states_stay_visible():
+    """Long Guided Upgrade waits must read as working, not frozen.
+
+    Verify System Build spins its busy ring and says "Verifying…"; the live
+    stepper labels and animates the active step and names the slow install
+    stage; both new animations honour reduced motion.
+    """
+    js = _read("admin.js")
+    css = _read("admin.css")
+    status_fn = _extract_fn(js, "setUpgradeReleaseStatus")
+    assert 'classList.toggle("is-scanning", verifying)' in status_fn
+    assert '"Verifying…"' in status_fn
+    render_fn = _extract_fn(js, "renderSystemAlignmentStatus")
+    assert '"Working…"' in render_fn
+    assert "this can take a few minutes" in render_fn
+    assert "@keyframes system-alignment-active-pulse" in css
+    assert 'li[data-state="active"]' in css
+    assert css.count("prefers-reduced-motion") >= 2
+
+
 def test_guided_upgrade_validation_reuses_setup_card_and_has_execute_action():
     html = _read("index.html")
     panel = _upgrade_panel(html)
@@ -3713,6 +3733,7 @@ def test_upgrade_current_admin_never_uses_ems_container_tag():
     assert "current_admin" in fn
     assert "system_build" in fn
     assert "upgradeState.current" not in fn
+    assert "upgradeState.runningAdmin" in fn
     # Dynamic values use textContent (no innerHTML injection surface).
     assert ".textContent" in fn
     assert "innerHTML" not in fn
@@ -4691,6 +4712,7 @@ def _run_maintenance_discovery_node(setup):
             "mconfigDiscoveryRole",
             "mconfigFindInverterMatch",
             "maintenanceMqttProposals",
+            "mconfigIsMqttDevice",
             "buildMaintenanceDiscoveryReview",
         )
     )

@@ -52,7 +52,8 @@ class EMSController:
         runtime_state=None,
         dashboard_store=None,
         battery_full_charge_store=None,
-        influx_writer=None
+        influx_writer=None,
+        zendure_mqtt_runtime=None
     ):
         self.devices = devices
         self.shelly = shelly
@@ -60,6 +61,7 @@ class EMSController:
         self.sleep_enabled = sleep_enabled
         self.runtime_state = runtime_state
         self.dashboard_store = dashboard_store
+        self.zendure_mqtt_runtime = zendure_mqtt_runtime
         # Optional native InfluxDB telemetry writer (None unless influxdb is
         # enabled). Failure-isolated and non-blocking; see ems.history.influx_writer.
         self.influx_writer = influx_writer

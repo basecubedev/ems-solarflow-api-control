@@ -93,6 +93,41 @@ def test_load_never_exposes_secret_feature_values(tmp_path):
         assert all(field["path"] != "influxdb.token" for field in section["fields"])
 
 
+def test_load_surfaces_runtime_override_provenance(tmp_path):
+    data = _config()
+    data["system"]["loop_interval"] = 3
+    _write_config(tmp_path, data)
+    (tmp_path / "runtime-state.json").write_text(
+        json.dumps({"system": {"loop_interval": 5}}), encoding="utf-8"
+    )
+    result = load_maintenance_config(base_dir=str(tmp_path))
+    overrides = result["overrides"]
+    assert overrides["system.loop_interval"]["config_value"] == 3
+    assert overrides["system.loop_interval"]["effective_value"] == 5
+    assert overrides["system.loop_interval"]["source"] == "dashboard_override"
+    assert overrides["system.max_total_power"]["source"] == "config"
+    assert result["draft"]["features"]["system.loop_interval"] == 3
+
+
+def test_load_without_runtime_file_marks_all_config(tmp_path):
+    _write_config(tmp_path, _config())
+    result = load_maintenance_config(base_dir=str(tmp_path))
+    overrides = result["overrides"]
+    assert overrides["system.max_total_power"]["source"] == "config"
+
+
+def test_preview_ignores_runtime_override(tmp_path):
+    data = _config()
+    data["system"]["loop_interval"] = 3
+    _write_config(tmp_path, data)
+    (tmp_path / "runtime-state.json").write_text(
+        json.dumps({"system": {"loop_interval": 5}}), encoding="utf-8"
+    )
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+    assert preview["changed"] is False
+
+
 # --- preview ------------------------------------------------------------
 
 
@@ -1220,3 +1255,137 @@ def test_apply_endpoint_writes_reviewed_draft_and_creates_backup(
     assert json.loads(path.read_text(encoding="utf-8"))["devices"][0]["ip"] == "192.168.1.111"
     assert payload["backup_path"]
     assert Path(payload["backup_path"]).read_bytes() == original
+
+
+def _seed_runtime_state(tmp_path, **system):
+    base_system = {
+        "enabled": True,
+        "max_total_power": 1600,
+        "loop_interval": 3,
+        "min_output_limit": 35,
+    }
+    base_system.update(system)
+    data = {
+        "system": base_system,
+        "winter": {"enabled": False},
+        "devices": {
+            "WR1": {
+                "enabled": True,
+                "max_power": 800,
+                "offgrid_socket_mode": "off",
+                "pv_priority_factor": 1.0,
+            },
+            "WR2": {
+                "enabled": True,
+                "max_power": 600,
+                "offgrid_socket_mode": "off",
+                "pv_priority_factor": 1.0,
+            },
+        },
+    }
+    path = tmp_path / "runtime-state.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
+def _convergence_service(tmp_path):
+    from admin.config_apply import ConfigApplyService
+    from admin.install_context import detect_install_context
+
+    return ConfigApplyService(
+        None,
+        tmp_path / "admin-data",
+        install_context_provider=lambda: detect_install_context(base_dir=str(tmp_path)),
+    )
+
+
+def test_apply_mirrors_changed_overlapping_key_to_runtime(tmp_path, monkeypatch):
+    data = _config()
+    data["system"]["loop_interval"] = 3
+    _write_config(tmp_path, data)
+    runtime_path = _seed_runtime_state(tmp_path)
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    loaded["draft"]["features"]["system.loop_interval"] = 7
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
+    srv, base = _server(config_apply=_convergence_service(tmp_path))
+    try:
+        status, payload = _post(
+            f"{base}/api/admin/maintenance/config/apply",
+            {
+                "draft": loaded["draft"],
+                "revision": loaded["revision"],
+                "confirm": True,
+                "backup": True,
+            },
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    assert payload["ok"] is True
+    assert payload["runtime_sync"]["applied"] == ["system.loop_interval"]
+    assert json.loads(runtime_path.read_text())["system"]["loop_interval"] == 7
+    assert (
+        json.loads((tmp_path / "config" / "config.json").read_text())["system"][
+            "loop_interval"
+        ]
+        == 7
+    )
+
+
+def test_apply_succeeds_when_runtime_file_absent(tmp_path, monkeypatch):
+    data = _config()
+    data["system"]["loop_interval"] = 3
+    _write_config(tmp_path, data)
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    loaded["draft"]["features"]["system.loop_interval"] = 7
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
+    srv, base = _server(config_apply=_convergence_service(tmp_path))
+    try:
+        status, payload = _post(
+            f"{base}/api/admin/maintenance/config/apply",
+            {
+                "draft": loaded["draft"],
+                "revision": loaded["revision"],
+                "confirm": True,
+                "backup": True,
+            },
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    assert payload["ok"] is True
+    assert payload["runtime_sync"]["applied"] == []
+    assert payload["runtime_sync"]["skipped"][0]["reason"] == "runtime_state_absent"
+    assert not (tmp_path / "runtime-state.json").exists()
+    assert (
+        json.loads((tmp_path / "config" / "config.json").read_text())["system"][
+            "loop_interval"
+        ]
+        == 7
+    )
+
+
+def test_reset_runtime_endpoint_writes_config_value(tmp_path, monkeypatch):
+    data = _config()
+    data["system"]["loop_interval"] = 3
+    _write_config(tmp_path, data)
+    runtime_path = _seed_runtime_state(tmp_path, loop_interval=5)
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
+    srv, base = _server(config_apply=_convergence_service(tmp_path))
+    try:
+        status, payload = _post(
+            f"{base}/api/admin/maintenance/config/reset-runtime",
+            {"targets": [{"scope": "system", "key": "loop_interval"}]},
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    assert payload["ok"] is True
+    assert payload["runtime_sync"]["applied"] == ["system.loop_interval"]
+    assert json.loads(runtime_path.read_text())["system"]["loop_interval"] == 3

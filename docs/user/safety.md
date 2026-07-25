@@ -49,6 +49,13 @@ The Admin Console is intended for a trusted local network. Optional HTTPS can
 protect local browser traffic, but the generated self-signed certificate is not
 a replacement for a VPN or a properly secured reverse proxy for remote access.
 
+Like the Dashboard, the Admin Console can write runtime *overrides*, but only for
+a fixed whitelist of keys (system power/loop limits, winter/HA enable, per-device
+enabled/max power/PV priority/off-grid mode) and only through the same validated
+runtime-write limits — never the hardware `outputLimit` or state-reconciliation
+write gates. The safety property is the whitelist, not the store: no other key
+can reach `runtime-state.json` from the Admin.
+
 ## Technical safety model
 
 For write gates, runtime write types, and control internals, see the

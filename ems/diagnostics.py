@@ -625,6 +625,33 @@ def diagnose_config_device_names(config_data):
     ]
 
 
+def diagnose_controllable_config_device_names(config_data):
+    """Config device names that the EMS keeps in runtime-state (controllable).
+
+    Telemetry-only Zendure MQTT devices carry no controllable runtime settings
+    and deliberately never get a runtime-state entry, so they must not be
+    reported as missing from runtime-state.
+    """
+
+    devices = config_data.get("devices", []) if isinstance(config_data, dict) else []
+    if not isinstance(devices, list):
+        return []
+    from ems.config import (
+        http_control_device_configs,
+        mqtt_control_device_configs,
+    )
+
+    controllable = (
+        http_control_device_configs(devices)
+        + mqtt_control_device_configs(devices)
+    )
+    return [
+        str(item.get("name"))
+        for item in controllable
+        if isinstance(item, dict) and item.get("name")
+    ]
+
+
 def diagnose_path_is_clean(path):
     if not isinstance(path, str) or not path.strip():
         return False
@@ -1316,7 +1343,8 @@ def diagnose_runtime_state_plausibility(checks, runtime_path, config_data):
         runtime_names = set(runtime_devices)
         for name in sorted(runtime_names - config_names):
             diagnose_add(checks, "runtime_state", "warning", "runtime_device_unknown", f"Runtime-state contains device not present in config: {name}", device=name)
-        for name in sorted(config_names - runtime_names):
+        controllable_names = set(diagnose_controllable_config_device_names(config_data))
+        for name in sorted(controllable_names - runtime_names):
             diagnose_add(checks, "runtime_state", "warning", "runtime_device_missing", f"Config device missing from runtime-state: {name}", device=name)
         config_limits = {}
         for item in config_data.get("devices", []) if isinstance(config_data, dict) else []:

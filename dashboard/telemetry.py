@@ -45,15 +45,10 @@ def _control_explain_payload(controller):
     return None
 
 
-def _battery_full_charge_assist_payload(controller, dev, state, now):
-    """Build the normalized battery_full_charge_assist status for one device.
+def _unknown_assist_payload(message="Full-charge assist state unavailable"):
+    """A minimal, safe battery_full_charge_assist payload with no live state."""
 
-    Falls back to a minimal "unknown" payload if the controller does not
-    expose the full-charge assist feature (older deployments, test doubles),
-    so the dashboard API and GUI never crash on missing assist state.
-    """
-
-    unknown = {
+    return {
         "enabled": False,
         "has_battery": False,
         "status": "unknown",
@@ -69,8 +64,108 @@ def _battery_full_charge_assist_payload(controller, dev, state, now):
         "soc_limit": 0,
         "ac_mode": 0,
         "ac_status": 0,
-        "message": "Full-charge assist state unavailable",
+        "message": message,
     }
+
+
+def _state_telemetry_fields(state):
+    """Map a DeviceState to the shared telemetry fields of a device tile.
+
+    Used for both controlled devices and read-only telemetry-only devices so
+    the two tile kinds never drift in how they read the same DeviceState.
+    """
+
+    return {
+        "soc": _rounded(getattr(state, "soc", 0)),
+        "min_soc": _rounded(getattr(state, "min_soc", 0)),
+        "max_soc": _rounded(getattr(state, "max_soc", 0)),
+        "pv_input_w": _rounded(getattr(state, "solar", 0)),
+        "pv_inputs_w": [
+            _rounded(getattr(state, field, 0))
+            for field in ("solar1", "solar2", "solar3", "solar4")
+        ],
+        "output_w": _rounded(getattr(state, "output", 0)),
+        # End-user EMS convention: positive means charging, negative means
+        # discharging. Zendure/controller field names use the opposite view,
+        # so the API publishes pack_out - pack_in exactly once here.
+        "battery_power_w": _rounded(
+            getattr(state, "pack_out", 0) - getattr(state, "pack_in", 0)
+        ),
+        "pack_input_w": _rounded(getattr(state, "pack_in", 0)),
+        "pack_output_w": _rounded(getattr(state, "pack_out", 0)),
+        "output_limit_w": _rounded(getattr(state, "output_limit", 0)),
+        "soc_limit": int(getattr(state, "soc_limit", 0) or 0),
+        "pack_state": int(getattr(state, "pack_state", 0) or 0),
+        "fault_level": int(getattr(state, "fault_level", 0) or 0),
+        "temperature_c": _rounded(getattr(state, "temp", 0)),
+        "voltage_v": _rounded(getattr(state, "voltage", 0)),
+        "rssi": int(getattr(state, "rssi", 0) or 0),
+        "remain_minutes": _rounded(getattr(state, "remain_minutes", 0)),
+        "smart_mode": int(getattr(state, "smart_mode", 0) or 0),
+        "grid_off_mode": int(getattr(state, "grid_off_mode", 0) or 0),
+        "ac_mode": int(getattr(state, "ac_mode", 0) or 0),
+        "ac_status": int(getattr(state, "ac_status", 0) or 0),
+        "dc_status": int(getattr(state, "dc_status", 0) or 0),
+        "grid_state": int(getattr(state, "grid_state", 0) or 0),
+        "soc_status": int(getattr(state, "soc_status", 0) or 0),
+        "pack_num": int(getattr(state, "pack_num", 0) or 0),
+        "input_limit_w": _rounded(getattr(state, "input_limit_w", 0)),
+    }
+
+
+def _telemetry_only_tiles(controller):
+    """Read-only tiles for Zendure MQTT telemetry-only devices, if any.
+
+    These devices stream telemetry but are excluded from the control loop
+    (``capabilities.write_output_limit`` is not set). They are not part of
+    ``controller.devices``; their live state comes from the telemetry runtime's
+    snapshot cache. Returns an empty list when no telemetry runtime is wired
+    (older deployments, test doubles) so the dashboard stays stable.
+    """
+
+    runtime = getattr(controller, "zendure_mqtt_runtime", None)
+    if runtime is None:
+        return []
+
+    try:
+        summaries = runtime.device_summaries()
+        snapshots = runtime.snapshots()
+    except Exception:
+        logging.debug("event=dashboard_telemetry_devices_unavailable", exc_info=True)
+        return []
+
+    from ems.clients import parse_device
+
+    tiles = []
+    for summary in summaries:
+        name = summary.get("name")
+        identifier = summary.get("identifier")
+        status = summary.get("status")
+        if not name or status not in ("online", "stale"):
+            continue
+        snapshot = snapshots.get(identifier) if identifier else None
+        metrics = getattr(snapshot, "metrics", None) if snapshot else None
+        if not metrics:
+            continue
+        tiles.append(
+            {
+                "name": name,
+                "online": status == "online",
+                "state": parse_device({"properties": metrics}),
+            }
+        )
+    return tiles
+
+
+def _battery_full_charge_assist_payload(controller, dev, state, now):
+    """Build the normalized battery_full_charge_assist status for one device.
+
+    Falls back to a minimal "unknown" payload if the controller does not
+    expose the full-charge assist feature (older deployments, test doubles),
+    so the dashboard API and GUI never crash on missing assist state.
+    """
+
+    unknown = _unknown_assist_payload()
 
     try:
         config = controller.full_charge_assist_config()
@@ -140,23 +235,16 @@ def build_dashboard_snapshot(
 
     for index, (dev, state) in enumerate(zip(controller.devices, states)):
         name = dev.name
-        pv_w = _rounded(getattr(state, "solar", 0))
-        output_w = _rounded(getattr(state, "output", 0))
-        # End-user EMS convention: positive means charging, negative means
-        # discharging. Zendure/controller field names use the opposite view,
-        # so the API publishes pack_out - pack_in exactly once here.
-        battery_power_w = _rounded(
-            getattr(state, "pack_out", 0) - getattr(state, "pack_in", 0)
-        )
+        fields = _state_telemetry_fields(state)
         online = bool(controller.device_online.get(name, True))
 
         if not online:
             offline_devices.append(name)
 
-        pv_total_w += pv_w
-        inverter_total_w += output_w
-        battery_total_w += battery_power_w
-        soc_values.append(_rounded(getattr(state, "soc", 0)))
+        pv_total_w += fields["pv_input_w"]
+        inverter_total_w += fields["output_w"]
+        battery_total_w += fields["battery_power_w"]
+        soc_values.append(fields["soc"])
 
         capability = capabilities[index] if index < len(capabilities) else None
         target_w = effective_targets[index] if index < len(effective_targets) else 0
@@ -165,37 +253,9 @@ def build_dashboard_snapshot(
         devices[name] = {
             "online": online,
             "enabled": bool(_device_runtime(controller, name, "enabled", True)),
-            "soc": _rounded(getattr(state, "soc", 0)),
-            "min_soc": _rounded(getattr(state, "min_soc", 0)),
-            "max_soc": _rounded(getattr(state, "max_soc", 0)),
-            "pv_input_w": pv_w,
-            "pv_inputs_w": [
-                _rounded(getattr(state, field, 0))
-                for field in ("solar1", "solar2", "solar3", "solar4")
-            ],
-            "output_w": output_w,
-            "battery_power_w": battery_power_w,
-            "pack_input_w": _rounded(getattr(state, "pack_in", 0)),
-            "pack_output_w": _rounded(getattr(state, "pack_out", 0)),
+            **fields,
             "target_w": _rounded(target_w),
             "allocated_target_w": _rounded(allocated_target_w),
-            "output_limit_w": _rounded(getattr(state, "output_limit", 0)),
-            "soc_limit": int(getattr(state, "soc_limit", 0) or 0),
-            "pack_state": int(getattr(state, "pack_state", 0) or 0),
-            "fault_level": int(getattr(state, "fault_level", 0) or 0),
-            "temperature_c": _rounded(getattr(state, "temp", 0)),
-            "voltage_v": _rounded(getattr(state, "voltage", 0)),
-            "rssi": int(getattr(state, "rssi", 0) or 0),
-            "remain_minutes": _rounded(getattr(state, "remain_minutes", 0)),
-            "smart_mode": int(getattr(state, "smart_mode", 0) or 0),
-            "grid_off_mode": int(getattr(state, "grid_off_mode", 0) or 0),
-            "ac_mode": int(getattr(state, "ac_mode", 0) or 0),
-            "ac_status": int(getattr(state, "ac_status", 0) or 0),
-            "dc_status": int(getattr(state, "dc_status", 0) or 0),
-            "grid_state": int(getattr(state, "grid_state", 0) or 0),
-            "soc_status": int(getattr(state, "soc_status", 0) or 0),
-            "pack_num": int(getattr(state, "pack_num", 0) or 0),
-            "input_limit_w": _rounded(getattr(state, "input_limit_w", 0)),
             "capability": (
                 {
                     "can_charge": capability.can_charge,
@@ -209,6 +269,35 @@ def build_dashboard_snapshot(
             ),
             "battery_full_charge_assist": _battery_full_charge_assist_payload(
                 controller, dev, state, now_dt
+            ),
+        }
+
+    for tile in _telemetry_only_tiles(controller):
+        name = tile["name"]
+        if name in devices:
+            continue
+        state = tile["state"]
+        online = tile["online"]
+        fields = _state_telemetry_fields(state)
+
+        if not online:
+            offline_devices.append(name)
+
+        pv_total_w += fields["pv_input_w"]
+        inverter_total_w += fields["output_w"]
+        battery_total_w += fields["battery_power_w"]
+        soc_values.append(fields["soc"])
+
+        devices[name] = {
+            "online": online,
+            "read_only": True,
+            "enabled": True,
+            **fields,
+            "target_w": 0,
+            "allocated_target_w": 0,
+            "capability": None,
+            "battery_full_charge_assist": _unknown_assist_payload(
+                "Telemetry-only device is not managed by full-charge assist"
             ),
         }
 

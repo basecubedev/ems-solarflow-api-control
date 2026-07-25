@@ -72,6 +72,10 @@ COPY ems/health.py ./ems/health.py
 COPY ems/clients.py ./ems/clients.py
 COPY ems/models.py ./ems/models.py
 COPY ems/logging_utils.py ./ems/logging_utils.py
+# Config->runtime convergence: admin.runtime_convergence reconciles the
+# whitelisted maintenance keys into runtime-state via the EMS runtime-state
+# reader/writer, so it must ship in the Admin image.
+COPY ems/runtime_state.py ./ems/runtime_state.py
 # Offline Zendure MQTT setup proposals + config-derived runtime status: Admin
 # turns discovery telemetry into preview-only config fragments and builds the
 # Maintenance telemetry status view with the EMS code instead of duplicating
@@ -101,6 +105,11 @@ COPY ems/mqtt_control/zendure_profiles.py ./ems/mqtt_control/zendure_profiles.py
 COPY ems/mqtt_control/power_capability.py ./ems/mqtt_control/power_capability.py
 COPY ems/mqtt_credentials.py ./ems/mqtt_credentials.py
 COPY dashboard/auth.py ./dashboard/auth.py
+# Config->runtime convergence: Admin Maintenance apply mirrors whitelisted keys
+# into runtime-state through the Dashboard's runtime_write helpers (same
+# whitelist), reached from admin.config_runtime_overlap during startup, so the
+# image must ship it or `python -m admin` fails to import.
+COPY dashboard/runtime_write.py ./dashboard/runtime_write.py
 # Shared HTTPS helper: the optional Admin HTTPS listener reuses the Dashboard's
 # certificate generation and SSLContext code instead of duplicating it.
 COPY dashboard/https.py ./dashboard/https.py
