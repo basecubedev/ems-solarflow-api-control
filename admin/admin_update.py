@@ -750,6 +750,11 @@ class TransitionRecord:
             "revision": self.revision,
         }
 
+    def is_expired(self, now=None) -> bool:
+        """True once ``now`` (default: current UTC time) has passed the TTL."""
+
+        return _transition_is_expired(self, now or _now_utc())
+
     def as_dict(self) -> dict:
         return {
             "state_version": self.state_version,
@@ -1469,7 +1474,14 @@ class PendingTransitionStore:
         )
 
     def cancel(self, *, operation_id=None, now=None) -> TransitionRecord | None:
-        """Mark the current transition cancelled (terminal, not resumable)."""
+        """Mark the current transition cancelled (terminal, not resumable).
+
+        A fresh transition may only be cancelled outside externally-mutating
+        stages. An expired one may be cancelled from any non-terminal stage:
+        expiry already refuses every forward path, so without cancel the
+        record would wedge the store permanently (``begin`` never replaces a
+        non-terminal record).
+        """
 
         with self._locked():
             raw = self._read_raw()
@@ -1483,7 +1495,9 @@ class PendingTransitionStore:
             if record.stage == TRANSITION_STAGE_CANCELLED:
                 return record
             self._require_mutable(record)
-            if record.stage not in CANCELLABLE_TRANSITION_STAGES:
+            if record.stage not in CANCELLABLE_TRANSITION_STAGES and not (
+                _transition_is_expired(record, now or _now_utc())
+            ):
                 raise TransitionStateError(
                     "mutation_in_progress",
                     f"transition cannot be cancelled while {record.stage} is running",

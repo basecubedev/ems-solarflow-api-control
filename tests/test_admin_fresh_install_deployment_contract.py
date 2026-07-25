@@ -10,6 +10,7 @@ durable stage between build confirmation and ``completed`` is observable.
 
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -20,8 +21,11 @@ from admin.admin_update import (
     ADMIN_IMAGE_REPO,
     EMS_IMAGE_REPO,
     PendingTransitionStore,
+    make_transition_record,
 )
 from admin.deployment import DeploymentService
+from admin.guided_upgrade import UpgradeJob
+from admin.operation_coordinator import OperationCoordinator
 from admin.image_identity import ImageIdentity
 from admin.known_good import KnownGoodStore
 from admin.server import ScanRegistry, create_server
@@ -380,6 +384,10 @@ def _walk_to_started_deployment(base, deployment):
     assert prepared["job_id"] == "prep-1"
     assert prepared["transition"]["operation_id"] == operation_id
     assert prepared["transition"]["stage"] == "resources_verified"
+    # Before the deployment worker claims the operation, the embedded status
+    # already carries a successful liveness verdict: proven inactive.
+    assert prepared["transition"]["worker_active"] is False
+    assert prepared["transition"]["worker_status_available"] is True
     # Preparing the workspace never advances the EMS operation.
     assert deployment.start_calls == 0
     assert _sample_transition(base)["stage"] == "resources_verified"
@@ -500,3 +508,287 @@ def test_reload_recovers_durable_stage_and_completes_after_restart(tmp_path):
     finally:
         srv2.shutdown()
         srv2.server_close()
+
+
+# --- expired abandonment is worker-aware over the HTTP boundary -------------
+#
+# An expired ems_operation_running transition must not be abandoned over HTTP
+# while its mutating worker is still tracked as live. Only once the worker is
+# gone (e.g. the Admin process restarted and its in-memory registry reset) may
+# the durable orphan be cancelled.
+
+LATER = datetime(2026, 7, 17, 14, 0, 0, tzinfo=timezone.utc)
+
+
+def _wait_until(predicate, timeout=2.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return predicate()
+
+
+def _cancel(base, operation_id):
+    return _request(
+        f"{base}/api/admin/system-alignment/cancel",
+        method="POST",
+        body={"operation_id": operation_id, "confirm": True},
+    )
+
+
+def test_deployment_start_job_poll_embeds_worker_aware_status(tmp_path):
+    # The browser renders the transition embedded in the start-job poll. That
+    # embed must carry the same coordinator-backed worker verdict as the
+    # dedicated status endpoint, or the poll re-enables Abandon against a live
+    # worker and the cancel then 409s.
+    srv, base, deployment, store, known_good = _serve_fresh_install(tmp_path)
+    try:
+        operation_id = _walk_to_started_deployment(base, deployment)
+        assert srv.operation_coordinator.is_active(operation_id) is True
+
+        status, _, polled = _request(
+            f"{base}/api/setup/deployment/start/jobs/start-1"
+        )
+        assert status == 200
+        transition = polled["transition"]
+        assert transition["worker_active"] is True
+        assert transition["worker_status_available"] is True
+        assert transition["cancel_available"] is False
+
+        srv.system_alignment._now = lambda: LATER
+        status, _, polled = _request(
+            f"{base}/api/setup/deployment/start/jobs/start-1"
+        )
+        assert status == 200
+        transition = polled["transition"]
+        assert transition["expired"] is True
+        assert transition["worker_active"] is True
+        assert transition["worker_status_available"] is True
+        assert transition["cancel_available"] is False
+        assert transition["resume_available"] is False
+
+        deployment.finish(dashboard_reachable=True)
+        assert _wait_until(
+            lambda: not srv.operation_coordinator.is_active(operation_id)
+        )
+        status, _, polled = _request(
+            f"{base}/api/setup/deployment/start/jobs/start-1"
+        )
+        assert status == 200
+        transition = polled["transition"]
+        assert transition["worker_active"] is False
+        assert transition["worker_status_available"] is True
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_upgrade_job_poll_embeds_worker_aware_status(tmp_path):
+    # Same contract for the Guided Upgrade job poll: its embedded transition
+    # must report the live coordinator claim, not an unconditional "inactive".
+    srv, base, deployment, store, known_good = _serve_fresh_install(tmp_path)
+    try:
+        build = _build()
+        record = store.begin(
+            make_transition_record(
+                mode="guided_upgrade",
+                system_tag=build.canonical_tag,
+                build_id=build.build_id,
+                revision=build.revision,
+                admin_image=build.admin_image,
+                admin_digest=build.admin_digest,
+                ems_image=build.ems_image,
+                ems_digest=build.ems_digest,
+                stage="ems_operation_running",
+                ttl_seconds=60,
+                now=T0,
+            ),
+            now=T0,
+        )
+        operation_id = record.operation_id
+
+        release = threading.Event()
+        job = UpgradeJob("upgrade-job", [])
+
+        def runner(handle):
+            release.wait(5)
+            handle.finish(
+                {"ok": True, "status": "succeeded", "steps": [], "warnings": []}
+            )
+
+        submitted, created = srv.upgrade_jobs.get_or_submit(
+            operation_id, job, runner, coordinator=srv.operation_coordinator
+        )
+        assert created is True and submitted is not None
+        assert _wait_until(
+            lambda: srv.operation_coordinator.is_active(operation_id)
+        )
+        srv.system_alignment._now = lambda: LATER
+
+        try:
+            status, _, polled = _request(
+                f"{base}/api/admin/maintenance/upgrade/jobs/upgrade-job"
+            )
+            assert status == 200
+            transition = polled["transition"]
+            assert transition["expired"] is True
+            assert transition["worker_active"] is True
+            assert transition["worker_status_available"] is True
+            assert transition["cancel_available"] is False
+            assert transition["resume_available"] is False
+        finally:
+            release.set()
+
+        assert _wait_until(
+            lambda: not srv.operation_coordinator.is_active(operation_id)
+        )
+        status, _, polled = _request(
+            f"{base}/api/admin/maintenance/upgrade/jobs/upgrade-job"
+        )
+        assert status == 200
+        transition = polled["transition"]
+        assert transition["worker_active"] is False
+        assert transition["worker_status_available"] is True
+        assert transition["cancel_available"] is True
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_resume_rejection_embeds_worker_aware_transition(tmp_path):
+    # The transition_active 409 says the worker is still running; its embedded
+    # transition must report the same verdict instead of "inactive".
+    srv, base, deployment, store, _ = _serve_fresh_install(tmp_path)
+    try:
+        operation_id = _walk_to_started_deployment(base, deployment)
+        assert srv.operation_coordinator.is_active(operation_id) is True
+
+        status, _, body = _request(
+            f"{base}/api/admin/system-alignment/resume",
+            method="POST",
+            body={"operation_id": operation_id},
+        )
+        assert status == 409
+        assert body["error"] == "transition_active"
+        transition = body["transition"]
+        assert transition["worker_active"] is True
+        assert transition["worker_status_available"] is True
+        assert transition["cancel_available"] is False
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_expired_running_transition_cancel_blocked_while_deployment_worker_live(
+    tmp_path,
+):
+    srv, base, deployment, store, known_good = _serve_fresh_install(tmp_path)
+    try:
+        operation_id = _walk_to_started_deployment(base, deployment)
+        assert store.read().stage == "ems_operation_running"
+        # The deployment worker claimed the operation before it began mutating,
+        # so its liveness is observable for the whole run.
+        assert srv.operation_coordinator.is_active(operation_id) is True
+
+        # Expire the transition without the deployment worker completing.
+        srv.system_alignment._now = lambda: LATER
+
+        transition = _sample_transition(base)
+        assert transition["expired"] is True
+        assert transition["worker_active"] is True
+        assert transition["worker_status_available"] is True
+        assert transition["cancel_available"] is False
+        assert transition["resume_available"] is False
+
+        status, _, body = _cancel(base, operation_id)
+        assert status == 409
+        assert body["error"] == "transition_worker_active"
+        assert store.read().stage == "ems_operation_running"
+
+        # The Admin process restarts: the in-memory coordinator resets while the
+        # durable transition survives. The orphan holds no claim and is escapable.
+        srv.operation_coordinator = OperationCoordinator()
+
+        transition = _sample_transition(base)
+        assert transition["worker_active"] is False
+        assert transition["worker_status_available"] is True
+        assert transition["cancel_available"] is True
+
+        status, _, cancelled = _cancel(base, operation_id)
+        assert status == 200
+        assert cancelled["stage"] == "cancelled"
+        assert store.read().stage == "cancelled"
+
+        # The orphaned worker later reaches its terminal callback: it must never
+        # revive the cancelled transition or write known-good behind the abandon.
+        deployment.finish(dashboard_reachable=True)
+        assert store.read().stage == "cancelled"
+        assert known_good.current() is None
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_expired_running_transition_cancel_blocked_while_upgrade_worker_live(tmp_path):
+    srv, base, deployment, store, known_good = _serve_fresh_install(tmp_path)
+    try:
+        build = _build()
+        record = store.begin(
+            make_transition_record(
+                mode="guided_upgrade",
+                system_tag=build.canonical_tag,
+                build_id=build.build_id,
+                revision=build.revision,
+                admin_image=build.admin_image,
+                admin_digest=build.admin_digest,
+                ems_image=build.ems_image,
+                ems_digest=build.ems_digest,
+                stage="ems_operation_running",
+                ttl_seconds=60,
+                now=T0,
+            ),
+            now=T0,
+        )
+        operation_id = record.operation_id
+
+        release = threading.Event()
+        job = UpgradeJob("upgrade-job", [])
+
+        def runner(handle):
+            release.wait(5)
+            handle.finish(
+                {"ok": True, "status": "succeeded", "steps": [], "warnings": []}
+            )
+
+        submitted, created = srv.upgrade_jobs.get_or_submit(
+            operation_id, job, runner, coordinator=srv.operation_coordinator
+        )
+        assert created is True and submitted is not None
+        assert _wait_until(
+            lambda: srv.operation_coordinator.is_active(operation_id)
+        )
+        srv.system_alignment._now = lambda: LATER
+
+        try:
+            transition = _sample_transition(base)
+            assert transition["expired"] is True
+            assert transition["worker_active"] is True
+            assert transition["cancel_available"] is False
+
+            status, _, body = _cancel(base, operation_id)
+            assert status == 409
+            assert body["error"] == "transition_worker_active"
+            assert store.read().stage == "ems_operation_running"
+        finally:
+            release.set()
+
+        assert _wait_until(
+            lambda: not srv.operation_coordinator.is_active(operation_id)
+        )
+        status, _, cancelled = _cancel(base, operation_id)
+        assert status == 200
+        assert cancelled["stage"] == "cancelled"
+    finally:
+        srv.shutdown()
+        srv.server_close()

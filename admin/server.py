@@ -83,6 +83,7 @@ from admin.guided_upgrade_context import (
 )
 from admin.install_context import detect_install_context
 from admin.image_identity import identify_image
+from admin.operation_coordinator import OperationCoordinator
 from admin.install_state import (
     LegacyMigrationError,
     detect_install_state,
@@ -169,17 +170,6 @@ PUBLIC_POST_PATHS = frozenset(
         "/api/admin/auth/logout",
     }
 )
-
-# Transient connectivity probes that mutate no setup state; they stay available
-# even before the Guided Setup System Build is aligned.
-_DISCOVERY_DIAGNOSTIC_PATHS = frozenset(
-    {
-        "/api/discovery/gateway-probe",
-        "/api/discovery/mqtt-brokers/probe",
-        "/api/discovery/zendure-cloud-mqtt/test",
-    }
-)
-
 
 def _validate_new_password(password, confirm):
     """Validate an initial password. Returns an error code or ``None``.
@@ -438,11 +428,14 @@ class AdminRuntime:
     admin_instance_id: str
     setup_intents: SetupIntentStore
     static_assets: dict = field(default_factory=dict)
-    # Start-job -> transition bookkeeping is shared by HTTP and HTTPS listeners.
-    # Entries describe only jobs that are still executing. Durable transition
-    # completion belongs to the worker callback; GET polling stays read-only.
-    deployment_alignment_jobs: dict = field(default_factory=dict)
-    deployment_alignment_lock: object = field(default_factory=threading.Lock)
+    # The single authority for worker liveness and atomic abandonment, shared by
+    # both listeners. Guided Upgrade and deployment workers claim it before they
+    # start mutating and release it when they stop; expired-transition abandon
+    # is coordinated through it so a worker can never register between "proven
+    # inactive" and durable cancellation.
+    operation_coordinator: OperationCoordinator = field(
+        default_factory=OperationCoordinator
+    )
     # Whether the process started an optional HTTPS listener at all (global; the
     # per-request transport is reported separately via AdminServer.https_active).
     https_configured: bool = False
@@ -695,8 +688,7 @@ class AdminServer(ThreadingHTTPServer):
         self.upgrade_jobs = runtime.upgrade_jobs
         self.guided_upgrade_context = runtime.guided_upgrade_context
         self.system_alignment = runtime.system_alignment
-        self.deployment_alignment_jobs = runtime.deployment_alignment_jobs
-        self.deployment_alignment_lock = runtime.deployment_alignment_lock
+        self.operation_coordinator = runtime.operation_coordinator
         self.admin_update = runtime.admin_update
         self.backup_service = runtime.backup_service
         self.backup_jobs = runtime.backup_jobs
@@ -1465,6 +1457,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             return 400
         if code in {
             "transition_active",
+            "transition_worker_active",
             "transition_context_mismatch",
             "operation_mismatch",
             "invalid_transition",
@@ -1493,9 +1486,19 @@ class AdminHandler(BaseHTTPRequestHandler):
         )
 
     def _alignment_status(self):
-        service = self.server.system_alignment
+        """The single production status read: always worker-aware.
+
+        Every response family that embeds a transition goes through here, so
+        the server coordinator's liveness verdict can never be dropped by an
+        individual route. Safe from any thread — the probe only takes the
+        coordinator's own leaf lock, and nothing reachable from
+        ``OperationCoordinator.abandon``'s cancel callback builds status.
+        """
+
         try:
-            payload = service.status()
+            payload = self.server.system_alignment.status(
+                operation_active=self._operation_active
+            )
         except Exception as exc:
             return {
                 "ok": False,
@@ -1683,6 +1686,14 @@ class AdminHandler(BaseHTTPRequestHandler):
         return True
 
     def _setup_discovery_write_path(self, path):
+        """Gate every ``/api/setup/discovery/`` alias on the confirmed operation.
+
+        Deliberately without a diagnostic-probe exemption: broker probe and
+        Zendure credential test persist discovery-store state (candidates,
+        status metadata), and Maintenance reaches the same handlers through the
+        generic ``/api/discovery/`` routes that need only session auth + CSRF.
+        """
+
         prefix = "/api/setup/discovery/"
         if not path.startswith(prefix):
             return path
@@ -1876,7 +1887,7 @@ class AdminHandler(BaseHTTPRequestHandler):
                 raise SystemAlignmentError(
                     "not_resumable", "EMS transition recovery is unavailable"
                 )
-            if stage == "ems_operation_running" and self._deployment_operation_active(
+            if stage == "ems_operation_running" and self._operation_active(
                 operation_id
             ):
                 raise SystemAlignmentError(
@@ -1901,9 +1912,14 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         self._send_json(result)
 
-    def _deployment_operation_active(self, operation_id):
-        with self.server.deployment_alignment_lock:
-            return operation_id in self.server.deployment_alignment_jobs.values()
+    def _operation_active(self, operation_id):
+        """True while a mutating worker for this operation holds a live claim.
+
+        Admin replacement runs in a detached sidecar with no local claim, so an
+        expired admin_reconnect_pending orphan reports inactive (escapable).
+        """
+
+        return self.server.operation_coordinator.is_active(operation_id)
 
     def _recover_healthcheck_kwargs(self, mode):
         health = self._transition_healthcheck_result(mode)
@@ -1980,7 +1996,8 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         try:
             result = self.server.system_alignment.cancel(
-                operation_id=body.get("operation_id")
+                operation_id=body.get("operation_id"),
+                coordinator=self.server.operation_coordinator,
             )
         except SystemAlignmentError as exc:
             self._send_alignment_error(exc)
@@ -2622,7 +2639,24 @@ class AdminHandler(BaseHTTPRequestHandler):
                     executor, run_context, pre_alignment, handle, operation_id
                 )
             ),
+            coordinator=self.server.operation_coordinator,
         )
+        if job is None:
+            # Abandonment won the claim race: never start a worker for a
+            # cancelled transition.
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": "system_transition_in_progress",
+                    "message": (
+                        "The System Build transition was abandoned before the "
+                        "upgrade could start."
+                    ),
+                    "transition": self._alignment_status().get("transition"),
+                },
+                status=409,
+            )
+            return
         snapshot = job.snapshot()
         transition = self._alignment_status().get("transition")
         self._send_json(
@@ -3968,6 +4002,25 @@ class AdminHandler(BaseHTTPRequestHandler):
                 )
                 return
 
+        # Claim before the worker starts mutating, so liveness has no
+        # registration gap; a refused claim means abandonment already won.
+        worker_token = None
+        if operation_id:
+            worker_token = self.server.operation_coordinator.claim(operation_id)
+            if worker_token is None:
+                self._send_json(
+                    {
+                        "ok": False,
+                        "reason": "ems_deployment_abandoned",
+                        "message": (
+                            "The System Build transition was abandoned before "
+                            "the EMS deployment could start."
+                        ),
+                    },
+                    status=409,
+                )
+                return
+
         def on_complete(job):
             self._complete_deployment_alignment(operation_id, job)
 
@@ -3977,72 +4030,73 @@ class AdminHandler(BaseHTTPRequestHandler):
                 succeeded=True,
             )
 
+        worker_started = False
         try:
-            start_kwargs = {
-                "on_complete": on_complete if operation_id else None,
-            }
-            # The productive deployment service exposes the exact boundary
-            # between container startup and dashboard health verification. Test
-            # and third-party adapters with the older callback surface continue
-            # to finalize through on_complete below.
-            if operation_id and isinstance(
-                self.server.deployment, DeploymentService
-            ):
-                start_kwargs["on_healthcheck"] = on_healthcheck
-            result = self.server.deployment.start(**start_kwargs)
-            if not isinstance(result, dict):
-                raise TypeError("deployment start returned no result")
-        except Exception:
-            if operation_id:
-                try:
+            try:
+                start_kwargs = {
+                    "on_complete": on_complete if operation_id else None,
+                }
+                # The productive deployment service exposes the exact boundary
+                # between container startup and dashboard health verification.
+                # Test and third-party adapters with the older callback surface
+                # continue to finalize through on_complete below.
+                if operation_id and isinstance(
+                    self.server.deployment, DeploymentService
+                ):
+                    start_kwargs["on_healthcheck"] = on_healthcheck
+                result = self.server.deployment.start(**start_kwargs)
+                if not isinstance(result, dict):
+                    raise TypeError("deployment start returned no result")
+            except Exception:
+                if operation_id:
+                    try:
+                        self.server.system_alignment.finish_ems_operation(
+                            operation_id=operation_id,
+                            succeeded=False,
+                            error_code="ems_deployment_unexpected_failure",
+                            error_message="EMS deployment failed unexpectedly.",
+                        )
+                    except SystemAlignmentError:
+                        pass
+                self._send_json(
+                    {
+                        "ok": False,
+                        "reason": "ems_deployment_unexpected_failure",
+                        "message": "EMS deployment failed unexpectedly.",
+                    },
+                    status=500,
+                )
+                return
+            if not result.get("ok", False):
+                if operation_id:
                     self.server.system_alignment.finish_ems_operation(
                         operation_id=operation_id,
                         succeeded=False,
-                        error_code="ems_deployment_unexpected_failure",
-                        error_message="EMS deployment failed unexpectedly.",
+                        error_code=result.get("reason") or "ems_deployment_failed",
+                        error_message=result.get("message")
+                        or "EMS deployment failed.",
                     )
-                except SystemAlignmentError:
-                    pass
-            self._send_json(
-                {
+                payload = {
                     "ok": False,
-                    "reason": "ems_deployment_unexpected_failure",
-                    "message": "EMS deployment failed unexpectedly.",
-                },
-                status=500,
-            )
-            return
-        if not result.get("ok", False):
-            if operation_id:
-                self.server.system_alignment.finish_ems_operation(
-                    operation_id=operation_id,
-                    succeeded=False,
-                    error_code=result.get("reason") or "ems_deployment_failed",
-                    error_message=result.get("message") or "EMS deployment failed.",
-                )
-            payload = {
-                "ok": False,
-                "reason": result.get("reason"),
-                "message": result.get("message"),
-            }
-            if result.get("detail"):
-                payload["detail"] = result["detail"]
-            self._send_json(payload, status=result.get("status", 409))
-            return
-        job_id = (result.get("job") or {}).get("job_id")
-        if operation_id and job_id:
-            with self.server.deployment_alignment_lock:
-                transition = self._alignment_status().get("transition") or {}
-                if transition.get("stage") == "ems_operation_running":
-                    self.server.deployment_alignment_jobs[job_id] = operation_id
-        self._send_json(result["job"], status=result.get("status", 202))
+                    "reason": result.get("reason"),
+                    "message": result.get("message"),
+                }
+                if result.get("detail"):
+                    payload["detail"] = result["detail"]
+                self._send_json(payload, status=result.get("status", 409))
+                return
+            # The worker is running; its terminal callback releases the claim.
+            worker_started = True
+            self._send_json(result["job"], status=result.get("status", 202))
+        finally:
+            if worker_token is not None and not worker_started:
+                self.server.operation_coordinator.release(worker_token)
 
     def _complete_deployment_alignment(self, operation_id, job):
         """Commit terminal deployment state from its worker, never a GET poll."""
 
         if not operation_id or not isinstance(job, dict):
             return
-        job_id = job.get("job_id")
         try:
             if job.get("status") == "failed":
                 error = job.get("error") or {}
@@ -4083,13 +4137,13 @@ class AdminHandler(BaseHTTPRequestHandler):
                 ),
             )
         except SystemAlignmentError:
-            # The durable service owns idempotency and recovery. A concurrent
-            # resume may already have committed the same terminal observation.
+            # A concurrent resume may already have committed the same terminal
+            # observation; the durable service owns idempotency.
             return
         finally:
-            if job_id:
-                with self.server.deployment_alignment_lock:
-                    self.server.deployment_alignment_jobs.pop(job_id, None)
+            # Terminal callback reached: release the claim so an expired
+            # orphan becomes abandonable.
+            self.server.operation_coordinator.release_operation(operation_id)
 
     def _send_deployment_start_job(self, job_id):
         job_id = job_id.strip("/")

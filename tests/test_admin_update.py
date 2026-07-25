@@ -1715,6 +1715,36 @@ def test_cancel_rejects_transition_while_external_mutation_is_running(tmp_path, 
     assert store.read().stage == stage
 
 
+@pytest.mark.parametrize(
+    "stage",
+    (
+        TRANSITION_STAGE_ADMIN_RECONNECT_PENDING,
+        TRANSITION_STAGE_EMS_OPERATION_RUNNING,
+        TRANSITION_STAGE_HEALTHCHECK_PENDING,
+    ),
+)
+def test_expired_transition_is_cancellable_from_any_stage(tmp_path, stage):
+    """Expiry supersedes the mutation-in-progress cancel gate.
+
+    The TTL is the store's own bound on external mutations: once a transition
+    has expired, every forward path (resume, claim, restart) refuses with
+    ``expired``. Refusing cancel as well would wedge the console permanently —
+    no resume, no cancel, and ``begin`` refuses to replace a non-terminal
+    record. An expired transition must therefore accept an explicit cancel
+    from any non-terminal stage.
+    """
+
+    store = PendingTransitionStore(tmp_path / "state")
+    record = store.begin(
+        make_transition_record(now=T0, ttl_seconds=60, stage=stage, **_txn_kwargs()),
+        now=T0,
+    )
+    later = datetime(2026, 7, 14, 14, 0, 0, tzinfo=timezone.utc)
+    cancelled = store.cancel(operation_id=record.operation_id, now=later)
+    assert cancelled.stage == TRANSITION_STAGE_CANCELLED
+    assert store.read().stage == TRANSITION_STAGE_CANCELLED
+
+
 def test_expired_transition_cannot_claim_new_ems_mutation(tmp_path):
     store = PendingTransitionStore(tmp_path / "state")
     record = store.begin(
@@ -2196,3 +2226,32 @@ def test_expired_active_transition_cannot_be_silently_replaced(tmp_path):
         store.begin(replacement, now=later)
     assert exc.value.reason == "transition_active"
     assert store.read().mode == "guided_upgrade"
+
+
+def test_expired_transition_escape_is_explicit_cancel_then_begin(tmp_path):
+    """The one escape from an expired transition: cancel it, then begin anew.
+
+    Silent replacement stays refused (see above); the operator-visible cancel
+    is the only path that frees the store for a fresh operation.
+    """
+
+    store = PendingTransitionStore(tmp_path / "state")
+    record = store.begin(
+        make_transition_record(
+            now=T0,
+            ttl_seconds=60,
+            stage=TRANSITION_STAGE_ADMIN_RECONNECT_PENDING,
+            **_txn_kwargs(),
+        ),
+        now=T0,
+    )
+    later = datetime(2026, 7, 14, 14, 0, 0, tzinfo=timezone.utc)
+    cancelled = store.cancel(operation_id=record.operation_id, now=later)
+    assert cancelled.stage == TRANSITION_STAGE_CANCELLED
+
+    replacement = store.begin(
+        make_transition_record(now=later, **_txn_kwargs(mode="fresh_install")),
+        now=later,
+    )
+    assert replacement.stage == TRANSITION_STAGE_ADMIN_UPDATE_PENDING
+    assert store.read().mode == "fresh_install"

@@ -340,6 +340,18 @@ in Maintenance; closing a row or switching the admin view parks it back. mDNS
 has no maintenance row: it refreshes automatically with every run, and
 enabling/disabling it stays a setup decision.
 
+The shared handlers select their request contract from the node's current
+owner before sending anything: mounted in a Maintenance slot they call the
+generic `/api/discovery/...` routes (Admin session + CSRF only), mounted in
+Guided Setup they go through the operation-gated `/api/setup/discovery/...`
+aliases with the confirmed `X-Setup-Operation-ID`. Maintenance credential
+actions therefore never depend on Guided Setup transition state — they keep
+working for manually installed systems and after Setup state files were
+cleaned up or removed during recovery — while Setup keeps its
+confirmed-operation gate for every alias, connectivity probes included (broker
+probe and the Zendure credential test persist discovery-store state, so they
+are not exempt).
+
 ## Current limitations
 
 - The Admin Console requires a password, but is still LAN-only by design. Run it

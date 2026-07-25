@@ -35,6 +35,10 @@ from admin.system_build import (
     system_build_keeps_current_admin,
     system_build_resource_strategy,
 )
+from admin.operation_coordinator import (
+    OperationWorkerActive,
+    OperationWorkerStatusUnavailable,
+)
 from admin.system_build_id import validate_system_build_id
 
 SUPPORTED_ALIGNMENT_MODES = frozenset(
@@ -48,6 +52,15 @@ SUPPORTED_ALIGNMENT_MODES = frozenset(
 
 _STRATEGY_EMBEDDED = BuildResourceStrategy.EMBEDDED.value
 _STRATEGY_RELEASE_ARCHIVE = BuildResourceStrategy.RELEASE_ARCHIVE.value
+
+_RESUMABLE_TRANSITION_STAGES = frozenset(
+    {
+        TRANSITION_STAGE_FAILED_RECOVERABLE,
+        TRANSITION_STAGE_EMS_OPERATION_PENDING,
+        TRANSITION_STAGE_EMS_OPERATION_RUNNING,
+        TRANSITION_STAGE_HEALTHCHECK_PENDING,
+    }
+)
 
 _ACTION_BUSY_STAGES = {
     TRANSITION_STAGE_ADMIN_UPDATE_PENDING,
@@ -378,8 +391,36 @@ class SystemAlignmentService:
             embedded_state=embedded_state,
         )
 
-    def status(self) -> dict:
-        """Return a side-effect-free transition/known-good snapshot for polling."""
+    @staticmethod
+    def _evaluate_worker(record, operation_active):
+        """Return ``(worker_active, worker_status_available)`` for the record.
+
+        Liveness comes from an injected read-only probe over the operation
+        coordinator (never from the store or the TTL). A missing or invalid
+        probe, like one that raises, leaves worker state *unknown*:
+        ``(None, False)`` rather than a fail-open ``inactive``, so abandonment
+        stays blocked until liveness can actually be read. Only a valid probe
+        may prove inactivity — an empty coordinator after an Admin restart
+        answers ``False`` and keeps the orphan escapable.
+        """
+
+        if not callable(operation_active):
+            return None, False
+        if not record.operation_id:
+            return False, True
+        try:
+            return bool(operation_active(record.operation_id)), True
+        except Exception:
+            return None, False
+
+    def status(self, *, operation_active=None) -> dict:
+        """Return a side-effect-free transition/known-good snapshot for polling.
+
+        ``operation_active`` is an optional ``operation_id -> bool`` liveness
+        probe. When provided, the resume/abandon capabilities reflect live
+        worker state as well as durable state and expiry; a probe that raises
+        leaves worker state unknown and fails closed (no abandon offered).
+        """
 
         try:
             record = self._transitions.read()
@@ -396,14 +437,18 @@ class SystemAlignmentService:
         known_good = self._known_good.current()
         if record is not None:
             transition = record.as_dict()
+            # TTL expiry proves the forward path is closed, not that the worker
+            # stopped; a still-running worker keeps resume and abandon disabled,
+            # and an unknown worker state fails closed the same way.
+            expired = record.is_expired(self._now_value())
+            worker_active, worker_status_available = self._evaluate_worker(
+                record, operation_active
+            )
+            transition["expired"] = expired
+            transition["worker_active"] = worker_active
+            transition["worker_status_available"] = worker_status_available
             transition["resume_available"] = (
-                record.stage
-                in {
-                    TRANSITION_STAGE_FAILED_RECOVERABLE,
-                    TRANSITION_STAGE_EMS_OPERATION_PENDING,
-                    TRANSITION_STAGE_EMS_OPERATION_RUNNING,
-                    TRANSITION_STAGE_HEALTHCHECK_PENDING,
-                }
+                record.stage in _RESUMABLE_TRANSITION_STAGES and not expired
             )
             try:
                 running_ems = self._identity_dict(self._current_ems_identity())
@@ -414,13 +459,18 @@ class SystemAlignmentService:
                 and isinstance(known_good, dict)
                 and self._ems_identity_matches_known_good(running_ems, known_good)
             )
-            # A recoverable transition whose only forward action (resume) keeps
-            # failing must not wedge the console: abandoning it is the escape
-            # when neither resume nor a known-good return can complete. Cancel is
-            # the store's own cancellability authority, so surface it here so the
-            # recovery UI can offer it for a guided_upgrade the same way the
-            # backend already accepts it.
-            transition["cancel_available"] = record.stage in CANCELLABLE_TRANSITION_STAGES
+            # Abandon is the escape out of a wedged transition: offered for
+            # recoverable failures and, once expired, from any non-terminal
+            # stage — but never while the worker is alive or its state unknown.
+            base_cancellable = (
+                record.stage in CANCELLABLE_TRANSITION_STAGES
+                or (expired and record.stage not in TERMINAL_TRANSITION_STAGES)
+            )
+            transition["cancel_available"] = bool(
+                base_cancellable
+                and worker_status_available
+                and worker_active is not True
+            )
         return {
             "ok": True,
             "active": bool(
@@ -1614,7 +1664,41 @@ class SystemAlignmentService:
             resource_strategy=record.resource_strategy,
         )
 
-    def cancel(self, *, operation_id) -> dict:
+    def cancel(self, *, operation_id, coordinator=None) -> dict:
+        """Abandon the transition once no matching worker can be active.
+
+        With a ``coordinator``, abandonment runs through its atomic
+        prove-inactive-then-cancel: a live worker raises
+        ``transition_worker_active``, an unverifiable state raises
+        ``transition_worker_status_unavailable``, and either leaves the durable
+        record untouched. Without one (no observable workers) the durable
+        cancel runs directly.
+        """
+
+        self._current_record(operation_id)
+        if coordinator is None:
+            return self._commit_cancel(operation_id)
+        try:
+            return coordinator.abandon(
+                operation_id, lambda: self._commit_cancel(operation_id)
+            )
+        except OperationWorkerActive as exc:
+            raise SystemAlignmentError(
+                "transition_worker_active",
+                "The System Build operation is still running. Wait for it to "
+                "finish before abandoning the transition.",
+            ) from exc
+        except OperationWorkerStatusUnavailable as exc:
+            raise SystemAlignmentError(
+                "transition_worker_status_unavailable",
+                "The System Build worker state could not be verified. Abandon is "
+                "blocked until the operation status is available.",
+            ) from exc
+
+    def _commit_cancel(self, operation_id) -> dict:
+        """Durably cancel while the coordinator lock is held: nothing here may
+        call back into the coordinator or build worker-aware status."""
+
         try:
             record = self._transitions.cancel(
                 operation_id=operation_id, now=self._now_value()

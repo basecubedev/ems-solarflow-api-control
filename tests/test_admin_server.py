@@ -1485,8 +1485,8 @@ def test_deployment_resolve_container_conflict_endpoint():
 
 def test_deployment_conflict_action_recovers_only_matching_failed_transition():
     class RecoverableContainerConflict(_FakeSystemAlignment):
-        def status(self):
-            result = super().status()
+        def status(self, *, operation_active=None):
+            result = super().status(operation_active=operation_active)
             result["transition"].update(
                 {
                     "system_tag": _DEV_BUILD_TAG,
@@ -3164,7 +3164,8 @@ class _FakeSystemAlignment:
             "system_build": self._system_build(requested_tag),
         }
 
-    def status(self):
+    def status(self, *, operation_active=None):
+        del operation_active
         transition = None
         if self.active:
             transition = {
@@ -3505,8 +3506,8 @@ def test_development_transition_recovery_ignores_browser_acknowledgement(tmp_pat
     # recovered — and a fresh browser acknowledgement is never trusted to grant
     # that authorization during recovery.
     class UnauthorizedDevTransition(_FakeSystemAlignment):
-        def status(self):
-            result = super().status()
+        def status(self, *, operation_active=None):
+            result = super().status(operation_active=operation_active)
             transition = result["transition"]
             transition["system_tag"] = _DEV_BUILD_TAG
             transition["build_id"] = _DEV_BUILD_TAG
@@ -3551,8 +3552,8 @@ def test_development_transition_recovery_ignores_browser_acknowledgement(tmp_pat
 
 def test_development_transition_recovery_uses_stored_ack(tmp_path):
     class AuthorizedDevTransition(_FakeSystemAlignment):
-        def status(self):
-            result = super().status()
+        def status(self, *, operation_active=None):
+            result = super().status(operation_active=operation_active)
             result["transition"].update(
                 {
                     "system_tag": _DEV_BUILD_TAG,
@@ -3584,8 +3585,8 @@ def test_development_transition_recovery_uses_stored_ack(tmp_path):
 
 def test_development_admin_reconnect_uses_stored_ack_without_checkbox(tmp_path):
     class DevelopmentReconnect(_FakeSystemAlignment):
-        def status(self):
-            result = super().status()
+        def status(self, *, operation_active=None):
+            result = super().status(operation_active=operation_active)
             transition = result["transition"]
             transition.update(
                 {
@@ -4676,7 +4677,7 @@ def test_discovery_gate_fails_closed_when_alignment_state_unavailable(tmp_path):
     # discovery write rather than defaulting open.
     class _NoGateMethods:
         @staticmethod
-        def status():
+        def status(*, operation_active=None):
             return {"ok": True, "active": False, "transition": None, "known_good": None}
 
     srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
@@ -4731,6 +4732,342 @@ def test_maintenance_discovery_remains_available_without_setup_operation(tmp_pat
 
     assert status == 200
     assert payload.get("error") is None
+
+
+# --- Maintenance discovery credentials: independent of Setup operations -------
+# Maintenance manages discovery credentials for an existing installation via the
+# generic /api/discovery routes. Those routes require the Admin session and CSRF
+# only — they must never consult the Guided Setup operation validator, so they
+# keep working after Setup transition state was completed, cleaned up or deleted
+# during recovery. The /api/setup/discovery aliases keep their confirmed-
+# operation gate unchanged.
+
+
+class _RejectingAlignment(_FakeSystemAlignment):
+    """Alignment double for a system without usable Setup transition state.
+
+    Every Setup discovery operation is refused (the live failure mode after
+    transition JSON files were removed); the counter proves generic Maintenance
+    routes never even consult the validator.
+    """
+
+    def __init__(self):
+        super().__init__(stage="failed_recoverable", active=False)
+        self.discovery_validation_calls = 0
+
+    def validate_setup_discovery_operation(self, *, operation_id):
+        self.discovery_validation_calls += 1
+        raise SystemAlignmentError(
+            "setup_operation_required", "a confirmed Setup operation id is required"
+        )
+
+
+def test_maintenance_zendure_credential_lifecycle_needs_no_setup_operation(tmp_path):
+    alignment = _RejectingAlignment()
+    discovery = _cloud_discovery(tmp_path)
+    srv, base = _serve(zendure_cloud_discovery=discovery)
+    _attach_system_alignment(srv, alignment)
+    base_path = f"{base}/api/discovery/zendure-cloud-mqtt"
+    try:
+        test_status, _, tested = _request(
+            f"{base_path}/test", method="POST", body={"api_key": _CLOUD_API_KEY}
+        )
+        save_status, _, saved = _request(
+            f"{base_path}/token", method="POST", body={"api_key": _CLOUD_API_KEY}
+        )
+        refresh_status, _, refreshed = _request(f"{base_path}/refresh", method="POST")
+        delete_status, _, deleted = _request(f"{base_path}/token", method="DELETE")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert test_status == 200 and tested["ok"] is True
+    assert save_status == 200 and saved["token_saved"] is True
+    assert refresh_status == 200 and refreshed["ok"] is True
+    assert delete_status == 200 and deleted["token_saved"] is False
+    assert alignment.discovery_validation_calls == 0
+    for payload in (tested, saved, refreshed, deleted):
+        assert _CLOUD_API_KEY not in json.dumps(payload)
+
+
+def test_maintenance_local_mqtt_credential_lifecycle_needs_no_setup_operation(
+    tmp_path,
+):
+    alignment = _RejectingAlignment()
+    mqtt = MqttBrokerDiscovery(connector=lambda host, port, timeout: port == 1883)
+    srv, base = _serve(
+        release_manager=_TrackingReleaseManager(tmp_path),
+        mqtt_discovery=mqtt,
+        mdns_provider=_FakeMdnsProvider(),
+    )
+    _attach_system_alignment(srv, alignment)
+    try:
+        save_status, _, saved = _request(
+            f"{base}/api/discovery/connections/mqtt-credentials",
+            method="POST",
+            body={
+                "label": "Maintenance broker",
+                "username": "svc",
+                "password": "maintenance-secret",
+            },
+        )
+        credentials = (saved.get("local_mqtt") or {}).get("credentials") or []
+        assert credentials, saved
+        credential_id = credentials[0]["id"]
+        probe_status, _, probed = _request(
+            f"{base}/api/discovery/mqtt-brokers/probe",
+            method="POST",
+            body={"cidr": "192.168.178.10/32"},
+        )
+        refresh_status, _, refreshed = _request(
+            f"{base}/api/discovery/mqtt-brokers/refresh", method="POST"
+        )
+        delete_status, _, deleted = _request(
+            f"{base}/api/discovery/connections/mqtt-credentials/{credential_id}",
+            method="DELETE",
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert save_status == 200
+    assert probe_status == 200 and probed["found"] == 1
+    assert refresh_status == 200
+    assert delete_status == 200 and deleted["ok"] is True
+    assert alignment.discovery_validation_calls == 0
+    assert "maintenance-secret" not in json.dumps(saved)
+
+
+@pytest.mark.parametrize(
+    ("method", "alias_path", "body", "confirmed_status"),
+    (
+        ("POST", "/api/setup/discovery/zendure-cloud-mqtt/test", {"api_key": "k"}, 200),
+        ("POST", "/api/setup/discovery/zendure-cloud-mqtt/token", {"api_key": "k"}, 200),
+        # No token is saved in this fresh store, so the handler itself answers
+        # not_configured once the operation gate has passed.
+        ("POST", "/api/setup/discovery/zendure-cloud-mqtt/refresh", {}, 400),
+        ("DELETE", "/api/setup/discovery/zendure-cloud-mqtt/token", None, 200),
+        (
+            "POST",
+            "/api/setup/discovery/connections/mqtt-credentials",
+            {"label": "L", "username": "u", "password": "p"},
+            200,
+        ),
+        ("DELETE", "/api/setup/discovery/connections/mqtt-credentials/l", None, 200),
+        (
+            "POST",
+            "/api/setup/discovery/mqtt-brokers/probe",
+            {"cidr": "192.168.178.10/32"},
+            200,
+        ),
+        ("POST", "/api/setup/discovery/mqtt-brokers/refresh", {}, 200),
+    ),
+    ids=(
+        "zendure-test",
+        "zendure-token-save",
+        "zendure-refresh",
+        "zendure-token-delete",
+        "mqtt-credential-save",
+        "mqtt-credential-delete",
+        "mqtt-broker-probe",
+        "mqtt-broker-refresh",
+    ),
+)
+def test_setup_discovery_credential_aliases_keep_the_operation_gate(
+    tmp_path, method, alias_path, body, confirmed_status
+):
+    # Connectivity probes included: the setup alias of every discovery write is
+    # operation-gated because probe/test persist discovery store state.
+    alignment = _FakeSystemAlignment(stage="resources_verified", active=True)
+    srv, base = _serve(
+        zendure_cloud_discovery=_cloud_discovery(tmp_path),
+        mqtt_discovery=MqttBrokerDiscovery(
+            connector=lambda host, port, timeout: port == 1883
+        ),
+        mdns_provider=_FakeMdnsProvider(),
+    )
+    _attach_system_alignment(srv, alignment)
+    try:
+        missing_status, _, missing = _request(
+            f"{base}{alias_path}", method=method, body=body
+        )
+        mismatch_status, _, mismatched = _request(
+            f"{base}{alias_path}",
+            method=method,
+            body=body,
+            extra_headers={"X-Setup-Operation-ID": "someone-elses-operation"},
+        )
+        gated_status, _, gated = _request(
+            f"{base}{alias_path}",
+            method=method,
+            body=body,
+            extra_headers={"X-Setup-Operation-ID": "op-1"},
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert missing_status == 409
+    assert missing["error"] == "setup_operation_required"
+    assert missing.get("return_to") == "system_build"
+    assert mismatch_status == 409
+    assert mismatched["error"] == "operation_mismatch"
+    assert gated_status == confirmed_status, gated
+    assert gated.get("error") not in {
+        "setup_operation_required",
+        "operation_mismatch",
+        "system_alignment_incomplete",
+    }
+
+
+def test_no_dormant_discovery_diagnostic_allowlist_remains():
+    # The one-time _DISCOVERY_DIAGNOSTIC_PATHS allowlist was never enforced and
+    # its endpoints are not read-only (broker probe merges candidates, the
+    # Zendure test persists status metadata), so the Setup alias gates them like
+    # every other discovery write; Maintenance uses the generic routes instead.
+    # An unused security-policy constant must not linger and suggest otherwise.
+    from admin import server as server_module
+
+    assert not hasattr(server_module, "_DISCOVERY_DIAGNOSTIC_PATHS")
+
+
+def test_setup_discovery_credential_alias_rejects_unverified_transition(tmp_path):
+    alignment = _FakeSystemAlignment(stage="admin_aligned", active=True)
+    srv, base = _serve(zendure_cloud_discovery=_cloud_discovery(tmp_path))
+    _attach_system_alignment(srv, alignment)
+    try:
+        status, _, payload = _request(
+            f"{base}/api/setup/discovery/zendure-cloud-mqtt/token",
+            method="POST",
+            body={"api_key": "k"},
+            extra_headers={"X-Setup-Operation-ID": "op-1"},
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 409
+    assert payload["error"] == "system_alignment_incomplete"
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    (
+        ("POST", "/api/discovery/zendure-cloud-mqtt/test", {"api_key": "k"}),
+        ("POST", "/api/discovery/zendure-cloud-mqtt/token", {"api_key": "k"}),
+        ("DELETE", "/api/discovery/zendure-cloud-mqtt/token", None),
+        (
+            "POST",
+            "/api/discovery/connections/mqtt-credentials",
+            {"label": "L", "username": "u", "password": "p"},
+        ),
+        ("DELETE", "/api/discovery/connections/mqtt-credentials/l", None),
+        (
+            "POST",
+            "/api/discovery/mqtt-brokers/probe",
+            {"cidr": "192.168.178.10/32"},
+        ),
+    ),
+    ids=(
+        "zendure-test",
+        "zendure-token-save",
+        "zendure-token-delete",
+        "mqtt-credential-save",
+        "mqtt-credential-delete",
+        "mqtt-broker-probe",
+    ),
+)
+def test_maintenance_credential_routes_still_require_auth_and_csrf(
+    tmp_path, method, path, body
+):
+    # Setup-operation independence must not loosen the session/CSRF gate.
+    srv, base = _serve(zendure_cloud_discovery=_cloud_discovery(tmp_path))
+    try:
+        anon_status, _, _ = raw_request(f"{base}{path}", method=method, body=body)
+        cookie_only = {
+            key: value
+            for key, value in auth_headers(f"{base}{path}", method).items()
+            if key != "X-CSRF-Token"
+        }
+        csrf_status, _, csrf_payload = raw_request(
+            f"{base}{path}", method=method, body=body, headers=cookie_only
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert anon_status in (401, 403)
+    assert csrf_status == 403
+    assert csrf_payload.get("error") == "csrf_failed"
+
+
+def test_recovered_install_without_transition_state_supports_maintenance(
+    tmp_path, monkeypatch, isolated_install_root
+):
+    # Real-world recovery: an existing installation (manual install, older
+    # Admin, or transition/state JSON removed during recovery). The *real*
+    # alignment service runs over an empty state dir, so no historical Setup
+    # operation can be validated — Maintenance must still load the config,
+    # test/save the Zendure credential and keep preview available.
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "system": {"max_total_power": 1600},
+                "devices": [
+                    {"name": "WR1", "ip": "192.168.1.100", "sn": "AAA", "max_power": 800}
+                ],
+                "grid_meter": {"type": "shelly", "ip": "192.168.1.50"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
+    cloud_dir = tmp_path / "cloud-store"
+    cloud_dir.mkdir()
+    srv, base = _serve(
+        system_alignment=None,
+        zendure_cloud_discovery=_cloud_discovery(cloud_dir),
+    )
+    state_dir = Path(isolated_install_root) / "admin-data" / "state"
+    assert not (state_dir / "pending-transition.json").exists()
+    try:
+        config_status, _, loaded = _request(f"{base}/api/admin/maintenance/config")
+        test_status, _, tested = _request(
+            f"{base}/api/discovery/zendure-cloud-mqtt/test",
+            method="POST",
+            body={"api_key": _CLOUD_API_KEY},
+        )
+        save_status, _, saved = _request(
+            f"{base}/api/discovery/zendure-cloud-mqtt/token",
+            method="POST",
+            body={"api_key": _CLOUD_API_KEY},
+        )
+        preview_status, _, preview = _request(
+            f"{base}/api/admin/maintenance/config/preview",
+            method="POST",
+            body={"draft": loaded["draft"]},
+        )
+        # The historical Setup path stays firmly closed — reproducing the exact
+        # refusal Maintenance used to trip over — without blocking the above.
+        alias_status, _, alias = _request(
+            f"{base}/api/setup/discovery/zendure-cloud-mqtt/test",
+            method="POST",
+            body={"api_key": _CLOUD_API_KEY},
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert config_status == 200 and loaded["status"] == "ok"
+    assert loaded["summary"]["device_count"] == 1
+    assert test_status == 200 and tested["ok"] is True
+    assert save_status == 200 and saved["token_saved"] is True
+    assert preview_status == 200
+    assert preview.get("validation") is not None
+    assert alias_status == 409
+    assert alias["error"] == "setup_operation_required"
 
 
 def test_unresolved_transition_blocks_unrelated_write_but_allows_diagnostics(
@@ -5144,3 +5481,77 @@ def test_failed_transition_keeps_recovery_reads_and_backup_creation_available(
         assert diagnostics.calls == 1
     else:
         assert any(call[0] == expected_call for call in backups.calls)
+
+
+# --- production status responses are always worker-aware --------------------
+
+
+def test_production_alignment_status_calls_are_worker_aware():
+    """Contract: every production system-alignment status read injects the
+    server coordinator's liveness probe.
+
+    The transition dict is embedded in many response families (dedicated
+    status, job polls, start accepts, transition-in-progress rejections). A
+    single bare ``status()`` call would let one of them report a live worker
+    as proven inactive, so the only permitted call site is the
+    ``_alignment_status`` helper and it must always pass
+    ``operation_active=self._operation_active``.
+    """
+
+    import ast
+
+    import admin.server
+
+    admin_dir = Path(admin.server.__file__).resolve().parent
+
+    def _touches_system_alignment(node):
+        return any(
+            isinstance(sub, ast.Attribute) and sub.attr == "system_alignment"
+            for sub in ast.walk(node)
+        )
+
+    def _status_calls(func):
+        return [
+            node
+            for node in ast.walk(func)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "status"
+            and _touches_system_alignment(node.func.value)
+        ]
+
+    offenders = []
+    helper_calls = []
+    helper_def = None
+    for path in sorted(admin_dir.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for func in ast.walk(tree):
+            if not isinstance(func, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            calls = _status_calls(func)
+            if not calls:
+                continue
+            if path.name == "server.py" and func.name == "_alignment_status":
+                helper_def = func
+                helper_calls.extend(calls)
+            else:
+                offenders.append(f"{path.name}:{func.name}")
+
+    assert offenders == [], (
+        "system_alignment.status() must only be called through the "
+        f"_alignment_status helper; bypasses: {offenders}"
+    )
+    assert helper_def is not None, "_alignment_status helper not found"
+
+    args = helper_def.args
+    assert [arg.arg for arg in args.args] == ["self"], (
+        "_alignment_status must not let callers alter the liveness probe"
+    )
+    assert args.kwonlyargs == [] and args.vararg is None and args.kwarg is None
+
+    assert len(helper_calls) == 1
+    keywords = {kw.arg: kw.value for kw in helper_calls[0].keywords}
+    probe = keywords.get("operation_active")
+    assert isinstance(probe, ast.Attribute) and probe.attr == "_operation_active", (
+        "_alignment_status must pass operation_active=self._operation_active"
+    )

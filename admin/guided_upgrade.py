@@ -284,20 +284,36 @@ class UpgradeJobRegistry:
         thread.start()
         return job
 
-    def get_or_submit(self, operation_id, job, runner):
+    def get_or_submit(self, operation_id, job, runner, *, coordinator=None):
         """Submit ``job`` for ``operation_id`` once; return ``(job, created)``.
 
-        A repeated call for the same operation returns the existing live job and
-        ``created=False`` without starting a second worker, so several resume
-        requests can never spawn two EMS upgrade jobs.
+        A repeat returns the existing job, so resume requests can never spawn a
+        second worker. With a ``coordinator``, the claim is taken before the
+        worker thread starts and released when it ends; a refused claim
+        (abandonment won) returns ``(None, False)`` instead of starting one.
         """
 
+        claimed_token = None
         with self._lock:
             existing_id = self._by_operation.get(operation_id)
             if existing_id is not None and existing_id in self._jobs:
                 return self._jobs[existing_id], False
+            if coordinator is not None:
+                claimed_token = coordinator.claim(operation_id)
+                if claimed_token is None:
+                    return None, False
             self._register_locked(job, operation_id=operation_id)
-        thread = threading.Thread(target=self._run, args=(job, runner), daemon=True)
+
+        def run_and_release(handle):
+            try:
+                runner(handle)
+            finally:
+                if coordinator is not None:
+                    coordinator.release(claimed_token)
+
+        thread = threading.Thread(
+            target=self._run, args=(job, run_and_release), daemon=True
+        )
         thread.start()
         return job, True
 

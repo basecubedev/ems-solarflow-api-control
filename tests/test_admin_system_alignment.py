@@ -9,6 +9,8 @@ after Admin + EMS are verified and health checks pass.
 """
 
 import dataclasses
+import threading
+import time
 from datetime import datetime, timezone
 
 import pytest
@@ -17,7 +19,13 @@ from admin.admin_update import (
     ADMIN_IMAGE_REPO,
     EMS_IMAGE_REPO,
     PendingTransitionStore,
+    TransitionStateError,
     make_transition_record,
+)
+from admin.guided_upgrade import UpgradeJob, UpgradeJobRegistry
+from admin.operation_coordinator import (
+    OperationCoordinator,
+    OperationWorkerStatusUnavailable,
 )
 from admin.image_identity import ImageIdentity
 from admin.known_good import KnownGoodStore
@@ -33,6 +41,10 @@ pytestmark = [pytest.mark.simulation, pytest.mark.system_build]
 
 REVISION = "f7265fc747c2223f126f0ee7801e030c6226edf4"
 T0 = datetime(2026, 7, 14, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def _no_worker(_operation_id):
+    return False
 
 STAGE_ADMIN_UPDATE_PENDING = "admin_update_pending"
 STAGE_ADMIN_RECONNECT_PENDING = "admin_reconnect_pending"
@@ -1482,8 +1494,11 @@ def test_status_marks_a_recoverable_transition_as_cancellable(tmp_path):
     service, transitions, _, build, operation_id = _healthcheck_pending_service(tmp_path)
 
     # While the healthcheck is still pending the transition is running, not an
-    # escape-hatch candidate.
-    assert service.status()["transition"]["cancel_available"] is False
+    # escape-hatch candidate — even with the worker proven inactive.
+    assert (
+        service.status(operation_active=_no_worker)["transition"]["cancel_available"]
+        is False
+    )
 
     service.finish_healthcheck(
         operation_id=operation_id,
@@ -1492,12 +1507,64 @@ def test_status_marks_a_recoverable_transition_as_cancellable(tmp_path):
         error_code="healthcheck_unavailable",
         error_message="EMS diagnostics reported unavailable",
     )
-    status = service.status()
+    status = service.status(operation_active=_no_worker)
     assert status["transition"]["stage"] == STAGE_FAILED_RECOVERABLE
     assert status["transition"]["cancel_available"] is True
 
     cancelled = service.cancel(operation_id=operation_id)
     assert cancelled["stage"] == "cancelled"
+    assert service.status()["active"] is False
+
+
+def test_status_offers_cancel_for_an_expired_transition(tmp_path):
+    """An expired transition's only remaining action is the abandon escape.
+
+    The live wedge: a guided_upgrade whose Admin container was replaced but
+    whose reconnect resume never landed sits at admin_reconnect_pending until
+    the TTL runs out. Every resume then fails with ``expired`` while status()
+    reported neither the expiry nor any available action. status() must expose
+    ``expired`` and report the transition as cancellable so the recovery UI
+    can offer the escape, and cancel() must then succeed.
+    """
+
+    build = _build()
+    service, transitions, *_ = _service(
+        tmp_path,
+        build=build,
+        running=_aligned_running(),
+        persistent_ref=build.admin_image,
+    )
+    record = transitions.begin(
+        make_transition_record(
+            mode="guided_upgrade",
+            system_tag=build.canonical_tag,
+            build_id=build.build_id,
+            revision=build.revision,
+            admin_image=build.admin_image,
+            admin_digest=build.admin_digest,
+            ems_image=build.ems_image,
+            ems_digest=build.ems_digest,
+            stage=STAGE_ADMIN_RECONNECT_PENDING,
+            ttl_seconds=60,
+            now=T0,
+        )
+    )
+
+    fresh = service.status(operation_active=_no_worker)["transition"]
+    assert fresh["expired"] is False
+    assert fresh["cancel_available"] is False
+
+    service._now = lambda: datetime(2026, 7, 14, 14, 0, 0, tzinfo=timezone.utc)
+    status = service.status(operation_active=_no_worker)
+    assert status["active"] is True
+    expired = status["transition"]
+    assert expired["stage"] == STAGE_ADMIN_RECONNECT_PENDING
+    assert expired["expired"] is True
+    assert expired["cancel_available"] is True
+    assert expired["resume_available"] is False
+
+    cancelled = service.cancel(operation_id=record.operation_id)
+    assert cancelled["stage"] == STAGE_CANCELLED
     assert service.status()["active"] is False
 
 
@@ -2538,3 +2605,418 @@ def test_terminal_validation_action_state_disables_both_actions(code):
     assert action["busy"] is False
     assert action["terminal_error"]["code"] == code
     assert action["terminal_error"]["message"].startswith("Correct")
+
+
+# --- expired transitions must be worker-aware before abandonment ------------
+#
+# TTL expiry proves every forward path is closed, not that the mutating worker
+# for the operation has stopped. Abandon and Resume therefore consult live
+# worker state, not the clock alone.
+
+LATER = datetime(2026, 7, 14, 14, 0, 0, tzinfo=timezone.utc)
+
+
+def _wait_until(predicate, timeout=2.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return predicate()
+
+
+def _running_ems_service(tmp_path):
+    """A guided_upgrade transition parked at ems_operation_running."""
+
+    service, transitions, known_good, build, operation_id = _resources_verified_service(
+        tmp_path
+    )
+    service.begin_ems_operation(operation_id=operation_id)
+    assert service.claim_ems_operation(operation_id=operation_id) is True
+    assert transitions.read().stage == STAGE_EMS_OPERATION_RUNNING
+    return service, transitions, known_good, build, operation_id
+
+
+def _blocking_upgrade_worker(registry, coordinator, operation_id):
+    """Submit a real upgrade worker that claims the coordinator until released.
+
+    Exercises the production path: the registry claims the operation through the
+    coordinator before starting the worker thread and releases it when the
+    worker finishes, so ``coordinator.is_active`` mirrors the worker lifecycle.
+    """
+
+    release = threading.Event()
+    job = UpgradeJob(operation_id + "-job", [])
+
+    def runner(handle):
+        release.wait(5)
+        handle.finish(
+            {"ok": True, "status": "succeeded", "steps": [], "warnings": []}
+        )
+
+    submitted, created = registry.get_or_submit(
+        operation_id, job, runner, coordinator=coordinator
+    )
+    assert created is True and submitted is not None
+    assert _wait_until(lambda: coordinator.is_active(operation_id))
+    return release
+
+
+def _new_build_record(build, *, now):
+    return make_transition_record(
+        mode="guided_upgrade",
+        system_tag=build.canonical_tag,
+        build_id=build.build_id,
+        revision=build.revision,
+        admin_image=build.admin_image,
+        admin_digest=build.admin_digest,
+        ems_image=build.ems_image,
+        ems_digest=build.ems_digest,
+        stage=STAGE_RESOURCES_VERIFIED,
+        now=now,
+    )
+
+
+def test_expired_running_transition_blocks_abandon_while_upgrade_worker_alive(tmp_path):
+    service, transitions, _, build, operation_id = _running_ems_service(tmp_path)
+    coordinator = OperationCoordinator()
+    registry = UpgradeJobRegistry()
+    release = _blocking_upgrade_worker(registry, coordinator, operation_id)
+    try:
+        service._now = lambda: LATER
+
+        status = service.status(operation_active=coordinator.is_active)
+        transition = status["transition"]
+        assert transition["expired"] is True
+        assert transition["worker_active"] is True
+        assert transition["worker_status_available"] is True
+        assert transition["resume_available"] is False
+        assert transition["cancel_available"] is False
+
+        with pytest.raises(SystemAlignmentError) as exc:
+            service.cancel(operation_id=operation_id, coordinator=coordinator)
+        assert exc.value.code == "transition_worker_active"
+        assert transitions.read().stage == STAGE_EMS_OPERATION_RUNNING
+
+        # A new operation cannot begin while the abandoned record is still
+        # non-terminal and the old worker keeps mutating.
+        with pytest.raises(TransitionStateError) as begin_exc:
+            transitions.begin(_new_build_record(build, now=LATER))
+        assert begin_exc.value.reason == "transition_active"
+    finally:
+        release.set()
+
+    assert _wait_until(lambda: not coordinator.is_active(operation_id))
+
+    status = service.status(operation_active=coordinator.is_active)
+    assert status["transition"]["worker_active"] is False
+    assert status["transition"]["cancel_available"] is True
+
+    cancelled = service.cancel(operation_id=operation_id, coordinator=coordinator)
+    assert cancelled["stage"] == STAGE_CANCELLED
+    # A worker that tries to register after abandonment is refused.
+    assert coordinator.claim(operation_id) is None
+
+    # With the worker gone and the transition terminal, a fresh operation begins.
+    restarted = transitions.begin(_new_build_record(build, now=LATER))
+    assert restarted.operation_id != operation_id
+
+
+def test_expired_healthcheck_transition_blocks_abandon_while_worker_alive(tmp_path):
+    service, transitions, _, build, operation_id = _healthcheck_pending_service(tmp_path)
+    coordinator = OperationCoordinator()
+    registry = UpgradeJobRegistry()
+    release = _blocking_upgrade_worker(registry, coordinator, operation_id)
+    try:
+        service._now = lambda: LATER
+
+        transition = service.status(operation_active=coordinator.is_active)[
+            "transition"
+        ]
+        assert transition["stage"] == STAGE_HEALTHCHECK_PENDING
+        assert transition["expired"] is True
+        assert transition["worker_active"] is True
+        assert transition["resume_available"] is False
+        assert transition["cancel_available"] is False
+
+        with pytest.raises(SystemAlignmentError) as exc:
+            service.cancel(operation_id=operation_id, coordinator=coordinator)
+        assert exc.value.code == "transition_worker_active"
+        assert transitions.read().stage == STAGE_HEALTHCHECK_PENDING
+    finally:
+        release.set()
+
+    assert _wait_until(lambda: not coordinator.is_active(operation_id))
+    cancelled = service.cancel(operation_id=operation_id, coordinator=coordinator)
+    assert cancelled["stage"] == STAGE_CANCELLED
+
+
+def test_expired_transition_without_matching_worker_stays_escapable(tmp_path):
+    # A live worker for a *different* operation must not block this abandon,
+    # and an expired orphan with no worker (the Admin-restart case) is escapable.
+    service, transitions, _, build, operation_id = _running_ems_service(tmp_path)
+    coordinator = OperationCoordinator()
+    service._now = lambda: LATER
+    other_token = coordinator.claim("some-other-operation")
+    assert other_token is not None
+
+    status = service.status(operation_active=coordinator.is_active)
+    transition = status["transition"]
+    assert transition["expired"] is True
+    assert transition["worker_active"] is False
+    assert transition["worker_status_available"] is True
+    assert transition["cancel_available"] is True
+    assert transition["resume_available"] is False
+
+    cancelled = service.cancel(operation_id=operation_id, coordinator=coordinator)
+    assert cancelled["stage"] == STAGE_CANCELLED
+
+
+@pytest.mark.parametrize(
+    "stage,extra",
+    [
+        (
+            STAGE_FAILED_RECOVERABLE,
+            {
+                "failed_stage": STAGE_ADMIN_ALIGNED,
+                "resume_stage": STAGE_ADMIN_ALIGNED,
+                "error_code": "resource_failed",
+                "error_message": "resource verification failed",
+            },
+        ),
+        (STAGE_EMS_OPERATION_PENDING, {}),
+        (STAGE_EMS_OPERATION_RUNNING, {}),
+        (STAGE_HEALTHCHECK_PENDING, {}),
+    ],
+)
+def test_expired_resumable_stage_never_offers_resume(tmp_path, stage, extra):
+    build = _build()
+    service, transitions, *_ = _service(
+        tmp_path,
+        build=build,
+        running=_aligned_running(),
+        persistent_ref=build.admin_image,
+    )
+    transitions.begin(
+        make_transition_record(
+            mode="guided_upgrade",
+            system_tag=build.canonical_tag,
+            build_id=build.build_id,
+            revision=build.revision,
+            admin_image=build.admin_image,
+            admin_digest=build.admin_digest,
+            ems_image=build.ems_image,
+            ems_digest=build.ems_digest,
+            stage=stage,
+            ttl_seconds=60,
+            now=T0,
+            **extra,
+        )
+    )
+
+    fresh = service.status()["transition"]
+    assert fresh["expired"] is False
+    assert fresh["resume_available"] is True
+
+    service._now = lambda: LATER
+    expired = service.status()["transition"]
+    assert expired["expired"] is True
+    assert expired["resume_available"] is False
+
+
+def test_stale_worker_completion_cannot_finish_a_cancelled_transition(tmp_path):
+    # The old worker may keep running its own process after the user abandons
+    # the transition, but its completion callbacks must never revive a terminal
+    # record or write known-good behind the operator's back.
+    service, transitions, known_good, build, operation_id = _healthcheck_pending_service(
+        tmp_path
+    )
+    service._now = lambda: LATER
+    cancelled = service.cancel(operation_id=operation_id)
+    assert cancelled["stage"] == STAGE_CANCELLED
+
+    with pytest.raises(SystemAlignmentError) as health_exc:
+        service.finish_healthcheck(
+            operation_id=operation_id, passed=True, system_build=build
+        )
+    assert health_exc.value.code == "not_resumable"
+
+    with pytest.raises(SystemAlignmentError) as ems_exc:
+        service.finish_ems_operation(operation_id=operation_id, succeeded=True)
+    assert ems_exc.value.code == "not_resumable"
+
+    assert known_good.current() is None
+    assert transitions.read().stage == STAGE_CANCELLED
+
+
+def test_stale_worker_completion_cannot_touch_a_newer_operation(tmp_path):
+    # After abandonment a fresh operation may own the store. The old worker's
+    # completion, keyed by its own (now-terminal) operation id, is rejected as
+    # a mismatch and never mutates the newer transition.
+    service, transitions, _, build, operation_id = _running_ems_service(tmp_path)
+    service._now = lambda: LATER
+    service.cancel(operation_id=operation_id)
+    newer = transitions.begin(_new_build_record(build, now=LATER))
+    assert newer.operation_id != operation_id
+
+    with pytest.raises(SystemAlignmentError) as exc:
+        service.finish_ems_operation(operation_id=operation_id, succeeded=True)
+    assert exc.value.code == "operation_mismatch"
+    assert transitions.read().operation_id == newer.operation_id
+    assert transitions.read().stage == STAGE_RESOURCES_VERIFIED
+
+
+def test_stale_worker_cannot_mark_a_newer_build_known_good(tmp_path):
+    # A worker that lost the abandonment race must not write known-good for the
+    # newer transition it never owned: its healthcheck completion is rejected by
+    # the operation-id guard before any known-good is recorded.
+    service, transitions, known_good, build, operation_id = _running_ems_service(
+        tmp_path
+    )
+    service._now = lambda: LATER
+    service.cancel(operation_id=operation_id)
+    newer = transitions.begin(_new_build_record(build, now=LATER))
+    assert newer.operation_id != operation_id
+
+    with pytest.raises(SystemAlignmentError) as exc:
+        service.finish_healthcheck(
+            operation_id=operation_id, passed=True, system_build=build
+        )
+    assert exc.value.code == "operation_mismatch"
+    assert known_good.current() is None
+    assert transitions.read().operation_id == newer.operation_id
+
+
+# --- worker-liveness lookup failures fail closed ----------------------------
+#
+# The original bug: a liveness probe that raised was swallowed to "inactive",
+# so a registry/lock fault silently enabled Abandon. Unknown worker state must
+# instead fail closed for both status and cancel.
+
+
+def _raising_probe(_operation_id):
+    raise RuntimeError("registry unavailable")
+
+
+def test_status_fails_closed_when_worker_liveness_lookup_raises(tmp_path):
+    service, transitions, _, build, operation_id = _running_ems_service(tmp_path)
+    service._now = lambda: LATER
+
+    transition = service.status(operation_active=_raising_probe)["transition"]
+    assert transition["expired"] is True
+    assert transition["worker_active"] is None
+    assert transition["worker_status_available"] is False
+    assert transition["resume_available"] is False
+    assert transition["cancel_available"] is False
+    # A read-only status never mutates the durable record.
+    assert transitions.read().stage == STAGE_EMS_OPERATION_RUNNING
+
+
+def test_status_without_liveness_provider_reports_worker_state_unavailable(tmp_path):
+    # No provider means worker liveness cannot be observed at all. That is not
+    # proof of inactivity: status must report the state unknown and keep the
+    # abandon escape closed until a real probe is supplied.
+    service, transitions, _, build, operation_id = _running_ems_service(tmp_path)
+    service._now = lambda: LATER
+
+    transition = service.status()["transition"]
+    assert transition["expired"] is True
+    assert transition["worker_active"] is None
+    assert transition["worker_status_available"] is False
+    assert transition["resume_available"] is False
+    assert transition["cancel_available"] is False
+    assert transitions.read().stage == STAGE_EMS_OPERATION_RUNNING
+
+
+def test_status_with_invalid_liveness_provider_fails_closed(tmp_path):
+    service, transitions, _, build, operation_id = _running_ems_service(tmp_path)
+    service._now = lambda: LATER
+
+    transition = service.status(operation_active=object())["transition"]
+    assert transition["worker_active"] is None
+    assert transition["worker_status_available"] is False
+    assert transition["resume_available"] is False
+    assert transition["cancel_available"] is False
+
+
+def test_status_with_proven_inactive_provider_offers_abandon(tmp_path):
+    # A valid provider that answers False is a successful liveness lookup: the
+    # worker is proven gone and the expired transition stays escapable. This is
+    # the Admin-restart orphan contract (empty coordinator, valid probe).
+    service, transitions, _, build, operation_id = _running_ems_service(tmp_path)
+    service._now = lambda: LATER
+
+    transition = service.status(operation_active=lambda _operation_id: False)[
+        "transition"
+    ]
+    assert transition["worker_active"] is False
+    assert transition["worker_status_available"] is True
+    assert transition["resume_available"] is False
+    assert transition["cancel_available"] is True
+
+    cancelled = service.cancel(operation_id=operation_id)
+    assert cancelled["stage"] == STAGE_CANCELLED
+
+
+def test_cancel_fails_closed_when_worker_liveness_cannot_be_verified(tmp_path):
+    service, transitions, _, build, operation_id = _running_ems_service(tmp_path)
+    service._now = lambda: LATER
+
+    class _UnavailableCoordinator:
+        def abandon(self, operation_id, cancel):
+            raise OperationWorkerStatusUnavailable(operation_id)
+
+    with pytest.raises(SystemAlignmentError) as exc:
+        service.cancel(
+            operation_id=operation_id, coordinator=_UnavailableCoordinator()
+        )
+    assert exc.value.code == "transition_worker_status_unavailable"
+    # Fail closed: the transition is untouched and a new operation stays blocked.
+    assert transitions.read().stage == STAGE_EMS_OPERATION_RUNNING
+    with pytest.raises(TransitionStateError) as begin_exc:
+        transitions.begin(_new_build_record(build, now=LATER))
+    assert begin_exc.value.reason == "transition_active"
+
+
+def test_abandon_and_worker_claim_never_both_win_through_the_service(tmp_path):
+    # The service abandon commits its durable cancel while holding the
+    # coordinator lock, so a worker that tries to claim the same operation
+    # mid-cancel is rejected and can never be active against a cancelled record.
+    service, transitions, _, build, operation_id = _running_ems_service(tmp_path)
+    coordinator = OperationCoordinator()
+    service._now = lambda: LATER
+
+    entered = threading.Event()
+    finish = threading.Event()
+    original_commit = service._commit_cancel
+    outcome = {}
+
+    def slow_commit(op):
+        entered.set()
+        assert finish.wait(2)
+        return original_commit(op)
+
+    service._commit_cancel = slow_commit
+
+    def abandon():
+        outcome["cancelled"] = service.cancel(
+            operation_id=operation_id, coordinator=coordinator
+        )
+
+    def claim():
+        assert entered.wait(2)
+        outcome["token"] = coordinator.claim(operation_id)
+
+    ta = threading.Thread(target=abandon)
+    tc = threading.Thread(target=claim)
+    ta.start()
+    tc.start()
+    assert entered.wait(2)
+    finish.set()
+    ta.join(2)
+    tc.join(2)
+
+    assert outcome["cancelled"]["stage"] == STAGE_CANCELLED
+    assert outcome["token"] is None
+    assert transitions.read().stage == STAGE_CANCELLED
+    assert coordinator.is_active(operation_id) is False

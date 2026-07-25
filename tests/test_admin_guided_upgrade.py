@@ -1143,20 +1143,31 @@ class _AlignedSystemBuild:
             "completed",
         }
 
-    def status(self):
+    def status(self, *, operation_active=None):
+        transition = None
+        if self.active:
+            if not callable(operation_active):
+                worker_active, worker_status_available = None, False
+            else:
+                try:
+                    worker_active, worker_status_available = (
+                        bool(operation_active("upgrade-op")),
+                        True,
+                    )
+                except Exception:
+                    worker_active, worker_status_available = None, False
+            transition = {
+                "operation_id": "upgrade-op",
+                "mode": "guided_upgrade",
+                "stage": self.stage,
+                "system_tag": TAG,
+                "request_fingerprint": self.request_fingerprint,
+                "worker_active": worker_active,
+                "worker_status_available": worker_status_available,
+            }
         return {
             "active": self.active and self.stage not in {"completed", "cancelled"},
-            "transition": (
-                {
-                    "operation_id": "upgrade-op",
-                    "mode": "guided_upgrade",
-                    "stage": self.stage,
-                    "system_tag": TAG,
-                    "request_fingerprint": self.request_fingerprint,
-                }
-                if self.active
-                else None
-            ),
+            "transition": transition,
             "known_good": None,
         }
 
@@ -1218,6 +1229,94 @@ def _execute_body(target=TAG, fingerprint=FINGERPRINT, **overrides):
     }
     body.update(overrides)
     return body
+
+
+class _BlockingExecutor:
+    """Delegate to a real executor but hold its worker inside run()."""
+
+    def __init__(self, inner):
+        self._inner = inner
+        self.release = threading.Event()
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    def run(self, *args, **kwargs):
+        self.release.wait(10)
+        return self._inner.run(*args, **kwargs)
+
+
+def _wait_until(predicate, timeout=2.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return predicate()
+
+
+def test_execute_response_and_job_poll_embed_worker_aware_status(tmp_path):
+    # The 202 after execute and every job poll embed the transition. Both must
+    # carry the server coordinator's worker verdict: the claim is taken before
+    # the response is built, so the embed reports the worker active until the
+    # worker thread releases it.
+    inner, _install, _compose, _docker = _make_executor(tmp_path)
+    executor = _BlockingExecutor(inner)
+    alignment = _AlignedSystemBuild(stage="resources_verified")
+    srv, base = _server(executor, system_alignment=alignment)
+    try:
+        status, body = _post(
+            base + "/api/admin/maintenance/upgrade/execute", _execute_body()
+        )
+        assert status == 202
+        transition = body["transition"]
+        assert transition["worker_active"] is True
+        assert transition["worker_status_available"] is True
+
+        status, polled = _get(
+            base + "/api/admin/maintenance/upgrade/jobs/" + body["job_id"]
+        )
+        assert status == 200
+        transition = polled["transition"]
+        assert transition["worker_active"] is True
+        assert transition["worker_status_available"] is True
+
+        executor.release.set()
+        _wait_job(base, body["job_id"])
+        assert _wait_until(
+            lambda: not srv.operation_coordinator.is_active("upgrade-op")
+        )
+        status, polled = _get(
+            base + "/api/admin/maintenance/upgrade/jobs/" + body["job_id"]
+        )
+        assert status == 200
+        transition = polled["transition"]
+        assert transition["worker_active"] is False
+        assert transition["worker_status_available"] is True
+    finally:
+        executor.release.set()
+        srv.shutdown()
+
+
+def test_execute_after_abandonment_embeds_worker_aware_transition(tmp_path):
+    # The "abandoned before the upgrade could start" 409 embeds the transition;
+    # its worker verdict must be the coordinator's (proven inactive), not an
+    # unavailable or fail-open placeholder.
+    executor, _install, _compose, _docker = _make_executor(tmp_path)
+    alignment = _AlignedSystemBuild(stage="resources_verified")
+    srv, base = _server(executor, system_alignment=alignment)
+    try:
+        srv.operation_coordinator.abandon("upgrade-op", lambda: None)
+        status, body = _post(
+            base + "/api/admin/maintenance/upgrade/execute", _execute_body()
+        )
+        assert status == 409
+        assert body["error"] == "system_transition_in_progress"
+        transition = body["transition"]
+        assert transition["worker_active"] is False
+        assert transition["worker_status_available"] is True
+    finally:
+        srv.shutdown()
 
 
 class _WarnAdminUpdate:
@@ -2072,8 +2171,8 @@ class _RecordingSystemBuild(_AlignedSystemBuild):
         self.stage = "completed" if passed else "failed_recoverable"
         return {"status": self.stage, "operation_id": operation_id}
 
-    def status(self):
-        base = super().status()
+    def status(self, *, operation_active=None):
+        base = super().status(operation_active=operation_active)
         transition = base.get("transition")
         if transition and self._error_code:
             transition["error_code"] = self._error_code

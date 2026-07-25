@@ -11,8 +11,9 @@ from datetime import datetime, timezone
 
 import pytest
 
-from admin.admin_update import PendingTransitionStore
+from admin.admin_update import PendingTransitionStore, make_transition_record
 from admin.image_identity import ImageIdentity
+from admin.operation_coordinator import OperationCoordinator
 from admin.known_good import KnownGoodStore
 from admin.system_alignment import SystemAlignmentError, SystemAlignmentService
 from admin.system_build import SystemBuild
@@ -23,6 +24,8 @@ pytestmark = pytest.mark.simulation
 REVISION = "f7265fc747c2223f126f0ee7801e030c6226edf4"
 NOW = datetime(2026, 7, 14, 12, 0, 0, tzinfo=timezone.utc)
 
+STAGE_ADMIN_RECONNECT_PENDING = "admin_reconnect_pending"
+STAGE_ADMIN_ALIGNED = "admin_aligned"
 STAGE_RESOURCES_VERIFIED = "resources_verified"
 STAGE_EMS_OPERATION_PENDING = "ems_operation_pending"
 STAGE_EMS_OPERATION_RUNNING = "ems_operation_running"
@@ -90,6 +93,7 @@ def _service(
     build,
     running_ems,
     embedded=None,
+    now=None,
 ):
     return SystemAlignmentService(
         resolver=_Resolver(build),
@@ -100,7 +104,7 @@ def _service(
         current_ems_identity=lambda: running_ems["identity"],
         persistent_ref=lambda: build.admin_image,
         launcher=lambda _record: pytest.fail("aligned Admin must not launch updater"),
-        now=lambda: NOW,
+        now=now or (lambda: NOW),
     )
 
 
@@ -288,3 +292,70 @@ def test_failed_healthcheck_recovers_after_restart_without_reclaiming_ems(tmp_pa
     with pytest.raises(SystemAlignmentError) as exc_info:
         after_restart.claim_ems_operation(operation_id=operation_id)
     assert getattr(exc_info.value, "code", None) == "not_resumable"
+
+
+def test_expired_reconnect_pending_transition_is_escapable_after_restart(tmp_path):
+    """The wedged live case: Admin replaced, but the reconnect resume never landed.
+
+    The durable record sits at admin_reconnect_pending until its TTL runs out;
+    every later resume (including after an Admin restart) fails with
+    ``expired``. The console must still offer an escape: status reports the
+    expired transition as cancellable, cancel succeeds, and a new operation
+    for the same build may then begin.
+    """
+
+    state_dir = tmp_path / "state"
+    build = _build()
+    running_ems = {"identity": _identity_for(build, role="ems")}
+    record = PendingTransitionStore(state_dir).begin(
+        make_transition_record(
+            mode="guided_upgrade",
+            system_tag=build.canonical_tag,
+            build_id=build.build_id,
+            revision=build.revision,
+            admin_image=build.admin_image,
+            admin_digest=build.admin_digest,
+            ems_image=build.ems_image,
+            ems_digest=build.ems_digest,
+            stage=STAGE_ADMIN_RECONNECT_PENDING,
+            ttl_seconds=60,
+            now=NOW,
+        ),
+        now=NOW,
+    )
+
+    later = datetime(2026, 7, 14, 14, 0, 0, tzinfo=timezone.utc)
+    after_restart = _service(
+        state_dir,
+        build=build,
+        running_ems=running_ems,
+        now=lambda: later,
+    )
+
+    with pytest.raises(SystemAlignmentError) as resume_exc:
+        after_restart.resume(operation_id=record.operation_id)
+    assert resume_exc.value.code == "expired"
+
+    # The restarted Admin owns a fresh, empty coordinator: the orphan holds no
+    # claim, so the liveness lookup succeeds and proves the worker inactive.
+    status = after_restart.status(
+        operation_active=OperationCoordinator().is_active
+    )
+    assert status["active"] is True
+    transition = status["transition"]
+    assert transition["expired"] is True
+    assert transition["worker_active"] is False
+    assert transition["worker_status_available"] is True
+    assert transition["cancel_available"] is True
+    assert transition["resume_available"] is False
+
+    cancelled = after_restart.cancel(operation_id=record.operation_id)
+    assert cancelled["stage"] == "cancelled"
+    assert after_restart.status()["active"] is False
+
+    restarted = after_restart.start(
+        requested_tag=build.canonical_tag,
+        mode="guided_upgrade",
+    )
+    assert restarted["operation_id"] != record.operation_id
+    assert restarted["stage"] == STAGE_ADMIN_ALIGNED

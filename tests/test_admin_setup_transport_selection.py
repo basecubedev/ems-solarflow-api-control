@@ -236,6 +236,59 @@ def test_reconcile_manual_mqtt_kept_when_local_api_becomes_first():
     assert dev["selectionOrigin"] == "manual"
 
 
+def test_priority_change_reasserts_priority_over_manual_markers():
+    """A priority change re-expresses which transport wins, so any earlier
+    per-device manual transport pick yields to the new priority. The reconciler
+    itself still honors manual origin (tested above); this reassert step runs on
+    a priority change and clears the manual markers before the reconciler re-runs
+    so priority decides. Manual removals (dismissedSerials) are untouched."""
+    out = _run_named(
+        ("reassertPriorityOverManualTransport",),
+        """
+let configDraftItems = [
+  { role: "inverter", serial_number: "EOD1AAA", auto_added: false },
+  { role: "inverter", serial_number: "EOD1CCC", auto_added: true },
+  { role: "grid_meter", auto_selected: false },
+];
+const zendureMqttPreviewProposals = new Map([
+  ["m:bbb", { serial_number: "EOD1BBB", selection_origin: "manual" }],
+  ["m:ddd", { serial_number: "EOD1DDD", selection_origin: "priority" }],
+]);
+let savedDraft = false;
+let savedMqtt = false;
+function saveConfigDraft() { savedDraft = true; }
+function saveMqttPreviewProposals() { savedMqtt = true; }
+reassertPriorityOverManualTransport();
+console.log(JSON.stringify({
+  draft: configDraftItems,
+  mqtt: [...zendureMqttPreviewProposals.values()],
+  savedDraft,
+  savedMqtt,
+}));
+""",
+    )
+    draft = {item.get("serial_number") or "grid": item for item in out["draft"]}
+    # The manual HTTP inverter loses its manual marker; the already-auto one and
+    # the grid meter are untouched.
+    assert draft["EOD1AAA"]["auto_added"] is True
+    assert draft["EOD1CCC"]["auto_added"] is True
+    assert draft["grid"]["auto_selected"] is False
+    mqtt = {entry["serial_number"]: entry for entry in out["mqtt"]}
+    # The manual MQTT selection is demoted so priority can re-decide it.
+    assert mqtt["EOD1BBB"]["selection_origin"] == "priority"
+    assert mqtt["EOD1DDD"]["selection_origin"] == "priority"
+    assert out["savedDraft"] is True
+    assert out["savedMqtt"] is True
+
+
+def test_move_discovery_source_reasserts_priority_before_sync():
+    js = _read("admin.js")
+    fn = js.split("function moveDiscoverySource", 1)[1].split("\nfunction ", 1)[0]
+    # A priority reorder reasserts priority over prior manual transport picks
+    # before it persists (which triggers syncConfigFromDiscovery -> reconcile).
+    assert "reassertPriorityOverManualTransport()" in fn
+
+
 def test_reconcile_dismissed_serial_selects_nothing():
     """A device the user removed entirely is not re-added over either transport."""
     state = dict(LATE_MQTT_STATE)
@@ -395,12 +448,10 @@ def test_http_inverter_body_offers_transport_switch():
 # --- Add more devices (Phase 7) -------------------------------------------
 
 
-def test_add_more_devices_includes_only_unconfigured_mqtt_proposals():
+def test_add_more_devices_includes_all_unselected_transports():
     out = _run_named(
         ("normalizeSerial", "unselectedMqttDeviceProposals"),
         """
-function inverterItems() { return [{ serial_number: "EOD1HTTP" }]; }
-function selectedMqttDeviceEntries() { return [{ serial_number: "EOD1SEL" }]; }
 const zendureMqttPreviewProposals = new Map([["m:sel", {}]]);
 function availableMqttDeviceProposals() {
   return [
@@ -412,19 +463,24 @@ function availableMqttDeviceProposals() {
 console.log(JSON.stringify(unselectedMqttDeviceProposals().map((p) => p.id)));
 """,
     )
-    # Already-selected (m:sel) and already-configured-over-HTTP (m:http, offered as
-    # a transport alternative on the selected card) are excluded; only the
-    # genuinely new MQTT device (m:new) is offered under Add more devices.
-    assert out == ["m:new"]
+    # Every discovered transport is offered under Add more devices; only a proposal
+    # already selected over MQTT (m:sel, its id is in the selection map) is hidden.
+    # A serial configured over another transport (m:http) is still shown so the
+    # user can add it over MQTT — no per-serial suppression.
+    assert out == ["m:http", "m:new"]
 
 
-def test_mqtt_candidate_card_offers_add_over_transport_and_escapes():
+def test_mqtt_candidate_card_uses_uniform_add_label_and_escapes():
     js = _read("admin.js")
     card = js.split("function renderMqttCandidateCard", 1)[1].split(
         "\nfunction ", 1
     )[0]
     assert "config-mqtt-add" in card
-    assert "Use over " in card
+    # The action is uniform with the HTTP candidate card ("Add as inverter"); no
+    # transport-specific "Use over X" button.
+    assert "Add as inverter" in card
+    assert "Use over " not in card
+    # Transport stays visible as metadata on the card, serial stays escaped.
     assert "transportLabelFor(source)" in card
     assert "escapeHtml(serial)" in card
 

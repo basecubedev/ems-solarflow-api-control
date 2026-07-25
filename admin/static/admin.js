@@ -100,6 +100,22 @@ function setupDiscoveryFetch(input, init) {
   return fetch(setupPath, options);
 }
 
+// One routing authority for discovery mutations shared between the workflows:
+// Guided Setup speaks the operation-gated /api/setup/discovery aliases,
+// Maintenance the generic authenticated /api/discovery routes. The context is
+// decided before the request is sent — never probed via a Setup 409.
+function discoveryFetch(input, init, context) {
+  if (context === "setup") return setupDiscoveryFetch(input, init);
+  if (context === "maintenance") return fetch(input, init);
+  throw new Error("Discovery request context is required");
+}
+
+// The shared source-config nodes move between the Setup parking/priority slots
+// and the Maintenance source rows; the node's current owner is the context.
+function discoveryContextFor(node) {
+  return inlineConfigMountedInMaintenance(node) ? "maintenance" : "setup";
+}
+
 const els = {
   form: document.getElementById("scan-form"),
   cidr: document.getElementById("cidr-input"),
@@ -1207,6 +1223,25 @@ async function persistDiscoveryPreparation() {
   syncConfigFromDiscovery();
 }
 
+function reassertPriorityOverManualTransport() {
+  let draftChanged = false;
+  for (const item of configDraftItems) {
+    if (item.role === "inverter" && item.auto_added === false) {
+      item.auto_added = true;
+      draftChanged = true;
+    }
+  }
+  if (draftChanged) saveConfigDraft();
+  let mqttChanged = false;
+  for (const entry of zendureMqttPreviewProposals.values()) {
+    if (entry.selection_origin === "manual") {
+      entry.selection_origin = "priority";
+      mqttChanged = true;
+    }
+  }
+  if (mqttChanged) saveMqttPreviewProposals();
+}
+
 function moveDiscoverySource(source, delta) {
   const priority = discoveryPreparation.discovery_priority.slice();
   const index = priority.indexOf(source);
@@ -1215,6 +1250,7 @@ function moveDiscoverySource(source, delta) {
   priority.splice(index, 1);
   priority.splice(next, 0, source);
   discoveryPreparation.discovery_priority = priority;
+  reassertPriorityOverManualTransport();
   persistDiscoveryPreparation();
 }
 
@@ -2954,10 +2990,11 @@ async function probeMqttNetworks(cidrs) {
 async function refreshMqttBrokers() {
   els.mqttRefresh.disabled = true;
   els.mqttMessage.textContent = "Refreshing broker discovery…";
+  const context = discoveryContextFor(els.mqttRefresh);
   try {
-    const res = await setupDiscoveryFetch("/api/discovery/mqtt-brokers/refresh", {
+    const res = await discoveryFetch("/api/discovery/mqtt-brokers/refresh", {
       method: "POST",
-    });
+    }, context);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "broker refresh failed");
     els.mqttMessage.textContent =
@@ -3047,14 +3084,16 @@ async function saveMqttCredential(event) {
   };
   els.mqttCredentialSave.disabled = true;
   els.mqttCredentialMessage.textContent = "Saving credential…";
+  const context = discoveryContextFor(els.mqttCredentialForm);
   try {
-    const res = await setupDiscoveryFetch(
+    const res = await discoveryFetch(
       "/api/discovery/connections/mqtt-credentials",
       {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-      }
+      },
+      context
     );
     const data = await res.json();
     if (!res.ok) throw new Error(data.message || data.error || "save failed");
@@ -3071,10 +3110,12 @@ async function saveMqttCredential(event) {
 
 async function deleteMqttCredential(id) {
   els.mqttCredentialMessage.textContent = "Removing credential…";
+  const context = discoveryContextFor(els.mqttCredentialList);
   try {
-    const res = await setupDiscoveryFetch(
+    const res = await discoveryFetch(
       "/api/discovery/connections/mqtt-credentials/" + encodeURIComponent(id),
-      { method: "DELETE" }
+      { method: "DELETE" },
+      context
     );
     const data = await res.json();
     if (!res.ok) throw new Error(data.message || data.error || "delete failed");
@@ -3200,12 +3241,13 @@ async function saveZendureCloudToken(event) {
   }
   els.zendureCloudSave.disabled = true;
   els.zendureCloudMessage.textContent = "Saving Zendure credential…";
+  const context = discoveryContextFor(els.zendureCloudForm);
   try {
-    const res = await setupDiscoveryFetch(ZENDURE_CLOUD_BASE + "/token", {
+    const res = await discoveryFetch(ZENDURE_CLOUD_BASE + "/token", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ api_key: apiKey }),
-    });
+    }, context);
     const data = await res.json();
     if (!res.ok || data.ok === false) {
       throw new Error(data.message || data.error || "save failed");
@@ -3225,13 +3267,14 @@ async function testZendureCloudToken() {
   const apiKey = els.zendureCloudTokenInput.value.trim();
   els.zendureCloudTest.disabled = true;
   els.zendureCloudMessage.textContent = "Testing Zendure credential…";
+  const context = discoveryContextFor(els.zendureCloudForm);
   try {
     const body = apiKey ? { api_key: apiKey } : {};
-    const res = await setupDiscoveryFetch(ZENDURE_CLOUD_BASE + "/test", {
+    const res = await discoveryFetch(ZENDURE_CLOUD_BASE + "/test", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-    });
+    }, context);
     const data = await res.json();
     if (!res.ok || data.ok === false) {
       throw new Error(data.message || data.error || "test failed");
@@ -3256,10 +3299,11 @@ async function testZendureCloudToken() {
 async function refreshZendureCloudDiscovery() {
   els.zendureCloudRefresh.disabled = true;
   els.zendureCloudMessage.textContent = "Discovering Zendure cloud devices…";
+  const context = discoveryContextFor(els.zendureCloudForm);
   try {
-    const res = await setupDiscoveryFetch(ZENDURE_CLOUD_BASE + "/refresh", {
+    const res = await discoveryFetch(ZENDURE_CLOUD_BASE + "/refresh", {
       method: "POST",
-    });
+    }, context);
     const data = await res.json();
     if (!res.ok || data.ok === false) {
       throw new Error(data.message || data.error || "refresh failed");
@@ -3283,9 +3327,13 @@ async function refreshZendureCloudDiscovery() {
         ").";
     await loadZendureCloudSettings();
     // Refresh proposals (and reconcile the draft) so a rescan actually swaps
-    // transport instead of leaving latestMqttProposals stale.
-    await loadMqttProposals();
-    await refreshUnifiedDevices();
+    // transport instead of leaving latestMqttProposals stale. Both feed the
+    // Setup draft only; a Maintenance-mounted refresh must not touch the Setup
+    // wizard (its Start discovery run reads the proposals itself).
+    if (context === "setup") {
+      await loadMqttProposals();
+      await refreshUnifiedDevices();
+    }
   } catch (err) {
     els.zendureCloudMessage.textContent =
       "Zendure cloud discovery failed: " + escapeHtml(err.message || String(err));
@@ -3297,10 +3345,11 @@ async function refreshZendureCloudDiscovery() {
 async function forgetZendureCloudToken() {
   els.zendureCloudForget.disabled = true;
   els.zendureCloudMessage.textContent = "Removing Zendure credential…";
+  const context = discoveryContextFor(els.zendureCloudForm);
   try {
-    const res = await setupDiscoveryFetch(ZENDURE_CLOUD_BASE + "/token", {
+    const res = await discoveryFetch(ZENDURE_CLOUD_BASE + "/token", {
       method: "DELETE",
-    });
+    }, context);
     const data = await res.json();
     if (!res.ok || data.ok === false) {
       throw new Error(data.message || data.error || "delete failed");
@@ -3309,7 +3358,7 @@ async function forgetZendureCloudToken() {
     renderZendureCloudDevices();
     els.zendureCloudMessage.textContent = data.message || "Zendure credential removed.";
     await loadZendureCloudSettings();
-    await refreshUnifiedDevices();
+    if (context === "setup") await refreshUnifiedDevices();
   } catch (err) {
     els.zendureCloudMessage.textContent =
       "Could not remove Zendure credential: " + escapeHtml(err.message || String(err));
@@ -4375,21 +4424,16 @@ function roleLabel(role) {
   return role === "grid_meter" ? "grid meter" : "inverter";
 }
 
-// MQTT device proposals not configured over any transport (an alternative for an
-// already-selected serial is offered on the selected card, not duplicated here).
+// Every discovered MQTT transport is offered under Add more devices; only a
+// proposal already selected over MQTT is dropped. A serial configured over
+// another transport stays listed so the user can add it over MQTT too.
 function unselectedMqttDeviceProposals() {
-  const configured = new Set(
-    [...inverterItems(), ...selectedMqttDeviceEntries()]
-      .map((entry) => normalizeSerial(entry.serial_number))
-      .filter(Boolean)
-  );
   const seen = new Set();
   const candidates = [];
   for (const proposal of availableMqttDeviceProposals()) {
     const id = String(proposal.id || "");
     if (!id || zendureMqttPreviewProposals.has(id)) continue;
     const serial = normalizeSerial(proposal.serial_number);
-    if (serial && configured.has(serial)) continue;
     const dedup = serial || id;
     if (seen.has(dedup)) continue;
     seen.add(dedup);
@@ -4458,8 +4502,7 @@ function renderMqttCandidateCard(proposal) {
     '<div class="hardware-card-actions">' +
     '<span class="hardware-card-status">Ready</span>' +
     '<button type="button" class="primary-button compact config-mqtt-add"' +
-    ' data-proposal-id="' + id + '">Use over ' +
-    escapeHtml(transportLabelFor(source)) + "</button>" +
+    ' data-proposal-id="' + id + '">Add as inverter</button>' +
     '<button type="button" class="hardware-card-toggle" data-available-toggle="' + id + '"' +
     ' aria-expanded="' + (open ? "true" : "false") +
     '" aria-controls="config-available-body-' + safe +
@@ -9442,6 +9485,32 @@ function renderUpgradeCurrent() {
   }
 }
 
+function summarizeMqttMigration(review) {
+  const migration = review || {};
+  const changes = Array.isArray(migration.changes) ? migration.changes : [];
+  const affected = changes.length;
+  const losingControl = changes.filter(
+    (change) => change && change.disables_control
+  ).length;
+  const relevant = migration.needs_migration === true || affected > 0;
+  let text = "";
+  if (relevant) {
+    let summary = "MQTT configuration migration required";
+    if (affected > 0) {
+      summary += " for " + affected + (affected === 1 ? " device" : " devices");
+    }
+    if (affected > 0 && losingControl > 0) {
+      summary +=
+        "; " +
+        losingControl +
+        (losingControl === 1 ? " device" : " devices") +
+        " will lose output control";
+    }
+    text = summary + ".";
+  }
+  return { relevant, affected, losingControl, text };
+}
+
 function renderUpgradePlan() {
   const release = upgradeSelectedRelease();
   const cur = upgradeState.current;
@@ -9497,18 +9566,10 @@ function renderUpgradePlan() {
     items.push({ tone: "warn", text: "Current version unknown" });
   }
   items.push({ tone: "info", text: "Verify the target image identity" });
-  const migration = upgradeState.migrationReview || {};
-  const migrationChanges = Array.isArray(migration.changes) ? migration.changes : [];
-  const migrationLosingControl = migrationChanges.filter(
-    (change) => change.disables_control
-  ).length;
-  items.push({
-    tone: migration.needs_migration ? "warn" : "info",
-    text: migration.needs_migration
-      ? "Review Zendure MQTT migration: " + migrationChanges.length +
-        " affected device(s), " + migrationLosingControl + " lose control"
-      : "Zendure MQTT migration review: no migration required",
-  });
+  const mqttMigration = summarizeMqttMigration(upgradeState.migrationReview);
+  if (mqttMigration.relevant) {
+    items.push({ tone: "warn", text: mqttMigration.text });
+  }
   // Admin alignment is always part of the plan, never a separate decision: the
   // Admin is aligned to the same System Build before EMS is deployed.
   items.push({
@@ -9760,14 +9821,11 @@ async function executeUpgrade() {
   const previousAdminInstanceId = authState.adminInstanceId;
   const target = upgradeState.preparedTag || upgradeState.selected;
   const options = readUpgradeOptions();
-  const migration = upgradeState.migrationReview || {};
-  const migrationChanges = Array.isArray(migration.changes) ? migration.changes : [];
-  const losingControl = migrationChanges.filter((change) => change.disables_control).length;
+  const mqttMigration = summarizeMqttMigration(upgradeState.migrationReview);
   const confirmation =
     "Confirm Guided Upgrade to " + target + ". " +
-    "MQTT migration " + (migration.needs_migration ? "required" : "not required") +
-    " (" + migrationChanges.length + " affected, " + losingControl + " lose control); " +
-    "backup " + (options.backup ? "enabled" : "disabled") + "; " +
+    (mqttMigration.relevant ? mqttMigration.text + " " : "") +
+    "Backup " + (options.backup ? "enabled" : "disabled") + "; " +
     "config changes " +
     (options.config_add_keys || options.config_comments ? "enabled" : "check only") +
     "; Admin/EMS container recreation required.";
@@ -13224,12 +13282,11 @@ async function maintenanceScanNetwork(
   onProgress,
   session = discoverySessions.maintenance
 ) {
-  const request = session.mode === "setup" ? setupDiscoveryFetch : fetch;
-  const start = await request("/api/discovery/scan", {
+  const start = await discoveryFetch("/api/discovery/scan", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ cidr }),
-  });
+  }, session.mode);
   const started = await start.json();
   if (!start.ok || !started.scan_id) {
     throw new Error(started.error || "scan request failed");
@@ -15742,16 +15799,33 @@ function renderSystemAlignmentStatus(data) {
   });
 
   const failed = stage === "failed_recoverable";
+  const expired = transition.expired === true;
+  const recoveryAvailable = failed || expired;
   const reconnecting =
-    stage === "admin_update_pending" ||
-    stage === "admin_reconnect_pending" ||
-    stage === "admin_alignment_started";
+    !expired &&
+    (stage === "admin_update_pending" ||
+      stage === "admin_reconnect_pending" ||
+      stage === "admin_alignment_started");
+  // Expiry or failure does not prove the operation's worker stopped, and a
+  // worker state that could not be verified is not "stopped" either.
+  const workerActive = transition.worker_active === true;
+  const workerStatusUnknown = transition.worker_status_available === false;
   if (systemAlignmentEls.reconnect) systemAlignmentEls.reconnect.hidden = !reconnecting;
-  if (systemAlignmentEls.partial) systemAlignmentEls.partial.hidden = !failed;
+  if (systemAlignmentEls.partial) systemAlignmentEls.partial.hidden = !recoveryAvailable;
   if (systemAlignmentEls.partialMessage) {
-    systemAlignmentEls.partialMessage.textContent =
-      errorMessage ||
-      "Admin is aligned, but EMS has not completed the matching build transition.";
+    systemAlignmentEls.partialMessage.textContent = workerStatusUnknown
+      ? "The System Build worker state could not be verified. Abandon is " +
+        "temporarily unavailable."
+      : workerActive
+        ? expired
+          ? "The System Build transition has expired, but its operation is still " +
+            "running. Wait for it to finish before abandoning the transition."
+          : "The System Build operation is still running. Wait for it to finish " +
+            "before abandoning the transition."
+        : errorMessage ||
+          (expired
+            ? "The System Build transition has expired. Abandon it to start a new one."
+            : "Admin is aligned, but EMS has not completed the matching build transition.");
   }
   if (systemAlignmentEls.resume) {
     systemAlignmentEls.resume.disabled =
@@ -15762,12 +15836,15 @@ function renderSystemAlignmentStatus(data) {
       !transition.operation_id || transition.return_available !== true;
   }
   if (systemAlignmentEls.abandon) {
-    // The escape hatch out of a wedged transition: enabled whenever the server
-    // reports the transition as cancellable, so a guided_upgrade whose resume
-    // keeps failing (and whose EMS was already recreated, so return is
-    // unavailable) can still be abandoned instead of blocking the console.
+    // The escape hatch out of a wedged transition, only with the worker
+    // proven inactive: an active, unknown or absent worker verdict keeps
+    // Abandon closed so a stale worker cannot keep mutating past a new
+    // operation.
     systemAlignmentEls.abandon.disabled =
-      !transition.operation_id || transition.cancel_available !== true;
+      !transition.operation_id ||
+      transition.cancel_available !== true ||
+      transition.worker_active !== false ||
+      transition.worker_status_available !== true;
   }
   // One authority owns visibility, task placement and polling for every render.
   applySystemBuildPresentation();

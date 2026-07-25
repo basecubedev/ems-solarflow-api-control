@@ -164,14 +164,35 @@ cancelled
 
 The record:
 
-- has a bounded TTL and rejects expired records;
+- has a bounded TTL; an expired record refuses every forward path (resume,
+  claim, restart). TTL expiry does not prove the operation's mutating worker
+  stopped, so the abandon escape is gated on live worker state, not the clock:
+  a single `OperationCoordinator` owns worker ownership and abandonment
+  atomically — Guided Upgrade and deployment workers claim it before mutating
+  and release it when they stop, and an abandon proves no matching worker is
+  active, blocks any future claim, and only then commits the durable cancel
+  under one lock (so a worker can never register between "proven inactive" and
+  cancellation). `status()` reports `worker_active` and `worker_status_available`
+  and only offers the abandon escape once the worker is proven gone; a live
+  worker returns `transition_worker_active` and an unverifiable worker state
+  fails closed with `transition_worker_status_unavailable`. A missing or
+  invalid liveness probe is itself an unverifiable state (`worker_active`
+  null, `worker_status_available` false, no cancel), and every production
+  status response — the dedicated endpoint, job polls, start accepts and
+  transition-in-progress rejections — reads through one server helper that
+  always injects the coordinator probe, so no route can report a live worker
+  as inactive. After an Admin restart the in-memory coordinator is empty: the
+  probe answers "proven inactive", so an expired orphan holds no claim and
+  stays escapable;
 - rejects unknown `state_version`, malformed records and a tampered
   `build_id`/`admin_digest`;
 - rejects resuming against a **different** running Admin build;
 - keeps reconnect polling and same-stage resume idempotent;
 - uses a cross-process file lock and durable claims for Admin update, embedded
   resource import and EMS work so those mutations cannot execute twice;
-- cannot be silently overwritten while an active transition is in progress.
+- cannot be silently overwritten while an active transition is in progress;
+  the operator-visible cancel is the only action that frees the store for a
+  new operation.
 
 Admin reconnect only advances to `admin_aligned`; resource verification,
 EMS execution and health checks remain pending. The operation becomes

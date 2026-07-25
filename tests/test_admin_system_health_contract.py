@@ -137,7 +137,8 @@ class _ResumeSystemAlignment:
     def __init__(self):
         self.recover_calls = []
 
-    def status(self):
+    def status(self, *, operation_active=None):
+        del operation_active
         return {
             "active": True,
             "transition": {

@@ -3037,7 +3037,7 @@ renderSystemAlignmentStatus({
   transition: {
     mode: "guided_upgrade", stage: "failed_recoverable", operation_id: "upgrade-op",
     system_tag: "v9.9.10", resume_available: true, return_available: false,
-    cancel_available: true,
+    cancel_available: true, worker_active: false, worker_status_available: true,
   },
 });
 console.log(JSON.stringify({
@@ -4465,7 +4465,7 @@ def test_maintenance_discovery_is_first_class_review_workflow():
     assert 'fetch("/api/discovery/networks"' in start
     assert 'fetch("/api/discovery/mqtt-brokers/refresh"' in start
     assert 'fetch(ZENDURE_CLOUD_BASE + "/settings")' in start
-    assert 'request("/api/discovery/scan"' in js
+    assert 'discoveryFetch("/api/discovery/scan"' in js
     assert '"/api/discovery/result/"' in js
     assert "buildMaintenanceDiscoveryReview" in start
     assert "/api/admin/maintenance/config/apply" not in start
@@ -7474,12 +7474,15 @@ def test_setup_discovery_mutations_use_confirmed_operation_routes():
     helper = _extract_fn(js, "setupDiscoveryFetch")
     assert '"/api/setup/discovery"' in helper
     assert 'headers.set("X-Setup-Operation-ID", setupOperationId)' in helper
+    # Setup-only workflow mutations: these panels exist only inside Guided
+    # Setup, so they always speak the operation-gated Setup alias. The shared
+    # credential/source controls are covered separately below — they select
+    # their route family from the mounted node's owning view.
     for header in (
         "async function persistDiscoveryPreparation",
         "async function refreshUnifiedDevices",
         "async function toggleMdns",
         "async function refreshMdns",
-        "async function refreshMqttBrokers",
     ):
         body = _async_fn_body(js, header)
         assert "setupDiscoveryFetch(" in body
@@ -7491,6 +7494,102 @@ def test_maintenance_discovery_keeps_separate_general_routes():
     assert 'fetch("/api/discovery/mqtt-brokers/refresh"' in maintenance
     assert 'fetch("/api/discovery/mdns/refresh"' in maintenance
     assert "/api/setup/discovery" not in maintenance
+
+
+# --- shared discovery controls: workflow-context request routing --------------
+# The credential/source-config nodes parked in #inline-config-parking serve both
+# Guided Setup (operation-gated /api/setup/discovery aliases) and Maintenance
+# "Add more devices" (generic authenticated /api/discovery routes). The node's
+# current owning view decides the request contract before the request is sent;
+# there is no Setup default and no probe-then-retry fallback, so Maintenance
+# keeps working when no Setup transition state exists at all.
+
+_SHARED_DISCOVERY_HANDLERS = (
+    "async function saveMqttCredential",
+    "async function deleteMqttCredential",
+    "async function refreshMqttBrokers",
+    "async function saveZendureCloudToken",
+    "async function testZendureCloudToken",
+    "async function refreshZendureCloudDiscovery",
+    "async function forgetZendureCloudToken",
+)
+
+
+def test_discovery_fetch_routes_by_explicit_workflow_context():
+    js = _read("admin.js")
+    helper = _extract_fn(js, "discoveryFetch")
+    assert 'context === "setup"' in helper
+    assert "setupDiscoveryFetch(input, init)" in helper
+    assert 'context === "maintenance"' in helper
+    assert "fetch(input, init)" in helper
+    # A missing context is a programming error, never a silent Setup default.
+    assert "Discovery request context is required" in helper
+    resolver = _extract_fn(js, "discoveryContextFor")
+    assert "inlineConfigMountedInMaintenance(" in resolver
+    assert '"maintenance"' in resolver
+    assert '"setup"' in resolver
+
+
+def test_shared_credential_handlers_resolve_context_from_owning_node():
+    js = _read("admin.js")
+    for header in _SHARED_DISCOVERY_HANDLERS:
+        body = _async_fn_body(js, header)
+        assert "discoveryContextFor(" in body, header
+        assert "discoveryFetch(" in body, header
+        assert "setupDiscoveryFetch(" not in body, header
+
+
+def test_setup_discovery_fetch_stays_confined_to_setup_only_callers():
+    # Tripwire: a future shared handler must never call setupDiscoveryFetch()
+    # directly — shared controls go through discoveryFetch(context). Every call
+    # site is attributed to its nearest enclosing function declaration.
+    js = _read("admin.js")
+    allowed = {
+        "discoveryFetch",
+        "loadGatewayNetworks",
+        "persistDiscoveryPreparation",
+        "refreshUnifiedDevices",
+        "toggleMdns",
+        "refreshMdns",
+        "probeMqttNetworks",
+    }
+    declarations = [
+        (match.start(), match.group(1))
+        for match in re.finditer(r"(?:async )?function (\w+)", js)
+    ]
+    callers = set()
+    for match in re.finditer(r"setupDiscoveryFetch\(", js):
+        enclosing = [name for start, name in declarations if start < match.start()]
+        assert enclosing, "setupDiscoveryFetch( call outside any function"
+        caller = enclosing[-1]
+        if caller == "setupDiscoveryFetch":
+            continue
+        callers.add(caller)
+    assert callers <= allowed, sorted(callers - allowed)
+
+
+def test_zendure_shared_handlers_gate_setup_followups_on_context():
+    js = _read("admin.js")
+    # The unified-device rescan and proposal reload mutate the Setup draft and
+    # can hijack the Setup wizard on a gate refusal; a Maintenance-mounted
+    # refresh/forget must never trigger them.
+    for header in (
+        "async function refreshZendureCloudDiscovery",
+        "async function forgetZendureCloudToken",
+    ):
+        body = _async_fn_body(js, header)
+        assert 'context === "setup"' in body, header
+        assert "refreshUnifiedDevices(" in body, header
+
+
+def test_maintenance_scan_shares_the_context_router():
+    js = _read("admin.js")
+    scan = _async_fn_body(js, "async function maintenanceScanNetwork")
+    # The per-session scan uses the same single routing authority instead of a
+    # second hand-rolled setup/maintenance switch.
+    assert "discoveryFetch(" in scan
+    assert "session.mode" in scan
+    assert "setupDiscoveryFetch" not in scan
 
 
 # --- Guided Setup Step 1: no development-build acknowledgement ---------------
@@ -9105,6 +9204,250 @@ def test_partial_transition_offers_an_abandon_escape_hatch():
     assert "operation_id: transition.operation_id" in abandon
     assert "confirm: true" in abandon
     assert 'data.stage !== "cancelled"' in abandon
+
+
+def test_expired_transition_surfaces_the_recovery_panel():
+    """An expired transition must not render as a running reconnect forever.
+
+    The server marks expiry on the transition (``expired``) and offers
+    ``cancel_available`` from any non-terminal stage. The renderer must treat
+    expiry as a recovery state: show the recovery panel (whose Abandon button
+    already follows ``cancel_available``), suppress the reconnecting note, and
+    say that the transition expired instead of showing the generic partial
+    message.
+    """
+
+    js = _read("admin.js")
+    render = _extract_fn(js, "renderSystemAlignmentStatus")
+    assert 'const expired = transition.expired === true' in render
+    assert "const recoveryAvailable = failed || expired" in render
+    assert "systemAlignmentEls.partial.hidden = !recoveryAvailable" in render
+    assert "!expired &&" in render
+    assert (
+        "The System Build transition has expired. Abandon it to start a new one."
+        in render
+    )
+
+
+def test_expired_transition_abandon_waits_for_the_worker_to_stop():
+    # TTL expiry is not proof the mutating worker stopped. While the server
+    # reports worker_active, the recovery panel must keep Abandon disabled and
+    # explain the wait; only once the worker is gone may Abandon light up.
+    js = _read("admin.js")
+    render = _extract_fn(js, "renderSystemAlignmentStatus")
+    assert "transition.worker_active === true" in render
+    assert "still running" in render
+    assert "Wait for it to finish before abandoning the transition." in render
+
+
+def _render_expired_recovery(
+    worker_active=False, *, worker_status_available=True, cancel_available=None
+):
+    if cancel_available is None:
+        cancel_available = bool(
+            worker_status_available and worker_active is not True
+        )
+
+    def _js_bool(value):
+        if value is None:
+            return "null"
+        return "true" if value else "false"
+
+    js = _read("admin.js")
+    render = _extract_fn(js, "renderSystemAlignmentStatus")
+    driver = f"""
+let systemAlignmentState;
+const SYSTEM_ALIGNMENT_STAGE_ORDER = [];
+function systemAlignmentStageStates(payload) {{
+  return {{ stage: (payload.transition || {{}}).stage || null, states: [] }};
+}}
+function applyUpgradeAlignmentTransition() {{}}
+function applySystemBuildPresentation() {{}}
+const document = {{ querySelectorAll: () => [] }};
+const systemAlignmentEls = {{
+  tag: {{}}, buildId: {{}}, revision: {{}}, adminImage: {{}}, emsImage: {{}},
+  message: {{}}, warning: {{}}, reconnect: {{}}, partial: {{}}, partialMessage: {{}},
+  resume: {{}}, returnToRunning: {{}}, abandon: {{}},
+}};
+{render}
+renderSystemAlignmentStatus({{
+  active: true,
+  transition: {{
+    mode: "guided_upgrade",
+    stage: "ems_operation_running",
+    operation_id: "expired-op",
+    expired: true,
+    worker_active: {_js_bool(worker_active)},
+    worker_status_available: {_js_bool(worker_status_available)},
+    resume_available: false,
+    cancel_available: {_js_bool(cancel_available)},
+  }},
+}});
+console.log(JSON.stringify({{
+  partialHidden: systemAlignmentEls.partial.hidden,
+  reconnectHidden: systemAlignmentEls.reconnect.hidden,
+  resumeDisabled: systemAlignmentEls.resume.disabled,
+  abandonDisabled: systemAlignmentEls.abandon.disabled,
+  message: systemAlignmentEls.partialMessage.textContent,
+}}));
+"""
+    return _run_node(driver)
+
+
+def test_expired_worker_active_recovery_panel_disables_abandon():
+    out = _render_expired_recovery(worker_active=True)
+    assert out["partialHidden"] is False
+    assert out["reconnectHidden"] is True
+    assert out["resumeDisabled"] is True
+    assert out["abandonDisabled"] is True
+    assert "still running" in out["message"]
+
+
+def test_expired_worker_inactive_recovery_panel_enables_abandon():
+    out = _render_expired_recovery(worker_active=False)
+    assert out["partialHidden"] is False
+    assert out["reconnectHidden"] is True
+    assert out["resumeDisabled"] is True
+    assert out["abandonDisabled"] is False
+    assert "Abandon it to start a new one." in out["message"]
+
+
+def test_expired_worker_unknown_recovery_panel_disables_abandon():
+    # worker_active === null / worker_status_available === false: liveness could
+    # not be verified, so Abandon fails closed and the panel explains the wait.
+    out = _render_expired_recovery(
+        worker_active=None, worker_status_available=False, cancel_available=False
+    )
+    assert out["partialHidden"] is False
+    assert out["reconnectHidden"] is True
+    assert out["resumeDisabled"] is True
+    assert out["abandonDisabled"] is True
+    assert "could not be verified" in out["message"]
+
+
+def test_expired_worker_unknown_blocks_abandon_even_if_cancel_available_true():
+    # Defence in depth: even if a stale/optimistic payload still says
+    # cancel_available true, an unverifiable worker state must keep Abandon off.
+    out = _render_expired_recovery(
+        worker_active=None, worker_status_available=False, cancel_available=True
+    )
+    assert out["abandonDisabled"] is True
+    assert "could not be verified" in out["message"]
+
+
+def test_recovery_render_source_fails_closed_on_unknown_worker_state():
+    render = _extract_fn(_read("admin.js"), "renderSystemAlignmentStatus")
+    assert "transition.worker_status_available === false" in render
+    assert "could not be verified" in render
+
+
+def _render_alignment_payload(payload):
+    js = _read("admin.js")
+    render = _extract_fn(js, "renderSystemAlignmentStatus")
+    driver = f"""
+let systemAlignmentState;
+const SYSTEM_ALIGNMENT_STAGE_ORDER = [];
+function systemAlignmentStageStates(payload) {{
+  return {{ stage: (payload.transition || {{}}).stage || null, states: [] }};
+}}
+function applyUpgradeAlignmentTransition() {{}}
+function applySystemBuildPresentation() {{}}
+const document = {{ querySelectorAll: () => [] }};
+const systemAlignmentEls = {{
+  tag: {{}}, buildId: {{}}, revision: {{}}, adminImage: {{}}, emsImage: {{}},
+  message: {{}}, warning: {{}}, reconnect: {{}}, partial: {{}}, partialMessage: {{}},
+  resume: {{}}, returnToRunning: {{}}, abandon: {{}},
+}};
+{render}
+renderSystemAlignmentStatus({json.dumps(payload)});
+console.log(JSON.stringify({{
+  partialHidden: systemAlignmentEls.partial.hidden,
+  resumeDisabled: systemAlignmentEls.resume.disabled,
+  abandonDisabled: systemAlignmentEls.abandon.disabled,
+  message: systemAlignmentEls.partialMessage.textContent,
+}}));
+"""
+    return _run_node(driver)
+
+
+def test_recovery_panel_fails_closed_when_worker_fields_are_absent():
+    # A transition without any worker verdict (stale or synthetic payload) is
+    # not proof the worker stopped: Abandon must stay disabled until a
+    # worker-aware render arrives.
+    out = _render_alignment_payload(
+        {
+            "active": True,
+            "transition": {
+                "mode": "guided_upgrade",
+                "stage": "failed_recoverable",
+                "operation_id": "upgrade-op",
+                "resume_available": False,
+                "cancel_available": True,
+            },
+        }
+    )
+    assert out["partialHidden"] is False
+    assert out["abandonDisabled"] is True
+
+
+def test_running_worker_keeps_abandon_disabled_before_expiry():
+    # failed_recoverable can race the worker's own terminal commit: while the
+    # server still reports the worker active, Abandon stays off and the panel
+    # says the operation is running instead of a generic failure message.
+    out = _render_alignment_payload(
+        {
+            "active": True,
+            "transition": {
+                "mode": "guided_upgrade",
+                "stage": "failed_recoverable",
+                "operation_id": "upgrade-op",
+                "error_message": "EMS deployment failed.",
+                "resume_available": False,
+                "cancel_available": False,
+                "worker_active": True,
+                "worker_status_available": True,
+            },
+        }
+    )
+    assert out["partialHidden"] is False
+    assert out["abandonDisabled"] is True
+    assert "still running" in out["message"]
+
+
+def test_job_poll_shaped_payload_drives_worker_aware_abandon_gating():
+    # The poller hands the whole job-poll body to the renderer; the embedded
+    # transition's worker verdict must gate Abandon exactly like the dedicated
+    # status payload does.
+    poll_body = {
+        "ok": True,
+        "job_id": "job-1",
+        "status": "running",
+        "steps": [],
+        "transition": {
+            "mode": "guided_upgrade",
+            "stage": "ems_operation_running",
+            "operation_id": "upgrade-op",
+            "expired": True,
+            "resume_available": False,
+            "cancel_available": False,
+            "worker_active": True,
+            "worker_status_available": True,
+        },
+    }
+    out = _render_alignment_payload(poll_body)
+    assert out["partialHidden"] is False
+    assert out["resumeDisabled"] is True
+    assert out["abandonDisabled"] is True
+    assert "still running" in out["message"]
+
+    released = json.loads(json.dumps(poll_body))
+    released["status"] = "failed"
+    released["transition"].update(
+        {"worker_active": False, "cancel_available": True}
+    )
+    out = _render_alignment_payload(released)
+    assert out["abandonDisabled"] is False
+    assert out["resumeDisabled"] is True
 
 
 # --- System Build progress is scoped to its owning task ---------------------

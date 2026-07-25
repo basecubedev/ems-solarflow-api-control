@@ -27,7 +27,8 @@ class SetupReadySystemAlignment:
             "ems_digest": "sha256:ems",
         }
 
-    def status(self):
+    def status(self, *, operation_active=None):
+        del operation_active
         return {
             "ok": True,
             "active": True,

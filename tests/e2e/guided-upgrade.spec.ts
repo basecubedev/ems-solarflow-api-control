@@ -42,7 +42,7 @@ async function openPlannedUpgrade(
   );
   await page.locator("#upgrade-plan-btn").click();
   await expect(page.locator("#upgrade-validation")).toContainText(
-    /Review Zendure MQTT migration: 1 affected device/i,
+    /MQTT configuration migration required for 1 device/i,
   );
   await expect(page.locator("#upgrade-validation")).toContainText(
     /Create a pre-upgrade backup/i,
@@ -147,6 +147,18 @@ async function confirmAndExecute(page: Page) {
   await expect(page.locator("#upgrade-execute-btn")).toHaveText("Upgrade system");
 }
 
+async function captureConfirmDialog(page: Page, trigger: () => Promise<void>) {
+  const message = new Promise<string>((resolve) => {
+    page.once("dialog", (dialog) => {
+      const text = dialog.message();
+      void dialog.dismiss();
+      resolve(text);
+    });
+  });
+  await trigger();
+  return message;
+}
+
 test.describe("Guided Upgrade", () => {
   test("preflight shows migration and backup, then renders ordered progress", async ({
     page,
@@ -177,6 +189,55 @@ test.describe("Guided Upgrade", () => {
     await expect(page.locator("#upgrade-execute-btn")).toBeDisabled();
     await page.locator("#upgrade-plan-btn").dispatchEvent("click");
     expect(postPlanReviewRequests).toBe(0);
+  });
+
+  test("a no-op migration is absent from the plan and the confirmation", async ({
+    page,
+    seedAdminScenario,
+  }) => {
+    const login = new LoginPage(page);
+    await login.open();
+    await login.authenticate();
+    await seedAdminScenario("mqtt_migration");
+    await page.reload();
+
+    await page.route(
+      "**/api/admin/maintenance/zendure-mqtt/migration-review",
+      (route: Route) =>
+        route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            status: "ok",
+            revision: "e2e-noop-review",
+            review: { needs_migration: false, changes: [], final_valid: true },
+          }),
+        }),
+    );
+
+    await page.locator('[data-start-path="manage_existing"]').click();
+    await page.locator('[data-open-maintenance-path="upgrade"]').click();
+    const select = page.locator("#upgrade-release-select");
+    await expect(select).toBeEnabled();
+    await select.selectOption("v9.9.10");
+    await page.locator("#upgrade-prepare-btn").click();
+    await expect(page.locator("#upgrade-release-status")).toHaveText(
+      /System Build verified/i,
+    );
+    await page.locator("#upgrade-plan-btn").click();
+    await expect(page.locator("#upgrade-plan-btn")).toHaveText("Plan ready");
+    await expect(page.locator("#upgrade-execute-btn")).toBeEnabled();
+
+    await expect(page.locator("#upgrade-validation")).not.toContainText(/MQTT/i);
+
+    const message = await captureConfirmDialog(page, () =>
+      page.locator("#upgrade-execute-btn").click(),
+    );
+    expect(message).toContain("Confirm Guided Upgrade to v9.9.10.");
+    expect(message).toContain("Backup enabled");
+    expect(message).not.toMatch(/MQTT/i);
+    expect(message).not.toMatch(/lose control/i);
+    expect(message).not.toMatch(/0 affected/i);
   });
 
   test("one plan click is busy immediately and produces one executable plan", async ({
@@ -806,5 +867,378 @@ test.describe("Guided Upgrade verified-fingerprint enforcement", () => {
     );
     await expect(page.locator("#upgrade-execute-btn")).toBeEnabled();
     expect(validations.count).toBe(0);
+  });
+
+  function expiredUpgradeStatus(workerActive: boolean) {
+    return {
+      ok: true,
+      active: true,
+      transition: {
+        operation_id: "expired-op",
+        mode: "guided_upgrade",
+        stage: "ems_operation_running",
+        system_tag: "v9.9.10",
+        build_id: "v9.9.10-f7265fc",
+        revision: "f7265fc747c2223f126f0ee7801e030c6226edf4",
+        admin_image: "ghcr.io/basecubedev/solarflow-control-admin:v9.9.10",
+        ems_image: "ghcr.io/basecubedev/solarflow-control:v9.9.10",
+        expired: true,
+        worker_active: workerActive,
+        worker_status_available: true,
+        resume_available: false,
+        cancel_available: !workerActive,
+      },
+      known_good: null,
+    };
+  }
+
+  function expiredWorkerStateStatus(
+    state: "unavailable" | "active" | "inactive",
+  ) {
+    const workerActive =
+      state === "active" ? true : state === "inactive" ? false : null;
+    return {
+      ok: true,
+      active: true,
+      transition: {
+        operation_id: "expired-op",
+        mode: "guided_upgrade",
+        stage: "ems_operation_running",
+        system_tag: "v9.9.10",
+        build_id: "v9.9.10-f7265fc",
+        revision: "f7265fc747c2223f126f0ee7801e030c6226edf4",
+        admin_image: "ghcr.io/basecubedev/solarflow-control-admin:v9.9.10",
+        ems_image: "ghcr.io/basecubedev/solarflow-control:v9.9.10",
+        expired: true,
+        worker_active: workerActive,
+        // Liveness is only known once the coordinator can be read; the
+        // unavailable state fails closed with cancel_available false.
+        worker_status_available: state !== "unavailable",
+        resume_available: false,
+        cancel_available: state === "inactive",
+      },
+      known_good: null,
+    };
+  }
+
+  async function forceRender(page: Page, payload: Record<string, unknown>) {
+    await page.evaluate((value) => {
+      (
+        window as typeof window & {
+          renderSystemAlignmentStatus: (data: unknown) => void;
+        }
+      ).renderSystemAlignmentStatus(value);
+    }, payload);
+  }
+
+  test("an expired transition can only be abandoned after its worker stops", async ({
+    page,
+  }) => {
+    let workerActive = true;
+    let cancelled = false;
+    let cancelBody: unknown = null;
+
+    const login = new LoginPage(page);
+    await login.open();
+    await login.authenticate();
+    await page.locator('[data-start-path="manage_existing"]').click();
+    await page.locator('[data-open-maintenance-path="upgrade"]').click();
+    await expect(page.locator("#upgrade-release-select")).toBeEnabled();
+
+    // Only now intercept status, so login and navigation see the real (empty)
+    // backend. The server is the authority for worker liveness; the browser
+    // never infers it from stage names or timers. A persistent status route
+    // lets the 1.8s poll observe the worker stopping without an arbitrary sleep.
+    await page.route("**/api/admin/system-alignment/status", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          cancelled
+            ? { ok: true, active: false, transition: null, known_good: null }
+            : expiredUpgradeStatus(workerActive),
+        ),
+      }),
+    );
+    await page.route(
+      "**/api/admin/system-alignment/cancel",
+      async (route: Route) => {
+        cancelBody = route.request().postDataJSON();
+        cancelled = true;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            active: false,
+            status: "cancelled",
+            stage: "cancelled",
+            transition: {
+              operation_id: "expired-op",
+              mode: "guided_upgrade",
+              stage: "cancelled",
+            },
+          }),
+        });
+      },
+    );
+
+    // Expired transition whose worker is still running: recovery panel visible,
+    // reconnect note hidden, and both Resume and Abandon disabled.
+    await forceRender(page, expiredUpgradeStatus(true));
+    await expect(page.locator("#system-alignment-partial")).toBeVisible();
+    await expect(page.locator("#system-alignment-partial")).toContainText(
+      /still running/i,
+    );
+    await expect(page.locator("#system-alignment-reconnect")).toBeHidden();
+    await expect(page.locator("#system-alignment-resume")).toBeDisabled();
+    await expect(page.locator("#system-alignment-abandon")).toBeDisabled();
+
+    // The worker stops. The next poll of the persistent route surfaces it and
+    // Abandon becomes enabled — Resume stays disabled because the TTL passed.
+    workerActive = false;
+    await expect(page.locator("#system-alignment-abandon")).toBeEnabled();
+    await expect(page.locator("#system-alignment-resume")).toBeDisabled();
+    await expect(page.locator("#system-alignment-partial")).toContainText(
+      /Abandon it to start a new one/i,
+    );
+
+    // Abandon: the request carries the operation id and explicit confirmation.
+    page.once("dialog", (dialog) => dialog.accept());
+    const cancelResponse = page.waitForResponse((response) =>
+      response.url().endsWith("/system-alignment/cancel"),
+    );
+    await page.locator("#system-alignment-abandon").click();
+    await cancelResponse;
+    expect(cancelBody).toEqual({ operation_id: "expired-op", confirm: true });
+
+    // The pipeline is terminal and removed, and a new Guided Upgrade can start.
+    await expect(page.locator("#system-alignment-partial")).toBeHidden();
+    await expect(page.locator("#upgrade-release-select")).toBeEnabled();
+  });
+
+  test("an expired transition stays unabandonable until its worker is verified stopped", async ({
+    page,
+  }) => {
+    let state: "unavailable" | "active" | "inactive" = "unavailable";
+    let cancelled = false;
+    let cancelBody: unknown = null;
+
+    const login = new LoginPage(page);
+    await login.open();
+    await login.authenticate();
+    await page.locator('[data-start-path="manage_existing"]').click();
+    await page.locator('[data-open-maintenance-path="upgrade"]').click();
+    await expect(page.locator("#upgrade-release-select")).toBeEnabled();
+
+    // Only intercept status after navigation, so the server stays the authority
+    // for worker liveness. The persistent route lets the 1.8s poll observe each
+    // state change without an arbitrary sleep.
+    await page.route("**/api/admin/system-alignment/status", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          cancelled
+            ? { ok: true, active: false, transition: null, known_good: null }
+            : expiredWorkerStateStatus(state),
+        ),
+      }),
+    );
+    await page.route(
+      "**/api/admin/system-alignment/cancel",
+      async (route: Route) => {
+        cancelBody = route.request().postDataJSON();
+        cancelled = true;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            active: false,
+            status: "cancelled",
+            stage: "cancelled",
+            transition: {
+              operation_id: "expired-op",
+              mode: "guided_upgrade",
+              stage: "cancelled",
+            },
+          }),
+        });
+      },
+    );
+
+    // 01-03: worker status could not be verified — Resume and Abandon disabled.
+    await forceRender(page, expiredWorkerStateStatus("unavailable"));
+    await expect(page.locator("#system-alignment-partial")).toBeVisible();
+    await expect(page.locator("#system-alignment-partial")).toContainText(
+      /could not be verified/i,
+    );
+    await expect(page.locator("#system-alignment-reconnect")).toBeHidden();
+    await expect(page.locator("#system-alignment-resume")).toBeDisabled();
+    await expect(page.locator("#system-alignment-abandon")).toBeDisabled();
+
+    // 04-05: liveness resolves and reports the worker active — Abandon stays off.
+    state = "active";
+    await expect(page.locator("#system-alignment-partial")).toContainText(
+      /still running/i,
+    );
+    await expect(page.locator("#system-alignment-abandon")).toBeDisabled();
+    await expect(page.locator("#system-alignment-resume")).toBeDisabled();
+
+    // 06-07: the worker stops — Abandon enables, Resume stays disabled (expired).
+    state = "inactive";
+    await expect(page.locator("#system-alignment-abandon")).toBeEnabled();
+    await expect(page.locator("#system-alignment-resume")).toBeDisabled();
+    await expect(page.locator("#system-alignment-partial")).toContainText(
+      /Abandon it to start a new one/i,
+    );
+
+    // 08: confirm Abandon; the request carries the operation id and confirmation.
+    page.once("dialog", (dialog) => dialog.accept());
+    const cancelResponse = page.waitForResponse((response) =>
+      response.url().endsWith("/system-alignment/cancel"),
+    );
+    await page.locator("#system-alignment-abandon").click();
+    await cancelResponse;
+    expect(cancelBody).toEqual({ operation_id: "expired-op", confirm: true });
+
+    // 09: terminal and removed, and a new Guided Upgrade can start.
+    await expect(page.locator("#system-alignment-partial")).toBeHidden();
+    await expect(page.locator("#upgrade-release-select")).toBeEnabled();
+  });
+
+  test("worker-aware status flows through the upgrade job poll", async ({
+    page,
+    seedAdminScenario,
+  }) => {
+    // The browser must obey the worker verdict embedded in the exact response
+    // types production polling uses — the execute accept and the job poll —
+    // not only the dedicated status endpoint. All sources answer from one
+    // state, as the centralized server helper guarantees.
+    let state: "unavailable" | "active" | "inactive" = "active";
+    let cancelled = false;
+    let cancelBody: unknown = null;
+
+    // 01-02: authenticate and open a planned Guided Upgrade.
+    await openPlannedUpgrade(page, seedAdminScenario);
+
+    const pollBody = () => {
+      const alignment = expiredWorkerStateStatus(state);
+      return {
+        ok: true,
+        status: state === "inactive" ? "failed" : "running",
+        steps: pendingSteps(),
+        ...(state === "inactive"
+          ? {
+              result: {
+                ok: false,
+                reason: "ems_upgrade_failed",
+                message: "simulated worker loss",
+                steps: resultSteps("recreate"),
+                target_release: "v9.9.10",
+              },
+            }
+          : {}),
+        transition: alignment.transition,
+      };
+    };
+
+    // 03: the worker claim exists when execute is accepted; the immediate
+    // response already embeds the worker-aware transition.
+    await page.route(
+      "**/api/admin/maintenance/upgrade/execute",
+      (route: Route) =>
+        route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            job_id: "e2e-upgrade",
+            steps: pendingSteps(),
+            transition: expiredWorkerStateStatus(state).transition,
+          }),
+        }),
+    );
+    await page.route(
+      "**/api/admin/maintenance/upgrade/jobs/e2e-upgrade",
+      (route) =>
+        route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(pollBody()),
+        }),
+    );
+    await page.route("**/api/admin/system-alignment/status", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          cancelled
+            ? { ok: true, active: false, transition: null, known_good: null }
+            : expiredWorkerStateStatus(state),
+        ),
+      }),
+    );
+    await page.route(
+      "**/api/admin/system-alignment/cancel",
+      async (route: Route) => {
+        cancelBody = route.request().postDataJSON();
+        cancelled = true;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            ok: true,
+            active: false,
+            status: "cancelled",
+            stage: "cancelled",
+            transition: {
+              operation_id: "expired-op",
+              mode: "guided_upgrade",
+              stage: "cancelled",
+            },
+          }),
+        });
+      },
+    );
+
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.locator("#upgrade-execute-btn").click();
+
+    // 04-05: the job poll embeds the active worker — Abandon stays disabled.
+    await expect(page.locator("#system-alignment-partial")).toBeVisible();
+    await expect(page.locator("#system-alignment-partial")).toContainText(
+      /still running/i,
+    );
+    await expect(page.locator("#system-alignment-abandon")).toBeDisabled();
+    await expect(page.locator("#system-alignment-resume")).toBeDisabled();
+
+    // 06-07: worker state becomes unavailable — Abandon stays disabled.
+    state = "unavailable";
+    await expect(page.locator("#system-alignment-partial")).toContainText(
+      /could not be verified/i,
+    );
+    await expect(page.locator("#system-alignment-abandon")).toBeDisabled();
+    await expect(page.locator("#system-alignment-resume")).toBeDisabled();
+
+    // 08-10: the worker releases its claim; the terminal poll reports it
+    // proven inactive and Abandon enables.
+    state = "inactive";
+    await expect(page.locator("#system-alignment-abandon")).toBeEnabled();
+    await expect(page.locator("#system-alignment-resume")).toBeDisabled();
+
+    // 11: confirm Abandon with the operation id and explicit confirmation.
+    page.once("dialog", (dialog) => dialog.accept());
+    const cancelResponse = page.waitForResponse((response) =>
+      response.url().endsWith("/system-alignment/cancel"),
+    );
+    await page.locator("#system-alignment-abandon").click();
+    await cancelResponse;
+    expect(cancelBody).toEqual({ operation_id: "expired-op", confirm: true });
+
+    // 12: the pipeline is terminal and a new Guided Upgrade can start.
+    await expect(page.locator("#system-alignment-partial")).toBeHidden();
+    await expect(page.locator("#upgrade-release-select")).toBeEnabled();
   });
 });
