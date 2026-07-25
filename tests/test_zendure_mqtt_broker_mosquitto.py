@@ -65,7 +65,13 @@ def _report(output_limit, *, device_id="DEV"):
     return json.dumps(
         {
             "sn": device_id,
-            "properties": {"outputLimit": output_limit, "electricLevel": 70},
+            "properties": {
+                "outputLimit": output_limit,
+                "acMode": 2,
+                "smartMode": 1,
+                "inputLimit": 0,
+                "electricLevel": 70,
+            },
         }
     )
 
@@ -94,13 +100,15 @@ def _publish_report_until(host, port, dev, value, predicate):
 
 
 @contextlib.contextmanager
-def _watch_topic(host, port, topic):
+def _watch_topic(host, port, topic, *, username=None, password=None):
     import paho.mqtt.client as mqtt
 
     try:
         client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     except (AttributeError, TypeError):
         client = mqtt.Client()
+    if username:
+        client.username_pw_set(username, password)
     subscribed = threading.Event()
     received = []
 
@@ -110,7 +118,7 @@ def _watch_topic(host, port, topic):
     client.on_connect = on_connect
     client.on_subscribe = lambda *_args: subscribed.set()
     client.on_message = lambda _client, _userdata, message: received.append(
-        (message.topic, message.payload)
+        (message.topic, message.payload, message.qos)
     )
     client.connect(host, port, keepalive=10)
     client.loop_start()
@@ -273,27 +281,14 @@ def test_real_mosquitto_pending_flush_and_safety_preemption(tmp_path):
         try:
             dev = runtime.devices[0]
             wait_until(lambda: dev._service.connected, message="broker never connected")
-            events = []
-            dev.set_dispatch_observer(events.append)
 
             assert dev.write_output_limit(600) is True
             first = dev._active_command
-            queued = dev.dispatch_output_limit(550)
-            assert queued.status.value == "queued_latest"
-            _publish_report_until(
-                host,
-                port,
-                dev,
-                600,
-                lambda: dev._active_command is not None
-                and dev._active_command.target_w == 550,
-            )
-            assert events[-1].status.value == "published"
-            assert events[-1].correlation_id == queued.correlation_id
-            assert first.state == "telemetry_confirmed"
+            replaced = dev.dispatch_output_limit(550)
+            assert replaced.status.value == "published"
+            assert first.state == "superseded"
+            assert dev._active_command.target_w == 550
 
-            # Settle the flushed target, then prove the exact 600 -> 0 W safety
-            # transition publishes immediately and supersedes its predecessor.
             _publish_report_until(
                 host,
                 port,
@@ -508,5 +503,105 @@ def test_real_mosquitto_multiple_control_brokers_stay_isolated(tmp_path):
                     )
                     assert [item[0] for item in seen_a] == [topic_a]
                     assert [item[0] for item in seen_b] == [topic_b]
+        finally:
+            runtime.stop()
+
+
+def test_real_mosquitto_cloud_shaped_two_devices_qos1_delivery(tmp_path, monkeypatch):
+    """Cloud-shaped credentialed broker, two devices, real QoS 1 PUBACK delivery.
+
+    A local Mosquitto proves EMS behaviour (auth, per-device topics, QoS 1
+    delivery acknowledgement) — it does NOT prove Zendure Cloud ACL behaviour.
+    """
+
+    from admin.credential_store import CredentialStore
+    from ems.mqtt_credentials import FileMqttCredentialResolver
+
+    user, password = "cloud-user", "cloud-pass"
+    monkeypatch.setenv("EMS_CONFIG_DIR", str(tmp_path / "config"))
+    store = CredentialStore(config_dir=str(tmp_path / "config"))
+    store.save_mqtt_cloud_runtime_secret(
+        "cloud-cred",
+        username=user,
+        password=password,
+        client_id="probe-client",
+        app_key="app-key-SECRET",
+    )
+    resolver = FileMqttCredentialResolver(tmp_path / "config" / "secrets")
+
+    def _device(name, device_id):
+        return {
+            "type": "zendure_mqtt",
+            "name": name,
+            "serial_number": device_id,
+            "hardware_profile": "solarflow_800_pro_2",
+            "mqtt": {
+                "broker_ref": "zendure_cloud",
+                "topic_family": "legacy_zendure_json_alt",
+                "device_id": device_id,
+                "product_key": "PKC",
+            },
+            "capabilities": {"write_output_limit": True},
+        }
+
+    with mosquitto_broker(tmp_path, username=user, password=password) as (host, port):
+        config = {
+            "zendure_mqtt": {
+                "brokers": {
+                    "zendure_cloud": {
+                        "enabled": True,
+                        "source": "zendure_cloud_mqtt",
+                        "host": host,
+                        "port": port,
+                        "tls": False,
+                        "credentials_ref": "cloud-cred",
+                    },
+                },
+            },
+            "devices": [_device("INV_2", "DEVC1"), _device("INV_3", "DEVC2")],
+        }
+        runtime = build_zendure_mqtt_control_runtime(
+            config, credential_resolver=resolver
+        )
+        assert [r.name for r in runtime.rejected] == []
+        assert len(runtime.services) == 1
+        runtime.start()
+        try:
+            by_name = {device.name: device for device in runtime.devices}
+            wait_until(
+                lambda: all(d._service.connected for d in by_name.values()),
+                message="cloud-shaped control service never connected",
+            )
+            with _watch_topic(
+                host, port, "iot/+/+/properties/write",
+                username=user, password=password,
+            ) as seen:
+                assert by_name["INV_2"].write_output_limit(300) is True
+                assert by_name["INV_3"].write_output_limit(450) is True
+                wait_until(
+                    lambda: len(seen) == 2,
+                    message="both cloud-shaped control writes were not observed",
+                )
+            topics = sorted(item[0] for item in seen)
+            assert topics == [
+                "iot/PKC/DEVC1/properties/write",
+                "iot/PKC/DEVC2/properties/write",
+            ]
+            assert [item[2] for item in seen] == [1, 1]
+            payloads = {json.loads(item[1])["deviceId"]: json.loads(item[1]) for item in seen}
+            assert payloads["DEVC1"]["properties"]["outputLimit"] == 300
+            assert payloads["DEVC1"]["properties"]["acMode"] == 2
+
+            def _delivered(dev):
+                import time as _time
+
+                dev.describe(now_monotonic=_time.monotonic())
+                record = dev._active_command or dev._last_command
+                return record is not None and record.broker_delivery == "delivered"
+
+            wait_until(
+                lambda: all(_delivered(d) for d in by_name.values()),
+                message="QoS 1 PUBACK delivery was never observed",
+            )
         finally:
             runtime.stop()

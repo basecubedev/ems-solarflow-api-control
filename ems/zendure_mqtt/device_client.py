@@ -10,20 +10,25 @@ HTTP state reconciliation (``supports_state_reconciliation = False``).
 """
 
 import json
+import logging
 import time
 
 from ems import config as cfg
 from ems.clients import parse_device
 from ems.health import CommHealth
+from ems.logging_utils import log_event
 from ems.mqtt_control import dispatch
 from ems.mqtt_control.command_state import (
     STATE_ACKNOWLEDGED,
+    STATE_CONFIRMATION_TIMED_OUT,
     STATE_PUBLISHED,
+    STATE_TIMED_OUT,
     CommandRecord,
     apply_confirmation_timeout,
     apply_reply,
     apply_timeout,
     complete_unconfirmed,
+    confirm_from_expected_properties,
     confirm_from_telemetry,
     mark_publish_failed,
     mark_published,
@@ -37,6 +42,10 @@ from ems.mqtt_control.zendure_commands import (
     PowerCommandError,
     build_power_command,
     next_power_message_id,
+)
+from ems.mqtt_control.zensdk_operations import (
+    ZenSdkOperationError,
+    build_zensdk_power_operation,
 )
 from ems.mqtt_control.zendure_profiles import (
     OPERATION_CHARGE,
@@ -53,8 +62,11 @@ from ems.zendure_mqtt.service import (
     SOURCE_ZENDURE_CLOUD_MQTT,
 )
 from ems.zendure_mqtt.write_protocols import (
+    CONTROL_PUBLISH_QOS,
+    MqttPublishMessage,
     PROTOCOL_LEGACY_PROPERTIES_WRITE,
     build_output_limit_message,
+    build_properties_write_message,
     resolve_write_protocol,
 )
 
@@ -232,6 +244,11 @@ class ZendureMqttDeviceClient:
         # None -> resolve from the write profile; explicit False -> no reliable
         # telemetry confirmation (completed_unconfirmed after publish/ack).
         self._telemetry_confirmation_override = telemetry_confirmation_supported
+        self._last_confirmed_target = None
+        self._last_confirmed_monotonic = None
+        self._foreign_streak = 0
+        self._foreign_last_observed_monotonic = None
+        self._external_control_suspected = None
         self.sn = serial_number or device_id
         self.control_gate = _SOURCE_GATE.get(source, "mqtt_local")
         self.min_soc = min_soc
@@ -266,6 +283,7 @@ class ZendureMqttDeviceClient:
             # settling timeouts, so confirming telemetry in the same fetch wins
             # over a confirmation deadline that has just elapsed.
             self._confirm_from_snapshot(state, status.snapshot, now)
+            self._detect_external_control(state, status.snapshot)
         # Settle the in-flight command's deadline and flush any pending target.
         self._expire_active_command(now)
         if not status.is_fresh:
@@ -376,8 +394,13 @@ class ZendureMqttDeviceClient:
                 self._active_correlation_id = None
                 self._discard_pending_target("superseded_by_safety_target")
                 return self._publish_target(target, now)
-            # A changed non-safety target while a command is in flight is stored as
-            # the single pending target, published once the active command settles.
+            if self._should_supersede_latest(active):
+                mark_superseded(active, now_monotonic=now)
+                self._last_command_state = active.state
+                self._active_command = None
+                self._active_correlation_id = None
+                self._discard_pending_target("superseded_by_latest_target")
+                return self._publish_target(target, now)
             if self._pending_target == target and self._pending_correlation_id:
                 correlation_id = self._pending_correlation_id
             else:
@@ -395,6 +418,106 @@ class ZendureMqttDeviceClient:
         # slot immediately, superseding any pending target left from before.
         self._discard_pending_target("superseded_by_fresh_target")
         return self._publish_target(target, now)
+
+    def write_properties(
+        self, properties, *, reason, field=None, error_event=None, log_fields=None
+    ):
+        """Transport-neutral property-write capability, MQTT implementation.
+
+        Publishes a validated property set to this device's own
+        ``properties/write`` topic. Only a resolved ZenSDK profile carries a
+        verified MQTT property-write contract, and only its model-declared
+        property names with safe integer values are accepted; anything else is
+        rejected without a publish. Write gates are enforced by the caller —
+        exactly the contract :meth:`dispatch_output_limit` follows. State
+        writes are not power commands: they bypass the single-in-flight power
+        command slot (``error_event``/``log_fields`` exist for HTTP-signature
+        parity and are unused here).
+        """
+
+        try:
+            message, message_id = self._prepare_property_write(properties)
+        except _WriteBlocked as blocked:
+            self.write_health.record_failure(
+                error=blocked.error, latency_ms=0.0, field=blocked.field
+            )
+            return dispatch.rejected(None, reason=blocked.error)
+        start = time.monotonic()
+        ok = self._publish_message(message).accepted
+        latency_ms = (time.monotonic() - start) * 1000.0
+        health_field = field or ",".join(properties)
+        if ok:
+            self.write_health.record_success(latency_ms, field=health_field)
+            return dispatch.published(None, message_id=message_id)
+        self.write_health.record_failure(
+            error="publish_failed", latency_ms=latency_ms, field=health_field
+        )
+        return dispatch.failed(None, message_id=message_id, reason="publish_failed")
+
+    _PROPERTY_VALUE_RANGES = {
+        "acMode": (1, 2),
+        "smartMode": (0, 1),
+        "outputLimit": (0, None),
+        "inputLimit": (0, None),
+    }
+
+    def _prepare_property_write(self, properties):
+        """Validate a property set and build its publish, or raise ``_WriteBlocked``."""
+
+        if self._hardware_profile_invalid:
+            raise _WriteBlocked("properties", "unknown_hardware_profile")
+        profile = self._power_profile
+        if profile is None or not profile.state_property_writes:
+            raise _WriteBlocked("properties", "property_write_unsupported")
+        if not isinstance(properties, dict) or not properties:
+            raise _WriteBlocked("properties", "invalid_property_value")
+        for key, value in properties.items():
+            if key not in profile.state_property_writes:
+                raise _WriteBlocked(key, "property_write_unsupported")
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise _WriteBlocked(key, "invalid_property_value")
+            minimum, maximum = self._PROPERTY_VALUE_RANGES.get(key, (None, None))
+            if minimum is not None and value < minimum:
+                raise _WriteBlocked(key, "invalid_property_value")
+            if maximum is not None and value > maximum:
+                raise _WriteBlocked(key, "invalid_property_value")
+            if key in ("outputLimit", "inputLimit"):
+                max_power = self.max_power
+                if (
+                    isinstance(max_power, (int, float))
+                    and max_power > 0
+                    and value > max_power
+                ):
+                    raise _WriteBlocked(key, "target_above_maximum")
+
+        message_id = next_power_message_id()
+        message = build_properties_write_message(
+            PROTOCOL_LEGACY_PROPERTIES_WRITE,
+            properties=properties,
+            topic_family=self._topic_family,
+            product_key=self._product_key,
+            device_id=self._device_id,
+            write_topic=self._write_topic,
+            message_id=message_id,
+            qos=CONTROL_PUBLISH_QOS,
+        )
+        if message is None:
+            raise _WriteBlocked("properties", "no_write_protocol")
+        return message, message_id
+
+    def _should_supersede_latest(self, active):
+        """Whether a changed target replaces the in-flight command immediately.
+
+        Only for a still-``published`` command on a no-ack profile: it has no
+        acknowledgement coming and can settle only via slow telemetry, so the
+        newest target is the honest intent. Ack-capable profiles keep their
+        short queue-behind-ack discipline.
+        """
+
+        return (
+            active.state == STATE_PUBLISHED
+            and not self._reply_contract().supports_acknowledgement
+        )
 
     def _should_preempt(self, active_target, new_target):
         """Whether a changed target must preempt the in-flight command for safety.
@@ -425,7 +548,7 @@ class ZendureMqttDeviceClient:
         correlation_id = correlation_id or self._next_dispatch_correlation_id()
 
         try:
-            topic, payload, message_id, operation = self._build_write(target)
+            message, message_id, operation, expected = self._build_write(target)
         except _WriteBlocked as blocked:
             self.write_health.record_failure(
                 error=blocked.error, latency_ms=0.0, field=blocked.field
@@ -441,14 +564,20 @@ class ZendureMqttDeviceClient:
             target_w=target,
             created_monotonic=now,
             device_key=self._device_id,
-            topic=topic,
+            topic=message.topic,
+            expected_properties=expected,
         )
         start = time.monotonic()
-        ok = self._service.publish_output_limit(topic, payload)
+        submission = self._publish_message(message)
+        ok = submission.accepted
         latency_ms = (time.monotonic() - start) * 1000.0
         field = "power_command" if operation is not None and record.topic and record.topic.endswith("function/invoke") else "outputLimit"
         if ok:
             mark_published(record, now_monotonic=now)
+            record.publish_mid = submission.mid
+            record.broker_delivery = (
+                "pending" if submission.mid is not None else "untracked"
+            )
             self.write_health.record_success(latency_ms, field=field)
             # A profile with neither a verified acknowledgement nor reliable
             # telemetry confirmation cannot be device-confirmed at all: a
@@ -479,6 +608,47 @@ class ZendureMqttDeviceClient:
             message_id=record.message_id,
             correlation_id=correlation_id,
         )
+
+    def _publish_message(self, message):
+        """Publish via the service with QoS/retain metadata intact.
+
+        Falls back to the legacy ``(topic, payload)`` service API — kept for
+        older service doubles — which can carry no metadata and no delivery
+        mid, so broker delivery stays untracked there.
+        """
+
+        from ems.zendure_mqtt.control import PublishSubmission
+
+        publish = getattr(self._service, "publish_message", None)
+        if callable(publish):
+            result = publish(message)
+            if isinstance(result, PublishSubmission):
+                return result
+            return PublishSubmission(bool(result))
+        ok = self._service.publish_output_limit(message.topic, message.payload)
+        return PublishSubmission(bool(ok))
+
+    def _settle_broker_delivery(self, record, now_monotonic):
+        """Observe PUBACK-based delivery for the in-flight command's publish.
+
+        Purely observational and bounded: a delivery timeout never terminates
+        the command (the confirmation lifecycle governs that); it only records
+        that the broker never acknowledged the publish within the window.
+        """
+
+        if record is None or record.broker_delivery != "pending":
+            return
+        confirmed = getattr(self._service, "delivery_confirmed", None)
+        if callable(confirmed) and confirmed(record.publish_mid):
+            record.broker_delivery = "delivered"
+            record.delivered_monotonic = now_monotonic
+            return
+        if (
+            record.published_monotonic is not None
+            and (now_monotonic - record.published_monotonic)
+            >= self._command_ack_timeout_s
+        ):
+            record.broker_delivery = "timeout"
 
     def _flush_pending_target(self, now):
         """Publish the single pending target once the active slot is free."""
@@ -528,7 +698,8 @@ class ZendureMqttDeviceClient:
         return operation
 
     def _build_write(self, target_w):
-        """Return ``(topic, payload, message_id, operation)`` or raise ``_WriteBlocked``.
+        """Return ``(topic, payload, message_id, operation, expected_properties)``
+        or raise ``_WriteBlocked``.
 
         The single place that turns a signed target into an addressed, model-aware
         publish. It never publishes and never falls back to an unverified shape.
@@ -557,13 +728,35 @@ class ZendureMqttDeviceClient:
                         "power_command", "unsupported_power_operation"
                     ) from exc
                 payload = json.dumps(command.payload).encode("utf-8")
-                return command.topic, payload, message_id, command.operation
-            # ZenSDK devices keep the properties/write shape, selected by the
-            # profile — never inferred from the topic family. Telemetry-only
-            # profiles were already rejected by the precheck above.
-            return self._build_properties_write(
-                target_w, PROTOCOL_LEGACY_PROPERTIES_WRITE
+                message = MqttPublishMessage(
+                    topic=command.topic,
+                    payload=payload,
+                    qos=CONTROL_PUBLISH_QOS,
+                    retain=False,
+                )
+                return message, message_id, command.operation, None
+            # ZenSDK: atomic mode+power contract; a bare outputLimit is ignored
+            # by a device in an inactive mode.
+            try:
+                contract = build_zensdk_power_operation(target_w)
+            except ZenSdkOperationError as exc:
+                raise _WriteBlocked(
+                    "outputLimit", "unsupported_power_operation"
+                ) from exc
+            message_id = next_power_message_id()
+            message = build_properties_write_message(
+                PROTOCOL_LEGACY_PROPERTIES_WRITE,
+                properties=contract.properties,
+                topic_family=self._topic_family,
+                product_key=self._product_key,
+                device_id=self._device_id,
+                write_topic=self._write_topic,
+                message_id=message_id,
+                qos=CONTROL_PUBLISH_QOS,
             )
+            if message is None:
+                raise _WriteBlocked("outputLimit", "no_write_protocol")
+            return message, message_id, contract.operation, contract.expected_properties
 
         return self._build_properties_write(target_w, self.write_protocol)
 
@@ -615,6 +808,13 @@ class ZendureMqttDeviceClient:
             raise _WriteBlocked("outputLimit", "target_above_maximum")
 
     def _build_properties_write(self, target_w, protocol):
+        """Single-property outputLimit write for the custom escape hatch only.
+
+        The operator-verified custom topic has no known telemetry/mode mapping,
+        so no mode properties and no expected-property confirmation set are
+        attached.
+        """
+
         message_id = next_power_message_id()
         message = build_output_limit_message(
             protocol,
@@ -624,15 +824,11 @@ class ZendureMqttDeviceClient:
             output_limit_w=target_w,
             write_topic=self._write_topic,
             message_id=message_id,
+            qos=CONTROL_PUBLISH_QOS,
         )
         if message is None:
             raise _WriteBlocked("outputLimit", "no_write_protocol")
-        return (
-            message.topic,
-            message.payload,
-            message_id,
-            operation_for_target(target_w),
-        )
+        return message, message_id, operation_for_target(target_w), None
 
     # --- command lifecycle: replies, timeout, telemetry confirmation ---------
 
@@ -696,6 +892,19 @@ class ZendureMqttDeviceClient:
         now = time.monotonic()
         applied = apply_reply(record, reply, now_monotonic=now)
         if applied:
+            if record.acknowledged:
+                log_event(
+                    logging.INFO,
+                    "device_command_acknowledged",
+                    **self._command_log_fields(record),
+                )
+            else:
+                log_event(
+                    logging.WARNING,
+                    "device_command_rejected",
+                    response_code=record.response_code,
+                    **self._command_log_fields(record),
+                )
             if record.state == STATE_ACKNOWLEDGED and not (
                 self._confirmation_policy().telemetry_confirmation_supported
             ):
@@ -731,6 +940,7 @@ class ZendureMqttDeviceClient:
             if flush:
                 self._flush_pending_target(now_monotonic)
             return
+        self._settle_broker_delivery(record, now_monotonic)
         supports_ack = self._reply_contract().supports_acknowledgement
         policy = self._confirmation_policy()
         released = False
@@ -762,6 +972,18 @@ class ZendureMqttDeviceClient:
             self._last_command_state = record.state
             self._active_command = None
             self._active_correlation_id = None
+            if record.state == STATE_CONFIRMATION_TIMED_OUT:
+                log_event(
+                    logging.WARNING,
+                    "confirmation_timed_out",
+                    **self._command_log_fields(record),
+                )
+            elif record.state == STATE_TIMED_OUT:
+                log_event(
+                    logging.WARNING,
+                    "device_command_ack_timed_out",
+                    **self._command_log_fields(record),
+                )
             if flush:
                 self._flush_pending_target(now_monotonic)
 
@@ -782,20 +1004,133 @@ class ZendureMqttDeviceClient:
         # An ack-capable profile only confirms an already-acknowledged command;
         # a no-ack profile confirms its published command directly from telemetry.
         allow_from_published = not self._reply_contract().supports_acknowledgement
-        observed = getattr(state, "output_limit", None)
         telemetry_monotonic = getattr(snapshot, "last_seen_monotonic", None)
-        if confirm_from_telemetry(
-            record,
-            observed,
-            tolerance_w=policy.confirmation_tolerance_w,
-            now_monotonic=now_monotonic,
-            telemetry_monotonic=telemetry_monotonic,
-            allow_from_published=allow_from_published,
-        ):
+        metric_monotonic = getattr(snapshot, "metric_monotonic", None)
+        if record.expected_properties:
+            confirmed = confirm_from_expected_properties(
+                record,
+                metrics,
+                tolerance_w=policy.confirmation_tolerance_w,
+                now_monotonic=now_monotonic,
+                telemetry_monotonic=telemetry_monotonic,
+                metric_monotonic=metric_monotonic,
+                allow_from_published=allow_from_published,
+            )
+        else:
+            observed = getattr(state, "output_limit", None)
+            if isinstance(metric_monotonic, dict):
+                telemetry_monotonic = metric_monotonic.get(
+                    policy.confirmation_metric, telemetry_monotonic
+                )
+            confirmed = confirm_from_telemetry(
+                record,
+                observed,
+                tolerance_w=policy.confirmation_tolerance_w,
+                now_monotonic=now_monotonic,
+                telemetry_monotonic=telemetry_monotonic,
+                allow_from_published=allow_from_published,
+            )
+        if confirmed:
             self._last_command_state = record.state
             self._active_command = None
             self._active_correlation_id = None
+            self._note_local_confirmation(record, now_monotonic)
+            elapsed_ms = (
+                (now_monotonic - record.published_monotonic) * 1000.0
+                if record.published_monotonic is not None
+                else None
+            )
+            log_event(
+                logging.INFO,
+                "telemetry_confirmed",
+                elapsed_ms=round(elapsed_ms, 1) if elapsed_ms is not None else None,
+                confirmation_metric=policy.confirmation_metric,
+                **self._command_log_fields(record),
+            )
             self._flush_pending_target(now_monotonic)
+
+    def _note_local_confirmation(self, record, now_monotonic):
+        """A locally confirmed target resets foreign-writer suspicion."""
+
+        self._last_confirmed_target = record.target_w
+        self._last_confirmed_monotonic = now_monotonic
+        self._foreign_streak = 0
+        self._foreign_last_observed_monotonic = None
+        self._external_control_suspected = None
+
+    def _detect_external_control(self, state, snapshot):
+        """Conservatively flag a foreign writer overwriting a confirmed target.
+
+        Requires: no local command in flight, a previously *confirmed* local
+        target, and at least two successive newer telemetry reports whose
+        ``outputLimit`` is materially away from that target. Reports evidence
+        only — never claims which controller is responsible.
+        """
+
+        if self._active_command is not None or self._last_confirmed_target is None:
+            return
+        metrics = getattr(snapshot, "metrics", None)
+        if not isinstance(metrics, dict) or "outputLimit" not in metrics:
+            return
+        times = getattr(snapshot, "metric_monotonic", None)
+        observed_time = None
+        if isinstance(times, dict):
+            observed_time = times.get("outputLimit")
+        if observed_time is None:
+            observed_time = getattr(snapshot, "last_seen_monotonic", None)
+        if observed_time is None:
+            return
+        if (
+            self._last_confirmed_monotonic is not None
+            and observed_time <= self._last_confirmed_monotonic
+        ):
+            return
+        if (
+            self._foreign_last_observed_monotonic is not None
+            and observed_time <= self._foreign_last_observed_monotonic
+        ):
+            return
+        observed = getattr(state, "output_limit", None)
+        if isinstance(observed, bool) or not isinstance(observed, (int, float)):
+            return
+        tolerance = self._confirmation_policy().confirmation_tolerance_w
+        if abs(float(observed) - float(self._last_confirmed_target)) <= tolerance:
+            self._foreign_streak = 0
+            self._foreign_last_observed_monotonic = observed_time
+            return
+        self._foreign_streak += 1
+        self._foreign_last_observed_monotonic = observed_time
+        if self._foreign_streak >= 2 and self._external_control_suspected is None:
+            self._external_control_suspected = {
+                "expected_w": self._last_confirmed_target,
+                "observed_w": int(observed),
+                "observations": self._foreign_streak,
+            }
+            log_event(
+                logging.WARNING,
+                "external_control_suspected",
+                device=self.name,
+                source=self.source,
+                broker_ref=self.broker_ref,
+                expected_w=self._last_confirmed_target,
+                observed_w=int(observed),
+                observations=self._foreign_streak,
+            )
+
+    def _command_log_fields(self, record):
+        """Secret-free structured fields identifying one command."""
+
+        return {
+            "device": self.name,
+            "source": self.source,
+            "broker_ref": self.broker_ref,
+            "hardware_profile": self.hardware_profile,
+            "operation": record.operation,
+            "target_w": record.target_w,
+            "message_id": record.message_id,
+            "command_state": record.state,
+            "broker_delivery": record.broker_delivery,
+        }
 
     def _control_capability(self):
         """Resolve this device's power-write capability for diagnostics.
@@ -920,6 +1255,9 @@ class ZendureMqttDeviceClient:
             "last_command": last_command,
             "active_command": active.snapshot() if active is not None else None,
             "pending_target": self._pending_target,
+            "last_confirmed_target_w": self._last_confirmed_target,
+            "external_control_suspected": bool(self._external_control_suspected),
+            "external_control_detail": self._external_control_suspected,
             "confirmation_deadline": confirmation_deadline,
             "command_ack_timeout_seconds": self._command_ack_timeout_s,
             "confirmation_timeout_seconds": self._confirmation_timeout_s,

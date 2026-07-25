@@ -96,8 +96,9 @@ def test_case_b_legacy_json_alt_local_mqtt():
     try:
         controller = run_installation_cycle(installation)
         assert "LA" in controller.last_control_explanation.devices
-        # The alt family uses the leading-slash canonical control route.
-        assert _writes(network, "local_a") == ["/PKLA/DEVLA/properties/write"]
+        # Commands stay on the iot/… tree even for the leading-slash report
+        # family: devices publish reports on /… but accept writes on iot/… only.
+        assert _writes(network, "local_a") == ["iot/PKLA/DEVLA/properties/write"]
     finally:
         installation.stop()
 

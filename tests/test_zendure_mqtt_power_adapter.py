@@ -112,15 +112,23 @@ def test_aio_profile_rejects_negative_target_without_publish():
     assert service.published == []
 
 
-# --- ZenSDK keeps properties/write ------------------------------------------
+# --- ZenSDK publishes the atomic mode+power properties write -----------------
 
 
-def test_zensdk_profile_keeps_properties_write_path():
+def test_zensdk_profile_publishes_atomic_properties_write():
+    # Source contract (Zendure-HA ZendureZenSdk.discharge): the power command
+    # carries smartMode/acMode/outputLimit/inputLimit in ONE properties write —
+    # a bare outputLimit is ignored by a device in an inactive mode.
     dev = _device("solarflow_800_pro_2")
     assert dev.write_output_limit(300) is True
     topic, payload = _published_payload(dev)
     assert topic == "iot/PRODUCT_KEY/DEVICE_ID/properties/write"
-    assert payload["properties"] == {"outputLimit": 300}
+    assert payload["properties"] == {
+        "smartMode": 1,
+        "acMode": 2,
+        "outputLimit": 300,
+        "inputLimit": 0,
+    }
 
 
 # --- telemetry-only hardware never writes -----------------------------------

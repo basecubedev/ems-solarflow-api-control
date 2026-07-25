@@ -29,6 +29,8 @@ class ZendureMqttSnapshot:
     product: str | None = None
     topic_families: set = field(default_factory=set)
     metrics: dict[str, Any] = field(default_factory=dict)
+    # Per-key report time: merged snapshots keep old values beside fresh ones.
+    metric_monotonic: dict[str, float] = field(default_factory=dict)
     battery_packs: list[dict[str, Any]] = field(default_factory=list)
     capabilities: set = field(default_factory=set)
     seen_topics: set = field(default_factory=set)
@@ -137,6 +139,7 @@ class ZendureMqttAggregator:
 
         if match.family in SCALAR_FAMILIES and match.metric:
             snap.metrics[match.metric] = coerce_scalar(payload)
+            snap.metric_monotonic[match.metric] = snap.last_seen_monotonic
         elif match.family in JSON_FAMILIES:
             self._merge_report(snap, payload)
 
@@ -147,6 +150,8 @@ class ZendureMqttAggregator:
         if report.product and not snap.product:
             snap.product = report.product
         snap.metrics.update(report.properties)
+        for key in report.properties:
+            snap.metric_monotonic[key] = snap.last_seen_monotonic
         if report.battery_packs:
             snap.battery_packs = report.battery_packs
 
@@ -165,6 +170,7 @@ class ZendureMqttAggregator:
                     product=snap.product,
                     topic_families=set(snap.topic_families),
                     metrics=metrics,
+                    metric_monotonic=dict(snap.metric_monotonic),
                     battery_packs=list(snap.battery_packs),
                     capabilities=infer_capabilities(snap.metrics, snap.battery_packs),
                     seen_topics=set(snap.seen_topics),

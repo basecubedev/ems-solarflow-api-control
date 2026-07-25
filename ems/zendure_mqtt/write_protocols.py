@@ -9,8 +9,9 @@ proven writable (scalar / unknown) would silently fall back to the legacy
 Two protocols exist, with deliberately different authority:
 
 ``legacy_properties_write``
-    ``iot/<productKey>/<deviceId>/properties/write`` (leading-slash variant for
-    ``legacy_zendure_json_alt``) with a ``{deviceId, messageId, timestamp,
+    ``iot/<productKey>/<deviceId>/properties/write`` (for every topic family —
+    devices on the leading-slash report family still accept commands only on
+    ``iot/…``) with a ``{deviceId, messageId, timestamp,
     properties}`` payload. It is a *message shape* only — the runtime uses it to
     build the properties/write publish for a concrete ZenSDK hardware profile.
     It is NOT a config-authorizing protocol: an ``mqtt.write_protocol`` of
@@ -34,8 +35,6 @@ import json
 import time
 from dataclasses import dataclass
 
-from ems.zendure_mqtt.topics import FAMILY_LEGACY_JSON_ALT
-
 PROTOCOL_LEGACY_PROPERTIES_WRITE = "legacy_properties_write"
 PROTOCOL_CUSTOM_PROPERTIES_WRITE = "custom_properties_write"
 
@@ -52,6 +51,10 @@ SUPPORTED_WRITE_PROTOCOLS = frozenset(
 CONFIG_AUTHORIZED_WRITE_PROTOCOLS = frozenset({PROTOCOL_CUSTOM_PROPERTIES_WRITE})
 
 _WRITE_SUFFIX = "properties/write"
+
+# QoS 1 makes broker delivery observable via PUBACK; control writes are never
+# retained (a retained setpoint would replay on every reconnect).
+CONTROL_PUBLISH_QOS = 1
 
 # MQTT topic-name limit is 65535 UTF-8 bytes; a control publish topic is short,
 # so a much tighter bound rejects obviously malformed/hostile values.
@@ -121,41 +124,45 @@ def resolve_write_protocol(topic_family, explicit=None) -> str | None:
 def _legacy_topic(family, product_key, device_id) -> str | None:
     if not product_key or not device_id:
         return None
-    if family == FAMILY_LEGACY_JSON_ALT:
-        return f"/{product_key}/{device_id}/{_WRITE_SUFFIX}"
+    # Commands always go to iot/… — leading-slash-family devices report on /…
+    # but accept writes on iot/… only (live capture + reference implementation).
     return f"iot/{product_key}/{device_id}/{_WRITE_SUFFIX}"
 
 
-def _properties_payload(device_id, output_limit_w, *, message_id, timestamp) -> bytes:
+def _properties_payload(device_id, properties, *, message_id, timestamp) -> bytes:
     body = {
         "deviceId": device_id,
         "messageId": message_id,
         "timestamp": timestamp,
-        "properties": {"outputLimit": int(output_limit_w)},
+        "properties": {key: int(value) for key, value in properties.items()},
     }
     return json.dumps(body).encode("utf-8")
 
 
-def build_output_limit_message(
+def build_properties_write_message(
     protocol,
     *,
+    properties,
     topic_family=None,
     product_key=None,
     device_id=None,
-    output_limit_w,
     write_topic=None,
     message_id=None,
     timestamp=None,
     qos=0,
+    retain=False,
 ) -> MqttPublishMessage | None:
-    """Build the publish message for an ``outputLimit`` write, or ``None``.
+    """Build the publish message for a properties write, or ``None``.
 
-    Returns ``None`` when the protocol is unsupported or the device is not
-    addressable for that protocol. Protocol-specific topic/payload construction
-    lives here, never in the controller.
+    ``properties`` is a mapping of already-validated integer device properties.
+    Returns ``None`` when the protocol is unsupported, the device is not
+    addressable for that protocol, or the property set is empty. Protocol-
+    specific topic/payload construction lives here, never in the controller.
     """
 
     if protocol not in SUPPORTED_WRITE_PROTOCOLS:
+        return None
+    if not isinstance(properties, dict) or not properties:
         return None
     if message_id is None:
         message_id = next_message_id()
@@ -175,6 +182,33 @@ def build_output_limit_message(
         return None
 
     payload = _properties_payload(
-        device_id, output_limit_w, message_id=message_id, timestamp=timestamp
+        device_id, properties, message_id=message_id, timestamp=timestamp
     )
-    return MqttPublishMessage(topic=topic, payload=payload, qos=qos)
+    return MqttPublishMessage(topic=topic, payload=payload, qos=qos, retain=retain)
+
+
+def build_output_limit_message(
+    protocol,
+    *,
+    topic_family=None,
+    product_key=None,
+    device_id=None,
+    output_limit_w,
+    write_topic=None,
+    message_id=None,
+    timestamp=None,
+    qos=0,
+) -> MqttPublishMessage | None:
+    """Build the publish message for an ``outputLimit`` write, or ``None``."""
+
+    return build_properties_write_message(
+        protocol,
+        properties={"outputLimit": int(output_limit_w)},
+        topic_family=topic_family,
+        product_key=product_key,
+        device_id=device_id,
+        write_topic=write_topic,
+        message_id=message_id,
+        timestamp=timestamp,
+        qos=qos,
+    )

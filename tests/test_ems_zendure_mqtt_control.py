@@ -66,8 +66,8 @@ class FakeMqttClient:
     def subscribe(self, topic, qos=0):
         self.subscriptions.append(topic)
 
-    def publish(self, topic, payload, qos=0):
-        self.publish_calls.append((topic, payload, qos))
+    def publish(self, topic, payload, qos=0, retain=False):
+        self.publish_calls.append((topic, payload, qos, retain))
         return None
 
 
@@ -126,7 +126,10 @@ def test_legacy_message_topic_and_payload_fields():
     assert body["properties"] == {"outputLimit": 321}
 
 
-def test_legacy_slash_variant_topic():
+def test_legacy_slash_report_family_still_writes_to_iot_topic():
+    # Devices on the leading-slash report family accept commands on iot/… only
+    # (live cloud capture + reference implementation); a leading-slash write
+    # topic is silently undelivered and must never be built.
     message = build_output_limit_message(
         PROTOCOL_LEGACY_PROPERTIES_WRITE,
         topic_family=FAMILY_LEGACY_JSON_ALT,
@@ -134,7 +137,7 @@ def test_legacy_slash_variant_topic():
         device_id="DEV",
         output_limit_w=100,
     )
-    assert message.topic == "/PK/DEV/properties/write"
+    assert message.topic == "iot/PK/DEV/properties/write"
 
 
 def test_message_none_when_unaddressable():
@@ -209,7 +212,7 @@ def test_control_client_publishes_when_connected():
     client = ZendureMqttControlClient(config, client_factory=lambda _c: fake)
     client.start()
     assert client.publish("iot/PK/DEV/properties/write", "{}") is True
-    assert fake.publish_calls == [("iot/PK/DEV/properties/write", "{}", 0)]
+    assert fake.publish_calls == [("iot/PK/DEV/properties/write", "{}", 0, False)]
 
 
 def test_control_client_does_not_publish_when_down():
@@ -293,7 +296,12 @@ def test_device_write_output_limit_publishes_and_gate_is_local():
     assert dev.write_output_limit(250) is True
     topic, payload = service.published[0]
     assert topic == "iot/PK/DEV/properties/write"
-    assert json.loads(payload)["properties"] == {"outputLimit": 250}
+    assert json.loads(payload)["properties"] == {
+        "smartMode": 1,
+        "acMode": 2,
+        "outputLimit": 250,
+        "inputLimit": 0,
+    }
 
 
 def test_device_cloud_source_maps_to_zendure_gate():

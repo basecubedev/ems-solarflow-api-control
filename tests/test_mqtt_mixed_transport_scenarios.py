@@ -350,7 +350,7 @@ def test_scenario_11_maximum_mixed_installation():
         assert set(controller.last_control_explanation.devices) == {"API", "A", "B", "Cloud"}
         assert installation.api_sessions["API"].post.called
         assert _mqtt_writes(network, "local_a") == ["iot/PKA/DEVA/properties/write"]
-        assert _mqtt_writes(network, "local_b") == ["/PKB/DEVB/properties/write"]
+        assert _mqtt_writes(network, "local_b") == ["iot/PKB/DEVB/properties/write"]
         assert _mqtt_writes(network, "cloud") == ["iot/PKCloud/DEVCloud/properties/write"]
         # Broker B carries the D0 subscription and one control publish only for B.
         assert installation.grid_meter.get_power() == _LOAD_W

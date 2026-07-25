@@ -23,6 +23,8 @@ scripts/
 !scripts/influx_utils.py
 # Admin builds generate the embedded release bundle from this repository tool.
 !scripts/generate_release_resources.py
+# On-hardware MQTT write-latency probe (developer tool; see docs/developer).
+!scripts/mqtt_write_latency_probe.py
 tasks/
 docs/develop/
 runtime-traces/

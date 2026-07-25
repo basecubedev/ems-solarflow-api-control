@@ -2064,11 +2064,30 @@ def control_writes_allowed(control_gate):
     return resolve_write_gate(control_gate).allowed
 
 
-def state_reconciliation_writes_allowed():
-    return (
-        hardware_writes_allowed()
-        and ALLOW_STATE_RECONCILIATION_WRITES
+def resolve_state_write_gate(control_gate="api") -> WriteGateDecision:
+    """Auditable gate decision for a state-reconciliation write.
+
+    Single policy for every transport: the device transport's own write gate
+    (never a hard-coded ``allow_hardware_writes``) plus the global
+    ``allow_state_reconciliation_writes`` gate. ``blocked_by`` names every gate
+    that would block the write.
+    """
+
+    gate = resolve_write_gate(control_gate)
+    blocked = list(gate.blocked_by)
+    if not ALLOW_STATE_RECONCILIATION_WRITES:
+        blocked.append("allow_state_reconciliation_writes")
+    return WriteGateDecision(
+        allowed=not blocked,
+        transport=gate.transport,
+        gate_name=gate.gate_name,
+        gate_enabled=gate.gate_enabled,
+        blocked_by=tuple(blocked),
     )
+
+
+def state_reconciliation_writes_allowed(control_gate="api"):
+    return resolve_state_write_gate(control_gate).allowed
 
 
 def runtime_state_path():

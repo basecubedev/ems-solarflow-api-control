@@ -28,6 +28,7 @@ COPY dashboard/ ./dashboard/
 # Runtime dependency of ems/history (Analytics influx sync/status); the rest of
 # scripts/ is dev tooling and intentionally not shipped.
 COPY scripts/influx_utils.py ./scripts/influx_utils.py
+COPY scripts/mqtt_write_latency_probe.py ./scripts/mqtt_write_latency_probe.py
 COPY ems-solarflow-api-control.py emsctl.py README.md ./
 # Runtime and entrypoint expect the template at /app/config.template.json; the
 # canonical source lives in config/ and is copied to that image path here.

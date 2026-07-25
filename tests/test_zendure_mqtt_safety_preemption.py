@@ -120,18 +120,41 @@ def test_substantial_reduction_preempts():
     assert old.state == "superseded"
 
 
-def test_small_reduction_queues_not_preempts():
+def test_no_ack_changed_target_supersedes_and_publishes_now():
+    """A no-ack command settles only via slow telemetry, so the latest target
+    replaces it immediately instead of stalling behind the confirmation window.
+    """
+
     dev = _zensdk_device()
     dev.write_output_limit(600)
-    # 600 -> 500 is only 100 W (< 300 W margin): queue as the pending target.
+    old = dev._active_command
+    result = dev.dispatch_output_limit(500)
+    assert result.status is WriteDispatchStatus.PUBLISHED
+    assert len(dev._service.published) == 2
+    assert dev._active_command.target_w == 500
+    assert old.state == "superseded"
+
+
+def test_no_ack_increase_supersedes_and_publishes_now():
+    dev = _zensdk_device()
+    dev.write_output_limit(600)
+    result = dev.dispatch_output_limit(900)
+    assert result.status is WriteDispatchStatus.PUBLISHED
+    assert len(dev._service.published) == 2
+    assert dev._active_command.target_w == 900
+
+
+def test_ack_profile_small_reduction_queues_not_preempts():
+    dev = _ack_device()
+    dev.write_output_limit(600)
     result = dev.dispatch_output_limit(500)
     assert result.status is WriteDispatchStatus.QUEUED_LATEST
     assert len(dev._service.published) == 1
     assert dev._pending_target == 500
 
 
-def test_increase_never_preempts():
-    dev = _zensdk_device()
+def test_ack_profile_increase_never_preempts():
+    dev = _ack_device()
     dev.write_output_limit(600)
     result = dev.dispatch_output_limit(900)
     assert result.status is WriteDispatchStatus.QUEUED_LATEST
@@ -155,7 +178,8 @@ def test_superseded_target_telemetry_cannot_confirm_replacement():
     assert new.state == "published"
     assert old.state == "superseded"
     dev._service.set_snapshot(
-        {"outputLimit": 0}, last_seen_monotonic=new.published_monotonic + 2.0
+        {"outputLimit": 0, "acMode": 2, "smartMode": 1, "inputLimit": 0},
+        last_seen_monotonic=new.published_monotonic + 2.0,
     )
     dev.fetch()
     assert new.state == "telemetry_confirmed"
@@ -198,13 +222,10 @@ def test_configurable_preempt_margin():
     assert dev._active_command.target_w == 500
 
 
-def test_sub_tolerance_reduction_never_preempts_even_with_tiny_margin():
-    # A reduction within the confirmation tolerance must not preempt: otherwise
-    # the preempting command could be cross-confirmed by telemetry still reporting
-    # the old target within tolerance. A 0 W stop still preempts regardless.
-    dev = _zensdk_device(safety_preempt_margin_w=5, confirmation_tolerance_w=25)
+def test_ack_profile_sub_tolerance_reduction_queues_zero_stop_preempts():
+    dev = _ack_device(safety_preempt_margin_w=5, confirmation_tolerance_w=25)
     dev.write_output_limit(600)
-    result = dev.dispatch_output_limit(585)  # 15 W, within the 25 W tolerance
+    result = dev.dispatch_output_limit(585)
     assert result.status is WriteDispatchStatus.QUEUED_LATEST
     assert dev._pending_target == 585
     result2 = dev.dispatch_output_limit(0)
@@ -234,7 +255,7 @@ def test_dispatch_coalesced_result():
 
 
 def test_dispatch_queued_result():
-    dev = _zensdk_device()
+    dev = _ack_device()
     dev.write_output_limit(600)
     result = dev.dispatch_output_limit(500)
     assert result.status is WriteDispatchStatus.QUEUED_LATEST

@@ -63,7 +63,7 @@ class FakeMqttClient:
     def subscribe(self, topic, qos=0):
         pass
 
-    def publish(self, topic, payload, qos=0):
+    def publish(self, topic, payload, qos=0, retain=False):
         self.publish_calls.append((topic, payload, qos))
         return None
 

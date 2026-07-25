@@ -84,29 +84,27 @@ def test_no_ack_write_confirms_directly_from_fresh_telemetry():
     # No reply is ever sent (no ack contract). Fresh telemetry matching the
     # target confirms the published command directly.
     dev._service.set_snapshot(
-        {"outputLimit": 500}, last_seen_monotonic=rec.published_monotonic + 1.0
+        {"outputLimit": 500, "acMode": 2},
+        last_seen_monotonic=rec.published_monotonic + 1.0,
     )
     dev.fetch()
     assert rec.state == "telemetry_confirmed"
     assert dev._active_command is None
 
 
-def test_no_ack_pending_target_publishes_after_confirmation():
+def test_no_ack_changed_target_supersedes_in_flight_command():
+    """The latest target replaces an unconfirmable in-flight command at once
+    instead of waiting out its telemetry-confirmation window.
+    """
+
     dev = _zensdk_device()
     dev.write_output_limit(500)
-    rec = dev._active_command
-    # A changed target waits behind the in-flight (published) no-ack command.
+    old = dev._active_command
     dev.write_output_limit(300)
-    assert dev._pending_target == 300
-    assert len(dev._service.published) == 1
-    # Confirming the first target from telemetry frees the slot and flushes 300.
-    dev._service.set_snapshot(
-        {"outputLimit": 500}, last_seen_monotonic=rec.published_monotonic + 1.0
-    )
-    dev.fetch()
-    assert rec.state == "telemetry_confirmed"
+    assert old.state == "superseded"
     assert len(dev._service.published) == 2
     assert dev._active_command.target_w == 300
+    assert dev._pending_target is None
 
 
 def test_no_ack_stale_telemetry_does_not_confirm():
@@ -177,7 +175,8 @@ def test_no_ack_uses_policy_tolerance_not_hardcoded_default():
     dev.write_output_limit(500)
     rec = dev._active_command
     dev._service.set_snapshot(
-        {"outputLimit": 580}, last_seen_monotonic=rec.published_monotonic + 1.0
+        {"outputLimit": 580, "acMode": 2},
+        last_seen_monotonic=rec.published_monotonic + 1.0,
     )
     dev.fetch()
     assert rec.state == "telemetry_confirmed"
@@ -219,7 +218,8 @@ def test_confirming_telemetry_wins_over_elapsed_confirmation_deadline():
     dev.write_output_limit(500)
     rec = dev._active_command
     dev._service.set_snapshot(
-        {"outputLimit": 500}, last_seen_monotonic=rec.published_monotonic + 0.001
+        {"outputLimit": 500, "acMode": 2},
+        last_seen_monotonic=rec.published_monotonic + 0.001,
     )
     dev.fetch()
     assert rec.state == "telemetry_confirmed"

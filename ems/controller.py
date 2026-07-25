@@ -7,11 +7,11 @@ from datetime import datetime, timedelta
 from ems import config as cfg
 from ems.clients import (
     fetch_all_devices,
-    zendure_write,
     zero_device_state,
 )
 from ems.logging_utils import log_event
 from ems.mqtt_control.dispatch import WriteDispatchStatus, dispatch_device_write
+from ems.property_writes import write_device_properties
 from ems.models import DeviceCapabilities
 from ems.runtime_intents import (
     DeviceRuntimeIntent,
@@ -1076,6 +1076,46 @@ class EMSController:
 
         return intent.output_control_allowed
 
+    def state_reconciliation_supported(self, dev, path):
+        """Whether ``dev`` supports state reconciliation; skip explicitly if not.
+
+        A transport without state reconciliation (MQTT control devices are
+        output-only) is skipped with an explicit event and reason — never a
+        silent fall-through to another transport's write path.
+        """
+
+        if getattr(dev, "supports_state_reconciliation", True):
+            return True
+        log_event(
+            logging.DEBUG,
+            "state_reconciliation_skipped",
+            device=dev.name,
+            path=path,
+            reason="transport_state_reconciliation_unsupported",
+            control_gate=getattr(dev, "control_gate", "api"),
+        )
+        return False
+
+    def state_write_gate_fields(self, dev):
+        """Auditable log fields for a blocked state write on ``dev``'s transport."""
+
+        gate = cfg.resolve_state_write_gate(getattr(dev, "control_gate", "api"))
+        return {
+            "dry_run": cfg.DRY_RUN,
+            "simulation": cfg.SIMULATION_MODE,
+            "write_gate": gate.gate_name,
+            "write_gate_enabled": gate.gate_enabled,
+            "blocked_by": ",".join(gate.blocked_by),
+            "allow_state_reconciliation_writes": (
+                cfg.ALLOW_STATE_RECONCILIATION_WRITES
+            ),
+        }
+
+    def device_state_writes_allowed(self, dev):
+        return cfg.state_reconciliation_writes_allowed(
+            getattr(dev, "control_gate", "api")
+        )
+
     def ac_mode_intent_log_fields(self, dev, state, intent):
         return {
             "device": dev.name,
@@ -1097,7 +1137,7 @@ class EMSController:
     def reconcile_ac_mode_intent(self, dev, state, intent):
         """Write acMode only when telemetry differs from desired runtime intent."""
 
-        if not getattr(dev, "supports_state_reconciliation", True):
+        if not self.state_reconciliation_supported(dev, "ac_mode_intent"):
             return True
 
         if intent.desired_ac_mode is None:
@@ -1142,29 +1182,25 @@ class EMSController:
                 )
                 return False
 
-        if not cfg.state_reconciliation_writes_allowed():
+        if not self.device_state_writes_allowed(dev):
             log_event(
                 logging.INFO,
                 "dry_run_ac_mode_intent_write",
                 **{
                     **fields,
-                    "dry_run": cfg.DRY_RUN,
-                    "simulation": cfg.SIMULATION_MODE,
-                    "allow_hardware_writes": cfg.ALLOW_HARDWARE_WRITES,
-                    "allow_state_reconciliation_writes": (
-                        cfg.ALLOW_STATE_RECONCILIATION_WRITES
-                    ),
+                    **self.state_write_gate_fields(dev),
                 }
             )
             return False
 
         try:
-            ok = zendure_write(
+            ok = write_device_properties(
                 dev,
-                "acMode",
                 {"acMode": desired_ac_mode},
-                "write_ac_mode_intent_error",
-                **fields
+                reason="ac_mode_intent",
+                field="acMode",
+                error_event="write_ac_mode_intent_error",
+                log_fields=fields
             )
 
             if not ok:
@@ -1253,7 +1289,7 @@ class EMSController:
     def reconcile_runtime_ac_charge_power(self, dev, state, intent):
         """Write inputLimit when runtime AC input intent requests a new value."""
 
-        if not getattr(dev, "supports_state_reconciliation", True):
+        if not self.state_reconciliation_supported(dev, "runtime_ac_charge_power"):
             return True
 
         desired_input_limit = self.desired_runtime_input_limit(dev, intent)
@@ -1283,29 +1319,25 @@ class EMSController:
             )
             return True
 
-        if not cfg.state_reconciliation_writes_allowed():
+        if not self.device_state_writes_allowed(dev):
             log_event(
                 logging.INFO,
                 "runtime_ac_charge_power_write_skipped",
                 **{
                     **fields,
-                    "dry_run": cfg.DRY_RUN,
-                    "simulation": cfg.SIMULATION_MODE,
-                    "allow_hardware_writes": cfg.ALLOW_HARDWARE_WRITES,
-                    "allow_state_reconciliation_writes": (
-                        cfg.ALLOW_STATE_RECONCILIATION_WRITES
-                    ),
+                    **self.state_write_gate_fields(dev),
                 }
             )
             return False
 
         try:
-            ok = zendure_write(
+            ok = write_device_properties(
                 dev,
-                "inputLimit",
                 {"inputLimit": desired_input_limit},
-                "runtime_ac_charge_power_write_error",
-                **fields
+                reason="runtime_ac_charge_power",
+                field="inputLimit",
+                error_event="runtime_ac_charge_power_write_error",
+                log_fields=fields
             )
 
             if not ok:
@@ -2087,7 +2119,7 @@ class EMSController:
     ):
         """Apply configured SOC limits if required."""
 
-        if not getattr(dev, "supports_state_reconciliation", True):
+        if not self.state_reconciliation_supported(dev, "soc_limits"):
             return True
 
         effective_min_soc = (
@@ -2127,7 +2159,7 @@ class EMSController:
 
             return True
 
-        if not cfg.state_reconciliation_writes_allowed():
+        if not self.device_state_writes_allowed(dev):
             log_event(
                 logging.INFO,
                 "dry_run_soc_limits",
@@ -2136,29 +2168,27 @@ class EMSController:
                 max_soc=effective_max_soc,
                 max_soc_property="socSet",
                 reason=reason,
-                dry_run=cfg.DRY_RUN,
-                simulation=cfg.SIMULATION_MODE,
-                allow_hardware_writes=cfg.ALLOW_HARDWARE_WRITES,
-                allow_state_reconciliation_writes=(
-                    cfg.ALLOW_STATE_RECONCILIATION_WRITES
-                )
+                **self.state_write_gate_fields(dev)
             )
             return False
 
         try:
 
-            ok = zendure_write(
+            ok = write_device_properties(
                 dev,
-                "minSoc/socSet",
                 {
                     "minSoc": int(effective_min_soc * 10),
                     "socSet": int(effective_max_soc * 10)
                 },
-                "write_soc_limits_error",
-                min_soc=effective_min_soc,
-                max_soc=effective_max_soc,
-                max_soc_property="socSet",
-                reason=reason
+                reason="soc_limits",
+                field="minSoc/socSet",
+                error_event="write_soc_limits_error",
+                log_fields={
+                    "min_soc": effective_min_soc,
+                    "max_soc": effective_max_soc,
+                    "max_soc_property": "socSet",
+                    "reason": reason,
+                }
             )
 
             if not ok:
@@ -2246,21 +2276,17 @@ class EMSController:
     def apply_winter_ac_charge_limit(self, dev):
         """Apply conservative winter AC charge input limit."""
 
+        if not self.state_reconciliation_supported(dev, "winter_ac_charge_limit"):
+            return
+
         properties = cfg.build_winter_ac_charge_limit_payload()
         fields = {
             "device": dev.name,
             "input_limit_w": properties["inputLimit"]
         }
 
-        if not cfg.state_reconciliation_writes_allowed():
-            fields.update({
-                "dry_run": cfg.DRY_RUN,
-                "simulation": cfg.SIMULATION_MODE,
-                "allow_hardware_writes": cfg.ALLOW_HARDWARE_WRITES,
-                "allow_state_reconciliation_writes": (
-                    cfg.ALLOW_STATE_RECONCILIATION_WRITES
-                )
-            })
+        if not self.device_state_writes_allowed(dev):
+            fields.update(self.state_write_gate_fields(dev))
 
             log_event(
                 logging.INFO,
@@ -2270,12 +2296,13 @@ class EMSController:
             return
 
         try:
-            ok = zendure_write(
+            ok = write_device_properties(
                 dev,
-                "winter_ac_charge_limit",
                 properties,
-                "write_winter_ac_charge_limit_error",
-                **fields
+                reason="winter_ac_charge_limit",
+                field="winter_ac_charge_limit",
+                error_event="write_winter_ac_charge_limit_error",
+                log_fields=fields
             )
 
             if not ok:
@@ -2299,7 +2326,7 @@ class EMSController:
     def run_startup_ac_mode_reconcile_once(self, dev, state):
         """Compatibility wrapper for legacy startup acMode reconciliation."""
 
-        if not getattr(dev, "supports_state_reconciliation", True):
+        if not self.state_reconciliation_supported(dev, "startup_ac_mode_reconcile"):
             return
 
         if self.initial_ac_mode_reconciled.get(dev.name, False):
@@ -2323,6 +2350,9 @@ class EMSController:
 
     def apply_device_modes(self, dev, state):
         """Apply device operating modes if required."""
+
+        if not self.state_reconciliation_supported(dev, "device_modes"):
+            return
 
         manage_grid_off_mode = dev.grid_off_mode is not None
         properties = {}
@@ -2373,15 +2403,8 @@ class EMSController:
 
             return
 
-        if not cfg.state_reconciliation_writes_allowed():
-            fields.update({
-                "dry_run": cfg.DRY_RUN,
-                "simulation": cfg.SIMULATION_MODE,
-                "allow_hardware_writes": cfg.ALLOW_HARDWARE_WRITES,
-                "allow_state_reconciliation_writes": (
-                    cfg.ALLOW_STATE_RECONCILIATION_WRITES
-                )
-            })
+        if not self.device_state_writes_allowed(dev):
+            fields.update(self.state_write_gate_fields(dev))
 
             log_event(
                 logging.INFO,
@@ -2391,12 +2414,13 @@ class EMSController:
             return
 
         try:
-            ok = zendure_write(
+            ok = write_device_properties(
                 dev,
-                ",".join(properties),
                 properties,
-                "write_device_modes_error",
-                **fields
+                reason="device_modes",
+                field=",".join(properties),
+                error_event="write_device_modes_error",
+                log_fields=fields
             )
 
             if not ok:
@@ -2460,7 +2484,7 @@ class EMSController:
     def apply_runtime_device_state(self, dev, state):
         """Apply runtime-state device intents through safe reconciliation."""
 
-        if not getattr(dev, "supports_state_reconciliation", True):
+        if not self.state_reconciliation_supported(dev, "runtime_device_state"):
             return
 
         if not self.runtime_state:
@@ -2511,15 +2535,8 @@ class EMSController:
             self.log_runtime_state_unchanged(fields)
             return
 
-        if not cfg.state_reconciliation_writes_allowed():
-            fields.update({
-                "dry_run": cfg.DRY_RUN,
-                "simulation": cfg.SIMULATION_MODE,
-                "allow_hardware_writes": cfg.ALLOW_HARDWARE_WRITES,
-                "allow_state_reconciliation_writes": (
-                    cfg.ALLOW_STATE_RECONCILIATION_WRITES
-                )
-            })
+        if not self.device_state_writes_allowed(dev):
+            fields.update(self.state_write_gate_fields(dev))
 
             log_event(
                 logging.INFO,
@@ -2529,12 +2546,13 @@ class EMSController:
             return
 
         try:
-            ok = zendure_write(
+            ok = write_device_properties(
                 dev,
-                "gridOffMode",
                 {"gridOffMode": desired_grid_off_mode},
-                "write_runtime_device_state_error",
-                **fields
+                reason="runtime_device_state",
+                field="gridOffMode",
+                error_event="write_runtime_device_state_error",
+                log_fields=fields
             )
 
             if not ok:

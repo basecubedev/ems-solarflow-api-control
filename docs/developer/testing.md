@@ -99,3 +99,7 @@ links stay honest.
 Automated tests reduce risk but do not replace real hardware validation: dry-run
 checks, watching the first live run, and per-installation review of power and
 SOC limits are still required. See [../user/safety.md](../user/safety.md).
+
+For an on-hardware measurement (not part of the offline suite) of how fast an
+MQTT `outputLimit` write reaches the inverter, see
+[mqtt-write-latency-probe.md](mqtt-write-latency-probe.md).

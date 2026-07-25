@@ -150,10 +150,10 @@ class FakeMqttClient:
     def subscribe(self, topic, qos=0):
         self.subscriptions.append(topic)
 
-    def publish(self, topic, payload, qos=0):
+    def publish(self, topic, payload, qos=0, retain=False):
         rc = 1 if self._broker.publish_fails else 0
         self._broker.record_publish(
-            PublishRecord(self._broker.ref, topic, payload, qos=qos)
+            PublishRecord(self._broker.ref, topic, payload, qos=qos, retain=retain)
         )
         return SimpleNamespace(rc=rc, mid=1)
 

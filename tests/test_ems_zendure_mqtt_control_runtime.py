@@ -149,7 +149,12 @@ def test_devices_publish_through_their_own_broker_service():
     assert len(service_a.published) == 1
     topic, payload = service_a.published[0]
     assert topic == "iot/PKA/DEVA/properties/write"
-    assert json.loads(payload)["properties"] == {"outputLimit": 200}
+    assert json.loads(payload)["properties"] == {
+        "smartMode": 1,
+        "acMode": 2,
+        "outputLimit": 200,
+        "inputLimit": 0,
+    }
     assert service_b.published == []
 
 

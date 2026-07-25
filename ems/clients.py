@@ -375,6 +375,30 @@ class ZendureClient:
             target_w=value,
         )
 
+    def write_properties(
+        self, properties, *, reason, field=None, error_event=None, log_fields=None
+    ):
+        """Transport-neutral property-write capability, HTTP implementation.
+
+        POSTs the properties to the device's local ``/properties/write``
+        endpoint and returns a structured dispatch result. ``reason`` names the
+        controller path for health/diagnostics; ``field``/``error_event`` keep
+        the historic write-health and error-log identities.
+        """
+
+        from ems.mqtt_control import dispatch
+
+        ok = zendure_write(
+            self,
+            field or ",".join(properties),
+            properties,
+            error_event or "write_properties_error",
+            **(log_fields or {}),
+        )
+        if ok:
+            return dispatch.published(None)
+        return dispatch.failed(None, reason="http_write_failed")
+
 
 class ShellyClient:
     """Client for Shelly power meter."""

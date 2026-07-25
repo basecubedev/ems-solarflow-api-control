@@ -58,11 +58,17 @@ class CommandRecord:
     # identity (usually equal to device_id); topic is where the command was sent.
     device_key: str | None = None
     topic: str | None = None
+    # Telemetry values proving the command applied; None -> single-metric path.
+    expected_properties: dict | None = None
     # Monotonic timeline stamps for each lifecycle transition (None until reached).
     published_monotonic: float | None = None
     acknowledged_monotonic: float | None = None
     confirmed_monotonic: float | None = None
     timeout_monotonic: float | None = None
+    # rc==0 is only submission; "delivered" requires an observed PUBACK.
+    publish_mid: int | None = None
+    broker_delivery: str | None = None
+    delivered_monotonic: float | None = None
 
     @property
     def is_terminal(self) -> bool:
@@ -95,6 +101,7 @@ class CommandRecord:
             "state": self.state,
             "response_code": self.response_code,
             "response_message": self.response_message,
+            "broker_delivery": self.broker_delivery,
         }
 
 
@@ -280,6 +287,81 @@ def confirm_from_telemetry(
     return False
 
 
+_WATT_PROPERTY_KEYS = frozenset({"outputLimit", "inputLimit"})
+
+# acMode and outputLimit are required; these are checked only when reported.
+_OPTIONAL_EXPECTED_KEYS = frozenset({"smartMode", "inputLimit"})
+
+
+def _observed_number(metrics, key):
+    value = metrics.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def confirm_from_expected_properties(
+    record: CommandRecord,
+    metrics,
+    *,
+    tolerance_w: int = _CONFIRM_TOLERANCE_W,
+    now_monotonic=None,
+    telemetry_monotonic=None,
+    metric_monotonic=None,
+    allow_from_published: bool = False,
+) -> bool:
+    """Confirm a command only when telemetry proves it *effective*.
+
+    Every expected property must hold: watt properties within ``tolerance_w``,
+    mode properties exactly. ``acMode`` and the commanded ``outputLimit`` must
+    be present — they make the command effective; ``smartMode``/``inputLimit``
+    are verified when telemetry exposes them. The ``outputLimit`` metric itself
+    must be newer than the publish (per-metric timestamp when available,
+    otherwise the snapshot timestamp), so a merged snapshot can never confirm a
+    command from a value that predates it — including a superseded command's
+    late echo.
+    """
+
+    eligible = record.state == STATE_ACKNOWLEDGED or (
+        allow_from_published and record.state == STATE_PUBLISHED
+    )
+    if not eligible:
+        return False
+    expected = record.expected_properties
+    if not isinstance(expected, Mapping) or not expected:
+        return False
+    if not isinstance(metrics, Mapping):
+        return False
+
+    freshness_reference = None
+    if isinstance(metric_monotonic, Mapping):
+        freshness_reference = metric_monotonic.get("outputLimit")
+    if freshness_reference is None:
+        freshness_reference = telemetry_monotonic
+    if (
+        freshness_reference is not None
+        and record.published_monotonic is not None
+        and freshness_reference < record.published_monotonic
+    ):
+        return False
+
+    for key, target in expected.items():
+        observed = _observed_number(metrics, key)
+        if observed is None:
+            if key in _OPTIONAL_EXPECTED_KEYS:
+                continue
+            return False
+        if key in _WATT_PROPERTY_KEYS:
+            if abs(observed - float(target)) > tolerance_w:
+                return False
+        elif int(observed) != int(target):
+            return False
+
+    record.state = STATE_TELEMETRY_CONFIRMED
+    record.confirmed_monotonic = now_monotonic
+    return True
+
+
 __all__ = [
     "STATE_QUEUED",
     "STATE_PUBLISHED",
@@ -300,4 +382,5 @@ __all__ = [
     "apply_confirmation_timeout",
     "complete_unconfirmed",
     "confirm_from_telemetry",
+    "confirm_from_expected_properties",
 ]

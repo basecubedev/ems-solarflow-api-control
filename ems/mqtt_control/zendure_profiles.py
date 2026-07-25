@@ -53,10 +53,15 @@ class ZendureHardwareProfile:
     supports_idle: bool
     supports_charge: bool
     validation_status: str
+    # Source-backed MQTT-writable properties; empty = no verified contract.
+    state_property_writes: tuple[str, ...] = ()
 
     @property
     def writable(self) -> bool:
         return self.power_write_profile in IMPLEMENTED_WRITE_PROFILES
+
+    def supports_property_write(self, name) -> bool:
+        return name in self.state_property_writes
 
     @property
     def supported_operations(self) -> tuple[str, ...]:
@@ -73,6 +78,8 @@ class ZendureHardwareProfile:
         return operation in self.supported_operations
 
 
+_ZENSDK_STATE_PROPERTIES = ("smartMode", "acMode", "outputLimit", "inputLimit")
+
 _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
     ZendureHardwareProfile(
         canonical_name="solarflow_800",
@@ -84,6 +91,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         supports_idle=True,
         supports_charge=False,
         validation_status=VALIDATION_EXISTING_SUPPORT,
+        state_property_writes=_ZENSDK_STATE_PROPERTIES,
     ),
     ZendureHardwareProfile(
         canonical_name="solarflow_800_pro",
@@ -95,6 +103,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         supports_idle=True,
         supports_charge=False,
         validation_status=VALIDATION_EXISTING_SUPPORT,
+        state_property_writes=_ZENSDK_STATE_PROPERTIES,
     ),
     ZendureHardwareProfile(
         canonical_name="solarflow_800_pro_2",
@@ -106,6 +115,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         supports_idle=True,
         supports_charge=False,
         validation_status=VALIDATION_EXISTING_SUPPORT,
+        state_property_writes=_ZENSDK_STATE_PROPERTIES,
     ),
     ZendureHardwareProfile(
         canonical_name="solarflow_800_plus",
@@ -117,6 +127,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         supports_idle=True,
         supports_charge=False,
         validation_status=VALIDATION_EXISTING_SUPPORT,
+        state_property_writes=_ZENSDK_STATE_PROPERTIES,
     ),
     ZendureHardwareProfile(
         canonical_name="solarflow_1600_ac_plus",
@@ -128,6 +139,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         supports_idle=True,
         supports_charge=False,
         validation_status=VALIDATION_EXISTING_SUPPORT,
+        state_property_writes=_ZENSDK_STATE_PROPERTIES,
     ),
     ZendureHardwareProfile(
         canonical_name="solarflow_2400_ac",
@@ -139,6 +151,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         supports_idle=True,
         supports_charge=False,
         validation_status=VALIDATION_EXISTING_SUPPORT,
+        state_property_writes=_ZENSDK_STATE_PROPERTIES,
     ),
     ZendureHardwareProfile(
         canonical_name="solarflow_2400_ac_plus",
@@ -150,6 +163,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         supports_idle=True,
         supports_charge=False,
         validation_status=VALIDATION_EXISTING_SUPPORT,
+        state_property_writes=_ZENSDK_STATE_PROPERTIES,
     ),
     ZendureHardwareProfile(
         canonical_name="solarflow_2400_pro",
@@ -161,6 +175,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         supports_idle=True,
         supports_charge=False,
         validation_status=VALIDATION_EXISTING_SUPPORT,
+        state_property_writes=_ZENSDK_STATE_PROPERTIES,
     ),
     ZendureHardwareProfile(
         canonical_name="solarflow_4000_ac_plus",
@@ -172,6 +187,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         supports_idle=True,
         supports_charge=False,
         validation_status=VALIDATION_EXISTING_SUPPORT,
+        state_property_writes=_ZENSDK_STATE_PROPERTIES,
     ),
     ZendureHardwareProfile(
         canonical_name="hyper_2000",
