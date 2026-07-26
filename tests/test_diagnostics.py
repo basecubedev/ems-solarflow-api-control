@@ -471,11 +471,24 @@ def test_emsctl_diagnose_duplicate_mqtt_device_id_produces_error(tmp_path):
     config["devices"] = [
         {"name": "WR1", "max_power": 800, "sn": "SER1"},
         _mqtt_device("MQTT1", "DEV1"),
-        _mqtt_device("MQTT2", "dev1"),
+        _mqtt_device("MQTT2", "DEV1"),
     ]
     result, codes = _diagnose_codes(tmp_path, config)
     assert result.returncode == 1, result.stderr
     assert "zendure_device_identity_duplicate" in codes
+
+
+def test_emsctl_diagnose_case_distinct_mqtt_device_ids_are_not_duplicates(tmp_path):
+    # Defect 2: MQTT device ids are case-sensitive route segments, so "DEV1" and
+    # "dev1" are two distinct devices, not a duplicate.
+    config = _base_diagnose_config(tmp_path)
+    config["devices"] = [
+        {"name": "WR1", "max_power": 800, "sn": "SER1"},
+        _mqtt_device("MQTT1", "DEV1"),
+        _mqtt_device("MQTT2", "dev1"),
+    ]
+    _, codes = _diagnose_codes(tmp_path, config)
+    assert "zendure_device_identity_duplicate" not in codes
 
 
 def test_emsctl_diagnose_unique_mqtt_device_ids_pass(tmp_path):

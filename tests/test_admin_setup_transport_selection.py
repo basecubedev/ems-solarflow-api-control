@@ -35,6 +35,14 @@ _PURE_HELPERS = (
     "normalizeSerial",
     "usableSerialValue",
     "physicalInverterIdentity",
+    "inverterVisibleSerial",
+    "inverterIdentityTokens",
+    "inverterIdentitySet",
+    "inverterHasIdentity",
+    "inverterIdentityConflict",
+    "inverterIdentitiesMatch",
+    "inverterIdentitySetOf",
+    "dismissalStorageKey",
     "mqttSourceOfConnection",
     "resolveSelectedDeviceSource",
     "reconcileTransportSelection",
@@ -169,8 +177,10 @@ def test_serialless_setup_reconciliation_uses_server_token_only():
 
     plan = _reconcile(state)
 
-    assert plan["dropMqttSelectionIds"] == []
-    assert plan["selectMqttProposalIds"] == []
+    # The stale selection (token scope-a) is normalized to the current same-scope
+    # proposal; the other-scope proposal stays a separate physical device.
+    assert plan["dropMqttSelectionIds"] == ["selected"]
+    assert [s["id"] for s in plan["selectMqttProposalIds"]] == ["same-scope"]
     assert {device["serial"] for device in plan["physicalDevices"]} == {
         "opaque:v1:scope-a",
         "opaque:v1:scope-b",
@@ -211,7 +221,7 @@ def test_reconcile_never_groups_transports_by_redaction_placeholder(placeholder)
 
 def test_fresh_setup_keeps_serialless_same_route_from_two_scopes_separate():
     out = _run_named(
-        ("serializeMqttProposalSelection",),
+        ("normalizeInverterAliasTokens", "serializeMqttProposalSelection"),
         """
 const zendureMqttPreviewProposals = new Map();
 const latestMqttProposals = [
@@ -237,6 +247,7 @@ const latestMqttProposals = [
 let nextName = 1;
 function inverterConfigNameForSerial() { return ""; }
 function nextInverterName() { return "INV_" + nextName++; }
+// serializeMqttProposalSelection normalizes alias tokens through this helper.
 for (const proposal of latestMqttProposals) {
   const entry = serializeMqttProposalSelection(proposal, { target: "device" });
   zendureMqttPreviewProposals.set(String(proposal.id), entry);
@@ -325,9 +336,9 @@ def test_apply_auto_config_readds_http_after_reconcile():
 def test_manual_add_and_toggle_clear_serial_dismissal():
     js = _read("admin.js")
     add = js.split("function addDeviceToDraft", 1)[1].split("\nfunction ", 1)[0]
-    # A removed device dismisses its serial; re-adding it manually must clear the
+    # A removed device dismisses its identity; re-adding it manually must clear the
     # dismissal or the reconciler would drop the re-add on the next pass.
-    assert "undismissSerial(device.serial_number)" in add
+    assert "undismissSerial(device)" in add
 
 
 def test_device_proposal_toggle_reconciles_to_drop_http_twin():
@@ -530,7 +541,16 @@ def _run_named(names, setup):
 
 def test_selected_inverter_cards_include_mqtt_and_dedupe_by_serial():
     out = _run_named(
-        ("normalizeSerial", "selectedInverterCards"),
+        (
+            "normalizeSerial",
+            "usableSerialValue",
+            "inverterVisibleSerial",
+            "inverterIdentityTokens",
+            "inverterIdentitySet",
+            "inverterIdentityConflict",
+            "inverterIdentitiesMatch",
+            "selectedInverterCards",
+        ),
         """
 function inverterItems() { return [{ source_id: "http:A", serial_number: "EOD1AAA" }]; }
 function selectedMqttDeviceEntries() {
@@ -561,7 +581,9 @@ def test_mqtt_inverter_card_shows_transport_and_supports_remove_and_switch():
     # remove, and (when a Local-API alternative exists) a transport-switch control.
     assert "transportLabelFor(source)" in card
     assert "config-mqtt-remove" in card
-    assert "renderTransportSwitchButton(serial, source)" in card
+    # Switching passes a stable identity reference (serial or opaque token), never
+    # a raw route id, so a route-only inverter can still switch transport.
+    assert "renderTransportSwitchButton(switchRef, source)" in card
     # The serial is escaped, never interpolated raw into the card HTML.
     assert "escapeHtml(serial)" in card
 
@@ -658,3 +680,609 @@ def test_mqtt_selection_changes_invalidate_preview():
         "\nfunction ", 1
     )[0]
     assert "renderConfigPreview()" in toggle
+
+
+# --- Alias-aware Fresh Setup identity enrichment (Archive 78) ---------------
+
+# The pure identity helpers Setup shares with Maintenance; extracted together so
+# node has every dependency the alias-aware Setup state needs.
+_IDENTITY_HELPERS = (
+    "normalizeSerial",
+    "usableSerialValue",
+    "physicalInverterIdentity",
+    "inverterVisibleSerial",
+    "inverterIdentityTokens",
+    "inverterIdentitySet",
+    "inverterHasIdentity",
+    "inverterIdentityConflict",
+    "inverterIdentitiesMatch",
+    "inverterIdentitySetOf",
+    "mqttSourceOfConnection",
+)
+
+
+def test_reconcile_route_only_selection_and_serial_enriched_proposal_is_one_group():
+    # Defect 1: a stored route-only selection and a later serial-bearing proposal
+    # of the same scoped route are one physical device (identity enrichment), not
+    # two. The stale selection id is normalized to the current proposal so exactly
+    # one selected entry remains (its manual origin preserved).
+    state = {
+        "httpInverters": [],
+        "mqttSelections": [
+            {
+                "id": "old-route-id",
+                "physical_identity_token": "opaque:v1:route",
+                "connection_source": "zendure_cloud_mqtt",
+                "selection_origin": "manual",
+            }
+        ],
+        "httpCandidateSerials": [],
+        "mqttProposals": [
+            {
+                "id": "new-serial-id",
+                "serial_number": "SERIAL-1",
+                "physical_identity_token": "opaque:v1:serial",
+                "physical_identity_alias_tokens": [
+                    "opaque:v1:serial",
+                    "opaque:v1:route",
+                ],
+                "connection_source": "zendure_cloud_mqtt",
+            }
+        ],
+        "priority": ["zendure_mqtt"],
+        "enabledSources": {"zendure_mqtt": True},
+        "dismissedSerials": [],
+    }
+    plan = _reconcile(state)
+    assert len(plan["physicalDevices"]) == 1
+    # The stale route-only selection is replaced by the current enriched proposal.
+    assert plan["dropMqttSelectionIds"] == ["old-route-id"]
+    assert len(plan["selectMqttProposalIds"]) == 1
+    remap = plan["selectMqttProposalIds"][0]
+    assert remap["id"] == "new-serial-id"
+    assert remap["selection_origin"] == "manual"
+    dev = plan["physicalDevices"][0]
+    assert dev["selectedSource"] == "zendure_mqtt"
+    # The enriched physical serial becomes the group's stable reference.
+    assert dev["serial"] == "serial-1"
+
+
+def test_reconcile_same_route_two_broker_scopes_stays_separate():
+    # Defect 1 / scope separation: the same raw route on two broker/account scopes
+    # carries distinct opaque tokens, so it stays two physical devices.
+    state = {
+        "httpInverters": [],
+        "mqttSelections": [],
+        "httpCandidateSerials": [],
+        "mqttProposals": [
+            {
+                "id": "cloud",
+                "physical_identity_token": "opaque:v1:cloud_scope",
+                "connection_source": "zendure_cloud_mqtt",
+            },
+            {
+                "id": "local",
+                "physical_identity_token": "opaque:v1:local_scope",
+                "connection_source": "local_mqtt",
+            },
+        ],
+        "priority": ["zendure_mqtt", "local_mqtt"],
+        "enabledSources": {"zendure_mqtt": True, "local_mqtt": True},
+        "dismissedSerials": [],
+    }
+    plan = _reconcile(state)
+    assert {d["serial"] for d in plan["physicalDevices"]} == {
+        "opaque:v1:cloud_scope",
+        "opaque:v1:local_scope",
+    }
+
+
+def test_reconcile_conflicting_serials_on_one_route_never_merge():
+    # Two contradictory serials on one route must stay two physical devices even
+    # when a bridging route-only observation shares the route.
+    state = {
+        "httpInverters": [],
+        "mqttSelections": [],
+        "httpCandidateSerials": [],
+        "mqttProposals": [
+            {
+                "id": "a",
+                "serial_number": "SERIAL-1",
+                "physical_identity_token": "opaque:v1:serial-1",
+                "physical_identity_alias_tokens": [
+                    "opaque:v1:serial-1",
+                    "opaque:v1:route",
+                ],
+                "connection_source": "zendure_cloud_mqtt",
+            },
+            {
+                "id": "b",
+                "serial_number": "SERIAL-2",
+                "physical_identity_token": "opaque:v1:serial-2",
+                "physical_identity_alias_tokens": [
+                    "opaque:v1:serial-2",
+                    "opaque:v1:route",
+                ],
+                "connection_source": "zendure_cloud_mqtt",
+            },
+        ],
+        "priority": ["zendure_mqtt"],
+        "enabledSources": {"zendure_mqtt": True},
+        "dismissedSerials": [],
+    }
+    plan = _reconcile(state)
+    assert {d["serial"] for d in plan["physicalDevices"]} == {"serial-1", "serial-2"}
+
+
+def test_alias_tokens_survive_serialize_storage_reload_and_preview():
+    # Defect 2: alias tokens are normalized (valid opaque tokens only, deduped) and
+    # carried through serialize -> localStorage -> reload -> preview payload.
+    out = _run_named(
+        (
+            "normalizeInverterAliasTokens",
+            "serializeMqttProposalSelection",
+            "mqttPreviewPayload",
+        ),
+        """
+let nextName = 1;
+function inverterConfigNameForSerial() { return ""; }
+function nextInverterName() { return "INV_" + nextName++; }
+const proposal = {
+  id: "zendure-mqtt:opaque:v1:route:cloud",
+  serial_number: "SERIAL-1",
+  physical_identity_token: "opaque:v1:serial",
+  physical_identity_alias_tokens: [
+    "opaque:v1:serial", "opaque:v1:route", "raw-route-id", "opaque:v1:serial",
+  ],
+  connection_source: "zendure_cloud_mqtt",
+  broker_ref: "cloud",
+  target: "device",
+  config_fragment: { type: "zendure_mqtt" },
+};
+const stored = serializeMqttProposalSelection(proposal, { target: "device" });
+const reloaded = JSON.parse(JSON.stringify([stored]));
+const zendureMqttPreviewProposals = new Map(
+  reloaded.map((entry) => [String(entry.id), entry])
+);
+const payload = mqttPreviewPayload();
+console.log(JSON.stringify({
+  stored: stored.physical_identity_alias_tokens,
+  payload: payload[0].physical_identity_alias_tokens,
+}));
+""",
+    )
+    # Invalid raw ids are dropped, duplicates removed, valid tokens preserved.
+    assert out["stored"] == ["opaque:v1:serial", "opaque:v1:route"]
+    assert out["payload"] == ["opaque:v1:serial", "opaque:v1:route"]
+
+
+def test_setup_name_survives_serial_enrichment():
+    # Defect 5: a route-only inverter name (stored under its route token) is still
+    # found once the serial and its token are added.
+    out = _run_named(
+        _IDENTITY_HELPERS
+        + ("rememberInverterName", "rememberedInverterName", "inverterConfigNameForSerial"),
+        """
+const transportInverterNames = new Map();
+function inverterItems() { return []; }
+function selectedMqttDeviceEntries() { return []; }
+const routeOnly = { physical_identity_token: "opaque:v1:route" };
+rememberInverterName(routeOnly, "My Inverter");
+const enriched = {
+  serial_number: "SERIAL-1",
+  physical_identity_token: "opaque:v1:serial",
+  physical_identity_alias_tokens: ["opaque:v1:serial", "opaque:v1:route"],
+};
+console.log(JSON.stringify({
+  byRouteOnly: rememberedInverterName(routeOnly),
+  byEnriched: rememberedInverterName(enriched),
+  byConfigName: inverterConfigNameForSerial(enriched),
+}));
+""",
+    )
+    assert out["byRouteOnly"] == "My Inverter"
+    assert out["byEnriched"] == "My Inverter"
+    assert out["byConfigName"] == "My Inverter"
+
+
+def test_setup_dismissal_survives_serial_enrichment():
+    # Defect 5: dismissing a route-only device keeps it dismissed after a serial
+    # appears, and never dismisses an unrelated device.
+    out = _run_named(
+        _IDENTITY_HELPERS
+        + (
+            "dismissalStorageKey",
+            "dismissalKeysForInverter",
+            "dismissSerial",
+            "inverterDismissed",
+        ),
+        """
+const dismissedSerials = new Set();
+function saveDismissedSerials() {}
+const routeOnly = { physical_identity_token: "opaque:v1:route" };
+dismissSerial(routeOnly);
+const enriched = {
+  serial_number: "SERIAL-1",
+  physical_identity_token: "opaque:v1:serial",
+  physical_identity_alias_tokens: ["opaque:v1:serial", "opaque:v1:route"],
+};
+console.log(JSON.stringify({
+  routeOnly: inverterDismissed(routeOnly),
+  enriched: inverterDismissed(enriched),
+  unrelated: inverterDismissed({ serial_number: "OTHER" }),
+}));
+""",
+    )
+    assert out["routeOnly"] is True
+    assert out["enriched"] is True
+    assert out["unrelated"] is False
+
+
+def test_dual_transport_dismissal_cleared_by_local_api_readd():
+    # Removing a dual-transport inverter over MQTT dismisses it by serial (not by
+    # its MQTT tokens), so re-adding it over Local API — whose scan device carries
+    # only the serial — clears the dismissal and the reconciler keeps the re-add
+    # even while the enriched MQTT proposal is still present.
+    out = _run_named(
+        _IDENTITY_HELPERS
+        + (
+            "dismissalStorageKey",
+            "dismissalKeysForInverter",
+            "dismissSerial",
+            "undismissSerial",
+            "inverterDismissed",
+            "resolveSelectedDeviceSource",
+            "reconcileTransportSelection",
+        ),
+        """
+const dismissedSerials = new Set();
+function saveDismissedSerials() {}
+const mqttEntry = {
+  serial_number: "SERIAL-1",
+  physical_identity_token: "opaque:v1:serial",
+  physical_identity_alias_tokens: ["opaque:v1:serial", "opaque:v1:route"],
+};
+dismissSerial(mqttEntry);
+undismissSerial({ serial_number: "SERIAL-1" });
+const plan = reconcileTransportSelection({
+  priority: ["local_api", "zendure_mqtt", "local_mqtt"],
+  enabledSources: { local_api: true, zendure_mqtt: true, local_mqtt: false },
+  dismissedSerials: [...dismissedSerials],
+  httpInverters: [{ source_id: "http:1", serial_number: "SERIAL-1", auto_added: false }],
+  httpCandidateSerials: ["SERIAL-1"],
+  mqttSelections: [],
+  mqttProposals: [{
+    id: "m", serial_number: "SERIAL-1",
+    physical_identity_token: "opaque:v1:serial",
+    physical_identity_alias_tokens: ["opaque:v1:serial", "opaque:v1:route"],
+    connection_source: "zendure_cloud_mqtt",
+  }],
+});
+console.log(JSON.stringify({
+  remaining: [...dismissedSerials],
+  dropHttp: plan.dropHttpSourceIds,
+}));
+""",
+    )
+    assert out["remaining"] == []
+    assert out["dropHttp"] == []
+
+
+def test_selected_cards_render_one_inverter_after_enrichment():
+    # Defect 5: a route-only entry and its serial-enriched entry are one physical
+    # inverter, so exactly one card is rendered.
+    out = _run_named(
+        _IDENTITY_HELPERS + ("selectedInverterCards",),
+        """
+function inverterItems() { return []; }
+function selectedMqttDeviceEntries() {
+  return [
+    { id: "route", physical_identity_token: "opaque:v1:route", connection_source: "zendure_cloud_mqtt" },
+    {
+      id: "serial",
+      serial_number: "SERIAL-1",
+      physical_identity_token: "opaque:v1:serial",
+      physical_identity_alias_tokens: ["opaque:v1:serial", "opaque:v1:route"],
+      connection_source: "zendure_cloud_mqtt",
+    },
+  ];
+}
+const cards = selectedInverterCards().map((card) => ({
+  kind: card.kind,
+  id: (card.item || card.entry).id,
+}));
+console.log(JSON.stringify(cards));
+""",
+    )
+    assert len(out) == 1
+
+
+def test_transport_switch_discovery_accepts_route_only_identity_token():
+    # Defect 5 / defect 10: alternative-transport discovery accepts an opaque
+    # identity token (not a physical serial), so a route-only inverter can switch
+    # transport. Both proposals share the route token but differ by source.
+    out = _run_named(
+        _IDENTITY_HELPERS + ("alternativeTransportsForSerial",),
+        """
+function availableConfigDevices() { return []; }
+function isAutoConfigReady() { return true; }
+function availableMqttDeviceProposals() {
+  return [
+    { id: "cloud", physical_identity_token: "opaque:v1:route", connection_source: "zendure_cloud_mqtt" },
+    { id: "local", physical_identity_token: "opaque:v1:route", connection_source: "local_mqtt" },
+  ];
+}
+console.log(JSON.stringify(
+  alternativeTransportsForSerial("opaque:v1:route", "zendure_mqtt")
+));
+""",
+    )
+    assert out == ["local_mqtt"]
+
+
+# --- Transitive connected-component grouping (Archive 79 / defect 1) ---------
+
+
+def test_three_node_bridge_is_one_connected_component():
+    # Defect 1 reproduction: a Local-API serial group, a stored route-only Cloud
+    # selection, and a serial+route bridge proposal must become ONE physical
+    # device. The bridge connects the serial group and the route-only group, so a
+    # non-transitive "first match wins" grouping would leave two groups.
+    state = {
+        "httpInverters": [
+            {"source_id": "http:S1", "serial_number": "SERIAL-1", "auto_added": True},
+        ],
+        "mqttSelections": [
+            {
+                "id": "old-route-selection",
+                "physical_identity_token": "opaque:v1:route",
+                "connection_source": "zendure_cloud_mqtt",
+                "selection_origin": "manual",
+            }
+        ],
+        "httpCandidateSerials": ["SERIAL-1"],
+        "mqttProposals": [
+            {
+                "id": "current-enriched-proposal",
+                "serial_number": "SERIAL-1",
+                "physical_identity_token": "opaque:v1:serial",
+                "physical_identity_alias_tokens": [
+                    "opaque:v1:serial",
+                    "opaque:v1:route",
+                ],
+                "connection_source": "zendure_cloud_mqtt",
+            }
+        ],
+        "priority": ["zendure_mqtt", "local_api", "local_mqtt"],
+        "enabledSources": {"local_api": True, "zendure_mqtt": True, "local_mqtt": False},
+        "dismissedSerials": [],
+    }
+    plan = _reconcile(state)
+    assert len(plan["physicalDevices"]) == 1
+    # One transport: the Local-API twin is dropped, the stale route-only selection
+    # is replaced by the current enriched proposal (exactly one selected entry).
+    assert "http:S1" in plan["dropHttpSourceIds"]
+    assert plan["dropMqttSelectionIds"] == ["old-route-selection"]
+    assert [s["id"] for s in plan["selectMqttProposalIds"]] == ["current-enriched-proposal"]
+    dev = plan["physicalDevices"][0]
+    assert dev["serial"] == "serial-1"
+    assert dev["selectedSource"] == "zendure_mqtt"
+
+
+def _bridge_nodes():
+    serial_only = {
+        "id": "serial-only",
+        "serial_number": "SERIAL-1",
+        "physical_identity_token": "opaque:v1:serial",
+        "connection_source": "zendure_cloud_mqtt",
+    }
+    route_only = {
+        "id": "route-only",
+        "physical_identity_token": "opaque:v1:route",
+        "connection_source": "zendure_cloud_mqtt",
+    }
+    bridge = {
+        "id": "bridge",
+        "serial_number": "SERIAL-1",
+        "physical_identity_token": "opaque:v1:serial",
+        "physical_identity_alias_tokens": ["opaque:v1:serial", "opaque:v1:route"],
+        "connection_source": "zendure_cloud_mqtt",
+    }
+    return serial_only, route_only, bridge
+
+
+@pytest.mark.parametrize(
+    "order",
+    [
+        ("serial_only", "route_only", "bridge"),
+        ("route_only", "serial_only", "bridge"),
+        ("bridge", "serial_only", "route_only"),
+    ],
+)
+def test_bridge_union_is_order_independent(order):
+    # The connected-component union is order independent: the serial group and the
+    # route-only group collapse into one physical device however the bridging
+    # observation is ordered relative to them.
+    nodes = dict(zip(("serial_only", "route_only", "bridge"), _bridge_nodes()))
+    plan = _reconcile(
+        {
+            "httpInverters": [],
+            "mqttSelections": [],
+            "httpCandidateSerials": [],
+            "mqttProposals": [nodes[name] for name in order],
+            "priority": ["zendure_mqtt"],
+            "enabledSources": {"zendure_mqtt": True},
+            "dismissedSerials": [],
+        }
+    )
+    assert len(plan["physicalDevices"]) == 1
+
+
+def test_transitive_chain_of_four_is_one_group():
+    # A four-observation chain a-b-c-d-e (each shares one token with the next)
+    # collapses to a single physical device.
+    def prop(pid, tokens):
+        return {
+            "id": pid,
+            "physical_identity_token": tokens[0],
+            "physical_identity_alias_tokens": tokens,
+            "connection_source": "zendure_cloud_mqtt",
+        }
+
+    plan = _reconcile(
+        {
+            "httpInverters": [],
+            "mqttSelections": [],
+            "httpCandidateSerials": [],
+            "mqttProposals": [
+                prop("p1", ["opaque:v1:a", "opaque:v1:b"]),
+                prop("p2", ["opaque:v1:b", "opaque:v1:c"]),
+                prop("p3", ["opaque:v1:c", "opaque:v1:d"]),
+                prop("p4", ["opaque:v1:d", "opaque:v1:e"]),
+            ],
+            "priority": ["zendure_mqtt"],
+            "enabledSources": {"zendure_mqtt": True},
+            "dismissedSerials": [],
+        }
+    )
+    assert len(plan["physicalDevices"]) == 1
+
+
+def test_transitive_chain_with_serial_conflict_never_merges_the_serials():
+    # The same chain but with two conflicting serials joined by a route-only
+    # bridge: the bridge must not unite the two serials into one component.
+    plan = _reconcile(
+        {
+            "httpInverters": [],
+            "mqttSelections": [],
+            "httpCandidateSerials": [],
+            "mqttProposals": [
+                {
+                    "id": "p1",
+                    "serial_number": "SERIAL-1",
+                    "physical_identity_token": "opaque:v1:serial-1",
+                    "physical_identity_alias_tokens": ["opaque:v1:serial-1", "opaque:v1:b"],
+                    "connection_source": "zendure_cloud_mqtt",
+                },
+                {
+                    "id": "bridge",
+                    "physical_identity_token": "opaque:v1:b",
+                    "physical_identity_alias_tokens": ["opaque:v1:b", "opaque:v1:c"],
+                    "connection_source": "zendure_cloud_mqtt",
+                },
+                {
+                    "id": "p3",
+                    "serial_number": "SERIAL-2",
+                    "physical_identity_token": "opaque:v1:serial-2",
+                    "physical_identity_alias_tokens": ["opaque:v1:serial-2", "opaque:v1:c"],
+                    "connection_source": "zendure_cloud_mqtt",
+                },
+            ],
+            "priority": ["zendure_mqtt"],
+            "enabledSources": {"zendure_mqtt": True},
+            "dismissedSerials": [],
+        }
+    )
+    serials = {d["serial"] for d in plan["physicalDevices"]}
+    assert "serial-1" in serials
+    assert "serial-2" in serials
+    # No device carries both serials: the conflicting serials are never one group.
+    assert len([d for d in plan["physicalDevices"] if d["serial"] in {"serial-1", "serial-2"}]) == 2
+
+
+def test_legacy_id_remap_leaves_exactly_one_selected_proposal():
+    # A stored selection carrying a legacy id and the current proposal (unique alias
+    # match) leave exactly one selected proposal after normalization.
+    state = {
+        "httpInverters": [
+            {"source_id": "http:S1", "serial_number": "SERIAL-1", "auto_added": True},
+        ],
+        "mqttSelections": [
+            {
+                "id": "legacy-route-id",
+                "physical_identity_token": "opaque:v1:route",
+                "connection_source": "zendure_cloud_mqtt",
+                "selection_origin": "priority",
+            }
+        ],
+        "httpCandidateSerials": ["SERIAL-1"],
+        "mqttProposals": [
+            {
+                "id": "zendure-mqtt:opaque:v1:anchor:zendure_cloud",
+                "serial_number": "SERIAL-1",
+                "physical_identity_token": "opaque:v1:serial",
+                "physical_identity_alias_tokens": ["opaque:v1:serial", "opaque:v1:route"],
+                "connection_source": "zendure_cloud_mqtt",
+            }
+        ],
+        "priority": ["zendure_mqtt", "local_api", "local_mqtt"],
+        "enabledSources": {"local_api": True, "zendure_mqtt": True, "local_mqtt": False},
+        "dismissedSerials": [],
+    }
+    plan = _reconcile(state)
+    assert plan["dropMqttSelectionIds"] == ["legacy-route-id"]
+    assert [s["id"] for s in plan["selectMqttProposalIds"]] == [
+        "zendure-mqtt:opaque:v1:anchor:zendure_cloud"
+    ]
+    # Exactly one physical device, selected over MQTT.
+    assert len(plan["physicalDevices"]) == 1
+
+
+def test_setup_name_survives_product_key_anchor_enrichment():
+    # Defect (name migration): a route-only inverter's name stored under its stable
+    # device-anchor token is still found once a product key is enriched — the
+    # anchor token is unchanged, only a precise-route alias is added.
+    out = _run_named(
+        _IDENTITY_HELPERS
+        + ("rememberInverterName", "rememberedInverterName", "inverterConfigNameForSerial"),
+        """
+const transportInverterNames = new Map();
+function inverterItems() { return []; }
+function selectedMqttDeviceEntries() { return []; }
+const routeOnly = { physical_identity_token: "opaque:v1:anchor" };
+rememberInverterName(routeOnly, "Garage");
+const enriched = {
+  physical_identity_token: "opaque:v1:anchor",
+  physical_identity_alias_tokens: ["opaque:v1:anchor", "opaque:v1:precise-route"],
+};
+console.log(JSON.stringify({
+  byRouteOnly: rememberedInverterName(routeOnly),
+  byEnriched: rememberedInverterName(enriched),
+}));
+""",
+    )
+    assert out["byRouteOnly"] == "Garage"
+    assert out["byEnriched"] == "Garage"
+
+
+def test_setup_dismissal_survives_product_key_anchor_enrichment():
+    # Defect (dismissal migration): dismissing a route-only device keeps it
+    # dismissed after a product key is enriched (same stable anchor token), and
+    # never dismisses an unrelated device.
+    out = _run_named(
+        _IDENTITY_HELPERS
+        + (
+            "dismissalStorageKey",
+            "dismissalKeysForInverter",
+            "dismissSerial",
+            "inverterDismissed",
+        ),
+        """
+const dismissedSerials = new Set();
+function saveDismissedSerials() {}
+const routeOnly = { physical_identity_token: "opaque:v1:anchor" };
+dismissSerial(routeOnly);
+const enriched = {
+  physical_identity_token: "opaque:v1:anchor",
+  physical_identity_alias_tokens: ["opaque:v1:anchor", "opaque:v1:precise-route"],
+};
+console.log(JSON.stringify({
+  routeOnly: inverterDismissed(routeOnly),
+  enriched: inverterDismissed(enriched),
+  unrelated: inverterDismissed({ physical_identity_token: "opaque:v1:other" }),
+}));
+""",
+    )
+    assert out["routeOnly"] is True
+    assert out["enriched"] is True
+    assert out["unrelated"] is False

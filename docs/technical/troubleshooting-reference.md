@@ -860,7 +860,7 @@ Check, in order:
 More detail: [safety-model.md](safety-model.md),
 [configuration.md](configuration.md), [runtime-state.md](runtime-state.md).
 
-### Maintenance shows "Identity conflict" for a rediscovered device
+### Setup or Maintenance shows "Identity conflict" for a rediscovered device
 
 Symptoms:
 
@@ -871,12 +871,28 @@ Symptoms:
 Cause: the discovered Cloud **route** is already configured against a **different
 physical serial**. The route says "one inverter" while the serials say "two", so
 Admin refuses to merge or add it as an independent inverter rather than guess.
+Fresh Setup and Maintenance apply the same rule.
 
 Fix: confirm which physical inverter that Cloud route belongs to. If the existing
 entry has the wrong serial, correct or remove it, then rediscover. A route-only
 device gaining its *own* serial is **not** a conflict — it is recognized as the
-same inverter (shown *In config*) and enriched in place. See
+same inverter (shown *In config*), keeps its custom name and dismissal, and is
+enriched in place. See
 [admin-discovery.md](admin-discovery.md#physical-inverter-identity-and-route-aliases).
+
+### A selected Cloud inverter reports "not present in current discovery state"
+
+Symptom: after a rediscovery, a previously selected Cloud MQTT inverter is
+rejected with `zendure_mqtt_proposal_unknown` at preview/apply.
+
+Expected behavior: this should **not** happen for a route-only Cloud selection
+that is rediscovered on the same scoped route (with or without a new serial). A
+Cloud proposal's selection id is anchored to its scoped-route token so it stays
+stable through serial enrichment, and trust resolution additionally remaps a
+stored selection to the current proposal when a trusted alias token intersects
+within the same broker scope. If you still see this error, the selection is
+genuinely stale (a different route, a different broker/account scope, or a
+tampered id/token) — re-run discovery and select the inverter again.
 
 ### Cloud MQTT topics look masked in status or support bundles
 

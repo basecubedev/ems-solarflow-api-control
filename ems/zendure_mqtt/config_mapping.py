@@ -15,6 +15,10 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from ems.device_identity import (
+    normalize_mqtt_route_segment,
+    normalize_physical_serial,
+)
 from ems.mqtt_control.zendure_profiles import (
     CONFIDENCE_CONFLICT,
     EVIDENCE_FULL_REPORT,
@@ -119,6 +123,18 @@ _SAFE_TOPIC_PREFIXES = ("Zendure/", "iot/")
 # topic is available, so no auto-applicable D0 grid-meter fragment is produced.
 WARN_GRID_METRIC_WITHOUT_TOPIC = "grid_power_metric_seen_but_topic_unavailable"
 
+# Emitted when contradictory physical serials share one scoped route. The
+# observations are never merged and control is blocked (ambiguous write target).
+WARN_IDENTITY_CONFLICT = "identity_route_serial_conflict"
+
+# Emitted when one device id carries two different known product keys (two
+# distinct precise routes) with no physical serial to disambiguate them. The
+# routes are never merged and control is blocked (ambiguous write address).
+WARN_ROUTE_PRODUCT_CONFLICT = "identity_route_product_conflict"
+
+CONFLICT_SERIAL = "serial"
+CONFLICT_PRODUCT = "product"
+
 
 @dataclass(frozen=True)
 class ZendureMqttConfigProposal:
@@ -183,12 +199,21 @@ class _DeviceView:
     capabilities: set = field(default_factory=set)
     metric_keys: set = field(default_factory=set)
     seen_topics: set = field(default_factory=set)
+    # Every distinct precise write route ``(product_key, device_id)`` observed for
+    # this logical device, case-sensitive. More than one means the write address is
+    # ambiguous even though the physical device is one, so no product key is pinned
+    # into a writable config.
+    precise_routes: set = field(default_factory=set)
 
     def merge(self, snap: ZendureMqttSnapshot) -> None:
         self.device_id = self.device_id or snap.device_id
         self.serial_number = self.serial_number or snap.serial_number
         self.product_key = self.product_key or snap.product_key
         self.product = self.product or snap.product
+        route_product = normalize_mqtt_route_segment(snap.product_key)
+        route_device = normalize_mqtt_route_segment(snap.device_id)
+        if route_product is not None and route_device is not None:
+            self.precise_routes.add((route_product, route_device))
         if isinstance(snap.product, str) and snap.product.strip():
             self.products.add(snap.product.strip())
             self.add_model_evidence(EVIDENCE_FULL_REPORT, snap.product.strip())
@@ -215,6 +240,141 @@ def _logical_key(snap: ZendureMqttSnapshot):
     if snap.product_key:
         return ("pk", snap.product_key)
     return ("topic", _primary_family(snap.topic_families))
+
+
+def _snapshot_identity_keys(
+    snap: ZendureMqttSnapshot,
+) -> tuple[str | None, str | None, str | None]:
+    """Return ``(serial, device_id, product_key)`` for one snapshot in a scope.
+
+    A physical serial is the strongest identity and is case-folded (the shared
+    serial rule). The device id is the stable route anchor and the product key
+    pins the precise write route; both are MQTT topic segments, so they are
+    compared case-sensitively (``iot/PK/DEV`` and ``iot/pk/dev`` are distinct
+    addresses). All reject masked/placeholder values.
+    """
+
+    serial = normalize_physical_serial(snap.serial_number)
+    device_id = normalize_mqtt_route_segment(snap.device_id) if snap.device_id else None
+    product_key = (
+        normalize_mqtt_route_segment(snap.product_key) if snap.product_key else None
+    )
+    return serial, device_id, product_key
+
+
+def _grouped_snapshot_views(
+    snapshots: list[ZendureMqttSnapshot],
+    source: str | None,
+    broker_ref: str | None,
+) -> list[tuple["_DeviceView", str | None]]:
+    """Group snapshots by trusted identity within one broker scope.
+
+    Returns ``(view, conflict_kind)`` pairs in first-seen order, where
+    ``conflict_kind`` is ``None``, ``"serial"`` or ``"product"``. A serial anchors
+    its group and absorbs a device-anchor observation only when it is the unique
+    serial group on that device id. Two serials contesting one device id never
+    merge (``"serial"`` conflict). Serial-less observations of one device id merge
+    unless two different known product keys prove two distinct routes, which stay
+    separate and blocked (``"product"`` conflict); a missing-product observation
+    then never bridges those routes.
+    """
+
+    keys = [_snapshot_identity_keys(snap) for snap in snapshots]
+
+    groups: list[dict[str, Any]] = []
+
+    def new_group(conflict: str | None = None) -> int:
+        groups.append({"snaps": [], "conflict": conflict})
+        return len(groups) - 1
+
+    serial_index: dict[str, int] = {}
+    device_to_serials: dict[str, set[str]] = {}
+
+    # Pass 1: anchor every serial-bearing observation by its physical serial.
+    for order, (snap, (serial, device_id, _pk)) in enumerate(zip(snapshots, keys)):
+        if serial is None:
+            continue
+        gi = serial_index.get(serial)
+        if gi is None:
+            gi = new_group()
+            serial_index[serial] = gi
+        groups[gi]["snaps"].append((order, snap))
+        if device_id is not None:
+            device_to_serials.setdefault(device_id, set()).add(serial)
+
+    # Pass 2: a device id claimed by two serials is contested — a serial conflict.
+    contested = {dev for dev, serials in device_to_serials.items() if len(serials) > 1}
+    for dev in contested:
+        for serial in device_to_serials[dev]:
+            groups[serial_index[serial]]["conflict"] = CONFLICT_SERIAL
+
+    # Pass 3: serial-less observations with a device id. Attach to a unique serial
+    # group, else defer for product-key-aware grouping per device id.
+    deferred: dict[str, list[tuple[int, ZendureMqttSnapshot, str | None]]] = {}
+    for order, (snap, (serial, device_id, product_key)) in enumerate(zip(snapshots, keys)):
+        if serial is not None or device_id is None:
+            continue
+        candidate = set() if device_id in contested else device_to_serials.get(device_id, set())
+        if len(candidate) == 1:
+            groups[serial_index[next(iter(candidate))]]["snaps"].append((order, snap))
+            continue
+        deferred.setdefault(device_id, []).append((order, snap, product_key))
+
+    for device_id, entries in deferred.items():
+        conflict = CONFLICT_SERIAL if device_id in contested else None
+        known_pks = {pk for _o, _s, pk in entries if pk}
+        if len(known_pks) <= 1:
+            gi = new_group(conflict)
+            for order, snap, _pk in entries:
+                groups[gi]["snaps"].append((order, snap))
+            continue
+        # Two distinct known product keys on one device id: two precise routes.
+        # One group per known key, plus a separate blocked group for any
+        # missing-product observation so it never bridges the routes.
+        by_pk: dict[str | None, int] = {}
+        for order, snap, product_key in entries:
+            gi = by_pk.get(product_key)
+            if gi is None:
+                gi = new_group(CONFLICT_PRODUCT)
+                by_pk[product_key] = gi
+            groups[gi]["snaps"].append((order, snap))
+
+    # Pass 4: observations with neither a serial nor a device id keep the legacy
+    # fallback grouping (product key, else topic family).
+    fallback_index: dict[Any, int] = {}
+    for order, (snap, (serial, device_id, _pk)) in enumerate(zip(snapshots, keys)):
+        if serial is not None or device_id is not None:
+            continue
+        key = _logical_key(snap)
+        gi = fallback_index.get(key)
+        if gi is None:
+            gi = new_group()
+            fallback_index[key] = gi
+        groups[gi]["snaps"].append((order, snap))
+
+    # Pass 5: within each physical group (serial-anchored or device-anchored),
+    # two distinct precise routes are two write addresses on one device. Block
+    # control without splitting the physical device. An already-set serial
+    # conflict is the reported cause and takes precedence.
+    for group in groups:
+        if group["conflict"] is not None:
+            continue
+        routes = set()
+        for order, _snap in group["snaps"]:
+            _serial, device_id, product_key = keys[order]
+            if product_key is not None and device_id is not None:
+                routes.add((product_key, device_id))
+        if len(routes) > 1:
+            group["conflict"] = CONFLICT_PRODUCT
+
+    ordered = sorted(groups, key=lambda g: min(order for order, _ in g["snaps"]))
+    result: list[tuple[_DeviceView, str | None]] = []
+    for group in ordered:
+        view = _DeviceView()
+        for _order, snap in sorted(group["snaps"], key=lambda item: item[0]):
+            view.merge(snap)
+        result.append((view, group["conflict"]))
+    return result
 
 
 def _primary_family(topic_families) -> str:
@@ -297,6 +457,7 @@ def _config_fragment(
     hardware_profile: str | None = None,
     power_write_profile: str | None = None,
     display_label: str | None = None,
+    writable_route_ambiguous: bool = False,
 ) -> dict[str, Any]:
     mqtt: dict[str, Any] = {}
     # The broker profile identity leads so the connection method is explicit.
@@ -312,7 +473,10 @@ def _config_fragment(
         mqtt["write_protocol"] = write_protocol
     if view.device_id:
         mqtt["device_id"] = view.device_id
-    if view.product_key:
+    # A device that carries more than one precise route has an ambiguous write
+    # address; no product key is pinned so a first-seen key can never become a
+    # silently writable target.
+    if view.product_key and not writable_route_ambiguous:
         mqtt["product_key"] = view.product_key
     # The cloud app key is a secret and is never proposed as config.
     mqtt["app_key"] = None
@@ -366,6 +530,7 @@ def _build_proposal(
     source: str | None = None,
     broker_ref: str | None = None,
     display_label: str | None = None,
+    conflict_kind: str | None = None,
 ) -> ZendureMqttConfigProposal:
     topic_family = _primary_family(view.topic_families)
     base_topic = _FAMILY_BASE_TOPIC.get(topic_family)
@@ -373,6 +538,9 @@ def _build_proposal(
     has_soc = bool(view.metric_keys & _SOC_METRICS)
     role_hint = _role_hint(view.capabilities, view.metric_keys)
     confidence = _confidence(topic_family, role_hint, has_power, has_soc)
+    # One physical device carrying more than one precise route has no single write
+    # address, so no product key is pinned and it is never displayed as writable.
+    writable_route_ambiguous = len(view.precise_routes) > 1
 
     # Hardware identity is resolved from all product/model evidence, never from
     # the topic family, and each observation keeps its real source (telemetry
@@ -440,12 +608,26 @@ def _build_proposal(
     if target == TARGET_GRID_METER:
         output_control = False
 
+    if conflict_kind is not None:
+        # Contradictory serials, or two known product keys, share one device id:
+        # the write target is ambiguous, so control is blocked and the conflict is
+        # surfaced instead of silently merging or trusting one route.
+        warn = (
+            WARN_ROUTE_PRODUCT_CONFLICT
+            if conflict_kind == CONFLICT_PRODUCT
+            else WARN_IDENTITY_CONFLICT
+        )
+        output_control = False
+        control_block_reason = warn
+        if warn not in warnings:
+            warnings.append(warn)
+
     return ZendureMqttConfigProposal(
         proposal_id=_proposal_id(view, topic_family),
         source=SOURCE,
         device_id=view.device_id,
         serial_number=view.serial_number,
-        product_key=view.product_key,
+        product_key=None if writable_route_ambiguous else view.product_key,
         product=view.product,
         topic_family=topic_family,
         base_topic=base_topic,
@@ -467,6 +649,7 @@ def _build_proposal(
             write_protocol=capability.write_protocol,
             hardware_profile=capability.hardware_profile,
             power_write_profile=capability.power_write_profile,
+            writable_route_ambiguous=writable_route_ambiguous,
         ),
         warnings=tuple(warnings),
         broker_ref=broker_ref,
@@ -553,41 +736,30 @@ def map_snapshots_to_proposals(
     never mutated.
     """
 
-    views: dict[Any, _DeviceView] = {}
-    order: list[Any] = []
-    for snap in snapshots:
-        key = _logical_key(snap)
-        view = views.get(key)
-        if view is None:
-            view = _DeviceView()
-            views[key] = view
-            order.append(key)
-        view.merge(snap)
-    for key in order:
-        _seed_view_evidence(views[key], seed_evidence)
+    grouped = _grouped_snapshot_views(list(snapshots), source, broker_ref)
+    for view, _conflict in grouped:
+        _seed_view_evidence(view, seed_evidence)
     # Device names are the EMS runtime identity key, so two units of the same
     # model must not propose the identical name: a shared product label gets the
     # per-device identity (serial, else device id, else product key) appended.
-    labels: dict[Any, str] = {}
+    labels: list[str] = [_display_label(view) for view, _ in grouped]
     label_counts: dict[str, int] = {}
-    for key in order:
-        label = _display_label(views[key])
-        labels[key] = label
+    for label in labels:
         label_counts[label] = label_counts.get(label, 0) + 1
-    for key in order:
-        view = views[key]
-        if label_counts[labels[key]] > 1:
+    for index, (view, _conflict) in enumerate(grouped):
+        if label_counts[labels[index]] > 1:
             identity = view.serial_number or view.device_id or view.product_key
             if identity:
-                labels[key] = f"{labels[key]} ({identity})"
+                labels[index] = f"{labels[index]} ({identity})"
     return tuple(
         _build_proposal(
-            views[key],
+            view,
             source=source,
             broker_ref=broker_ref,
-            display_label=labels[key],
+            display_label=labels[index],
+            conflict_kind=conflict,
         )
-        for key in order
+        for index, (view, conflict) in enumerate(grouped)
     )
 
 

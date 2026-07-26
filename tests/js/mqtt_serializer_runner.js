@@ -52,7 +52,9 @@ function extractFunction(name) {
 
 // eslint-disable-next-line no-new-func
 const factory = new Function(
-  extractFunction("serializeMqttProposalSelection") +
+  extractFunction("normalizeInverterAliasTokens") +
+    "\n" +
+    extractFunction("serializeMqttProposalSelection") +
     "\nreturn serializeMqttProposalSelection;"
 );
 const serializeMqttProposalSelection = factory();

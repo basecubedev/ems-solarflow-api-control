@@ -6433,6 +6433,7 @@ def _run_mqtt_proposal_node(setup):
         for name in (
             "isMqttGridMeterProposal",
             "mqttGridMeterProposalTopic",
+            "normalizeInverterAliasTokens",
             "serializeMqttProposalSelection",
             "mqttPreviewPayload",
             "selectedMqttGridMeterId",
@@ -10674,6 +10675,7 @@ let configDraftItems = [];
 let inverterSeq = 0;
 const configDismissed = new Set();
 const dismissedSerials = new Set();
+function inverterDismissed() { return false; }
 function serialSelectedOverMqtt() { return false; }
 const discoveryPreparation = { discovery_priority: ["local_api", "local_mqtt", "zendure_mqtt"] };
 function discoverySourceEnabled(source) {

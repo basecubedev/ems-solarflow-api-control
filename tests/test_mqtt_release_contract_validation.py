@@ -124,14 +124,22 @@ def _discover_one(harness, serial="REAL"):
         {"seen_topics": ["Zendure/sensor/FORGED/totalPower"]},
     ],
 )
-def test_forged_proposal_fields_are_rejected(harness, forged):
+def test_forged_proposal_fields_never_reach_config(harness, forged):
+    # The browser is not authoritative for discovery evidence: a forged mutable
+    # field is ignored (the trusted server value wins), so the selection still
+    # resolves and applies, and the forged value never reaches the generated
+    # config. The trusted D0 topic (derived from the trusted serial) is used.
     proposal = _discover_one(harness)
     selection = harness.selection(proposal, replace_grid_meter=True)
     selection.update(forged)
-    status, payload = harness.apply(selections=[selection])
-    assert status == 400
-    # The forged field never produced a config; the request was rejected.
-    assert "error" in payload
+    status, payload = harness.apply(
+        devices=[api_device_selection()], selections=[selection]
+    )
+    assert status == 200, payload
+    blob = json.dumps(harness.applied_config())
+    assert "Zendure/sensor/REAL/totalPower" in blob
+    for sentinel in ("FORGED", "10.9.9.9", "9999"):
+        assert sentinel not in blob
 
 
 def test_unknown_broker_ref_selection_is_rejected(harness):

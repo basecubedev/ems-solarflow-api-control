@@ -324,7 +324,15 @@ class ReleaseContractHarness:
         return self.discovery.candidates()
 
     def trusted_proposals(self):
-        return zendure_mqtt_config_proposals.proposals_from_brokers(self.candidates())
+        # Mirror the server: attach identity tokens (and any Cloud/route-primary
+        # stable id) so a selection built here resolves against the same set the
+        # preview/apply endpoints expose. Local serial-bearing ids are unchanged.
+        proposals = zendure_mqtt_config_proposals.proposals_from_brokers(
+            self.candidates()
+        )
+        return zendure_mqtt_config_proposals.annotate_identity_tokens(
+            proposals, self._srv.identity_token_key
+        )
 
     def proposal_for(self, serial):
         for proposal in self.trusted_proposals():

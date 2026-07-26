@@ -159,7 +159,6 @@ from ems.device_identity import (
     PHYSICAL_IDENTITY_TOKEN_FIELD,
     broker_sources_from_config,
     resolve_inverter_identity,
-    resolve_inverter_identity_evidence,
 )
 from ems.external_status import (
     mask_external_mqtt_string,
@@ -3702,7 +3701,9 @@ class AdminHandler(BaseHTTPRequestHandler):
             return None, "zendure_mqtt_proposals entries must be objects"
 
         resolved, errors = zendure_mqtt_config_proposals.resolve_selected_proposals(
-            proposals, self._trusted_mqtt_proposals()
+            proposals,
+            self._trusted_mqtt_proposals(),
+            self.server.identity_token_key,
         )
         if errors:
             return None, errors[0]["message"]
@@ -3729,26 +3730,9 @@ class AdminHandler(BaseHTTPRequestHandler):
             self.server.mqtt_discovery.candidates(),
             cloud_candidates,
         )
-        for proposal in proposals:
-            if not isinstance(proposal, dict):
-                continue
-            fragment = proposal.get("config_fragment")
-            evidence = resolve_inverter_identity_evidence(
-                fragment,
-                token_key=self.server.identity_token_key,
-            )
-            if evidence is None or evidence.primary.opaque_token is None:
-                continue
-            proposal[PHYSICAL_IDENTITY_TOKEN_FIELD] = evidence.primary.opaque_token
-            alias_tokens = list(evidence.opaque_tokens)
-            if alias_tokens:
-                proposal[PHYSICAL_IDENTITY_ALIAS_TOKENS_FIELD] = alias_tokens
-            if evidence.primary.kind == "scoped_mqtt_route":
-                proposal["id"] = (
-                    f"zendure-mqtt:{evidence.primary.opaque_token}:"
-                    f"{proposal.get('broker_ref') or 'default'}"
-                )
-        return proposals
+        return zendure_mqtt_config_proposals.annotate_identity_tokens(
+            proposals, self.server.identity_token_key
+        )
 
     def _public_mqtt_proposals(self):
         """Browser-safe proposal view with raw write identities removed."""
@@ -3877,7 +3861,9 @@ class AdminHandler(BaseHTTPRequestHandler):
             item_mqtt = item.get("mqtt") if isinstance(item.get("mqtt"), dict) else {}
             broker_ref = item.get("proposal_broker_ref") or item_mqtt.get("broker_ref")
             selected, errors = zendure_mqtt_config_proposals.resolve_selected_proposals(
-                [{"id": proposal_id.strip(), "broker_ref": broker_ref}], trusted
+                [{"id": proposal_id.strip(), "broker_ref": broker_ref}],
+                trusted,
+                self.server.identity_token_key,
             )
             if errors or not selected:
                 return None, (

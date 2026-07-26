@@ -174,41 +174,27 @@ def test_mqtt_identity_prefers_serial_number_when_present():
     assert zendure_config_device_identity(entry) == ("physical_serial", "sn-9")
 
 
-def test_mqtt_identity_from_product_key_and_device_id():
+def test_mqtt_identity_is_the_stable_device_anchor():
+    # The strongest serial-less identity is the stable device anchor
+    # (source/broker-scope/device_id). Product key and topic family are precise
+    # addressing/schema evidence, not the coarse duplicate-detection identity, so
+    # the same device id resolves to one anchor whether or not they are present.
+    # The device id is an MQTT route segment, so its case is preserved (defect 2).
     entry = _telemetry_only_entry()
     entry.pop("serial_number", None)
-    assert zendure_config_device_identity(entry) == (
-        "scoped_mqtt_route",
-        "zendure_mqtt",
-        "default",
-        "pk1",
-        "abc123",
-    )
+    anchor = ("scoped_mqtt_device_anchor", "zendure_mqtt", "default", "ABC123")
+    assert zendure_config_device_identity(entry) == anchor
 
+    without_product = _telemetry_only_entry()
+    without_product.pop("serial_number", None)
+    without_product["mqtt"].pop("product_key")
+    assert zendure_config_device_identity(without_product) == anchor
 
-def test_mqtt_identity_from_topic_family_and_device_id():
-    entry = _telemetry_only_entry()
-    entry["mqtt"].pop("product_key")
-    assert zendure_config_device_identity(entry) == (
-        "scoped_mqtt_route",
-        "zendure_mqtt",
-        "default",
-        "topic:zensdk_ha_scalar",
-        "abc123",
-    )
-
-
-def test_mqtt_identity_from_device_id_only():
-    entry = _telemetry_only_entry()
-    entry["mqtt"].pop("product_key")
-    entry["mqtt"].pop("topic_family")
-    assert zendure_config_device_identity(entry) == (
-        "scoped_mqtt_route",
-        "zendure_mqtt",
-        "default",
-        "topic:unknown",
-        "abc123",
-    )
+    device_only = _telemetry_only_entry()
+    device_only.pop("serial_number", None)
+    device_only["mqtt"].pop("product_key")
+    device_only["mqtt"].pop("topic_family")
+    assert zendure_config_device_identity(device_only) == anchor
 
 
 def test_identity_is_none_without_meaningful_fields():

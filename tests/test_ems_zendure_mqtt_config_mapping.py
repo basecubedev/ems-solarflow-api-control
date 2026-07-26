@@ -376,6 +376,315 @@ def test_distinct_devices_produce_distinct_proposals():
     }
 
 
+# --- identity-alias grouping (route enrichment) -----------------------------
+
+
+def _route_only_snapshot(device_id="ROUTE-1", product_key="PK"):
+    return ZendureMqttSnapshot(
+        device_id=device_id,
+        serial_number=None,
+        product_key=product_key,
+        product="Hyper 2000",
+        topic_families={FAMILY_LEGACY_JSON},
+        metrics={"outputLimit": 100},
+        capabilities={"output_control"},
+    )
+
+
+def _serial_bearing_snapshot(device_id="ROUTE-1", serial="SERIAL-1", product_key="PK"):
+    return ZendureMqttSnapshot(
+        device_id=device_id,
+        serial_number=serial,
+        product_key=product_key,
+        product="Hyper 2000",
+        topic_families={FAMILY_LEGACY_JSON},
+        metrics={"electricLevel": 50},
+        capabilities={"battery_storage"},
+    )
+
+
+def test_route_only_and_serial_bearing_same_route_merge_into_one_proposal():
+    # A serial-less route observation and a later serial-bearing observation of
+    # the same scoped route are the same physical inverter (identity enrichment),
+    # so they must never split into two proposals.
+    proposals = map_snapshots_to_proposals(
+        [_route_only_snapshot(), _serial_bearing_snapshot()],
+        source="zendure_cloud_mqtt",
+        broker_ref="zendure_cloud",
+    )
+    assert len(proposals) == 1
+    merged = proposals[0]
+    assert merged.serial_number == "SERIAL-1"
+    assert merged.device_id == "ROUTE-1"
+    # Telemetry, metrics and capabilities from both observations are preserved.
+    assert "outputLimit" in merged.metrics
+    assert "electricLevel" in merged.metrics
+    assert "output_control" in merged.capabilities
+    assert "battery_storage" in merged.capabilities
+    assert "identity_route_serial_conflict" not in merged.warnings
+
+
+def test_serial_then_route_only_order_still_merges():
+    proposals = map_snapshots_to_proposals(
+        [_serial_bearing_snapshot(), _route_only_snapshot()],
+        source="zendure_cloud_mqtt",
+        broker_ref="zendure_cloud",
+    )
+    assert len(proposals) == 1
+    assert proposals[0].serial_number == "SERIAL-1"
+
+
+def test_same_route_claiming_two_serials_is_blocked_not_merged():
+    # Two contradictory physical serials on one scoped route must never be
+    # silently merged; each stays a distinct proposal, flagged as an identity
+    # conflict, and control is blocked because the write target is ambiguous.
+    proposals = map_snapshots_to_proposals(
+        [
+            _serial_bearing_snapshot(serial="SERIAL-1"),
+            _serial_bearing_snapshot(serial="SERIAL-2"),
+        ],
+        source="zendure_cloud_mqtt",
+        broker_ref="zendure_cloud",
+    )
+    assert len(proposals) == 2
+    assert {p.serial_number for p in proposals} == {"SERIAL-1", "SERIAL-2"}
+    for proposal in proposals:
+        assert "identity_route_serial_conflict" in proposal.warnings
+        assert proposal.output_control_supported is False
+        assert proposal.control_block_reason == "identity_route_serial_conflict"
+
+
+def test_route_only_shared_with_conflicting_serials_does_not_bridge_merge():
+    # A route-only observation that shares a contested route with two different
+    # serials must not act as a bridge that merges the two serials together.
+    proposals = map_snapshots_to_proposals(
+        [
+            _serial_bearing_snapshot(serial="SERIAL-1"),
+            _serial_bearing_snapshot(serial="SERIAL-2"),
+            _route_only_snapshot(),
+        ],
+        source="zendure_cloud_mqtt",
+        broker_ref="zendure_cloud",
+    )
+    serials = {p.serial_number for p in proposals}
+    assert "SERIAL-1" in serials
+    assert "SERIAL-2" in serials
+    # The two serial proposals are never collapsed into one.
+    assert len([p for p in proposals if p.serial_number in {"SERIAL-1", "SERIAL-2"}]) == 2
+
+
+def test_serial_less_observations_of_one_route_merge_into_one_proposal():
+    # Two serial-less observations of the same device route (differing product key
+    # / topic family) are one physical device and must merge into one proposal —
+    # never split into two with a colliding id and name.
+    a = ZendureMqttSnapshot(
+        device_id="DEVICE-X",
+        serial_number=None,
+        product_key=None,
+        product="Hyper 2000",
+        topic_families={FAMILY_ZENSDK_HA_SCALAR},
+        metrics={"electricLevel": 50},
+        capabilities={"battery_storage"},
+    )
+    b = ZendureMqttSnapshot(
+        device_id="DEVICE-X",
+        serial_number=None,
+        product_key="PK",
+        product="Hyper 2000",
+        topic_families={FAMILY_LEGACY_JSON},
+        metrics={"outputLimit": 100},
+        capabilities={"output_control"},
+    )
+    proposals = map_snapshots_to_proposals(
+        [a, b], source="local_mqtt", broker_ref="local_mqtt"
+    )
+    assert len(proposals) == 1
+    merged = proposals[0]
+    assert merged.role_hint == ROLE_BATTERY_INVERTER
+    assert "electricLevel" in merged.metrics
+    assert "outputLimit" in merged.metrics
+
+
+def _serialless_pk_snapshot(device_id="DEVICE-X", product_key="PK-A", metric="outputLimit"):
+    return ZendureMqttSnapshot(
+        device_id=device_id,
+        serial_number=None,
+        product_key=product_key,
+        product="Hyper 2000",
+        topic_families={FAMILY_LEGACY_JSON},
+        metrics={metric: 100},
+        capabilities={"output_control"},
+    )
+
+
+def test_two_known_product_keys_on_one_device_id_are_blocked_not_merged():
+    # Defect 3: two serial-less observations sharing a device id but carrying
+    # different known product keys are two distinct precise routes. They must not
+    # merge (which would mix metrics onto one control target); each stays a
+    # separate blocked proposal and control is off (ambiguous write address).
+    proposals = map_snapshots_to_proposals(
+        [
+            _serialless_pk_snapshot(product_key="PK-A", metric="outputLimit"),
+            _serialless_pk_snapshot(product_key="PK-B", metric="inputLimit"),
+        ],
+        source="zendure_cloud_mqtt",
+        broker_ref="zendure_cloud",
+    )
+    assert len(proposals) == 2
+    assert {p.product_key for p in proposals} == {"PK-A", "PK-B"}
+    for proposal in proposals:
+        assert "identity_route_product_conflict" in proposal.warnings
+        assert proposal.output_control_supported is False
+        assert proposal.control_block_reason == "identity_route_product_conflict"
+    # Metrics are never mixed across the two conflicting routes.
+    by_pk = {p.product_key: p for p in proposals}
+    assert "outputLimit" in by_pk["PK-A"].metrics
+    assert "outputLimit" not in by_pk["PK-B"].metrics
+    assert "inputLimit" in by_pk["PK-B"].metrics
+
+
+def test_missing_product_observation_does_not_bridge_two_product_routes():
+    # Defect 3: an unknown-product observation of a contested device id must not
+    # bridge the two known product routes. It becomes its own blocked observation.
+    missing = ZendureMqttSnapshot(
+        device_id="DEVICE-X",
+        serial_number=None,
+        product_key=None,
+        product="Hyper 2000",
+        topic_families={FAMILY_LEGACY_JSON},
+        metrics={"solarInputPower": 5},
+        capabilities=set(),
+    )
+    proposals = map_snapshots_to_proposals(
+        [
+            _serialless_pk_snapshot(product_key="PK-A", metric="outputLimit"),
+            _serialless_pk_snapshot(product_key="PK-B", metric="inputLimit"),
+            missing,
+        ],
+        source="zendure_cloud_mqtt",
+        broker_ref="zendure_cloud",
+    )
+    # PK-A, PK-B, and the ambiguous missing-product observation stay separate.
+    assert len(proposals) == 3
+    known = [p for p in proposals if p.product_key in {"PK-A", "PK-B"}]
+    assert len(known) == 2
+    # The missing-product observation never absorbed a known route's metrics.
+    for proposal in known:
+        assert "solarInputPower" not in proposal.metrics
+
+
+def test_same_serial_gains_additional_route_is_one_proposal():
+    a = _serial_bearing_snapshot(device_id="ROUTE-A", serial="SERIAL-1", product_key="PK")
+    b = _serial_bearing_snapshot(device_id="ROUTE-B", serial="SERIAL-1", product_key="PK")
+    proposals = map_snapshots_to_proposals(
+        [a, b], source="zendure_cloud_mqtt", broker_ref="zendure_cloud"
+    )
+    assert len(proposals) == 1
+    assert proposals[0].serial_number == "SERIAL-1"
+
+
+def _serialless_route_snapshot(device_id, product_key, metric):
+    return ZendureMqttSnapshot(
+        device_id=device_id,
+        serial_number=None,
+        product_key=product_key,
+        product="Hyper 2000",
+        topic_families={FAMILY_LEGACY_JSON},
+        metrics={metric: 100},
+        capabilities={"output_control"},
+    )
+
+
+def test_serial_backed_conflicting_serialless_route_blocks_writes():
+    # Defect 3 (repro A): a serial-bearing observation and a serial-less
+    # observation share a device id but carry different product keys — one physical
+    # inverter, two precise write routes. Control is blocked and no product key is
+    # pinned into a writable config.
+    a = _serial_bearing_snapshot(device_id="DEV", serial="SERIAL-1", product_key="PK-A")
+    b = _serialless_route_snapshot("DEV", "PK-B", "inputLimit")
+    proposals = map_snapshots_to_proposals(
+        [a, b], source="zendure_cloud_mqtt", broker_ref="zendure_cloud"
+    )
+    assert len(proposals) == 1
+    proposal = proposals[0]
+    assert proposal.serial_number == "SERIAL-1"
+    assert proposal.output_control_supported is False
+    assert proposal.control_block_reason == "identity_route_product_conflict"
+    assert "identity_route_product_conflict" in proposal.warnings
+    assert "product_key" not in proposal.config_fragment["mqtt"]
+    assert proposal.config_fragment["capabilities"]["write_output_limit"] is False
+    assert proposal.product_key is None
+
+
+def test_serial_no_product_plus_two_serialless_routes_blocks():
+    # Defect 3 (repro B): a serial with no product key plus two serial-less
+    # observations carrying two product keys on one device id. One inverter, two
+    # routes → blocked, no pin.
+    a = _serial_bearing_snapshot(device_id="DEV", serial="SERIAL-1", product_key=None)
+    b = _serialless_route_snapshot("DEV", "PK-A", "outputLimit")
+    c = _serialless_route_snapshot("DEV", "PK-B", "inputLimit")
+    proposals = map_snapshots_to_proposals(
+        [a, b, c], source="zendure_cloud_mqtt", broker_ref="zendure_cloud"
+    )
+    assert len(proposals) == 1
+    proposal = proposals[0]
+    assert proposal.serial_number == "SERIAL-1"
+    assert proposal.control_block_reason == "identity_route_product_conflict"
+    assert "product_key" not in proposal.config_fragment["mqtt"]
+
+
+def test_same_serial_two_product_keys_blocks_not_first_wins():
+    # Defect 3 (repro C): the same serial reports two different product keys on one
+    # device id. Never silently pick the first; block control and drop the pin.
+    a = _serial_bearing_snapshot(device_id="DEV", serial="SERIAL-1", product_key="PK-A")
+    b = _serial_bearing_snapshot(device_id="DEV", serial="SERIAL-1", product_key="PK-B")
+    proposals = map_snapshots_to_proposals(
+        [a, b], source="zendure_cloud_mqtt", broker_ref="zendure_cloud"
+    )
+    assert len(proposals) == 1
+    proposal = proposals[0]
+    assert proposal.serial_number == "SERIAL-1"
+    assert proposal.control_block_reason == "identity_route_product_conflict"
+    assert "identity_route_product_conflict" in proposal.warnings
+    assert "product_key" not in proposal.config_fragment["mqtt"]
+
+
+def test_route_conflict_does_not_make_serial_a_second_inverter():
+    # Defect 3: route ambiguity blocks control but never turns one physical serial
+    # into two inverters.
+    a = _serial_bearing_snapshot(device_id="DEV", serial="SERIAL-1", product_key="PK-A")
+    b = _serial_bearing_snapshot(device_id="DEV", serial="SERIAL-1", product_key="PK-B")
+    proposals = map_snapshots_to_proposals(
+        [a, b], source="zendure_cloud_mqtt", broker_ref="zendure_cloud"
+    )
+    assert len({p.serial_number for p in proposals}) == 1
+
+
+def test_case_distinct_device_ids_do_not_merge():
+    # Defect 2: two device ids differing only in case are distinct MQTT routes and
+    # never collapse into one proposal.
+    a = _serialless_route_snapshot("DEV", "PK", "outputLimit")
+    b = _serialless_route_snapshot("dev", "PK", "electricLevel")
+    proposals = map_snapshots_to_proposals(
+        [a, b], source="zendure_cloud_mqtt", broker_ref="zendure_cloud"
+    )
+    assert len(proposals) == 2
+
+
+def test_case_distinct_product_keys_are_distinct_routes():
+    # Defect 2 + 3: "PK" and "pk" on one device id are two distinct routes, blocked
+    # and never merged.
+    a = _serialless_route_snapshot("DEV", "PK", "outputLimit")
+    b = _serialless_route_snapshot("DEV", "pk", "inputLimit")
+    proposals = map_snapshots_to_proposals(
+        [a, b], source="zendure_cloud_mqtt", broker_ref="zendure_cloud"
+    )
+    assert len(proposals) == 2
+    assert {p.product_key for p in proposals} == {"PK", "pk"}
+    for proposal in proposals:
+        assert proposal.control_block_reason == "identity_route_product_conflict"
+
+
 # --- purity -----------------------------------------------------------------
 
 

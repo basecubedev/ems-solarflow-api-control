@@ -13,6 +13,7 @@ from typing import Any, Literal
 
 IdentityKind = Literal[
     "physical_serial",
+    "scoped_mqtt_device_anchor",
     "scoped_mqtt_route",
     "local_api_endpoint",
 ]
@@ -46,11 +47,18 @@ class InverterIdentity:
 class InverterIdentityEvidence:
     """One physical inverter's trusted identity aliases, strongest first.
 
-    ``primary`` is the strongest available identity (serial > scoped route >
-    endpoint); ``aliases`` are the other trusted identities the same observation
-    carries. An inverter is enriched, not duplicated, when a later observation adds
-    a stronger identity to an alias already known, so matching intersects the whole
-    alias set rather than a single destructive priority result.
+    ``primary`` is the strongest available identity (serial > scoped device
+    anchor > precise scoped route > endpoint); ``aliases`` are the other trusted
+    identities the same observation carries. Matching intersects the whole alias
+    set, so an inverter is enriched, not duplicated, when a later observation adds
+    a stronger identity to an alias already known.
+
+    An MQTT observation carries two scoped identities: a *device anchor*
+    (source/broker-scope/device_id) that stays stable while semantic metadata such
+    as product key or topic family is enriched, and — when a product key is known —
+    a *precise route* (source/broker-scope/product_key/device_id) that is the exact
+    write address. Two observations that share an anchor but carry different known
+    product keys prove two distinct routes and never merge (:meth:`route_conflict`).
     """
 
     primary: InverterIdentity
@@ -88,6 +96,31 @@ class InverterIdentityEvidence:
             if identity.kind != "physical_serial"
         )
 
+    def _routes_by_anchor(self) -> dict[tuple[str, ...], set[str]]:
+        by_anchor: dict[tuple[str, ...], set[str]] = {}
+        for identity in self.identities:
+            if identity.kind != "scoped_mqtt_route":
+                continue
+            source, scope, product_key, device_id = identity.normalized_components
+            by_anchor.setdefault((source, scope, device_id), set()).add(product_key)
+        return by_anchor
+
+    def route_conflict(self, other: InverterIdentityEvidence) -> bool:
+        """True when a shared device anchor carries two different known product keys.
+
+        The anchor says "one device route", the differing product keys say "two"
+        — a distinct precise write address on each side. Merging them would mix two
+        routes onto one control target, so they are kept apart (fail closed).
+        """
+
+        mine = self._routes_by_anchor()
+        theirs = other._routes_by_anchor()
+        for anchor, my_keys in mine.items():
+            other_keys = theirs.get(anchor)
+            if other_keys and my_keys and my_keys.isdisjoint(other_keys):
+                return True
+        return False
+
 
 def _clean(value: Any, *, fold_case: bool = False) -> str | None:
     if not isinstance(value, str):
@@ -97,12 +130,10 @@ def _clean(value: Any, *, fold_case: bool = False) -> str | None:
         not cleaned
         or any(marker in cleaned for marker in _MASK_MARKERS)
         or cleaned.casefold() in {"<redacted>", "[redacted]", "redacted"}
+        or cleaned.casefold().startswith(("your_", "your-"))
     ):
         return None
-    normalized = cleaned.casefold() if fold_case else cleaned
-    if normalized.startswith(("your_", "your-")):
-        return None
-    return normalized
+    return cleaned.casefold() if fold_case else cleaned
 
 
 def normalize_physical_serial(value: Any) -> str | None:
@@ -115,6 +146,19 @@ def normalize_physical_serial(value: Any) -> str | None:
     """
 
     return _clean(value, fold_case=True)
+
+
+def normalize_mqtt_route_segment(value: Any) -> str | None:
+    """Trimmed, case-sensitive MQTT route segment (product key or device id).
+
+    MQTT topic segments are case-sensitive addresses, so — unlike a physical
+    serial — they are compared exactly and their original case is preserved.
+    Masked, redacted and placeholder values return ``None``. Never apply the
+    serial normalizer to a route identifier: case-folding would collapse two
+    distinct write addresses (``iot/PK/DEV`` vs ``iot/pk/dev``).
+    """
+
+    return _clean(value, fold_case=False)
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:
@@ -172,11 +216,18 @@ def _serial_identity(item: Mapping[str, Any], fragment: Mapping[str, Any]):
     return InverterIdentity("physical_serial", (serial,), "trusted")
 
 
-def _scoped_route_identity(
+def _scoped_route_identities(
     item: Mapping[str, Any],
     fragment: Mapping[str, Any],
     broker_sources: Mapping[str, str] | None,
-):
+) -> list[InverterIdentity]:
+    """Return the scoped device anchor and, when a product key is known, its route.
+
+    The anchor (``source``/``broker_scope``/``device_id``) is stable across
+    product-key and topic-family enrichment; the precise route additionally pins
+    the product key so distinct write addresses on one device id stay distinct.
+    """
+
     mqtt = _mqtt_view(item)
     item_type = _first(item.get("kind"), item.get("type"), fold_case=True)
     connection_source = _first(
@@ -187,7 +238,7 @@ def _scoped_route_identity(
     )
     is_mqtt = bool(mqtt) or item_type == "zendure_mqtt" or connection_source in _MQTT_SOURCES
     if not is_mqtt:
-        return None
+        return []
     broker_ref = _first(
         mqtt.get("broker_ref"),
         item.get("broker_ref"),
@@ -218,28 +269,27 @@ def _scoped_route_identity(
         mqtt.get("device_id"),
         item.get("device_id"),
         _mapping(fragment.get("mqtt")).get("device_id"),
-        fold_case=True,
     )
     if device_id is None:
-        return None
+        return []
+    anchor = InverterIdentity(
+        "scoped_mqtt_device_anchor",
+        (source, broker_scope, device_id),
+        "scoped",
+    )
     product_key = _first(
         mqtt.get("product_key"),
         item.get("product_key"),
         _mapping(fragment.get("mqtt")).get("product_key"),
-        fold_case=True,
     )
-    topic_family = _first(
-        mqtt.get("topic_family"),
-        item.get("topic_family"),
-        _mapping(fragment.get("mqtt")).get("topic_family"),
-        fold_case=True,
-    )
-    semantic_scope = product_key or f"topic:{topic_family or 'unknown'}"
-    return InverterIdentity(
+    if product_key is None:
+        return [anchor]
+    route = InverterIdentity(
         "scoped_mqtt_route",
-        (source, broker_scope, semantic_scope, device_id),
+        (source, broker_scope, product_key, device_id),
         "scoped",
     )
+    return [anchor, route]
 
 
 def _endpoint_identity(item: Mapping[str, Any], fragment: Mapping[str, Any]):
@@ -259,7 +309,7 @@ def _resolved_identities(
     fragment = _fragment(item)
     candidates = [
         _serial_identity(item, fragment),
-        _scoped_route_identity(item, fragment, broker_sources),
+        *_scoped_route_identities(item, fragment, broker_sources),
         _endpoint_identity(item, fragment),
     ]
     return [identity for identity in candidates if identity is not None]
@@ -329,16 +379,83 @@ def identity_evidence_conflict(
     return not left.alias_keys().isdisjoint(right.alias_keys())
 
 
-def same_inverter_evidence(
+def same_physical_inverter_evidence(
     left: InverterIdentityEvidence | None, right: InverterIdentityEvidence | None
 ) -> bool:
-    """True when two evidences share a trusted identity alias without a conflict."""
+    """True when two evidences describe one physical inverter.
+
+    Physical identity and writable-route ambiguity are separate decisions. A
+    shared physical serial is decisive: one inverter may gain routes, account
+    scopes or product keys, so it holds even when the precise write routes differ
+    (that ambiguity blocks control only; see :func:`mqtt_route_conflict`). Absent
+    a shared serial, a shared weaker alias (device anchor, route, endpoint) unites
+    them only when no identity conflict and no route conflict makes the shared
+    anchor ambiguous.
+    """
 
     if left is None or right is None:
         return False
     if identity_evidence_conflict(left, right):
         return False
+    if not left.serial_keys().isdisjoint(right.serial_keys()):
+        return True
+    if left.route_conflict(right):
+        return False
     return not left.comparison_keys.isdisjoint(right.comparison_keys)
+
+
+# The stable public name of the physical-identity predicate. It answers "one
+# inverter?" and never overloads control-address safety onto that boolean.
+same_inverter_evidence = same_physical_inverter_evidence
+
+
+def mqtt_route_conflict(
+    left: InverterIdentityEvidence | None, right: InverterIdentityEvidence | None
+) -> bool:
+    """True when one shared device anchor carries two different known product keys.
+
+    A pure control-address concern, independent of physical identity: the two
+    evidences may still be one physical inverter
+    (:func:`same_physical_inverter_evidence`), but the precise write address is
+    ambiguous, so output control must be blocked.
+    """
+
+    if left is None or right is None:
+        return False
+    return left.route_conflict(right)
+
+
+def legacy_route_folded_tokens(
+    evidence: InverterIdentityEvidence | None, key: bytes
+) -> tuple[str, ...]:
+    """Server-only legacy tokens for an evidence's MQTT route identities.
+
+    A prior release case-folded MQTT route segments, so a browser selection stored
+    then may still carry a case-folded token. These tokens let such a stale
+    selection remap to its current exact-case proposal. They are never sent to the
+    browser: two case-distinct routes fold to one token, so exposing it would
+    merge them again.
+    """
+
+    if evidence is None:
+        return ()
+    tokens: list[str] = []
+    for identity in evidence.identities:
+        if identity.kind == "scoped_mqtt_device_anchor":
+            source, scope, device_id = identity.normalized_components
+            folded = (source, scope, device_id.casefold())
+        elif identity.kind == "scoped_mqtt_route":
+            source, scope, product_key, device_id = identity.normalized_components
+            folded = (source, scope, product_key.casefold(), device_id.casefold())
+        else:
+            continue
+        if folded == identity.normalized_components:
+            continue
+        legacy = InverterIdentity(identity.kind, folded, identity.confidence)
+        token = opaque_identity_token(legacy, key)
+        if token not in tokens:
+            tokens.append(token)
+    return tuple(tokens)
 
 
 def opaque_identity_token(identity: InverterIdentity, key: bytes) -> str:
@@ -417,11 +534,15 @@ __all__ = [
     "broker_sources_from_config",
     "identity_conflict",
     "identity_evidence_conflict",
+    "legacy_route_folded_tokens",
+    "mqtt_route_conflict",
+    "normalize_mqtt_route_segment",
     "normalize_physical_serial",
     "opaque_identity_token",
     "resolve_inverter_identity",
     "resolve_inverter_identity_evidence",
     "same_inverter_evidence",
     "same_physical_inverter",
+    "same_physical_inverter_evidence",
     "supplied_identity_token",
 ]

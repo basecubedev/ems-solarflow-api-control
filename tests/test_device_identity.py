@@ -18,10 +18,15 @@ from admin.zendure_mqtt_config_proposals import build_proposals
 from ems.device_identity import (
     broker_sources_from_config,
     identity_evidence_conflict,
+    legacy_route_folded_tokens,
+    mqtt_route_conflict,
+    normalize_mqtt_route_segment,
+    normalize_physical_serial,
     opaque_identity_token,
     resolve_inverter_identity,
     resolve_inverter_identity_evidence,
     same_inverter_evidence,
+    same_physical_inverter_evidence,
 )
 
 pytestmark = pytest.mark.simulation
@@ -69,11 +74,12 @@ def test_serial_is_primary_across_api_and_mqtt_transports():
     ("change", "value"),
     [
         ("broker_ref", "cloud_b"),
-        ("product_key", "PRODUCT_B"),
         ("source", "local_mqtt"),
     ],
 )
-def test_serialless_mqtt_route_identity_is_scoped(change, value):
+def test_serialless_mqtt_anchor_is_broker_and_account_scoped(change, value):
+    # The stable device anchor is scoped by source and broker/account, so a route
+    # observed under a different broker/account scope is a different device.
     first = _mqtt_device()
     second = _mqtt_device()
     second["mqtt"][change] = value
@@ -82,11 +88,35 @@ def test_serialless_mqtt_route_identity_is_scoped(change, value):
     right = resolve_inverter_identity(second)
 
     assert left is not None and right is not None
-    assert left.kind == right.kind == "scoped_mqtt_route"
+    assert left.kind == right.kind == "scoped_mqtt_device_anchor"
     assert left.normalized_components != right.normalized_components
     assert opaque_identity_token(left, TOKEN_KEY) != opaque_identity_token(
         right, TOKEN_KEY
     )
+
+
+def test_serialless_mqtt_anchor_survives_product_key_change():
+    # Defect 2: a product-key change keeps the stable device anchor identical (the
+    # anchor is the browser equality/selection handle) while the precise route
+    # alias — the exact write address — changes.
+    route_only = resolve_inverter_identity_evidence(
+        _mqtt_device(product_key=""), token_key=TOKEN_KEY
+    )
+    enriched = resolve_inverter_identity_evidence(
+        _mqtt_device(product_key="PRODUCT_B"), token_key=TOKEN_KEY
+    )
+
+    assert route_only is not None and enriched is not None
+    assert route_only.primary.kind == enriched.primary.kind == "scoped_mqtt_device_anchor"
+    # Stable anchor is unchanged across the enrichment.
+    assert route_only.primary.opaque_token == enriched.primary.opaque_token
+    # The known product key adds a distinct precise route alias.
+    assert not any(a.kind == "scoped_mqtt_route" for a in route_only.aliases)
+    route = next(a for a in enriched.aliases if a.kind == "scoped_mqtt_route")
+    assert route.opaque_token != enriched.primary.opaque_token
+    # Same anchor, missing vs known product key: enrichment, never a conflict.
+    assert same_inverter_evidence(route_only, enriched) is True
+    assert not identity_evidence_conflict(route_only, enriched)
 
 
 def test_evidence_retains_route_alias_after_serial_enrichment():
@@ -97,12 +127,12 @@ def test_evidence_retains_route_alias_after_serial_enrichment():
     after = resolve_inverter_identity_evidence(serialized, token_key=TOKEN_KEY)
 
     assert before is not None and after is not None
-    # Route-only: primary is the scoped route.
-    assert before.primary.kind == "scoped_mqtt_route"
-    # Serialized: primary is the serial, but the scoped route survives as an alias.
+    # Route-only: primary is the stable device anchor.
+    assert before.primary.kind == "scoped_mqtt_device_anchor"
+    # Serialized: primary is the serial, but the device anchor survives as an alias.
     assert after.primary.kind == "physical_serial"
-    assert any(alias.kind == "scoped_mqtt_route" for alias in after.aliases)
-    # The pre-enrichment route identity intersects the enriched evidence.
+    assert any(alias.kind == "scoped_mqtt_device_anchor" for alias in after.aliases)
+    # The pre-enrichment anchor identity intersects the enriched evidence.
     assert same_inverter_evidence(before, after) is True
     assert not identity_evidence_conflict(before, after)
     # Alias tokens intersect: the route token is present in both.
@@ -172,6 +202,131 @@ def test_evidence_same_serial_under_different_cloud_scopes_matches():
     assert same_inverter_evidence(left, right) is True
 
 
+def test_evidence_same_device_id_two_known_product_keys_is_route_conflict():
+    # Defect 3: two serial-less observations share a device id but carry different
+    # known product keys — two distinct precise routes. They must not be treated as
+    # one inverter (shared anchor alone cannot merge them).
+    left = resolve_inverter_identity_evidence(
+        _mqtt_device(device_id="DEVICE-X", product_key="PK-A"), token_key=TOKEN_KEY
+    )
+    right = resolve_inverter_identity_evidence(
+        _mqtt_device(device_id="DEVICE-X", product_key="PK-B"), token_key=TOKEN_KEY
+    )
+
+    assert left is not None and right is not None
+    assert left.route_conflict(right) is True
+    # The shared anchor intersects, but the route conflict keeps them apart.
+    assert not left.comparison_keys.isdisjoint(right.comparison_keys)
+    assert same_inverter_evidence(left, right) is False
+
+
+def test_evidence_missing_product_enriches_single_known_route():
+    # Defect 3: a missing-product observation and a single known product route on
+    # the same device id enrich into one inverter (no conflict).
+    missing = resolve_inverter_identity_evidence(
+        _mqtt_device(device_id="DEVICE-X", product_key=""), token_key=TOKEN_KEY
+    )
+    known = resolve_inverter_identity_evidence(
+        _mqtt_device(device_id="DEVICE-X", product_key="PK-A"), token_key=TOKEN_KEY
+    )
+
+    assert missing is not None and known is not None
+    assert missing.route_conflict(known) is False
+    assert same_inverter_evidence(missing, known) is True
+
+
+def test_physical_serial_normalizer_is_case_insensitive():
+    assert normalize_physical_serial(" AbC-123 ") == normalize_physical_serial("abc-123")
+    assert normalize_physical_serial(" AbC-123 ") == "abc-123"
+
+
+def test_mqtt_route_segment_normalizer_preserves_case_and_rejects_masks():
+    # Defect 2: MQTT topic segments are case-sensitive addresses.
+    assert normalize_mqtt_route_segment(" PK-A ") == "PK-A"
+    assert normalize_mqtt_route_segment("pk-a") != normalize_mqtt_route_segment("PK-A")
+    for masked in ("••••", "…abcd", "<redacted>", "your_product_key", "YOUR_KEY", ""):
+        assert normalize_mqtt_route_segment(masked) is None
+
+
+def test_mqtt_route_segments_are_case_sensitive():
+    # Defect 2: PK/DEV and pk/dev are distinct write addresses — distinct anchors,
+    # routes and browser tokens — and must never collapse.
+    upper = resolve_inverter_identity_evidence(
+        _mqtt_device(product_key="PK", device_id="DEV"), token_key=TOKEN_KEY
+    )
+    lower = resolve_inverter_identity_evidence(
+        _mqtt_device(product_key="pk", device_id="dev"), token_key=TOKEN_KEY
+    )
+    assert upper is not None and lower is not None
+    assert upper.comparison_keys.isdisjoint(lower.comparison_keys)
+    assert set(upper.opaque_tokens).isdisjoint(lower.opaque_tokens)
+    assert same_physical_inverter_evidence(upper, lower) is False
+
+
+def test_mqtt_device_id_case_distinguishes_routes():
+    # Defect 2: only the device-id case differs — still two distinct routes.
+    left = resolve_inverter_identity_evidence(
+        _mqtt_device(product_key="PK", device_id="DEV"), token_key=TOKEN_KEY
+    )
+    right = resolve_inverter_identity_evidence(
+        _mqtt_device(product_key="PK", device_id="Dev"), token_key=TOKEN_KEY
+    )
+    assert left.comparison_keys.isdisjoint(right.comparison_keys)
+
+
+def test_same_serial_with_route_conflict_is_one_physical_inverter():
+    # Related defect: the same physical serial observed on two precise product
+    # routes is one physical inverter even though the write address is ambiguous.
+    # Physical identity and route conflict are separate answers.
+    left = resolve_inverter_identity_evidence(
+        _mqtt_device(device_id="DEV", product_key="PK-A", serial_number="SERIAL-1"),
+        token_key=TOKEN_KEY,
+    )
+    right = resolve_inverter_identity_evidence(
+        _mqtt_device(device_id="DEV", product_key="PK-B", serial_number="SERIAL-1"),
+        token_key=TOKEN_KEY,
+    )
+    assert left is not None and right is not None
+    assert same_physical_inverter_evidence(left, right) is True
+    assert same_inverter_evidence(left, right) is True
+    assert mqtt_route_conflict(left, right) is True
+
+
+def test_serialless_route_conflict_is_not_one_physical_inverter():
+    # Without a shared serial, a shared device anchor with two known product keys
+    # cannot prove one inverter; the route conflict keeps them apart.
+    left = resolve_inverter_identity_evidence(
+        _mqtt_device(device_id="DEVICE-X", product_key="PK-A"), token_key=TOKEN_KEY
+    )
+    right = resolve_inverter_identity_evidence(
+        _mqtt_device(device_id="DEVICE-X", product_key="PK-B"), token_key=TOKEN_KEY
+    )
+    assert mqtt_route_conflict(left, right) is True
+    assert same_physical_inverter_evidence(left, right) is False
+
+
+def test_legacy_route_folded_token_remaps_uppercase_route_uniquely():
+    # Migration: a case-folded token from a prior release must still identify the
+    # current exact-case route, but never equal a current exact-case token.
+    exact = resolve_inverter_identity_evidence(
+        _mqtt_device(product_key="PK", device_id="DEV"), token_key=TOKEN_KEY
+    )
+    legacy = legacy_route_folded_tokens(exact, TOKEN_KEY)
+    assert legacy
+    folded = resolve_inverter_identity_evidence(
+        _mqtt_device(product_key="pk", device_id="dev"), token_key=TOKEN_KEY
+    )
+    assert set(legacy) & set(folded.opaque_tokens)
+    assert set(legacy).isdisjoint(exact.opaque_tokens)
+
+
+def test_legacy_route_folded_tokens_empty_for_lowercase_route():
+    lower = resolve_inverter_identity_evidence(
+        _mqtt_device(product_key="pk", device_id="dev"), token_key=TOKEN_KEY
+    )
+    assert legacy_route_folded_tokens(lower, TOKEN_KEY) == ()
+
+
 def test_evidence_opaque_tokens_contain_no_raw_identifiers():
     device = _mqtt_device(
         product_key="PRODUCT_SECRET",
@@ -188,15 +343,20 @@ def test_evidence_opaque_tokens_contain_no_raw_identifiers():
             assert raw.lower() not in token.lower()
 
 
-def test_topic_family_scopes_route_when_product_scope_is_unavailable():
+def test_topic_family_does_not_scope_the_stable_device_anchor():
+    # Defect 2: the same scoped device observed under two topic families keeps one
+    # stable anchor — topic family is schema evidence, never identity material — so
+    # a stored selection survives a topic-family change.
     first = _mqtt_device(product_key="", topic_family="zensdk_ha_scalar")
     second = _mqtt_device(product_key="", topic_family="legacy_zendure_json")
 
-    left = resolve_inverter_identity(first)
-    right = resolve_inverter_identity(second)
+    left = resolve_inverter_identity(first, token_key=TOKEN_KEY)
+    right = resolve_inverter_identity(second, token_key=TOKEN_KEY)
 
     assert left is not None and right is not None
-    assert left.normalized_components != right.normalized_components
+    assert left.kind == right.kind == "scoped_mqtt_device_anchor"
+    assert left.normalized_components == right.normalized_components
+    assert left.opaque_token == right.opaque_token
 
 
 def test_multiple_named_cloud_accounts_keep_distinct_broker_scopes():

@@ -93,20 +93,23 @@ def test_stale_proposal_from_previous_session_rejected():
     assert errors[0]["code"] == "zendure_mqtt_proposal_unknown"
 
 
-def test_browser_changed_serial_is_ignored_not_trusted():
+def test_browser_changed_serial_is_ignored_trusted_wins():
+    # Defect 1: serial is mutable trusted evidence, not a selection assertion. A
+    # stale/forged browser serial is ignored and the trusted serial wins.
     trusted = _device_proposals(serial="REAL")
     sel = _selection(trusted[0], serial_number="FAKE")
     resolved, errors = resolve_selected_proposals([sel], trusted)
-    assert resolved == []
-    assert errors[0]["code"] == "zendure_mqtt_proposal_conflict"
+    assert errors == []
+    assert resolved[0]["serial_number"] == "REAL"
+    assert "FAKE" not in json.dumps(resolved)
 
 
-def test_browser_changed_broker_host_never_reaches_config():
+def test_browser_changed_broker_host_is_ignored_never_reaches_config():
     trusted = _device_proposals(host="10.0.0.10")
     sel = _selection(trusted[0], broker_host="10.0.0.99")
     resolved, errors = resolve_selected_proposals([sel], trusted)
-    assert resolved == []
-    assert errors[0]["code"] == "zendure_mqtt_proposal_conflict"
+    assert errors == []
+    assert "10.0.0.99" not in json.dumps(resolved)
 
 
 def test_browser_changed_broker_ref_is_unknown():
@@ -117,22 +120,71 @@ def test_browser_changed_broker_ref_is_unknown():
     assert errors[0]["code"] == "zendure_mqtt_proposal_unknown"
 
 
-def test_browser_changed_topic_family_rejected():
+def test_browser_changed_topic_family_is_ignored_trusted_wins():
+    # Defect 1: topic family is mutable discovery evidence; a stale browser echo is
+    # ignored and the current trusted family is used.
     trusted = _device_proposals()
+    trusted[0]["topic_family"] = "legacy_zendure_json"
     sel = _selection(trusted[0], topic_family="something_else")
     resolved, errors = resolve_selected_proposals([sel], trusted)
-    assert resolved == []
-    assert errors[0]["code"] == "zendure_mqtt_proposal_conflict"
+    assert errors == []
+    assert resolved[0]["topic_family"] == "legacy_zendure_json"
 
 
-def test_browser_injected_seen_topics_rejected():
+def test_browser_injected_seen_topics_is_ignored_trusted_wins():
+    # Defect 1: observed topics grow while the same trusted proposal is selected; a
+    # stale/injected browser value is ignored and the trusted set is used.
     trusted = _d0_proposals(serial="REAL")
+    sel = _selection(trusted[0], seen_topics=["Zendure/sensor/FAKE/totalPower"])
+    resolved, errors = resolve_selected_proposals([sel], trusted)
+    assert errors == []
+    assert resolved[0]["seen_topics"] == trusted[0]["seen_topics"]
+    assert "FAKE" not in json.dumps(resolved)
+
+
+def test_stored_selection_survives_product_key_appearance():
+    # Defect 1: the trusted proposal gains a product key the browser never had; the
+    # selection still resolves and the trusted product key wins.
+    trusted = _device_proposals()
+    trusted[0]["product_key"] = "PKNEW"
+    sel = _selection(trusted[0])
+    sel.pop("product_key", None)
+    resolved, errors = resolve_selected_proposals([sel], trusted)
+    assert errors == []
+    assert resolved[0]["product_key"] == "PKNEW"
+
+
+def test_stored_selection_ignores_stale_product_key_and_model_evidence():
+    trusted = _device_proposals()
+    trusted[0]["product_key"] = "PKNEW"
+    trusted[0]["product"] = "SolarFlow 800 Pro2"
+    sel = _selection(trusted[0], product_key="PKOLD", product="Hyper 2000")
+    resolved, errors = resolve_selected_proposals([sel], trusted)
+    assert errors == []
+    assert resolved[0]["product_key"] == "PKNEW"
+    assert resolved[0]["product"] == "SolarFlow 800 Pro2"
+    assert "PKOLD" not in json.dumps(resolved)
+
+
+def test_trusted_current_fields_always_win_over_browser_echo():
+    # Defect 1: many mutable browser echoes at once are all ignored; every trusted
+    # value wins and no stale value reaches the resolved proposal.
+    trusted = _device_proposals(serial="REAL")
     sel = _selection(
-        trusted[0], seen_topics=["Zendure/sensor/FAKE/totalPower"]
+        trusted[0],
+        serial_number="STALE",
+        topic_family="stale_family",
+        product_key="STALEPK",
+        device_id="STALEDEV",
+        seen_topics=["Zendure/sensor/STALE/totalPower"],
+        broker_host="10.9.9.9",
+        connection_source="zendure_cloud_mqtt",
     )
     resolved, errors = resolve_selected_proposals([sel], trusted)
-    assert resolved == []
-    assert errors[0]["code"] == "zendure_mqtt_proposal_conflict"
+    assert errors == []
+    assert resolved[0]["serial_number"] == trusted[0]["serial_number"]
+    assert resolved[0]["config_fragment"] == trusted[0]["config_fragment"]
+    assert "STALE" not in json.dumps(resolved)
 
 
 def test_replace_grid_meter_must_be_real_boolean():

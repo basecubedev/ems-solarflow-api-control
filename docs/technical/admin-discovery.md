@@ -136,12 +136,16 @@ existing generated file.
 
 Selected Zendure MQTT proposals are not trusted by content: the browser submits
 a stable proposal `id` (and its `broker_ref`) that the backend resolves back to
-the full proposal held in current discovery state. Serial, device id, broker
-identity, topic family, capabilities and connection metadata (TLS mode,
-`tls_insecure`, non-secret `credentials_ref`) all come from that stored
-proposal; the browser may only add its selection (`replace_grid_meter`). An
-unknown, stale or forged proposal `id`, or a submitted field that conflicts with
-the stored proposal, is rejected before any config is generated. Each locally
+the full proposal held in current discovery state. Serial, device id, product
+key, broker identity, topic family, capabilities, observed topics and connection
+metadata (TLS mode, `tls_insecure`, non-secret `credentials_ref`) all come from
+that stored proposal — a mutable discovery value the browser echoes is
+**ignored**, not trusted, so a stable selection never fails merely because it
+carries a stale value after enrichment. The browser may only add its own
+selection state (`replace_grid_meter`). A selection still fails closed on an
+unknown or ambiguous `id`, a forged opaque identity token, a mismatched
+broker/account scope, or a `target`-type mismatch that would select a different
+workflow. Each locally
 discovered broker gets a deterministic, endpoint-derived `local_mqtt_<slug>_<hash>`
 `broker_ref` that stays stable whether the broker is discovered alone or
 alongside others; two brokers that share a broker id but differ in host/port/TLS
@@ -331,13 +335,39 @@ work unit, and a failing source only marks its unit failed — the draft and the
 other sources' results are untouched.
 
 The review is transport-aware around one authoritative backend identity. A
-trusted physical serial is primary across transports. Without a serial, an MQTT
-route is scoped by transport/source, broker or account reference, product key,
-device route ID and topic family where needed; Local API uses its endpoint only
-as a final fallback. The backend derives a keyed, non-reversible
-`physical_identity_token` for browser equality. Raw Cloud route IDs and full
-product/device topics are masked before browser/support exposure, and JavaScript
-never regenerates scoped route identity from those masked fields. The token is
+trusted physical serial is primary across transports. A physical serial is
+compared **case-insensitively** (the shared serial rule); a device id and product
+key are MQTT topic segments and so are compared **case-sensitively** —
+`iot/PK/DEV/…` and `iot/pk/dev/…` are distinct write addresses and never
+collapse. Without a serial, an MQTT observation carries two scoped identities: a
+**stable device anchor** (transport/source + broker or account scope + device
+route ID) and — only when a product key is known — a **precise route** that
+additionally pins the product key (the exact write address
+`iot/<productKey>/<deviceId>/…`). The anchor is deliberately coarse and stable:
+it does **not** change when the product key or topic family is later enriched, so
+a stored selection, its remembered name and its dismissal survive that
+enrichment, and the Cloud selection id is derived from the anchor token (never
+the mutable route token).
+
+Physical identity and writable-route ambiguity are separate answers. The precise
+route is what detects conflicts and addresses writes: two serial-less
+observations that share one device anchor but carry two different **known**
+product keys are two distinct routes and never merge — each stays a separate,
+control-blocked proposal (`identity_route_product_conflict`) whose browser token
+is its precise-route token (the shared anchor is withheld) so the routes never
+share a browser identity, and a missing-product observation of such a contested
+device never bridges the two routes. When a shared physical serial ties the
+observations together they remain **one** physical inverter (one proposal, one
+card), but if that inverter carries more than one precise route the write address
+is ambiguous, so output control is blocked (`identity_route_product_conflict`)
+and no product key is pinned into the writable config. Local API uses its endpoint only as a final fallback. Fresh Setup
+groups physical inverters as connected identity components (union-find), so a
+bridging observation merges every group it transitively connects, while two
+different serials never merge — not directly and not through a bridge. The
+backend derives a keyed, non-reversible `physical_identity_token` for browser
+equality. Raw Cloud route IDs and full product/device topics are masked before
+browser/support exposure, and JavaScript never regenerates scoped route identity
+from those masked fields. The token is
 helper metadata, not config source-of-truth; rotating its Admin-local key changes
 tokens, while authoritative config identity remains intact. The 32-byte HMAC key
 is stored at `$EMS_ADMIN_DATA_DIR/state/.device-identity-key` (normally
@@ -670,7 +700,17 @@ alias even after a physical serial is later learned.
   `physical_identity_alias_tokens` (every alias) — plus a physical serial where
   it is already allowed to be shown. Raw MQTT route ids are never sent to the
   browser as identity material, and the tokens are derived, not authoritative
-  config state. Fresh Setup and Maintenance share the same alias semantics.
+  config state.
+- **Fresh Setup and Maintenance agree.** Both group by trusted alias
+  intersection (never by one preferred identity, a display name or a masked
+  route), so the same evidence yields the same result in either flow. In Fresh
+  Setup a route-only inverter selected before its serial is known keeps its
+  **custom name** and its **dismissal** once the serial (and its token) appears,
+  renders **one** selected card, and produces **one** device in the preview. A
+  route claiming two different serials is blocked the same way it is in
+  Maintenance. The full alias set travels with a selection through serialization,
+  local storage, reload and the preview payload, but the backend stays
+  authoritative — browser alias tokens are grouping hints only.
 
 ## Cloud route redaction at external boundaries
 
@@ -808,6 +848,20 @@ against exactly the same combined set. Cloud proposals carry
   are recorded, so no Admin-only mode string reaches config preview.
 - Local proposal ids keep their `:g<generation>` stamp from the broker store;
   cloud proposals take no part in that generation/TTL bookkeeping.
+- A **Cloud** proposal's selection id is anchored to its scoped-route opaque
+  token (`zendure-mqtt:<route-token>:<broker_ref>`), so it stays **stable while
+  the physical serial is enriched** — a stored route-only Cloud selection still
+  resolves after the same route gains a serial, without re-adding the inverter.
+  Local proposals keep their serial-based id (local generation freshness stays
+  part of the id); a stale local route-only selection is instead recovered by an
+  alias-token remap in trust resolution. Either way, a submitted selection whose
+  id predates enrichment resolves to the current proposal only when a trusted
+  alias token intersects within the same `broker_ref`; a tampered token, an
+  ambiguous match or an unrelated stale id still fails closed. A selection stored
+  before route ids were compared case-sensitively may carry a case-folded token;
+  it is remapped server-side only, and only when it resolves to exactly one
+  current proposal in the same scope — two case-distinct routes that fold to one
+  token fail closed rather than merge.
 
 ### Docker networking
 

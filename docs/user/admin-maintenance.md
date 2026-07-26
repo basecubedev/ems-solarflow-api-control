@@ -270,7 +270,10 @@ This path inspects and edits an existing installation.
   trusted identity can never be added as two separate API and MQTT devices;
   contradictory evidence — the **same Cloud route claiming a different physical
   serial** — is shown as a blocked **Identity conflict** and fails validation
-  instead of guessing or merging. Browser-facing
+  instead of guessing or merging. Fresh Setup applies the identical rules: a
+  route-only Cloud inverter selected in Setup keeps its custom name and its
+  dismissal, renders one card and produces one device in the preview once the
+  same route later reports a serial. Browser-facing
   status and support data retain trusted physical serials and useful non-secret
   context, but remove credentials and expose only masked shapes for Cloud route,
   product and topic identifiers — never their full account-scoped values.

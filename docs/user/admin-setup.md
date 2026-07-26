@@ -129,7 +129,14 @@ the Admin Console (see **Start** above), open `http://127.0.0.1:8090`, and pick
    physical inverter between Local API and MQTT preserves its current EMS name.
    A device also reachable over another transport offers *Use … instead* to
    switch manually — a manual choice is kept even if you later change discovery
-   priority — and **Add more devices** lists unconfigured MQTT devices too.
+   priority — and **Add more devices** lists unconfigured MQTT devices too. A
+   serial-less Cloud MQTT inverter you select before its serial is known is
+   recognized as the **same** inverter once discovery later reports the same
+   Cloud route carrying a physical serial: it keeps your custom name and any
+   dismissal, stays a single card, and is never offered as a second device to
+   add. (Identity uses the trusted serial and scoped route, never a raw Cloud
+   route id or display name; two different serials on one route are blocked as an
+   *Identity conflict* rather than merged.)
    *Add a device
    manually* also lets you add a read-only **Zendure MQTT broker** and one or
    more **Zendure MQTT devices** telemetry discovery could not reach. Pick a
