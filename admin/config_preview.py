@@ -5,6 +5,7 @@ import copy
 import json
 from pathlib import Path
 
+from admin.device_common_fields import materialize_common_device_defaults
 from admin.install_context import detect_install_context
 from admin.inverter_names import next_compact_inverter_name
 from admin.releases import ReleaseError
@@ -104,7 +105,10 @@ def _upsert_zendure_mqtt_device(devices, base_index_by_identity, entry, resolved
         base_index_by_identity.get(identity) if identity is not None else None
     )
     if existing_index is None:
-        devices.append(entry)
+        # A brand-new device materializes the central common defaults, exactly
+        # like a device added through Maintenance; a rebind below never touches
+        # the existing device's stored values.
+        devices.append(materialize_common_device_defaults(entry))
         return "added"
 
     device = devices[existing_index]
@@ -224,6 +228,7 @@ def _merge_zendure_mqtt_proposals(preview, proposals, validation, cloud_auth_ava
     allocation_count = len(devices)
     added = 0
     control_added = 0
+    cloud_control_added = 0
     for proposal in proposals[:_MAX_ZENDURE_MQTT_PROPOSALS]:
         if not isinstance(proposal, dict):
             continue
@@ -302,6 +307,11 @@ def _merge_zendure_mqtt_proposals(preview, proposals, validation, cloud_auth_ava
             added += 1
             if is_control_zendure_mqtt_device_config(entry):
                 control_added += 1
+                broker = (preview.get("zendure_mqtt", {}).get("brokers", {})).get(
+                    resolved_ref, {}
+                )
+                if broker.get("source") == SOURCE_ZENDURE_CLOUD_MQTT:
+                    cloud_control_added += 1
 
     # Rebinds reuse the base device, so a profile provisioned for such a proposal
     # would otherwise linger unreferenced; prune only newly-created ones.
@@ -317,6 +327,16 @@ def _merge_zendure_mqtt_proposals(preview, proposals, validation, cloud_auth_ava
                 "zendure_mqtt_telemetry_only",
                 f"{telemetry_added} Zendure MQTT {noun} will be written without "
                 "output control. Output writes stay off for them.",
+            )
+        )
+    if cloud_control_added:
+        validation["warnings"].append(
+            _issue(
+                "zendure_cloud_mqtt_single_controller",
+                "Zendure Cloud MQTT output control selected: use only one "
+                "active controller. Disable Zendure HEMS, Smart Matching, "
+                "Zendure schedules and any other system that writes inverter "
+                "power.",
             )
         )
     if control_added:

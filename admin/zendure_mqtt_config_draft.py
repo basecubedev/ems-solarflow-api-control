@@ -17,6 +17,10 @@ unsupported control request is downgraded to telemetry-only.
 import copy
 import re
 
+from admin.device_common_fields import (
+    apply_common_device_values,
+    common_device_draft_values,
+)
 from ems.config_catalog import ZENDURE_MQTT_GENERATIONS
 from ems.zendure_mqtt.capability import mqtt_output_control_capability
 from ems.zendure_mqtt.config_entries import (
@@ -553,7 +557,8 @@ def zendure_mqtt_device_draft(device):
         write_protocol=write_protocol or None,
     )
     has_write_target = bool(_mqtt_str(mqtt, "product_key") or write_topic)
-    return {
+    draft = common_device_draft_values(device)
+    draft.update({
         "kind": "zendure_mqtt",
         "original_name": name,
         "name": name,
@@ -605,7 +610,8 @@ def zendure_mqtt_device_draft(device):
             "read_soc": read_soc,
             "write_output_limit": write_output_limit,
         },
-    }
+    })
+    return draft
 
 
 def _apply_output_control(device, item, *, new_device, model_changed=False):
@@ -785,6 +791,11 @@ def apply_zendure_mqtt_draft_fields(device, item):
     _apply_output_control(
         device, item, new_device=new_device, model_changed=model_changed
     )
+
+    # Common (transport-independent) tuning values round-trip through the same
+    # catalog-derived projection as Local API devices; keys absent from the
+    # draft stay untouched so a no-op apply remains byte-exact.
+    apply_common_device_values(device, item)
 
     enabled = bool(item.get("enabled", True))
     if "enabled" in device or item.get("has_enabled_key") or not enabled:

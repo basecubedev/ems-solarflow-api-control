@@ -226,6 +226,37 @@ This path inspects and edits an existing installation.
   migrated or renumbered when you open the editor, remove/reorder another
   device, run discovery, or apply an unrelated change.
 
+  Every new inverter — manual or discovered, Local API or Zendure MQTT — starts
+  with the same central default values (smart mode, output limit, PV size,
+  PV priority, battery size, SoC limits) from the config template/catalog, and
+  both transports edit the identical common field set on their cards. Another
+  configured inverter's values are never used as a template for a new one, and
+  the values you see on a new card are exactly what preview and apply write.
+  The default output limit is the generic central default (800 W), not a
+  model-specific value — review it for your hardware. PV size is a
+  configurable estimate for power sharing; discovery cannot measure the
+  connected PV array. Existing explicit values are never replaced by new
+  defaults: a device from an older config that lacks some of these values
+  keeps its stored shape on a no-op apply (the missing values are shown as
+  inherited defaults in the editor, and the EMS runtime falls back to its
+  built-in defaults), and materializes the central defaults only when you edit
+  the device or switch its transport — the preview shows exactly which values
+  would be written before you apply.
+
+  One physical inverter (identified by its serial number) is always one config
+  entry with one selected connection. When discovery finds a serial that is
+  already configured over another transport — for example a Local API scan
+  sees an inverter you configured over MQTT, or an MQTT proposal matches a
+  configured Local API inverter — the review offers **Use Local API instead**
+  / **Use Local MQTT instead** / **Use Zendure Cloud MQTT instead** on that
+  device rather than a second **Add as inverter** action. Switching the
+  transport replaces the connection of the same logical device: the configured
+  name, enabled state, and all common tuning values are preserved (also across
+  a rename in the same draft), only the connection fields change, and stale
+  fields of the previous transport are removed. The same serial can never be
+  added as two separate API and MQTT devices; a draft whose identity evidence
+  is contradictory fails validation instead of guessing.
+
   **Start discovery** searches all three sources, like the setup flow: the
   local network (mDNS refresh plus network scans), local MQTT brokers (a fresh
   read-only listen on reachable brokers, trying anonymous access and every

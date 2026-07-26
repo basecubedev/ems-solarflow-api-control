@@ -21,6 +21,7 @@ from ems.config_catalog import (
     get_config_feature_sections,
 )
 from ems.mqtt_control.zendure_profiles import hardware_profile_selector_options
+from admin.device_common_fields import coerce_field_value
 from admin.zendure_mqtt_config_draft import generation_supports_output_control
 
 
@@ -219,58 +220,9 @@ def _device_field_index():
     return index
 
 
-def _coerce(field, value):
-    if value is None:
-        return None
-    field_type = field.get("type")
-    if field_type == "boolean":
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            return value.strip().lower() in ("1", "true", "yes", "on")
-        return bool(value)
-    if field_type == "integer":
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return value
-    if field_type == "number":
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            return value
-        return int(number) if number.is_integer() else number
-    if field_type in ("month_list", "integer_list"):
-        return _coerce_int_list(value)
-    if field_type == "string_list":
-        return _coerce_string_list(value)
-    return value
-
-
-def _coerce_int_list(value):
-    items = value
-    if isinstance(value, str):
-        items = [part for part in value.replace(";", ",").split(",")]
-    if not isinstance(items, (list, tuple)):
-        return value
-    result = []
-    for item in items:
-        text = str(item).strip()
-        if not text:
-            continue
-        try:
-            result.append(int(float(text)))
-        except (TypeError, ValueError):
-            return value
-    return result
-
-
-def _coerce_string_list(value):
-    if isinstance(value, (list, tuple)):
-        return [str(item).strip() for item in value if str(item).strip()]
-    if isinstance(value, str):
-        return [part.strip() for part in value.split(",") if part.strip()]
-    return value
+# Catalog field coercion is shared with the Zendure MQTT draft path; it lives
+# in admin.device_common_fields (below this module in the import graph).
+_coerce = coerce_field_value
 
 
 def _set_path(config, path, value):

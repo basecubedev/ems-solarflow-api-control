@@ -1,10 +1,12 @@
-# MQTT write-latency probe
+# MQTT hardware control probe (write latency + effectiveness)
 
-A developer measurement tool that answers one question: **how fast does an
-`outputLimit` value written over MQTT actually reach the inverter?**
+A developer tool that answers two questions: **does a power command written over
+MQTT actually take effect on the inverter, and how fast?**
 
-It writes the setpoint over MQTT (the same wire format the EMS control loop
-publishes) and reads the value back over the device's **local HTTP API**, polled
+It publishes the **exact production command** the EMS control loop would build
+(the atomic model-specific property set — `smartMode`/`acMode`/`outputLimit`/
+`inputLimit` for ZenSDK models — at QoS 1, never retained, on the `iot/…`
+topic) and reads the state back over the device's **local HTTP API**, polled
 fast. This sidesteps the ~30 s MQTT telemetry cadence: the HTTP
 `/properties/report` endpoint can be read several times per second, so the
 measured latency is the real end-to-end time from *"publish to broker"* to *"new
@@ -62,7 +64,17 @@ after itself:
   it — the default is dry-run), the probe refuses to write, exactly like the EMS.
   A live control install already runs with `dry_run: false`; that is what lets the
   probe measure. `--confirm-writes` does not override `dry_run`.
-- **The initial `outputLimit` is restored** at the end of the run (also on error).
+- **The complete initial power state is restored** — `smartMode`, `acMode`,
+  `outputLimit` **and** `inputLimit`, captured before the first write — through
+  the production property-write path on success, failure, timeout and
+  interruption, then **verified over HTTP**. A failed restore or verification
+  makes the run exit non-zero.
+- **Mode-changing tests need double confirmation.** `--mode-test` additionally
+  requires `--confirm-mode-changes`, and it only runs when the device is
+  currently *not* in smart AC output mode — the probe never forces a device out
+  of output mode.
+- **A retained control command is refused outright** (a retained setpoint would
+  replay on every broker reconnect).
 - **`config.json` is never modified.** The startup config-upgrade write step is
   skipped, and no control loop is started.
 
@@ -85,8 +97,21 @@ The probe needs the same runtime the EMS has: Python with `requests` and
 network access to the broker and the inverter. Select the inverter with
 `--api-ip <ip>` and append one of the three command shapes:
 
-- `--api-ip <ip> --dry-preview` — resolve the device and print the plan, writing nothing.
-- `--api-ip <ip> --confirm-writes --poll-interval 1 --samples 12` — measure.
+- `--api-ip <ip> --dry-preview` — resolve the device and print the full
+  operation plan (topic, QoS, retain, exact properties, effective gates, the
+  current `smartMode`/`acMode`/`inputLimit`/`outputLimit` state and the restore
+  plan), writing nothing.
+- `--api-ip <ip> --confirm-writes --poll-interval 1 --samples 12` — setpoint
+  landing test: measure publish-to-HTTP-visible latency and verify the
+  commanded mode landed with each sample.
+- `--api-ip <ip> --confirm-writes --verify-output` — additionally classify the
+  physical reaction per sample: `output_reacted`,
+  `no_output_possible_soc_at_minimum` (setpoint landed but conditions allow no
+  output) or `not_reacted`. A landed setpoint alone is **never** reported as
+  "power control works".
+- `--api-ip <ip> --mode-test --confirm-writes --confirm-mode-changes` — mode
+  recovery test: from a non-output mode, prove the atomic command switches the
+  required mode and lands the target, then restore the initial state.
 - `--api-ip <ip> --confirm-writes --poll-interval 1 --markdown` — measure and print the docs table.
 
 A 1 s poll reports latency in 1 s steps. For sub-second resolution lower
@@ -168,6 +193,11 @@ python3 scripts/mqtt_write_latency_probe.py --api-ip 192.168.1.50 --confirm-writ
 | `--match-tolerance W` | `5` | Watts of jitter tolerated when detecting the change. |
 | `--connect-timeout S` | `15` | Wait for the MQTT broker to connect. |
 | `--no-contention-check` | check on | Do not abort when a foreign writer changes the value. |
+| `--verify-output` | off | After a landed setpoint, classify the physical output reaction. |
+| `--output-timeout S` | `30` | Wait for the physical output to react. |
+| `--output-tolerance W` | `50` | Tolerance for the physical output check. |
+| `--mode-test` | off | Mode recovery test (device must currently be in a non-output mode). |
+| `--confirm-mode-changes` | off | Required (with `--confirm-writes`) for mode-changing tests. |
 
 The two `--values` must differ and must stay within the device `max_power`; the
 probe toggles between them so every sample is a clearly detectable change (robust

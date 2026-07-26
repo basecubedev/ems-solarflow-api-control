@@ -769,6 +769,18 @@ Expected live-write event:
 event=write_output_limit_published
 ```
 
+For an MQTT device this event means only that the command was **dispatched to
+the transport** — never that the device accepted it. Follow the command
+lifecycle events to see what actually happened:
+
+```text
+mqtt_publish_delivered        broker acknowledged the QoS 1 publish (PUBACK)
+device_command_acknowledged   correlated device reply (legacy invoke profiles)
+telemetry_confirmed           telemetry proved the command effective
+confirmation_timed_out        no matching telemetry before the deadline
+external_control_suspected    a foreign writer keeps overriding a confirmed target
+```
+
 Other relevant events:
 
 ```text
@@ -777,7 +789,35 @@ device_disabled_skip_write
 offline_skip_write
 deadband_skip_write
 write_output_limit_error
+state_reconciliation_skipped
 ```
+
+### Cloud MQTT writes are published but the inverter never changes
+
+Symptoms:
+
+- `write_output_limit_published` appears for the cloud device
+- repeated `confirmation_timed_out` warnings
+- inverter output never follows the target
+
+Check, in order:
+
+1. `confirmation_timed_out` includes `broker_delivery`. `timeout` there means
+   the broker never acknowledged the publish — check the cloud credentials:
+   bidirectional cloud MQTT requires the Zendure App / Home Assistant
+   authorization credentials from the device-list login; the public read-only
+   developer account silently drops writes.
+2. `broker_delivery=delivered` with no confirmation means the broker accepted
+   the command but the device did not apply it — verify the pinned
+   `hardware_profile` matches the physical model and the device identifiers
+   (`product_key`, `device_id`) are correct.
+3. `external_control_suspected` means another controller is overriding EMS:
+   disable Zendure HEMS, Smart Matching, Zendure schedules and any other
+   system that writes inverter power. Only one controller may run.
+4. Validate the full path with the hardware probe
+   ([mqtt-write-latency-probe.md](../developer/mqtt-write-latency-probe.md)):
+   stop the EMS, run `--dry-preview`, then `--confirm-writes` and check that
+   the setpoint (and with `--verify-output` the physical output) lands.
 
 More detail: [safety-model.md](safety-model.md),
 [configuration.md](configuration.md), [runtime-state.md](runtime-state.md).

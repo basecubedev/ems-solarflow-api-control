@@ -284,6 +284,62 @@ is invented without verified evidence. Machine-readable errors:
 `invalid_power_target`, `target_above_maximum`, `charge_target_unsupported`,
 `unsupported_power_operation`.
 
+## ZenSDK operation contracts
+
+A resolved ZenSDK profile never publishes a bare `outputLimit`: a device sitting
+in an inactive mode (`smartMode=0` / `acMode=1`) ignores a lone setpoint, and
+sending the mode fields separately would race it. Every ZenSDK power command is
+the **atomic** source-backed property set (`ems/mqtt_control/zensdk_operations.py`,
+mirroring the reference implementation):
+
+```json
+// discharge (target > 0)
+{"smartMode": 1, "acMode": 2, "outputLimit": 300, "inputLimit": 0}
+// idle (target == 0)
+{"smartMode": 1, "acMode": 2, "outputLimit": 0, "inputLimit": 0}
+```
+
+Idle deliberately stays in smart output regulation at 0 W instead of dropping to
+`smartMode: 0` standby (as the reference `power_off` does): the EMS five-second
+loop crosses 0 W routinely and must not toggle a flash-persistent operating mode
+on every crossing; long standby phases are governed upstream (strict night
+idle). AC charge (`{"smartMode": 1, "acMode": 1, "outputLimit": 0,
+"inputLimit": <w>}`) is known from the reference implementation but **fails
+closed** — no ZenSDK profile enables charge until it is validated on hardware.
+
+**Write topic.** `properties/write` commands are always addressed on
+`iot/<productKey>/<deviceId>/properties/write` — for every topic family. Devices
+on the leading-slash report family publish their reports on `/…` topics but
+accept commands on `iot/…` only (live cloud capture: a getAll published to
+`iot/…/properties/read` is answered; the reference implementation writes to
+`iot/…` unconditionally). A leading-slash write topic is silently undelivered
+and is never built.
+
+**QoS and retain.** Every control and property publish is QoS 1 and never
+retained (`CONTROL_PUBLISH_QOS`): QoS 1 makes broker delivery observable via
+PUBACK, and a retained setpoint would be replayed to the device on every broker
+reconnect. The builder's QoS/retain metadata reaches the paho client unchanged.
+
+## Transport-neutral property writes and state reconciliation
+
+State/mode writes go through the per-device `write_properties()` capability
+(`ems/property_writes.py` dispatches): an HTTP device POSTs to its local
+`/properties/write`, an MQTT ZenSDK device publishes to its own
+`properties/write` topic (only its model-declared `state_property_writes` —
+`smartMode`/`acMode`/`outputLimit`/`inputLimit` — with range-checked integer
+values), legacy automation profiles reject arbitrary property writes, and a
+device with no capability fails closed. The controller never touches
+`dev.session` and never falls through from one transport to another.
+
+State reconciliation itself remains **API-only** (`supports_state_reconciliation
+= False` on MQTT devices); every reconciliation path skips an unsupported
+transport with an explicit `state_reconciliation_skipped` event. The gate policy
+is one resolver (`resolve_state_write_gate`): the device transport's own write
+gate (`allow_hardware_writes` / `allow_mqtt_local_control_writes` /
+`allow_mqtt_zendure_control_writes`) **plus**
+`allow_state_reconciliation_writes` — MQTT state writes never depend on the HTTP
+`allow_hardware_writes` gate.
+
 ## Custom write escape hatch restrictions
 
 `custom_properties_write` requires an explicit advanced/custom mode and an
@@ -323,7 +379,12 @@ queued → published┤─→ telemetry_confirmed                      (no-ack, 
                   └─→ timed_out                                (ack profile only)
 ```
 
-- `published` — the broker accepted the publish (transport only).
+- `published` — the local MQTT client accepted the publish (transport
+  submission only, `rc == 0`). Broker delivery is tracked separately per
+  command: `broker_delivery` moves `pending` → `delivered` when the QoS 1
+  PUBACK is observed, or `timeout` when it never arrives within the bounded
+  window (`untracked` when the transport exposes no mid). Broker delivery is
+  still **not** device acceptance.
 - `acknowledged` — a device reply correlated by `messageId` + `deviceId` reported
   success. A wrong-id, wrong-device, stale or duplicate reply is ignored. Only
   profiles with a **verified reply contract** (legacy `function/invoke`) reach it.
@@ -331,14 +392,18 @@ queued → published┤─→ telemetry_confirmed                      (no-ack, 
 - `timed_out` — an **ack profile** saw no reply before the acknowledgement
   timeout. A no-ack profile has no acknowledgement to wait for and never uses
   this state.
-- `telemetry_confirmed` — the commanded output was actually observed in telemetry
-  **newer than the publish** and within the policy tolerance. An **ack profile**
-  confirms only an already-`acknowledged` command; a **no-ack profile** (ZenSDK
-  `properties/write`) confirms its `published` command **directly**, since it has
-  no acknowledgement to wait for. Retained pre-command, stale, wrong-device or
+- `telemetry_confirmed` — telemetry proved the command **effective**, not merely
+  echoed. An atomic ZenSDK command carries its expected property set and is
+  confirmed only when `outputLimit` is within tolerance, `acMode` matches
+  exactly, and `smartMode`/`inputLimit` match when telemetry reports them; the
+  `outputLimit` metric's **own** report time (the aggregator records per-metric
+  timestamps) must be newer than the publish, so a merged snapshot refreshed by
+  an unrelated message — or a superseded command's late echo — can never
+  confirm it. An **ack profile** confirms only an already-`acknowledged`
+  command; a **no-ack profile** (ZenSDK `properties/write`) confirms its
+  `published` command directly. Retained pre-command, stale, wrong-device or
   out-of-tolerance telemetry never confirms, and a command is never reported
-  `confirmed` from a publish or ack alone. Acknowledgement correlation stays
-  strict: an ack profile's published command is never confirmed from telemetry.
+  `confirmed` from a publish, PUBACK or ack alone.
 - `completed_unconfirmed` — the strongest honest signal on a profile with **no
   reliable telemetry confirmation**: the acknowledgement (ack profile) or the
   successful publish (no-ack, non-confirmable profile — completed at publish
@@ -349,9 +414,10 @@ queued → published┤─→ telemetry_confirmed                      (no-ack, 
   acknowledgement (ack profile) or from the **publish** (no-ack profile). The slot
   is released and the uncertainty exposed rather than blocking control forever.
   This is **never** conflated with a missing acknowledgement (`timed_out`).
-- `superseded` — a safety preemption retired this command out of the active slot
-  and published a safer target in its place (see *Live wiring*). It is terminal,
-  so a late reply or late telemetry for it can never confirm the replacement.
+- `superseded` — a newer command retired this one out of the active slot (a
+  safety preemption, or a changed target replacing an unconfirmable no-ack
+  command; see *Live wiring*). It is terminal, so a late reply or late
+  telemetry for it can never confirm the replacement.
 
 Every state after `published` is terminal, so a command can never occupy the
 single active slot indefinitely. The per-profile confirmation policy
@@ -369,8 +435,16 @@ device:
 
 - no active command → publish immediately;
 - the same target while active → coalesce (no republish);
-- a *changed* non-safety target while active → store the single
-  **`pending_latest_target`** (never an unbounded queue) and publish nothing yet;
+- a *changed* target while a **no-ack** command awaits telemetry confirmation →
+  **supersede**: the in-flight command settles only via slow telemetry (up to
+  the ~30 s report cadence on the cloud broker), so the latest intent retires it
+  as terminal `superseded` and publishes now — regulation is never capped at
+  one command per report cycle, and a dead write path can never hide behind
+  queued targets. Publish rate stays bounded by the controller's own
+  deadband/ramp upstream;
+- a *changed* non-safety target while an **ack-capable** command is in flight →
+  store the single **`pending_latest_target`** (never an unbounded queue); its
+  acknowledgement window is short and bounded;
 - a **safety reduction** while active → **preempt**: a full stop to 0 W, or a
   reduction of at least `safety_preempt_margin_w` (default 300 W), retires the
   in-flight command as terminal `superseded` and publishes the safer target
@@ -401,6 +475,27 @@ settles) is published *inside the device client* on a subsequent read cycle, not
 through a controller `set_output_limit()` call, so it does not raise a second
 `write_output_limit_published` event; the eventual publish is instead visible in
 the device's `describe()` diagnostics (`active_command` / `last_command`).
+
+Command lifecycle transitions emit their own honest events:
+`mqtt_publish_delivered` (PUBACK observed, debug), `device_command_acknowledged`
+/ `device_command_rejected` (correlated replies), `telemetry_confirmed` (with
+`elapsed_ms`), `confirmation_timed_out` (WARNING — `broker_delivery` in the
+event separates "the broker never acknowledged the publish" from "delivered but
+the device ignored or overrode it"), `device_command_ack_timed_out`, and
+`external_control_suspected`. `write_output_limit_published` remains a
+**dispatch** event: it never means device success.
+
+### Foreign-writer detection
+
+After a locally **confirmed** target, two successive strictly-newer telemetry
+reports whose `outputLimit` is materially away from it — with no local command
+in flight — raise a conservative `external_control_suspected` WARNING and set
+the flag (with expected/observed watts) in `describe()`. The report names
+evidence only, never a specific controller; a matching report resets the streak
+and a new local confirmation clears the flag. Operators running Cloud MQTT
+control must disable Zendure HEMS, Smart Matching, Zendure schedules and any
+other simultaneous controller (the Admin preview/apply and `diagnose` surface
+this advisory as `zendure_cloud_mqtt_single_controller`).
 
 The control client subscribes to each device's verified reply topic —
 `iot/<productKey>/<deviceId>/function/invoke/reply` (leading-slash family:
@@ -445,8 +540,10 @@ is **never** true while the broker is disconnected. The report includes
 only), `power_write_profile`, `supported_operations`,
 `controller_reachable_operations`, `control_block_reason`,
 `command_ack_timeout_seconds`, `confirmation_timeout_seconds`,
-`telemetry_confirmation_supported`, `pending_target`, `confirmation_deadline`, a
-structured `active_command` and `last_command`
+`telemetry_confirmation_supported`, `pending_target`, `confirmation_deadline`,
+`last_confirmed_target_w`, `external_control_suspected` (+
+`external_control_detail`), and a structured `active_command` / `last_command`
 (`{message_id, device_id, device_key, operation, target_power_w, topic, state,
-response_code, response_message}`) — replacing the ambiguous single
-`control_enabled` flag (kept for compatibility, alongside `last_command_state`).
+response_code, response_message, broker_delivery}`) — replacing the ambiguous
+single `control_enabled` flag (kept for compatibility, alongside
+`last_command_state`).

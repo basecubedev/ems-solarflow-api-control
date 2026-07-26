@@ -3948,6 +3948,27 @@ function normalizeSerial(value) {
   return String(value == null ? "" : value).trim().toLowerCase();
 }
 
+// One physical inverter identity across transports: the physical serial wins
+// (Local API sn, MQTT serial_number); the MQTT routing id is a fallback only
+// when no physical serial exists, because cloud routing ids may differ from
+// the serial and must never shadow one. Placeholder (YOUR_...) and
+// display-masked values never identify a device. Kept equivalent to the
+// backend ems.zendure_mqtt.config_entries.zendure_physical_identity.
+function physicalInverterIdentity(device) {
+  if (!device) return "";
+  const usable = (value) => {
+    if (typeof value === "string" && (value.includes("•") || value.includes("…"))) {
+      return "";
+    }
+    const key = normalizeSerial(value);
+    if (!key || key.startsWith("your_") || key.startsWith("your-")) return "";
+    return key;
+  };
+  const serial = usable(device.sn) || usable(device.serial_number);
+  if (serial) return serial;
+  return usable(device.mqtt && device.mqtt.device_id) || usable(device.device_id);
+}
+
 function mqttSourceOfConnection(connectionSource) {
   return String(connectionSource || "") === "zendure_cloud_mqtt"
     ? "zendure_mqtt"
@@ -11624,15 +11645,23 @@ function mconfigCatalogControl(field, value, onChange, opts) {
       label: String(opt),
     }));
     // Hardware rows show an unset value as "—" instead of silently displaying
-    // the first option; picking a real value stays an explicit edit.
+    // the first option; picking a real value stays an explicit edit. The
+    // effective inherited default is named so the row is never blank.
     if (opts && opts.allowUnset && !options.some((opt) => opt.value === current)) {
-      options.unshift({ value: "", label: "—" });
+      options.unshift({
+        value: "",
+        label: opts.defaultValue != null ? "— (default: " + opts.defaultValue + ")" : "—",
+      });
     }
     return mconfigSelectControl(current, options, onChange);
   }
   const numeric = field.type === "integer" || field.type === "number";
   const display = Array.isArray(value) ? value.join(", ") : value;
-  return mconfigTextControl(display, onChange, numeric ? "number" : "text");
+  const input = mconfigTextControl(display, onChange, numeric ? "number" : "text");
+  if (opts && opts.defaultValue != null && (value == null || value === "")) {
+    input.placeholder = String(opts.defaultValue) + " (default)";
+  }
+  return input;
 }
 
 function mconfigCatalogRow(field, value, onChange, opts) {
@@ -12293,6 +12322,26 @@ function mconfigNextInverterName(excludeDevice) {
   );
 }
 
+// Central common defaults for a new inverter, served with the maintenance
+// catalog payload (catalog.default_device.common). The backend merge
+// re-materializes the same values, so these are a usability prefill, never
+// the authority.
+function mconfigDeviceCommonDefaults() {
+  const catalog = mconfigState.catalog || {};
+  const payload = catalog.default_device || {};
+  return payload.common && typeof payload.common === "object"
+    ? payload.common
+    : {};
+}
+
+function mconfigApplyCommonDefaults(device) {
+  const defaults = mconfigDeviceCommonDefaults();
+  for (const key of Object.keys(defaults)) {
+    if (device[key] == null) device[key] = defaults[key];
+  }
+  return device;
+}
+
 function renderMaintenanceZendureMqttDevice(device, index) {
   const body = document.createElement("div");
   body.className = "mconfig-fields feature-fields";
@@ -12554,6 +12603,17 @@ function renderMaintenanceZendureMqttDevice(device, index) {
     )
   );
 
+  // The MQTT editor renders the same common tuning fields as the Local API
+  // editor (one shared renderer) below its transport-specific connection
+  // block; a Local API IP field is never shown for an MQTT device.
+  const wrapper = document.createElement("div");
+  wrapper.append(
+    body,
+    renderCommonInverterFields(device, () => {
+      card.meta.textContent = mconfigMqttDeviceSummary(device);
+    })
+  );
+
   const id = "maintenance-mqtt-device-" + index;
   const model = mconfigHardwareModelLabel(device.hardware_model);
   card = mconfigHardwareCard({
@@ -12563,7 +12623,7 @@ function renderMaintenanceZendureMqttDevice(device, index) {
     model: device.alternative_layout ? model + " · alternative topic layout detected" : model,
     meta: mconfigMqttDeviceSummary(device),
     enabled: device.enabled !== false,
-    body,
+    body: wrapper,
     onRemove: () => {
       mconfigState.openHardware.delete(id);
       mconfigState.draft.devices.splice(index, 1);
@@ -12610,24 +12670,26 @@ function mconfigAddZendureMqttDevice() {
   const devices = mconfigState.draft.devices || (mconfigState.draft.devices = []);
   const generations = mconfigGenerations();
   const preferred = generations.find((g) => g.default) || generations[0];
-  devices.push({
-    kind: "zendure_mqtt",
-    original_name: null,
-    name: mconfigNextInverterName(),
-    enabled: true,
-    has_enabled_key: true,
-    serial_number: "",
-    device_id: "",
-    product_key: "",
-    hardware_generation: preferred ? preferred.id : "",
-    hardware_model: "",
-    power_write_profile: null,
-    alternative_layout: false,
-    output_control: false,
-    supports_output_control: false,
-    control_readiness: { ready: false, reason: "hardware_profile_missing" },
-    capabilities: { read_power: true, read_soc: true, write_output_limit: false },
-  });
+  devices.push(
+    mconfigApplyCommonDefaults({
+      kind: "zendure_mqtt",
+      original_name: null,
+      name: mconfigNextInverterName(),
+      enabled: true,
+      has_enabled_key: true,
+      serial_number: "",
+      device_id: "",
+      product_key: "",
+      hardware_generation: preferred ? preferred.id : "",
+      hardware_model: "",
+      power_write_profile: null,
+      alternative_layout: false,
+      output_control: false,
+      supports_output_control: false,
+      control_readiness: { ready: false, reason: "hardware_profile_missing" },
+      capabilities: { read_power: true, read_soc: true, write_output_limit: false },
+    })
+  );
   mconfigState.openHardware.add("maintenance-mqtt-device-" + (devices.length - 1));
   renderMaintenanceInverters();
 }
@@ -12637,6 +12699,52 @@ function mconfigAddZendureMqttDevice() {
 // name/ip/sn are identity fields: they always write (a cleared IP is a real
 // edit), while other catalog values drop back to "unset" on an emptied input.
 const MCONFIG_DEVICE_IDENTITY_KEYS = new Set(["name", "ip", "sn"]);
+
+// The device SN key differs between config (sn) and catalog (devices[].sn);
+// deviceFieldKey maps catalog paths onto the draft device keys directly.
+function mconfigDeviceFieldRow(device, field, updateMeta) {
+  const key = deviceFieldKey(field.path);
+  const identity = MCONFIG_DEVICE_IDENTITY_KEYS.has(key);
+  const defaults = mconfigDeviceCommonDefaults();
+  return mconfigAttachOverrideBadge(
+    mconfigCatalogRow(
+      field,
+      device[key],
+      (v) => {
+        if (!identity && String(v).trim() === "") delete device[key];
+        else device[key] = v;
+        if (updateMeta) updateMeta();
+      },
+      {
+        allowUnset: !identity,
+        defaultValue: identity ? null : defaults[key],
+      }
+    ),
+    mconfigDeviceOverrideEntry(device.original_name, key)
+  );
+}
+
+// Common (transport-independent) tuning fields: one renderer for the Local
+// API and Zendure MQTT editors, driven by the shared hardware catalog so both
+// transports always offer the identical common field set.
+function renderCommonInverterFields(device, updateMeta) {
+  const fields = mconfigDeviceCatalogFields().filter(
+    (field) => !MCONFIG_DEVICE_IDENTITY_KEYS.has(deviceFieldKey(field.path))
+  );
+  return mconfigLevelledFields(fields, (field) =>
+    mconfigDeviceFieldRow(device, field, updateMeta)
+  );
+}
+
+// Local API connection identity (name/ip/sn); never rendered for MQTT devices.
+function renderLocalApiConnectionFields(device, updateMeta) {
+  const fields = mconfigDeviceCatalogFields().filter((field) =>
+    MCONFIG_DEVICE_IDENTITY_KEYS.has(deviceFieldKey(field.path))
+  );
+  return mconfigLevelledFields(fields, (field) =>
+    mconfigDeviceFieldRow(device, field, updateMeta)
+  );
+}
 
 function mconfigInverterSummary(device) {
   const endpoint = String(device.ip || "") + (device.port ? ":" + String(device.port) : "");
@@ -12668,28 +12776,15 @@ function renderMaintenanceInverter(device, index) {
     )
   );
 
-  // The device SN key differs between config (sn) and catalog (devices[].sn);
-  // deviceFieldKey maps catalog paths onto the draft device keys directly.
-  const fields = mconfigLevelledFields(mconfigDeviceCatalogFields(), (field) => {
-    const key = deviceFieldKey(field.path);
-    const identity = MCONFIG_DEVICE_IDENTITY_KEYS.has(key);
-    return mconfigAttachOverrideBadge(
-      mconfigCatalogRow(
-        field,
-        device[key],
-        (v) => {
-          if (!identity && String(v).trim() === "") delete device[key];
-          else device[key] = v;
-          card.meta.textContent = mconfigInverterSummary(device);
-        },
-        { allowUnset: !identity }
-      ),
-      mconfigDeviceOverrideEntry(device.original_name, key)
-    );
-  });
-
+  const updateMeta = () => {
+    card.meta.textContent = mconfigInverterSummary(device);
+  };
   const body = document.createElement("div");
-  body.append(enabledWrap, fields);
+  body.append(
+    enabledWrap,
+    renderLocalApiConnectionFields(device, updateMeta),
+    renderCommonInverterFields(device, updateMeta)
+  );
 
   const id = "maintenance-inverter-" + index;
   card = mconfigHardwareCard({
@@ -12726,19 +12821,15 @@ function renderMaintenanceInverters() {
 
 function mconfigAddInverter() {
   const devices = mconfigState.draft.devices || (mconfigState.draft.devices = []);
-  const template = devices.length ? devices[0] : {};
-  const device = {
+  // A new inverter starts from the central defaults, never from the values of
+  // another configured device.
+  const device = mconfigApplyCommonDefaults({
     original_name: null,
     name: mconfigNextInverterName(),
     ip: "",
     sn: "",
     enabled: true,
-  };
-  for (const field of mconfigDeviceCatalogFields()) {
-    const key = deviceFieldKey(field.path);
-    if (MCONFIG_DEVICE_IDENTITY_KEYS.has(key)) continue;
-    if (template[key] != null) device[key] = template[key];
-  }
+  });
   devices.push(device);
   mconfigState.openHardware.add("maintenance-inverter-" + (devices.length - 1));
   renderMaintenanceInverters();
@@ -12755,7 +12846,10 @@ function mconfigDiscoveryRole(device) {
 }
 
 function mconfigFindInverterMatch(configured, discovered, used) {
-  const serial = mconfigIdentity(configured.sn);
+  // Physical serial matches across transports (Local API sn, MQTT
+  // serial_number); the IP fallback applies only to serial-less Local API
+  // devices — a serial-less MQTT device is never merged on weak evidence.
+  const serial = physicalInverterIdentity(configured);
   if (serial) {
     const bySerial = discovered.find(
       (device) =>
@@ -12765,7 +12859,9 @@ function mconfigFindInverterMatch(configured, discovered, used) {
     );
     if (bySerial) return { device: bySerial, match: "serial" };
   }
+  if (mconfigIsMqttDevice(configured)) return null;
   const ip = mconfigIdentity(configured.ip);
+  if (!ip) return null;
   const byIp = discovered.find(
     (device) =>
       !used.has(deviceKey(device)) &&
@@ -12781,13 +12877,31 @@ function buildMaintenanceDiscoveryReview(discovered) {
   const results = [];
   const devices = (mconfigState.draft && mconfigState.draft.devices) || [];
   devices.forEach((configured, index) => {
-    if (mconfigIsMqttDevice(configured)) return;
+    const isMqtt = mconfigIsMqttDevice(configured);
     const match = mconfigFindInverterMatch(configured, supported, used);
     if (!match) {
-      results.push({ role: "inverter", state: "missing", configured, index });
+      // A configured MQTT device without a Local API observation is not a
+      // "missing inverter": its transport state is reported by its own MQTT
+      // proposal row.
+      if (!isMqtt) {
+        results.push({ role: "inverter", state: "missing", configured, index });
+      }
       return;
     }
     used.add(deviceKey(match.device));
+    if (isMqtt) {
+      // Same physical inverter observed over Local API: offer the alternative
+      // transport on the configured device instead of a duplicate add.
+      results.push({
+        role: "inverter",
+        state: "transport",
+        configured,
+        discovered: match.device,
+        index,
+        targetSource: "local_api",
+      });
+      return;
+    }
     const ipChanged =
       match.match === "serial" &&
       mconfigIdentity(configured.ip) !== mconfigIdentity(match.device.ip);
@@ -12872,11 +12986,22 @@ function mconfigMqttProposalState(proposal) {
     );
   if (mconfigState.pristine && inList(mconfigState.pristine.devices)) return "found";
   if (mconfigState.draft && inList(mconfigState.draft.devices)) return "added";
+  // The same physical inverter configured over another transport is a
+  // transport alternative, never a second independent device.
+  const overOtherTransport = (
+    (mconfigState.draft && mconfigState.draft.devices) ||
+    []
+  ).some(
+    (device) =>
+      !mconfigIsMqttDevice(device) && physicalInverterIdentity(device) === identity
+  );
+  if (overOtherTransport) return "transport";
   return "new";
 }
 
-function mconfigAddZendureMqttProposal(proposal) {
-  if (mconfigMqttProposalState(proposal) !== "new") return false;
+// Draft entry for a trusted Zendure MQTT proposal; shared by "add to draft"
+// and the transport switch so both produce the identical device shape.
+function mconfigZendureMqttDraftFromProposal(proposal) {
   const fragment = proposal.config_fragment || {};
   const mqtt = fragment.mqtt || {};
   const caps = fragment.capabilities || {};
@@ -12889,8 +13014,7 @@ function mconfigAddZendureMqttProposal(proposal) {
     proposal.device_id ||
     mqtt.device_id ||
     "";
-  const devices = mconfigState.draft.devices || (mconfigState.draft.devices = []);
-  devices.push({
+  return mconfigApplyCommonDefaults({
     kind: "zendure_mqtt",
     original_name: null,
     proposal_id: proposal.id || "",
@@ -12938,6 +13062,12 @@ function mconfigAddZendureMqttProposal(proposal) {
       source: proposal.connection_source || proposal.source || "",
     },
   });
+}
+
+function mconfigAddZendureMqttProposal(proposal) {
+  if (mconfigMqttProposalState(proposal) !== "new") return false;
+  const devices = mconfigState.draft.devices || (mconfigState.draft.devices = []);
+  devices.push(mconfigZendureMqttDraftFromProposal(proposal));
   // Configuration happens on the configured card: adding opens it there.
   mconfigState.openHardware.add("maintenance-mqtt-device-" + (devices.length - 1));
   renderMaintenanceInverters();
@@ -12969,7 +13099,7 @@ function mconfigDiscoveredAlreadyInDraft(item) {
   const devices = mconfigState.draft.devices || [];
   return devices.some(
     (device) =>
-      (serial && mconfigIdentity(device.sn) === serial) ||
+      (serial && physicalInverterIdentity(device) === serial) ||
       (!serial && ip && mconfigIdentity(device.ip) === ip)
   );
 }
@@ -12984,6 +13114,14 @@ function mconfigDiscoveryActionState(item) {
       text: "Configured",
       disabled: true,
       cssClass: "is-configured-missing",
+    };
+  }
+
+  if (item.state === "transport") {
+    return {
+      text: "Use " + transportLabelFor(item.targetSource || "local_api") + " instead",
+      disabled: false,
+      cssClass: "is-transport",
     };
   }
 
@@ -13050,19 +13188,75 @@ function mconfigAddDiscovered(item) {
   if (
     devices.some(
       (device) =>
-        (serial && mconfigIdentity(device.sn) === serial) ||
+        (serial && physicalInverterIdentity(device) === serial) ||
         (!serial && mconfigIdentity(device.ip) === mconfigIdentity(found.ip))
     )
   ) return false;
-  devices.push({
-    original_name: null,
-    name: mconfigNextInverterName(),
-    ip: found.ip || "",
-    sn: found.serial_number || "",
-    enabled: true,
-  });
+  devices.push(
+    mconfigApplyCommonDefaults({
+      original_name: null,
+      name: mconfigNextInverterName(),
+      ip: found.ip || "",
+      sn: found.serial_number || "",
+      enabled: true,
+    })
+  );
   // Configuration happens on the configured card: adding opens it there.
   mconfigState.openHardware.add("maintenance-inverter-" + (devices.length - 1));
+  renderMaintenanceInverters();
+  mconfigMarkDraftChanged("discovery");
+  return true;
+}
+
+// Switch a draft inverter to another transport in place: same logical device,
+// same name and common tuning values, new connection fields only. The
+// original_name reference is preserved so the backend replaces the one
+// original entry even after a rename.
+function mconfigSwitchInverterTransport(identity, targetSource, context) {
+  const devices = (mconfigState.draft && mconfigState.draft.devices) || [];
+  const key = normalizeSerial(identity);
+  if (!key) return false;
+  const index = devices.findIndex(
+    (device) => physicalInverterIdentity(device) === key
+  );
+  if (index === -1) return false;
+  const current = devices[index];
+  const preserved = {
+    original_name: current.original_name || null,
+    enabled: current.enabled !== false,
+    has_enabled_key: true,
+  };
+  if (current.name) preserved.name = current.name;
+  for (const field of mconfigDeviceCatalogFields()) {
+    const fieldKey = deviceFieldKey(field.path);
+    if (MCONFIG_DEVICE_IDENTITY_KEYS.has(fieldKey)) continue;
+    if (current[fieldKey] != null) preserved[fieldKey] = current[fieldKey];
+  }
+  let replacement;
+  let cardId;
+  if (targetSource === "local_api") {
+    const found = (context && context.discovered) || {};
+    replacement = Object.assign(
+      {
+        kind: "local_api",
+        ip: found.ip || "",
+        sn: found.serial_number || current.serial_number || current.sn || "",
+      },
+      preserved
+    );
+    cardId = "maintenance-inverter-" + index;
+  } else {
+    const proposal = context && context.proposal;
+    if (!proposal) return false;
+    replacement = Object.assign(
+      mconfigZendureMqttDraftFromProposal(proposal),
+      preserved
+    );
+    cardId = "maintenance-mqtt-device-" + index;
+  }
+  mconfigApplyCommonDefaults(replacement);
+  devices[index] = replacement;
+  mconfigState.openHardware.add(cardId);
   renderMaintenanceInverters();
   mconfigMarkDraftChanged("discovery");
   return true;
@@ -13101,6 +13295,9 @@ const MCONFIG_MQTT_PROPOSAL_ACTIONS = {
   found: { text: "In config", disabled: true, cssClass: "is-in-config" },
   added: { text: "Added to draft", disabled: true, cssClass: "is-added" },
   new: { text: "Add to draft", disabled: false, cssClass: "is-add" },
+  // Same physical inverter already configured over another transport: the
+  // action switches the connection instead of adding a duplicate device.
+  transport: { text: "", disabled: false, cssClass: "is-transport" },
 };
 
 function renderMaintenanceMqttProposalCard(item) {
@@ -13174,15 +13371,27 @@ function renderMaintenanceMqttProposalCard(item) {
   accept.type = "button";
   accept.className =
     "primary-button compact mconfig-discovery-add-button " + actionState.cssClass;
-  accept.textContent = actionState.text;
+  accept.textContent =
+    item.state === "transport"
+      ? "Use " + transportLabelFor(transportSource) + " instead"
+      : actionState.text;
   accept.disabled = actionState.disabled;
   if (!actionState.disabled) {
     accept.addEventListener("click", () => {
-      if (!mconfigAddZendureMqttProposal(proposal)) return;
+      const changed =
+        item.state === "transport"
+          ? mconfigSwitchInverterTransport(
+              mconfigMqttProposalIdentity(proposal),
+              transportSource,
+              { proposal }
+            )
+          : mconfigAddZendureMqttProposal(proposal);
+      if (!changed) return;
       accept.disabled = true;
-      accept.classList.remove("is-add");
+      accept.classList.remove("is-add", "is-transport");
       accept.classList.add("is-added");
-      accept.textContent = "Added to draft";
+      accept.textContent =
+        item.state === "transport" ? "Transport switched" : "Added to draft";
       mconfigAppendSourceBadge(sources, "selected", "source-mdns");
     });
   }
@@ -13200,6 +13409,7 @@ const MCONFIG_DISCOVERY_STATUS_TEXT = {
   new: "Detected",
   missing: "Not found",
   conflict: "IP changed",
+  transport: "Alternative transport",
 };
 
 function renderMaintenanceDiscoveryCard(item) {
@@ -13277,7 +13487,13 @@ function renderMaintenanceDiscoveryCard(item) {
   if (!actionState.disabled) {
     accept.addEventListener("click", () => {
       let changed = false;
-      if (item.state === "conflict") {
+      if (item.state === "transport") {
+        changed = mconfigSwitchInverterTransport(
+          physicalInverterIdentity(item.configured),
+          item.targetSource || "local_api",
+          { discovered: item.discovered }
+        );
+      } else if (item.state === "conflict") {
         const target = mconfigState.draft.devices[item.index];
         if (target) {
           target.ip = item.discovered.ip || target.ip;
@@ -13292,9 +13508,10 @@ function renderMaintenanceDiscoveryCard(item) {
       if (!changed) return;
 
       accept.disabled = true;
-      accept.classList.remove("is-add", "is-update");
+      accept.classList.remove("is-add", "is-update", "is-transport");
       accept.classList.add("is-added");
-      accept.textContent = "Added to draft";
+      accept.textContent =
+        item.state === "transport" ? "Transport switched" : "Added to draft";
       mconfigAppendSourceBadge(sources, "selected", "source-mdns");
       if (ignore) ignore.disabled = true;
     });
@@ -13320,11 +13537,12 @@ function renderMaintenanceDiscoveryReview(results) {
   if (!mconfigEls.discoveryResults || !mconfigEls.discoveryReview) return;
   mconfigEls.discoveryResults.textContent = "";
   mconfigEls.discoveryResults.className = "mconfig-discovery-results";
-  const counts = { found: 0, new: 0, missing: 0, conflict: 0 };
+  const counts = { found: 0, new: 0, missing: 0, conflict: 0, transport: 0 };
   results.forEach((item) => {
     counts[item.state] = (counts[item.state] || 0) + 1;
   });
-  const configured = counts.found + counts.missing + counts.conflict;
+  const configured =
+    counts.found + counts.missing + counts.conflict + counts.transport;
   const summary = document.createElement("div");
   summary.className = "mconfig-discovery-summary";
   const summaryTitle = document.createElement("strong");

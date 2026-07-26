@@ -2063,6 +2063,57 @@ def build_default_template(device_count=2):
     return template
 
 
+DEVICE_IDENTITY_FIELD_KEYS = ("name", "ip", "sn")
+
+
+def device_common_field_keys():
+    """Common (transport-independent) editable ``devices[]`` keys.
+
+    Derived from the central catalog field index, so a future common device
+    field reaches every Admin flow without another hand-written list.
+    Identity/connection keys (``name``/``ip``/``sn``) stay explicitly mapped by
+    each transport and are never part of the common set.
+    """
+
+    keys = []
+    for path in get_config_feature_field_index():
+        if not path.startswith("devices[]."):
+            continue
+        key = path[len("devices[].") :]
+        if key not in DEVICE_IDENTITY_FIELD_KEYS:
+            keys.append(key)
+    return tuple(keys)
+
+
+def default_device_config():
+    """The template device prototype split into identity/common/comment parts.
+
+    Returns a fresh deep copy. Sample identity values (``WR1`` /
+    ``192.168.1.100`` / ``YOUR_SN``) are separated from the common tuning
+    values so Admin flows can materialize real defaults without ever copying
+    placeholder identity into a discovered device.
+    """
+
+    prototype = copy.deepcopy(_DEFAULT_TEMPLATE["devices"][0])
+    identity = {}
+    comments = {}
+    common = {}
+    for key, value in prototype.items():
+        if str(key).startswith("_"):
+            comments[key] = value
+        elif key in DEVICE_IDENTITY_FIELD_KEYS:
+            identity[key] = value
+        else:
+            common[key] = value
+    return {"identity": identity, "common": common, "comments": comments}
+
+
+def device_common_defaults():
+    """Fresh copy of the central common tuning defaults for one device."""
+
+    return default_device_config()["common"]
+
+
 def render_default_template(device_count=2):
     """Render deterministic pretty JSON with setup-friendly root grouping."""
 

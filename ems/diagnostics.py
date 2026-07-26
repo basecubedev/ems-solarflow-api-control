@@ -919,6 +919,18 @@ def diagnose_zendure_mqtt_device_config(checks, index, item, *, broker_sources=N
                 f"{name} is a control-capable Zendure MQTT device; output write is enabled",
                 index=index,
             )
+            broker_ref = zendure_mqtt_entries.zendure_mqtt_broker_ref(item)
+            if (broker_sources or {}).get(broker_ref) == "zendure_cloud_mqtt":
+                diagnose_add(
+                    checks,
+                    "config",
+                    "info",
+                    "zendure_cloud_mqtt_single_controller",
+                    f"{name} is controlled over Zendure Cloud MQTT: run only one "
+                    "controller — disable Zendure HEMS, Smart Matching, Zendure "
+                    "schedules and other systems that write inverter power",
+                    index=index,
+                )
         else:
             diagnose_add(
                 checks,

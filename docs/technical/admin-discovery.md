@@ -330,6 +330,18 @@ results flow into the one review card list. Each source is its own progress
 work unit, and a failing source only marks its unit failed — the draft and the
 other sources' results are untouched.
 
+The review is transport-aware around one physical identity (the physical
+serial; the MQTT routing id only when no serial exists — shared resolver
+`zendure_physical_identity` / `physicalInverterIdentity`, contract-tested for
+backend/browser equivalence). A discovered serial that is already configured
+over another transport renders as an **Alternative transport** row with a
+**Use … instead** action that switches the configured device's connection in
+place — name, enabled state, and common tuning values preserved, stale
+transport fields removed — never as a second **Add as inverter** result. The
+same serial can never enter the draft twice across transports; the backend
+merge additionally enforces duplicate-identity and identity-conflict
+validation, so a buggy client cannot apply a duplicate.
+
 The **Discovery sources** rows under the discovery actions expose the setup
 flow's source-config blocks (local MQTT credential pool, Zendure credential) by
 **moving the parked DOM nodes** (`#inline-config-parking`,

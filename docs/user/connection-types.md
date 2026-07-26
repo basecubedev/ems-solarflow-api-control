@@ -99,10 +99,21 @@ API, no broker redirect, no reflashing.
 > a per-device `write_output_limit` opt-in, and the
 > `allow_mqtt_zendure_control_writes` gate (on by default, can be switched off).
 > **Topic family or hardware generation alone never authorizes output control**,
-> and unknown or conflicting model evidence stays telemetry-only. Cloud control
-> is **Validated on the maintainer's SolarFlow 800 Pro 2** (ZenSDK
-> `zensdk_properties_write` over the cloud broker); other Zendure generations are
-> not yet confirmed on physical hardware. Prefer a local transport for live
+> and unknown or conflicting model evidence stays telemetry-only. The cloud
+> broker is **bidirectional only with the Zendure App / Home Assistant
+> authorization credentials** returned by the device-list login — the public
+> read-only developer MQTT account can subscribe to telemetry but its writes
+> are silently discarded. ZenSDK cloud commands are the atomic
+> mode+power property set at QoS 1 on the `iot/…` topic; a publish is only a
+> transport step, and EMS reports a command effective only after telemetry
+> confirmation (see
+> [zendure-mqtt-power-control.md](../technical/zendure-mqtt-power-control.md)).
+> **Run only one controller:** disable Zendure HEMS, Smart Matching and
+> Zendure schedules when EMS controls a device over the cloud broker. The
+> corrected cloud command path is protocol-verified against reference
+> implementations, captured hardware traffic and a real-broker test harness;
+> re-validation of live cloud control on physical hardware (SolarFlow 800
+> Pro 2) with the corrected path is pending. Prefer a local transport for live
 > control (lower latency) — [reports welcome](#help-improve-compatibility).
 
 Details: [Zendure MQTT discovery (cloud)](../technical/admin-discovery.md#zendure-mqtt-discovery-cloud)

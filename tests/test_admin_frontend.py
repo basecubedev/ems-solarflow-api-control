@@ -4591,7 +4591,9 @@ def test_maintenance_discovery_matches_serial_before_ip_and_keeps_missing():
     add = js.split("function mconfigAddDiscovered", 1)[1].split(
         "\nfunction ", 1
     )[0]
-    assert "mconfigIdentity(device.sn) === serial" in add
+    # Duplicate detection is cross-transport: the physical identity matcher
+    # also covers configured MQTT devices (serial_number), not only device.sn.
+    assert "physicalInverterIdentity(device) === serial" in add
     assert "port: found.port ||" not in add
     assert 'gridMeter.port = found.port' in add
 
@@ -4709,6 +4711,8 @@ def _run_maintenance_discovery_node(setup):
             "deviceKey",
             "isConfigCandidate",
             "mconfigIdentity",
+            "normalizeSerial",
+            "physicalInverterIdentity",
             "mconfigDiscoveryRole",
             "mconfigFindInverterMatch",
             "maintenanceMqttProposals",
@@ -6565,8 +6569,19 @@ def test_maintenance_device_cards_are_catalog_driven():
     fn = js.split("function renderMaintenanceInverter", 1)[1].split(
         "\nfunction ", 1
     )[0]
-    assert "mconfigDeviceCatalogFields" in fn
-    assert "mconfigLevelledFields" in fn
+    # Both editors share one catalog-driven renderer pair: connection identity
+    # plus the transport-independent common tuning fields.
+    assert "renderLocalApiConnectionFields" in fn
+    assert "renderCommonInverterFields" in fn
+    common = js.split("function renderCommonInverterFields", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    assert "mconfigDeviceCatalogFields" in common
+    assert "mconfigLevelledFields" in common
+    mqtt_editor = js.split("function renderMaintenanceZendureMqttDevice", 1)[1].split(
+        "\nfunction mconfigIsMqttDevice", 1
+    )[0]
+    assert "renderCommonInverterFields" in mqtt_editor
 
 
 def test_maintenance_levelled_fields_defined_once_and_shared():
@@ -6761,10 +6776,15 @@ def run_mconfig_add_mqtt_proposal(proposal):
             "nextCompactInverterName",
             "mconfigNextInverterName",
             "mconfigIdentity",
+            "normalizeSerial",
+            "physicalInverterIdentity",
+            "mconfigDeviceCommonDefaults",
+            "mconfigApplyCommonDefaults",
             "mconfigIsMqttDevice",
             "mconfigMqttProposalIdentity",
             "mconfigMqttDeviceIdentity",
             "mconfigMqttProposalState",
+            "mconfigZendureMqttDraftFromProposal",
             "mconfigAddZendureMqttProposal",
         )
     )
@@ -6773,7 +6793,7 @@ def run_mconfig_add_mqtt_proposal(proposal):
         "function mconfigMarkDraftChanged() {}\n"
         "const mconfigState = {pristine: {devices: []}, draft: {devices: []},"
         " openHardware: new Set(), previewFingerprint: null,"
-        " discoveryDraftChanges: 0};\n"
+        " discoveryDraftChanges: 0, catalog: {default_device: {common: {}}}};\n"
     )
     script = (
         stub

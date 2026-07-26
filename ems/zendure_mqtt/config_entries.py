@@ -398,6 +398,42 @@ def zendure_config_device_identity(item: Any) -> tuple[str, ...] | None:
     return ("mqtt_dev", device_id)
 
 
+# Display-mask markers: a masked identifier never identifies a physical device
+# and must not make two redacted entries compare equal.
+_IDENTITY_MASK_MARKERS = ("•", "…")
+
+
+def zendure_physical_identity(item: Any) -> str | None:
+    """Normalized physical identity of a config/draft device entry, or ``None``.
+
+    The physical serial wins (local API ``sn``, MQTT ``serial_number``); the
+    MQTT routing id is a fallback only when no physical serial exists, because
+    cloud routing ids may legitimately differ from the physical serial and must
+    never shadow one. Placeholder (``YOUR_...``) and display-masked values
+    resolve to ``None``. Normalization (trim, lowercase) is for comparison
+    only; stored identifiers are never rewritten.
+    """
+
+    if not isinstance(item, Mapping):
+        return None
+
+    def usable(value: str | None) -> str | None:
+        if value is None:
+            return None
+        if any(marker in value for marker in _IDENTITY_MASK_MARKERS):
+            return None
+        return value
+
+    serial = usable(_normalized_identity(item.get("sn"))) or usable(
+        _normalized_identity(item.get("serial_number"))
+    )
+    if serial is not None:
+        return serial
+    return usable(_normalized_identity(_mqtt_field(item, "device_id"))) or usable(
+        _normalized_identity(item.get("device_id"))
+    )
+
+
 def find_duplicate_zendure_device_identities(devices: Any) -> list[dict[str, Any]]:
     """Report duplicate physical-device identities among active ``devices[]``.
 

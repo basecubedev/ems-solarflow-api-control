@@ -13,10 +13,13 @@ import json
 
 from admin.config_preview import _GRID_TYPE_CHOICES, _valid_host
 from admin.config_runtime_overlap import overlap_provenance_for_context
+from admin.device_common_fields import (
+    coerce_field_value as _coerce,
+    common_device_value_fields,
+)
 from admin.inverter_names import next_compact_inverter_name
 from admin.install_context import detect_install_context
 from admin.setup_config import (
-    _coerce,
     _set_path,
     grid_meter_variant_catalog,
     hardware_section_catalog,
@@ -42,6 +45,8 @@ from ems.config import (
 )
 from ems.config_catalog import (
     ZENDURE_MQTT_BROKER_HELP,
+    device_common_defaults,
+    device_common_field_keys,
     get_config_feature_field_index,
     get_config_feature_sections,
     http_grid_meter_types,
@@ -57,6 +62,7 @@ from ems.zendure_mqtt.config_entries import (
     validate_zendure_mqtt_control_device_config,
     validate_zendure_mqtt_device_config,
     zendure_mqtt_broker_profile_views,
+    zendure_physical_identity,
 )
 
 # HTTP/IP and MQTT grid-meter type sets both come from the central catalog/config
@@ -215,27 +221,10 @@ def _maintenance_field_index():
     return index
 
 
-def _device_value_fields():
-    """Catalog device fields (beyond name/ip/sn identity) the editor may write.
-
-    Derived from the central catalog so the editable per-device value set is
-    never a maintenance-only copy; name/ip/sn keep dedicated identity handling.
-    """
-
-    fields = {}
-    for path, field in get_config_feature_field_index().items():
-        if not path.startswith("devices[]."):
-            continue
-        key = path[len("devices[].") :]
-        if key in ("name", "ip", "sn"):
-            continue
-        if not _is_maintenance_field(field):
-            continue
-        fields[key] = field
-    return fields
-
-
-_DEVICE_VALUE_FIELDS = _device_value_fields()
+# Catalog device fields (beyond name/ip/sn identity) the editor may write.
+# Shared with the Zendure MQTT draft path via admin.device_common_fields so
+# both transports project the identical common value set.
+_DEVICE_VALUE_FIELDS = common_device_value_fields()
 
 
 def _get_path(config, path):
@@ -509,6 +498,12 @@ def _catalog():
         # Hardware metadata shared with the setup catalog (single source:
         # ems.config_catalog) so both hardware editors render the same fields.
         "hardware_sections": hardware_section_catalog("maintenance"),
+        # Central default common values for a new inverter, from the same
+        # catalog/template source the config template is generated from. The
+        # browser initializes new devices from this payload; the merge path
+        # re-materializes the same defaults, so a buggy client cannot produce
+        # an incomplete device.
+        "default_device": {"common": device_common_defaults()},
         "grid_meter_variants": grid_meter_variant_catalog(),
         "zendure_mqtt_generations": generation_catalog(),
         "zendure_mqtt_hardware_models": [
@@ -667,6 +662,98 @@ def _is_mqtt_draft_item(item):
     return item.get("kind") == "zendure_mqtt" or item.get("type") == "zendure_mqtt"
 
 
+# Connection/identity keys owned by exactly one transport. A transport switch
+# removes the old transport's keys and nothing else, so common tuning values
+# and unknown custom keys survive the switch untouched.
+_LOCAL_API_ONLY_DEVICE_KEYS = ("ip", "sn", "port", "connection_type")
+_ZENDURE_MQTT_ONLY_DEVICE_KEYS = (
+    "type",
+    "serial_number",
+    "device_id",
+    "product",
+    "product_key",
+    "mqtt",
+    "capabilities",
+    "hardware_profile",
+    "power_write_profile",
+)
+
+
+def _strip_stale_transport_keys(device, transport):
+    stale = (
+        _ZENDURE_MQTT_ONLY_DEVICE_KEYS
+        if transport == "local_api"
+        else _LOCAL_API_ONLY_DEVICE_KEYS
+    )
+    for key in stale:
+        device.pop(key, None)
+    return device
+
+
+def materialize_maintenance_device(*, existing_device, draft_item, transport, defaults):
+    """Materialize one maintenance draft entry into a config device.
+
+    Value precedence: existing explicit device values, then explicit draft
+    edits, then the central catalog defaults. A transport switch keeps the
+    device's common/custom values and replaces only the connection: the old
+    transport's keys are dropped before the new transport's fields apply.
+    Missing common defaults materialize for brand-new devices and transport
+    switches only — an untouched existing device keeps its byte-exact stored
+    shape so a no-op apply never rewrites config.
+    """
+
+    is_mqtt = transport == "zendure_mqtt"
+    new_device = existing_device is None
+    switched = not new_device and is_zendure_mqtt_device_config(existing_device) != is_mqtt
+    if new_device:
+        device = {}
+    elif switched:
+        device = _strip_stale_transport_keys(copy.deepcopy(existing_device), transport)
+    else:
+        device = copy.deepcopy(existing_device)
+    if is_mqtt:
+        apply_zendure_mqtt_draft_fields(device, draft_item)
+    else:
+        _apply_device_fields(device, draft_item)
+    if new_device or switched:
+        for key, value in defaults.items():
+            if key not in device:
+                device[key] = copy.deepcopy(value)
+    return device
+
+
+def _resolve_original_device(item, by_name, identity_index, claimed_ids, issues):
+    """Find the config entry a draft item edits, failing closed on conflicts.
+
+    ``original_name`` is authoritative when it resolves. The physical identity
+    is a guarded fallback for drafts that lost the original reference (e.g.
+    across a transport switch): it only matches an unambiguous serial that no
+    other draft item already claims by name. When name and identity resolve to
+    different originals the evidence is contradictory and the merge refuses to
+    guess.
+    """
+
+    named = by_name.get(str(item.get("original_name") or ""))
+    identity = zendure_physical_identity(item)
+    matched = identity_index.get(identity) if identity else None
+    if named is not None and matched is not None and named is not matched:
+        label = str(item.get("name") or item.get("original_name") or "device").strip()
+        issues.append(
+            _issue(
+                "device_identity_conflict",
+                f"{label}: the draft references one configured device but carries "
+                "the physical serial of another. Reload the current config and "
+                "review the draft.",
+            )
+        )
+        return None
+    if named is not None:
+        return named
+    if matched is not None and id(matched) not in claimed_ids:
+        return matched
+    return None
+
+
 def _merge_devices(merged, devices, issues):
     if not isinstance(devices, list):
         return
@@ -676,18 +763,29 @@ def _merge_devices(merged, devices, issues):
         key = str(device.get("name") or "")
         if key and key not in by_name:
             by_name[key] = device
-    # Prototype for a brand-new local-API device copies tuning fields; it must be
-    # a local device, never an MQTT telemetry entry.
-    local_originals = [d for d in originals if not is_zendure_mqtt_device_config(d)]
-    prototype = copy.deepcopy(local_originals[0]) if local_originals else {}
+    # Physical-identity fallback index: only an unambiguous serial may match.
+    identity_index = {}
+    for device in originals:
+        identity = zendure_physical_identity(device)
+        if identity is None:
+            continue
+        identity_index[identity] = None if identity in identity_index else device
+    claimed_ids = {
+        id(by_name[str(item.get("original_name") or "")])
+        for item in devices
+        if isinstance(item, dict) and str(item.get("original_name") or "") in by_name
+    }
     allocation_names = [str(device.get("name") or "").strip() for device in originals]
     allocation_count = len(originals)
+    defaults = device_common_defaults()
 
     result = []
     for item in devices:
         if not isinstance(item, dict) or item.get("removed") is True:
             continue
-        original = by_name.get(str(item.get("original_name") or ""))
+        original = _resolve_original_device(
+            item, by_name, identity_index, claimed_ids, issues
+        )
         if original is None and "name" not in item:
             item = copy.deepcopy(item)
             item["name"] = next_compact_inverter_name(
@@ -699,16 +797,21 @@ def _merge_devices(merged, devices, issues):
             if name:
                 allocation_names.append(name)
         if _is_mqtt_draft_item(item):
-            existing_mqtt = isinstance(original, dict) and is_zendure_mqtt_device_config(
-                original
+            device = materialize_maintenance_device(
+                existing_device=original,
+                draft_item=item,
+                transport="zendure_mqtt",
+                defaults=defaults,
             )
-            device = copy.deepcopy(original) if existing_mqtt else {}
-            apply_zendure_mqtt_draft_fields(device, item)
-            if not existing_mqtt:
+            if not is_zendure_mqtt_device_config(original):
                 _resolve_new_device_broker(merged, device, item, issues)
         else:
-            device = copy.deepcopy(original) if original is not None else copy.deepcopy(prototype)
-            _apply_device_fields(device, item)
+            device = materialize_maintenance_device(
+                existing_device=original,
+                draft_item=item,
+                transport="local_api",
+                defaults=defaults,
+            )
         result.append(device)
     merged["devices"] = result
 
@@ -984,6 +1087,54 @@ def _merge_features(merged, features):
 # --- validation ----------------------------------------------------------
 
 
+def _has_enabled_cloud_control_device(config):
+    brokers = (config.get("zendure_mqtt") or {}).get("brokers")
+    if not isinstance(brokers, dict):
+        return False
+    cloud_refs = {
+        ref
+        for ref, broker in brokers.items()
+        if isinstance(broker, dict)
+        and broker.get("source") == "zendure_cloud_mqtt"
+    }
+    if not cloud_refs:
+        return False
+    for device in config.get("devices") or []:
+        if not isinstance(device, dict) or device.get("enabled") is False:
+            continue
+        if not is_control_zendure_mqtt_device_config(device):
+            continue
+        if (device.get("mqtt") or {}).get("broker_ref") in cloud_refs:
+            return True
+    return False
+
+
+_COMMON_DEVICE_VALUE_KEYS = device_common_field_keys()
+
+
+def _append_common_value_warning(validation, device, label, transport_label):
+    """Flag an enabled control device that lacks common tuning values.
+
+    A warning, not an error: legacy configs relying on runtime fallbacks stay
+    applyable byte-for-byte, but an incomplete control device can no longer
+    pass preview as silently fully configured.
+    """
+
+    if device.get("enabled") is False:
+        return
+    missing = [key for key in _COMMON_DEVICE_VALUE_KEYS if key not in device]
+    if not missing:
+        return
+    validation["warnings"].append(
+        _issue(
+            "device_common_values_missing",
+            f"{label} ({transport_label}): no configured value for "
+            f"{', '.join(missing)}; the EMS runtime falls back to built-in "
+            "defaults. Editing the device materializes the central defaults.",
+        )
+    )
+
+
 def _validate(config, merge_issues=()):
     validation = {"errors": list(merge_issues), "warnings": [], "info": []}
     # A reserved named broker ref (``default``) is rejected regardless of devices:
@@ -1037,6 +1188,11 @@ def _validate(config, merge_issues=()):
                         validation["errors"].append(
                             _issue(issue["code"], f"{label}: {issue['message']}.")
                         )
+                # Telemetry-only MQTT devices never need control tuning values.
+                if is_control_zendure_mqtt_device_config(device):
+                    _append_common_value_warning(
+                        validation, device, label, "Zendure MQTT"
+                    )
                 continue
             if not _valid_host(device.get("ip")):
                 validation["errors"].append(
@@ -1047,6 +1203,7 @@ def _validate(config, merge_issues=()):
                 validation["errors"].append(
                     _issue("device_serial_missing", f"{label} requires a serial number.")
                 )
+            _append_common_value_warning(validation, device, label, "Local API")
         duplicates = sorted({name for name in names if name and names.count(name) > 1})
         if duplicates:
             validation["errors"].append(
@@ -1091,6 +1248,17 @@ def _validate(config, merge_issues=()):
                 )
     else:
         validation["warnings"].append(_issue("grid_meter_missing", "No grid meter is configured."))
+
+    if _has_enabled_cloud_control_device(config):
+        validation["warnings"].append(
+            _issue(
+                "zendure_cloud_mqtt_single_controller",
+                "Zendure Cloud MQTT output control is enabled: use only one "
+                "active controller. Disable Zendure HEMS, Smart Matching, "
+                "Zendure schedules and any other system that writes inverter "
+                "power.",
+            )
+        )
 
     try:
         json.dumps(config, allow_nan=False)
@@ -1181,6 +1349,7 @@ def _flatten(value, prefix, out):
 __all__ = [
     "load_maintenance_config",
     "build_maintenance_draft",
+    "materialize_maintenance_device",
     "preview_maintenance_config",
     "prepare_maintenance_config_apply",
     "summarize_config_changes",

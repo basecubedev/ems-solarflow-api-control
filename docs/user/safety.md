@@ -10,8 +10,13 @@ before you let it run unattended.
 - Check your grid meter direction (import positive, export negative).
 - Check the maximum output limit.
 - Check minimum and maximum battery SOC.
-- Make sure no other controller writes Zendure output limits (Zendure app HEMS,
-  another automation, or a second EMS).
+- Make sure no other controller writes Zendure output limits. Use only one
+  active controller: disable Zendure HEMS, Smart Matching, Zendure schedules /
+  energy plans, Home Assistant or ioBroker automations that set inverter power,
+  and any second EMS instance. This matters especially for Zendure Cloud MQTT
+  control — the cloud services write the same setpoints. The EMS cannot disable
+  them for you; it reports `external_control_suspected` when a foreign writer
+  repeatedly overrides a confirmed target.
 - Start with conservative settings.
 - Monitor the first live run.
 
