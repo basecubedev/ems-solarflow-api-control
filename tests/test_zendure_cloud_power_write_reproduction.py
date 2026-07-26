@@ -140,6 +140,44 @@ def test_zensdk_alt_family_write_topic_uses_iot_prefix():
     assert topic == "iot/PRODUCT_KEY/DEVICE_ID/properties/write"
 
 
+def test_profile_backed_stored_write_topic_cannot_override_canonical_topic():
+    """A stored ``mqtt.write_topic`` must never redirect a known-profile command.
+
+    A stale leading-slash report topic left in config (the exact misconfiguration
+    that publishes the atomic command where the device never applies it) must be
+    ignored: a pinned model always publishes to ``iot/PK/DEV/properties/write``.
+    """
+
+    dev = _cloud_pro2(write_topic="/PRODUCT_KEY/DEVICE_ID/properties/report")
+    assert dev.write_output_limit(300) is True
+    topic, properties = _last_properties(dev)
+    assert topic == "iot/PRODUCT_KEY/DEVICE_ID/properties/write"
+    assert properties == {
+        "smartMode": 1,
+        "acMode": 2,
+        "outputLimit": 300,
+        "inputLimit": 0,
+    }
+
+
+def test_profile_backed_arbitrary_write_topic_is_ignored_for_property_write():
+    """The state/property write path also ignores a stored write_topic override."""
+
+    dev = _cloud_pro2(write_topic="iot/OTHER/OTHER/properties/write")
+    assert bool(dev.write_properties({"acMode": 2}, reason="runtime_intent")) is True
+    topic, properties = _last_properties(dev)
+    assert topic == "iot/PRODUCT_KEY/DEVICE_ID/properties/write"
+    assert properties == {"acMode": 2}
+
+
+def test_describe_exposes_canonical_effective_topic_and_flags_obsolete_override():
+    dev = _cloud_pro2(write_topic="/PRODUCT_KEY/DEVICE_ID/properties/report")
+    described = dev.describe()
+    assert described["effective_write_topic"] == "iot/PRODUCT_KEY/DEVICE_ID/properties/write"
+    assert described["effective_write_topic_source"] == "canonical_profile"
+    assert described["write_topic_obsolete"] is True
+
+
 # --- the symptom stays honest: unapplied write times out, never confirms -----
 
 

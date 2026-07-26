@@ -118,6 +118,34 @@ def test_custom_writable_device_draft_reports_control_supported():
     assert draft["output_control"] is True
     assert draft["mqtt"]["write_protocol"] == "custom_properties_write"
     assert draft["mqtt"]["write_topic"] == WRITE_TOPIC
+    # The custom escape hatch's explicit topic IS the effective one.
+    assert draft["mqtt"]["effective_write_topic"] == WRITE_TOPIC
+    assert draft["mqtt"]["effective_write_topic_source"] == "custom_explicit"
+    assert draft["mqtt"]["write_topic_obsolete"] is False
+
+
+def test_profile_backed_draft_shows_canonical_effective_topic():
+    device = {
+        "type": "zendure_mqtt",
+        "name": "Pro2",
+        "enabled": True,
+        "serial_number": "SN1",
+        "hardware_profile": "solarflow_800_pro_2",
+        "power_write_profile": "zensdk_properties_write",
+        "mqtt": {
+            "broker_ref": "home_broker",
+            "topic_family": "legacy_zendure_json",
+            "device_id": "DEV",
+            "product_key": "PK",
+            # Obsolete residue: a pinned model ignores this.
+            "write_topic": "/PK/DEV/properties/report",
+        },
+        "capabilities": {"read_power": True, "read_soc": True, "write_output_limit": True},
+    }
+    draft = zendure_mqtt_device_draft(device)
+    assert draft["mqtt"]["effective_write_topic"] == "iot/PK/DEV/properties/write"
+    assert draft["mqtt"]["effective_write_topic_source"] == "canonical_profile"
+    assert draft["mqtt"]["write_topic_obsolete"] is True
 
 
 def test_scalar_device_without_custom_protocol_stays_unsupported():

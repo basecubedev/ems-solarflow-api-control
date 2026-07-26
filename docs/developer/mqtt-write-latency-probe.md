@@ -31,6 +31,13 @@ IP** (`--api-ip`), and everything else comes from `config.json`:
   unambiguously — it works the same with one MQTT device or twenty. (If the same
   inverter also has an HTTP device entry, the probe can auto-match by serial with
   no `--api-ip`; an MQTT-only inverter needs `--api-ip`.)
+- **Selection is fail-closed.** If the serial (or any selector) matches more than
+  one configured device, the probe **aborts before connecting or publishing** and
+  prints a redacted candidate list (name, source, hardware profile, broker
+  reference, last-4 of serial/device id) — it never silently writes to the first
+  match. Narrow it with `--device-name`, `--serial`, `--device-id` or
+  `--broker-ref`. A config carrying duplicate device identities or names is
+  refused up front (the same guard the live EMS enforces).
 - **HTTP read-back — no key.** The local SolarFlow HTTP API
   (`http://<inverter-ip>/properties/report`) is unauthenticated. The probe reads
   it exactly the way the EMS does (`ZendureClient.fetch()`), with no token.
@@ -67,8 +74,18 @@ after itself:
 - **The complete initial power state is restored** — `smartMode`, `acMode`,
   `outputLimit` **and** `inputLimit`, captured before the first write — through
   the production property-write path on success, failure, timeout and
-  interruption, then **verified over HTTP**. A failed restore or verification
-  makes the run exit non-zero.
+  interruption, then **verified over HTTP by property type**: watt-like values
+  (`outputLimit`/`inputLimit`) within tolerance, mode/enum values (`smartMode`/
+  `acMode`) **exactly**. `restore_verified` is reported only when *every* captured
+  property is restored and verified. If the atomic property write is rejected and
+  the probe falls back to an `outputLimit`-only write, that is reported as
+  `restore_partial` — **never** a full restore. A partial, failed, or unattempted
+  restore makes the run exit non-zero.
+- **A non-restorable initial state fails preflight before the first write.**
+  Before publishing anything, the probe verifies the selected profile can restore
+  every captured mode-changing property (e.g. an initial `acMode` outside the
+  profile's writable range). If it cannot, the probe reports `preflight_failed`
+  and refuses to write.
 - **Mode-changing tests need double confirmation.** `--mode-test` additionally
   requires `--confirm-mode-changes`, and it only runs when the device is
   currently *not* in smart AC output mode — the probe never forces a device out
@@ -80,9 +97,24 @@ after itself:
 
 ## What the number means
 
-The reported latency is *MQTT publish → new value visible on the local HTTP API*.
-The measurement resolution equals `--poll-interval`, so the true latency lies
-within one poll interval below the reported value.
+The probe reports **four distinct timing dimensions** — it never labels one as
+another:
+
+- **local submit** — time to hand the command to the Paho MQTT client. Local
+  submission only; it is *not* broker delivery.
+- **broker delivery** — the observed QoS 1 PUBACK for the publish
+  (`delivered` / `timeout` / `untracked` when the transport exposes no message
+  id). Broker delivery is *not* device acceptance.
+- **setpoint HTTP-match** — MQTT publish → the **target** value visible on the
+  device's local HTTP API. Only samples whose observed `outputLimit` actually
+  *matched* the target (within `--match-tolerance`) count; movement toward the
+  target is reported separately and never counts as a match or a latency sample.
+- **physical output** — time for real output to react (with `--verify-output`).
+
+"Setpoint landed" means `abs(observed - target) <= match_tolerance`, never merely
+that the value moved away from the baseline. The measurement resolution equals
+`--poll-interval`, so the true latency lies within one poll interval below the
+reported value.
 
 Why the HTTP read-back rather than an MQTT signal: the cloud-MQTT ZenSDK
 `properties/write` profile (used by the 800 Pro 2) has **no command
@@ -98,12 +130,15 @@ network access to the broker and the inverter. Select the inverter with
 `--api-ip <ip>` and append one of the three command shapes:
 
 - `--api-ip <ip> --dry-preview` — resolve the device and print the full
-  operation plan (topic, QoS, retain, exact properties, effective gates, the
-  current `smartMode`/`acMode`/`inputLimit`/`outputLimit` state and the restore
-  plan), writing nothing.
+  operation plan (the selected device, the **canonical effective write topic**
+  and whether an obsolete `mqtt.write_topic` override is present and ignored, QoS,
+  retain, exact properties, effective gates, the current
+  `smartMode`/`acMode`/`inputLimit`/`outputLimit` state, the restorable and any
+  non-restorable initial properties, and the single-writer advisory), writing
+  nothing.
 - `--api-ip <ip> --confirm-writes --poll-interval 1 --samples 12` — setpoint
-  landing test: measure publish-to-HTTP-visible latency and verify the
-  commanded mode landed with each sample.
+  landing test: measure publish-to-target-visible latency (only a real target
+  match counts) and verify the full commanded mode set landed with each sample.
 - `--api-ip <ip> --confirm-writes --verify-output` — additionally classify the
   physical reaction per sample: `output_reacted`,
   `no_output_possible_soc_at_minimum` (setpoint landed but conditions allow no
@@ -111,7 +146,9 @@ network access to the broker and the inverter. Select the inverter with
   "power control works".
 - `--api-ip <ip> --mode-test --confirm-writes --confirm-mode-changes` — mode
   recovery test: from a non-output mode, prove the atomic command switches the
-  required mode and lands the target, then restore the initial state.
+  required mode and lands the target (`mode_and_setpoint_verified` requires every
+  expected property — `smartMode`/`acMode`/`outputLimit`/`inputLimit` — to match
+  by type), then restore the initial state.
 - `--api-ip <ip> --confirm-writes --poll-interval 1 --markdown` — measure and print the docs table.
 
 A 1 s poll reports latency in 1 s steps. For sub-second resolution lower
@@ -183,7 +220,10 @@ python3 scripts/mqtt_write_latency_probe.py --api-ip 192.168.1.50 --confirm-writ
 | `--markdown` | off | Also print a documentation-ready results table. |
 | `--config PATH` | resolved like the EMS | Path to `config.json`. |
 | `--api-ip IP` | — | Local HTTP API IP of the inverter to test; the probe reads its serial and selects the matching MQTT control device. The recommended way to pick the device. |
-| `--device NAME` | the only one | MQTT control device name (tiebreaker; needed only without `--api-ip` when more than one MQTT device exists). |
+| `--device-name NAME` (alias `--device`) | the only one | Select the MQTT control device by name (disambiguates when several match). |
+| `--serial SN` | — | Select the MQTT control device by physical serial. |
+| `--device-id ID` | — | Select the MQTT control device by MQTT device id. |
+| `--broker-ref REF` | — | Select the MQTT control device by broker reference. |
 | `--api-device NAME` | matched by serial | HTTP device entry for the read-back when not using `--api-ip` (auto-matched by serial otherwise). |
 | `--values A B` | `200 500` | Two `outputLimit` setpoints to toggle between (W). |
 | `--samples N` | `10` | Number of write/observe samples. |
@@ -205,11 +245,18 @@ to the device rounding or clamping the setpoint).
 
 ## Recording results
 
-`--markdown` prints a table with samples landed, latency min / p50 / p95 / max,
-the host→broker publish latency, and the poll resolution. Paste that block into
-the measured-results location and link it from wherever the number is cited. Always
-keep the caveat line the tool prints: the value is *MQTT publish → HTTP-visible*,
+`--markdown` prints a table with samples **matched** (only target matches count),
+movement-only samples, broker-delivered count, the setpoint HTTP-match latency
+min / p50 / p95 / max, the local-submit and broker-delivery p50s, and the poll
+resolution. Paste that block into the measured-results location and link it from
+wherever the number is cited. Always keep the caveat line the tool prints: the
+setpoint value is *MQTT publish → target visible on HTTP* (matched samples only),
 its resolution equals the poll interval, and it was measured with the EMS stopped.
+
+Do not claim the Cloud MQTT path works unless the canonical topic was used, the
+broker delivered, the setpoint matched, the required mode properties matched, and
+the restore verified. Physical output may be classified separately when
+battery/grid conditions make output impossible.
 
 ## See also
 

@@ -557,6 +557,22 @@ def zendure_mqtt_device_draft(device):
         write_protocol=write_protocol or None,
     )
     has_write_target = bool(_mqtt_str(mqtt, "product_key") or write_topic)
+    # A pinned model always publishes to its canonical topic; a stored write_topic
+    # is then obsolete residue the UI shows read-only (never an editable field) so
+    # Maintenance/Setup never reintroduce it. The custom escape hatch keeps its
+    # explicit topic as the effective one.
+    if model_profile is not None:
+        from ems.zendure_mqtt.write_protocols import canonical_profile_write_topic
+
+        effective_write_topic = canonical_profile_write_topic(
+            _mqtt_str(mqtt, "product_key"), _mqtt_str(mqtt, "device_id")
+        )
+        effective_write_topic_source = "canonical_profile"
+        write_topic_obsolete = bool(write_topic)
+    else:
+        effective_write_topic = write_topic or None
+        effective_write_topic_source = "custom_explicit"
+        write_topic_obsolete = False
     draft = common_device_draft_values(device)
     draft.update({
         "kind": "zendure_mqtt",
@@ -604,6 +620,9 @@ def zendure_mqtt_device_draft(device):
             "device_id": _mqtt_str(mqtt, "device_id"),
             "write_protocol": write_protocol,
             "write_topic": write_topic,
+            "effective_write_topic": effective_write_topic,
+            "effective_write_topic_source": effective_write_topic_source,
+            "write_topic_obsolete": write_topic_obsolete,
         },
         "capabilities": {
             "read_power": read_power,

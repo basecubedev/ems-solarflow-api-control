@@ -138,6 +138,43 @@ def test_stale_output_metric_in_fresh_snapshot_cannot_confirm():
     assert rec.state == "published"
 
 
+@pytest.mark.parametrize("stale_key", ["acMode", "smartMode", "inputLimit"])
+def test_stale_mode_metric_in_fresh_snapshot_cannot_confirm(stale_key):
+    """A fresh outputLimit must not confirm a command while a matching-but-stale
+    acMode/smartMode/inputLimit predates the publish: the atomic ZenSDK command
+    changes all four together, so a cached mode value is not evidence it applied.
+    """
+
+    dev = _device()
+    rec = _published(dev)
+    now = rec.published_monotonic
+    metric_times = {key: now + 1.0 for key in APPLIED}
+    metric_times[stale_key] = now - 5.0
+    dev._service.set_snapshot(dict(APPLIED), now + 1.0, metric_times)
+    dev.fetch()
+    assert rec.state == "published"
+
+
+def test_all_expected_properties_fresh_and_matching_confirms():
+    dev = _device()
+    rec = _published(dev)
+    now = rec.published_monotonic
+    metric_times = {key: now + 1.0 for key in APPLIED}
+    dev._service.set_snapshot(dict(APPLIED), now + 1.0, metric_times)
+    dev.fetch()
+    assert rec.state == "telemetry_confirmed"
+
+
+def test_metric_timestamp_exactly_equal_to_publish_is_fresh():
+    dev = _device()
+    rec = _published(dev)
+    now = rec.published_monotonic
+    metric_times = {key: now for key in APPLIED}
+    dev._service.set_snapshot(dict(APPLIED), now, metric_times)
+    dev.fetch()
+    assert rec.state == "telemetry_confirmed"
+
+
 # --- lifecycle events --------------------------------------------------------
 
 

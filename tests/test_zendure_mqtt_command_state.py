@@ -143,3 +143,150 @@ def test_confirmation_never_happens_without_acknowledgement():
     # Cannot jump published -> confirmed on telemetry alone.
     assert confirm_from_telemetry(rec, 500) is False
     assert rec.state == STATE_PUBLISHED
+
+
+# --- shared property comparator + per-property freshness ---------------------
+
+
+def test_property_matches_classifies_watt_vs_enum():
+    from ems.mqtt_control.command_state import property_matches
+
+    # Watt-like: within tolerance passes, enum off-by-one within tolerance fails.
+    assert property_matches("outputLimit", 297, 300, watt_tolerance=25) is True
+    assert property_matches("inputLimit", 30, 0, watt_tolerance=25) is False
+    assert property_matches("acMode", 2, 2, watt_tolerance=25) is True
+    assert property_matches("acMode", 1, 2, watt_tolerance=25) is False
+    assert property_matches("smartMode", 0, 1, watt_tolerance=25) is False
+    # A non-numeric/boolean observation never matches.
+    assert property_matches("acMode", True, 1, watt_tolerance=25) is False
+    assert property_matches("outputLimit", None, 300, watt_tolerance=25) is False
+
+
+def test_metric_is_fresh_uses_per_metric_timestamp_over_snapshot():
+    from ems.mqtt_control.command_state import metric_is_fresh
+
+    published = 100.0
+    # A stale per-metric time wins over a newer snapshot-wide time.
+    assert metric_is_fresh(
+        "acMode",
+        published_monotonic=published,
+        telemetry_monotonic=200.0,
+        metric_monotonic={"acMode": 90.0},
+    ) is False
+    # A fresh per-metric time confirms.
+    assert metric_is_fresh(
+        "acMode",
+        published_monotonic=published,
+        telemetry_monotonic=90.0,
+        metric_monotonic={"acMode": 105.0},
+    ) is True
+    # No per-metric timestamp falls back to the snapshot time.
+    assert metric_is_fresh(
+        "acMode",
+        published_monotonic=published,
+        telemetry_monotonic=105.0,
+        metric_monotonic={},
+    ) is True
+    # No publish time to compare against: treated as fresh (single-metric parity).
+    assert metric_is_fresh(
+        "acMode",
+        published_monotonic=None,
+        telemetry_monotonic=None,
+        metric_monotonic=None,
+    ) is True
+
+
+def _expected_record(target_w=300):
+    rec = _record(target_w=target_w)
+    rec.expected_properties = {
+        "smartMode": 1,
+        "acMode": 2,
+        "outputLimit": target_w,
+        "inputLimit": 0,
+    }
+    mark_published(rec, now_monotonic=100.0)
+    return rec
+
+
+def test_confirm_from_expected_properties_requires_fresh_required_property():
+    from ems.mqtt_control.command_state import confirm_from_expected_properties
+
+    rec = _expected_record()
+    metrics = {"smartMode": 1, "acMode": 2, "outputLimit": 300, "inputLimit": 0}
+    # acMode matches but is stale -> no confirmation.
+    times = {k: 101.0 for k in metrics}
+    times["acMode"] = 90.0
+    assert (
+        confirm_from_expected_properties(
+            rec,
+            metrics,
+            now_monotonic=101.0,
+            telemetry_monotonic=101.0,
+            metric_monotonic=times,
+            allow_from_published=True,
+        )
+        is False
+    )
+    assert rec.state == STATE_PUBLISHED
+
+    # All fresh -> confirms.
+    times["acMode"] = 101.0
+    assert (
+        confirm_from_expected_properties(
+            rec,
+            metrics,
+            now_monotonic=101.0,
+            telemetry_monotonic=101.0,
+            metric_monotonic=times,
+            allow_from_published=True,
+        )
+        is True
+    )
+    assert rec.state == STATE_TELEMETRY_CONFIRMED
+
+
+def test_confirm_from_expected_properties_absent_required_fails_absent_optional_ok():
+    from ems.mqtt_control.command_state import confirm_from_expected_properties
+
+    # Absent required acMode -> fail.
+    rec = _expected_record()
+    assert (
+        confirm_from_expected_properties(
+            rec,
+            {"smartMode": 1, "outputLimit": 300, "inputLimit": 0},
+            now_monotonic=101.0,
+            telemetry_monotonic=101.0,
+            metric_monotonic={"smartMode": 101.0, "outputLimit": 101.0, "inputLimit": 101.0},
+            allow_from_published=True,
+        )
+        is False
+    )
+
+    # Absent optional smartMode -> confirms on the required properties alone.
+    rec = _expected_record()
+    metrics = {"acMode": 2, "outputLimit": 300, "inputLimit": 0}
+    times = {k: 101.0 for k in metrics}
+    assert (
+        confirm_from_expected_properties(
+            rec, metrics, now_monotonic=101.0, telemetry_monotonic=101.0,
+            metric_monotonic=times, allow_from_published=True,
+        )
+        is True
+    )
+
+
+def test_confirm_from_expected_properties_present_optional_stale_fails():
+    from ems.mqtt_control.command_state import confirm_from_expected_properties
+
+    rec = _expected_record()
+    metrics = {"smartMode": 1, "acMode": 2, "outputLimit": 300, "inputLimit": 0}
+    times = {k: 101.0 for k in metrics}
+    # A present-but-stale optional smartMode is NOT the same as an absent one.
+    times["smartMode"] = 90.0
+    assert (
+        confirm_from_expected_properties(
+            rec, metrics, now_monotonic=101.0, telemetry_monotonic=101.0,
+            metric_monotonic=times, allow_from_published=True,
+        )
+        is False
+    )

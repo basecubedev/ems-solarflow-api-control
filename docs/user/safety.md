@@ -24,6 +24,28 @@ Until your real values are filled in, EMS stays in safe mode: it calculates
 targets but does not write to hardware. Review your settings, then enable live
 writes.
 
+## Zendure Cloud MQTT control confirmation
+
+Cloud MQTT control is only proven when the whole path checks out — a broker
+publish succeeding is **not** the same as the device applying the command. The
+EMS keeps these facts separate and honest:
+
+- **Broker delivery is not device acceptance.** `broker_delivery=delivered`
+  (the QoS 1 PUBACK) only means the broker received the publish; a command is
+  confirmed only when telemetry proves every commanded property (mode *and*
+  setpoint) actually took effect and is fresh.
+- **A known model always writes to its canonical topic.** A stale
+  `mqtt.write_topic` left in an upgraded config can never misroute control; it is
+  flagged and cleaned up by maintenance. Only the isolated custom escape hatch
+  uses an explicit topic.
+- **Validate before trusting it.** To prove Cloud MQTT control end to end on real
+  hardware, stop the EMS and use the hardware probe
+  ([developer/mqtt-write-latency-probe.md](../developer/mqtt-write-latency-probe.md)):
+  it confirms the canonical topic, broker delivery, an exact setpoint match, the
+  required mode properties, and a fully verified restore of the initial state.
+  Do not conclude "Cloud MQTT control works" from movement toward the target or a
+  broker PUBACK alone.
+
 ## During the first live run
 
 - Watch grid power.

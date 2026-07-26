@@ -182,3 +182,42 @@ def test_applied_migration_result_is_always_valid(device):
     # A second full validation of the mutated config finds nothing to fix/flag.
     assert validate_zendure_mqtt_control_configs(config) == []
     assert plan_zendure_mqtt_migration(config) == []
+
+
+# --- obsolete profile write_topic: warned, never blocked ---------------------
+
+
+def _pinned_pro2_with_write_topic():
+    device = _control_device(
+        hardware_profile="solarflow_800_pro_2",
+        power_write_profile="zensdk_properties_write",
+    )
+    device["mqtt"]["write_topic"] = "/PK/DEV/properties/report"
+    return device
+
+
+def test_profile_write_topic_is_a_warning_not_an_error():
+    from ems.zendure_mqtt.config_entries import (
+        validate_zendure_mqtt_control_device_config,
+    )
+
+    device = _pinned_pro2_with_write_topic()
+    issues = validate_zendure_mqtt_control_device_config(device)
+    obsolete = [i for i in issues if i["code"] == "profile_write_topic_obsolete"]
+    assert len(obsolete) == 1
+    assert obsolete[0]["severity"] == "warning"
+    # A warning must not make the device unwritable: no error, no startup block.
+    assert [i for i in issues if i["severity"] == "error"] == []
+    assert zendure_mqtt_control_migration_startup_error(_config(device)) is None
+
+
+def test_normalization_clears_the_obsolete_write_topic_warning():
+    from ems.zendure_mqtt.config_entries import (
+        validate_zendure_mqtt_control_device_config,
+    )
+
+    device = _pinned_pro2_with_write_topic()
+    config = _config(device)
+    migrate_zendure_mqtt_control_configs(config)
+    issues = validate_zendure_mqtt_control_device_config(device)
+    assert [i for i in issues if i["code"] == "profile_write_topic_obsolete"] == []

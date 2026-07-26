@@ -792,6 +792,23 @@ def _control_write_capability_issues(item: Mapping[str, Any]) -> list[dict[str, 
             topic_family=topic_family, hardware_profile=hardware_profile
         )
         if cap.supported:
+            # A pinned model publishes to its canonical topic; a stored
+            # mqtt.write_topic is dead config. Warn (never block: the device is
+            # writable) so Admin/migration can normalize it away.
+            if (
+                zendure_mqtt_write_topic(item) is not None
+                and zendure_mqtt_product_key(item) is not None
+            ):
+                return [
+                    _issue(
+                        "warning",
+                        "profile_write_topic_obsolete",
+                        "mqtt.write_topic is ignored for a pinned hardware_profile: "
+                        "control uses the canonical "
+                        "iot/<productKey>/<deviceId>/properties/write topic. Remove "
+                        "the obsolete override.",
+                    )
+                ]
             return []
         code = cap.block_reason or "write_protocol_unsupported"
         return [_issue("error", code, _BLOCK_REASON_MESSAGES.get(code, code))]

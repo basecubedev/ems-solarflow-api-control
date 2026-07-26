@@ -57,6 +57,20 @@ MIGRATION_UNADDRESSABLE_WARNING = (
 
 ACTION_PIN_PROFILE = "pin_profile"
 ACTION_DISABLE_CONTROL = "disable_control"
+# A pure cleanup: a profile-backed device carries an obsolete mqtt.write_topic
+# that the runtime already ignores (canonical topic wins). Removing it is safe
+# and never blocks startup — the device is already writable.
+ACTION_NORMALIZE_WRITE_TOPIC = "normalize_write_topic"
+
+MIGRATION_WRITE_TOPIC_NORMALIZED_WARNING = (
+    "An obsolete mqtt.write_topic was removed: a pinned Zendure hardware model "
+    "always publishes to its canonical iot/<productKey>/<deviceId>/properties/"
+    "write topic, so the stored override was ignored and is now cleaned up."
+)
+
+# Actions that make a config safe to run but do not, on their own, force a
+# migration before startup (the runtime already behaves correctly).
+_NON_BLOCKING_ACTIONS = frozenset({ACTION_NORMALIZE_WRITE_TOPIC})
 
 # Validation error codes migration is responsible for (write addressing,
 # capability, metadata consistency) — broker/structural errors are unrelated
@@ -227,6 +241,10 @@ def _pin_change(device, index, name, device_id, profile_id, write_profile, sourc
         changes.append(
             _diff(f"{prefix}.mqtt.write_protocol", mqtt.get("write_protocol"), None)
         )
+    if _obsolete_write_topic(device) is not None:
+        changes.append(
+            _diff(f"{prefix}.mqtt.write_topic", mqtt.get("write_topic"), None)
+        )
     return ZendureMqttMigrationChange(
         device=name,
         action=ACTION_PIN_PROFILE,
@@ -241,6 +259,38 @@ def _pin_change(device, index, name, device_id, profile_id, write_profile, sourc
         index=index,
         device_id=device_id,
         changes=tuple(changes),
+    )
+
+
+def _obsolete_write_topic(device):
+    """The obsolete ``mqtt.write_topic`` on a profile-backed device, else ``None``.
+
+    A pinned model publishes to its canonical topic, so a stored ``write_topic``
+    is dead config. It is only removed when the device is addressable by
+    ``product_key`` (the canonical topic is buildable) — a device addressed solely
+    by ``write_topic`` keeps it so migration never strips its only address.
+    """
+
+    if not zendure_mqtt_product_key(device):
+        return None
+    return zendure_mqtt_write_topic(device)
+
+
+def _normalize_write_topic_change(device, index, name, device_id):
+    prefix = f"devices[{index}]"
+    mqtt = device.get("mqtt")
+    before = mqtt.get("write_topic") if isinstance(mqtt, dict) else None
+    return ZendureMqttMigrationChange(
+        device=name,
+        action=ACTION_NORMALIZE_WRITE_TOPIC,
+        hardware_profile=zendure_mqtt_hardware_profile(device),
+        power_write_profile=None,
+        code="zendure_mqtt_control_write_topic_normalized",
+        severity="info",
+        message=f"{name}: {MIGRATION_WRITE_TOPIC_NORMALIZED_WARNING}",
+        index=index,
+        device_id=device_id,
+        changes=(_diff(f"{prefix}.mqtt.write_topic", before, None),),
     )
 
 
@@ -284,11 +334,13 @@ def _plan_device(device, index) -> ZendureMqttMigrationChange | None:
 
     if not isinstance(device, dict) or not is_control_zendure_mqtt_device_config(device):
         return None
-    if _already_safe(device):
-        return None
-
     name = device.get("name") if isinstance(device.get("name"), str) else "device"
     device_id = zendure_mqtt_device_identifier(device)
+    if _already_safe(device):
+        if _obsolete_write_topic(device) is not None:
+            return _normalize_write_topic_change(device, index, name, device_id)
+        return None
+
     profile_id, source = _intended_model(device)
     if profile_id is not None:
         cap = resolve_power_write_capability(
@@ -407,6 +459,7 @@ def zendure_mqtt_control_migration_startup_error(config) -> dict | None:
         change
         for change in plan_zendure_mqtt_migration(config)
         if change.index in enabled_control_indexes
+        and change.action not in _NON_BLOCKING_ACTIONS
     ]
     if not blocking:
         return None
@@ -421,12 +474,18 @@ def _apply_change(device, change: ZendureMqttMigrationChange) -> None:
     """Apply one planned change in place, stripping obsolete write metadata."""
 
     mqtt = device.get("mqtt")
+    if change.action == ACTION_NORMALIZE_WRITE_TOPIC:
+        if isinstance(mqtt, dict):
+            mqtt.pop("write_topic", None)
+        return
     if change.action == ACTION_PIN_PROFILE:
         device["hardware_profile"] = change.hardware_profile
         # Canonical registry metadata, and no stale legacy escape hatch.
         device["power_write_profile"] = change.power_write_profile
         if isinstance(mqtt, dict):
             mqtt.pop("write_protocol", None)
+            if _obsolete_write_topic(device) is not None:
+                mqtt.pop("write_topic", None)
         return
     caps = device.get("capabilities")
     if isinstance(caps, dict):
@@ -471,6 +530,8 @@ __all__ = [
     "MIGRATION_REQUIRED_CODE",
     "ACTION_PIN_PROFILE",
     "ACTION_DISABLE_CONTROL",
+    "ACTION_NORMALIZE_WRITE_TOPIC",
+    "MIGRATION_WRITE_TOPIC_NORMALIZED_WARNING",
     "ZendureMqttMigrationChange",
     "ZendureMqttMigrationError",
     "plan_zendure_mqtt_migration",

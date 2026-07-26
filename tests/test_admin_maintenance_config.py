@@ -517,6 +517,9 @@ def test_cloud_route_id_is_masked_in_browser_and_preserved_on_round_trip(tmp_pat
     assert mqtt_draft["serial_number"] == "DEVICE_SN"
     assert mqtt_draft["device_id"] == "••••"
     assert mqtt_draft["mqtt"]["device_id"] == "••••"
+    # The canonical effective topic must mask the route id, never leak it.
+    assert "DEVICEKEY" not in (mqtt_draft["mqtt"].get("effective_write_topic") or "")
+    assert "••••" in (mqtt_draft["mqtt"].get("effective_write_topic") or "")
     assert "DEVICEKEY" not in json.dumps(loaded)
 
     prepared = prepare_maintenance_config_apply(

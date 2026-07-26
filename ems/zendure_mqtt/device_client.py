@@ -64,9 +64,11 @@ from ems.zendure_mqtt.service import (
 from ems.zendure_mqtt.write_protocols import (
     CONTROL_PUBLISH_QOS,
     MqttPublishMessage,
+    PROTOCOL_CUSTOM_PROPERTIES_WRITE,
     PROTOCOL_LEGACY_PROPERTIES_WRITE,
     build_output_limit_message,
     build_properties_write_message,
+    canonical_profile_write_topic,
     resolve_write_protocol,
 )
 
@@ -497,13 +499,55 @@ class ZendureMqttDeviceClient:
             topic_family=self._topic_family,
             product_key=self._product_key,
             device_id=self._device_id,
-            write_topic=self._write_topic,
+            write_topic=None,
             message_id=message_id,
             qos=CONTROL_PUBLISH_QOS,
         )
         if message is None:
             raise _WriteBlocked("properties", "no_write_protocol")
         return message, message_id
+
+    def check_property_writes(self, properties):
+        """Return ``{key: reason}`` for property values this device cannot write.
+
+        Read-only preflight mirroring :meth:`_prepare_property_write`'s validation
+        without publishing, so a caller (e.g. the hardware probe) can prove the
+        complete captured state is restorable before the first write. An empty
+        result means every property is writable/restorable.
+        """
+
+        if not isinstance(properties, dict):
+            return {}
+        if self._hardware_profile_invalid:
+            return {key: "unknown_hardware_profile" for key in properties}
+        profile = self._power_profile
+        if profile is None or not profile.state_property_writes:
+            return {key: "property_write_unsupported" for key in properties}
+        writable = set(profile.state_property_writes)
+        reasons = {}
+        for key, value in properties.items():
+            if key not in writable:
+                reasons[key] = "property_write_unsupported"
+                continue
+            if isinstance(value, bool) or not isinstance(value, int):
+                reasons[key] = "invalid_property_value"
+                continue
+            minimum, maximum = self._PROPERTY_VALUE_RANGES.get(key, (None, None))
+            if minimum is not None and value < minimum:
+                reasons[key] = "invalid_property_value"
+                continue
+            if maximum is not None and value > maximum:
+                reasons[key] = "invalid_property_value"
+                continue
+            if key in ("outputLimit", "inputLimit"):
+                max_power = self.max_power
+                if (
+                    isinstance(max_power, (int, float))
+                    and max_power > 0
+                    and value > max_power
+                ):
+                    reasons[key] = "target_above_maximum"
+        return reasons
 
     def _should_supersede_latest(self, active):
         """Whether a changed target replaces the in-flight command immediately.
@@ -650,6 +694,25 @@ class ZendureMqttDeviceClient:
         ):
             record.broker_delivery = "timeout"
 
+    def _reconcile_terminal_delivery(self, now_monotonic):
+        """Settle a PUBACK for a command that already left the active slot.
+
+        Telemetry confirmation retires a command out of the active slot before its
+        broker PUBACK may have been observed. The record survives as
+        ``_last_command`` and its publish mid stays queryable, so a later PUBACK
+        still upgrades broker_delivery pending->delivered (or a missing one settles
+        to timeout). Broker delivery and device acceptance stay independent: this
+        never changes the command's terminal outcome. Bounded to the single
+        retained record.
+        """
+
+        record = self._last_command
+        if record is None or record is self._active_command:
+            return
+        if not record.is_terminal:
+            return
+        self._settle_broker_delivery(record, now_monotonic)
+
     def _flush_pending_target(self, now):
         """Publish the single pending target once the active slot is free."""
 
@@ -750,7 +813,7 @@ class ZendureMqttDeviceClient:
                 topic_family=self._topic_family,
                 product_key=self._product_key,
                 device_id=self._device_id,
-                write_topic=self._write_topic,
+                write_topic=None,
                 message_id=message_id,
                 qos=CONTROL_PUBLISH_QOS,
             )
@@ -913,6 +976,7 @@ class ZendureMqttDeviceClient:
                 complete_unconfirmed(record, now_monotonic=now)
             self._last_command_state = record.state
             if record.is_terminal:
+                self._settle_broker_delivery(record, now)
                 self._active_command = None
                 self._active_correlation_id = None
                 self._flush_pending_target(now)
@@ -935,6 +999,9 @@ class ZendureMqttDeviceClient:
         )
 
     def _expire_active_command(self, now_monotonic, *, flush=True):
+        # A late PUBACK for an already-retired command is settled every cycle,
+        # independently of whether a command currently occupies the active slot.
+        self._reconcile_terminal_delivery(now_monotonic)
         record = self._active_command
         if record is None:
             if flush:
@@ -1031,6 +1098,9 @@ class ZendureMqttDeviceClient:
                 allow_from_published=allow_from_published,
             )
         if confirmed:
+            # Fold in a PUBACK already observed by confirmation time before the
+            # command leaves the active slot; a later one is reconciled per cycle.
+            self._settle_broker_delivery(record, now_monotonic)
             self._last_command_state = record.state
             self._active_command = None
             self._active_correlation_id = None
@@ -1170,6 +1240,30 @@ class ZendureMqttDeviceClient:
             return True
         return bool(isinstance(self._write_topic, str) and self._write_topic.strip())
 
+    def _effective_write_topic_info(self):
+        """Resolve the topic control writes actually use, its source and staleness.
+
+        A pinned profile always publishes to the canonical ``iot/…`` topic; only
+        the custom escape hatch uses the explicit ``mqtt.write_topic``. A stored
+        ``write_topic`` on a profile-backed device is obsolete: it is ignored by
+        the builder and reported here so diagnostics/migration can surface it.
+        """
+
+        has_stored = bool(
+            isinstance(self._write_topic, str) and self._write_topic.strip()
+        )
+        is_custom = (
+            self._power_profile is None
+            and self.write_protocol == PROTOCOL_CUSTOM_PROPERTIES_WRITE
+        )
+        if is_custom:
+            topic = self._write_topic.strip() if has_stored else None
+            return topic, "custom_explicit", False
+        topic = canonical_profile_write_topic(self._product_key, self._device_id)
+        # A stored write_topic on a profile-backed device is obsolete: the
+        # canonical topic wins and the override is only cosmetic config residue.
+        return topic, "canonical_profile", has_stored
+
     def _confirmation_deadline(self, active):
         """Absolute monotonic deadline for confirming an in-flight command.
 
@@ -1230,7 +1324,21 @@ class ZendureMqttDeviceClient:
         )
         active = self._active_command
         confirmation_deadline = self._confirmation_deadline(active)
-        last_command = self._last_command.snapshot() if self._last_command else None
+        last = self._last_command
+        last_command = last.snapshot() if last else None
+        effective_topic, topic_source, write_topic_obsolete = (
+            self._effective_write_topic_info()
+        )
+
+        def _age(stamp):
+            if stamp is None or now_monotonic is None:
+                return None
+            return round(now_monotonic - stamp, 3)
+
+        last_local_submit_age_s = _age(last.published_monotonic) if last else None
+        last_broker_delivery = last.broker_delivery if last else None
+        last_broker_delivery_age_s = _age(last.delivered_monotonic) if last else None
+        last_telemetry_confirmation_age_s = _age(self._last_confirmed_monotonic)
         return {
             "name": self.name,
             "broker_ref": self.broker_ref,
@@ -1241,6 +1349,13 @@ class ZendureMqttDeviceClient:
             "controller_reachable_operations": reachable,
             "source": self.source,
             "topic_family": self._topic_family,
+            "effective_write_topic": effective_topic,
+            "effective_write_topic_source": topic_source,
+            "write_topic_obsolete": write_topic_obsolete,
+            "last_local_submit_age_seconds": last_local_submit_age_s,
+            "last_broker_delivery": last_broker_delivery,
+            "last_broker_delivery_age_seconds": last_broker_delivery_age_s,
+            "last_telemetry_confirmation_age_seconds": last_telemetry_confirmation_age_s,
             # Explicit control state (control_enabled kept for compatibility).
             "control_requested": True,
             "control_supported": supported,

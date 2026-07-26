@@ -117,6 +117,80 @@ def test_dry_run_reports_disable_for_unknown_model():
     assert [c.action for c in changes] == ["disable_control"]
 
 
+# --- obsolete profile-backed write_topic normalization ----------------------
+
+
+def _pinned_pro2(**over):
+    device = _control_device(
+        hardware_profile="solarflow_800_pro_2",
+        power_write_profile="zensdk_properties_write",
+    )
+    device.update(over)
+    return device
+
+
+def test_profile_backed_obsolete_write_topic_is_normalized_away():
+    from ems.zendure_mqtt.migration import (
+        zendure_mqtt_control_migration_startup_error,
+    )
+
+    device = _pinned_pro2()
+    device["mqtt"]["write_topic"] = "/PK/DEV/properties/report"
+    device["mqtt"]["vendor_extension"] = "keep-me"
+    config = _config(device)
+
+    changes = plan_zendure_mqtt_migration(config)
+    assert [c.action for c in changes] == ["normalize_write_topic"]
+    assert changes[0].severity == "info"
+    assert changes[0].changes[0]["path"] == "devices[0].mqtt.write_topic"
+
+    # A pure normalization must never hard-block startup: the runtime already
+    # ignores the obsolete override and publishes to the canonical topic.
+    assert zendure_mqtt_control_migration_startup_error(config) is None
+
+    _cfg, warnings = migrate_zendure_mqtt_control_configs(config)
+    assert "write_topic" not in device["mqtt"]
+    assert device["mqtt"]["product_key"] == "PK"
+    assert device["mqtt"]["device_id"] == "DEV"
+    assert device["mqtt"]["vendor_extension"] == "keep-me"
+    assert device["hardware_profile"] == "solarflow_800_pro_2"
+    assert any(
+        w["code"] == "zendure_mqtt_control_write_topic_normalized" for w in warnings
+    )
+
+    # Idempotent: a re-run has nothing left to do.
+    assert plan_zendure_mqtt_migration(config) == []
+
+
+def test_pin_change_also_strips_a_stored_write_topic():
+    device = _control_device(product="SolarFlow 800 Pro 2")
+    device["mqtt"]["write_topic"] = "/PK/DEV/properties/report"
+    _cfg, _warnings = migrate_zendure_mqtt_control_configs(_config(device))
+    assert device["hardware_profile"] == "solarflow_800_pro_2"
+    assert "write_topic" not in device["mqtt"]
+
+
+def test_custom_protocol_write_topic_is_preserved_by_migration():
+    # The custom escape hatch legitimately needs its explicit topic; migration
+    # must never strip it (there is no pinned profile to derive a canonical one).
+    device = _control_device()
+    device["mqtt"].pop("product_key", None)
+    device["mqtt"]["write_protocol"] = "custom_properties_write"
+    device["mqtt"]["write_topic"] = "iot/PK/DEV/properties/write"
+    _cfg, _warnings = migrate_zendure_mqtt_control_configs(_config(device))
+    assert device["mqtt"]["write_topic"] == "iot/PK/DEV/properties/write"
+
+
+def test_write_topic_only_addressed_profile_device_keeps_its_address():
+    # A profile device addressed solely by write_topic (no product_key) must not
+    # have its only address stripped — canonical topic cannot be built for it.
+    device = _pinned_pro2()
+    device["mqtt"].pop("product_key", None)
+    device["mqtt"]["write_topic"] = "iot/PK/DEV/properties/write"
+    changes = plan_zendure_mqtt_migration(_config(device))
+    assert all(c.action != "normalize_write_topic" for c in changes)
+
+
 def test_needs_migration_predicate():
     assert zendure_mqtt_control_configs_need_migration(
         _config(_control_device())

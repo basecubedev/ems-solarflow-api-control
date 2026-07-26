@@ -129,6 +129,17 @@ def _legacy_topic(family, product_key, device_id) -> str | None:
     return f"iot/{product_key}/{device_id}/{_WRITE_SUFFIX}"
 
 
+def canonical_profile_write_topic(product_key, device_id) -> str | None:
+    """Canonical control publish topic for a known/profile-backed device.
+
+    ``iot/<productKey>/<deviceId>/properties/write`` — the single rule shared by
+    the message builder, config validation, migration and diagnostics so a stored
+    ``mqtt.write_topic`` can never redirect a known-profile control write.
+    """
+
+    return _legacy_topic(None, product_key, device_id)
+
+
 def _properties_payload(device_id, properties, *, message_id, timestamp) -> bytes:
     body = {
         "deviceId": device_id,
@@ -170,13 +181,13 @@ def build_properties_write_message(
         timestamp = int(time.time())
 
     if protocol == PROTOCOL_CUSTOM_PROPERTIES_WRITE:
+        # The custom escape hatch is the only protocol that may target an
+        # explicit operator-supplied topic.
         topic = write_topic.strip() if isinstance(write_topic, str) and write_topic.strip() else None
-    else:  # legacy_properties_write
-        topic = (
-            write_topic.strip()
-            if isinstance(write_topic, str) and write_topic.strip()
-            else _legacy_topic(topic_family, product_key, device_id)
-        )
+    else:  # legacy_properties_write: a known profile always uses the canonical
+        # iot/… topic. A stored write_topic never redirects a profile-backed
+        # control write.
+        topic = _legacy_topic(topic_family, product_key, device_id)
     if topic is None or publish_topic_error(topic) is not None:
         # Never publish to an empty, wildcard, NUL-bearing or malformed topic.
         return None

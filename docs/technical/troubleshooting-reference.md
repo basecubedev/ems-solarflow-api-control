@@ -806,18 +806,31 @@ Check, in order:
    the broker never acknowledged the publish — check the cloud credentials:
    bidirectional cloud MQTT requires the Zendure App / Home Assistant
    authorization credentials from the device-list login; the public read-only
-   developer account silently drops writes.
+   developer account silently drops writes. Broker delivery and device
+   acceptance are **independent**: `broker_delivery=delivered` never means the
+   device applied the command, and a late PUBACK still updates the delivery
+   state even after telemetry already confirmed.
 2. `broker_delivery=delivered` with no confirmation means the broker accepted
    the command but the device did not apply it — verify the pinned
    `hardware_profile` matches the physical model and the device identifiers
    (`product_key`, `device_id`) are correct.
-3. `external_control_suspected` means another controller is overriding EMS:
+3. **Obsolete write topic.** A profile-backed device that carries a stale
+   `mqtt.write_topic` cannot misroute control — the canonical
+   `iot/<productKey>/<deviceId>/properties/write` topic is always used — but a
+   `profile_write_topic_obsolete` validation warning flags it. Apply the
+   migration/maintenance preview to remove it. (`diagnose` reports the effective
+   write topic and its source, `canonical_profile` vs `custom_explicit`.)
+4. `external_control_suspected` means another controller is overriding EMS:
    disable Zendure HEMS, Smart Matching, Zendure schedules and any other
    system that writes inverter power. Only one controller may run.
-4. Validate the full path with the hardware probe
+5. Validate the full path with the hardware probe
    ([mqtt-write-latency-probe.md](../developer/mqtt-write-latency-probe.md)):
-   stop the EMS, run `--dry-preview`, then `--confirm-writes` and check that
-   the setpoint (and with `--verify-output` the physical output) lands.
+   stop the EMS, run `--dry-preview` (it shows the canonical topic, whether an
+   obsolete override is ignored, and restore feasibility), then `--confirm-writes`
+   and check that the setpoint **matches the target** (movement toward it is not
+   a match) and the required mode properties match. The probe reports broker
+   delivery, setpoint HTTP-match and physical output as separate timings, and
+   exits non-zero if the initial state cannot be fully restored.
 
 More detail: [safety-model.md](safety-model.md),
 [configuration.md](configuration.md), [runtime-state.md](runtime-state.md).

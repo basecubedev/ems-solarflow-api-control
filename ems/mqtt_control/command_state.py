@@ -287,10 +287,12 @@ def confirm_from_telemetry(
     return False
 
 
-_WATT_PROPERTY_KEYS = frozenset({"outputLimit", "inputLimit"})
+# Watt-like properties compare within a tolerance; every other expected
+# property is a mode/enum and must match exactly.
+WATT_PROPERTY_KEYS = frozenset({"outputLimit", "inputLimit"})
 
 # acMode and outputLimit are required; these are checked only when reported.
-_OPTIONAL_EXPECTED_KEYS = frozenset({"smartMode", "inputLimit"})
+OPTIONAL_EXPECTED_KEYS = frozenset({"smartMode", "inputLimit"})
 
 
 def _observed_number(metrics, key):
@@ -298,6 +300,51 @@ def _observed_number(metrics, key):
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return float(value)
+
+
+def property_matches(key, observed, expected, *, watt_tolerance: int) -> bool:
+    """Whether an observed value satisfies an expected one for its property type.
+
+    Watt-like properties (``outputLimit``/``inputLimit``) match within
+    ``watt_tolerance``; every other property is a mode/enum and must match
+    exactly. A non-numeric or boolean observation never matches.
+    """
+
+    if isinstance(observed, bool) or not isinstance(observed, (int, float)):
+        return False
+    if isinstance(expected, bool) or not isinstance(expected, (int, float)):
+        return False
+    if key in WATT_PROPERTY_KEYS:
+        return abs(float(observed) - float(expected)) <= watt_tolerance
+    return int(observed) == int(expected)
+
+
+def metric_is_fresh(
+    key,
+    *,
+    published_monotonic,
+    telemetry_monotonic,
+    metric_monotonic,
+) -> bool:
+    """Whether telemetry for ``key`` is at least as new as the command's publish.
+
+    The per-property report time (``metric_monotonic[key]``) is authoritative
+    when present, so a merged snapshot can never let a stale cached property
+    inherit a newer snapshot-wide timestamp. Only when the property has no
+    per-metric timestamp is the snapshot ``telemetry_monotonic`` used. With no
+    publish time or no timestamp at all, provenance cannot be judged and the
+    metric is treated as fresh (parity with a single-metric confirmation).
+    """
+
+    if published_monotonic is None:
+        return True
+    if isinstance(metric_monotonic, Mapping) and key in metric_monotonic:
+        reference = metric_monotonic.get(key)
+    else:
+        reference = telemetry_monotonic
+    if reference is None:
+        return True
+    return reference >= published_monotonic
 
 
 def confirm_from_expected_properties(
@@ -312,14 +359,14 @@ def confirm_from_expected_properties(
 ) -> bool:
     """Confirm a command only when telemetry proves it *effective*.
 
-    Every expected property must hold: watt properties within ``tolerance_w``,
-    mode properties exactly. ``acMode`` and the commanded ``outputLimit`` must
-    be present — they make the command effective; ``smartMode``/``inputLimit``
-    are verified when telemetry exposes them. The ``outputLimit`` metric itself
-    must be newer than the publish (per-metric timestamp when available,
-    otherwise the snapshot timestamp), so a merged snapshot can never confirm a
-    command from a value that predates it — including a superseded command's
-    late echo.
+    Every expected property that participates in confirmation must both match
+    (watt properties within ``tolerance_w``, mode properties exactly) AND be
+    fresh — newer than or equal to the command publish, judged per property from
+    its own report time. ``acMode`` and the commanded ``outputLimit`` are
+    required; ``smartMode``/``inputLimit`` are verified only when telemetry
+    exposes them, but a *present* optional property must still match and be
+    fresh. A stale ``acMode``/``smartMode``/``inputLimit`` — a merged snapshot's
+    cached value, or a superseded command's late echo — can never confirm.
     """
 
     eligible = record.state == STATE_ACKNOWLEDGED or (
@@ -333,28 +380,20 @@ def confirm_from_expected_properties(
     if not isinstance(metrics, Mapping):
         return False
 
-    freshness_reference = None
-    if isinstance(metric_monotonic, Mapping):
-        freshness_reference = metric_monotonic.get("outputLimit")
-    if freshness_reference is None:
-        freshness_reference = telemetry_monotonic
-    if (
-        freshness_reference is not None
-        and record.published_monotonic is not None
-        and freshness_reference < record.published_monotonic
-    ):
-        return False
-
     for key, target in expected.items():
         observed = _observed_number(metrics, key)
         if observed is None:
-            if key in _OPTIONAL_EXPECTED_KEYS:
+            if key in OPTIONAL_EXPECTED_KEYS:
                 continue
             return False
-        if key in _WATT_PROPERTY_KEYS:
-            if abs(observed - float(target)) > tolerance_w:
-                return False
-        elif int(observed) != int(target):
+        if not property_matches(key, observed, target, watt_tolerance=tolerance_w):
+            return False
+        if not metric_is_fresh(
+            key,
+            published_monotonic=record.published_monotonic,
+            telemetry_monotonic=telemetry_monotonic,
+            metric_monotonic=metric_monotonic,
+        ):
             return False
 
     record.state = STATE_TELEMETRY_CONFIRMED
@@ -383,4 +422,8 @@ __all__ = [
     "complete_unconfirmed",
     "confirm_from_telemetry",
     "confirm_from_expected_properties",
+    "property_matches",
+    "metric_is_fresh",
+    "WATT_PROPERTY_KEYS",
+    "OPTIONAL_EXPECTED_KEYS",
 ]

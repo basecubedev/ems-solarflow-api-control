@@ -272,6 +272,47 @@ def test_real_mosquitto_no_ack_telemetry_confirmation_and_timeout(tmp_path):
             runtime.stop()
 
 
+def test_real_mosquitto_broker_delivery_survives_telemetry_confirmation(tmp_path):
+    """A real QoS 1 PUBACK is retained through telemetry terminalization.
+
+    Verifies both dimensions on a real broker: the command reaches
+    ``telemetry_confirmed`` AND its ``broker_delivery`` is ``delivered`` — the
+    PUBACK evidence is never lost when telemetry retires the command.
+    """
+
+    with mosquitto_broker(tmp_path) as (host, port):
+        runtime = build_zendure_mqtt_control_runtime(
+            _config(host, port, "solarflow_800_pro_2")
+        )
+        runtime.start()
+        try:
+            dev = runtime.devices[0]
+            wait_until(lambda: dev._service.connected, message="broker never connected")
+            assert dev.write_output_limit(500) is True
+            command = dev._active_command
+            assert command.broker_delivery in ("pending", "delivered")
+
+            _publish_report_until(
+                host, port, dev, 500,
+                lambda: command.state == "telemetry_confirmed",
+            )
+            assert command.state == "telemetry_confirmed"
+            assert dev._active_command is None
+
+            def _delivered():
+                dev.fetch()
+                return command.broker_delivery == "delivered"
+
+            wait_until(
+                _delivered,
+                message="broker delivery was not retained through confirmation",
+            )
+            assert command.broker_delivery == "delivered"
+            assert command.delivered_monotonic is not None
+        finally:
+            runtime.stop()
+
+
 def test_real_mosquitto_pending_flush_and_safety_preemption(tmp_path):
     with mosquitto_broker(tmp_path) as (host, port):
         runtime = build_zendure_mqtt_control_runtime(

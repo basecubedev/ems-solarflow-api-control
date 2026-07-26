@@ -198,7 +198,21 @@ Outcomes (fail closed):
   (`power_write_profile` derived from the registry);
 - no exact evidence → disable output control (telemetry-only), strip the unsafe
   write protocol, and attach the warning *"MQTT power control was disabled because
-  the exact Zendure hardware model is not configured…"*.
+  the exact Zendure hardware model is not configured…"*;
+- an already-safe profile-backed device that still carries an obsolete
+  `mqtt.write_topic` → a **non-blocking** `normalize_write_topic` change (severity
+  `info`) that removes the override while preserving `product_key`/`device_id`
+  and any custom fields. The runtime already ignores the override (the canonical
+  topic wins), so this never forces a migration before startup — it is a cleanup
+  offered in the plan/preview. A device addressed *only* by `write_topic` keeps
+  it, and a `custom_properties_write` entry always keeps its explicit topic.
+
+> **Migration note for old `mqtt.write_topic` entries.** If an upgraded config
+> has a profile-backed device with a stale `mqtt.write_topic` (for example a
+> leading-slash report topic copied by mistake), control is **not** broken — the
+> canonical `iot/…` topic is used regardless. Config validation surfaces a
+> `profile_write_topic_obsolete` warning and the migration/maintenance preview
+> shows the `write_topic` removal; apply it to clean up the config.
 
 Migration resolves the model from **all** available signals together
 (`product`, `model`, `mqtt.product`) via `resolve_hardware_profile_evidence`, so
@@ -307,13 +321,23 @@ idle). AC charge (`{"smartMode": 1, "acMode": 1, "outputLimit": 0,
 "inputLimit": <w>}`) is known from the reference implementation but **fails
 closed** — no ZenSDK profile enables charge until it is validated on hardware.
 
-**Write topic.** `properties/write` commands are always addressed on
-`iot/<productKey>/<deviceId>/properties/write` — for every topic family. Devices
-on the leading-slash report family publish their reports on `/…` topics but
-accept commands on `iot/…` only (live cloud capture: a getAll published to
-`iot/…/properties/read` is answered; the reference implementation writes to
-`iot/…` unconditionally). A leading-slash write topic is silently undelivered
-and is never built.
+**Write topic.** For a known/profile-backed device, `properties/write` commands
+are always addressed on the **canonical** `iot/<productKey>/<deviceId>/
+properties/write` — for every topic family, derived from the product key and
+device id (`canonical_profile_write_topic`). Devices on the leading-slash report
+family publish their reports on `/…` topics but accept commands on `iot/…` only
+(live cloud capture: a getAll published to `iot/…/properties/read` is answered;
+the reference implementation writes to `iot/…` unconditionally). A leading-slash
+write topic is silently undelivered.
+
+A stored `mqtt.write_topic` **can never redirect a known-profile control write**:
+the message builder derives the canonical topic for `legacy_properties_write`
+and reads an explicit topic only for `custom_properties_write`. A profile-backed
+device carrying an obsolete `mqtt.write_topic` is flagged by config validation
+(`profile_write_topic_obsolete`, a warning — the device stays writable) and
+removed by migration/normalization (`normalize_write_topic`), preserving the
+product key, device id and custom fields. See "Migration of existing configs"
+for the migration note.
 
 **QoS and retain.** Every control and property publish is QoS 1 and never
 retained (`CONTROL_PUBLISH_QOS`): QoS 1 makes broker delivery observable via
@@ -394,16 +418,24 @@ queued → published┤─→ telemetry_confirmed                      (no-ack, 
   this state.
 - `telemetry_confirmed` — telemetry proved the command **effective**, not merely
   echoed. An atomic ZenSDK command carries its expected property set and is
-  confirmed only when `outputLimit` is within tolerance, `acMode` matches
-  exactly, and `smartMode`/`inputLimit` match when telemetry reports them; the
-  `outputLimit` metric's **own** report time (the aggregator records per-metric
-  timestamps) must be newer than the publish, so a merged snapshot refreshed by
-  an unrelated message — or a superseded command's late echo — can never
-  confirm it. An **ack profile** confirms only an already-`acknowledged`
-  command; a **no-ack profile** (ZenSDK `properties/write`) confirms its
-  `published` command directly. Retained pre-command, stale, wrong-device or
-  out-of-tolerance telemetry never confirms, and a command is never reported
-  `confirmed` from a publish, PUBACK or ack alone.
+  confirmed only when **every** participating property both matches (watt-like
+  `outputLimit`/`inputLimit` within tolerance, mode/enum `acMode`/`smartMode`
+  exactly) **and is fresh**: each property's freshness is judged from its **own**
+  report time (`metric_monotonic[key]`, recorded per key by the aggregator), which
+  must be newer than or equal to the publish. `acMode` and `outputLimit` are
+  required; `smartMode`/`inputLimit` are checked when telemetry reports them, but a
+  *present* optional value must also match and be fresh. Because freshness is
+  per-property, a stale-but-matching `acMode`/`smartMode`/`inputLimit` — a merged
+  snapshot's cached value or a superseded command's late echo — can never confirm
+  a fresh command, even when `outputLimit` is fresh. An **ack profile** confirms
+  only an already-`acknowledged` command; a **no-ack profile** (ZenSDK
+  `properties/write`) confirms its `published` command directly. A command is
+  never reported `confirmed` from a publish, PUBACK or ack alone. Broker delivery
+  and device acceptance stay independent: a late PUBACK that arrives after
+  telemetry confirmation still updates `broker_delivery` (`pending` → `delivered`,
+  or `timeout` when none arrives) on the retained terminal record, and a
+  telemetry-confirmed command is never downgraded because broker evidence is
+  missing.
 - `completed_unconfirmed` — the strongest honest signal on a profile with **no
   reliable telemetry confirmation**: the acknowledgement (ack profile) or the
   successful publish (no-ack, non-confirmable profile — completed at publish

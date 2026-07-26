@@ -53,7 +53,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from ems.mqtt_control.command_state import property_matches  # noqa: E402
+
 RESTORE_PROPERTIES = ("smartMode", "acMode", "outputLimit", "inputLimit")
+
+# Property-type classification shared with the confirmation contract: watt-like
+# properties compare within a tolerance, every other property is an enum/mode and
+# compares exactly. Restore/mode verification must never apply a watt tolerance to
+# a mode value.
+WATT_PROPERTIES = ("outputLimit", "inputLimit")
 
 
 def bootstrap_config(config_arg):
@@ -107,22 +115,91 @@ def bootstrap_config(config_arg):
     return cfg, config, path
 
 
-def resolve_mqtt_device(runtime, name):
-    """Pick the MQTT control device to write to (by name, or the only one)."""
+def _last4(value):
+    text = str(value or "")
+    return text[-4:] if text else ""
+
+
+def _redact_candidate(dev):
+    """A secret-free identity summary of one candidate device for an error list."""
+
+    return (
+        f"name={getattr(dev, 'name', None)} "
+        f"source={getattr(dev, 'source', None)} "
+        f"hardware_profile={getattr(dev, 'hardware_profile', None)} "
+        f"broker_ref={getattr(dev, 'broker_ref', None)} "
+        f"serial=…{_last4(getattr(dev, 'sn', None))} "
+        f"device_id=…{_last4(getattr(dev, '_device_id', None))}"
+    )
+
+
+def _candidate_list(devices):
+    return "; ".join(_redact_candidate(d) for d in devices)
+
+
+def select_mqtt_device(runtime, *, name=None, serial=None, device_id=None,
+                       broker_ref=None, http_serial=None):
+    """Select exactly one configured MQTT control device, or return an error.
+
+    Every supplied selector must match; the HTTP-reported serial (``http_serial``)
+    is treated as an additional serial filter. Zero matches is an error; more than
+    one at the same specificity aborts with a redacted candidate list — the probe
+    never silently writes to the first of several matching devices.
+    """
 
     devices = list(getattr(runtime, "devices", []) or [])
     if not devices:
         return None, "no MQTT control device is configured (no write-capable zendure_mqtt entry)"
-    if name:
-        for dev in devices:
-            if dev.name == name:
-                return dev, None
-        available = ", ".join(sorted(d.name for d in devices))
-        return None, f"no MQTT control device named {name!r} (available: {available})"
-    if len(devices) == 1:
-        return devices[0], None
-    available = ", ".join(sorted(d.name for d in devices))
-    return None, f"multiple MQTT control devices; pass --device (available: {available})"
+
+    def matches(dev):
+        if name is not None and getattr(dev, "name", None) != name:
+            return False
+        if serial is not None and str(getattr(dev, "sn", "")) != str(serial):
+            return False
+        if http_serial is not None and str(getattr(dev, "sn", "")) != str(http_serial):
+            return False
+        if device_id is not None and str(getattr(dev, "_device_id", "")) != str(device_id):
+            return False
+        if broker_ref is not None and getattr(dev, "broker_ref", None) != broker_ref:
+            return False
+        return True
+
+    candidates = [d for d in devices if matches(d)]
+    if len(candidates) == 1:
+        return candidates[0], None
+    if not candidates:
+        if http_serial is not None:
+            return None, (
+                f"no MQTT control device has serial {http_serial}. "
+                f"MQTT control devices: {_candidate_list(devices)}"
+            )
+        return None, (
+            "no MQTT control device matches the given selectors "
+            f"(--device/--serial/--device-id/--broker-ref). Devices: {_candidate_list(devices)}"
+        )
+    return None, (
+        f"ambiguous device selection: {len(candidates)} devices match. Narrow with "
+        f"--device-name/--serial/--device-id/--broker-ref. Candidates: "
+        f"{_candidate_list(candidates)}"
+    )
+
+
+def resolve_mqtt_device(runtime, name, *, serial=None, device_id=None, broker_ref=None):
+    """Pick the single MQTT control device to write to; fail closed on ambiguity."""
+
+    devices = list(getattr(runtime, "devices", []) or [])
+    if name is None and serial is None and device_id is None and broker_ref is None:
+        if len(devices) == 1:
+            return devices[0], None
+        if not devices:
+            return None, "no MQTT control device is configured (no write-capable zendure_mqtt entry)"
+        return None, (
+            "multiple MQTT control devices; pass --device-name/--serial/--device-id/"
+            f"--broker-ref. Candidates: {_candidate_list(devices)}"
+        )
+    return select_mqtt_device(
+        runtime, name=name, serial=serial, device_id=device_id, broker_ref=broker_ref
+    )
 
 
 def resolve_http_reader(cfg, config, session, api_device, api_ip, mqtt_dev):
@@ -205,12 +282,14 @@ def serial_from_report(report):
     return None
 
 
-def resolve_by_api_ip(runtime, session, api_ip, device_name):
+def resolve_by_api_ip(runtime, session, api_ip, device_name, *, serial=None,
+                      device_id=None, broker_ref=None):
     """Anchor on the HTTP API IP: read its serial, then find the matching MQTT device.
 
-    Returns ``(dev, reader, serial, err)``. The IP unambiguously selects the target
-    inverter regardless of how many MQTT control devices are configured: the device
-    is the control entry whose serial equals the one the inverter reports over HTTP.
+    Returns ``(dev, reader, resolved_serial, err)``. The reported serial plus any
+    explicit selectors must resolve to exactly one control device; two devices
+    sharing the serial abort with a redacted candidate list rather than silently
+    selecting the first.
     """
 
     from ems.clients import ZendureClient
@@ -221,49 +300,56 @@ def resolve_by_api_ip(runtime, session, api_ip, device_name):
             f"could not read http://{api_ip}/properties/report "
             "(is the inverter's local HTTP API reachable at this IP?)"
         )
-    serial = serial_from_report(report)
-    if not serial:
+    reported_serial = serial_from_report(report)
+    if not reported_serial:
         return None, None, None, (
             f"no serial number in the API report from {api_ip}; cannot match a device"
         )
-    candidates = [d for d in runtime.devices if str(getattr(d, "sn", "")) == serial]
-    if device_name:
-        candidates = [d for d in candidates if d.name == device_name]
-    if not candidates:
-        known = ", ".join(sorted(f"{d.name}({d.sn})" for d in runtime.devices)) or "(none)"
-        return None, None, None, (
-            f"no MQTT control device has serial {serial} (reported by {api_ip}). "
-            f"MQTT control devices: {known}"
-        )
-    dev = candidates[0]
-    reader = ZendureClient(dev.name, api_ip, serial, session, 0, 0, 1, None)
-    return dev, reader, serial, None
+    dev, err = select_mqtt_device(
+        runtime, name=device_name, serial=serial, device_id=device_id,
+        broker_ref=broker_ref, http_serial=reported_serial,
+    )
+    if err:
+        return None, None, None, err
+    reader = ZendureClient(dev.name, api_ip, reported_serial, session, 0, 0, 1, None)
+    return dev, reader, reported_serial, None
 
 
 def read_power_state(reader):
-    """Return the device's current power-relevant state as a dict, or None."""
+    """Return the device's current power-relevant state as a dict, or None.
+
+    A writable property whose HTTP report value is absent (``None``) is omitted
+    rather than defaulted, so mode verification can honestly report a property the
+    device does not expose instead of confirming against a fabricated default.
+    """
 
     state = reader.fetch()
     if state is None:
         return None
-    return {
-        "smartMode": int(state.smart_mode),
-        "acMode": int(state.ac_mode),
-        "outputLimit": int(state.output_limit),
-        "inputLimit": int(state.input_limit_w),
+    result = {
         "outputHomePower": int(state.output),
         "soc": float(state.soc),
         "minSoc": float(state.min_soc),
         "solarInputPower": float(state.solar),
         "gridState": int(state.grid_state),
     }
+    for key, attr in (
+        ("smartMode", "smart_mode"),
+        ("acMode", "ac_mode"),
+        ("outputLimit", "output_limit"),
+        ("inputLimit", "input_limit_w"),
+    ):
+        value = getattr(state, attr, None)
+        if value is not None:
+            result[key] = int(value)
+    return result
 
 
 def read_output_limit(reader):
     """Return the device's current ``outputLimit`` in watts, or None on read failure."""
 
     state = read_power_state(reader)
-    return None if state is None else state["outputLimit"]
+    return None if state is None else state.get("outputLimit")
 
 
 def initial_restore_state(ip, session):
@@ -309,15 +395,23 @@ class Sample:
     index: int
     target: int
     baseline: int
-    publish_ok: bool
-    publish_ms: float
-    latency_ms: float | None
-    observed: int | None
+    publish_submitted: bool
+    # Local Paho submit time only — never broker delivery (see broker_delivery_ms).
+    local_publish_submit_ms: float
+    # Observed broker PUBACK delivery (delivered/timeout/untracked/pending).
+    broker_delivery_status: str
+    broker_delivery_ms: float | None
+    # HTTP-visible setpoint match time; None unless the target was actually matched.
+    setpoint_http_ms: float | None
+    last_observed_output_limit: int | None
+    # Movement away from baseline is diagnostics only — never setpoint landing.
+    movement_observed: bool
     matched_target: bool
     timed_out: bool
     polls: int
     mode_ok: bool | None = None
     physical: str | None = None
+    physical_output_ms: float | None = None
 
 
 def wait_for_broker(dev, timeout_s):
@@ -340,14 +434,40 @@ def build_command(dev, target):
 
 
 def publish_target(dev, target):
-    """Publish the production command; return (ok, publish_ms, expected)."""
+    """Publish the production command; return ``(ok, local_submit_ms, mid, expected)``.
+
+    ``local_submit_ms`` is the time to hand the message to the Paho client — local
+    submission only, never broker delivery. ``mid`` correlates a later PUBACK.
+    """
 
     message, _message_id, _operation, expected = build_command(dev, target)
     if message.retain:
         raise RuntimeError("refusing to publish a retained control command")
     start = time.monotonic()
     submission = dev._publish_message(message)
-    return bool(submission), (time.monotonic() - start) * 1000.0, expected
+    local_submit_ms = (time.monotonic() - start) * 1000.0
+    mid = getattr(submission, "mid", None)
+    return bool(submission), local_submit_ms, mid, expected
+
+
+def observe_broker_delivery(dev, mid, opts, *, sleep=time.sleep, now=time.monotonic):
+    """Observe the broker PUBACK for a publish; return ``(status, delivery_ms)``.
+
+    ``status`` is delivered/timeout/untracked. ``untracked`` means the transport
+    exposes no mid (delivery is unobservable), never that it failed. Bounded by
+    the ack timeout so the probe never blocks.
+    """
+
+    confirmed = getattr(getattr(dev, "_service", None), "delivery_confirmed", None)
+    if mid is None or not callable(confirmed):
+        return "untracked", None
+    start = now()
+    deadline = start + opts.connect_timeout
+    while now() < deadline:
+        if confirmed(mid):
+            return "delivered", (now() - start) * 1000.0
+        sleep(opts.poll_interval)
+    return "timeout", None
 
 
 def classify_physical(power_state, target, tolerance):
@@ -366,9 +486,16 @@ def classify_physical(power_state, target, tolerance):
 
 
 def verify_physical(reader, target, opts, *, sleep=time.sleep, now=time.monotonic, progress=None):
+    """Verify the physical output reaction; return ``(verdict, physical_ms)``.
+
+    ``physical_ms`` is the time to a non-``not_reacted`` verdict, or ``None`` when
+    the output never reacted within the window.
+    """
+
     if progress is None:
         progress = _no_progress
-    deadline = now() + opts.output_timeout
+    start = now()
+    deadline = start + opts.output_timeout
     last = None
     while now() < deadline:
         sleep(opts.poll_interval)
@@ -378,8 +505,8 @@ def verify_physical(reader, target, opts, *, sleep=time.sleep, now=time.monotoni
         verdict = classify_physical(last, target, opts.output_tolerance)
         progress(f"  output check: outputHomePower={last['outputHomePower']}W -> {verdict}")
         if verdict != "not_reacted":
-            return verdict
-    return classify_physical(last, target, opts.output_tolerance)
+            return verdict, (now() - start) * 1000.0
+    return classify_physical(last, target, opts.output_tolerance), None
 
 
 def run_probe(dev, reader, values, opts, *, sleep=time.sleep, now=time.monotonic, progress=None):
@@ -394,18 +521,18 @@ def run_probe(dev, reader, values, opts, *, sleep=time.sleep, now=time.monotonic
         progress = _no_progress
 
     samples = []
-    last_landed = None
+    last_matched = None
     for index in range(opts.samples):
         baseline = read_output_limit(reader)
         if baseline is None:
             raise RuntimeError("HTTP API read failed; cannot measure")
         if (
             opts.contention_check
-            and last_landed is not None
-            and moved(baseline, last_landed, opts.match_tolerance)
+            and last_matched is not None
+            and moved(baseline, last_matched, opts.match_tolerance)
         ):
             raise RuntimeError(
-                f"foreign writer detected: expected ~{last_landed} W, read {baseline} W. "
+                f"foreign writer detected: expected ~{last_matched} W, read {baseline} W. "
                 "Is the EMS still running? Stop it and retry."
             )
 
@@ -413,24 +540,34 @@ def run_probe(dev, reader, values, opts, *, sleep=time.sleep, now=time.monotonic
         if not moved(target, baseline, opts.match_tolerance):
             target = next((v for v in values if moved(v, baseline, opts.match_tolerance)), target)
 
-        ok, publish_ms, expected = publish_target(dev, target)
+        ok, submit_ms, mid, expected = publish_target(dev, target)
         progress(
             f"sample {index + 1}/{opts.samples}: wrote {target}W (baseline {baseline}W) "
-            f"publish={'ok' if ok else 'FAILED'} {publish_ms:.0f}ms"
+            f"local_submit={'ok' if ok else 'FAILED'} {submit_ms:.0f}ms"
         )
         if not ok:
             progress("  -> publish failed (broker down or write blocked); skipping")
             samples.append(
-                Sample(index, target, baseline, False, publish_ms, None, None, False, False, 0)
+                Sample(
+                    index, target, baseline, False, submit_ms, "untracked", None,
+                    None, None, False, False, False, 0,
+                )
             )
             sleep(opts.settle)
             continue
+
+        delivery_status, delivery_ms = observe_broker_delivery(
+            dev, mid, opts, sleep=sleep, now=now
+        )
+        progress(f"  broker delivery: {delivery_status}"
+                 + (f" {delivery_ms:.0f}ms" if delivery_ms is not None else ""))
 
         start = now()
         deadline = start + opts.timeout
         observed = baseline
         polls = 0
-        landed_at = None
+        matched_at = None
+        movement_observed = False
         while now() < deadline:
             sleep(opts.poll_interval)
             polls += 1
@@ -439,44 +576,69 @@ def run_probe(dev, reader, values, opts, *, sleep=time.sleep, now=time.monotonic
             if observed is None:
                 continue
             if moved(observed, baseline, opts.match_tolerance):
-                landed_at = now()
+                movement_observed = True
+            # Setpoint landing requires the actual target, never mere movement.
+            if abs(observed - target) <= opts.match_tolerance:
+                matched_at = now()
                 break
 
-        if landed_at is None:
+        if matched_at is None:
             progress(
-                f"  -> TIMED OUT after {opts.timeout:.0f}s (outputLimit still {observed}W; "
-                "the HTTP read never reflected the write)"
+                f"  -> TIMED OUT after {opts.timeout:.0f}s (outputLimit {observed}W, "
+                f"target {target}W{', moved but never matched' if movement_observed else ''})"
             )
             samples.append(
-                Sample(index, target, baseline, True, publish_ms, None, observed, False, True, polls)
+                Sample(
+                    index, target, baseline, True, submit_ms, delivery_status,
+                    delivery_ms, None, observed, movement_observed, False, True, polls,
+                )
             )
         else:
-            latency_ms = (landed_at - start) * 1000.0
-            matched = observed is not None and abs(observed - target) <= opts.match_tolerance
+            setpoint_http_ms = (matched_at - start) * 1000.0
             power_state = read_power_state(reader)
-            mode_ok = None
-            if expected and power_state is not None:
-                mode_ok = power_state["acMode"] == expected.get("acMode", power_state["acMode"])
-            physical = None
+            mode_ok = _mode_matches(expected, power_state, opts.match_tolerance)
+            physical, physical_ms = None, None
             if opts.verify_output:
-                physical = verify_physical(
+                physical, physical_ms = verify_physical(
                     reader, target, opts, sleep=sleep, now=now, progress=progress
                 )
             progress(
-                f"  -> landed after {latency_ms:.0f}ms (outputLimit={observed}W"
-                + (f", acMode_ok={mode_ok}" if mode_ok is not None else "")
+                f"  -> matched target after {setpoint_http_ms:.0f}ms (outputLimit={observed}W"
+                + (f", mode_ok={mode_ok}" if mode_ok is not None else "")
                 + (f", physical={physical}" if physical else "")
                 + ")"
             )
             samples.append(
                 Sample(
-                    index, target, baseline, True, publish_ms, latency_ms, observed,
-                    matched, False, polls, mode_ok=mode_ok, physical=physical,
+                    index, target, baseline, True, submit_ms, delivery_status,
+                    delivery_ms, setpoint_http_ms, observed, movement_observed, True,
+                    False, polls, mode_ok=mode_ok, physical=physical,
+                    physical_output_ms=physical_ms,
                 )
             )
-            last_landed = observed
+            last_matched = observed
         sleep(opts.settle)
     return samples
+
+
+def _mode_matches(expected, power_state, watt_tolerance):
+    """Whether telemetry satisfies the full expected property set, or ``None``.
+
+    Returns ``None`` when a required property is not exposed by the HTTP report
+    (verification incomplete), otherwise whether every expected property matches
+    by type (watt-like within tolerance, mode/enum exactly).
+    """
+
+    if not expected or power_state is None:
+        return None
+    for key, target in expected.items():
+        if key not in power_state:
+            return None
+        if not property_matches(
+            key, power_state[key], target, watt_tolerance=watt_tolerance
+        ):
+            return False
+    return True
 
 
 def _no_progress(_message):
@@ -495,18 +657,18 @@ def run_mode_recovery_test(dev, reader, target, opts, *, sleep=time.sleep, now=t
     state = read_power_state(reader)
     if state is None:
         return {"result": "error", "detail": "HTTP API read failed"}
-    if state["smartMode"] == 1 and state["acMode"] == 2:
+    if state.get("smartMode") == 1 and state.get("acMode") == 2:
         return {
             "result": "not_applicable",
             "detail": "device already in smart AC output mode (smartMode=1, acMode=2)",
         }
     progress(
-        f"mode test: starting from smartMode={state['smartMode']} acMode={state['acMode']} "
-        f"outputLimit={state['outputLimit']}W"
+        f"mode test: starting from smartMode={state.get('smartMode')} "
+        f"acMode={state.get('acMode')} outputLimit={state.get('outputLimit')}W"
     )
-    ok, publish_ms, expected = publish_target(dev, target)
+    ok, submit_ms, _mid, expected = publish_target(dev, target)
     if not ok:
-        return {"result": "publish_failed", "detail": f"publish failed after {publish_ms:.0f}ms"}
+        return {"result": "publish_failed", "detail": f"publish failed after {submit_ms:.0f}ms"}
     deadline = now() + opts.timeout
     while now() < deadline:
         sleep(opts.poll_interval)
@@ -514,20 +676,12 @@ def run_mode_recovery_test(dev, reader, target, opts, *, sleep=time.sleep, now=t
         if current is None:
             continue
         progress(
-            f"  smartMode={current['smartMode']} acMode={current['acMode']} "
-            f"outputLimit={current['outputLimit']}W"
+            f"  smartMode={current.get('smartMode')} acMode={current.get('acMode')} "
+            f"outputLimit={current.get('outputLimit')}W inputLimit={current.get('inputLimit')}W"
         )
-        if (
-            current["acMode"] == expected.get("acMode", 2)
-            and abs(current["outputLimit"] - target) <= opts.match_tolerance
-        ):
-            return {
-                "result": "mode_and_setpoint_landed",
-                "detail": (
-                    f"smartMode={current['smartMode']} acMode={current['acMode']} "
-                    f"outputLimit={current['outputLimit']}W"
-                ),
-            }
+        verdict = _mode_test_verdict(expected, current, opts.match_tolerance)
+        if verdict is not None:
+            return verdict
     final = read_power_state(reader)
     return {
         "result": "timed_out",
@@ -535,18 +689,72 @@ def run_mode_recovery_test(dev, reader, target, opts, *, sleep=time.sleep, now=t
     }
 
 
+def _mode_test_verdict(expected, current, watt_tolerance):
+    """A terminal mode-test verdict once telemetry settles, or ``None`` to wait.
+
+    Verifies the *complete* expected property set by type: watt-like within
+    tolerance, mode/enum exactly. A required property not exposed by the HTTP
+    report yields ``setpoint_verified_mode_incomplete`` rather than a false
+    full-mode success; a settled mismatch is ``mode_mismatch``.
+    """
+
+    setpoint_ok = property_matches(
+        "outputLimit", current.get("outputLimit"), expected["outputLimit"],
+        watt_tolerance=watt_tolerance,
+    )
+    if not setpoint_ok:
+        return None  # keep waiting for the setpoint to land
+
+    incomplete = [k for k in expected if k not in current]
+    detail = (
+        f"smartMode={current.get('smartMode')} acMode={current.get('acMode')} "
+        f"outputLimit={current.get('outputLimit')}W inputLimit={current.get('inputLimit')}W"
+    )
+    if incomplete:
+        return {
+            "result": "setpoint_verified_mode_incomplete",
+            "detail": f"{detail}; not reported by HTTP: {sorted(incomplete)}",
+        }
+    mismatches = [
+        k for k, v in expected.items()
+        if not property_matches(k, current[k], v, watt_tolerance=watt_tolerance)
+    ]
+    if mismatches:
+        return {"result": "mode_mismatch", "detail": f"{detail}; mismatched: {sorted(mismatches)}"}
+    return {"result": "mode_and_setpoint_verified", "detail": detail}
+
+
+def preflight_restorable(dev, initial):
+    """Return ``{key: reason}`` for captured properties this device cannot restore.
+
+    A mode-changing test must not begin unless the complete captured state can be
+    restored by the production property writer (e.g. an initial ``acMode`` outside
+    the profile's writable range). An empty result means the full restore is safe.
+    """
+
+    if not initial:
+        return {}
+    desired = {k: v for k, v in initial.items() if k in RESTORE_PROPERTIES}
+    return dev.check_property_writes(desired)
+
+
 def restore_initial_state(dev, reader, initial, opts, *, sleep=time.sleep, now=time.monotonic, progress=None):
     """Restore the complete captured power state via the production write path.
 
-    Returns a report dict with the publish result and an HTTP verification of
-    the restored values. Never raises.
+    Returns a report dict. ``restore_verified`` is true only when every captured
+    property is restored and verified by type (watt-like within tolerance,
+    mode/enum exactly). An ``outputLimit``-only fallback (when the atomic property
+    write is rejected) is reported as ``restore_partial`` — never as a full
+    restore. Never raises.
     """
 
     if progress is None:
         progress = _no_progress
     if not initial:
-        return {"restored": False, "detail": "no initial state captured"}
+        return {"restored": False, "restore_verified": False, "restore_partial": False,
+                "detail": "no initial state captured"}
     desired = {k: v for k, v in initial.items() if k in RESTORE_PROPERTIES}
+    partial = False
     try:
         result = dev.write_properties(desired, reason="probe_restore")
         ok = bool(result)
@@ -555,14 +763,21 @@ def restore_initial_state(dev, reader, initial, opts, *, sleep=time.sleep, now=t
         ok, detail = False, f"{type(exc).__name__}"
     if not ok and "outputLimit" in desired:
         try:
-            ok, _ms, _expected = publish_target(dev, desired["outputLimit"])
+            ok, _ms, _mid, _expected = publish_target(dev, desired["outputLimit"])
+            partial = ok
             detail = f"fallback outputLimit-only restore (properties write: {detail})"
         except Exception as exc:
-            return {"restored": False, "detail": f"restore publish failed: {type(exc).__name__}"}
+            return {"restored": False, "restore_verified": False, "restore_partial": False,
+                    "detail": f"restore publish failed: {type(exc).__name__}"}
     if not ok:
-        return {"restored": False, "detail": detail or "publish failed"}
+        return {"restored": False, "restore_verified": False, "restore_partial": False,
+                "detail": detail or "publish failed"}
 
+    # A partial (outputLimit-only) fallback can only ever verify the setpoint, so
+    # only the outputLimit is checked and full restoration is never claimed.
+    verify_keys = {"outputLimit"} if partial else set(desired)
     deadline = now() + opts.timeout
+    verified = False
     while now() < deadline:
         sleep(opts.poll_interval)
         current = read_power_state(reader)
@@ -570,18 +785,31 @@ def restore_initial_state(dev, reader, initial, opts, *, sleep=time.sleep, now=t
             continue
         mismatch = {
             key: (current.get(key), desired[key])
-            for key in desired
-            if current.get(key) is not None
-            and abs(int(current[key]) - int(desired[key])) > opts.match_tolerance
+            for key in verify_keys
+            if current.get(key) is None
+            or not property_matches(
+                key, current[key], desired[key], watt_tolerance=opts.match_tolerance
+            )
         }
         if not mismatch:
-            progress(f"restore verified: {desired}")
-            return {"restored": True, "verified": True, "state": desired, "detail": detail}
+            verified = True
+            break
+    restore_verified = verified and not partial
+    if verified:
+        progress(
+            ("partial (outputLimit-only) restore verified: " if partial
+             else "restore verified: ") + f"{desired}"
+        )
     return {
         "restored": True,
-        "verified": False,
+        "restore_verified": restore_verified,
+        "restore_partial": partial,
+        "verified": restore_verified,
         "state": desired,
-        "detail": (detail + "; " if detail else "") + "HTTP verification timed out",
+        "detail": (
+            (detail + "; " if detail else "")
+            + ("verified" if verified else "HTTP verification timed out")
+        ),
     }
 
 
@@ -600,24 +828,42 @@ def percentile(sorted_values, q):
 
 
 def summarize(samples, opts):
-    """Aggregate the successful samples into headline latency statistics."""
+    """Aggregate matched samples into headline latency statistics.
 
-    latencies = sorted(s.latency_ms for s in samples if s.latency_ms is not None)
-    publishes = sorted(s.publish_ms for s in samples if s.publish_ok)
+    Only a sample that actually matched the target counts as landed; a
+    movement-only or timed-out sample is reported separately and never inflates
+    the setpoint-latency percentiles.
+    """
+
+    matched = [s for s in samples if s.matched_target]
+    latencies = sorted(s.setpoint_http_ms for s in matched if s.setpoint_http_ms is not None)
+    submits = sorted(s.local_publish_submit_ms for s in samples if s.publish_submitted)
+    deliveries = sorted(
+        s.broker_delivery_ms for s in samples if s.broker_delivery_ms is not None
+    )
     ok = len(latencies)
+    # Mutually exclusive buckets. Movement toward the target that never matched is
+    # diagnostics only and is counted separately from a sample that never moved.
+    unmatched = [s for s in samples if s.publish_submitted and not s.matched_target]
+    movement_only = sum(1 for s in unmatched if s.movement_observed)
+    timed_out = sum(1 for s in unmatched if not s.movement_observed)
     return {
         "samples": len(samples),
-        "landed": ok,
-        "timed_out": sum(1 for s in samples if s.timed_out),
-        "publish_failed": sum(1 for s in samples if not s.publish_ok),
+        "matched": len(matched),
+        "landed": len(matched),
+        "movement_only": movement_only,
+        "timed_out": timed_out,
+        "publish_failed": sum(1 for s in samples if not s.publish_submitted),
+        "broker_delivered": sum(1 for s in samples if s.broker_delivery_status == "delivered"),
         "mode_ok": sum(1 for s in samples if s.mode_ok),
         "output_reacted": sum(1 for s in samples if s.physical == "output_reacted"),
         "poll_resolution_ms": opts.poll_interval * 1000.0,
-        "latency_min_ms": latencies[0] if ok else None,
-        "latency_p50_ms": percentile(latencies, 0.5),
-        "latency_p95_ms": percentile(latencies, 0.95),
-        "latency_max_ms": latencies[-1] if ok else None,
-        "publish_p50_ms": percentile(publishes, 0.5),
+        "setpoint_http_min_ms": latencies[0] if ok else None,
+        "setpoint_http_p50_ms": percentile(latencies, 0.5),
+        "setpoint_http_p95_ms": percentile(latencies, 0.95),
+        "setpoint_http_max_ms": latencies[-1] if ok else None,
+        "local_submit_p50_ms": percentile(submits, 0.5),
+        "broker_delivery_p50_ms": percentile(deliveries, 0.5) if deliveries else None,
     }
 
 
@@ -634,37 +880,52 @@ def format_text_report(dev, reader, values, samples, stats):
         f"transport={dev.source} gate={dev.control_gate} api={reader.ip} values={values}"
     )
     lines.append("")
-    lines.append(f"{'#':>2}  {'target':>7}  {'baseline':>8}  {'latency_ms':>10}  {'publish_ms':>10}  {'polls':>5}  status")
+    lines.append(
+        f"{'#':>2}  {'target':>7}  {'baseline':>8}  {'setpoint_ms':>11}  "
+        f"{'submit_ms':>9}  {'broker':>9}  {'polls':>5}  status"
+    )
     for s in samples:
-        if not s.publish_ok:
+        if not s.publish_submitted:
             status = "publish_failed"
+        elif s.matched_target:
+            status = "matched"
+        elif s.timed_out and s.movement_observed:
+            status = f"moved_not_matched(observed={s.last_observed_output_limit})"
         elif s.timed_out:
             status = "timed_out"
-        elif s.matched_target:
-            status = "ok"
         else:
-            status = f"ok(observed={s.observed})"
+            status = "no_match"
         if s.mode_ok is False:
             status += ",mode_mismatch"
+        elif s.mode_ok is None and s.matched_target:
+            status += ",mode_incomplete"
         if s.physical:
             status += f",{s.physical}"
+        broker = s.broker_delivery_status
+        if s.broker_delivery_ms is not None:
+            broker = f"{s.broker_delivery_ms:.0f}ms"
         lines.append(
             f"{s.index:>2}  {s.target:>7}  {s.baseline:>8}  "
-            f"{_fmt_ms(s.latency_ms):>10}  {s.publish_ms:>10.1f}  {s.polls:>5}  {status}"
+            f"{_fmt_ms(s.setpoint_http_ms):>11}  {s.local_publish_submit_ms:>9.1f}  "
+            f"{broker:>9}  {s.polls:>5}  {status}"
         )
     lines.append("")
     lines.append(
-        f"landed {stats['landed']}/{stats['samples']}  "
-        f"timed_out={stats['timed_out']}  publish_failed={stats['publish_failed']}  "
+        f"matched {stats['matched']}/{stats['samples']}  "
+        f"movement_only={stats['movement_only']}  timed_out={stats['timed_out']}  "
+        f"publish_failed={stats['publish_failed']}  broker_delivered={stats['broker_delivered']}  "
         f"poll_resolution={stats['poll_resolution_ms']:.0f} ms"
     )
     lines.append(
-        f"latency ms  min={_fmt_ms(stats['latency_min_ms'])}  "
-        f"p50={_fmt_ms(stats['latency_p50_ms'])}  "
-        f"p95={_fmt_ms(stats['latency_p95_ms'])}  "
-        f"max={_fmt_ms(stats['latency_max_ms'])}"
+        f"setpoint HTTP-match ms  min={_fmt_ms(stats['setpoint_http_min_ms'])}  "
+        f"p50={_fmt_ms(stats['setpoint_http_p50_ms'])}  "
+        f"p95={_fmt_ms(stats['setpoint_http_p95_ms'])}  "
+        f"max={_fmt_ms(stats['setpoint_http_max_ms'])}  (matched samples only)"
     )
-    lines.append(f"host->broker publish ms  p50={_fmt_ms(stats['publish_p50_ms'])}")
+    lines.append(
+        f"local submit ms p50={_fmt_ms(stats['local_submit_p50_ms'])}   "
+        f"broker delivery ms p50={_fmt_ms(stats['broker_delivery_p50_ms'])}"
+    )
     return "\n".join(lines)
 
 
@@ -678,22 +939,27 @@ def format_markdown_report(dev, reader, values, stats):
             "",
             "Command channel: MQTT. Observation channel: local HTTP API "
             f"(`{reader.ip}`), polled every {stats['poll_resolution_ms']:.0f} ms. "
-            f"Toggled between {values} W.",
+            f"Toggled between {values} W. Only samples that matched the target count "
+            "as landed.",
             "",
             "| Metric | Value |",
             "| --- | --- |",
-            f"| Samples landed | {stats['landed']} / {stats['samples']} |",
-            f"| Latency min | {_fmt_ms(stats['latency_min_ms'])} ms |",
-            f"| Latency p50 | {_fmt_ms(stats['latency_p50_ms'])} ms |",
-            f"| Latency p95 | {_fmt_ms(stats['latency_p95_ms'])} ms |",
-            f"| Latency max | {_fmt_ms(stats['latency_max_ms'])} ms |",
-            f"| Host→broker publish p50 | {_fmt_ms(stats['publish_p50_ms'])} ms |",
+            f"| Samples matched | {stats['matched']} / {stats['samples']} |",
+            f"| Movement-only (not matched) | {stats['movement_only']} |",
+            f"| Broker delivered | {stats['broker_delivered']} / {stats['samples']} |",
+            f"| Setpoint HTTP-match min | {_fmt_ms(stats['setpoint_http_min_ms'])} ms |",
+            f"| Setpoint HTTP-match p50 | {_fmt_ms(stats['setpoint_http_p50_ms'])} ms |",
+            f"| Setpoint HTTP-match p95 | {_fmt_ms(stats['setpoint_http_p95_ms'])} ms |",
+            f"| Setpoint HTTP-match max | {_fmt_ms(stats['setpoint_http_max_ms'])} ms |",
+            f"| Local submit p50 | {_fmt_ms(stats['local_submit_p50_ms'])} ms |",
+            f"| Broker delivery p50 | {_fmt_ms(stats['broker_delivery_p50_ms'])} ms |",
             f"| Poll resolution | {stats['poll_resolution_ms']:.0f} ms |",
             "",
-            "_MQTT publish → new value visible on the device's local HTTP API. "
-            "Measurement resolution equals the poll interval; true latency lies within "
-            "one poll interval below the reported value. Measured with the EMS stopped "
-            "(single writer)._",
+            "_Local submit = time to hand the command to the MQTT client. Broker "
+            "delivery = observed PUBACK. Setpoint HTTP-match = MQTT publish → target "
+            "value visible on the device's local HTTP API (matched samples only; "
+            "movement toward the target is not a match). Measured with the EMS "
+            "stopped (single writer)._",
         ]
     )
 
@@ -708,6 +974,13 @@ def print_preview(dev, reader, values, gate, initial):
         f"  hardware_profile={dev.hardware_profile}  "
         f"power_write_profile={described.get('power_write_profile')}"
     )
+    print(
+        f"  effective write topic: {described.get('effective_write_topic')} "
+        f"(source={described.get('effective_write_topic_source')})"
+    )
+    if described.get("write_topic_obsolete"):
+        print("  note: an obsolete mqtt.write_topic override is present and IGNORED "
+              "(the canonical topic is used).")
     print(
         f"  write_gate={gate.gate_name} enabled={gate.gate_enabled} "
         f"blocked_by={list(gate.blocked_by)}"
@@ -725,7 +998,14 @@ def print_preview(dev, reader, values, gate, initial):
             print(f"  {value}W -> NOT BUILDABLE ({exc})")
     if initial:
         restore = {k: v for k, v in initial.items() if k in RESTORE_PROPERTIES}
-        print(f"  restore plan: properties/write {restore}")
+        unrestorable = preflight_restorable(dev, initial)
+        restorable = {k: v for k, v in restore.items() if k not in unrestorable}
+        print(f"  restorable initial properties: {restorable}")
+        if unrestorable:
+            print(f"  NON-RESTORABLE initial properties: {unrestorable} "
+                  "(a mode-changing test would be refused at preflight)")
+    print("  single-writer advisory: stop the live EMS before writing "
+          "(two writers to outputLimit is forbidden).")
 
 
 def parse_args(argv=None):
@@ -733,7 +1013,10 @@ def parse_args(argv=None):
         description="Probe Zendure MQTT power control against the local HTTP API."
     )
     parser.add_argument("--config", default=None, help="Path to config.json (default: resolved like the EMS).")
-    parser.add_argument("--device", default=None, help="MQTT control device name (default: the only one).")
+    parser.add_argument("--device", "--device-name", dest="device", default=None, help="MQTT control device name (default: the only one).")
+    parser.add_argument("--serial", default=None, help="Select the MQTT control device by physical serial.")
+    parser.add_argument("--device-id", dest="device_id", default=None, help="Select the MQTT control device by MQTT device id.")
+    parser.add_argument("--broker-ref", dest="broker_ref", default=None, help="Select the MQTT control device by broker reference.")
     parser.add_argument("--api-device", default=None, help="HTTP device entry name for the read-back (default: matched by serial).")
     parser.add_argument("--api-ip", default=None, help="Local HTTP API IP of the inverter to test. The probe reads its serial and selects the matching MQTT control device (unambiguous even with many devices).")
     parser.add_argument("--values", type=int, nargs=2, metavar=("A", "B"), default=[200, 500], help="Two outputLimit setpoints to toggle between (W).")
@@ -765,17 +1048,38 @@ def main(argv=None):
     cfg, config, config_path = bootstrap_config(opts.config)
 
     from ems.clients import create_session
+    from ems.zendure_mqtt.config_entries import (
+        find_duplicate_device_names,
+        find_duplicate_zendure_device_identities,
+    )
     from ems.zendure_mqtt.control_runtime import build_zendure_mqtt_control_runtime
+
+    # Fail closed on a config the live EMS would refuse: duplicate device
+    # identities/names make single-writer selection ambiguous.
+    devices_config = config.get("devices") if isinstance(config, dict) else None
+    if find_duplicate_zendure_device_identities(devices_config) or find_duplicate_device_names(
+        devices_config
+    ):
+        print(
+            "error: duplicate device identities or names in config; resolve them "
+            "before probing (single-writer selection must be unambiguous)",
+            file=sys.stderr,
+        )
+        return 1
 
     runtime = build_zendure_mqtt_control_runtime(config)
     session = create_session()
 
     if opts.api_ip:
         dev, reader, matched_serial, err = resolve_by_api_ip(
-            runtime, session, opts.api_ip, opts.device
+            runtime, session, opts.api_ip, opts.device,
+            serial=opts.serial, device_id=opts.device_id, broker_ref=opts.broker_ref,
         )
     else:
-        dev, err = resolve_mqtt_device(runtime, opts.device)
+        dev, err = resolve_mqtt_device(
+            runtime, opts.device, serial=opts.serial,
+            device_id=opts.device_id, broker_ref=opts.broker_ref,
+        )
         reader = None
         if not err:
             reader, err = resolve_http_reader(
@@ -838,6 +1142,7 @@ def main(argv=None):
     exit_code = 0
     samples = []
     mode_result = None
+    wrote = False
     try:
         if not wait_for_broker(dev, opts.connect_timeout):
             print("error: MQTT broker did not connect within the timeout", file=sys.stderr)
@@ -848,12 +1153,25 @@ def main(argv=None):
             return 1
         print(f"initial state: {initial}\n")
 
+        # Preflight: the complete captured state must be restorable before any
+        # write — otherwise the test could leave the device in a changed state
+        # it cannot restore. Abort before the first publish.
+        unrestorable = preflight_restorable(dev, initial)
+        if unrestorable:
+            print(
+                f"preflight_failed: this profile cannot restore the captured initial "
+                f"state {unrestorable}; refusing to write.",
+                file=sys.stderr,
+            )
+            return 1
+
+        wrote = True
         if opts.mode_test:
             mode_result = run_mode_recovery_test(
                 dev, reader, opts.values[0], opts, progress=progress
             )
             print(f"\nmode test: {mode_result['result']} — {mode_result['detail']}")
-            if mode_result["result"] not in ("mode_and_setpoint_landed", "not_applicable"):
+            if mode_result["result"] not in ("mode_and_setpoint_verified", "not_applicable"):
                 exit_code = 1
         else:
             samples = run_probe(dev, reader, opts.values, opts, progress=progress)
@@ -864,10 +1182,14 @@ def main(argv=None):
         print("\ninterrupted: restoring initial state", file=sys.stderr)
         exit_code = 130
     finally:
-        if initial is not None:
+        # Restore only if a write actually happened (a preflight abort changed
+        # nothing). Restore runs on success, timeout, exception and interrupt.
+        if wrote and initial is not None:
             report = restore_initial_state(dev, reader, initial, opts, progress=progress)
             print(f"\nrestore: {report}")
-            if not report.get("restored") or report.get("verified") is False:
+            # A partial (outputLimit-only) or unverified restore is a failure, and
+            # a zero exit must never hide it.
+            if not report.get("restored") or not report.get("restore_verified"):
                 exit_code = exit_code or 1
         runtime.stop()
 

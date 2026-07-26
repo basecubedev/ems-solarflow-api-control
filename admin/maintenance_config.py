@@ -164,8 +164,16 @@ def _redact_cloud_mqtt_route_ids(value):
             isinstance(mqtt, dict)
             and mqtt.get("source") == "zendure_cloud_mqtt"
         ):
-            if mqtt.get("device_id") not in (None, ""):
+            original_device_id = mqtt.get("device_id")
+            if original_device_id not in (None, ""):
                 mqtt["device_id"] = _REDACTED
+                # The canonical effective topic embeds the route device id; mask
+                # that segment too while keeping the topic shape visible.
+                topic = mqtt.get("effective_write_topic")
+                if isinstance(topic, str) and original_device_id in topic:
+                    mqtt["effective_write_topic"] = topic.replace(
+                        original_device_id, _REDACTED
+                    )
             if value.get("device_id") not in (None, ""):
                 value["device_id"] = _REDACTED
         for item in value.values():
