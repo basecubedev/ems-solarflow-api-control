@@ -22,6 +22,9 @@ class _FakeSnapshot:
     def __init__(self, metrics, last_seen_monotonic):
         self.metrics = metrics
         self.last_seen_monotonic = last_seen_monotonic
+        self.metric_monotonic = {
+            key: last_seen_monotonic for key in metrics
+        }
 
 
 class _FakeService:

@@ -148,6 +148,41 @@ def test_diagnose_redact_report_for_http_masks_structured_and_text_secrets():
     json.dumps(redacted, sort_keys=True)
 
 
+def test_diagnose_http_redaction_masks_cloud_route_in_name_and_arbitrary_topic():
+    route = "ACCOUNT_ROUTE_1234"
+    product = "PRODUCT_ACCOUNT_A"
+    topic = f"iot/{product}/{route}/properties/write"
+    report = {
+        "zendure_mqtt": {
+            "brokers": [
+                {
+                    "broker_ref": "cloud_a",
+                    "source": "zendure_cloud_mqtt",
+                    "password": "BROKER_PASSWORD",
+                }
+            ],
+            "devices": [
+                {
+                    "broker_ref": "cloud_a",
+                    "source": "zendure_cloud_mqtt",
+                    "device_id": route,
+                    "product_key": product,
+                    "name": f"WR {route}",
+                    "reason": f"publish {topic} pending",
+                    "authorization_code": "AUTH_CODE_SECRET",
+                }
+            ],
+        }
+    }
+
+    flattened = json.dumps(
+        diagnostics.diagnose_redact_report_for_http(report)
+    )
+
+    for raw in (route, product, topic, "BROKER_PASSWORD", "AUTH_CODE_SECRET"):
+        assert raw not in flattened
+
+
 def test_diagnose_docker_deep_warns_when_docker_cli_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(diagnostics, "BASE_DIR", str(tmp_path))
     monkeypatch.setattr(diagnostics.shutil, "which", lambda name: None)

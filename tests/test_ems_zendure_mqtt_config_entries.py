@@ -159,33 +159,41 @@ def test_input_entry_is_not_mutated():
 def test_identity_from_local_api_sn():
     assert zendure_config_device_identity(
         {"name": "WR1", "ip": "192.168.1.50", "sn": "SER1"}
-    ) == ("serial", "ser1")
+    ) == ("physical_serial", "ser1")
 
 
 def test_identity_from_top_level_serial_number():
     assert zendure_config_device_identity(
         {"name": "WR1", "serial_number": "Abc-9"}
-    ) == ("serial", "abc-9")
+    ) == ("physical_serial", "abc-9")
 
 
 def test_mqtt_identity_prefers_serial_number_when_present():
     entry = _telemetry_only_entry()
     entry["serial_number"] = "SN-9"
-    assert zendure_config_device_identity(entry) == ("serial", "sn-9")
+    assert zendure_config_device_identity(entry) == ("physical_serial", "sn-9")
 
 
 def test_mqtt_identity_from_product_key_and_device_id():
     entry = _telemetry_only_entry()
     entry.pop("serial_number", None)
-    assert zendure_config_device_identity(entry) == ("mqtt_pk", "pk1", "abc123")
+    assert zendure_config_device_identity(entry) == (
+        "scoped_mqtt_route",
+        "zendure_mqtt",
+        "default",
+        "pk1",
+        "abc123",
+    )
 
 
 def test_mqtt_identity_from_topic_family_and_device_id():
     entry = _telemetry_only_entry()
     entry["mqtt"].pop("product_key")
     assert zendure_config_device_identity(entry) == (
-        "mqtt_tf",
-        "zensdk_ha_scalar",
+        "scoped_mqtt_route",
+        "zendure_mqtt",
+        "default",
+        "topic:zensdk_ha_scalar",
         "abc123",
     )
 
@@ -194,7 +202,13 @@ def test_mqtt_identity_from_device_id_only():
     entry = _telemetry_only_entry()
     entry["mqtt"].pop("product_key")
     entry["mqtt"].pop("topic_family")
-    assert zendure_config_device_identity(entry) == ("mqtt_dev", "abc123")
+    assert zendure_config_device_identity(entry) == (
+        "scoped_mqtt_route",
+        "zendure_mqtt",
+        "default",
+        "topic:unknown",
+        "abc123",
+    )
 
 
 def test_identity_is_none_without_meaningful_fields():
@@ -340,6 +354,19 @@ def test_startup_error_is_none_without_duplicates():
 def test_startup_error_reports_count_on_duplicate():
     devices = [{"name": "WR1", "sn": "SHARED"}, {"name": "WR2", "sn": "shared"}]
     assert duplicate_zendure_identity_startup_error(devices) == {"duplicate_count": 1}
+
+
+def test_startup_identity_guard_inherits_named_broker_source_scope():
+    local = _telemetry_only_entry()
+    local.pop("serial_number", None)
+    local["mqtt"]["source"] = "local_mqtt"
+    local["mqtt"]["broker_ref"] = "shared"
+    cloud = copy.deepcopy(local)
+    cloud["mqtt"].pop("source")
+
+    assert duplicate_zendure_identity_startup_error(
+        [local, cloud], broker_sources={"shared": "zendure_cloud_mqtt"}
+    ) is None
 
 
 def test_startup_error_ignores_disabled_duplicate():

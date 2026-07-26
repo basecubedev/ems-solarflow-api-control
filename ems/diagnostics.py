@@ -32,6 +32,7 @@ from urllib.request import Request, urlopen
 
 from dashboard import auth as dashboard_auth
 from ems import config as config_mod
+from ems.external_status import sanitize_external_mqtt_status
 from ems.health import (
     CommHealth,
     render_device_health,
@@ -71,7 +72,6 @@ DIAGNOSE_REDACT_KEYWORDS = (
     "credential",
     "credentials",
     "username",
-    "mqtt",
     "hash",
     "serial",
     "sn",
@@ -845,7 +845,9 @@ def diagnose_config_plausibility(checks, args, config_data):
     for issue in zendure_mqtt_entries.find_duplicate_device_names(devices):
         diagnose_add(checks, "config", "error", issue["code"], issue["message"])
 
-    for issue in zendure_mqtt_entries.find_duplicate_zendure_device_identities(devices):
+    for issue in zendure_mqtt_entries.find_duplicate_zendure_device_identities(
+        devices, broker_sources=broker_sources
+    ):
         diagnose_add(checks, "config", "error", issue["code"], issue["message"])
 
     dashboard = config_data.get("dashboard", {})
@@ -1881,7 +1883,8 @@ def diagnose_redact_text(text):
 
 
 def diagnose_redact_report_for_http(report):
-    return diagnose_redact_text_values(diagnose_redact_value(report))
+    external = sanitize_external_mqtt_status(report, drop_secrets=False)
+    return diagnose_redact_text_values(diagnose_redact_value(external))
 
 
 def diagnose_redact_text_values(value):
@@ -3061,8 +3064,11 @@ def diagnose_write_support_bundle(report, args, config_data, runtime_path):
     if runtime_path and os.path.exists(runtime_path):
         runtime_data, _ = diagnose_json_file(runtime_path)
 
-    control_report = report.get("control") or {}
-    control_quality_report = report.get("control_quality") or {}
+    external_report = sanitize_external_mqtt_status(
+        report, sensitive_context=config_data
+    )
+    control_report = external_report.get("control") or {}
+    control_quality_report = external_report.get("control_quality") or {}
     build = report.get("build") or {}
     metadata = {
         "bundle_version": SUPPORT_BUNDLE_VERSION,
@@ -3073,8 +3079,13 @@ def diagnose_write_support_bundle(report, args, config_data, runtime_path):
     }
 
     with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
-        bundle.writestr("diagnosis.txt", diagnose_redact_text(diagnose_text(report)))
-        bundle.writestr("diagnosis.json", diagnose_redact_text(json.dumps(report, indent=2, sort_keys=True)))
+        bundle.writestr(
+            "diagnosis.txt", diagnose_redact_text(diagnose_text(external_report))
+        )
+        bundle.writestr(
+            "diagnosis.json",
+            diagnose_redact_text(json.dumps(external_report, indent=2, sort_keys=True)),
+        )
         bundle.writestr(
             "control-diagnostics.json",
             diagnose_redact_text(json.dumps(control_report, indent=2, sort_keys=True)),
@@ -3102,7 +3113,11 @@ def diagnose_write_support_bundle(report, args, config_data, runtime_path):
         bundle.writestr(
             "redacted-config.json",
             json.dumps(
-                diagnose_redact_value(config_data if isinstance(config_data, dict) else {}),
+                diagnose_redact_value(
+                    sanitize_external_mqtt_status(
+                        config_data if isinstance(config_data, dict) else {}
+                    )
+                ),
                 indent=2,
                 sort_keys=True,
             ),
@@ -3110,7 +3125,12 @@ def diagnose_write_support_bundle(report, args, config_data, runtime_path):
         bundle.writestr(
             "runtime-state.json",
             json.dumps(
-                diagnose_redact_value(runtime_data if isinstance(runtime_data, dict) else {}),
+                diagnose_redact_value(
+                    sanitize_external_mqtt_status(
+                        runtime_data if isinstance(runtime_data, dict) else {},
+                        sensitive_context=config_data,
+                    )
+                ),
                 indent=2,
                 sort_keys=True,
             ),
@@ -3401,7 +3421,7 @@ def diagnose_collect(args):
         "error": sum(1 for check in checks if check["level"] == "error"),
     }
     status = "error" if summary["error"] else "warning" if summary["warning"] else "ok"
-    return {
+    report = {
         "status": status,
         "mode": mode,
         "mode_sources": mode_sources,
@@ -3427,6 +3447,9 @@ def diagnose_collect(args):
         "battery_full_charge_assist": battery_full_charge_report,
         "hardware_health": hardware_health,
     }
+    return sanitize_external_mqtt_status(
+        report, sensitive_context=config_data
+    )
 
 
 DIAGNOSE_SERVICE_DEFAULTS = {

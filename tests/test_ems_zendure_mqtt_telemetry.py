@@ -184,6 +184,28 @@ def test_aggregator_records_last_seen_from_injected_clocks():
     assert snap.last_seen_epoch == 1_700_000_000.0
 
 
+def test_merged_snapshot_preserves_each_metric_observation_provenance():
+    monotonic_values = iter((100.0, 200.0))
+    agg = ZendureMqttAggregator(
+        monotonic=lambda: next(monotonic_values), wall_clock=lambda: 1.0
+    )
+    agg.observe(
+        "iot/PK/DEV/properties/report",
+        json.dumps(
+            {
+                "properties": {"outputLimit": 300, "acMode": 2},
+            }
+        ),
+    )
+    agg.observe("Zendure/sensor/DEV/electricLevel", "50")
+    snap = agg.snapshots()[0]
+
+    assert snap.last_seen_monotonic == 200.0
+    assert snap.metric_monotonic["outputLimit"] == 100.0
+    assert snap.metric_monotonic["electricLevel"] == 200.0
+    assert snap.observed_metrics == {"electricLevel"}
+
+
 def test_aggregator_preserves_packdata_as_battery_packs():
     snap = _snapshot_for(
         [("iot/PK/DEV/properties/report", json.dumps(_legacy_payload()))]

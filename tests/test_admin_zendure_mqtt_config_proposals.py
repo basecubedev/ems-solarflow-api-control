@@ -1,10 +1,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Admin adapter: discovery observations -> Zendure MQTT config proposals."""
 
+import json
 import subprocess
 import sys
+from types import SimpleNamespace
 
 from admin.models import MqttHardwareCandidate
+from admin.server import AdminHandler
+from admin import zendure_mqtt_config_proposals as proposal_module
 from admin.zendure_mqtt_config_proposals import (
     build_proposals,
     proposals_from_brokers,
@@ -277,16 +281,218 @@ def test_cloud_proposal_gets_cloud_broker_ref():
     assert proposals[0]["config_fragment"]["mqtt"]["source"] == "zendure_cloud_mqtt"
 
 
-def test_same_device_on_local_and_cloud_yields_one_proposal_per_source():
-    # One physical device seen on both brokers stays two distinct proposals so
-    # the operator picks exactly one connection method.
+def test_serialless_cloud_route_remains_a_trusted_config_proposal():
+    proposals = build_proposals(
+        [
+            _cloud_candidate(
+                serial_number=None,
+                device_id="ACCOUNT_ROUTE_1234",
+                product_key="PRODUCT_SCOPE",
+            ).to_dict()
+        ]
+    )
+
+    assert len(proposals) == 1
+    fragment = proposals[0]["config_fragment"]
+    assert "serial_number" not in fragment
+    assert fragment["mqtt"]["device_id"] == "ACCOUNT_ROUTE_1234"
+    assert fragment["mqtt"]["product_key"] == "PRODUCT_SCOPE"
+
+
+def test_public_serialless_cloud_proposal_exposes_only_opaque_identity(monkeypatch):
+    route = "ACCOUNT_ROUTE_1234"
+    product = "PRODUCT_ACCOUNT_A"
+    topic = f"iot/{product}/{route}/properties/write"
+    trusted = {
+        "id": f"zendure-mqtt:{route}",
+        "broker_ref": "cloud_a",
+        "connection_source": "zendure_cloud_mqtt",
+        "device_id": route,
+        "serial_number": None,
+        "product_key": product,
+        "display_name": f"Zendure {route}",
+        "reason": f"last publish {topic}",
+        "seen_topics": [topic],
+        "config_fragment": {
+            "type": "zendure_mqtt",
+            "name": f"Zendure {route}",
+            "mqtt": {
+                "source": "zendure_cloud_mqtt",
+                "broker_ref": "cloud_a",
+                "topic_family": "legacy_zendure_json",
+                "device_id": route,
+                "write_topic": topic,
+            },
+        },
+    }
+    monkeypatch.setattr(
+        proposal_module,
+        "proposals_from_sources",
+        lambda local, cloud: [trusted],
+    )
+    handler = object.__new__(AdminHandler)
+    handler.server = SimpleNamespace(
+        identity_token_key=b"public-proposal-identity-key-32b",
+        mqtt_discovery=SimpleNamespace(candidates=lambda: []),
+        zendure_cloud_discovery=SimpleNamespace(trusted_candidates=lambda: []),
+    )
+
+    proposal = handler._public_mqtt_proposals()[0]
+    flattened = json.dumps(proposal)
+
+    assert proposal["physical_identity_token"].startswith("opaque:v1:")
+    assert proposal["id"].startswith("zendure-mqtt:opaque:v1:")
+    assert proposal["device_id"] == "…1234"
+    assert route not in flattened
+    assert product not in flattened
+    assert topic not in flattened
+
+
+def test_server_issues_distinct_opaque_ids_for_same_local_route_on_two_brokers(
+    monkeypatch,
+):
+    route = "LOCAL_SHARED_ROUTE"
+
+    def trusted(ref):
+        return {
+            "id": f"zendure-mqtt:{route}",
+            "broker_ref": ref,
+            "connection_source": "local_mqtt",
+            "device_id": route,
+            "serial_number": None,
+            "config_fragment": {
+                "type": "zendure_mqtt",
+                "mqtt": {
+                    "source": "local_mqtt",
+                    "broker_ref": ref,
+                    "topic_family": "zensdk_ha_scalar",
+                    "device_id": route,
+                },
+            },
+        }
+
+    monkeypatch.setattr(
+        proposal_module,
+        "proposals_from_sources",
+        lambda local, cloud: [trusted("garage"), trusted("shed")],
+    )
+    handler = object.__new__(AdminHandler)
+    handler.server = SimpleNamespace(
+        identity_token_key=b"public-proposal-identity-key-32b",
+        mqtt_discovery=SimpleNamespace(candidates=lambda: []),
+        zendure_cloud_discovery=SimpleNamespace(trusted_candidates=lambda: []),
+    )
+
+    proposals = handler._public_mqtt_proposals()
+
+    assert len({proposal["id"] for proposal in proposals}) == 2
+    assert len(
+        {proposal["physical_identity_token"] for proposal in proposals}
+    ) == 2
+    assert all(
+        proposal["id"].startswith("zendure-mqtt:opaque:v1:")
+        for proposal in proposals
+    )
+
+
+def test_public_proposals_mask_cloud_route_from_other_scope_candidate(monkeypatch):
+    route = "ACCOUNT_ROUTE_SHARED_ACROSS_SCOPES"
+    product = "PRODUCT_ACCOUNT_SCOPE"
+
+    def trusted(source, ref):
+        return {
+            "id": f"zendure-mqtt:{route}:{ref}",
+            "broker_ref": ref,
+            "connection_source": source,
+            "device_id": route,
+            "serial_number": None,
+            "product_key": product if source == "zendure_cloud_mqtt" else None,
+            "display_name": f"Zendure {route}",
+            "config_fragment": {
+                "type": "zendure_mqtt",
+                "name": f"Zendure {route}",
+                "mqtt": {
+                    "source": source,
+                    "broker_ref": ref,
+                    "topic_family": "legacy_zendure_json",
+                    "device_id": route,
+                    "product_key": (
+                        product if source == "zendure_cloud_mqtt" else None
+                    ),
+                },
+            },
+        }
+
+    monkeypatch.setattr(
+        proposal_module,
+        "proposals_from_sources",
+        lambda local, cloud: [
+            trusted("zendure_cloud_mqtt", "cloud"),
+            trusted("local_mqtt", "garage"),
+        ],
+    )
+    handler = object.__new__(AdminHandler)
+    handler.server = SimpleNamespace(
+        identity_token_key=b"public-proposal-identity-key-32b",
+        mqtt_discovery=SimpleNamespace(candidates=lambda: []),
+        zendure_cloud_discovery=SimpleNamespace(trusted_candidates=lambda: []),
+    )
+
+    proposals = handler._public_mqtt_proposals()
+    flattened = json.dumps(proposals)
+
+    assert len(proposals) == 2
+    assert len({proposal["physical_identity_token"] for proposal in proposals}) == 2
+    assert route not in flattened
+    assert product not in flattened
+
+
+def test_same_physical_serial_on_local_and_cloud_prefers_local_proposal():
+    # A shared physical serial is authoritative cross-transport evidence, so
+    # the existing Local MQTT observation suppresses the cloud duplicate.
     proposals = build_proposals(
         [_scalar_candidate().to_dict(), _cloud_candidate(serial_number="ABC123", device_id="ABC123").to_dict()]
     )
-    refs = sorted(p["broker_ref"] for p in proposals)
-    assert len(refs) == 2
-    assert any(ref.startswith("local_mqtt_") for ref in refs)
-    assert "zendure_cloud" in refs
+    assert len(proposals) == 2
+
+    combined = proposals_from_sources(
+        [{"devices": [_scalar_candidate().to_dict()]}],
+        [
+            _cloud_candidate(
+                serial_number=" abc123 ", device_id="CLOUD_ROUTE"
+            ).to_dict()
+        ],
+    )
+    assert len(combined) == 1
+    assert combined[0]["connection_source"] == "local_mqtt"
+
+
+def test_same_raw_route_on_local_and_cloud_stays_separate_without_serial():
+    route = "SHARED_ACCOUNT_SCOPED_ROUTE"
+    combined = proposals_from_sources(
+        [
+            {
+                "devices": [
+                    _scalar_candidate(
+                        serial_number=None,
+                        device_id=route,
+                    ).to_dict()
+                ]
+            }
+        ],
+        [
+            _cloud_candidate(
+                serial_number=None,
+                device_id=route,
+            ).to_dict()
+        ],
+    )
+
+    assert len(combined) == 2
+    assert {proposal["connection_source"] for proposal in combined} == {
+        "local_mqtt",
+        "zendure_cloud_mqtt",
+    }
 
 
 def _d0_local_candidate(**overrides):

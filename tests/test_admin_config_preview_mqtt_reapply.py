@@ -189,6 +189,61 @@ def test_case_a_exact_reapply_idempotent(tmp_path):
     assert set(_brokers(result)) == {ref_a}
 
 
+def test_serialless_cloud_reapply_inherits_base_broker_source_scope(tmp_path):
+    ref = "zendure_cloud"
+    route = "ACCOUNT_ROUTE_1234"
+    product = "PRODUCT_A"
+    broker = {
+        "enabled": True,
+        "source": "zendure_cloud_mqtt",
+        "host": "mqtt.example.invalid",
+        "port": 8883,
+        "tls": True,
+        "credentials_ref": "zendure_cloud:account-a",
+    }
+    device = {
+        "type": "zendure_mqtt",
+        "name": "Cloud inverter",
+        "enabled": True,
+        "mqtt": {
+            # Source is intentionally inherited from the named broker profile.
+            "broker_ref": ref,
+            "topic_family": "legacy_zendure_json",
+            "product_key": product,
+            "device_id": route,
+        },
+        "capabilities": {
+            "read_power": True,
+            "read_soc": True,
+            "write_output_limit": False,
+        },
+    }
+    base = _base_config({ref: broker}, [device])
+    path = _write(tmp_path, base)
+    proposal_device = copy.deepcopy(device)
+    proposal_device["mqtt"]["source"] = "zendure_cloud_mqtt"
+    proposal = {
+        "id": "opaque-proposal-id",
+        "config_fragment": proposal_device,
+        "broker_ref": ref,
+        "broker_host": broker["host"],
+        "broker_port": broker["port"],
+        "broker_tls": True,
+        "credentials_ref": broker["credentials_ref"],
+        "connection_source": "zendure_cloud_mqtt",
+    }
+
+    result = _generator(path).generate(
+        [], zendure_mqtt_proposals=[proposal]
+    )
+
+    assert result["ready"] is True, result["validation"]
+    devices = _mqtt_devices(result)
+    assert len(devices) == 1
+    assert devices[0]["mqtt"]["device_id"] == route
+    assert devices[0]["mqtt"]["broker_ref"] == ref
+
+
 # --- Case B: same device, changed trusted endpoint -> rebind -------------
 
 

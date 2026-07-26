@@ -9,6 +9,15 @@ import { LoginPage } from "./pages/login-page";
 
 const SERIAL_A = "E2EMQTTAAA1";
 const SERIAL_B = "E2EMQTTBBB2";
+const CLOUD_ROUTE_SERIALLESS = "E2E_CLOUD_ROUTE_7501";
+const CLOUD_PRODUCT_SERIALLESS = "E2E_CLOUD_PRODUCT_75";
+const CLOUD_TOPIC_SERIALLESS =
+  `iot/${CLOUD_PRODUCT_SERIALLESS}/${CLOUD_ROUTE_SERIALLESS}/properties/report`;
+const CLOUD_PHYSICAL_SERIAL = "E2E-CLOUD-SERIAL-7502";
+const CLOUD_ROUTE_SERIALIZED = "E2E_CLOUD_ROUTE_7502";
+const CLOUD_PRODUCT_SERIALIZED = "E2E_CLOUD_PRODUCT_76";
+const CLOUD_TOPIC_SERIALIZED =
+  `iot/${CLOUD_PRODUCT_SERIALIZED}/${CLOUD_ROUTE_SERIALIZED}/properties/report`;
 
 type DiscoveryState = {
   apiDevices: unknown[];
@@ -108,7 +117,7 @@ async function openMaintenanceEditor(page: Page) {
     '[data-maintenance-toggle="maintenance-config-card"]',
   );
   const editor = page.locator("#maintenance-config-editor");
-  await expect(toggle).toContainText("inverters");
+  await expect(toggle).toContainText(/inverter/);
   await expect(async () => {
     if (!(await editor.isVisible())) await toggle.click();
     await expect(editor).toBeVisible({ timeout: 1_000 });
@@ -169,6 +178,27 @@ async function login(page: Page) {
   const loginPage = new LoginPage(page);
   await loginPage.open();
   await loginPage.authenticate();
+}
+
+async function loadRealMqttProposals(
+  page: Page,
+  state: DiscoveryState,
+) {
+  // APIRequestContext requests are not intercepted by page.route(), so this
+  // reads the real backend's browser-safe proposals and their server-issued
+  // opaque identity tokens, then feeds that response into deterministic UI
+  // discovery.
+  const response = await page.request.get("/api/discovery/mqtt-proposals");
+  expect(response.ok()).toBeTruthy();
+  const payload = (await response.json()) as { proposals: unknown[] };
+  const flattened = JSON.stringify(payload);
+  expect(flattened).not.toContain(CLOUD_ROUTE_SERIALLESS);
+  expect(flattened).not.toContain(CLOUD_PRODUCT_SERIALLESS);
+  expect(flattened).not.toContain(CLOUD_TOPIC_SERIALLESS);
+  expect(flattened).not.toContain(CLOUD_ROUTE_SERIALIZED);
+  expect(flattened).not.toContain(CLOUD_PRODUCT_SERIALIZED);
+  expect(flattened).not.toContain(CLOUD_TOPIC_SERIALIZED);
+  state.proposals = payload.proposals;
 }
 
 test("MQTT then API: discovery offers a transport switch, not a duplicate inverter", async ({
@@ -307,4 +337,116 @@ test("API then MQTT: proposal for a configured serial switches the transport in 
   await expect(configuredCards(page)).toHaveCount(3);
   const persisted = cardByText(page, "Local API inverter");
   await expect(persisted).toHaveClass(/hardware-card-zendure-mqtt/);
+});
+
+test("serial-less Cloud identity survives apply, reload, rediscovery and scope changes", async ({
+  page,
+  seedAdminScenario,
+}) => {
+  test.setTimeout(90_000);
+  const state: DiscoveryState = { apiDevices: [], proposals: [] };
+  await mockDiscovery(page, state);
+  await login(page);
+  await seedAdminScenario("serialless_cloud_identity");
+  await loadRealMqttProposals(page, state);
+
+  await page.reload();
+  await openMaintenanceEditor(page);
+  await expect(configuredCards(page)).toHaveCount(1);
+  await expect(page.locator("body")).not.toContainText(CLOUD_ROUTE_SERIALLESS);
+  await expect(page.locator("body")).not.toContainText(CLOUD_TOPIC_SERIALLESS);
+
+  // Add both real Cloud proposals: one has no physical serial and is grouped
+  // solely through its opaque scoped token; the other has a physical serial.
+  await runDiscovery(page);
+  const results = page.locator("#maintenance-discovery-results");
+  const addButtons = results.locator(
+    ".mconfig-discovery-add-button.is-add",
+  );
+  await expect(addButtons).toHaveCount(2);
+  await addButtons.first().click();
+  await addButtons.first().click();
+  await expect(configuredCards(page)).toHaveCount(3);
+
+  const serialless = cardByText(page, "…7501");
+  await openCard(page, serialless);
+  await fieldInput(serialless, "Device name").fill("Roof Serial-less");
+  await previewAndApply(page);
+
+  // A derived token remains stable after persistence and reload; it is not
+  // browser-authored or stored as route-like config data.
+  await page.reload();
+  await openMaintenanceEditor(page);
+  await expect(configuredCards(page)).toHaveCount(3);
+  await expect(cardByText(page, "Roof Serial-less")).toHaveCount(1);
+  await expect(page.locator("body")).not.toContainText(CLOUD_ROUTE_SERIALLESS);
+
+  // Rediscovering the identical scoped Cloud routes offers no duplicate Add.
+  await runDiscovery(page);
+  await expect(
+    results.locator(".mconfig-discovery-add-button.is-add"),
+  ).toHaveCount(0);
+  await expect(
+    results.locator(".mconfig-discovery-add-button.is-in-config"),
+  ).toHaveCount(2);
+
+  // Physical serial remains the higher-confidence cross-transport identity:
+  // the serialized Cloud inverter can switch to Local API in place.
+  state.apiDevices = [
+    apiInverter(CLOUD_PHYSICAL_SERIAL, "192.168.75.22"),
+  ];
+  await runDiscovery(page);
+  const apiSwitch = results.getByRole("button", {
+    name: "Use Local API instead",
+  });
+  await expect(apiSwitch).toHaveCount(1);
+  await apiSwitch.click();
+  await expect(configuredCards(page)).toHaveCount(3);
+  const serializedSwitched = cardByText(page, CLOUD_PHYSICAL_SERIAL);
+  await expect(serializedSwitched).toHaveCount(1);
+  await expect(serializedSwitched).toHaveClass(/hardware-card-inverter/);
+  await openCard(page, serializedSwitched);
+  await expect(
+    fieldInput(serializedSwitched, "Device IP address"),
+  ).toHaveValue("192.168.75.22");
+  await expect(fieldInput(serializedSwitched, "Serial number")).toHaveValue(
+    CLOUD_PHYSICAL_SERIAL,
+  );
+  await previewAndApply(page);
+  await page.reload();
+  await openMaintenanceEditor(page);
+  await expect(configuredCards(page)).toHaveCount(3);
+  const serializedPersisted = cardByText(page, CLOUD_PHYSICAL_SERIAL);
+  await expect(serializedPersisted).toHaveCount(1);
+  await expect(serializedPersisted).toHaveClass(/hardware-card-inverter/);
+  await openCard(page, serializedPersisted);
+  await expect(
+    fieldInput(serializedPersisted, "Device IP address"),
+  ).toHaveValue("192.168.75.22");
+  await expect(fieldInput(serializedPersisted, "Serial number")).toHaveValue(
+    CLOUD_PHYSICAL_SERIAL,
+  );
+
+  // The same raw route under another broker/source scope is a separate device,
+  // but known Cloud route/product values stay masked across the whole response.
+  await seedAdminScenario("serialless_cloud_identity_other_scope");
+  await loadRealMqttProposals(page, state);
+  await runDiscovery(page);
+  await expect(
+    results.locator(".mconfig-discovery-add-button.is-add"),
+  ).toHaveCount(1);
+  await expect(configuredCards(page)).toHaveCount(3);
+  await expect(page.locator("body")).not.toContainText(CLOUD_ROUTE_SERIALLESS);
+  await expect(page.locator("body")).not.toContainText(CLOUD_TOPIC_SERIALLESS);
+
+  // Leaving that separately scoped candidate unselected while renaming and
+  // applying the original does not duplicate or discard its scoped identity.
+  const original = cardByText(page, "Roof Serial-less");
+  await openCard(page, original);
+  await fieldInput(original, "Device name").fill("Roof Serial-less Final");
+  await previewAndApply(page);
+  await page.reload();
+  await openMaintenanceEditor(page);
+  await expect(configuredCards(page)).toHaveCount(3);
+  await expect(cardByText(page, "Roof Serial-less Final")).toHaveCount(1);
 });

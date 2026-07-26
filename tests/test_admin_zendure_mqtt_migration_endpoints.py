@@ -102,6 +102,26 @@ def _legacy_control_config():
     }
 
 
+def _cloud_legacy_control_config():
+    route = "ADMIN_MIGRATION_CLOUD_ROUTE_7501"
+    product = "ADMIN_MIGRATION_PRODUCT_ACCOUNT"
+    topic = f"iot/{product}/{route}/properties/write"
+    config = _legacy_control_config()
+    config["zendure_mqtt"]["brokers"] = {
+        "cloud_a": {
+            "source": "zendure_cloud_mqtt",
+            "host": "mqtt.example.invalid",
+            "password": "MIGRATION_BROKER_PASSWORD",
+        }
+    }
+    device = config["devices"][0]
+    device["name"] = f"Cloud {route} via {topic}"
+    device["mqtt"]["broker_ref"] = "cloud_a"
+    device["mqtt"]["device_id"] = route
+    device["mqtt"]["product_key"] = product
+    return config, route, product, topic
+
+
 REVIEW = "/api/admin/maintenance/zendure-mqtt/migration-review"
 APPLY = "/api/admin/maintenance/zendure-mqtt/migration-apply"
 
@@ -116,6 +136,29 @@ def test_review_endpoint_returns_plan_and_fingerprint(server):
     assert payload["confirmation_required"] is True
     assert payload["revision"]
     assert "s3cr3t-broker-pass" not in json.dumps(payload)
+
+
+def test_migration_review_and_apply_never_expose_cloud_route_or_topic(server):
+    base, root = server
+    config, route, product, topic = _cloud_legacy_control_config()
+    _write_config(root, config)
+
+    review_status, review = _request(f"{base}{REVIEW}")
+    review_flattened = json.dumps(review)
+    assert review_status == 200
+    assert review["review"]["needs_migration"] is True
+    for raw in (route, product, topic, "MIGRATION_BROKER_PASSWORD"):
+        assert raw not in review_flattened
+
+    apply_status, applied = _request(
+        f"{base}{APPLY}",
+        "POST",
+        {"confirm": True, "revision": review["revision"], "backup": True},
+    )
+    applied_flattened = json.dumps(applied)
+    assert apply_status == 200
+    for raw in (route, product, topic, "MIGRATION_BROKER_PASSWORD"):
+        assert raw not in applied_flattened
 
 
 def test_review_requires_authentication(server):

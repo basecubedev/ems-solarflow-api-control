@@ -11,6 +11,7 @@ target-compatible telemetry value is observed, never from a publish alone.
 """
 
 from collections.abc import Mapping
+import math
 from dataclasses import dataclass
 
 STATE_QUEUED = "queued"
@@ -58,6 +59,7 @@ class CommandRecord:
     # identity (usually equal to device_id); topic is where the command was sent.
     device_key: str | None = None
     topic: str | None = None
+    correlation_id: str | None = None
     # Telemetry values proving the command applied; None -> single-metric path.
     expected_properties: dict | None = None
     # Monotonic timeline stamps for each lifecycle transition (None until reached).
@@ -67,8 +69,11 @@ class CommandRecord:
     timeout_monotonic: float | None = None
     # rc==0 is only submission; "delivered" requires an observed PUBACK.
     publish_mid: int | None = None
+    publish_delivery_token: object | None = None
     broker_delivery: str | None = None
     delivered_monotonic: float | None = None
+    confirmation_block_reason: str | None = None
+    confirmation_evidence: tuple = ()
 
     @property
     def is_terminal(self) -> bool:
@@ -96,12 +101,14 @@ class CommandRecord:
             "device_id": self.device_id,
             "device_key": self.device_key,
             "operation": self.operation,
+            "correlation_id": self.correlation_id,
             "target_power_w": self.target_w,
             "topic": self.topic,
             "state": self.state,
             "response_code": self.response_code,
             "response_message": self.response_message,
             "broker_delivery": self.broker_delivery,
+            "confirmation_block_reason": self.confirmation_block_reason,
         }
 
 
@@ -245,6 +252,7 @@ def confirm_from_telemetry(
     tolerance_w: int = _CONFIRM_TOLERANCE_W,
     now_monotonic=None,
     telemetry_monotonic=None,
+    metric_key: str = "outputLimit",
     allow_from_published: bool = False,
 ) -> bool:
     """Promote a command to telemetry_confirmed, when confirmable.
@@ -272,18 +280,23 @@ def confirm_from_telemetry(
     if not isinstance(observed_output_w, (int, float)) or isinstance(
         observed_output_w, bool
     ):
+        record.confirmation_block_reason = f"{metric_key}: missing_or_invalid"
         return False
-    # Telemetry that predates the command (retained/stale) cannot confirm it.
-    if (
-        telemetry_monotonic is not None
-        and record.published_monotonic is not None
-        and telemetry_monotonic < record.published_monotonic
-    ):
+    freshness = metric_confirmation_freshness(
+        command_published_monotonic=record.published_monotonic,
+        metric_observed_monotonic=telemetry_monotonic,
+        snapshot_observed_monotonic=None,
+        metric_was_in_snapshot=False,
+    )
+    if not freshness.fresh:
+        record.confirmation_block_reason = f"{metric_key}: {freshness.reason}"
         return False
     if abs(float(observed_output_w) - float(record.target_w)) <= tolerance_w:
         record.state = STATE_TELEMETRY_CONFIRMED
         record.confirmed_monotonic = now_monotonic
+        record.confirmation_block_reason = None
         return True
+    record.confirmation_block_reason = f"{metric_key}: mismatch"
     return False
 
 
@@ -291,8 +304,40 @@ def confirm_from_telemetry(
 # property is a mode/enum and must match exactly.
 WATT_PROPERTY_KEYS = frozenset({"outputLimit", "inputLimit"})
 
-# acMode and outputLimit are required; these are checked only when reported.
+# acMode and outputLimit are required; optional fields are checked when reported.
 OPTIONAL_EXPECTED_KEYS = frozenset({"smartMode", "inputLimit"})
+
+FRESHNESS_FRESH = "fresh"
+FRESHNESS_STALE = "stale"
+FRESHNESS_MISSING_COMMAND_TIME = "missing_command_time"
+FRESHNESS_MISSING_METRIC_TIME = "missing_metric_time"
+FRESHNESS_UNTRUSTED_SNAPSHOT = "untrusted_snapshot"
+FRESHNESS_NOT_OBSERVED = "not_observed"
+
+
+@dataclass(frozen=True)
+class FreshnessResult:
+    """Factual timestamp-provenance verdict for one telemetry property."""
+
+    reason: str
+    observed_monotonic: float | None = None
+
+    @property
+    def fresh(self) -> bool:
+        return self.reason == FRESHNESS_FRESH
+
+
+@dataclass(frozen=True)
+class PropertyConfirmation:
+    """Matching and provenance evidence for one expected command property."""
+
+    key: str
+    expected: object
+    observed: object | None
+    required: bool
+    matches: bool
+    freshness: str
+    confirmed: bool
 
 
 def _observed_number(metrics, key):
@@ -302,12 +347,33 @@ def _observed_number(metrics, key):
     return float(value)
 
 
+def exact_state_number(value) -> int | None:
+    """Normalize a mode/enum/state value to an exact int, or ``None`` if it is not one.
+
+    ``int`` is accepted (except ``bool``); a ``float`` is accepted only when it is
+    finite and integer-valued (``2.0`` -> ``2``). A fractional, ``NaN`` or infinite
+    float, a boolean, a string, or any other type is rejected so it can never be
+    mistaken for a valid mode.
+    """
+
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if math.isfinite(value) and value.is_integer():
+            return int(value)
+        return None
+    return None
+
+
 def property_matches(key, observed, expected, *, watt_tolerance: int) -> bool:
     """Whether an observed value satisfies an expected one for its property type.
 
     Watt-like properties (``outputLimit``/``inputLimit``) match within
-    ``watt_tolerance``; every other property is a mode/enum and must match
-    exactly. A non-numeric or boolean observation never matches.
+    ``watt_tolerance``; every other property is a mode/enum compared as exact
+    finite integers (see ``exact_state_number``). A non-numeric, boolean or
+    fractional observation never matches a mode.
     """
 
     if isinstance(observed, bool) or not isinstance(observed, (int, float)):
@@ -315,8 +381,49 @@ def property_matches(key, observed, expected, *, watt_tolerance: int) -> bool:
     if isinstance(expected, bool) or not isinstance(expected, (int, float)):
         return False
     if key in WATT_PROPERTY_KEYS:
+        if not math.isfinite(float(observed)) or not math.isfinite(float(expected)):
+            return False
         return abs(float(observed) - float(expected)) <= watt_tolerance
-    return int(observed) == int(expected)
+    observed_mode = exact_state_number(observed)
+    expected_mode = exact_state_number(expected)
+    if observed_mode is None or expected_mode is None:
+        return False
+    return observed_mode == expected_mode
+
+
+def _usable_monotonic(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
+def metric_confirmation_freshness(
+    *,
+    command_published_monotonic,
+    metric_observed_monotonic,
+    snapshot_observed_monotonic,
+    metric_was_in_snapshot,
+) -> FreshnessResult:
+    """Return fail-closed time provenance for one confirmation property."""
+
+    command_time = _usable_monotonic(command_published_monotonic)
+    if command_time is None:
+        return FreshnessResult(FRESHNESS_MISSING_COMMAND_TIME)
+    observed_time = _usable_monotonic(metric_observed_monotonic)
+    if observed_time is None and metric_was_in_snapshot:
+        observed_time = _usable_monotonic(snapshot_observed_monotonic)
+    if observed_time is None:
+        snapshot_time = _usable_monotonic(snapshot_observed_monotonic)
+        reason = (
+            FRESHNESS_UNTRUSTED_SNAPSHOT
+            if snapshot_time is not None
+            else FRESHNESS_MISSING_METRIC_TIME
+        )
+        return FreshnessResult(reason)
+    if observed_time < command_time:
+        return FreshnessResult(FRESHNESS_STALE, observed_time)
+    return FreshnessResult(FRESHNESS_FRESH, observed_time)
 
 
 def metric_is_fresh(
@@ -325,26 +432,104 @@ def metric_is_fresh(
     published_monotonic,
     telemetry_monotonic,
     metric_monotonic,
+    metric_was_in_snapshot=False,
 ) -> bool:
     """Whether telemetry for ``key`` is at least as new as the command's publish.
 
-    The per-property report time (``metric_monotonic[key]``) is authoritative
-    when present, so a merged snapshot can never let a stale cached property
-    inherit a newer snapshot-wide timestamp. Only when the property has no
-    per-metric timestamp is the snapshot ``telemetry_monotonic`` used. With no
-    publish time or no timestamp at all, provenance cannot be judged and the
-    metric is treated as fresh (parity with a single-metric confirmation).
+    A per-property report time is authoritative. Snapshot time is usable only
+    when the parser explicitly says this property was observed in that snapshot;
+    missing or ambiguous provenance fails closed.
     """
 
-    if published_monotonic is None:
-        return True
     if isinstance(metric_monotonic, Mapping) and key in metric_monotonic:
-        reference = metric_monotonic.get(key)
+        metric_reference = metric_monotonic.get(key)
     else:
-        reference = telemetry_monotonic
-    if reference is None:
-        return True
-    return reference >= published_monotonic
+        metric_reference = None
+    return metric_confirmation_freshness(
+        command_published_monotonic=published_monotonic,
+        metric_observed_monotonic=metric_reference,
+        snapshot_observed_monotonic=telemetry_monotonic,
+        metric_was_in_snapshot=metric_was_in_snapshot,
+    ).fresh
+
+
+def evaluate_expected_properties_confirmation(
+    record: CommandRecord,
+    metrics,
+    *,
+    tolerance_w: int,
+    telemetry_monotonic,
+    metric_monotonic,
+    snapshot_observed_keys=None,
+) -> tuple[PropertyConfirmation, ...]:
+    """Evaluate property matching and time provenance without changing state."""
+
+    expected = record.expected_properties
+    if not isinstance(expected, Mapping) or not expected:
+        return ()
+    if not isinstance(metrics, Mapping):
+        return ()
+    observed_keys = (
+        set(snapshot_observed_keys)
+        if isinstance(snapshot_observed_keys, (set, frozenset, list, tuple))
+        else set()
+    )
+    evidence = []
+    for key, target in expected.items():
+        required = key not in OPTIONAL_EXPECTED_KEYS
+        observed = metrics.get(key)
+        numeric_observed = _observed_number(metrics, key)
+        if numeric_observed is None:
+            evidence.append(
+                PropertyConfirmation(
+                    key=key,
+                    expected=target,
+                    observed=observed,
+                    required=required,
+                    matches=False,
+                    freshness=FRESHNESS_NOT_OBSERVED,
+                    confirmed=not required and key not in metrics,
+                )
+            )
+            continue
+        matches = property_matches(
+            key, numeric_observed, target, watt_tolerance=tolerance_w
+        )
+        metric_time = (
+            metric_monotonic.get(key)
+            if isinstance(metric_monotonic, Mapping) and key in metric_monotonic
+            else None
+        )
+        freshness = metric_confirmation_freshness(
+            command_published_monotonic=record.published_monotonic,
+            metric_observed_monotonic=metric_time,
+            snapshot_observed_monotonic=telemetry_monotonic,
+            metric_was_in_snapshot=key in observed_keys,
+        )
+        evidence.append(
+            PropertyConfirmation(
+                key=key,
+                expected=target,
+                observed=observed,
+                required=required,
+                matches=matches,
+                freshness=freshness.reason,
+                confirmed=matches and freshness.fresh,
+            )
+        )
+    return tuple(evidence)
+
+
+def _property_failure_reason(evidence):
+    for item in evidence:
+        if item.confirmed:
+            continue
+        if item.freshness == FRESHNESS_NOT_OBSERVED:
+            return f"{item.key}: missing_or_invalid"
+        if not item.matches:
+            return f"{item.key}: mismatch"
+        return f"{item.key}: {item.freshness}"
+    return None
 
 
 def confirm_from_expected_properties(
@@ -355,6 +540,7 @@ def confirm_from_expected_properties(
     now_monotonic=None,
     telemetry_monotonic=None,
     metric_monotonic=None,
+    snapshot_observed_keys=None,
     allow_from_published: bool = False,
 ) -> bool:
     """Confirm a command only when telemetry proves it *effective*.
@@ -374,30 +560,26 @@ def confirm_from_expected_properties(
     )
     if not eligible:
         return False
-    expected = record.expected_properties
-    if not isinstance(expected, Mapping) or not expected:
+    evidence = evaluate_expected_properties_confirmation(
+        record,
+        metrics,
+        tolerance_w=tolerance_w,
+        telemetry_monotonic=telemetry_monotonic,
+        metric_monotonic=metric_monotonic,
+        snapshot_observed_keys=snapshot_observed_keys,
+    )
+    record.confirmation_evidence = evidence
+    if not evidence:
+        record.confirmation_block_reason = "command: confirmation_unavailable"
         return False
-    if not isinstance(metrics, Mapping):
+    failure_reason = _property_failure_reason(evidence)
+    if failure_reason is not None:
+        record.confirmation_block_reason = failure_reason
         return False
-
-    for key, target in expected.items():
-        observed = _observed_number(metrics, key)
-        if observed is None:
-            if key in OPTIONAL_EXPECTED_KEYS:
-                continue
-            return False
-        if not property_matches(key, observed, target, watt_tolerance=tolerance_w):
-            return False
-        if not metric_is_fresh(
-            key,
-            published_monotonic=record.published_monotonic,
-            telemetry_monotonic=telemetry_monotonic,
-            metric_monotonic=metric_monotonic,
-        ):
-            return False
 
     record.state = STATE_TELEMETRY_CONFIRMED
     record.confirmed_monotonic = now_monotonic
+    record.confirmation_block_reason = None
     return True
 
 
@@ -412,6 +594,8 @@ __all__ = [
     "STATE_TIMED_OUT",
     "STATE_SUPERSEDED",
     "CommandRecord",
+    "FreshnessResult",
+    "PropertyConfirmation",
     "reply_matches",
     "mark_published",
     "mark_publish_failed",
@@ -422,8 +606,11 @@ __all__ = [
     "complete_unconfirmed",
     "confirm_from_telemetry",
     "confirm_from_expected_properties",
+    "evaluate_expected_properties_confirmation",
+    "exact_state_number",
     "property_matches",
     "metric_is_fresh",
+    "metric_confirmation_freshness",
     "WATT_PROPERTY_KEYS",
     "OPTIONAL_EXPECTED_KEYS",
 ]

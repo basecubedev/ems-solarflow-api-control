@@ -63,6 +63,11 @@ COPY ems/__init__.py ./ems/__init__.py
 COPY ems/paths.py ./ems/paths.py
 COPY ems/config_catalog.py ./ems/config_catalog.py
 COPY ems/config.py ./ems/config.py
+# Shared Admin/Core identity and browser/support redaction contracts. Admin
+# derives opaque scoped device tokens and sanitizes diagnostics through these
+# modules; they contain no network client or broker connection code.
+COPY ems/device_identity.py ./ems/device_identity.py
+COPY ems/external_status.py ./ems/external_status.py
 COPY ems/backup.py ./ems/backup.py
 COPY ems/backup_crypto.py ./ems/backup_crypto.py
 COPY ems/influx_setup.py ./ems/influx_setup.py

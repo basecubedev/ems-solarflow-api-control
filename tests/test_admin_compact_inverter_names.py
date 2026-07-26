@@ -147,6 +147,7 @@ def test_maintenance_creation_paths_share_the_allocator():
             "nextCompactInverterName",
             "mconfigNextInverterName",
             "normalizeSerial",
+            "usableSerialValue",
             "physicalInverterIdentity",
             "mconfigDeviceCommonDefaults",
             "mconfigApplyCommonDefaults",

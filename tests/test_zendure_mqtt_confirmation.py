@@ -21,6 +21,9 @@ class _FakeSnapshot:
     def __init__(self, metrics, last_seen_monotonic):
         self.metrics = metrics
         self.last_seen_monotonic = last_seen_monotonic
+        self.metric_monotonic = {
+            key: last_seen_monotonic for key in metrics
+        }
 
 
 class _FakeService:
@@ -104,6 +107,23 @@ def test_acknowledged_confirms_from_fresh_telemetry_and_releases_slot():
     assert dev._active_command is None
 
 
+@pytest.mark.parametrize("invalid_observation", [False, None, ""])
+def test_acknowledged_stop_rejects_invalid_present_raw_output(invalid_observation):
+    dev = _device()
+    dev.write_output_limit(0)
+    rec = dev._active_command
+    dev.handle_reply(_reply(rec))
+    dev._service.set_snapshot(
+        {"outputLimit": invalid_observation},
+        last_seen_monotonic=rec.published_monotonic + 1.0,
+    )
+
+    dev.fetch()
+
+    assert rec.state == "acknowledged"
+    assert rec.confirmation_block_reason == "outputLimit: missing_or_invalid"
+
+
 def test_acknowledged_without_telemetry_times_out_confirmation_and_releases_slot():
     dev = _device(command_ack_timeout_seconds=100.0, confirmation_timeout_seconds=5.0)
     dev.write_output_limit(500)
@@ -111,9 +131,13 @@ def test_acknowledged_without_telemetry_times_out_confirmation_and_releases_slot
     dev.handle_reply(_reply(rec))
     assert rec.state == "acknowledged"
     # No matching telemetry before the confirmation deadline.
-    dev.describe(now_monotonic=rec.acknowledged_monotonic + 6.0)
+    described = dev.describe(now_monotonic=rec.acknowledged_monotonic + 6.0)
     assert rec.state == "confirmation_timed_out"
     assert dev._active_command is None
+    assert rec.confirmation_block_reason == "outputLimit: no_fresh_snapshot"
+    assert described["last_command"]["confirmation_block_reason"] == (
+        "outputLimit: no_fresh_snapshot"
+    )
 
 
 # --- no reliable confirmation available --------------------------------------

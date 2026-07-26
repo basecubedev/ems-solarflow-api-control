@@ -31,6 +31,8 @@ class ZendureMqttSnapshot:
     metrics: dict[str, Any] = field(default_factory=dict)
     # Per-key report time: merged snapshots keep old values beside fresh ones.
     metric_monotonic: dict[str, float] = field(default_factory=dict)
+    # Exact property keys carried by the most recently observed MQTT message.
+    observed_metrics: set[str] = field(default_factory=set)
     battery_packs: list[dict[str, Any]] = field(default_factory=list)
     capabilities: set = field(default_factory=set)
     seen_topics: set = field(default_factory=set)
@@ -132,6 +134,7 @@ class ZendureMqttAggregator:
         snap.last_seen_monotonic = self._monotonic()
         snap.topic_families.add(match.family)
         snap.seen_topics.add(topic)
+        snap.observed_metrics = set()
         if match.serial_number and not snap.serial_number:
             snap.serial_number = match.serial_number
         if match.product_key and not snap.product_key:
@@ -140,6 +143,7 @@ class ZendureMqttAggregator:
         if match.family in SCALAR_FAMILIES and match.metric:
             snap.metrics[match.metric] = coerce_scalar(payload)
             snap.metric_monotonic[match.metric] = snap.last_seen_monotonic
+            snap.observed_metrics.add(match.metric)
         elif match.family in JSON_FAMILIES:
             self._merge_report(snap, payload)
 
@@ -152,6 +156,7 @@ class ZendureMqttAggregator:
         snap.metrics.update(report.properties)
         for key in report.properties:
             snap.metric_monotonic[key] = snap.last_seen_monotonic
+        snap.observed_metrics.update(report.properties)
         if report.battery_packs:
             snap.battery_packs = report.battery_packs
 
@@ -171,6 +176,7 @@ class ZendureMqttAggregator:
                     topic_families=set(snap.topic_families),
                     metrics=metrics,
                     metric_monotonic=dict(snap.metric_monotonic),
+                    observed_metrics=set(snap.observed_metrics),
                     battery_packs=list(snap.battery_packs),
                     capabilities=infer_capabilities(snap.metrics, snap.battery_packs),
                     seen_topics=set(snap.seen_topics),

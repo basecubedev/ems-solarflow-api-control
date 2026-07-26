@@ -121,7 +121,9 @@ class ZendureMqttReadClient:
             try:
                 client.subscribe(topic, qos=0)
             except Exception:
-                logger.debug("event=zendure_mqtt_subscribe_failed topic=%s", topic)
+                # A Cloud subscription embeds account-scoped product/device route
+                # identifiers. The event is useful; the raw topic is not.
+                logger.debug("event=zendure_mqtt_subscribe_failed")
 
     def _on_disconnect(self, *_args, **_kwargs):
         self._connected = False

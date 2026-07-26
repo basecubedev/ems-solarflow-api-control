@@ -330,17 +330,38 @@ results flow into the one review card list. Each source is its own progress
 work unit, and a failing source only marks its unit failed — the draft and the
 other sources' results are untouched.
 
-The review is transport-aware around one physical identity (the physical
-serial; the MQTT routing id only when no serial exists — shared resolver
-`zendure_physical_identity` / `physicalInverterIdentity`, contract-tested for
-backend/browser equivalence). A discovered serial that is already configured
-over another transport renders as an **Alternative transport** row with a
-**Use … instead** action that switches the configured device's connection in
+The review is transport-aware around one authoritative backend identity. A
+trusted physical serial is primary across transports. Without a serial, an MQTT
+route is scoped by transport/source, broker or account reference, product key,
+device route ID and topic family where needed; Local API uses its endpoint only
+as a final fallback. The backend derives a keyed, non-reversible
+`physical_identity_token` for browser equality. Raw Cloud route IDs and full
+product/device topics are masked before browser/support exposure, and JavaScript
+never regenerates scoped route identity from those masked fields. The token is
+helper metadata, not config source-of-truth; rotating its Admin-local key changes
+tokens, while authoritative config identity remains intact. The 32-byte HMAC key
+is stored at `$EMS_ADMIN_DATA_DIR/state/.device-identity-key` (normally
+`/data/state/.device-identity-key` in the Admin container); the state directory is
+restricted to mode `0700` and the key to `0600` on POSIX systems. A missing key is
+created atomically. An unreadable or invalid key, or permissions that cannot be
+enforced, fails Admin startup closed instead of issuing unstable or unkeyed
+tokens. Deleting or rotating it regenerates browser equality tokens on the next
+successful startup but does
+not change authoritative device configuration. For the single configured Cloud
+account, a locally named broker ref and discovery's canonical `zendure_cloud` ref
+normalize to the same account scope; multiple configured Cloud refs remain
+distinct and are never merged by assumption. A discovered serial that is already
+configured over another transport renders as an **Alternative transport** row
+with a **Use … instead** action that switches the configured device's connection in
 place — name, enabled state, and common tuning values preserved, stale
 transport fields removed — never as a second **Add as inverter** result. The
 same serial can never enter the draft twice across transports; the backend
 merge additionally enforces duplicate-identity and identity-conflict
-validation, so a buggy client cannot apply a duplicate.
+validation, so a buggy client cannot apply a duplicate. Outside the sole-account
+alias normalization above, the same raw route ID under different
+broker/account/product scopes produces different tokens and is not merged. If
+serial and scoped-token evidence point at different configured devices, preview
+fails closed with an identity conflict.
 
 The **Discovery sources** rows under the discovery actions expose the setup
 flow's source-config blocks (local MQTT credential pool, Zendure credential) by
@@ -617,6 +638,58 @@ transports; the `-m docker` tier proves the same boundaries against a real local
 control is not part of this validation; per-generation physical-hardware
 validation status is tracked in
 [supported-setups.md](../user/supported-setups.md).
+
+### Physical inverter identity and route aliases
+
+One physical inverter can be observed under more than one trusted identity: a
+physical **serial**, a scoped **MQTT route** (`source` + Cloud-account/broker
+scope + product/topic scope + device id), and a local **API endpoint**. The
+identity resolver (`ems/device_identity.py`,
+`resolve_inverter_identity_evidence`) returns all of them as an *evidence set* —
+a strongest **primary** plus trusted **aliases** — rather than a single
+destructive priority result. This is what lets a device keep its scoped-route
+alias even after a physical serial is later learned.
+
+- **Alias matching.** Two observations are the same logical inverter when *any*
+  trusted alias intersects. A configured **route-only** Cloud device therefore
+  still matches a later proposal for the **same route that now carries a serial**
+  (and vice versa): the shared route alias resolves them to one device, so
+  Maintenance shows it *In config*, offers no second *Add*, and enriches the
+  existing entry rather than creating a duplicate. Enrichment preserves the name,
+  enabled state, common tuning, transport and broker reference and adds only the
+  new trusted serial, still through normal preview/apply confirmation.
+- **Conflict fails closed.** When a shared scoped route is combined with two
+  **different** physical serials, the aliases contradict each other (the route
+  says one inverter, the serials say two). The merge refuses to guess
+  (`device_identity_conflict`) and the browser renders a blocked *Identity
+  conflict* state — never an automatic merge, never *Add as independent
+  inverter*. Sharing a serial is never a conflict: the same serial may gain
+  additional routes or Cloud-account scopes.
+- **Browser tokens are opaque and equality-only.** The browser matches on
+  keyed, non-reversible HMAC tokens — `physical_identity_token` (primary) and
+  `physical_identity_alias_tokens` (every alias) — plus a physical serial where
+  it is already allowed to be shown. Raw MQTT route ids are never sent to the
+  browser as identity material, and the tokens are derived, not authoritative
+  config state. Fresh Setup and Maintenance share the same alias semantics.
+
+## Cloud route redaction at external boundaries
+
+Zendure **Cloud** MQTT routes are account-scoped and are masked at every
+browser and support-export boundary through
+`ems/external_status.sanitize_external_mqtt_status`. Masking is **source-aware**
+and decided per node: a node is Cloud-scoped when its `source` is
+`zendure_cloud_mqtt`, its `broker_ref` resolves to a Cloud broker, or its value
+is a known Cloud route captured elsewhere in the document.
+
+- **Cloud topics are masked** to `iot/…/…/<suffix>` or `/…/…/<suffix>` for any
+  recognized suffix — `properties`/`report` as well as `function`/`invoke` and
+  custom `custom/vendor/action` routes, whether canonical (`iot/…`) or
+  leading-slash. Cloud product/device values are also collected from topic fields
+  so the same route stays masked in free-form log/error text and mapping keys.
+- **Local MQTT topics are preserved.** They carry user-controlled local
+  identifiers, not Cloud account routing secrets, so they remain visible as
+  useful diagnostics. A mixed local+Cloud status document redacts only the Cloud
+  route material, per node — local device labels and topics stay available.
 
 ## Zendure MQTT discovery (cloud)
 

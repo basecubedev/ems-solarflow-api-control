@@ -33,7 +33,12 @@ EMS keeps these facts separate and honest:
 - **Broker delivery is not device acceptance.** `broker_delivery=delivered`
   (the QoS 1 PUBACK) only means the broker received the publish; a command is
   confirmed only when telemetry proves every commanded property (mode *and*
-  setpoint) actually took effect and is fresh.
+  setpoint) actually took effect and has trustworthy per-property time
+  provenance. A matching cached value or a property with no observation time
+  cannot confirm a command. Late PUBACK evidence is retained independently of
+  newer commands within a bounded ledger. If an unresolved raw MQTT identifier
+  becomes ambiguous across a disconnect, EMS quarantines it rather than ever
+  attributing its callback to the wrong command.
 - **A known model always writes to its canonical topic.** A stale
   `mqtt.write_topic` left in an upgraded config can never misroute control; it is
   flagged and cleaned up by maintenance. Only the isolated custom escape hatch
@@ -41,8 +46,16 @@ EMS keeps these facts separate and honest:
 - **Validate before trusting it.** To prove Cloud MQTT control end to end on real
   hardware, stop the EMS and use the hardware probe
   ([developer/mqtt-write-latency-probe.md](../developer/mqtt-write-latency-probe.md)):
-  it confirms the canonical topic, broker delivery, an exact setpoint match, the
-  required mode properties, and a fully verified restore of the initial state.
+  it confirms the masked canonical topic shape, broker delivery, an exact
+  setpoint match, the required mode properties, and a fully verified restore of
+  every property the operation can modify. Restore verification also requires an
+  observed post-command state transition before the complete initial state
+  returns, so an unchanged read cannot hide a still-pending test command. The
+  probe refuses the first write if any required initial value is missing and
+  never substitutes a normal atomic power command for a partial restore. A read
+  error during cleanup cannot skip the full restore attempt: the probe records
+  the fault, keeps verification fail-closed, exits non-zero without sufficient
+  evidence, and always stops the MQTT runtime it started.
   Do not conclude "Cloud MQTT control works" from movement toward the target or a
   broker PUBACK alone.
 

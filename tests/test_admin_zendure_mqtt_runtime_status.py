@@ -360,6 +360,145 @@ def test_live_status_never_exposes_credentials(tmp_path):
         assert key not in view
 
 
+def test_live_cloud_status_never_exposes_route_id_or_full_command_topic(tmp_path):
+    route = "ACCOUNT_ROUTE_1234"
+    topic = f"iot/PRODUCT_SECRET/{route}/properties/write"
+    _write_config(tmp_path, {"zendure_mqtt": {"enabled": True}, "devices": []})
+    _write_live_status(
+        tmp_path,
+        _live_status(
+            brokers=[
+                {
+                    "broker_ref": "cloud_a",
+                    "source": "zendure_cloud_mqtt",
+                }
+            ],
+            devices=[
+                {
+                    "name": "Cloud battery",
+                    "broker_ref": "cloud_a",
+                    "source": "zendure_cloud_mqtt",
+                    "identifier": route,
+                    "effective_write_topic": topic,
+                    "last_command": {
+                        "device_id": route,
+                        "topic": topic,
+                        "correlation_id": "safe-correlation-id",
+                    },
+                }
+            ],
+        ),
+    )
+
+    view = bridge.build_runtime_status_view(base_dir=str(tmp_path))
+    flattened = json.dumps(view)
+
+    assert route not in flattened
+    assert topic not in flattened
+    assert "PRODUCT_SECRET" not in flattened
+    assert view["devices"][0]["identifier"] == "…1234"
+    assert view["devices"][0]["last_command"]["correlation_id"] == "safe-correlation-id"
+
+
+def test_live_invalid_summary_uses_installed_config_to_mask_route_in_name(tmp_path):
+    route = "ACCOUNT_ROUTE_7501"
+    product = "PRODUCT_KEY_7501"
+    _write_config(
+        tmp_path,
+        {
+            "zendure_mqtt": {
+                "brokers": {
+                    "cloud_a": {
+                        "source": "zendure_cloud_mqtt",
+                        "host": "mqtt.example.invalid",
+                    }
+                }
+            },
+            "devices": [
+                {
+                    "type": "zendure_mqtt",
+                    "name": f"Rejected Cloud {route}",
+                    "mqtt": {
+                        "broker_ref": "cloud_a",
+                        "device_id": route,
+                        "product_key": product,
+                    },
+                }
+            ],
+        },
+    )
+    # Invalid runtime summaries intentionally omit identifier/source details;
+    # the name is the only field left that still contains the configured route.
+    _write_live_status(
+        tmp_path,
+        _live_status(
+            devices=[
+                {
+                    "name": f"Rejected Cloud {route}",
+                    "broker_ref": "cloud_a",
+                    "identifier": None,
+                    "source": None,
+                    "status": "invalid",
+                    "issues": ["topic_family_missing"],
+                }
+            ],
+            invalid_device_count=1,
+        ),
+    )
+
+    view = bridge.build_runtime_status_view(base_dir=str(tmp_path))
+    flattened = json.dumps(view)
+
+    assert view["source"] == "live_runtime"
+    assert route not in flattened
+    assert product not in flattened
+    assert view["devices"][0]["name"] != f"Rejected Cloud {route}"
+
+
+def test_live_invalid_summary_masks_name_only_route_from_incomplete_cloud_config(
+    tmp_path,
+):
+    route = "SECRET_CLOUD_ROUTE_7501"
+    raw_name = f"Rejected Cloud {route}"
+    _write_config(
+        tmp_path,
+        {
+            "zendure_mqtt": {
+                "brokers": {
+                    "cloud_a": {
+                        "source": "zendure_cloud_mqtt",
+                        "host": "mqtt.example.invalid",
+                    }
+                }
+            },
+            "devices": [
+                {
+                    "type": "zendure_mqtt",
+                    "name": raw_name,
+                    "mqtt": {"broker_ref": "cloud_a"},
+                }
+            ],
+        },
+    )
+    _write_live_status(
+        tmp_path,
+        _live_status(
+            devices=[
+                {
+                    "name": raw_name,
+                    "status": "invalid",
+                    "issues": ["device_id_missing"],
+                }
+            ],
+            invalid_device_count=1,
+        ),
+    )
+
+    view = bridge.build_runtime_status_view(base_dir=str(tmp_path))
+
+    assert route not in json.dumps(view)
+
+
 def test_fallback_path_starts_no_broker_client(tmp_path, monkeypatch):
     _write_config(
         tmp_path,

@@ -208,6 +208,86 @@ def test_diagnostics_endpoint_survives_runner_exception(tmp_path):
     assert payload["summary"]["status"] == "unavailable"
 
 
+def test_diagnostics_endpoint_masks_cloud_identity_in_every_result_field(
+    tmp_path, monkeypatch
+):
+    route = "ADMIN_DIAG_CLOUD_ROUTE_7501"
+    product = "ADMIN_DIAG_PRODUCT_ACCOUNT"
+    topic = f"iot/{product}/{route}/properties/write"
+    _standard_install(tmp_path)
+    (tmp_path / "config" / "config.json").write_text(
+        json.dumps(
+            {
+                "zendure_mqtt": {
+                    "brokers": {
+                        "cloud_a": {
+                            "source": "zendure_cloud_mqtt",
+                            "host": "mqtt.example.invalid",
+                            "password": "CONFIG_BROKER_PASSWORD",
+                        }
+                    }
+                },
+                "devices": [
+                    {
+                        "type": "zendure_mqtt",
+                        "name": f"Cloud device {route}",
+                        "mqtt": {
+                            "broker_ref": "cloud_a",
+                            "product_key": product,
+                            "device_id": route,
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
+
+    class RawDiagnostics:
+        def run(self, check_ids=None):
+            return {
+                "available": True,
+                "mode": "container",
+                "checks": [
+                    {
+                        "id": "quick_diagnose",
+                        "name": f"Device {route}",
+                        "stdout": f"publish pending for {topic}",
+                        "stderr": f"route={route} product={product}",
+                        "parsed": {route: {"topic": topic}},
+                        "runtime_status": {
+                            "broker_ref": "cloud_a",
+                            "device_id": route,
+                            "write_topic": topic,
+                        },
+                        "app_key": "RESULT_APP_KEY_SECRET",
+                        "authorization_code": "RESULT_AUTH_SECRET",
+                    }
+                ],
+                "summary": {"status": "ok"},
+            }
+
+    srv, base = _server(RawDiagnostics())
+    try:
+        status, payload = _post(f"{base}/api/admin/maintenance/diagnostics/run")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    flattened = json.dumps(payload)
+    assert status == 200
+    for raw in (
+        route,
+        product,
+        topic,
+        "RESULT_APP_KEY_SECRET",
+        "RESULT_AUTH_SECRET",
+        "CONFIG_BROKER_PASSWORD",
+    ):
+        assert raw not in flattened
+
+
 def test_overview_endpoint_still_works_alongside_diagnostics(tmp_path, monkeypatch):
     _standard_install(tmp_path)
     monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))

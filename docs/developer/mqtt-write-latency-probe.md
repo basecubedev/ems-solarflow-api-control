@@ -9,9 +9,11 @@ It publishes the **exact production command** the EMS control loop would build
 topic) and reads the state back over the device's **local HTTP API**, polled
 fast. This sidesteps the ~30 s MQTT telemetry cadence: the HTTP
 `/properties/report` endpoint can be read several times per second, so the
-measured latency is the real end-to-end time from *"publish to broker"* to *"new
-`outputLimit` visible on the device"*, bounded only by the poll interval instead
-of the telemetry report period.
+measured latency is the real end-to-end time from immediately before local
+submission to *"new `outputLimit` visible on the device"*, bounded only by the
+poll interval instead of the telemetry report period. Broker delivery, HTTP
+setpoint and physical-output latency share that same monotonic origin, so they
+remain comparable even when local submission is slow.
 
 Tool: [`scripts/mqtt_write_latency_probe.py`](../../scripts/mqtt_write_latency_probe.py).
 Tests: [`tests/test_mqtt_write_latency_probe.py`](../../tests/test_mqtt_write_latency_probe.py)
@@ -73,43 +75,96 @@ after itself:
   probe measure. `--confirm-writes` does not override `dry_run`.
 - **The complete initial power state is restored** — `smartMode`, `acMode`,
   `outputLimit` **and** `inputLimit`, captured before the first write — through
-  the production property-write path on success, failure, timeout and
-  interruption, then **verified over HTTP by property type**: watt-like values
+  the production property-write path after any locally accepted test write, on
+  success, failure, timeout and interruption, then **verified over HTTP by
+  property type**: watt-like values
   (`outputLimit`/`inputLimit`) within tolerance, mode/enum values (`smartMode`/
-  `acMode`) **exactly**. `restore_verified` is reported only when *every* captured
-  property is restored and verified. If the atomic property write is rejected and
-  the probe falls back to an `outputLimit`-only write, that is reported as
-  `restore_partial` — **never** a full restore. A partial, failed, or unattempted
-  restore makes the run exit non-zero.
+  `acMode`) **exactly**. `restore_verified` is reported only when *every*
+  potentially modified property was captured, submitted for restoration and
+  verified after HTTP first observed state away from those initial values. That
+  transition barrier prevents an unchanged pre-command read from being mistaken
+  for restoration while an accepted test command is still pending. If the
+  transition cannot be observed, the result remains unverified and exits
+  non-zero. A known atomic profile has no `outputLimit`-only fallback: the normal
+  power-target helper would also overwrite its mode and input properties. If the
+  full model-supported restore cannot be built or submitted, restoration fails.
+  An HTTP read exception during cleanup is recorded but cannot skip the full
+  restore submission; verification keeps polling and fails closed if trustworthy
+  evidence does not recover. Once the MQTT runtime has started, an outer
+  `finally` always stops it, including when restoration itself raises.
 - **A non-restorable initial state fails preflight before the first write.**
-  Before publishing anything, the probe verifies the selected profile can restore
-  every captured mode-changing property (e.g. an initial `acMode` outside the
-  profile's writable range). If it cannot, the probe reports `preflight_failed`
-  and refuses to write.
+  Before publishing anything, the probe derives the potentially modified property
+  set from the exact production operations it will run. It requires a trustworthy,
+  writable initial value for every one of those properties (not merely the subset
+  returned by an incomplete HTTP report). A missing `smartMode`, `acMode`,
+  `outputLimit` or `inputLimit`, or an unsupported initial value, reports
+  `preflight_failed` and refuses to write.
+- **Restore is triggered by accepted writes, not intentions.** A builder,
+  preflight or local-publish rejection before submission changes nothing and does
+  not issue a restore command. Once any state-changing command is locally accepted,
+  restoration is required on success, timeout, exception and interruption even
+  when its broker outcome is unknown. The final report says why restoration was or
+  was not attempted.
 - **Mode-changing tests need double confirmation.** `--mode-test` additionally
   requires `--confirm-mode-changes`, and it only runs when the device is
   currently *not* in smart AC output mode — the probe never forces a device out
-  of output mode.
+  of output mode. Its command uses the same submission/PUBACK/HTTP/physical
+  observer and reports the same common-origin timing fields as the normal sample
+  loop.
 - **A retained control command is refused outright** (a retained setpoint would
   replay on every broker reconnect).
 - **`config.json` is never modified.** The startup config-upgrade write step is
   skipped, and no control loop is started.
 
+### Cross-transport identity binding
+
+Device *selection* (which MQTT control device to write to) is decided only from
+configured selectors — `--device-name`, `--device-id`, `--broker-ref`, and
+`--serial` when a trusted physical serial is already configured. With `--api-ip`
+and no explicit selector, the HTTP-reported serial auto-selects a device **only
+when that device has a matching trusted physical serial**. A serial-less Cloud
+device's `sn` falls back to its Cloud route id — a different identity domain — so
+it is never auto-selected by an HTTP serial and must be named explicitly.
+
+After selection, the probe evaluates the cross-transport *binding* between the
+MQTT device and the HTTP readback serial before any write:
+
+- **Serial matches** the configured physical serial → binding verified, writes
+  proceed.
+- **Serial conflicts** with a configured physical serial → the identities are
+  contradictory; the probe refuses to write (and dry preview exits non-zero).
+- **No physical serial is stored** (serial-less Cloud device) → the HTTP readback
+  is *new, unverified* binding evidence, never a route match and never persisted.
+  A write requires **exact `--device-name`, `--device-id` and `--broker-ref`
+  selectors** plus **`--confirm-unbound-api-readback`** (accept the readback for
+  this run only), or a physical serial bound first through Admin discovery.
+  Without that, the write is blocked; dry preview states the binding is
+  unverified and that the write remains blocked.
+
+The binding decision always runs before the first publish; the probe never binds
+a Cloud route to an HTTP serial silently.
+
 ## What the number means
 
-The probe reports **four distinct timing dimensions** — it never labels one as
-another:
+The probe captures one monotonic origin immediately before command submission and
+reports every primary latency from that origin. PUBACK observation, HTTP setpoint
+polling and optional physical-output polling are interleaved in one bounded loop;
+a slow or missing PUBACK never postpones the HTTP observation. The reported timing
+dimensions are:
 
-- **local submit** — time to hand the command to the Paho MQTT client. Local
+- **local submit duration** — time to hand the command to the Paho MQTT client. Local
   submission only; it is *not* broker delivery.
-- **broker delivery** — the observed QoS 1 PUBACK for the publish
+- **broker delivery from submit** — the observed QoS 1 PUBACK relative to the
+  common submission origin
   (`delivered` / `timeout` / `untracked` when the transport exposes no message
   id). Broker delivery is *not* device acceptance.
-- **setpoint HTTP-match** — MQTT publish → the **target** value visible on the
+- **setpoint match from submit** — command submission → the **target** value visible on the
   device's local HTTP API. Only samples whose observed `outputLimit` actually
   *matched* the target (within `--match-tolerance`) count; movement toward the
   target is reported separately and never counts as a match or a latency sample.
-- **physical output** — time for real output to react (with `--verify-output`).
+- **physical reaction from submit** — the primary physical-output latency (with
+  `--verify-output`). The incremental physical delay after the setpoint match is
+  also reported separately; it never replaces the primary value.
 
 "Setpoint landed" means `abs(observed - target) <= match_tolerance`, never merely
 that the value moved away from the baseline. The measurement resolution equals
@@ -148,7 +203,9 @@ network access to the broker and the inverter. Select the inverter with
   recovery test: from a non-output mode, prove the atomic command switches the
   required mode and lands the target (`mode_and_setpoint_verified` requires every
   expected property — `smartMode`/`acMode`/`outputLimit`/`inputLimit` — to match
-  by type), then restore the initial state.
+  by type), then restore the initial state. It uses the normal interleaved
+  evidence timeline and reports local-submit duration, PUBACK, setpoint match,
+  physical reaction from submit and physical delay after setpoint.
 - `--api-ip <ip> --confirm-writes --poll-interval 1 --markdown` — measure and print the docs table.
 
 A 1 s poll reports latency in 1 s steps. For sub-second resolution lower
@@ -231,13 +288,14 @@ python3 scripts/mqtt_write_latency_probe.py --api-ip 192.168.1.50 --confirm-writ
 | `--timeout S` | `20` | Per-sample wait for the value to land. |
 | `--settle S` | `2.0` | Pause between samples. |
 | `--match-tolerance W` | `5` | Watts of jitter tolerated when detecting the change. |
-| `--connect-timeout S` | `15` | Wait for the MQTT broker to connect. |
+| `--connect-timeout S` | `15` | Wait for the MQTT broker to connect, and bound per-command PUBACK observation. |
 | `--no-contention-check` | check on | Do not abort when a foreign writer changes the value. |
 | `--verify-output` | off | After a landed setpoint, classify the physical output reaction. |
 | `--output-timeout S` | `30` | Wait for the physical output to react. |
 | `--output-tolerance W` | `50` | Tolerance for the physical output check. |
 | `--mode-test` | off | Mode recovery test (device must currently be in a non-output mode). |
 | `--confirm-mode-changes` | off | Required (with `--confirm-writes`) for mode-changing tests. |
+| `--confirm-unbound-api-readback` | off | For a serial-less Cloud device, accept the HTTP readback serial as unverified binding evidence for this run only (never persisted). Requires exact `--device-name`/`--device-id`/`--broker-ref`. See [Cross-transport identity binding](#cross-transport-identity-binding). |
 
 The two `--values` must differ and must stay within the device `max_power`; the
 probe toggles between them so every sample is a clearly detectable change (robust

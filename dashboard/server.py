@@ -64,6 +64,14 @@ SECURITY_HEADERS = {
         "geolocation=(), microphone=(), camera=(), payment=(), usb=()"
     ),
 }
+_EXTERNAL_ROUTE_KEYS = frozenset(
+    {"device_id", "device_key", "identifier", "route_id", "product_key"}
+)
+_EXTERNAL_NAMED_ROUTE_CONTAINERS = frozenset(
+    {"devices", "diagnostic_by_route", "metrics", "sources"}
+)
+_EXTERNAL_CONTEXT_HISTORY_LIMIT = 4
+_EXTERNAL_ALIAS_CACHE_LIMIT = 512
 
 
 def _split_csv(value):
@@ -93,6 +101,337 @@ def _parse_time_param(value):
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed
+
+
+def _usable_external_mqtt_context(value):
+    """Whether parsed config can safely anchor current device identities."""
+
+    if not isinstance(value, dict) or not isinstance(value.get("devices"), list):
+        return False
+    mqtt_config = value.get("zendure_mqtt")
+    mqtt_config = mqtt_config if isinstance(mqtt_config, dict) else {}
+    broker_sources = {}
+    top_source = str(mqtt_config.get("source") or "").strip().casefold()
+    if top_source:
+        broker_sources["default"] = top_source
+    brokers = mqtt_config.get("brokers")
+    if isinstance(brokers, dict):
+        for ref, profile in brokers.items():
+            if isinstance(profile, dict):
+                broker_sources[str(ref).strip()] = str(
+                    profile.get("source") or ""
+                ).strip().casefold()
+
+    cloud_scope_configured = "zendure_cloud_mqtt" in broker_sources.values()
+    cloud_device_count = 0
+    for device in value["devices"]:
+        if not isinstance(device, dict):
+            continue
+        mqtt = device.get("mqtt")
+        mqtt = mqtt if isinstance(mqtt, dict) else {}
+        broker_ref = str(mqtt.get("broker_ref") or "default").strip()
+        source = str(
+            mqtt.get("source")
+            or device.get("connection_source")
+            or broker_sources.get(broker_ref)
+            or ""
+        ).strip().casefold()
+        if source != "zendure_cloud_mqtt":
+            continue
+        cloud_device_count += 1
+        route = mqtt.get("device_id", device.get("device_id"))
+        if not isinstance(route, str) or not route.strip():
+            return False
+
+    if cloud_scope_configured:
+        return cloud_device_count > 0
+    return True
+
+
+def _external_mqtt_config_context(server):
+    """Return active or last-known-good MQTT redaction context."""
+
+    history = getattr(server, "_external_mqtt_config_history", None)
+    if not isinstance(history, list):
+        history = []
+        server._external_mqtt_config_history = history
+
+    def combined_context():
+        if not history:
+            return None
+        if len(history) == 1:
+            return history[0]
+        return {"redaction_contexts": list(history)}
+
+    config_path = getattr(server, "config_path", None)
+    if config_path and os.path.exists(config_path):
+        try:
+            with open(config_path, encoding="utf-8") as handle:
+                loaded = json.load(handle)
+            if isinstance(loaded, dict) and _usable_external_mqtt_context(loaded):
+                if not history or history[-1] != loaded:
+                    history.append(loaded)
+                    del history[:-_EXTERNAL_CONTEXT_HISTORY_LIMIT]
+                server._external_mqtt_context_fail_closed = False
+                return combined_context()
+            # A parsed but incomplete replacement is not trustworthy enough to
+            # disable payload-derived masking. Retain any older context too.
+            server._external_mqtt_context_fail_closed = True
+            return combined_context()
+        except (OSError, ValueError, TypeError):
+            pass
+    server._external_mqtt_context_fail_closed = not bool(history)
+    return combined_context()
+
+
+def _plausibly_sensitive_external_identifier(value):
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    if len(text) <= 4:
+        return False
+    if len(text) >= 12 or any(character.isspace() for character in text):
+        return True
+    if "/" in text or re.search(r"\d{4}", text):
+        return True
+    return bool(re.search(r"[A-Z].*[A-Z]", text))
+
+
+def _fail_closed_external_identifiers(payload, *, trusted_device_names=()):
+    """Collect device-bound strings when no trusted config is available."""
+
+    identifiers = {}
+    trusted_device_names = set(trusted_device_names)
+
+    def remember(value, *, forced=False):
+        if isinstance(value, str) and value:
+            identifiers[value] = identifiers.get(value, False) or forced
+
+    def remember_device_label(value):
+        if not isinstance(value, str):
+            return
+        remember(value, forced=_plausibly_sensitive_external_identifier(value))
+        if value in trusted_device_names:
+            return
+        for token in re.findall(r"[A-Za-z0-9_.:-]+", value):
+            if _plausibly_sensitive_external_identifier(token):
+                remember(token, forced=True)
+
+    def visit(node, *, device_scope=False):
+        if isinstance(node, dict):
+            for key, child in node.items():
+                lowered = str(key).casefold()
+                child_scope = device_scope or lowered == "devices"
+                if lowered in _EXTERNAL_ROUTE_KEYS:
+                    remember(child, forced=True)
+                elif lowered in {"device", "device_name"}:
+                    remember_device_label(child)
+                if (
+                    lowered in _EXTERNAL_NAMED_ROUTE_CONTAINERS
+                    and isinstance(child, dict)
+                ):
+                    for named_key in child:
+                        if lowered == "devices":
+                            remember_device_label(named_key)
+                        else:
+                            remember(
+                                named_key,
+                                forced=lowered == "diagnostic_by_route",
+                            )
+                elif lowered == "devices" and isinstance(child, (list, tuple)):
+                    for device_name in child:
+                        remember_device_label(device_name)
+                if device_scope and lowered == "name":
+                    remember_device_label(child)
+                visit(child, device_scope=child_scope)
+        elif isinstance(node, (list, tuple)):
+            for child in node:
+                visit(child, device_scope=device_scope)
+
+    visit(payload)
+    return identifiers
+
+
+def _external_context_device_names(context):
+    names = []
+
+    def visit(node):
+        if isinstance(node, dict):
+            devices = node.get("devices")
+            if isinstance(devices, list):
+                for device in devices:
+                    name = device.get("name") if isinstance(device, dict) else None
+                    if isinstance(name, str) and name and name not in names:
+                        names.append(name)
+            for child in node.values():
+                visit(child)
+        elif isinstance(node, list):
+            for child in node:
+                visit(child)
+
+    visit(context)
+    return names
+
+
+def _external_device_aliases(server, config_context=None, payload=None):
+    """Return collision-free browser aliases for configured device names."""
+
+    from ems.external_status import sanitize_external_mqtt_status
+
+    context = (
+        config_context
+        if isinstance(config_context, dict)
+        else _external_mqtt_config_context(server)
+    )
+    trusted_names = _external_context_device_names(context)
+    names = list(trusted_names)
+    uncertain_names = set()
+    forced_names = set()
+    validation = getattr(server, "runtime_validation", None)
+    validation_names = (
+        validation.get("device_max_power")
+        if isinstance(validation, dict)
+        else None
+    )
+    if isinstance(validation_names, dict):
+        for name in validation_names:
+            if (
+                isinstance(name, str)
+                and name
+                and name not in names
+                and _plausibly_sensitive_external_identifier(name)
+            ):
+                names.append(name)
+                uncertain_names.add(name)
+    fail_closed = bool(
+        getattr(server, "_external_mqtt_context_fail_closed", context is None)
+    )
+    for identifier, forced in _fail_closed_external_identifiers(
+        payload, trusted_device_names=trusted_names
+    ).items():
+        if identifier in trusted_names:
+            continue
+        if not forced and not _plausibly_sensitive_external_identifier(identifier):
+            continue
+        if identifier not in names:
+            names.append(identifier)
+        uncertain_names.add(identifier)
+        if forced:
+            forced_names.add(identifier)
+
+    alias_cache = getattr(server, "_external_device_alias_cache", None)
+    if not isinstance(alias_cache, dict):
+        alias_cache = {}
+        server._external_device_alias_cache = alias_cache
+    for name in alias_cache:
+        if name not in names:
+            names.append(name)
+
+    groups = {}
+    for name in names:
+        if name in alias_cache:
+            continue
+        masked = sanitize_external_mqtt_status(
+            name,
+            sensitive_context=context,
+            drop_secrets=False,
+        )
+        if (
+            name in uncertain_names
+            and masked == name
+            and (
+                fail_closed
+                or name in forced_names
+            )
+        ):
+            from ems.external_status import mask_route_identifier
+
+            masked = mask_route_identifier(name)
+        base = masked if isinstance(masked, str) and masked else "Device"
+        groups.setdefault(base, []).append(name)
+
+    reserved = set(groups) | set(names)
+    raw_name_set = set(names)
+    used = set(alias_cache.values())
+    for base, raw_names in groups.items():
+        if (
+            len(raw_names) == 1
+            and base not in used
+            and (base == raw_names[0] or base not in raw_name_set)
+        ):
+            alias_cache[raw_names[0]] = base
+            used.add(base)
+            continue
+        suffix = 1
+        for raw_name in raw_names:
+            candidate = f"{base} [{suffix}]"
+            while candidate in reserved or candidate in used:
+                suffix += 1
+                candidate = f"{base} [{suffix}]"
+            alias_cache[raw_name] = candidate
+            used.add(candidate)
+            suffix += 1
+    while len(alias_cache) > _EXTERNAL_ALIAS_CACHE_LIMIT:
+        alias_cache.pop(next(iter(alias_cache)))
+    return dict(alias_cache)
+
+
+def _replace_external_device_names(value, aliases):
+    """Replace exact configured names in mapping keys and scalar values."""
+
+    if isinstance(value, dict):
+        result = {}
+        for key, child in value.items():
+            safe_key = aliases.get(key, key)
+            if safe_key in result:
+                base_key = str(safe_key)
+                ordinal = 2
+                candidate = f"{base_key} [{ordinal}]"
+                while candidate in result:
+                    ordinal += 1
+                    candidate = f"{base_key} [{ordinal}]"
+                safe_key = candidate
+            result[safe_key] = _replace_external_device_names(child, aliases)
+        return result
+    if isinstance(value, list):
+        return [_replace_external_device_names(child, aliases) for child in value]
+    if isinstance(value, tuple):
+        return [_replace_external_device_names(child, aliases) for child in value]
+    if isinstance(value, str):
+        replacements = {raw: alias for raw, alias in aliases.items() if raw != alias}
+        if not replacements:
+            return value
+        pattern = re.compile(
+            "|".join(
+                re.escape(raw)
+                for raw in sorted(replacements, key=len, reverse=True)
+            )
+        )
+        return pattern.sub(lambda match: replacements[match.group(0)], value)
+    return value
+
+
+def _resolve_external_device_name(server, browser_name):
+    aliases = _external_device_aliases(server)
+    return {alias: raw for raw, alias in aliases.items()}.get(
+        browser_name, browser_name
+    )
+
+
+def _external_mqtt_status_payload(server, payload, *, drop_secrets=True):
+    """Sanitize one browser response with the active MQTT config as context."""
+
+    config_context = _external_mqtt_config_context(server)
+    aliases = _external_device_aliases(server, config_context, payload)
+    aliased_payload = _replace_external_device_names(payload, aliases)
+
+    from ems.external_status import sanitize_external_mqtt_status
+
+    return sanitize_external_mqtt_status(
+        aliased_payload,
+        sensitive_context=config_context,
+        drop_secrets=drop_secrets,
+    )
 
 
 class JsonBodyTooLarge(ValueError):
@@ -190,6 +529,9 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         self.runtime_validation = runtime_validation or build_validation_context(
             runtime_state=runtime_state
         )
+        # Capture redaction context while the startup config is known-good.
+        # Later atomic replacement/read failures retain this last-good copy.
+        _external_mqtt_config_context(self)
         self.sse_limiter = SSEConnectionLimiter(
             sse_max_connections,
             sse_max_connections_per_ip,
@@ -271,7 +613,11 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
 
         if parsed.path == "/api/live":
-            self._send_json(self.server.store.latest())
+            self._send_json(
+                _external_mqtt_status_payload(
+                    self.server, self.server.store.latest()
+                )
+            )
             return
 
         if parsed.path == "/api/history":
@@ -288,10 +634,15 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 )
                 return
 
-            self._send_json({
-                "range": range_name,
-                "items": self.server.store.history(range_name),
-            })
+            self._send_json(
+                _external_mqtt_status_payload(
+                    self.server,
+                    {
+                        "range": range_name,
+                        "items": self.server.store.history(range_name),
+                    },
+                )
+            )
             return
 
         if parsed.path == "/api/history/series":
@@ -307,7 +658,11 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/api/energy-stats":
-            self._send_json(self.server.store.energy_summary())
+            self._send_json(
+                _external_mqtt_status_payload(
+                    self.server, self.server.store.energy_summary()
+                )
+            )
             return
 
         if parsed.path == "/api/ui-config":
@@ -321,9 +676,12 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/runtime":
             self._send_json(
-                attach_limits(
-                    runtime_payload(self.server.runtime_state),
-                    self.server.runtime_validation,
+                _external_mqtt_status_payload(
+                    self.server,
+                    attach_limits(
+                        runtime_payload(self.server.runtime_state),
+                        self.server.runtime_validation,
+                    ),
                 )
             )
             return
@@ -604,7 +962,15 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             return None
 
         series = normalize_series(_split_csv(query.get("series", [None])[0]))
-        devices = _split_csv(query.get("devices", [None])[0]) or None
+        browser_devices = _split_csv(query.get("devices", [None])[0])
+        devices = (
+            [
+                _resolve_external_device_name(self.server, name)
+                for name in browser_devices
+            ]
+            if browser_devices
+            else None
+        )
         return range_name, start, end, series, devices
 
     def _serve_series(self, provider, query, *, log_label):
@@ -625,7 +991,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         decimate_history_result(result)
         payload = result.to_dict()
         payload["range"] = range_name
-        self._send_json(payload)
+        self._send_json(_external_mqtt_status_payload(self.server, payload))
 
     def _handle_history_series(self, query):
         # Lightweight operational history for the Aggregate/Devices charts.
@@ -725,7 +1091,14 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         finally:
             self.server.diagnose_lock.release()
 
-        self._send_json(redacted)
+        # The diagnostics redactor retains secret-shaped fields with an
+        # explicit ``<redacted>`` value; preserve that stable schema while the
+        # central MQTT boundary masks routes/topics and mapping keys.
+        self._send_json(
+            _external_mqtt_status_payload(
+                self.server, redacted, drop_secrets=False
+            )
+        )
 
     def _handle_support_bundle(self):
         auth_error = self._require_read_auth()
@@ -843,7 +1216,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         result["service_level"] = logging.getLevelName(
             logging.getLogger().getEffectiveLevel()
         )
-        self._send_json(result)
+        self._send_json(_external_mqtt_status_payload(self.server, result))
 
     def _handle_set_log_level(self):
         # Changing the service's runtime log verbosity is a state change, so it
@@ -1165,7 +1538,10 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     self.server.runtime_validation,
                 )
             elif path.startswith("/api/runtime/device/"):
-                device_name = unquote(path.rsplit("/", 1)[-1])
+                browser_name = unquote(path.rsplit("/", 1)[-1])
+                device_name = _resolve_external_device_name(
+                    self.server, browser_name
+                )
                 result = apply_device_update(
                     self.server.runtime_state,
                     device_name,
@@ -1176,13 +1552,29 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "not_found"}, status=404)
                 return
         except RuntimeWriteError as exc:
-            self._send_json({"error": "invalid_runtime_update", "message": str(exc)}, status=400)
+            self._send_json(
+                _external_mqtt_status_payload(
+                    self.server,
+                    {"error": "invalid_runtime_update", "message": str(exc)},
+                ),
+                status=400,
+            )
             return
         except ValueError as exc:
-            self._send_json({"error": "bad_request", "message": str(exc)}, status=400)
+            self._send_json(
+                _external_mqtt_status_payload(
+                    self.server,
+                    {"error": "bad_request", "message": str(exc)},
+                ),
+                status=400,
+            )
             return
 
-        self._send_json({"updated": True, **result})
+        self._send_json(
+            _external_mqtt_status_payload(
+                self.server, {"updated": True, **result}
+            )
+        )
 
     def _json_body_preflight(self):
         try:
@@ -1295,7 +1687,10 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                 timestamp = snapshot.get("timestamp")
 
                 if timestamp != last_timestamp:
-                    payload = json.dumps(snapshot, sort_keys=True)
+                    payload = json.dumps(
+                        _external_mqtt_status_payload(self.server, snapshot),
+                        sort_keys=True,
+                    )
                     message = f"event: telemetry\ndata: {payload}\n\n"
                     try:
                         self.wfile.write(message.encode("utf-8"))

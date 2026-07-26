@@ -614,6 +614,156 @@ def build_test_runtime(*, data_dir):
             ],
         }
 
+    serialless_route = "E2E_CLOUD_ROUTE_7501"
+    serialless_product = "E2E_CLOUD_PRODUCT_75"
+    serialized_route = "E2E_CLOUD_ROUTE_7502"
+    serialized_product = "E2E_CLOUD_PRODUCT_76"
+    serialized_serial = "E2E-CLOUD-SERIAL-7502"
+
+    def serialless_cloud_config():
+        return {
+            "config_schema_version": 3,
+            "system": {"max_total_power": 1600},
+            "grid_meter": {"type": "shelly", "ip": "192.168.75.2"},
+            "zendure_mqtt": {
+                "brokers": {
+                    "zendure_cloud": {
+                        "enabled": True,
+                        "source": "zendure_cloud_mqtt",
+                        "host": "mqtt.zen-iot.com",
+                        "port": 8883,
+                        "tls": True,
+                        "username": "cloud-e2e-user",
+                        "password": "cloud-e2e-password",
+                    }
+                }
+            },
+            "devices": [
+                {
+                    "name": "Existing API inverter",
+                    "ip": "192.168.75.20",
+                    "sn": "E2E-API-7501",
+                    "max_power": 800,
+                }
+            ],
+        }
+
+    def cloud_identity_observation(
+        *,
+        source,
+        host,
+        port,
+        device_id=serialless_route,
+        serial_number=None,
+        product_key=serialless_product,
+        display_name="Serial-less SolarFlow",
+    ):
+        return {
+            "broker_id": f"{source}:{host}:{port}",
+            "broker_host": host,
+            "broker_port": port,
+            "topic_family": "legacy_zendure_json",
+            "device_id": device_id,
+            "serial_number": serial_number,
+            "product_key": product_key,
+            "model_hint": display_name,
+            "display_name": display_name,
+            "metrics_seen": ["packInput", "outputHomePower"],
+            "topics_seen": [
+                f"iot/{product_key}/{device_id}/properties/report"
+            ],
+            "source_type": source,
+            "tls_mode": "system_ca" if source == "zendure_cloud_mqtt" else None,
+        }
+
+    enrichment_serial = "E2E-CLOUD-SERIAL-7501"
+
+    def serialless_cloud_route_enrichment_config():
+        config = serialless_cloud_config()
+        config["devices"].append(
+            {
+                "name": "Roof Serial-less",
+                "type": "zendure_mqtt",
+                "pv_kwp": 2.5,
+                "mqtt": {
+                    "broker_ref": "zendure_cloud",
+                    "topic_family": "legacy_zendure_json",
+                    "product_key": serialless_product,
+                    "device_id": serialless_route,
+                },
+                "capabilities": {
+                    "read_power": True,
+                    "read_soc": True,
+                    "write_output_limit": False,
+                },
+            }
+        )
+        return config
+
+    def seed_serialized_same_route_candidate():
+        # The same Cloud route re-observed, now carrying a physical serial: the
+        # route alias must still resolve to the existing serial-less device.
+        runtime.zendure_cloud_discovery._trusted_candidates = [
+            cloud_identity_observation(
+                source="zendure_cloud_mqtt",
+                host="mqtt.zen-iot.com",
+                port=8883,
+                device_id=serialless_route,
+                serial_number=enrichment_serial,
+                product_key=serialless_product,
+                display_name="Serialized Roof",
+            ),
+        ]
+        runtime.zendure_cloud_discovery._candidates = []
+
+    def seed_serialless_cloud_candidate():
+        runtime.zendure_cloud_discovery._trusted_candidates = [
+            cloud_identity_observation(
+                source="zendure_cloud_mqtt",
+                host="mqtt.zen-iot.com",
+                port=8883,
+            ),
+            cloud_identity_observation(
+                source="zendure_cloud_mqtt",
+                host="mqtt.zen-iot.com",
+                port=8883,
+                device_id=serialized_route,
+                serial_number=serialized_serial,
+                product_key=serialized_product,
+                display_name="Serialized Cloud SolarFlow",
+            ),
+        ]
+        runtime.zendure_cloud_discovery._candidates = []
+
+    def clear_local_mqtt_candidates():
+        generation = runtime.mqtt_discovery.store.begin_refresh()
+        runtime.mqtt_discovery.store.complete_refresh(
+            generation, [], success=True
+        )
+
+    def seed_other_scope_local_candidate():
+        observation = cloud_identity_observation(
+            source="local_mqtt",
+            host="192.168.75.30",
+            port=1883,
+        )
+        generation = runtime.mqtt_discovery.store.begin_refresh()
+        runtime.mqtt_discovery.store.complete_refresh(
+            generation,
+            [
+                {
+                    "id": "mqtt:192.168.75.30:1883",
+                    "host": "192.168.75.30",
+                    "port": 1883,
+                    "tls": False,
+                    "reachable": True,
+                    "topic_refresh_success": True,
+                    "devices": [observation],
+                }
+            ],
+            success=True,
+        )
+
     def write_install_config(config):
         target = detect_install_context().config_path
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -634,6 +784,17 @@ def build_test_runtime(*, data_dir):
             )
         elif scenario == "mixed_transports":
             write_install_config(mixed_transport_config())
+        elif scenario == "serialless_cloud_identity":
+            write_install_config(serialless_cloud_config())
+            clear_local_mqtt_candidates()
+            seed_serialless_cloud_candidate()
+        elif scenario == "serialless_cloud_identity_other_scope":
+            seed_serialless_cloud_candidate()
+            seed_other_scope_local_candidate()
+        elif scenario == "serialless_cloud_route_enrichment":
+            write_install_config(serialless_cloud_route_enrichment_config())
+            clear_local_mqtt_candidates()
+            seed_serialized_same_route_candidate()
         elif scenario == "mqtt_mutate":
             target = detect_install_context().config_path
             config = json.loads(target.read_text(encoding="utf-8"))
@@ -722,6 +883,9 @@ def build_test_runtime(*, data_dir):
             detect_install_context().config_path.unlink()
         except FileNotFoundError:
             pass
+        runtime.zendure_cloud_discovery._trusted_candidates = []
+        runtime.zendure_cloud_discovery._candidates = []
+        clear_local_mqtt_candidates()
         _restore_initial_bundle(
             Path(data_dir) / "embedded-bundle", initial_running_tag
         )

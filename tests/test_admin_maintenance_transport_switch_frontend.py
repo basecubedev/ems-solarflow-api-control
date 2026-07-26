@@ -47,6 +47,7 @@ _HELPERS = (
     "nextCompactInverterName",
     "mconfigNextInverterName",
     "normalizeSerial",
+    "usableSerialValue",
     "physicalInverterIdentity",
     "mconfigHardwareSection",
     "mconfigDeviceCatalogFields",

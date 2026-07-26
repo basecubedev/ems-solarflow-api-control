@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ems.external_status import sanitize_external_mqtt_status
 from ems.zendure_mqtt.config_entries import (
     DEFAULT_BROKER_REF,
     RESERVED_MQTT_BROKER_REFS,
@@ -549,9 +550,15 @@ class ZendureMqttTelemetryRuntime:
         service_factory=None,
         broker_runtimes=None,
         stale_after_seconds: float | None = None,
+        status_sensitive_context=None,
     ):
         self._invalid_devices = tuple(invalid_devices)
         self._config_error = config_error
+        # The external snapshot can be intentionally lossy (for example an
+        # invalid entry retains its display name but drops route/source fields).
+        # Keep the installed config as read-only masking context so a Cloud route
+        # embedded in such a name cannot survive persistence.
+        self._status_sensitive_context = status_sensitive_context
         if broker_runtimes is not None:
             self._brokers = list(broker_runtimes)
             self._stale_after_seconds = (
@@ -665,7 +672,13 @@ class ZendureMqttTelemetryRuntime:
         status = self.status()
         if control_status is not None:
             status["control"] = control_status
-        payload = {"written_at": time.time(), "status": status}
+        payload = {
+            "written_at": time.time(),
+            "status": sanitize_external_mqtt_status(
+                status,
+                sensitive_context=self._status_sensitive_context,
+            ),
+        }
         try:
             target = Path(path)
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -777,4 +790,5 @@ def build_zendure_mqtt_runtime(
         invalid_devices=invalid,
         config_error=config_error,
         stale_after_seconds=stale_after,
+        status_sensitive_context=config,
     )

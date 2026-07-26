@@ -15,6 +15,7 @@ from ems.clients import (
     create_session,
 )
 from ems.controller import EMSController
+from ems.device_identity import broker_sources_from_config
 from ems.logging_utils import log_event, setup_logging
 from ems.runtime_state import RuntimeState, build_runtime_defaults
 from ems.simulation import (
@@ -151,7 +152,8 @@ def main():
     # rather than let two entries (e.g. an API device and an MQTT telemetry
     # entry for the same serial) drive conflicting state.
     duplicate_identity = duplicate_zendure_identity_startup_error(
-        cfg.CONFIG.get("devices")
+        cfg.CONFIG.get("devices"),
+        broker_sources=broker_sources_from_config(cfg.CONFIG),
     )
     if duplicate_identity:
         log_event(

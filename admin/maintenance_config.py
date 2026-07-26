@@ -9,6 +9,7 @@ atomic config apply service.
 
 import copy
 import hashlib
+import hmac
 import json
 
 from admin.config_preview import _GRID_TYPE_CHOICES, _valid_host
@@ -52,6 +53,20 @@ from ems.config_catalog import (
     http_grid_meter_types,
 )
 from ems.mqtt_credentials import find_mqtt_credential_consumer_issues
+from ems.device_identity import (
+    PHYSICAL_IDENTITY_ALIAS_TOKENS_FIELD,
+    PHYSICAL_IDENTITY_TOKEN_FIELD,
+    broker_sources_from_config,
+    identity_evidence_conflict,
+    resolve_inverter_identity,
+    resolve_inverter_identity_evidence,
+    supplied_identity_token,
+)
+from ems.external_status import (
+    mask_external_mqtt_string,
+    mask_mqtt_topic,
+    sanitize_external_mqtt_status,
+)
 from ems.zendure_mqtt.config_entries import (
     find_duplicate_zendure_device_identities,
     find_reserved_mqtt_broker_ref_issues,
@@ -62,7 +77,6 @@ from ems.zendure_mqtt.config_entries import (
     validate_zendure_mqtt_control_device_config,
     validate_zendure_mqtt_device_config,
     zendure_mqtt_broker_profile_views,
-    zendure_physical_identity,
 )
 
 # HTTP/IP and MQTT grid-meter type sets both come from the central catalog/config
@@ -113,6 +127,10 @@ _SECRET_LEAF_FRAGMENTS = (
 # not a secret and the setup preview shows it, so maintenance must too.
 _NON_SECRET_LEAF_KEYS = (
     "credentials_ref",
+    # A keyed, non-reversible equality helper deliberately issued to the
+    # browser; it is neither a bearer token nor config source-of-truth.
+    PHYSICAL_IDENTITY_TOKEN_FIELD,
+    PHYSICAL_IDENTITY_ALIAS_TOKENS_FIELD,
     # Boolean presence metadata used by the browser to render keep/clear/set
     # controls. It carries no credential value and must remain a boolean.
     "has_password",
@@ -146,41 +164,139 @@ def _redact_secrets(value):
     return value
 
 
-def redact_config_for_browser(value):
+def redact_config_for_browser(
+    value, *, identity_token_key=None, broker_sources=None
+):
     """Redact config/draft secrets in a browser-facing copy in-place."""
 
+    if identity_token_key is not None:
+        _attach_physical_identity_tokens(
+            value, identity_token_key, broker_sources=broker_sources
+        )
+    safe = sanitize_external_mqtt_status(
+        value,
+        sensitive_context=value,
+        drop_secrets=False,
+    )
+    if isinstance(value, dict) and isinstance(safe, dict):
+        value.clear()
+        value.update(safe)
+    elif isinstance(value, list) and isinstance(safe, list):
+        value[:] = safe
+    else:
+        value = safe
+    _redact_cloud_mqtt_route_ids(value, broker_sources=broker_sources)
     _redact_secrets(value)
-    _redact_cloud_mqtt_route_ids(value)
     _redact_mqtt_device_id_diff(value)
     return value
 
 
-def _redact_cloud_mqtt_route_ids(value):
+def _attach_physical_identity_tokens(value, token_key, *, broker_sources=None):
+    """Attach derived equality tokens to each browser-visible devices list."""
+
+    def walk(node, inherited_sources=None):
+        if not isinstance(node, dict):
+            if isinstance(node, list):
+                for child in node:
+                    walk(child, inherited_sources)
+            return
+        sources = broker_sources_from_config(node) or inherited_sources or {}
+        devices = node.get("devices")
+        if isinstance(devices, list):
+            for device in devices:
+                if not isinstance(device, dict):
+                    continue
+                evidence = resolve_inverter_identity_evidence(
+                    device, broker_sources=sources, token_key=token_key
+                )
+                if evidence is None:
+                    continue
+                if evidence.primary.opaque_token is not None:
+                    device[PHYSICAL_IDENTITY_TOKEN_FIELD] = (
+                        evidence.primary.opaque_token
+                    )
+                alias_tokens = list(evidence.opaque_tokens)
+                if alias_tokens:
+                    device[PHYSICAL_IDENTITY_ALIAS_TOKENS_FIELD] = alias_tokens
+        for child in node.values():
+            walk(child, sources)
+
+    walk(value, broker_sources or {})
+
+
+def _redact_cloud_mqtt_route_ids(value, *, broker_sources=None):
     """Hide account-scoped cloud route ids while preserving physical serials."""
 
+    sources = dict(broker_sources or {})
     if isinstance(value, dict):
-        mqtt = value.get("mqtt")
-        if (
-            isinstance(mqtt, dict)
-            and mqtt.get("source") == "zendure_cloud_mqtt"
-        ):
-            original_device_id = mqtt.get("device_id")
-            if original_device_id not in (None, ""):
-                mqtt["device_id"] = _REDACTED
-                # The canonical effective topic embeds the route device id; mask
-                # that segment too while keeping the topic shape visible.
-                topic = mqtt.get("effective_write_topic")
-                if isinstance(topic, str) and original_device_id in topic:
-                    mqtt["effective_write_topic"] = topic.replace(
-                        original_device_id, _REDACTED
+        sources.update(broker_sources_from_config(value))
+
+    def mask_strings(node, sensitive):
+        if isinstance(node, dict):
+            for child_key in list(node):
+                child = node[child_key]
+                if str(child_key).lower() in {
+                    "sn",
+                    "serial_number",
+                    PHYSICAL_IDENTITY_TOKEN_FIELD,
+                }:
+                    continue
+                safe_key = (
+                    mask_external_mqtt_string(
+                        child_key,
+                        sensitive_values=frozenset(sensitive),
+                        cloud_scoped=True,
                     )
-            if value.get("device_id") not in (None, ""):
-                value["device_id"] = _REDACTED
-        for item in value.values():
-            _redact_cloud_mqtt_route_ids(item)
-    elif isinstance(value, list):
-        for item in value:
-            _redact_cloud_mqtt_route_ids(item)
+                    if isinstance(child_key, str)
+                    else child_key
+                )
+                safe_child = mask_strings(child, sensitive)
+                if safe_key != child_key:
+                    del node[child_key]
+                node[safe_key] = safe_child
+            return node
+        if isinstance(node, list):
+            return [mask_strings(child, sensitive) for child in node]
+        if isinstance(node, str):
+            return mask_external_mqtt_string(
+                node, sensitive_values=frozenset(sensitive), cloud_scoped=True
+            )
+        return node
+
+    all_sensitive = set()
+
+    def walk(node):
+        if isinstance(node, dict):
+            mqtt = node.get("mqtt")
+            if isinstance(mqtt, dict):
+                broker_ref = str(mqtt.get("broker_ref") or "default").strip()
+                source = str(mqtt.get("source") or sources.get(broker_ref) or "")
+                if source == "zendure_cloud_mqtt":
+                    sensitive = {
+                        raw.strip()
+                        for raw in (
+                            mqtt.get("device_id"),
+                            mqtt.get("product_key"),
+                            node.get("device_id"),
+                            node.get("product_key"),
+                        )
+                        if isinstance(raw, str) and raw.strip()
+                    }
+                    all_sensitive.update(sensitive)
+                    mask_strings(node, sensitive)
+                    for target in (mqtt, node):
+                        for key in ("device_id", "product_key"):
+                            if target.get(key) not in (None, ""):
+                                target[key] = _REDACTED
+            for child in node.values():
+                walk(child)
+        elif isinstance(node, list):
+            for child in node:
+                walk(child)
+
+    walk(value)
+    if all_sensitive:
+        mask_strings(value, all_sensitive)
 
 
 def _redact_mqtt_device_id_diff(value):
@@ -188,10 +304,18 @@ def _redact_mqtt_device_id_diff(value):
 
     if isinstance(value, dict):
         path = value.get("path")
-        if isinstance(path, str) and path.endswith(".mqtt.device_id"):
+        if isinstance(path, str) and path.endswith(
+            (".mqtt.device_id", ".mqtt.product_key")
+        ):
             for key in ("before", "after"):
                 if value.get(key) not in (None, ""):
                     value[key] = _REDACTED
+        elif isinstance(path, str) and "topic" in path.lower():
+            # A diff entry has lost its parent device and cannot prove local vs
+            # Cloud scope, so it masks every routing topic fail-safe.
+            for key in ("before", "after"):
+                if isinstance(value.get(key), str):
+                    value[key] = mask_mqtt_topic(value[key], cloud_scoped=True)
         for item in value.values():
             _redact_mqtt_device_id_diff(item)
     elif isinstance(value, list):
@@ -262,7 +386,7 @@ def _bounded(value):
 # --- load / draft --------------------------------------------------------
 
 
-def load_maintenance_config(base_dir=None):
+def load_maintenance_config(base_dir=None, *, identity_token_key=None):
     """Load the resolved EMS config and return a normalized maintenance view.
 
     Missing or invalid config degrades to a clear status (never an exception),
@@ -306,17 +430,72 @@ def load_maintenance_config(base_dir=None):
         }
 
     draft = build_maintenance_draft(config)
+    overrides = overlap_provenance_for_context(context, config)
+    _attach_runtime_override_identity_tokens(
+        overrides,
+        config,
+        identity_token_key=identity_token_key,
+    )
+    browser_fields = {
+        "draft": copy.deepcopy(draft),
+        "overrides": overrides,
+    }
+    redact_config_for_browser(
+        browser_fields,
+        identity_token_key=identity_token_key,
+        broker_sources=broker_sources_from_config(config),
+    )
+    browser_fields = sanitize_external_mqtt_status(
+        browser_fields,
+        sensitive_context=config,
+        drop_secrets=False,
+    )
     return {
         "status": "ok",
         "config_path": config_path,
         "source": context.config_source,
         "revision": hashlib.sha256(raw).hexdigest(),
         "summary": _summary(config, draft),
-        "draft": redact_config_for_browser(copy.deepcopy(draft)),
-        "overrides": overlap_provenance_for_context(context, config),
+        "draft": browser_fields["draft"],
+        "overrides": browser_fields["overrides"],
         "catalog": _catalog(),
         "warnings": [],
     }
+
+
+def _attach_runtime_override_identity_tokens(
+    overrides, config, *, identity_token_key
+):
+    """Bind device override rows to raw config identities without exposing names.
+
+    Cloud route values can occur in a configured display name, so the browser's
+    override map is masked along with the draft.  Each field row carries the
+    same server-issued equality token as its device draft; reset requests can
+    therefore resolve the installed device without trusting or reconstructing
+    the masked display name.
+    """
+
+    if identity_token_key is None or not isinstance(overrides, dict):
+        return
+    device_overrides = overrides.get("devices")
+    if not isinstance(device_overrides, dict):
+        return
+    broker_sources = broker_sources_from_config(config)
+    for device in _config_devices(config):
+        name = str(device.get("name") or "").strip()
+        fields = device_overrides.get(name)
+        if not name or not isinstance(fields, dict):
+            continue
+        identity = resolve_inverter_identity(
+            device,
+            broker_sources=broker_sources,
+            token_key=identity_token_key,
+        )
+        if identity is None or identity.opaque_token is None:
+            continue
+        for entry in fields.values():
+            if isinstance(entry, dict):
+                entry[PHYSICAL_IDENTITY_TOKEN_FIELD] = identity.opaque_token
 
 
 def build_maintenance_draft(config):
@@ -568,7 +747,7 @@ def _load_current(base_dir):
     return None, raw, current
 
 
-def preview_maintenance_config(draft, base_dir=None):
+def preview_maintenance_config(draft, base_dir=None, *, identity_token_key=None):
     """Merge a draft with the current config and return validation + diff.
 
     Never writes: the resolved config is only ever read, and the merged result
@@ -585,7 +764,9 @@ def preview_maintenance_config(draft, base_dir=None):
 
     draft = draft if isinstance(draft, dict) else {}
     merge_issues = []
-    merged = _merge_draft(current, draft, merge_issues)
+    merged = _merge_draft(
+        current, draft, merge_issues, identity_token_key=identity_token_key
+    )
     validation = _validate(merged, merge_issues)
     # Read-only preview surfaces the global MQTT credentials_ref contract early
     # (canonical refs, single-source ownership) so the UI shows a bad reference
@@ -594,18 +775,33 @@ def preview_maintenance_config(draft, base_dir=None):
     # structured code and a byte-exact rollback.
     _append_mqtt_credential_consumer_issues(validation, merged)
     diff = summarize_config_changes(current, merged)
-    return {
+    response = {
         "status": "ok",
         "config_path": config_path,
         "revision": hashlib.sha256(raw).hexdigest(),
         "changed": diff["changed"],
-        "diff": redact_config_for_browser(diff),
+        "diff": redact_config_for_browser(
+            diff,
+            identity_token_key=identity_token_key,
+            broker_sources=broker_sources_from_config(merged),
+        ),
         "validation": validation,
-        "preview": redact_config_for_browser(copy.deepcopy(merged)),
+        "preview": redact_config_for_browser(
+            copy.deepcopy(merged),
+            identity_token_key=identity_token_key,
+            broker_sources=broker_sources_from_config(merged),
+        ),
     }
+    return sanitize_external_mqtt_status(
+        response,
+        sensitive_context=merged,
+        drop_secrets=False,
+    )
 
 
-def prepare_maintenance_config_apply(draft, expected_revision, base_dir=None):
+def prepare_maintenance_config_apply(
+    draft, expected_revision, base_dir=None, *, identity_token_key=None
+):
     """Validate a reviewed draft and serialize it without writing anything.
 
     The serialized ``payload`` carries the true merged config (secrets intact);
@@ -619,18 +815,34 @@ def prepare_maintenance_config_apply(draft, expected_revision, base_dir=None):
 
     draft = draft if isinstance(draft, dict) else {}
     merge_issues = []
-    merged = _merge_draft(current, draft, merge_issues)
+    merged = _merge_draft(
+        current, draft, merge_issues, identity_token_key=identity_token_key
+    )
     validation = _validate(merged, merge_issues)
     diff = summarize_config_changes(current, merged)
-    result = {
-        "status": "ok",
-        "config_path": str(detect_install_context(base_dir=base_dir).config_path),
-        "revision": revision,
-        "changed": diff["changed"],
-        "diff": redact_config_for_browser(diff),
-        "validation": validation,
-        "preview": redact_config_for_browser(copy.deepcopy(merged)),
-    }
+    result = sanitize_external_mqtt_status(
+        {
+            "status": "ok",
+            "config_path": str(
+                detect_install_context(base_dir=base_dir).config_path
+            ),
+            "revision": revision,
+            "changed": diff["changed"],
+            "diff": redact_config_for_browser(
+                diff,
+                identity_token_key=identity_token_key,
+                broker_sources=broker_sources_from_config(merged),
+            ),
+            "validation": validation,
+            "preview": redact_config_for_browser(
+                copy.deepcopy(merged),
+                identity_token_key=identity_token_key,
+                broker_sources=broker_sources_from_config(merged),
+            ),
+        },
+        sensitive_context=merged,
+        drop_secrets=False,
+    )
     if not expected_revision or expected_revision != revision:
         return {
             "status": "conflict",
@@ -650,7 +862,7 @@ def prepare_maintenance_config_apply(draft, expected_revision, base_dir=None):
     return result
 
 
-def _merge_draft(current, draft, issues):
+def _merge_draft(current, draft, issues, *, identity_token_key=None):
     """Merge the draft onto a copy of the current config.
 
     ``issues`` collects actionable ``{code, message}`` errors raised while
@@ -659,7 +871,12 @@ def _merge_draft(current, draft, issues):
     """
 
     merged = copy.deepcopy(current)
-    _merge_devices(merged, draft.get("devices"), issues)
+    _merge_devices(
+        merged,
+        draft.get("devices"),
+        issues,
+        identity_token_key=identity_token_key,
+    )
     _merge_grid_meter(merged, draft.get("grid_meter"))
     _merge_zendure_mqtt_broker(merged, draft.get("zendure_mqtt"))
     _merge_features(merged, draft.get("features"))
@@ -730,39 +947,172 @@ def materialize_maintenance_device(*, existing_device, draft_item, transport, de
     return device
 
 
-def _resolve_original_device(item, by_name, identity_index, claimed_ids, issues):
+def _resolve_original_device(
+    item,
+    by_name,
+    identity_index,
+    token_index,
+    evidence_by_id,
+    claimed_ids,
+    issues,
+    *,
+    broker_sources,
+    identity_token_key,
+):
     """Find the config entry a draft item edits, failing closed on conflicts.
 
-    ``original_name`` is authoritative when it resolves. The physical identity
-    is a guarded fallback for drafts that lost the original reference (e.g.
-    across a transport switch): it only matches an unambiguous serial that no
-    other draft item already claims by name. When name and identity resolve to
-    different originals the evidence is contradictory and the merge refuses to
-    guess.
+    ``original_name`` is authoritative when it resolves. Otherwise the item's
+    trusted identity aliases (serial, scoped route, endpoint) are intersected
+    against the configured devices: a route-only entry still matches a later
+    serial-bearing observation of the same route (enrichment), while a shared
+    route that claims a different physical serial is a contradiction and refuses
+    to guess. When name and identity resolve to different originals, or one alias
+    is ambiguous across entries, the merge fails closed.
     """
 
     named = by_name.get(str(item.get("original_name") or ""))
-    identity = zendure_physical_identity(item)
-    matched = identity_index.get(identity) if identity else None
-    if named is not None and matched is not None and named is not matched:
-        label = str(item.get("name") or item.get("original_name") or "device").strip()
+    evidence = resolve_inverter_identity_evidence(
+        item,
+        broker_sources=broker_sources,
+        token_key=identity_token_key,
+    )
+    supplied_token = supplied_identity_token(item)
+    token_match = token_index.get(supplied_token) if supplied_token else None
+    label = str(item.get("name") or item.get("original_name") or "device").strip()
+
+    matched = None
+    if evidence is not None:
+        hits = []
+        for key in evidence.comparison_keys:
+            if key in identity_index:
+                found = identity_index[key]
+                if found is None:
+                    # A trusted alias shared by two configured entries is
+                    # ambiguous; refuse to guess which one is edited.
+                    issues.append(
+                        _issue(
+                            "device_identity_conflict",
+                            f"{label}: a trusted identity alias matches more than "
+                            "one configured device. Reload the current config and "
+                            "review the draft.",
+                        )
+                    )
+                    return None
+                if all(found is not hit for hit in hits):
+                    hits.append(found)
+        if len(hits) > 1:
+            issues.append(
+                _issue(
+                    "device_identity_conflict",
+                    f"{label}: the draft's identity aliases refer to different "
+                    "configured devices. Reload the current config and review the "
+                    "draft.",
+                )
+            )
+            return None
+        if hits:
+            matched = hits[0]
+
+    if (
+        supplied_token
+        and evidence is not None
+        and evidence.opaque_tokens
+        and not any(
+            hmac.compare_digest(supplied_token, token)
+            for token in evidence.opaque_tokens
+        )
+    ):
         issues.append(
             _issue(
                 "device_identity_conflict",
-                f"{label}: the draft references one configured device but carries "
-                "the physical serial of another. Reload the current config and "
-                "review the draft.",
+                f"{label}: the server-issued device identity does not match the "
+                "draft's physical or scoped route identity. Reload the current "
+                "config and review the draft.",
             )
         )
         return None
+
+    candidates = [
+        candidate for candidate in (named, matched, token_match) if candidate is not None
+    ]
+    if candidates and any(candidate is not candidates[0] for candidate in candidates[1:]):
+        issues.append(
+            _issue(
+                "device_identity_conflict",
+                f"{label}: the draft name, physical identity and scoped route "
+                "identity refer to different configured devices. Reload the "
+                "current config and review the draft.",
+            )
+        )
+        return None
+    if supplied_token and evidence is None and named is None and token_match is None:
+        issues.append(
+            _issue(
+                "device_identity_conflict",
+                f"{label}: the server-issued device identity is unknown or stale. "
+                "Reload the current config and review the draft.",
+            )
+        )
+        return None
+
+    resolved = named or token_match or matched
+    # A shared route with a different serial is a conflict only for an
+    # identity/token match — a device the draft did not name. When the draft
+    # authoritatively names the entry (``original_name``), the user is editing
+    # that one device, so correcting/changing its serial on the same route is a
+    # legitimate edit, not a contradiction between two devices.
+    if (
+        named is None
+        and resolved is not None
+        and evidence is not None
+        and identity_evidence_conflict(evidence, evidence_by_id.get(id(resolved)))
+    ):
+        issues.append(
+            _issue(
+                "device_identity_conflict",
+                f"{label}: this Cloud route is already bound to a different "
+                "physical serial. Reload the current config and review the draft.",
+            )
+        )
+        return None
+
     if named is not None:
         return named
-    if matched is not None and id(matched) not in claimed_ids:
-        return matched
+    fallback = token_match or matched
+    if fallback is not None and id(fallback) not in claimed_ids:
+        return fallback
     return None
 
 
-def _merge_devices(merged, devices, issues):
+def _restore_unchanged_cloud_display_name(original, item, broker_sources):
+    """Keep a redacted no-op name byte-exact without trusting browser input."""
+
+    if not isinstance(original, dict) or not isinstance(item, dict):
+        return item
+    mqtt = original.get("mqtt")
+    if not isinstance(mqtt, dict):
+        return item
+    broker_ref = str(mqtt.get("broker_ref") or "default").strip()
+    source = str(mqtt.get("source") or broker_sources.get(broker_ref) or "")
+    if source != "zendure_cloud_mqtt":
+        return item
+    original_name = str(original.get("name") or "").strip()
+    sensitive = frozenset(
+        raw.strip()
+        for raw in (mqtt.get("device_id"), mqtt.get("product_key"))
+        if isinstance(raw, str) and raw.strip()
+    )
+    safe_name = mask_external_mqtt_string(
+        original_name, sensitive_values=sensitive, cloud_scoped=True
+    )
+    if safe_name == original_name or str(item.get("name") or "").strip() != safe_name:
+        return item
+    restored = copy.deepcopy(item)
+    restored["name"] = original_name
+    return restored
+
+
+def _merge_devices(merged, devices, issues, *, identity_token_key=None):
     if not isinstance(devices, list):
         return
     originals = _config_devices(merged)
@@ -771,13 +1121,27 @@ def _merge_devices(merged, devices, issues):
         key = str(device.get("name") or "")
         if key and key not in by_name:
             by_name[key] = device
-    # Physical-identity fallback index: only an unambiguous serial may match.
+    broker_sources = broker_sources_from_config(merged)
     identity_index = {}
+    token_index = {}
+    evidence_by_id = {}
     for device in originals:
-        identity = zendure_physical_identity(device)
-        if identity is None:
+        evidence = resolve_inverter_identity_evidence(
+            device,
+            broker_sources=broker_sources,
+            token_key=identity_token_key,
+        )
+        if evidence is None:
             continue
-        identity_index[identity] = None if identity in identity_index else device
+        evidence_by_id[id(device)] = evidence
+        # Index every trusted alias (serial AND scoped route AND endpoint), not
+        # only the strongest one, so a route-only entry still matches a later
+        # serial-bearing observation of the same route. A key shared by two
+        # entries maps to None (ambiguous) and fails closed on match.
+        for key in evidence.comparison_keys:
+            identity_index[key] = None if key in identity_index else device
+        for token in evidence.opaque_tokens:
+            token_index[token] = None if token in token_index else device
     claimed_ids = {
         id(by_name[str(item.get("original_name") or "")])
         for item in devices
@@ -792,8 +1156,21 @@ def _merge_devices(merged, devices, issues):
         if not isinstance(item, dict) or item.get("removed") is True:
             continue
         original = _resolve_original_device(
-            item, by_name, identity_index, claimed_ids, issues
+            item,
+            by_name,
+            identity_index,
+            token_index,
+            evidence_by_id,
+            claimed_ids,
+            issues,
+            broker_sources=broker_sources,
+            identity_token_key=identity_token_key,
         )
+        item = _restore_unchanged_cloud_display_name(
+            original, item, broker_sources
+        )
+        if original is not None:
+            claimed_ids.add(id(original))
         if original is None and "name" not in item:
             item = copy.deepcopy(item)
             item["name"] = next_compact_inverter_name(
@@ -1138,7 +1515,9 @@ def _append_common_value_warning(validation, device, label, transport_label):
             "device_common_values_missing",
             f"{label} ({transport_label}): no configured value for "
             f"{', '.join(missing)}; the EMS runtime falls back to built-in "
-            "defaults. Editing the device materializes the central defaults.",
+            "defaults. Central defaults are added per device only when it is "
+            "newly created or its transport is switched; existing entries are "
+            "not changed retroactively.",
         )
     )
 
@@ -1220,7 +1599,9 @@ def _validate(config, merge_issues=()):
                     f"Config names must be unique: {', '.join(duplicates)}.",
                 )
             )
-        for issue in find_duplicate_zendure_device_identities(devices):
+        for issue in find_duplicate_zendure_device_identities(
+            devices, broker_sources=broker_sources_from_config(config)
+        ):
             validation["errors"].append(_issue(issue["code"], issue["message"]))
         for issue in find_zendure_mqtt_broker_profile_issues(config):
             validation["errors"].append(_issue(issue["code"], issue["message"]))

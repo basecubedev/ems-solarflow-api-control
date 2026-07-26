@@ -236,15 +236,24 @@ This path inspects and edits an existing installation.
   model-specific value — review it for your hardware. PV size is a
   configurable estimate for power sharing; discovery cannot measure the
   connected PV array. Existing explicit values are never replaced by new
-  defaults: a device from an older config that lacks some of these values
-  keeps its stored shape on a no-op apply (the missing values are shown as
-  inherited defaults in the editor, and the EMS runtime falls back to its
-  built-in defaults), and materializes the central defaults only when you edit
-  the device or switch its transport — the preview shows exactly which values
-  would be written before you apply.
+  defaults: a device from an older config that lacks some of these values keeps
+  its stored shape on a no-op apply (the missing values are shown as inherited
+  defaults in the editor, and the EMS runtime falls back to its built-in
+  defaults). New devices and transport switches materialize the central
+  defaults; an existing incomplete device keeps missing fields until a draft
+  change explicitly applies them. The preview shows exactly which values would
+  be written before you apply.
 
-  One physical inverter (identified by its serial number) is always one config
-  entry with one selected connection. When discovery finds a serial that is
+  One physical inverter is always one config entry with one selected connection.
+  A trusted serial number is the strongest cross-transport identity. A Cloud MQTT
+  device with no physical serial instead receives a server-generated opaque
+  equality token derived from its broker/account, product and route scope. The
+  token is non-reversible and contains neither the route ID nor credentials; the
+  browser compares it but never reconstructs identity from masked fields. The
+  same route under another broker/account/product scope remains a separate
+  device. Alternate broker-ref names for the sole configured Cloud account are
+  normalized to that one account; multiple Cloud refs are kept distinct rather
+  than guessed to match. When discovery finds an identity that is
   already configured over another transport — for example a Local API scan
   sees an inverter you configured over MQTT, or an MQTT proposal matches a
   configured Local API inverter — the review offers **Use Local API instead**
@@ -253,9 +262,18 @@ This path inspects and edits an existing installation.
   transport replaces the connection of the same logical device: the configured
   name, enabled state, and all common tuning values are preserved (also across
   a rename in the same draft), only the connection fields change, and stale
-  fields of the previous transport are removed. The same serial can never be
-  added as two separate API and MQTT devices; a draft whose identity evidence
-  is contradictory fails validation instead of guessing.
+  fields of the previous transport are removed. A serial-less Cloud device is
+  also recognized as the same inverter when discovery later reports the **same
+  Cloud route now carrying a physical serial**: the review shows it *In config*
+  with no second **Add**, and the existing entry is enriched with the serial
+  (name and common values preserved) instead of being duplicated. The same
+  trusted identity can never be added as two separate API and MQTT devices;
+  contradictory evidence — the **same Cloud route claiming a different physical
+  serial** — is shown as a blocked **Identity conflict** and fails validation
+  instead of guessing or merging. Browser-facing
+  status and support data retain trusted physical serials and useful non-secret
+  context, but remove credentials and expose only masked shapes for Cloud route,
+  product and topic identifiers — never their full account-scoped values.
 
   **Start discovery** searches all three sources, like the setup flow: the
   local network (mDNS refresh plus network scans), local MQTT brokers (a fresh

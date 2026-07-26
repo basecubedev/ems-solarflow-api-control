@@ -16,6 +16,7 @@ from admin.deployment import DockerError
 from admin.ems_tool import EmsToolRunner
 from admin.guided_upgrade import (
     GuidedUpgradeExecutor,
+    UpgradeJob,
     guided_upgrade_request_fingerprint,
     plan_upgrade_steps,
 )
@@ -1381,9 +1382,30 @@ def test_guided_preflight_failure_does_not_start_admin_alignment(tmp_path):
 
 
 def test_guided_upgrade_rejects_stale_mqtt_migration_review_before_alignment(
-    tmp_path,
+    tmp_path, monkeypatch
 ):
-    executor = _executor_for(tmp_path, _control_migration_config())
+    route = "GUIDED_MIGRATION_CLOUD_ROUTE_7501"
+    product = "GUIDED_MIGRATION_PRODUCT_ACCOUNT"
+    topic = f"iot/{product}/{route}/properties/write"
+    config = _control_migration_config()
+    config["zendure_mqtt"] = {
+        "brokers": {
+            "cloud_a": {"source": "zendure_cloud_mqtt"}
+        }
+    }
+    config["devices"][0]["name"] = f"Cloud {route} via {topic}"
+    config["devices"][0]["mqtt"].update(
+        {
+            "broker_ref": "cloud_a",
+            "device_id": route,
+            "product_key": product,
+        }
+    )
+    executor = _executor_for(tmp_path, config)
+    install_root = Path(
+        executor._install_context_provider().config_path
+    ).parent.parent
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(install_root))
     alignment = _AlignedSystemBuild(stage="resources_verified")
     original = Path(executor._install_context_provider().config_path).read_bytes()
     srv, base = _server(executor, system_alignment=alignment)
@@ -1403,6 +1425,9 @@ def test_guided_upgrade_rejects_stale_mqtt_migration_review_before_alignment(
 
     assert status == 409
     assert body["reason"] == "mqtt_migration_review_stale"
+    flattened = json.dumps(body)
+    for raw in (route, product, topic):
+        assert raw not in flattened
     assert alignment.start_calls == []
     assert Path(executor._install_context_provider().config_path).read_bytes() == original
 
@@ -1708,6 +1733,87 @@ def test_unknown_job_id_returns_404(tmp_path):
         srv.shutdown()
     assert status == 404
     assert body["ok"] is False
+
+
+def test_upgrade_job_endpoint_masks_cloud_routes_in_complete_job_state(
+    tmp_path, monkeypatch
+):
+    route = "ADMIN_UPGRADE_CLOUD_ROUTE_7501"
+    product = "ADMIN_UPGRADE_PRODUCT_ACCOUNT"
+    topic = f"iot/{product}/{route}/properties/write"
+    install_config = tmp_path / "config" / "config.json"
+    install_config.parent.mkdir(parents=True)
+    install_config.write_text(
+        json.dumps(
+            {
+                "zendure_mqtt": {
+                    "brokers": {
+                        "cloud_a": {"source": "zendure_cloud_mqtt"}
+                    }
+                },
+                "devices": [
+                    {
+                        "type": "zendure_mqtt",
+                        "name": f"Cloud {route}",
+                        "mqtt": {
+                            "broker_ref": "cloud_a",
+                            "product_key": product,
+                            "device_id": route,
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
+    executor, _install_dir, _compose, _docker = _make_executor(tmp_path)
+    srv, base = _server(executor)
+    job = UpgradeJob(
+        "cloud-diagnostics-job",
+        [{"key": "diagnostics", "label": f"Check {route}"}],
+    )
+
+    def finish(raw_job):
+        raw_job.record_step(
+            {
+                "id": "diagnostics",
+                "status": "ok",
+                "detail": f"checked {topic}",
+            }
+        )
+        raw_job.finish(
+            {
+                "ok": True,
+                "status": "completed",
+                "stdout": f"publish {topic}",
+                "stderr": f"route={route} product={product}",
+                "diagnostics": {
+                    "runtime_status": {
+                        "broker_ref": "cloud_a",
+                        "device_id": route,
+                        "write_topic": topic,
+                    },
+                    route: {"name": f"Device {route}"},
+                    "authorization_code": "UPGRADE_AUTH_SECRET",
+                },
+            }
+        )
+
+    srv.upgrade_jobs.submit(job, finish)
+    try:
+        status, body = _get(
+            base
+            + "/api/admin/maintenance/upgrade/jobs/cloud-diagnostics-job"
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    flattened = json.dumps(body)
+    assert status == 200
+    for raw in (route, product, topic, "UPGRADE_AUTH_SECRET"):
+        assert raw not in flattened
 
 
 # --- read-only System Build validation (no transition side effects) ------

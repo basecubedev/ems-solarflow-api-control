@@ -21,6 +21,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from ems.device_identity import resolve_inverter_identity
+
 ZENDURE_MQTT_TYPE = "zendure_mqtt"
 
 # Stable identity of the implicit broker used by old single-broker configs. A
@@ -344,97 +346,42 @@ def _normalized(value: Any) -> str | None:
     return None
 
 
-def _normalized_identity(value: Any) -> str | None:
-    """Normalize a real device identifier, excluding setup placeholders."""
-
-    normalized = _normalized(value)
-    if normalized is None:
-        return None
-    # These values are already treated as unresolved by config placeholder
-    # safety. They do not identify a physical device and must not make the
-    # shipped template look like two copies of the same device at startup.
-    if normalized.startswith(("your_", "your-")):
-        return None
-    return normalized
-
-
-def _mqtt_field(item: Mapping[str, Any], key: str) -> str | None:
-    mqtt = item.get("mqtt")
-    if isinstance(mqtt, Mapping):
-        return _normalized(mqtt.get(key))
-    return None
-
-
-def zendure_config_device_identity(item: Any) -> tuple[str, ...] | None:
+def zendure_config_device_identity(
+    item: Any, *, broker_sources: Mapping[str, str] | None = None
+) -> tuple[str, ...] | None:
     """Return a sanitized, comparable identity for a Zendure config entry.
 
     A serial number is preferred because it is the strongest cross-adapter
     identity: a local/API device and an MQTT entry for the same physical unit
-    collide on it. MQTT entries without a serial fall back to their MQTT
-    identifiers. The identity never includes credentials or a broker host.
+    collide on it. MQTT entries without a serial use a source-, broker-, and
+    product/topic-scoped route; Local API entries without a serial use their
+    endpoint. The identity never includes credentials or a broker host.
     Returns ``None`` when no meaningful identity exists.
     """
 
-    if not isinstance(item, Mapping):
-        return None
-
-    serial = _normalized_identity(item.get("sn")) or _normalized_identity(
-        item.get("serial_number")
-    )
-    if serial is not None:
-        return ("serial", serial)
-
-    device_id = _normalized_identity(_mqtt_field(item, "device_id")) or (
-        _normalized_identity(item.get("device_id"))
-    )
-    if device_id is None:
-        return None
-    product_key = _mqtt_field(item, "product_key")
-    if product_key is not None:
-        return ("mqtt_pk", product_key, device_id)
-    topic_family = _mqtt_field(item, "topic_family")
-    if topic_family is not None:
-        return ("mqtt_tf", topic_family, device_id)
-    return ("mqtt_dev", device_id)
-
-
-# Display-mask markers: a masked identifier never identifies a physical device
-# and must not make two redacted entries compare equal.
-_IDENTITY_MASK_MARKERS = ("•", "…")
+    identity = resolve_inverter_identity(item, broker_sources=broker_sources)
+    return identity.comparison_key if identity is not None else None
 
 
 def zendure_physical_identity(item: Any) -> str | None:
     """Normalized physical identity of a config/draft device entry, or ``None``.
 
-    The physical serial wins (local API ``sn``, MQTT ``serial_number``); the
-    MQTT routing id is a fallback only when no physical serial exists, because
-    cloud routing ids may legitimately differ from the physical serial and must
-    never shadow one. Placeholder (``YOUR_...``) and display-masked values
-    resolve to ``None``. Normalization (trim, lowercase) is for comparison
-    only; stored identifiers are never rewritten.
+    Only an explicit physical serial qualifies here (local API ``sn`` or MQTT
+    ``serial_number``). Account-scoped MQTT routing ids are deliberately never
+    treated as physical serials. Placeholder (``YOUR_...``) and display-masked
+    values resolve to ``None``. Normalization is for comparison only; stored
+    identifiers are never rewritten.
     """
 
-    if not isinstance(item, Mapping):
+    identity = resolve_inverter_identity(item)
+    if identity is None or identity.kind != "physical_serial":
         return None
-
-    def usable(value: str | None) -> str | None:
-        if value is None:
-            return None
-        if any(marker in value for marker in _IDENTITY_MASK_MARKERS):
-            return None
-        return value
-
-    serial = usable(_normalized_identity(item.get("sn"))) or usable(
-        _normalized_identity(item.get("serial_number"))
-    )
-    if serial is not None:
-        return serial
-    return usable(_normalized_identity(_mqtt_field(item, "device_id"))) or usable(
-        _normalized_identity(item.get("device_id"))
-    )
+    return identity.normalized_components[0]
 
 
-def find_duplicate_zendure_device_identities(devices: Any) -> list[dict[str, Any]]:
+def find_duplicate_zendure_device_identities(
+    devices: Any, *, broker_sources: Mapping[str, str] | None = None
+) -> list[dict[str, Any]]:
     """Report duplicate physical-device identities among active ``devices[]``.
 
     A physical Zendure device must be configured only once. Entries are matched
@@ -451,7 +398,9 @@ def find_duplicate_zendure_device_identities(devices: Any) -> list[dict[str, Any
     for index, item in enumerate(devices):
         if not isinstance(item, Mapping) or not config_entry_enabled(item):
             continue
-        identity = zendure_config_device_identity(item)
+        identity = zendure_config_device_identity(
+            item, broker_sources=broker_sources
+        )
         if identity is None:
             continue
         first = seen.get(identity)
@@ -521,7 +470,9 @@ def duplicate_device_name_startup_error(devices: Any) -> dict[str, Any] | None:
     return {"duplicate_count": len(duplicates)}
 
 
-def duplicate_zendure_identity_startup_error(devices: Any) -> dict[str, Any] | None:
+def duplicate_zendure_identity_startup_error(
+    devices: Any, *, broker_sources: Mapping[str, str] | None = None
+) -> dict[str, Any] | None:
     """Sanitized startup-abort fields when active Zendure identities collide.
 
     Returns ``{"duplicate_count": N}`` when a physical device is configured more
@@ -530,7 +481,9 @@ def duplicate_zendure_identity_startup_error(devices: Any) -> dict[str, Any] | N
     credentials.
     """
 
-    duplicates = find_duplicate_zendure_device_identities(devices)
+    duplicates = find_duplicate_zendure_device_identities(
+        devices, broker_sources=broker_sources
+    )
     if not duplicates:
         return None
     return {"duplicate_count": len(duplicates)}

@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
+import json
 import logging
 
 from dashboard.auth import write_password_file
@@ -87,6 +88,109 @@ def test_logs_return_lines_and_headers(tmp_path):
         assert "default-src 'self'" in headers["Content-Security-Policy"]
         assert headers["X-Content-Type-Options"] == "nosniff"
         assert headers["X-Frame-Options"] == "DENY"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_logs_mask_cloud_route_and_product_using_config_scope(tmp_path):
+    route = "DASHBOARD_LOG_CLOUD_ROUTE_7501"
+    product = "DASHBOARD_LOG_PRODUCT_ACCOUNT"
+    password = "DASHBOARD_LOG_CLOUD_PASSWORD_7501"
+    app_key = "DASHBOARD_LOG_CLOUD_APP_KEY_7501"
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "zendure_mqtt": {
+                    "brokers": {
+                        "cloud_a": {
+                            "source": "zendure_cloud_mqtt",
+                            "host": "mqtt.example.invalid",
+                            "password": password,
+                            "app_key": app_key,
+                        }
+                    }
+                },
+                "devices": [
+                    {
+                        "type": "zendure_mqtt",
+                        "mqtt": {
+                            "broker_ref": "cloud_a",
+                            "product_key": product,
+                            "device_id": route,
+                        },
+                    }
+                ],
+            }
+        )
+    )
+    buffer = make_buffer(
+        "logs.cloud-route",
+        [
+            (
+                logging.INFO,
+                f"pending route {route} product {product} auth {password} {app_key}",
+            )
+        ],
+    )
+    server, base_url = logs_server(
+        tmp_path,
+        buffer,
+        config_path=str(config_path),
+    )
+
+    try:
+        cookie = login(base_url)
+        status, _, payload = json_response(
+            f"{base_url}/api/logs", headers={"Cookie": cookie}
+        )
+        flattened = json.dumps(payload)
+        assert status == 200
+        assert route not in flattened
+        assert product not in flattened
+        assert password not in flattened
+        assert app_key not in flattened
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_logs_mask_labeled_cloud_identifiers_without_config_context(tmp_path):
+    route = "DASHBOARD_LOG_CLOUD_ROUTE_7501"
+    product = "DASHBOARD_LOG_PRODUCT_ACCOUNT"
+    password = "DASHBOARD_LOG_PASSWORD_7502"
+    app_key = "DASHBOARD_LOG_APP_KEY_7503"
+    buffer = make_buffer(
+        "logs.cloud-route-no-config",
+        [
+            (
+                logging.INFO,
+                (
+                    f"rejected device=Roof-{route} product={product} "
+                    f"password={password} app_key={app_key} "
+                    f"url=mqtt://cloud-user:{password}@broker.invalid"
+                ),
+            )
+        ],
+    )
+    server, base_url = logs_server(
+        tmp_path,
+        buffer,
+        config_path=str(tmp_path / "missing-config.json"),
+    )
+
+    try:
+        cookie = login(base_url)
+        status, _, payload = json_response(
+            f"{base_url}/api/logs", headers={"Cookie": cookie}
+        )
+        flattened = json.dumps(payload)
+        assert status == 200
+        assert route not in flattened
+        assert product not in flattened
+        assert password not in flattened
+        assert app_key not in flattened
     finally:
         server.shutdown()
         server.server_close()

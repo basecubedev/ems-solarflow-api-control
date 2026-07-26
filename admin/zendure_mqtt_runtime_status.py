@@ -13,23 +13,9 @@ import json
 import time
 
 from ems import paths
+from ems.external_status import sanitize_external_mqtt_status
 
 from admin.install_context import detect_install_context
-
-# Defence in depth: EMS status is already credential-free, but this bridge drops
-# any secret-looking key so a future EMS payload can never leak one to the UI.
-_SECRET_MARKERS = (
-    "password",
-    "passwd",
-    "secret",
-    "token",
-    "app_key",
-    "appkey",
-    "api_key",
-    "apikey",
-    "credential",
-    "username",
-)
 
 _UNAVAILABLE_MESSAGE = "Zendure MQTT telemetry status is unavailable."
 
@@ -38,17 +24,13 @@ _UNAVAILABLE_MESSAGE = "Zendure MQTT telemetry status is unavailable."
 _LIVE_STATUS_MAX_AGE_SECONDS = 180
 
 
-def _is_secret_key(key):
-    lowered = str(key).lower()
-    return any(marker in lowered for marker in _SECRET_MARKERS)
+def _scrub(value, *, sensitive_context=None):
+    """Apply the shared external MQTT status boundary policy."""
 
-
-def _scrub(value):
-    if isinstance(value, dict):
-        return {k: _scrub(v) for k, v in value.items() if not _is_secret_key(k)}
-    if isinstance(value, list):
-        return [_scrub(item) for item in value]
-    return value
+    return sanitize_external_mqtt_status(
+        value,
+        sensitive_context=sensitive_context,
+    )
 
 
 def _read_config(context):
@@ -86,7 +68,14 @@ def _read_live_status(context, *, now=None):
         return None, "EMS live status snapshot is missing a timestamp."
     if now - written_at > _LIVE_STATUS_MAX_AGE_SECONDS:
         return None, "EMS live status snapshot is stale."
-    return _scrub(payload["status"]), None
+    # Invalid/rejected runtime entries deliberately omit route/source fields,
+    # but may retain a configured display name containing that route.  The
+    # installed config supplies the lost Cloud scope/value evidence needed to
+    # mask the otherwise context-free live snapshot.
+    return _scrub(
+        payload["status"],
+        sensitive_context=_read_config(context),
+    ), None
 
 
 def _unavailable(message=_UNAVAILABLE_MESSAGE, *, fallback_reason=None):
@@ -198,7 +187,10 @@ def _offline_status(context):
     if config is None:
         return None
     try:
-        return _scrub(_build_status_via_ems(config))
+        return _scrub(
+            _build_status_via_ems(config),
+            sensitive_context=config,
+        )
     except Exception:
         if _config_uses_zendure_mqtt(config):
             return None

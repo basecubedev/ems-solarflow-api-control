@@ -6,6 +6,7 @@ subscribe/connect/lifecycle behaviour is asserted without a network broker.
 """
 
 import json
+import logging
 
 import pytest
 
@@ -105,6 +106,23 @@ def test_app_key_adds_cloud_family_without_global_wildcard():
     assert "secretAppKey/#" in fake.subscriptions
     assert "#" not in fake.subscriptions
     assert set(DEFAULT_LOCAL_SUBSCRIPTIONS).issubset(set(fake.subscriptions))
+
+
+def test_subscribe_failure_log_does_not_expose_raw_cloud_topic(caplog):
+    topic = "iot/PRODUCT_SECRET/ACCOUNT_ROUTE_1234/#"
+    client, fake = _build(subscriptions=(topic,))
+
+    def reject_subscribe(_topic, qos=0):
+        raise OSError("subscribe failed")
+
+    fake.subscribe = reject_subscribe
+    with caplog.at_level(logging.DEBUG, logger="ems.zendure_mqtt.client"):
+        client.start()
+
+    assert "event=zendure_mqtt_subscribe_failed" in caplog.text
+    assert topic not in caplog.text
+    assert "PRODUCT_SECRET" not in caplog.text
+    assert "ACCOUNT_ROUTE_1234" not in caplog.text
 
 
 def test_zensdk_scalar_topic_updates_snapshot():

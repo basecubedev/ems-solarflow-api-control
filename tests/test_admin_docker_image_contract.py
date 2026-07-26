@@ -69,6 +69,12 @@ def test_dockerfile_copies_the_ems_path_resolver():
     assert "ems/paths.py" in copies
 
 
+def test_dockerfile_copies_shared_device_identity_and_status_sanitizer():
+    copies = dict((dest, src) for src, dest in _dockerfile_app_copies())
+    assert "ems/device_identity.py" in copies
+    assert "ems/external_status.py" in copies
+
+
 def test_admin_image_contains_dashboard_auth_helper():
     # Admin shares the EMS Dashboard password; the auth helper must ship in the
     # image so the Admin server can hash/verify against config/dashboard-auth.json.

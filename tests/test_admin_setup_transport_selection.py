@@ -33,6 +33,8 @@ STATIC_DIR = os.path.join(
 # matters: dependencies first.
 _PURE_HELPERS = (
     "normalizeSerial",
+    "usableSerialValue",
+    "physicalInverterIdentity",
     "mqttSourceOfConnection",
     "resolveSelectedDeviceSource",
     "reconcileTransportSelection",
@@ -134,6 +136,131 @@ def test_reconcile_is_idempotent():
     assert second["dropHttpSourceIds"] == []
     assert second["selectMqttProposalIds"] == []
     assert second["dropMqttSelectionIds"] == []
+
+
+def test_serialless_setup_reconciliation_uses_server_token_only():
+    state = {
+        "httpInverters": [],
+        "mqttSelections": [
+            {
+                "id": "selected",
+                "physical_identity_token": "opaque:v1:scope-a",
+                "connection_source": "zendure_cloud_mqtt",
+                "selection_origin": "manual",
+            }
+        ],
+        "httpCandidateSerials": [],
+        "mqttProposals": [
+            {
+                "id": "same-scope",
+                "physical_identity_token": "opaque:v1:scope-a",
+                "connection_source": "zendure_cloud_mqtt",
+            },
+            {
+                "id": "other-scope",
+                "physical_identity_token": "opaque:v1:scope-b",
+                "connection_source": "zendure_cloud_mqtt",
+            },
+        ],
+        "priority": ["zendure_mqtt"],
+        "enabledSources": {"zendure_mqtt": True},
+        "dismissedSerials": [],
+    }
+
+    plan = _reconcile(state)
+
+    assert plan["dropMqttSelectionIds"] == []
+    assert plan["selectMqttProposalIds"] == []
+    assert {device["serial"] for device in plan["physicalDevices"]} == {
+        "opaque:v1:scope-a",
+        "opaque:v1:scope-b",
+    }
+
+
+@pytest.mark.parametrize("placeholder", ["<redacted>", "[redacted]", "redacted"])
+def test_reconcile_never_groups_transports_by_redaction_placeholder(placeholder):
+    plan = _reconcile(
+        {
+            "httpInverters": [
+                {
+                    "source_id": "http-placeholder",
+                    "serial_number": placeholder,
+                    "auto_added": True,
+                }
+            ],
+            "mqttSelections": [],
+            "httpCandidateSerials": [placeholder],
+            "mqttProposals": [
+                {
+                    "id": "mqtt-placeholder",
+                    "serial_number": placeholder,
+                    "connection_source": "zendure_cloud_mqtt",
+                }
+            ],
+            "priority": ["zendure_mqtt", "local_api"],
+            "enabledSources": {"local_api": True, "zendure_mqtt": True},
+            "dismissedSerials": [placeholder],
+        }
+    )
+
+    assert plan["physicalDevices"] == []
+    assert plan["dropHttpSourceIds"] == []
+    assert plan["dropMqttSelectionIds"] == []
+    assert plan["selectMqttProposalIds"] == []
+
+
+def test_fresh_setup_keeps_serialless_same_route_from_two_scopes_separate():
+    out = _run_named(
+        ("serializeMqttProposalSelection",),
+        """
+const zendureMqttPreviewProposals = new Map();
+const latestMqttProposals = [
+  {
+    id: "zendure-mqtt:opaque:v1:cloud_scope:cloud",
+    physical_identity_token: "opaque:v1:cloud_scope",
+    connection_source: "zendure_cloud_mqtt",
+    broker_ref: "cloud",
+    device_id: "…7501",
+    target: "device",
+    config_fragment: { type: "zendure_mqtt" },
+  },
+  {
+    id: "zendure-mqtt:opaque:v1:local_scope:garage",
+    physical_identity_token: "opaque:v1:local_scope",
+    connection_source: "local_mqtt",
+    broker_ref: "garage",
+    device_id: "…7501",
+    target: "device",
+    config_fragment: { type: "zendure_mqtt" },
+  },
+];
+let nextName = 1;
+function inverterConfigNameForSerial() { return ""; }
+function nextInverterName() { return "INV_" + nextName++; }
+for (const proposal of latestMqttProposals) {
+  const entry = serializeMqttProposalSelection(proposal, { target: "device" });
+  zendureMqttPreviewProposals.set(String(proposal.id), entry);
+}
+console.log(JSON.stringify({
+  size: zendureMqttPreviewProposals.size,
+  entries: [...zendureMqttPreviewProposals.entries()].map(([id, entry]) => ({
+    id,
+    token: entry.physical_identity_token,
+    broker_ref: entry.broker_ref,
+  })),
+}));
+""",
+    )
+
+    assert out["size"] == 2
+    assert {entry["token"] for entry in out["entries"]} == {
+        "opaque:v1:cloud_scope",
+        "opaque:v1:local_scope",
+    }
+    assert {entry["broker_ref"] for entry in out["entries"]} == {
+        "cloud",
+        "garage",
+    }
 
 
 def test_reconcile_manual_local_api_not_overridden_by_priority():

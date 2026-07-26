@@ -2410,6 +2410,7 @@ function serializeMqttProposalSelection(proposal, { target, replaceGridMeter } =
     // Trusted proposal metadata required for server-side validation/mapping.
     topic_family: proposal.topic_family,
     broker_ref: proposal.broker_ref,
+    physical_identity_token: proposal.physical_identity_token,
     serial_number: proposal.serial_number,
     device_id: proposal.device_id,
     seen_topics: Array.isArray(proposal.seen_topics)
@@ -3948,25 +3949,94 @@ function normalizeSerial(value) {
   return String(value == null ? "" : value).trim().toLowerCase();
 }
 
-// One physical inverter identity across transports: the physical serial wins
-// (Local API sn, MQTT serial_number); the MQTT routing id is a fallback only
-// when no physical serial exists, because cloud routing ids may differ from
-// the serial and must never shadow one. Placeholder (YOUR_...) and
-// display-masked values never identify a device. Kept equivalent to the
-// backend ems.zendure_mqtt.config_entries.zendure_physical_identity.
+function usableSerialValue(value) {
+  if (typeof value === "string" && (value.includes("•") || value.includes("…"))) {
+    return "";
+  }
+  const key = normalizeSerial(value);
+  if (
+    !key ||
+    key.startsWith("your_") ||
+    key.startsWith("your-") ||
+    ["<redacted>", "[redacted]", "redacted"].includes(key)
+  ) {
+    return "";
+  }
+  return key;
+}
+
+// One browser-safe inverter equality key across transports: an explicit
+// physical serial wins; otherwise only the server-issued opaque token may be
+// used. MQTT routing ids are account-scoped write targets and never identity
+// material in the browser. Placeholder and display-masked values are ignored.
 function physicalInverterIdentity(device) {
   if (!device) return "";
-  const usable = (value) => {
-    if (typeof value === "string" && (value.includes("•") || value.includes("…"))) {
-      return "";
-    }
-    const key = normalizeSerial(value);
-    if (!key || key.startsWith("your_") || key.startsWith("your-")) return "";
-    return key;
-  };
-  const serial = usable(device.sn) || usable(device.serial_number);
+  const serial = usableSerialValue(device.sn) || usableSerialValue(device.serial_number);
   if (serial) return serial;
-  return usable(device.mqtt && device.mqtt.device_id) || usable(device.device_id);
+  const token = String(device.physical_identity_token || "").trim();
+  return /^opaque:v1:[A-Za-z0-9_-]+$/.test(token) ? token : "";
+}
+
+function inverterVisibleSerial(device) {
+  if (!device) return "";
+  return usableSerialValue(device.sn) || usableSerialValue(device.serial_number);
+}
+
+// The server-issued opaque equality tokens (primary + trusted aliases) a device
+// or proposal carries. Tokens are keyed, non-reversible and equality-only; raw
+// MQTT route ids are never identity material in the browser. An inverter keeps
+// its scoped-route alias token even once a physical serial is added, so a
+// route-only device and a later serial-bearing observation still intersect.
+function inverterIdentityTokens(device) {
+  const tokens = new Set();
+  if (!device) return tokens;
+  const add = (value) => {
+    const token = String(value == null ? "" : value).trim();
+    if (/^opaque:v1:[A-Za-z0-9_-]+$/.test(token)) tokens.add(token);
+  };
+  add(device.physical_identity_token);
+  const aliases = device.physical_identity_alias_tokens;
+  if (Array.isArray(aliases)) aliases.forEach(add);
+  return tokens;
+}
+
+// The full identity set: a visible physical serial (stable across transports)
+// plus every opaque alias token.
+function inverterIdentitySet(device) {
+  const set = inverterIdentityTokens(device);
+  const serial = inverterVisibleSerial(device);
+  if (serial) set.add("serial:" + serial);
+  return set;
+}
+
+function inverterHasIdentity(device) {
+  return inverterIdentitySet(device).size > 0;
+}
+
+// A shared scoped-route alias combined with different visible serials is a
+// contradiction: the route claims one inverter, the serials claim two.
+function inverterIdentityConflict(a, b) {
+  const sa = inverterVisibleSerial(a);
+  const sb = inverterVisibleSerial(b);
+  if (!sa || !sb || sa === sb) return false;
+  const ta = inverterIdentityTokens(a);
+  const tb = inverterIdentityTokens(b);
+  for (const token of ta) {
+    if (tb.has(token)) return true;
+  }
+  return false;
+}
+
+// Two observations are the same logical inverter when any trusted identity
+// alias intersects and no serial/route conflict contradicts it.
+function inverterIdentitiesMatch(a, b) {
+  if (inverterIdentityConflict(a, b)) return false;
+  const sa = inverterIdentitySet(a);
+  const sb = inverterIdentitySet(b);
+  for (const key of sa) {
+    if (sb.has(key)) return true;
+  }
+  return false;
 }
 
 function mqttSourceOfConnection(connectionSource) {
@@ -4035,15 +4105,21 @@ function resolveSelectedDeviceSource({ available, sourcePriority, previous }) {
   return { selectedSource, selectionOrigin, available: selectedSource != null };
 }
 
-// Pure planner: group by serial, pick one transport each, return the drops/adds.
-// Serial-less drafts are never cross-transport merged. Idempotent.
+// Pure planner: group by physical serial or server-issued opaque identity,
+// pick one transport each, and return the drops/adds. Idempotent.
 function reconcileTransportSelection(state) {
   const priority = Array.isArray(state.priority) ? state.priority : [];
   const enabled = state.enabledSources || {};
+  const identityValue = (value) => {
+    const raw = String(value == null ? "" : value).trim();
+    if (/^opaque:v1:[A-Za-z0-9_-]+$/.test(raw)) return raw;
+    return physicalInverterIdentity({ serial_number: raw });
+  };
   const dismissed = new Set(
-    (state.dismissedSerials || []).map(normalizeSerial).filter(Boolean)
+    (state.dismissedSerials || []).map(identityValue).filter(Boolean)
   );
   const groups = new Map();
+  const identityOf = (item) => physicalInverterIdentity(item);
   const groupFor = (serial) => {
     let group = groups.get(serial);
     if (!group) {
@@ -4054,18 +4130,18 @@ function reconcileTransportSelection(state) {
   };
 
   for (const item of state.httpInverters || []) {
-    const serial = normalizeSerial(item.serial_number);
-    if (!serial) continue; // serial-less: not cross-transport unifiable
+    const serial = identityOf(item);
+    if (!serial) continue;
     const group = groupFor(serial);
     group.http.push(item);
     group.sources.add("local_api");
   }
   for (const serial of state.httpCandidateSerials || []) {
-    const key = normalizeSerial(serial);
+    const key = identityValue(serial);
     if (key) groupFor(key).sources.add("local_api");
   }
   for (const sel of state.mqttSelections || []) {
-    const serial = normalizeSerial(sel.serial_number);
+    const serial = identityOf(sel);
     if (!serial) continue;
     const source = mqttSourceOfConnection(sel.connection_source);
     const group = groupFor(serial);
@@ -4073,7 +4149,7 @@ function reconcileTransportSelection(state) {
     group.sources.add(source);
   }
   for (const proposal of state.mqttProposals || []) {
-    const serial = normalizeSerial(proposal.serial_number);
+    const serial = identityOf(proposal);
     if (!serial) continue;
     const source = mqttSourceOfConnection(proposal.connection_source);
     const group = groupFor(serial);
@@ -4197,6 +4273,7 @@ function reconcileInverterTransports() {
     mqttSelections: selectedMqttDeviceEntries().map((entry) => ({
       id: entry.id,
       serial_number: entry.serial_number,
+      physical_identity_token: entry.physical_identity_token,
       connection_source: entry.connection_source,
       selection_origin: entry.selection_origin,
     })),
@@ -4204,6 +4281,7 @@ function reconcileInverterTransports() {
     mqttProposals: availableMqttDeviceProposals().map((proposal) => ({
       id: proposal.id,
       serial_number: proposal.serial_number,
+      physical_identity_token: proposal.physical_identity_token,
       connection_source: proposal.connection_source,
     })),
     priority: discoveryPreparation.discovery_priority || [],
@@ -12963,27 +13041,51 @@ function maintenanceMqttProposals() {
 
 function mconfigMqttProposalIdentity(proposal) {
   const fragment = proposal.config_fragment || {};
-  return mconfigIdentity(
-    proposal.serial_number ||
-      proposal.device_id ||
-      fragment.serial_number ||
-      (fragment.mqtt && fragment.mqtt.device_id) ||
-      ""
-  );
+  return physicalInverterIdentity(proposal) || physicalInverterIdentity(fragment);
 }
 
 function mconfigMqttDeviceIdentity(device) {
-  return mconfigIdentity(device.serial_number || device.device_id || "");
+  return physicalInverterIdentity(device);
+}
+
+// A proposal carries its identity material either at the top level or inside its
+// config_fragment; merge both into one identity view for alias matching.
+function mconfigProposalIdentityView(proposal) {
+  const fragment = (proposal && proposal.config_fragment) || {};
+  const aliases =
+    (Array.isArray(proposal.physical_identity_alias_tokens) &&
+      proposal.physical_identity_alias_tokens.length &&
+      proposal.physical_identity_alias_tokens) ||
+    fragment.physical_identity_alias_tokens ||
+    [];
+  return {
+    sn: proposal.sn || fragment.sn,
+    serial_number: proposal.serial_number || fragment.serial_number,
+    physical_identity_token:
+      proposal.physical_identity_token || fragment.physical_identity_token,
+    physical_identity_alias_tokens: aliases,
+  };
 }
 
 function mconfigMqttProposalState(proposal) {
-  const identity = mconfigMqttProposalIdentity(proposal);
-  if (!identity) return "new";
+  const view = mconfigProposalIdentityView(proposal);
+  if (!inverterHasIdentity(view)) return "new";
+  const conflicts = (devices) =>
+    (devices || []).some((device) => inverterIdentityConflict(device, view));
+  // A route already bound to a different physical serial is a contradiction:
+  // never merged, never added as an independent inverter.
+  if (mconfigState.pristine && conflicts(mconfigState.pristine.devices)) {
+    return "identity_conflict";
+  }
+  if (mconfigState.draft && conflicts(mconfigState.draft.devices)) {
+    return "identity_conflict";
+  }
   const inList = (devices) =>
     (devices || []).some(
-      (device) =>
-        mconfigIsMqttDevice(device) && mconfigMqttDeviceIdentity(device) === identity
+      (device) => mconfigIsMqttDevice(device) && inverterIdentitiesMatch(device, view)
     );
+  // A route-only device enriched by a later serial (or vice versa) intersects on
+  // its surviving alias token, so it is recognized as the same inverter.
   if (mconfigState.pristine && inList(mconfigState.pristine.devices)) return "found";
   if (mconfigState.draft && inList(mconfigState.draft.devices)) return "added";
   // The same physical inverter configured over another transport is a
@@ -12992,8 +13094,7 @@ function mconfigMqttProposalState(proposal) {
     (mconfigState.draft && mconfigState.draft.devices) ||
     []
   ).some(
-    (device) =>
-      !mconfigIsMqttDevice(device) && physicalInverterIdentity(device) === identity
+    (device) => !mconfigIsMqttDevice(device) && inverterIdentitiesMatch(device, view)
   );
   if (overOtherTransport) return "transport";
   return "new";
@@ -13008,22 +13109,19 @@ function mconfigZendureMqttDraftFromProposal(proposal) {
   // The backend capability result on the trusted fragment decides output
   // control; the browser never re-derives topic-family write rules.
   const outputControl = caps.write_output_limit === true;
-  const identity =
-    proposal.serial_number ||
-    fragment.serial_number ||
-    proposal.device_id ||
-    mqtt.device_id ||
-    "";
+  const serial = proposal.serial_number || fragment.serial_number || "";
+  const displayRoute = mqtt.device_id || proposal.device_id || "";
   return mconfigApplyCommonDefaults({
     kind: "zendure_mqtt",
     original_name: null,
     proposal_id: proposal.id || "",
     proposal_broker_ref: proposal.broker_ref || mqtt.broker_ref || "",
+    physical_identity_token: proposal.physical_identity_token || "",
     name: mconfigNextInverterName(),
     enabled: true,
     has_enabled_key: true,
-    serial_number: fragment.serial_number || identity,
-    device_id: mqtt.device_id || identity,
+    serial_number: serial,
+    device_id: displayRoute,
     product_key: mqtt.product_key || "",
     hardware_generation: proposal.hardware_generation || "",
     // The concrete registry model (from the trusted fragment) selects the runtime
@@ -13040,7 +13138,7 @@ function mconfigZendureMqttDraftFromProposal(proposal) {
       source: mqtt.source || "",
       topic_family: mqtt.topic_family || "",
       base_topic: mqtt.base_topic == null ? null : mqtt.base_topic,
-      device_id: mqtt.device_id || identity,
+      device_id: displayRoute,
       product_key: mqtt.product_key || "",
       write_protocol: mqtt.write_protocol || "",
     },
@@ -13122,6 +13220,14 @@ function mconfigDiscoveryActionState(item) {
       text: "Use " + transportLabelFor(item.targetSource || "local_api") + " instead",
       disabled: false,
       cssClass: "is-transport",
+    };
+  }
+
+  if (item.state === "identity_conflict") {
+    return {
+      text: "Identity conflict",
+      disabled: true,
+      cssClass: "is-conflict",
     };
   }
 
@@ -13214,7 +13320,10 @@ function mconfigAddDiscovered(item) {
 // original entry even after a rename.
 function mconfigSwitchInverterTransport(identity, targetSource, context) {
   const devices = (mconfigState.draft && mconfigState.draft.devices) || [];
-  const key = normalizeSerial(identity);
+  const rawIdentity = String(identity == null ? "" : identity).trim();
+  const key = /^opaque:v1:[A-Za-z0-9_-]+$/.test(rawIdentity)
+    ? rawIdentity
+    : normalizeSerial(rawIdentity);
   if (!key) return false;
   const index = devices.findIndex(
     (device) => physicalInverterIdentity(device) === key
@@ -13298,6 +13407,13 @@ const MCONFIG_MQTT_PROPOSAL_ACTIONS = {
   // Same physical inverter already configured over another transport: the
   // action switches the connection instead of adding a duplicate device.
   transport: { text: "", disabled: false, cssClass: "is-transport" },
+  // This Cloud route is already bound to a different physical serial: blocked,
+  // never merged and never added as an independent inverter.
+  identity_conflict: {
+    text: "Identity conflict",
+    disabled: true,
+    cssClass: "is-conflict",
+  },
 };
 
 function renderMaintenanceMqttProposalCard(item) {
@@ -13362,6 +13478,15 @@ function renderMaintenanceMqttProposalCard(item) {
     : "Telemetry only: this device's topic family has no verified MQTT write " +
       "method, so EMS reads values but does not send output control.";
   card.appendChild(note);
+
+  if (item.state === "identity_conflict") {
+    const conflict = document.createElement("p");
+    conflict.className = "maintenance-note is-conflict";
+    conflict.textContent =
+      "Identity conflict: this Cloud route is already configured with a " +
+      "different physical serial. Resolve the existing device before adding it.";
+    card.appendChild(conflict);
+  }
 
   const actions = document.createElement("div");
   actions.className = "mconfig-discovery-item-actions";
@@ -14338,7 +14463,12 @@ function mconfigCollectOverrideTargets() {
     for (const key of Object.keys(fields)) {
       const entry = fields[key];
       if (entry && entry.source === "dashboard_override") {
-        targets.push({ scope: "device", name, key });
+        const target = { scope: "device", name, key };
+        const token = String(entry.physical_identity_token || "").trim();
+        if (token.startsWith("opaque:v1:")) {
+          target.physical_identity_token = token;
+        }
+        targets.push(target);
       }
     }
   }

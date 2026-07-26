@@ -522,6 +522,122 @@ def test_write_status_file_merges_control_status(tmp_path):
     assert "control" not in json.loads(path.read_text(encoding="utf-8"))["status"]
 
 
+def test_write_status_file_masks_cloud_route_and_command_topic(tmp_path):
+    runtime = build_zendure_mqtt_runtime(
+        {"zendure_mqtt": {"host": "broker.local"}, "devices": []},
+        service_factory=FakeService,
+    )
+    route = "ACCOUNT_ROUTE_1234"
+    topic = f"iot/PRODUCT_SECRET/{route}/properties/write"
+    control_status = {
+        "devices": [
+            {
+                "name": "Cloud battery",
+                "broker_ref": "cloud_a",
+                "source": "zendure_cloud_mqtt",
+                "identifier": route,
+                "product_key": "PRODUCT_SECRET",
+                "effective_write_topic": topic,
+                "last_command": {
+                    "device_id": route,
+                    "topic": topic,
+                    "correlation_id": "safe-correlation-id",
+                },
+                "password": "BROKER_PASSWORD",
+                "app_key": "APP_KEY_SECRET",
+            }
+        ],
+        "authorization_code": "AUTHORIZATION_SECRET",
+    }
+    path = tmp_path / "data" / "zendure-mqtt-status.json"
+
+    assert runtime.write_status_file(path, control_status=control_status) is True
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    flattened = json.dumps(payload)
+
+    for secret in (
+        route,
+        topic,
+        "PRODUCT_SECRET",
+        "BROKER_PASSWORD",
+        "APP_KEY_SECRET",
+        "AUTHORIZATION_SECRET",
+    ):
+        assert secret not in flattened
+    device = payload["status"]["control"]["devices"][0]
+    assert device["identifier"] == "…1234"
+    assert device["effective_write_topic"] == "iot/…/…/properties/write"
+    assert device["last_command"]["correlation_id"] == "safe-correlation-id"
+
+
+def test_write_status_file_masks_route_left_only_in_invalid_device_name(tmp_path):
+    route = "ACCOUNT_ROUTE_7501"
+    product = "PRODUCT_KEY_7501"
+    config = {
+        "zendure_mqtt": {
+            "brokers": {
+                "cloud_a": {
+                    "enabled": False,
+                    "source": "zendure_cloud_mqtt",
+                    "host": "mqtt.example.invalid",
+                    "port": 8883,
+                }
+            }
+        },
+        "devices": [
+            {
+                "type": "zendure_mqtt",
+                "name": f"Rejected Cloud {route}",
+                "mqtt": {
+                    "broker_ref": "cloud_a",
+                    # Deliberately invalid: classification drops the route/source
+                    # fields but retains the operator-facing display name.
+                    "device_id": route,
+                    "product_key": product,
+                },
+                "capabilities": {"write_output_limit": False},
+            }
+        ],
+    }
+    runtime = build_zendure_mqtt_runtime(config, service_factory=FakeService)
+    assert runtime.status()["invalid_device_count"] == 1
+    path = tmp_path / "data" / "zendure-mqtt-status.json"
+
+    assert runtime.write_status_file(path) is True
+
+    flattened = path.read_text(encoding="utf-8")
+    assert route not in flattened
+    assert product not in flattened
+    payload = json.loads(flattened)
+    assert payload["status"]["devices"][0]["name"] != f"Rejected Cloud {route}"
+
+
+def test_write_status_file_masks_name_only_route_in_incomplete_cloud_config(tmp_path):
+    route = "SECRET_CLOUD_ROUTE_7501"
+    config = {
+        "zendure_mqtt": {
+            "brokers": {
+                "cloud_a": {
+                    "source": "zendure_cloud_mqtt",
+                    "host": "mqtt.example.invalid",
+                }
+            }
+        },
+        "devices": [
+            {
+                "type": "zendure_mqtt",
+                "name": f"Rejected Cloud {route}",
+                "mqtt": {"broker_ref": "cloud_a"},
+            }
+        ],
+    }
+    runtime = build_zendure_mqtt_runtime(config, service_factory=FakeService)
+    path = tmp_path / "data" / "zendure-mqtt-status.json"
+
+    assert runtime.write_status_file(path) is True
+    assert route not in path.read_text(encoding="utf-8")
+
+
 def test_write_status_file_swallows_io_errors(tmp_path):
     runtime = build_zendure_mqtt_runtime(
         {"zendure_mqtt": {"enabled": False}, "devices": []},

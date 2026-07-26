@@ -12,6 +12,7 @@ import contextlib
 import json
 import subprocess
 import threading
+import time
 
 import pytest
 
@@ -97,6 +98,56 @@ def _publish_report_until(host, port, dev, value, predicate):
         observed,
         message=f"{value} W telemetry was not observed",
     )
+
+
+class _HeldFirstPublishCallback:
+    """Delay exactly one real paho ``on_publish`` callback until released."""
+
+    def __init__(self, dev):
+        control_client = dev._service._client
+        self._paho_client = control_client._client
+        self._original = self._paho_client.on_publish
+        self._lock = threading.Lock()
+        self._observed = threading.Event()
+        self._captured = False
+        self._held = None
+
+    def __enter__(self):
+        assert callable(self._original)
+        self._paho_client.on_publish = self._capture
+        return self
+
+    def _capture(self, *args, **kwargs):
+        with self._lock:
+            if not self._captured:
+                self._captured = True
+                self._held = (args, kwargs)
+                self._observed.set()
+                return
+        self._original(*args, **kwargs)
+
+    @property
+    def mid(self):
+        with self._lock:
+            return self._held[0][2] if self._held is not None else None
+
+    def wait(self):
+        wait_until(
+            self._observed.is_set,
+            message="control publish did not reach the real on_publish callback",
+        )
+
+    def release(self):
+        with self._lock:
+            held = self._held
+            self._held = None
+        if held is not None:
+            args, kwargs = held
+            self._original(*args, **kwargs)
+
+    def __exit__(self, *_exc):
+        self.release()
+        self._paho_client.on_publish = self._original
 
 
 @contextlib.contextmanager
@@ -309,6 +360,156 @@ def test_real_mosquitto_broker_delivery_survives_telemetry_confirmation(tmp_path
             )
             assert command.broker_delivery == "delivered"
             assert command.delivered_monotonic is not None
+        finally:
+            runtime.stop()
+
+
+def test_real_mosquitto_delayed_puback_reconciles_after_newer_command(tmp_path):
+    with mosquitto_broker(tmp_path) as (host, port):
+        runtime = build_zendure_mqtt_control_runtime(
+            _config(host, port, "solarflow_800_pro_2")
+        )
+        runtime.start()
+        try:
+            dev = runtime.devices[0]
+            wait_until(lambda: dev._service.connected, message="broker never connected")
+            with _HeldFirstPublishCallback(dev) as delayed:
+                assert dev.write_output_limit(300) is True
+                first = dev._active_command
+                delayed.wait()
+                assert delayed.mid == first.publish_mid
+                assert dev._service.delivery_status(first.publish_delivery_token) == (
+                    "pending"
+                )
+
+                _publish_report_until(
+                    host,
+                    port,
+                    dev,
+                    300,
+                    lambda: first.state == "telemetry_confirmed",
+                )
+                assert first.broker_delivery == "pending"
+
+                assert dev.write_output_limit(400) is True
+                second = dev._active_command
+                assert second is dev._last_command
+                assert first.publish_mid != second.publish_mid
+                wait_until(
+                    lambda: dev._service.delivery_status(
+                        second.publish_delivery_token
+                    )
+                    == "delivered",
+                    message="newer command PUBACK was not processed",
+                )
+                assert dev._service.delivery_status(
+                    first.publish_delivery_token
+                ) == "pending"
+
+                # Deliver the actual callback for Command A only after Command B
+                # exists. Reconciliation must update A's retained record, not B.
+                delayed.release()
+
+                def deliveries_reconciled():
+                    dev.describe(now_monotonic=time.monotonic())
+                    return (
+                        first.broker_delivery == "delivered"
+                        and second.broker_delivery == "delivered"
+                    )
+
+                wait_until(
+                    deliveries_reconciled,
+                    message="older terminal delivery was not reconciled",
+                )
+        finally:
+            runtime.stop()
+
+
+def test_real_mosquitto_terminal_command_evidence_is_count_bounded(tmp_path):
+    with mosquitto_broker(tmp_path) as (host, port):
+        runtime = build_zendure_mqtt_control_runtime(
+            _config(host, port, "solarflow_800_pro_2")
+        )
+        runtime.start()
+        try:
+            dev = runtime.devices[0]
+            wait_until(lambda: dev._service.connected, message="broker never connected")
+            dev._command_evidence_max_records = 3
+            records = []
+
+            for target in (100, 200, 300, 400, 500):
+                assert dev.write_output_limit(target) is True
+                record = dev._active_command
+                records.append(record)
+                _publish_report_until(
+                    host,
+                    port,
+                    dev,
+                    target,
+                    lambda record=record: record.state == "telemetry_confirmed",
+                )
+
+                def delivered(record=record):
+                    dev.describe(now_monotonic=time.monotonic())
+                    return record.broker_delivery == "delivered"
+
+                wait_until(
+                    delivered,
+                    message=f"{target} W broker delivery was not observed",
+                )
+
+            assert len(dev._command_evidence) == 3
+            assert list(dev._command_evidence.values()) == records[-3:]
+            assert all(record.is_terminal for record in dev._command_evidence.values())
+        finally:
+            runtime.stop()
+
+
+def test_real_mosquitto_terminal_delivery_timeout_preserves_confirmation(tmp_path):
+    with mosquitto_broker(tmp_path) as (host, port):
+        runtime = build_zendure_mqtt_control_runtime(
+            _config(host, port, "solarflow_800_pro_2")
+        )
+        runtime.start()
+        try:
+            dev = runtime.devices[0]
+            wait_until(lambda: dev._service.connected, message="broker never connected")
+            with _HeldFirstPublishCallback(dev) as delayed:
+                assert dev.write_output_limit(500) is True
+                command = dev._active_command
+                delayed.wait()
+                assert delayed.mid == command.publish_mid
+
+                _publish_report_until(
+                    host,
+                    port,
+                    dev,
+                    500,
+                    lambda: command.state == "telemetry_confirmed",
+                )
+                assert command.broker_delivery == "pending"
+
+                dev.describe(
+                    now_monotonic=(
+                        command.published_monotonic + dev._command_ack_timeout_s + 0.1
+                    )
+                )
+                assert command.state == "telemetry_confirmed"
+                assert command.broker_delivery == "timeout"
+
+                # A callback observed only after the evidence deadline cannot
+                # downgrade device confirmation or rewrite the honest timeout.
+                delayed.release()
+                wait_until(
+                    lambda: dev._service.delivery_status(
+                        command.publish_delivery_token
+                    )
+                    == "delivered",
+                    message="delayed real PUBACK callback was not released",
+                )
+                dev.describe(now_monotonic=time.monotonic())
+                assert command.state == "telemetry_confirmed"
+                assert command.broker_delivery == "timeout"
         finally:
             runtime.stop()
 

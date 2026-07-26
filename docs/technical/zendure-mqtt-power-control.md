@@ -406,9 +406,10 @@ queued → published┤─→ telemetry_confirmed                      (no-ack, 
 - `published` — the local MQTT client accepted the publish (transport
   submission only, `rc == 0`). Broker delivery is tracked separately per
   command: `broker_delivery` moves `pending` → `delivered` when the QoS 1
-  PUBACK is observed, or `timeout` when it never arrives within the bounded
-  window (`untracked` when the transport exposes no mid). Broker delivery is
-  still **not** device acceptance.
+  PUBACK is observed, `disconnected` when the connection is lost while evidence
+  is unresolved, or `timeout` when it never arrives within the bounded window
+  (`untracked` when the transport exposes no mid). Broker delivery is still
+  **not** device acceptance.
 - `acknowledged` — a device reply correlated by `messageId` + `deviceId` reported
   success. A wrong-id, wrong-device, stale or duplicate reply is ignored. Only
   profiles with a **verified reply contract** (legacy `function/invoke`) reach it.
@@ -419,10 +420,13 @@ queued → published┤─→ telemetry_confirmed                      (no-ack, 
 - `telemetry_confirmed` — telemetry proved the command **effective**, not merely
   echoed. An atomic ZenSDK command carries its expected property set and is
   confirmed only when **every** participating property both matches (watt-like
-  `outputLimit`/`inputLimit` within tolerance, mode/enum `acMode`/`smartMode`
-  exactly) **and is fresh**: each property's freshness is judged from its **own**
-  report time (`metric_monotonic[key]`, recorded per key by the aggregator), which
-  must be newer than or equal to the publish. `acMode` and `outputLimit` are
+  `outputLimit`/`inputLimit` within tolerance, mode/enum `acMode`/`smartMode` as
+  **exact finite integers**) **and is fresh**: the command must have a trustworthy monotonic publish
+  time, captured only after the local MQTT client accepts the publish, and each
+  property's freshness is judged from its **own** report time
+  (`metric_monotonic[key]`, recorded per key by the aggregator), which must be
+  newer than or equal to the publish. Missing command or property time provenance
+  fails closed. `acMode` and `outputLimit` are
   required; `smartMode`/`inputLimit` are checked when telemetry reports them, but a
   *present* optional value must also match and be fresh. Because freshness is
   per-property, a stale-but-matching `acMode`/`smartMode`/`inputLimit` — a merged
@@ -433,7 +437,8 @@ queued → published┤─→ telemetry_confirmed                      (no-ack, 
   never reported `confirmed` from a publish, PUBACK or ack alone. Broker delivery
   and device acceptance stay independent: a late PUBACK that arrives after
   telemetry confirmation still updates `broker_delivery` (`pending` → `delivered`,
-  or `timeout` when none arrives) on the retained terminal record, and a
+  or `timeout` when none arrives) on the original retained terminal record, even
+  after a newer command becomes the latest command, and a
   telemetry-confirmed command is never downgraded because broker evidence is
   missing.
 - `completed_unconfirmed` — the strongest honest signal on a profile with **no
@@ -451,8 +456,20 @@ queued → published┤─→ telemetry_confirmed                      (no-ack, 
   command; see *Live wiring*). It is terminal, so a late reply or late
   telemetry for it can never confirm the replacement.
 
-Every state after `published` is terminal, so a command can never occupy the
-single active slot indefinitely. The per-profile confirmation policy
+Mode/enum matching is intentionally strict. The shared comparator
+(`property_matches` in `ems/mqtt_control/command_state.py`) normalizes a mode
+value through `exact_state_number`, which accepts an `int` (never a `bool`) and a
+finite `float` **only** when it is integer-valued (`2.0` → `2`), and rejects a
+fractional value, `NaN`, infinity, a boolean or a string. A fractional
+observation such as `acMode` `1.9` therefore never confirms a commanded `acMode`
+`1` — it is not a valid enum value. Only watt-like properties use the configured
+tolerance; every mode/enum property is compared as an exact integer. The same
+comparator backs mode-test verification, restore verification and foreign-writer
+detection in the hardware probe.
+
+The active `published` and `acknowledged` states both have bounded deadlines;
+every outcome after them is terminal, so a command can never occupy the single
+active slot indefinitely. The per-profile confirmation policy
 (`ems/mqtt_control/confirmation.py`) declares `telemetry_confirmation_supported`,
 the `confirmation_metric`, the `confirmation_tolerance_w` (passed into the
 confirmation, never a hard-coded default) and the `confirmation_timeout_seconds`.
@@ -487,8 +504,20 @@ device:
   acknowledgement completion or either timeout) → publish the latest pending
   target **once**.
 
-An unresolved command record is never overwritten, and an out-of-order reply for
-an older command can never affect the newer one.
+Terminal records with unresolved broker delivery remain in a bounded per-device
+evidence ledger keyed by their transport receipt. By default it retains at most
+64 records for at most 300 seconds, keeps resolved records briefly for
+diagnostics, and settles pending records on PUBACK, timeout or disconnect.
+Replacing `last_command` never orphans an older publish. Transport receipt
+generations distinguish normal raw-MID reuse and devices that share one broker
+client; the transport itself bounds its token and compatibility MID histories at
+512 entries each. A callback carries no generation, however, so an MID whose
+unresolved publish crossed a disconnect is permanently quarantined for that
+client. If its bounded tombstone is later evicted, future callbacks and
+submissions using that protocol MID remain non-attributable rather than being
+guessed. The quarantine is naturally bounded by MQTT's 65,535 packet
+identifiers. Thus an expired late callback cannot update the wrong command. An
+out-of-order reply for an older command can never affect the newer one.
 
 `dispatch_output_limit()` returns a structured `WriteDispatchResult`
 (`ems/mqtt_control/dispatch.py`) — `published` / `coalesced_active` /
@@ -574,8 +603,25 @@ only), `power_write_profile`, `supported_operations`,
 `command_ack_timeout_seconds`, `confirmation_timeout_seconds`,
 `telemetry_confirmation_supported`, `pending_target`, `confirmation_deadline`,
 `last_confirmed_target_w`, `external_control_suspected` (+
-`external_control_detail`), and a structured `active_command` / `last_command`
+`external_control_detail`), recent unresolved-delivery summary fields, and a
+structured `active_command` / `last_command`
 (`{message_id, device_id, device_key, operation, target_power_w, topic, state,
-response_code, response_message, broker_delivery}`) — replacing the ambiguous
-single `control_enabled` flag (kept for compatibility, alongside
-`last_command_state`).
+response_code, response_message, broker_delivery, correlation_id,
+confirmation_block_reason}`) — replacing the ambiguous single `control_enabled`
+flag (kept for compatibility, alongside `last_command_state`). Those raw routing
+fields exist only in internal in-memory diagnostics. The persisted live-status
+file, Admin, browser and support/export boundaries use the central external-status
+sanitizer: they expose masked route/topic shapes and never return a full Cloud
+route ID or product/device topic path. Subscription-failure events omit the raw
+topic entirely, so the browser log viewer cannot surface an account-scoped route
+from that path.
+
+Security-boundary classification is explicit: trusted config plus live
+`CommandRecord`, device-client and control-runtime objects may retain raw routing
+identity for internal matching; the local `zendure-mqtt-status.json` file is an
+out-of-process Admin input and is therefore persisted in masked form; Dashboard
+and Admin JSON/SSE/log/migration/upgrade responses are browser-facing redacted
+data; generated support bundles are exported redacted data. Raw identifiers stay
+inside the matching boundary. Every external transition uses the shared
+sanitizer; browser and support paths additionally supply installed config as
+sensitive context where it is available.

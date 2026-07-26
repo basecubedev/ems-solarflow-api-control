@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import pytest
 
 from admin.config_apply import ConfigApplyService
-from admin.config_export import ConfigExportService
+from admin.config_export import ConfigExportService, ConfigExportValidationError
 from admin.config_preview import ConfigPreviewGenerator
 from admin.install_context import detect_install_context
 from admin.models import DiscoveredDevice
@@ -481,10 +481,10 @@ def _control_export_body():
     }
 
 
-def test_release_endpoint_defaults_to_setup_flow_and_honours_upgrade_flag():
+def test_release_endpoint_defaults_to_setup_flow_and_honours_upgrade_flag(tmp_path):
     # Guided Setup (no query) lists releases without the upgrade gate; the
     # maintenance flow passes ?flow=upgrade to enable it.
-    manager = _FakeReleaseManager()
+    manager = _FakeReleaseManager(tmp_path)
     srv, base = _serve(release_manager=manager)
     try:
         status, _, _ = _request(f"{base}/api/setup/releases")
@@ -499,9 +499,9 @@ def test_release_endpoint_defaults_to_setup_flow_and_honours_upgrade_flag():
         srv.server_close()
 
 
-def test_release_setup_endpoints_use_alignment_then_release_resources():
+def test_release_setup_endpoints_use_alignment_then_release_resources(tmp_path):
     alignment = _FakeSystemAlignment(stage="resources_verified")
-    srv, base = _serve(release_manager=_FakeReleaseManager())
+    srv, base = _serve(release_manager=_FakeReleaseManager(tmp_path))
     _attach_system_alignment(srv, alignment)
     try:
         intent_id = _fresh_setup_intent(base)
@@ -566,9 +566,9 @@ _ORDERED_TEMPLATE = {
 }
 
 
-def test_config_template_response_preserves_template_key_order():
+def test_config_template_response_preserves_template_key_order(tmp_path):
     srv, base = _serve(
-        release_manager=_FakeReleaseManager(template=_ORDERED_TEMPLATE)
+        release_manager=_FakeReleaseManager(tmp_path, template=_ORDERED_TEMPLATE)
     )
     try:
         status, _, body = _request(f"{base}/api/setup/config-template")
@@ -588,9 +588,9 @@ def test_config_template_response_preserves_template_key_order():
         srv.server_close()
 
 
-def test_config_preview_response_preserves_template_key_order():
+def test_config_preview_response_preserves_template_key_order(tmp_path):
     srv, base = _serve(
-        release_manager=_FakeReleaseManager(template=_ORDERED_TEMPLATE)
+        release_manager=_FakeReleaseManager(tmp_path, template=_ORDERED_TEMPLATE)
     )
     try:
         status, _, body = _request(
@@ -612,7 +612,63 @@ def test_config_preview_response_preserves_template_key_order():
         srv.server_close()
 
 
-def test_release_prepare_returns_clean_embedded_resource_error():
+def test_config_preview_get_masks_cloud_route_and_issues_identity_token(
+    tmp_path, monkeypatch
+):
+    route = "ACCOUNT_ROUTE_7501"
+    product = "PRODUCT_KEY_7501"
+    topic = f"iot/{product}/{route}/properties/write"
+    template = {
+        "zendure_mqtt": {
+            "brokers": {
+                "cloud_a": {
+                    "source": "zendure_cloud_mqtt",
+                    "host": "mqtt.example.invalid",
+                    "port": 8883,
+                    "tls": True,
+                }
+            }
+        },
+        "devices": [
+            {
+                "type": "zendure_mqtt",
+                "name": f"Cloud shed {route}",
+                "mqtt": {
+                    "broker_ref": "cloud_a",
+                    "topic_family": "legacy_zendure_json_alt",
+                    "device_id": route,
+                    "product_key": product,
+                    "write_topic": topic,
+                },
+                "capabilities": {"write_output_limit": False},
+            }
+        ],
+    }
+    config_dir = tmp_path / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.json").write_text(
+        json.dumps(template), encoding="utf-8"
+    )
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
+    srv, base = _serve(
+        release_manager=_FakeReleaseManager(tmp_path, template=template)
+    )
+    try:
+        status, _, payload = _request(f"{base}/api/setup/config-preview")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    flattened = json.dumps(payload)
+    assert route not in flattened
+    assert product not in flattened
+    assert topic not in flattened
+    device = payload["config"]["devices"][0]
+    assert device["physical_identity_token"].startswith("opaque:v1:")
+
+
+def test_release_prepare_returns_clean_embedded_resource_error(tmp_path):
     class _UnwritableAlignment(_FakeSystemAlignment):
         def prepare_setup_resources(
             self, *, requested_tag, mode, development_risk_acknowledged=False
@@ -623,7 +679,7 @@ def test_release_prepare_returns_clean_embedded_resource_error():
                 "Check the Docker volume mount for ./data/admin:/data.",
             )
 
-    srv, base = _serve(release_manager=_FakeReleaseManager())
+    srv, base = _serve(release_manager=_FakeReleaseManager(tmp_path))
     _attach_system_alignment(srv, _UnwritableAlignment())
     try:
         intent_id = _fresh_setup_intent(base)
@@ -689,6 +745,78 @@ def test_config_download_is_blocked_when_validation_fails(tmp_path):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_config_validation_failure_masks_installed_cloud_route_name(
+    tmp_path, monkeypatch
+):
+    route = "ACCOUNT_ROUTE_7501"
+    product = "PRODUCT_KEY_7501"
+    raw_name = f"Cloud shed {route}"
+    config_dir = tmp_path / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "zendure_mqtt": {
+                    "brokers": {
+                        "cloud_a": {
+                            "source": "zendure_cloud_mqtt",
+                            "host": "mqtt.example.invalid",
+                        }
+                    }
+                },
+                "devices": [
+                    {
+                        "type": "zendure_mqtt",
+                        "name": raw_name,
+                        "mqtt": {
+                            "broker_ref": "cloud_a",
+                            "device_id": route,
+                            "product_key": product,
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
+
+    class RejectingExport:
+        def serialize(self, *_args, **_kwargs):
+            raise ConfigExportValidationError(
+                {
+                    "validation": {
+                        "errors": [
+                            {
+                                "code": "device_name_duplicate",
+                                "message": f"Config names must be unique: {raw_name}.",
+                            }
+                        ],
+                        "warnings": [],
+                        "info": [],
+                    }
+                }
+            )
+
+    srv, base = _serve(config_export=RejectingExport())
+    try:
+        status, _, payload = _request(
+            f"{base}/api/setup/config/download",
+            method="POST",
+            body={"devices": [], "supported_grid_meter_count": 0},
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 422
+    assert payload["reason"] == "validation_failed"
+    flattened = json.dumps(payload)
+    assert route not in flattened
+    assert product not in flattened
+    assert raw_name not in flattened
 
 
 def test_config_write_endpoint_protects_overwrite_and_rejects_paths(tmp_path):

@@ -808,8 +808,13 @@ Check, in order:
    authorization credentials from the device-list login; the public read-only
    developer account silently drops writes. Broker delivery and device
    acceptance are **independent**: `broker_delivery=delivered` never means the
-   device applied the command, and a late PUBACK still updates the delivery
-   state even after telemetry already confirmed.
+   device applied the command, and a late PUBACK still updates its original
+   bounded ledger record after telemetry confirmation and after newer commands.
+   An unresolved MID that crosses a disconnect is quarantined instead of being
+   guessed after reuse, even once its bounded tombstone expires.
+   Confirmation also requires a trustworthy command publish time and a fresh
+   per-property observation time; missing provenance fails closed rather than
+   confirming a cached matching value.
 2. `broker_delivery=delivered` with no confirmation means the broker accepted
    the command but the device did not apply it — verify the pinned
    `hardware_profile` matches the physical model and the device identifiers
@@ -829,11 +834,63 @@ Check, in order:
    obsolete override is ignored, and restore feasibility), then `--confirm-writes`
    and check that the setpoint **matches the target** (movement toward it is not
    a match) and the required mode properties match. The probe reports broker
-   delivery, setpoint HTTP-match and physical output as separate timings, and
-   exits non-zero if the initial state cannot be fully restored.
+   delivery, setpoint HTTP-match and physical output from the same submission
+   origin, plus the physical delay after setpoint. It polls delivery and HTTP
+   evidence together, refuses to write when any potentially modified initial
+   property is missing, requires an observed away-then-initial HTTP transition
+   before calling restoration verified, has no unsafe atomic-profile partial
+   fallback, and exits non-zero if the initial state cannot be fully restored.
+   A restoration-time HTTP read fault is recorded and cannot suppress the full
+   restore submission; missing verification evidence remains a non-zero result.
+   The probe stops its MQTT runtime in an outer cleanup path even if restoration
+   raises.
+6. **Serial-less Cloud device: `--api-ip` reports "no MQTT control device has a
+   trusted physical serial …" or the write is blocked as unverified binding.**
+   A Cloud device without a stored physical serial cannot be auto-selected by the
+   HTTP serial (the Cloud route id and a physical serial are different identity
+   domains). Select it with exact `--device-name`, `--device-id` and
+   `--broker-ref`. The probe then treats the HTTP serial as *new, unverified*
+   binding evidence and blocks the write until you either pass
+   `--confirm-unbound-api-readback` (accept it for this run only — never
+   persisted) or bind the physical serial first through Admin discovery. A
+   configured serial that does **not** match the HTTP readback is a hard identity
+   conflict and always blocks. See
+   [mqtt-write-latency-probe.md](../developer/mqtt-write-latency-probe.md#cross-transport-identity-binding).
 
 More detail: [safety-model.md](safety-model.md),
 [configuration.md](configuration.md), [runtime-state.md](runtime-state.md).
+
+### Maintenance shows "Identity conflict" for a rediscovered device
+
+Symptoms:
+
+- A discovered Cloud MQTT proposal shows a disabled **Identity conflict** action
+  instead of *Add* / *In config*.
+- Preview/apply reports `device_identity_conflict`.
+
+Cause: the discovered Cloud **route** is already configured against a **different
+physical serial**. The route says "one inverter" while the serials say "two", so
+Admin refuses to merge or add it as an independent inverter rather than guess.
+
+Fix: confirm which physical inverter that Cloud route belongs to. If the existing
+entry has the wrong serial, correct or remove it, then rediscover. A route-only
+device gaining its *own* serial is **not** a conflict — it is recognized as the
+same inverter (shown *In config*) and enriched in place. See
+[admin-discovery.md](admin-discovery.md#physical-inverter-identity-and-route-aliases).
+
+### Cloud MQTT topics look masked in status or support bundles
+
+This is expected. Zendure **Cloud** account-scoped routes
+(`iot/<product>/<device>/...`, including `function/invoke` and custom suffixes)
+are masked to `iot/…/…/...` at every browser and support-export boundary, in
+structured fields, log/error text and mapping keys alike, so a support bundle
+never carries account routing secrets. **Local** MQTT topics are *not* masked —
+they contain user-controlled local identifiers, not Cloud secrets, and stay
+visible as useful diagnostics. A mixed local+Cloud status masks only the Cloud
+route material, per device. Physical serials and non-secret context are retained;
+credentials are dropped. Full identifiers are kept internally where required for
+correct command routing and matching — only external boundaries redact. See
+[admin-discovery.md](admin-discovery.md#cloud-route-redaction-at-external-boundaries).
 
 ### Dashboard values do not add up exactly
 

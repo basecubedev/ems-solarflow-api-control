@@ -43,6 +43,7 @@ from ems.config_catalog import (
     grid_meter_types,
     grid_meter_variant_field_spec,
 )
+from ems.device_identity import broker_sources_from_config
 from ems.influx_setup import DOCKER_FIRST_SECRET_FILE
 from ems.zendure_mqtt.config_entries import (
     SOURCE_LOCAL_MQTT,
@@ -88,7 +89,9 @@ def _existing_broker_refs(preview):
     return set(_existing_broker_profiles(preview))
 
 
-def _upsert_zendure_mqtt_device(devices, base_index_by_identity, entry, resolved_ref):
+def _upsert_zendure_mqtt_device(
+    devices, base_index_by_identity, entry, resolved_ref, *, broker_sources
+):
     """Add, update or leave an MQTT device for a trusted proposal ``entry``.
 
     Returns one of ``added`` / ``updated`` / ``unchanged``. When the proposal's
@@ -100,7 +103,9 @@ def _upsert_zendure_mqtt_device(devices, base_index_by_identity, entry, resolved
     rebind and still collides under duplicate-identity validation.
     """
 
-    identity = zendure_config_device_identity(entry)
+    identity = zendure_config_device_identity(
+        entry, broker_sources=broker_sources
+    )
     existing_index = (
         base_index_by_identity.get(identity) if identity is not None else None
     )
@@ -179,12 +184,15 @@ def _merge_zendure_mqtt_proposals(preview, proposals, validation, cloud_auth_ava
     # physical identity (for in-place upsert) and the broker refs that already
     # existed (so only profiles this call creates may be pruned).
     preexisting_refs = _existing_broker_refs(preview)
+    broker_sources = broker_sources_from_config(preview)
     base_index_by_identity = {}
     disabled_base_identities = set()
     for index, device in enumerate(devices):
         if not (isinstance(device, dict) and device.get("type") == "zendure_mqtt"):
             continue
-        identity = zendure_config_device_identity(device)
+        identity = zendure_config_device_identity(
+            device, broker_sources=broker_sources
+        )
         if identity is None:
             continue
         if config_entry_enabled(device):
@@ -210,7 +218,9 @@ def _merge_zendure_mqtt_proposals(preview, proposals, validation, cloud_auth_ava
         scan_entry = sanitize_zendure_mqtt_fragment(copy.deepcopy(fragment))
         if validate_zendure_mqtt_fragment(scan_entry):
             continue
-        scan_identity = zendure_config_device_identity(scan_entry)
+        scan_identity = zendure_config_device_identity(
+            scan_entry, broker_sources=broker_sources
+        )
         if scan_identity is not None:
             proposal_identity_counts[scan_identity] = (
                 proposal_identity_counts.get(scan_identity, 0) + 1
@@ -255,7 +265,9 @@ def _merge_zendure_mqtt_proposals(preview, proposals, validation, cloud_auth_ava
                 )
             continue
         label = str(entry.get("name") or "Zendure MQTT device").strip()
-        identity = zendure_config_device_identity(entry)
+        identity = zendure_config_device_identity(
+            entry, broker_sources=broker_sources
+        )
         if identity is not None and identity in conflicting_identities:
             if identity not in reported_conflicts:
                 validation["errors"].append(
@@ -302,7 +314,11 @@ def _merge_zendure_mqtt_proposals(preview, proposals, validation, cloud_auth_ava
         if isinstance(mqtt, dict):
             mqtt["broker_ref"] = resolved_ref
         if _upsert_zendure_mqtt_device(
-            devices, base_index_by_identity, entry, resolved_ref
+            devices,
+            base_index_by_identity,
+            entry,
+            resolved_ref,
+            broker_sources=broker_sources_from_config(preview),
         ) == "added":
             added += 1
             if is_control_zendure_mqtt_device_config(entry):
@@ -1209,7 +1225,10 @@ class ConfigPreviewGenerator:
                 )
             )
 
-        for issue in find_duplicate_zendure_device_identities(preview.get("devices")):
+        for issue in find_duplicate_zendure_device_identities(
+            preview.get("devices"),
+            broker_sources=broker_sources_from_config(preview),
+        ):
             validation["errors"].append(
                 _issue(
                     issue["code"],

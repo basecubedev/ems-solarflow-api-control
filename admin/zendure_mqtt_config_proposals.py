@@ -24,6 +24,7 @@ from admin.zendure_mqtt_config_draft import (
     telemetry_schema_for_topic_family,
 )
 from ems.config import parse_mqtt_port, require_json_bool, resolve_mqtt_tls_metadata
+from ems.device_identity import resolve_inverter_identity
 from ems.zendure_mqtt.config_entries import (
     normalized_broker_identity,
     stable_local_broker_ref,
@@ -177,12 +178,6 @@ def _observation_to_snapshot(
         return None
     serial = _unmasked(observation.get("serial_number"))
     device_id = _unmasked(observation.get("device_id"))
-    source_type = str(observation.get("source_type") or SOURCE_LOCAL_MQTT)
-    if source_type == SOURCE_ZENDURE_CLOUD_MQTT and serial is None:
-        # A cloud route id may be an account-scoped deviceKey. Without a
-        # physical serial there is no browser-safe identity for the proposal,
-        # so keep the existing fail-closed behaviour even in the trusted view.
-        return None
     if serial is None and device_id is None:
         # A masked-only candidate (e.g. a cloud deviceList entry without a serial)
         # has no identifier safe to persist, so it never becomes a proposal.
@@ -437,22 +432,29 @@ def proposals_from_sources(
     and the config-preview trust resolve, so a selection made in the review UI
     always resolves against the same set it was rendered from. Local proposals
     keep their generation stamping (cloud candidates take no part in the local
-    broker store's generation/TTL bookkeeping). A cloud candidate whose
-    identifier already appears on a discovered local broker is dropped: the
-    local connection wins, so one physical device is never offered twice.
+    broker store's generation/TTL bookkeeping). A cloud candidate whose trusted
+    physical serial already appears on a local broker is dropped: the local
+    connection wins. Account-scoped route ids remain separate candidates.
     """
 
     proposals = proposals_from_brokers(brokers)
-    local_tokens = {
-        token
-        for proposal in proposals
-        for token in (proposal.get("serial_number"), proposal.get("device_id"))
-        if token
+    # Only a trusted physical serial may collapse observations across broker
+    # families. MQTT route ids are broker/account scoped, so the same raw route
+    # on Local MQTT and Zendure Cloud remains two distinct candidates.
+    def physical_key(proposal):
+        identity = resolve_inverter_identity(proposal.get("config_fragment"))
+        return (
+            identity.comparison_key
+            if identity is not None and identity.kind == "physical_serial"
+            else None
+        )
+
+    local_physical_keys = {
+        key for proposal in proposals if (key := physical_key(proposal)) is not None
     }
     for proposal in build_proposals(cloud_candidates):
-        if proposal.get("serial_number") in local_tokens:
-            continue
-        if proposal.get("device_id") in local_tokens:
+        cloud_key = physical_key(proposal)
+        if cloud_key is not None and cloud_key in local_physical_keys:
             continue
         proposals.append(proposal)
     return proposals
@@ -482,6 +484,7 @@ _TRUSTED_CONFLICT_FIELDS = (
     "broker_port",
     "broker_tls",
     "product_key",
+    "physical_identity_token",
 )
 
 
@@ -563,7 +566,10 @@ def resolve_trusted_proposal(
             for value in (trusted.get("device_id"), trusted.get("serial_number"))
             if value is not None
         }
-        if submitted["device_id"] not in accepted_device_ids:
+        if (
+            not is_masked_zendure_identifier(submitted["device_id"])
+            and submitted["device_id"] not in accepted_device_ids
+        ):
             return None, _proposal_issue(
                 "zendure_mqtt_proposal_conflict",
                 "MQTT proposal field 'device_id' does not match the discovered "

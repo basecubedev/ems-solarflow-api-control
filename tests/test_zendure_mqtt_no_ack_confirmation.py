@@ -18,6 +18,8 @@ a published command can never be *acknowledged*. It must instead:
 The confirmation deadline for a no-ack command starts at successful publish time.
 """
 
+import time
+
 import pytest
 
 from ems.zendure_mqtt.device_client import ZendureMqttDeviceClient
@@ -30,6 +32,9 @@ class _FakeSnapshot:
     def __init__(self, metrics, last_seen_monotonic):
         self.metrics = metrics
         self.last_seen_monotonic = last_seen_monotonic
+        self.metric_monotonic = {
+            key: last_seen_monotonic for key in metrics
+        }
 
 
 class _FakeService:
@@ -120,6 +125,33 @@ def test_no_ack_stale_telemetry_does_not_confirm():
     assert dev._active_command is rec
 
 
+def test_telemetry_observed_before_local_publish_acceptance_is_stale():
+    dev = _zensdk_device()
+    service = dev._service
+    original_publish = service.publish_output_limit
+
+    def publish_with_pre_acceptance_telemetry(topic, payload):
+        service.set_snapshot(
+            {
+                "smartMode": 1,
+                "acMode": 2,
+                "outputLimit": 500,
+                "inputLimit": 0,
+            },
+            last_seen_monotonic=time.monotonic(),
+        )
+        return original_publish(topic, payload)
+
+    service.publish_output_limit = publish_with_pre_acceptance_telemetry
+    assert dev.write_output_limit(500) is True
+    rec = dev._active_command
+    assert service._snapshot.last_seen_monotonic < rec.published_monotonic
+
+    dev.fetch()
+    assert rec.state == "published"
+    assert rec.confirmation_block_reason.endswith(": stale")
+
+
 def test_no_ack_value_mismatch_does_not_confirm():
     dev = _zensdk_device()
     dev.write_output_limit(500)
@@ -208,6 +240,7 @@ def test_absent_output_telemetry_does_not_confirm_a_stop():
     )
     dev.fetch()
     assert rec.state == "published"
+    assert rec.confirmation_block_reason == "outputLimit: not_observed"
 
 
 def test_confirming_telemetry_wins_over_elapsed_confirmation_deadline():

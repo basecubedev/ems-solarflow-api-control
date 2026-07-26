@@ -128,6 +128,7 @@ from admin.zendure_mqtt_migration_review import (
 from admin.zendure_mqtt_runtime_status import build_runtime_status_view
 from admin.networks import detect_network_suggestions
 from admin.development_catalogue import development_catalogue_source
+from admin.device_identity import IdentityTokenKeyStore
 from admin.releases import ReleaseError, ReleaseManager, default_admin_data_dir
 from admin.known_good import KnownGoodStore
 from admin.setup_config import build_setup_catalog
@@ -153,6 +154,18 @@ from admin.system_build import (
 )
 from dashboard.auth import LoginRateLimiter, SessionStore
 from dashboard.static_files import build_static_asset_index, static_asset_key
+from ems.device_identity import (
+    PHYSICAL_IDENTITY_ALIAS_TOKENS_FIELD,
+    PHYSICAL_IDENTITY_TOKEN_FIELD,
+    broker_sources_from_config,
+    resolve_inverter_identity,
+    resolve_inverter_identity_evidence,
+)
+from ems.external_status import (
+    mask_external_mqtt_string,
+    mask_route_identifier,
+    sanitize_external_mqtt_status,
+)
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 MAX_JSON_BODY_BYTES = 4 * 1024
@@ -431,6 +444,7 @@ class AdminRuntime:
     auth_setup_limiter: LoginRateLimiter
     admin_instance_id: str
     setup_intents: SetupIntentStore
+    identity_token_key: bytes
     static_assets: dict = field(default_factory=dict)
     # The single authority for worker liveness and atomic abandonment, shared by
     # both listeners. Guided Upgrade and deployment workers claim it before they
@@ -565,6 +579,9 @@ def create_admin_runtime(
     )
     config_preview = ConfigPreviewGenerator(release_manager)
     admin_data_dir = getattr(release_manager, "data_dir", default_admin_data_dir())
+    identity_token_key = IdentityTokenKeyStore(
+        Path(admin_data_dir) / "state"
+    ).load_or_create()
     # EMS-owned credential store (config/secrets/). Persists the Zendure token and
     # local MQTT broker credentials so a later EMS runtime can read them; a legacy
     # Admin-local Zendure token is migrated in on first read.
@@ -660,6 +677,7 @@ def create_admin_runtime(
         auth_setup_limiter=LoginRateLimiter(max_failures=10, window_seconds=60),
         admin_instance_id=uuid.uuid4().hex,
         setup_intents=setup_intents or SetupIntentStore(),
+        identity_token_key=identity_token_key,
         static_assets=static_assets,
     )
 
@@ -704,6 +722,7 @@ class AdminServer(ThreadingHTTPServer):
             runtime, "test_admin_instance_id", None
         )
         self.setup_intents = runtime.setup_intents
+        self.identity_token_key = runtime.identity_token_key
         self.static_assets = runtime.static_assets
         # Present only for the gated browser-test runtime; ``None`` (and its route
         # 404s) in every normal deployment.
@@ -716,6 +735,22 @@ class AdminServer(ThreadingHTTPServer):
 
 class AdminHandler(BaseHTTPRequestHandler):
     server_version = "AdminDiscovery/1.0"
+
+    def _sanitize_external_mqtt_payload(self, payload):
+        """Apply the installed-config-aware browser/export MQTT boundary."""
+
+        config_context = None
+        try:
+            context = self.server.config_apply.install_context_provider()
+            config_context = json.loads(Path(context.config_path).read_bytes())
+        except (AttributeError, OSError, TypeError, ValueError):
+            # Explicit Cloud markers and canonical topics in a payload remain
+            # masked even when the installed config cannot be read.
+            config_context = None
+        return sanitize_external_mqtt_status(
+            payload,
+            sensitive_context=config_context,
+        )
 
     def do_GET(self):
         path = self.path.split("?", 1)[0]
@@ -751,7 +786,11 @@ class AdminHandler(BaseHTTPRequestHandler):
             self._send_json(run_maintenance_overview())
             return
         if path == "/api/admin/maintenance/config":
-            self._send_json(load_maintenance_config())
+            self._send_json(
+                load_maintenance_config(
+                    identity_token_key=self.server.identity_token_key
+                )
+            )
             return
         if path == "/api/admin/maintenance/zendure-mqtt/runtime-status":
             self._send_json(build_runtime_status_view())
@@ -798,7 +837,11 @@ class AdminHandler(BaseHTTPRequestHandler):
             self._send_json(build_setup_catalog())
             return
         if path == "/api/setup/config-preview":
-            self._send_json(self.server.config_preview.generate())
+            preview = redact_config_for_browser(
+                copy.deepcopy(self.server.config_preview.generate()),
+                identity_token_key=self.server.identity_token_key,
+            )
+            self._send_json(self._sanitize_external_mqtt_payload(preview))
             return
         if path == "/api/setup/config/status":
             self._send_json(self.server.config_export.status())
@@ -2037,7 +2080,7 @@ class AdminHandler(BaseHTTPRequestHandler):
                 }
             )
             return
-        self._send_json(result)
+        self._send_json(self._sanitize_external_mqtt_payload(result))
 
     def _handle_maintenance_config_preview(self):
         # Preview only: the merge never writes, and the config path is resolved
@@ -2078,12 +2121,20 @@ class AdminHandler(BaseHTTPRequestHandler):
                 status=400,
             )
             return
-        self._send_json(preview_maintenance_config(draft))
+        self._send_json(
+            self._sanitize_external_mqtt_payload(
+                preview_maintenance_config(
+                    draft, identity_token_key=self.server.identity_token_key
+                )
+            )
+        )
 
     def _handle_zendure_mqtt_migration_review(self):
         # Read-only EMS-owned migration review + config fingerprint. Never mutates
         # and never returns broker secrets.
-        self._send_json(load_migration_review())
+        self._send_json(
+            self._sanitize_external_mqtt_payload(load_migration_review())
+        )
 
     def _handle_zendure_mqtt_migration_apply(self):
         # Confirmed, EMS-owned migration apply. Auth + CSRF are already enforced by
@@ -2120,23 +2171,31 @@ class AdminHandler(BaseHTTPRequestHandler):
         prepared = prepare_migration_apply(revision)
         status = prepared.get("status")
         if status == "conflict":
-            self._send_json(prepared, status=409)
+            self._send_json(
+                self._sanitize_external_mqtt_payload(prepared), status=409
+            )
             return
         if status == "missing":
-            self._send_json(prepared, status=404)
+            self._send_json(
+                self._sanitize_external_mqtt_payload(prepared), status=404
+            )
             return
         if status != "ok":
-            self._send_json(prepared, status=400)
+            self._send_json(
+                self._sanitize_external_mqtt_payload(prepared), status=400
+            )
             return
         if not prepared.get("changed"):
             # Idempotent no-op: nothing to migrate, so nothing is written.
             self._send_json(
-                {
-                    "ok": True,
-                    "status": "noop",
-                    "changed": False,
-                    "warnings": prepared["warnings"],
-                }
+                self._sanitize_external_mqtt_payload(
+                    {
+                        "ok": True,
+                        "status": "noop",
+                        "changed": False,
+                        "warnings": prepared["warnings"],
+                    }
+                )
             )
             return
         with self.server.config_apply.apply_transaction():
@@ -2146,22 +2205,32 @@ class AdminHandler(BaseHTTPRequestHandler):
                 )
             except ConfigChangedError as exc:
                 self._send_json(
-                    {"ok": False, "status": "conflict", "message": str(exc)},
+                    self._sanitize_external_mqtt_payload(
+                        {
+                            "ok": False,
+                            "status": "conflict",
+                            "message": str(exc),
+                        }
+                    ),
                     status=409,
                 )
                 return
             except OSError as exc:
                 self._send_json(
-                    {
-                        "ok": False,
-                        "status": "error",
-                        "message": f"Apply failed: {exc}",
-                    },
+                    self._sanitize_external_mqtt_payload(
+                        {
+                            "ok": False,
+                            "status": "error",
+                            "message": f"Apply failed: {exc}",
+                        }
+                    ),
                     status=500,
                 )
                 return
         result["warnings"] = prepared["warnings"]
-        self._send_json(result, status=200)
+        self._send_json(
+            self._sanitize_external_mqtt_payload(result), status=200
+        )
 
     def _handle_maintenance_config_apply(self):
         if self._reject_unrelated_transition_write():
@@ -2210,15 +2279,23 @@ class AdminHandler(BaseHTTPRequestHandler):
                 status=400,
             )
             return
-        prepared = prepare_maintenance_config_apply(draft, revision)
+        prepared = prepare_maintenance_config_apply(
+            draft,
+            revision,
+            identity_token_key=self.server.identity_token_key,
+        )
         if prepared.get("status") != "ok":
             status = 409 if prepared.get("status") == "conflict" else 400
-            self._send_json(prepared, status=status)
+            self._send_json(
+                self._sanitize_external_mqtt_payload(prepared), status=status
+            )
             return
         payload, status_code = self._maintenance_apply_transaction(
             prepared, revision, backup
         )
-        self._send_json(payload, status=status_code)
+        self._send_json(
+            self._sanitize_external_mqtt_payload(payload), status=status_code
+        )
 
     def _maintenance_apply_transaction(self, prepared, revision, backup):
         """Stage credentials and apply the config as one serialized unit.
@@ -2301,12 +2378,81 @@ class AdminHandler(BaseHTTPRequestHandler):
         if not isinstance(config, dict):
             self._send_json({"error": "current config is invalid"}, status=409)
             return
+        targets, identity_error = self._resolve_runtime_reset_device_targets(
+            config, targets
+        )
+        if identity_error is not None:
+            self._send_json({"error": identity_error}, status=409)
+            return
         try:
             summary = reset_targets_to_config(context, config, targets)
         except Exception as exc:
             self._send_json({"error": f"reset failed: {exc}"}, status=500)
             return
-        self._send_json({"ok": True, "runtime_sync": summary}, status=200)
+        self._send_json(
+            self._sanitize_external_mqtt_payload(
+                {"ok": True, "runtime_sync": summary}
+            ),
+            status=200,
+        )
+
+    def _resolve_runtime_reset_device_targets(self, config, targets):
+        """Resolve browser-safe device targets through server-issued tokens.
+
+        A configured Cloud route may be part of a device display name.  That
+        name is masked in Maintenance payloads and cannot identify the runtime
+        entry on its own.  Opaque tokens are keyed by the Admin and are resolved
+        only against the current installed config; ambiguous/stale evidence
+        fails closed instead of selecting a similarly named device.
+        """
+
+        sources = broker_sources_from_config(config)
+        by_token = {}
+        ambiguous = set()
+        devices = config.get("devices")
+        for device in devices if isinstance(devices, list) else []:
+            if not isinstance(device, dict):
+                continue
+            identity = resolve_inverter_identity(
+                device,
+                broker_sources=sources,
+                token_key=self.server.identity_token_key,
+            )
+            name = str(device.get("name") or "").strip()
+            token = identity.opaque_token if identity is not None else None
+            if not name or token is None:
+                continue
+            if token in by_token and by_token[token] != name:
+                ambiguous.add(token)
+            else:
+                by_token[token] = name
+
+        resolved = []
+        for target in targets:
+            if not isinstance(target, dict) or target.get("scope") != "device":
+                resolved.append(target)
+                continue
+            token = target.get(PHYSICAL_IDENTITY_TOKEN_FIELD)
+            if token is None:
+                # Backward-compatible raw-name requests remain valid for local
+                # devices and older open tabs. Masked Cloud names are not guessed.
+                resolved.append(target)
+                continue
+            if (
+                not isinstance(token, str)
+                or not token.startswith("opaque:v1:")
+                or token in ambiguous
+                or token not in by_token
+            ):
+                return None, (
+                    "device identity is stale or ambiguous; reload Maintenance "
+                    "before resetting live overrides"
+                )
+            resolved_target = dict(target)
+            resolved_target["name"] = by_token[token]
+            resolved_target.pop(PHYSICAL_IDENTITY_TOKEN_FIELD, None)
+            resolved.append(resolved_target)
+        return resolved, None
 
     def _mirror_runtime_after_apply(self, prepared):
         """Mirror changed overlapping whitelisted keys into runtime-state.
@@ -2518,7 +2664,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         if rejection is not None:
             self._send_json(
-                rejection,
+                self._sanitize_external_mqtt_payload(rejection),
                 status=_UPGRADE_STATUS_CODES.get(rejection.get("reason"), 400),
             )
             return
@@ -2527,17 +2673,19 @@ class AdminHandler(BaseHTTPRequestHandler):
             "revision"
         ):
             self._send_json(
-                {
-                    "ok": False,
-                    "status": "conflict",
-                    "reason": "mqtt_migration_review_stale",
-                    "message": (
-                        "The Zendure MQTT migration changed after planning. "
-                        "Review and confirm the current upgrade plan."
-                    ),
-                    "migration": migration.get("review"),
-                    "migration_revision": migration.get("revision"),
-                },
+                self._sanitize_external_mqtt_payload(
+                    {
+                        "ok": False,
+                        "status": "conflict",
+                        "reason": "mqtt_migration_review_stale",
+                        "message": (
+                            "The Zendure MQTT migration changed after planning. "
+                            "Review and confirm the current upgrade plan."
+                        ),
+                        "migration": migration.get("review"),
+                        "migration_revision": migration.get("revision"),
+                    }
+                ),
                 status=409,
             )
             return
@@ -2837,7 +2985,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         if rejection is not None:
             self._send_json(
-                rejection,
+                self._sanitize_external_mqtt_payload(rejection),
                 status=_UPGRADE_STATUS_CODES.get(rejection.get("reason"), 409),
             )
             return
@@ -3038,11 +3186,13 @@ class AdminHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": False, "error": "unknown job_id"}, status=404)
             return
         self._send_json(
-            {
-                "ok": True,
-                **job,
-                "transition": self._alignment_status().get("transition"),
-            }
+            self._sanitize_external_mqtt_payload(
+                {
+                    "ok": True,
+                    **job,
+                    "transition": self._alignment_status().get("transition"),
+                }
+            )
         )
 
     # --- Admin Console self-update ---------------------------------------
@@ -3496,7 +3646,12 @@ class AdminHandler(BaseHTTPRequestHandler):
         # shared credential-staging layer, which rejects the same references with
         # a stable structured code and a byte-exact rollback.
         _surface_mqtt_credential_consumer_issues(preview)
-        self._send_json(redact_config_for_browser(copy.deepcopy(preview)))
+        self._send_json(
+            redact_config_for_browser(
+                copy.deepcopy(preview),
+                identity_token_key=self.server.identity_token_key,
+            )
+        )
 
     @staticmethod
     def _preview_manual_mqtt(body):
@@ -3570,15 +3725,94 @@ class AdminHandler(BaseHTTPRequestHandler):
             if callable(trusted_candidates)
             else self.server.zendure_cloud_discovery.candidates()
         )
-        return zendure_mqtt_config_proposals.proposals_from_sources(
+        proposals = zendure_mqtt_config_proposals.proposals_from_sources(
             self.server.mqtt_discovery.candidates(),
             cloud_candidates,
         )
+        for proposal in proposals:
+            if not isinstance(proposal, dict):
+                continue
+            fragment = proposal.get("config_fragment")
+            evidence = resolve_inverter_identity_evidence(
+                fragment,
+                token_key=self.server.identity_token_key,
+            )
+            if evidence is None or evidence.primary.opaque_token is None:
+                continue
+            proposal[PHYSICAL_IDENTITY_TOKEN_FIELD] = evidence.primary.opaque_token
+            alias_tokens = list(evidence.opaque_tokens)
+            if alias_tokens:
+                proposal[PHYSICAL_IDENTITY_ALIAS_TOKENS_FIELD] = alias_tokens
+            if evidence.primary.kind == "scoped_mqtt_route":
+                proposal["id"] = (
+                    f"zendure-mqtt:{evidence.primary.opaque_token}:"
+                    f"{proposal.get('broker_ref') or 'default'}"
+                )
+        return proposals
 
     def _public_mqtt_proposals(self):
         """Browser-safe proposal view with raw write identities removed."""
 
         proposals = copy.deepcopy(self._trusted_mqtt_proposals())
+        # Collect account-scoped values before mutating any proposal. A Local
+        # candidate can legitimately contain the same route string as a Cloud
+        # candidate in another broker scope; the public response must not let
+        # that second proposal re-expose a known Cloud account identifier.
+        sensitive_values = set()
+        for proposal in proposals:
+            if not isinstance(proposal, dict):
+                continue
+            fragment = proposal.get("config_fragment")
+            mqtt = fragment.get("mqtt") if isinstance(fragment, dict) else None
+            is_cloud = (
+                proposal.get("connection_source") == SOURCE_ZENDURE_CLOUD_MQTT
+                or (
+                    isinstance(mqtt, dict)
+                    and mqtt.get("source") == SOURCE_ZENDURE_CLOUD_MQTT
+                )
+            )
+            if not is_cloud:
+                continue
+            for raw in (
+                proposal.get("device_id"),
+                proposal.get("product_key"),
+                mqtt.get("device_id") if isinstance(mqtt, dict) else None,
+                mqtt.get("product_key") if isinstance(mqtt, dict) else None,
+            ):
+                if isinstance(raw, str) and raw.strip():
+                    sensitive_values.add(raw.strip())
+        sensitive = frozenset(sensitive_values)
+
+        def mask_public_strings(node, *, cloud_scoped=False):
+            if isinstance(node, dict):
+                for key in list(node):
+                    if key in {
+                        "sn",
+                        "serial_number",
+                        PHYSICAL_IDENTITY_TOKEN_FIELD,
+                        PHYSICAL_IDENTITY_ALIAS_TOKENS_FIELD,
+                    }:
+                        continue
+                    safe_key = (
+                        mask_external_mqtt_string(
+                            key, sensitive_values=sensitive, cloud_scoped=cloud_scoped
+                        )
+                        if isinstance(key, str)
+                        else key
+                    )
+                    child = mask_public_strings(node[key], cloud_scoped=cloud_scoped)
+                    if safe_key != key:
+                        del node[key]
+                    node[safe_key] = child
+            elif isinstance(node, list):
+                for index, child in enumerate(node):
+                    node[index] = mask_public_strings(child, cloud_scoped=cloud_scoped)
+            elif isinstance(node, str):
+                return mask_external_mqtt_string(
+                    node, sensitive_values=sensitive, cloud_scoped=cloud_scoped
+                )
+            return node
+
         for proposal in proposals:
             if not isinstance(proposal, dict):
                 continue
@@ -3596,16 +3830,27 @@ class AdminHandler(BaseHTTPRequestHandler):
                 # The trusted device id is the observed MQTT routing key. Keep
                 # it server-side and expose the physical serial as the stable
                 # browser identity instead.
+                raw_route_id = proposal.get("device_id")
                 serial = proposal.get("serial_number")
                 proposal["device_id"] = (
                     serial.strip()
                     if isinstance(serial, str) and serial.strip()
-                    else None
+                    else mask_route_identifier(raw_route_id)
                 )
+                masked_route = mask_route_identifier(raw_route_id)
+                for key in ("display_name",):
+                    value = proposal.get(key)
+                    if isinstance(value, str) and isinstance(raw_route_id, str):
+                        proposal[key] = value.replace(raw_route_id, masked_route)
             if isinstance(mqtt, dict):
                 mqtt.pop("product_key", None)
                 if is_cloud:
                     mqtt.pop("device_id", None)
+            if is_cloud and isinstance(fragment, dict):
+                raw_name = fragment.get("name")
+                if isinstance(raw_name, str) and isinstance(raw_route_id, str):
+                    fragment["name"] = raw_name.replace(raw_route_id, masked_route)
+            mask_public_strings(proposal, cloud_scoped=is_cloud)
         return proposals
 
     def _resolve_maintenance_mqtt_draft(self, draft):
@@ -3641,6 +3886,12 @@ class AdminHandler(BaseHTTPRequestHandler):
                     else "The selected MQTT proposal is no longer available; refresh discovery."
                 )
             proposal = selected[0]
+            trusted_token = proposal.get(PHYSICAL_IDENTITY_TOKEN_FIELD)
+            submitted_token = item.get(PHYSICAL_IDENTITY_TOKEN_FIELD)
+            if submitted_token is not None and submitted_token != trusted_token:
+                return None, "The selected MQTT proposal identity changed; refresh discovery."
+            if isinstance(trusted_token, str) and trusted_token:
+                item[PHYSICAL_IDENTITY_TOKEN_FIELD] = trusted_token
             fragment = proposal.get("config_fragment")
             trusted_mqtt = fragment.get("mqtt") if isinstance(fragment, dict) else None
             if not isinstance(trusted_mqtt, dict):
@@ -4292,7 +4543,10 @@ class AdminHandler(BaseHTTPRequestHandler):
         }
         if changes is not None:
             self._rollback_staged_credentials(changes, payload)
-        return payload
+        # Validation messages may contain configured display names. A Cloud
+        # route embedded in such a name is sensitive even though the generated
+        # preview/config fields themselves were already redacted.
+        return self._sanitize_external_mqtt_payload(payload)
 
     def _send_validation_failure(self, preview, changes=None):
         self._send_json(self._validation_failure_payload(preview, changes), status=422)

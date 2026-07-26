@@ -519,7 +519,9 @@ def test_cloud_route_id_is_masked_in_browser_and_preserved_on_round_trip(tmp_pat
     assert mqtt_draft["mqtt"]["device_id"] == "••••"
     # The canonical effective topic must mask the route id, never leak it.
     assert "DEVICEKEY" not in (mqtt_draft["mqtt"].get("effective_write_topic") or "")
-    assert "••••" in (mqtt_draft["mqtt"].get("effective_write_topic") or "")
+    assert mqtt_draft["mqtt"].get("effective_write_topic") == (
+        "iot/…/…/properties/write"
+    )
     assert "DEVICEKEY" not in json.dumps(loaded)
 
     prepared = prepare_maintenance_config_apply(
@@ -1140,6 +1142,84 @@ def test_preview_endpoint_returns_validation_and_diff(tmp_path, monkeypatch):
     assert "validation" in payload
 
 
+def test_preview_and_rejected_apply_mask_route_bearing_cloud_name_everywhere(
+    tmp_path, monkeypatch
+):
+    route = "ACCOUNT_ROUTE_7501"
+    product = "PRODUCT_KEY_7501"
+    topic = f"iot/{product}/{route}/properties/write"
+    data = _config()
+    data["grid_meter"]["type"] = "intentionally_invalid_meter"
+    data["zendure_mqtt"] = {
+        "brokers": {
+            "cloud_a": {
+                "enabled": True,
+                "source": "zendure_cloud_mqtt",
+                "host": "mqtt.example.invalid",
+                "port": 8883,
+                "tls": True,
+                "credentials_ref": "zendure_cloud:cloud_a",
+            }
+        }
+    }
+    data["devices"].append(
+        {
+            "type": "zendure_mqtt",
+            "name": f"Cloud shed {route}",
+            "enabled": True,
+            "hardware_profile": "solarflow_800_pro_2",
+            "power_write_profile": "zensdk_properties_write",
+            "mqtt": {
+                "broker_ref": "cloud_a",
+                "topic_family": "legacy_zendure_json_alt",
+                "device_id": route,
+                "product_key": product,
+                "write_topic": topic,
+            },
+            "capabilities": {
+                "read_power": True,
+                "read_soc": True,
+                "write_output_limit": True,
+            },
+        }
+    )
+    _write_config(tmp_path, data)
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
+    srv, base = _server()
+    try:
+        _, loaded = _get(f"{base}/api/admin/maintenance/config")
+        preview_status, preview = _post(
+            f"{base}/api/admin/maintenance/config/preview",
+            {"draft": loaded["draft"]},
+        )
+        apply_status, rejected = _post(
+            f"{base}/api/admin/maintenance/config/apply",
+            {
+                "draft": loaded["draft"],
+                "revision": loaded["revision"],
+                "confirm": True,
+                "backup": True,
+            },
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert preview_status == 200
+    assert preview["validation"]["ok"] is False
+    assert any(
+        issue["code"] == "device_common_values_missing"
+        for issue in preview["validation"]["warnings"]
+    )
+    assert apply_status == 400
+    assert rejected["status"] == "invalid"
+    for response in (loaded, preview, rejected):
+        flattened = json.dumps(response)
+        assert route not in flattened
+        assert product not in flattened
+        assert topic not in flattened
+
+
 def test_preview_endpoint_rejects_custom_path(tmp_path, monkeypatch):
     _write_config(tmp_path, _config())
     monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
@@ -1392,3 +1472,87 @@ def test_reset_runtime_endpoint_writes_config_value(tmp_path, monkeypatch):
     assert payload["ok"] is True
     assert payload["runtime_sync"]["applied"] == ["system.loop_interval"]
     assert json.loads(runtime_path.read_text())["system"]["loop_interval"] == 3
+
+
+def test_reset_runtime_resolves_masked_cloud_name_by_opaque_token(
+    tmp_path, monkeypatch
+):
+    route = "ACCOUNT_ROUTE_7501"
+    product = "PRODUCT_KEY_7501"
+    raw_name = f"Cloud shed {route}"
+    data = _config()
+    data["devices"] = [
+        {
+            "type": "zendure_mqtt",
+            "name": raw_name,
+            "enabled": True,
+            "max_power": 700,
+            "mqtt": {
+                "broker_ref": "cloud_a",
+                "topic_family": "legacy_zendure_json",
+                "product_key": product,
+                "device_id": route,
+                "write_topic": f"iot/{product}/{route}/properties/write",
+            },
+            "capabilities": {
+                "read_power": True,
+                "read_soc": True,
+                "write_output_limit": True,
+            },
+        }
+    ]
+    data["zendure_mqtt"] = {
+        "brokers": {
+            "cloud_a": {
+                "host": "mqtt.example.invalid",
+                "port": 8883,
+                "tls": True,
+                "source": "zendure_cloud_mqtt",
+                "credentials_ref": "zendure_cloud:cloud_a",
+            }
+        }
+    }
+    _write_config(tmp_path, data)
+    runtime_path = tmp_path / "runtime-state.json"
+    runtime_path.write_text(
+        json.dumps(
+            {
+                "system": {"max_total_power": 1600},
+                "devices": {raw_name: {"max_power": 500}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
+    srv, base = _server(config_apply=_convergence_service(tmp_path))
+    try:
+        load_status, loaded = _get(f"{base}/api/admin/maintenance/config")
+        safe_name, fields = next(iter(loaded["overrides"]["devices"].items()))
+        token = fields["max_power"]["physical_identity_token"]
+        status, payload = _post(
+            f"{base}/api/admin/maintenance/config/reset-runtime",
+            {
+                "targets": [
+                    {
+                        "scope": "device",
+                        "name": safe_name,
+                        "key": "max_power",
+                        "physical_identity_token": token,
+                    }
+                ]
+            },
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert load_status == 200
+    assert route not in safe_name
+    assert token.startswith("opaque:v1:")
+    assert status == 200
+    assert payload["ok"] is True
+    assert json.loads(runtime_path.read_text())["devices"][raw_name]["max_power"] == 700
+    response_text = json.dumps(payload)
+    assert route not in response_text
+    assert product not in response_text
+    assert f"iot/{product}/{route}/properties/write" not in response_text

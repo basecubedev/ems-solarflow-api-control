@@ -12,6 +12,7 @@ HTTP state reconciliation (``supports_state_reconciliation = False``).
 import json
 import logging
 import time
+from collections import OrderedDict
 
 from ems import config as cfg
 from ems.clients import parse_device
@@ -90,6 +91,10 @@ DEFAULT_COMMAND_ACK_TIMEOUT_SECONDS = 10.0
 # substantial safety reduction is never held behind an old command for its full
 # timeout. Smaller changes queue as the single latest pending target.
 DEFAULT_SAFETY_PREEMPT_MARGIN_W = 300
+
+# Five minutes spans many control cycles while keeping per-device evidence small.
+DEFAULT_COMMAND_EVIDENCE_MAX_RECORDS = 64
+DEFAULT_COMMAND_EVIDENCE_MAX_AGE_SECONDS = 300.0
 
 
 class _WriteBlocked(Exception):
@@ -177,6 +182,8 @@ class ZendureMqttDeviceClient:
         confirmation_tolerance_w=None,
         safety_preempt_margin_w=DEFAULT_SAFETY_PREEMPT_MARGIN_W,
         telemetry_confirmation_supported=None,
+        command_evidence_max_records=DEFAULT_COMMAND_EVIDENCE_MAX_RECORDS,
+        command_evidence_max_age_seconds=DEFAULT_COMMAND_EVIDENCE_MAX_AGE_SECONDS,
     ):
         self.name = name
         self._service = service
@@ -220,6 +227,19 @@ class ZendureMqttDeviceClient:
         self._active_correlation_id = None
         self._last_command = None
         self._last_command_state = None
+        self._command_evidence = OrderedDict()
+        try:
+            self._command_evidence_max_records = max(
+                1, int(command_evidence_max_records)
+            )
+        except (TypeError, ValueError):
+            self._command_evidence_max_records = DEFAULT_COMMAND_EVIDENCE_MAX_RECORDS
+        try:
+            self._command_evidence_max_age_s = max(
+                0.0, float(command_evidence_max_age_seconds)
+            )
+        except (TypeError, ValueError):
+            self._command_evidence_max_age_s = DEFAULT_COMMAND_EVIDENCE_MAX_AGE_SECONDS
         self._dispatch_observer = None
         self._dispatch_sequence = 0
         try:
@@ -252,6 +272,11 @@ class ZendureMqttDeviceClient:
         self._foreign_last_observed_monotonic = None
         self._external_control_suspected = None
         self.sn = serial_number or device_id
+        # The trusted physical serial when one is configured, else None. ``sn``
+        # falls back to the route/device id for a serial-less device, so it is not
+        # a trustworthy cross-transport identity; ``physical_serial`` distinguishes
+        # a real, bindable serial from that fallback.
+        self.physical_serial = serial_number or None
         self.control_gate = _SOURCE_GATE.get(source, "mqtt_local")
         self.min_soc = min_soc
         self.max_soc = max_soc
@@ -286,6 +311,18 @@ class ZendureMqttDeviceClient:
             # over a confirmation deadline that has just elapsed.
             self._confirm_from_snapshot(state, status.snapshot, now)
             self._detect_external_control(state, status.snapshot)
+        else:
+            record = self._active_command
+            policy = self._confirmation_policy()
+            if (
+                record is not None
+                and not record.confirmed
+                and policy.telemetry_confirmation_supported
+                and policy.confirmation_metric
+            ):
+                record.confirmation_block_reason = (
+                    f"{policy.confirmation_metric}: no_fresh_snapshot"
+                )
         # Settle the in-flight command's deadline and flush any pending target.
         self._expire_active_command(now)
         if not status.is_fresh:
@@ -609,19 +646,33 @@ class ZendureMqttDeviceClient:
             created_monotonic=now,
             device_key=self._device_id,
             topic=message.topic,
+            correlation_id=correlation_id,
             expected_properties=expected,
         )
         start = time.monotonic()
         submission = self._publish_message(message)
+        publish_completed = time.monotonic()
         ok = submission.accepted
-        latency_ms = (time.monotonic() - start) * 1000.0
+        latency_ms = (publish_completed - start) * 1000.0
         field = "power_command" if operation is not None and record.topic and record.topic.endswith("function/invoke") else "outputLimit"
         if ok:
-            mark_published(record, now_monotonic=now)
+            # Confirmation provenance starts only once the local transport has
+            # actually accepted the publish. Telemetry observed while building or
+            # submitting the command is conservatively pre-command evidence.
+            mark_published(record, now_monotonic=publish_completed)
             record.publish_mid = submission.mid
+            record.publish_delivery_token = submission.delivery_token
             record.broker_delivery = (
                 "pending" if submission.mid is not None else "untracked"
             )
+            policy = self._confirmation_policy()
+            if (
+                policy.telemetry_confirmation_supported
+                and policy.confirmation_metric
+            ):
+                record.confirmation_block_reason = (
+                    f"{policy.confirmation_metric}: no_fresh_snapshot"
+                )
             self.write_health.record_success(latency_ms, field=field)
             # A profile with neither a verified acknowledgement nor reliable
             # telemetry confirmation cannot be device-confirmed at all: a
@@ -630,7 +681,7 @@ class ZendureMqttDeviceClient:
             if not self._reply_contract().supports_acknowledgement and not (
                 self._confirmation_policy().telemetry_confirmation_supported
             ):
-                complete_unconfirmed(record, now_monotonic=now)
+                complete_unconfirmed(record, now_monotonic=publish_completed)
         else:
             mark_publish_failed(record)
             self.write_health.record_failure(
@@ -641,6 +692,7 @@ class ZendureMqttDeviceClient:
         self._last_command = record
         self._last_command_state = record.state
         if ok:
+            self._remember_command_evidence(record, publish_completed)
             return dispatch.published(
                 target,
                 message_id=record.message_id,
@@ -682,10 +734,20 @@ class ZendureMqttDeviceClient:
 
         if record is None or record.broker_delivery != "pending":
             return
+        delivery_reference = record.publish_delivery_token or record.publish_mid
+        delivery_status = getattr(self._service, "delivery_status", None)
+        status = delivery_status(delivery_reference) if callable(delivery_status) else None
         confirmed = getattr(self._service, "delivery_confirmed", None)
-        if callable(confirmed) and confirmed(record.publish_mid):
+        if status == "delivered" or (
+            status is None and callable(confirmed) and confirmed(delivery_reference)
+        ):
             record.broker_delivery = "delivered"
             record.delivered_monotonic = now_monotonic
+            return
+        if status == "disconnected" or (
+            status is None and getattr(self._service, "connected", None) is False
+        ):
+            record.broker_delivery = "disconnected"
             return
         if (
             record.published_monotonic is not None
@@ -694,24 +756,53 @@ class ZendureMqttDeviceClient:
         ):
             record.broker_delivery = "timeout"
 
+    def _command_evidence_key(self, record):
+        token = record.publish_delivery_token
+        if token is not None:
+            return ("submission", token)
+        return (
+            "legacy",
+            record.publish_mid,
+            record.message_id,
+            record.created_monotonic,
+        )
+
+    def _remember_command_evidence(self, record, now_monotonic):
+        self._command_evidence[self._command_evidence_key(record)] = record
+        self._prune_command_evidence(now_monotonic)
+
+    def _prune_command_evidence(self, now_monotonic):
+        for key, record in tuple(self._command_evidence.items()):
+            if record is self._active_command:
+                continue
+            origin = (
+                record.published_monotonic
+                if record.published_monotonic is not None
+                else record.created_monotonic
+            )
+            if (now_monotonic - origin) > self._command_evidence_max_age_s:
+                self._command_evidence.pop(key, None)
+        while len(self._command_evidence) > self._command_evidence_max_records:
+            removable = next(
+                (
+                    key
+                    for key, record in self._command_evidence.items()
+                    if record is not self._active_command
+                ),
+                None,
+            )
+            if removable is None:
+                break
+            self._command_evidence.pop(removable, None)
+
     def _reconcile_terminal_delivery(self, now_monotonic):
-        """Settle a PUBACK for a command that already left the active slot.
+        """Settle delivery for every retained command, including older terminals."""
 
-        Telemetry confirmation retires a command out of the active slot before its
-        broker PUBACK may have been observed. The record survives as
-        ``_last_command`` and its publish mid stays queryable, so a later PUBACK
-        still upgrades broker_delivery pending->delivered (or a missing one settles
-        to timeout). Broker delivery and device acceptance stay independent: this
-        never changes the command's terminal outcome. Bounded to the single
-        retained record.
-        """
-
-        record = self._last_command
-        if record is None or record is self._active_command:
-            return
-        if not record.is_terminal:
-            return
-        self._settle_broker_delivery(record, now_monotonic)
+        for record in tuple(self._command_evidence.values()):
+            if record is self._active_command or not record.is_terminal:
+                continue
+            self._settle_broker_delivery(record, now_monotonic)
+        self._prune_command_evidence(now_monotonic)
 
     def _flush_pending_target(self, now):
         """Publish the single pending target once the active slot is free."""
@@ -1067,12 +1158,16 @@ class ZendureMqttDeviceClient:
         # confirm from telemetry that never reported the output.
         metrics = getattr(snapshot, "metrics", None)
         if not isinstance(metrics, dict) or policy.confirmation_metric not in metrics:
+            record.confirmation_block_reason = (
+                f"{policy.confirmation_metric}: not_observed"
+            )
             return
         # An ack-capable profile only confirms an already-acknowledged command;
         # a no-ack profile confirms its published command directly from telemetry.
         allow_from_published = not self._reply_contract().supports_acknowledgement
         telemetry_monotonic = getattr(snapshot, "last_seen_monotonic", None)
         metric_monotonic = getattr(snapshot, "metric_monotonic", None)
+        observed_metrics = getattr(snapshot, "observed_metrics", None)
         if record.expected_properties:
             confirmed = confirm_from_expected_properties(
                 record,
@@ -1081,20 +1176,32 @@ class ZendureMqttDeviceClient:
                 now_monotonic=now_monotonic,
                 telemetry_monotonic=telemetry_monotonic,
                 metric_monotonic=metric_monotonic,
+                snapshot_observed_keys=observed_metrics,
                 allow_from_published=allow_from_published,
             )
         else:
-            observed = getattr(state, "output_limit", None)
-            if isinstance(metric_monotonic, dict):
-                telemetry_monotonic = metric_monotonic.get(
-                    policy.confirmation_metric, telemetry_monotonic
-                )
+            # Confirm against the raw property. ``parse_device`` intentionally
+            # defaults falsy values for runtime telemetry, which must not turn an
+            # invalid False/None/empty observation into a valid 0 W confirmation.
+            observed = metrics.get(policy.confirmation_metric)
+            trusted_metric_time = None
+            if (
+                isinstance(metric_monotonic, dict)
+                and policy.confirmation_metric in metric_monotonic
+            ):
+                trusted_metric_time = metric_monotonic.get(policy.confirmation_metric)
+            elif (
+                isinstance(observed_metrics, (set, frozenset, list, tuple))
+                and policy.confirmation_metric in observed_metrics
+            ):
+                trusted_metric_time = telemetry_monotonic
             confirmed = confirm_from_telemetry(
                 record,
                 observed,
                 tolerance_w=policy.confirmation_tolerance_w,
                 now_monotonic=now_monotonic,
-                telemetry_monotonic=telemetry_monotonic,
+                telemetry_monotonic=trusted_metric_time,
+                metric_key=policy.confirmation_metric,
                 allow_from_published=allow_from_published,
             )
         if confirmed:
@@ -1200,6 +1307,7 @@ class ZendureMqttDeviceClient:
             "message_id": record.message_id,
             "command_state": record.state,
             "broker_delivery": record.broker_delivery,
+            "confirmation_block_reason": record.confirmation_block_reason,
         }
 
     def _control_capability(self):
@@ -1339,6 +1447,16 @@ class ZendureMqttDeviceClient:
         last_broker_delivery = last.broker_delivery if last else None
         last_broker_delivery_age_s = _age(last.delivered_monotonic) if last else None
         last_telemetry_confirmation_age_s = _age(self._last_confirmed_monotonic)
+        unresolved = [
+            record
+            for record in self._command_evidence.values()
+            if record.broker_delivery == "pending"
+        ]
+        unresolved_ages = [
+            age
+            for record in unresolved
+            if (age := _age(record.published_monotonic)) is not None
+        ]
         return {
             "name": self.name,
             "broker_ref": self.broker_ref,
@@ -1356,6 +1474,10 @@ class ZendureMqttDeviceClient:
             "last_broker_delivery": last_broker_delivery,
             "last_broker_delivery_age_seconds": last_broker_delivery_age_s,
             "last_telemetry_confirmation_age_seconds": last_telemetry_confirmation_age_s,
+            "recent_unresolved_delivery_count": len(unresolved),
+            "oldest_unresolved_delivery_age_seconds": (
+                max(unresolved_ages) if unresolved_ages else None
+            ),
             # Explicit control state (control_enabled kept for compatibility).
             "control_requested": True,
             "control_supported": supported,

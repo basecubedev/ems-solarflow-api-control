@@ -144,7 +144,15 @@ _COMMON_HELPERS = (
 
 _OPTIONAL_HELPERS = (
     "normalizeSerial",
+    "usableSerialValue",
     "physicalInverterIdentity",
+    "inverterVisibleSerial",
+    "inverterIdentityTokens",
+    "inverterIdentitySet",
+    "inverterHasIdentity",
+    "inverterIdentityConflict",
+    "inverterIdentitiesMatch",
+    "mconfigProposalIdentityView",
     "mconfigDeviceCommonDefaults",
     "mconfigApplyCommonDefaults",
     "mconfigIsMqttDevice",

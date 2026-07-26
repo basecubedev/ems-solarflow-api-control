@@ -702,8 +702,10 @@ def test_ui_proposal_selection_payload_carries_no_secrets():
     for field in ("id:", "target:", "topic_family:", "broker_ref:", "seen_topics:"):
         assert field in serializer_fn
     # No secret is ever placed on the payload.
-    for banned in ("app_key", "token", "password", "username"):
+    assert "physical_identity_token:" in serializer_fn
+    for banned in ("app_key:", "password:", "username:"):
         assert banned not in serializer_fn
+    assert "\n    token:" not in serializer_fn
     # The preview payload delegates to the one canonical serializer rather than
     # rebuilding a divergent payload shape.
     payload_fn = _extract_fn(js, "mqttPreviewPayload")
@@ -4712,6 +4714,7 @@ def _run_maintenance_discovery_node(setup):
             "isConfigCandidate",
             "mconfigIdentity",
             "normalizeSerial",
+            "usableSerialValue",
             "physicalInverterIdentity",
             "mconfigDiscoveryRole",
             "mconfigFindInverterMatch",
@@ -6777,7 +6780,15 @@ def run_mconfig_add_mqtt_proposal(proposal):
             "mconfigNextInverterName",
             "mconfigIdentity",
             "normalizeSerial",
+            "usableSerialValue",
             "physicalInverterIdentity",
+            "inverterVisibleSerial",
+            "inverterIdentityTokens",
+            "inverterIdentitySet",
+            "inverterHasIdentity",
+            "inverterIdentityConflict",
+            "inverterIdentitiesMatch",
+            "mconfigProposalIdentityView",
             "mconfigDeviceCommonDefaults",
             "mconfigApplyCommonDefaults",
             "mconfigIsMqttDevice",

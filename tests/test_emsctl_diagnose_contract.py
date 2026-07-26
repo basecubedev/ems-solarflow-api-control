@@ -221,6 +221,77 @@ def test_support_bundle_contract_files_and_metadata(tmp_path):
     assert quality["export_import"]["samples"] == 4
 
 
+def test_support_bundle_masks_cloud_route_and_full_topic(tmp_path):
+    route = "ACCOUNT_ROUTE_1234"
+    topic = f"iot/PRODUCT_SECRET/{route}/properties/write"
+    write_runtime(
+        tmp_path,
+        zendure_mqtt={
+            "brokers": [
+                {
+                    "broker_ref": "cloud_a",
+                    "source": "zendure_cloud_mqtt",
+                    "password": "BROKER_PASSWORD",
+                }
+            ],
+            "devices": [
+                {
+                    "name": "WR1",
+                    "broker_ref": "cloud_a",
+                    "source": "zendure_cloud_mqtt",
+                    "identifier": route,
+                    "last_command": {
+                        "device_id": route,
+                        "topic": topic,
+                        "correlation_id": "safe-correlation-id",
+                    },
+                }
+            ],
+        },
+    )
+    config_path = tmp_path / "config.json"
+    write_config(config_path)
+    config = json.loads(config_path.read_text())
+    config["zendure_mqtt"] = {
+        "brokers": {
+            "cloud_a": {
+                "source": "zendure_cloud_mqtt",
+                "host": "mqtt.example.invalid",
+                "credentials_ref": "zendure_cloud:account-a",
+            }
+        }
+    }
+    config["devices"].append(
+        {
+            "name": "Cloud inverter",
+            "type": "zendure_mqtt",
+            "mqtt": {
+                "broker_ref": "cloud_a",
+                "product_key": "PRODUCT_SECRET",
+                "device_id": route,
+                "write_topic": topic,
+            },
+        }
+    )
+    config_path.write_text(json.dumps(config))
+    output_path = tmp_path / "support-bundle.zip"
+
+    result = run_emsctl(
+        tmp_path,
+        "diagnose",
+        "--support-bundle",
+        "--output",
+        str(output_path),
+    )
+
+    assert result.returncode in (0, 1), result.stderr
+    with zipfile.ZipFile(output_path) as bundle:
+        contents = b"\n".join(bundle.read(name) for name in bundle.namelist())
+    for secret in (route, topic, b"BROKER_PASSWORD".decode()):
+        assert secret.encode() not in contents
+    assert b"safe-correlation-id" in contents
+
+
 def test_support_bundle_redacts_known_secret_shapes(tmp_path):
     secrets = {
         "zendure_token": "zendure-token-secret",
