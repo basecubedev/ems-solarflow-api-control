@@ -141,13 +141,18 @@ the Admin Console (see **Start** above), open `http://127.0.0.1:8090`, and pick
    manually* also lets you add a read-only **Zendure MQTT broker** and one or
    more **Zendure MQTT devices** telemetry discovery could not reach. Pick a
    friendly *Hardware generation* (telemetry/topic grouping), then an *Exact
-   hardware model* from the EMS/Core registry. The model's write protocol,
-   supported operations, and validation maturity are displayed before control
-   can be enabled. Choosing **Unknown / telemetry only**, omitting the model, or
-   receiving conflicting model evidence always keeps the device read-only;
-   generation or topic family alone never authorizes writes. A supported exact
-   model on a compatible transport exposes **Enable EMS output control over
-   MQTT** and joins the same control loop as a local API device — without
+   hardware model* from the EMS/Core registry. The form has two separate identity
+   fields: the **Physical serial number** identifies the inverter (telemetry
+   matching, duplicate detection), and the **MQTT device ID** is the exact MQTT
+   route/payload id a control write targets — the physical serial is never used as
+   the route id. A telemetry-only device needs only the serial. The model's write
+   protocol, supported operations, and validation maturity are displayed before
+   control can be enabled. Choosing **Unknown / telemetry only**, omitting the
+   model, or receiving conflicting model evidence always keeps the device
+   read-only; generation or topic family alone never authorizes writes. A
+   supported exact model on a compatible transport exposes **Enable EMS output
+   control over MQTT** — which requires the MQTT device ID — and joins the same
+   control loop as a local API device — without
    hand-editing the config file (see
    [Zendure MQTT output control](../technical/configuration.md#zendure-mqtt-output-control)).
 

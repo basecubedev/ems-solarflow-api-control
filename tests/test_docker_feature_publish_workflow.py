@@ -41,6 +41,7 @@ ADMIN_IMAGE = "ghcr.io/basecubedev/ems-solarflow-admin"
 
 JOBS = (
     "resolve-source",
+    "mqtt-release-contract",
     "packaged-system-build-smoke",
     "mosquitto-lifecycle",
     "package-smoke",
@@ -162,13 +163,58 @@ def test_ems_build_args_use_canonical_development_release_tag_and_channel():
 def test_publish_depends_on_every_release_gate():
     text = _text()
     publish = text.split("  publish-feature-ghcr:", 1)[1]
-    for gate in (
-        "resolve-source",
-        "packaged-system-build-smoke",
-        "mosquitto-lifecycle",
-        "package-smoke",
-    ):
-        assert gate in publish.split("    steps:", 1)[0]
+    for gate in JOBS[:-1]:
+        assert gate in publish.split("    steps:", 1)[0], gate
+
+
+def test_publish_depends_on_the_fast_mqtt_release_contract():
+    needs = _job("publish-feature-ghcr").split("    steps:", 1)[0]
+    assert "mqtt-release-contract" in needs
+
+
+def test_mqtt_release_contract_job_exists_and_is_read_only():
+    section = _job("mqtt-release-contract")
+    assert "runs-on: ubuntu-latest" in section
+    assert _job_permissions()["mqtt-release-contract"] == ["contents: read"]
+
+
+def test_mqtt_release_contract_builds_the_resolved_immutable_sha():
+    section = _job("mqtt-release-contract")
+    assert "resolve-source" in section.split("    steps:", 1)[0]
+    assert f"ref: {RESOLVED_SHA}" in section
+    assert "ref: ${{ inputs.ref }}" not in section
+
+
+def test_mqtt_release_contract_runs_the_fast_release_gate():
+    section = _job("mqtt-release-contract")
+    assert "pytest -q -rs -m mqtt_release" in section
+    assert 'pytest -q -rs -m "simulation and power_control"' in section
+    assert "set -o pipefail" in section
+
+
+def test_mqtt_release_contract_fails_when_a_selection_runs_no_tests():
+    section = _job("mqtt-release-contract")
+    # A marker typo must not turn "0 tests selected" into a green release gate.
+    assert section.count('grep -E "[1-9][0-9]* passed"') >= 2
+
+
+def test_mqtt_release_contract_runs_static_validation():
+    section = _job("mqtt-release-contract")
+    assert "ruff check ." in section
+    assert "python -m compileall -q" in section
+    assert "python tools/build_config_template.py --check" in section
+    assert "node --check admin/static/admin.js" in section
+    for package in ("admin", "ems", "dashboard", "scripts", "tests"):
+        assert package in section, package
+    assert "emsctl.py" in section
+    assert "ems-solarflow-api-control.py" in section
+
+
+def test_mqtt_release_contract_installs_runtime_and_dev_requirements():
+    section = _job("mqtt-release-contract")
+    assert "python -m pip install --upgrade pip" in section
+    assert "-r requirements.txt -r requirements-dev.txt" in section
+    assert 'python-version: "3.11"' in section
 
 
 def test_workflow_defaults_to_read_only_permissions():
@@ -195,6 +241,19 @@ def test_only_the_publish_job_holds_write_permissions():
     # Every release-gate job stays strictly read-only.
     for job in JOBS[:-1]:
         assert permissions[job] == ["contents: read"], job
+
+
+def test_mosquitto_gate_runs_the_complete_real_broker_contract():
+    # tests/test_mqtt_release_fail_closed.py owns the documented real-broker set;
+    # the publish gate must run exactly that set, so neither can drift alone.
+    from tests.test_mqtt_release_fail_closed import GATE_FILES
+
+    section = _job("mosquitto-lifecycle")
+    for gate_file in GATE_FILES:
+        assert gate_file in section, gate_file
+    assert section.count("tests/test_mqtt_real") + section.count(
+        "tests/test_zendure_mqtt_broker_mosquitto.py"
+    ) == len(GATE_FILES)
 
 
 def test_mosquitto_gate_fails_closed_in_release_ci():

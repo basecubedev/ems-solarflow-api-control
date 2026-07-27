@@ -781,7 +781,8 @@ def _manual_zendure_mqtt_proposals(manual_devices, broker_ref, validation):
             for issue in issues:
                 validation["errors"].append(_issue(issue["code"], issue["message"]))
             continue
-        identifier = fragment["serial_number"]
+        fragment_mqtt = fragment.get("mqtt") if isinstance(fragment.get("mqtt"), dict) else {}
+        identifier = fragment.get("serial_number") or fragment_mqtt.get("device_id") or ""
         proposal = {
             "id": f"manual-zendure-mqtt:{identifier}",
             "config_fragment": fragment,

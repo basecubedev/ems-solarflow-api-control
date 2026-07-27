@@ -72,7 +72,12 @@ def test_explicit_operator_choice_is_respected():
 def test_maintenance_card_wires_the_auto_default_and_syncs_the_checkbox():
     js = _read("admin.js")
     render = _extract_fn(js, "renderMaintenanceZendureMqttDevice")
-    assert "mconfigMqttShouldDefaultControl(device, supported, hasWriteTarget)" in render
+    # The auto-default is gated on a *complete route* (route id + write target),
+    # never a write target alone — the physical serial is never the route id.
+    assert "mconfigMqttShouldDefaultControl(device, supported, routeComplete)" in render
+    assert "const routeComplete = !!routeDeviceId && hasWriteTarget" in render
+    # routeDeviceId derives only from the explicit mqtt.device_id.
+    assert "device.mqtt.device_id.trim()" in render
     assert "outputControlInput.checked = device.output_control === true" in render
     assert "device.output_control_user_set = true" in render
 

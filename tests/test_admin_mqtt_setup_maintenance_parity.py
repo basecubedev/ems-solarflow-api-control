@@ -88,6 +88,7 @@ def test_manual_entry_matches_discovery_for_supported_inverter():
             "generation": "hub_hyper_legacy",
             "power_hardware_profile": "hyper_2000",
             "serial_number": "LEG123",
+            "mqtt_device_id": "DEV9",
             "product_key": "PKKEY",
             "output_control": True,
         },

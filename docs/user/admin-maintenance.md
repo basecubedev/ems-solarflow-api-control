@@ -221,7 +221,16 @@ This path inspects and edits an existing installation.
   EMS name (`INV_1`, `INV_2`, …) from one sequence shared by all transports.
   The name is the operational identifier used by config, logs, dashboard state,
   and the Flowchart; model, address, serial number, transport, and hardware
-  generation remain separate card details. You may edit the proposed name
+  generation remain separate card details. On a Zendure MQTT card the
+  **Serial number** (physical identity) and the **MQTT device ID** (exact MQTT
+  route/payload id) are two independent fields: editing one never changes the
+  other, and the physical serial is never used as the route id. Output control
+  needs an explicit MQTT device ID; clearing it disables control until you enter
+  the real route id. Clearing an identifier field really removes it: Preview and
+  Apply write the field exactly as you left it and a reload shows it empty, so a
+  value you deleted never reappears. The one exception is a redacted Cloud value
+  shown as `••••` — leaving that mask untouched keeps the stored identifier,
+  because the browser is never given the real one. You may edit the proposed name
   before applying. Existing configured names are preserved exactly and are not
   migrated or renumbered when you open the editor, remove/reorder another
   device, run discovery, or apply an unrelated change.

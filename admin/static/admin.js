@@ -2163,11 +2163,36 @@ function mqttWriteProtocolLabel(protocol) {
 function mqttControlReasonLabel(reason) {
   const labels = {
     output_control_not_observed: "No output control observed in telemetry yet",
+    // Route-addressing and identity blocks: keep the user-facing reason aligned
+    // with why control is actually blocked. No raw product key or route id is
+    // exposed.
+    write_target_missing:
+      "No complete MQTT write route: an MQTT device ID (and product key) is required",
+    mqtt_device_id_missing:
+      "MQTT device ID is missing: the physical serial cannot be used as the MQTT route",
+    identity_route_product_conflict:
+      "This physical inverter carries two MQTT product routes — output control is blocked",
+    identity_route_serial_conflict:
+      "Two physical serials share one MQTT route — output control is blocked",
+    identity_conflict: "Identity conflict for this MQTT route — output control is blocked",
+    hardware_profile_conflict:
+      "Conflicting hardware-model evidence — select the exact model to enable control",
   };
   return (
     labels[String(reason || "")] ||
     "No verified write protocol for this topic family"
   );
+}
+
+// When output control is blocked the visible reason must describe the actual
+// block. control_block_reason is the machine-readable block cause (route
+// conflict, missing write route, model conflict); output_control_reason is only
+// the capability/write-protocol name and is used when nothing blocks.
+function mqttProposalControlReason(proposal) {
+  if (!proposal) {
+    return "";
+  }
+  return proposal.control_block_reason || proposal.output_control_reason || "";
 }
 
 function mqttProposalWriteProtocol(proposal) {
@@ -2266,7 +2291,7 @@ function renderMqttProposalCard(proposal) {
           )
         : fact(
             "Reason",
-            escapeHtml(mqttControlReasonLabel(proposal.output_control_reason))
+            escapeHtml(mqttControlReasonLabel(mqttProposalControlReason(proposal)))
           )) +
       fact("Role hint", escapeHtml(proposal.role_hint || "unknown"));
   return (
@@ -2386,11 +2411,12 @@ function hasMqttPreviewProposals() {
 // fragment and re-validates family/topic/broker before any preview is produced.
 // Both storage and the preview payload go through this one helper so a future
 // change can never drop a required field from only one path.
-// The durable selection is proven server-side by id + broker_ref + opaque token;
-// the backend resolves those to the current trusted proposal and ignores every
-// mutable discovery echo below (topic_family, seen_topics, device_id, broker
-// endpoint). Those fields are carried only as browser display/grid-meter hints,
-// never as a security assertion — the server is authoritative.
+// The durable selection is resolved server-side from id + broker_ref: an exact
+// current hit needs no token, while the opaque identity token is required only to
+// remap a stale/alias id and is validated whenever supplied. The backend then
+// ignores every mutable discovery echo below (topic_family, seen_topics,
+// device_id, broker endpoint); those fields are browser display/grid-meter hints,
+// never a security assertion — the server is authoritative.
 function serializeMqttProposalSelection(proposal, { target, replaceGridMeter } = {}) {
   const resolvedTarget = String(
     target || proposal.target || "device"
@@ -2547,6 +2573,7 @@ const mqttManualEls = {
   deviceForm: document.getElementById("config-mqtt-device-form"),
   deviceName: document.getElementById("config-mqtt-device-name"),
   deviceSerial: document.getElementById("config-mqtt-device-serial"),
+  deviceMqttId: document.getElementById("config-mqtt-device-mqttid"),
   deviceGeneration: document.getElementById("config-mqtt-device-generation"),
   deviceModel: document.getElementById("config-mqtt-device-model"),
   deviceProductKeyField: document.getElementById("config-mqtt-device-productkey-field"),
@@ -2811,6 +2838,8 @@ function manualMqttDevicesPayload() {
   return manualMqttDevices.map((device) => ({
     name: device.name || "",
     serial_number: device.serial_number || "",
+    // Explicit MQTT route/payload device id, independent of the physical serial.
+    mqtt_device_id: device.mqtt_device_id || "",
     hardware_generation: device.hardware_generation || device.generation || "",
     hardware_model: device.hardware_model || device.power_hardware_profile || "",
     product_key: device.product_key || "",
@@ -2865,8 +2894,11 @@ function renderManualMqttDevices() {
 
 function addManualMqttDevice() {
   const serial = (mqttManualEls.deviceSerial.value || "").trim();
+  const mqttId = mqttManualEls.deviceMqttId
+    ? (mqttManualEls.deviceMqttId.value || "").trim()
+    : "";
   if (!serial) {
-    showMqttDeviceError("Serial number or device ID is required.");
+    showMqttDeviceError("Physical serial number is required.");
     return;
   }
   const generation = selectedMqttGeneration();
@@ -2879,20 +2911,30 @@ function addManualMqttDevice() {
     showMqttDeviceError("A device with this serial number is already added.");
     return;
   }
+  const wantsControl = Boolean(
+    generation.supports_output_control &&
+      model && model.control_supported &&
+      mqttManualEls.deviceControl &&
+      mqttManualEls.deviceControl.checked
+  );
+  // A control write is addressed by the explicit MQTT route id, never the
+  // physical serial, so output control needs the MQTT device ID.
+  if (wantsControl && !mqttId) {
+    showMqttDeviceError(
+      "MQTT device ID is required to enable output control."
+    );
+    return;
+  }
   manualMqttDevices.push({
     name: (mqttManualEls.deviceName.value || "").trim(),
     serial_number: serial,
+    mqtt_device_id: mqttId,
     hardware_generation: generation.id,
     hardware_model: model && model.id ? model.id : "",
     product_key: generation.product_key
       ? (mqttManualEls.deviceProductKey.value || "").trim()
       : "",
-    output_control: Boolean(
-      generation.supports_output_control &&
-        model && model.control_supported &&
-        mqttManualEls.deviceControl &&
-        mqttManualEls.deviceControl.checked
-    ),
+    output_control: wantsControl,
   });
   saveManualMqttDevices();
   showMqttDeviceError("");
@@ -12634,23 +12676,14 @@ function renderMaintenanceZendureMqttDevice(device, index) {
         "Model, address and serial remain in the device details."
     )
   );
-  const mqttDeviceId = () =>
-    (device.mqtt && device.mqtt.device_id) || device.device_id || "";
   body.appendChild(
     mconfigLabelRow(
       "Serial number",
       mconfigTextControl(device.serial_number || "", (v) => {
-        const prev = device.serial_number || "";
+        // The physical serial and the MQTT route id are independent identities:
+        // editing the serial never changes mqtt.device_id (one input must never
+        // overwrite an unrelated field).
         device.serial_number = v;
-        // Keep the MQTT routing id in sync only while it still mirrors the
-        // serial, so a distinct mqtt.device_id is never clobbered by a serial
-        // edit (one input must never overwrite an unrelated field).
-        const current = mqttDeviceId();
-        if (!current || current === prev) {
-          device.device_id = v;
-          if (!device.mqtt) device.mqtt = {};
-          device.mqtt.device_id = v;
-        }
         card.meta.textContent = mconfigMqttDeviceSummary(device);
       }),
       "Physical device serial. Matches telemetry and detects duplicate devices."
@@ -12659,14 +12692,16 @@ function renderMaintenanceZendureMqttDevice(device, index) {
   body.appendChild(
     mconfigLabelRow(
       "MQTT device ID",
-      mconfigTextControl(mqttDeviceId(), (v) => {
-        device.device_id = v;
+      mconfigTextControl((device.mqtt && device.mqtt.device_id) || "", (v) => {
+        const trimmed = v.trim();
         if (!device.mqtt) device.mqtt = {};
-        device.mqtt.device_id = v;
+        device.mqtt.device_id = trimmed;
+        syncGenerationFields();
         card.meta.textContent = mconfigMqttDeviceSummary(device);
+        mconfigMarkDraftChanged("manual");
       }),
-      "MQTT routing identity. Defaults to the serial number; change it only if " +
-        "the broker addresses this device by a different ID."
+      "Exact MQTT route/payload device ID. The physical serial is never used " +
+        "as the MQTT route ID."
     )
   );
 
@@ -12693,17 +12728,27 @@ function renderMaintenanceZendureMqttDevice(device, index) {
     const supported = mconfigMqttControlSupported(device, generation, model);
     const explicitWriteTopic = !!(device.mqtt && device.mqtt.write_topic);
     const trustedWriteTarget = device.trusted_write_target === true;
+    // The MQTT route/payload device id is the explicit mqtt.device_id only; the
+    // physical serial is never used as the route id.
+    const routeDeviceId =
+      device.mqtt && typeof device.mqtt.device_id === "string"
+        ? device.mqtt.device_id.trim()
+        : "";
     productKeyRow.hidden =
       !device.product_key && (!supported || explicitWriteTopic || trustedWriteTarget);
     // A concrete, supported model is required before control can be offered.
     controlRow.hidden = !supported;
-    if (!supported && device.output_control) {
+    // Output control can never stay enabled without a complete write route: a
+    // supported model and the explicit MQTT route device id. Clearing the route
+    // id unchecks control rather than leaving a contradictory editor state.
+    if (device.output_control && (!supported || !routeDeviceId)) {
       device.output_control = false;
       if (device.capabilities) device.capabilities.write_output_limit = false;
     }
     const hasWriteTarget =
       !!device.product_key || explicitWriteTopic || trustedWriteTarget;
-    if (mconfigMqttShouldDefaultControl(device, supported, hasWriteTarget)) {
+    const routeComplete = !!routeDeviceId && hasWriteTarget;
+    if (mconfigMqttShouldDefaultControl(device, supported, routeComplete)) {
       device.output_control = true;
       if (!device.capabilities) {
         device.capabilities = { read_power: true, read_soc: true };
@@ -12724,7 +12769,9 @@ function renderMaintenanceZendureMqttDevice(device, index) {
       : "None";
     const backendReadiness = device.control_readiness || {};
     controlReadiness.textContent = supported
-      ? backendReadiness.reason === "write_target_missing" &&
+      ? !routeDeviceId
+        ? "MQTT device ID is missing"
+        : backendReadiness.reason === "write_target_missing" &&
           !device.product_key && !explicitWriteTopic && !trustedWriteTarget
         ? "Product key or write topic required"
         : backendReadiness.ready && device.hardware_model === model.id
@@ -12734,7 +12781,11 @@ function renderMaintenanceZendureMqttDevice(device, index) {
         ? "Telemetry only for this transport/model"
         : "Exact model required";
     note.textContent = supported
-      ? device.output_control
+      ? !routeDeviceId
+        ? "MQTT device ID is missing. The physical serial cannot be used " +
+          "automatically as the Cloud MQTT route ID. Enter the MQTT device ID " +
+          "to enable output control."
+        : device.output_control
         ? "Output control is enabled: EMS regulates this inverter over MQTT, " +
           "using the same control loop as a local API device."
         : "This device supports output control. Enable it to let EMS regulate " +
@@ -13663,7 +13714,7 @@ function renderMaintenanceMqttProposalCard(item) {
     mconfigAppendDeviceFact(
       facts,
       "Reason",
-      mqttControlReasonLabel(proposal.output_control_reason)
+      mqttControlReasonLabel(mqttProposalControlReason(proposal))
     );
   }
   card.appendChild(facts);

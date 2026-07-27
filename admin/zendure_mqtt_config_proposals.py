@@ -549,15 +549,23 @@ def annotate_identity_tokens(
 # --- Server-side proposal trust boundary ------------------------------------
 #
 # The browser is never authoritative for a proposal's identity, broker,
-# capabilities or discovery evidence. A stable selection is proven only by its
-# ``id``, its ``broker_ref`` (account/broker scope) and a server-issued opaque
-# identity token (or a unique legacy-token remap). Once resolved, every trusted
-# field comes from current stored state; the browser may only add its own
-# selection state (``replace_grid_meter``). Mutable discovery evidence a browser
-# echoes — topic family, product key, serial, device id, ``seen_topics``, model
-# evidence, capabilities, broker endpoint — is deliberately ignored (the stored
-# value wins), so a stable selection never fails merely because it carries a
-# stale echo after enrichment.
+# capabilities or discovery evidence. The trust contract is deliberately
+# compatible (not token-mandatory):
+#
+#   * an exact ``(id, broker_ref)`` hit against current discovery state is
+#     sufficient to select the current proposal directly — a token is not
+#     required for that path;
+#   * a server-issued opaque identity token is required only to remap a stale or
+#     alias id (a stored ``id`` from before a serial/route enrichment, or a
+#     case-folded legacy token), and is validated whenever it is supplied: a
+#     token belonging to no trusted identity in scope is rejected.
+#
+# Once resolved, every trusted field comes from current stored state; the browser
+# may only add its own selection state (``replace_grid_meter``). Mutable discovery
+# evidence a browser echoes — topic family, product key, serial, device id,
+# ``seen_topics``, model evidence, capabilities, broker endpoint — is deliberately
+# ignored (the stored value wins), so a stable selection never fails merely
+# because it carries a stale echo after enrichment.
 
 # Fields the browser legitimately supplies for a selected proposal; validated,
 # never taken from stored state.
@@ -730,13 +738,15 @@ def resolve_trusted_proposal(
 
     Returns ``(resolved_proposal, None)`` or ``(None, issue)``. ``resolved`` is a
     deep copy of the stored proposal with only the validated browser selection
-    (``replace_grid_meter``) applied. A stable selection is proven by its id,
-    broker/account scope and server-issued opaque token (or a unique legacy-token
-    remap when ``token_key`` is given). Mutable discovery evidence the browser
-    echoes (topic family, product key, serial, device id, ``seen_topics``, …) is
-    ignored: the trusted value always wins, so a valid selection never fails
-    merely because it carries a stale echo. Unknown/ambiguous ids, forged tokens,
-    wrong broker scopes and target-type mismatches still fail closed.
+    (``replace_grid_meter``) applied. The contract is compatible: an exact
+    ``(id, broker_ref)`` hit selects the current proposal directly (no token
+    required), while an opaque identity token is required only to remap a stale or
+    alias id — and is validated whenever supplied (a token matching no trusted
+    identity in scope is rejected). Mutable discovery evidence the browser echoes
+    (topic family, product key, serial, device id, ``seen_topics``, …) is ignored:
+    the trusted value always wins, so a valid selection never fails merely because
+    it carries a stale echo. Unknown/ambiguous ids, forged tokens, wrong broker
+    scopes and target-type mismatches still fail closed.
     """
 
     if not isinstance(submitted, Mapping):

@@ -100,6 +100,65 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
           echo "Resolved '${INPUT_REF}' to ${sha}"
 
+  mqtt-release-contract:
+    name: Fast Zendure MQTT development-release gate
+    needs: [resolve-source]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve-source.outputs.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run static validation
+        run: |
+          set -o pipefail
+          ruff check . 2>&1 | tee -a release-contract.log
+          python -m compileall -q \
+            admin ems dashboard scripts tests emsctl.py ems-solarflow-api-control.py \
+            2>&1 | tee -a release-contract.log
+          python tools/build_config_template.py --check 2>&1 | tee -a release-contract.log
+          node --check admin/static/admin.js 2>&1 | tee -a release-contract.log
+      - name: Run fast MQTT release gate
+        run: |
+          set -o pipefail
+          pytest -q -rs -m mqtt_release | tee -a release-contract.log | tee mqtt-release.log
+          grep -E "[1-9][0-9]* passed" mqtt-release.log >/dev/null || {
+            echo "The mqtt_release selection executed no tests." >&2
+            exit 1
+          }
+      - name: Run simulation and power-control gate
+        run: |
+          set -o pipefail
+          pytest -q -rs -m "simulation and power_control" \
+            | tee -a release-contract.log | tee power-control.log
+          grep -E "[1-9][0-9]* passed" power-control.log >/dev/null || {
+            echo "The simulation/power_control selection executed no tests." >&2
+            exit 1
+          }
+      - name: Upload release-contract log
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: mqtt-release-contract-log
+          path: release-contract.log
+          if-no-files-found: ignore
+          retention-days: 14
+
   packaged-system-build-smoke:
     name: Packaged Admin System Build smoke
     needs: [resolve-source]
@@ -187,7 +246,12 @@ jobs:
           EMS_REQUIRE_REAL_MQTT_TESTS: "1"
         run: |
           set -o pipefail
-          pytest -q -rs tests/test_zendure_mqtt_broker_mosquitto.py tests/test_mqtt_real_legacy_flow.py \
+          pytest -q -rs \
+            tests/test_zendure_mqtt_broker_mosquitto.py \
+            tests/test_mqtt_real_mosquitto.py \
+            tests/test_mqtt_real_mosquitto_acl.py \
+            tests/test_mqtt_real_mosquitto_tls.py \
+            tests/test_mqtt_real_legacy_flow.py \
             | tee mosquitto-gate.log
           grep -E "[1-9][0-9]* passed" mosquitto-gate.log >/dev/null || {
             echo "No real Mosquitto lifecycle test executed." >&2
@@ -270,6 +334,7 @@ jobs:
     name: Build and publish feature Docker image
     needs:
       - resolve-source
+      - mqtt-release-contract
       - packaged-system-build-smoke
       - mosquitto-lifecycle
       - package-smoke

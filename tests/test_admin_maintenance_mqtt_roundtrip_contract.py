@@ -432,3 +432,77 @@ def test_edit_disable_only(tmp_path):
     dev = [d for d in merged["devices"] if d.get("type") == "zendure_mqtt"][0]
     assert dev["enabled"] is False
     assert dev["capabilities"]["write_output_limit"] is False
+
+
+# --- unsafe legacy control entry: top-level device_id is not an MQTT route -----
+
+
+def _unsafe_control_config(ref="local_mqtt_home", *, top_level_device_id="TOPLEVEL-ID"):
+    """A control device carrying a top-level device_id but no mqtt.device_id.
+
+    This is the invalid-but-loadable shape a legacy config can hold: output
+    control is requested, yet the entry has no explicit MQTT route id, so the
+    top-level device_id is the only device identifier present.
+    """
+
+    _, profile = _named_local_broker(ref=ref)
+    config = _base_config()
+    config["zendure_mqtt"] = {"enabled": True, "brokers": {ref: profile}}
+    config["devices"].append(
+        {
+            "type": "zendure_mqtt",
+            "name": "Unsafe Control",
+            "enabled": True,
+            "serial_number": "PHYSICAL-SERIAL",
+            "device_id": top_level_device_id,
+            "hardware_profile": "hyper_2000",
+            "power_write_profile": "legacy_object_device_automation",
+            "mqtt": {
+                "broker_ref": ref,
+                "topic_family": "legacy_zendure_json",
+                "base_topic": "iot",
+                "product_key": "PK-A",
+            },
+            "capabilities": {
+                "read_power": True,
+                "read_soc": True,
+                "write_output_limit": True,
+            },
+        }
+    )
+    return config
+
+
+def test_noop_roundtrip_of_unsafe_legacy_entry_stays_mqtt_device_id_missing(tmp_path):
+    config = _unsafe_control_config()
+    _write_config(tmp_path, config)
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    assert loaded["status"] == "ok"
+    draft = loaded["draft"]
+    prepared = prepare_maintenance_config_apply(
+        draft, loaded["revision"], base_dir=str(tmp_path)
+    )
+    # The unchanged unsafe entry stays invalid: the top-level device_id is never
+    # promoted into the MQTT route, so the control validator still rejects it.
+    assert prepared["status"] == "invalid", prepared
+    codes = {issue["code"] for issue in prepared["validation"]["errors"]}
+    assert "mqtt_device_id_missing" in codes
+
+
+def test_entering_explicit_route_device_id_repairs_the_unsafe_entry(tmp_path):
+    config = _unsafe_control_config()
+    _write_config(tmp_path, config)
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    draft = loaded["draft"]
+    dev = [d for d in draft["devices"] if d.get("kind") == "zendure_mqtt"][0]
+    dev["mqtt"]["device_id"] = "ROUTE-DEV-ID"
+    prepared = prepare_maintenance_config_apply(
+        draft, loaded["revision"], base_dir=str(tmp_path)
+    )
+    assert prepared["status"] == "ok", prepared
+    merged = json.loads(prepared["payload"])
+    device = [d for d in merged["devices"] if d.get("type") == "zendure_mqtt"][0]
+    assert device["mqtt"]["device_id"] == "ROUTE-DEV-ID"
+    assert device["capabilities"]["write_output_limit"] is True
+    # The physical serial and the legacy top-level device_id are left untouched.
+    assert device["serial_number"] == "PHYSICAL-SERIAL"

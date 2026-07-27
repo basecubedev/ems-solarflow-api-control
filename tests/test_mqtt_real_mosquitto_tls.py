@@ -13,7 +13,7 @@ import pytest
 
 from ems.clients import MqttGridMeterClient, create_grid_meter_client
 from tests.helpers.mosquitto import (
-    docker_available,
+    require_real_broker_environment,
     mosquitto_tls_broker,
     publish_once,
     publish_until,
@@ -21,11 +21,8 @@ from tests.helpers.mosquitto import (
 
 pytestmark = pytest.mark.docker
 
-pytest.importorskip("paho.mqtt.client")
-pytest.importorskip("cryptography")
 
-if not docker_available():
-    pytest.skip("Docker is not available", allow_module_level=True)
+require_real_broker_environment("cryptography")
 
 
 def _poll_power(client, expected, timeout=10.0):

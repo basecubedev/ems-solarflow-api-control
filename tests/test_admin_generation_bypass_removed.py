@@ -71,6 +71,7 @@ def test_admin_concrete_model_authorizes_write():
             "generation": "hub_hyper_legacy",
             "power_hardware_profile": "hyper_2000",
             "serial_number": "SN1",
+            "mqtt_device_id": "DEV1",
             "product_key": "PK1",
             "output_control": True,
         },

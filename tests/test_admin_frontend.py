@@ -5900,6 +5900,33 @@ def test_js_manual_mqtt_device_payload_carries_selected_generation():
     assert "serial_number:" in payload
 
 
+def test_index_has_separate_physical_serial_and_mqtt_device_id_fields():
+    html = _read("index.html")
+    # Fresh Setup exposes the physical serial and the MQTT route id as two
+    # distinct manual inputs; the serial is never overloaded as the route id.
+    assert "Physical serial number" in html
+    assert 'id="config-mqtt-device-serial"' in html
+    assert 'id="config-mqtt-device-mqttid"' in html
+    assert "Serial number / device ID" not in html
+
+
+def test_js_manual_mqtt_payload_carries_explicit_route_device_id():
+    js = _read("admin.js")
+    payload = js.split("function manualMqttDevicesPayload", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    assert "mqtt_device_id:" in payload
+
+
+def test_js_manual_mqtt_control_requires_explicit_route_device_id():
+    js = _read("admin.js")
+    adder = js.split("function addManualMqttDevice", 1)[1].split("\nfunction ", 1)[0]
+    # Output control cannot be enabled from manual entry without an explicit MQTT
+    # device ID; the serial is never used as the route id.
+    assert "wantsControl && !mqttId" in adder
+    assert "MQTT device ID is required" in adder
+
+
 def test_maintenance_config_has_zendure_mqtt_broker_fields():
     html = _read("index.html")
     editor = html.split('id="maintenance-config-editor"', 1)[1]
@@ -5946,6 +5973,23 @@ def test_maintenance_renders_zendure_mqtt_device_without_ip_host():
     assert "mconfigMqttControlSupported" in render
     # Control is gated by capability, never forced on an unsupported family.
     assert "does not send MQTT control commands" not in render
+    # Exactly one MQTT device ID field is rendered (no duplicate row).
+    assert render.count('"MQTT device ID"') == 1
+    # The route field writes only mqtt.device_id; the physical serial and the
+    # legacy top-level device_id are never synchronized by any callback here.
+    assert "device.mqtt.device_id = trimmed" in render
+    assert "device.device_id = trimmed" not in render
+    assert "device.device_id = v" not in render
+
+
+def test_maintenance_mqtt_control_default_is_route_aware():
+    js = _read("admin.js")
+    sync = js.split("const syncGenerationFields", 1)[1].split("\n  };", 1)[0]
+    # Output control can only default on, or stay on, with a complete write route
+    # that includes the explicit MQTT route device id.
+    assert "routeDeviceId" in sync
+    assert "routeComplete" in sync
+    assert "mconfigMqttShouldDefaultControl(device, supported, routeComplete)" in sync
 
 
 def test_maintenance_discovery_review_can_show_mqtt_proposals():

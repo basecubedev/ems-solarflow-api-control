@@ -232,3 +232,30 @@ def test_index_and_resolve_do_not_expose_full_store():
     assert issue is None
     assert isinstance(resolved, dict)
     assert resolved is not trusted[0]
+
+
+# --- trust contract: compatible policy (documented, not token-mandatory) -----
+
+
+def test_trust_contract_exact_hit_needs_no_token():
+    # An exact (id, broker_ref) hit selects the current proposal directly; the
+    # opaque identity token is not required for a direct current-proposal hit.
+    trusted = _device_proposals(serial="REAL")
+    sel = _selection(trusted[0])
+    assert "physical_identity_token" not in sel
+    resolved, errors = resolve_selected_proposals([sel], trusted)
+    assert errors == []
+    assert resolved[0]["serial_number"] == "REAL"
+
+
+def test_trust_contract_supplied_token_is_validated_even_on_exact_hit():
+    # A token is required only for stale/alias remapping, but whenever a browser
+    # does supply one it is validated: an opaque token belonging to no trusted
+    # identity in scope is rejected even on an exact id hit (never silently taken).
+    trusted = _device_proposals(serial="REAL")
+    sel = _selection(
+        trusted[0], physical_identity_token="opaque:v1:deadbeefcafebabe0011"
+    )
+    resolved, errors = resolve_selected_proposals([sel], trusted)
+    assert resolved == []
+    assert errors[0]["code"] == "zendure_mqtt_proposal_conflict"

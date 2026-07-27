@@ -563,10 +563,13 @@ def _build_proposal(
         observed_capabilities=view.capabilities,
     )
     output_control, control_reason = proposal_output_control(capability)
-    # Capability alone cannot derive a concrete write topic. Discovery normally
-    # supplies the product key; without one the proposal remains telemetry-only
-    # and reports the missing target instead of generating an invalid config.
-    if output_control and not view.product_key:
+    # Capability alone cannot derive a concrete write route. A profile-backed
+    # write targets iot/<productKey>/<deviceId>/properties/write, so both the
+    # product key and an explicit device id are required; a physical serial is
+    # never an MQTT route id. Discovery normally observes both, but without either
+    # the proposal stays telemetry-only and reports the missing target instead of
+    # generating an invalid, unaddressable config.
+    if output_control and (not view.product_key or not view.device_id):
         output_control = False
         control_reason = "write_target_missing"
     control_block_reason = (

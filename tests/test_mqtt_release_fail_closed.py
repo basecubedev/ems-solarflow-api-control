@@ -19,8 +19,13 @@ from tests.helpers.mosquitto import docker_available
 pytestmark = pytest.mark.simulation
 
 ROOT = Path(__file__).resolve().parents[1]
+# The documented real-broker release contract. The publish workflow runs exactly
+# this set; tests/test_docker_feature_publish_workflow.py pins them together.
 GATE_FILES = (
     "tests/test_zendure_mqtt_broker_mosquitto.py",
+    "tests/test_mqtt_real_mosquitto.py",
+    "tests/test_mqtt_real_mosquitto_acl.py",
+    "tests/test_mqtt_real_mosquitto_tls.py",
     "tests/test_mqtt_real_legacy_flow.py",
 )
 LIFECYCLE_TEST = (
@@ -74,6 +79,18 @@ def test_required_ci_docker_absence_fails_the_gate(tmp_path):
     output = result.stdout + result.stderr
     assert "EMS_REQUIRE_REAL_MQTT_TESTS" in output
     assert "Docker CLI" in output
+
+
+@pytest.mark.parametrize("gate_file", GATE_FILES)
+def test_every_gate_file_fails_closed_on_its_own(tmp_path, gate_file):
+    # Each module must abort by itself. Asserting only on the whole selection
+    # would let a module that skips silently hide behind its passing siblings
+    # while the publish gate still sees "N passed".
+    result = _run_gate(tmp_path, docker_stub=None, require=True, files=(gate_file,))
+    assert result.returncode != 0, gate_file
+    output = result.stdout + result.stderr
+    assert "EMS_REQUIRE_REAL_MQTT_TESTS" in output, gate_file
+    assert "skipped" not in output, gate_file
 
 
 def test_required_ci_docker_daemon_down_fails_the_gate(tmp_path):

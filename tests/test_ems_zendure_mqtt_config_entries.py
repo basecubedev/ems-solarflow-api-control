@@ -266,7 +266,9 @@ def test_cloud_device_subscriptions_are_device_scoped_and_deduped():
 
     devices = [
         _dev("A", "cloud", product_key="PK", device_id="D1"),
-        _dev("B", "cloud", product_key="PK", serial="D2"),  # identifier from serial
+        # A physical serial is not an MQTT route id: without mqtt.device_id this
+        # entry contributes no device-scoped subscription (serial never substitutes).
+        _dev("B", "cloud", product_key="PK", serial="D2"),
         _dev("C", "other", product_key="PK", device_id="D3"),  # other broker
         _dev("D", "cloud", product_key="PK", device_id="D4", enabled=False),
         _dev("E", "cloud", device_id="D5"),  # no product key -> unaddressable
@@ -275,8 +277,6 @@ def test_cloud_device_subscriptions_are_device_scoped_and_deduped():
     assert zendure_cloud_device_subscriptions(devices, "cloud") == (
         "/PK/D1/#",
         "iot/PK/D1/#",
-        "/PK/D2/#",
-        "iot/PK/D2/#",
     )
     assert zendure_cloud_device_subscriptions(devices, "missing") == ()
     assert zendure_cloud_device_subscriptions(None, "cloud") == ()

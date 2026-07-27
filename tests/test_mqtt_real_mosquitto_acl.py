@@ -12,7 +12,7 @@ import pytest
 
 from ems.mqtt_credentials import MqttCredentials
 from tests.helpers.mosquitto import (
-    docker_available,
+    require_real_broker_environment,
     mosquitto_acl_broker,
     publish_once,
     publish_until,
@@ -20,10 +20,8 @@ from tests.helpers.mosquitto import (
 
 pytestmark = pytest.mark.docker
 
-pytest.importorskip("paho.mqtt.client")
 
-if not docker_available():
-    pytest.skip("Docker is not available", allow_module_level=True)
+require_real_broker_environment()
 
 
 class _Resolver:

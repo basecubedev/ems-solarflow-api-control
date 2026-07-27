@@ -176,6 +176,43 @@ def _is_masked_identifier(value):
     return isinstance(value, str) and any(marker in value for marker in _MASK_MARKERS)
 
 
+# Draft states of an editable, non-secret field. A key the browser never sent is
+# not an edit, while a key it sent empty is an explicit clear.
+_KEEP = "keep"
+_SET = "set"
+_CLEAR = "clear"
+
+
+def _editable_draft_value(key, *containers):
+    """Classify an editable draft field as keep/set/clear.
+
+    A masked display placeholder resolves to keep: the browser is never given a
+    redacted cloud identifier, so it can never resubmit one and must not be able
+    to erase the stored value by echoing the mask back.
+    """
+
+    present = False
+    for container in containers:
+        if not isinstance(container, dict) or key not in container:
+            continue
+        present = True
+        value = str(container.get(key) or "").strip()
+        if _is_masked_identifier(value):
+            return _KEEP, ""
+        if value:
+            return _SET, value
+    return (_CLEAR, "") if present else (_KEEP, "")
+
+
+def _store_editable_value(target, key, state, value):
+    """Write a keep/set/clear decision onto a config mapping."""
+
+    if state == _SET:
+        target[key] = value
+    elif state == _CLEAR and str(target.get(key) or "").strip():
+        target.pop(key, None)
+
+
 def generation_catalog():
     """User-facing Zendure hardware generations for the UI (no internal names)."""
 
@@ -418,7 +455,15 @@ def build_manual_zendure_mqtt_fragment(item, broker_ref):
         ]
     name = str(item.get("name") or "").strip()
     label = name or "Zendure MQTT device"
-    identifier = str(item.get("serial_number") or item.get("device_id") or "").strip()
+    # The physical serial and the MQTT route/payload device id are independent
+    # identities: the serial is read only from serial_number and the route id
+    # only from an explicit mqtt.device_id (or the top-level mqtt_device_id draft
+    # field). Neither is ever derived from the other.
+    serial = str(item.get("serial_number") or "").strip()
+    item_mqtt = item.get("mqtt") if isinstance(item.get("mqtt"), dict) else {}
+    route_device_id = str(
+        item_mqtt.get("device_id") or item.get("mqtt_device_id") or ""
+    ).strip()
     normalized = normalize_zendure_mqtt_draft(item)
     profile = generation_profile(normalized.get("hardware_generation"))
     if profile is None:
@@ -428,11 +473,11 @@ def build_manual_zendure_mqtt_fragment(item, broker_ref):
                 f"{label}: choose a Zendure hardware generation.",
             )
         ]
-    if not identifier:
+    if not serial and not route_device_id:
         return None, [
             _issue(
                 "zendure_mqtt_device_identifier_missing",
-                f"{label}: enter a serial number or device ID.",
+                f"{label}: enter a serial number or MQTT device ID.",
             )
         ]
 
@@ -440,8 +485,9 @@ def build_manual_zendure_mqtt_fragment(item, broker_ref):
         "broker_ref": broker_ref,
         "topic_family": profile["topic_family"],
         "base_topic": profile["base_topic"],
-        "device_id": identifier,
     }
+    if route_device_id:
+        mqtt["device_id"] = route_device_id
     product_key = ""
     if profile["product_key"]:
         product_key = str(item.get("product_key") or "").strip()
@@ -479,8 +525,18 @@ def build_manual_zendure_mqtt_fragment(item, broker_ref):
                 "adding it as telemetry only.",
             )
         )
+    elif wants_control and not route_device_id:
+        # A control write is addressed by the explicit MQTT route id, never the
+        # physical serial; without it the entry cannot be made write-capable.
+        return None, [
+            _issue(
+                "mqtt_device_id_missing",
+                f"{label}: enter the MQTT device ID to enable output control; the "
+                "physical serial number is not an MQTT route identifier.",
+            )
+        ]
     elif wants_control:
-        # A control device must be addressable to derive its write topic.
+        # A control device must also be addressable to derive its write topic.
         if not product_key and not str(item.get("write_topic") or "").strip():
             return None, [
                 _issue(
@@ -496,7 +552,7 @@ def build_manual_zendure_mqtt_fragment(item, broker_ref):
         "type": "zendure_mqtt",
         "enabled": True,
         "name": name if "name" in item else "INV_1",
-        "serial_number": identifier,
+        "serial_number": serial,
         "mqtt": mqtt,
         "capabilities": {
             "read_power": True,
@@ -556,7 +612,13 @@ def zendure_mqtt_device_draft(device):
         hardware_profile=zendure_mqtt_hardware_profile(device),
         write_protocol=write_protocol or None,
     )
-    has_write_target = bool(_mqtt_str(mqtt, "product_key") or write_topic)
+    # Route addressability requires an explicit mqtt.device_id (never the physical
+    # serial) plus the mode's target (product_key for a profile canonical topic, or
+    # a valid write_topic for a custom write).
+    from ems.zendure_mqtt.config_entries import zendure_mqtt_control_addressability
+
+    addressability = zendure_mqtt_control_addressability(device)
+    has_write_target = addressability.ready
     # A pinned model always publishes to its canonical topic; a stored write_topic
     # is then obsolete residue the UI shows read-only (never an editable field) so
     # Maintenance/Setup never reintroduce it. The custom escape hatch keeps its
@@ -581,6 +643,11 @@ def zendure_mqtt_device_draft(device):
         "enabled": bool(device.get("enabled", True)),
         "has_enabled_key": "enabled" in device,
         "serial_number": str(device.get("serial_number") or "").strip(),
+        # Display device id: the MQTT route id (mqtt.device_id), falling back to a
+        # legacy top-level device_id. Redacted for cloud devices before it reaches
+        # the browser. This is display only — apply never reads the route id from
+        # it (that comes exclusively from mqtt.device_id below), so a top-level
+        # device_id can never be promoted into the write route.
         "device_id": _mqtt_str(mqtt, "device_id") or str(device.get("device_id") or "").strip(),
         "product_key": _mqtt_str(mqtt, "product_key"),
         "hardware_generation": generation or "",
@@ -702,9 +769,9 @@ def apply_zendure_mqtt_draft_fields(device, item):
     # the physical/API identity, mqtt.device_id is the MQTT routing identity. A
     # config may legitimately carry different values, so they are patched
     # independently and never collapsed into one input.
-    serial = str(item.get("serial_number") or "").strip()
-    if serial:
-        device["serial_number"] = serial
+    _store_editable_value(
+        device, "serial_number", *_editable_draft_value("serial_number", item)
+    )
 
     # A concrete registry model pins the runtime write adapter into config; it is
     # separate from the display-only hardware generation. power_write_profile is
@@ -792,20 +859,18 @@ def apply_zendure_mqtt_draft_fields(device, item):
         mqtt["topic_family"] = profile["topic_family"]
         mqtt["base_topic"] = profile["base_topic"]
     item_mqtt = item.get("mqtt") if isinstance(item.get("mqtt"), dict) else {}
-    device_id = str(item_mqtt.get("device_id") or item.get("device_id") or "").strip()
-    if device_id and not _is_masked_identifier(device_id):
-        mqtt["device_id"] = device_id
+    # The MQTT route id comes only from mqtt.device_id; a legacy top-level
+    # device_id is never promoted into the write route.
+    _store_editable_value(
+        mqtt, "device_id", *_editable_draft_value("device_id", item_mqtt)
+    )
     # Product-key addressing is a runtime write target, not a display-generation
     # property. Cloud JSON devices may use a generation whose manual form does
-    # not normally request a key, so persist any explicit unmasked draft value
-    # regardless of generation. Blank/redacted values keep the existing target.
-    item_product_key = str(
-        item.get("product_key")
-        or (item_mqtt.get("product_key") if isinstance(item_mqtt, dict) else "")
-        or ""
-    ).strip()
-    if item_product_key and not _is_masked_identifier(item_product_key):
-        mqtt["product_key"] = item_product_key
+    # not normally request a key, so persist any explicit draft value regardless
+    # of generation.
+    _store_editable_value(
+        mqtt, "product_key", *_editable_draft_value("product_key", item, item_mqtt)
+    )
 
     _apply_output_control(
         device, item, new_device=new_device, model_changed=model_changed

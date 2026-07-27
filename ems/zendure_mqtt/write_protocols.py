@@ -169,11 +169,18 @@ def build_properties_write_message(
     Returns ``None`` when the protocol is unsupported, the device is not
     addressable for that protocol, or the property set is empty. Protocol-
     specific topic/payload construction lives here, never in the controller.
+
+    An explicit non-empty ``device_id`` is required for every supported protocol:
+    the payload always carries a ``deviceId``, so an explicit write topic never
+    removes the need for an explicit route id and the builder never emits a
+    ``deviceId=null`` payload.
     """
 
     if protocol not in SUPPORTED_WRITE_PROTOCOLS:
         return None
     if not isinstance(properties, dict) or not properties:
+        return None
+    if not isinstance(device_id, str) or not device_id.strip():
         return None
     if message_id is None:
         message_id = next_message_id()

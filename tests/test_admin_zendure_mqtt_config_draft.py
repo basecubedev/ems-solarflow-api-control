@@ -22,13 +22,15 @@ pytestmark = pytest.mark.simulation
 
 
 def test_manual_supported_model_control_selected_enables_write():
-    # A concrete registry model (not the generation) authorizes control.
+    # A concrete registry model (not the generation) authorizes control; an
+    # explicit MQTT route device id addresses it (never the physical serial).
     fragment, issues = build_manual_zendure_mqtt_fragment(
         {
             "name": "Hyper",
             "generation": "hub_hyper_legacy",
             "power_hardware_profile": "hyper_2000",
             "serial_number": "SN1",
+            "mqtt_device_id": "DEV1",
             "product_key": "PK1",
             "output_control": True,
         },
@@ -39,6 +41,7 @@ def test_manual_supported_model_control_selected_enables_write():
     assert fragment["hardware_profile"] == "hyper_2000"
     assert "write_protocol" not in fragment["mqtt"]
     assert fragment["mqtt"]["product_key"] == "PK1"
+    assert fragment["mqtt"]["device_id"] == "DEV1"
 
 
 def test_manual_supported_generation_telemetry_only_when_control_not_selected():
@@ -87,14 +90,16 @@ def test_manual_unsupported_generation_control_request_falls_back_to_telemetry()
 
 
 def test_manual_control_requires_write_target():
-    # A legacy control device must be addressable (product_key) to derive its
-    # write topic; requesting control without one is a clear, actionable error.
+    # A legacy control device with an explicit route id must still be addressable
+    # (product_key) to derive its write topic; requesting control without one is a
+    # clear, actionable error.
     fragment, issues = build_manual_zendure_mqtt_fragment(
         {
             "name": "Hyper",
             "generation": "hub_hyper_legacy",
             "power_hardware_profile": "hyper_2000",
             "serial_number": "SN3",
+            "mqtt_device_id": "DEV3",
             "output_control": True,
         },
         "local_a",
@@ -381,3 +386,233 @@ def test_supported_toggle_without_write_target_remains_validation_visible():
         },
     )
     assert device["capabilities"]["write_output_limit"] is True
+
+
+def test_apply_without_route_device_id_fails_validation():
+    # Applying a control draft that carries only a physical serial (no explicit
+    # mqtt.device_id) must not silently create a write-capable entry: the control
+    # validator surfaces mqtt_device_id_missing and Preview/Apply cannot pass it.
+    from ems.zendure_mqtt.config_entries import (
+        validate_zendure_mqtt_control_device_config,
+    )
+
+    device = {}
+    apply_zendure_mqtt_draft_fields(
+        device,
+        {
+            "name": "Pro2",
+            "serial_number": "P2SN",
+            "hardware_generation": "solarflow_zensdk",
+            "hardware_model": "solarflow_800_pro_2",
+            "output_control": True,
+            "product_key": "PKP2",
+            "mqtt": {
+                "broker_ref": "zendure_cloud",
+                "source": "zendure_cloud_mqtt",
+                "topic_family": "legacy_zendure_json_alt",
+                "product_key": "PKP2",
+            },
+            "capabilities": {"read_power": True, "read_soc": True},
+        },
+    )
+    codes = {
+        i["code"]
+        for i in validate_zendure_mqtt_control_device_config(device)
+        if i.get("severity") == "error"
+    }
+    assert "mqtt_device_id_missing" in codes
+
+
+# --- explicit route id separation: serial is never an MQTT route --------------
+
+
+def test_manual_control_without_route_device_id_is_not_writable():
+    # A supported model with a product key and a physical serial, but no explicit
+    # MQTT route device id, must not become a write-capable fragment: control is
+    # rejected with mqtt_device_id_missing (the serial is never the route id).
+    fragment, issues = build_manual_zendure_mqtt_fragment(
+        {
+            "name": "Hyper",
+            "generation": "hub_hyper_legacy",
+            "power_hardware_profile": "hyper_2000",
+            "serial_number": "PHYSICAL-SERIAL",
+            "product_key": "PK-A",
+            "output_control": True,
+        },
+        "local_a",
+    )
+    assert fragment is None
+    assert any(issue["code"] == "mqtt_device_id_missing" for issue in issues)
+
+
+def test_manual_preserves_distinct_serial_and_route_device_id():
+    fragment, issues = build_manual_zendure_mqtt_fragment(
+        {
+            "name": "Hyper",
+            "generation": "hub_hyper_legacy",
+            "power_hardware_profile": "hyper_2000",
+            "serial_number": "PHYSICAL-SERIAL",
+            "mqtt_device_id": "ROUTE-DEV-ID",
+            "product_key": "PK-A",
+            "output_control": True,
+        },
+        "local_a",
+    )
+    assert issues == []
+    assert fragment["serial_number"] == "PHYSICAL-SERIAL"
+    assert fragment["mqtt"]["device_id"] == "ROUTE-DEV-ID"
+    assert fragment["capabilities"]["write_output_limit"] is True
+
+
+def test_manual_does_not_copy_serial_into_route_device_id():
+    # A telemetry-only manual entry with only a physical serial keeps the serial
+    # out of the MQTT route: no mqtt.device_id is synthesized from it.
+    fragment, issues = build_manual_zendure_mqtt_fragment(
+        {
+            "name": "SF800",
+            "generation": "solarflow_zensdk",
+            "serial_number": "PHYSICAL-SERIAL",
+        },
+        "local_a",
+    )
+    assert issues == []
+    assert fragment["serial_number"] == "PHYSICAL-SERIAL"
+    assert "device_id" not in fragment["mqtt"]
+
+
+def test_manual_does_not_copy_top_level_device_id_into_route_device_id():
+    # A legacy top-level device_id is not an MQTT route id and must never populate
+    # mqtt.device_id; only an explicit mqtt.device_id / mqtt_device_id does.
+    fragment, issues = build_manual_zendure_mqtt_fragment(
+        {
+            "name": "SF800",
+            "generation": "solarflow_zensdk",
+            "serial_number": "PHYSICAL-SERIAL",
+            "device_id": "TOPLEVEL-ID",
+        },
+        "local_a",
+    )
+    assert issues == []
+    assert "device_id" not in fragment["mqtt"]
+
+
+def test_maintenance_projection_does_not_expose_top_level_device_id_as_route():
+    # An unsafe legacy config carrying a top-level device_id but no mqtt.device_id
+    # must project a draft whose MQTT route id is empty, not the top-level id.
+    from admin.zendure_mqtt_config_draft import zendure_mqtt_device_draft
+
+    device = {
+        "type": "zendure_mqtt",
+        "name": "SF800",
+        "enabled": True,
+        "serial_number": "PHYSICAL-SERIAL",
+        "device_id": "TOPLEVEL-ID",
+        "mqtt": {
+            "broker_ref": "zendure_cloud",
+            "source": "zendure_cloud_mqtt",
+            "topic_family": "legacy_zendure_json",
+            "product_key": "PK-A",
+        },
+        "capabilities": {"read_power": True, "read_soc": True, "write_output_limit": True},
+    }
+    draft = zendure_mqtt_device_draft(device)
+    assert draft["mqtt"]["device_id"] == ""
+    # The legacy top-level device_id is kept only as a display/migration value; it
+    # is never surfaced as the route id.
+    assert draft["device_id"] == "TOPLEVEL-ID"
+
+
+def test_maintenance_projection_route_id_is_mqtt_device_id_not_top_level():
+    # The draft's MQTT route id (draft["mqtt"]["device_id"]) is the configured
+    # mqtt.device_id, never a legacy top-level device_id. (The display-only
+    # draft["device_id"] prefers the route id; the write route is decided by
+    # apply, which reads mqtt.device_id exclusively — see the apply tests.)
+    from admin.zendure_mqtt_config_draft import zendure_mqtt_device_draft
+
+    device = {
+        "type": "zendure_mqtt",
+        "name": "SF800",
+        "enabled": True,
+        "serial_number": "PHYSICAL-SERIAL",
+        "device_id": "TOPLEVEL-ID",
+        "mqtt": {
+            "broker_ref": "zendure_cloud",
+            "source": "zendure_cloud_mqtt",
+            "topic_family": "legacy_zendure_json",
+            "device_id": "ROUTE-ID",
+            "product_key": "PK-A",
+        },
+        "capabilities": {"read_power": True, "read_soc": True, "write_output_limit": True},
+    }
+    draft = zendure_mqtt_device_draft(device)
+    assert draft["mqtt"]["device_id"] == "ROUTE-ID"
+
+
+def test_apply_reads_route_only_from_mqtt_device_id():
+    # A draft carrying a top-level device_id but no mqtt.device_id must not promote
+    # the top-level value into the MQTT route on apply.
+    device = {
+        "type": "zendure_mqtt",
+        "name": "SF800",
+        "enabled": True,
+        "serial_number": "PHYSICAL-SERIAL",
+        "device_id": "TOPLEVEL-ID",
+        "mqtt": {
+            "broker_ref": "zendure_cloud",
+            "topic_family": "legacy_zendure_json",
+            "product_key": "PK-A",
+        },
+        "capabilities": {"read_power": True, "read_soc": True, "write_output_limit": True},
+    }
+    apply_zendure_mqtt_draft_fields(
+        device,
+        {
+            "name": "SF800",
+            "original_name": "SF800",
+            "serial_number": "PHYSICAL-SERIAL",
+            "device_id": "TOPLEVEL-ID",
+            "output_control": True,
+            "product_key": "PK-A",
+            "mqtt": {
+                "broker_ref": "zendure_cloud",
+                "topic_family": "legacy_zendure_json",
+                "product_key": "PK-A",
+            },
+            "capabilities": {"read_power": True, "read_soc": True, "write_output_limit": True},
+        },
+    )
+    assert "device_id" not in device["mqtt"]
+
+
+def test_apply_writes_explicit_route_device_id():
+    # An explicitly supplied mqtt.device_id makes the entry addressable.
+    device = {
+        "type": "zendure_mqtt",
+        "name": "SF800",
+        "enabled": True,
+        "serial_number": "PHYSICAL-SERIAL",
+        "mqtt": {
+            "broker_ref": "zendure_cloud",
+            "topic_family": "legacy_zendure_json",
+            "product_key": "PK-A",
+        },
+        "capabilities": {"read_power": True, "read_soc": True, "write_output_limit": True},
+    }
+    apply_zendure_mqtt_draft_fields(
+        device,
+        {
+            "name": "SF800",
+            "original_name": "SF800",
+            "serial_number": "PHYSICAL-SERIAL",
+            "output_control": True,
+            "product_key": "PK-A",
+            "mqtt": {
+                "broker_ref": "zendure_cloud",
+                "topic_family": "legacy_zendure_json",
+                "device_id": "ROUTE-DEV-ID",
+                "product_key": "PK-A",
+            },
+            "capabilities": {"read_power": True, "read_soc": True, "write_output_limit": True},
+        },
+    )
+    assert device["mqtt"]["device_id"] == "ROUTE-DEV-ID"

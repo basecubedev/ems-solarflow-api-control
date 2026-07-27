@@ -232,9 +232,11 @@ result in memory and runs the normal control validation before writing
 (`ZendureMqttMigrationError`), never committed. A pin strips obsolete write
 metadata (stale `mqtt.write_protocol`, an inconsistent `power_write_profile`) and
 re-derives the canonical `power_write_profile` from the registry. Exact model
-evidence with **incomplete addressing** (no `product_key` and no `write_topic`)
-disables control and preserves telemetry rather than reporting success while
-leaving `write_target_missing`. Every planned change carries a stable device
+evidence with **incomplete addressing** — a missing explicit `mqtt.device_id`
+route id, or (profile-backed) no `product_key` / (custom) no `write_topic` —
+disables control (`zendure_mqtt_control_disabled_unaddressable`) and preserves
+telemetry, the physical serial and broker/profile metadata rather than reporting
+success while leaving an unaddressable route. Every planned change carries a stable device
 identity (`index`, `device_id`) and exact `{path, before, after}` entries, so
 duplicate device names are never ambiguous — for example
 `{"path": "devices[2].hardware_profile", "before": null, "after": "hyper_2000"}`.
@@ -338,6 +340,54 @@ device carrying an obsolete `mqtt.write_topic` is flagged by config validation
 removed by migration/normalization (`normalize_write_topic`), preserving the
 product key, device id and custom fields. See "Migration of existing configs"
 for the migration note.
+
+**Write addressing: physical serial vs MQTT route device id.** These are two
+distinct identities and a physical serial is **never** used as a control route
+id:
+
+- `serial_number` (`sn`) identifies the physical inverter — the cross-adapter
+  match key. It is read case-insensitively (`normalize_physical_serial`) and used
+  for duplicate detection, telemetry matching and identity, never as an address.
+- `mqtt.device_id` is the exact MQTT route segment and payload `deviceId` a
+  control write targets. It is case-sensitive (`normalize_mqtt_route_segment`) and
+  read only from `mqtt.device_id` — `zendure_mqtt_route_device_id()` never falls
+  back to `serial_number` or a top-level `device_id`. The legacy
+  `zendure_mqtt_device_identifier()` (serial fallback) is kept only for read-only
+  telemetry matching.
+
+Every control-capable entry therefore requires an **explicit `mqtt.device_id`**.
+`zendure_mqtt_control_addressability()` is the single source of truth reused by
+config validation, migration, Maintenance readiness and diagnostics; a control
+route is complete only when:
+
+- profile-backed (canonical topic): `mqtt.product_key` **and** `mqtt.device_id`;
+- custom (`custom_properties_write`): a valid `mqtt.write_topic` **and**
+  `mqtt.device_id` (the payload always carries `deviceId`, so an explicit topic
+  never removes the need for an explicit route id).
+
+Config validation rejects a control entry with no route id
+(`mqtt_device_id_missing`) or no write target (`write_target_missing`); the
+proposal mapper keeps such a device telemetry-only; migration disables control
+(`zendure_mqtt_control_disabled_unaddressable`) while preserving telemetry, the
+physical serial and broker/profile metadata; the properties/write builder returns
+no message (never a `deviceId=null` payload); and Cloud device-scoped
+subscriptions contribute only for a complete `product_key`/`device_id` route.
+
+**Admin manual entry (Fresh Setup and Maintenance).** The UI carries the same
+separation, never inferring a route id from a serial. Fresh Setup's manual
+Zendure MQTT form has two distinct inputs — **Physical serial number** and
+**MQTT device ID** — and `build_manual_zendure_mqtt_fragment()` reads the serial
+only from `serial_number` and the route id only from `mqtt.device_id` (or the
+top-level `mqtt_device_id` draft field); enabling output control without an
+explicit MQTT device ID is rejected with `mqtt_device_id_missing`. A
+telemetry-only entry needs only the serial. In Maintenance each inverter card
+renders exactly one editable **MQTT device ID** field: editing the serial changes
+only `serial_number`, editing the route id changes only `mqtt.device_id`, and the
+projection/apply (`zendure_mqtt_device_draft` / `apply_zendure_mqtt_draft_fields`)
+never fall back to a legacy top-level `device_id` for the route — so an unchanged
+unsafe legacy entry stays `mqtt_device_id_missing` until the operator enters the
+real route id. The browser is untrusted: Preview/Apply re-run the same Core
+validation regardless of the editor state.
 
 **QoS and retain.** Every control and property publish is QoS 1 and never
 retained (`CONTROL_PUBLISH_QOS`): QoS 1 makes broker delivery observable via

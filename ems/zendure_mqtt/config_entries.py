@@ -21,7 +21,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from ems.device_identity import resolve_inverter_identity
+from ems.device_identity import (
+    normalize_mqtt_route_segment,
+    resolve_inverter_identity,
+)
 
 ZENDURE_MQTT_TYPE = "zendure_mqtt"
 
@@ -277,6 +280,115 @@ def _has_device_identifier(item: Mapping[str, Any]) -> bool:
     return zendure_mqtt_device_identifier(item) is not None
 
 
+def zendure_mqtt_route_device_id(item: Any) -> str | None:
+    """Return the explicit MQTT route/payload device id, or ``None``.
+
+    Reads only ``mqtt.device_id`` — the exact MQTT topic segment and payload
+    ``deviceId`` a control write targets — and never falls back to the physical
+    ``serial_number`` or a top-level ``device_id``. The value is trimmed and
+    case-preserved (route segments are case-sensitive); masked, redacted and
+    placeholder values resolve to ``None``. This is the sole authority for
+    addressing a control write, distinct from
+    :func:`zendure_mqtt_device_identifier` (telemetry matching, legacy fallback):
+    a physical serial identifies the inverter, never its MQTT route.
+    """
+
+    if not isinstance(item, Mapping):
+        return None
+    mqtt = item.get("mqtt")
+    if not isinstance(mqtt, Mapping):
+        return None
+    return normalize_mqtt_route_segment(mqtt.get("device_id"))
+
+
+ADDRESSABILITY_READY = "ready"
+ADDRESSABILITY_MISSING_DEVICE_ID = "missing_device_id"
+ADDRESSABILITY_MISSING_PRODUCT_KEY = "missing_product_key"
+ADDRESSABILITY_MISSING_WRITE_TOPIC = "missing_write_topic"
+ADDRESSABILITY_INVALID_WRITE_TOPIC = "invalid_write_topic"
+
+
+@dataclass(frozen=True)
+class ControlAddressability:
+    """Whether a Zendure MQTT control entry has a complete, explicit write route."""
+
+    ready: bool
+    reason: str
+    profile_backed: bool
+    device_id: str | None
+    product_key: str | None
+    write_topic: str | None
+
+
+def _profile_backed_control(item: Any) -> bool:
+    """True when a pinned, known, writable, transport-compatible profile applies.
+
+    Such a device publishes to its canonical ``iot/<productKey>/<deviceId>``
+    topic, so its write route needs a product key; a device without a pinned
+    writable profile is addressed by the explicit custom ``mqtt.write_topic``.
+    """
+
+    hardware_profile = zendure_mqtt_hardware_profile(item)
+    if not hardware_profile:
+        return False
+    from ems.mqtt_control.power_capability import resolve_power_write_capability
+    from ems.mqtt_control.zendure_profiles import hardware_profile_by_name
+
+    if hardware_profile_by_name(hardware_profile) is None:
+        return False
+    return resolve_power_write_capability(
+        topic_family=zendure_mqtt_topic_family(item),
+        hardware_profile=hardware_profile,
+    ).supported
+
+
+def zendure_mqtt_control_addressability(
+    item: Any, *, profile_backed: bool | None = None
+) -> ControlAddressability:
+    """Resolve the write-route addressability of a control entry.
+
+    Every control write needs an explicit ``mqtt.device_id`` route id (the topic
+    segment and the payload ``deviceId``); a physical serial is never
+    substituted. A profile-backed device additionally needs a ``mqtt.product_key``
+    for its canonical topic; a custom device needs a valid explicit
+    ``mqtt.write_topic``. ``profile_backed`` overrides mode detection for callers
+    (migration) that resolve the intended writable model separately. Single source
+    of truth for config validation, migration, Maintenance readiness and
+    diagnostics so route checks never drift apart.
+    """
+
+    from ems.zendure_mqtt.write_protocols import publish_topic_error
+
+    device_id = zendure_mqtt_route_device_id(item)
+    product_key = zendure_mqtt_product_key(item)
+    write_topic = zendure_mqtt_write_topic(item)
+    if profile_backed is None:
+        profile_backed = _profile_backed_control(item)
+    if profile_backed:
+        if product_key is None:
+            reason = ADDRESSABILITY_MISSING_PRODUCT_KEY
+        elif device_id is None:
+            reason = ADDRESSABILITY_MISSING_DEVICE_ID
+        else:
+            reason = ADDRESSABILITY_READY
+    elif write_topic is None:
+        reason = ADDRESSABILITY_MISSING_WRITE_TOPIC
+    elif publish_topic_error(write_topic) is not None:
+        reason = ADDRESSABILITY_INVALID_WRITE_TOPIC
+    elif device_id is None:
+        reason = ADDRESSABILITY_MISSING_DEVICE_ID
+    else:
+        reason = ADDRESSABILITY_READY
+    return ControlAddressability(
+        reason == ADDRESSABILITY_READY,
+        reason,
+        profile_backed,
+        device_id,
+        product_key,
+        write_topic,
+    )
+
+
 def zendure_cloud_device_subscriptions(devices: Any, broker_ref: str) -> tuple[str, ...]:
     """Device-scoped cloud topic filters for entries bound to ``broker_ref``.
 
@@ -285,7 +397,12 @@ def zendure_cloud_device_subscriptions(devices: Any, broker_ref: str) -> tuple[s
     per-device trees. Cloud services therefore subscribe exactly those (parity
     with Admin cloud discovery); the account ``<app_key>/#`` tree is appended by
     the client config. Disabled entries and entries without a product key or
-    device identifier contribute nothing.
+    route device id contribute nothing.
+
+    The device-scoped route is ``<productKey>/<mqtt.device_id>``: both are
+    case-sensitive MQTT segments and the physical ``serial_number`` is never
+    substituted for the route id, so an entry without an explicit ``mqtt.device_id``
+    contributes no subscription rather than subscribing to a wrong topic.
     """
 
     if not isinstance(devices, list):
@@ -296,13 +413,8 @@ def zendure_cloud_device_subscriptions(devices: Any, broker_ref: str) -> tuple[s
             continue
         if zendure_mqtt_broker_ref(item) != broker_ref:
             continue
-        mqtt = item.get("mqtt")
-        product_key = (
-            str(mqtt.get("product_key") or "").strip()
-            if isinstance(mqtt, Mapping)
-            else ""
-        )
-        identifier = zendure_mqtt_device_identifier(item)
+        product_key = zendure_mqtt_product_key(item)
+        identifier = zendure_mqtt_route_device_id(item)
         if not product_key or not identifier:
             continue
         for topic in (
@@ -657,11 +769,12 @@ def validate_zendure_mqtt_control_device_config(
     """Validate a control (write-capable) Zendure MQTT entry; empty means valid.
 
     Shares the structural checks with the telemetry validator and additionally
-    requires the entry to actually opt in to control and be write-addressable
-    (an ``mqtt.product_key`` to derive the write topic, or an explicit
-    ``mqtt.write_topic`` override). When ``broker_sources`` is supplied a device
-    that overrides its broker profile's transport source is rejected so device
-    config can never select a different write gate than the broker profile.
+    requires the entry to actually opt in to control and be write-addressable: an
+    explicit ``mqtt.device_id`` route id (never the physical serial), plus a
+    ``mqtt.product_key`` for the canonical profile topic or an explicit
+    ``mqtt.write_topic`` for a custom write. When ``broker_sources`` is supplied a
+    device that overrides its broker profile's transport source is rejected so
+    device config can never select a different write gate than the broker profile.
     """
 
     type_issue = _entry_type_issue(item)
@@ -685,13 +798,33 @@ def validate_zendure_mqtt_control_device_config(
             )
         )
 
-    if zendure_mqtt_product_key(item) is None and zendure_mqtt_write_topic(item) is None:
+    if zendure_mqtt_route_device_id(item) is None:
+        issues.append(
+            _issue(
+                "error",
+                "mqtt_device_id_missing",
+                "mqtt.device_id is required for output-control writes; the physical "
+                "serial_number is not an MQTT route identifier",
+            )
+        )
+
+    product_key = zendure_mqtt_product_key(item)
+    if product_key is None and zendure_mqtt_write_topic(item) is None:
         issues.append(
             _issue(
                 "error",
                 "write_target_missing",
                 "mqtt.product_key or mqtt.write_topic is required to address "
                 "output-control writes",
+            )
+        )
+    elif product_key is None and _profile_backed_control(item):
+        issues.append(
+            _issue(
+                "error",
+                "write_target_missing",
+                "mqtt.product_key is required to address the canonical profile "
+                "write topic",
             )
         )
 

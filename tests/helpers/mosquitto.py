@@ -29,20 +29,26 @@ def real_mqtt_tests_required() -> bool:
     return os.environ.get(REQUIRE_REAL_MQTT_ENV) == "1"
 
 
-def require_real_broker_environment() -> None:
+def require_real_broker_environment(*required_imports) -> None:
     """Module-level gate: skip locally, fail closed when release CI requires.
 
     With ``EMS_REQUIRE_REAL_MQTT_TESTS=1`` a missing broker environment must
-    fail the run — a release gate must never go green by skipping.
+    fail the run — a release gate must never go green by skipping. Extra
+    ``required_imports`` are gated the same way, so a module cannot slip past
+    the gate through a plain ``importorskip``.
     """
+
+    import importlib
 
     import pytest
 
     reason = None
-    try:
-        import paho.mqtt.client  # noqa: F401
-    except ImportError:
-        reason = "paho-mqtt is not installed"
+    for module in ("paho.mqtt.client", *required_imports):
+        try:
+            importlib.import_module(module)
+        except ImportError:
+            reason = f"{module} is not installed"
+            break
     if reason is None and not which("docker"):
         reason = "the Docker CLI is not installed"
     if reason is None and (

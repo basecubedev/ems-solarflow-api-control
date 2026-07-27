@@ -35,10 +35,12 @@ from ems.zendure_mqtt.config_entries import (
     config_entry_enabled,
     is_control_zendure_mqtt_device_config,
     validate_zendure_mqtt_control_device_config,
+    zendure_mqtt_control_addressability,
     zendure_mqtt_device_identifier,
     zendure_mqtt_hardware_profile,
     zendure_mqtt_product_key,
     zendure_mqtt_topic_family,
+    zendure_mqtt_write_protocol,
     zendure_mqtt_write_topic,
 )
 
@@ -51,8 +53,10 @@ MIGRATION_DISABLED_WARNING = (
 
 MIGRATION_UNADDRESSABLE_WARNING = (
     "MQTT power control was disabled because the Zendure device is not "
-    "write-addressable (no product_key or write_topic). Add the write address in "
-    "Maintenance before enabling control again."
+    "write-addressable: a profile-backed device needs mqtt.product_key and an "
+    "explicit mqtt.device_id; a custom write needs mqtt.write_topic and "
+    "mqtt.device_id. The physical serial_number is not an MQTT route device id. "
+    "Add the missing write address in Maintenance before enabling control again."
 )
 
 ACTION_PIN_PROFILE = "pin_profile"
@@ -79,6 +83,7 @@ _MIGRATION_VALIDATION_CODES = frozenset(
     {
         "control_not_requested",
         "write_target_missing",
+        "mqtt_device_id_missing",
         "hardware_profile_missing",
         "hardware_profile_unknown",
         "hardware_profile_deferred",
@@ -171,12 +176,19 @@ def _model_resolution(device):
     return resolve_hardware_profile_evidence(evidences)
 
 
-def _addressing_complete(device):
-    """A device can carry a power write only with a product_key or a write_topic."""
+def _addressing_complete(device, *, profile_backed=None):
+    """A control device is route-addressable only with a complete explicit route.
 
-    return bool(zendure_mqtt_product_key(device)) or bool(
-        zendure_mqtt_write_topic(device)
-    )
+    That means an explicit ``mqtt.device_id`` (never the physical serial) plus the
+    mode's write target: a ``product_key`` for a profile-backed canonical topic or
+    a valid ``write_topic`` for a custom write. ``profile_backed`` lets callers
+    that resolved the intended writable model separately (before pinning it) pick
+    the canonical-topic contract.
+    """
+
+    return zendure_mqtt_control_addressability(
+        device, profile_backed=profile_backed
+    ).ready
 
 
 def _intended_model(device):
@@ -193,24 +205,61 @@ def _intended_model(device):
     return resolution.profile_id, resolution.source_value
 
 
-def _already_safe(device):
-    """A control device is safe only when its concrete model is fully consistent.
+def _is_custom_escape_hatch(device):
+    """True when the device pins the explicit ``custom_properties_write`` protocol.
 
-    Requires a known, writable, transport-compatible pinned ``hardware_profile``,
-    complete write addressing, a ``power_write_profile`` that matches the registry
-    (or is absent), and no leftover ``mqtt.write_protocol``. A bare
-    ``mqtt.write_protocol`` (the removed legacy escape hatch) is never authority.
+    This is the only no-profile control method that authorizes a write; the
+    removed ``legacy_properties_write`` inference never does.
+    """
+
+    from ems.zendure_mqtt.write_protocols import (
+        PROTOCOL_CUSTOM_PROPERTIES_WRITE,
+        resolve_write_protocol,
+    )
+
+    protocol = resolve_write_protocol(
+        zendure_mqtt_topic_family(device), zendure_mqtt_write_protocol(device)
+    )
+    return protocol == PROTOCOL_CUSTOM_PROPERTIES_WRITE
+
+
+def _custom_write_already_safe(device):
+    """A no-profile control device is safe only as a complete custom escape hatch.
+
+    That means the explicit ``custom_properties_write`` protocol, a valid explicit
+    ``mqtt.write_topic`` and a complete route (an explicit ``mqtt.device_id``).
+    """
+
+    from ems.zendure_mqtt.write_protocols import publish_topic_error
+
+    if not _is_custom_escape_hatch(device):
+        return False
+    write_topic = zendure_mqtt_write_topic(device)
+    if not write_topic or publish_topic_error(write_topic) is not None:
+        return False
+    return _addressing_complete(device, profile_backed=False)
+
+
+def _already_safe(device):
+    """A control device is safe only when its write method is fully consistent.
+
+    A pinned model must be known, writable, transport-compatible, completely
+    write-addressable, carry a ``power_write_profile`` matching the registry (or
+    none) and no leftover ``mqtt.write_protocol``. Without a pinned model the only
+    safe config is a complete ``custom_properties_write`` escape hatch (explicit
+    valid topic + explicit route device id). The removed ``legacy_properties_write``
+    inference is never authority.
     """
 
     hardware_profile = zendure_mqtt_hardware_profile(device)
     profile = hardware_profile_by_name(hardware_profile) if hardware_profile else None
     if profile is None:
-        return False
+        return _custom_write_already_safe(device)
     cap = resolve_power_write_capability(
         topic_family=zendure_mqtt_topic_family(device),
         hardware_profile=hardware_profile,
     )
-    if not cap.supported or not _addressing_complete(device):
+    if not cap.supported or not _addressing_complete(device, profile_backed=True):
         return False
     stored = device.get("power_write_profile")
     if isinstance(stored, str) and stored.strip() and stored.strip() != profile.power_write_profile:
@@ -348,7 +397,7 @@ def _plan_device(device, index) -> ZendureMqttMigrationChange | None:
             hardware_profile=profile_id,
         )
         if cap.supported:
-            if _addressing_complete(device):
+            if _addressing_complete(device, profile_backed=True):
                 return _pin_change(
                     device, index, name, device_id, profile_id, cap.write_profile, source
                 )
@@ -360,6 +409,17 @@ def _plan_device(device, index) -> ZendureMqttMigrationChange | None:
                 code="zendure_mqtt_control_disabled_unaddressable",
                 message=f"{name}: {MIGRATION_UNADDRESSABLE_WARNING}",
             )
+    # A custom escape hatch that is not already safe has an incomplete/invalid
+    # route (missing device id or invalid topic), not an unknown model.
+    if _is_custom_escape_hatch(device):
+        return _disable_change(
+            device,
+            index,
+            name,
+            device_id,
+            code="zendure_mqtt_control_disabled_unaddressable",
+            message=f"{name}: {MIGRATION_UNADDRESSABLE_WARNING}",
+        )
     return _disable_change(
         device,
         index,

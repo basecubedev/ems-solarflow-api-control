@@ -35,6 +35,7 @@ def test_manual_supported_inverter_is_controllable_without_editing_config():
             "generation": "hub_hyper_legacy",
             "power_hardware_profile": "hyper_2000",
             "serial_number": "SN1",
+            "mqtt_device_id": "DEV1",
             "product_key": "PK1",
             "output_control": True,
         },

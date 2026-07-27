@@ -19,10 +19,10 @@ from ems.zendure_mqtt.config_entries import (
     zendure_cloud_device_subscriptions,
     zendure_mqtt_broker_profile_views,
     zendure_mqtt_broker_ref,
-    zendure_mqtt_device_identifier,
     zendure_mqtt_hardware_profile,
     zendure_mqtt_power_write_profile,
     zendure_mqtt_product_key,
+    zendure_mqtt_route_device_id,
     zendure_mqtt_topic_family,
     zendure_mqtt_write_protocol,
     zendure_mqtt_write_topic,
@@ -201,7 +201,10 @@ def build_zendure_mqtt_control_runtime(
         device = ZendureMqttDeviceClient(
                 name,
                 service,
-                device_id=zendure_mqtt_device_identifier(item),
+                # The MQTT route/payload device id is the explicit mqtt.device_id
+                # only; validation above rejected any control entry lacking it, so a
+                # physical serial is never routed here.
+                device_id=zendure_mqtt_route_device_id(item),
                 topic_family=zendure_mqtt_topic_family(item),
                 # The broker profile is authoritative for the transport source
                 # (and thus the write gate); a device may not override it. A

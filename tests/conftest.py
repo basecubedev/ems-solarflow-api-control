@@ -34,6 +34,7 @@ MQTT_RELEASE_MODULES = frozenset(
         "test_zendure_mqtt_evidence_provenance",
         # Admin MQTT config round trips
         "test_ems_zendure_mqtt_config_mapping",
+        "test_admin_maintenance_explicit_identifier_clear",
         "test_admin_mqtt_control_use_case",
         "test_admin_mqtt_setup_maintenance_parity",
         # Admin migration review and apply

@@ -802,9 +802,16 @@
                           Short unique EMS name used in config, logs, dashboard and Flowchart.
                           Model, address and serial remain in the device details.
                         </p>
-                        <label class="field"><span class="field-label">Serial number / device ID</span>
+                        <label class="field"><span class="field-label">Physical serial number</span>
                           <input id="config-mqtt-device-serial" type="text" placeholder="e.g. DEVICE_SN">
                         </label>
+                        <label class="field"><span class="field-label">MQTT device ID</span>
+                          <input id="config-mqtt-device-mqttid" type="text" placeholder="exact MQTT route/payload device ID">
+                        </label>
+                        <p class="future-note" id="config-mqtt-device-mqttid-help">
+                          The exact MQTT route/payload device ID. The physical serial is never
+                          used as the MQTT route ID. Required to enable output control.
+                        </p>
                         <label class="field"><span class="field-label">Zendure hardware generation</span>
                           <select id="config-mqtt-device-generation"></select>
                         </label>

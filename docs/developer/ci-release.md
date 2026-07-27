@@ -71,6 +71,31 @@ or the commit a tag at HEAD points at — is a protected release ref (`main`,
 least-privilege: gates are `contents: read`, only `publish-feature-ghcr` holds
 `packages: write`, and only the catalogue jobs hold `contents: write`.
 
+### Pre-publish gates
+
+`publish-feature-ghcr` depends on all four gates below, so no image is pushed
+before every one of them is green. Each checks out the resolved SHA, never the
+mutable `ref` input.
+
+| Job | What it runs |
+| --- | --- |
+| `mqtt-release-contract` | `ruff check .`, `compileall`, `tools/build_config_template.py --check`, `node --check admin/static/admin.js`, then `pytest -m mqtt_release` and `pytest -m "simulation and power_control"` |
+| `packaged-system-build-smoke` | packaged Admin three-build Chromium smoke |
+| `mosquitto-lifecycle` | the real-broker contract against a live Mosquitto |
+| `package-smoke` | Admin/EMS image builds plus the paired startup contract |
+
+`mqtt-release-contract` fails when either pytest selection executes no tests, so
+a renamed marker cannot turn an empty run into a green release gate.
+
+`mosquitto-lifecycle` runs the complete documented real-broker set —
+`test_zendure_mqtt_broker_mosquitto.py`, `test_mqtt_real_mosquitto.py`,
+`test_mqtt_real_mosquitto_acl.py`, `test_mqtt_real_mosquitto_tls.py`,
+`test_mqtt_real_legacy_flow.py`. `tests/test_mqtt_release_fail_closed.py` owns
+that list and `tests/test_docker_feature_publish_workflow.py` pins the workflow
+to it, so the two cannot drift. With `EMS_REQUIRE_REAL_MQTT_TESTS=1` a missing
+Docker CLI, an unreachable daemon, a broker that fails to start, or an
+all-skipped run fails the gate instead of passing quietly.
+
 Both images publish under the sanitized `dev-<safe-ref>` prefix plus the
 canonical immutable tag (`dev-<branch-slug>-<ref-hash>-<short-sha>-<run-id>-<attempt>`),
 for both `ghcr.io/basecubedev/ems-solarflow-api-control` and
@@ -95,8 +120,7 @@ it must never carry the feature implementation. Then:
 4. Select the feature branch as the workflow ref.
 5. Enter the same feature ref as the required `ref` input.
 6. Confirm the resolved immutable SHA printed by `resolve-source`.
-7. Allow all release gates to complete (static, non-Docker regression,
-   `mqtt_release`, `system_build`, Playwright, packaged smoke, real Mosquitto).
+7. Allow all release gates to complete (see **Pre-publish gates** above).
 8. The catalogue entry is written only after the pushed images are pulled back
    and the remote packaged Admin browser canary passes.
 
