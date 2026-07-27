@@ -303,10 +303,13 @@ def test_manual_transport_switch_preserves_config_name_both_directions():
             "rememberInverterName",
             "inverterConfigNameForSerial",
             "normalizeInverterAliasTokens",
+            "configuredInverterConnection",
+            "preservedInverterValues",
             "serializeMqttProposalSelection",
             "switchInverterTransport",
         ],
         """
+const DEVICE_MAPPED_FIELD_KEYS = {name: "config_name", ip: "ip", sn: "serial_number"};
 let configDraftItems = [{
   source_id: "local:1", role: "inverter", config_name: "INV_1",
   serial_number: "SERIAL-1", auto_added: false,

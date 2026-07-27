@@ -381,10 +381,10 @@ not change authoritative device configuration. For the single configured Cloud
 account, a locally named broker ref and discovery's canonical `zendure_cloud` ref
 normalize to the same account scope; multiple configured Cloud refs remain
 distinct and are never merged by assumption. A discovered serial that is already
-configured over another transport renders as an **Alternative transport** row
-with a **Use … instead** action that switches the configured device's connection in
-place — name, enabled state, and common tuning values preserved, stale
-transport fields removed — never as a second **Add as inverter** result. The
+configured over another connection renders as an **Alternative connection** row
+with a **Use connection** action that switches the configured device's connection
+in place — name, enabled state, and common tuning values preserved, stale
+transport fields removed — never as a second **Add inverter** result. The
 same serial can never enter the draft twice across transports; the backend
 merge additionally enforces duplicate-identity and identity-conflict
 validation, so a buggy client cannot apply a duplicate. Outside the sole-account
@@ -668,6 +668,39 @@ transports; the `-m docker` tier proves the same boundaries against a real local
 control is not part of this validation; per-generation physical-hardware
 validation status is tracked in
 [supported-setups.md](../user/supported-setups.md).
+
+### Connection candidate states
+
+Setup and Maintenance classify every discovered inverter connection with one
+shared contract (`inverterCandidateConnectionState` in `admin/static/admin.js`)
+and render exactly one contextual action per candidate. The candidate pool is a
+*connection* pool, keyed by identity + connection source + broker scope, so an
+alternative connection for an already configured inverter stays offered; it is
+built from the current trusted proposal set only, so an obsolete alternative
+disappears with the discovery generation that produced it.
+
+| State | Condition | Action | Effect |
+|---|---|---|---|
+| `new` | no configured inverter matches the candidate's physical identity | **Add inverter** | adds a new logical inverter |
+| `active` | same physical inverter, same connection source and broker scope | **Active** (disabled) | none |
+| `alternative` | same physical inverter, different concrete connection | **Use connection** | switches the existing logical inverter in place |
+| `identity_conflict` | contradictory identity evidence (shared route alias, different visible serials) | **Identity conflict** (disabled) | none — fail closed |
+
+User-facing connection labels come from one helper (`connectionLabelFor`):
+`local_api` → **API**, `local_mqtt` → **MQTT**, `zendure_mqtt` → **Zendure
+MQTT**, anything unrecognized → **Unknown**. Internal enums, config types and
+transport identifiers are unchanged.
+
+**Use connection** never opens a confirmation dialog and never creates a second
+device. It routes to the existing switch helpers
+(`switchInverterTransport` / `mconfigSwitchInverterTransport`) with a trusted
+identity reference only — a visible serial or an opaque identity token; route
+device ids, product keys and credentials are never placed in DOM attributes.
+The switch carries the config name, the enabled state and every common
+(transport-independent) `devices[]` value; only connection fields are replaced,
+and stale fields of the previous connection are removed. Config Preview remains
+the review step: the backend re-resolves the trusted proposal and re-runs
+identity, route, broker and capability validation before any config is written.
 
 ### Physical inverter identity and route aliases
 

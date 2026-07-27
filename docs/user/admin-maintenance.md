@@ -210,7 +210,7 @@ This path inspects and edits an existing installation.
 
   Adding hardware also works like Fresh Install: the **Add more devices** row
   runs discovery (plus a manual scan), lists candidates as cards with
-  one-click **Add as inverter / Add as grid meter** actions and their match
+  one-click **Add inverter / Add as grid meter** actions and their match
   state against the current config (In config, Not found, IP changed), and
   offers manual adding for devices discovery cannot reach. Adding a device —
   from discovery or manually — opens its configured card, where all device
@@ -263,12 +263,11 @@ This path inspects and edits an existing installation.
   device. Alternate broker-ref names for the sole configured Cloud account are
   normalized to that one account; multiple Cloud refs are kept distinct rather
   than guessed to match. When discovery finds an identity that is
-  already configured over another transport — for example a Local API scan
+  already configured over another connection — for example an API scan
   sees an inverter you configured over MQTT, or an MQTT proposal matches a
-  configured Local API inverter — the review offers **Use Local API instead**
-  / **Use Local MQTT instead** / **Use Zendure Cloud MQTT instead** on that
-  device rather than a second **Add as inverter** action. Switching the
-  transport replaces the connection of the same logical device: the configured
+  configured API inverter — the review offers **Use connection** on that
+  device rather than a second **Add inverter** action. Switching the
+  connection replaces the connection of the same logical device: the configured
   name, enabled state, and all common tuning values are preserved (also across
   a rename in the same draft), only the connection fields change, and stale
   fields of the previous transport are removed. A serial-less Cloud device is

@@ -96,7 +96,7 @@ def test_logs_return_lines_and_headers(tmp_path):
 def test_logs_mask_cloud_route_and_product_using_config_scope(tmp_path):
     route = "DASHBOARD_LOG_CLOUD_ROUTE_7501"
     product = "DASHBOARD_LOG_PRODUCT_ACCOUNT"
-    password = "DASHBOARD_LOG_CLOUD_PASSWORD_7501"
+    credential_probe = "DASHBOARD_LOG_CLOUD_PASSWORD_7501"
     app_key = "DASHBOARD_LOG_CLOUD_APP_KEY_7501"
     config_path = tmp_path / "config.json"
     config_path.write_text(
@@ -107,7 +107,7 @@ def test_logs_mask_cloud_route_and_product_using_config_scope(tmp_path):
                         "cloud_a": {
                             "source": "zendure_cloud_mqtt",
                             "host": "mqtt.example.invalid",
-                            "password": password,
+                            "password": credential_probe,
                             "app_key": app_key,
                         }
                     }
@@ -130,7 +130,7 @@ def test_logs_mask_cloud_route_and_product_using_config_scope(tmp_path):
         [
             (
                 logging.INFO,
-                f"pending route {route} product {product} auth {password} {app_key}",
+                f"pending route {route} product {product} auth {credential_probe} {app_key}",
             )
         ],
     )
@@ -149,7 +149,7 @@ def test_logs_mask_cloud_route_and_product_using_config_scope(tmp_path):
         assert status == 200
         assert route not in flattened
         assert product not in flattened
-        assert password not in flattened
+        assert credential_probe not in flattened
         assert app_key not in flattened
     finally:
         server.shutdown()
@@ -159,7 +159,7 @@ def test_logs_mask_cloud_route_and_product_using_config_scope(tmp_path):
 def test_logs_mask_labeled_cloud_identifiers_without_config_context(tmp_path):
     route = "DASHBOARD_LOG_CLOUD_ROUTE_7501"
     product = "DASHBOARD_LOG_PRODUCT_ACCOUNT"
-    password = "DASHBOARD_LOG_PASSWORD_7502"
+    credential_probe = "DASHBOARD_LOG_PASSWORD_7502"
     app_key = "DASHBOARD_LOG_APP_KEY_7503"
     buffer = make_buffer(
         "logs.cloud-route-no-config",
@@ -168,8 +168,8 @@ def test_logs_mask_labeled_cloud_identifiers_without_config_context(tmp_path):
                 logging.INFO,
                 (
                     f"rejected device=Roof-{route} product={product} "
-                    f"password={password} app_key={app_key} "
-                    f"url=mqtt://cloud-user:{password}@broker.invalid"
+                    f"password={credential_probe} app_key={app_key} "
+                    f"url=mqtt://cloud-user:{credential_probe}@broker.invalid"
                 ),
             )
         ],
@@ -189,7 +189,7 @@ def test_logs_mask_labeled_cloud_identifiers_without_config_context(tmp_path):
         assert status == 200
         assert route not in flattened
         assert product not in flattened
-        assert password not in flattened
+        assert credential_probe not in flattened
         assert app_key not in flattened
     finally:
         server.shutdown()

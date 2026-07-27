@@ -1464,9 +1464,9 @@ def test_evaluate_http_binding_still_flags_truly_different_serials():
     assert binding.status == probe.BINDING_CONFLICT
 
 
-def test_select_by_trusted_serial_matches_case_insensitively():
+def test_select_by_physical_serial_matches_case_insensitively():
     runtime = FakeRuntime([_mqtt_device("INV_2", "sn-abc")])
-    dev, err = probe.select_by_trusted_serial(runtime, "SN-ABC")
+    dev, err = probe.select_by_physical_serial(runtime, "SN-ABC")
     assert err is None
     assert dev.name == "INV_2"
 

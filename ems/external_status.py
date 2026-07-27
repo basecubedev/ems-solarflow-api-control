@@ -200,7 +200,7 @@ def _node_source(node: Mapping[str, Any]) -> str:
     return ""
 
 
-def _secret_values(value: Any) -> set[str]:
+def _credential_values(value: Any) -> set[str]:
     """Collect credential values so free-form status/log text is also safe."""
 
     values: set[str] = set()
@@ -586,22 +586,22 @@ def sanitize_external_mqtt_status(
     sensitive_values |= _cloud_topic_route_segments(
         value, cloud_refs
     ) | _cloud_topic_route_segments(sensitive_context, cloud_refs)
-    secret_values = (
-        _secret_values(value) | _secret_values(sensitive_context)
+    credential_values = (
+        _credential_values(value) | _credential_values(sensitive_context)
         if drop_secrets
         else set()
     )
 
-    def replace_secrets(raw: str, *, mapping_key: bool = False) -> str:
+    def redact_credentials(raw: str, *, mapping_key: bool = False) -> str:
         safe = raw
-        for secret in sorted(secret_values, key=len, reverse=True):
-            if len(secret) >= 8:
-                safe = safe.replace(secret, "<redacted>")
-            elif safe == secret:
+        for credential in sorted(credential_values, key=len, reverse=True):
+            if len(credential) >= 8:
+                safe = safe.replace(credential, "<redacted>")
+            elif safe == credential:
                 safe = "<redacted>"
             elif not mapping_key:
                 safe = re.sub(
-                    rf"(?<![A-Za-z0-9]){re.escape(secret)}(?![A-Za-z0-9])",
+                    rf"(?<![A-Za-z0-9]){re.escape(credential)}(?![A-Za-z0-9])",
                     "<redacted>",
                     safe,
                 )
@@ -609,14 +609,14 @@ def sanitize_external_mqtt_status(
 
     def safe_string(raw: str, *, cloud_scoped: bool = False) -> str:
         return mask_external_mqtt_string(
-            replace_secrets(raw),
+            redact_credentials(raw),
             sensitive_values=frozenset(sensitive_values),
             cloud_scoped=cloud_scoped,
         )
 
     def safe_mapping_key(raw: str, *, cloud_scoped: bool = False) -> str:
         return mask_external_mqtt_string(
-            replace_secrets(raw, mapping_key=True),
+            redact_credentials(raw, mapping_key=True),
             sensitive_values=frozenset(sensitive_values),
             cloud_scoped=cloud_scoped,
         )
@@ -655,7 +655,7 @@ def sanitize_external_mqtt_status(
                         candidate = f"{base_key} [{ordinal}]"
                     safe_key = candidate
                 if lowered in _TRUSTED_IDENTITY_KEYS and isinstance(child, str):
-                    result[safe_key] = replace_secrets(child)
+                    result[safe_key] = redact_credentials(child)
                 elif node_cloud and lowered in _ROUTE_KEYS:
                     result[safe_key] = mask_route_identifier(child)
                 else:

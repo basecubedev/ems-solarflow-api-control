@@ -4647,7 +4647,7 @@ def test_maintenance_discovery_cards_keep_add_actions_not_local_preview():
     assert "In config" in js
     # Adding from discovery is fresh-install style: role-specific add actions.
     assert "Add as grid meter" in js
-    assert "Add as inverter" in js
+    assert "Add inverter" in js
 
     assert "previewMaintenanceConfig" not in review
     assert "mconfig-discovery-next" not in review

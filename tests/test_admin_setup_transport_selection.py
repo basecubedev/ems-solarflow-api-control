@@ -574,24 +574,26 @@ console.log(JSON.stringify(cards));
     ]
 
 
-def test_mqtt_inverter_card_shows_transport_and_supports_remove_and_switch():
+def test_mqtt_inverter_card_shows_its_connection_and_supports_remove():
     js = _read("admin.js")
     card = js.split("function renderMqttInverterCard", 1)[1].split("\nfunction ", 1)[0]
-    # The card renders the transport label, a remove action distinct from the HTTP
-    # remove, and (when a Local-API alternative exists) a transport-switch control.
-    assert "transportLabelFor(source)" in card
+    # The configured card names its connection with the short label and keeps a
+    # remove action distinct from the HTTP remove.
+    assert "connectionLabelFor(source)" in card
+    assert "renderConnectionPill(source)" in card
     assert "config-mqtt-remove" in card
-    # Switching passes a stable identity reference (serial or opaque token), never
-    # a raw route id, so a route-only inverter can still switch transport.
-    assert "renderTransportSwitchButton(switchRef, source)" in card
+    # Switching moved to the candidate pool: the configured card carries no
+    # second switch control.
+    assert "renderTransportSwitchButton" not in card
     # The serial is escaped, never interpolated raw into the card HTML.
     assert "escapeHtml(serial)" in card
 
 
-def test_http_inverter_body_offers_transport_switch():
+def test_http_inverter_body_names_its_connection_without_a_switch_control():
     js = _read("admin.js")
     body = js.split("function renderInverterBody", 1)[1].split("\nfunction ", 1)[0]
-    assert 'renderTransportSwitchButton(item.serial_number, "local_api")' in body
+    assert 'connectionLabelFor("local_api")' in body
+    assert "renderTransportSwitchButton" not in body
 
 
 # --- Add more devices (Phase 7) -------------------------------------------
@@ -599,7 +601,7 @@ def test_http_inverter_body_offers_transport_switch():
 
 def test_add_more_devices_includes_all_unselected_transports():
     out = _run_named(
-        ("normalizeSerial", "unselectedMqttDeviceProposals"),
+        ("normalizeSerial", "mqttSourceOfConnection", "unselectedMqttDeviceProposals"),
         """
 const zendureMqttPreviewProposals = new Map([["m:sel", {}]]);
 function availableMqttDeviceProposals() {
@@ -625,22 +627,23 @@ def test_mqtt_candidate_card_uses_uniform_add_label_and_escapes():
         "\nfunction ", 1
     )[0]
     assert "config-mqtt-add" in card
-    # The action is uniform with the HTTP candidate card ("Add as inverter"); no
-    # transport-specific "Use over X" button.
-    assert "Add as inverter" in card
-    assert "Use over " not in card
-    # Transport stays visible as metadata on the card, serial stays escaped.
-    assert "transportLabelFor(source)" in card
+    # A new physical device adds; an alternative connection for a configured one
+    # switches through the shared candidate-state action.
+    assert "Add inverter" in card
+    assert "Add as inverter" not in card
+    assert "renderConnectionCandidateAction(" in card
+    # The connection stays visible as metadata on the card, serial stays escaped.
+    assert "connectionLabelFor(source)" in card
     assert "escapeHtml(serial)" in card
 
 
-def test_transport_switch_button_escapes_serial_and_source():
+def test_candidate_action_escapes_identity_reference_and_source():
     js = _read("admin.js")
-    fn = js.split("function renderTransportSwitchButton", 1)[1].split(
+    fn = js.split("function renderConnectionCandidateAction", 1)[1].split(
         "\nfunction ", 1
     )[0]
-    assert "escapeHtml(alternative)" in fn
-    assert 'escapeHtml(String(serial || ""))' in fn
+    assert "escapeHtml(state.identityRef)" in fn
+    assert 'escapeHtml(String(state.candidateSource || ""))' in fn
 
 
 # --- Config navigation gating (Phase 9) -----------------------------------
@@ -998,26 +1001,38 @@ console.log(JSON.stringify(cards));
 
 
 def test_transport_switch_discovery_accepts_route_only_identity_token():
-    # Defect 5 / defect 10: alternative-transport discovery accepts an opaque
-    # identity token (not a physical serial), so a route-only inverter can switch
-    # transport. Both proposals share the route token but differ by source.
+    # Defect 5 / defect 10: a route-only inverter (opaque identity token, no
+    # physical serial) still resolves its alternative connection and exposes the
+    # token as the switch reference — never a raw route id.
     out = _run_named(
-        _IDENTITY_HELPERS + ("alternativeTransportsForSerial",),
+        _IDENTITY_HELPERS
+        + (
+            "connectionLabelFor",
+            "inverterItems",
+            "selectedMqttDeviceEntries",
+            "configuredInverterConnection",
+            "sameConnectionScope",
+            "inverterCandidateConnectionState",
+        ),
         """
-function availableConfigDevices() { return []; }
-function isAutoConfigReady() { return true; }
-function availableMqttDeviceProposals() {
-  return [
-    { id: "cloud", physical_identity_token: "opaque:v1:route", connection_source: "zendure_cloud_mqtt" },
-    { id: "local", physical_identity_token: "opaque:v1:route", connection_source: "local_mqtt" },
-  ];
-}
+let configDraftItems = [];
+const zendureMqttPreviewProposals = new Map([["cloud", {
+  id: "cloud", target: "device", config_name: "INV_1",
+  physical_identity_token: "opaque:v1:route",
+  connection_source: "zendure_cloud_mqtt",
+}]]);
+const localCandidate = {
+  id: "local", physical_identity_token: "opaque:v1:route",
+  connection_source: "local_mqtt",
+};
 console.log(JSON.stringify(
-  alternativeTransportsForSerial("opaque:v1:route", "zendure_mqtt")
+  inverterCandidateConnectionState(localCandidate, "local_mqtt")
 ));
 """,
     )
-    assert out == ["local_mqtt"]
+    assert out["state"] == "alternative"
+    assert out["currentSource"] == "zendure_mqtt"
+    assert out["identityRef"] == "opaque:v1:route"
 
 
 # --- Transitive connected-component grouping (Archive 79 / defect 1) ---------

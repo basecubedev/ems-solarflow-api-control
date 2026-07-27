@@ -245,7 +245,7 @@ test("MQTT then API: discovery offers a transport switch, not a duplicate invert
   await expect(renamed).toHaveClass(/hardware-card-zendure-mqtt/);
 
   // Local API discovery now sees the same serials: the review offers a
-  // transport switch on the configured devices, never an "Add as inverter".
+  // connection switch on the configured devices, never an "Add inverter".
   state.apiDevices = [
     apiInverter(SERIAL_A, "192.168.60.21"),
     apiInverter(SERIAL_B, "192.168.60.22"),
@@ -253,18 +253,18 @@ test("MQTT then API: discovery offers a transport switch, not a duplicate invert
   await runDiscovery(page);
   const results = page.locator("#maintenance-discovery-results");
   const switchButtons = results.getByRole("button", {
-    name: "Use Local API instead",
+    name: "Use connection",
   });
   await expect(switchButtons).toHaveCount(2);
   await expect(
-    results.getByRole("button", { name: "Add as inverter" }),
+    results.getByRole("button", { name: "Add inverter" }),
   ).toHaveCount(0);
 
-  // Switch the renamed inverter to Local API: same card count, same name,
+  // Switch the renamed inverter to API: same card count, same name,
   // same tuning values, new connection fields.
   await results
     .locator(".mconfig-discovery-device-card", { hasText: "Roof West" })
-    .getByRole("button", { name: "Use Local API instead" })
+    .getByRole("button", { name: "Use connection" })
     .click();
   await expect(configuredCards(page)).toHaveCount(5);
   const switched = cardByText(page, "Roof West");
@@ -308,15 +308,15 @@ test("API then MQTT: proposal for a configured serial switches the transport in 
   await expect(configuredCards(page)).toHaveCount(3);
 
   // The proposal matches the configured Local API inverter's serial: the only
-  // offer is the transport switch.
+  // offer is the connection switch.
   await runDiscovery(page);
   const results = page.locator("#maintenance-discovery-results");
   const switchButton = results.getByRole("button", {
-    name: "Use Local MQTT instead",
+    name: "Use connection",
   });
   await expect(switchButton).toHaveCount(1);
   await expect(
-    results.getByRole("button", { name: "Add to draft" }),
+    results.getByRole("button", { name: "Add inverter" }),
   ).toHaveCount(0);
 
   await switchButton.click();
@@ -397,7 +397,7 @@ test("serial-less Cloud identity survives apply, reload, rediscovery and scope c
   ];
   await runDiscovery(page);
   const apiSwitch = results.getByRole("button", {
-    name: "Use Local API instead",
+    name: "Use connection",
   });
   await expect(apiSwitch).toHaveCount(1);
   await apiSwitch.click();

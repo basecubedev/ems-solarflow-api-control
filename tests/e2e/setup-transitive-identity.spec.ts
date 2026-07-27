@@ -368,7 +368,7 @@ test("Fresh Setup: a Local-API serial, a route-only Cloud selection and a serial
   await expect(draftInverterCards(page)).toHaveCount(1);
   const merged = draftInverterCards(page).first();
   await expect(merged).toContainText("Roof Bridge");
-  await expect(merged).toContainText("Zendure Cloud MQTT");
+  await expect(merged).toContainText("Zendure MQTT");
   await expect(page.locator("body")).not.toContainText("E2EANCHOR7501");
   await expect(page.locator("#config-preview-devices")).toContainText(/1 inverter/i);
   await expect(page.locator("#config-validation")).not.toContainText(/not present/i);

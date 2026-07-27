@@ -215,6 +215,10 @@ def _merge_zendure_mqtt_proposals(preview, proposals, validation, cloud_auth_ava
         fragment = proposal.get("config_fragment")
         if not isinstance(fragment, dict):
             continue
+        # A disabled selection never becomes a device, so it can never be the
+        # second claim on a physical identity either.
+        if proposal.get("enabled") is False:
+            continue
         scan_entry = sanitize_zendure_mqtt_fragment(copy.deepcopy(fragment))
         if validate_zendure_mqtt_fragment(scan_entry):
             continue
@@ -245,6 +249,11 @@ def _merge_zendure_mqtt_proposals(preview, proposals, validation, cloud_auth_ava
         fragment = proposal.get("config_fragment")
         if not isinstance(fragment, dict):
             continue
+        # A disabled selection is left out of the generated config exactly like a
+        # disabled Local API draft item, so the enabled state survives a
+        # connection switch in both directions.
+        if proposal.get("enabled") is False:
+            continue
         entry = sanitize_zendure_mqtt_fragment(copy.deepcopy(fragment))
         if "config_name" in proposal:
             config_name = str(proposal.get("config_name") or "").strip()
@@ -264,6 +273,10 @@ def _merge_zendure_mqtt_proposals(preview, proposals, validation, cloud_auth_ava
                     _issue("zendure_mqtt_invalid", f"{label}: {issue['message']}.")
                 )
             continue
+        # Common (transport-independent) device values travel with the logical
+        # inverter through the same catalog-filtered writer the Local API draft
+        # uses; identity and connection keys stay owned by the fragment.
+        apply_device_config_values(entry, proposal.get("config_values"))
         label = str(entry.get("name") or "Zendure MQTT device").strip()
         identity = zendure_config_device_identity(
             entry, broker_sources=broker_sources

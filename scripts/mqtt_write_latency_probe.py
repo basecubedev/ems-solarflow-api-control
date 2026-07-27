@@ -194,8 +194,8 @@ def select_mqtt_device(runtime, *, name=None, serial=None, device_id=None,
     )
 
 
-def select_by_trusted_serial(runtime, http_serial):
-    """Select the one device whose *trusted* physical serial equals the readback.
+def select_by_physical_serial(runtime, http_serial):
+    """Select the one device whose configured physical serial equals the readback.
 
     Only a device with a configured physical serial can be matched by an
     HTTP-reported serial. A serial-less device (its ``sn`` falls back to the Cloud
@@ -450,7 +450,7 @@ def resolve_by_api_ip(runtime, session, api_ip, device_name, *, serial=None,
             broker_ref=broker_ref,
         )
     else:
-        dev, err = select_by_trusted_serial(runtime, reported_serial)
+        dev, err = select_by_physical_serial(runtime, reported_serial)
     if err:
         return None, None, None, err
     reader = ZendureClient(dev.name, api_ip, reported_serial, session, 0, 0, 1, None)

@@ -206,6 +206,19 @@ function inverterCards(page: Page) {
   return page.locator("#config-draft-list .hardware-card-inverter");
 }
 
+// "Add more devices" is a collapsed <details>; its cards are only operable once
+// it is open. Re-assert instead of sleeping: the list re-renders on every draft
+// change, but the open state is owned by the element.
+async function openCandidatePool(page: Page) {
+  const details = page.locator("#config-available-details");
+  await expect(async () => {
+    if (!(await details.evaluate((node: HTMLDetailsElement) => node.open))) {
+      await details.locator("> summary").click();
+    }
+    expect(await details.evaluate((node: HTMLDetailsElement) => node.open)).toBe(true);
+  }).toPass();
+}
+
 test("late Zendure MQTT priority reconfigures the auto-added Local-API inverters", async ({ page }) => {
   const state = { mqttReady: false, priority: ["local_api", "local_mqtt", "zendure_mqtt"] };
   await reachDevices(page, state);
@@ -216,7 +229,7 @@ test("late Zendure MQTT priority reconfigures the auto-added Local-API inverters
   const initialCard = inverterCards(page).first();
   await expect(initialCard).toHaveAttribute("data-source-id", /^zendure_local_http:/);
   await initialCard.locator(".hardware-card-toggle").click();
-  await expect(initialCard).toContainText("Local API");
+  await expect(initialCard).toContainText("API");
 
   // Move Zendure MQTT to priority 1, then rescan it (proposals now arrive).
   await page.locator('[data-setup-step="devices"]').click();
@@ -233,12 +246,12 @@ test("late Zendure MQTT priority reconfigures the auto-added Local-API inverters
   await zendureRow.locator("[data-prep-rescan]").click();
   await proposalsLoaded;
 
-  // Config now shows both inverters over Zendure Cloud MQTT, no duplicate cards.
+  // Config now shows both inverters over Zendure MQTT, no duplicate cards.
   await page.locator('[data-setup-step="config"]').click();
   await expect(inverterCards(page)).toHaveCount(2);
   const switchedCards = await inverterCards(page).all();
   for (const card of switchedCards) {
-    await expect(card).toContainText("Zendure Cloud MQTT");
+    await expect(card).toContainText("Zendure MQTT");
     await expect(card).not.toContainText("192.168.100.78");
   }
   await expect(switchedCards[0]).toContainText("INV_1");
@@ -258,22 +271,38 @@ test("late Zendure MQTT priority reconfigures the auto-added Local-API inverters
   await expect(page.locator("#setup-next")).toBeEnabled();
 });
 
-test("Add more devices offers the Local-API transport alternative", async ({ page }) => {
+test("Add more devices offers the API connection as an alternative", async ({ page }) => {
   const state = { mqttReady: true, priority: ["zendure_mqtt", "local_api", "local_mqtt"] };
   await reachDevices(page, state);
 
   // With Zendure MQTT prioritized from the start, the inverters are configured
-  // over MQTT; their Local-API alternative is offered on the selected card.
+  // over MQTT; the API connection stays offered in the candidate pool.
   await page.locator('[data-setup-step="config"]').click();
   await expect(inverterCards(page)).toHaveCount(2);
-  const firstCard = inverterCards(page).first();
-  await expect(firstCard).toContainText("INV_1");
-  await firstCard.locator(".hardware-card-toggle").click();
-  await expect(firstCard).toContainText(/Use Local API instead/i);
-  await firstCard.getByRole("button", { name: /Use Local API instead/i }).click();
+  await expect(inverterCards(page).first()).toContainText("INV_1");
+
+  await openCandidatePool(page);
+  const available = page.locator("#config-available-list");
+  const apiCandidate = available.locator(
+    '.hardware-card-inverter[data-candidate-state="alternative"]',
+    { hasText: SERIAL_A },
+  );
+  await expect(apiCandidate).toContainText("Already configured as INV_1 via Zendure MQTT");
+  await apiCandidate.getByRole("button", { name: "Use connection" }).click();
+
+  // One logical inverter, same name, now over API.
+  await expect(inverterCards(page)).toHaveCount(2);
   const switched = inverterCards(page).first();
   await expect(switched).toHaveAttribute("data-source-id", /^zendure_local_http:/);
   await expect(switched).toContainText("INV_1");
-  await switched.locator(".hardware-card-toggle").click();
-  await expect(switched).toContainText("Local API");
+  await expect(switched).toContainText("API");
+
+  // The Zendure MQTT connection for the same physical inverter is offered back
+  // without deleting the inverter.
+  await expect(
+    available.locator(
+      '.hardware-card-inverter[data-candidate-state="alternative"]',
+      { hasText: SERIAL_A },
+    ),
+  ).toContainText("Already configured as INV_1 via API");
 });

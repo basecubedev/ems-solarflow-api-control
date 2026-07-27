@@ -113,23 +113,29 @@ the Admin Console (see **Start** above), open `http://127.0.0.1:8090`, and pick
    message, no changes were made — wait and select **Verify System Build** again
    (see [troubleshooting](../technical/troubleshooting-reference.md)).
 2. **02 Devices** — run discovery. One physical device may be reachable over
-   several transports (Local API, local MQTT, Zendure Cloud MQTT). **Discovery
-   priority** picks the preferred transport automatically: raising Zendure MQTT
-   above Local API and rescanning reconfigures a device that was auto-added over
-   Local API to use MQTT instead — the same physical device is never listed
-   twice. Discovery priority chooses the transport only; it never enables output
-   control by itself (see step 3 and **04**).
+   several connections (API, MQTT, Zendure MQTT). **Discovery priority** picks
+   the preferred connection automatically: raising Zendure MQTT above Local API
+   and rescanning reconfigures a device that was auto-added over API to use
+   MQTT instead — the same physical device is never listed twice. Discovery
+   priority chooses the connection only; it never enables output control by
+   itself (see step 3 and **04**).
 3. **03 Config** — review and complete the generated config. The selected
-   transport shows on each device card (e.g. *Transport: Zendure Cloud MQTT*).
-   Every newly added inverter receives a short sequential EMS name such as
-   `INV_1`, `INV_2`, and so on. This is the operational identifier used in
-   `config.json`, logs, the dashboard, and the Flowchart; model, address,
-   serial number, hardware generation, and transport remain separate details on
-   the card. You may edit the default before applying the config. Switching a
-   physical inverter between Local API and MQTT preserves its current EMS name.
-   A device also reachable over another transport offers *Use … instead* to
-   switch manually — a manual choice is kept even if you later change discovery
-   priority — and **Add more devices** lists unconfigured MQTT devices too. A
+   connection shows as a short pill on each device card: **API**, **MQTT** or
+   **Zendure MQTT**. Every newly added inverter receives a short sequential EMS
+   name such as `INV_1`, `INV_2`, and so on. This is the operational identifier
+   used in `config.json`, logs, the dashboard, and the Flowchart; model,
+   address, serial number, hardware generation, and connection remain separate
+   details on the card. You may edit the default before applying the config.
+   **Add more devices** is a connection list, not just a device list: it shows
+   every discovered connection that is not the one currently selected. A
+   connection for a physical inverter you have not configured yet offers **Add
+   inverter**; a second connection for an inverter you already configured shows
+   *Already configured as INV_1 via API* and offers **Use connection**, which
+   switches that one logical inverter to the other connection immediately —
+   no confirmation dialog, no duplicate device, and the EMS name, enabled state
+   and all common values are preserved. The connection you left stays listed,
+   so you can switch back without removing the inverter. A manual choice is
+   kept even if you later change discovery priority. A
    serial-less Cloud MQTT inverter you select before its serial is known is
    recognized as the **same** inverter once discovery later reports the same
    Cloud route carrying a physical serial: it keeps your custom name and any

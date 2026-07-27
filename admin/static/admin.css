@@ -1533,6 +1533,27 @@ code {
   letter-spacing: .06em;
   text-transform: uppercase;
 }
+/* Short connection label on inverter cards and connection candidates. */
+.connection-pill {
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.connection-pill[data-connection="local_api"] { color: var(--output); }
+.connection-pill[data-connection="local_mqtt"],
+.connection-pill[data-connection="zendure_mqtt"] { color: var(--accent2); }
+.candidate-connection-note {
+  margin: 0;
+  padding: 0 12px 10px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.candidate-connection-note.is-conflict { color: var(--danger); }
 .hardware-card-remove.secondary-button.compact {
   min-height: 26px;
   padding: 0 8px;
