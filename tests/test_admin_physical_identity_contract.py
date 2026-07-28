@@ -184,13 +184,15 @@ def test_maintenance_proposal_state_matches_tokens_and_keeps_scopes_separate():
     helpers = _proposal_state_helpers(js)
     script = helpers + """
 function mconfigIsMqttDevice(device) { return device && device.kind === "zendure_mqtt"; }
+// Maintenance loads the draft as a clone of the installed config, so the
+// configured device is present in both.
+const configured = { kind: "zendure_mqtt",
+  physical_identity_token: "opaque:v1:scope-a",
+  physical_identity_alias_tokens: ["opaque:v1:scope-a"],
+  mqtt: { device_id: "…1234" } };
 const mconfigState = {
-  pristine: { devices: [
-    { kind: "zendure_mqtt", physical_identity_token: "opaque:v1:scope-a",
-      physical_identity_alias_tokens: ["opaque:v1:scope-a"],
-      mqtt: { device_id: "…1234" } }
-  ] },
-  draft: { devices: [] },
+  pristine: { devices: [configured] },
+  draft: { devices: [configured] },
 };
 const same = { physical_identity_token: "opaque:v1:scope-a",
   physical_identity_alias_tokens: ["opaque:v1:scope-a"],
@@ -224,7 +226,15 @@ PROPOSAL_STATE_HELPER_NAMES = (
     "inverterHasIdentity",
     "inverterIdentityConflict",
     "inverterIdentitiesMatch",
+    "mqttSourceOfConnection",
+    "connectionBrokerScope",
+    "mconfigIsMqttDevice",
+    "mconfigDeviceMqttSource",
+    "mconfigDeviceConnectionSource",
+    "mconfigSameMqttConnection",
     "mconfigProposalIdentityView",
+    "mconfigDraftDevicesMatchingCandidate",
+    "mconfigPristineHasCandidateConnection",
     "mconfigMqttProposalState",
 )
 
@@ -247,13 +257,13 @@ def test_route_only_device_recognizes_later_serial_enrichment():
     script = helpers + """
 function mconfigIsMqttDevice(device) { return device && device.kind === "zendure_mqtt"; }
 // Existing configured device is route-only: its only alias token is the route.
+const configured = { kind: "zendure_mqtt",
+  physical_identity_token: "opaque:v1:route-1",
+  physical_identity_alias_tokens: ["opaque:v1:route-1"],
+  mqtt: { device_id: "…1234" } };
 const mconfigState = {
-  pristine: { devices: [
-    { kind: "zendure_mqtt", physical_identity_token: "opaque:v1:route-1",
-      physical_identity_alias_tokens: ["opaque:v1:route-1"],
-      mqtt: { device_id: "…1234" } }
-  ] },
-  draft: { devices: [] },
+  pristine: { devices: [configured] },
+  draft: { devices: [configured] },
 };
 // Same route, now with a serial: primary token is the serial, but the route
 // survives as an alias, so it intersects the existing route-only device.
@@ -296,14 +306,13 @@ def test_serial_device_matches_route_rediscovery_and_blocks_serial_conflict():
     helpers = _proposal_state_helpers(js)
     script = helpers + """
 function mconfigIsMqttDevice(device) { return device && device.kind === "zendure_mqtt"; }
+const configured = { kind: "zendure_mqtt", serial_number: "SERIAL-001",
+  physical_identity_token: "opaque:v1:serial-1",
+  physical_identity_alias_tokens: ["opaque:v1:serial-1", "opaque:v1:route-1"],
+  mqtt: { device_id: "…1234" } };
 const mconfigState = {
-  pristine: { devices: [
-    { kind: "zendure_mqtt", serial_number: "SERIAL-001",
-      physical_identity_token: "opaque:v1:serial-1",
-      physical_identity_alias_tokens: ["opaque:v1:serial-1", "opaque:v1:route-1"],
-      mqtt: { device_id: "…1234" } }
-  ] },
-  draft: { devices: [] },
+  pristine: { devices: [configured] },
+  draft: { devices: [configured] },
 };
 const routeOnly = {
   physical_identity_token: "opaque:v1:route-1",

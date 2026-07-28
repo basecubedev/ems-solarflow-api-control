@@ -16,6 +16,7 @@ unsupported control request is downgraded to telemetry-only.
 
 import copy
 import re
+from collections.abc import Mapping
 
 from admin.device_common_fields import (
     apply_common_device_values,
@@ -27,7 +28,9 @@ from ems.zendure_mqtt.config_entries import (
     is_control_zendure_mqtt_device_config,
     validate_zendure_mqtt_control_device_config,
     validate_zendure_mqtt_device_config,
+    zendure_mqtt_broker_ref,
     zendure_mqtt_hardware_profile,
+    zendure_mqtt_source,
 )
 from ems.zendure_mqtt.topics import (
     FAMILY_LEGACY_JSON,
@@ -575,7 +578,73 @@ def _mqtt_str(mqtt, key):
     return ""
 
 
-def zendure_mqtt_device_draft(device):
+def _effective_mqtt_source(device, broker_sources):
+    """Transport source a configured MQTT device uses, or ``""`` when unresolved.
+
+    A config may omit ``mqtt.source`` because the referenced broker profile is
+    the authority for the transport (and thus for the write gate). Resolving it
+    here keeps the browser from having to guess from whichever discovery
+    proposals happen to exist; an unresolved source stays empty so no caller can
+    read a concrete transport that was never proven.
+    """
+
+    stated = zendure_mqtt_source(device)
+    if stated:
+        return stated
+    if not isinstance(broker_sources, Mapping):
+        return ""
+    return str(broker_sources.get(zendure_mqtt_broker_ref(device)) or "")
+
+
+def _selected_mqtt_connection(item):
+    """Concrete MQTT connection a proposal-backed draft entry selects.
+
+    ``None`` for an entry that carries no proposal selection at all, so an
+    ordinary field edit can never re-home a stored connection: only a draft
+    entry built from a discovery proposal carries a proposal id or a broker
+    endpoint block, and the editable draft of a stored device carries neither.
+    The broker block is proposal-owned (the server rewrites it from current
+    discovery), so it outranks the browser-editable ``mqtt`` values it
+    duplicates; the endpoint it names is validated by the broker resolver,
+    which rejects a ref that already means a different connection.
+    """
+
+    mqtt = item.get("mqtt") if isinstance(item.get("mqtt"), dict) else {}
+    broker = item.get("broker") if isinstance(item.get("broker"), dict) else {}
+    if not broker and not str(item.get("proposal_id") or "").strip():
+        return None
+    ref = str(broker.get("ref") or mqtt.get("broker_ref") or "").strip()
+    source = str(broker.get("source") or mqtt.get("source") or "").strip().lower()
+    if not ref and not source:
+        return None
+    return (source, ref, str(mqtt.get("topic_family") or "").strip())
+
+
+def zendure_mqtt_connection_switched(device, item, broker_sources=None):
+    """True when a draft entry selects a different concrete MQTT connection.
+
+    Same config type is not the same connection: an already configured MQTT
+    inverter can be moved to another broker, another account or another
+    transport. The trusted proposal selection — never a raw field comparison —
+    is the switch signal, so route enrichment on the unchanged connection stays
+    an ordinary edit. A stored config may omit ``mqtt.source`` because its
+    broker profile is the authority; resolving it here keeps a reselection of
+    the same transport from reading as a cloud/local change.
+    """
+
+    selected = _selected_mqtt_connection(item)
+    if selected is None:
+        return False
+    mqtt = device.get("mqtt") if isinstance(device.get("mqtt"), dict) else {}
+    stored = (
+        _effective_mqtt_source(device, broker_sources).strip().lower(),
+        str(mqtt.get("broker_ref") or "").strip(),
+        str(mqtt.get("topic_family") or "").strip(),
+    )
+    return selected != stored
+
+
+def zendure_mqtt_device_draft(device, *, broker_sources=None):
     """Editable maintenance draft view of an existing ``zendure_mqtt`` device.
 
     Preserves the MQTT topic identity and device/product identifiers, surfaces
@@ -682,6 +751,9 @@ def zendure_mqtt_device_draft(device):
         "mqtt": {
             "broker_ref": _mqtt_str(mqtt, "broker_ref"),
             "source": _mqtt_str(mqtt, "source"),
+            # Display-only resolution of the stored source; apply never reads it,
+            # so an untouched draft still writes back byte-identical config.
+            "effective_source": _effective_mqtt_source(device, broker_sources),
             "topic_family": topic_family,
             "base_topic": mqtt.get("base_topic") if isinstance(mqtt, dict) else None,
             "device_id": _mqtt_str(mqtt, "device_id"),
@@ -817,7 +889,11 @@ def apply_zendure_mqtt_draft_fields(device, item):
                 value = item_mqtt.get(key)
                 if isinstance(value, str) and value.strip():
                     mqtt[key] = value.strip()
-            if "base_topic" in item_mqtt:
+            # A draft that carries no base topic (absent, or an explicit null
+            # from a proposal whose observation never reported one) must not
+            # persist a null: the selected family's canonical topic keeps the
+            # seeded connection complete.
+            if item_mqtt.get("base_topic") is not None:
                 mqtt["base_topic"] = item_mqtt["base_topic"]
             elif mqtt.get("topic_family"):
                 # No explicit base topic: derive the observed family's canonical
@@ -900,6 +976,7 @@ __all__ = [
     "hardware_generation_for_model",
     "resolve_hardware_generation",
     "telemetry_schema_for_topic_family",
+    "zendure_mqtt_connection_switched",
     "sanitize_zendure_mqtt_fragment",
     "validate_zendure_mqtt_fragment",
     "build_manual_zendure_mqtt_fragment",

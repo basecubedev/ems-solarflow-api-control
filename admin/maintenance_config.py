@@ -35,6 +35,7 @@ from admin.zendure_mqtt_config_draft import (
     apply_zendure_mqtt_draft_fields,
     generation_catalog,
     zendure_hardware_profile_options,
+    zendure_mqtt_connection_switched,
     zendure_mqtt_device_draft,
 )
 from ems.config import (
@@ -501,8 +502,12 @@ def _attach_runtime_override_identity_tokens(
 def build_maintenance_draft(config):
     """Build an editable in-memory draft from the current config values."""
 
+    broker_sources = broker_sources_from_config(config)
     return {
-        "devices": [_device_draft(device) for device in _config_devices(config)],
+        "devices": [
+            _device_draft(device, broker_sources)
+            for device in _config_devices(config)
+        ],
         "grid_meter": _grid_meter_draft(config.get("grid_meter")),
         "zendure_mqtt": _zendure_mqtt_broker_draft(config.get("zendure_mqtt")),
         "features": _feature_draft(config),
@@ -516,9 +521,9 @@ def _config_devices(config):
     return [device for device in devices if isinstance(device, dict)]
 
 
-def _device_draft(device):
+def _device_draft(device, broker_sources=None):
     if is_zendure_mqtt_device_config(device):
-        return zendure_mqtt_device_draft(device)
+        return zendure_mqtt_device_draft(device, broker_sources=broker_sources)
     name = str(device.get("name") or "").strip()
     draft = {
         "kind": "local_api",
@@ -904,6 +909,20 @@ _ZENDURE_MQTT_ONLY_DEVICE_KEYS = (
 )
 
 
+# Keys that outlive a change of MQTT connection: the config type stays
+# zendure_mqtt and the physical serial names the same inverter.
+_ZENDURE_MQTT_DEVICE_IDENTITY_KEYS = ("type", "serial_number")
+# Everything a concrete MQTT connection owns — broker, route, topic identity and
+# the write/hardware profile bound to it. Selecting a different connection
+# replaces all of them at once so nothing from the old broker or account can
+# survive; name, enabled and every common tuning value stay untouched.
+_ZENDURE_MQTT_CONNECTION_KEYS = tuple(
+    key
+    for key in _ZENDURE_MQTT_ONLY_DEVICE_KEYS
+    if key not in _ZENDURE_MQTT_DEVICE_IDENTITY_KEYS
+)
+
+
 def _strip_stale_transport_keys(device, transport):
     stale = (
         _ZENDURE_MQTT_ONLY_DEVICE_KEYS
@@ -915,13 +934,25 @@ def _strip_stale_transport_keys(device, transport):
     return device
 
 
-def materialize_maintenance_device(*, existing_device, draft_item, transport, defaults):
+def _strip_stale_connection_keys(device):
+    for key in _ZENDURE_MQTT_CONNECTION_KEYS:
+        device.pop(key, None)
+    return device
+
+
+def materialize_maintenance_device(
+    *, existing_device, draft_item, transport, defaults, connection_switched=False
+):
     """Materialize one maintenance draft entry into a config device.
 
     Value precedence: existing explicit device values, then explicit draft
     edits, then the central catalog defaults. A transport switch keeps the
     device's common/custom values and replaces only the connection: the old
     transport's keys are dropped before the new transport's fields apply.
+    ``connection_switched`` applies the same replacement within one transport,
+    for an MQTT device moved to another concrete MQTT connection — its stale
+    connection keys go first, so the selected broker, route, topic identity and
+    write profile are projected as one whole instead of patched field by field.
     Missing common defaults materialize for brand-new devices and transport
     switches only — an untouched existing device keeps its byte-exact stored
     shape so a no-op apply never rewrites config.
@@ -934,6 +965,8 @@ def materialize_maintenance_device(*, existing_device, draft_item, transport, de
         device = {}
     elif switched:
         device = _strip_stale_transport_keys(copy.deepcopy(existing_device), transport)
+    elif is_mqtt and connection_switched:
+        device = _strip_stale_connection_keys(copy.deepcopy(existing_device))
     else:
         device = copy.deepcopy(existing_device)
     if is_mqtt:
@@ -1182,14 +1215,19 @@ def _merge_devices(merged, devices, issues, *, identity_token_key=None):
             if name:
                 allocation_names.append(name)
         if _is_mqtt_draft_item(item):
+            was_mqtt = is_zendure_mqtt_device_config(original)
+            connection_switched = was_mqtt and zendure_mqtt_connection_switched(
+                original, item, broker_sources
+            )
             device = materialize_maintenance_device(
                 existing_device=original,
                 draft_item=item,
                 transport="zendure_mqtt",
                 defaults=defaults,
+                connection_switched=connection_switched,
             )
-            if not is_zendure_mqtt_device_config(original):
-                _resolve_new_device_broker(merged, device, item, issues)
+            if not was_mqtt or connection_switched:
+                _resolve_selected_device_broker(merged, device, item, issues)
         else:
             device = materialize_maintenance_device(
                 existing_device=original,
@@ -1201,16 +1239,17 @@ def _merge_devices(merged, devices, issues, *, identity_token_key=None):
     merged["devices"] = result
 
 
-def _resolve_new_device_broker(merged, device, item, issues):
-    """Persist the broker profile a newly added Zendure MQTT device references.
+def _resolve_selected_device_broker(merged, device, item, issues):
+    """Persist the broker profile a selected Zendure MQTT connection references.
 
     Runs the same shared resolver as Fresh Setup on the endpoint the browser
     passed through from the trusted discovery proposal: a matching existing
     profile (any ref) is reused, a new endpoint provisions its own profile, and
     a ref that already exists with different connection data is rejected with an
-    actionable conflict instead of being silently replaced. An existing device
-    edit never reaches this path, so operator-declared profiles are never
-    rewritten by the device editor.
+    actionable conflict instead of being silently replaced. Reached by a newly
+    added device, a transport switch and an MQTT device moved to another
+    concrete MQTT connection — never by an ordinary field edit, so an untouched
+    broker profile is never rewritten by the device editor.
     """
 
     broker = item.get("broker")

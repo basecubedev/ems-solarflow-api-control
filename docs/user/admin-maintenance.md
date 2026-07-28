@@ -270,7 +270,36 @@ This path inspects and edits an existing installation.
   connection replaces the connection of the same logical device: the configured
   name, enabled state, and all common tuning values are preserved (also across
   a rename in the same draft), only the connection fields change, and stale
-  fields of the previous transport are removed. A serial-less Cloud device is
+  fields of the previous connection are removed. This holds between two MQTT
+  connections as well — one local broker to another, or a local broker to and
+  from your Zendure Cloud account: the applied config carries the selected
+  broker, transport, topic identity and route as one whole, never the new route
+  on the old broker. If the selected broker is not configured yet, applying adds
+  its profile; a broker name that already means a different connection is
+  reported as a conflict instead of being overwritten.
+
+  Switching is reversible inside one discovery session. What each discovered
+  connection offers is decided by the *current draft*, not by what is installed:
+  the moment you switch, the connection the inverter no longer uses is offered
+  as **Use connection** again, and the whole review — cards, notes, actions and
+  counts — is rebuilt from the discovery results already on hand. No rescan, no
+  reload. So `b1 → b2 → b1` between two local brokers, and `API → Zendure MQTT →
+  API` (or the reverse), all work without leaving the page, each step selecting
+  that exact broker and route and leaving exactly one logical inverter behind.
+  *In config* therefore means "this is the installed connection and you have not
+  changed it"; a connection you selected in this session reads as a draft change
+  until you apply. Removing an inverter from the draft makes its connections
+  addable again. Where a trusted identity would match more than one draft
+  device, the action is a blocked **Identity conflict** rather than a guess at
+  which inverter you meant.
+
+  A configured MQTT device does not have to state its transport: the broker
+  profile it references is the authority, and the Admin backend resolves the
+  transport from it, so a Cloud device shows **Zendure MQTT** on its card before
+  any discovery has run. When the transport genuinely cannot be resolved, the
+  card claims none rather than defaulting to local MQTT.
+
+  A serial-less Cloud device is
   also recognized as the same inverter when discovery later reports the **same
   Cloud route now carrying a physical serial**: the review shows it *In config*
   with no second **Add**, and the existing entry is enriched with the serial

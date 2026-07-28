@@ -3912,6 +3912,19 @@ class AdminHandler(BaseHTTPRequestHandler):
                 item["product_key"] = product_key.strip()
                 item.setdefault("mqtt", {})["product_key"] = product_key.strip()
 
+            # The connection a proposal selects is proposal-owned, not
+            # browser-owned: a selection re-homes an existing device's whole
+            # MQTT connection, so its broker ref, transport source and topic
+            # identity come from current discovery rather than from the
+            # browser's editable echo of them.
+            item_mqtt = item.setdefault("mqtt", {})
+            for key in ("broker_ref", "source", "topic_family", "base_topic", "write_protocol"):
+                value = trusted_mqtt.get(key)
+                if value is None:
+                    item_mqtt.pop(key, None)
+                else:
+                    item_mqtt[key] = value
+
             # The broker endpoint is proposal-owned, not browser-owned.
             item["broker"] = {
                 "ref": proposal.get("broker_ref") or trusted_mqtt.get("broker_ref") or "",

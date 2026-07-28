@@ -91,10 +91,12 @@ _IDENTITY_HELPERS = (
 
 _STATE_HELPERS = _IDENTITY_HELPERS + (
     "connectionLabelFor",
+    "connectionBrokerScope",
+    "sameMqttConnectionScope",
     "inverterItems",
     "selectedMqttDeviceEntries",
     "configuredInverterConnection",
-    "sameConnectionScope",
+    "sameConcreteConnection",
     "inverterCandidateConnectionState",
 )
 
@@ -108,6 +110,17 @@ def _state_env(draft_items, mqtt_entries):
     )
 
 
+def _candidate_ref(candidate, source):
+    """The reference the production renderers pass: proposal id, or deviceKey."""
+
+    if source != "local_api":
+        return str(candidate.get("id") or "")
+    serial = candidate.get("serial_number")
+    if serial:
+        return (candidate.get("api_family") or "device") + ":" + serial
+    return str(candidate.get("id") or "")
+
+
 def _resolve(draft_items, mqtt_entries, candidate, source):
     js = _read()
     helpers = "\n".join(_extract_fn(js, name) for name in _STATE_HELPERS)
@@ -119,6 +132,8 @@ def _resolve(draft_items, mqtt_entries, candidate, source):
         + json.dumps(candidate)
         + ", "
         + json.dumps(source)
+        + ", "
+        + json.dumps(_candidate_ref(candidate, source))
         + ")));"
     )
     return _node(script)
@@ -201,6 +216,7 @@ _CLOUD_CANDIDATE = {
 _API_CANDIDATE = {
     "id": "zendure:PHYS-1",
     "serial_number": "PHYS-1",
+    "api_family": "zendure",
     "role_suggestion": "inverter",
     "ip": "192.168.1.100",
 }
@@ -281,6 +297,7 @@ _CARD_HELPERS = _STATE_HELPERS + (
     "sourcesOf",
     "sourceBadges",
     "draftHasSource",
+    "connectionCandidateToken",
     "renderConnectionCandidateAction",
     "connectionCandidateNote",
     "renderConnectionPill",
@@ -296,6 +313,7 @@ def _render(fn_call, draft_items, mqtt_entries, payload):
         "const DEFAULT_INVERTER_DISPLAY = 'SolarFlow 800 Pro 2';\n"
         "const openHardwareCards = new Set();\n"
         "const SOURCE_LABELS = {};\n"
+        "let connectionCandidateTokens = new Map();\n"
         "function normalizeDiscoverySource(value) { return String(value || ''); }\n"
     )
     script = (
@@ -378,7 +396,14 @@ def test_candidate_pool_keeps_one_entry_per_concrete_connection():
     js = _read()
     helpers = "\n".join(
         _extract_fn(js, name)
-        for name in _IDENTITY_HELPERS + ("unselectedMqttDeviceProposals",)
+        for name in _IDENTITY_HELPERS
+        + (
+            "connectionBrokerScope",
+            "sameMqttConnectionScope",
+            "concreteMqttConnectionKey",
+            "selectedMqttDeviceEntries",
+            "unselectedMqttDeviceProposals",
+        )
     )
     proposals = [
         dict(_CLOUD_CANDIDATE, config_fragment={}),

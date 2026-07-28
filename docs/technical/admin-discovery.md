@@ -702,6 +702,32 @@ and stale fields of the previous connection are removed. Config Preview remains
 the review step: the backend re-resolves the trusted proposal and re-runs
 identity, route, broker and capability validation before any config is written.
 
+Same config type is not the same connection. The merge classifies a Zendure MQTT
+draft entry against the stored device with
+`zendure_mqtt_connection_switched()` (`admin/zendure_mqtt_config_draft.py`),
+comparing the resolved transport source, broker ref and topic family — a stored
+config that omits `mqtt.source` resolves it from its broker profile, so a
+same-transport reselection is not read as a cloud/local change. Only an entry
+built from a discovery proposal (it carries a proposal id or a broker endpoint
+block) can switch; the editable draft of a stored device carries neither, so an
+ordinary field edit and a pure route enrichment stay ordinary edits and a no-op
+draft still applies byte-identically.
+
+On a switch, `materialize_maintenance_device()` drops the connection-owned keys
+of the old connection (`mqtt`, `capabilities`, route/product ids,
+`hardware_profile`, `power_write_profile`) before the draft projects the
+selected one, so broker, transport source, topic family, base topic, route and
+write profile land as one whole rather than as individually patched fields. The
+same shared broker resolver used for newly added devices and transport switches
+then runs (`_resolve_selected_device_broker`): a matching endpoint reuses its
+existing profile under any ref, a new endpoint provisions one, and a ref that
+already names a different endpoint is rejected as
+`zendure_mqtt_broker_conflict` instead of being replaced. The connection a
+proposal selects is proposal-owned: `_resolve_maintenance_mqtt_draft()`
+overwrites the browser's `mqtt.broker_ref`, `source`, `topic_family`,
+`base_topic` and `write_protocol` from the trusted fragment, so a crafted draft
+cannot re-home a configured inverter onto a foreign broker.
+
 ### Physical inverter identity and route aliases
 
 One physical inverter can be observed under more than one trusted identity: a

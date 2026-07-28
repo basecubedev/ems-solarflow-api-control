@@ -49,6 +49,12 @@ _HELPERS = (
     "normalizeSerial",
     "usableSerialValue",
     "physicalInverterIdentity",
+    "inverterVisibleSerial",
+    "inverterIdentityTokens",
+    "inverterIdentitySet",
+    "inverterHasIdentity",
+    "inverterIdentityConflict",
+    "inverterIdentitiesMatch",
     "mconfigHardwareSection",
     "mconfigDeviceCatalogFields",
     "deviceFieldKey",
@@ -91,6 +97,7 @@ def _run(devices, action):
     stub = (
         "const MCONFIG_DEVICE_IDENTITY_KEYS = new Set(['name', 'ip', 'sn']);\n"
         "function renderMaintenanceInverters() {}\n"
+        "function mconfigRerenderDiscoveryReview() {}\n"
         "function mconfigMarkDraftChanged() {}\n"
         "const mconfigState = {\n"
         "  pristine: null,\n"

@@ -4799,6 +4799,7 @@ def test_maintenance_discovery_grid_meter_without_port_omits_port():
         "function gridMeterType() { return 'shelly'; }\n"
         "function renderMaintenanceGridMeter() {}\n"
         "function renderMaintenanceInverters() {}\n"
+        "function mconfigRerenderDiscoveryReview() {}\n"
         "function setMaintenanceFact() {}\n"
         "const mconfigEls = {result: null, applyPanel: null, discoveryStatus: null, summary: null};\n"
         "const mconfigState = {draft: {devices: [], grid_meter: {}}, previewFingerprint: null, openHardware: new Set()};\n"
@@ -6839,6 +6840,8 @@ def run_mconfig_add_mqtt_proposal(proposal):
             "mconfigIsMqttDevice",
             "mconfigMqttProposalIdentity",
             "mconfigMqttDeviceIdentity",
+            "mconfigDraftDevicesMatchingCandidate",
+            "mconfigPristineHasCandidateConnection",
             "mconfigMqttProposalState",
             "mconfigZendureMqttDraftFromProposal",
             "mconfigAddZendureMqttProposal",
@@ -6846,6 +6849,7 @@ def run_mconfig_add_mqtt_proposal(proposal):
     )
     stub = (
         "function renderMaintenanceInverters() {}\n"
+        "function mconfigRerenderDiscoveryReview() {}\n"
         "function mconfigMarkDraftChanged() {}\n"
         "const mconfigState = {pristine: {devices: []}, draft: {devices: []},"
         " openHardware: new Set(), previewFingerprint: null,"

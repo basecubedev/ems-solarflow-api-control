@@ -129,6 +129,7 @@ def _state_stub(devices):
         "  },\n"
         "};\n"
         "function renderMaintenanceInverters() {}\n"
+        "function mconfigRerenderDiscoveryReview() {}\n"
         "function mconfigMarkDraftChanged() {}\n"
     )
 
@@ -261,6 +262,8 @@ def test_mqtt_proposal_add_materializes_central_defaults():
         _COMMON_HELPERS
         + (
             "mconfigIsMqttDevice",
+            "mconfigDraftDevicesMatchingCandidate",
+            "mconfigPristineHasCandidateConnection",
             "mconfigMqttProposalState",
             "mconfigAddZendureMqttProposal",
         ),
@@ -319,6 +322,8 @@ def test_configured_api_serial_blocks_mqtt_proposal_add():
         _COMMON_HELPERS
         + (
             "mconfigIsMqttDevice",
+            "mconfigDraftDevicesMatchingCandidate",
+            "mconfigPristineHasCandidateConnection",
             "mconfigMqttProposalState",
         ),
         _state_stub([api_device])

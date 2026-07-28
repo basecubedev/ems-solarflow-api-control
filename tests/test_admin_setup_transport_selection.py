@@ -601,7 +601,14 @@ def test_http_inverter_body_names_its_connection_without_a_switch_control():
 
 def test_add_more_devices_includes_all_unselected_transports():
     out = _run_named(
-        ("normalizeSerial", "mqttSourceOfConnection", "unselectedMqttDeviceProposals"),
+        _IDENTITY_HELPERS
+        + (
+            "connectionBrokerScope",
+            "sameMqttConnectionScope",
+            "concreteMqttConnectionKey",
+            "selectedMqttDeviceEntries",
+            "unselectedMqttDeviceProposals",
+        ),
         """
 const zendureMqttPreviewProposals = new Map([["m:sel", {}]]);
 function availableMqttDeviceProposals() {
@@ -1008,10 +1015,12 @@ def test_transport_switch_discovery_accepts_route_only_identity_token():
         _IDENTITY_HELPERS
         + (
             "connectionLabelFor",
+            "connectionBrokerScope",
+            "sameMqttConnectionScope",
             "inverterItems",
             "selectedMqttDeviceEntries",
             "configuredInverterConnection",
-            "sameConnectionScope",
+            "sameConcreteConnection",
             "inverterCandidateConnectionState",
         ),
         """

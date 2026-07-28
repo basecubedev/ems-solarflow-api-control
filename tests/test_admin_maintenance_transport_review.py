@@ -266,6 +266,7 @@ function mconfigAddZendureMqttDevice() {
 }
 function mconfigMarkDraftChanged() {}
 function renderMaintenanceInverters() {}
+function mconfigRerenderDiscoveryReview() {}
 addManualMaintenanceMqttDevice().then(() => {
   const dev = mconfigState.draft.devices[mconfigState.draft.devices.length - 1];
   console.log(JSON.stringify({ dev, mintBody }));

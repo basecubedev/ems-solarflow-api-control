@@ -614,6 +614,116 @@ def build_test_runtime(*, data_dir):
             ],
         }
 
+    switch_serial = "SWITCH-SERIAL"
+
+    def _switchback_common():
+        return {
+            "config_schema_version": 3,
+            "system": {"max_total_power": 2000},
+            "grid_meter": {"type": "shelly", "ip": "192.168.60.2"},
+        }
+
+    def _switchback_mqtt_device(broker_ref, device_id, product_key):
+        # mqtt.source is deliberately omitted: the broker profile is the
+        # authority, so the draft must resolve the transport from it.
+        return {
+            "type": "zendure_mqtt",
+            "name": "INV_1",
+            "serial_number": switch_serial,
+            "hardware_profile": "hyper_2000",
+            "max_power": 642,
+            "min_soc": 22,
+            "mqtt": {
+                "broker_ref": broker_ref,
+                "topic_family": "legacy_zendure_json",
+                "device_id": device_id,
+                "product_key": product_key,
+            },
+            "capabilities": {
+                "read_power": True,
+                "read_soc": True,
+                "write_output_limit": True,
+            },
+        }
+
+    def _local_broker(host):
+        return {
+            "enabled": True,
+            "source": "local_mqtt",
+            "host": host,
+            "port": 1883,
+            "tls": False,
+            "username": "local-user",
+            "password": "e2e-local-broker-secret",
+        }
+
+    def _cloud_broker():
+        return {
+            "enabled": True,
+            "source": "zendure_cloud_mqtt",
+            "host": "mqtt.zen-iot.com",
+            "port": 8883,
+            "tls": True,
+            "username": "cloud-user",
+            "password": "e2e-cloud-broker-secret",
+        }
+
+    def local_broker_switchback_config():
+        """INV_1 on local broker b1, with b2 configured as a second scope."""
+
+        config = _switchback_common()
+        config["zendure_mqtt"] = {
+            "brokers": {
+                "local_b1": _local_broker("192.168.60.10"),
+                "local_b2": _local_broker("192.168.60.11"),
+            }
+        }
+        config["devices"] = [
+            _switchback_mqtt_device("local_b1", "SWITCH-ROUTE-B1", "SWITCH-PK")
+        ]
+        return config
+
+    def api_cloud_switchback_config():
+        """INV_1 on the local API, with a Cloud broker available to switch to."""
+
+        config = _switchback_common()
+        config["zendure_mqtt"] = {"brokers": {"cloud_switch": _cloud_broker()}}
+        config["devices"] = [
+            {
+                "name": "INV_1",
+                "ip": "192.168.60.20",
+                "sn": switch_serial,
+                "max_power": 642,
+                "min_soc": 22,
+            }
+        ]
+        return config
+
+    def local_cloud_switchback_config():
+        """INV_1 on local broker b1, with the Cloud broker available to move to."""
+
+        config = _switchback_common()
+        config["zendure_mqtt"] = {
+            "brokers": {
+                "local_b1": _local_broker("192.168.60.10"),
+                "cloud_switch": _cloud_broker(),
+            }
+        }
+        config["devices"] = [
+            _switchback_mqtt_device("local_b1", "SWITCH-ROUTE-B1", "SWITCH-PK")
+        ]
+        return config
+
+    def cloud_api_switchback_config():
+        """INV_1 on Cloud MQTT with no stated source, discoverable over the API."""
+
+        config = _switchback_common()
+        config["zendure_mqtt"] = {"brokers": {"cloud_switch": _cloud_broker()}}
+        config["devices"] = [
+            _switchback_mqtt_device("cloud_switch", "SWITCH-ROUTE-CLOUD", "SWITCH-PK")
+        ]
+        return config
+
     serialless_route = "E2E_CLOUD_ROUTE_7501"
     serialless_product = "E2E_CLOUD_PRODUCT_75"
     serialized_route = "E2E_CLOUD_ROUTE_7502"
@@ -784,6 +894,14 @@ def build_test_runtime(*, data_dir):
             )
         elif scenario == "mixed_transports":
             write_install_config(mixed_transport_config())
+        elif scenario == "maintenance_local_broker_switchback":
+            write_install_config(local_broker_switchback_config())
+        elif scenario == "maintenance_api_cloud_switchback":
+            write_install_config(api_cloud_switchback_config())
+        elif scenario == "maintenance_cloud_api_switchback":
+            write_install_config(cloud_api_switchback_config())
+        elif scenario == "maintenance_local_cloud_switchback":
+            write_install_config(local_cloud_switchback_config())
         elif scenario == "serialless_cloud_identity":
             write_install_config(serialless_cloud_config())
             clear_local_mqtt_candidates()

@@ -168,6 +168,7 @@ const MCONFIG_DEVICE_IDENTITY_KEYS = new Set(["name", "ip", "sn"]);
 function deviceFieldKey(path) { return path; }
 function mconfigGenerations() { return []; }
 function renderMaintenanceInverters() {}
+function mconfigRerenderDiscoveryReview() {}
 function renderMaintenanceGridMeter() {}
 function mconfigMarkDraftChanged() {}
 function mconfigIdentity(value) { return String(value || "").trim().toLowerCase(); }
