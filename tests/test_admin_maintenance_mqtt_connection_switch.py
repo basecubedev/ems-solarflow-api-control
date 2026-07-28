@@ -284,12 +284,39 @@ def _resolve_draft(draft, proposals):
     return AdminHandler._resolve_maintenance_mqtt_draft(_Stub(), draft)
 
 
+def _resolved(draft, proposals):
+    """Server-resolve a browser draft, requiring the resolution to succeed."""
+
+    resolved, error = _resolve_draft(draft, proposals)
+    assert error is None, error
+    return resolved
+
+
 def _preview_and_payload(tmp_path, draft, revision):
     preview = preview_maintenance_config(draft, base_dir=str(tmp_path))
     assert preview["validation"]["ok"] is True, preview["validation"]["errors"]
     prepared = prepare_maintenance_config_apply(draft, revision, base_dir=str(tmp_path))
     assert prepared["status"] == "ok", prepared
     return preview["preview"], json.loads(prepared["payload"])
+
+
+def _trusted_preview_and_payload(tmp_path, draft, revision, proposals):
+    """Preview/apply a switch draft over the trusted-proposal resolution step."""
+
+    return _preview_and_payload(tmp_path, _resolved(draft, proposals), revision)
+
+
+def _rejection(tmp_path, draft, revision, code="mqtt_proposal_untrusted"):
+    """Assert preview and apply both fail closed, and return the stored config."""
+
+    preview = preview_maintenance_config(draft, base_dir=str(tmp_path))
+    assert preview["validation"]["ok"] is False, preview["validation"]
+    assert preview["validation"]["errors"][0]["code"] == code, preview["validation"]
+    prepared = prepare_maintenance_config_apply(draft, revision, base_dir=str(tmp_path))
+    assert prepared["status"] == "invalid", prepared
+    assert "payload" not in prepared
+    assert prepared["validation"]["errors"][0]["code"] == code, prepared["validation"]
+    return preview["preview"]
 
 
 # --- concrete local broker switches --------------------------------------
@@ -302,7 +329,9 @@ def test_local_broker_switch_persists_the_selected_connection(tmp_path):
     proposal = _local_proposal(BROKER_B2_HOST, "ROUTE-B2")
     _switch_connection(draft, "INV_1", proposal)
 
-    preview, written = _preview_and_payload(tmp_path, draft, loaded["revision"])
+    preview, written = _trusted_preview_and_payload(
+        tmp_path, draft, loaded["revision"], [proposal]
+    )
 
     for config in (preview, written):
         mqtt = _mqtt_device(config)["mqtt"]
@@ -329,7 +358,9 @@ def test_switching_back_restores_the_original_broker_and_route(tmp_path):
     proposal = _local_proposal(BROKER_B1_HOST, "ROUTE-B1")
     _switch_connection(draft, "INV_1", proposal)
 
-    preview, written = _preview_and_payload(tmp_path, draft, loaded["revision"])
+    preview, written = _trusted_preview_and_payload(
+        tmp_path, draft, loaded["revision"], [proposal]
+    )
 
     for config in (preview, written):
         mqtt = _mqtt_device(config)["mqtt"]
@@ -356,7 +387,9 @@ def test_cloud_to_local_switch_replaces_source_and_drops_cloud_route(tmp_path):
     proposal = _local_proposal(BROKER_B1_HOST, "ROUTE-B1")
     _switch_connection(draft, "INV_1", proposal)
 
-    preview, written = _preview_and_payload(tmp_path, draft, loaded["revision"])
+    preview, written = _trusted_preview_and_payload(
+        tmp_path, draft, loaded["revision"], [proposal]
+    )
 
     for config in (preview, written):
         mqtt = _mqtt_device(config)["mqtt"]
@@ -378,7 +411,9 @@ def test_local_to_cloud_switch_persists_the_cloud_connection(tmp_path):
     proposal = _cloud_proposal()
     _switch_connection(draft, "INV_1", proposal)
 
-    preview, written = _preview_and_payload(tmp_path, draft, loaded["revision"])
+    preview, written = _trusted_preview_and_payload(
+        tmp_path, draft, loaded["revision"], [proposal]
+    )
 
     for config in (preview, written):
         mqtt = _mqtt_device(config)["mqtt"]
@@ -405,7 +440,9 @@ def test_existing_profile_for_the_selected_endpoint_is_reused_unchanged(tmp_path
     proposal = _local_proposal(BROKER_B2_HOST, "ROUTE-B2")
     _switch_connection(draft, "INV_1", proposal)
 
-    _, written = _preview_and_payload(tmp_path, draft, loaded["revision"])
+    _, written = _trusted_preview_and_payload(
+        tmp_path, draft, loaded["revision"], [proposal]
+    )
 
     assert _mqtt_device(written)["mqtt"]["broker_ref"] == BROKER_B2_REF
     assert written["zendure_mqtt"]["brokers"] == _broker_profiles(
@@ -420,7 +457,9 @@ def test_new_endpoint_persists_exactly_one_new_profile(tmp_path):
     proposal = _local_proposal("10.0.0.77", "ROUTE-NEW")
     _switch_connection(draft, "INV_1", proposal)
 
-    _, written = _preview_and_payload(tmp_path, draft, loaded["revision"])
+    _, written = _trusted_preview_and_payload(
+        tmp_path, draft, loaded["revision"], [proposal]
+    )
 
     brokers = written["zendure_mqtt"]["brokers"]
     assert set(brokers) == {BROKER_B1_REF, proposal["broker_ref"]}
@@ -438,12 +477,15 @@ def test_conflicting_broker_ref_blocks_preview_and_apply(tmp_path):
     loaded = load_maintenance_config(base_dir=str(tmp_path))
     draft = loaded["draft"]
     proposal = _local_proposal("10.0.0.77", "ROUTE-NEW")
-    item = _switch_connection(draft, "INV_1", proposal)
+    _switch_connection(draft, "INV_1", proposal)
     # A third endpoint offered under a ref that already names a different
     # endpoint in the stored config must never silently replace that profile.
+    # Applied past the resolution step, so this exercises the merge-layer guard
+    # rather than the proposal trust boundary.
+    draft = _resolved(draft, [proposal])
+    item = _mqtt_draft_item(draft)
     item["broker"]["ref"] = BROKER_B1_REF
     item["mqtt"]["broker_ref"] = BROKER_B1_REF
-    item["proposal_broker_ref"] = BROKER_B1_REF
 
     preview = preview_maintenance_config(draft, base_dir=str(tmp_path))
     assert preview["validation"]["ok"] is False
@@ -462,7 +504,9 @@ def test_cloud_switch_keeps_the_credentials_ref_without_exposing_secrets(tmp_pat
     proposal = _cloud_proposal()
     _switch_connection(draft, "INV_1", proposal)
 
-    preview, written = _preview_and_payload(tmp_path, draft, loaded["revision"])
+    preview, written = _trusted_preview_and_payload(
+        tmp_path, draft, loaded["revision"], [proposal]
+    )
 
     for config in (preview, written):
         profile = config["zendure_mqtt"]["brokers"][proposal["broker_ref"]]
@@ -533,7 +577,9 @@ def test_switch_preserves_name_enabled_and_common_values(tmp_path):
     proposal = _local_proposal(BROKER_B2_HOST, "ROUTE-B2")
     _switch_connection(draft, "INV_1", proposal)
 
-    _, written = _preview_and_payload(tmp_path, draft, loaded["revision"])
+    _, written = _trusted_preview_and_payload(
+        tmp_path, draft, loaded["revision"], [proposal]
+    )
 
     switched = _mqtt_device(written)
     assert switched["name"] == "INV_1"
@@ -543,25 +589,121 @@ def test_switch_preserves_name_enabled_and_common_values(tmp_path):
     assert switched["serial_number"] == SERIAL
 
 
-def test_switch_without_a_proposal_id_still_replaces_the_connection(tmp_path):
+# --- trust boundary ------------------------------------------------------
+
+
+def test_every_generated_proposal_carries_an_id(tmp_path):
+    # The fail-closed contract below rests on this: a switch never has to fall
+    # back to an unidentified selection, because discovery always emits an id.
+    for proposal in (
+        _local_proposal(BROKER_B2_HOST, "ROUTE-B2"),
+        _local_proposal("10.0.0.77", "ROUTE-NEW"),
+        _cloud_proposal(),
+    ):
+        assert str(proposal.get("id") or "").strip()
+
+
+def test_switch_without_a_proposal_id_is_rejected(tmp_path):
     _write_config(tmp_path, _config(_local_device()))
     loaded = load_maintenance_config(base_dir=str(tmp_path))
     draft = loaded["draft"]
     proposal = _local_proposal(BROKER_B2_HOST, "ROUTE-B2")
     item = _switch_connection(draft, "INV_1", proposal)
-    # Discovery that emits no opaque proposal id must not silently degrade to
-    # "new route on the old broker" — the invalid combination this fixes.
     item.pop("proposal_id")
     item.pop("proposal_broker_ref")
 
-    _, written = _preview_and_payload(tmp_path, draft, loaded["revision"])
+    resolved, error = _resolve_draft(draft, [proposal])
 
-    mqtt = _mqtt_device(written)["mqtt"]
-    assert mqtt["broker_ref"] == proposal["broker_ref"]
-    assert mqtt["device_id"] == "ROUTE-B2"
+    assert resolved is None
+    assert error
+    # The merge is fail-closed on its own: a browser broker block is not proof
+    # that a proposal exists, whatever reaches it.
+    preview = _rejection(tmp_path, draft, loaded["revision"])
+    assert _mqtt_device(preview)["mqtt"] == _local_device()["mqtt"]
 
 
-# --- trust boundary ------------------------------------------------------
+def test_untrusted_switch_provisions_no_broker_profile(tmp_path):
+    _write_config(tmp_path, _config(_local_device()))
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    draft = loaded["draft"]
+    item = _mqtt_draft_item(draft)
+    item["broker"] = {
+        "ref": "local_mqtt_10_9_9_9_61c5b0c5",
+        "host": "10.9.9.9",
+        "port": 1883,
+        "tls": False,
+        "source": "local_mqtt",
+    }
+    item["mqtt"]["broker_ref"] = "local_mqtt_10_9_9_9_61c5b0c5"
+    item["mqtt"]["device_id"] = "EVIL-ROUTE"
+
+    resolved, error = _resolve_draft(draft, [])
+    assert resolved is None and error
+
+    preview = _rejection(tmp_path, draft, loaded["revision"])
+    assert set(preview["zendure_mqtt"]["brokers"]) == {BROKER_B1_REF}
+    assert "10.9.9.9" not in json.dumps(preview)
+
+
+def test_removing_the_proposal_id_after_rendering_a_candidate_is_rejected(tmp_path):
+    _write_config(tmp_path, _config(_local_device()))
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    draft = loaded["draft"]
+    proposal = _local_proposal(BROKER_B2_HOST, "ROUTE-B2")
+    item = _switch_connection(draft, "INV_1", proposal)
+    # The proposal is current and would resolve; the retained broker block must
+    # still not stand in for the selection the browser dropped.
+    item.pop("proposal_id")
+
+    resolved, error = _resolve_draft(draft, [proposal])
+
+    assert resolved is None
+    assert error
+
+
+def test_unknown_proposal_id_is_rejected(tmp_path):
+    _write_config(tmp_path, _config(_local_device()))
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    draft = loaded["draft"]
+    proposal = _local_proposal(BROKER_B2_HOST, "ROUTE-B2")
+    item = _switch_connection(draft, "INV_1", proposal)
+    item["proposal_id"] = "not-a-known-proposal"
+
+    resolved, error = _resolve_draft(draft, [proposal])
+
+    assert resolved is None
+    assert error
+
+
+def test_proposal_under_a_foreign_broker_scope_is_rejected(tmp_path):
+    _write_config(
+        tmp_path,
+        _config(_local_device(), broker_refs=(BROKER_B1_REF, BROKER_B2_REF)),
+    )
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    draft = loaded["draft"]
+    proposal = _local_proposal(BROKER_B2_HOST, "ROUTE-B2")
+    item = _switch_connection(draft, "INV_1", proposal)
+    item["proposal_broker_ref"] = BROKER_B1_REF
+
+    resolved, error = _resolve_draft(draft, [proposal])
+
+    assert resolved is None
+    assert error
+
+
+def test_conflicting_physical_identity_is_rejected(tmp_path):
+    _write_config(tmp_path, _config(_local_device()))
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    draft = loaded["draft"]
+    proposal = _local_proposal(BROKER_B2_HOST, "ROUTE-B2")
+    item = _switch_connection(draft, "INV_1", proposal)
+    item["serial_number"] = "SN-SOMEONE-ELSE"
+
+    resolved, error = _resolve_draft(draft, [proposal])
+
+    assert resolved is None
+    assert error
 
 
 def test_tampered_connection_fields_cannot_rehome_a_device(tmp_path):
