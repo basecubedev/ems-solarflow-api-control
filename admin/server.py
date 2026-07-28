@@ -121,6 +121,10 @@ from admin.zendure_cloud_mqtt import (
     credential_mode_is_supported,
 )
 from admin import zendure_mqtt_config_proposals
+from admin.zendure_mqtt_config_draft import (
+    TRUSTED_CONNECTION_SELECTION_FIELD,
+    zendure_mqtt_untrusted_connection_block,
+)
 from admin.zendure_mqtt_migration_review import (
     load_migration_review,
     prepare_migration_apply,
@@ -3845,6 +3849,11 @@ class AdminHandler(BaseHTTPRequestHandler):
         and only then are the raw product key and MQTT routing id restored. A
         stale id or changed proposal identity fails closed; raw keys never cross
         the HTTP boundary.
+
+        Resolution is also what authorizes a connection replacement: every
+        generated proposal carries an id, so an entry that would re-home a
+        stored device on a submitted broker endpoint alone is refused instead
+        of being read as proposal-derived.
         """
 
         resolved_draft = copy.deepcopy(draft)
@@ -3855,8 +3864,18 @@ class AdminHandler(BaseHTTPRequestHandler):
         for item in devices:
             if not isinstance(item, dict):
                 continue
+            # The trust marker is server-owned; a submitted one never survives.
+            item.pop(TRUSTED_CONNECTION_SELECTION_FIELD, None)
             proposal_id = item.get("proposal_id")
             if not isinstance(proposal_id, str) or not proposal_id.strip():
+                if str(
+                    item.get("original_name") or ""
+                ).strip() and zendure_mqtt_untrusted_connection_block(item):
+                    return None, (
+                        "The selected MQTT connection is not backed by a current "
+                        "discovery proposal; rerun discovery and pick the "
+                        "connection again."
+                    )
                 continue
             item_mqtt = item.get("mqtt") if isinstance(item.get("mqtt"), dict) else {}
             broker_ref = item.get("proposal_broker_ref") or item_mqtt.get("broker_ref")
@@ -3912,11 +3931,9 @@ class AdminHandler(BaseHTTPRequestHandler):
                 item["product_key"] = product_key.strip()
                 item.setdefault("mqtt", {})["product_key"] = product_key.strip()
 
-            # The connection a proposal selects is proposal-owned, not
-            # browser-owned: a selection re-homes an existing device's whole
-            # MQTT connection, so its broker ref, transport source and topic
-            # identity come from current discovery rather than from the
-            # browser's editable echo of them.
+            # A selection re-homes the device's whole MQTT connection, so every
+            # connection field comes from current discovery rather than from the
+            # browser's editable echo of it.
             item_mqtt = item.setdefault("mqtt", {})
             for key in ("broker_ref", "source", "topic_family", "base_topic", "write_protocol"):
                 value = trusted_mqtt.get(key)
@@ -3925,7 +3942,6 @@ class AdminHandler(BaseHTTPRequestHandler):
                 else:
                     item_mqtt[key] = value
 
-            # The broker endpoint is proposal-owned, not browser-owned.
             item["broker"] = {
                 "ref": proposal.get("broker_ref") or trusted_mqtt.get("broker_ref") or "",
                 "host": proposal.get("broker_host") or "",
@@ -3936,6 +3952,7 @@ class AdminHandler(BaseHTTPRequestHandler):
                 "credentials_ref": proposal.get("credentials_ref") or "",
                 "source": proposal.get("connection_source") or proposal.get("source") or "",
             }
+            item[TRUSTED_CONNECTION_SELECTION_FIELD] = True
         return resolved_draft, None
 
     def _stage_setup_credentials(self, config, broker, changes):

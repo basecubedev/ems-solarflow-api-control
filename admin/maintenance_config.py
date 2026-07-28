@@ -37,6 +37,7 @@ from admin.zendure_mqtt_config_draft import (
     zendure_hardware_profile_options,
     zendure_mqtt_connection_switched,
     zendure_mqtt_device_draft,
+    zendure_mqtt_untrusted_connection_block,
 )
 from ems.config import (
     MQTT_GRID_METER_TYPES,
@@ -1216,6 +1217,25 @@ def _merge_devices(merged, devices, issues, *, identity_token_key=None):
                 allocation_names.append(name)
         if _is_mqtt_draft_item(item):
             was_mqtt = is_zendure_mqtt_device_config(original)
+            # Moving a stored device onto another concrete MQTT connection is a
+            # proposal-authorized action. Whichever entry the merge resolved it
+            # onto, an endpoint block the server never checked against current
+            # discovery is refused here rather than provisioning a profile.
+            untrusted = original is not None and zendure_mqtt_untrusted_connection_block(
+                item
+            )
+            if untrusted:
+                label = str(
+                    item.get("name") or original.get("name") or "Zendure MQTT device"
+                ).strip()
+                issues.append(
+                    _issue(
+                        "mqtt_proposal_untrusted",
+                        f"{label}: the selected MQTT connection is not backed by a "
+                        "current discovery proposal; rerun discovery and pick the "
+                        "connection again.",
+                    )
+                )
             connection_switched = was_mqtt and zendure_mqtt_connection_switched(
                 original, item, broker_sources
             )
@@ -1226,7 +1246,7 @@ def _merge_devices(merged, devices, issues, *, identity_token_key=None):
                 defaults=defaults,
                 connection_switched=connection_switched,
             )
-            if not was_mqtt or connection_switched:
+            if not untrusted and (not was_mqtt or connection_switched):
                 _resolve_selected_device_broker(merged, device, item, issues)
         else:
             device = materialize_maintenance_device(

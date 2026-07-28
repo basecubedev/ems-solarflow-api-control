@@ -619,7 +619,10 @@ def test_switch_without_a_proposal_id_is_rejected(tmp_path):
     # The merge is fail-closed on its own: a browser broker block is not proof
     # that a proposal exists, whatever reaches it.
     preview = _rejection(tmp_path, draft, loaded["revision"])
-    assert _mqtt_device(preview)["mqtt"] == _local_device()["mqtt"]
+    mqtt = _mqtt_device(preview)["mqtt"]
+    assert mqtt["broker_ref"] == BROKER_B1_REF
+    assert mqtt["source"] == "local_mqtt"
+    assert set(preview["zendure_mqtt"]["brokers"]) == {BROKER_B1_REF}
 
 
 def test_untrusted_switch_provisions_no_broker_profile(tmp_path):

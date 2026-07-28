@@ -39,6 +39,10 @@ from ems.zendure_mqtt.topics import (
     FAMILY_ZENSDK_HA_SCALAR,
 )
 
+# Server-only marker set once a draft entry's MQTT connection resolved against
+# current trusted discovery state. Never accepted from browser JSON.
+TRUSTED_CONNECTION_SELECTION_FIELD = "trusted_connection_selection"
+
 
 def _draft_hardware_model(item):
     """Concrete registry hardware model pinned on a draft entry, or ``""``.
@@ -596,23 +600,36 @@ def _effective_mqtt_source(device, broker_sources):
     return str(broker_sources.get(zendure_mqtt_broker_ref(device)) or "")
 
 
-def _selected_mqtt_connection(item):
-    """Concrete MQTT connection a proposal-backed draft entry selects.
+def zendure_mqtt_untrusted_connection_block(item):
+    """True when a draft entry carries a broker endpoint the server never resolved.
 
-    ``None`` for an entry that carries no proposal selection at all, so an
-    ordinary field edit can never re-home a stored connection: only a draft
-    entry built from a discovery proposal carries a proposal id or a broker
-    endpoint block, and the editable draft of a stored device carries neither.
-    The broker block is proposal-owned (the server rewrites it from current
-    discovery), so it outranks the browser-editable ``mqtt`` values it
-    duplicates; the endpoint it names is validated by the broker resolver,
-    which rejects a ref that already means a different connection.
+    The endpoint block is the only draft field that can provision a broker
+    profile and re-home a device, and the browser can craft every byte of it.
+    Callers use this to refuse it on an entry bound to a stored device.
     """
 
+    if item.get(TRUSTED_CONNECTION_SELECTION_FIELD) is True:
+        return False
+    broker = item.get("broker")
+    return isinstance(broker, dict) and bool(broker)
+
+
+def _selected_mqtt_connection(item):
+    """Concrete MQTT connection a server-resolved draft entry selects.
+
+    ``None`` unless the server marked the entry as backed by a current trusted
+    proposal, so neither an ordinary field edit nor a crafted broker block can
+    re-home a stored connection: a submitted ``broker``/``mqtt`` pair is not
+    proof that the connection it names was ever discovered. On a resolved entry
+    the broker block is proposal-owned (the resolver rewrote it from current
+    discovery) and therefore outranks the browser-editable ``mqtt`` values it
+    duplicates.
+    """
+
+    if item.get(TRUSTED_CONNECTION_SELECTION_FIELD) is not True:
+        return None
     mqtt = item.get("mqtt") if isinstance(item.get("mqtt"), dict) else {}
     broker = item.get("broker") if isinstance(item.get("broker"), dict) else {}
-    if not broker and not str(item.get("proposal_id") or "").strip():
-        return None
     ref = str(broker.get("ref") or mqtt.get("broker_ref") or "").strip()
     source = str(broker.get("source") or mqtt.get("source") or "").strip().lower()
     if not ref and not source:
@@ -964,6 +981,8 @@ def apply_zendure_mqtt_draft_fields(device, item):
 
 __all__ = [
     "SECRET_KEY_FRAGMENTS",
+    "TRUSTED_CONNECTION_SELECTION_FIELD",
+    "zendure_mqtt_untrusted_connection_block",
     "MASKED_IDENTITY_KEYS",
     "TELEMETRY_SCHEMAS",
     "generation_catalog",

@@ -15060,8 +15060,15 @@ async function previewMaintenanceConfig() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ draft: mconfigState.draft }),
     });
-    if (!resp.ok) throw new Error("preview request failed");
-    renderMaintenanceConfigPreview(await resp.json());
+    const payload = await resp.json();
+    // A refused draft (e.g. a connection selection the server could not resolve
+    // against current discovery) answers with a status code and a validation
+    // body. Rendering it keeps the reason and the next step visible instead of
+    // collapsing to a generic transport failure.
+    if (!resp.ok && !(payload && payload.validation)) {
+      throw new Error("preview request failed");
+    }
+    renderMaintenanceConfigPreview(payload);
   } catch (err) {
     if (mconfigEls.result) mconfigEls.result.hidden = false;
     setMaintenanceFact(mconfigEls.validation, "preview failed", "warn");

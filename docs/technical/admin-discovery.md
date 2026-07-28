@@ -145,7 +145,9 @@ carries a stale value after enrichment. The browser may only add its own
 selection state (`replace_grid_meter`). A selection still fails closed on an
 unknown or ambiguous `id`, a forged opaque identity token, a mismatched
 broker/account scope, or a `target`-type mismatch that would select a different
-workflow. Each locally
+workflow — and, in Maintenance, on a missing `id` where the entry would replace a
+stored device's connection (see
+[Reversible connection switching](#connection-candidate-states)). Each locally
 discovered broker gets a deterministic, endpoint-derived `local_mqtt_<slug>_<hash>`
 `broker_ref` that stays stable whether the broker is discovered alone or
 alongside others; two brokers that share a broker id but differ in host/port/TLS
@@ -707,11 +709,30 @@ draft entry against the stored device with
 `zendure_mqtt_connection_switched()` (`admin/zendure_mqtt_config_draft.py`),
 comparing the resolved transport source, broker ref and topic family — a stored
 config that omits `mqtt.source` resolves it from its broker profile, so a
-same-transport reselection is not read as a cloud/local change. Only an entry
-built from a discovery proposal (it carries a proposal id or a broker endpoint
-block) can switch; the editable draft of a stored device carries neither, so an
-ordinary field edit and a pure route enrichment stay ordinary edits and a no-op
-draft still applies byte-identically.
+same-transport reselection is not read as a cloud/local change. An ordinary
+field edit and a pure route enrichment stay ordinary edits, and a no-op draft
+still applies byte-identically.
+
+Only a **server-resolved** proposal selection can switch a stored device's
+connection. Every generated proposal carries a non-empty id, so
+`_resolve_maintenance_mqtt_draft()` requires one: a draft entry that names a
+stored device (`original_name`) and submits a `broker` endpoint block without a
+resolvable `proposal_id` is refused with `mqtt_proposal_untrusted`, and both
+Preview and Apply answer `400` with `status: "invalid"` before any backup or
+config write. A submitted broker block is not evidence that the connection it
+names was ever discovered — every byte of it is browser-controlled.
+
+After a selection resolves against current trusted discovery state, the server
+marks the entry with the internal `trusted_connection_selection` flag
+(`TRUSTED_CONNECTION_SELECTION_FIELD`). The flag is stripped from every
+submitted entry first and is never read from browser JSON. The merge treats it
+as the sole switch authorization: `_selected_mqtt_connection()` returns nothing
+without it, and an unmarked endpoint block on an entry the merge resolved onto a
+stored device is refused with the same `mqtt_proposal_untrusted` code — so the
+identity index cannot be used to re-home a device by submitting the entry as if
+it were new. Adding a **new** manual MQTT device keeps its own explicit path:
+that entry binds to no stored device, so its broker block still provisions a
+profile through the manual workflow's own validation.
 
 On a switch, `materialize_maintenance_device()` drops the connection-owned keys
 of the old connection (`mqtt`, `capabilities`, route/product ids,

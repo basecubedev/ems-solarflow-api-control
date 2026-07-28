@@ -615,6 +615,8 @@ def build_test_runtime(*, data_dir):
         }
 
     switch_serial = "SWITCH-SERIAL"
+    # Cloud proposals always share the one reserved cloud broker ref.
+    _CLOUD_SWITCH_REF = "zendure_cloud"
 
     def _switchback_common():
         return {
@@ -646,6 +648,25 @@ def build_test_runtime(*, data_dir):
             },
         }
 
+    def _switchback_local_ref(host):
+        """The ref real discovery assigns this endpoint.
+
+        The seeded config has to name its profiles exactly as a config written
+        from discovery would, or the browser cannot recognize the installed
+        connection among the offered ones.
+        """
+
+        from ems.zendure_mqtt.config_entries import (
+            normalized_broker_identity,
+            stable_local_broker_ref,
+        )
+
+        return stable_local_broker_ref(
+            normalized_broker_identity(
+                {"source": "local_mqtt", "host": host, "port": 1883, "tls": False}
+            )
+        )
+
     def _local_broker(host):
         return {
             "enabled": True,
@@ -674,12 +695,16 @@ def build_test_runtime(*, data_dir):
         config = _switchback_common()
         config["zendure_mqtt"] = {
             "brokers": {
-                "local_b1": _local_broker("192.168.60.10"),
-                "local_b2": _local_broker("192.168.60.11"),
+                _switchback_local_ref("192.168.60.10"): _local_broker("192.168.60.10"),
+                _switchback_local_ref("192.168.60.11"): _local_broker("192.168.60.11"),
             }
         }
         config["devices"] = [
-            _switchback_mqtt_device("local_b1", "SWITCH-ROUTE-B1", "SWITCH-PK")
+            _switchback_mqtt_device(
+                _switchback_local_ref("192.168.60.10"),
+                "SWITCH-ROUTE-B1",
+                "SWITCH-PK",
+            )
         ]
         return config
 
@@ -687,7 +712,7 @@ def build_test_runtime(*, data_dir):
         """INV_1 on the local API, with a Cloud broker available to switch to."""
 
         config = _switchback_common()
-        config["zendure_mqtt"] = {"brokers": {"cloud_switch": _cloud_broker()}}
+        config["zendure_mqtt"] = {"brokers": {_CLOUD_SWITCH_REF: _cloud_broker()}}
         config["devices"] = [
             {
                 "name": "INV_1",
@@ -705,12 +730,16 @@ def build_test_runtime(*, data_dir):
         config = _switchback_common()
         config["zendure_mqtt"] = {
             "brokers": {
-                "local_b1": _local_broker("192.168.60.10"),
-                "cloud_switch": _cloud_broker(),
+                _switchback_local_ref("192.168.60.10"): _local_broker("192.168.60.10"),
+                _CLOUD_SWITCH_REF: _cloud_broker(),
             }
         }
         config["devices"] = [
-            _switchback_mqtt_device("local_b1", "SWITCH-ROUTE-B1", "SWITCH-PK")
+            _switchback_mqtt_device(
+                _switchback_local_ref("192.168.60.10"),
+                "SWITCH-ROUTE-B1",
+                "SWITCH-PK",
+            )
         ]
         return config
 
@@ -718,9 +747,11 @@ def build_test_runtime(*, data_dir):
         """INV_1 on Cloud MQTT with no stated source, discoverable over the API."""
 
         config = _switchback_common()
-        config["zendure_mqtt"] = {"brokers": {"cloud_switch": _cloud_broker()}}
+        config["zendure_mqtt"] = {"brokers": {_CLOUD_SWITCH_REF: _cloud_broker()}}
         config["devices"] = [
-            _switchback_mqtt_device("cloud_switch", "SWITCH-ROUTE-CLOUD", "SWITCH-PK")
+            _switchback_mqtt_device(
+                _CLOUD_SWITCH_REF, "SWITCH-ROUTE-CLOUD", "SWITCH-PK"
+            )
         ]
         return config
 
@@ -874,6 +905,109 @@ def build_test_runtime(*, data_dir):
             success=True,
         )
 
+    def seed_api_serial_local_candidate():
+        """A real local observation of the configured Local API inverter.
+
+        Replacing that device's transport is proposal-authorized, so the backend
+        needs its own candidate for that serial — the browser cannot supply one.
+        """
+
+        generation = runtime.mqtt_discovery.store.begin_refresh()
+        runtime.mqtt_discovery.store.complete_refresh(
+            generation,
+            [
+                {
+                    "id": "mqtt:192.168.50.30:1883",
+                    "host": "192.168.50.30",
+                    "port": 1883,
+                    "tls": False,
+                    "reachable": True,
+                    "topic_refresh_success": True,
+                    "devices": [
+                        {
+                            "broker_id": "local_mqtt:192.168.50.30:1883",
+                            "broker_host": "192.168.50.30",
+                            "broker_port": 1883,
+                            "source_type": "local_mqtt",
+                            "topic_family": "zensdk_ha_scalar",
+                            "device_id": "API-SERIAL",
+                            "serial_number": "API-SERIAL",
+                            "model_hint": "SolarFlow 800 Pro 2",
+                            "display_name": "SolarFlow 800 Pro 2",
+                            "metrics_seen": ["electricLevel", "outputHomePower"],
+                            "topics_seen": [
+                                "Zendure/sensor/API-SERIAL/electricLevel"
+                            ],
+                        }
+                    ],
+                }
+            ],
+            success=True,
+        )
+
+    def _switchback_observation(*, source, host, port, device_id):
+        return {
+            "broker_id": f"{source}:{host}:{port}",
+            "broker_host": host,
+            "broker_port": port,
+            "source_type": source,
+            "topic_family": "legacy_zendure_json",
+            "device_id": device_id,
+            "serial_number": switch_serial,
+            "product_key": "SWITCH-PK",
+            # Matches the stored hardware_profile, so a switch keeps resolving
+            # the same concrete model and the device stays control-capable.
+            "model_hint": "Hyper 2000",
+            "display_name": "Hyper 2000",
+            "metrics_seen": ["packInput", "outputHomePower"],
+            "topics_seen": [f"iot/SWITCH-PK/{device_id}/properties/report"],
+            "tls_mode": "system_ca" if source == "zendure_cloud_mqtt" else None,
+        }
+
+    def seed_switchback_local_candidates(*endpoints):
+        """Real local observations behind the switchback connection offers.
+
+        The connection switch is authorized by a current trusted proposal, so
+        these specs need the backend's own discovery state — a browser-side
+        proposal mock proves nothing to the server.
+        """
+
+        generation = runtime.mqtt_discovery.store.begin_refresh()
+        runtime.mqtt_discovery.store.complete_refresh(
+            generation,
+            [
+                {
+                    "id": f"mqtt:{host}:1883",
+                    "host": host,
+                    "port": 1883,
+                    "tls": False,
+                    "reachable": True,
+                    "topic_refresh_success": True,
+                    "devices": [
+                        _switchback_observation(
+                            source="local_mqtt",
+                            host=host,
+                            port=1883,
+                            device_id=device_id,
+                        )
+                    ],
+                }
+                for host, device_id in endpoints
+            ],
+            success=True,
+        )
+
+    def seed_switchback_cloud_candidate():
+        runtime.zendure_cloud_discovery._trusted_candidates = [
+            _switchback_observation(
+                source="zendure_cloud_mqtt",
+                host="mqtt.zen-iot.com",
+                port=8883,
+                device_id="SWITCH-ROUTE-CLOUD",
+            )
+        ]
+        runtime.zendure_cloud_discovery._candidates = []
+
     def write_install_config(config):
         target = detect_install_context().config_path
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -894,14 +1028,30 @@ def build_test_runtime(*, data_dir):
             )
         elif scenario == "mixed_transports":
             write_install_config(mixed_transport_config())
+        elif scenario == "mixed_transports_api_mqtt_switch":
+            write_install_config(mixed_transport_config())
+            seed_api_serial_local_candidate()
         elif scenario == "maintenance_local_broker_switchback":
             write_install_config(local_broker_switchback_config())
+            seed_switchback_local_candidates(
+                ("192.168.60.10", "SWITCH-ROUTE-B1"),
+                ("192.168.60.11", "SWITCH-ROUTE-B2"),
+            )
         elif scenario == "maintenance_api_cloud_switchback":
             write_install_config(api_cloud_switchback_config())
+            clear_local_mqtt_candidates()
+            seed_switchback_cloud_candidate()
         elif scenario == "maintenance_cloud_api_switchback":
             write_install_config(cloud_api_switchback_config())
+            clear_local_mqtt_candidates()
+            seed_switchback_cloud_candidate()
         elif scenario == "maintenance_local_cloud_switchback":
             write_install_config(local_cloud_switchback_config())
+            # No local candidate: proposals_from_sources drops a cloud candidate
+            # whose serial is already seen on a local broker, so the Cloud
+            # connection is only ever offered when the local one is not observed.
+            clear_local_mqtt_candidates()
+            seed_switchback_cloud_candidate()
         elif scenario == "serialless_cloud_identity":
             write_install_config(serialless_cloud_config())
             clear_local_mqtt_candidates()

@@ -40,10 +40,10 @@ function apiInverter(serial: string, ip: string) {
   };
 }
 
-// Proposals are mocked without an opaque server proposal id: the resulting
-// draft entries take the manual local-MQTT path through the real backend, so
-// the trusted-proposal boundary stays enforced (a browser-invented id would be
-// rejected by design).
+// Mocked without a proposal id: these entries are *added* as new devices, which
+// takes the manual local-MQTT path through the real backend. Replacing a stored
+// device's connection is proposal-authorized and cannot be mocked this way — the
+// switch case below reads the backend's own discovery state instead.
 function mqttProposal(serial: string) {
   return {
     serial_number: serial,
@@ -298,11 +298,16 @@ test("API then MQTT: proposal for a configured serial switches the transport in 
 }) => {
   const state: DiscoveryState = {
     apiDevices: [],
-    proposals: [mqttProposal("API-SERIAL")],
+    proposals: [],
   };
   await mockDiscovery(page, state);
+  // Replacing a stored device's transport needs a proposal the server can
+  // resolve, so this case reads the backend's own seeded discovery state.
+  await page.route("**/api/discovery/mqtt-proposals**", (route) =>
+    route.continue(),
+  );
   await login(page);
-  await seedAdminScenario("mixed_transports");
+  await seedAdminScenario("mixed_transports_api_mqtt_switch");
   await page.reload();
   await openMaintenanceEditor(page);
   await expect(configuredCards(page)).toHaveCount(3);

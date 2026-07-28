@@ -5,18 +5,24 @@ import { LoginPage } from "./pages/login-page";
 // Reversible maintenance connection switching: one physical inverter moves back
 // and forth between its discovered connections inside a single discovery
 // session. The connection it no longer uses becomes selectable again straight
-// away — no rescan, no reload, no duplicate device. Discovery is
-// deterministically mocked; the maintenance draft runs against the real
-// test-mode backend.
+// away — no rescan, no reload, no duplicate device.
+//
+// MQTT proposals come from the backend's own seeded discovery state, never from
+// a browser mock: a connection switch is only authorized by a proposal the
+// server can resolve, so mocking them would bypass the boundary under test.
 
 const SERIAL = "SWITCH-SERIAL";
 const ROUTE_B1 = "SWITCH-ROUTE-B1";
 const ROUTE_B2 = "SWITCH-ROUTE-B2";
 const ROUTE_CLOUD = "SWITCH-ROUTE-CLOUD";
+// The refs discovery derives for the seeded endpoints; the scenario config names
+// its broker profiles exactly the same way.
+const REF_B1 = "local_mqtt_192_168_60_10_a176fa84";
+const REF_B2 = "local_mqtt_192_168_60_11_1e93cabd";
+const REF_CLOUD = "zendure_cloud";
 
 type DiscoveryState = {
   apiDevices: unknown[];
-  proposals: unknown[];
 };
 
 function apiInverter(serial: string, ip: string) {
@@ -32,46 +38,6 @@ function apiInverter(serial: string, ip: string) {
     verified: true,
     usable_for_config: true,
     config_ready: true,
-  };
-}
-
-// Proposals are mocked without an opaque server proposal id, matching the other
-// maintenance specs: the resulting draft entries take the manual path through
-// the real backend, so the trusted-proposal boundary stays enforced.
-function mqttProposal(
-  brokerRef: string,
-  route: string,
-  source = "local_mqtt",
-  host = "192.168.60.10",
-) {
-  return {
-    serial_number: SERIAL,
-    device_id: route,
-    target: "device",
-    connection_source: source,
-    broker_ref: brokerRef,
-    broker_host: host,
-    broker_port: source === "zendure_cloud_mqtt" ? 8883 : 1883,
-    broker_tls: source === "zendure_cloud_mqtt",
-    output_control_supported: true,
-    display_name: "SolarFlow 800 Pro 2",
-    hardware_model: "hyper_2000",
-    topic_family: "legacy_zendure_json",
-    hardware_generation: "hub_hyper_legacy",
-    role_hint: "inverter",
-    config_fragment: {
-      type: "zendure_mqtt",
-      serial_number: SERIAL,
-      enabled: true,
-      mqtt: {
-        broker_ref: brokerRef,
-        source,
-        topic_family: "legacy_zendure_json",
-        device_id: route,
-        product_key: "SWITCH-PK",
-      },
-      capabilities: { read_power: true, read_soc: true, write_output_limit: true },
-    },
   };
 }
 
@@ -97,9 +63,6 @@ async function mockDiscovery(page: Page, state: DiscoveryState) {
   await page.route("**/api/discovery/mqtt-brokers/refresh**", (route) =>
     json(route, { ok: true }),
   );
-  await page.route("**/api/discovery/mqtt-proposals**", (route) =>
-    json(route, { proposals: state.proposals }),
-  );
   await page.route("**/api/discovery/zendure-cloud-mqtt/settings**", (route) =>
     json(route, { token_saved: false, tls_mode: "system_ca" }),
   );
@@ -108,6 +71,11 @@ async function mockDiscovery(page: Page, state: DiscoveryState) {
   );
   await page.route("**/api/discovery/result/**", (route) =>
     json(route, { status: "complete", devices: [] }),
+  );
+  // Proposals are served by the real backend so the ids the browser selects are
+  // the ones the server can resolve.
+  await page.route("**/api/discovery/mqtt-proposals**", (route) =>
+    route.continue(),
   );
 }
 
@@ -224,7 +192,7 @@ async function expectPreviewedConnection(
 // selection is proven by its broker and transport, never by reading the route.
 async function expectPreviewedCloudConnection(page: Page) {
   const mqtt = await expectPreviewedConnection(page, {
-    broker_ref: "cloud_switch",
+    broker_ref: REF_CLOUD,
     source: "zendure_cloud_mqtt",
   });
   expect(String(mqtt.device_id || "")).not.toBe(ROUTE_CLOUD);
@@ -247,10 +215,6 @@ test("Local MQTT b1 -> b2 -> b1 switches back without a rescan", async ({
 }) => {
   const state: DiscoveryState = {
     apiDevices: [],
-    proposals: [
-      mqttProposal("local_b1", ROUTE_B1),
-      mqttProposal("local_b2", ROUTE_B2, "local_mqtt", "192.168.60.11"),
-    ],
   };
   await mockDiscovery(page, state);
   await login(page);
@@ -274,7 +238,7 @@ test("Local MQTT b1 -> b2 -> b1 switches back without a rescan", async ({
   // The whole connection follows the selection into the generated config, not
   // just the route: b1 is no longer this device's broker.
   await expectPreviewedConnection(page, {
-    broker_ref: "local_b2",
+    broker_ref: REF_B2,
     source: "local_mqtt",
     device_id: ROUTE_B2,
   });
@@ -299,27 +263,23 @@ test("Local MQTT b1 -> b2 -> b1 switches back without a rescan", async ({
   // Back on the stored connection exactly: b1 with its original route, and no
   // stated source invented for a config that always resolved it from the profile.
   await expectPreviewedConnection(page, {
-    broker_ref: "local_b1",
+    broker_ref: REF_B1,
     device_id: ROUTE_B1,
   });
+  await expect(page.locator("#maintenance-config-validation")).toHaveText("valid");
   await expect(page.locator("#maintenance-config-apply-btn")).toBeVisible();
 });
 
-test("Local MQTT <-> Zendure MQTT keeps the selected connection in the preview", async ({
+// One-way only: discovery drops a Cloud candidate whose physical serial is
+// already observed on a local broker, so a device stored on a local broker can
+// only ever be offered the Cloud connection while the local one is unobserved.
+// Reversibility is covered by the b1/b2 and API cases above and below.
+test("Local MQTT -> Zendure MQTT keeps the selected connection in the preview", async ({
   page,
   seedAdminScenario,
 }) => {
   const state: DiscoveryState = {
     apiDevices: [],
-    proposals: [
-      mqttProposal("local_b1", ROUTE_B1),
-      mqttProposal(
-        "cloud_switch",
-        ROUTE_CLOUD,
-        "zendure_cloud_mqtt",
-        "mqtt.zen-iot.com",
-      ),
-    ],
   };
   await mockDiscovery(page, state);
   await login(page);
@@ -331,15 +291,8 @@ test("Local MQTT <-> Zendure MQTT keeps the selected connection in the preview",
   await runDiscovery(page);
   await useTheOfferedConnection(page);
   await expectOneInverter(page, /hardware-card-zendure-mqtt/);
-  await expectPreviewedCloudConnection(page);
-
-  await useTheOfferedConnection(page);
-  await expectOneInverter(page, /hardware-card-zendure-mqtt/);
   await expectPreservedCommonValues(page);
-  await expectPreviewedConnection(page, {
-    broker_ref: "local_b1",
-    device_id: ROUTE_B1,
-  });
+  await expectPreviewedCloudConnection(page);
 });
 
 test("API -> Zendure MQTT -> API switches back in one session", async ({
@@ -348,14 +301,6 @@ test("API -> Zendure MQTT -> API switches back in one session", async ({
 }) => {
   const state: DiscoveryState = {
     apiDevices: [apiInverter(SERIAL, "192.168.60.20")],
-    proposals: [
-      mqttProposal(
-        "cloud_switch",
-        ROUTE_CLOUD,
-        "zendure_cloud_mqtt",
-        "mqtt.zen-iot.com",
-      ),
-    ],
   };
   await mockDiscovery(page, state);
   await login(page);
@@ -388,14 +333,6 @@ test("Zendure MQTT -> API -> Zendure MQTT switches back in one session", async (
 }) => {
   const state: DiscoveryState = {
     apiDevices: [apiInverter(SERIAL, "192.168.60.20")],
-    proposals: [
-      mqttProposal(
-        "cloud_switch",
-        ROUTE_CLOUD,
-        "zendure_cloud_mqtt",
-        "mqtt.zen-iot.com",
-      ),
-    ],
   };
   await mockDiscovery(page, state);
   await login(page);
@@ -425,4 +362,58 @@ test("Zendure MQTT -> API -> Zendure MQTT switches back in one session", async (
     "Zendure MQTT",
   );
   await expectPreservedCommonValues(page);
+});
+
+// The browser's broker endpoint block is not proof that a proposal exists: with
+// the server-resolvable selection stripped from the submitted draft, the switch
+// must be refused rather than re-homing the device onto the submitted broker.
+test("a connection switch without its proposal id is refused", async ({
+  page,
+  seedAdminScenario,
+}) => {
+  const state: DiscoveryState = {
+    apiDevices: [],
+  };
+  await mockDiscovery(page, state);
+  await login(page);
+  await seedAdminScenario("maintenance_local_broker_switchback");
+  await page.reload();
+  await openMaintenanceEditor(page);
+
+  await runDiscovery(page);
+  await useTheOfferedConnection(page);
+  await expect(cardInput(page, inverterCard(page), "MQTT device ID")).toHaveValue(
+    ROUTE_B2,
+  );
+
+  await page.route("**/api/admin/maintenance/config/preview", async (route) => {
+    const body = JSON.parse(route.request().postData() || "{}");
+    for (const device of (body.draft && body.draft.devices) || []) {
+      delete device.proposal_id;
+      delete device.proposal_broker_ref;
+    }
+    await route.continue({ postData: JSON.stringify(body) });
+  });
+
+  await page.locator("#maintenance-config-preview-btn").click();
+  await expect(page.locator("#maintenance-config-warnings")).toContainText(
+    /not backed by a current discovery proposal/,
+  );
+  await expect(page.locator("#maintenance-config-validation")).toHaveText(
+    "invalid",
+  );
+  await expect(page.locator("#maintenance-config-apply-btn")).toBeHidden();
+
+  // Nothing was written: the reloaded config still uses the stored connection.
+  await page.unroute("**/api/admin/maintenance/config/preview");
+  await page.reload();
+  await openMaintenanceEditor(page);
+  await expectOneInverter(page, /hardware-card-zendure-mqtt/);
+  await expect(cardInput(page, inverterCard(page), "MQTT device ID")).toHaveValue(
+    ROUTE_B1,
+  );
+  await expectPreviewedConnection(page, {
+    broker_ref: REF_B1,
+    device_id: ROUTE_B1,
+  });
 });
