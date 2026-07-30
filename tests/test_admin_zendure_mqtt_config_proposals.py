@@ -10,6 +10,7 @@ from admin.models import MqttHardwareCandidate
 from admin.server import AdminHandler
 from admin import zendure_mqtt_config_proposals as proposal_module
 from admin.zendure_mqtt_config_proposals import (
+    annotate_identity_tokens,
     build_proposals,
     proposals_from_brokers,
     proposals_from_sources,
@@ -447,9 +448,10 @@ def test_public_proposals_mask_cloud_route_from_other_scope_candidate(monkeypatc
     assert product not in flattened
 
 
-def test_same_physical_serial_on_local_and_cloud_prefers_local_proposal():
-    # A shared physical serial is authoritative cross-transport evidence, so
-    # the existing Local MQTT observation suppresses the cloud duplicate.
+def test_same_physical_serial_on_local_and_cloud_stays_two_connections():
+    # One physical inverter reachable over two transports is two connection
+    # alternatives, not a duplicate observation: suppressing either one would
+    # make that direction of the switch unofferable.
     proposals = build_proposals(
         [_scalar_candidate().to_dict(), _cloud_candidate(serial_number="ABC123", device_id="ABC123").to_dict()]
     )
@@ -463,8 +465,144 @@ def test_same_physical_serial_on_local_and_cloud_prefers_local_proposal():
             ).to_dict()
         ],
     )
+
+    combined = annotate_identity_tokens(
+        combined, b"proposal-alternatives-identity-32b"
+    )
+    assert len(combined) == 2
+    assert {proposal["connection_source"] for proposal in combined} == {
+        "local_mqtt",
+        "zendure_cloud_mqtt",
+    }
+    assert len({proposal["id"] for proposal in combined}) == 2
+    assert len({proposal["broker_ref"] for proposal in combined}) == 2
+    # Both connections still describe one physical inverter.
+    tokens = {
+        proposal["physical_identity_token"]
+        for proposal in annotate_identity_tokens(
+            combined, b"proposal-alternatives-identity-32b"
+        )
+    }
+    assert len(tokens) == 1
+
+
+def test_duplicate_local_observations_of_one_connection_collapse():
+    combined = proposals_from_sources(
+        [
+            {
+                "devices": [
+                    _scalar_candidate().to_dict(),
+                    _scalar_candidate().to_dict(),
+                ]
+            }
+        ],
+        [],
+    )
     assert len(combined) == 1
-    assert combined[0]["connection_source"] == "local_mqtt"
+
+
+def test_two_local_brokers_with_one_serial_stay_two_connections():
+    combined = proposals_from_sources(
+        [
+            {"devices": [_scalar_candidate(broker_host="10.0.0.5").to_dict()]},
+            {"devices": [_scalar_candidate(broker_host="10.0.0.6").to_dict()]},
+        ],
+        [],
+    )
+
+    assert len(combined) == 2
+    assert len({proposal["broker_ref"] for proposal in combined}) == 2
+    assert all(
+        proposal["connection_source"] == "local_mqtt" for proposal in combined
+    )
+
+
+def test_local_b1_b2_and_cloud_are_three_alternatives_for_one_serial():
+    combined = proposals_from_sources(
+        [
+            {"devices": [_scalar_candidate(broker_host="10.0.0.5").to_dict()]},
+            {"devices": [_scalar_candidate(broker_host="10.0.0.6").to_dict()]},
+        ],
+        [_cloud_candidate(serial_number="ABC123", device_id="CLOUD_ROUTE").to_dict()],
+    )
+
+    combined = annotate_identity_tokens(
+        combined, b"proposal-alternatives-identity-32b"
+    )
+    assert len(combined) == 3
+    assert len({proposal["broker_ref"] for proposal in combined}) == 3
+    # A selection names (id, broker_ref); two local brokers legitimately share a
+    # serial-anchored id, so the pair — not the id alone — has to stay distinct.
+    assert (
+        len({(proposal["id"], proposal["broker_ref"]) for proposal in combined}) == 3
+    )
+    assert sorted(proposal["connection_source"] for proposal in combined) == [
+        "local_mqtt",
+        "local_mqtt",
+        "zendure_cloud_mqtt",
+    ]
+
+
+def test_a_trusted_selection_resolves_either_alternative():
+    from admin.zendure_mqtt_config_proposals import resolve_selected_proposals
+
+    key = b"proposal-alternatives-key-32byte"
+    combined = annotate_identity_tokens(
+        proposals_from_sources(
+            [{"devices": [_scalar_candidate().to_dict()]}],
+            [
+                _cloud_candidate(
+                    serial_number="ABC123", device_id="CLOUD_ROUTE"
+                ).to_dict()
+            ],
+        ),
+        key,
+    )
+
+    for proposal in combined:
+        selected, errors = resolve_selected_proposals(
+            [{"id": proposal["id"], "broker_ref": proposal["broker_ref"]}],
+            combined,
+            key,
+        )
+        assert not errors, errors
+        assert selected[0]["connection_source"] == proposal["connection_source"]
+        assert selected[0]["broker_ref"] == proposal["broker_ref"]
+
+
+def test_public_proposals_keep_both_alternatives_without_exposing_cloud_ids(
+    monkeypatch,
+):
+    route = "CLOUD_ACCOUNT_ROUTE"
+    product = "CLOUD_PRODUCT_KEY"
+    combined = proposals_from_sources(
+        [{"devices": [_scalar_candidate().to_dict()]}],
+        [
+            _cloud_candidate(
+                serial_number="ABC123", device_id=route, product_key=product
+            ).to_dict()
+        ],
+    )
+    monkeypatch.setattr(
+        proposal_module, "proposals_from_sources", lambda local, cloud: combined
+    )
+    handler = object.__new__(AdminHandler)
+    handler.server = SimpleNamespace(
+        identity_token_key=b"public-proposal-identity-key-32b",
+        mqtt_discovery=SimpleNamespace(candidates=lambda: []),
+        zendure_cloud_discovery=SimpleNamespace(trusted_candidates=lambda: []),
+    )
+
+    public = handler._public_mqtt_proposals()
+    flattened = json.dumps(public)
+
+    assert len(public) == 2
+    assert {proposal["connection_source"] for proposal in public} == {
+        "local_mqtt",
+        "zendure_cloud_mqtt",
+    }
+    assert route not in flattened
+    assert product not in flattened
 
 
 def test_same_raw_route_on_local_and_cloud_stays_separate_without_serial():
@@ -726,12 +864,28 @@ def test_sources_exclude_masked_only_cloud_candidates():
     assert proposals_from_sources([], [masked]) == []
 
 
-def test_sources_prefer_local_broker_for_device_seen_on_both():
+def test_sources_offer_both_connections_for_a_device_seen_on_both():
     brokers = [_broker_with([_scalar_candidate().to_dict()])]
     cloud = [_cloud_candidate(serial_number="ABC123", device_id="ABC123").to_dict()]
     proposals = proposals_from_sources(brokers, cloud)
+    assert len(proposals) == 2
+    assert {proposal["broker_ref"] for proposal in proposals} == {
+        next(
+            p["broker_ref"]
+            for p in proposals
+            if p["broker_ref"].startswith("local_mqtt_")
+        ),
+        "zendure_cloud",
+    }
+
+
+def test_a_cloud_candidate_repeated_in_the_broker_list_collapses():
+    # The same cloud observation reaching both source lists is one connection,
+    # not an alternative to itself.
+    cloud = _cloud_candidate(serial_number="ABC123", device_id="CLOUD_ROUTE").to_dict()
+    proposals = proposals_from_sources([_broker_with([cloud])], [cloud])
     assert len(proposals) == 1
-    assert proposals[0]["broker_ref"].startswith("local_mqtt_")
+    assert proposals[0]["broker_ref"] == "zendure_cloud"
 
 
 def test_sources_stamp_generation_on_local_proposals_only():

@@ -681,6 +681,17 @@ alternative connection for an already configured inverter stays offered; it is
 built from the current trusted proposal set only, so an obsolete alternative
 disappears with the discovery generation that produced it.
 
+The trusted proposal set itself keeps those alternatives apart. One physical
+inverter reachable over a local broker *and* over the Zendure account is two
+selectable connections, not one observation seen twice, so `proposals_from_sources()`
+deduplicates strictly by concrete connection scope — source, broker/account
+reference, trusted endpoint, topic family and route (`connection_dedup_key`) —
+and never by physical identity. Local broker b1, local broker b2 and the Cloud
+account stay three proposals for one serial; only an observation of the very same
+connection collapses. Physical grouping happens afterwards and separately: the
+shared `physical_identity_token` marks them as alternatives for one logical
+inverter, which is what keeps a switch from creating a second configured device.
+
 | State | Condition | Action | Effect |
 |---|---|---|---|
 | `new` | no configured inverter matches the candidate's physical identity | **Add inverter** | adds a new logical inverter |
@@ -734,6 +745,32 @@ it were new. Adding a **new** manual MQTT device keeps its own explicit path:
 that entry binds to no stored device, so its broker block still provisions a
 profile through the manual workflow's own validation.
 
+A resolved proposal authorizes the **connection**, not the device. It proves that
+the connection exists and that the browser did not invent it; it does not prove
+that the connection belongs to the configured inverter the draft names. A
+proposal-backed entry that edits a stored device must therefore also share
+trusted identity evidence with it (`same_physical_inverter_evidence`): a shared
+physical serial, a shared trusted identity token, or a shared scoped route the
+proposal enriches with a serial. Otherwise the selection is refused with
+`mqtt_proposal_identity_mismatch` — *"The selected connection belongs to a
+different inverter"* — and both Preview and Apply answer `400` with
+`status: "invalid"` before any broker profile, preview payload, backup or config
+write. Both sides of that comparison are read server-side: the stored config
+entry named by `original_name`, and the connection the resolver itself wrote onto
+the draft entry. Removing or overwriting the browser's `serial_number`,
+`device_id` or `physical_identity_token` therefore changes nothing. The merge
+layer repeats the check independently and leaves the stored entry untouched, so
+a draft that never passed the HTTP boundary fails closed too. `original_name`
+stays authoritative for an **ordinary manual edit**, which may still correct a
+configured serial or route under the existing validation — the distinction is
+the trusted-selection marker, not the name.
+
+Because the selected endpoint arrives under a freshly generated `broker_ref`,
+that ref is first canonicalized against the already declared profiles for the
+comparison. Without it one physical broker declared as `local_b1` and offered as
+`local_mqtt_<slug>_<hash>` would compare as two scopes, and a route-only device
+could never be enriched by a proposal for its own route.
+
 On a switch, `materialize_maintenance_device()` drops the connection-owned keys
 of the old connection (`mqtt`, `capabilities`, route/product ids,
 `hardware_profile`, `power_write_profile`) before the draft projects the
@@ -775,6 +812,12 @@ alias even after a physical serial is later learned.
   conflict* state — never an automatic merge, never *Add as independent
   inverter*. Sharing a serial is never a conflict: the same serial may gain
   additional routes or Cloud-account scopes.
+- **One identity, several connections.** Because a shared serial is not a
+  conflict, distinct Local MQTT and Zendure MQTT connections legitimately carry
+  one physical identity. Grouping them under that identity is what makes them
+  *alternatives* for a single logical inverter; it must never collapse them into
+  one connection, or the direction of a switch that starts from the observed
+  connection becomes unofferable.
 - **Browser tokens are opaque and equality-only.** The browser matches on
   keyed, non-reversible HMAC tokens — `physical_identity_token` (primary) and
   `physical_identity_alias_tokens` (every alias) — plus a physical serial where

@@ -743,6 +743,23 @@ def build_test_runtime(*, data_dir):
         ]
         return config
 
+    def cloud_local_switchback_config():
+        """INV_1 on the Cloud broker, with local b1 declared to move back to."""
+
+        config = _switchback_common()
+        config["zendure_mqtt"] = {
+            "brokers": {
+                _switchback_local_ref("192.168.60.10"): _local_broker("192.168.60.10"),
+                _CLOUD_SWITCH_REF: _cloud_broker(),
+            }
+        }
+        config["devices"] = [
+            _switchback_mqtt_device(
+                _CLOUD_SWITCH_REF, "SWITCH-ROUTE-CLOUD", "SWITCH-PK"
+            )
+        ]
+        return config
+
     def cloud_api_switchback_config():
         """INV_1 on Cloud MQTT with no stated source, discoverable over the API."""
 
@@ -945,7 +962,7 @@ def build_test_runtime(*, data_dir):
             success=True,
         )
 
-    def _switchback_observation(*, source, host, port, device_id):
+    def _switchback_observation(*, source, host, port, device_id, serial=None):
         return {
             "broker_id": f"{source}:{host}:{port}",
             "broker_host": host,
@@ -953,7 +970,7 @@ def build_test_runtime(*, data_dir):
             "source_type": source,
             "topic_family": "legacy_zendure_json",
             "device_id": device_id,
-            "serial_number": switch_serial,
+            "serial_number": serial or switch_serial,
             "product_key": "SWITCH-PK",
             # Matches the stored hardware_profile, so a switch keeps resolving
             # the same concrete model and the device stays control-capable.
@@ -969,7 +986,9 @@ def build_test_runtime(*, data_dir):
 
         The connection switch is authorized by a current trusted proposal, so
         these specs need the backend's own discovery state — a browser-side
-        proposal mock proves nothing to the server.
+        proposal mock proves nothing to the server. Each endpoint is
+        ``(host, device_id)`` or ``(host, device_id, serial)``; a distinct serial
+        seeds another physical inverter on that broker.
         """
 
         generation = runtime.mqtt_discovery.store.begin_refresh()
@@ -977,8 +996,8 @@ def build_test_runtime(*, data_dir):
             generation,
             [
                 {
-                    "id": f"mqtt:{host}:1883",
-                    "host": host,
+                    "id": f"mqtt:{endpoint[0]}:1883",
+                    "host": endpoint[0],
                     "port": 1883,
                     "tls": False,
                     "reachable": True,
@@ -986,13 +1005,14 @@ def build_test_runtime(*, data_dir):
                     "devices": [
                         _switchback_observation(
                             source="local_mqtt",
-                            host=host,
+                            host=endpoint[0],
                             port=1883,
-                            device_id=device_id,
+                            device_id=endpoint[1],
+                            serial=endpoint[2] if len(endpoint) > 2 else None,
                         )
                     ],
                 }
-                for host, device_id in endpoints
+                for endpoint in endpoints
             ],
             success=True,
         )
@@ -1047,11 +1067,20 @@ def build_test_runtime(*, data_dir):
             seed_switchback_cloud_candidate()
         elif scenario == "maintenance_local_cloud_switchback":
             write_install_config(local_cloud_switchback_config())
-            # No local candidate: proposals_from_sources drops a cloud candidate
-            # whose serial is already seen on a local broker, so the Cloud
-            # connection is only ever offered when the local one is not observed.
-            clear_local_mqtt_candidates()
+            # Both connections of one physical inverter are observed at once, so
+            # each direction of the switch has a real proposal to resolve.
+            seed_switchback_local_candidates(("192.168.60.10", "SWITCH-ROUTE-B1"))
             seed_switchback_cloud_candidate()
+        elif scenario == "maintenance_cloud_local_switchback":
+            write_install_config(cloud_local_switchback_config())
+            seed_switchback_local_candidates(("192.168.60.10", "SWITCH-ROUTE-B1"))
+            seed_switchback_cloud_candidate()
+        elif scenario == "maintenance_foreign_inverter_proposal":
+            write_install_config(local_broker_switchback_config())
+            seed_switchback_local_candidates(
+                ("192.168.60.10", "SWITCH-ROUTE-B1"),
+                ("192.168.60.11", "SWITCH-ROUTE-OTHER", "SWITCH-SERIAL-OTHER"),
+            )
         elif scenario == "serialless_cloud_identity":
             write_install_config(serialless_cloud_config())
             clear_local_mqtt_candidates()

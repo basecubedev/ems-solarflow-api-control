@@ -28,7 +28,7 @@ from ems.device_identity import (
     PHYSICAL_IDENTITY_ALIAS_TOKENS_FIELD,
     PHYSICAL_IDENTITY_TOKEN_FIELD,
     legacy_route_folded_tokens,
-    resolve_inverter_identity,
+    normalize_mqtt_route_segment,
     resolve_inverter_identity_evidence,
 )
 from ems.zendure_mqtt.config_entries import (
@@ -431,6 +431,40 @@ def proposals_from_brokers(brokers: Iterable[Any]) -> list[dict[str, Any]]:
     return proposals
 
 
+def connection_dedup_key(proposal: Mapping[str, Any]) -> tuple:
+    """Concrete connection a proposal describes, for cross-source deduplication.
+
+    Everything that makes a connection reachable in its own right: transport
+    source, broker/account scope, telemetry family and the route within it. A
+    physical serial deliberately takes no part — one inverter may be reachable
+    over Local MQTT and over the Zendure account at the same time, and those are
+    two selectable alternatives, not one observation seen twice.
+    """
+
+    fragment = proposal.get("config_fragment")
+    mqtt = fragment.get("mqtt") if isinstance(fragment, Mapping) else None
+    mqtt = mqtt if isinstance(mqtt, Mapping) else {}
+    source = str(
+        proposal.get("connection_source") or mqtt.get("source") or SOURCE_LOCAL_MQTT
+    ).strip().lower()
+    broker_ref = str(
+        proposal.get("broker_ref") or mqtt.get("broker_ref") or ""
+    ).strip()
+    return (
+        source,
+        broker_ref,
+        str(proposal.get("broker_host") or "").strip().lower(),
+        parse_mqtt_port(proposal.get("broker_port"))
+        if proposal.get("broker_port") not in (None, "")
+        else None,
+        str(mqtt.get("topic_family") or proposal.get("topic_family") or "").strip(),
+        normalize_mqtt_route_segment(mqtt.get("device_id") or proposal.get("device_id")),
+        normalize_mqtt_route_segment(
+            mqtt.get("product_key") or proposal.get("product_key")
+        ),
+    )
+
+
 def proposals_from_sources(
     brokers: Iterable[Any], cloud_candidates: Iterable[Any] = ()
 ) -> list[dict[str, Any]]:
@@ -440,30 +474,23 @@ def proposals_from_sources(
     and the config-preview trust resolve, so a selection made in the review UI
     always resolves against the same set it was rendered from. Local proposals
     keep their generation stamping (cloud candidates take no part in the local
-    broker store's generation/TTL bookkeeping). A cloud candidate whose trusted
-    physical serial already appears on a local broker is dropped: the local
-    connection wins. Account-scoped route ids remain separate candidates.
+    broker store's generation/TTL bookkeeping).
+
+    Proposals are kept apart by concrete connection scope, never by physical
+    identity: one inverter on Local MQTT and on the Zendure account yields both
+    connections so either direction of a Maintenance switch stays offerable. A
+    shared serial groups them as alternatives for one logical inverter
+    downstream (see :func:`annotate_identity_tokens`). Only an observation of
+    the very same connection collapses.
     """
 
     proposals = proposals_from_brokers(brokers)
-    # Only a trusted physical serial may collapse observations across broker
-    # families. MQTT route ids are broker/account scoped, so the same raw route
-    # on Local MQTT and Zendure Cloud remains two distinct candidates.
-    def physical_key(proposal):
-        identity = resolve_inverter_identity(proposal.get("config_fragment"))
-        return (
-            identity.comparison_key
-            if identity is not None and identity.kind == "physical_serial"
-            else None
-        )
-
-    local_physical_keys = {
-        key for proposal in proposals if (key := physical_key(proposal)) is not None
-    }
+    seen = {connection_dedup_key(proposal) for proposal in proposals}
     for proposal in build_proposals(cloud_candidates):
-        cloud_key = physical_key(proposal)
-        if cloud_key is not None and cloud_key in local_physical_keys:
+        key = connection_dedup_key(proposal)
+        if key in seen:
             continue
+        seen.add(key)
         proposals.append(proposal)
     return proposals
 

@@ -190,10 +190,13 @@ async function expectPreviewedConnection(
 
 // Cloud route identifiers stay redacted in the browser preview, so the landed
 // selection is proven by its broker and transport, never by reading the route.
-async function expectPreviewedCloudConnection(page: Page) {
+// ``source`` is passed explicitly for the same reason as above: landing back on
+// a stored connection that never stated one must not invent it, so that case
+// omits the argument.
+async function expectPreviewedCloudConnection(page: Page, source?: string) {
   const mqtt = await expectPreviewedConnection(page, {
     broker_ref: REF_CLOUD,
-    source: "zendure_cloud_mqtt",
+    source,
   });
   expect(String(mqtt.device_id || "")).not.toBe(ROUTE_CLOUD);
   expect(String(mqtt.device_id || "")).not.toBe(ROUTE_B1);
@@ -270,11 +273,10 @@ test("Local MQTT b1 -> b2 -> b1 switches back without a rescan", async ({
   await expect(page.locator("#maintenance-config-apply-btn")).toBeVisible();
 });
 
-// One-way only: discovery drops a Cloud candidate whose physical serial is
-// already observed on a local broker, so a device stored on a local broker can
-// only ever be offered the Cloud connection while the local one is unobserved.
-// Reversibility is covered by the b1/b2 and API cases above and below.
-test("Local MQTT -> Zendure MQTT keeps the selected connection in the preview", async ({
+// One physical inverter observed on a local broker and on the Zendure account
+// at the same time: both connections stay on offer, so either direction of the
+// switch is reachable inside one discovery session.
+test("Local MQTT -> Zendure MQTT -> Local MQTT switches back without a rescan", async ({
   page,
   seedAdminScenario,
 }) => {
@@ -289,10 +291,75 @@ test("Local MQTT -> Zendure MQTT keeps the selected connection in the preview", 
   await expectOneInverter(page, /hardware-card-zendure-mqtt/);
 
   await runDiscovery(page);
+  // b1 is the installed connection; the Cloud account is the alternative.
+  await expect(results(page).locator(".mconfig-discovery-add-button.is-in-config"))
+    .toHaveCount(1);
+  await expect(results(page).locator(".mconfig-discovery-add-button.is-transport"))
+    .toHaveCount(1);
+
   await useTheOfferedConnection(page);
   await expectOneInverter(page, /hardware-card-zendure-mqtt/);
+  await expect(inverterCard(page).locator(".connection-pill")).toHaveText(
+    "Zendure MQTT",
+  );
   await expectPreservedCommonValues(page);
+  await expectPreviewedCloudConnection(page, "zendure_cloud_mqtt");
+  // The freed local connection is immediately selectable again, no rescan.
+  await expect(results(page).locator(".mconfig-discovery-add-button.is-transport"))
+    .toHaveCount(1);
+
+  await useTheOfferedConnection(page);
+  await expectOneInverter(page, /hardware-card-zendure-mqtt/);
+  await expect(cardInput(page, inverterCard(page), "MQTT device ID")).toHaveValue(
+    ROUTE_B1,
+  );
+  await expectPreservedCommonValues(page);
+  await expectPreviewedConnection(page, {
+    broker_ref: REF_B1,
+    device_id: ROUTE_B1,
+  });
+  await expect(page.locator("#maintenance-config-validation")).toHaveText("valid");
+  await expect(page.locator("#maintenance-config-apply-btn")).toBeVisible();
+});
+
+test("Zendure MQTT -> Local MQTT -> Zendure MQTT switches back without a rescan", async ({
+  page,
+  seedAdminScenario,
+}) => {
+  const state: DiscoveryState = {
+    apiDevices: [],
+  };
+  await mockDiscovery(page, state);
+  await login(page);
+  await seedAdminScenario("maintenance_cloud_local_switchback");
+  await page.reload();
+  await openMaintenanceEditor(page);
+  await expectOneInverter(page, /hardware-card-zendure-mqtt/);
+
+  await runDiscovery(page);
+  await useTheOfferedConnection(page);
+  await expectOneInverter(page, /hardware-card-zendure-mqtt/);
+  await expect(cardInput(page, inverterCard(page), "MQTT device ID")).toHaveValue(
+    ROUTE_B1,
+  );
+  await expectPreservedCommonValues(page);
+  await expectPreviewedConnection(page, {
+    broker_ref: REF_B1,
+    source: "local_mqtt",
+    device_id: ROUTE_B1,
+  });
+
+  await useTheOfferedConnection(page);
+  await expectOneInverter(page, /hardware-card-zendure-mqtt/);
+  await expect(inverterCard(page).locator(".connection-pill")).toHaveText(
+    "Zendure MQTT",
+  );
+  await expectPreservedCommonValues(page);
+  // Back on the installed Cloud connection exactly, without inventing a stated
+  // source for a config that always resolved it from its broker profile.
   await expectPreviewedCloudConnection(page);
+  await expect(page.locator("#maintenance-config-validation")).toHaveText("valid");
+  await expect(page.locator("#maintenance-config-apply-btn")).toBeVisible();
 });
 
 test("API -> Zendure MQTT -> API switches back in one session", async ({
@@ -315,7 +382,7 @@ test("API -> Zendure MQTT -> API switches back in one session", async ({
   await expect(inverterCard(page).locator(".connection-pill")).toHaveText(
     "Zendure MQTT",
   );
-  await expectPreviewedCloudConnection(page);
+  await expectPreviewedCloudConnection(page, "zendure_cloud_mqtt");
 
   // The Local API connection is offered again straight away.
   await useTheOfferedConnection(page);
@@ -417,3 +484,99 @@ test("a connection switch without its proposal id is refused", async ({
     device_id: ROUTE_B1,
   });
 });
+
+// A current, resolvable proposal proves a connection exists — not that it
+// belongs to the configured inverter the draft names. The foreign proposal here
+// is the backend's own, so only the server-side device binding can refuse it.
+async function foreignProposal(page: Page) {
+  const response = await page.request.get("/api/discovery/mqtt-proposals");
+  expect(response.ok()).toBeTruthy();
+  const { proposals } = await response.json();
+  const foreign = (proposals || []).filter(
+    (proposal: { serial_number?: string }) =>
+      proposal.serial_number === "SWITCH-SERIAL-OTHER",
+  );
+  expect(foreign).toHaveLength(1);
+  return foreign[0];
+}
+
+for (const tampering of [
+  { name: "keeping the foreign identity fields", drop: false },
+  { name: "dropping the stored identity fields", drop: true },
+]) {
+  test(`a proposal for another inverter is refused when ${tampering.name}`, async ({
+    page,
+    seedAdminScenario,
+  }) => {
+    const state: DiscoveryState = {
+      apiDevices: [],
+    };
+    await mockDiscovery(page, state);
+    await login(page);
+    await seedAdminScenario("maintenance_foreign_inverter_proposal");
+    await page.reload();
+    await openMaintenanceEditor(page);
+    await runDiscovery(page);
+
+    const proposal = await foreignProposal(page);
+    const fragmentMqtt = (proposal.config_fragment || {}).mqtt || {};
+    await page.route("**/api/admin/maintenance/config/preview", async (route) => {
+      const body = JSON.parse(route.request().postData() || "{}");
+      for (const device of (body.draft && body.draft.devices) || []) {
+        if (device.original_name !== "INV_1") continue;
+        device.proposal_id = proposal.id;
+        device.proposal_broker_ref = proposal.broker_ref;
+        device.broker = {
+          ref: proposal.broker_ref,
+          host: proposal.broker_host,
+          port: proposal.broker_port,
+          tls: proposal.broker_tls === true,
+          tls_insecure: proposal.broker_tls_insecure === true,
+          tls_mode: proposal.broker_tls_mode || "",
+          credentials_ref: proposal.credentials_ref || "",
+          source: proposal.connection_source || "",
+        };
+        if (tampering.drop) {
+          // The stored device's identity is gone from the submitted draft.
+          delete device.physical_identity_token;
+          delete device.serial_number;
+          delete device.device_id;
+          device.mqtt = { broker_ref: proposal.broker_ref };
+        } else {
+          device.physical_identity_token = proposal.physical_identity_token;
+          device.serial_number = proposal.serial_number;
+          device.device_id = fragmentMqtt.device_id;
+          device.mqtt = {
+            broker_ref: fragmentMqtt.broker_ref,
+            source: fragmentMqtt.source,
+            topic_family: fragmentMqtt.topic_family,
+            device_id: fragmentMqtt.device_id,
+          };
+        }
+      }
+      await route.continue({ postData: JSON.stringify(body) });
+    });
+
+    await page.locator("#maintenance-config-preview-btn").click();
+    await expect(page.locator("#maintenance-config-warnings")).toContainText(
+      /belongs to a different inverter/,
+    );
+    await expect(page.locator("#maintenance-config-validation")).toHaveText(
+      "invalid",
+    );
+    await expect(page.locator("#maintenance-config-apply-btn")).toBeHidden();
+
+    // Nothing landed: the stored connection is still the configured one.
+    await page.unroute("**/api/admin/maintenance/config/preview");
+    await page.reload();
+    await openMaintenanceEditor(page);
+    await expectOneInverter(page, /hardware-card-zendure-mqtt/);
+    await expect(cardInput(page, inverterCard(page), "MQTT device ID")).toHaveValue(
+      ROUTE_B1,
+    );
+    await expectPreviewedConnection(page, {
+      broker_ref: REF_B1,
+      device_id: ROUTE_B1,
+    });
+  });
+}

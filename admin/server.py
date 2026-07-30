@@ -97,10 +97,13 @@ from admin.container_actions import (
 from admin.container_names import DEFAULT_EMS_CONTAINER
 from admin.maintenance import run_maintenance_overview
 from admin.maintenance_config import (
+    PROPOSAL_IDENTITY_MISMATCH_CODE,
+    PROPOSAL_IDENTITY_MISMATCH_MESSAGE,
     load_maintenance_config,
     prepare_maintenance_config_apply,
     preview_maintenance_config,
     redact_config_for_browser,
+    trusted_selection_conflicts_with_stored_device,
 )
 from admin.runtime_convergence import (
     mirror_changed_keys_to_runtime,
@@ -233,6 +236,32 @@ def _surface_mqtt_credential_consumer_issues(preview):
             {"code": issue["code"], "message": issue["message"]}
         )
     preview["ready"] = False
+
+
+def _maintenance_resolution_rejection(message):
+    """Fail-closed Preview/Apply body for a refused MQTT connection selection.
+
+    Both handlers refuse before any merge, so the response carries no preview and
+    no prepared payload. The identity mismatch keeps its own code: it is not an
+    untrusted endpoint but a trusted one belonging to another inverter.
+    """
+
+    code = (
+        PROPOSAL_IDENTITY_MISMATCH_CODE
+        if message == PROPOSAL_IDENTITY_MISMATCH_MESSAGE
+        else "mqtt_proposal_untrusted"
+    )
+    return {
+        "status": "invalid",
+        "message": message,
+        "validation": {
+            "ok": False,
+            "errors": [{"code": code, "message": message}],
+            "warnings": [],
+            "info": [],
+        },
+    }
+
 
 # Guided-upgrade preflight rejection reasons -> HTTP status. Accepted runs spawn
 # a job (202) whose live step progress is polled; only rejections use this map.
@@ -2106,22 +2135,7 @@ class AdminHandler(BaseHTTPRequestHandler):
         draft, resolution_error = self._resolve_maintenance_mqtt_draft(draft)
         if resolution_error:
             self._send_json(
-                {
-                    "status": "invalid",
-                    "message": resolution_error,
-                    "validation": {
-                        "ok": False,
-                        "errors": [
-                            {
-                                "code": "mqtt_proposal_untrusted",
-                                "message": resolution_error,
-                            }
-                        ],
-                        "warnings": [],
-                        "info": [],
-                    },
-                },
-                status=400,
+                _maintenance_resolution_rejection(resolution_error), status=400
             )
             return
         self._send_json(
@@ -2264,22 +2278,7 @@ class AdminHandler(BaseHTTPRequestHandler):
         draft, resolution_error = self._resolve_maintenance_mqtt_draft(draft)
         if resolution_error:
             self._send_json(
-                {
-                    "status": "invalid",
-                    "message": resolution_error,
-                    "validation": {
-                        "ok": False,
-                        "errors": [
-                            {
-                                "code": "mqtt_proposal_untrusted",
-                                "message": resolution_error,
-                            }
-                        ],
-                        "warnings": [],
-                        "info": [],
-                    },
-                },
-                status=400,
+                _maintenance_resolution_rejection(resolution_error), status=400
             )
             return
         prepared = prepare_maintenance_config_apply(
@@ -3853,7 +3852,9 @@ class AdminHandler(BaseHTTPRequestHandler):
         Resolution is also what authorizes a connection replacement: every
         generated proposal carries an id, so an entry that would re-home a
         stored device on a submitted broker endpoint alone is refused instead
-        of being read as proposal-derived.
+        of being read as proposal-derived. Authorization is per device, not per
+        connection: a current proposal for another physical inverter is refused
+        against the stored config, never against the browser's echo of it.
         """
 
         resolved_draft = copy.deepcopy(draft)
@@ -3952,7 +3953,17 @@ class AdminHandler(BaseHTTPRequestHandler):
                 "credentials_ref": proposal.get("credentials_ref") or "",
                 "source": proposal.get("connection_source") or proposal.get("source") or "",
             }
+            # The proposal's own serial completes the entry's server-side
+            # identity; the checks above already refused a contradicting one.
+            if trusted_serial:
+                item["serial_number"] = trusted_serial
             item[TRUSTED_CONNECTION_SELECTION_FIELD] = True
+            if trusted_selection_conflicts_with_stored_device(
+                item.get("original_name"),
+                item,
+                identity_token_key=self.server.identity_token_key,
+            ):
+                return None, PROPOSAL_IDENTITY_MISMATCH_MESSAGE
         return resolved_draft, None
 
     def _stage_setup_credentials(self, config, broker, changes):

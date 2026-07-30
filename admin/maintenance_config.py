@@ -29,9 +29,13 @@ from admin.zendure_mqtt_broker_profiles import (
     BrokerEndpointError,
     broker_endpoint,
     default_zendure_cloud_auth_available,
+    endpoint_broker_profile,
+    existing_broker_profiles,
     resolve_broker_ref,
+    source_is_local,
 )
 from admin.zendure_mqtt_config_draft import (
+    TRUSTED_CONNECTION_SELECTION_FIELD,
     apply_zendure_mqtt_draft_fields,
     generation_catalog,
     zendure_hardware_profile_options,
@@ -62,6 +66,7 @@ from ems.device_identity import (
     identity_evidence_conflict,
     resolve_inverter_identity,
     resolve_inverter_identity_evidence,
+    same_physical_inverter_evidence,
     supplied_identity_token,
 )
 from ems.external_status import (
@@ -70,12 +75,14 @@ from ems.external_status import (
     sanitize_external_mqtt_status,
 )
 from ems.zendure_mqtt.config_entries import (
+    SOURCE_LOCAL_MQTT,
     find_duplicate_zendure_device_identities,
     find_reserved_mqtt_broker_ref_issues,
     find_zendure_mqtt_broker_profile_issues,
     has_runtime_control_device,
     is_control_zendure_mqtt_device_config,
     is_zendure_mqtt_device_config,
+    normalized_broker_identity,
     validate_zendure_mqtt_control_device_config,
     validate_zendure_mqtt_device_config,
     zendure_mqtt_broker_profile_views,
@@ -981,6 +988,134 @@ def materialize_maintenance_device(
     return device
 
 
+PROPOSAL_IDENTITY_MISMATCH_CODE = "mqtt_proposal_identity_mismatch"
+PROPOSAL_IDENTITY_MISMATCH_MESSAGE = (
+    "The selected connection belongs to a different inverter. Rerun discovery "
+    "and choose a connection for the same physical device."
+)
+
+
+def _declared_ref_for_selected_endpoint(config, item):
+    """Ref an already declared profile uses for this selection's endpoint.
+
+    A proposal names its endpoint under a freshly generated ref, so the same
+    physical broker can appear under two refs until the apply reuses the stored
+    profile. Scoped route identities are keyed on the ref, so without this the
+    same connection would compare as two scopes.
+    """
+
+    broker = item.get("broker")
+    if not isinstance(broker, dict) or not broker:
+        return None
+    ref = str(broker.get("ref") or "").strip()
+    try:
+        endpoint = broker_endpoint(
+            {
+                "broker_host": broker.get("host"),
+                "broker_port": broker.get("port"),
+                "broker_tls": broker.get("tls"),
+                "broker_tls_insecure": broker.get("tls_insecure"),
+                "broker_tls_mode": broker.get("tls_mode"),
+                "credentials_ref": broker.get("credentials_ref"),
+                "connection_source": broker.get("source"),
+            }
+        )
+    except BrokerEndpointError:
+        return None
+    if not source_is_local(endpoint, ref):
+        return None
+    identity = normalized_broker_identity(
+        endpoint_broker_profile(endpoint, SOURCE_LOCAL_MQTT)
+    )
+    if identity is None:
+        return None
+    for declared_ref, profile in existing_broker_profiles(config).items():
+        if normalized_broker_identity(profile) == identity:
+            return declared_ref
+    return None
+
+
+def selected_connection_identity_evidence(
+    config, item, *, broker_sources=None, identity_token_key=None
+):
+    """Identity evidence of a resolved connection selection, scoped like config."""
+
+    probe = item
+    declared = _declared_ref_for_selected_endpoint(config, item)
+    mqtt = item.get("mqtt") if isinstance(item.get("mqtt"), dict) else {}
+    if declared and declared != str(mqtt.get("broker_ref") or "").strip():
+        probe = copy.deepcopy(item)
+        probe.setdefault("mqtt", {})["broker_ref"] = declared
+    return resolve_inverter_identity_evidence(
+        probe,
+        broker_sources=broker_sources
+        if broker_sources is not None
+        else broker_sources_from_config(config),
+        token_key=identity_token_key,
+    )
+
+
+def trusted_selection_targets_other_inverter(
+    config, original, item, *, broker_sources=None, identity_token_key=None
+):
+    """True when a trusted connection selection names another physical inverter.
+
+    A resolved proposal proves the connection exists, not that it belongs to the
+    device the draft edits. Both sides are read server-side — the stored config
+    entry and the connection the resolver wrote onto the entry — so dropping or
+    rewriting the browser's identity fields cannot make a foreign selection pass.
+    """
+
+    if not isinstance(item, dict) or item.get(TRUSTED_CONNECTION_SELECTION_FIELD) is not True:
+        return False
+    if not isinstance(original, dict):
+        return False
+    stored = resolve_inverter_identity_evidence(
+        original,
+        broker_sources=broker_sources
+        if broker_sources is not None
+        else broker_sources_from_config(config),
+        token_key=identity_token_key,
+    )
+    selected = selected_connection_identity_evidence(
+        config,
+        item,
+        broker_sources=broker_sources,
+        identity_token_key=identity_token_key,
+    )
+    return not same_physical_inverter_evidence(stored, selected)
+
+
+def trusted_selection_conflicts_with_stored_device(
+    original_name, item, *, base_dir=None, identity_token_key=None
+):
+    """True when a resolved selection would re-home the stored device it names.
+
+    Reads the config from disk so the HTTP boundary can refuse a cross-device
+    selection before any merge, broker provisioning, backup or write happens.
+    """
+
+    name = str(original_name or "").strip()
+    if not name:
+        return False
+    error, _raw, current = _load_current(base_dir)
+    if error is not None:
+        return False
+    original = next(
+        (
+            device
+            for device in _config_devices(current)
+            if str(device.get("name") or "") == name
+        ),
+        None,
+    )
+    if original is None:
+        return False
+    return trusted_selection_targets_other_inverter(
+        current, original, item, identity_token_key=identity_token_key
+    )
+
+
 def _resolve_original_device(
     item,
     by_name,
@@ -1217,6 +1352,27 @@ def _merge_devices(merged, devices, issues, *, identity_token_key=None):
                 allocation_names.append(name)
         if _is_mqtt_draft_item(item):
             was_mqtt = is_zendure_mqtt_device_config(original)
+            # A resolved proposal authorizes the connection, not the device: one
+            # for another physical inverter leaves the stored entry untouched
+            # rather than materializing a foreign identity into the preview.
+            if trusted_selection_targets_other_inverter(
+                merged,
+                original,
+                item,
+                broker_sources=broker_sources,
+                identity_token_key=identity_token_key,
+            ):
+                label = str(
+                    item.get("name") or original.get("name") or "Zendure MQTT device"
+                ).strip()
+                issues.append(
+                    _issue(
+                        PROPOSAL_IDENTITY_MISMATCH_CODE,
+                        f"{label}: {PROPOSAL_IDENTITY_MISMATCH_MESSAGE}",
+                    )
+                )
+                result.append(copy.deepcopy(original))
+                continue
             # Moving a stored device onto another concrete MQTT connection is a
             # proposal-authorized action. Whichever entry the merge resolved it
             # onto, an endpoint block the server never checked against current
