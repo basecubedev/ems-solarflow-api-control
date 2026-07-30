@@ -77,6 +77,16 @@ admin state:
 and UI state). It is not EMS config and not part of the EMS control path.
 Removing it does not change EMS behavior; it only resets Admin Console state.
 
+Temporary workflow artifacts under `data/admin/` have an owner and a lifecycle.
+Guided Setup's are owned by `admin/setup_workflow.py` — the generated config
+(`generated/config.json` plus its `config.meta.json` base-revision record) and
+the deployment marker (`state/.admin-deployment.json`) — and are removed by
+`POST /api/setup/abandon`, the single backend-owned reset behind the wizard's
+"Start over". Browser state may render workflow state but is never the authority
+for its cleanup. See
+[admin-workflow-state.md](admin-workflow-state.md) for the full inventory,
+config write paths and transition matrix.
+
 ## Authentication
 
 The Admin Console is protected by the shared EMS/Dashboard password — there is

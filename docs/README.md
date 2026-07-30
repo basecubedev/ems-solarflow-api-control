@@ -86,6 +86,7 @@ Architecture, internals and reference. You do not need this for a normal setup.
 | Admin architecture | [technical/admin-architecture.md](technical/admin-architecture.md) | Admin Console = UI/orchestration, Docker Bootstrap layout, EMS/Core as source of truth. |
 | Admin discovery | [technical/admin-discovery.md](technical/admin-discovery.md) | Full Admin Console internals: wizard, release/build identity, discovery, Docker setup, security. |
 | System-build pairing | [technical/system-build-pairing.md](technical/system-build-pairing.md) | Admin and EMS as one paired system build: pair identity, alignment, embedded resources, known-good. |
+| Admin workflow state | [technical/admin-workflow-state.md](technical/admin-workflow-state.md) | Persisted workflow-state inventory, config write paths, transition matrix and abandonment invariants. |
 | Configuration | [technical/configuration.md](technical/configuration.md) | Static `config.json` keys, safety flags, devices, grid meters and winter settings. |
 | Configuration examples | [configuration-examples.md](configuration-examples.md) | Copy/paste starting points for standalone, HA, dry-run and live writes. |
 | Control logic | [technical/control-logic.md](technical/control-logic.md) | Target calculation, filtering, allocation and write suppression. |

@@ -31,6 +31,7 @@ from pathlib import Path
 from admin.install_context import detect_install_context
 from admin.models import utc_now_iso
 from admin.releases import DOCKER_IMAGE_REPOSITORY, ReleaseError, default_admin_data_dir
+from admin.setup_workflow import GENERATED_CONFIG_OWNER, read_generated_metadata
 
 INSTALL_SCRIPT = "install-docker.sh"
 INFLUX_COMPOSE_RESOURCE = "deploy/docker/compose.influxdb.yml"
@@ -1228,7 +1229,7 @@ class DeploymentJobRegistry:
         self._order = []
         self._max_jobs = max_jobs
 
-    def submit(self, job, runner, *, on_complete=None):
+    def submit(self, job, runner, *, on_complete=None, on_settled=None):
         with self._lock:
             self._jobs[job.job_id] = job
             self._order.append(job.job_id)
@@ -1236,7 +1237,7 @@ class DeploymentJobRegistry:
                 self._jobs.pop(self._order.pop(0), None)
         thread = threading.Thread(
             target=self._run,
-            args=(job, runner, on_complete),
+            args=(job, runner, on_complete, on_settled),
             daemon=True,
         )
         thread.start()
@@ -1248,7 +1249,7 @@ class DeploymentJobRegistry:
         return job.snapshot() if job is not None else None
 
     @staticmethod
-    def _run(job, runner, on_complete=None):
+    def _run(job, runner, on_complete=None, on_settled=None):
         try:
             runner(job)
         except DockerError as exc:
@@ -1271,6 +1272,14 @@ class DeploymentJobRegistry:
             else:
                 job.fail("prepare_failed", "Deployment preparation failed unexpectedly.")
         finally:
+            # The worker has stopped mutating: release its lifecycle ownership
+            # before any completion observer runs, so a terminal observer (which
+            # needs its own exclusive claim) is not blocked by this worker.
+            if on_settled is not None:
+                try:
+                    on_settled()
+                except Exception:
+                    pass
             if on_complete is not None:
                 try:
                     on_complete(job.snapshot())
@@ -1300,9 +1309,14 @@ class DeploymentService:
         dashboard_retry_seconds=1.0,
         runtime_env=None,
         install_context_provider=detect_install_context,
+        setup_workflows=None,
     ):
         self.release_manager = release_manager
         self.config_export = config_export
+        # Guided Setup workflow authority: deployment accepts only the active
+        # workflow's preview-bound generated config. Without a store every
+        # generated config fails closed into the review-required path.
+        self.setup_workflows = setup_workflows
         data_dir = Path(admin_data_dir) if admin_data_dir else _admin_data_dir(release_manager)
         self.admin_data_dir = data_dir
         # The live deployment target is the standard EMS install root
@@ -1384,7 +1398,15 @@ class DeploymentService:
 
     # --- prepare ---------------------------------------------------------
 
-    def prepare(self, overwrite=False):
+    def prepare(self, overwrite=False, *, workflow_id=None, on_settled=None):
+        """Submit the preparation worker for one immutable workflow identity.
+
+        The owning workflow is resolved once, here, and carried in the worker's
+        context. The worker never asks which workflow is active later, so it can
+        neither stamp a replacement workflow's identity into the marker nor keep
+        writing for a workflow that was terminalized in the meantime.
+        """
+
         release = self._release_context()
         if release is None:
             return _reject("release_not_prepared", "Prepare release resources first.")
@@ -1394,6 +1416,9 @@ class DeploymentService:
                 "generated_config_missing",
                 "Save a generated config before preparing the deployment.",
             )
+        rejection = self._generated_config_rejection(config)
+        if rejection is not None:
+            return rejection
         identity = self._resolve_runtime_identity()
         if identity is None:
             return _reject(
@@ -1423,6 +1448,9 @@ class DeploymentService:
             conflict = self._workspace_conflict(release, config, overwrite)
             if conflict is not None:
                 return conflict
+            owner = self._prepare_owner(workflow_id)
+            if isinstance(owner, dict) and owner.get("rejected"):
+                return owner["rejected"]
             context = {
                 "release": release,
                 "config": config,
@@ -1431,19 +1459,54 @@ class DeploymentService:
                 "overwrite": overwrite,
                 "puid": identity[0],
                 "pgid": identity[1],
+                "workflow": owner,
             }
             job = DeploymentJob(uuid.uuid4().hex, str(self.workspace_dir))
             self._active_job = job.job_id
-            self.registry.submit(job, lambda handle: self._run_prepare(handle, context))
+            self.registry.submit(
+                job,
+                lambda handle: self._run_prepare(handle, context),
+                on_settled=on_settled,
+            )
             return {"ok": True, "job": job.snapshot(), "status": 202}
+
+    def _prepare_owner(self, workflow_id):
+        """The immutable workflow identity this preparation belongs to.
+
+        ``None`` only when no workflow store is configured at all (a
+        service-level harness); a configured store must resolve the requested id
+        — or the active one when the caller did not name it — to an active
+        record, else the preparation is refused before any worker starts.
+        """
+
+        if self.setup_workflows is None:
+            return None
+        record = self.setup_workflows.active()
+        if record is None or (workflow_id and record["workflow_id"] != workflow_id):
+            return {
+                "rejected": _reject(
+                    "generated_config_review_required",
+                    "This deployment preparation does not belong to the active "
+                    "setup workflow. Generate the config again under the current "
+                    "setup.",
+                )
+            }
+        preview = record.get("preview") or {}
+        return {
+            "workflow_id": record["workflow_id"],
+            "preview_id": preview.get("preview_id"),
+        }
 
     def job(self, job_id):
         return self.registry.get(job_id)
 
     # --- start -----------------------------------------------------------
 
-    def start(self, *, on_complete=None, on_healthcheck=None):
-        rejection = self._verify_start_ready()
+    def start(
+        self, *, on_complete=None, on_healthcheck=None, workflow_id=None,
+        on_settled=None,
+    ):
+        rejection = self._verify_start_ready(workflow_id=workflow_id)
         if rejection is not None:
             return rejection
         marker = self._prepared_marker()
@@ -1452,6 +1515,11 @@ class DeploymentService:
             "profiles": profiles,
             "dashboard_url": self._dashboard_url(),
             "resolution_log": [],
+            "workflow": (
+                {"workflow_id": marker.get("workflow_id")}
+                if isinstance(marker, dict) and marker.get("workflow_id")
+                else None
+            ),
         }
         with self._operation_lock:
             if self._active_job is not None:
@@ -1477,21 +1545,21 @@ class DeploymentService:
                     on_healthcheck=on_healthcheck,
                 )
 
-            if on_complete is None:
-                self.start_registry.submit(job, runner)
-            else:
-                self.start_registry.submit(
-                    job, runner, on_complete=on_complete
-                )
+            self.start_registry.submit(
+                job, runner, on_complete=on_complete, on_settled=on_settled
+            )
             return {"ok": True, "job": job.snapshot(), "status": 202}
 
-    def repair_workspace_permissions(self):
+    def repair_workspace_permissions(self, *, workflow_id=None):
         marker = self._prepared_marker()
         if not self._marker_matches_workspace(marker):
             return _reject(
                 "deployment_not_prepared",
                 "Prepare the deployment first before repairing permissions.",
             )
+        rejection = self._reject_foreign_marker(marker, workflow_id)
+        if rejection is not None:
+            return rejection
         identity = self._marker_runtime_identity(marker)
         image = self._ems_image_from_marker(marker)
         if identity is None or image is None:
@@ -1572,9 +1640,29 @@ class DeploymentService:
             ),
         }
 
-    def resolve_container_conflict(self, container_name, action):
+    def _reject_foreign_marker(self, marker, workflow_id):
+        """Refuse a workspace action addressed to another workflow's preparation."""
+
+        if self.setup_workflows is None or not workflow_id:
+            return None
+        if (
+            not isinstance(marker, dict)
+            or marker.get("owner") != GENERATED_CONFIG_OWNER
+            or marker.get("workflow_id") != workflow_id
+        ):
+            return _reject(
+                "deployment_marker_invalid",
+                "The prepared deployment belongs to another setup workflow. "
+                "Prepare the deployment again.",
+            )
+        return None
+
+    def resolve_container_conflict(self, container_name, action, *, workflow_id=None):
         """Resolve a confirmed conflict without removing volumes or user data."""
 
+        rejection = self._reject_foreign_marker(self._prepared_marker(), workflow_id)
+        if rejection is not None:
+            return rejection
         supported_actions = {
             "remove_stopped_and_continue",
             "replace_running_and_continue",
@@ -1668,7 +1756,7 @@ class DeploymentService:
             "continue": next_conflict is None,
         }
 
-    def _verify_start_ready(self):
+    def _verify_start_ready(self, *, workflow_id=None):
         docker = self._docker_status()
         if not docker or docker.get("state") != "ready":
             return _reject(
@@ -1705,6 +1793,19 @@ class DeploymentService:
                 "deployment_marker_invalid",
                 "The deployment preparation marker does not match this workspace.",
             )
+        if self.setup_workflows is not None:
+            active = self.setup_workflows.active()
+            if (
+                active is None
+                or marker.get("owner") != GENERATED_CONFIG_OWNER
+                or marker.get("workflow_id") != active["workflow_id"]
+                or (workflow_id and workflow_id != active["workflow_id"])
+            ):
+                return _reject(
+                    "deployment_marker_invalid",
+                    "The deployment preparation belongs to another setup "
+                    "workflow. Prepare the deployment again.",
+                )
         if expected != config["sha256"]:
             return _reject(
                 "deployment_config_mismatch",
@@ -1733,7 +1834,10 @@ class DeploymentService:
             job.finish_step(key)
 
         job.start_step("checking_deployment", "Checking prepared deployment")
-        rejection = self._verify_start_ready()
+        self._require_carried_workflow(context)
+        rejection = self._verify_start_ready(
+            workflow_id=(context.get("workflow") or {}).get("workflow_id")
+        )
         if rejection is not None:
             raise DockerError(rejection["reason"], rejection["message"])
         self.docker.check()
@@ -1911,12 +2015,32 @@ class DeploymentService:
             and self._marker_matches_workspace(marker)
         )
 
+    def _require_carried_workflow(self, context):
+        """Refuse to keep writing for a workflow that is no longer the owner.
+
+        The identity comes from the worker's own context, never from a fresh
+        "which workflow is active now" lookup, so a replacement workflow can
+        never inherit this worker's writes.
+        """
+
+        workflow = context.get("workflow")
+        if workflow is None or self.setup_workflows is None:
+            return
+        active = self.setup_workflows.active()
+        if active is None or active["workflow_id"] != workflow["workflow_id"]:
+            raise DockerError(
+                "setup_workflow_not_active",
+                "The setup this deployment belongs to was discarded. Start the "
+                "deployment again under the current setup.",
+            )
+
     def _run_prepare(self, job, context):
         release = context["release"]
         config = context["config"]
         images = context["images"]
         puid, pgid = context["puid"], context["pgid"]
         job.set_images(images)
+        self._require_carried_workflow(context)
 
         job.start_step("docker", "Checking Docker…")
         self.docker.check()
@@ -1969,7 +2093,10 @@ class DeploymentService:
         self._verify_workspace_permissions(ems_image, puid, pgid)
         job.finish_step("permissions")
 
-        marker = self._write_marker(release, config, images, puid, pgid)
+        self._require_carried_workflow(context)
+        marker = self._write_marker(
+            release, config, images, puid, pgid, workflow=context.get("workflow")
+        )
         job.succeed(marker)
 
     # --- workspace helpers ----------------------------------------------
@@ -2023,10 +2150,16 @@ class DeploymentService:
         text = "".join(f"{key}={value}\n" for key, value in values.items())
         _atomic_write(path, text.encode("utf-8"))
 
-    def _write_marker(self, release, config, images, puid, pgid):
+    def _write_marker(self, release, config, images, puid, pgid, *, workflow=None):
         marker = {
             "release": release["tag"],
             "config_sha256": config["sha256"],
+            # Marker ownership: the identity the authorized worker carries, so a
+            # start can refuse a marker another (superseded) workflow prepared
+            # and cleanup can prove the marker is this workflow's to remove.
+            "owner": GENERATED_CONFIG_OWNER if workflow else None,
+            "workflow_id": (workflow or {}).get("workflow_id"),
+            "preview_id": (workflow or {}).get("preview_id"),
             "images": [
                 {"service": image["service"], "image": image["image"]}
                 for image in images
@@ -2187,6 +2320,84 @@ class DeploymentService:
             "sha256": hashlib.sha256(raw).hexdigest(),
             "config": config if isinstance(config, dict) else None,
         }
+
+    def _generated_config_rejection(self, config):
+        """Refuse a generated config that is unowned, foreign, tampered or stale.
+
+        Ownership first: the metadata sidecar must name the active Guided Setup
+        workflow, its exact preview and the payload hash of the generated
+        bytes. A legacy sidecar-less artifact — or one from an abandoned or
+        superseded workflow — requires regeneration under the active workflow
+        instead of silently keeping the pre-ownership deploy path. Then
+        freshness: presence is part of the revision state, so a live config
+        deleted after an existing-config draft, and one that appeared after a
+        fresh-install draft, are both changes. A live config equal to the
+        generated bytes is this same config being redeployed. Not bypassed by
+        ``overwrite``, which confirms replacing an install, not discarding an
+        unseen change.
+        """
+
+        meta = read_generated_metadata(self.config_export.target_path)
+        review = self._generated_config_ownership_rejection(meta, config)
+        if review is not None:
+            return review
+        base = meta["base_config_revision"]
+        try:
+            live = (self.workspace_dir / "config" / "config.json").read_bytes()
+        except OSError:
+            unchanged = base["expect_absent"]
+        else:
+            live_revision = hashlib.sha256(live).hexdigest()
+            unchanged = live_revision in (
+                base["expected_revision"],
+                config["sha256"],
+            )
+        if unchanged:
+            return None
+        return _reject(
+            "stale_generated_config",
+            "config/config.json changed after this configuration was generated. "
+            "Review the configuration again before deploying it.",
+        )
+
+    def _generated_config_ownership_rejection(self, meta, config):
+        """409 payload unless ``meta`` proves the active workflow's ownership."""
+
+        review = _reject(
+            "generated_config_review_required",
+            "This generated configuration cannot prove which setup workflow "
+            "reviewed it. Review the configuration and generate it again "
+            "before deploying.",
+        )
+        if not isinstance(meta, dict):
+            return review
+        workflow_id = meta.get("workflow_id")
+        preview_id = meta.get("preview_id")
+        prepared_sha256 = meta.get("prepared_config_sha256")
+        base = meta.get("base_config_revision")
+        if not (
+            isinstance(workflow_id, str)
+            and workflow_id
+            and isinstance(preview_id, str)
+            and preview_id
+            and isinstance(prepared_sha256, str)
+            and isinstance(base, dict)
+            and isinstance(base.get("expect_absent"), bool)
+        ):
+            return review
+        if self.setup_workflows is None:
+            return review
+        record = self.setup_workflows.active()
+        if record is None or record["workflow_id"] != workflow_id:
+            return review
+        # The durable write-time binding, not whichever preview is current now:
+        # revisiting Config Preview issues newer previews and must not disown an
+        # artifact that was legitimately generated earlier in this workflow.
+        if (record.get("artifacts") or {}).get("generated_preview_id") != preview_id:
+            return review
+        if config["sha256"] != prepared_sha256:
+            return review
+        return None
 
     def _influx_plan(self, release, config):
         generated = config.get("config") if config else None

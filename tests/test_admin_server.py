@@ -35,6 +35,7 @@ from admin.server import (
 from admin import zendure_mqtt_config_proposals
 from tests.admin_auth_helpers import auth_headers, authenticate, raw_request
 from tests.helpers.system_alignment import SetupReadySystemAlignment
+from tests.helpers.setup_config import authorize_setup_mutation
 
 pytestmark = pytest.mark.simulation
 
@@ -397,7 +398,7 @@ def test_setup_config_catalog_endpoint_never_exposes_secret_values(server):
 
 def test_config_preview_endpoint_accepts_features_object(server):
     status, _, payload = _request(
-        f"{server}/api/setup/config-preview",
+        f"{server}/api/setup/config-preview/validate",
         method="POST",
         body={"devices": [], "features": {"winter.enabled": True}},
     )
@@ -481,6 +482,40 @@ def _control_export_body():
     }
 
 
+def _authorized_body(base, body=None, **kwargs):
+    """A mutation body carrying real workflow + exact-preview authority."""
+
+    return authorize_setup_mutation(
+        base, _request, body if body is not None else _control_export_body(), **kwargs
+    )
+
+
+def _setup_body(srv, **extra):
+    """A Setup deployment body carrying the server's exact workflow id.
+
+    Prepare, start, permission repair and container-conflict resolution all
+    require the workflow they belong to by name, so tests present it the same way
+    the browser does.
+    """
+
+    return {
+        "setup_workflow_id": srv.setup_workflows.ensure_active()["workflow_id"],
+        **extra,
+    }
+
+
+def _abandon(base, srv, workflow_id="current"):
+    """Discard Setup by name: the stored workflow id is always required."""
+
+    if workflow_id == "current":
+        workflow_id = (srv.setup_workflows.load() or {}).get("workflow_id")
+    return _request(
+        f"{base}/api/setup/abandon",
+        method="POST",
+        body={"setup_workflow_id": workflow_id},
+    )
+
+
 def test_release_endpoint_defaults_to_setup_flow_and_honours_upgrade_flag(tmp_path):
     # Guided Setup (no query) lists releases without the upgrade gate; the
     # maintenance flow passes ?flow=upgrade to enable it.
@@ -529,7 +564,7 @@ def test_release_setup_endpoints_use_alignment_then_release_resources(tmp_path):
         assert template["template"] == {"devices": []}
 
         status, _, preview = _request(
-            f"{base}/api/setup/config-preview",
+            f"{base}/api/setup/config-preview/validate",
             method="POST",
             body={"devices": [], "supported_grid_meter_count": 0},
         )
@@ -594,7 +629,7 @@ def test_config_preview_response_preserves_template_key_order(tmp_path):
     )
     try:
         status, _, body = _request(
-            f"{base}/api/setup/config-preview",
+            f"{base}/api/setup/config-preview/validate",
             method="POST",
             body={"devices": [], "supported_grid_meter_count": 0},
         )
@@ -821,15 +856,17 @@ def test_config_validation_failure_masks_installed_cloud_route_name(
 
 def test_config_write_endpoint_protects_overwrite_and_rejects_paths(tmp_path):
     srv, base = _serve(release_manager=_control_export_manager(tmp_path))
-    body = _control_export_body()
     try:
+        body = _authorized_body(base)
         status, _, first = _request(
             f"{base}/api/setup/config/write", method="POST", body=body
         )
         assert status == 200
         assert first["ok"] is True
-        target = tmp_path / "generated" / "config.json"
-        assert first["path"] == str(target)
+        target = Path(first["path"])
+        assert target == tmp_path / "workflows" / "guided-setup" / body[
+            "setup_workflow_id"
+        ] / "generated" / "config.json"
         assert target.exists()
 
         status, _, existing = _request(
@@ -861,21 +898,21 @@ def test_config_write_endpoint_protects_overwrite_and_rejects_paths(tmp_path):
 
 def test_config_status_reports_generated_config_presence(tmp_path):
     srv, base = _serve(release_manager=_control_export_manager(tmp_path))
-    body = _control_export_body()
     try:
         status, _, before = _request(f"{base}/api/setup/config/status")
         assert status == 200
-        target = tmp_path / "generated" / "config.json"
-        assert before == {"path": str(target), "exists": False}
+        legacy = tmp_path / "generated" / "config.json"
+        assert before == {"path": str(legacy), "exists": False}
 
-        write_status, _, _ = _request(
+        body = _authorized_body(base)
+        write_status, _, written = _request(
             f"{base}/api/setup/config/write", method="POST", body=body
         )
         assert write_status == 200
 
         status, _, after = _request(f"{base}/api/setup/config/status")
         assert status == 200
-        assert after == {"path": str(target), "exists": True}
+        assert after == {"path": written["path"], "exists": True}
     finally:
         srv.shutdown()
         srv.server_close()
@@ -904,7 +941,7 @@ def test_config_preview_endpoint_ignores_local_repo_config(tmp_path, monkeypatch
     )
     try:
         status, _, preview = _request(
-            f"{base}/api/setup/config-preview",
+            f"{base}/api/setup/config-preview/validate",
             method="POST",
             body={"devices": [], "supported_grid_meter_count": 0},
         )
@@ -932,8 +969,8 @@ def test_config_apply_writes_resolved_install_config(tmp_path):
     install_root = tmp_path / "ems"
     apply = _apply_service(manager, tmp_path / "admin", install_root)
     srv, base = _serve(release_manager=manager, config_apply=apply)
-    body = _control_export_body()
     try:
+        body = _authorized_body(base)
         status, _, payload = _request(
             f"{base}/api/setup/config/apply", method="POST", body=body
         )
@@ -959,8 +996,8 @@ def test_config_apply_backs_up_existing_config(tmp_path):
     target.write_bytes(old_bytes)
     apply = _apply_service(manager, tmp_path / "admin", install_root)
     srv, base = _serve(release_manager=manager, config_apply=apply)
-    body = _control_export_body()
     try:
+        body = _authorized_body(base)
         status, _, payload = _request(
             f"{base}/api/setup/config/apply", method="POST", body=body
         )
@@ -986,13 +1023,27 @@ def test_config_apply_is_blocked_when_validation_fails(tmp_path):
     target.write_bytes(original)
     apply = _apply_service(manager, tmp_path / "admin", install_root)
     srv, base = _serve(release_manager=manager, config_apply=apply)
-    body = {"devices": [], "supported_grid_meter_count": 0}
     try:
-        status, _, payload = _request(
-            f"{base}/api/setup/config/apply", method="POST", body=body
+        from tests.helpers.setup_config import start_setup_workflow
+
+        workflow_id = start_setup_workflow(base, _request)
+        invalid = {"devices": [], "supported_grid_meter_count": 0}
+        status, _, preview = _request(
+            f"{base}/api/setup/config-preview",
+            method="POST",
+            body={**invalid, "setup_workflow_id": workflow_id},
         )
-        assert status == 422
-        assert payload["reason"] == "validation_failed"
+        assert status == 200
+        assert "config_preview_id" not in preview
+        assert preview["validation"]["errors"][0]["code"] == "grid_meter_missing"
+
+        status, _, payload = _request(
+            f"{base}/api/setup/config/apply",
+            method="POST",
+            body={**invalid, "setup_workflow_id": workflow_id},
+        )
+        assert status == 409
+        assert payload["error"] == "setup_preview_required"
         assert target.read_bytes() == original
     finally:
         srv.shutdown()
@@ -1045,7 +1096,7 @@ def test_config_preview_accepts_zendure_mqtt_proposals(tmp_path):
     srv, base = _serve(release_manager=_FakeReleaseManager(tmp_path), mqtt_discovery=mqtt)
     try:
         status, _, payload = _request(
-            f"{base}/api/setup/config-preview",
+            f"{base}/api/setup/config-preview/validate",
             method="POST",
             body={
                 "devices": [],
@@ -1088,7 +1139,7 @@ def test_config_preview_accepts_broker_and_manual_zendure_mqtt_device(tmp_path):
     srv, base = _serve(release_manager=_FakeReleaseManager(tmp_path))
     try:
         status, _, payload = _request(
-            f"{base}/api/setup/config-preview",
+            f"{base}/api/setup/config-preview/validate",
             method="POST",
             body={
                 "devices": [],
@@ -1152,11 +1203,11 @@ def test_config_export_endpoints_include_telemetry_mqtt_alongside_control_device
     # A browser cannot smuggle a secret through proposal content: the backend
     # resolves the id back to trusted stored state and ignores submitted content.
     selection["config_fragment"] = {"password": "hunter2"}
-    body = {
-        **_control_export_body(),
-        "zendure_mqtt_proposals": [selection],
-    }
     try:
+        body = _authorized_body(
+            base,
+            {**_control_export_body(), "zendure_mqtt_proposals": [selection]},
+        )
         status, _, downloaded = _request(
             f"{base}/api/setup/config/download", method="POST", body=body
         )
@@ -1179,7 +1230,7 @@ def test_config_export_endpoints_include_telemetry_mqtt_alongside_control_device
 
         install_config = install_root / "config" / "config.json"
         assert install_config.exists()
-        for path in (tmp_path / "generated" / "config.json", install_config):
+        for path in (Path(written["path"]), install_config):
             blob = path.read_text(encoding="utf-8").lower()
             assert "zendure_mqtt" in blob
             for secret in ("password", "app_key", "hunter2", "token", "username"):
@@ -1230,8 +1281,11 @@ class _FakeDeployment:
             "can_prepare": True,
         }
 
-    def prepare(self, overwrite=False):
+    def prepare(self, overwrite=False, *, workflow_id=None, on_settled=None):
         self.prepared_overwrite = overwrite
+        self.prepare_workflow_id = workflow_id
+        if on_settled is not None:
+            on_settled()
         if overwrite is False and getattr(self, "existing_install", False):
             return {
                 "ok": False,
@@ -1271,8 +1325,11 @@ class _FakeDeployment:
         return {"job_id": "job-1", "status": "succeeded", "prepared": True,
                 "steps": [], "images": []}
 
-    def start(self, *, on_complete=None):
+    def start(self, *, on_complete=None, workflow_id=None, on_settled=None):
         self.start_calls += 1
+        self.start_workflow_id = workflow_id
+        if on_settled is not None:
+            on_settled()
         if getattr(self, "start_rejection", None):
             return {
                 "ok": False,
@@ -1318,7 +1375,7 @@ class _FakeDeployment:
             "dashboard_reachable": not getattr(self, "dashboard_unreachable", False),
         }
 
-    def resolve_container_conflict(self, container_name, action):
+    def resolve_container_conflict(self, container_name, action, *, workflow_id=None):
         self.resolved_conflict = (container_name, action)
         if container_name != "ems-solarflow-api-control":
             return {
@@ -1329,7 +1386,7 @@ class _FakeDeployment:
             }
         return {"ok": True, "removed": container_name, "continue": True}
 
-    def repair_workspace_permissions(self):
+    def repair_workspace_permissions(self, *, workflow_id=None):
         self.repair_calls += 1
         return {"ok": True, "repaired": True}
 
@@ -1380,7 +1437,7 @@ def test_deployment_prepare_endpoint_starts_job_and_passes_overwrite():
         status, _, job = _request(
             f"{base}/api/setup/deployment/prepare",
             method="POST",
-            body={"overwrite": True},
+            body=_setup_body(srv, overwrite=True),
         )
         assert status == 202
         assert job["job_id"] == "job-1"
@@ -1403,7 +1460,7 @@ def test_deployment_prepare_endpoint_surfaces_conflict():
     srv, base = _serve(deployment=deployment)
     try:
         status, _, payload = _request(
-            f"{base}/api/setup/deployment/prepare", method="POST", body={}
+            f"{base}/api/setup/deployment/prepare", method="POST", body=_setup_body(srv)
         )
         assert status == 409
         assert payload["reason"] == "workspace_conflict"
@@ -1434,7 +1491,7 @@ def test_deployment_prepare_endpoint_surfaces_existing_install_conflict():
     srv, base = _serve(deployment=deployment)
     try:
         status, _, payload = _request(
-            f"{base}/api/setup/deployment/prepare", method="POST", body={}
+            f"{base}/api/setup/deployment/prepare", method="POST", body=_setup_body(srv)
         )
         assert status == 409
         assert payload["ok"] is False
@@ -1454,7 +1511,7 @@ def test_deployment_prepare_attaches_current_durable_transition():
     _attach_system_alignment(srv, alignment)
     try:
         status, headers, payload = _request(
-            f"{base}/api/setup/deployment/prepare", method="POST", body={}
+            f"{base}/api/setup/deployment/prepare", method="POST", body=_setup_body(srv)
         )
         assert status == 202
         assert headers["Content-Type"].startswith("application/json")
@@ -1473,18 +1530,18 @@ def test_deployment_prepare_succeeds_when_transition_clears_during_prepare():
     alignment = _FakeSystemAlignment()
 
     class _TransitionClearingDeployment(_FakeDeployment):
-        def prepare(self, overwrite=False):
+        def prepare(self, overwrite=False, **kwargs):
             # A concurrent session cancels the System Build transition while
             # the workspace prepare is still running.
             alignment.active = False
-            return super().prepare(overwrite)
+            return super().prepare(overwrite, **kwargs)
 
     deployment = _TransitionClearingDeployment()
     srv, base = _serve(deployment=deployment)
     _attach_system_alignment(srv, alignment)
     try:
         status, headers, payload = _request(
-            f"{base}/api/setup/deployment/prepare", method="POST", body={}
+            f"{base}/api/setup/deployment/prepare", method="POST", body=_setup_body(srv)
         )
         assert status == 202
         assert headers["Content-Type"].startswith("application/json")
@@ -1498,8 +1555,8 @@ def test_deployment_prepare_succeeds_when_transition_clears_during_prepare():
 
 def test_deployment_prepare_transition_does_not_replace_job_payload():
     class _RecordingDeployment(_FakeDeployment):
-        def prepare(self, overwrite=False):
-            self.last_result = super().prepare(overwrite)
+        def prepare(self, overwrite=False, **kwargs):
+            self.last_result = super().prepare(overwrite, **kwargs)
             return self.last_result
 
     deployment = _RecordingDeployment()
@@ -1508,7 +1565,7 @@ def test_deployment_prepare_transition_does_not_replace_job_payload():
     _attach_system_alignment(srv, alignment)
     try:
         status, _, payload = _request(
-            f"{base}/api/setup/deployment/prepare", method="POST", body={}
+            f"{base}/api/setup/deployment/prepare", method="POST", body=_setup_body(srv)
         )
         assert status == 202
         job = deployment.last_result["job"]
@@ -1525,7 +1582,7 @@ def test_deployment_start_and_status_endpoints():
     srv, base = _serve(deployment=deployment)
     try:
         status, _, started = _request(
-            f"{base}/api/setup/deployment/start", method="POST", body={}
+            f"{base}/api/setup/deployment/start", method="POST", body=_setup_body(srv)
         )
         assert status == 202
         assert started["job_id"] == "start-1"
@@ -1559,7 +1616,7 @@ def test_deployment_start_rejects_unprepared_and_parameters():
     srv, base = _serve(deployment=deployment)
     try:
         status, _, rejected = _request(
-            f"{base}/api/setup/deployment/start", method="POST", body={}
+            f"{base}/api/setup/deployment/start", method="POST", body=_setup_body(srv)
         )
         assert status == 409
         assert rejected["reason"] == "deployment_not_prepared"
@@ -1584,10 +1641,11 @@ def test_deployment_resolve_container_conflict_endpoint():
         status, _, resolved = _request(
             f"{base}/api/setup/deployment/resolve-container-conflict",
             method="POST",
-            body={
-                "container_name": "ems-solarflow-api-control",
-                "action": "remove_stopped_and_continue",
-            },
+            body=_setup_body(
+                srv,
+                container_name="ems-solarflow-api-control",
+                action="remove_stopped_and_continue",
+            ),
         )
         assert status == 200
         assert resolved["removed"] == "ems-solarflow-api-control"
@@ -1599,10 +1657,11 @@ def test_deployment_resolve_container_conflict_endpoint():
         status, _, rejected = _request(
             f"{base}/api/setup/deployment/resolve-container-conflict",
             method="POST",
-            body={
-                "container_name": "arbitrary",
-                "action": "remove_stopped_and_continue",
-            },
+            body=_setup_body(
+                srv,
+                container_name="arbitrary",
+                action="remove_stopped_and_continue",
+            ),
         )
         assert status == 400
         assert rejected["reason"] == "unknown_container_name"
@@ -1655,10 +1714,11 @@ def test_deployment_conflict_action_recovers_only_matching_failed_transition():
         status, _, payload = _request(
             f"{base}/api/setup/deployment/resolve-container-conflict",
             method="POST",
-            body={
-                "container_name": "ems-solarflow-api-control",
-                "action": "remove_stopped_and_continue",
-            },
+            body=_setup_body(
+                srv,
+                container_name="ems-solarflow-api-control",
+                action="remove_stopped_and_continue",
+            ),
         )
     finally:
         srv.shutdown()
@@ -1684,10 +1744,11 @@ def test_deployment_conflict_action_does_not_recover_unrelated_failure():
         status, _, payload = _request(
             f"{base}/api/setup/deployment/resolve-container-conflict",
             method="POST",
-            body={
-                "container_name": "ems-solarflow-api-control",
-                "action": "remove_stopped_and_continue",
-            },
+            body=_setup_body(
+                srv,
+                container_name="ems-solarflow-api-control",
+                action="remove_stopped_and_continue",
+            ),
         )
     finally:
         srv.shutdown()
@@ -2363,7 +2424,7 @@ def test_config_preview_accepts_zendure_cloud_mqtt_proposal(tmp_path):
             "device_id": proposal["device_id"],
         }
         status, _, payload = _request(
-            f"{base}/api/setup/config-preview",
+            f"{base}/api/setup/config-preview/validate",
             method="POST",
             body={
                 "devices": [],
@@ -4254,17 +4315,17 @@ def test_setup_config_compose_and_ems_are_blocked_before_resources_verified(tmp_
         config_status, _, config_payload = _request(
             f"{base}/api/setup/config/write",
             method="POST",
-            body={"devices": [], "supported_grid_meter_count": 0},
+            body=_authorized_body(base, _control_export_body()),
         )
         compose_status, _, compose_payload = _request(
             f"{base}/api/setup/deployment/prepare",
             method="POST",
-            body={},
+            body=_setup_body(srv),
         )
         ems_status, _, ems_payload = _request(
             f"{base}/api/setup/deployment/start",
             method="POST",
-            body={},
+            body=_setup_body(srv),
         )
     finally:
         srv.shutdown()
@@ -4274,7 +4335,7 @@ def test_setup_config_compose_and_ems_are_blocked_before_resources_verified(tmp_
     for payload in (config_payload, compose_payload, ems_payload):
         assert payload["error"] == "system_alignment_incomplete"
         assert payload["transition"]["stage"] == "admin_aligned"
-    assert not (tmp_path / "generated" / "config.json").exists()
+    assert not list(tmp_path.rglob("generated/config.json"))
     assert deployment.prepared_overwrite is None
     assert deployment.start_calls == 0
 
@@ -4289,7 +4350,7 @@ def test_fresh_setup_deployment_worker_finishes_before_terminal_job_poll(tmp_pat
     _attach_system_alignment(srv, alignment)
     try:
         start_status, _, started = _request(
-            f"{base}/api/setup/deployment/start", method="POST", body={}
+            f"{base}/api/setup/deployment/start", method="POST", body=_setup_body(srv)
         )
         assert start_status == 202
         assert started["job_id"] == "start-1"
@@ -4329,7 +4390,7 @@ def test_recoverable_pending_ems_stage_can_be_completed_after_restart(tmp_path):
     _attach_system_alignment(srv, alignment)
     try:
         status, _, payload = _request(
-            f"{base}/api/setup/deployment/start", method="POST", body={}
+            f"{base}/api/setup/deployment/start", method="POST", body=_setup_body(srv)
         )
     finally:
         srv.shutdown()
@@ -4362,7 +4423,7 @@ def test_fresh_setup_deployment_failures_remain_recoverable(
     _attach_system_alignment(srv, alignment)
     try:
         status, _, payload = _request(
-            f"{base}/api/setup/deployment/start", method="POST", body={}
+            f"{base}/api/setup/deployment/start", method="POST", body=_setup_body(srv)
         )
         if failure == "start_rejection":
             assert status == 409
@@ -5289,6 +5350,12 @@ def test_setup_mutations_require_an_active_resource_verified_transition(
     )
     _attach_system_alignment(srv, alignment)
     try:
+        if path.startswith("/api/setup/config/"):
+            body = _authorized_body(base, _control_export_body())
+        else:
+            # Present valid workflow authority so the alignment gate — not a
+            # missing workflow id — is what refuses the mutation.
+            body = _setup_body(srv, **body)
         status, _, payload = _request(base + path, method="POST", body=body)
     finally:
         srv.shutdown()
@@ -5297,7 +5364,7 @@ def test_setup_mutations_require_an_active_resource_verified_transition(
     assert status == 409
     assert payload["error"] == "system_alignment_incomplete"
     assert payload["transition"] is None
-    assert not (tmp_path / "generated" / "config.json").exists()
+    assert not list(tmp_path.rglob("generated/config.json"))
     assert deployment.prepared_overwrite is None
     assert deployment.start_calls == 0
     assert deployment.repair_calls == 0
@@ -5322,7 +5389,7 @@ def test_setup_config_write_requires_current_setup_operation(
         status, _, payload = _request(
             base + "/api/setup/config/write",
             method="POST",
-            body={"devices": [], "supported_grid_meter_count": 0},
+            body=_authorized_body(base, _control_export_body()),
         )
     finally:
         srv.shutdown()
@@ -5330,15 +5397,15 @@ def test_setup_config_write_requires_current_setup_operation(
 
     assert status == 409
     assert payload["error"] == "system_alignment_incomplete"
-    assert not (tmp_path / "generated" / "config.json").exists()
+    assert not list(tmp_path.rglob("generated/config.json"))
 
 
 def test_fresh_deployment_worker_completes_transition_without_terminal_get_poll(
     tmp_path,
 ):
     class CompletingDeployment(_FakeDeployment):
-        def start(self, *, on_complete=None):
-            result = super().start()
+        def start(self, *, on_complete=None, **kwargs):
+            result = super().start(**kwargs)
             if on_complete is not None:
                 on_complete(
                     {
@@ -5359,7 +5426,7 @@ def test_fresh_deployment_worker_completes_transition_without_terminal_get_poll(
     _attach_system_alignment(srv, alignment)
     try:
         status, _, payload = _request(
-            base + "/api/setup/deployment/start", method="POST", body={}
+            base + "/api/setup/deployment/start", method="POST", body=_setup_body(srv)
         )
     finally:
         srv.shutdown()
@@ -5373,8 +5440,8 @@ def test_fresh_deployment_worker_completes_transition_without_terminal_get_poll(
 
 def test_fresh_deployment_start_exception_leaves_recoverable_transition(tmp_path):
     class RaisingDeployment(_FakeDeployment):
-        def start(self, *, on_complete=None):
-            del on_complete
+        def start(self, **kwargs):
+            del kwargs
             self.start_calls += 1
             raise RuntimeError("unexpected deployment launcher failure")
 
@@ -5387,7 +5454,7 @@ def test_fresh_deployment_start_exception_leaves_recoverable_transition(tmp_path
     _attach_system_alignment(srv, alignment)
     try:
         status, _, payload = _request(
-            base + "/api/setup/deployment/start", method="POST", body={}
+            base + "/api/setup/deployment/start", method="POST", body=_setup_body(srv)
         )
     finally:
         srv.shutdown()
@@ -5683,3 +5750,94 @@ def test_production_alignment_status_calls_are_worker_aware():
     assert isinstance(probe, ast.Attribute) and probe.attr == "_operation_active", (
         "_alignment_status must pass operation_active=self._operation_active"
     )
+
+
+def test_setup_abandon_clears_generated_config_and_reports_state(tmp_path):
+    """The backend-owned Start over: one idempotent, authoritative reset."""
+
+    srv, base = _serve(release_manager=_control_export_manager(tmp_path))
+    try:
+        written, _, first = _request(
+            f"{base}/api/setup/config/write",
+            method="POST",
+            body=_authorized_body(base),
+        )
+        assert written == 200
+        _, _, before = _request(f"{base}/api/setup/config/status")
+        assert before["exists"] is True
+
+        status, _, payload = _abandon(base, srv)
+        assert status == 200
+        assert payload["ok"] is True
+        assert payload["generated_config"]["exists"] is False
+        assert payload["transition"]["stage"] == "cancelled"
+        assert payload["workflow"]["status"] == "abandoned"
+        assert first["path"] in payload["removed"]
+
+        _, _, after = _request(f"{base}/api/setup/config/status")
+        assert after["exists"] is False
+
+        # Idempotent: a retry after a dropped response changes nothing further.
+        again, _, repeat = _abandon(base, srv)
+        assert again == 200
+        assert repeat["ok"] is True
+        assert repeat["removed"] == []
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_setup_abandon_leaves_the_live_config_untouched(tmp_path):
+    srv, base = _serve(release_manager=_control_export_manager(tmp_path))
+    live = Path(detect_install_context().config_path)
+    live.parent.mkdir(parents=True, exist_ok=True)
+    live.write_text('{"live": true}\n', encoding="utf-8")
+    try:
+        status, _, payload = _abandon(base, srv)
+        assert status == 200
+        assert payload["ok"] is True
+        assert live.read_text(encoding="utf-8") == '{"live": true}\n'
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_setup_abandon_reports_partial_cleanup_and_converges_on_retry(tmp_path):
+    """A failed removal must be explicit and retryable, never a silent success."""
+
+    import shutil
+    from unittest import mock
+
+    srv, base = _serve(release_manager=_control_export_manager(tmp_path))
+    real_rmtree = shutil.rmtree
+
+    try:
+        written, _, first = _request(
+            f"{base}/api/setup/config/write",
+            method="POST",
+            body=_authorized_body(base),
+        )
+        assert written == 200
+        generated = Path(first["path"])
+
+        def guarded(target, *args, **kwargs):
+            if Path(target) == generated.parent.parent:
+                raise PermissionError(13, "Permission denied")
+            return real_rmtree(target, *args, **kwargs)
+
+        with mock.patch.object(shutil, "rmtree", guarded):
+            status, _, payload = _abandon(base, srv)
+        assert status == 500
+        assert payload["ok"] is False
+        assert payload["error"] == "abandon_cleanup_incomplete"
+        assert payload["generated_config"]["exists"] is True
+        assert generated.exists()
+
+        retried, _, done = _abandon(base, srv)
+        assert retried == 200
+        assert done["ok"] is True
+        assert done["generated_config"]["exists"] is False
+        assert not generated.exists()
+    finally:
+        srv.shutdown()
+        srv.server_close()

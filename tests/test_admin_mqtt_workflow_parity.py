@@ -37,6 +37,7 @@ from tests.admin_auth_helpers import auth_headers, authenticate
 from tests.helpers.fake_mqtt import FakeMqttNetwork
 from tests.helpers.system_alignment import SetupReadySystemAlignment
 from tests.test_admin_maintenance_config import _draft_item_from_proposal
+from tests.helpers.setup_config import authorize_setup_mutation, start_setup_workflow
 from tests.test_admin_server import (
     _FakeReleaseManager,
     _fake_gateway_prober,
@@ -139,6 +140,15 @@ def _request(url, method="GET", body=None):
         return exc.code, json.loads(exc.read() or b"null")
 
 
+def _workflow_request(url, method="GET", body=None):
+    status, payload = _request(url, method, body)
+    return status, {}, payload
+
+
+def _authorized(base, body, **kwargs):
+    return authorize_setup_mutation(base, _workflow_request, body, **kwargs)
+
+
 def _setup_local_device():
     return {
         "source_id": "local:wr1",
@@ -237,17 +247,14 @@ def _run_setup_workflow(root, case, monkeypatch):
     try:
         _stage_case_inputs(srv, base, case)
         proposal = _case_proposal(base, case)
-        status, payload = _request(
-            f"{base}/api/setup/config/apply",
-            "POST",
-            {
-                "devices": [_setup_local_device()],
-                "supported_grid_meter_count": 0,
-                "zendure_mqtt_proposals": [
-                    {"id": proposal["id"], "broker_ref": proposal["broker_ref"]}
-                ],
-            },
-        )
+        body = _authorized(base, {
+            "devices": [_setup_local_device()],
+            "supported_grid_meter_count": 0,
+            "zendure_mqtt_proposals": [
+                {"id": proposal["id"], "broker_ref": proposal["broker_ref"]}
+            ],
+        })
+        status, payload = _request(f"{base}/api/setup/config/apply", "POST", body)
         assert status == 200 and payload.get("ok") is True, payload
     finally:
         srv.shutdown()
@@ -639,18 +646,20 @@ def _credential_apply_outcome(workflow, root, case, monkeypatch, fetch, prepare)
         proposal = _case_proposal(base, case)
         if prepare is not None:
             prepare(srv, fetch, monkeypatch)
+        if workflow == "setup":
+            # Authorize before counting so "calls" stays the apply's own
+            # deviceList usage.
+            body = _authorized(base, {
+                "devices": [_setup_local_device()],
+                "supported_grid_meter_count": 0,
+                "zendure_mqtt_proposals": [
+                    {"id": proposal["id"], "broker_ref": proposal["broker_ref"]}
+                ],
+            })
         calls_before = fetch.calls
         if workflow == "setup":
             status, payload = _request(
-                f"{base}/api/setup/config/apply",
-                "POST",
-                {
-                    "devices": [_setup_local_device()],
-                    "supported_grid_meter_count": 0,
-                    "zendure_mqtt_proposals": [
-                        {"id": proposal["id"], "broker_ref": proposal["broker_ref"]}
-                    ],
-                },
+                f"{base}/api/setup/config/apply", "POST", body
             )
         else:
             status, loaded = _request(f"{base}/api/admin/maintenance/config")
@@ -764,10 +773,12 @@ def test_setup_and_maintenance_share_credential_decisions(
         assert maintenance["config_path"].read_bytes() == maintenance["config_before"]
 
 
-# --- integrity-violation parity across the real HTTP Apply paths ------------
+# --- integrity-violation parity across the real HTTP mutation paths ---------
 # A non-canonical configured reference and a cross-source shared reference are
-# rejected identically by Setup and Maintenance: same status, same stable code,
-# same reference/sources, and neither flow mutates config.json.
+# rejected with the same stable code by both flows, and neither mutates
+# config.json. Setup fail-closes at review: the workflow preview surfaces the
+# code and refuses mutation authority, so the apply route rejects before any
+# staging. Maintenance still reports the code from its apply transaction.
 
 
 def _local_auth_case(credentials_ref, serial="PARITYX"):
@@ -835,7 +846,8 @@ def test_setup_and_maintenance_reject_invalid_configured_ref_identically(
     from tests.test_admin_maintenance_mqtt_apply import _CloudFetch
 
     # Setup: a non-canonical observation reference flows into the generated
-    # config and is blocked at apply.
+    # config; the workflow preview refuses it authority and the apply is
+    # fail-closed without one.
     setup_root = tmp_path_factory.mktemp("setup-invalid-ref")
     monkeypatch.setenv("EMS_INSTALL_DIR", str(setup_root))
     case_bad = _local_auth_case("Bad Ref")
@@ -843,17 +855,29 @@ def test_setup_and_maintenance_reject_invalid_configured_ref_identically(
     try:
         srv.credential_store.save_mqtt_discovery_secret("bad-ref", "user", LOCAL_PASSWORD)
         proposal = _case_proposal(base, case_bad)
-        s_status, s_payload = _request(
-            f"{base}/api/setup/config/apply",
-            "POST",
-            {
-                "devices": [],
-                "supported_grid_meter_count": 0,
-                "zendure_mqtt_proposals": [
-                    {"id": proposal["id"], "broker_ref": proposal["broker_ref"]}
-                ],
-            },
+        setup_body = {
+            "devices": [],
+            "supported_grid_meter_count": 0,
+            "zendure_mqtt_proposals": [
+                {"id": proposal["id"], "broker_ref": proposal["broker_ref"]}
+            ],
+            "setup_workflow_id": start_setup_workflow(base, _workflow_request),
+        }
+        s_status, s_preview = _request(
+            f"{base}/api/setup/config-preview", "POST", setup_body
         )
+        assert s_status == 200 and s_preview["ready"] is False, s_preview
+        assert "config_preview_id" not in s_preview
+        s_codes = {e["code"] for e in s_preview["validation"]["errors"]}
+        s_refs = {
+            profile.get("credentials_ref")
+            for profile in s_preview["config"]["zendure_mqtt"]["brokers"].values()
+        }
+        a_status, a_payload = _request(
+            f"{base}/api/setup/config/apply", "POST", setup_body
+        )
+        assert a_status == 409, a_payload
+        assert a_payload.get("error") == "setup_preview_required"
     finally:
         srv.shutdown()
         srv.server_close()
@@ -886,15 +910,15 @@ def test_setup_and_maintenance_reject_invalid_configured_ref_identically(
         srv.shutdown()
         srv.server_close()
 
-    # Both workflows: identical stable rejection, no secrets leaked.
-    assert s_status == m_status == 400
-    assert (
-        s_payload.get("code")
-        == m_payload.get("code")
-        == "mqtt_credentials_ref_invalid"
-    )
-    assert s_payload.get("credentials_ref") == m_payload.get("credentials_ref") == "Bad Ref"
-    _assert_no_secrets(s_payload)
+    # Both workflows: the same stable code for the same reference, no secrets
+    # leaked from either rejection.
+    assert m_status == 400
+    assert "mqtt_credentials_ref_invalid" in s_codes
+    assert m_payload.get("code") == "mqtt_credentials_ref_invalid"
+    assert "Bad Ref" in s_refs
+    assert m_payload.get("credentials_ref") == "Bad Ref"
+    _assert_no_secrets(s_preview)
+    _assert_no_secrets(a_payload)
     _assert_no_secrets(m_payload)
 
 
@@ -903,8 +927,9 @@ def test_setup_and_maintenance_reject_cross_source_shared_ref_identically(
 ):
     from tests.test_admin_maintenance_mqtt_apply import _CloudFetch
 
-    # Setup: a local broker whose reference collides with the cloud reference is
-    # blocked at apply when both brokers are selected.
+    # Setup: a local broker whose reference collides with the cloud reference
+    # is refused preview authority when both brokers are selected, so the
+    # apply is fail-closed before staging.
     setup_root = tmp_path_factory.mktemp("setup-conflict")
     monkeypatch.setenv("EMS_INSTALL_DIR", str(setup_root))
     case = _local_auth_case("zendure-cloud")
@@ -918,18 +943,30 @@ def test_setup_and_maintenance_reject_cross_source_shared_ref_identically(
         assert status == 200
         local = next(p for p in payload["proposals"] if p["broker_ref"] != "zendure_cloud")
         cloud = next(p for p in payload["proposals"] if p["broker_ref"] == "zendure_cloud")
-        s_status, s_payload = _request(
-            f"{base}/api/setup/config/apply",
-            "POST",
-            {
-                "devices": [],
-                "supported_grid_meter_count": 0,
-                "zendure_mqtt_proposals": [
-                    {"id": local["id"], "broker_ref": local["broker_ref"]},
-                    {"id": cloud["id"], "broker_ref": cloud["broker_ref"]},
-                ],
-            },
+        setup_body = {
+            "devices": [],
+            "supported_grid_meter_count": 0,
+            "zendure_mqtt_proposals": [
+                {"id": local["id"], "broker_ref": local["broker_ref"]},
+                {"id": cloud["id"], "broker_ref": cloud["broker_ref"]},
+            ],
+            "setup_workflow_id": start_setup_workflow(base, _workflow_request),
+        }
+        s_status, s_preview = _request(
+            f"{base}/api/setup/config-preview", "POST", setup_body
         )
+        assert s_status == 200 and s_preview["ready"] is False, s_preview
+        assert "config_preview_id" not in s_preview
+        s_codes = {e["code"] for e in s_preview["validation"]["errors"]}
+        s_refs = {
+            profile.get("credentials_ref")
+            for profile in s_preview["config"]["zendure_mqtt"]["brokers"].values()
+        }
+        a_status, a_payload = _request(
+            f"{base}/api/setup/config/apply", "POST", setup_body
+        )
+        assert a_status == 409, a_payload
+        assert a_payload.get("error") == "setup_preview_required"
     finally:
         srv.shutdown()
         srv.server_close()
@@ -962,19 +999,15 @@ def test_setup_and_maintenance_reject_cross_source_shared_ref_identically(
         srv.shutdown()
         srv.server_close()
 
-    assert s_status == m_status == 400
-    assert (
-        s_payload.get("code")
-        == m_payload.get("code")
-        == "mqtt_credential_source_conflict"
-    )
-    assert (
-        s_payload.get("credentials_ref")
-        == m_payload.get("credentials_ref")
-        == "zendure-cloud"
-    )
-    assert sorted(s_payload.get("sources") or []) == sorted(
-        m_payload.get("sources") or []
-    ) == ["local_mqtt", "zendure_cloud_mqtt"]
-    _assert_no_secrets(s_payload)
+    assert m_status == 400
+    assert "mqtt_credential_source_conflict" in s_codes
+    assert m_payload.get("code") == "mqtt_credential_source_conflict"
+    assert "zendure-cloud" in s_refs
+    assert m_payload.get("credentials_ref") == "zendure-cloud"
+    assert sorted(m_payload.get("sources") or []) == [
+        "local_mqtt",
+        "zendure_cloud_mqtt",
+    ]
+    _assert_no_secrets(s_preview)
+    _assert_no_secrets(a_payload)
     _assert_no_secrets(m_payload)

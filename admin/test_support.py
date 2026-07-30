@@ -36,6 +36,8 @@ from admin.admin_update import (
     PendingTransitionStore,
 )
 from admin.development_catalogue import development_catalogue_source
+from admin.models import utc_now_iso
+from admin.setup_workflow import SetupWorkflowArtifacts
 from admin.embedded_resources import (
     EmbeddedReleaseResources,
     ReleaseArchiveResources,
@@ -1046,6 +1048,12 @@ def build_test_runtime(*, data_dir):
             _build_embedded_bundle(
                 Path(data_dir) / "embedded-bundle", "v9.9.9"
             )
+        elif scenario == "delete_install_config":
+            # Deletion is a revision state too; the browser tests need to reach it.
+            try:
+                detect_install_context().config_path.unlink()
+            except FileNotFoundError:
+                pass
         elif scenario == "mixed_transports":
             write_install_config(mixed_transport_config())
         elif scenario == "mixed_transports_api_mqtt_switch":
@@ -1137,6 +1145,45 @@ def build_test_runtime(*, data_dir):
             )
         elif scenario == "system_build_v070_resource_failure":
             _BROKEN_RESOURCE_TAGS.add("v0.7.0")
+        elif scenario == "setup_cleanup_pending":
+            # A terminal Guided Setup whose cleanup did not converge: the
+            # workflow stays the owner of the file it left behind, so a
+            # replacement Setup and both Guided Upgrade phases stay blocked and
+            # only a retry under this exact id can clear it.
+            record = runtime.setup_workflows.ensure_active()
+            workflow_id = record["workflow_id"]
+            artifacts = SetupWorkflowArtifacts(data_dir, workflow_id=workflow_id)
+            target = artifacts.generated_config_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text('{"devices": []}\n', encoding="utf-8")
+            artifacts.record_generated(
+                workflow_id=workflow_id,
+                preview_id="pv-" + "0" * 16,
+                draft_fingerprint="sha256:" + "0" * 64,
+                base_config_revision={
+                    "expected_revision": None,
+                    "expect_absent": True,
+                },
+                prepared_config_sha256="0" * 64,
+            )
+            runtime.setup_workflows.finish(
+                workflow_id,
+                status="abandoned",
+                cleanup={
+                    "state": "pending",
+                    "attempted_at": utc_now_iso(),
+                    "failed_count": 1,
+                    "review_count": 0,
+                    "artifacts": [
+                        {"kind": "generated_config", "status": "failed"}
+                    ],
+                },
+            )
+            return {
+                "ok": True,
+                "scenario": scenario,
+                "setup_workflow_id": workflow_id,
+            }
         elif scenario == "guided_upgrade_target_moved":
             # The verified upgrade target (v9.9.10) is re-pushed to a new EMS
             # digest, so a re-resolve at execute time yields a different pair.
@@ -1155,11 +1202,19 @@ def build_test_runtime(*, data_dir):
             "pending-transition.json",
             "known-good-system-build.json",
             "selected-release.json",
+            # A leftover Guided Setup record would keep its cleanup state — and
+            # therefore its blocking — alive across specs.
+            "guided-setup-workflow.json",
+            ".admin-deployment.json",
         ):
             try:
                 (state_dir / name).unlink()
             except FileNotFoundError:
                 pass
+        import shutil as _shutil
+
+        _shutil.rmtree(Path(data_dir) / "workflows", ignore_errors=True)
+        _shutil.rmtree(Path(data_dir) / "generated", ignore_errors=True)
         releases_dir = Path(data_dir) / "releases"
         if releases_dir.exists():
             import shutil

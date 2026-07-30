@@ -43,6 +43,10 @@ from tests.admin_auth_helpers import authenticate, auth_headers
 from tests.helpers.controller import run_installation_cycle
 from tests.helpers.fake_mqtt import FakeMqttNetwork
 from tests.helpers.system_alignment import SetupReadySystemAlignment
+from tests.helpers.setup_config import (
+    authorize_setup_mutation,
+    start_setup_workflow,
+)
 from tests.test_admin_server import (
     _FakeReleaseManager,
     _fake_gateway_prober,
@@ -242,6 +246,7 @@ class ReleaseContractHarness:
         self._base = None
         self._thread = None
         self._runtimes = []
+        self._setup_workflow_id = None
         self.last_apply_path = None
 
     # --- lifecycle ----------------------------------------------------------
@@ -368,6 +373,23 @@ class ReleaseContractHarness:
                 return exc.code, payload
             return exc.code, json.loads(payload or b"null")
 
+    def _authority_request(self, url, method="GET", body=None):
+        """Three-tuple adapter over :meth:`request` for the shared helpers."""
+
+        path = url[len(self._base):] if url.startswith(self._base) else url
+        status, payload = self.request(path, method=method, body=body)
+        return status, None, payload
+
+    @property
+    def setup_workflow_id(self):
+        """The active Guided Setup workflow, confirmed on first use."""
+
+        if self._setup_workflow_id is None:
+            self._setup_workflow_id = start_setup_workflow(
+                self._base, self._authority_request
+            )
+        return self._setup_workflow_id
+
     @staticmethod
     def _body(devices, selections, supported_grid_meter_count, **extra):
         body = {
@@ -378,10 +400,23 @@ class ReleaseContractHarness:
         body.update(extra)
         return body
 
+    def _authorized_body(self, devices, selections, supported_grid_meter_count, **extra):
+        """Stand in for a browser that previewed this exact draft first."""
+
+        return authorize_setup_mutation(
+            self._base,
+            self._authority_request,
+            self._body(devices, selections, supported_grid_meter_count, **extra),
+            workflow_id=self.setup_workflow_id,
+        )
+
     def preview(self, *, devices=None, selections=(), supported_grid_meter_count=0):
         return self.request(
             "/api/setup/config-preview",
-            body=self._body(devices, selections, supported_grid_meter_count),
+            body={
+                **self._body(devices, selections, supported_grid_meter_count),
+                "setup_workflow_id": self.setup_workflow_id,
+            },
         )
 
     def download(self, *, devices=None, selections=(), supported_grid_meter_count=0):
@@ -396,7 +431,7 @@ class ReleaseContractHarness:
     ):
         return self.request(
             "/api/setup/config/write",
-            body=self._body(
+            body=self._authorized_body(
                 devices, selections, supported_grid_meter_count, overwrite=overwrite
             ),
         )
@@ -404,11 +439,31 @@ class ReleaseContractHarness:
     def apply(self, *, devices=None, selections=(), supported_grid_meter_count=0):
         status, payload = self.request(
             "/api/setup/config/apply",
-            body=self._body(devices, selections, supported_grid_meter_count),
+            body=self._authorized_body(
+                devices, selections, supported_grid_meter_count
+            ),
         )
         if status == 200 and isinstance(payload, dict) and payload.get("path"):
             self.last_apply_path = Path(payload["path"])
         return status, payload
+
+    def apply_untrusted(
+        self, *, devices=None, selections=(), supported_grid_meter_count=0
+    ):
+        """Apply a selection the server cannot resolve to trusted discovery state.
+
+        Untrusted proposal content is refused while the request is parsed,
+        before any workflow/preview authority is consulted — such a draft can
+        never be previewed, so it can never earn authority either.
+        """
+
+        return self.request(
+            "/api/setup/config/apply",
+            body={
+                **self._body(devices, selections, supported_grid_meter_count),
+                "setup_workflow_id": self.setup_workflow_id,
+            },
+        )
 
     def applied_config(self):
         if self.last_apply_path is None:

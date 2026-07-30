@@ -94,3 +94,8 @@ class SetupReadySystemAlignment:
     def finish_healthcheck(*, operation_id, passed, **_kwargs):
         del passed
         return {"operation_id": operation_id, "stage": "completed"}
+
+    @staticmethod
+    def cancel(*, operation_id, coordinator=None):
+        del coordinator
+        return {"ok": True, "operation_id": operation_id, "stage": "cancelled"}

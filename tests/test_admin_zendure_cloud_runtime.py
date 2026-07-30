@@ -32,6 +32,7 @@ from ems.zendure_mqtt.control_runtime import build_zendure_mqtt_control_runtime
 from tests.admin_auth_helpers import auth_headers, authenticate
 from tests.helpers.fake_mqtt import FakeMqttNetwork
 from tests.helpers.system_alignment import SetupReadySystemAlignment
+from tests.helpers.setup_config import authorize_setup_mutation
 from tests.test_admin_server import (
     _FakeReleaseManager,
     _fake_gateway_prober,
@@ -148,12 +149,17 @@ def _cloud_selection(base):
     return {"id": cloud[0]["id"], "broker_ref": cloud[0]["broker_ref"]}
 
 
+def _workflow_request(url, method="GET", body=None):
+    status, payload = _request(url, method, body)
+    return status, {}, payload
+
+
 def _apply(base, selection):
-    body = {
+    body = authorize_setup_mutation(base, _workflow_request, {
         "devices": [],
         "supported_grid_meter_count": 0,
         "zendure_mqtt_proposals": [selection],
-    }
+    })
     return _request(f"{base}/api/setup/config/apply", "POST", body)
 
 

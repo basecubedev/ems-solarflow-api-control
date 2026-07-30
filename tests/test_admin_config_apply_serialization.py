@@ -31,6 +31,7 @@ from tests.test_admin_maintenance_mqtt_apply import (
     _write_config,
 )
 from tests.test_admin_mqtt_credential_promotion_transaction import (
+    _authorized,
     _discovery_with_proposal,
     _serve as _serve_setup,
     _write_body,
@@ -156,15 +157,24 @@ def test_failed_apply_cannot_roll_back_over_parallel_success(monkeypatch, tmp_pa
         srv.server_close()
 
 
-def test_parallel_new_credential_creation_serializes(tmp_path):
+def test_parallel_setup_credential_creation_cannot_overlap(tmp_path):
+    """Two Setup Applies for one workflow no longer meet inside the transaction.
+
+    Setup mutations hold an exclusive lifecycle claim on their workflow, so the
+    second request is refused before it stages anything instead of interleaving
+    with the first one's rollback. The rollback itself must still leave the
+    credential store consistent, which the sequential retry proves.
+    """
+
     discovery = _discovery_with_proposal()
     srv, base = _serve_setup(discovery, tmp_path)
     srv.credential_store.save_mqtt_discovery_secret("home", "user", "password")
-    body = {**_write_body(discovery), "overwrite": True}
     try:
+        # One reviewed preview authorizes the retry too: a failed request must
+        # not consume the authority the successful one presents.
+        body = _authorized(base, {**_write_body(discovery), "overwrite": True})
         entered_a = threading.Event()
         release_a = threading.Event()
-        waiting_b = threading.Event()
         original_apply = srv.config_apply.apply
         first_call = []
 
@@ -177,7 +187,6 @@ def test_parallel_new_credential_creation_serializes(tmp_path):
             return original_apply(*args, **kwargs)
 
         srv.config_apply.apply = blocking_then_failing_apply
-        transaction = _observe_transaction(srv, entered_a, waiting_b)
 
         results = {}
 
@@ -187,22 +196,24 @@ def test_parallel_new_credential_creation_serializes(tmp_path):
         thread_a = threading.Thread(target=run, args=("a",))
         thread_a.start()
         assert entered_a.wait(WAIT_S), f"apply never entered: {results}"
-        thread_b = threading.Thread(target=run, args=("b",))
-        thread_b.start()
-        _release_a_when_b_progressed(transaction, waiting_b, thread_b, release_a)
+        status_b, payload_b = _request(f"{base}/api/setup/config/apply", "POST", body)
+        release_a.set()
         thread_a.join(WAIT_S)
-        thread_b.join(WAIT_S)
-        assert not thread_a.is_alive() and not thread_b.is_alive()
+        assert not thread_a.is_alive()
 
         status_a, payload_a = results["a"]
-        status_b, payload_b = results["b"]
         assert status_a == 500 and payload_a.get("ok") is False, payload_a
-        assert status_b == 200 and payload_b.get("ok") is True, payload_b
+        assert status_b == 409, payload_b
+        assert payload_b["error"] == "setup_operation_in_progress"
+        assert payload_b["operation"] == "config_apply"
 
-        # B's successful apply produced a config referencing the new record;
-        # A's failed apply must not have deleted that record underneath it.
+        # The refused request staged nothing, so the retry is the only writer:
+        # it produces a config referencing the record, and A's rollback did not
+        # delete the record underneath it.
+        status_c, payload_c = _request(f"{base}/api/setup/config/apply", "POST", body)
+        assert status_c == 200 and payload_c.get("ok") is True, payload_c
         config = json.loads(
-            __import__("pathlib").Path(payload_b["path"]).read_text(encoding="utf-8")
+            pathlib.Path(payload_c["path"]).read_text(encoding="utf-8")
         )
         assert "home" in json.dumps(config)
         secret = srv.credential_store.load_mqtt_broker_secret("home")
@@ -216,49 +227,39 @@ def test_parallel_new_credential_creation_serializes(tmp_path):
 # --- one exact payload is staged, validated and written ---------------------
 
 
-def _mark_each_serialization(srv):
-    """Count serializations and stamp each output so the written call is known.
+def _capture_each_serialization(srv):
+    """Count serializations and keep each output so the written call is known.
 
-    Injecting a per-call marker proves the *written* bytes came from the first
-    (and only) serialization, not a later re-serialization whose output could
-    have diverged from what credentials were staged for.
+    A marker injected into the payload would invalidate the reviewed preview's
+    prepared-config hash, so the proof is byte capture instead: with exactly
+    one recorded serialization, written bytes equal to that output prove the
+    write used the same serialization credentials were staged for.
     """
 
     original = srv.config_export.serialize
-    calls = []
+    outputs = []
 
     def wrapper(*args, **kwargs):
         payload, preview = original(*args, **kwargs)
-        calls.append(True)
-        config = json.loads(payload)
-        config["_serialize_call"] = len(calls)
-        payload = (
-            json.dumps(config, indent=2, ensure_ascii=False) + "\n"
-        ).encode("utf-8")
+        outputs.append(payload)
         return payload, preview
 
     srv.config_export.serialize = wrapper
-    return calls
+    return outputs
 
 
 def test_setup_apply_serializes_config_once(tmp_path):
     discovery = _discovery_with_proposal()
     srv, base = _serve_setup(discovery, tmp_path)
     srv.credential_store.save_mqtt_discovery_secret("home", "user", "password")
-    calls = _mark_each_serialization(srv)
     try:
-        status, payload = _request(
-            f"{base}/api/setup/config/apply",
-            "POST",
-            {**_write_body(discovery), "overwrite": True},
-        )
+        body = _authorized(base, {**_write_body(discovery), "overwrite": True})
+        outputs = _capture_each_serialization(srv)
+        status, payload = _request(f"{base}/api/setup/config/apply", "POST", body)
         assert status == 200 and payload.get("ok") is True, payload
-        assert len(calls) == 1, "setup apply must serialize the target config once"
-        written = json.loads(
-            pathlib.Path(payload["path"]).read_text(encoding="utf-8")
-        )
+        assert len(outputs) == 1, "setup apply must serialize the target config once"
         # The written bytes are the first (only) serialization, not a later one.
-        assert written["_serialize_call"] == 1
+        assert pathlib.Path(payload["path"]).read_bytes() == outputs[0]
     finally:
         srv.shutdown()
         srv.server_close()
@@ -268,19 +269,13 @@ def test_setup_write_serializes_config_once(tmp_path):
     discovery = _discovery_with_proposal()
     srv, base = _serve_setup(discovery, tmp_path)
     srv.credential_store.save_mqtt_discovery_secret("home", "user", "password")
-    calls = _mark_each_serialization(srv)
     try:
-        status, payload = _request(
-            f"{base}/api/setup/config/write",
-            "POST",
-            {**_write_body(discovery), "overwrite": True},
-        )
+        body = _authorized(base, {**_write_body(discovery), "overwrite": True})
+        outputs = _capture_each_serialization(srv)
+        status, payload = _request(f"{base}/api/setup/config/write", "POST", body)
         assert status == 200 and payload.get("ok") is True, payload
-        assert len(calls) == 1, "setup write must serialize the target config once"
-        written = json.loads(
-            pathlib.Path(payload["path"]).read_text(encoding="utf-8")
-        )
-        assert written["_serialize_call"] == 1
+        assert len(outputs) == 1, "setup write must serialize the target config once"
+        assert pathlib.Path(payload["path"]).read_bytes() == outputs[0]
     finally:
         srv.shutdown()
         srv.server_close()
@@ -360,7 +355,7 @@ def test_setup_and_maintenance_share_prepared_payload_transaction(monkeypatch, t
         status, payload = _request(
             f"{base}/api/setup/config/apply",
             "POST",
-            {"devices": [], "supported_grid_meter_count": 0},
+            _authorized(base, {"devices": [], "supported_grid_meter_count": 0}),
         )
         assert status == 200 and payload.get("ok") is True, payload
         assert len(entries) == 2, "setup apply must use the same prepared payload"
@@ -398,7 +393,7 @@ def test_setup_and_maintenance_share_one_apply_transaction(monkeypatch, tmp_path
         status, payload = _request(
             f"{base}/api/setup/config/apply",
             "POST",
-            {"devices": [], "supported_grid_meter_count": 0},
+            _authorized(base, {"devices": [], "supported_grid_meter_count": 0}),
         )
         assert status == 200 and payload.get("ok") is True, payload
         assert len(entries) == 2, "setup apply must run inside the same transaction"

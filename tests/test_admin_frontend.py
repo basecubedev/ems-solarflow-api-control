@@ -1285,6 +1285,8 @@ const setupState = {{
   }},
 }};
 let startCalls = 0;
+const setupWorkflowId = "wf-1";
+const conflictBodies = [];
 const afterFirst = {{}};
 const responses = [
   {{
@@ -1299,7 +1301,8 @@ const responses = [
   }},
   {{ok: true, removed: "ems-influxdb", continue: true, conflict: null}},
 ];
-async function fetch() {{
+async function fetch(_url, options) {{
+  conflictBodies.push(options && options.body ? JSON.parse(options.body) : null);
   const payload = responses.shift();
   return {{ok: true, json: async () => payload}};
 }}
@@ -1311,7 +1314,10 @@ async function startDeployment() {{ startCalls += 1; }}
   afterFirst.startCalls = startCalls;
   afterFirst.conflict = setupState.start.conflict && setupState.start.conflict.container_name;
   await resolveContainerConflict();
-  console.log(JSON.stringify({{afterFirst, startCalls, conflict: setupState.start.conflict}}));
+  console.log(JSON.stringify({{
+    afterFirst, startCalls, conflict: setupState.start.conflict,
+    workflowIds: conflictBodies.map((body) => body.setup_workflow_id),
+  }}));
 }})();
 """
     result = subprocess.run(
@@ -1320,6 +1326,8 @@ async function startDeployment() {{ startCalls += 1; }}
 
     assert result.returncode == 0, result.stderr
     outcome = json.loads(result.stdout)
+    # Every conflict resolution names the workflow it belongs to.
+    assert outcome["workflowIds"] == ["wf-1", "wf-1"]
     assert outcome["afterFirst"] == {
         "startCalls": 0,
         "conflict": "ems-influxdb",
@@ -3015,9 +3023,15 @@ def test_failed_recoverable_render_keeps_upgrade_disabled_and_recovery_available
             _extract_fn(js, "renderUpgradeAdminAlignment"),
             _extract_fn(js, "applyUpgradeAlignmentTransition"),
             _extract_fn(js, "renderSystemAlignmentStatus"),
+            _extract_decl(js, "function recoveryActionFor"),
         ]
     )
-    header = """
+    header = (
+        _cleanup_recovery_decls(js)
+        + """
+const SETUP_TRANSITION_MODES = new Set(["fresh_install", "automated_setup"]);
+const DISCARD_SETUP_CONFIRM = "";
+const CANCEL_UPGRADE_CONFIRM = "";
 let systemAlignmentState = null;
 const SYSTEM_ALIGNMENT_STAGE_ORDER = [];
 const UPGRADE_ALIGNMENT_STATUS_TEXT = {
@@ -3050,6 +3064,7 @@ let upgradeState = {
   validation: null, releases: [],
 };
 """
+    )
     driver = """
 updateExecuteButton();
 const executeDisabledBefore = upgradeEls.executeBtn.disabled;
@@ -3117,11 +3132,12 @@ def test_guided_upgrade_selection_change_is_side_effect_free():
 
 def test_guided_upgrade_verify_is_the_only_validation_trigger():
     js = _read("admin.js")
-    # The heavy /upgrade/validate call lives only in prepareUpgradeTarget, which is
-    # bound only to the explicit form submit (the "Verify System Build" button).
-    assert js.count('"/api/admin/maintenance/upgrade/validate"') == 1
+    # The heavy /upgrade/validate calls live only in prepareUpgradeTarget (the
+    # initial attempt plus the one retry after a confirmed Discard setup), bound
+    # only to the explicit form submit (the "Verify System Build" button).
+    assert js.count('"/api/admin/maintenance/upgrade/validate"') == 2
     prepare = _async_fn_body(js, "async function prepareUpgradeTarget")
-    assert "/api/admin/maintenance/upgrade/validate" in prepare
+    assert prepare.count('"/api/admin/maintenance/upgrade/validate"') == 2
     bindings = js.split("if (upgradeEls.form)", 1)[1].split("if (upgradeEls.reload)", 1)[0]
     assert "prepareUpgradeTarget()" in bindings
 
@@ -6273,7 +6289,7 @@ def test_index_has_start_over_button():
     html = _read("index.html")
     nav = html.split('class="setup-nav"', 1)[1].split("</div>", 1)[0]
     assert 'id="setup-start-over"' in nav
-    assert "Start over" in nav
+    assert "Restart setup" in nav
 
 
 def test_js_start_over_resets_draft_and_returns_to_first_step():
@@ -6293,7 +6309,7 @@ def test_js_start_over_resets_draft_and_returns_to_first_step():
 def test_js_start_over_confirmation_states_what_is_and_is_not_deleted():
     js = _read("admin.js")
     const = js.split("const START_OVER_CONFIRM", 1)[1].split(";\n", 1)[0]
-    assert "does not delete" in const
+    assert "does not change" in const
     assert "installed EMS system" in const
     assert "backups" in const
 
@@ -6301,10 +6317,17 @@ def test_js_start_over_confirmation_states_what_is_and_is_not_deleted():
 def test_js_start_over_does_not_call_destructive_endpoints():
     js = _read("admin.js")
     fn = js.split("function startGuidedSetupOver", 1)[1].split("\nfunction ", 1)[0]
-    # Purely a client-side draft reset: no deployment/container/backup/config
-    # deletion request may be issued from here.
-    assert "fetch(" not in fn
+    # The backend-owned abandon is the only request Start over may issue: no
+    # deployment, container, backup or config-deletion call belongs here.
+    assert fn.count("fetch(") == 1
+    assert '"/api/setup/abandon"' in fn
     assert "DELETE" not in fn
+    for endpoint in (
+        "/api/setup/deployment/",
+        "/api/setup/config/apply",
+        "/api/admin/maintenance/",
+    ):
+        assert endpoint not in fn
 
 
 def _run_start_over_node(setup):
@@ -6321,12 +6344,82 @@ def _run_start_over_node(setup):
             "clearFeatureValues",
             "resetDiscoverySession",
             "clearGuidedSetupTimers",
-            "startGuidedSetupOver",
         )
     )
+    helpers += "\n" + _extract_fn(js, "resumeGuidedSetupLifecycle")
+    # Extracted async-aware: startGuidedSetupOver awaits the backend abandon, so
+    # dropping its `async` keyword would not even parse.
+    header = "async function startGuidedSetupOver"
+    helpers += "\n" + header + _async_fn_body(js, header)
     preamble = """
 let fetchCalls = 0;
-global.fetch = () => { fetchCalls += 1; return Promise.resolve({}); };
+const fetchUrls = [];
+// "ok" | "refused" | "network" — how /api/setup/abandon answers.
+let abandonOutcome = "ok";
+let abandonBody = { ok: true };
+const fetchBodies = [];
+global.fetch = (url, options) => {
+  fetchCalls += 1;
+  fetchUrls.push(url);
+  fetchBodies.push(options && options.body ? JSON.parse(options.body) : null);
+  if (abandonOutcome === "network") return Promise.reject(new Error("offline"));
+  return Promise.resolve({
+    ok: abandonOutcome === "ok",
+    json: () => Promise.resolve(abandonBody),
+  });
+};
+let setupWorkflowId = "wf-old";
+const workflowWrites = [];
+function setSetupWorkflowId(value) {
+  setupWorkflowId = value || null;
+  workflowWrites.push(value || null);
+}
+let setupIntentId = "intent-old";
+let freshSetupConfirmationRequired = true;
+function postStartPath() {
+  return Promise.resolve({
+    result: {
+      ok: true,
+      setup_workflow_id: "wf-new",
+      setup_intent_id: "intent-new",
+    },
+  });
+}
+let startOverRunning = false;
+let baselineWrites = [];
+function setConfigBaseline(value) { baselineWrites.push(value); }
+function showSetupConfigConflict() {}
+// The owning-workflow lookup and the lifecycle/cleanup readers the abandon path
+// consults; the reset itself is the function under test.
+async function fetchOwningSetupWorkflowId() { return setupWorkflowId; }
+function isSetupOperationInProgress(data) {
+  return Boolean(data && data.error === "setup_operation_in_progress");
+}
+function setupOperationInProgressMessage() { return "still running"; }
+function setupCleanupStateFor(data) {
+  if (!data) return null;
+  return data.error === "abandon_cleanup_incomplete" ? "pending" : null;
+}
+const cleanupPanels = [];
+function showSetupCleanupIncomplete(data) { cleanupPanels.push(data); }
+let alignmentRefreshes = 0;
+function loadSystemAlignmentStatus() { alignmentRefreshes += 1; }
+const polled = { deployment: [], start: [] };
+let liveTimers = 0;
+function pollDeploymentJob(jobId) {
+  polled.deployment.push(jobId);
+  if (deploymentJobTimer) liveTimers -= 1;
+  deploymentJobTimer = 41;
+  liveTimers += 1;
+}
+function pollStartJob(jobId) {
+  polled.start.push(jobId);
+  if (startJobTimer) liveTimers -= 1;
+  startJobTimer = 42;
+  liveTimers += 1;
+}
+let shownErrors = [];
+let statusMessages = [];
 const removedTimers = [];
 const window = {
   confirm: () => true,
@@ -6385,21 +6478,22 @@ const setupState = {
   start: { status: "succeeded", job_id: "old-start-job" },
 };
 function setActiveStep(step) { setupState.activeStep = step; }
-function showError() {}
+function showError(message) { if (message) shownErrors.push(message); }
 function showSetupNavError() {}
 function updateBusy() {}
 function renderSetupDiscoveryProgress() {}
 function renderAggregate() {}
 function renderConfigDraft() {}
 function renderConfigAvailable() {}
-function renderConfigPreview() {}
+let configPreviewRenders = 0;
+function renderConfigPreview() { configPreviewRenders += 1; }
 function renderDeployment() {}
 function renderStart() {}
-function setStatus() {}
+function setStatus(message) { if (message) statusMessages.push(message); }
 """
     epilogue = """
 const capturedGeneration = guidedSetupGeneration;
-startGuidedSetupOver();
+startGuidedSetupOver().then(() => {
 console.log(JSON.stringify({
   activeStep: setupState.activeStep,
   devicesDiscoveryStarted: devicesDiscoveryStarted,
@@ -6412,9 +6506,23 @@ console.log(JSON.stringify({
   discoveryActive: discoverySessions.setup.active,
   staleDetected: capturedGeneration !== guidedSetupGeneration,
   fetchCalls: fetchCalls,
+  fetchUrls: fetchUrls,
   latestConfigPreview: latestConfigPreview,
   dismissedSerialsSize: dismissedSerials.size,
+  alignmentRefreshes: alignmentRefreshes,
+  polled: polled,
+  liveTimers: liveTimers,
+  shownErrors: shownErrors,
+  statusMessages: statusMessages,
+  configPreviewRenders: configPreviewRenders,
+  startOverRunning: startOverRunning,
+  baselineWrites: baselineWrites,
+  fetchBodies: fetchBodies,
+  workflowWrites: workflowWrites,
+  setupWorkflowId: setupWorkflowId,
+  setupIntentId: setupIntentId,
 }));
+});
 """
     script = preamble + helpers + "\n" + setup + "\n" + epilogue
     result = subprocess.run(
@@ -6449,8 +6557,15 @@ def test_js_start_over_full_reset_behavior():
     assert out["discoveryActive"] is False
     # A response captured before the reset now detects it is stale.
     assert out["staleDetected"] is True
-    # No network request (destructive or otherwise) was issued.
-    assert out["fetchCalls"] == 0
+    # Exactly one request: the backend-owned abandon that makes the reset real.
+    assert out["fetchCalls"] == 1
+    assert out["fetchUrls"] == ["/api/setup/abandon"]
+    # The abandon targets exactly this tab's workflow; identity clears only
+    # after the backend confirmed, then the replacement identity is adopted.
+    assert out["fetchBodies"] == [{"setup_workflow_id": "wf-old"}]
+    assert out["workflowWrites"][0] is None
+    assert out["setupWorkflowId"] == "wf-new"
+    assert out["setupIntentId"] == "intent-new"
 
 
 # --- D0 MQTT grid-meter proposal UX --------------------------------------
@@ -7781,27 +7896,23 @@ def test_setup_selection_change_clears_context_and_previews_without_validating()
     assert "validateSelectedSystemBuild(" not in change
 
 
-def test_setup_selection_change_cancels_superseded_fresh_install_operation_first():
+def test_setup_selection_change_supersedes_through_the_backend_owner():
     js = _read("admin.js")
     change = _async_fn_body(js, "async function onReleaseSelectChange")
-    cancel = _async_fn_body(
-        js, "async function cancelSupersededFreshInstallTransition"
-    )
+    supersede = _async_fn_body(js, "async function supersedeSetupBuild")
 
-    # A superseded in-progress fresh-install transition is still cancelled on
-    # selection (status/cancel only, no pull, no validation), before the local
-    # preview is shown.
-    assert "await cancelSupersededFreshInstallTransition(value, previousTag)" in change
-    assert change.index("cancelSupersededFreshInstallTransition") < change.index(
+    # Changing the selected build retires the old workflow as ONE backend
+    # operation, before the local preview is shown — never a browser-composed
+    # cancel + reset + new intent sequence.
+    assert "await supersedeSetupBuild(value, previousTag)" in change
+    assert change.index("supersedeSetupBuild") < change.index(
         "presentSelectedSystemBuild"
     )
-    assert '"/api/admin/system-alignment/status"' in cancel
-    assert '"/api/admin/system-alignment/cancel"' in cancel
-    assert 'transition.mode !== "fresh_install"' in cancel
-    assert "operation_id: transition.operation_id" in cancel
-    assert "confirm: true" in cancel
-    assert 'postStartPath("setup_new", false)' in cancel
-    assert "setupIntentId = result.setup_intent_id" in cancel
+    assert '"/api/setup/system-build/supersede"' in supersede
+    assert "system-alignment/cancel" not in supersede
+    assert "setup_workflow_id: setupWorkflowId" in supersede
+    assert "setupIntentId = data.setup_intent_id" in supersede
+    assert "setSetupWorkflowId(data.setup_workflow_id)" in supersede
 
 
 def test_setup_revalidation_invalidates_prior_verdict_and_error():
@@ -9299,18 +9410,25 @@ def test_partial_system_transition_exposes_reconnect_and_recovery_controls():
     assert "operation_id" in js
 
 
-def test_partial_transition_offers_an_abandon_escape_hatch():
+def test_partial_transition_offers_an_owner_specific_escape_hatch():
     # A guided_upgrade whose resume keeps failing (and whose EMS was already
-    # recreated, so return_available is false) must still be escapable: the
-    # recovery panel exposes an Abandon action that cancels the transition.
+    # recreated, so return_available is false) must still be escapable. The
+    # action is chosen by the transition's owner: an upgrade is cancelled, a
+    # Setup-owned transition is discarded through its own abandon endpoint.
     js = _read("admin.js")
     render = _extract_fn(js, "renderSystemAlignmentStatus")
     assert "transition.cancel_available !== true" in render
+    assert "recoveryActionFor(transition.mode)" in render
+    owner = _extract_decl(js, "function recoveryActionFor")
+    assert '"/api/setup/abandon"' in owner
+    assert '"/api/admin/system-alignment/cancel"' in owner
+    assert '"Discard setup"' in owner
+    assert '"Cancel upgrade"' in owner
     abandon = _async_fn_body(js, "async function abandonSystemAlignment")
-    assert '"/api/admin/system-alignment/cancel"' in abandon
+    assert "recoveryActionFor(transition.mode)" in abandon
     assert "operation_id: transition.operation_id" in abandon
     assert "confirm: true" in abandon
-    assert 'data.stage !== "cancelled"' in abandon
+    assert 'data.stage === "cancelled"' in abandon
 
 
 def test_expired_transition_surfaces_the_recovery_panel():
@@ -9347,6 +9465,31 @@ def test_expired_transition_abandon_waits_for_the_worker_to_stop():
     assert "Wait for it to finish before abandoning the transition." in render
 
 
+def _extract_decl(js, header):
+    """Extract one declaration, stopping at the next top-level one."""
+
+    body = js.split(header, 1)[1]
+    return header + re.split(r"\n(?:async function |function |const |let )", body)[0]
+
+
+def _cleanup_recovery_decls(js):
+    """The real cleanup-recovery re-assertion the alignment renderer calls.
+
+    A pending Setup cleanup is durable state, so ``renderSystemAlignmentStatus``
+    re-asserts it on every render instead of letting the poll erase it. Drivers
+    that run the renderer therefore need the real declarations, not a stub.
+    """
+
+    return "let setupCleanupState = null;\n" + "\n".join(
+        [
+            _extract_decl(js, "const SETUP_CLEANUP_PENDING_MESSAGE"),
+            _extract_decl(js, "const SETUP_CLEANUP_REVIEW_MESSAGE"),
+            _extract_decl(js, "function setupCleanupWarningText"),
+            _extract_decl(js, "function renderSetupCleanupRecovery"),
+        ]
+    )
+
+
 def _render_expired_recovery(
     worker_active=False, *, worker_status_available=True, cancel_available=None
 ):
@@ -9362,7 +9505,16 @@ def _render_expired_recovery(
 
     js = _read("admin.js")
     render = _extract_fn(js, "renderSystemAlignmentStatus")
+    # The renderer routes the recovery action by transition owner, so the
+    # owner map has to come along with it.
+    owner = _extract_decl(js, "function recoveryActionFor")
+    cleanup = _cleanup_recovery_decls(js)
     driver = f"""
+const SETUP_TRANSITION_MODES = new Set(["fresh_install", "automated_setup"]);
+const DISCARD_SETUP_CONFIRM = "";
+const CANCEL_UPGRADE_CONFIRM = "";
+{cleanup}
+{owner}
 let systemAlignmentState;
 const SYSTEM_ALIGNMENT_STAGE_ORDER = [];
 function systemAlignmentStageStates(payload) {{
@@ -9374,7 +9526,7 @@ const document = {{ querySelectorAll: () => [] }};
 const systemAlignmentEls = {{
   tag: {{}}, buildId: {{}}, revision: {{}}, adminImage: {{}}, emsImage: {{}},
   message: {{}}, warning: {{}}, reconnect: {{}}, partial: {{}}, partialMessage: {{}},
-  resume: {{}}, returnToRunning: {{}}, abandon: {{}},
+  resume: {{}}, returnToRunning: {{}}, abandon: {{}}, retryCleanup: {{}},
 }};
 {render}
 renderSystemAlignmentStatus({{
@@ -9395,6 +9547,8 @@ console.log(JSON.stringify({{
   reconnectHidden: systemAlignmentEls.reconnect.hidden,
   resumeDisabled: systemAlignmentEls.resume.disabled,
   abandonDisabled: systemAlignmentEls.abandon.disabled,
+  abandonHidden: systemAlignmentEls.abandon.hidden,
+  abandonLabel: systemAlignmentEls.abandon.textContent,
   message: systemAlignmentEls.partialMessage.textContent,
 }}));
 """
@@ -9451,7 +9605,14 @@ def test_recovery_render_source_fails_closed_on_unknown_worker_state():
 def _render_alignment_payload(payload):
     js = _read("admin.js")
     render = _extract_fn(js, "renderSystemAlignmentStatus")
+    owner = _extract_decl(js, "function recoveryActionFor")
+    cleanup = _cleanup_recovery_decls(js)
     driver = f"""
+const SETUP_TRANSITION_MODES = new Set(["fresh_install", "automated_setup"]);
+const DISCARD_SETUP_CONFIRM = "";
+const CANCEL_UPGRADE_CONFIRM = "";
+{cleanup}
+{owner}
 let systemAlignmentState;
 const SYSTEM_ALIGNMENT_STAGE_ORDER = [];
 function systemAlignmentStageStates(payload) {{
@@ -9463,7 +9624,7 @@ const document = {{ querySelectorAll: () => [] }};
 const systemAlignmentEls = {{
   tag: {{}}, buildId: {{}}, revision: {{}}, adminImage: {{}}, emsImage: {{}},
   message: {{}}, warning: {{}}, reconnect: {{}}, partial: {{}}, partialMessage: {{}},
-  resume: {{}}, returnToRunning: {{}}, abandon: {{}},
+  resume: {{}}, returnToRunning: {{}}, abandon: {{}}, retryCleanup: {{}},
 }};
 {render}
 renderSystemAlignmentStatus({json.dumps(payload)});
@@ -9471,6 +9632,8 @@ console.log(JSON.stringify({{
   partialHidden: systemAlignmentEls.partial.hidden,
   resumeDisabled: systemAlignmentEls.resume.disabled,
   abandonDisabled: systemAlignmentEls.abandon.disabled,
+  abandonHidden: systemAlignmentEls.abandon.hidden,
+  abandonLabel: systemAlignmentEls.abandon.textContent,
   message: systemAlignmentEls.partialMessage.textContent,
 }}));
 """
@@ -10595,7 +10758,9 @@ def _run_system_alignment_fact_reset(stage):
     js = _read("admin.js")
     reset = _extract_fn(js, "resetSystemAlignmentPresentation")
     render = _extract_fn(js, "renderSystemAlignmentStatus")
+    cleanup = _cleanup_recovery_decls(js)
     script = f"""
+{cleanup}
 const systemAlignmentEls = {{
   workflow: {{hidden: true}}, tag: {{textContent: ""}}, buildId: {{textContent: ""}},
   revision: {{textContent: ""}}, adminImage: {{textContent: ""}},
@@ -10863,3 +11028,735 @@ def test_js_clear_draft_and_start_over_clear_mqtt_selection():
     assert "clearMqttSelection()" in clear_draft
     start_over = _extract_fn(js, "startGuidedSetupOver")
     assert "clearMqttSelection()" in start_over
+
+
+def test_start_over_calls_the_backend_abandon_operation():
+    """Start over must be backend-authoritative, not a browser-only reset.
+
+    The durable artifacts Guided Setup creates (generated config, deployment
+    marker, pending transition) live on the server, so the reset has to go
+    through the abandon endpoint instead of only clearing localStorage.
+    """
+
+    js = _read("admin.js")
+    start_over = _async_fn_body(js, "async function startGuidedSetupOver")
+    assert '"/api/setup/abandon"' in start_over
+    assert 'method: "POST"' in start_over
+
+
+def test_start_over_clears_browser_state_only_after_backend_success():
+    js = _read("admin.js")
+    start_over = _async_fn_body(js, "async function startGuidedSetupOver")
+    abandon_index = start_over.index('"/api/setup/abandon"')
+    # Every local reset happens after the abandon response was accepted.
+    for marker in (
+        "resetDiscoverySession(",
+        "configDraftItems = []",
+        "clearMqttSelection()",
+        "setActiveStep(",
+    ):
+        assert start_over.index(marker) > abandon_index, marker
+
+
+def test_start_over_failure_leaves_a_visible_recoverable_state():
+    js = _read("admin.js")
+    start_over = _async_fn_body(js, "async function startGuidedSetupOver")
+    assert "catch" in start_over
+    assert "showError(" in start_over
+    # A failed abandon must not silently claim the workflow was reset.
+    reset_message = "Guided Setup reset. Your installed EMS system was not changed."
+    assert start_over.index("catch") < start_over.index(reset_message)
+
+
+# --- Start over failure must not freeze the current workflow ---------------
+
+_ACTIVE_DEPLOYMENT = """
+setupState.activeStep = "deployment";
+setupState.deployment = { status: "running", job_id: "job-dep-1" };
+setupState.start = { status: "idle", job_id: null };
+"""
+
+_ACTIVE_START = """
+setupState.activeStep = "start";
+setupState.deployment = { status: "succeeded", job_id: "job-dep-1" };
+setupState.start = { status: "running", job_id: "job-start-1" };
+"""
+
+
+def test_refused_start_over_keeps_the_draft_and_resumes_polling():
+    out = _run_start_over_node(
+        'abandonOutcome = "refused";\n'
+        'abandonBody = { ok: false, message: "worker still active" };\n'
+        + _ACTIVE_DEPLOYMENT
+    )
+    # The backend refused, so nothing local may be discarded.
+    assert out["draftLen"] == 1
+    assert out["activeStep"] == "deployment"
+    assert out["featureKeys"] == ["grid_meter.type"]
+    assert out["startOverRunning"] is False
+    # The refusal is visible and the authoritative state is re-read.
+    assert any("worker still active" in message for message in out["shownErrors"])
+    assert out["alignmentRefreshes"] == 1
+    # A refused abandon keeps this tab's workflow identity untouched.
+    assert out["workflowWrites"] == []
+    assert out["setupWorkflowId"] == "wf-old"
+    # The lifecycle the active step needs is running again, exactly once.
+    assert out["polled"]["deployment"] == ["job-dep-1"]
+    assert out["polled"]["start"] == []
+    assert out["liveTimers"] == 1
+
+
+def test_refused_start_over_resumes_the_start_step_lifecycle():
+    out = _run_start_over_node(
+        'abandonOutcome = "refused";\nabandonBody = { ok: false };\n' + _ACTIVE_START
+    )
+    assert out["polled"]["start"] == ["job-start-1"]
+    assert out["polled"]["deployment"] == []
+    assert out["liveTimers"] == 1
+    assert out["activeStep"] == "start"
+
+
+def test_network_failure_during_start_over_is_equally_recoverable():
+    out = _run_start_over_node('abandonOutcome = "network";\n' + _ACTIVE_DEPLOYMENT)
+    assert out["draftLen"] == 1
+    assert out["activeStep"] == "deployment"
+    assert out["startOverRunning"] is False
+    assert out["shownErrors"]
+    assert out["alignmentRefreshes"] == 1
+    assert out["polled"]["deployment"] == ["job-dep-1"]
+    assert out["liveTimers"] == 1
+
+
+def test_partial_cleanup_is_not_reported_as_a_complete_reset():
+    out = _run_start_over_node(
+        'abandonOutcome = "refused";\n'
+        'abandonBody = { ok: false, error: "abandon_cleanup_incomplete",'
+        ' message: "2 setup file(s) could not be removed." };\n' + _ACTIVE_DEPLOYMENT
+    )
+    reset_claim = "Guided Setup reset. Your installed EMS system was not changed."
+    assert reset_claim not in out["statusMessages"]
+    assert out["draftLen"] == 1
+    assert any("could not be removed" in message for message in out["shownErrors"])
+
+
+def test_successful_start_over_leaves_polling_stopped_and_state_clean():
+    out = _run_start_over_node(_ACTIVE_DEPLOYMENT)
+    # A confirmed abandon resets: no lifecycle is resumed for a workflow that
+    # no longer exists.
+    assert out["polled"]["deployment"] == []
+    assert out["polled"]["start"] == []
+    assert out["liveTimers"] == 0
+    assert out["draftLen"] == 0
+    assert out["activeStep"] == "release"
+    assert out["alignmentRefreshes"] == 1
+    assert out["shownErrors"] == []
+
+
+# --- workflow action ownership and language --------------------------------
+
+
+def _recovery_payload(mode, stage="failed_recoverable"):
+    return {
+        "active": True,
+        "transition": {
+            "mode": mode,
+            "stage": stage,
+            "operation_id": "op-1",
+            "resume_available": False,
+            "cancel_available": True,
+            "worker_active": False,
+            "worker_status_available": True,
+        },
+    }
+
+
+def test_setup_owned_recovery_offers_discard_setup():
+    out = _render_alignment_payload(_recovery_payload("fresh_install"))
+    assert out["abandonLabel"] == "Discard setup"
+    assert out["abandonHidden"] is False
+    assert out["abandonDisabled"] is False
+
+
+def test_guided_upgrade_recovery_offers_cancel_upgrade():
+    out = _render_alignment_payload(_recovery_payload("guided_upgrade"))
+    assert out["abandonLabel"] == "Cancel upgrade"
+    assert out["abandonHidden"] is False
+
+
+def test_unknown_transition_owner_offers_no_destructive_action():
+    out = _render_alignment_payload(_recovery_payload("something_else"))
+    assert out["abandonHidden"] is True
+    assert out["abandonDisabled"] is True
+
+
+def _run_setup_conflict_node(setup):
+    js = _read("admin.js")
+    helpers = "\n".join(
+        [
+            _extract_decl(js, "function isSetupConfigConflict"),
+            _extract_decl(js, "function showSetupConfigConflict"),
+            _extract_decl(js, "function setupCleanupStateFor"),
+            _extract_decl(js, "function setupCleanupWarningText"),
+            _extract_decl(js, "function showSetupCleanupIncomplete"),
+            _extract_decl(js, "function renderSetupCleanupRecovery"),
+            _extract_decl(js, "const SETUP_CLEANUP_PENDING_MESSAGE"),
+            _extract_decl(js, "const SETUP_CLEANUP_REVIEW_MESSAGE"),
+            _extract_decl(js, "function configExportBody"),
+            _extract_decl(js, "const SETUP_CONFLICT_MESSAGES"),
+        ]
+    )
+    preamble = """
+const el = () => ({ hidden: true, textContent: "" });
+const configEls = {
+  conflict: el(), conflictMessage: el(), conflictReview: el(),
+  conflictDiscard: el(), conflictDetails: el(), conflictDetail: el(),
+};
+const systemAlignmentEls = {
+  warning: el(), retryCleanup: el(), partial: el(), partialMessage: el(),
+  resume: el(), returnToRunning: el(), abandon: el(),
+};
+let setupCleanupState = null;
+let configDraftItems = [{ role: "inverter" }];
+let setupConfigBaseline = null;
+let setupWorkflowId = null;
+let setupConfigPreviewId = null;
+let featureValues = {};
+function supportedGridMeters() { return []; }
+function mqttPreviewPayload() { return []; }
+function mqttBrokerPayload() { return null; }
+function manualMqttDevicesPayload() { return []; }
+"""
+    return _run_node(preamble + helpers + "\n" + setup)
+
+
+def test_stale_conflict_is_shown_without_touching_the_draft():
+    out = _run_setup_conflict_node(
+        """
+showSetupConfigConflict({ error: "stale_setup_config", message: "detail" });
+console.log(JSON.stringify({
+  hidden: configEls.conflict.hidden,
+  message: configEls.conflictMessage.textContent,
+  detail: configEls.conflictDetail.textContent,
+  draftLen: configDraftItems.length,
+}));
+"""
+    )
+    assert out["hidden"] is False
+    assert "changed after this setup was opened" in out["message"]
+    assert out["detail"] == "detail"
+    # The user's work is never discarded by a conflict.
+    assert out["draftLen"] == 1
+
+
+def test_mutation_body_carries_workflow_and_exact_preview_ids():
+    out = _run_setup_conflict_node(
+        """
+setupWorkflowId = "wf-1";
+setupConfigPreviewId = "pv-1";
+const body = configExportBody(false);
+console.log(JSON.stringify({
+  workflow: body.setup_workflow_id,
+  preview: body.config_preview_id,
+  hasLegacyRevision: "config_revision" in body,
+}));
+"""
+    )
+    assert out["workflow"] == "wf-1"
+    assert out["preview"] == "pv-1"
+    # The raw live revision is display-only; it is never mutation authority.
+    assert out["hasLegacyRevision"] is False
+
+
+def test_preview_mismatch_keeps_the_users_draft_visible():
+    out = _run_setup_conflict_node(
+        """
+showSetupConfigConflict({ error: "setup_preview_mismatch", message: "m" });
+console.log(JSON.stringify({
+  hidden: configEls.conflict.hidden,
+  message: configEls.conflictMessage.textContent,
+  draftLen: configDraftItems.length,
+}));
+"""
+    )
+    assert out["hidden"] is False
+    assert "changed after the displayed preview was created" in out["message"]
+    assert out["draftLen"] == 1
+
+
+def test_partial_cleanup_offers_retry_cleanup():
+    out = _run_setup_conflict_node(
+        """
+showSetupCleanupIncomplete({ error: "abandon_cleanup_incomplete" });
+const stopped = {
+  warning: systemAlignmentEls.warning.textContent,
+  retryHidden: systemAlignmentEls.retryCleanup.hidden,
+};
+showSetupCleanupIncomplete({
+  error: "setup_cleanup_required",
+  workflow: { cleanup: { state: "review_required", blocking: true } },
+});
+const review = {
+  warning: systemAlignmentEls.warning.textContent,
+  retryHidden: systemAlignmentEls.retryCleanup.hidden,
+};
+showSetupCleanupIncomplete(null);
+console.log(JSON.stringify({
+  ...stopped,
+  review: review,
+  clearedRetryHidden: systemAlignmentEls.retryCleanup.hidden,
+  clearedWarningHidden: systemAlignmentEls.warning.hidden,
+}));
+"""
+    )
+    # The copy is truthful about what remains and what was not changed.
+    assert "Setup has stopped." in out["warning"]
+    assert "Temporary files remain." in out["warning"]
+    assert "No new Setup or Upgrade can start until cleanup succeeds." in out["warning"]
+    assert "live config and the running EMS were not changed" in out["warning"]
+    assert out["retryHidden"] is False
+    # An unknown owner is not something a retry converges, so it is not offered.
+    assert "kept for review" in out["review"]["warning"]
+    assert out["review"]["retryHidden"] is True
+    assert out["clearedRetryHidden"] is True
+    assert out["clearedWarningHidden"] is True
+
+
+def test_review_current_configuration_earns_a_new_baseline_by_refreshing():
+    js = _read("admin.js")
+    review = _async_fn_body(js, "async function reviewCurrentSetupConfiguration")
+    # The stale baseline is dropped and only a real preview can set a new one.
+    assert "setConfigBaseline(null)" in review
+    assert "await requestConfigPreview()" in review
+    preview = _async_fn_body(js, "async function requestConfigPreview")
+    assert "setConfigBaseline(data.config_revision)" in preview
+
+
+def test_retry_cleanup_calls_the_setup_abandon_endpoint():
+    js = _read("admin.js")
+    retry = _async_fn_body(js, "async function retrySetupCleanup")
+    assert '"/api/setup/abandon"' in retry
+    # The retry addresses the exact workflow that owns the failed cleanup, and
+    # only reports success when no cleanup state remains.
+    assert "await fetchOwningSetupWorkflowId()" in retry
+    assert "setup_workflow_id: workflowId" in retry
+    assert retry.index("fetchOwningSetupWorkflowId") < retry.index(
+        '"/api/setup/abandon"'
+    )
+    assert "setupCleanupStateFor(data) !== null" in retry
+    assert "isSetupOperationInProgress(data)" in retry
+
+
+# --- workflow identity: old tabs, stale sessions, primitive-cancel isolation --
+
+
+def test_setup_paths_never_call_the_primitive_alignment_cancel():
+    js = _read("admin.js")
+    # Exactly one caller may reference the narrow transition primitive: the
+    # guided_upgrade recovery action ("Cancel upgrade"). Every Setup-owned
+    # termination goes through /api/setup/abandon or the build supersede.
+    assert js.count('"/api/admin/system-alignment/cancel"') == 1
+    recovery = _extract_fn(js, "recoveryActionFor")
+    assert '"/api/admin/system-alignment/cancel"' in recovery
+    assert '"Cancel upgrade"' in recovery
+    assert recovery.index("guided_upgrade") < recovery.index(
+        "/api/admin/system-alignment/cancel"
+    )
+
+
+def test_workflow_conflict_stops_mutations_and_offers_recovery_actions():
+    js = _read("admin.js")
+    helpers = "\n".join(
+        [
+            _extract_decl(js, "const SETUP_WORKFLOW_CONFLICT_ERRORS"),
+            _extract_decl(js, "const SETUP_WORKFLOW_STALE_MESSAGE"),
+            _extract_decl(js, "function isSetupWorkflowConflict"),
+            _extract_decl(js, "function handleSetupWorkflowConflict"),
+            _extract_decl(js, "function setSetupPreviewId"),
+        ]
+    )
+    preamble = """
+const el = () => ({ hidden: true, textContent: "" });
+const configEls = {
+  workflowConflict: el(),
+  workflowConflictMessage: el(),
+  previewReady: el(),
+};
+let setupWorkflowStale = false;
+let setupConfigPreviewId = "pv-1";
+let configPreviewRequest = 4;
+let latestConfigPreview = { ready: true };
+let configPreviewTimer = 7;
+const clearedTimers = [];
+const window = { clearTimeout: (h) => clearedTimers.push(h) };
+const readyWrites = [];
+function setConfigExportReady(value) { readyWrites.push(value); }
+function saveSetupWorkflowState() {}
+"""
+    epilogue = """
+handleSetupWorkflowConflict({
+  error: "setup_workflow_not_active",
+  message: "This browser tab belongs to an older setup session and can no " +
+    "longer change the current workflow.",
+});
+console.log(JSON.stringify({
+  stale: setupWorkflowStale,
+  previewId: setupConfigPreviewId,
+  readyWrites: readyWrites,
+  clearedTimers: clearedTimers,
+  previewRequest: configPreviewRequest,
+  previewTimer: configPreviewTimer,
+  latestPreview: latestConfigPreview,
+  panelHidden: configEls.workflowConflict.hidden,
+  message: configEls.workflowConflictMessage.textContent,
+  detected: isSetupWorkflowConflict({ error: "setup_workflow_not_active" }),
+  notAConflict: isSetupWorkflowConflict({ error: "stale_setup_config" }),
+}));
+"""
+    out = _run_node(preamble + helpers + "\n" + epilogue)
+    # Mutation authority is revoked, actions disable, and the poller stops.
+    assert out["stale"] is True
+    assert out["previewId"] is None
+    assert out["readyWrites"] == [False]
+    assert out["clearedTimers"] == [7]
+    # Every in-flight preview generation is superseded and the timer handle is
+    # dropped, so a response already on the wire can neither repaint the preview
+    # nor re-enable Apply/Write.
+    assert out["previewRequest"] == 5
+    assert out["previewTimer"] is None
+    assert out["latestPreview"] is None
+    # The panel names the situation and its actions exist in the markup.
+    assert out["panelHidden"] is False
+    assert "older setup session" in out["message"]
+    assert out["detected"] is True
+    assert out["notAConflict"] is False
+    html = _read("index.html")
+    assert "Open current setup" in html
+    assert "Discard local draft" in html
+
+
+def test_stale_workflow_tab_stops_previewing_and_config_changes_revoke_authority():
+    js = _read("admin.js")
+    preview = _async_fn_body(js, "async function requestConfigPreview")
+    # A stale tab neither polls nor mutates; a workflow conflict is handled
+    # before any preview verdict is applied.
+    assert "if (setupWorkflowStale) return;" in preview
+    assert preview.index("isSetupWorkflowConflict(data)") < preview.index(
+        "latestConfigPreview = data"
+    )
+    render = _extract_fn(js, "renderConfigPreview")
+    # Any config-affecting change immediately revokes the exact preview ID and
+    # disables Apply/Write until the new preview succeeds.
+    assert "setSetupPreviewId(null)" in render
+    assert "setConfigExportReady(false)" in render
+
+
+def test_discard_active_setup_clears_identity_only_after_backend_success():
+    js = _read("admin.js")
+    discard = _async_fn_body(js, "async function discardActiveSetup")
+    assert '"/api/setup/abandon"' in discard
+    # Local identity clears strictly behind the confirmed backend result.
+    assert discard.index("data.ok === true") < discard.index(
+        "setSetupWorkflowId(null)"
+    )
+
+
+def test_upgrade_verify_resolves_a_setup_conflict_through_its_owner():
+    js = _read("admin.js")
+    prepare = _async_fn_body(js, "async function prepareUpgradeTarget")
+    # The server blocks validation while Guided Setup owns unresolved state;
+    # the browser resolves that through the Setup owner and retries once.
+    assert 'data.error === "setup_abandon_required"' in prepare
+    assert "resolveSetupConflictForUpgrade()" in prepare
+    assert prepare.index("setup_abandon_required") < prepare.index(
+        "resolveSetupConflictForUpgrade()"
+    )
+    resolve = _async_fn_body(js, "async function resolveSetupConflictForUpgrade")
+    # It is an explicit, named confirmation followed by the backend abandon —
+    # never the narrow transition primitive.
+    assert "window.confirm(DISCARD_SETUP_CONFIRM)" in resolve
+    assert "discardActiveSetup()" in resolve
+    assert "system-alignment/cancel" not in resolve
+    # An incomplete cleanup keeps the upgrade blocked and offers Retry cleanup,
+    # and an operation still in progress is never reported as a discard.
+    assert "setupCleanupStateFor(discarded.data)" in resolve
+    assert "showSetupCleanupIncomplete" in resolve
+    assert "isSetupOperationInProgress(discarded.data)" in resolve
+    prepare = _async_fn_body(js, "async function prepareUpgradeTarget")
+    # A cleanup-pending Setup is its own conflict: only its retry unblocks the
+    # upgrade, so validation must not offer a fresh Discard setup for it.
+    assert 'data.error === "setup_cleanup_required"' in prepare
+    assert prepare.index("setup_cleanup_required") < prepare.index(
+        "setup_abandon_required"
+    )
+
+
+def test_upgrade_verify_only_validates_after_cleanup_succeeded():
+    js = _read("admin.js")
+    prepare = _async_fn_body(js, "async function prepareUpgradeTarget")
+    conflict = prepare.split('data.error === "setup_abandon_required"', 1)[1]
+    guard = conflict.split("if (!resolved.ok)", 1)
+    assert len(guard) == 2, "a failed cleanup must short-circuit the retry"
+    # The retry validation comes after the guard, never before it.
+    assert '"/api/admin/maintenance/upgrade/validate"' in guard[1]
+
+
+
+# --- delayed preview responses and cleanup recovery after a reload -----------
+
+
+def test_a_delayed_preview_response_cannot_repaint_a_superseded_tab():
+    """The backend already refuses the stale workflow; the browser must not show
+    false authority in the meantime."""
+
+    js = _read("admin.js")
+    helpers = "\n".join(
+        [
+            _extract_decl(js, "const SETUP_WORKFLOW_CONFLICT_ERRORS"),
+            _extract_decl(js, "const SETUP_WORKFLOW_STALE_MESSAGE"),
+            _extract_decl(js, "function isSetupWorkflowConflict"),
+            _extract_decl(js, "function handleSetupWorkflowConflict"),
+            _extract_decl(js, "function setSetupPreviewId"),
+            "async function requestConfigPreview"
+            + _async_fn_body(js, "async function requestConfigPreview"),
+        ]
+    )
+    preamble = """
+const el = () => ({ hidden: true, textContent: "", disabled: true });
+const configEls = {
+  preview: el(), previewReady: el(), previewRelease: el(), previewBase: el(),
+  previewDevices: el(), exportStatus: el(), workflowConflict: el(),
+  workflowConflictMessage: el(), download: el(), apply: el(),
+  validationCard: { dataset: {} },
+};
+let setupWorkflowStale = false;
+let setupWorkflowId = "wf-old";
+let setupConfigPreviewId = null;
+let latestConfigPreview = null;
+let configPreviewRequest = 0;
+let configPreviewTimer = null;
+let guidedSetupGeneration = 1;
+let configDraftItems = [];
+let featureValues = {};
+const readyWrites = [];
+function setConfigExportReady(value) {
+  readyWrites.push(value);
+  configEls.apply.disabled = !value;
+  configEls.download.disabled = !value;
+}
+function saveSetupWorkflowState() {}
+function setConfigBaseline() {}
+function showSetupConfigConflict() {}
+function renderConfigValidation() {}
+function notifySetupStatus() {}
+function supportedGridMeters() { return []; }
+function mqttPreviewPayload() { return []; }
+function mqttBrokerPayload() { return null; }
+function manualMqttDevicesPayload() { return []; }
+const window = { clearTimeout: () => {}, setTimeout: () => 0 };
+let deliverResponse = null;
+global.fetch = () => new Promise((resolve) => { deliverResponse = resolve; });
+"""
+    epilogue = """
+(async () => {
+  const inFlight = requestConfigPreview();
+  // Another request learns the workflow was superseded while this preview is
+  // still on the wire.
+  handleSetupWorkflowConflict({ error: "setup_workflow_not_active" });
+  deliverResponse({
+    ok: true,
+    json: async () => ({
+      ready: true,
+      config: { devices: [{ name: "WR1" }] },
+      config_preview_id: "pv-late",
+      config_revision: { expected_revision: null, expect_absent: true },
+      release: "v0.9.0",
+    }),
+  });
+  await inFlight;
+  console.log(JSON.stringify({
+    previewId: setupConfigPreviewId,
+    latestPreview: latestConfigPreview,
+    applyDisabled: configEls.apply.disabled,
+    downloadDisabled: configEls.download.disabled,
+    previewText: configEls.preview.textContent,
+    readyLabel: configEls.previewReady.textContent,
+    readyWrites: readyWrites,
+    releaseLabel: configEls.previewRelease.textContent,
+  }));
+})();
+"""
+    out = _run_node(preamble + helpers + "\n" + epilogue)
+    # The late success neither mints a preview ID nor re-enables a mutation.
+    assert out["previewId"] is None
+    assert out["latestPreview"] is None
+    assert out["applyDisabled"] is True
+    assert out["downloadDisabled"] is True
+    assert out["readyWrites"] == [False]
+    # And it repaints nothing the conflict panel already decided.
+    assert out["previewText"] == ""
+    assert out["releaseLabel"] == ""
+    assert out["readyLabel"] == "Session superseded"
+
+
+def _restore_workflow_node(workflow):
+    js = _read("admin.js")
+    helpers = "\n".join(
+        [
+            _extract_decl(js, "function setupCleanupBlocks"),
+            _extract_decl(js, "function setupCleanupStateFor"),
+            _extract_decl(js, "function setupCleanupWarningText"),
+            _extract_decl(js, "function showSetupCleanupIncomplete"),
+            _extract_decl(js, "function renderSetupCleanupRecovery"),
+            _extract_decl(js, "const SETUP_CLEANUP_PENDING_MESSAGE"),
+            _extract_decl(js, "const SETUP_CLEANUP_REVIEW_MESSAGE"),
+            _extract_decl(js, "function setSetupWorkflowId"),
+            "async function fetchSetupWorkflowSnapshot"
+            + _async_fn_body(js, "async function fetchSetupWorkflowSnapshot"),
+            "async function restoreSetupWorkflowFromServer"
+            + _async_fn_body(js, "async function restoreSetupWorkflowFromServer"),
+        ]
+    )
+    preamble = (
+        """
+const el = () => ({ hidden: true, textContent: "" });
+const systemAlignmentEls = {
+  warning: el(), retryCleanup: el(), partial: el(), partialMessage: el(),
+  resume: el(), returnToRunning: el(), abandon: el(),
+};
+let setupCleanupState = null;
+let setupWorkflowId = null;
+let setupConfigPreviewId = "pv-1";
+const saves = [];
+function saveSetupWorkflowState() { saves.push(setupWorkflowId); }
+const setupState = { activeStep: "config" };
+let renders = 0;
+function renderConfigPreview() { renders += 1; }
+global.fetch = async () => ({
+  ok: true,
+  json: async () => ({ workflow: WORKFLOW }),
+});
+const WORKFLOW = """
+        + json.dumps(workflow)
+        + ";\n"
+    )
+    epilogue = """
+(async () => {
+  await restoreSetupWorkflowFromServer();
+  console.log(JSON.stringify({
+    workflowId: setupWorkflowId,
+    previewId: setupConfigPreviewId,
+    saves: saves,
+    warning: systemAlignmentEls.warning.textContent,
+    warningHidden: systemAlignmentEls.warning.hidden,
+    retryHidden: systemAlignmentEls.retryCleanup.hidden,
+    renders: renders,
+  }));
+})();
+"""
+    return _run_node(preamble + helpers + "\n" + epilogue)
+
+
+def test_cleanup_pending_workflow_id_survives_a_reload():
+    out = _restore_workflow_node(
+        {
+            "workflow_id": "wf-terminal",
+            "status": "abandoned",
+            "cleanup": {"state": "pending", "blocking": True, "failed_count": 1},
+        }
+    )
+    # The ID is kept because the retry can only be addressed to it.
+    assert out["workflowId"] == "wf-terminal"
+    assert out["saves"] == ["wf-terminal"]
+    # But it carries no mutation authority any more.
+    assert out["previewId"] is None
+    assert out["warningHidden"] is False
+    assert "Setup has stopped." in out["warning"]
+    assert out["retryHidden"] is False
+
+
+def test_review_required_after_a_reload_does_not_offer_a_pointless_retry():
+    out = _restore_workflow_node(
+        {
+            "workflow_id": "wf-terminal",
+            "status": "abandoned",
+            "cleanup": {"state": "review_required", "blocking": True, "review_count": 1},
+        }
+    )
+    assert out["workflowId"] == "wf-terminal"
+    assert "kept for review" in out["warning"]
+    assert out["retryHidden"] is True
+
+
+def test_a_converged_terminal_workflow_is_dropped_after_a_reload():
+    out = _restore_workflow_node(
+        {
+            "workflow_id": "wf-done",
+            "status": "completed",
+            "cleanup": {"state": "complete", "blocking": False},
+        }
+    )
+    assert out["workflowId"] is None
+    assert out["warningHidden"] is True
+    assert out["retryHidden"] is True
+
+
+def test_operation_in_progress_never_reports_a_successful_discard():
+    js = _read("admin.js")
+    helpers = "\n".join(
+        [
+            _extract_decl(js, "const SETUP_OPERATION_LABELS"),
+            _extract_decl(js, "function isSetupOperationInProgress"),
+            _extract_decl(js, "function setupOperationInProgressMessage"),
+            "async function fetchSetupWorkflowSnapshot"
+            + _async_fn_body(js, "async function fetchSetupWorkflowSnapshot"),
+            "async function fetchOwningSetupWorkflowId"
+            + _async_fn_body(js, "async function fetchOwningSetupWorkflowId"),
+            _extract_decl(js, "async function discardActiveSetup"),
+        ]
+    )
+    preamble = """
+let setupWorkflowId = "wf-live";
+const identityWrites = [];
+function setSetupWorkflowId(value) { identityWrites.push(value); }
+function showSetupCleanupIncomplete() {}
+function setupCleanupStateFor() { return null; }
+global.fetch = async (url) => {
+  if (String(url).indexOf("/api/setup/workflow") === 0) {
+    return {
+      ok: true,
+      json: async () => ({
+        workflow: { workflow_id: "wf-live", status: "active", cleanup: {} },
+      }),
+    };
+  }
+  return {
+    ok: false,
+    status: 409,
+    json: async () => ({
+      ok: false,
+      error: "setup_operation_in_progress",
+      operation: "config_apply",
+    }),
+  };
+};
+"""
+    epilogue = """
+(async () => {
+  const result = await discardActiveSetup();
+  console.log(JSON.stringify({
+    ok: result.ok,
+    status: result.status,
+    error: result.data.error,
+    identityWrites: identityWrites,
+    message: setupOperationInProgressMessage(result.data),
+  }));
+})();
+"""
+    out = _run_node(preamble + helpers + "\n" + epilogue)
+    assert out["ok"] is False
+    assert out["status"] == 409
+    assert out["error"] == "setup_operation_in_progress"
+    # The local identity and draft survive: nothing was abandoned.
+    assert out["identityWrites"] == []
+    assert "applying the configuration" in out["message"]
+    assert "Nothing was discarded." in out["message"]

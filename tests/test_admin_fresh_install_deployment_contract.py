@@ -26,12 +26,14 @@ from admin.admin_update import (
 from admin.deployment import DeploymentService
 from admin.guided_upgrade import UpgradeJob
 from admin.operation_coordinator import OperationCoordinator
+from admin.setup_lifecycle import SetupLifecycleCoordinator
 from admin.image_identity import ImageIdentity
 from admin.known_good import KnownGoodStore
 from admin.server import ScanRegistry, create_server
 from admin.system_alignment import SystemAlignmentService
 from admin.system_build import SystemBuild
 from tests.admin_auth_helpers import auth_headers, authenticate
+from tests.helpers.setup_config import authorize_setup_mutation
 
 pytestmark = [pytest.mark.simulation, pytest.mark.system_build]
 
@@ -191,8 +193,11 @@ class _ScriptedDeployment(DeploymentService):
         self._on_healthcheck = None
         self._start_snapshot = None
 
-    def prepare(self, overwrite=False):
+    def prepare(self, overwrite=False, *, workflow_id=None, on_settled=None):
         self.prepare_calls += 1
+        self.prepare_workflow_id = workflow_id
+        if on_settled is not None:
+            on_settled()
         return {
             "ok": True,
             "status": 202,
@@ -216,10 +221,15 @@ class _ScriptedDeployment(DeploymentService):
             "images": [],
         }
 
-    def start(self, *, on_complete=None, on_healthcheck=None):
+    def start(
+        self, *, on_complete=None, on_healthcheck=None, workflow_id=None,
+        on_settled=None,
+    ):
         self.start_calls += 1
         self._on_complete = on_complete
         self._on_healthcheck = on_healthcheck
+        self.start_workflow_id = workflow_id
+        self._on_settled = on_settled
         self._start_snapshot = {
             "job_id": "start-1",
             "status": "running",
@@ -357,7 +367,7 @@ def _walk_to_started_deployment(base, deployment):
     status, _, written = _request(
         f"{base}/api/setup/config/write",
         method="POST",
-        body={
+        body=authorize_setup_mutation(base, _request, {
             "devices": [
                 {
                     "config_name": "inverter_1",
@@ -371,13 +381,15 @@ def _walk_to_started_deployment(base, deployment):
                 }
             ],
             "supported_grid_meter_count": 0,
-        },
+        }),
     )
     assert status == 200
     assert written["ok"] is True
 
     status, headers, prepared = _request(
-        f"{base}/api/setup/deployment/prepare", method="POST", body={}
+        f"{base}/api/setup/deployment/prepare",
+        method="POST",
+        body={"setup_workflow_id": _setup_workflow_id(base)},
     )
     assert status == 202
     assert headers["Content-Type"].startswith("application/json")
@@ -393,7 +405,9 @@ def _walk_to_started_deployment(base, deployment):
     assert _sample_transition(base)["stage"] == "resources_verified"
 
     status, _, started = _request(
-        f"{base}/api/setup/deployment/start", method="POST", body={}
+        f"{base}/api/setup/deployment/start",
+        method="POST",
+        body={"setup_workflow_id": _setup_workflow_id(base)},
     )
     assert status == 202
     assert started["job_id"] == "start-1"
@@ -534,6 +548,21 @@ def _cancel(base, operation_id):
         f"{base}/api/admin/system-alignment/cancel",
         method="POST",
         body={"operation_id": operation_id, "confirm": True},
+    )
+
+
+def _setup_workflow_id(base):
+    """The workflow id every Setup deployment route requires by name."""
+
+    workflow = (_request(f"{base}/api/setup/workflow")[2] or {}).get("workflow") or {}
+    return workflow.get("workflow_id")
+
+
+def _abandon(base):
+    return _request(
+        f"{base}/api/setup/abandon",
+        method="POST",
+        body={"setup_workflow_id": _setup_workflow_id(base)},
     )
 
 
@@ -701,23 +730,33 @@ def test_expired_running_transition_cancel_blocked_while_deployment_worker_live(
         assert transition["cancel_available"] is False
         assert transition["resume_available"] is False
 
+        # The narrow cancel never terminates a Setup-owned transition; the
+        # worker-aware refusal comes from the owning abandon route. The live
+        # deployment worker still owns its workflow, so the abandon is refused
+        # by the Setup lifecycle before the transition is even consulted.
         status, _, body = _cancel(base, operation_id)
         assert status == 409
-        assert body["error"] == "transition_worker_active"
+        assert body["error"] == "setup_abandon_required"
+        status, _, body = _abandon(base)
+        assert status == 409
+        assert body["error"] == "setup_operation_in_progress"
+        assert body["operation"] == "deployment_start"
         assert store.read().stage == "ems_operation_running"
 
-        # The Admin process restarts: the in-memory coordinator resets while the
+        # The Admin process restarts: both in-memory coordinators reset while the
         # durable transition survives. The orphan holds no claim and is escapable.
         srv.operation_coordinator = OperationCoordinator()
+        srv.setup_lifecycle = SetupLifecycleCoordinator()
 
         transition = _sample_transition(base)
         assert transition["worker_active"] is False
         assert transition["worker_status_available"] is True
         assert transition["cancel_available"] is True
 
-        status, _, cancelled = _cancel(base, operation_id)
+        status, _, abandoned = _abandon(base)
         assert status == 200
-        assert cancelled["stage"] == "cancelled"
+        assert abandoned["ok"] is True
+        assert abandoned["transition"]["stage"] == "cancelled"
         assert store.read().stage == "cancelled"
 
         # The orphaned worker later reaches its terminal callback: it must never

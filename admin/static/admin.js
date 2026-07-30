@@ -3521,6 +3521,10 @@ els.zendureCloudForget.addEventListener("click", forgetZendureCloudToken);
 // discovery update, but draft cards only redraw on structural changes.
 
 const CONFIG_DRAFT_STORAGE_KEY = "ems-admin-config-draft";
+// The live-config revision the draft was reviewed against. Stored beside the
+// draft so a reload restores the pair; without it the server refuses to mutate.
+const CONFIG_BASELINE_STORAGE_KEY = "ems-admin-config-baseline";
+const CONFIG_WORKFLOW_STORAGE_KEY = "ems-admin-setup-workflow";
 const CONFIG_DISMISSED_STORAGE_KEY = "ems-admin-config-dismissed";
 // Serials removed outright: the reconciler skips them over either transport.
 const CONFIG_DISMISSED_SERIALS_STORAGE_KEY = "ems-admin-config-dismissed-serials";
@@ -3565,7 +3569,201 @@ const configEls = {
   applyStatus: document.getElementById("config-apply-status"),
   applyRollback: document.getElementById("config-apply-rollback"),
   applyTarget: document.getElementById("config-apply-target"),
+  conflict: document.getElementById("setup-config-conflict"),
+  conflictMessage: document.getElementById("setup-config-conflict-message"),
+  conflictReview: document.getElementById("setup-config-conflict-review"),
+  conflictDiscard: document.getElementById("setup-config-conflict-discard"),
+  conflictDetails: document.getElementById("setup-config-conflict-details"),
+  conflictDetail: document.getElementById("setup-config-conflict-detail"),
+  workflowConflict: document.getElementById("setup-workflow-conflict"),
+  workflowConflictMessage: document.getElementById(
+    "setup-workflow-conflict-message"
+  ),
+  workflowConflictOpen: document.getElementById("setup-workflow-conflict-open"),
+  workflowConflictDiscard: document.getElementById(
+    "setup-workflow-conflict-discard"
+  ),
 };
+
+const SETUP_CONFLICT_MESSAGES = {
+  stale_setup_config:
+    "The live EMS configuration changed after this setup was opened. " +
+    "Your setup draft was not applied.",
+  setup_preview_required:
+    "Review the current configuration again before saving or applying it.",
+  setup_preview_mismatch:
+    "This setup changed after the displayed preview was created. Review the " +
+    "current configuration again before saving or applying it.",
+};
+
+// Workflow-identity conflicts are terminal for this tab's authority (unlike
+// preview conflicts, which a re-review repairs), so they get their own panel.
+const SETUP_WORKFLOW_CONFLICT_ERRORS = new Set([
+  "setup_workflow_required",
+  "setup_workflow_not_active",
+]);
+
+const SETUP_WORKFLOW_STALE_MESSAGE =
+  "This browser tab belongs to an older setup session and can no longer " +
+  "change the current workflow.";
+
+// A terminal operation was refused because a mutation still owns the workflow.
+// It is not an abandonment: the workflow, its draft and its identity stay.
+const SETUP_OPERATION_LABELS = {
+  config_write: "saving the generated configuration",
+  config_apply: "applying the configuration",
+  deployment_prepare: "preparing the deployment",
+  deployment_start: "starting EMS",
+  permission_repair: "repairing the workspace permissions",
+  container_conflict_resolution: "resolving a container conflict",
+};
+
+function isSetupOperationInProgress(data) {
+  return Boolean(data && data.error === "setup_operation_in_progress");
+}
+
+function setupOperationInProgressMessage(data) {
+  const label = SETUP_OPERATION_LABELS[(data && data.operation) || ""];
+  return (
+    "Setup is still " +
+    (label || "finishing another operation") +
+    ". Wait for it to finish, then try again. Nothing was discarded."
+  );
+}
+
+function isSetupConfigConflict(data) {
+  return Boolean(data && SETUP_CONFLICT_MESSAGES[data.error]);
+}
+
+function isSetupWorkflowConflict(data) {
+  return Boolean(data && SETUP_WORKFLOW_CONFLICT_ERRORS.has(data.error));
+}
+
+// Never clears the draft: the user keeps their work and chooses how to continue.
+function showSetupConfigConflict(data) {
+  if (!configEls.conflict) return;
+  const conflict = isSetupConfigConflict(data);
+  configEls.conflict.hidden = !conflict;
+  if (!conflict) return;
+  if (configEls.conflictMessage) {
+    configEls.conflictMessage.textContent = SETUP_CONFLICT_MESSAGES[data.error];
+  }
+  if (configEls.conflictDetail && configEls.conflictDetails) {
+    const detail = data.message || "";
+    configEls.conflictDetail.textContent = detail;
+    configEls.conflictDetails.hidden = !detail;
+  }
+}
+
+// The exact preview is spent or stale: a new one is only ever earned by a real
+// regeneration against the current live config, never by replaying the old ID.
+async function reviewCurrentSetupConfiguration() {
+  showSetupConfigConflict(null);
+  setConfigBaseline(null);
+  setSetupPreviewId(null);
+  await requestConfigPreview();
+}
+
+// This tab's workflow identity was refused: stop polling and mutating, keep
+// the user's draft visible, and let them explicitly rejoin or discard.
+function handleSetupWorkflowConflict(data) {
+  setupWorkflowStale = true;
+  // Supersede every in-flight preview generation. A preview response that was
+  // already on the wire describes a workflow the server has since refused; it
+  // must not repaint the preview, its verdict or its readiness afterwards.
+  configPreviewRequest += 1;
+  latestConfigPreview = null;
+  setSetupPreviewId(null);
+  setConfigExportReady(false);
+  if (configPreviewTimer) {
+    window.clearTimeout(configPreviewTimer);
+    configPreviewTimer = null;
+  }
+  if (configEls.previewReady) {
+    configEls.previewReady.textContent = "Session superseded";
+  }
+  if (configEls.workflowConflict) {
+    configEls.workflowConflict.hidden = false;
+    if (configEls.workflowConflictMessage) {
+      configEls.workflowConflictMessage.textContent =
+        (data && data.message) || SETUP_WORKFLOW_STALE_MESSAGE;
+    }
+  }
+}
+
+// The server's redacted workflow view: identity, lifecycle and cleanup state.
+async function fetchSetupWorkflowSnapshot() {
+  try {
+    const res = await fetch("/api/setup/workflow", { cache: "no-store" });
+    const data = await res.json();
+    if (!res.ok) return null;
+    const workflow = data && data.workflow;
+    return workflow && typeof workflow.workflow_id === "string" ? workflow : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+function setupCleanupBlocks(workflow) {
+  const cleanup = workflow && workflow.cleanup;
+  return Boolean(cleanup && cleanup.blocking === true);
+}
+
+// The workflow this tab may still act on. A terminal workflow whose cleanup has
+// not converged keeps its identity: it is the only id its retry can name.
+async function fetchCurrentSetupWorkflowId() {
+  const workflow = await fetchSetupWorkflowSnapshot();
+  if (!workflow) return null;
+  if (workflow.status === "active" || setupCleanupBlocks(workflow)) {
+    return workflow.workflow_id;
+  }
+  return null;
+}
+
+// Any destructive Setup action must name the workflow on record — including a
+// terminal one. Only a genuinely absent record yields null.
+async function fetchOwningSetupWorkflowId() {
+  const workflow = await fetchSetupWorkflowSnapshot();
+  return (workflow && workflow.workflow_id) || null;
+}
+
+// Rejoin the server's current workflow (or drop identity if none is active);
+// the local draft is kept and re-previewed under the adopted identity.
+async function openCurrentSetupWorkflow() {
+  const workflow = await fetchSetupWorkflowSnapshot();
+  if (workflow && setupCleanupBlocks(workflow)) {
+    // There is nothing to rejoin: the workflow is terminal and still owns files.
+    setupWorkflowId = workflow.workflow_id;
+    saveSetupWorkflowState();
+    showSetupCleanupIncomplete(workflow.cleanup);
+    return;
+  }
+  setSetupWorkflowId(workflow && workflow.status === "active" ? workflow.workflow_id : null);
+  if (configEls.workflowConflict) configEls.workflowConflict.hidden = true;
+  showSetupConfigConflict(null);
+  renderConfigPreview();
+}
+
+// Discard the active Setup through its backend owner. Returns the abandon
+// response; local identity is cleared only after the backend confirmed.
+async function discardActiveSetup() {
+  const current = await fetchOwningSetupWorkflowId();
+  const res = await fetch("/api/setup/abandon", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(current ? { setup_workflow_id: current } : {}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (isSetupOperationInProgress(data)) {
+    // Another Setup operation still owns the workflow: nothing was discarded,
+    // so the local identity and draft must stay exactly as they are.
+    return { ok: false, status: res.status, data };
+  }
+  if (res.ok && data.ok === true) {
+    setSetupWorkflowId(null);
+  }
+  return { ok: res.ok && data.ok === true, status: res.status, data };
+}
 
 let activeConfigTemplate = null;
 let activeConfigTemplateTag = null;
@@ -3576,6 +3774,15 @@ let configPreviewTimer = null;
 // Flat, ordered list of draft items keyed by their discovery source id. Order
 // is display order; inverter numbering and preview grouping derive from it.
 let configDraftItems = loadConfigDraft();
+let setupConfigBaseline = loadConfigBaseline();
+// Server-owned mutation authority: the durable workflow identity plus the
+// exact preview the server issued for the current draft. The browser renders
+// them but never invents them; both clear only on confirmed backend lifecycle
+// events (abandon, supersede) or when the server refuses them.
+let setupWorkflowState = loadSetupWorkflowState();
+let setupWorkflowId = setupWorkflowState.workflow_id;
+let setupConfigPreviewId = setupWorkflowState.preview_id;
+let setupWorkflowStale = false;
 upgradeStoredInverterNames();
 // Source ids the user removed/cleared: auto-config must not re-add these, so a
 // manual "Remove" or "Clear draft" is not undone by the next discovery poll.
@@ -3625,6 +3832,96 @@ function saveFeatureValues() {
     );
   } catch (err) {
     /* localStorage may be unavailable; feature values still live in memory. */
+  }
+}
+
+function isConfigBaseline(value) {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      typeof value.expect_absent === "boolean" &&
+      (value.expected_revision === null ||
+        typeof value.expected_revision === "string")
+  );
+}
+
+function loadConfigBaseline() {
+  try {
+    const raw = window.localStorage.getItem(CONFIG_BASELINE_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return isConfigBaseline(parsed) ? parsed : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+function loadSetupWorkflowState() {
+  try {
+    const raw = window.localStorage.getItem(CONFIG_WORKFLOW_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      typeof parsed.workflow_id === "string" &&
+      parsed.workflow_id
+    ) {
+      return {
+        workflow_id: parsed.workflow_id,
+        preview_id:
+          typeof parsed.preview_id === "string" && parsed.preview_id
+            ? parsed.preview_id
+            : null,
+      };
+    }
+  } catch (err) {
+    /* localStorage may be unavailable; identity then lives in memory only. */
+  }
+  return { workflow_id: null, preview_id: null };
+}
+
+function saveSetupWorkflowState() {
+  try {
+    if (setupWorkflowId) {
+      window.localStorage.setItem(
+        CONFIG_WORKFLOW_STORAGE_KEY,
+        JSON.stringify({
+          workflow_id: setupWorkflowId,
+          preview_id: setupConfigPreviewId,
+        })
+      );
+    } else {
+      window.localStorage.removeItem(CONFIG_WORKFLOW_STORAGE_KEY);
+    }
+  } catch (err) {
+    /* localStorage may be unavailable; identity then lives in memory only. */
+  }
+}
+
+function setSetupWorkflowId(value) {
+  setupWorkflowId = typeof value === "string" && value ? value : null;
+  if (!setupWorkflowId) setupConfigPreviewId = null;
+  setupWorkflowStale = false;
+  saveSetupWorkflowState();
+}
+
+function setSetupPreviewId(value) {
+  setupConfigPreviewId = typeof value === "string" && value ? value : null;
+  saveSetupWorkflowState();
+}
+
+function setConfigBaseline(value) {
+  setupConfigBaseline = isConfigBaseline(value) ? value : null;
+  try {
+    if (setupConfigBaseline) {
+      window.localStorage.setItem(
+        CONFIG_BASELINE_STORAGE_KEY,
+        JSON.stringify(setupConfigBaseline)
+      );
+    } else {
+      window.localStorage.removeItem(CONFIG_BASELINE_STORAGE_KEY);
+    }
+  } catch (err) {
+    /* localStorage may be unavailable; the baseline still lives in memory. */
   }
 }
 
@@ -6609,6 +6906,13 @@ function configDraftPreview() {
 function renderConfigPreview() {
   if (!configEls.preview) return;
   latestConfigPreview = null;
+  // Supersede any in-flight preview: its response describes a draft (and a
+  // workflow identity) that is no longer the current one, so it must not paint
+  // a verdict or a conflict over this render.
+  configPreviewRequest += 1;
+  // A config-affecting change immediately revokes the exact preview authority;
+  // Apply/Write stay disabled until the new preview succeeds.
+  setSetupPreviewId(null);
   configEls.preview.textContent = "{}";
   setConfigExportReady(false);
   if (configEls.exportStatus) configEls.exportStatus.hidden = true;
@@ -6619,6 +6923,7 @@ function renderConfigPreview() {
 }
 
 async function requestConfigPreview() {
+  if (setupWorkflowStale) return;
   const requestId = ++configPreviewRequest;
   const generation = guidedSetupGeneration;
   try {
@@ -6626,6 +6931,7 @@ async function requestConfigPreview() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        setup_workflow_id: setupWorkflowId,
         devices: configDraftItems,
         supported_grid_meter_count: supportedGridMeters().length,
         features: featureValues,
@@ -6634,10 +6940,21 @@ async function requestConfigPreview() {
         zendure_mqtt_manual_devices: manualMqttDevicesPayload(),
       }),
     });
+    // Re-check after every await: a workflow conflict raised by another request
+    // while this one was in flight has already revoked this tab's authority.
+    if (setupWorkflowStale || requestId !== configPreviewRequest) return;
     const data = await res.json();
+    if (setupWorkflowStale) return;
     if (requestId !== configPreviewRequest || generation !== guidedSetupGeneration) return;
+    if (isSetupWorkflowConflict(data)) {
+      handleSetupWorkflowConflict(data);
+      return;
+    }
     if (!res.ok) throw new Error(data.error || "Config preview unavailable.");
     latestConfigPreview = data;
+    setSetupPreviewId(data.config_preview_id || null);
+    setConfigBaseline(data.config_revision);
+    showSetupConfigConflict(null);
     configEls.preview.textContent = JSON.stringify(data.config || {}, null, 2);
     setConfigExportReady(Boolean(data.ready));
     if (configEls.previewReady) {
@@ -6662,7 +6979,8 @@ async function requestConfigPreview() {
     renderConfigValidation();
     notifySetupStatus();
   } catch (err) {
-    if (requestId !== configPreviewRequest) return;
+    // A delayed failure must not repaint a superseded tab either.
+    if (setupWorkflowStale || requestId !== configPreviewRequest) return;
     latestConfigPreview = {
       ready: false,
       validation: {
@@ -6679,7 +6997,11 @@ async function requestConfigPreview() {
 }
 
 function configExportBody(overwrite) {
+  // Mutation authority is the workflow ID plus the exact server-issued
+  // preview ID; the raw live revision is display-only and never sent back.
   return {
+    setup_workflow_id: setupWorkflowId,
+    config_preview_id: setupConfigPreviewId,
     devices: configDraftItems,
     supported_grid_meter_count: supportedGridMeters().length,
     features: featureValues,
@@ -6691,9 +7013,12 @@ function configExportBody(overwrite) {
 }
 
 // Selected Zendure MQTT proposals are allowed in the generated config, so
-// export/apply readiness follows the backend preview alone.
+// export/apply readiness follows the backend preview alone — and mutations
+// additionally need the exact preview ID the server issued for it.
 function configExportAllowed() {
-  return Boolean(latestConfigPreview && latestConfigPreview.ready);
+  return Boolean(
+    latestConfigPreview && latestConfigPreview.ready && setupConfigPreviewId
+  );
 }
 
 function setConfigExportReady(ready) {
@@ -6774,6 +7099,17 @@ async function applyGeneratedConfig() {
     });
     const data = await res.json();
     showCredentialRollbackWarning(configEls.applyRollback, data);
+    if (isSetupWorkflowConflict(data)) {
+      handleSetupWorkflowConflict(data);
+      showConfigApplyStatus(SETUP_WORKFLOW_STALE_MESSAGE, "error");
+      return;
+    }
+    if (isSetupConfigConflict(data)) {
+      setSetupPreviewId(null);
+      showSetupConfigConflict(data);
+      showConfigApplyStatus(SETUP_CONFLICT_MESSAGES[data.error], "error");
+      return;
+    }
     if (!res.ok || !data.ok) {
       throw new Error(configExportError(data, "Could not apply the config."));
     }
@@ -6960,6 +7296,38 @@ if (configEls.download) {
 if (configEls.apply) {
   configEls.apply.addEventListener("click", applyGeneratedConfig);
 }
+if (configEls.conflictReview) {
+  configEls.conflictReview.addEventListener("click", reviewCurrentSetupConfiguration);
+}
+if (configEls.conflictDiscard) {
+  configEls.conflictDiscard.addEventListener("click", startGuidedSetupOver);
+}
+
+if (configEls.workflowConflictOpen) {
+  configEls.workflowConflictOpen.addEventListener(
+    "click",
+    openCurrentSetupWorkflow
+  );
+}
+
+if (configEls.workflowConflictDiscard) {
+  // Drop only this tab's local draft, then rejoin whatever workflow is
+  // current; the server-side setup of the newer session stays untouched.
+  configEls.workflowConflictDiscard.addEventListener("click", async () => {
+    configDraftItems = [];
+    try {
+      window.localStorage.removeItem(CONFIG_DRAFT_STORAGE_KEY);
+    } catch (err) {
+      /* localStorage may be unavailable; draft still lives in memory. */
+    }
+    setConfigBaseline(null);
+    clearMqttSelection();
+    clearFeatureValues();
+    renderConfigDraft();
+    renderConfigAvailable();
+    await openCurrentSetupWorkflow();
+  });
+}
 
 if (configEls.draftList) {
   configEls.draftList.addEventListener("click", (event) => {
@@ -7078,6 +7446,8 @@ if (configEls.clearDraft) {
     } catch (err) {
       /* ignore */
     }
+    setConfigBaseline(null);
+    showSetupConfigConflict(null);
     // Clear the MQTT selection in lockstep so the two draft halves stay in sync.
     clearMqttSelection();
     renderConfigDraft();
@@ -7267,6 +7637,8 @@ let startJobTimer = null;
 // Bumped by "Start over" so an async response begun before the reset can detect
 // it is stale and refuse to repopulate the freshly reset wizard.
 let guidedSetupGeneration = 0;
+// Start over awaits the backend abandon; a second click must not race it.
+let startOverRunning = false;
 
 let setupInitialized = false;
 let devicesDiscoveryStarted = false;
@@ -7556,6 +7928,19 @@ async function continueFromConfig() {
       body: JSON.stringify(configExportBody(true)),
     });
     const data = await res.json();
+    if (isSetupWorkflowConflict(data)) {
+      handleSetupWorkflowConflict(data);
+      showSetupNavError(SETUP_WORKFLOW_STALE_MESSAGE);
+      renderSetupNav();
+      return;
+    }
+    if (isSetupConfigConflict(data)) {
+      setSetupPreviewId(null);
+      showSetupConfigConflict(data);
+      showSetupNavError(SETUP_CONFLICT_MESSAGES[data.error]);
+      renderSetupNav();
+      return;
+    }
     if (!res.ok || data.ok === false) {
       throw new Error(configExportError(data, "Could not save the generated config."));
     }
@@ -7855,7 +8240,10 @@ async function prepareDeployment(overwrite) {
     const res = await fetch("/api/setup/deployment/prepare", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ overwrite: Boolean(overwrite) }),
+      body: JSON.stringify({
+        setup_workflow_id: setupWorkflowId,
+        overwrite: Boolean(overwrite),
+      }),
     });
     const data = await res.json();
     if (res.status === 409 && data.reason === "existing_install_conflict") {
@@ -8258,7 +8646,7 @@ async function startDeployment() {
     const res = await fetch("/api/setup/deployment/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ setup_workflow_id: setupWorkflowId }),
     });
     const data = await res.json();
     if (data && data.transition) {
@@ -8316,7 +8704,7 @@ async function repairWorkspacePermissions() {
     const res = await fetch("/api/setup/deployment/repair-permissions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ setup_workflow_id: setupWorkflowId }),
     });
     const data = await res.json();
     if (!res.ok || data.ok === false) {
@@ -8354,6 +8742,7 @@ async function resolveContainerConflict() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        setup_workflow_id: setupWorkflowId,
         container_name: conflict.container_name,
         action: replace
           ? "replace_running_and_continue"
@@ -8476,7 +8865,7 @@ async function onReleaseSelectChange() {
   }
   renderReleaseResources();
   try {
-    await cancelSupersededFreshInstallTransition(value, previousTag);
+    await supersedeSetupBuild(value, previousTag);
   } catch (err) {
     systemBuildState.status = SYSTEM_BUILD_STATUS.FAILED;
     systemBuildState.failedAction = "validate";
@@ -8826,10 +9215,10 @@ document.querySelectorAll("[data-setup-step]").forEach((button) => {
   button.addEventListener("click", () => setActiveStep(button.dataset.setupStep));
 });
 const START_OVER_CONFIRM =
-  "Start Guided Setup again?\n\n" +
-  "This clears the current setup selections, discovered-device draft, generated " +
-  "configuration preview and setup progress.\n\n" +
-  "It does not delete an installed EMS system, existing configuration, runtime " +
+  "Restart Guided Setup?\n\n" +
+  "This removes the current setup draft, generated configuration, deployment " +
+  "plan and setup progress, then returns to the first setup step.\n\n" +
+  "It does not change the installed EMS system, live configuration, runtime " +
   "data, containers, volumes or backups.";
 
 function clearFeatureValues() {
@@ -8839,6 +9228,22 @@ function clearFeatureValues() {
   } catch (err) {
     /* localStorage may be unavailable; feature values still live in memory. */
   }
+}
+
+// Restart the lifecycle a still-active Setup state needs after a refused reset.
+// Both pollers clear their own timer and capture the current generation, so this
+// can neither duplicate a timer nor revive a request the reset superseded.
+function resumeGuidedSetupLifecycle() {
+  loadSystemAlignmentStatus();
+  const deployment = setupState.deployment;
+  if (deployment.status === "running" && deployment.job_id) {
+    pollDeploymentJob(deployment.job_id);
+  }
+  const start = setupState.start;
+  if (start.status === "running" && start.job_id) {
+    pollStartJob(start.job_id);
+  }
+  if (setupState.activeStep === "config") renderConfigPreview();
 }
 
 // Stop every Guided Setup-owned timer/poll. Unrelated global Admin timers (mDNS
@@ -8858,17 +9263,67 @@ function clearGuidedSetupTimers() {
   }
 }
 
-// Resets only the Guided Setup draft/wizard session. It never calls a deployment,
+// Resets the Guided Setup session, browser and backend. The only request it
+// makes is the backend-owned abandon, which drops Setup's own transition,
+// generated config and deployment marker; it never calls a deployment,
 // container, volume, backup or live-config deletion endpoint, so an already
 // installed EMS system, its config/data, containers, volumes and backups are
 // left untouched. The prepared-release cache is harmless and is kept.
-function startGuidedSetupOver() {
+async function startGuidedSetupOver() {
   if (!window.confirm(START_OVER_CONFIRM)) return;
+  if (startOverRunning) return;
+  startOverRunning = true;
 
   // Invalidate any in-flight wizard response and stop all wizard timers first,
-  // so nothing repopulates the state we are about to reset.
+  // so nothing repopulates state while the abandon request is in flight.
   guidedSetupGeneration += 1;
   clearGuidedSetupTimers();
+
+  // The backend owns the durable Setup state (pending transition, generated
+  // config, deployment marker), so it is abandoned first. Only once that
+  // succeeds is the browser state cleared — otherwise the console would look
+  // reset while the server still blocks Maintenance on the old workflow.
+  try {
+    // The workflow must be named exactly: an empty request is never authority
+    // over whatever workflow happens to be stored.
+    const workflowId = setupWorkflowId || (await fetchOwningSetupWorkflowId());
+    const res = await fetch("/api/setup/abandon", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(
+        workflowId ? { setup_workflow_id: workflowId } : {}
+      ),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (isSetupOperationInProgress(data)) {
+      throw new Error(setupOperationInProgressMessage(data));
+    }
+    if (setupCleanupStateFor(data) !== null) {
+      showSetupCleanupIncomplete(data);
+      throw new Error(
+        data.message || "Some temporary setup files could not be removed."
+      );
+    }
+    if (!res.ok || data.ok !== true) {
+      throw new Error(
+        data.message || data.error || "The setup state could not be cleared."
+      );
+    }
+  } catch (err) {
+    startOverRunning = false;
+    showError(
+      "Could not reset Guided Setup: " +
+        (err.message || String(err)) +
+        " Your installed EMS system was not changed."
+    );
+    setStatus("Guided Setup was not reset.", "is-error");
+    // The workflow is still live, so its polling must come back with it.
+    resumeGuidedSetupLifecycle();
+    return;
+  }
+  startOverRunning = false;
+  // The old workflow is terminal on the backend; only now drop its identity.
+  setSetupWorkflowId(null);
 
   // Discovery session and device caches.
   resetDiscoverySession(discoverySessions.setup);
@@ -8888,6 +9343,8 @@ function startGuidedSetupOver() {
   } catch (err) {
     /* localStorage may be unavailable; draft still lives in memory. */
   }
+  setConfigBaseline(null);
+  showSetupConfigConflict(null);
   configDismissed.clear();
   dismissedSerials.clear();
   try {
@@ -8910,6 +9367,19 @@ function startGuidedSetupOver() {
   setupState.start = createInitialStartState();
   clearSetupOperationContext();
 
+  // Continue under a fresh workflow identity (and one-shot intent) so the
+  // restarted wizard can mutate again without returning to the start gate.
+  try {
+    const { result } = await postStartPath("setup_new", false);
+    if (result.ok && result.setup_workflow_id) {
+      setupIntentId = result.setup_intent_id || setupIntentId;
+      setSetupWorkflowId(result.setup_workflow_id);
+      freshSetupConfirmationRequired = false;
+    }
+  } catch (err) {
+    /* The start gate re-issues identity on the next explicit entry. */
+  }
+
   showError("");
   showSetupNavError("");
   setActiveStep("release");
@@ -8921,6 +9391,7 @@ function startGuidedSetupOver() {
   renderConfigPreview();
   renderDeployment();
   renderStart();
+  loadSystemAlignmentStatus();
   setStatus("Guided Setup reset. Your installed EMS system was not changed.", "is-done");
 }
 
@@ -8987,6 +9458,31 @@ function initSetupWizard() {
   loadReleases();
   loadSetupCatalog();
   refreshDeploymentStatus();
+  restoreSetupWorkflowFromServer();
+}
+
+// After a reload or an Admin restart the backend record is the one workflow
+// interpretation: adopt the active identity (or drop a stale local one) and
+// re-establish the exact preview for the restored draft.
+async function restoreSetupWorkflowFromServer() {
+  const workflow = await fetchSetupWorkflowSnapshot();
+  if (workflow && setupCleanupBlocks(workflow)) {
+    // A reload must not look like a clean slate: the workflow is terminal but
+    // still owns files, so keep its id (the retry needs it) and say so.
+    setupWorkflowId = workflow.workflow_id;
+    setupConfigPreviewId = null;
+    saveSetupWorkflowState();
+    showSetupCleanupIncomplete(workflow.cleanup);
+    return;
+  }
+  showSetupCleanupIncomplete(null);
+  const current =
+    workflow && workflow.status === "active" ? workflow.workflow_id : null;
+  const changed = current !== setupWorkflowId;
+  if (changed) setSetupWorkflowId(current);
+  if (changed && setupState.activeStep === "config") {
+    renderConfigPreview();
+  }
 }
 
 // --- start gate ----------------------------------------------------------
@@ -10896,45 +11392,44 @@ function upgradeValidationAccepted(ok, data) {
   );
 }
 
-// Cancel an abandoned fresh_install/automated_setup transition (a live
-// guided_upgrade is left to its own resume path).
-async function cancelBlockingSetupTransition() {
-  const statusRes = await fetch("/api/admin/system-alignment/status", {
-    cache: "no-store",
-  });
-  const status = await statusRes.json().catch(() => ({}));
-  if (!statusRes.ok) {
-    throw new Error(status.message || status.error || "transition status is unavailable");
+// An unresolved Guided Setup blocks upgrade validation server-side. Resolving
+// it is the Setup owner's job: an explicit Discard setup confirmation, the
+// backend abandon operation (which removes the Setup transition together with
+// its artifacts), and only then may validation start.
+async function resolveSetupConflictForUpgrade() {
+  if (!window.confirm(DISCARD_SETUP_CONFIRM)) {
+    return {
+      ok: false,
+      message: "Discard the unfinished setup before validating an upgrade.",
+    };
   }
-  const transition = status && status.transition;
-  if (
-    !transition ||
-    !status.active ||
-    transition.stage === "completed" ||
-    transition.stage === "cancelled" ||
-    (transition.mode !== "fresh_install" &&
-      transition.mode !== "automated_setup")
-  ) {
-    return false;
+  const discarded = await discardActiveSetup();
+  if (discarded.ok) {
+    showSetupCleanupIncomplete(null);
+    loadSystemAlignmentStatus();
+    return { ok: true };
   }
-  if (!transition.operation_id) {
-    throw new Error("the incomplete setup has no cancellable operation id");
+  if (isSetupOperationInProgress(discarded.data)) {
+    return { ok: false, message: setupOperationInProgressMessage(discarded.data) };
   }
-  const cancelRes = await fetch("/api/admin/system-alignment/cancel", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ operation_id: transition.operation_id, confirm: true }),
-  });
-  const cancelled = await cancelRes.json().catch(() => ({}));
-  if (!cancelRes.ok || cancelled.stage !== "cancelled") {
-    throw new Error(
-      cancelled.message ||
-        cancelled.error ||
-        "the incomplete setup could not be cancelled"
-    );
+  const cleanupState = setupCleanupStateFor(discarded.data);
+  if (cleanupState !== null) {
+    showSetupCleanupIncomplete(discarded.data);
+    return {
+      ok: false,
+      message:
+        cleanupState === "review_required"
+          ? SETUP_CLEANUP_REVIEW_MESSAGE
+          : "Setup has stopped, but some temporary setup files could not be " +
+            "removed. Retry cleanup, then verify the build again.",
+    };
   }
-  renderSystemAlignmentStatus(cancelled);
-  return true;
+  return {
+    ok: false,
+    message:
+      (discarded.data && (discarded.data.message || discarded.data.error)) ||
+      "The unfinished setup could not be discarded.",
+  };
 }
 
 // The explicit verification: download or reuse the Admin/EMS images and verify
@@ -10973,34 +11468,56 @@ async function prepareUpgradeTarget() {
   renderUpgradePlan();
   const stale = () =>
     generation !== upgradeState.validationGeneration || tag !== upgradeState.selected;
-  // Clear an abandoned setup-mode transition that would block the upgrade.
-  try {
-    await cancelBlockingSetupTransition();
-  } catch (err) {
-    if (stale()) return;
-    upgradeState.prepared = false;
-    upgradeState.preparedTag = null;
-    upgradeState.status = "failed";
-    upgradeState.error =
-      "Could not clear an incomplete setup: " + (err.message || String(err));
-    resetSystemAlignmentPresentation(tag, "validation_failed", upgradeState.error);
-    renderUpgradeBadges(upgradeSelectedRelease());
-    setUpgradeReleaseStatus();
-    renderUpgradePlan();
-    return;
-  }
-  if (stale()) return;
   const body = { tag };
   if (upgradeSelectedIsDevelopment() && upgradeDevAckSatisfied()) {
     body.acknowledge_risk = true;
   }
   try {
-    const res = await fetch("/api/admin/maintenance/upgrade/validate", {
+    let res = await fetch("/api/admin/maintenance/upgrade/validate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    const data = await res.json().catch(() => ({}));
+    let data = await res.json().catch(() => ({}));
+    if (stale()) return;
+    if (res.status === 409 && data && data.error === "setup_cleanup_required") {
+      // A terminal Setup whose cleanup has not converged owns the files it left
+      // behind. Only its own retry can unblock the upgrade — never a new abandon.
+      showSetupCleanupIncomplete(data);
+      upgradeState.prepared = false;
+      upgradeState.preparedTag = null;
+      upgradeState.status = "failed";
+      upgradeState.error = data.message || SETUP_CLEANUP_PENDING_MESSAGE;
+      resetSystemAlignmentPresentation(tag, "validation_failed", upgradeState.error);
+      renderUpgradeBadges(upgradeSelectedRelease());
+      setUpgradeReleaseStatus();
+      renderUpgradePlan();
+      return;
+    }
+    if (res.status === 409 && data && data.error === "setup_abandon_required") {
+      // The server blocks validation while Guided Setup owns unresolved state.
+      // Resolution goes through the Setup owner (explicit Discard setup), and
+      // its artifacts must be gone before validation starts.
+      const resolved = await resolveSetupConflictForUpgrade();
+      if (stale()) return;
+      if (!resolved.ok) {
+        upgradeState.prepared = false;
+        upgradeState.preparedTag = null;
+        upgradeState.status = "failed";
+        upgradeState.error = resolved.message;
+        resetSystemAlignmentPresentation(tag, "validation_failed", upgradeState.error);
+        renderUpgradeBadges(upgradeSelectedRelease());
+        setUpgradeReleaseStatus();
+        renderUpgradePlan();
+        return;
+      }
+      res = await fetch("/api/admin/maintenance/upgrade/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      data = await res.json().catch(() => ({}));
+    }
     // A superseded verification never applies its verdict: a newer selection, or
     // a changed target, wins.
     if (stale()) return;
@@ -15851,11 +16368,12 @@ async function startPath(choice) {
       return;
     }
     if (result.route === "setup") {
-      if (!result.setup_intent_id) {
+      if (!result.setup_intent_id || !result.setup_workflow_id) {
         setStartError("Fresh Setup confirmation was not recorded. Try again.");
         return;
       }
       setupIntentId = result.setup_intent_id;
+      setSetupWorkflowId(result.setup_workflow_id);
       enterSetup();
       return;
     }
@@ -15899,7 +16417,163 @@ const systemAlignmentEls = {
   resume: document.getElementById("system-alignment-resume"),
   returnToRunning: document.getElementById("system-alignment-return"),
   abandon: document.getElementById("system-alignment-abandon"),
+  retryCleanup: document.getElementById("system-alignment-retry-cleanup"),
 };
+
+// The recovery action is chosen by the transition's owner, never by the panel:
+// Setup-owned transitions discard their artifacts, an upgrade only cancels.
+const SETUP_TRANSITION_MODES = new Set(["fresh_install", "automated_setup"]);
+
+const DISCARD_SETUP_CONFIRM =
+  "Discard this setup?\n\n" +
+  "The current setup draft, generated configuration, deployment plan and " +
+  "setup progress will be removed.\n\n" +
+  "The installed EMS system, live configuration, runtime data, containers, " +
+  "volumes and backups will not be changed.";
+
+const CANCEL_UPGRADE_CONFIRM =
+  "Cancel this upgrade?\n\n" +
+  "The System Build transition stops here and the console returns to the " +
+  "normal setup and upgrade choices.\n\n" +
+  "The running EMS build, live configuration and backups are left as they are.";
+
+const SETUP_CLEANUP_PENDING_MESSAGE =
+  "Setup has stopped. Temporary files remain. No new Setup or Upgrade can " +
+  "start until cleanup succeeds. The live config and the running EMS were not " +
+  "changed by the failed cleanup.";
+
+const SETUP_CLEANUP_REVIEW_MESSAGE =
+  "Setup has stopped. Files remain that cannot be proven to belong to this " +
+  "setup, so they were kept for review. No new Setup or Upgrade can start " +
+  "until they are resolved. The live config and the running EMS were not " +
+  "changed.";
+
+// Which unresolved cleanup state a backend response describes, or null when the
+// response reports none. "pending" is a failed removal a retry can converge;
+// "review_required" needs an operator, so a retry is not offered as a fix.
+function setupCleanupStateFor(data) {
+  if (!data) return null;
+  if (data.error === "abandon_cleanup_incomplete") return "pending";
+  if (data.error === "setup_artifact_review_required") return "review_required";
+  const cleanup =
+    (data.workflow && data.workflow.cleanup) ||
+    (typeof data.state === "string" ? data : null) ||
+    (data.cleanup_state ? { state: data.cleanup_state, blocking: true } : null);
+  if (!cleanup) return null;
+  if (data.error !== "setup_cleanup_required" && cleanup.blocking !== true) {
+    return null;
+  }
+  return cleanup.state === "review_required" ? "review_required" : "pending";
+}
+
+// An unfinished cleanup is durable backend state, so it outlives a transition
+// status poll: the renderer must not erase it, and the card that carries the
+// retry has to stay reachable once the transition itself is already terminal.
+let setupCleanupState = null;
+
+function setupCleanupWarningText() {
+  if (setupCleanupState === "review_required") return SETUP_CLEANUP_REVIEW_MESSAGE;
+  if (setupCleanupState === "pending") return SETUP_CLEANUP_PENDING_MESSAGE;
+  return null;
+}
+
+// Truthful partial cleanup: the transition may already be gone while files
+// remain, so the panel says so and offers a retry instead of "done".
+function showSetupCleanupIncomplete(data) {
+  setupCleanupState = setupCleanupStateFor(data);
+  renderSetupCleanupRecovery();
+}
+
+function renderSetupCleanupRecovery() {
+  const text = setupCleanupWarningText();
+  if (systemAlignmentEls.warning && text !== null) {
+    systemAlignmentEls.warning.textContent = text;
+    systemAlignmentEls.warning.hidden = false;
+  } else if (systemAlignmentEls.warning && setupCleanupState === null) {
+    systemAlignmentEls.warning.hidden = true;
+  }
+  if (systemAlignmentEls.partial && setupCleanupState !== null) {
+    systemAlignmentEls.partial.hidden = false;
+  }
+  if (systemAlignmentEls.partialMessage && text !== null) {
+    systemAlignmentEls.partialMessage.textContent = text;
+  }
+  if (systemAlignmentEls.retryCleanup) {
+    // Only a failed removal converges on a retry; an unknown owner needs an
+    // operator, so the action is not offered as if it would help.
+    systemAlignmentEls.retryCleanup.hidden = setupCleanupState !== "pending";
+  }
+  // While cleanup owns the workflow, no other recovery action applies.
+  for (const element of [
+    systemAlignmentEls.resume,
+    systemAlignmentEls.returnToRunning,
+    systemAlignmentEls.abandon,
+  ]) {
+    if (element && setupCleanupState !== null) element.hidden = true;
+  }
+}
+
+async function retrySetupCleanup() {
+  try {
+    // The retry must name the workflow that owns the failed cleanup; the server
+    // record is the authority for which one that is.
+    const workflowId = await fetchOwningSetupWorkflowId();
+    if (!workflowId) {
+      showSetupCleanupIncomplete(null);
+      loadSystemAlignmentStatus();
+      return;
+    }
+    const res = await fetch("/api/setup/abandon", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ setup_workflow_id: workflowId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (isSetupOperationInProgress(data)) {
+      if (systemAlignmentEls.warning) {
+        systemAlignmentEls.warning.textContent =
+          setupOperationInProgressMessage(data);
+        systemAlignmentEls.warning.hidden = false;
+      }
+      return;
+    }
+    if (setupCleanupStateFor(data) !== null) {
+      showSetupCleanupIncomplete(data);
+      return;
+    }
+    if (!res.ok || data.ok !== true) {
+      throw new Error(data.message || data.error || "Cleanup did not finish.");
+    }
+    showSetupCleanupIncomplete(null);
+    setSetupWorkflowId(null);
+    loadSystemAlignmentStatus();
+  } catch (err) {
+    if (systemAlignmentEls.warning) {
+      systemAlignmentEls.warning.textContent = err.message || String(err);
+      systemAlignmentEls.warning.hidden = false;
+    }
+  }
+}
+
+function recoveryActionFor(mode) {
+  if (SETUP_TRANSITION_MODES.has(mode)) {
+    return {
+      owner: "guided_setup",
+      label: "Discard setup",
+      endpoint: "/api/setup/abandon",
+      confirm: DISCARD_SETUP_CONFIRM,
+    };
+  }
+  if (mode === "guided_upgrade") {
+    return {
+      owner: "guided_upgrade",
+      label: "Cancel upgrade",
+      endpoint: "/api/admin/system-alignment/cancel",
+      confirm: CANCEL_UPGRADE_CONFIRM,
+    };
+  }
+  return null;
+}
 
 const SYSTEM_ALIGNMENT_STAGE_ORDER = [
   "select",
@@ -16295,8 +16969,17 @@ function applySystemBuildAlignment() {
   notifySetupStatus();
 }
 
-async function cancelSupersededFreshInstallTransition(nextTag, previousTag) {
+// Changing the selected System Build after a previous choice retires the old
+// Setup workflow as ONE backend operation: the server cancels its transition,
+// removes its preview and artifacts, marks it superseded and returns the
+// replacement workflow with a fresh one-shot intent. The browser never
+// composes cancel + reset + new intent itself.
+async function supersedeSetupBuild(nextTag, previousTag) {
   if (!nextTag || nextTag === previousTag) return false;
+  if (!setupWorkflowId) return false;
+  // Only an existing Setup-owned transition for a *different* build has to be
+  // retired. Selecting a build before any transition exists, or re-selecting
+  // the one the transition already targets, changes nothing on the server.
   const statusRes = await fetch("/api/admin/system-alignment/status", {
     cache: "no-store",
   });
@@ -16310,42 +16993,32 @@ async function cancelSupersededFreshInstallTransition(nextTag, previousTag) {
     transition.system_tag === nextTag ||
     transition.stage === "completed" ||
     transition.stage === "cancelled" ||
-    (transition.mode !== "fresh_install" &&
-      transition.mode !== "automated_setup")
+    !SETUP_TRANSITION_MODES.has(transition.mode)
   ) {
     return false;
   }
-  if (!transition.operation_id) {
-    throw new Error("the previous System Build has no cancellable operation id");
-  }
-  const cancelRes = await fetch("/api/admin/system-alignment/cancel", {
+  const res = await fetch("/api/setup/system-build/supersede", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ operation_id: transition.operation_id, confirm: true }),
+    body: JSON.stringify({ setup_workflow_id: setupWorkflowId, tag: nextTag }),
   });
-  const cancelled = await cancelRes.json().catch(() => ({}));
-  if (!cancelRes.ok || cancelled.stage !== "cancelled") {
+  const data = await res.json().catch(() => ({}));
+  if (isSetupWorkflowConflict(data)) {
+    handleSetupWorkflowConflict(data);
+    throw new Error(data.message || SETUP_WORKFLOW_STALE_MESSAGE);
+  }
+  if (!res.ok || data.ok !== true || !data.setup_workflow_id) {
     throw new Error(
-      cancelled.message ||
-        cancelled.error ||
-        "the previous System Build operation could not be cancelled"
+      data.message ||
+        data.error ||
+        "the previous System Build could not be superseded"
     );
   }
   clearSetupOperationContext();
-  if (!setupIntentId) {
-    const { result } = await postStartPath("setup_new", false);
-    if (result.requires_confirmation) {
-      throw new Error(
-        "confirm Fresh Setup again from the start screen before changing builds"
-      );
-    }
-    if (!result.ok || !result.setup_intent_id) {
-      throw new Error(result.message || "a new Fresh Setup intent could not be created");
-    }
-    setupIntentId = result.setup_intent_id;
-    freshSetupConfirmationRequired = false;
-  }
-  renderSystemAlignmentStatus(cancelled);
+  setupIntentId = data.setup_intent_id || null;
+  freshSetupConfirmationRequired = false;
+  setSetupWorkflowId(data.setup_workflow_id);
+  loadSystemAlignmentStatus();
   return true;
 }
 
@@ -17311,6 +17984,10 @@ function renderSystemAlignmentStatus(data) {
   const workerStatusUnknown = transition.worker_status_available === false;
   if (systemAlignmentEls.reconnect) systemAlignmentEls.reconnect.hidden = !reconnecting;
   if (systemAlignmentEls.partial) systemAlignmentEls.partial.hidden = !recoveryAvailable;
+  if (systemAlignmentEls.resume) systemAlignmentEls.resume.hidden = false;
+  if (systemAlignmentEls.returnToRunning) {
+    systemAlignmentEls.returnToRunning.hidden = false;
+  }
   if (systemAlignmentEls.partialMessage) {
     systemAlignmentEls.partialMessage.textContent = workerStatusUnknown
       ? "The System Build worker state could not be verified. Abandon is " +
@@ -17336,15 +18013,22 @@ function renderSystemAlignmentStatus(data) {
   }
   if (systemAlignmentEls.abandon) {
     // The escape hatch out of a wedged transition, only with the worker
-    // proven inactive: an active, unknown or absent worker verdict keeps
-    // Abandon closed so a stale worker cannot keep mutating past a new
-    // operation.
+    // proven inactive: an active, unknown or absent worker verdict keeps it
+    // closed so a stale worker cannot keep mutating past a new operation. An
+    // unknown owner offers no destructive action at all.
+    const recovery = recoveryActionFor(transition.mode);
+    systemAlignmentEls.abandon.hidden = !recovery;
+    if (recovery) systemAlignmentEls.abandon.textContent = recovery.label;
     systemAlignmentEls.abandon.disabled =
+      !recovery ||
       !transition.operation_id ||
       transition.cancel_available !== true ||
       transition.worker_active !== false ||
       transition.worker_status_available !== true;
   }
+  // A pending Setup cleanup is durable state, not a transition observation: it
+  // re-asserts itself after every poll so the poller cannot erase the recovery.
+  renderSetupCleanupRecovery();
   // One authority owns visibility, task placement and polling for every render.
   applySystemBuildPresentation();
 }
@@ -17485,30 +18169,56 @@ async function returnToRunningSystemBuild() {
 
 async function abandonSystemAlignment() {
   const transition = (systemAlignmentState && systemAlignmentState.transition) || {};
-  if (!transition.operation_id) return;
-  if (
-    !window.confirm(
-      "Abandon this System Build transition? The upgrade stops here and the " +
-        "console returns to the normal setup/upgrade choices. The running EMS " +
-        "build is left as-is; you can start a fresh install or a new upgrade " +
-        "afterwards."
-    )
-  ) {
-    return;
-  }
+  const action = recoveryActionFor(transition.mode);
+  if (!action || !transition.operation_id) return;
+  if (!window.confirm(action.confirm)) return;
   try {
-    const res = await fetch("/api/admin/system-alignment/cancel", {
+    let body;
+    if (action.owner === "guided_setup") {
+      // Discard the server's CURRENT workflow explicitly — the panel shows the
+      // current state, so a stale locally-cached identity must not block it.
+      const current = await fetchOwningSetupWorkflowId();
+      body = current ? { setup_workflow_id: current } : {};
+    } else {
+      body = { operation_id: transition.operation_id, confirm: true };
+    }
+    const res = await fetch(action.endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ operation_id: transition.operation_id, confirm: true }),
+      body: JSON.stringify(body),
     });
-    const data = await res.json();
-    if (!res.ok || data.stage !== "cancelled") {
-      throw new Error(data.message || data.error || "The transition could not be abandoned.");
+    const data = await res.json().catch(() => ({}));
+    if (isSetupOperationInProgress(data)) {
+      // Nothing was discarded: keep the workflow and say which operation owns it.
+      if (systemAlignmentEls.warning) {
+        systemAlignmentEls.warning.textContent =
+          setupOperationInProgressMessage(data);
+        systemAlignmentEls.warning.hidden = false;
+      }
+      loadSystemAlignmentStatus();
+      return;
     }
-    // A cancelled transition is terminal (active:false); rendering it lets the
-    // presentation authority clear the recovery panel and restore normal routing.
-    renderSystemAlignmentStatus(data);
+    if (action.owner === "guided_setup" && res.ok && data.ok === true) {
+      setSetupWorkflowId(null);
+    }
+    if (setupCleanupStateFor(data) !== null) {
+      showSetupCleanupIncomplete(data);
+      loadSystemAlignmentStatus();
+      return;
+    }
+    const succeeded =
+      action.owner === "guided_setup" ? data.ok === true : data.stage === "cancelled";
+    if (!res.ok || !succeeded) {
+      throw new Error(
+        data.message ||
+          data.error ||
+          (action.owner === "guided_setup"
+            ? "The setup could not be discarded."
+            : "The upgrade could not be cancelled.")
+      );
+    }
+    showSetupCleanupIncomplete(null);
+    renderSystemAlignmentStatus(data.transition ? data : data);
     loadSystemAlignmentStatus();
   } catch (err) {
     if (systemAlignmentEls.warning) {
@@ -17526,6 +18236,9 @@ if (systemAlignmentEls.returnToRunning) {
 }
 if (systemAlignmentEls.abandon) {
   systemAlignmentEls.abandon.addEventListener("click", abandonSystemAlignment);
+}
+if (systemAlignmentEls.retryCleanup) {
+  systemAlignmentEls.retryCleanup.addEventListener("click", retrySetupCleanup);
 }
 
 // --- Auth gate wiring -------------------------------------------------------

@@ -9,7 +9,9 @@ reads secrets. It only writes the real EMS ``config.json`` on the explicit
 offers a backup by default and requires explicit confirmation before apply.
 """
 
+import contextlib
 import copy
+import hashlib
 import hmac
 import json
 import os
@@ -32,7 +34,11 @@ from admin.admin_update import (
     admin_image_ref_from_env,
 )
 from admin.config_apply import ConfigApplyService, ConfigChangedError
-from admin.config_export import ConfigExportService, ConfigExportValidationError
+from admin.config_export import (
+    ConfigExportService,
+    ConfigExportValidationError,
+    config_payload_bytes,
+)
 from admin.config_preview import ConfigPreviewGenerator
 from admin.deployment import DeploymentService, DockerCli
 from admin.discovery import (
@@ -139,6 +145,26 @@ from admin.device_identity import IdentityTokenKeyStore
 from admin.releases import ReleaseError, ReleaseManager, default_admin_data_dir
 from admin.known_good import KnownGoodStore
 from admin.setup_config import build_setup_catalog
+from admin.guided_setup_workflow import (
+    GuidedSetupWorkflowError,
+    GuidedSetupWorkflowStore,
+    PREVIEW_MISMATCH_MESSAGE,
+    SETUP_PREVIEW_MISMATCH,
+    SETUP_WORKFLOW_REQUIRED,
+    STATUS_COMPLETED,
+    STATUS_SUPERSEDED,
+    WORKFLOW_REQUIRED_MESSAGE,
+    cleanup_blocks,
+    cleanup_conflict_error,
+    setup_mutation_fingerprint,
+)
+from admin.setup_lifecycle import SetupLifecycleCoordinator
+from admin.setup_workflow import (
+    SETUP_TRANSITION_MODES,
+    SetupWorkflowAbandonError,
+    SetupWorkflowArtifacts,
+    abandon_setup_workflow,
+)
 from admin.setup_intent import (
     SetupIntentError,
     SetupIntentStore,
@@ -176,6 +202,34 @@ from ems.external_status import (
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 MAX_JSON_BODY_BYTES = 4 * 1024
 MAX_CONFIG_PREVIEW_BODY_BYTES = 64 * 1024
+
+SETUP_CONFIG_STALE = "stale_setup_config"
+SETUP_ABANDON_REQUIRED = "setup_abandon_required"
+TRANSITION_CANCEL_UNSUPPORTED = "transition_cancel_unsupported"
+
+
+def _stale_setup_rejection(expected_revision, expect_absent):
+    """409 payload for a mutation whose reviewed live baseline no longer holds.
+
+    The stale response invalidates the exact preview (the caller clears it), so
+    the browser must review the current configuration again before mutating.
+    """
+
+    return (
+        {
+            "ok": False,
+            "error": SETUP_CONFIG_STALE,
+            "message": (
+                "The live EMS configuration changed after this setup was "
+                "opened. Your setup draft was not applied."
+            ),
+            "config_revision": {
+                "expected_revision": expected_revision,
+                "expect_absent": expect_absent,
+            },
+        },
+        409,
+    )
 MAX_ZENDURE_MQTT_PREVIEW_PROPOSALS = 20
 MAX_TRACKED_SCANS = 20
 
@@ -462,6 +516,8 @@ class AdminRuntime:
     config_preview: ConfigPreviewGenerator
     config_export: ConfigExportService
     config_apply: ConfigApplyService
+    setup_artifacts: SetupWorkflowArtifacts
+    setup_workflows: GuidedSetupWorkflowStore
     deployment: DeploymentService
     ems_cli: EmsCliDiagnostics
     guided_upgrade: GuidedUpgradeExecutor
@@ -485,6 +541,12 @@ class AdminRuntime:
     # inactive" and durable cancellation.
     operation_coordinator: OperationCoordinator = field(
         default_factory=OperationCoordinator
+    )
+    # The single arbiter of Guided Setup mutation vs. terminal ownership, shared
+    # by both listeners. Transient on purpose: a restart holds no claims, so
+    # every commit stays gated by the durable workflow record.
+    setup_lifecycle: SetupLifecycleCoordinator = field(
+        default_factory=SetupLifecycleCoordinator
     )
     # Whether the process started an optional HTTPS listener at all (global; the
     # per-request transport is reported separately via AdminServer.https_active).
@@ -647,12 +709,21 @@ def create_admin_runtime(
         )
     except Exception:
         pass
+    # Durable Guided Setup workflow identity: one server-owned record binding
+    # the active workflow, its exact preview authority and its artifacts.
+    setup_workflows = GuidedSetupWorkflowStore(admin_data_dir)
     config_export = config_export or ConfigExportService(
-        config_preview, admin_data_dir
+        config_preview,
+        admin_data_dir,
+        target_path_provider=setup_workflows.active_generated_config_path,
     )
     config_apply = config_apply or ConfigApplyService(config_export, admin_data_dir)
+    setup_artifacts = SetupWorkflowArtifacts(admin_data_dir)
     deployment = deployment or DeploymentService(
-        release_manager, config_export, admin_data_dir=admin_data_dir
+        release_manager,
+        config_export,
+        admin_data_dir=admin_data_dir,
+        setup_workflows=setup_workflows,
     )
     ems_cli = ems_cli or EmsCliDiagnostics()
     guided_upgrade = guided_upgrade or GuidedUpgradeExecutor(
@@ -693,6 +764,8 @@ def create_admin_runtime(
         config_preview=config_preview,
         config_export=config_export,
         config_apply=config_apply,
+        setup_artifacts=setup_artifacts,
+        setup_workflows=setup_workflows,
         deployment=deployment,
         ems_cli=ems_cli,
         guided_upgrade=guided_upgrade,
@@ -736,6 +809,8 @@ class AdminServer(ThreadingHTTPServer):
         self.config_preview = runtime.config_preview
         self.config_export = runtime.config_export
         self.config_apply = runtime.config_apply
+        self.setup_artifacts = runtime.setup_artifacts
+        self.setup_workflows = runtime.setup_workflows
         self.deployment = runtime.deployment
         self.ems_cli = runtime.ems_cli
         self.guided_upgrade = runtime.guided_upgrade
@@ -743,6 +818,7 @@ class AdminServer(ThreadingHTTPServer):
         self.guided_upgrade_context = runtime.guided_upgrade_context
         self.system_alignment = runtime.system_alignment
         self.operation_coordinator = runtime.operation_coordinator
+        self.setup_lifecycle = runtime.setup_lifecycle
         self.admin_update = runtime.admin_update
         self.backup_service = runtime.backup_service
         self.backup_jobs = runtime.backup_jobs
@@ -877,6 +953,13 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/setup/config/status":
             self._send_json(self.server.config_export.status())
+            return
+        if path == "/api/setup/workflow":
+            # Redacted view of the durable Guided Setup workflow record:
+            # identifiers, lifecycle and artifact existence — never secrets.
+            self._send_json(
+                {"workflow": self.server.setup_workflows.redacted_view()}
+            )
             return
         if path == "/api/setup/deployment/plan":
             plan = self.server.deployment.plan()
@@ -1058,6 +1141,9 @@ class AdminHandler(BaseHTTPRequestHandler):
         if path == "/api/admin/maintenance/backups/delete":
             self._handle_backup_delete()
             return
+        if path == "/api/setup/abandon":
+            self._handle_setup_abandon()
+            return
         if path == "/api/setup/releases/prepare":
             self._handle_release_prepare(mode=TRANSITION_MODE_FRESH_INSTALL)
             return
@@ -1069,6 +1155,9 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/setup/system-build/confirm":
             self._handle_setup_system_build_confirm()
+            return
+        if path == "/api/setup/system-build/supersede":
+            self._handle_setup_system_build_supersede()
             return
         if path in (
             "/api/setup/config-preview",
@@ -1470,8 +1559,19 @@ class AdminHandler(BaseHTTPRequestHandler):
         if choice != "setup_new":
             self.server.setup_intents.invalidate_session(session_id)
         elif result.get("ok"):
+            # The durable workflow identity outlives the one-shot intent: it is
+            # what every Setup config mutation must present. Re-entering Fresh
+            # Setup continues the active workflow instead of forking a second
+            # identity, and a previous workflow whose cleanup has not converged
+            # blocks a replacement — including its setup intent.
+            try:
+                workflow = self.server.setup_workflows.ensure_active()
+            except GuidedSetupWorkflowError as exc:
+                self._send_workflow_rejection(exc)
+                return
             intent = self.server.setup_intents.issue(session_id=session_id)
             result["setup_intent_id"] = intent.intent_id
+            result["setup_workflow_id"] = workflow["workflow_id"]
             result["existing_install_confirmed"] = bool(
                 result.get("state") != "none" and confirm
             )
@@ -1992,7 +2092,37 @@ class AdminHandler(BaseHTTPRequestHandler):
         except (SystemBuildError, SystemAlignmentError) as exc:
             self._send_alignment_error(exc)
             return
+        if result.get("stage") == "completed":
+            # Recovery reached the durable success: run the same terminal
+            # lifecycle bookkeeping as the direct completion paths.
+            mode = transition.get("mode")
+            if mode == TRANSITION_MODE_GUIDED_UPGRADE:
+                self._clear_guided_upgrade_context(operation_id)
+            elif mode in SETUP_TRANSITION_MODES:
+                self._complete_setup_workflow()
         self._send_json(result)
+
+    def _complete_setup_workflow(self):
+        """Mark the active Guided Setup workflow completed (terminal)."""
+
+        workflows = self.server.setup_workflows
+        record = workflows.active() if workflows else None
+        if record is None:
+            return
+        try:
+            with self.server.setup_lifecycle.claim_termination(
+                workflow_id=record["workflow_id"], operation="complete"
+            ):
+                workflows.finish(record["workflow_id"], status=STATUS_COMPLETED)
+        except GuidedSetupWorkflowError:
+            # A mutation still owns the workflow. The durable transition
+            # completion stands; the record stays active and its artifacts stay
+            # review-gated, which is the safe reading.
+            pass
+        except OSError:
+            # Never fail the completed transition on record bookkeeping; a
+            # stale active record only means artifacts stay review-gated.
+            pass
 
     def _operation_active(self, operation_id):
         """True while a mutating worker for this operation holds a live claim.
@@ -2067,6 +2197,16 @@ class AdminHandler(BaseHTTPRequestHandler):
         self._send_json(result)
 
     def _handle_system_alignment_cancel(self):
+        """The narrow transition-cancel primitive — never a Setup lifecycle exit.
+
+        Setup-owned transitions must terminate through ``/api/setup/abandon``
+        (or the build supersede operation), which also removes the workflow's
+        artifacts; cancelling only the transition here would reproduce the
+        split lifecycle this endpoint used to allow. Unknown transition modes
+        fail closed. A successful Guided Upgrade cancel additionally clears
+        exactly its own operation's durable upgrade context.
+        """
+
         body = self._read_json_body()
         if body is None:
             return
@@ -2076,6 +2216,36 @@ class AdminHandler(BaseHTTPRequestHandler):
         if body.get("confirm") is not True:
             self._send_json({"error": "confirmation_required"}, status=400)
             return
+        transition = self._alignment_status().get("transition") or {}
+        mode = transition.get("mode")
+        if mode in SETUP_TRANSITION_MODES:
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": SETUP_ABANDON_REQUIRED,
+                    "message": (
+                        "This transition belongs to Guided Setup. Use Discard "
+                        "setup so its temporary files are removed with it."
+                    ),
+                    "transition": transition,
+                },
+                status=409,
+            )
+            return
+        if transition and mode != TRANSITION_MODE_GUIDED_UPGRADE:
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": TRANSITION_CANCEL_UNSUPPORTED,
+                    "message": (
+                        "This transition's owner is unknown to this Admin "
+                        "version; it cannot be cancelled here."
+                    ),
+                    "transition": transition,
+                },
+                status=409,
+            )
+            return
         try:
             result = self.server.system_alignment.cancel(
                 operation_id=body.get("operation_id"),
@@ -2084,7 +2254,26 @@ class AdminHandler(BaseHTTPRequestHandler):
         except SystemAlignmentError as exc:
             self._send_alignment_error(exc)
             return
+        if (
+            mode == TRANSITION_MODE_GUIDED_UPGRADE
+            and isinstance(result, dict)
+            and result.get("stage") == "cancelled"
+        ):
+            self._clear_guided_upgrade_context(body.get("operation_id"))
         self._send_json(result)
+
+    def _clear_guided_upgrade_context(self, operation_id):
+        """Operation-bound context cleanup on a terminal upgrade lifecycle event."""
+
+        store = getattr(self.server, "guided_upgrade_context", None)
+        if store is None:
+            return
+        try:
+            store.clear_for_operation(operation_id)
+        except OSError:
+            # Cleanup must never fail the lifecycle event that triggered it; a
+            # leftover context is refused by its fail-closed loader anyway.
+            pass
 
     def _handle_maintenance_diagnostics(self):
         # User-triggered read-only EMS checks. The body carries no command input;
@@ -2562,6 +2751,13 @@ class AdminHandler(BaseHTTPRequestHandler):
                 {"ok": False, "error": "acknowledgement_required"}, status=400
             )
             return
+        conflict = self._setup_owned_conflict()
+        if conflict is not None:
+            # An unresolved Guided Setup must be discarded through its owner
+            # before an upgrade may even validate; the owner removes the Setup
+            # transition together with its artifacts.
+            self._send_json(conflict, status=409)
+            return
         validator = getattr(
             self.server.system_alignment, "validate_upgrade_target", None
         )
@@ -2576,6 +2772,59 @@ class AdminHandler(BaseHTTPRequestHandler):
             self._send_alignment_error(exc)
             return
         self._send_json(result)
+
+    def _setup_owned_conflict(self):
+        """409 payload while Guided Setup still owns unresolved durable state.
+
+        Two distinct conflicts, each with its own code so the UI can offer the
+        right action: an unfinished Setup that still has to be discarded
+        (``setup_abandon_required``), and a terminal Setup whose cleanup has not
+        converged (``setup_cleanup_required``) — that workflow is the only owner
+        of the files it left behind, so it must finish first. A completed
+        workflow with converged cleanup does not block: the deployment marker it
+        leaves behind is installed-system state.
+        """
+
+        workflows = self.server.setup_workflows
+        record = workflows.load() if workflows else None
+        if cleanup_blocks(record):
+            exc = cleanup_conflict_error(record)
+            return {
+                "ok": False,
+                "error": exc.code,
+                "message": exc.message,
+                "workflow": workflows.redacted_view(),
+            }
+        status = self._alignment_status()
+        transition = status.get("transition") or {}
+        if (
+            status.get("active")
+            and transition.get("mode") in SETUP_TRANSITION_MODES
+            and transition.get("stage") not in {"completed", "cancelled"}
+        ):
+            blocking = True
+        else:
+            blocking = False
+            if record is not None and record["status"] == "active":
+                artifacts = SetupWorkflowArtifacts(
+                    workflows.admin_data_dir,
+                    workflow_id=record["workflow_id"],
+                ).state()
+                blocking = (
+                    artifacts["generated_config"]["exists"]
+                    or artifacts["deployment_marker"]["exists"]
+                )
+        if not blocking:
+            return None
+        return {
+            "ok": False,
+            "error": SETUP_ABANDON_REQUIRED,
+            "message": (
+                "An unfinished Guided Setup is still active. Discard the setup "
+                "so its temporary files are removed, then validate the upgrade."
+            ),
+            "transition": transition or None,
+        }
 
     def _handle_maintenance_upgrade_execute(self):
         # Confirmed mutation: bump the EMS image and force-recreate only the EMS
@@ -2610,6 +2859,13 @@ class AdminHandler(BaseHTTPRequestHandler):
                 },
                 status=400,
             )
+            return
+        conflict = self._setup_owned_conflict()
+        if conflict is not None:
+            # The same gate as upgrade validation: unresolved Guided Setup state
+            # (including a cleanup that did not converge) must be finished by its
+            # owner before an upgrade may mutate the installed system.
+            self._send_json(conflict, status=409)
             return
         target_release = body.get("target_release")
         # The System Build the operator verified is the only one that may run. A
@@ -2918,6 +3174,22 @@ class AdminHandler(BaseHTTPRequestHandler):
                 )
             )
             return
+        # A duplicate resume re-attaches to the single existing job — even
+        # after completion, when the durable context has already been cleared.
+        existing = self.server.upgrade_jobs.for_operation(operation_id)
+        if existing is not None:
+            snapshot = existing.snapshot()
+            self._send_json(
+                {
+                    "ok": True,
+                    "job_id": existing.job_id,
+                    "status": snapshot["status"],
+                    "steps": snapshot["steps"],
+                    "transition": self._alignment_status().get("transition"),
+                },
+                status=202,
+            )
+            return
         target_release = transition.get("system_tag")
         try:
             stage = self._advance_guided_upgrade_reconnect(operation_id, transition)
@@ -3180,6 +3452,10 @@ class AdminHandler(BaseHTTPRequestHandler):
                 "message": transition.get("error_message")
                 or "EMS health checks did not pass.",
             }
+        elif completion_stage == "completed":
+            # The durable success (known-good + completed stage) is committed;
+            # the execution context is no longer a pending upgrade.
+            self._clear_guided_upgrade_context(operation_id)
         return result
 
     def _send_upgrade_job(self, job_id):
@@ -3518,6 +3794,9 @@ class AdminHandler(BaseHTTPRequestHandler):
         result.setdefault("tag", build.get("canonical_tag") or body.get("tag"))
         result.setdefault("resources", {})
         result.setdefault("warnings", [])
+        self._record_setup_transition_link(
+            result.get("operation_id"), mode, result.get("tag")
+        )
         if self._alignment_resources_verified():
             result["status"] = "ready_for_ems"
             self._send_json(result)
@@ -3561,6 +3840,11 @@ class AdminHandler(BaseHTTPRequestHandler):
         except (SystemBuildError, SystemAlignmentError) as exc:
             self._send_alignment_error(exc, requested_tag=body.get("tag"))
             return
+        self._record_setup_transition_link(
+            result.get("operation_id"),
+            TRANSITION_MODE_FRESH_INSTALL,
+            body.get("tag"),
+        )
         if result.get("status") == "admin_alignment_started" or result.get("reconnect"):
             self._send_json(result, status=202)
             return
@@ -3604,7 +3888,94 @@ class AdminHandler(BaseHTTPRequestHandler):
                 status=409,
             )
             return
+        self._record_setup_transition_link(
+            result.get("operation_id"), TRANSITION_MODE_FRESH_INSTALL, tag
+        )
         self._send_json(result)
+
+    def _record_setup_transition_link(self, operation_id, mode, tag):
+        """Best-effort link from the workflow record to its transition.
+
+        The record only references System Alignment authority — a failed link
+        never blocks the setup step that created the transition.
+        """
+
+        workflows = self.server.setup_workflows
+        record = workflows.active() if workflows else None
+        if record is None:
+            return
+        try:
+            workflows.record_transition(
+                record["workflow_id"],
+                operation_id=operation_id,
+                transition_mode=mode,
+                selected_system_tag=tag,
+            )
+        except OSError:
+            pass
+
+    def _handle_setup_system_build_supersede(self):
+        """Backend-owned build change: retire the old Setup workflow as one unit.
+
+        Replaces the browser-composed cancel + local reset + new intent
+        sequence. The old workflow's transition is cancelled (worker-checked),
+        its preview and artifacts are removed, the workflow is marked
+        superseded, and only then is the replacement workflow (with a fresh
+        one-shot setup intent) created and returned. An incomplete cleanup
+        stays truthful: the old workflow is already terminal, no replacement is
+        created, and the response asks for a retry.
+        """
+
+        body = self._read_json_body()
+        if body is None:
+            return
+        if not isinstance(body, dict) or set(body) - {"setup_workflow_id", "tag"}:
+            self._send_json({"error": "unsupported_field"}, status=400)
+            return
+        tag = body.get("tag")
+        if not isinstance(tag, str) or not tag.strip():
+            self._send_json({"error": "tag is required"}, status=400)
+            return
+        workflows = self.server.setup_workflows
+        try:
+            record = workflows.require_active(body.get("setup_workflow_id"))
+        except GuidedSetupWorkflowError as exc:
+            self._send_workflow_rejection(exc)
+            return
+        result = self._terminate_setup_workflow(
+            record["workflow_id"],
+            operation="supersede",
+            error_code="supersede_failed",
+            error_message="Could not supersede the Guided Setup state: {exc}",
+            terminal_status=STATUS_SUPERSEDED,
+        )
+        if result is None:
+            return
+        if not result["ok"]:
+            self._send_json(
+                {**result, "superseded_workflow_id": record["workflow_id"]},
+                status=result.get("status", 500),
+            )
+            return
+        try:
+            replacement = workflows.start_replacement(selected_system_tag=tag.strip())
+        except GuidedSetupWorkflowError as exc:
+            self._send_workflow_rejection(exc)
+            return
+        intent = self.server.setup_intents.issue(
+            session_id=self._admin_session_cookie_value()
+        )
+        self._send_json(
+            {
+                "ok": True,
+                "superseded_workflow_id": record["workflow_id"],
+                "setup_workflow_id": replacement["workflow_id"],
+                "setup_intent_id": intent.intent_id,
+                "selected_system_tag": replacement["selected_system_tag"],
+                "transition": result.get("transition"),
+                "cleanup": result.get("cleanup"),
+            }
+        )
 
     def _handle_config_template(self):
         try:
@@ -3615,6 +3986,12 @@ class AdminHandler(BaseHTTPRequestHandler):
         self._send_json(result)
 
     def _handle_config_preview(self):
+        # Only the primary preview route issues mutation authority; the
+        # ``/validate`` alias stays a read-only validation with no workflow
+        # binding and no preview ID.
+        issue_authority = (
+            self.path.split("?", 1)[0] == "/api/setup/config-preview"
+        )
         body = self._read_json_body(MAX_CONFIG_PREVIEW_BODY_BYTES)
         if body is None:
             return
@@ -3639,6 +4016,14 @@ class AdminHandler(BaseHTTPRequestHandler):
         if error is not None:
             self._send_json({"error": error}, status=400)
             return
+        workflows = self.server.setup_workflows
+        record = None
+        if issue_authority:
+            try:
+                record = workflows.require_active(body.get("setup_workflow_id"))
+            except GuidedSetupWorkflowError as exc:
+                self._send_workflow_rejection(exc)
+                return
         preview = self.server.config_preview.generate(
             draft, count, features, proposals, broker, manual_devices
         )
@@ -3648,12 +4033,87 @@ class AdminHandler(BaseHTTPRequestHandler):
         # shared credential-staging layer, which rejects the same references with
         # a stable structured code and a byte-exact rollback.
         _surface_mqtt_credential_consumer_issues(preview)
-        self._send_json(
-            redact_config_for_browser(
-                copy.deepcopy(preview),
-                identity_token_key=self.server.identity_token_key,
-            )
+        response = redact_config_for_browser(
+            copy.deepcopy(preview),
+            identity_token_key=self.server.identity_token_key,
         )
+        # The live baseline stays in the response for explanation/diagnostics;
+        # mutation authority is the opaque preview ID bound server-side.
+        response["config_revision"] = self._live_config_revision()
+        if issue_authority:
+            response["setup_workflow_id"] = record["workflow_id"]
+            preview_id = self._issue_preview_authority(
+                record,
+                preview,
+                response["config_revision"],
+                draft,
+                count,
+                features,
+                proposals,
+                broker,
+                manual_devices,
+            )
+            if preview_id is not None:
+                response["config_preview_id"] = preview_id
+        self._send_json(response)
+
+    def _issue_preview_authority(
+        self,
+        record,
+        preview,
+        config_revision,
+        draft,
+        count,
+        features,
+        proposals,
+        broker,
+        manual_devices,
+    ):
+        """Persist exact preview authority for a ready preview; else revoke.
+
+        A preview that is not ready (or cannot be serialized) must not leave an
+        older preview's authority behind — the workflow's stored preview always
+        reflects the latest reviewed state.
+        """
+
+        workflows = self.server.setup_workflows
+        prepared_sha256 = None
+        if preview.get("ready"):
+            try:
+                prepared_sha256 = hashlib.sha256(
+                    config_payload_bytes(preview["config"])
+                ).hexdigest()
+            except (TypeError, ValueError):
+                prepared_sha256 = None
+        if not preview.get("ready") or prepared_sha256 is None:
+            workflows.clear_preview(record["workflow_id"])
+            return None
+        fingerprint = setup_mutation_fingerprint(
+            draft=draft,
+            supported_grid_meter_count=count,
+            features=features,
+            zendure_mqtt_proposals=proposals,
+            zendure_mqtt_broker=broker,
+            zendure_mqtt_manual_devices=manual_devices,
+        )
+        try:
+            updated = workflows.record_preview(
+                record["workflow_id"],
+                draft_fingerprint=fingerprint,
+                base_config_revision=config_revision,
+                prepared_config_sha256=prepared_sha256,
+            )
+        except GuidedSetupWorkflowError:
+            return None
+        return updated["preview"]["preview_id"]
+
+    def _send_workflow_rejection(self, exc):
+        payload, status = self._workflow_rejection_payload(exc)
+        self._send_json(payload, status=status)
+
+    def _live_config_revision(self):
+        revision, expect_absent = self.server.config_apply.capture_config_revision()
+        return {"expected_revision": revision, "expect_absent": expect_absent}
 
     @staticmethod
     def _preview_manual_mqtt(body):
@@ -4085,13 +4545,36 @@ class AdminHandler(BaseHTTPRequestHandler):
         if error is not None:
             self._send_json({"error": error}, status=400)
             return None
-        return draft, count, overwrite, features, proposals, broker, manual_devices
+        # The legacy ``config_revision`` may still be posted but is transport
+        # only: mutation authority is the workflow ID plus the exact preview ID.
+        workflow_id = body.get("setup_workflow_id")
+        preview_id = body.get("config_preview_id")
+        if workflow_id is not None and not isinstance(workflow_id, str):
+            self._send_json({"error": "setup_workflow_id must be a string"}, status=400)
+            return None
+        if preview_id is not None and not isinstance(preview_id, str):
+            self._send_json({"error": "config_preview_id must be a string"}, status=400)
+            return None
+        return (
+            draft,
+            count,
+            overwrite,
+            features,
+            proposals,
+            broker,
+            manual_devices,
+            workflow_id,
+            preview_id,
+        )
 
     def _handle_config_download(self):
         request = self._config_export_request()
         if request is None:
             return
-        draft, count, _overwrite, features, proposals, broker, manual_devices = request
+        (
+            draft, count, _overwrite, features, proposals, broker,
+            manual_devices, _workflow_id, _preview_id,
+        ) = request
         try:
             payload, _preview = self.server.config_export.serialize(
                 draft, count, features, proposals, broker, manual_devices
@@ -4106,12 +4589,22 @@ class AdminHandler(BaseHTTPRequestHandler):
         )
 
     def _handle_config_write(self):
-        if not self._require_alignment_resources():
-            return
         request = self._config_export_request()
         if request is None:
             return
-        draft, count, overwrite, features, proposals, broker, manual_devices = request
+        (
+            draft, count, overwrite, features, proposals, broker,
+            manual_devices, workflow_id, preview_id,
+        ) = request
+        # Workflow identity precedes the alignment gate: an old tab must learn
+        # its workflow is gone, not a misleading resource-verification error.
+        try:
+            self.server.setup_workflows.require_active(workflow_id)
+        except GuidedSetupWorkflowError as exc:
+            self._send_workflow_rejection(exc)
+            return
+        if not self._require_alignment_resources():
+            return
         payload, status_code = self._setup_config_transaction(
             draft,
             count,
@@ -4119,7 +4612,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             proposals,
             broker,
             manual_devices,
-            lambda change: self.server.config_export.write(
+            lambda change, record, preview: self._write_generated_config(
                 draft,
                 count,
                 overwrite,
@@ -4127,20 +4620,33 @@ class AdminHandler(BaseHTTPRequestHandler):
                 proposals,
                 broker,
                 manual_devices,
-                prepared=change,
+                change,
+                record,
+                preview,
             ),
             failure_reason="write_failed",
             failure_message="Could not save generated config: {exc}",
+            workflow_id=workflow_id,
+            preview_id=preview_id,
+            operation="config_write",
         )
         self._send_json(payload, status=status_code)
 
     def _handle_config_apply(self):
-        if not self._require_alignment_resources():
-            return
         request = self._config_export_request()
         if request is None:
             return
-        draft, count, _overwrite, features, proposals, broker, manual_devices = request
+        (
+            draft, count, _overwrite, features, proposals, broker,
+            manual_devices, workflow_id, preview_id,
+        ) = request
+        try:
+            self.server.setup_workflows.require_active(workflow_id)
+        except GuidedSetupWorkflowError as exc:
+            self._send_workflow_rejection(exc)
+            return
+        if not self._require_alignment_resources():
+            return
         payload, status_code = self._setup_config_transaction(
             draft,
             count,
@@ -4148,7 +4654,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             proposals,
             broker,
             manual_devices,
-            lambda change: self.server.config_apply.apply(
+            lambda change, record, preview: self.server.config_apply.apply(
                 draft,
                 count,
                 features,
@@ -4159,8 +4665,161 @@ class AdminHandler(BaseHTTPRequestHandler):
             ),
             failure_reason="apply_failed",
             failure_message="Could not apply the config to the EMS installation: {exc}",
+            workflow_id=workflow_id,
+            preview_id=preview_id,
+            operation="config_apply",
+            consume_preview=True,
         )
         self._send_json(payload, status=status_code)
+
+    def _handle_setup_abandon(self):
+        """The one backend-owned reset for Guided Setup's durable state.
+
+        Also the retry entry point: an incomplete cleanup keeps the same
+        workflow ID, so the retry addresses it exactly. The ``setup_workflow_id``
+        is mandatory whenever a workflow record exists — a missing ID is never
+        permission to discard whatever is stored. Only Setup's own transition and
+        provably owned artifacts are touched.
+        """
+
+        body = self._read_optional_json_body()
+        if body is None:
+            return
+        if set(body) - {"setup_workflow_id"}:
+            self._send_json({"error": "unsupported_field"}, status=400)
+            return
+        workflow_id = body.get("setup_workflow_id")
+        if workflow_id is not None and not isinstance(workflow_id, str):
+            self._send_json(
+                {"error": "setup_workflow_id must be a string"}, status=400
+            )
+            return
+        workflow_id = workflow_id or None
+        record = self.server.setup_workflows.load()
+        if workflow_id is None and record is not None:
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": SETUP_WORKFLOW_REQUIRED,
+                    "message": WORKFLOW_REQUIRED_MESSAGE,
+                    "workflow": self.server.setup_workflows.redacted_view(),
+                },
+                status=409,
+            )
+            return
+        result = self._terminate_setup_workflow(
+            workflow_id,
+            operation="cleanup_retry" if self._is_terminal(record) else "abandon",
+            error_code="abandon_failed",
+            error_message="Could not clear the Guided Setup state: {exc}",
+        )
+        if result is None:
+            return
+        self._send_json(
+            result, status=200 if result["ok"] else result.get("status", 500)
+        )
+
+    @staticmethod
+    def _is_terminal(record):
+        return bool(record is not None and record.get("status") != "active")
+
+    def _terminate_setup_workflow(
+        self, workflow_id, *, operation, error_code, error_message,
+        terminal_status=None,
+    ):
+        """Run one terminal Setup operation under an exclusive lifecycle claim.
+
+        Returns the abandon result, or ``None`` after the error response has
+        already been sent. A refused claim means a mutation still owns the
+        workflow: nothing is cancelled and nothing is removed.
+        """
+
+        lifecycle = self.server.setup_lifecycle
+        extra = {} if terminal_status is None else {"terminal_status": terminal_status}
+        try:
+            claim = (
+                lifecycle.claim_termination(
+                    workflow_id=workflow_id, operation=operation
+                )
+                if workflow_id
+                # Legacy pre-workflow cleanup has no workflow to claim; it can
+                # neither adopt nor delete a workflow-owned artifact.
+                else contextlib.nullcontext()
+            )
+        except GuidedSetupWorkflowError as exc:
+            payload, status = self._workflow_rejection_payload(exc)
+            self._send_json(payload, status=status)
+            return None
+        try:
+            with claim:
+                return abandon_setup_workflow(
+                    alignment=self.server.system_alignment,
+                    coordinator=self.server.operation_coordinator,
+                    status=self._alignment_status(),
+                    workflows=self.server.setup_workflows,
+                    workflow_id=workflow_id,
+                    **extra,
+                )
+        except SystemAlignmentError as exc:
+            self._send_json(
+                {"ok": False, "error": exc.code, "message": exc.message},
+                status=self._alignment_error_status(exc.code),
+            )
+        except SetupWorkflowAbandonError as exc:
+            self._send_json(
+                {"ok": False, "error": exc.code, "message": exc.message},
+                status=409,
+            )
+        except OSError as exc:
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": error_code,
+                    "message": error_message.format(exc=exc),
+                },
+                status=500,
+            )
+        return None
+
+    def _write_generated_config(
+        self, draft, count, overwrite, features, proposals, broker,
+        manual_devices, change, record, preview,
+    ):
+        """Write the generated config into its workflow directory and bind it.
+
+        The metadata sidecar carries the full ownership proof — workflow,
+        exact preview, draft fingerprint, live baseline and payload hash — so
+        deployment can later verify this artifact belongs to the active
+        workflow's reviewed state.
+        """
+
+        result = self.server.config_export.write(
+            draft,
+            count,
+            overwrite,
+            features,
+            proposals,
+            broker,
+            manual_devices,
+            prepared=change,
+        )
+        if result.get("ok"):
+            workflow_id = record["workflow_id"]
+            artifacts = SetupWorkflowArtifacts(
+                self.server.setup_workflows.admin_data_dir,
+                workflow_id=workflow_id,
+            )
+            artifacts.record_generated(
+                workflow_id=workflow_id,
+                preview_id=preview["preview_id"],
+                draft_fingerprint=preview["draft_fingerprint"],
+                base_config_revision=preview["base_config_revision"],
+                prepared_config_sha256=hashlib.sha256(change.payload).hexdigest(),
+            )
+            self.server.setup_workflows.bind_generated_artifacts(
+                workflow_id, preview_id=preview["preview_id"]
+            )
+        return result
 
     def _setup_config_transaction(
         self,
@@ -4174,29 +4833,76 @@ class AdminHandler(BaseHTTPRequestHandler):
         *,
         failure_reason,
         failure_message,
+        workflow_id,
+        preview_id,
+        operation,
+        consume_preview=False,
     ):
-        """Stage setup credentials and commit the config as one serialized unit.
+        """Verify workflow/preview authority, stage credentials and commit as one
+        serialized unit.
 
-        The target config is generated first and credential staging works
-        from it, exactly like the Maintenance apply, so both flows share one
-        reuse/rotate/provision decision path. Staging happens before the
-        config write so a credential problem fails before config.json
-        changes; a failed or declined commit rolls the staged records back so
-        no config ever references a missing secret and no orphan secret
-        survives. Everything — validation, staging, commit, rollback — runs
-        inside the one apply transaction shared with Maintenance, so parallel
-        Apply requests serialize instead of corrupting each other's
-        credential state. Returns ``(payload, http_status)``.
+        The lifecycle claim is taken first and held across the whole transaction,
+        so this mutation owns the workflow until its irreversible work is done: a
+        concurrent abandon or supersede is refused rather than terminalizing
+        underneath the commit, and a mutation that starts after terminalization
+        began is refused before it stages anything.
+
+        Verification order inside the shared apply transaction: the workflow
+        must be active, the submitted preview ID must be the workflow's stored
+        preview, the recomputed mutation fingerprint must match it, and the
+        live config must still match the reviewed baseline — all before the
+        config is serialized or any credential is staged, so a rejected
+        mutation leaves the live config and the credential store byte-exact
+        unchanged and never consumes the preview. A stale live baseline (or a
+        prepared payload that no longer reproduces the previewed hash)
+        additionally revokes the stored preview: the browser must review the
+        current configuration again.
+
+        The target config is generated exactly once and credential staging
+        works from it, exactly like the Maintenance apply, so both flows share
+        one reuse/rotate/provision decision path. A failed or declined commit
+        rolls the staged records back so no config ever references a missing
+        secret and no orphan secret survives. Returns ``(payload, http_status)``.
         """
 
+        workflows = self.server.setup_workflows
         changes = []
-        with self.server.config_apply.apply_transaction():
-            # Capture the config's revision (or its expected absence) before
-            # staging so the commit can refuse to overwrite a config edited or
-            # created externally while credentials were being staged.
+        try:
+            claim = self.server.setup_lifecycle.claim_mutation(
+                workflow_id=workflow_id, operation=operation
+            )
+        except GuidedSetupWorkflowError as exc:
+            return self._workflow_rejection_payload(exc)
+        with claim, self.server.config_apply.apply_transaction():
+            try:
+                record = workflows.require_active(workflow_id)
+                fingerprint = setup_mutation_fingerprint(
+                    draft=draft,
+                    supported_grid_meter_count=count,
+                    features=features,
+                    zendure_mqtt_proposals=proposals,
+                    zendure_mqtt_broker=broker,
+                    zendure_mqtt_manual_devices=manual_devices,
+                )
+                preview = workflows.verify_preview_authority(
+                    record,
+                    preview_id=preview_id,
+                    draft_fingerprint=fingerprint,
+                )
+            except GuidedSetupWorkflowError as exc:
+                return self._workflow_rejection_payload(exc)
+            # Re-read the live config under the transaction and compare it to
+            # the baseline the preview was issued against: a Maintenance edit
+            # after the review must reject even a matching draft fingerprint.
             expected_revision, expect_absent = (
                 self.server.config_apply.capture_config_revision()
             )
+            if preview["base_config_revision"] != {
+                "expected_revision": expected_revision,
+                "expect_absent": expect_absent,
+            }:
+                workflows.clear_preview(record["workflow_id"])
+                return _stale_setup_rejection(expected_revision, expect_absent)
             try:
                 # Serialize the target config exactly once: credentials are
                 # staged for these exact bytes and the commit writes them, so the
@@ -4213,6 +4919,22 @@ class AdminHandler(BaseHTTPRequestHandler):
                 )
             except ConfigExportValidationError as exc:
                 return self._validation_failure_payload(exc.preview, changes), 422
+            prepared_sha256 = hashlib.sha256(change.payload).hexdigest()
+            if (
+                preview["prepared_config_sha256"] is not None
+                and preview["prepared_config_sha256"] != prepared_sha256
+            ):
+                # Same inputs but different generated bytes: server-side state
+                # (e.g. the prepared release template) changed since the review.
+                workflows.clear_preview(record["workflow_id"])
+                return (
+                    {
+                        "ok": False,
+                        "error": SETUP_PREVIEW_MISMATCH,
+                        "message": PREVIEW_MISMATCH_MESSAGE,
+                    },
+                    409,
+                )
             try:
                 self._stage_setup_credentials(change.parsed_config, broker, changes)
             except CredentialStoreError as exc:
@@ -4230,13 +4952,15 @@ class AdminHandler(BaseHTTPRequestHandler):
                     400,
                 )
             try:
-                result = commit(change)
+                result = commit(change, record, preview)
             except ConfigExportValidationError as exc:
                 return self._validation_failure_payload(exc.preview, changes), 422
             except ConfigChangedError as exc:
                 # The config was edited or created externally during staging;
                 # never overwrite it. Roll the staged credentials back so no
                 # orphan secret survives and the external config bytes are kept.
+                # The reviewed baseline no longer holds either way.
+                workflows.clear_preview(record["workflow_id"])
                 return (
                     self._rollback_staged_credentials(
                         changes,
@@ -4261,19 +4985,64 @@ class AdminHandler(BaseHTTPRequestHandler):
                 # records would reference nothing, so remove the newly created
                 # ones.
                 return self._rollback_staged_credentials(changes, result), 409
+            if consume_preview and result.get("ok"):
+                # A successful direct Apply consumes its preview: the live
+                # config just changed, so the reviewed baseline is spent.
+                workflows.clear_preview(record["workflow_id"])
         return result, 200
 
+    def _workflow_rejection_payload(self, exc):
+        payload = {"ok": False, "error": exc.code, "message": exc.message}
+        # The operation kind only: never draft contents, digests or paths.
+        operation = getattr(exc, "operation", None)
+        if operation:
+            payload["operation"] = operation
+        view = self.server.setup_workflows.redacted_view()
+        if view is not None:
+            payload["workflow"] = view
+        return payload, exc.status
+
     def _handle_deployment_prepare(self):
+        """Submit the preparation worker under this workflow's lifecycle claim.
+
+        The claim is established before this handler answers 202, and the worker
+        releases it when it settles — so an abandon or supersede attempted while
+        the worker still writes config, compose or the marker is refused instead
+        of racing it.
+        """
+
         if not self._require_alignment_resources():
             return
         body = self._read_optional_json_body()
         if body is None:
             return
+        if set(body) - {"overwrite", "setup_workflow_id"}:
+            self._send_json({"error": "unsupported_field"}, status=400)
+            return
         overwrite = body.get("overwrite", False)
         if not isinstance(overwrite, bool):
             self._send_json({"error": "overwrite must be a boolean"}, status=400)
             return
-        result = self.server.deployment.prepare(overwrite=overwrite)
+        claim = self._claim_setup_deployment(
+            body.get("setup_workflow_id"), "deployment_prepare"
+        )
+        if claim is None:
+            return
+        settled = False
+        try:
+            result = self.server.deployment.prepare(
+                overwrite=overwrite,
+                workflow_id=claim.workflow_id,
+                on_settled=claim.release,
+            )
+            settled = bool(result.get("ok", False))
+        except Exception:
+            claim.release()
+            raise
+        if not settled:
+            claim.release()
+        if result.get("ok", False):
+            self.server.setup_workflows.record_deployment_marker(claim.workflow_id)
         if not result.get("ok", False):
             payload = {
                 "ok": False,
@@ -4295,6 +5064,24 @@ class AdminHandler(BaseHTTPRequestHandler):
             payload["transition"] = transition
         self._send_json(payload, status=result.get("status", 202))
 
+    def _claim_setup_deployment(self, workflow_id, operation):
+        """Verify the exact workflow, then claim it for a deployment mutation.
+
+        Returns the claim, or ``None`` after the rejection has been sent. The
+        verification and the claim are both required: verification proves the
+        caller names the current workflow, the claim keeps it that way for as
+        long as the operation can still commit.
+        """
+
+        try:
+            record = self.server.setup_workflows.require_active(workflow_id)
+            return self.server.setup_lifecycle.claim_mutation(
+                workflow_id=record["workflow_id"], operation=operation
+            )
+        except GuidedSetupWorkflowError as exc:
+            self._send_workflow_rejection(exc)
+            return None
+
     def _send_deployment_job(self, job_id):
         job = self.server.deployment.job(job_id.strip("/"))
         if job is None:
@@ -4308,11 +5095,28 @@ class AdminHandler(BaseHTTPRequestHandler):
         body = self._read_optional_json_body()
         if body is None:
             return
-        if body:
+        if set(body) - {"setup_workflow_id"}:
             self._send_json(
                 {"error": "deployment start does not accept parameters"}, status=400
             )
             return
+        setup_claim = self._claim_setup_deployment(
+            body.get("setup_workflow_id"), "deployment_start"
+        )
+        if setup_claim is None:
+            return
+        handed_over = False
+        try:
+            handed_over = bool(self._start_deployment_worker(setup_claim))
+        finally:
+            # A started worker owns the release through ``on_settled``; every
+            # other path must give the claim back here.
+            if not handed_over:
+                setup_claim.release()
+
+    def _start_deployment_worker(self, setup_claim):
+        """Drive the EMS start; returns True once the worker owns the claim."""
+
         transition = self._alignment_status().get("transition") or {}
         operation_id = transition.get("operation_id")
         if self._reject_nonstartable_ems_stage(transition.get("stage")):
@@ -4373,6 +5177,8 @@ class AdminHandler(BaseHTTPRequestHandler):
             try:
                 start_kwargs = {
                     "on_complete": on_complete if operation_id else None,
+                    "workflow_id": setup_claim.workflow_id,
+                    "on_settled": setup_claim.release,
                 }
                 # The productive deployment service exposes the exact boundary
                 # between container startup and dashboard health verification.
@@ -4429,6 +5235,7 @@ class AdminHandler(BaseHTTPRequestHandler):
         finally:
             if worker_token is not None and not worker_started:
                 self.server.operation_coordinator.release(worker_token)
+        return worker_started
 
     def _complete_deployment_alignment(self, operation_id, job):
         """Commit terminal deployment state from its worker, never a GET poll."""
@@ -4464,7 +5271,7 @@ class AdminHandler(BaseHTTPRequestHandler):
                     operation_id=operation_id, succeeded=True
                 )
             healthy = job.get("dashboard_reachable") is True
-            self.server.system_alignment.finish_healthcheck(
+            completion = self.server.system_alignment.finish_healthcheck(
                 operation_id=operation_id,
                 passed=healthy,
                 error_code=None if healthy else "healthcheck_failed",
@@ -4474,6 +5281,8 @@ class AdminHandler(BaseHTTPRequestHandler):
                     else "EMS started but its dashboard health check failed."
                 ),
             )
+            if (completion or {}).get("stage") == "completed":
+                self._complete_setup_workflow()
         except SystemAlignmentError:
             # A concurrent resume may already have committed the same terminal
             # observation; the durable service owns idempotency.
@@ -4501,12 +5310,20 @@ class AdminHandler(BaseHTTPRequestHandler):
         body = self._read_optional_json_body()
         if body is None:
             return
-        if body:
+        if set(body) - {"setup_workflow_id"}:
             self._send_json(
                 {"error": "permission repair does not accept parameters"}, status=400
             )
             return
-        result = self.server.deployment.repair_workspace_permissions()
+        claim = self._claim_setup_deployment(
+            body.get("setup_workflow_id"), "permission_repair"
+        )
+        if claim is None:
+            return
+        with claim:
+            result = self.server.deployment.repair_workspace_permissions(
+                workflow_id=claim.workflow_id
+            )
         if not result.get("ok", False):
             payload = {
                 "ok": False,
@@ -4523,6 +5340,9 @@ class AdminHandler(BaseHTTPRequestHandler):
         body = self._read_json_body()
         if body is None:
             return
+        if set(body) - {"container_name", "action", "setup_workflow_id"}:
+            self._send_json({"error": "unsupported_field"}, status=400)
+            return
         container_name = body.get("container_name")
         action = body.get("action")
         if not isinstance(container_name, str) or not isinstance(action, str):
@@ -4530,6 +5350,17 @@ class AdminHandler(BaseHTTPRequestHandler):
                 {"error": "container_name and action must be strings"}, status=400
             )
             return
+        claim = self._claim_setup_deployment(
+            body.get("setup_workflow_id"), "container_conflict_resolution"
+        )
+        if claim is None:
+            return
+        with claim:
+            self._resolve_setup_container_conflict(
+                claim, container_name=container_name, action=action
+            )
+
+    def _resolve_setup_container_conflict(self, claim, *, container_name, action):
         alignment = self._alignment_status()
         if not self._alignment_resources_allowed(
             alignment, allow_ems_pending=True
@@ -4543,7 +5374,7 @@ class AdminHandler(BaseHTTPRequestHandler):
                 self._require_alignment_resources(allow_ems_pending=True)
                 return
         result = self.server.deployment.resolve_container_conflict(
-            container_name, action
+            container_name, action, workflow_id=claim.workflow_id
         )
         if not result.get("ok", False):
             payload = {

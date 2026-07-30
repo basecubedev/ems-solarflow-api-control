@@ -1338,6 +1338,7 @@ def test_maintenance_config_failure_restores_malformed_record_bytes(
 
 def test_setup_apply_rotates_changed_local_credentials(tmp_path):
     from tests.test_admin_mqtt_credential_promotion_transaction import (
+        _authorized,
         _discovery_with_proposal,
         _serve as _serve_setup,
         _write_body,
@@ -1347,12 +1348,18 @@ def test_setup_apply_rotates_changed_local_credentials(tmp_path):
     srv, base = _serve_setup(discovery, tmp_path)
     srv.credential_store.save_mqtt_discovery_secret("home", "ems", "old-password")
     try:
-        body = _write_body(discovery)
+        body = _authorized(base, _write_body(discovery))
         status, payload = _request(f"{base}/api/setup/config/apply", "POST", body)
         assert status == 200 and payload.get("ok") is True, payload
 
         srv.credential_store.save_mqtt_discovery_secret("home", "ems", "new-password")
-        status, payload = _request(f"{base}/api/setup/config/apply", "POST", body)
+        # The first apply changed the live config and consumed its preview, so
+        # the re-apply is reviewed again, exactly as the browser re-previews.
+        status, payload = _request(
+            f"{base}/api/setup/config/apply",
+            "POST",
+            _authorized(base, _write_body(discovery)),
+        )
         assert status == 200 and payload.get("ok") is True, payload
         # Setup and Maintenance share the rotation contract.
         secret = srv.credential_store.load_mqtt_broker_secret("home")

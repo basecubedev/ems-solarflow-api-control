@@ -19,7 +19,9 @@ from admin.deployment import (
     parse_pull_progress,
 )
 from admin import deployment
+from admin.guided_setup_workflow import GuidedSetupWorkflowStore
 from admin.releases import ReleaseError
+from tests.helpers.setup_config import adopt_generated_config
 
 pytestmark = pytest.mark.simulation
 
@@ -173,7 +175,7 @@ class _SyncRegistry:
     def __init__(self):
         self._jobs = {}
 
-    def submit(self, job, runner):
+    def submit(self, job, runner, *, on_complete=None, on_settled=None):
         self._jobs[job.job_id] = job
         try:
             runner(job)
@@ -185,6 +187,11 @@ class _SyncRegistry:
             job.fail("workspace_write_failed", str(exc))
         except Exception:
             job.fail("prepare_failed", "Deployment preparation failed unexpectedly.")
+        finally:
+            if on_settled is not None:
+                on_settled()
+            if on_complete is not None:
+                on_complete(job.snapshot())
         return job
 
     def get(self, job_id):
@@ -228,7 +235,7 @@ def _service(
     releases_dir = _make_release(tmp_path, influx_image=influx_image)
     manager = _FakeReleaseManager(releases_dir)
     target = _write_config(tmp_path, influx)
-    return DeploymentService(
+    service = DeploymentService(
         manager,
         _ConfigExport(target),
         workspace_dir=tmp_path / "deployment",
@@ -240,7 +247,10 @@ def _service(
         dashboard_probe=dashboard_probe or (lambda _url: True),
         sleep=lambda _seconds: None,
         runtime_env={"PUID": "1000", "PGID": "1000"},
+        setup_workflows=GuidedSetupWorkflowStore(tmp_path),
     )
+    adopt_generated_config(service)
+    return service
 
 
 BUNDLED = {"enabled": True, "mode": "bundled"}
@@ -268,7 +278,7 @@ def _service_default_workspace(tmp_path, install_root):
     releases_dir = _make_release(tmp_path)
     manager = _FakeReleaseManager(releases_dir)
     target = _write_config(tmp_path)
-    return DeploymentService(
+    service = DeploymentService(
         manager,
         _ConfigExport(target),
         admin_data_dir=Path(install_root) / "data" / "admin",
@@ -283,7 +293,12 @@ def _service_default_workspace(tmp_path, install_root):
         install_context_provider=lambda: SimpleNamespace(
             install_root=Path(install_root)
         ),
+        setup_workflows=GuidedSetupWorkflowStore(
+            Path(install_root) / "data" / "admin"
+        ),
     )
+    adopt_generated_config(service)
+    return service
 
 
 def test_job_completion_callback_observes_terminal_success_without_polling(tmp_path):
@@ -714,6 +729,7 @@ def test_prepare_conflict_on_changed_config_requires_overwrite(tmp_path):
 
     # Change the generated config so the workspace marker no longer matches.
     _write_config(tmp_path, influx=BUNDLED)
+    adopt_generated_config(service)
     conflict, job = _run_prepare(service)
     assert conflict["ok"] is False
     assert conflict["reason"] == "workspace_conflict"
@@ -727,6 +743,32 @@ def test_prepare_conflict_on_changed_config_requires_overwrite(tmp_path):
 
 
 # --- start ---------------------------------------------------------------
+
+
+def test_prepare_stamps_the_marker_with_its_workflow(tmp_path):
+    service = _service(tmp_path, influx=DISABLED)
+    _run_prepare(service)
+
+    marker = json.loads(Path(service.marker_path).read_text(encoding="utf-8"))
+    active = service.setup_workflows.active()
+    assert marker["workflow_id"] == active["workflow_id"]
+    assert marker["preview_id"] == active["preview"]["preview_id"]
+
+
+def test_start_rejects_a_marker_prepared_by_another_workflow(tmp_path):
+    """A superseded workflow's prepared deployment must not start under the
+    replacement workflow."""
+
+    service = _service(tmp_path, influx=DISABLED)
+    _run_prepare(service)
+    store = service.setup_workflows
+    store.finish(store.active()["workflow_id"], status="superseded")
+    store.ensure_active()
+
+    result, job = _run_start(service)
+
+    assert job is None
+    assert result["reason"] == "deployment_marker_invalid"
 
 
 def test_start_is_blocked_until_deployment_is_prepared(tmp_path):

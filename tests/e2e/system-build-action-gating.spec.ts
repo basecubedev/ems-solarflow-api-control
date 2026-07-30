@@ -206,7 +206,7 @@ test.describe("Fresh Install System Build action gating", () => {
     );
   });
 
-  test("changing a confirmed Latest operation to v0.7.0 cancels it automatically", async (
+  test("changing a confirmed Latest operation to v0.7.0 supersedes it automatically", async (
     { page },
     testInfo,
   ) => {
@@ -215,14 +215,22 @@ test.describe("Fresh Install System Build action gating", () => {
     await setup.selectBuild("latest");
     await setup.continueToDevices();
     await page.locator('[data-setup-step="release"]').click();
+    const before = await (await page.request.get("/api/setup/workflow")).json();
 
-    const cancellation = page.waitForResponse(
+    // The build change retires the old Setup workflow as one backend
+    // operation; the narrow transition primitive is never used for it.
+    const superseded = page.waitForResponse(
       (response) =>
-        response.url().includes("/api/admin/system-alignment/cancel") &&
+        response.url().includes("/api/setup/system-build/supersede") &&
         response.request().method() === "POST",
     );
     await setup.selectBuild("v0.7.0");
-    expect((await cancellation).ok()).toBe(true);
+    const supersedeBody = await (await superseded).json();
+    expect(supersedeBody.ok, JSON.stringify(supersedeBody)).toBe(true);
+    expect(supersedeBody.superseded_workflow_id).toBe(before.workflow.workflow_id);
+    const after = await (await page.request.get("/api/setup/workflow")).json();
+    expect(after.workflow.status).toBe("active");
+    expect(after.workflow.workflow_id).not.toBe(before.workflow.workflow_id);
     expect(await expectValidSystemBuildAction(page, setup, testInfo)).toBe(
       "continue",
     );

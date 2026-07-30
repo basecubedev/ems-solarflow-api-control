@@ -54,7 +54,7 @@ def test_new_discovery_generation_invalidates_old_proposal(harness):
     assert "g2" in current["id"] and current["id"] != stale["id"]
 
     # The stale generation-1 selection is rejected server-side.
-    status, payload = harness.apply(selections=[stale])
+    status, payload = harness.apply_untrusted(selections=[stale])
     assert status == 400
     assert "discovery" in payload["error"].lower() or "not present" in payload["error"].lower()
 

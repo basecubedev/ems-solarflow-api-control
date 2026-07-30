@@ -172,7 +172,10 @@ the Admin Console (see **Start** above), open `http://127.0.0.1:8090`, and pick
 4. **04 Prepare deployment** — the Admin Console writes the generated config to
    the standard `config/config.json` (backing up any existing config first) and
    prepares the EMS deployment: the Compose file plus the target EMS image and
-   resources.
+   resources. If `config/config.json` changed after you generated the config —
+   because Maintenance, a restore or a migration edited it — the prepare stops
+   with a conflict instead of overwriting that change. Reopen 03 Config, review
+   the current config and generate it again.
 5. **05 Start EMS** — start (or restart) EMS, wait for the health check, then run
    `emsctl.py diagnose` to confirm the install.
 
@@ -182,6 +185,82 @@ After setup, open the dashboard at `http://<host-ip>:8080`, work through the
 
 If a legacy root `config.json` is present, the Admin Console can use it as source
 data, but the applied target is always `config/config.json`.
+
+## Restarting or discarding a setup
+
+**Restart setup** in Guided Setup discards the whole wizard run, not just the
+browser view: the Admin Console cancels the pending System Build transition and
+deletes the generated config and deployment marker it created, then returns to
+the first step. Your installed EMS, live `config/config.json`, runtime data,
+containers, volumes and backups are left untouched. The recovery panel offers
+the same action as **Discard setup** when a setup transition needs escaping; a
+Guided Upgrade offers **Cancel upgrade**, which ends the upgrade only.
+
+Discarding a setup is never a half-action. If the console is still busy with
+something the setup itself started — saving or applying the configuration,
+preparing the deployment, starting EMS — the discard is **refused** and says which
+operation is still running. Nothing has been discarded at that point: your draft
+and the setup stay exactly as they were, and you can discard once that operation
+finishes.
+
+### If temporary files remain
+
+Stopping the setup and clearing its files are two separate things, and the console
+never pretends otherwise:
+
+- **Setup has stopped. Temporary files remain.** No new setup and no upgrade can
+  start until the cleanup succeeds, and the console offers **Retry cleanup**. Your
+  live `config/config.json` and the running EMS were not changed by the failed
+  cleanup. The message survives a browser reload and an Admin restart, and the
+  retry always applies to the same setup — so you never have to work out which
+  files belong to what, and you never need to delete JSON files by hand.
+- **Files were kept for review.** If the console finds a file it cannot prove
+  belongs to this setup — a generated config left by an older Admin version, or a
+  deployment marker written before setups were tracked — it **keeps** it and says
+  so instead of deleting it. **Retry cleanup** is not offered, because retrying
+  would not change the answer. Nothing was changed on your running system; a
+  maintainer has to look at the leftover file. The same applies while a setup is
+  running: such a file is never deployed either, and the console asks you to
+  generate the configuration again.
+
+Changing the selected System Build after a setup has started retires the
+previous setup the same way: the console asks the server to supersede it, so
+the earlier build's generated config and deployment plan are removed before the
+new build continues. Nothing from the old build stays behind — and if the previous
+setup was still busy, the build change is refused rather than cutting it off.
+
+If you want to start a guided upgrade while a setup is still unfinished, the
+console asks you to **Discard setup** first. The upgrade only begins after that
+cleanup is confirmed — an unfinished setup can never deploy over an upgrade, or
+the other way round. This holds for both upgrade steps: neither verifying a build
+nor upgrading the system starts while setup files remain. **Cancel upgrade** in
+turn keeps your running system, your live configuration and the last known-good
+build exactly as they are.
+
+## If the configuration changed while you were working
+
+Setup checks two things before it saves or applies anything: that the draft is
+exactly the one shown in the preview, and that `config/config.json` has not
+changed since that preview was created.
+
+- **Changing the draft requires a new preview.** As soon as you edit a device,
+  a setting or a broker password, Apply and Continue are disabled until the
+  preview has refreshed. The preview you looked at is what gets applied — a
+  preview of one draft can never save a different one.
+- **A changed live configuration stops the save.** If `config/config.json`
+  changes in the meantime — through Maintenance, a restore, or another session
+  — Apply is refused and your draft is kept. Choose **Review current
+  configuration** to re-check it against the current config, then apply again.
+- **Another setup session can take over.** If setup was restarted or its build
+  changed elsewhere, this browser tab belongs to an older session and can no
+  longer change anything. The console says so and offers **Open current setup**
+  (continue with the session that is now current) or **Discard local draft**
+  (drop only this tab's unsaved draft). The other session is never affected.
+
+After upgrading the Admin Console while a setup was unfinished, a configuration
+generated by the older version has to be generated once more: the console
+returns you to the config preview and asks you to regenerate it. Nothing is
+deleted, and your installed system is not touched.
 
 Full detail: [../admin-discovery.md](../technical/admin-discovery.md). Layout and legacy
 migration: [config-layout.md](config-layout.md).

@@ -322,6 +322,14 @@ class UpgradeJobRegistry:
             job = self._jobs.get(job_id)
         return job.snapshot() if job is not None else None
 
+    def for_operation(self, operation_id):
+        """The operation's existing job, else ``None`` — for duplicate resumes."""
+
+        with self._lock:
+            job_id = self._by_operation.get(operation_id)
+            job = self._jobs.get(job_id) if job_id is not None else None
+        return job
+
     @staticmethod
     def _run(job, runner):
         try:

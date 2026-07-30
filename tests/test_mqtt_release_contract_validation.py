@@ -145,7 +145,7 @@ def test_forged_proposal_fields_never_reach_config(harness, forged):
 def test_unknown_broker_ref_selection_is_rejected(harness):
     proposal = _discover_one(harness)
     selection = {"id": proposal["id"], "broker_ref": "not-a-real-ref"}
-    status, payload = harness.apply(selections=[selection])
+    status, payload = harness.apply_untrusted(selections=[selection])
     assert status == 400
 
 

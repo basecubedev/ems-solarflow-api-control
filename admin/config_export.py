@@ -17,6 +17,22 @@ class ConfigExportValidationError(Exception):
         self.preview = preview
 
 
+def config_payload_bytes(config):
+    """The one serialization of a generated config to target bytes.
+
+    Preview hashing and export/apply must agree byte-for-byte, so the exact
+    prepared-config hash bound into a Setup preview provably matches what a
+    later write/apply serializes.
+    """
+
+    return (
+        json.dumps(config, indent=2, ensure_ascii=False, allow_nan=False).encode(
+            "utf-8"
+        )
+        + b"\n"
+    )
+
+
 @dataclass(frozen=True)
 class PreparedConfigChange:
     """The single serialized target config used by one apply transaction.
@@ -39,10 +55,22 @@ class PreparedConfigChange:
 
 
 class ConfigExportService:
-    def __init__(self, preview_generator, admin_data_dir):
+    def __init__(self, preview_generator, admin_data_dir, target_path_provider=None):
         self.preview_generator = preview_generator
-        self.target_path = Path(admin_data_dir) / "generated" / "config.json"
+        self._default_target_path = Path(admin_data_dir) / "generated" / "config.json"
+        # Resolves the generated-config target per call (the active Guided Setup
+        # workflow's own directory); the legacy singleton path stays the
+        # fallback so pre-workflow artifacts remain inspectable.
+        self._target_path_provider = target_path_provider
         self._write_lock = threading.Lock()
+
+    @property
+    def target_path(self):
+        if self._target_path_provider is not None:
+            provided = self._target_path_provider()
+            if provided:
+                return Path(provided)
+        return self._default_target_path
 
     def status(self):
         target = self.target_path
@@ -67,13 +95,7 @@ class ConfigExportService:
         )
         if not preview["ready"]:
             raise ConfigExportValidationError(preview)
-        payload = json.dumps(
-            preview["config"],
-            indent=2,
-            ensure_ascii=False,
-            allow_nan=False,
-        ).encode("utf-8") + b"\n"
-        return payload, preview
+        return config_payload_bytes(preview["config"]), preview
 
     def prepare(
         self,

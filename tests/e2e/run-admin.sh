@@ -7,6 +7,10 @@ TMP="$(mktemp -d)"
 export EMS_ADMIN_TEST_MODE=1
 export EMS_ADMIN_DATA_DIR="$TMP/admin-data"
 export EMS_INSTALL_DIR="$TMP/install"
+# Without a non-root runtime identity the deployment step can never prepare, so
+# its browser-facing conflict states would be unreachable in tests.
+export PUID="${PUID:-$(id -u)}"
+export PGID="${PGID:-$(id -g)}"
 mkdir -p "$EMS_ADMIN_DATA_DIR" "$EMS_INSTALL_DIR"
 PY="$ROOT/.venv/bin/python"
 [ -x "$PY" ] || PY="$(command -v python3)"

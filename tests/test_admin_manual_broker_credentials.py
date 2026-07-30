@@ -21,6 +21,7 @@ from admin.server import ScanRegistry, create_server
 from ems.mqtt_credentials import FileMqttCredentialResolver, default_mqtt_secrets_dir
 from tests.admin_auth_helpers import auth_headers, authenticate
 from tests.helpers.system_alignment import SetupReadySystemAlignment
+from tests.helpers.setup_config import authorize_setup_mutation
 from tests.test_admin_server import (
     _FakeReleaseManager,
     _fake_gateway_prober,
@@ -108,6 +109,15 @@ def _request(url, method="GET", body=None):
         return exc.code, json.loads(exc.read() or b"null")
 
 
+def _workflow_request(url, method="GET", body=None):
+    status, payload = _request(url, method, body)
+    return status, {}, payload
+
+
+def _authorized(base, body, **kwargs):
+    return authorize_setup_mutation(base, _workflow_request, body, **kwargs)
+
+
 def _serve(tmp_path):
     srv = create_server(
         "127.0.0.1", 0,
@@ -138,7 +148,8 @@ def _body():
 def test_apply_stages_manual_broker_secret_and_keeps_config_clean(tmp_path):
     srv, base = _serve(tmp_path)
     try:
-        status, payload = _request(f"{base}/api/setup/config/apply", "POST", _body())
+        body = _authorized(base, _body())
+        status, payload = _request(f"{base}/api/setup/config/apply", "POST", body)
         assert status == 200 and payload["ok"] is True, payload
         config = json.loads(Path(payload["path"]).read_text())
         blob = json.dumps(config)
@@ -162,7 +173,8 @@ def test_apply_stages_manual_broker_secret_and_keeps_config_clean(tmp_path):
 def test_reapply_with_different_password_rotates_credential(tmp_path):
     srv, base = _serve(tmp_path)
     try:
-        status, payload = _request(f"{base}/api/setup/config/apply", "POST", _body())
+        body = _authorized(base, _body())
+        status, payload = _request(f"{base}/api/setup/config/apply", "POST", body)
         assert status == 200 and payload["ok"] is True, payload
         ref = json.loads(Path(payload["path"]).read_text())["zendure_mqtt"][
             "brokers"
@@ -170,6 +182,7 @@ def test_reapply_with_different_password_rotates_credential(tmp_path):
 
         rotated = _body()
         rotated["zendure_mqtt_broker"]["password"] = "rotated-broker-pw"
+        rotated = _authorized(base, rotated)
         status, payload = _request(
             f"{base}/api/setup/config/apply", "POST", rotated
         )
@@ -190,18 +203,21 @@ def test_reapply_with_different_password_rotates_credential(tmp_path):
 def test_config_write_failure_restores_rotated_manual_broker_secret(tmp_path):
     srv, base = _serve(tmp_path)
     try:
-        status, payload = _request(f"{base}/api/setup/config/apply", "POST", _body())
+        body = _authorized(base, _body())
+        status, payload = _request(f"{base}/api/setup/config/apply", "POST", body)
         assert status == 200 and payload["ok"] is True, payload
         ref = json.loads(Path(payload["path"]).read_text())["zendure_mqtt"][
             "brokers"
         ]["local_mqtt"]["credentials_ref"]
 
+        rotated = _body()
+        rotated["zendure_mqtt_broker"]["password"] = "rotated-broker-pw"
+        rotated = _authorized(base, rotated)
+
         def _boom(*args, **kwargs):
             raise OSError("disk full")
 
         srv.config_apply.apply = _boom
-        rotated = _body()
-        rotated["zendure_mqtt_broker"]["password"] = "rotated-broker-pw"
         status, payload = _request(
             f"{base}/api/setup/config/apply", "POST", rotated
         )
@@ -225,7 +241,8 @@ def test_config_write_failure_rolls_back_manual_broker_secret(tmp_path):
 
     srv.config_apply.apply = _boom
     try:
-        status, payload = _request(f"{base}/api/setup/config/apply", "POST", _body())
+        body = _authorized(base, _body())
+        status, payload = _request(f"{base}/api/setup/config/apply", "POST", body)
         assert status == 500
         ref = srv.credential_store.normalize_ref("local_mqtt")
         assert srv.credential_store.load_mqtt_broker_secret(ref) is None

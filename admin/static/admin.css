@@ -1361,6 +1361,11 @@ code {
 .config-validation-item-warn .config-validation-icon { color: var(--pv); }
 .config-validation-item-error,
 .config-validation-item-error .config-validation-icon { color: var(--danger); }
+/* display:grid above overrides the UA [hidden] rule, so restore it explicitly. */
+#setup-config-conflict[hidden],
+#setup-workflow-conflict[hidden] { display: none; }
+#setup-config-conflict,
+#setup-workflow-conflict { gap: 8px; grid-template-columns: minmax(0, 1fr); }
 /* Reuses the config-validation error/warn tones; only lays out the ref list. */
 .credential-rollback-warning { margin-top: 8px; }
 .credential-rollback-refs {

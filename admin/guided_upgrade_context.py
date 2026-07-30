@@ -313,6 +313,34 @@ class GuidedUpgradeContextStore:
             except FileNotFoundError:
                 pass
 
+    def clear_for_operation(self, operation_id) -> bool:
+        """Remove the stored context only when it belongs to ``operation_id``.
+
+        Terminal lifecycle events (Cancel upgrade, completed upgrade) are bound
+        to their operation, so an old cancellation can never clear a newer
+        upgrade's context. An unreadable file is left untouched — fail closed
+        rather than guess ownership. Returns whether the context was removed.
+        """
+
+        if not operation_id or not isinstance(operation_id, str):
+            return False
+        with self._lock:
+            try:
+                raw = self.path.read_bytes()
+            except (FileNotFoundError, OSError):
+                return False
+            try:
+                data = json.loads(raw.decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                return False
+            if not isinstance(data, dict) or data.get("operation_id") != operation_id:
+                return False
+            try:
+                self.path.unlink()
+            except FileNotFoundError:
+                pass
+            return True
+
     @staticmethod
     def _to_context(record) -> GuidedUpgradeContext:
         return GuidedUpgradeContext(

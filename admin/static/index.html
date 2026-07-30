@@ -892,6 +892,34 @@
                role="status" aria-live="polite" hidden></p>
             <div id="config-apply-rollback" class="credential-rollback-warning"
                  role="alert" hidden></div>
+            <div id="setup-config-conflict" class="config-validation-item config-validation-item-error"
+                 role="alert" hidden>
+              <p id="setup-config-conflict-message"></p>
+              <div class="setup-nav-inline">
+                <button id="setup-config-conflict-review" type="button" class="primary-button compact">
+                  Review current configuration
+                </button>
+                <button id="setup-config-conflict-discard" type="button" class="secondary-button compact">
+                  Discard setup
+                </button>
+              </div>
+              <details id="setup-config-conflict-details" class="advanced-details" hidden>
+                <summary>Technical details</summary>
+                <pre id="setup-config-conflict-detail" class="config-preview"></pre>
+              </details>
+            </div>
+            <div id="setup-workflow-conflict" class="config-validation-item config-validation-item-error"
+                 role="alert" hidden>
+              <p id="setup-workflow-conflict-message"></p>
+              <div class="setup-nav-inline">
+                <button id="setup-workflow-conflict-open" type="button" class="primary-button compact">
+                  Open current setup
+                </button>
+                <button id="setup-workflow-conflict-discard" type="button" class="secondary-button compact">
+                  Discard local draft
+                </button>
+              </div>
+            </div>
           </details>
           <details class="advanced-details" id="config-template-details">
             <summary>Show template details</summary>
@@ -1148,7 +1176,7 @@
 
       <div class="setup-nav">
         <button id="setup-back" type="button" class="secondary-button compact" hidden>Back</button>
-        <button id="setup-start-over" type="button" class="secondary-button compact">Start over</button>
+        <button id="setup-start-over" type="button" class="secondary-button compact">Restart setup</button>
         <p id="setup-nav-error" class="scan-error" role="alert" hidden></p>
         <button id="setup-next" type="button" class="primary-button compact" disabled>Next</button>
       </div>
@@ -2155,7 +2183,10 @@
               Return Admin to running build
             </button>
             <button type="button" id="system-alignment-abandon" class="secondary-button compact">
-              Abandon transition
+              Discard setup
+            </button>
+            <button type="button" id="system-alignment-retry-cleanup" class="primary-button compact" hidden>
+              Retry cleanup
             </button>
           </div>
         </div>

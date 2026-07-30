@@ -454,7 +454,7 @@ test.describe("Guided Upgrade", () => {
     );
   });
 
-  test("validate cancels an abandoned setup transition that would block execute", async ({
+  test("validate discards a blocking setup through its owner before verifying", async ({
     page,
     seedAdminScenario,
   }) => {
@@ -483,15 +483,38 @@ test.describe("Guided Upgrade", () => {
     await expect(select).toBeEnabled();
     await select.selectOption("v9.9.10");
 
-    const cancelled = page.waitForResponse((response) =>
-      response.url().endsWith("/system-alignment/cancel"),
+    // The server refuses to validate while Guided Setup owns unresolved state,
+    // so the console asks for an explicit Discard setup and resolves it through
+    // the Setup owner — the narrow transition primitive is never used here.
+    const confirmed: string[] = [];
+    page.on("dialog", (dialog) => {
+      confirmed.push(dialog.message());
+      return dialog.accept();
+    });
+    const abandoned = page.waitForResponse((response) =>
+      response.url().endsWith("/api/setup/abandon"),
     );
+    const primitiveCancels: string[] = [];
+    page.on("request", (request) => {
+      if (request.url().endsWith("/system-alignment/cancel")) {
+        primitiveCancels.push(request.url());
+      }
+    });
     await page.locator("#upgrade-prepare-btn").click();
-    expect((await cancelled).ok()).toBeTruthy();
+    expect((await abandoned).ok()).toBeTruthy();
+    expect(confirmed.join(" ")).toMatch(/Discard this setup\?/i);
 
     await expect(page.locator("#upgrade-release-status")).toHaveText(
       /System Build verified/i,
     );
+    expect(primitiveCancels).toEqual([]);
+
+    // The Setup owner removed its artifacts along with the transition.
+    const generated = await page.evaluate(async () => {
+      const res = await fetch("/api/setup/config/status", { cache: "no-store" });
+      return res.json();
+    });
+    expect(generated.exists).toBe(false);
 
     const cleared = await page.evaluate(async () => {
       const res = await fetch("/api/admin/system-alignment/status", {

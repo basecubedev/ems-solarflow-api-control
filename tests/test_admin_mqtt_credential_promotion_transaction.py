@@ -20,6 +20,7 @@ from admin.server import ScanRegistry, create_server
 from admin import zendure_mqtt_config_proposals
 from tests.admin_auth_helpers import auth_headers, authenticate
 from tests.helpers.system_alignment import SetupReadySystemAlignment
+from tests.helpers.setup_config import authorize_setup_mutation
 from tests.test_admin_server import (
     _FakeReleaseManager,
     _fake_gateway_prober,
@@ -46,6 +47,15 @@ def _request(url, method="GET", body=None):
             return resp.status, json.loads(resp.read() or b"null")
     except urllib.error.HTTPError as exc:
         return exc.code, json.loads(exc.read() or b"null")
+
+
+def _workflow_request(url, method="GET", body=None):
+    status, payload = _request(url, method, body)
+    return status, {}, payload
+
+
+def _authorized(base, body, **kwargs):
+    return authorize_setup_mutation(base, _workflow_request, body, **kwargs)
 
 
 def _device_observation(credentials_ref="home"):
@@ -122,7 +132,9 @@ def test_preview_and_download_are_side_effect_free(tmp_path):
     srv.credential_store.save_mqtt_discovery_secret("home", "user", "password")
     body = _write_body(discovery)
     try:
-        status, _ = _request(f"{base}/api/setup/config-preview", "POST", body)
+        status, _ = _request(
+            f"{base}/api/setup/config-preview/validate", "POST", body
+        )
         assert status == 200
         status, _ = _request(f"{base}/api/setup/config/download", "POST", body)
         assert status == 200
@@ -141,7 +153,9 @@ def test_setup_preview_surfaces_invalid_credentials_ref(tmp_path):
     srv, base = _serve(discovery, tmp_path)
     body = _write_body(discovery)
     try:
-        status, preview = _request(f"{base}/api/setup/config-preview", "POST", body)
+        status, preview = _request(
+            f"{base}/api/setup/config-preview/validate", "POST", body
+        )
         assert status == 200
         assert preview["ready"] is False
         codes = {e["code"] for e in preview["validation"]["errors"]}
@@ -191,9 +205,8 @@ def test_setup_apply_conflicts_when_config_changed_during_staging(tmp_path, monk
     external = b'{"externally": "edited"}\n'
     _patch_external_edit_during_staging(monkeypatch, config_path, external)
     try:
-        status, payload = _request(
-            f"{base}/api/setup/config/apply", "POST", _write_body(discovery)
-        )
+        body = _authorized(base, _write_body(discovery))
+        status, payload = _request(f"{base}/api/setup/config/apply", "POST", body)
         assert status == 409, payload
         # The external edit is preserved; the prepared payload was not written.
         assert config_path.read_bytes() == external
@@ -213,9 +226,8 @@ def test_setup_apply_conflicts_when_config_created_during_staging(tmp_path, monk
     external = b'{"externally": "created"}\n'
     _patch_external_edit_during_staging(monkeypatch, config_path, external)
     try:
-        status, payload = _request(
-            f"{base}/api/setup/config/apply", "POST", _write_body(discovery)
-        )
+        body = _authorized(base, _write_body(discovery))
+        status, payload = _request(f"{base}/api/setup/config/apply", "POST", body)
         assert status == 409, payload
         # The config that appeared externally is preserved, not overwritten.
         assert config_path.read_bytes() == external
@@ -232,9 +244,8 @@ def test_setup_apply_writes_when_config_absent_and_unchanged(tmp_path):
     config_path = _install_config_path()
     assert not config_path.exists()
     try:
-        status, payload = _request(
-            f"{base}/api/setup/config/apply", "POST", _write_body(discovery)
-        )
+        body = _authorized(base, _write_body(discovery))
+        status, payload = _request(f"{base}/api/setup/config/apply", "POST", body)
         assert status == 200 and payload["ok"] is True, payload
         assert config_path.exists()
         assert _runtime_secret_saved(srv)
@@ -248,12 +259,11 @@ def test_successful_write_promotes_credential_and_writes_config(tmp_path):
     srv, base = _serve(discovery, tmp_path)
     srv.credential_store.save_mqtt_discovery_secret("home", "user", "password")
     try:
-        status, payload = _request(
-            f"{base}/api/setup/config/write", "POST", _write_body(discovery)
-        )
+        body = _authorized(base, _write_body(discovery))
+        status, payload = _request(f"{base}/api/setup/config/write", "POST", body)
         assert status == 200 and payload["ok"] is True
         assert _runtime_secret_saved(srv)
-        config = json.loads((tmp_path / "generated" / "config.json").read_text())
+        config = json.loads(Path(payload["path"]).read_text())
         blob = json.dumps(config)
         assert "credentials_ref" in blob
         # No secret material ever lands in config.
@@ -269,12 +279,12 @@ def test_missing_promotion_source_leaves_config_and_secrets_untouched(tmp_path):
     srv, base = _serve(discovery, tmp_path)
     # Deliberately do NOT save the discovery secret; promotion must fail.
     try:
-        status, payload = _request(
-            f"{base}/api/setup/config/write", "POST", _write_body(discovery)
-        )
+        body = _authorized(base, _write_body(discovery))
+        status, payload = _request(f"{base}/api/setup/config/write", "POST", body)
         assert status == 400
         assert payload["reason"] == "credential_promotion_failed"
-        assert not (tmp_path / "generated" / "config.json").exists()
+        status, target = _request(f"{base}/api/setup/config/status")
+        assert status == 200 and target["exists"] is False
         assert not _runtime_secret_saved(srv)
     finally:
         srv.shutdown()
@@ -289,14 +299,14 @@ def test_config_write_failure_after_staging_leaves_no_orphan_secret(tmp_path):
     def _boom(*args, **kwargs):
         raise OSError("disk full")
 
-    srv.config_export.write = _boom
     try:
-        status, payload = _request(
-            f"{base}/api/setup/config/write", "POST", _write_body(discovery)
-        )
+        body = _authorized(base, _write_body(discovery))
+        srv.config_export.write = _boom
+        status, payload = _request(f"{base}/api/setup/config/write", "POST", body)
         assert status == 500
         assert payload["reason"] == "write_failed"
-        assert not (tmp_path / "generated" / "config.json").exists()
+        status, target = _request(f"{base}/api/setup/config/status")
+        assert status == 200 and target["exists"] is False
         # The staged runtime record must be rolled back on write failure.
         assert not _runtime_secret_saved(srv)
     finally:
@@ -309,18 +319,15 @@ def test_target_exists_without_overwrite_rolls_back_new_secret(tmp_path):
     srv, base = _serve(discovery, tmp_path)
     srv.credential_store.save_mqtt_discovery_secret("home", "user", "password")
     try:
-        status, payload = _request(
-            f"{base}/api/setup/config/write", "POST", _write_body(discovery)
-        )
+        body = _authorized(base, _write_body(discovery))
+        status, payload = _request(f"{base}/api/setup/config/write", "POST", body)
         assert status == 200 and _runtime_secret_saved(srv)
 
         # Remove the just-promoted runtime record, then repeat without overwrite:
         # the write is refused (target_exists) so the freshly staged record must
         # be rolled back rather than left orphaned.
         srv.credential_store.forget_mqtt_broker_secret("home")
-        status, payload = _request(
-            f"{base}/api/setup/config/write", "POST", _write_body(discovery)
-        )
+        status, payload = _request(f"{base}/api/setup/config/write", "POST", body)
         assert status == 409 and payload["reason"] == "target_exists"
         assert not _runtime_secret_saved(srv)
     finally:
@@ -333,9 +340,8 @@ def test_successful_apply_promotes_credential_and_writes_install_config(tmp_path
     srv, base = _serve(discovery, tmp_path)
     srv.credential_store.save_mqtt_discovery_secret("home", "user", "password")
     try:
-        status, payload = _request(
-            f"{base}/api/setup/config/apply", "POST", _write_body(discovery)
-        )
+        body = _authorized(base, _write_body(discovery))
+        status, payload = _request(f"{base}/api/setup/config/apply", "POST", body)
         assert status == 200 and payload["ok"] is True
         assert _runtime_secret_saved(srv)
         config = json.loads(Path(payload["path"]).read_text())
@@ -353,8 +359,8 @@ def test_repeated_write_promotion_is_idempotent(tmp_path):
     discovery = _discovery_with_proposal()
     srv, base = _serve(discovery, tmp_path)
     srv.credential_store.save_mqtt_discovery_secret("home", "user", "password")
-    body = {**_write_body(discovery), "overwrite": True}
     try:
+        body = _authorized(base, {**_write_body(discovery), "overwrite": True})
         for _ in range(2):
             status, payload = _request(
                 f"{base}/api/setup/config/write", "POST", body
