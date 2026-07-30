@@ -162,6 +162,30 @@ def broker_endpoint(proposal):
     }
 
 
+def draft_broker_endpoint(broker):
+    """Parse the Admin draft broker block a selected proposal travels with.
+
+    Every Admin consumer of a discovered connection — an MQTT inverter draft
+    entry and the central MQTT grid meter alike — carries the proposal's
+    non-secret endpoint under these draft key names, so the mapping to
+    :func:`broker_endpoint` lives here once. Raises
+    :class:`BrokerEndpointError` exactly like :func:`broker_endpoint`.
+    """
+
+    broker = broker if isinstance(broker, dict) else {}
+    return broker_endpoint(
+        {
+            "broker_host": broker.get("host"),
+            "broker_port": broker.get("port"),
+            "broker_tls": broker.get("tls"),
+            "broker_tls_insecure": broker.get("tls_insecure"),
+            "broker_tls_mode": broker.get("tls_mode"),
+            "credentials_ref": broker.get("credentials_ref"),
+            "connection_source": broker.get("source"),
+        }
+    )
+
+
 def endpoint_broker_profile(endpoint, source):
     """Shape a proposal endpoint as a broker profile for identity comparison.
 
@@ -354,6 +378,7 @@ __all__ = [
     "broker_endpoint",
     "collision_safe_local_ref",
     "default_zendure_cloud_auth_available",
+    "draft_broker_endpoint",
     "endpoint_broker_profile",
     "existing_broker_profiles",
     "is_local_broker_ref",

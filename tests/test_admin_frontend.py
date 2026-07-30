@@ -1420,7 +1420,7 @@ def test_config_inverters_use_shared_hardware_cards():
     )[0]
 
     assert "renderHardwareCard({" in row
-    assert 'kind: "inverter"' in row
+    assert 'role: "inverter"' in row
     assert 'removeClass: "config-draft-remove"' in row
     assert "inverterModelText(item)" in row
     assert "data-inverter-toggle" in row
@@ -1611,7 +1611,7 @@ def test_js_config_available_cards_use_hardware_card_style():
         "\nfunction ", 1
     )[0]
     # Setup available cards adopt the Maintenance hardware-card layout.
-    assert "hardware-card hardware-card-" in card
+    assert "hardwareCardClass(hardwareRole)" in card
     assert "hardware-card-head" in card
     assert "hardware-card-summary" in card
     assert "hardware-card-title" in card
@@ -1622,7 +1622,7 @@ def test_js_config_available_cards_use_hardware_card_style():
     assert "hardware-card-toggle" in card
     assert "hardware-card-body" in card
     # Grid meter candidates get the grid-meter variant, inverters the inverter one.
-    assert '"grid-meter"' in card
+    assert '"grid_meter"' in card
     assert '"inverter"' in card
     # Setup add behavior is preserved, not moved onto mconfig helpers.
     assert "config-add" in card
@@ -2491,7 +2491,7 @@ def test_js_grid_meter_card_uses_shared_hardware_controls():
         "\nfunction ", 1
     )[0]
     assert "renderHardwareCard({" in fn
-    assert 'kind: "grid-meter"' in fn
+    assert 'role: "grid_meter"' in fn
     assert "gridMeterModelText(meter)" in fn
     assert 'removeClass: "config-grid-remove"' in fn
     body = js.split("function renderGridMeterBody", 1)[1].split(
@@ -4404,7 +4404,7 @@ def test_js_maintenance_config_renders_setup_style_cards():
     hardware = js.split("function mconfigHardwareCard", 1)[1].split(
         "\nfunction ", 1
     )[0]
-    assert "hardware-card hardware-card-" in hardware
+    assert "hardwareCardClass(options.role)" in hardware
     assert "hardware-card-status" in hardware
     assert "hardware-card-model" in hardware
     expanded = js.split("function mconfigSetExpanded", 1)[1].split("\nfunction ", 1)[0]
@@ -4688,7 +4688,7 @@ def test_setup_unified_overview_uses_hardware_card_list_layout():
     )[0]
 
     # Same collapsible hardware-card list layout as the maintenance/config list.
-    assert '"hardware-card hardware-card-' in card
+    assert "hardwareCardClass(hardwareRole)" in card
     assert '"hardware-card-head"' in card
     assert '"hardware-card-summary"' in card
     assert '"hardware-card-body"' in card
@@ -6478,6 +6478,9 @@ def _run_mqtt_proposal_node(setup):
         for name in (
             "isMqttGridMeterProposal",
             "mqttGridMeterProposalTopic",
+            "mqttProposalBrokerRef",
+            "mqttGridMeterConfigFromProposal",
+            "confirmGridMeterReplacement",
             "normalizeInverterAliasTokens",
             "serializeMqttProposalSelection",
             "mqttPreviewPayload",
@@ -6843,6 +6846,8 @@ def run_mconfig_add_mqtt_proposal(proposal):
             "mconfigDraftDevicesMatchingCandidate",
             "mconfigPristineHasCandidateConnection",
             "mconfigMqttProposalState",
+            "mqttProposalBrokerRef",
+            "mqttProposalBrokerProfile",
             "mconfigZendureMqttDraftFromProposal",
             "mconfigAddZendureMqttProposal",
         )

@@ -607,14 +607,36 @@ instead of adding a telemetry device, writes the result to the central
 `grid_meter` block (never to `devices[]`), keeps exactly one grid meter active,
 and never silently replaces an already-selected grid meter.
 
+Guided Setup and Maintenance offer the same action from the same helpers: the
+hardware role (`mqttProposalHardwareRole`) decides that a proposal is a grid
+meter, and one shared mapping (`mqttGridMeterConfigFromProposal`) turns the
+trusted fragment into the `grid_meter` config model. In Maintenance the action
+writes only the in-memory draft — the live config still changes through the
+normal preview → validate → backup → apply workflow — and replacing an already
+configured grid meter asks for confirmation first.
+
+The meter's `broker_ref` may name a broker that was discovered in this session
+and is not declared in the config yet. The adopted draft therefore carries the
+same non-secret broker block an MQTT inverter draft entry carries
+(`mqttProposalBrokerProfile`: ref, host, port, TLS mode, `credentials_ref`,
+source), and the Maintenance merge provisions it through the one shared broker
+resolver both consumers use: an endpoint already declared under any ref is
+reused, a new endpoint provisions its own profile, and a ref that exists with a
+different endpoint is refused (`zendure_mqtt_broker_conflict`) instead of being
+replaced. The block is attached only after a replacement is confirmed, so a
+declined replacement leaves no unreferenced profile behind, and a Zendure Cloud
+endpoint is never provisioned for a grid meter (EMS Core accepts only a
+`local_mqtt` broker there).
+
 Weak or unsafe evidence never becomes an auto-applicable D0 grid meter: a bare
 `totalPower` metric without an exact safe local topic keeps only a role hint plus
 a `grid_power_metric_seen_but_topic_unavailable` warning; the `number/…` write
 channel, extra path segments, foreign/custom prefixes, and cloud topics (whose
 prefix is the secret account app key) are all rejected. Cloud MQTT D0
-auto-mapping is **not supported** in this release. Local HTTP remains the
-recommended Zendure grid-meter path (see
-[configuration](configuration.md)); MQTT is an optional alternative.
+auto-mapping is **not supported** in this release. Such a grid meter keeps its
+grid-meter card and a disabled **"Use as grid meter"** action — it is never
+offered as an inverter. Local HTTP remains the recommended Zendure grid-meter
+path (see [configuration](configuration.md)); MQTT is an optional alternative.
 
 Credentials are a reusable **discovery credential pool**, not per-broker
 connection config: the Local MQTT inline config exposes only a compact
@@ -699,6 +721,13 @@ inverter, which is what keeps a switch from creating a second configured device.
 | `alternative` | same physical inverter, different concrete connection | **Use connection** | switches the existing logical inverter in place |
 | `identity_conflict` | contradictory identity evidence (shared route alias, different visible serials) | **Identity conflict** (disabled) | none — fail closed |
 
+This table applies to proposals whose hardware role is **inverter** (and to
+unclassified candidates, which keep the explicit inverter action). A proposal
+classified as a **grid meter** never enters it: it resolves against the central
+`grid_meter` draft instead and offers **Use as grid meter** / **Added to draft**
+/ **In config**, or a disabled **Use as grid meter** when the proposal carries no
+trusted mapping.
+
 User-facing connection labels come from one helper (`connectionLabelFor`):
 `local_api` → **API**, `local_mqtt` → **MQTT**, `zendure_mqtt` → **Zendure
 MQTT**, anything unrecognized → **Unknown**. Internal enums, config types and
@@ -776,10 +805,10 @@ of the old connection (`mqtt`, `capabilities`, route/product ids,
 `hardware_profile`, `power_write_profile`) before the draft projects the
 selected one, so broker, transport source, topic family, base topic, route and
 write profile land as one whole rather than as individually patched fields. The
-same shared broker resolver used for newly added devices and transport switches
-then runs (`_resolve_selected_device_broker`): a matching endpoint reuses its
-existing profile under any ref, a new endpoint provisions one, and a ref that
-already names a different endpoint is rejected as
+same shared broker resolver used for newly added devices, transport switches
+and the MQTT grid meter then runs (`_resolve_draft_broker_ref`): a matching
+endpoint reuses its existing profile under any ref, a new endpoint provisions
+one, and a ref that already names a different endpoint is rejected as
 `zendure_mqtt_broker_conflict` instead of being replaced. The connection a
 proposal selects is proposal-owned: `_resolve_maintenance_mqtt_draft()`
 overwrites the browser's `mqtt.broker_ref`, `source`, `topic_family`,

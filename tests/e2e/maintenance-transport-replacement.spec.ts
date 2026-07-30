@@ -1,4 +1,4 @@
-import { type Page, type Route } from "@playwright/test";
+import { type Locator, type Page, type Route } from "@playwright/test";
 import { test, expect } from "./fixtures/admin";
 import { LoginPage } from "./pages/login-page";
 
@@ -163,6 +163,13 @@ function fieldInput(card: ReturnType<typeof cardByText>, label: string) {
     .first();
 }
 
+// The hardware role owns the card class for every transport, so a card's
+// configured connection is asserted through its transport metadata.
+async function expectInverterConnection(card: Locator, connection: string) {
+  await expect(card).toHaveClass(/hardware-card-inverter/);
+  await expect(card).toHaveAttribute("data-connection", connection);
+}
+
 async function previewAndApply(page: Page) {
   await page.locator("#maintenance-config-preview-btn").click();
   const applyBtn = page.locator("#maintenance-config-apply-btn");
@@ -242,7 +249,7 @@ test("MQTT then API: discovery offers a transport switch, not a duplicate invert
   await openMaintenanceEditor(page);
   await expect(configuredCards(page)).toHaveCount(5);
   const renamed = cardByText(page, "Roof West");
-  await expect(renamed).toHaveClass(/hardware-card-zendure-mqtt/);
+  await expectInverterConnection(renamed, "local_mqtt");
 
   // Local API discovery now sees the same serials: the review offers a
   // connection switch on the configured devices, never an "Add inverter".
@@ -268,7 +275,7 @@ test("MQTT then API: discovery offers a transport switch, not a duplicate invert
     .click();
   await expect(configuredCards(page)).toHaveCount(5);
   const switched = cardByText(page, "Roof West");
-  await expect(switched).toHaveClass(/hardware-card-inverter/);
+  await expectInverterConnection(switched, "local_api");
   await openCard(page, switched);
   await expect(fieldInput(switched, "Device IP address")).toHaveValue(
     "192.168.60.21",
@@ -284,7 +291,7 @@ test("MQTT then API: discovery offers a transport switch, not a duplicate invert
   // Exactly five inverter entries persist — the switch replaced, not added.
   await expect(configuredCards(page)).toHaveCount(5);
   const persisted = cardByText(page, "Roof West");
-  await expect(persisted).toHaveClass(/hardware-card-inverter/);
+  await expectInverterConnection(persisted, "local_api");
   await openCard(page, persisted);
   await expect(fieldInput(persisted, "Device IP address")).toHaveValue(
     "192.168.60.21",
@@ -327,7 +334,7 @@ test("API then MQTT: proposal for a configured serial switches the transport in 
   await switchButton.click();
   await expect(configuredCards(page)).toHaveCount(3);
   const switched = cardByText(page, "Local API inverter");
-  await expect(switched).toHaveClass(/hardware-card-zendure-mqtt/);
+  await expectInverterConnection(switched, "local_mqtt");
   await openCard(page, switched);
   await expect(fieldInput(switched, "Serial number")).toHaveValue("API-SERIAL");
   // The seeded max_power survives; missing values materialize from defaults.
@@ -341,7 +348,7 @@ test("API then MQTT: proposal for a configured serial switches the transport in 
   await openMaintenanceEditor(page);
   await expect(configuredCards(page)).toHaveCount(3);
   const persisted = cardByText(page, "Local API inverter");
-  await expect(persisted).toHaveClass(/hardware-card-zendure-mqtt/);
+  await expectInverterConnection(persisted, "local_mqtt");
 });
 
 test("serial-less Cloud identity survives apply, reload, rediscovery and scope changes", async ({
@@ -409,7 +416,7 @@ test("serial-less Cloud identity survives apply, reload, rediscovery and scope c
   await expect(configuredCards(page)).toHaveCount(3);
   const serializedSwitched = cardByText(page, CLOUD_PHYSICAL_SERIAL);
   await expect(serializedSwitched).toHaveCount(1);
-  await expect(serializedSwitched).toHaveClass(/hardware-card-inverter/);
+  await expectInverterConnection(serializedSwitched, "local_api");
   await openCard(page, serializedSwitched);
   await expect(
     fieldInput(serializedSwitched, "Device IP address"),
@@ -423,7 +430,7 @@ test("serial-less Cloud identity survives apply, reload, rediscovery and scope c
   await expect(configuredCards(page)).toHaveCount(3);
   const serializedPersisted = cardByText(page, CLOUD_PHYSICAL_SERIAL);
   await expect(serializedPersisted).toHaveCount(1);
-  await expect(serializedPersisted).toHaveClass(/hardware-card-inverter/);
+  await expectInverterConnection(serializedPersisted, "local_api");
   await openCard(page, serializedPersisted);
   await expect(
     fieldInput(serializedPersisted, "Device IP address"),

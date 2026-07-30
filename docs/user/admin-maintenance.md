@@ -215,7 +215,14 @@ This path inspects and edits an existing installation.
   offers manual adding for devices discovery cannot reach. Adding a device —
   from discovery or manually — opens its configured card, where all device
   configuration happens. Discovery here also surfaces Zendure MQTT config
-  proposals you can add straight to the draft.
+  proposals you can add straight to the draft. An MQTT proposal recognized as a
+  grid meter offers **Use as grid meter** instead of **Add inverter** and fills
+  the grid-meter card; if a grid meter is already configured you are asked before
+  it is replaced. When that meter sits on an MQTT broker your config does not
+  know yet, the broker profile is added to the same draft, exactly as it is for
+  an MQTT inverter — an already configured broker is reused, never duplicated.
+  Like every discovery action, this only changes the draft — nothing reaches the
+  live config before you preview and apply.
 
   A newly added Local API or Zendure MQTT inverter receives the next compact
   EMS name (`INV_1`, `INV_2`, …) from one sequence shared by all transports.

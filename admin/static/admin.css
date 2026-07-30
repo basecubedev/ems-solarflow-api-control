@@ -500,6 +500,14 @@ code {
   font-size: 11px;
 }
 .mconfig-discovery-summary strong { color: var(--text); font-size: 12px; }
+/* Maintenance MQTT proposals reuse the shared .hardware-card shell, so this
+   rule only restores the flat proposal layout and never sets a role colour. */
+.mconfig-discovery-proposal-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+}
 .mconfig-discovery-device-card[data-state="missing"] { opacity: .82; }
 .mconfig-discovery-device-card[data-state="conflict"] {
   border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
@@ -519,6 +527,7 @@ code {
   border-color: color-mix(in srgb, var(--accent2) 35%, var(--border));
 }
 .mconfig-discovery-add-button.is-configured-missing:disabled,
+.mconfig-discovery-add-button.is-unavailable:disabled,
 .mconfig-discovery-add-button.is-ignored:disabled {
   opacity: .58;
   color: var(--muted);
@@ -1057,8 +1066,15 @@ code {
 .mqtt-device-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .mqtt-device-title { font-size: 13px; font-weight: 800; }
 
-/* Zendure MQTT config proposals: same Aggregate/Device card styling. */
-.mqtt-proposal-card { border-color: color-mix(in srgb, var(--accent2) 30%, var(--border)); }
+/* Zendure MQTT config proposals sit in the shared .hardware-card shell, which
+   owns the hardware-role colour. This rule only adds the proposal content
+   layout and must never set a border or background of its own. */
+.mqtt-proposal-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+}
 .proposal-safety { display: flex; flex-wrap: wrap; gap: 6px; }
 .proposal-safety-pill { background: rgba(255, 255, 255, 0.04); color: var(--muted); }
 .proposal-warnings { display: flex; flex-wrap: wrap; gap: 6px; }

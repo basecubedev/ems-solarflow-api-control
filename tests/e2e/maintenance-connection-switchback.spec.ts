@@ -152,9 +152,12 @@ async function useTheOfferedConnection(page: Page) {
   await button.click();
 }
 
-async function expectOneInverter(page: Page, kind: RegExp) {
+// The hardware role owns the card class for every transport, so the configured
+// connection is asserted through the card's transport metadata instead.
+async function expectOneInverter(page: Page, connection: string) {
   await expect(configuredCards(page)).toHaveCount(1);
-  await expect(inverterCard(page)).toHaveClass(kind);
+  await expect(inverterCard(page)).toHaveClass(/hardware-card-inverter/);
+  await expect(inverterCard(page)).toHaveAttribute("data-connection", connection);
 }
 
 // The generated backend config, not the in-memory draft: Preview renders what
@@ -224,7 +227,7 @@ test("Local MQTT b1 -> b2 -> b1 switches back without a rescan", async ({
   await seedAdminScenario("maintenance_local_broker_switchback");
   await page.reload();
   await openMaintenanceEditor(page);
-  await expectOneInverter(page, /hardware-card-zendure-mqtt/);
+  await expectOneInverter(page, "local_mqtt");
 
   await runDiscovery(page);
   // b1 is the installed connection; b2 is the only alternative on offer.
@@ -234,7 +237,7 @@ test("Local MQTT b1 -> b2 -> b1 switches back without a rescan", async ({
     .toHaveCount(1);
 
   await useTheOfferedConnection(page);
-  await expectOneInverter(page, /hardware-card-zendure-mqtt/);
+  await expectOneInverter(page, "local_mqtt");
   await expect(cardInput(page, inverterCard(page), "MQTT device ID")).toHaveValue(
     ROUTE_B2,
   );
@@ -254,7 +257,7 @@ test("Local MQTT b1 -> b2 -> b1 switches back without a rescan", async ({
     .toHaveCount(0);
 
   await useTheOfferedConnection(page);
-  await expectOneInverter(page, /hardware-card-zendure-mqtt/);
+  await expectOneInverter(page, "local_mqtt");
   await expect(cardInput(page, inverterCard(page), "MQTT device ID")).toHaveValue(
     ROUTE_B1,
   );
@@ -288,7 +291,7 @@ test("Local MQTT -> Zendure MQTT -> Local MQTT switches back without a rescan", 
   await seedAdminScenario("maintenance_local_cloud_switchback");
   await page.reload();
   await openMaintenanceEditor(page);
-  await expectOneInverter(page, /hardware-card-zendure-mqtt/);
+  await expectOneInverter(page, "local_mqtt");
 
   await runDiscovery(page);
   // b1 is the installed connection; the Cloud account is the alternative.
@@ -298,7 +301,7 @@ test("Local MQTT -> Zendure MQTT -> Local MQTT switches back without a rescan", 
     .toHaveCount(1);
 
   await useTheOfferedConnection(page);
-  await expectOneInverter(page, /hardware-card-zendure-mqtt/);
+  await expectOneInverter(page, "zendure_mqtt");
   await expect(inverterCard(page).locator(".connection-pill")).toHaveText(
     "Zendure MQTT",
   );
@@ -309,7 +312,7 @@ test("Local MQTT -> Zendure MQTT -> Local MQTT switches back without a rescan", 
     .toHaveCount(1);
 
   await useTheOfferedConnection(page);
-  await expectOneInverter(page, /hardware-card-zendure-mqtt/);
+  await expectOneInverter(page, "local_mqtt");
   await expect(cardInput(page, inverterCard(page), "MQTT device ID")).toHaveValue(
     ROUTE_B1,
   );
@@ -334,11 +337,11 @@ test("Zendure MQTT -> Local MQTT -> Zendure MQTT switches back without a rescan"
   await seedAdminScenario("maintenance_cloud_local_switchback");
   await page.reload();
   await openMaintenanceEditor(page);
-  await expectOneInverter(page, /hardware-card-zendure-mqtt/);
+  await expectOneInverter(page, "zendure_mqtt");
 
   await runDiscovery(page);
   await useTheOfferedConnection(page);
-  await expectOneInverter(page, /hardware-card-zendure-mqtt/);
+  await expectOneInverter(page, "local_mqtt");
   await expect(cardInput(page, inverterCard(page), "MQTT device ID")).toHaveValue(
     ROUTE_B1,
   );
@@ -350,7 +353,7 @@ test("Zendure MQTT -> Local MQTT -> Zendure MQTT switches back without a rescan"
   });
 
   await useTheOfferedConnection(page);
-  await expectOneInverter(page, /hardware-card-zendure-mqtt/);
+  await expectOneInverter(page, "zendure_mqtt");
   await expect(inverterCard(page).locator(".connection-pill")).toHaveText(
     "Zendure MQTT",
   );
@@ -374,11 +377,11 @@ test("API -> Zendure MQTT -> API switches back in one session", async ({
   await seedAdminScenario("maintenance_api_cloud_switchback");
   await page.reload();
   await openMaintenanceEditor(page);
-  await expectOneInverter(page, /hardware-card-inverter/);
+  await expectOneInverter(page, "local_api");
 
   await runDiscovery(page);
   await useTheOfferedConnection(page);
-  await expectOneInverter(page, /hardware-card-zendure-mqtt/);
+  await expectOneInverter(page, "zendure_mqtt");
   await expect(inverterCard(page).locator(".connection-pill")).toHaveText(
     "Zendure MQTT",
   );
@@ -386,7 +389,7 @@ test("API -> Zendure MQTT -> API switches back in one session", async ({
 
   // The Local API connection is offered again straight away.
   await useTheOfferedConnection(page);
-  await expectOneInverter(page, /hardware-card-inverter/);
+  await expectOneInverter(page, "local_api");
   await expect(inverterCard(page).locator(".connection-pill")).toHaveText("API");
   await expectPreservedCommonValues(page);
   await expect(cardInput(page, inverterCard(page), "Device IP address")).toHaveValue(
@@ -409,7 +412,7 @@ test("Zendure MQTT -> API -> Zendure MQTT switches back in one session", async (
 
   // The installed config states no mqtt.source; the broker profile resolves it,
   // so the configured card names Zendure MQTT before any discovery has run.
-  await expectOneInverter(page, /hardware-card-zendure-mqtt/);
+  await expectOneInverter(page, "zendure_mqtt");
   await expect(inverterCard(page).locator(".connection-pill")).toHaveText(
     "Zendure MQTT",
   );
@@ -420,11 +423,11 @@ test("Zendure MQTT -> API -> Zendure MQTT switches back in one session", async (
 
   await runDiscovery(page);
   await useTheOfferedConnection(page);
-  await expectOneInverter(page, /hardware-card-inverter/);
+  await expectOneInverter(page, "local_api");
   await expect(inverterCard(page).locator(".connection-pill")).toHaveText("API");
 
   await useTheOfferedConnection(page);
-  await expectOneInverter(page, /hardware-card-zendure-mqtt/);
+  await expectOneInverter(page, "zendure_mqtt");
   await expect(inverterCard(page).locator(".connection-pill")).toHaveText(
     "Zendure MQTT",
   );
@@ -475,7 +478,7 @@ test("a connection switch without its proposal id is refused", async ({
   await page.unroute("**/api/admin/maintenance/config/preview");
   await page.reload();
   await openMaintenanceEditor(page);
-  await expectOneInverter(page, /hardware-card-zendure-mqtt/);
+  await expectOneInverter(page, "local_mqtt");
   await expect(cardInput(page, inverterCard(page), "MQTT device ID")).toHaveValue(
     ROUTE_B1,
   );
@@ -570,7 +573,7 @@ for (const tampering of [
     await page.unroute("**/api/admin/maintenance/config/preview");
     await page.reload();
     await openMaintenanceEditor(page);
-    await expectOneInverter(page, /hardware-card-zendure-mqtt/);
+    await expectOneInverter(page, "local_mqtt");
     await expect(cardInput(page, inverterCard(page), "MQTT device ID")).toHaveValue(
       ROUTE_B1,
     );

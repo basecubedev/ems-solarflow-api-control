@@ -294,6 +294,8 @@ _CARD_HELPERS = _STATE_HELPERS + (
     "escapeHtml",
     "fact",
     "deviceKey",
+    "hardwareCardKindForRole",
+    "hardwareCardClass",
     "sourcesOf",
     "sourceBadges",
     "draftHasSource",

@@ -362,6 +362,78 @@ def test_switch_to_zendure_3ct_http_drops_stale_tasmota_and_mqtt_keys(tmp_path):
     assert "topic" not in grid
 
 
+def _adopted_mqtt_grid_meter_config():
+    """A config with the local broker profile an adopted MQTT meter references."""
+
+    data = _config()
+    data["zendure_mqtt"] = {
+        "brokers": {
+            "local_bridge": {
+                "enabled": True,
+                "source": "local_mqtt",
+                "host": "192.168.1.10",
+                "port": 1883,
+                "tls": False,
+            }
+        }
+    }
+    return data
+
+
+# Exactly the draft the Admin grid-meter adoption writes
+# (admin/static/admin.js mqttGridMeterConfigFromProposal): meter type, broker
+# reference, topic and payload defaults from the trusted proposal fragment, and
+# no endpoint fields of its own.
+_ADOPTED_MQTT_GRID_METER_DRAFT = {
+    "present": True,
+    "type": "zendure_smartmeter_d0",
+    "mqtt": {
+        "broker_ref": "local_bridge",
+        "topic": "Zendure/sensor/D0SERIAL/totalPower",
+        "payload_format": "number",
+        "max_age_seconds": 15,
+    },
+}
+
+
+def test_adopted_mqtt_grid_meter_draft_validates_and_replaces_the_http_meter(tmp_path):
+    _write_config(tmp_path, _adopted_mqtt_grid_meter_config())
+    draft = load_maintenance_config(base_dir=str(tmp_path))["draft"]
+    draft["grid_meter"] = dict(_ADOPTED_MQTT_GRID_METER_DRAFT)
+
+    preview = preview_maintenance_config(draft, base_dir=str(tmp_path))
+    grid = preview["preview"]["grid_meter"]
+    assert preview["validation"]["ok"] is True
+    assert grid["type"] == "zendure_smartmeter_d0"
+    assert grid["mqtt"] == {
+        "broker_ref": "local_bridge",
+        "topic": "Zendure/sensor/D0SERIAL/totalPower",
+        "payload_format": "number",
+        "max_age_seconds": 15,
+    }
+    # The replaced HTTP endpoint never lingers beside the MQTT settings.
+    assert "ip" not in grid
+
+
+def test_adopted_mqtt_grid_meter_reaches_disk_only_through_explicit_apply(tmp_path):
+    path = _write_config(tmp_path, _adopted_mqtt_grid_meter_config())
+    original = path.read_bytes()
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    loaded["draft"]["grid_meter"] = dict(_ADOPTED_MQTT_GRID_METER_DRAFT)
+
+    preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+    assert path.read_bytes() == original
+
+    prepared = prepare_maintenance_config_apply(
+        loaded["draft"], loaded["revision"], base_dir=str(tmp_path)
+    )
+    assert prepared["status"] == "ok"
+    assert json.loads(prepared["payload"])["grid_meter"]["mqtt"]["topic"] == (
+        "Zendure/sensor/D0SERIAL/totalPower"
+    )
+    assert path.read_bytes() == original
+
+
 def test_preview_does_not_write_config(tmp_path):
     path = _write_config(tmp_path, _config())
     original = path.read_text(encoding="utf-8")

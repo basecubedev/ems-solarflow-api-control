@@ -27,8 +27,8 @@ from admin.setup_config import (
 )
 from admin.zendure_mqtt_broker_profiles import (
     BrokerEndpointError,
-    broker_endpoint,
     default_zendure_cloud_auth_available,
+    draft_broker_endpoint,
     endpoint_broker_profile,
     existing_broker_profiles,
     resolve_broker_ref,
@@ -890,7 +890,7 @@ def _merge_draft(current, draft, issues, *, identity_token_key=None):
         issues,
         identity_token_key=identity_token_key,
     )
-    _merge_grid_meter(merged, draft.get("grid_meter"))
+    _merge_grid_meter(merged, draft.get("grid_meter"), issues)
     _merge_zendure_mqtt_broker(merged, draft.get("zendure_mqtt"))
     _merge_features(merged, draft.get("features"))
     return merged
@@ -1009,17 +1009,7 @@ def _declared_ref_for_selected_endpoint(config, item):
         return None
     ref = str(broker.get("ref") or "").strip()
     try:
-        endpoint = broker_endpoint(
-            {
-                "broker_host": broker.get("host"),
-                "broker_port": broker.get("port"),
-                "broker_tls": broker.get("tls"),
-                "broker_tls_insecure": broker.get("tls_insecure"),
-                "broker_tls_mode": broker.get("tls_mode"),
-                "credentials_ref": broker.get("credentials_ref"),
-                "connection_source": broker.get("source"),
-            }
-        )
+        endpoint = draft_broker_endpoint(broker)
     except BrokerEndpointError:
         return None
     if not source_is_local(endpoint, ref):
@@ -1402,8 +1392,17 @@ def _merge_devices(merged, devices, issues, *, identity_token_key=None):
                 defaults=defaults,
                 connection_switched=connection_switched,
             )
+            # A newly added device, a transport switch and an MQTT device moved
+            # to another concrete connection provision their broker; an ordinary
+            # field edit never rewrites an untouched broker profile.
             if not untrusted and (not was_mqtt or connection_switched):
-                _resolve_selected_device_broker(merged, device, item, issues)
+                _resolve_draft_broker_ref(
+                    merged,
+                    item.get("broker"),
+                    device.get("mqtt"),
+                    str(device.get("name") or "Zendure MQTT device").strip(),
+                    issues,
+                )
         else:
             device = materialize_maintenance_device(
                 existing_device=original,
@@ -1415,43 +1414,38 @@ def _merge_devices(merged, devices, issues, *, identity_token_key=None):
     merged["devices"] = result
 
 
-def _resolve_selected_device_broker(merged, device, item, issues):
+def _resolve_draft_broker_ref(merged, broker, mqtt, label, issues, *, local_only=False):
     """Persist the broker profile a selected Zendure MQTT connection references.
 
-    Runs the same shared resolver as Fresh Setup on the endpoint the browser
-    passed through from the trusted discovery proposal: a matching existing
-    profile (any ref) is reused, a new endpoint provisions its own profile, and
-    a ref that already exists with different connection data is rejected with an
-    actionable conflict instead of being silently replaced. Reached by a newly
-    added device, a transport switch and an MQTT device moved to another
-    concrete MQTT connection — never by an ordinary field edit, so an untouched
-    broker profile is never rewritten by the device editor.
+    The one provisioning path for every Admin consumer of a discovery proposal —
+    inverter devices and the central MQTT grid meter alike. Runs the same shared
+    resolver as Fresh Setup on the endpoint the browser passed through from the
+    trusted proposal: a matching existing profile (any ref) is reused, a new
+    endpoint provisions its own profile, and a ref that already exists with
+    different connection data is rejected with an actionable conflict instead of
+    being silently replaced. The effective ref is written back into ``mqtt`` and
+    returned, or ``None`` when nothing was resolved. ``local_only`` consumers
+    (the grid meter) never mint a Zendure Cloud profile: EMS Core rejects a cloud
+    grid-meter broker, so one must not be provisioned for it.
     """
 
-    broker = item.get("broker")
     if not isinstance(broker, dict) or not broker:
-        return
-    label = str(device.get("name") or "Zendure MQTT device").strip()
+        return None
     validation = {"errors": issues}
     try:
-        endpoint = broker_endpoint(
-            {
-                "broker_host": broker.get("host"),
-                "broker_port": broker.get("port"),
-                "broker_tls": broker.get("tls"),
-                "broker_tls_insecure": broker.get("tls_insecure"),
-                "broker_tls_mode": broker.get("tls_mode"),
-                "credentials_ref": broker.get("credentials_ref"),
-                "connection_source": broker.get("source"),
-            }
-        )
+        endpoint = draft_broker_endpoint(broker)
     except BrokerEndpointError as exc:
         issues.append(_issue("zendure_mqtt_broker_endpoint_invalid", f"{label}: {exc}."))
-        return
-    mqtt = device.get("mqtt") if isinstance(device.get("mqtt"), dict) else {}
-    ref = str(broker.get("ref") or "").strip() or str(mqtt.get("broker_ref") or "").strip()
+        return None
+    settings = mqtt if isinstance(mqtt, dict) else {}
+    ref = (
+        str(broker.get("ref") or "").strip()
+        or str(settings.get("broker_ref") or "").strip()
+    )
     if not ref:
-        return
+        return None
+    if local_only and not source_is_local(endpoint, ref):
+        return None
     resolved = resolve_broker_ref(
         merged,
         ref,
@@ -1462,9 +1456,10 @@ def _resolve_selected_device_broker(merged, device, item, issues):
         ref_conflict="reject",
     )
     if resolved is None:
-        return
-    if isinstance(device.get("mqtt"), dict):
-        device["mqtt"]["broker_ref"] = resolved
+        return None
+    if isinstance(mqtt, dict):
+        mqtt["broker_ref"] = resolved
+    return resolved
 
 
 def _merge_zendure_mqtt_broker(merged, broker):
@@ -1557,7 +1552,7 @@ def _coerce_number(value):
     return int(number) if number.is_integer() else number
 
 
-def _merge_grid_meter(merged, grid_meter):
+def _merge_grid_meter(merged, grid_meter, issues):
     if not isinstance(grid_meter, dict):
         return
     if grid_meter.get("present") is False:
@@ -1593,6 +1588,29 @@ def _merge_grid_meter(merged, grid_meter):
         _strip_stale_grid_meter_keys(target)
     if new_type in _MQTT_GRID_METER_TYPES:
         _merge_grid_meter_mqtt(target, grid_meter.get("mqtt"))
+        broker = grid_meter.get("broker")
+        if isinstance(broker, dict) and broker:
+            _resolve_draft_broker_ref(
+                merged,
+                broker,
+                _grid_meter_mqtt_container(target),
+                "Grid meter",
+                issues,
+                local_only=True,
+            )
+
+
+def _grid_meter_mqtt_container(target):
+    """The dict that holds the meter's MQTT settings (nested or legacy flat)."""
+
+    nested = target.get("mqtt")
+    if isinstance(nested, dict):
+        return nested
+    if any(key in target for key in _MQTT_GRID_METER_FLAT_KEYS):
+        return target
+    nested = {}
+    target["mqtt"] = nested
+    return nested
 
 
 def _merge_grid_meter_mqtt(target, draft_mqtt):

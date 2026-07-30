@@ -106,12 +106,15 @@ def test_maintenance_review_role_reflects_mqtt_transport():
 def test_maintenance_mqtt_card_labels_transport_from_source():
     js = _read()
     card = _extract_fn(js, "renderMaintenanceMqttProposalCard")
-    # The role pill and dataset.role must reflect the real transport (Local MQTT
-    # vs Zendure Cloud MQTT), not a hardcoded "zendure mqtt".
-    assert 'rolePill.textContent = "zendure mqtt"' not in card
-    assert 'card.dataset.role = "zendure_mqtt"' not in card
+    # The transport pill and data-connection must reflect the real transport
+    # (Local MQTT vs Zendure Cloud MQTT), not a hardcoded "zendure mqtt".
+    assert 'transportPill.textContent = "zendure mqtt"' not in card
+    assert 'card.dataset.connection = "zendure_mqtt"' not in card
     assert "mqttTransportLabel(proposal)" in card
     assert "mqttSourceOfConnection(proposal.connection_source)" in card
+    assert "card.dataset.connection = transportSource" in card
+    # data-role carries the hardware role, never the transport.
+    assert "card.dataset.role = hardwareRole" in card
 
 
 # --- Manual local MQTT entry (Part C) --------------------------------------

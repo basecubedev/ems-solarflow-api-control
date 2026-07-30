@@ -867,6 +867,21 @@ function fact(label, valueHtml, rawHtml) {
   );
 }
 
+// --- hardware-card role vocabulary ---------------------------------------
+// One normalized hardware role decides the card colour for every discovery
+// source. The transport a device was found over never changes it, and a role
+// the backend did not positively identify stays neutral.
+
+function hardwareCardKindForRole(role) {
+  const kinds = { inverter: "inverter", grid_meter: "grid-meter" };
+  return kinds[String(role || "").toLowerCase()] || null;
+}
+
+function hardwareCardClass(role) {
+  const kind = hardwareCardKindForRole(role);
+  return kind ? "hardware-card hardware-card-" + kind : "hardware-card";
+}
+
 // --- network suggestions -------------------------------------------------
 
 async function loadNetworks() {
@@ -1554,7 +1569,7 @@ function renderUnifiedDeviceCard(device) {
   );
   const role = String(device.role || "unknown");
   const isGridMeter = role === "grid_meter";
-  const kind = isGridMeter ? "grid-meter" : "inverter";
+  const hardwareRole = isGridMeter ? "grid_meter" : "inverter";
   const id = escapeHtml(sourceId);
   const safe = sourceId.replace(/[^a-z0-9]/gi, "-");
   const endpoint = String(device.ip || "");
@@ -1607,7 +1622,7 @@ function renderUnifiedDeviceCard(device) {
     "</div>";
 
   return (
-    '<article class="hardware-card hardware-card-' + kind +
+    '<article class="' + hardwareCardClass(hardwareRole) +
     '" data-source-id="' + id + '"' +
     (open ? ' data-open="true"' : "") + ">" +
     '<div class="hardware-card-head">' +
@@ -2134,10 +2149,75 @@ function isMqttGridMeterProposal(proposal) {
   );
 }
 
+// Hardware role of an MQTT proposal, from the backend target/role_hint only.
+// Display name, model, serial, topic text and connection source are never
+// evidence; anything not positively classified stays "unknown" and neutral.
+function mqttProposalHardwareRole(proposal) {
+  if (!proposal) return "unknown";
+  const roleHint = String(proposal.role_hint || "").toLowerCase();
+  if (
+    isMqttGridMeterProposal(proposal) ||
+    String(proposal.target || "").toLowerCase() === "grid_meter" ||
+    roleHint === "grid_meter_candidate"
+  ) {
+    return "grid_meter";
+  }
+  return roleHint === "battery_inverter_candidate" ? "inverter" : "unknown";
+}
+
 function mqttGridMeterProposalTopic(proposal) {
   const fragment = proposal && proposal.grid_meter_fragment;
   const mqtt = fragment && fragment.mqtt;
   return mqtt && typeof mqtt.topic === "string" ? mqtt.topic : "";
+}
+
+// The broker reference a trusted proposal fragment names, falling back to the
+// proposal's own ref. One normalization for every consumer of a proposal.
+function mqttProposalBrokerRef(proposal, mqtt) {
+  const fragmentRef = mqtt && mqtt.broker_ref;
+  return String(fragmentRef || (proposal && proposal.broker_ref) || "").trim();
+}
+
+// The one proposal → broker-profile mapping. Inverter drafts and grid-meter
+// adoption both carry it, so a broker discovered in this session is provisioned
+// by the shared server-side resolver instead of staying an unknown broker_ref.
+// Non-secret connection metadata only; credentials travel as a reference.
+function mqttProposalBrokerProfile(proposal, mqtt) {
+  return {
+    ref: mqttProposalBrokerRef(proposal, mqtt),
+    host: proposal.broker_host || "",
+    port: proposal.broker_port == null ? null : proposal.broker_port,
+    tls: proposal.broker_tls === true,
+    tls_insecure: proposal.broker_tls_insecure === true,
+    tls_mode: proposal.broker_tls_mode || "",
+    credentials_ref: proposal.credentials_ref || "",
+    source: proposal.connection_source || proposal.source || "",
+  };
+}
+
+// The one proposal → grid_meter config mapping, shared by Guided Setup and
+// Maintenance and identical for Local and Zendure MQTT. Only the backend-minted
+// fragment is trusted, so a grid-meter role alone never yields a mapping. The
+// broker reference is consumed from the shared normalization; no broker
+// transport is rebuilt here.
+function mqttGridMeterConfigFromProposal(proposal) {
+  const fragment = (proposal && proposal.grid_meter_fragment) || null;
+  const type = fragment ? String(fragment.type || "").trim() : "";
+  if (!type || !mqttGridMeterProposalTopic(proposal)) return null;
+  const mqtt = Object.assign({}, fragment.mqtt);
+  const brokerRef = mqttProposalBrokerRef(proposal, mqtt);
+  if (brokerRef) mqtt.broker_ref = brokerRef;
+  return { present: true, type, mqtt };
+}
+
+// Exactly one central grid meter exists, so an already chosen one is never
+// silently replaced — Setup and Maintenance ask the same question.
+function confirmGridMeterReplacement() {
+  return typeof window !== "undefined" && typeof window.confirm === "function"
+    ? window.confirm(
+        "A grid meter is already selected. Replace it with this MQTT grid meter?"
+      )
+    : false;
 }
 
 // Preview-only proposal card. It never renders credentials/tokens and never
@@ -2294,7 +2374,9 @@ function renderMqttProposalCard(proposal) {
           )) +
       fact("Role hint", escapeHtml(proposal.role_hint || "unknown"));
   return (
-    '<article class="mqtt-device-card mqtt-proposal-card">' +
+    '<article class="' +
+    hardwareCardClass(mqttProposalHardwareRole(proposal)) +
+    ' mqtt-proposal-card">' +
     '<div class="mqtt-device-head">' +
     '<span class="mqtt-device-title">' +
     escapeHtml(proposal.display_name || "Zendure MQTT proposal") +
@@ -2515,7 +2597,7 @@ function toggleMqttPreviewProposal(proposalId) {
   if (!proposal) return;
   const isGrid = isMqttGridMeterProposal(proposal);
   if (!isGrid && !proposal.config_fragment) return;
-  if (isGrid && !proposal.grid_meter_fragment) return;
+  if (isGrid && !mqttGridMeterConfigFromProposal(proposal)) return;
 
   let replaceGridMeter = false;
   if (isGrid) {
@@ -2526,13 +2608,7 @@ function toggleMqttPreviewProposal(proposalId) {
     }
     // Never silently replace an HTTP/Shelly grid meter already selected.
     if (hasSelectedHttpGridMeter()) {
-      const confirmReplace =
-        typeof window !== "undefined" && typeof window.confirm === "function"
-          ? window.confirm(
-              "A grid meter is already selected. Replace it with this MQTT grid meter?"
-            )
-          : false;
-      if (!confirmReplace) return;
+      if (!confirmGridMeterReplacement()) return;
       replaceGridMeter = true;
     }
   }
@@ -4982,7 +5058,7 @@ function renderMqttCandidateCard(proposal) {
     fact("Output control", controllable ? "Supported" : "Telemetry only") +
     "</div>";
   return (
-    '<article class="hardware-card hardware-card-inverter"' +
+    '<article class="' + hardwareCardClass("inverter") + '"' +
     ' data-source-id="' + id + '"' +
     ' data-candidate-state="' + escapeHtml(candidate.state) + '"' +
     (open ? ' data-open="true"' : "") + ">" +
@@ -5039,7 +5115,7 @@ function renderConfigAvailableCard(device) {
   const sourceId = deviceKey(device);
   const role = String(device.role_suggestion || "unknown");
   const isGridMeter = role === "grid_meter";
-  const kind = isGridMeter ? "grid-meter" : "inverter";
+  const hardwareRole = isGridMeter ? "grid_meter" : "inverter";
   const id = escapeHtml(sourceId);
   const safe = String(sourceId).replace(/[^a-z0-9]/gi, "-");
   const ready =
@@ -5094,7 +5170,7 @@ function renderConfigAvailableCard(device) {
     "</div>";
 
   return (
-    '<article class="hardware-card hardware-card-' + escapeHtml(kind) +
+    '<article class="' + hardwareCardClass(hardwareRole) +
     '" data-source-id="' + id + '"' +
     ' data-candidate-state="' + escapeHtml(candidate.state) + '"' +
     (open ? ' data-open="true"' : "") + ">" +
@@ -5365,7 +5441,7 @@ function renderMqttInverterCard(entry, index) {
     '<button type="button" class="secondary-button compact config-mqtt-reset">Reset name</button>' +
     "</div>";
   return renderHardwareCard({
-    kind: "inverter",
+    role: "inverter",
     sourceId: proposalId,
     title: "Inverter " + (index + 1),
     model: mqttInverterModel(entry),
@@ -5478,7 +5554,7 @@ function renderHardwareCard(card) {
   const status = card.enabled ? "Enabled" : "Disabled";
   const badges = (card.badges || []).join("");
   return (
-    '<article class="hardware-card hardware-card-' + escapeHtml(card.kind) +
+    '<article class="' + hardwareCardClass(card.role) +
     '" data-source-id="' + id + '"' +
     (card.open ? ' data-open="true"' : "") + ">" +
     '<div class="hardware-card-head">' +
@@ -5518,7 +5594,7 @@ function renderInverterDraftRow(item, index) {
   const open = openHardwareCards.has(item.source_id);
   const title = "Inverter " + (index + 1);
   return renderHardwareCard({
-    kind: "inverter",
+    role: "inverter",
     sourceId: item.source_id,
     title,
     model: inverterModelText(item),
@@ -5820,7 +5896,7 @@ function renderSelectedGridMeter(meter) {
     badges.push('<span class="stale-badge">stale</span>');
   }
   return renderHardwareCard({
-    kind: "grid-meter",
+    role: "grid_meter",
     sourceId: meter.source_id,
     title: "Grid meter",
     model: gridMeterModelText(meter),
@@ -12348,8 +12424,10 @@ function mconfigSetExpanded(card, body, caret, buttons, open) {
 
 function mconfigHardwareCard(options) {
   const card = document.createElement("article");
-  card.className = "hardware-card hardware-card-" + options.kind;
+  // Hardware role owns the card class; the transport stays separate metadata.
+  card.className = hardwareCardClass(options.role);
   card.dataset.sourceId = options.id;
+  if (options.connectionSource) card.dataset.connection = options.connectionSource;
 
   const head = document.createElement("div");
   head.className = "hardware-card-head";
@@ -12686,7 +12764,7 @@ function renderMaintenanceGridMeter() {
 
   const variant = mconfigGridMeterVariant(type);
   card = mconfigHardwareCard({
-    kind: "grid-meter",
+    role: "grid_meter",
     id: cardId,
     title: "Grid meter",
     model: variant ? variant.label : "No grid meter configured",
@@ -13220,7 +13298,7 @@ function renderMaintenanceZendureMqttDevice(device, index) {
   const id = "maintenance-mqtt-device-" + index;
   const model = mconfigHardwareModelLabel(device.hardware_model);
   card = mconfigHardwareCard({
-    kind: "zendure-mqtt",
+    role: "inverter",
     id,
     title: "Inverter " + (index + 1),
     model: device.alternative_layout ? model + " · alternative topic layout detected" : model,
@@ -13422,7 +13500,7 @@ function renderMaintenanceInverter(device, index) {
 
   const id = "maintenance-inverter-" + index;
   card = mconfigHardwareCard({
-    kind: "inverter",
+    role: "inverter",
     id,
     title: "Inverter " + (index + 1),
     model: "Zendure SolarFlow inverter",
@@ -13585,11 +13663,19 @@ function buildMaintenanceDiscoveryReview(discovered) {
   maintenanceMqttProposals().forEach((proposal) => {
     results.push({
       role: mqttSourceOfConnection(proposal.connection_source),
-      state: mconfigMqttProposalState(proposal),
+      state: mconfigMqttProposalReviewState(proposal),
       mqttProposal: proposal,
     });
   });
   return results;
+}
+
+// The hardware role picks the state machine: a grid meter resolves against the
+// central grid_meter draft, an inverter against the device list.
+function mconfigMqttProposalReviewState(proposal) {
+  return mqttProposalHardwareRole(proposal) === "grid_meter"
+    ? mconfigMqttGridMeterState(proposal)
+    : mconfigMqttProposalState(proposal);
 }
 
 function maintenanceMqttProposals() {
@@ -13760,16 +13846,7 @@ function mconfigZendureMqttDraftFromProposal(proposal) {
     },
     // Trusted proposal broker endpoint, passed through so the backend can
     // persist the broker profile; the browser derives no broker rules.
-    broker: {
-      ref: mqtt.broker_ref || proposal.broker_ref || "",
-      host: proposal.broker_host || "",
-      port: proposal.broker_port == null ? null : proposal.broker_port,
-      tls: proposal.broker_tls === true,
-      tls_insecure: proposal.broker_tls_insecure === true,
-      tls_mode: proposal.broker_tls_mode || "",
-      credentials_ref: proposal.credentials_ref || "",
-      source: proposal.connection_source || proposal.source || "",
-    },
+    broker: mqttProposalBrokerProfile(proposal, mqtt),
   });
 }
 
@@ -13780,6 +13857,49 @@ function mconfigAddZendureMqttProposal(proposal) {
   // Configuration happens on the configured card: adding opens it there.
   mconfigState.openHardware.add("maintenance-mqtt-device-" + (devices.length - 1));
   renderMaintenanceInverters();
+  mconfigMarkDraftChanged("discovery");
+  mconfigRerenderDiscoveryReview();
+  return true;
+}
+
+// A configured meter is the proposal's meter only on the exact same type, topic
+// and broker reference: two brokers can bridge the same topic name.
+function mconfigGridMeterIsMapping(meter, mapping) {
+  if (!meter || !mapping || meter.present === false) return false;
+  const mqtt = meter.mqtt || {};
+  return (
+    String(meter.type || "") === mapping.type &&
+    String(mqtt.topic || "") === String(mapping.mqtt.topic || "") &&
+    String(mqtt.broker_ref || "") === String(mapping.mqtt.broker_ref || "")
+  );
+}
+
+// What a grid-meter proposal offers against the current draft. Without a trusted
+// mapping it stays "unavailable": the browser never invents a grid-meter topic.
+function mconfigMqttGridMeterState(proposal) {
+  const mapping = mqttGridMeterConfigFromProposal(proposal);
+  if (!mapping) return "unavailable";
+  const draft = mconfigState.draft || {};
+  if (!mconfigGridMeterIsMapping(draft.grid_meter, mapping)) return "new";
+  const pristine = mconfigState.pristine || {};
+  return mconfigGridMeterIsMapping(pristine.grid_meter, mapping) ? "found" : "added";
+}
+
+function mconfigAdoptMqttGridMeterProposal(proposal) {
+  const mapping = mqttGridMeterConfigFromProposal(proposal);
+  if (!mapping) return false;
+  const current = (mconfigState.draft && mconfigState.draft.grid_meter) || null;
+  if (mconfigGridMeterIsMapping(current, mapping)) return false;
+  const configured = Boolean(current && (current.present || current.type));
+  if (configured && !confirmGridMeterReplacement()) return false;
+  // The broker travels with the meter only once the adoption is committed, so a
+  // declined replacement can never leave an unreferenced profile in the draft.
+  const broker = mqttProposalBrokerProfile(proposal, mapping.mqtt);
+  if (broker.ref) mapping.broker = broker;
+  mconfigState.draft.grid_meter = mapping;
+  // Configuration happens on the configured card: adopting opens it there.
+  mconfigState.openHardware.add("maintenance-grid-meter");
+  renderMaintenanceGridMeter();
   mconfigMarkDraftChanged("discovery");
   mconfigRerenderDiscoveryReview();
   return true;
@@ -14071,23 +14191,42 @@ const MCONFIG_MQTT_PROPOSAL_ACTIONS = {
   },
 };
 
+// Grid-meter hardware is adopted as the central grid meter, never as an
+// inverter; without a trusted mapping the action stays visible but inert.
+const MCONFIG_MQTT_GRID_METER_ACTIONS = {
+  found: { text: "In config", disabled: true, cssClass: "is-in-config" },
+  added: { text: "Added to draft", disabled: true, cssClass: "is-added" },
+  new: { text: "Use as grid meter", disabled: false, cssClass: "is-add" },
+  unavailable: {
+    text: "Use as grid meter",
+    disabled: true,
+    cssClass: "is-unavailable",
+  },
+};
+
 function renderMaintenanceMqttProposalCard(item) {
   const proposal = item.mqttProposal;
   const card = document.createElement("article");
-  card.className = "device-card mconfig-discovery-device-card";
+  const hardwareRole = mqttProposalHardwareRole(proposal);
+  card.className =
+    hardwareCardClass(hardwareRole) +
+    " mconfig-discovery-device-card mconfig-discovery-proposal-card";
   card.dataset.state = item.state;
   const transportSource = mqttSourceOfConnection(proposal.connection_source);
-  card.dataset.role = transportSource;
+  // Hardware role owns the card colour; the transport stays separate metadata.
+  card.dataset.role = hardwareRole;
+  card.dataset.connection = transportSource;
 
   const head = document.createElement("div");
   head.className = "device-card-head";
   const name = document.createElement("span");
   name.className = "device-name";
   name.textContent = proposal.display_name || "Zendure MQTT device";
-  const rolePill = document.createElement("span");
-  rolePill.className = "device-role " + discoveryRoleClass(transportSource);
-  rolePill.textContent = mqttTransportLabel(proposal);
-  head.append(name, rolePill);
+  const transportPill = document.createElement("span");
+  transportPill.className = "connection-pill";
+  transportPill.dataset.connection = transportSource;
+  transportPill.textContent = mqttTransportLabel(proposal);
+  head.append(name, transportPill);
   card.appendChild(head);
 
   const sources = document.createElement("div");
@@ -14104,34 +14243,45 @@ function renderMaintenanceMqttProposalCard(item) {
   );
   mconfigAppendDeviceFact(facts, "Hardware generation", mqttGenerationLabel(proposal));
   mconfigAppendDeviceFact(facts, "Transport", mqttTransportLabel(proposal));
-  const controllable = !!proposal.output_control_supported;
-  mconfigAppendDeviceFact(
-    facts,
-    "Output control",
-    controllable ? "Supported" : "Not available"
-  );
-  if (controllable) {
-    mconfigAppendDeviceFact(
-      facts,
-      "Write protocol",
-      mqttWriteProtocolLabel(mqttProposalWriteProtocol(proposal))
-    );
+  const isGridMeter = hardwareRole === "grid_meter";
+  const controllable = !isGridMeter && !!proposal.output_control_supported;
+  const note = document.createElement("p");
+  note.className = "maintenance-note muted";
+  if (isGridMeter) {
+    mconfigAppendDeviceFact(facts, "Role", "Grid meter");
+    mconfigAppendDeviceFact(facts, "Topic", mqttGridMeterProposalTopic(proposal));
+    note.textContent =
+      item.state === "unavailable"
+        ? "Grid meter without a trusted totalPower topic on this connection: " +
+          "EMS never derives one, so it cannot be adopted here."
+        : "Grid meter: EMS reads the grid signal from this MQTT topic. It is " +
+          "read-only and never written to.";
   } else {
     mconfigAppendDeviceFact(
       facts,
-      "Reason",
-      mqttControlReasonLabel(mqttProposalControlReason(proposal))
+      "Output control",
+      controllable ? "Supported" : "Not available"
     );
+    if (controllable) {
+      mconfigAppendDeviceFact(
+        facts,
+        "Write protocol",
+        mqttWriteProtocolLabel(mqttProposalWriteProtocol(proposal))
+      );
+    } else {
+      mconfigAppendDeviceFact(
+        facts,
+        "Reason",
+        mqttControlReasonLabel(mqttProposalControlReason(proposal))
+      );
+    }
+    note.textContent = controllable
+      ? "Supported inverter: EMS regulates its output over MQTT using the same " +
+        "control loop as a local API device."
+      : "Telemetry only: this device's topic family has no verified MQTT write " +
+        "method, so EMS reads values but does not send output control.";
   }
   card.appendChild(facts);
-
-  const note = document.createElement("p");
-  note.className = "maintenance-note muted";
-  note.textContent = controllable
-    ? "Supported inverter: EMS regulates its output over MQTT using the same " +
-      "control loop as a local API device."
-    : "Telemetry only: this device's topic family has no verified MQTT write " +
-      "method, so EMS reads values but does not send output control.";
   card.appendChild(note);
 
   if (item.state === "identity_conflict") {
@@ -14148,8 +14298,10 @@ function renderMaintenanceMqttProposalCard(item) {
 
   const actions = document.createElement("div");
   actions.className = "mconfig-discovery-item-actions";
-  const actionState =
-    MCONFIG_MQTT_PROPOSAL_ACTIONS[item.state] || MCONFIG_MQTT_PROPOSAL_ACTIONS.new;
+  const actionState = isGridMeter
+    ? MCONFIG_MQTT_GRID_METER_ACTIONS[item.state] ||
+      MCONFIG_MQTT_GRID_METER_ACTIONS.unavailable
+    : MCONFIG_MQTT_PROPOSAL_ACTIONS[item.state] || MCONFIG_MQTT_PROPOSAL_ACTIONS.new;
   const accept = document.createElement("button");
   accept.type = "button";
   accept.className =
@@ -14160,6 +14312,10 @@ function renderMaintenanceMqttProposalCard(item) {
     // The mutation rebuilds the whole review, so this card is replaced by one
     // that describes the new draft; it is never patched by hand.
     accept.addEventListener("click", () => {
+      if (isGridMeter) {
+        mconfigAdoptMqttGridMeterProposal(proposal);
+        return;
+      }
       if (item.state === "transport") {
         mconfigSwitchInverterTransport(
           mconfigMqttProposalIdentity(proposal),
@@ -14291,7 +14447,7 @@ function renderMaintenanceDiscoveryCard(item) {
   if (relationship) body.appendChild(relationship);
 
   const card = mconfigHardwareCard({
-    kind: isGridMeter ? "grid-meter" : "inverter",
+    role: isGridMeter ? "grid_meter" : "inverter",
     id: cardId,
     title: isGridMeter ? "Grid meter candidate" : "Inverter candidate",
     model: mconfigDiscoveryLabel(item),

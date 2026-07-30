@@ -159,6 +159,8 @@ _OPTIONAL_HELPERS = (
     "mconfigIsMqttDevice",
     "mconfigMqttDeviceIdentity",
     "mconfigMqttProposalIdentity",
+    "mqttProposalBrokerRef",
+    "mqttProposalBrokerProfile",
     "mconfigZendureMqttDraftFromProposal",
 )
 

@@ -60,6 +60,8 @@ _HELPERS = (
     "deviceFieldKey",
     "mconfigDeviceCommonDefaults",
     "mconfigApplyCommonDefaults",
+    "mqttProposalBrokerRef",
+    "mqttProposalBrokerProfile",
     "mconfigZendureMqttDraftFromProposal",
     "mconfigSwitchInverterTransport",
 )
