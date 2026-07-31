@@ -17,7 +17,8 @@ is written and shown to fail before the production change is made. Bugs get a
 reproducing test before the fix. Small UI tweaks and exploratory prototypes may
 stay pragmatic and gain tests as they settle. This is a working policy for the
 areas that can write to real hardware, not a claim that every historical line of
-the project was produced under strict test-driven development.
+the project was produced under strict test-driven development. The canonical
+project requirement and scope are defined in [agent-rules.md](agent-rules.md).
 
 ## Quick local loop
 
@@ -87,6 +88,8 @@ Several tests protect docs and public contracts rather than runtime behavior:
 
 - `tests/test_docs_user_structure.py` — the user / technical / developer
   documentation split and README routing.
+- `tests/test_agent_rules_contract.py` — the canonical rule set and supported
+  agent entry-point links.
 - `tests/test_docker_docs_contract.py`, `tests/test_docker_first_setup.py` —
   the Docker Bootstrap installer/compose/docs promise.
 - `tests/test_issue_templates.py` — issue-template documentation links.

@@ -1,3 +1,12 @@
+<!-- project-rules:start -->
+# Mandatory Project Rules
+
+Before planning, editing or committing, read
+[`docs/developer/agent-rules.md`](docs/developer/agent-rules.md). That file is
+the canonical project rule set. Tool-specific sections below supplement it and
+never replace it.
+<!-- project-rules:end -->
+
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 

@@ -25,6 +25,33 @@ readings, and installation-specific constraints. Home Assistant status
 publishing and helper reads can be enabled manually with `ha.enabled=true` and
 `ha.control_enabled=true`.
 
+## Authority and Single Source of Truth
+
+Every authoritative project fact has one owner. Other components may validate,
+orchestrate, cache or display that fact, but they do not become an independent
+authority.
+
+| Concern | Authority | Projection or proof only |
+|---|---|---|
+| Static device/system configuration and logical-device enabled state | `config/config.json`, validated by EMS/Core | Admin forms, previews and browser drafts |
+| Mutable operator/runtime state | `data/runtime-state.json`, through EMS-owned validated writers | Admin and Dashboard displays |
+| Running container, image and health state | Docker daemon inspection | Cached release selections |
+| Desired deployment | Standard `docker-compose.yml` and canonical install paths | Temporary staging compose files |
+| Control, validation, diagnostics and backup semantics | EMS/Core | Admin orchestration and UI wording |
+| Guided workflow identity and transitions | Validated durable Admin workflow/transition records | Browser state, pollers, URLs and local storage |
+| Workflow artifact cleanup-scope ownership | Validated durable claim, exact owner/workflow identity embedded in artifacts or sidecars, or canonical workflow-scoped path derived from the exact workflow ID | File existence, file name or known global location |
+| Permission to delete an in-scope artifact | Exact ownership proof and canonical-path validation | Cleanup-scope membership alone |
+| User-visible state | The corresponding backend authority above | browser/UI/cache projection only |
+
+Changing API, Local MQTT or Zendure MQTT transport preserves the logical
+device's enabled state; transport adapters do not own activation. A known path
+or existing file likewise does not prove workflow ownership or safe deletion;
+only a canonical workflow-scoped path derived from the exact workflow ID can be
+an ownership proof.
+
+The mandatory development process and safety rules for agents are maintained in
+the canonical [agent rules](../developer/agent-rules.md).
+
 ## Code Structure
 
 The entry script performs bootstrap and coordination only:

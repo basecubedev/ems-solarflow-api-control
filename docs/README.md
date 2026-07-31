@@ -105,6 +105,7 @@ For contributors and maintainers. Git clone and build-from-source belong here.
 
 | Topic | Document | Use |
 |---|---|---|
+| Agent rules | [developer/agent-rules.md](developer/agent-rules.md) | Canonical project-wide rules for coding agents and maintainers. |
 | Developer setup | [developer/developer-setup.md](developer/developer-setup.md) | Source checkout, venv, local config and dry-run validation. |
 | Development notes | [developer/development.md](developer/development.md) | Module layout and developer workflow. |
 | Developer notes | [developer/developer.md](developer/developer.md) | Additional development and maintenance context. |
