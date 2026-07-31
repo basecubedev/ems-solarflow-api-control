@@ -7915,6 +7915,67 @@ def test_setup_selection_change_supersedes_through_the_backend_owner():
     assert "setSetupWorkflowId(data.setup_workflow_id)" in supersede
 
 
+def test_system_build_mutations_name_the_server_issued_workflow():
+    js = _read("admin.js")
+    confirm = _async_fn_body(js, "async function confirmSelectedSystemBuild")
+    update = _async_fn_body(js, "async function updateAdminForSystemBuild")
+
+    # Both requests that create the Setup System Build transition submit the exact
+    # workflow the server issued — no local fallback, no "whichever is current".
+    assert "setup_workflow_id: setupWorkflowId" in confirm
+    assert "setup_workflow_id: setupWorkflowId" in update
+    for body in (confirm, update):
+        assert "setupWorkflowId ||" not in body
+        assert "fetchCurrentSetupWorkflowId" not in body
+        assert "fetchOwningSetupWorkflowId" not in body
+
+
+def test_workflow_conflict_covers_intent_and_transition_ownership_refusals():
+    js = _read("admin.js")
+    errors = js.split("SETUP_WORKFLOW_CONFLICT_ERRORS = new Set(", 1)[1].split(
+        ")", 1
+    )[0]
+    for error in (
+        "setup_workflow_required",
+        "setup_workflow_not_active",
+        "setup_intent_workflow_mismatch",
+        "setup_transition_owner_unproven",
+        "setup_transition_context_mismatch",
+    ):
+        assert error in errors
+
+
+def test_a_workflow_conflict_drops_the_local_intent_and_preview_authority():
+    handler = _extract_fn(_read("admin.js"), "handleSetupWorkflowConflict")
+    # A workflow this tab no longer owns invalidates both halves of its local
+    # authority: the one-shot confirmation and the exact preview.
+    assert "setupIntentId = null" in handler
+    assert "setSetupPreviewId(null)" in handler
+    assert "setConfigExportReady(false)" in handler
+    assert "configPreviewRequest += 1" in handler
+
+
+def test_system_build_workflow_conflicts_reuse_the_existing_recovery_surface():
+    js = _read("admin.js")
+    handler = _extract_fn(js, "handleSystemBuildWorkflowConflict")
+    confirm = _async_fn_body(js, "async function confirmSelectedSystemBuild")
+    update = _async_fn_body(js, "async function updateAdminForSystemBuild")
+
+    assert "isSetupWorkflowConflict(data)" in handler
+    assert "handleSetupWorkflowConflict(data)" in handler
+    # No new visual system: the task-local conflict panel plus the existing
+    # Control/Energy-stage error line and Step 1 unlock.
+    assert "setSystemBuildError(" in handler
+    assert 'setActiveStep("release")' in handler
+    assert "clearSetupOperationContext()" in handler
+    # An old tab's response is refused before it can be read as a success.
+    for body in (confirm, update):
+        assert "handleSystemBuildWorkflowConflict(data)" in body
+        assert body.index("handleSystemBuildWorkflowConflict(data)") < body.index(
+            "handleSetupIntentRejection(data)"
+        )
+
+
 def test_setup_revalidation_invalidates_prior_verdict_and_error():
     validate = _async_fn_body(
         _read("admin.js"), "async function validateSelectedSystemBuild"
@@ -9634,10 +9695,73 @@ console.log(JSON.stringify({{
   abandonDisabled: systemAlignmentEls.abandon.disabled,
   abandonHidden: systemAlignmentEls.abandon.hidden,
   abandonLabel: systemAlignmentEls.abandon.textContent,
+  returnHidden: systemAlignmentEls.returnToRunning.hidden,
+  returnDisabled: systemAlignmentEls.returnToRunning.disabled,
   message: systemAlignmentEls.partialMessage.textContent,
 }}));
 """
     return _run_node(driver)
+
+
+def _failed_recovery_payload(mode, **transition):
+    return {
+        "active": True,
+        "transition": {
+            "mode": mode,
+            "stage": "failed_recoverable",
+            "operation_id": "op-1",
+            "resume_available": True,
+            "cancel_available": True,
+            "worker_active": False,
+            "worker_status_available": True,
+            **transition,
+        },
+    }
+
+
+@pytest.mark.parametrize("mode", ["fresh_install", "automated_setup"])
+def test_setup_recovery_does_not_offer_return_to_running(mode):
+    # The server always refuses the shared return primitive for a Setup-owned
+    # transition, so the action must not be shown at all. Resume and Discard
+    # setup stay available.
+    out = _render_alignment_payload(
+        _failed_recovery_payload(mode, return_available=False)
+    )
+
+    assert out["returnHidden"] is True
+    assert out["returnDisabled"] is True
+    assert out["resumeDisabled"] is False
+    assert out["abandonHidden"] is False
+    assert out["abandonDisabled"] is False
+    assert out["abandonLabel"] == "Discard setup"
+    assert "discard this setup" in out["message"]
+
+
+@pytest.mark.parametrize("mode", ["fresh_install", "automated_setup"])
+def test_setup_recovery_return_stays_closed_on_an_optimistic_payload(mode):
+    # Defence in depth: a stale payload claiming return_available must not
+    # re-enable an action the server will always reject.
+    out = _render_alignment_payload(
+        _failed_recovery_payload(mode, return_available=True)
+    )
+
+    assert out["returnHidden"] is True
+    assert out["returnDisabled"] is True
+
+
+def test_guided_upgrade_recovery_still_offers_return_to_running():
+    out = _render_alignment_payload(
+        _failed_recovery_payload("guided_upgrade", return_available=True)
+    )
+
+    assert out["returnHidden"] is False
+    assert out["returnDisabled"] is False
+    assert out["abandonLabel"] == "Cancel upgrade"
+
+
+def test_setup_return_request_is_refused_before_it_is_sent():
+    action = _extract_fn(_read("admin.js"), "returnToRunningSystemBuild")
+    assert "SETUP_TRANSITION_MODES.has(transition.mode)" in action
 
 
 def test_recovery_panel_fails_closed_when_worker_fields_are_absent():
@@ -10037,6 +10161,7 @@ let selectedSystemBuildTag = "v1";
 const authState = {{adminInstanceId: "old"}};
 let systemBuildMutationLocked = false;
 let setupIntentId = "intent-1";
+let setupWorkflowId = "wf-1";
 let setupOperationId = null;
 let reconnectOp = "__uncalled__";
 const systemBuildState = {{
@@ -10059,6 +10184,7 @@ function systemBuildUpdateAllowed() {{ return true; }}
 function applySystemBuildAlignment() {{}}
 function setupIntentHeaders(h) {{ return h || {{}}; }}
 function handleSetupIntentRejection() {{ return false; }}
+function handleSystemBuildWorkflowConflict() {{ return false; }}
 function renderSystemAlignmentStatus() {{}}
 function showReconnectOverlay() {{}}
 async function waitForAdminReconnect(prev, op) {{ reconnectOp = op; }}
@@ -10760,6 +10886,7 @@ def _run_system_alignment_fact_reset(stage):
     render = _extract_fn(js, "renderSystemAlignmentStatus")
     cleanup = _cleanup_recovery_decls(js)
     script = f"""
+const SETUP_TRANSITION_MODES = new Set(["fresh_install", "automated_setup"]);
 {cleanup}
 const systemAlignmentEls = {{
   workflow: {{hidden: true}}, tag: {{textContent: ""}}, buildId: {{textContent: ""}},

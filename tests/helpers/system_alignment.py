@@ -62,9 +62,12 @@ class SetupReadySystemAlignment:
         }
 
     def prepare_setup_resources(
-        self, *, requested_tag, mode, development_risk_acknowledged=False
+        self, *, requested_tag, mode, development_risk_acknowledged=False,
+        pre_launch=None,
     ):
-        del mode
+        # Its transition already exists, so this models a resume: production does
+        # not re-link an existing transition and never calls ``pre_launch`` here.
+        del mode, pre_launch
         return {
             "ok": True,
             "status": "ready_for_ems",

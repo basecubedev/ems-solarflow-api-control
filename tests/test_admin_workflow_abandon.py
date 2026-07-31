@@ -214,20 +214,27 @@ def test_abandon_is_idempotent(tmp_path):
 
 
 def test_abandon_does_not_adopt_a_guided_upgrade_transition(tmp_path):
-    """A Setup abandon must never cancel another workflow's transition."""
+    """A Setup abandon must never touch another workflow's transition.
+
+    A non-Setup transition is not merely left uncancelled — the abandon fails
+    closed. A Setup owner that cannot prove which transition is its own also
+    cannot prove which files belong to it, so it removes nothing either.
+    """
 
     data_dir = _admin_data(tmp_path)
+    generated = _write_generated(SetupWorkflowArtifacts(data_dir))
     alignment = _Alignment(
         _setup_transition(stage="ems_operation_pending", mode="guided_upgrade")
     )
 
-    result = abandon_setup_workflow(
-        artifacts=SetupWorkflowArtifacts(data_dir), alignment=alignment
-    )
+    with pytest.raises(SetupWorkflowAbandonError) as exc:
+        abandon_setup_workflow(
+            artifacts=SetupWorkflowArtifacts(data_dir), alignment=alignment
+        )
 
+    assert exc.value.code == "setup_transition_owner_unproven"
     assert alignment.cancelled == []
-    assert result["transition"]["mode"] == "guided_upgrade"
-    assert result["transition"]["stage"] == "ems_operation_pending"
+    assert generated.exists()
 
 
 def test_abandon_reports_the_resulting_authoritative_state(tmp_path):

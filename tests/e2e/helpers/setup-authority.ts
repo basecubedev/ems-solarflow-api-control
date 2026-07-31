@@ -10,12 +10,52 @@ export async function csrf(page: Page): Promise<string> {
   return (await (await page.request.get("/api/admin/auth/status")).json()).csrf_token;
 }
 
-export async function post(page: Page, url: string, data: unknown) {
+export async function post(
+  page: Page,
+  url: string,
+  data: unknown,
+  headers?: Record<string, string>,
+) {
   const res = await page.request.post(url, {
-    headers: { "X-CSRF-Token": await csrf(page) },
+    headers: { "X-CSRF-Token": await csrf(page), ...(headers ?? {}) },
     data: data as any,
   });
   return { status: res.status(), body: await res.json().catch(() => ({})) };
+}
+
+/**
+ * Confirm Fresh Setup and keep both halves of the authority it issues.
+ *
+ * The durable workflow id names the owner; the one-shot intent is that session's
+ * confirmation *for that workflow*. Every System Build mutation needs both.
+ */
+export async function enterSetupWorkflow(page: Page) {
+  const { status, body } = await post(page, "/api/admin/start-path", {
+    choice: "setup_new",
+    confirm: true,
+  });
+  expect(status, JSON.stringify(body)).toBe(200);
+  expect(body.setup_workflow_id, JSON.stringify(body)).toBeTruthy();
+  expect(body.setup_intent_id, JSON.stringify(body)).toBeTruthy();
+  return {
+    workflowId: body.setup_workflow_id as string,
+    intentId: body.setup_intent_id as string,
+  };
+}
+
+/** One System Build mutation carrying its exact workflow and its intent. */
+export async function postSystemBuild(
+  page: Page,
+  url: string,
+  data: Record<string, unknown>,
+  intentId: string | null,
+) {
+  return post(
+    page,
+    url,
+    data,
+    intentId ? { "X-Setup-Intent-ID": intentId } : undefined,
+  );
 }
 
 /** Confirm Fresh Setup and return the durable workflow id. */

@@ -37,56 +37,135 @@ def _fingerprint(base, *, runtime=RUNTIME_DOWN):
     )
 
 
+WORKFLOW = "wf-" + "0" * 20
+
+
 def _store(**kwargs):
     kwargs.setdefault("state_fingerprint", lambda: "fp-stable")
     return SetupIntentStore(**kwargs)
 
 
+def _issue(store, *, session_id="sess", workflow_id=WORKFLOW):
+    return store.issue(session_id=session_id, workflow_id=workflow_id)
+
+
+def _claim(store, intent_id, *, session_id="sess", workflow_id=WORKFLOW):
+    return store.claim(intent_id, session_id=session_id, workflow_id=workflow_id)
+
+
 def test_claim_consumes_an_intent_exactly_once():
     store = _store()
-    record = store.issue(session_id="sess")
-    claimed = store.claim(record.intent_id, session_id="sess")
+    record = _issue(store)
+    claimed = _claim(store, record.intent_id)
     assert claimed.intent_id == record.intent_id
 
     with pytest.raises(SetupIntentError) as exc:
-        store.claim(record.intent_id, session_id="sess")
+        _claim(store, record.intent_id)
     assert exc.value.reason == "setup_intent_consumed"
     assert exc.value.status == 409
 
 
 def test_claim_requires_the_same_session():
     store = _store()
-    record = store.issue(session_id="sess")
+    record = _issue(store)
     with pytest.raises(SetupIntentError) as exc:
-        store.claim(record.intent_id, session_id="other")
+        _claim(store, record.intent_id, session_id="other")
     assert exc.value.reason == "setup_intent_required"
 
 
 def test_claim_rejects_a_missing_or_empty_intent():
     store = _store()
     with pytest.raises(SetupIntentError) as exc:
-        store.claim("", session_id="sess")
+        _claim(store, "")
     assert exc.value.reason == "setup_intent_required"
 
 
 def test_claim_rejects_expired_records():
     clock = [100.0]
     store = _store(ttl_seconds=60, time_fn=lambda: clock[0])
-    record = store.issue(session_id="sess")
+    record = _issue(store)
     clock[0] += 61
     with pytest.raises(SetupIntentError) as exc:
-        store.claim(record.intent_id, session_id="sess")
+        _claim(store, record.intent_id)
     assert exc.value.reason == "setup_intent_expired"
 
 
 def test_claim_rejects_a_changed_installation_fingerprint():
     current = ["fp-a"]
     store = _store(state_fingerprint=lambda: current[0])
-    record = store.issue(session_id="sess")
+    record = _issue(store)
     current[0] = "fp-b"
     with pytest.raises(SetupIntentError) as exc:
-        store.claim(record.intent_id, session_id="sess")
+        _claim(store, record.intent_id)
     assert exc.value.reason == "setup_state_changed"
+
+
+# --- workflow binding --------------------------------------------------------
+
+
+def test_issue_requires_a_workflow_id():
+    store = _store()
+    with pytest.raises(ValueError):
+        store.issue(session_id="sess", workflow_id=None)
+
+
+def test_an_intent_carries_the_workflow_it_was_issued_for():
+    store = _store()
+    record = _issue(store, workflow_id="wf-a")
+    assert record.workflow_id == "wf-a"
+
+
+def test_claim_rejects_a_foreign_workflow():
+    store = _store()
+    record = _issue(store, workflow_id="wf-a")
+    with pytest.raises(SetupIntentError) as exc:
+        _claim(store, record.intent_id, workflow_id="wf-b")
+    assert exc.value.reason == "setup_intent_workflow_mismatch"
+    assert exc.value.status == 409
+    # The refused claim did not consume it: its own workflow can still use it.
+    assert _claim(store, record.intent_id, workflow_id="wf-a").workflow_id == "wf-a"
+
+
+def test_validate_rejects_a_foreign_workflow_without_consuming():
+    store = _store()
+    record = _issue(store, workflow_id="wf-a")
+    with pytest.raises(SetupIntentError) as exc:
+        store.validate(record.intent_id, session_id="sess", workflow_id="wf-b")
+    assert exc.value.reason == "setup_intent_workflow_mismatch"
+    assert store.validate(
+        record.intent_id, session_id="sess", workflow_id="wf-a"
+    ).intent_id == record.intent_id
+
+
+def test_invalidate_workflow_clears_every_session_holding_it():
+    store = _store()
+    first = _issue(store, session_id="a", workflow_id="wf-a")
+    second = _issue(store, session_id="b", workflow_id="wf-a")
+    other = _issue(store, session_id="c", workflow_id="wf-b")
+
+    store.invalidate_workflow("wf-a")
+
+    for record in (first, second):
+        with pytest.raises(SetupIntentError) as exc:
+            _claim(store, record.intent_id, session_id=record.session_id,
+                   workflow_id="wf-a")
+        # A retired workflow's intent reports the workflow, not a bare unknown
+        # id: the browser has to rejoin the current setup, not just re-confirm.
+        assert exc.value.reason == "setup_intent_workflow_mismatch"
+    assert _claim(
+        store, other.intent_id, session_id="c", workflow_id="wf-b"
+    ).intent_id == other.intent_id
+
+
+def test_issuing_for_another_session_keeps_the_first_sessions_intent():
+    """The pre-existing per-session invalidation is unchanged by the binding."""
+
+    store = _store()
+    first = _issue(store, session_id="a", workflow_id="wf-a")
+    _issue(store, session_id="b", workflow_id="wf-a")
+    assert _claim(
+        store, first.intent_id, session_id="a", workflow_id="wf-a"
+    ).intent_id == first.intent_id
 
 
 def test_only_one_of_two_parallel_claims_succeeds():
@@ -102,7 +181,7 @@ def test_only_one_of_two_parallel_claims_succeeds():
         return "fp-stable"
 
     store = _store(state_fingerprint=slow_fingerprint)
-    record = store.issue(session_id="sess")
+    record = _issue(store)
 
     outcomes = []
     start = threading.Barrier(2)
@@ -110,7 +189,7 @@ def test_only_one_of_two_parallel_claims_succeeds():
     def attempt():
         start.wait()
         try:
-            store.claim(record.intent_id, session_id="sess")
+            _claim(store, record.intent_id)
             outcomes.append("claimed")
         except SetupIntentError as exc:
             outcomes.append(exc.reason)
@@ -127,11 +206,11 @@ def test_only_one_of_two_parallel_claims_succeeds():
 
 def test_a_claimed_intent_cannot_be_reissued_by_a_stale_copy():
     store = _store()
-    record = store.issue(session_id="sess")
-    store.claim(record.intent_id, session_id="sess")
+    record = _issue(store)
+    _claim(store, record.intent_id)
     # A second attempt on the same id reports it consumed, never still-usable.
     with pytest.raises(SetupIntentError) as exc:
-        store.claim(record.intent_id, session_id="sess")
+        _claim(store, record.intent_id)
     assert exc.value.reason == "setup_intent_consumed"
 
 
@@ -212,7 +291,7 @@ def test_intent_record_stores_only_a_digest_not_secret_file_content(tmp_path):
     store = _store(
         state_fingerprint=lambda: _fingerprint(tmp_path),
     )
-    record = store.issue(session_id="sess")
+    record = _issue(store, session_id="sess")
     assert secret not in record.install_state_fingerprint
     assert len(record.install_state_fingerprint) == 64
     int(record.install_state_fingerprint, 16)  # a pure hex digest
@@ -227,10 +306,10 @@ def test_claim_fails_closed_when_a_security_file_cannot_be_read():
         return "fp-stable"
 
     store = _store(state_fingerprint=fingerprint)
-    record = store.issue(session_id="sess")
+    record = _issue(store, session_id="sess")
     mode[0] = "boom"
     with pytest.raises(SetupIntentError) as exc:
-        store.claim(record.intent_id, session_id="sess")
+        _claim(store, record.intent_id, session_id="sess")
     assert exc.value.reason == "setup_state_changed"
 
 
@@ -240,16 +319,16 @@ def test_claim_fails_closed_when_a_security_file_cannot_be_read():
 def test_expired_intents_are_removed_on_issue():
     clock = [0.0]
     store = _store(ttl_seconds=10, time_fn=lambda: clock[0])
-    stale = store.issue(session_id="old")
+    stale = _issue(store, session_id="old")
     clock[0] += 11
-    store.issue(session_id="new")
+    _issue(store, session_id="new")
     # The expired record is gone, not merely unusable.
     assert stale.intent_id not in store._records
 
 
 def test_store_never_exceeds_its_size_limit():
     store = _store(max_records=4)
-    issued = [store.issue(session_id=f"sess-{i}").intent_id for i in range(20)]
+    issued = [_issue(store, session_id=f"sess-{i}").intent_id for i in range(20)]
     assert len(store._records) <= 4
     # The most recent issue always survives the eviction of older records.
     assert issued[-1] in store._records
@@ -258,12 +337,12 @@ def test_store_never_exceeds_its_size_limit():
 def test_consumed_tombstone_expires_and_stops_reporting_consumed():
     clock = [0.0]
     store = _store(consumed_ttl_seconds=30, time_fn=lambda: clock[0])
-    record = store.issue(session_id="sess")
-    store.claim(record.intent_id, session_id="sess")
+    record = _issue(store, session_id="sess")
+    _claim(store, record.intent_id, session_id="sess")
     clock[0] += 31
-    store.issue(session_id="other")  # prunes the expired tombstone
+    _issue(store, session_id="other")  # prunes the expired tombstone
     with pytest.raises(SetupIntentError) as exc:
-        store.claim(record.intent_id, session_id="sess")
+        _claim(store, record.intent_id, session_id="sess")
     # Once the short-lived tombstone expires the id is simply unknown again.
     assert exc.value.reason == "setup_intent_required"
 
@@ -271,20 +350,20 @@ def test_consumed_tombstone_expires_and_stops_reporting_consumed():
 def test_consumed_tombstones_are_bounded_by_the_limit():
     store = _store(max_records=4)
     for i in range(10):
-        record = store.issue(session_id=f"sess-{i}")
-        store.claim(record.intent_id, session_id=f"sess-{i}")
-    assert len(store._consumed) <= 4
+        record = _issue(store, session_id=f"sess-{i}")
+        _claim(store, record.intent_id, session_id=f"sess-{i}")
+    assert len(store._tombstones) <= 4
 
 
 def test_logout_removes_open_intents_and_tombstones_for_the_session():
     store = _store()
-    open_intent = store.issue(session_id="sess")
-    claimed = store.issue(session_id="sess")
-    store.claim(claimed.intent_id, session_id="sess")
+    open_intent = _issue(store, session_id="sess")
+    claimed = _issue(store, session_id="sess")
+    _claim(store, claimed.intent_id, session_id="sess")
     store.invalidate_session("sess")
     assert open_intent.intent_id not in store._records
-    assert claimed.intent_id not in store._consumed
+    assert claimed.intent_id not in store._tombstones
     # The cleared tombstone means a stale copy is now merely unknown, not consumed.
     with pytest.raises(SetupIntentError) as exc:
-        store.claim(claimed.intent_id, session_id="sess")
+        _claim(store, claimed.intent_id, session_id="sess")
     assert exc.value.reason == "setup_intent_required"

@@ -79,7 +79,7 @@ def _seed_owned_artifacts(base, srv):
 
     from admin.setup_workflow import SetupWorkflowArtifacts
 
-    workflow_id = _start_workflow(base)
+    workflow_id = _start_workflow(base, srv)
     artifacts = SetupWorkflowArtifacts(
         srv.setup_workflows.admin_data_dir, workflow_id=workflow_id
     )
@@ -284,7 +284,7 @@ def test_worker_active_abandon_refusal_removes_nothing(tmp_path):
     _attach_system_alignment(srv, alignment)
     generated, marker = _seed_legacy_artifacts(tmp_path)
     try:
-        workflow_id = _start_workflow(base)
+        workflow_id = _start_workflow(base, srv)
         status, _, payload = _request(
             f"{base}/api/setup/abandon",
             method="POST",
@@ -309,7 +309,7 @@ def test_worker_active_supersede_refusal_keeps_the_old_workflow(tmp_path):
     _attach_system_alignment(srv, alignment)
     generated, marker = _seed_legacy_artifacts(tmp_path)
     try:
-        workflow_id = _start_workflow(base)
+        workflow_id = _start_workflow(base, srv)
         status, _, payload = _request(
             f"{base}/api/setup/system-build/supersede",
             method="POST",

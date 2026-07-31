@@ -25,6 +25,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from admin.admin_update import SETUP_TRANSITION_MODES
 from admin.guided_setup_workflow import (
     ARTIFACT_ABSENT,
     ARTIFACT_FAILED,
@@ -45,7 +46,6 @@ GENERATED_CONFIG_META_FILE = "config.meta.json"
 GENERATED_CONFIG_OWNER = "guided_setup"
 GENERATED_CONFIG_META_VERSION = 2
 
-SETUP_TRANSITION_MODES = frozenset({"fresh_install", "automated_setup"})
 TERMINAL_STAGES = frozenset({"completed", "cancelled"})
 
 CLEANUP_INCOMPLETE = "abandon_cleanup_incomplete"
@@ -372,22 +372,62 @@ def read_generated_metadata(generated_config_path):
     return meta if isinstance(meta, dict) else None
 
 
-def _owns_transition(record, operation_id):
-    """True when this workflow may cancel the transition ``operation_id``.
+OWNERSHIP_NONE = "none"
+OWNERSHIP_OWNED = "owned"
+OWNERSHIP_UNPROVEN = "unproven"
+OWNERSHIP_MISMATCH = "mismatch"
 
-    A Setup-owned *mode* is not ownership: once the workflow record names its own
-    ``operation_id``, only that transition may be cancelled, so one workflow can
-    never terminate the transition another one started. A record that never
-    linked a transition (the link is best-effort) falls back to the mode check —
-    the store holds a single workflow, so there is no other candidate.
+SETUP_TRANSITION_OWNER_UNPROVEN = "setup_transition_owner_unproven"
+SETUP_TRANSITION_CONTEXT_MISMATCH = "setup_transition_context_mismatch"
+
+OWNER_UNPROVEN_MESSAGE = (
+    "This setup cannot prove it owns the active System Build transition. Nothing "
+    "was cancelled or removed."
+)
+CONTEXT_MISMATCH_MESSAGE = (
+    "The active System Build transition belongs to a different setup operation. "
+    "Nothing was cancelled or removed."
+)
+
+
+def transition_ownership(record, transition):
+    """How strongly ``record`` can prove it owns ``transition``.
+
+    ``none`` — there is no non-terminal transition, so there is nothing to own,
+    cancel or adopt. ``owned`` — the workflow's stored ``operation_id`` *is* this
+    Setup-mode transition's operation id. ``unproven`` — the workflow names no
+    operation id, or the transition is not Setup-owned at all. ``mismatch`` — the
+    workflow names a different operation id.
+
+    A Setup-owned *mode* is never proof of ownership: it only classifies the
+    transition. Only the exact operation id proves which workflow started it, so
+    one workflow can never terminate or adopt the transition another one created.
+    A missing record is the documented pre-workflow path (see
+    ``abandon_setup_workflow``) and is answered ``owned`` for a Setup-mode
+    transition: there is no workflow that could be named, so there is also no
+    newer workflow whose state could be lost.
     """
 
+    transition = transition or {}
+    operation_id = transition.get("operation_id")
+    if not operation_id or transition.get("stage") in TERMINAL_STAGES:
+        return OWNERSHIP_NONE
+    if transition.get("mode") not in SETUP_TRANSITION_MODES:
+        return OWNERSHIP_UNPROVEN
     if record is None:
-        return True
+        return OWNERSHIP_OWNED
     linked = record.get("operation_id")
     if not linked:
-        return True
-    return linked == operation_id
+        return OWNERSHIP_UNPROVEN
+    return OWNERSHIP_OWNED if linked == operation_id else OWNERSHIP_MISMATCH
+
+
+def transition_ownership_error(ownership):
+    """The fail-closed ``(code, message)`` an unprovable ownership must return."""
+
+    if ownership == OWNERSHIP_MISMATCH:
+        return SETUP_TRANSITION_CONTEXT_MISMATCH, CONTEXT_MISMATCH_MESSAGE
+    return SETUP_TRANSITION_OWNER_UNPROVEN, OWNER_UNPROVEN_MESSAGE
 
 
 class SetupWorkflowAbandonError(Exception):
@@ -397,6 +437,37 @@ class SetupWorkflowAbandonError(Exception):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+SETUP_TRANSITION_LINK_FAILED = "setup_transition_link_failed"
+SETUP_TRANSITION_LINK_UNRECONCILED = "setup_transition_link_unreconciled"
+
+
+class SetupTransitionLinkError(Exception):
+    """The workflow could not be made the durable owner of its transition.
+
+    Raised inside the System Alignment pre-commit boundary, so the transition is
+    never committed and no Admin replacement is launched: an unownable transition
+    must not exist at all.
+    """
+
+    code = SETUP_TRANSITION_LINK_FAILED
+
+    def __init__(self, message):
+        super().__init__(message)
+        self.message = message
+
+
+class SetupTransitionLinkRollbackError(SetupTransitionLinkError):
+    """The link was written, the transition commit failed, and so did the undo.
+
+    Both stores are readable but no longer agree: the workflow names an
+    operation that never became a transition. Nothing was launched, but the
+    inconsistency is durable, so it is reported as its own reconciliation error
+    rather than as the commit failure that triggered it.
+    """
+
+    code = SETUP_TRANSITION_LINK_UNRECONCILED
 
 
 def abandon_setup_workflow(
@@ -413,12 +484,14 @@ def abandon_setup_workflow(
 
     Idempotent. With a ``workflows`` store this is workflow-verified: a
     ``workflow_id`` that does not match the stored record is refused before
-    anything changes, so an old tab can never discard a newer workflow. The
-    transition is cancelled only when it is setup-owned and non-terminal, so a
-    Guided Upgrade transition is never adopted. A refused cancel propagates
-    before any removal, so a running operation never loses state it still
-    depends on. ``status`` is the caller's worker-aware read; an unreadable
-    transition fails closed.
+    anything changes, so an old tab can never discard a newer workflow. A
+    non-terminal transition is cancelled only when this workflow can prove it
+    owns its exact ``operation_id``; an unproven or mismatched owner fails closed
+    with nothing cancelled and nothing cleaned, because a workflow that cannot
+    name the transition also cannot know which artifacts belong to it. A refused
+    cancel propagates before any removal, so a running operation never loses
+    state it still depends on. ``status`` is the caller's worker-aware read; an
+    unreadable transition fails closed.
 
     Cleanup after a successful cancel is best-effort per *owned* artifact: a
     failed removal yields ``ok: False`` with ``abandon_cleanup_incomplete`` and
@@ -457,15 +530,12 @@ def abandon_setup_workflow(
             or "The System Build transition state could not be read.",
         )
     transition = dict(status.get("transition") or {})
-    operation_id = transition.get("operation_id")
-    if (
-        operation_id
-        and transition.get("mode") in SETUP_TRANSITION_MODES
-        and transition.get("stage") not in TERMINAL_STAGES
-        and _owns_transition(record, operation_id)
-    ):
+    ownership = transition_ownership(record, transition)
+    if ownership in {OWNERSHIP_UNPROVEN, OWNERSHIP_MISMATCH}:
+        raise SetupWorkflowAbandonError(*transition_ownership_error(ownership))
+    if ownership == OWNERSHIP_OWNED:
         cancelled = alignment.cancel(
-            operation_id=operation_id, coordinator=coordinator
+            operation_id=transition["operation_id"], coordinator=coordinator
         )
         transition["stage"] = (cancelled or {}).get("stage", "cancelled")
     cleanup = artifacts.clear()

@@ -18,6 +18,7 @@ from admin.config_preview import ConfigPreviewGenerator
 from admin.install_context import detect_install_context
 from admin.models import DiscoveredDevice
 from admin.mqtt_discovery import MqttBrokerDiscovery
+from admin.operation_coordinator import OperationCoordinator
 from admin.secret_store import ZendureTokenStore
 from admin.system_alignment import (
     SystemAlignmentError,
@@ -126,15 +127,41 @@ def _request(url, method="GET", body=None, extra_headers=None):
         return exc.code, exc.headers, json.loads(exc.read() or b"null")
 
 
-def _fresh_setup_intent(base, *, confirm=False):
+def _own_active_setup_transition(srv, base, workflow_id):
+    """Give ``workflow_id`` the transition ownership production writes pre-commit.
+
+    Production links a Setup transition into its workflow record inside the System
+    Alignment pre-commit boundary, so a workflow that reached a transition always
+    names its exact ``operation_id``. A harness that *pre-seeds* an active Setup
+    transition has to establish the same fact, or the workflow it starts afterwards
+    is an unlinked owner — a state the ownership rules refuse on purpose.
+    """
+
+    _status, _headers, payload = _request(f"{base}/api/admin/system-alignment/status")
+    transition = (payload or {}).get("transition") or {}
+    if transition.get("mode") not in {"fresh_install", "automated_setup"}:
+        return None
+    return srv.setup_workflows.record_transition(
+        workflow_id,
+        operation_id=transition.get("operation_id"),
+        transition_mode=transition["mode"],
+        selected_system_tag=transition.get("system_tag"),
+    )
+
+
+def _setup_build_authority(srv, base, *, confirm=False):
+    """The exact workflow id and one-shot intent a System Build route requires."""
+
     status, _, payload = _request(
         f"{base}/api/admin/start-path",
         method="POST",
         body={"choice": "setup_new", "confirm": confirm},
     )
-    assert status == 200
-    assert payload["ok"] is True
-    return payload["setup_intent_id"]
+    assert status == 200, payload
+    assert payload["ok"] is True, payload
+    workflow_id = payload["setup_workflow_id"]
+    _own_active_setup_transition(srv, base, workflow_id)
+    return workflow_id, payload["setup_intent_id"]
 
 
 def test_root_serves_html(server):
@@ -505,10 +532,17 @@ def _setup_body(srv, **extra):
 
 
 def _abandon(base, srv, workflow_id="current"):
-    """Discard Setup by name: the stored workflow id is always required."""
+    """Discard Setup by name: the stored workflow id is always required.
+
+    Also establishes the transition ownership production writes pre-commit, so a
+    harness that pre-seeded an active Setup transition is discarded by a workflow
+    that can prove it owns it (an unlinked owner is refused on purpose).
+    """
 
     if workflow_id == "current":
         workflow_id = (srv.setup_workflows.load() or {}).get("workflow_id")
+    if workflow_id:
+        _own_active_setup_transition(srv, base, workflow_id)
     return _request(
         f"{base}/api/setup/abandon",
         method="POST",
@@ -539,7 +573,7 @@ def test_release_setup_endpoints_use_alignment_then_release_resources(tmp_path):
     srv, base = _serve(release_manager=_FakeReleaseManager(tmp_path))
     _attach_system_alignment(srv, alignment)
     try:
-        intent_id = _fresh_setup_intent(base)
+        workflow_id, intent_id = _setup_build_authority(srv, base)
         status, _, releases = _request(f"{base}/api/setup/releases")
         assert status == 200
         assert releases["prepared_release"] == "v0.6.0"
@@ -549,7 +583,7 @@ def test_release_setup_endpoints_use_alignment_then_release_resources(tmp_path):
         status, _, prepared = _request(
             f"{base}/api/setup/releases/prepare",
             method="POST",
-            body={"tag": "v0.6.0"},
+            body={"tag": "v0.6.0", "setup_workflow_id": workflow_id},
             extra_headers={"X-Setup-Intent-ID": intent_id},
         )
         assert status == 200
@@ -706,7 +740,8 @@ def test_config_preview_get_masks_cloud_route_and_issues_identity_token(
 def test_release_prepare_returns_clean_embedded_resource_error(tmp_path):
     class _UnwritableAlignment(_FakeSystemAlignment):
         def prepare_setup_resources(
-            self, *, requested_tag, mode, development_risk_acknowledged=False
+            self, *, requested_tag, mode, development_risk_acknowledged=False,
+            pre_launch=None,
         ):
             raise SystemAlignmentError(
                 "system_build_resources_invalid",
@@ -717,11 +752,11 @@ def test_release_prepare_returns_clean_embedded_resource_error(tmp_path):
     srv, base = _serve(release_manager=_FakeReleaseManager(tmp_path))
     _attach_system_alignment(srv, _UnwritableAlignment())
     try:
-        intent_id = _fresh_setup_intent(base)
+        workflow_id, intent_id = _setup_build_authority(srv, base)
         status, _, payload = _request(
             f"{base}/api/setup/releases/prepare",
             method="POST",
-            body={"tag": "v0.6.0"},
+            body={"tag": "v0.6.0", "setup_workflow_id": workflow_id},
             extra_headers={"X-Setup-Intent-ID": intent_id},
         )
         assert status == 409
@@ -2577,8 +2612,13 @@ def test_setup_intent_is_required_by_setup_mutations(path, tmp_path):
     srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
     _attach_system_alignment(srv, alignment)
     try:
+        # Naming the active workflow is not the user's confirmation: the route
+        # still refuses without the one-shot intent issued for that workflow.
+        workflow_id, _intent_id = _setup_build_authority(srv, base)
         status, _, payload = _request(
-            f"{base}{path}", method="POST", body={"tag": "v0.8.0"}
+            f"{base}{path}",
+            method="POST",
+            body={"tag": "v0.8.0", "setup_workflow_id": workflow_id},
         )
     finally:
         srv.shutdown()
@@ -2602,12 +2642,12 @@ def test_setup_intent_expires_before_confirm(tmp_path):
     )
     _attach_system_alignment(srv, alignment)
     try:
-        intent_id = _fresh_setup_intent(base)
+        workflow_id, intent_id = _setup_build_authority(srv, base)
         now[0] += 1201
         status, _, payload = _request(
             f"{base}/api/setup/system-build/confirm",
             method="POST",
-            body={"tag": "v0.8.0"},
+            body={"tag": "v0.8.0", "setup_workflow_id": workflow_id},
             extra_headers={"X-Setup-Intent-ID": intent_id},
         )
     finally:
@@ -2626,13 +2666,13 @@ def test_setup_intent_rejects_changed_install_state(tmp_path):
     srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
     _attach_system_alignment(srv, alignment)
     try:
-        intent_id = _fresh_setup_intent(base)
+        workflow_id, intent_id = _setup_build_authority(srv, base)
         config_path = Path(paths.BASE_DIR) / "config" / "config.json"
         _write_json(config_path, {"changed": True})
         status, _, payload = _request(
             f"{base}/api/setup/system-build/confirm",
             method="POST",
-            body={"tag": "v0.8.0"},
+            body={"tag": "v0.8.0", "setup_workflow_id": workflow_id},
             extra_headers={"X-Setup-Intent-ID": intent_id},
         )
     finally:
@@ -2652,7 +2692,7 @@ def test_setup_intent_is_invalid_after_logout_and_new_session(tmp_path):
     srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
     _attach_system_alignment(srv, alignment)
     try:
-        intent_id = _fresh_setup_intent(base)
+        workflow_id, intent_id = _setup_build_authority(srv, base)
         logout_status, _, _ = _request(
             f"{base}/api/admin/auth/logout", method="POST"
         )
@@ -2660,7 +2700,7 @@ def test_setup_intent_is_invalid_after_logout_and_new_session(tmp_path):
         status, _, payload = _request(
             f"{base}/api/setup/system-build/confirm",
             method="POST",
-            body={"tag": "v0.8.0"},
+            body={"tag": "v0.8.0", "setup_workflow_id": workflow_id},
             extra_headers={"X-Setup-Intent-ID": intent_id},
         )
     finally:
@@ -2678,7 +2718,7 @@ def test_setup_intent_is_invalid_after_selecting_another_start_path(tmp_path):
     srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
     _attach_system_alignment(srv, alignment)
     try:
-        intent_id = _fresh_setup_intent(base)
+        workflow_id, intent_id = _setup_build_authority(srv, base)
         manage_status, _, _ = _request(
             f"{base}/api/admin/start-path",
             method="POST",
@@ -2687,7 +2727,7 @@ def test_setup_intent_is_invalid_after_selecting_another_start_path(tmp_path):
         status, _, payload = _request(
             f"{base}/api/setup/system-build/confirm",
             method="POST",
-            body={"tag": "v0.8.0"},
+            body={"tag": "v0.8.0", "setup_workflow_id": workflow_id},
             extra_headers={"X-Setup-Intent-ID": intent_id},
         )
     finally:
@@ -2707,16 +2747,16 @@ def test_development_setup_intent_is_required_but_acknowledgement_is_not(tmp_pat
     srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
     _attach_system_alignment(srv, alignment)
     try:
+        workflow_id, intent_id = _setup_build_authority(srv, base)
         missing_intent_status, _, missing_intent = _request(
             f"{base}/api/setup/system-build/confirm",
             method="POST",
-            body={"tag": _DEV_BUILD_TAG},
+            body={"tag": _DEV_BUILD_TAG, "setup_workflow_id": workflow_id},
         )
-        intent_id = _fresh_setup_intent(base)
         accepted_status, _, accepted = _request(
             f"{base}/api/setup/system-build/confirm",
             method="POST",
-            body={"tag": _DEV_BUILD_TAG},
+            body={"tag": _DEV_BUILD_TAG, "setup_workflow_id": workflow_id},
             extra_headers={"X-Setup-Intent-ID": intent_id},
         )
     finally:
@@ -3312,7 +3352,8 @@ class _FakeSystemAlignment:
         )
 
     def prepare_setup_resources(
-        self, *, requested_tag, mode, development_risk_acknowledged=False
+        self, *, requested_tag, mode, development_risk_acknowledged=False,
+        pre_launch=None,
     ):
         # Aligned-only: verify resources without ever launching an Admin update.
         # A not-yet-aligned Admin is refused with the alignment-required error.
@@ -3321,6 +3362,8 @@ class _FakeSystemAlignment:
         self.development_acknowledgements.append(development_risk_acknowledged)
         self.prepare_calls.append({"requested_tag": requested_tag, "mode": mode})
         if self.stage in {"resources_verified", "admin_aligned"}:
+            if pre_launch is not None:
+                pre_launch(SimpleNamespace(operation_id="op-1"))
             self.stage = "resources_verified"
             return {
                 "ok": True,
@@ -3337,11 +3380,15 @@ class _FakeSystemAlignment:
         )
 
     def confirm_setup_build(
-        self, *, requested_tag, mode, development_risk_acknowledged=False
+        self, *, requested_tag, mode, development_risk_acknowledged=False,
+        pre_launch=None,
     ):
         self._reject_floating(requested_tag)
         self.development_acknowledgements.append(development_risk_acknowledged)
         self.confirm_calls.append({"requested_tag": requested_tag, "mode": mode})
+        # Production persists the workflow link before committing the transition.
+        if pre_launch is not None:
+            pre_launch(SimpleNamespace(operation_id="op-1"))
         self.stage = "resources_verified"
         return {
             "ok": True,
@@ -3415,7 +3462,9 @@ class _FakeSystemAlignment:
         self._ems_claimed = False
         return {"ok": True, "operation_id": operation_id, "stage": self.stage}
 
-    def recover_ems_operation(self, *, operation_id, healthcheck_passed=None):
+    def recover_ems_operation(
+        self, *, operation_id, healthcheck_passed=None, **_kwargs
+    ):
         if self.stage in {"resources_verified", "ems_operation_pending"}:
             return {"ok": True, "operation_id": operation_id, "stage": self.stage}
         if self.stage == "healthcheck_pending" and healthcheck_passed is not None:
@@ -3487,7 +3536,11 @@ class _FakeSystemAlignment:
     ):
         self.ems_calls.append(("finish", operation_id, succeeded, error_code))
         self.stage = "healthcheck_pending" if succeeded else "failed_recoverable"
-        return {"status": self.stage, "operation_id": operation_id}
+        return {
+            "status": self.stage,
+            "stage": self.stage,
+            "operation_id": operation_id,
+        }
 
     def finish_healthcheck(
         self,
@@ -3501,7 +3554,13 @@ class _FakeSystemAlignment:
         self.health_calls.append((operation_id, passed, error_code))
         self.stage = "completed" if passed else "failed_recoverable"
         self.active = not passed
-        return {"status": self.stage, "operation_id": operation_id}
+        # The real service reports the transition stage under both keys; the
+        # server's terminal bookkeeping reads "stage".
+        return {
+            "status": self.stage,
+            "stage": self.stage,
+            "operation_id": operation_id,
+        }
 
 
 class _TrackingReleaseManager(_FakeReleaseManager):
@@ -3597,6 +3656,36 @@ def test_admin_runtime_accepts_one_shared_system_alignment_service(tmp_path):
     assert runtime.system_alignment is alignment
 
 
+def test_productive_alignment_service_shares_the_runtime_worker_coordinator(
+    tmp_path, monkeypatch
+):
+    # Worker liveness only means something when the service that claims for a
+    # resource import and the route that abandons the operation consult the same
+    # coordinator, so the productive graph must hand over its own instance.
+    monkeypatch.setenv(
+        "EMS_ADMIN_DEVELOPMENT_CATALOGUE", str(tmp_path / "missing-catalogue.json")
+    )
+    runtime = create_admin_runtime()
+
+    assert (
+        getattr(runtime.system_alignment, "_coordinator", None)
+        is runtime.operation_coordinator
+    )
+
+
+def test_admin_runtime_accepts_an_injected_worker_coordinator(tmp_path):
+    # The path the deterministic E2E runtime uses: build the alignment service
+    # against the coordinator the runtime will hold.
+    coordinator = OperationCoordinator()
+    runtime = create_admin_runtime(
+        release_manager=_TrackingReleaseManager(tmp_path),
+        system_alignment=_FakeSystemAlignment(),
+        operation_coordinator=coordinator,
+    )
+
+    assert runtime.operation_coordinator is coordinator
+
+
 def test_production_server_wires_development_catalogue_source(tmp_path, monkeypatch):
     # The productive server builds its own ReleaseManager with a real development
     # catalogue source (not the test-only injected item list), so a published
@@ -3620,11 +3709,11 @@ def test_setup_release_prepare_verifies_resources_without_updating_admin(tmp_pat
     srv, base = _serve(release_manager=manager)
     _attach_system_alignment(srv, alignment)
     try:
-        intent_id = _fresh_setup_intent(base)
+        workflow_id, intent_id = _setup_build_authority(srv, base)
         status, _, payload = _request(
             f"{base}/api/setup/releases/prepare",
             method="POST",
-            body={"tag": "v0.8.0"},
+            body={"tag": "v0.8.0", "setup_workflow_id": workflow_id},
             extra_headers={"X-Setup-Intent-ID": intent_id},
         )
     finally:
@@ -3650,11 +3739,11 @@ def test_setup_release_prepare_refuses_to_update_an_unaligned_admin(tmp_path):
     srv, base = _serve(release_manager=manager)
     _attach_system_alignment(srv, alignment)
     try:
-        intent_id = _fresh_setup_intent(base)
+        workflow_id, intent_id = _setup_build_authority(srv, base)
         status, _, payload = _request(
             f"{base}/api/setup/releases/prepare",
             method="POST",
-            body={"tag": "v0.8.0"},
+            body={"tag": "v0.8.0", "setup_workflow_id": workflow_id},
             extra_headers={"X-Setup-Intent-ID": intent_id},
         )
     finally:
@@ -3673,11 +3762,11 @@ def test_setup_release_prepare_authorizes_development_build_without_ack(tmp_path
     srv, base = _serve(release_manager=manager)
     _attach_system_alignment(srv, alignment)
     try:
-        intent_id = _fresh_setup_intent(base)
+        workflow_id, intent_id = _setup_build_authority(srv, base)
         accepted_status, _, accepted = _request(
             f"{base}/api/setup/releases/prepare",
             method="POST",
-            body={"tag": _DEV_BUILD_TAG},
+            body={"tag": _DEV_BUILD_TAG, "setup_workflow_id": workflow_id},
             extra_headers={"X-Setup-Intent-ID": intent_id},
         )
     finally:
@@ -3811,11 +3900,11 @@ def test_setup_update_admin_revalidates_and_starts_alignment_with_reconnect(tmp_
     srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
     _attach_system_alignment(srv, alignment)
     try:
-        intent_id = _fresh_setup_intent(base)
+        workflow_id, intent_id = _setup_build_authority(srv, base)
         status, _, payload = _request(
             f"{base}/api/setup/system-build/update-admin",
             method="POST",
-            body={"tag": "v0.8.0"},
+            body={"tag": "v0.8.0", "setup_workflow_id": workflow_id},
             extra_headers={"X-Setup-Intent-ID": intent_id},
         )
     finally:
@@ -3839,11 +3928,11 @@ def test_setup_update_admin_authorizes_development_build_without_ack(tmp_path):
     srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
     _attach_system_alignment(srv, alignment)
     try:
-        intent_id = _fresh_setup_intent(base)
+        workflow_id, intent_id = _setup_build_authority(srv, base)
         status, _, _payload = _request(
             f"{base}/api/setup/system-build/update-admin",
             method="POST",
-            body={"tag": _DEV_BUILD_TAG},
+            body={"tag": _DEV_BUILD_TAG, "setup_workflow_id": workflow_id},
             extra_headers={"X-Setup-Intent-ID": intent_id},
         )
     finally:
@@ -3862,9 +3951,9 @@ def test_setup_update_admin_requires_session_and_csrf(tmp_path):
     srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
     _attach_system_alignment(srv, alignment)
     url = f"{base}/api/setup/system-build/update-admin"
-    body = {"tag": "v0.8.0"}
     try:
-        intent_id = _fresh_setup_intent(base)
+        workflow_id, intent_id = _setup_build_authority(srv, base)
+        body = {"tag": "v0.8.0", "setup_workflow_id": workflow_id}
         unauthenticated, _, _ = raw_request(url, method="POST", body=body)
         cookie_only = auth_headers(url, "GET")
         cookie_only["X-Setup-Intent-ID"] = intent_id
@@ -3890,11 +3979,11 @@ def test_automated_setup_prepare_uses_the_same_alignment_service(tmp_path):
     srv, base = _serve(release_manager=manager)
     _attach_system_alignment(srv, alignment)
     try:
-        intent_id = _fresh_setup_intent(base)
+        workflow_id, intent_id = _setup_build_authority(srv, base)
         status, _, payload = _request(
             f"{base}/api/setup/automated/releases/prepare",
             method="POST",
-            body={"tag": "v0.8.0"},
+            body={"tag": "v0.8.0", "setup_workflow_id": workflow_id},
             extra_headers={"X-Setup-Intent-ID": intent_id},
         )
     finally:
@@ -3994,19 +4083,23 @@ def test_setup_system_build_confirm_creates_one_idempotent_operation(tmp_path):
     srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
     _attach_system_alignment(srv, alignment)
     try:
+        workflow_id, intent_id = _setup_build_authority(srv, base)
         first_status, _, first = _request(
             f"{base}/api/setup/system-build/confirm",
             method="POST",
-            body={"tag": "v0.8.0", "acknowledge_risk": False},
-            extra_headers={"X-Setup-Intent-ID": _fresh_setup_intent(base)},
+            body={"tag": "v0.8.0", "acknowledge_risk": False,
+                  "setup_workflow_id": workflow_id},
+            extra_headers={"X-Setup-Intent-ID": intent_id},
         )
         # A one-shot intent authorizes exactly one mutation, so the idempotent
         # re-confirm needs its own fresh confirmation.
+        _same, second_intent = _setup_build_authority(srv, base)
         second_status, _, second = _request(
             f"{base}/api/setup/system-build/confirm",
             method="POST",
-            body={"tag": "v0.8.0", "acknowledge_risk": False},
-            extra_headers={"X-Setup-Intent-ID": _fresh_setup_intent(base)},
+            body={"tag": "v0.8.0", "acknowledge_risk": False,
+                  "setup_workflow_id": workflow_id},
+            extra_headers={"X-Setup-Intent-ID": second_intent},
         )
     finally:
         srv.shutdown()
@@ -4026,17 +4119,17 @@ def test_setup_intent_is_consumed_after_the_first_mutation(tmp_path):
     srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
     _attach_system_alignment(srv, alignment)
     try:
-        intent_id = _fresh_setup_intent(base)
+        workflow_id, intent_id = _setup_build_authority(srv, base)
         first_status, _, _ = _request(
             f"{base}/api/setup/system-build/confirm",
             method="POST",
-            body={"tag": "v0.8.0"},
+            body={"tag": "v0.8.0", "setup_workflow_id": workflow_id},
             extra_headers={"X-Setup-Intent-ID": intent_id},
         )
         second_status, _, second = _request(
             f"{base}/api/setup/system-build/confirm",
             method="POST",
-            body={"tag": "v0.8.0"},
+            body={"tag": "v0.8.0", "setup_workflow_id": workflow_id},
             extra_headers={"X-Setup-Intent-ID": intent_id},
         )
     finally:
@@ -4055,7 +4148,8 @@ def test_setup_intent_is_consumed_after_the_first_mutation(tmp_path):
 def test_setup_intent_stays_consumed_even_when_the_mutation_fails(tmp_path):
     class FailingConfirm(_FakeSystemAlignment):
         def confirm_setup_build(
-            self, *, requested_tag, mode, development_risk_acknowledged=False
+            self, *, requested_tag, mode, development_risk_acknowledged=False,
+            pre_launch=None,
         ):
             raise SystemAlignmentError(
                 "transition_context_mismatch",
@@ -4066,17 +4160,17 @@ def test_setup_intent_stays_consumed_even_when_the_mutation_fails(tmp_path):
     srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
     _attach_system_alignment(srv, alignment)
     try:
-        intent_id = _fresh_setup_intent(base)
+        workflow_id, intent_id = _setup_build_authority(srv, base)
         first_status, _, _ = _request(
             f"{base}/api/setup/system-build/confirm",
             method="POST",
-            body={"tag": "v0.9.0"},
+            body={"tag": "v0.9.0", "setup_workflow_id": workflow_id},
             extra_headers={"X-Setup-Intent-ID": intent_id},
         )
         second_status, _, second = _request(
             f"{base}/api/setup/system-build/confirm",
             method="POST",
-            body={"tag": "v0.9.0"},
+            body={"tag": "v0.9.0", "setup_workflow_id": workflow_id},
             extra_headers={"X-Setup-Intent-ID": intent_id},
         )
     finally:
@@ -4095,7 +4189,7 @@ def test_parallel_confirm_and_update_admin_share_one_intent(tmp_path):
     srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
     _attach_system_alignment(srv, alignment)
     try:
-        intent_id = _fresh_setup_intent(base)
+        workflow_id, intent_id = _setup_build_authority(srv, base)
         results = {}
         barrier = threading.Barrier(2)
 
@@ -4104,7 +4198,7 @@ def test_parallel_confirm_and_update_admin_share_one_intent(tmp_path):
             status, _, payload = _request(
                 f"{base}{path}",
                 method="POST",
-                body={"tag": "v0.8.0"},
+                body={"tag": "v0.8.0", "setup_workflow_id": workflow_id},
                 extra_headers={"X-Setup-Intent-ID": intent_id},
             )
             results[key] = (status, payload)
@@ -4129,13 +4223,16 @@ def test_parallel_confirm_and_update_admin_share_one_intent(tmp_path):
         srv.server_close()
 
     statuses = sorted(status for status, _ in results.values())
-    # Exactly one request proceeds; the other is refused as consumed.
+    # Exactly one request proceeds. The loser is refused either because the
+    # winner already spent the one-shot intent, or because the winner still owns
+    # the workflow's lifecycle claim — never because both were allowed to run.
     assert statuses[0] in {200, 202}
-    consumed = [
-        payload for status, payload in results.values() if status == 409
-    ]
-    assert len(consumed) == 1
-    assert consumed[0]["error"] == "setup_intent_consumed"
+    refused = [payload for status, payload in results.values() if status == 409]
+    assert len(refused) == 1
+    assert refused[0]["error"] in {
+        "setup_intent_consumed",
+        "setup_operation_in_progress",
+    }
 
 
 def test_setup_system_build_confirm_authorizes_development_build_without_ack(tmp_path):
@@ -4143,11 +4240,11 @@ def test_setup_system_build_confirm_authorizes_development_build_without_ack(tmp
     srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
     _attach_system_alignment(srv, alignment)
     try:
-        intent_id = _fresh_setup_intent(base)
+        workflow_id, intent_id = _setup_build_authority(srv, base)
         status, _, payload = _request(
             f"{base}/api/setup/system-build/confirm",
             method="POST",
-            body={"tag": _DEV_BUILD_TAG},
+            body={"tag": _DEV_BUILD_TAG, "setup_workflow_id": workflow_id},
             extra_headers={"X-Setup-Intent-ID": intent_id},
         )
     finally:
@@ -4173,11 +4270,12 @@ def test_fresh_install_confirm_starts_without_acknowledgement(tmp_path, tag):
     srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
     _attach_system_alignment(srv, alignment)
     try:
+        workflow_id, intent_id = _setup_build_authority(srv, base)
         status, _, payload = _request(
             f"{base}/api/setup/system-build/confirm",
             method="POST",
-            body={"tag": tag},
-            extra_headers={"X-Setup-Intent-ID": _fresh_setup_intent(base)},
+            body={"tag": tag, "setup_workflow_id": workflow_id},
+            extra_headers={"X-Setup-Intent-ID": intent_id},
         )
     finally:
         srv.shutdown()
@@ -4195,11 +4293,12 @@ def test_fresh_install_confirm_still_validates_build_server_side(tmp_path):
     srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
     _attach_system_alignment(srv, alignment)
     try:
+        workflow_id, intent_id = _setup_build_authority(srv, base)
         status, _, payload = _request(
             f"{base}/api/setup/system-build/confirm",
             method="POST",
-            body={"tag": _DEV_FLOATING_TAG},
-            extra_headers={"X-Setup-Intent-ID": _fresh_setup_intent(base)},
+            body={"tag": _DEV_FLOATING_TAG, "setup_workflow_id": workflow_id},
+            extra_headers={"X-Setup-Intent-ID": intent_id},
         )
     finally:
         srv.shutdown()
@@ -4217,17 +4316,17 @@ def test_development_confirm_does_not_reauthorize_a_consumed_setup_intent(tmp_pa
     srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
     _attach_system_alignment(srv, alignment)
     try:
-        intent_id = _fresh_setup_intent(base)
+        workflow_id, intent_id = _setup_build_authority(srv, base)
         first_status, _, _ = _request(
             f"{base}/api/setup/system-build/confirm",
             method="POST",
-            body={"tag": _DEV_BUILD_TAG},
+            body={"tag": _DEV_BUILD_TAG, "setup_workflow_id": workflow_id},
             extra_headers={"X-Setup-Intent-ID": intent_id},
         )
         second_status, _, second = _request(
             f"{base}/api/setup/system-build/confirm",
             method="POST",
-            body={"tag": _DEV_BUILD_TAG},
+            body={"tag": _DEV_BUILD_TAG, "setup_workflow_id": workflow_id},
             extra_headers={"X-Setup-Intent-ID": intent_id},
         )
     finally:
@@ -4243,7 +4342,8 @@ def test_development_confirm_does_not_reauthorize_a_consumed_setup_intent(tmp_pa
 def test_confirm_reports_a_different_active_transition_context(tmp_path):
     class MismatchedTransition(_FakeSystemAlignment):
         def confirm_setup_build(
-            self, *, requested_tag, mode, development_risk_acknowledged=False
+            self, *, requested_tag, mode, development_risk_acknowledged=False,
+            pre_launch=None,
         ):
             raise SystemAlignmentError(
                 "transition_context_mismatch",
@@ -4254,11 +4354,11 @@ def test_confirm_reports_a_different_active_transition_context(tmp_path):
     srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
     _attach_system_alignment(srv, alignment)
     try:
-        intent_id = _fresh_setup_intent(base)
+        workflow_id, intent_id = _setup_build_authority(srv, base)
         status, _, payload = _request(
             f"{base}/api/setup/system-build/confirm",
             method="POST",
-            body={"tag": "v0.9.0", "acknowledge_risk": False},
+            body={"tag": "v0.9.0", "acknowledge_risk": False, "setup_workflow_id": workflow_id},
             extra_headers={"X-Setup-Intent-ID": intent_id},
         )
     finally:

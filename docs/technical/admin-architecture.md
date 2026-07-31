@@ -169,6 +169,14 @@ returns a reconnect response, and the replacement Admin resumes from
 `data/admin/state/`. Reconnect proves only the Admin stage; it does not complete
 the EMS operation or write known-good state.
 
+One operation dispatches at most one replacement. The durable transition stage
+decides that a replacement is expected; an exclusive per-operation claim
+(`ReplacementDispatchCoordinator`, `admin/replacement_dispatch.py`) decides which
+of several concurrent callers actually invokes the launcher — both listeners
+share it through the single `SystemAlignmentService` in `AdminRuntime`. The
+sidecar's own `claim_admin_update()` remains the durable guard inside the
+replacement. See `docs/technical/admin-workflow-state.md` §5.5.
+
 Admin image update decisions are made by digest/build identity, not by tag name
 alone.
 

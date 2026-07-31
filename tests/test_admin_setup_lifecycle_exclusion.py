@@ -68,17 +68,21 @@ class _PausedPrepare:
 class _Mutation(threading.Thread):
     """Run one Setup mutation request off-thread and keep its outcome."""
 
-    def __init__(self, base, path, body):
+    def __init__(self, base, path, body, extra_headers=None):
         super().__init__(daemon=True)
         self._base = base
         self._path = path
         self._body = body
+        self._extra_headers = extra_headers
         self.status = None
         self.payload = None
 
     def run(self):
         self.status, _, self.payload = _request(
-            f"{self._base}{self._path}", method="POST", body=self._body
+            f"{self._base}{self._path}",
+            method="POST",
+            body=self._body,
+            extra_headers=self._extra_headers,
         )
 
 
@@ -112,7 +116,7 @@ def test_empty_abandon_cannot_discard_newer_workflow(tmp_path):
     srv, base = _serve(release_manager=_control_export_manager(tmp_path))
     _write_live('{"live": "A"}\n')
     try:
-        first = _start_workflow(base)
+        first = _start_workflow(base, srv)
         status, _, payload = _abandon(base, {"setup_workflow_id": first})
         assert status == 200 and payload["ok"] is True, payload
 

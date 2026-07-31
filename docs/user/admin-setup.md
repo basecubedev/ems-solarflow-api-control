@@ -197,11 +197,95 @@ the same action as **Discard setup** when a setup transition needs escaping; a
 Guided Upgrade offers **Cancel upgrade**, which ends the upgrade only.
 
 Discarding a setup is never a half-action. If the console is still busy with
-something the setup itself started — saving or applying the configuration,
-preparing the deployment, starting EMS — the discard is **refused** and says which
-operation is still running. Nothing has been discarded at that point: your draft
-and the setup stay exactly as they were, and you can discard once that operation
-finishes.
+something the setup itself started — updating the Admin Server, confirming the
+System Build, preparing the release resources, verifying the System Build
+resources, saving or applying the configuration, preparing the deployment,
+starting EMS — the discard is **refused** and says which operation is still
+running. Nothing has been discarded at that point: your draft and the setup stay
+exactly as they were, and you can discard once that operation finishes. The
+reverse also holds: once a discard has begun, the operation it interrupted cannot
+start a System Build change afterwards.
+
+Resource verification is worth calling out, because the progress display is
+still on **Verifying selected System Build resources** while it happens: the
+files are being unpacked and written at that moment, so a discard would leave a
+half-written copy behind. The console therefore disables the discard until the
+verification finishes or fails, and tells you to wait rather than reporting a
+discard it did not perform.
+
+### If a setup step takes too long
+
+A System Build change has a time limit. Once it passes, the console stops trying
+to continue it and offers **Discard setup** as the way out — that is what keeps a
+setup interrupted by a power cut or a crashed Admin Console from blocking the
+system forever.
+
+Running out of time does not by itself mean the work has stopped, so the discard
+is not offered unconditionally:
+
+- **Time limit passed and nothing is running** — Discard setup is available. This
+  is the normal recovery, including after an Admin Console restart, where any
+  work from before the restart is gone by definition.
+- **Time limit passed but an operation is still running** — Discard setup stays
+  disabled, and the panel says the setup has run out of time *but its operation is
+  still running*. Wait for it to finish; the discard becomes available immediately
+  afterwards. This matters most for resource verification, which writes shared
+  files: discarding mid-write would leave a half-written copy behind whether or not
+  the time limit has passed.
+- **The console cannot tell whether anything is running** — Discard setup stays
+  disabled too, and says so. It never guesses "probably finished".
+
+### If the Admin data directory cannot be written
+
+Starting a System Build change writes two things: a note in the setup's own record
+saying which operation it owns, and the operation itself. If the second write fails
+— a full disk, a read-only mount, anything the filesystem refuses — the first one
+is taken back before you are told, so **nothing was started and the setup stays
+exactly as it was**. Fix the Admin data directory and start the step again; no
+cleanup of your own is needed. This holds for a plain refusal and for a real
+filesystem error alike.
+
+There is one case the console cannot tidy up for you: if it also cannot read the
+setup's record back to take that note away, it says so explicitly — nothing was
+started, but the setup's record and the operation list no longer agree. It does not
+report a clean "nothing happened", and it never rewrites or deletes a record it
+could not read, because that record is the only proof of which files belong to your
+setup. Check the Admin data directory, then discard the setup and start it again.
+
+### If a System Build step fails
+
+A failed System Build step does not throw away the setup. The recovery panel
+offers:
+
+- **Resume** — retry the step that failed, from the exact point it is safe to
+  retry from;
+- **Discard setup** — stop the setup and remove the files it created, as above.
+
+A Guided Upgrade recovery additionally offers **Return to running build**, which
+puts the Admin Console back on the System Build your EMS is currently running.
+That action is deliberately **not** offered during a setup. Returning is really
+two steps — end the failed operation, then start a new one — and during a setup
+there is no record that would own the new operation afterwards, so a later
+retry, discard or Admin restart could not tell who it belonged to. Resume and
+Discard setup both have a clear owner and cover the same situations. If the
+action is requested anyway, the server refuses it and changes nothing.
+
+### One setup at a time, even with two browser windows
+
+Two browser windows can be open on the same setup, but only one setup is ever
+current, and only the window that is on the current setup can change it. When one
+window changes the selected System Build or discards the setup, the other window's
+confirmation stops being valid immediately — including its own Fresh Setup
+confirmation, which belongs to the setup it was given for and is never carried
+over to the replacement. The stale window says its setup session was replaced and
+offers to open the current setup or discard it; it never silently acts on the
+newer setup, and nothing it had prepared is applied.
+
+If the console cannot tell whether a pending System Build change belongs to the
+setup you are looking at, it refuses that change and cancels nothing. This is
+deliberate: cancelling somebody else's System Build transition, or deleting files
+whose owner cannot be proven, would be worse than asking you to reload and act on
+the setup the server actually has.
 
 ### If temporary files remain
 

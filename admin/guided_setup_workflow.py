@@ -135,6 +135,16 @@ class GuidedSetupWorkflowError(Exception):
         self.status = status
 
 
+class GuidedSetupWorkflowReadError(Exception):
+    """The durable record could not be read well enough to reconcile against it.
+
+    Only reconciliation raises this. Authority reads stay fail-closed (``None``),
+    because refusing a mutation is the safe answer there; a compensation that
+    cannot inspect the record instead has to say so, since "unreadable" and
+    "already superseded" are the same value but opposite conclusions.
+    """
+
+
 def _is_secret_key(key):
     lowered = key.lower()
     return any(marker in lowered for marker in _SECRET_KEY_MARKERS)
@@ -387,6 +397,39 @@ class GuidedSetupWorkflowStore:
             return None
         return record if self._valid_record(record) else None
 
+    def _load_for_reconciliation(self):
+        """Read the record strictly: ``None`` only when there is genuinely none.
+
+        An absent file is a defined outcome — there is no record that could still
+        name a stale operation, so nothing needs restoring. Every other unusable
+        state (unreadable, oversized, malformed, foreign-shaped) raises, because
+        the compensation would otherwise report a reconciliation it never made.
+        """
+
+        try:
+            raw = self.path.read_bytes()
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise GuidedSetupWorkflowReadError(
+                f"the Guided Setup record could not be read: {exc}"
+            ) from exc
+        if len(raw) > MAX_RECORD_BYTES:
+            raise GuidedSetupWorkflowReadError(
+                "the Guided Setup record is larger than the accepted maximum"
+            )
+        try:
+            record = json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise GuidedSetupWorkflowReadError(
+                "the Guided Setup record is corrupt"
+            ) from exc
+        if not self._valid_record(record):
+            raise GuidedSetupWorkflowReadError(
+                "the Guided Setup record does not hold a valid workflow"
+            )
+        return record
+
     def active(self):
         record = self.load()
         if record is None or record["status"] != STATUS_ACTIVE:
@@ -564,6 +607,35 @@ class GuidedSetupWorkflowStore:
             record["preview"] = None
             return self._persist(record)
 
+    def link_transition(
+        self,
+        workflow_id,
+        *,
+        operation_id,
+        transition_mode,
+        selected_system_tag=None,
+    ):
+        """Make ``workflow_id`` the owner of ``operation_id``.
+
+        Returns ``(record, previous_operation_id)``. Reading the replaced
+        reference under the same lock as the write is what makes the caller's
+        compensating :meth:`restore_transition_link` exact — a previous value
+        sampled outside the lock could already be stale.
+        """
+
+        with self._lock:
+            record = self.active()
+            if record is None or record["workflow_id"] != workflow_id:
+                return None, None
+            previous = record.get("operation_id")
+            if operation_id is not None:
+                record["operation_id"] = str(operation_id)
+            if transition_mode in _ALLOWED_TRANSITION_MODES:
+                record["transition_mode"] = transition_mode
+            if selected_system_tag:
+                record["selected_system_tag"] = str(selected_system_tag)
+            return self._persist(record), previous
+
     def record_transition(
         self,
         workflow_id,
@@ -572,16 +644,43 @@ class GuidedSetupWorkflowStore:
         transition_mode,
         selected_system_tag=None,
     ):
+        record, _previous = self.link_transition(
+            workflow_id,
+            operation_id=operation_id,
+            transition_mode=transition_mode,
+            selected_system_tag=selected_system_tag,
+        )
+        return record
+
+    def restore_transition_link(
+        self, workflow_id, *, expected_operation_id, previous_operation_id
+    ):
+        """Compare-and-restore the transition reference this workflow last wrote.
+
+        Only the *selection* metadata is left alone: the operation id is the
+        ownership proof, and restoring it is what keeps a workflow from naming a
+        transition that never became durable. The write is refused unless the
+        record still names ``expected_operation_id``, so a compensation that lost
+        the race to a newer successful link erases nothing. Returns the restored
+        record, or ``None`` when the compensation no longer applies.
+
+        Reads strictly under the store lock: a durable state that cannot be
+        inspected raises :class:`GuidedSetupWorkflowReadError` rather than reading
+        as a stale no-op, and a record that is present but unusable is never
+        cleared, replaced or reconstructed.
+        """
+
         with self._lock:
-            record = self.active()
+            record = self._load_for_reconciliation()
             if record is None or record["workflow_id"] != workflow_id:
                 return None
-            if operation_id is not None:
-                record["operation_id"] = str(operation_id)
-            if transition_mode in _ALLOWED_TRANSITION_MODES:
-                record["transition_mode"] = transition_mode
-            if selected_system_tag:
-                record["selected_system_tag"] = str(selected_system_tag)
+            if record.get("operation_id") != expected_operation_id:
+                return None
+            record["operation_id"] = (
+                str(previous_operation_id)
+                if previous_operation_id is not None
+                else None
+            )
             return self._persist(record)
 
     def bind_generated_artifacts(self, workflow_id, *, preview_id):
@@ -753,6 +852,7 @@ __all__ = [
     "CLEANUP_REVIEW_REQUIRED",
     "GUIDED_SETUP_WORKFLOW_FILE",
     "GuidedSetupWorkflowError",
+    "GuidedSetupWorkflowReadError",
     "GuidedSetupWorkflowStore",
     "SETUP_CLEANUP_REQUIRED",
     "SETUP_PREVIEW_MISMATCH",

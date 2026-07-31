@@ -3598,9 +3598,14 @@ const SETUP_CONFLICT_MESSAGES = {
 
 // Workflow-identity conflicts are terminal for this tab's authority (unlike
 // preview conflicts, which a re-review repairs), so they get their own panel.
+// A refused setup intent or an unprovable transition owner means the same thing:
+// this tab is not the workflow the server is willing to change.
 const SETUP_WORKFLOW_CONFLICT_ERRORS = new Set([
   "setup_workflow_required",
   "setup_workflow_not_active",
+  "setup_intent_workflow_mismatch",
+  "setup_transition_owner_unproven",
+  "setup_transition_context_mismatch",
 ]);
 
 const SETUP_WORKFLOW_STALE_MESSAGE =
@@ -3665,9 +3670,13 @@ async function reviewCurrentSetupConfiguration() {
 }
 
 // This tab's workflow identity was refused: stop polling and mutating, keep
-// the user's draft visible, and let them explicitly rejoin or discard.
+// the user's draft visible, and let them explicitly rejoin or discard. The local
+// one-shot intent goes with it — a confirmation issued for a workflow this tab no
+// longer owns can never authorize anything, so keeping it would only produce a
+// second, more confusing rejection.
 function handleSetupWorkflowConflict(data) {
   setupWorkflowStale = true;
+  setupIntentId = null;
   // Supersede every in-flight preview generation. A preview response that was
   // already on the wire describes a workflow the server has since refused; it
   // must not repaint the preview, its verdict or its readiness afterwards.
@@ -16716,6 +16725,24 @@ function handleSetupIntentRejection(data) {
   return true;
 }
 
+// A System Build mutation was refused because this tab is not the workflow the
+// server owns. Reuse the task-local workflow conflict panel (no new visual
+// system), unlock Step 1 and stop treating the response as a build failure.
+// Returns true once handled so the caller does not also report a generic error.
+function handleSystemBuildWorkflowConflict(data) {
+  if (!isSetupWorkflowConflict(data)) return false;
+  handleSetupWorkflowConflict(data);
+  clearSetupOperationContext();
+  systemBuildMutationLocked = false;
+  systemBuildState.status = SYSTEM_BUILD_STATUS.IDLE;
+  systemBuildState.error = null;
+  systemBuildState.failedAction = null;
+  setSystemBuildError((data && data.message) || SETUP_WORKFLOW_STALE_MESSAGE);
+  setActiveStep("release");
+  applySystemBuildAlignment();
+  return true;
+}
+
 // User-facing status lines for the Admin Server update action. The concrete
 // technical cause (retag/recreate/image) stays in the validation checklist and
 // diagnostics, never in this plain-language status line.
@@ -17253,9 +17280,12 @@ async function confirmSelectedSystemBuild() {
     const res = await fetch("/api/setup/system-build/confirm", {
       method: "POST",
       headers: setupIntentHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ tag }),
+      // The exact server-issued workflow identity, never a locally chosen one:
+      // this request creates the transition that workflow will own.
+      body: JSON.stringify({ tag, setup_workflow_id: setupWorkflowId }),
     });
     const data = await res.json().catch(() => ({}));
+    if (handleSystemBuildWorkflowConflict(data)) return;
     if (handleSetupIntentRejection(data)) return;
     if (tag !== selectedSystemBuildTag) {
       throw new Error("The selected System Build changed during confirmation.");
@@ -17417,13 +17447,14 @@ async function updateAdminForSystemBuild() {
   systemBuildState.status = SYSTEM_BUILD_STATUS.UPDATING;
   applySystemBuildAlignment();
   try {
-    const body = { tag };
+    const body = { tag, setup_workflow_id: setupWorkflowId };
     const res = await fetch("/api/setup/system-build/update-admin", {
       method: "POST",
       headers: setupIntentHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({}));
+    if (handleSystemBuildWorkflowConflict(data)) return;
     if (handleSetupIntentRejection(data)) return;
     if (!res.ok && res.status !== 202) {
       throw new Error((data && (data.message || data.error)) || "Admin update failed.");
@@ -17985,8 +18016,12 @@ function renderSystemAlignmentStatus(data) {
   if (systemAlignmentEls.reconnect) systemAlignmentEls.reconnect.hidden = !reconnecting;
   if (systemAlignmentEls.partial) systemAlignmentEls.partial.hidden = !recoveryAvailable;
   if (systemAlignmentEls.resume) systemAlignmentEls.resume.hidden = false;
+  // Returning to the running build is not offered for a Guided Setup transition:
+  // the server refuses it because the new align-existing operation would have no
+  // durable owner. Setup recovery is Resume or Discard setup.
+  const setupOwned = SETUP_TRANSITION_MODES.has(transition.mode);
   if (systemAlignmentEls.returnToRunning) {
-    systemAlignmentEls.returnToRunning.hidden = false;
+    systemAlignmentEls.returnToRunning.hidden = setupOwned;
   }
   if (systemAlignmentEls.partialMessage) {
     systemAlignmentEls.partialMessage.textContent = workerStatusUnknown
@@ -18001,7 +18036,11 @@ function renderSystemAlignmentStatus(data) {
         : errorMessage ||
           (expired
             ? "The System Build transition has expired. Abandon it to start a new one."
-            : "Admin is aligned, but EMS has not completed the matching build transition.");
+            : setupOwned
+              ? "Admin is aligned, but EMS has not completed the matching build " +
+                "transition. Retry it, or discard this setup to remove its " +
+                "temporary files."
+              : "Admin is aligned, but EMS has not completed the matching build transition.");
   }
   if (systemAlignmentEls.resume) {
     systemAlignmentEls.resume.disabled =
@@ -18009,7 +18048,9 @@ function renderSystemAlignmentStatus(data) {
   }
   if (systemAlignmentEls.returnToRunning) {
     systemAlignmentEls.returnToRunning.disabled =
-      !transition.operation_id || transition.return_available !== true;
+      setupOwned ||
+      !transition.operation_id ||
+      transition.return_available !== true;
   }
   if (systemAlignmentEls.abandon) {
     // The escape hatch out of a wedged transition, only with the worker
@@ -18142,6 +18183,7 @@ async function resumeSystemAlignment() {
 async function returnToRunningSystemBuild() {
   const transition = (systemAlignmentState && systemAlignmentState.transition) || {};
   if (!transition.operation_id) return;
+  if (SETUP_TRANSITION_MODES.has(transition.mode)) return;
   const previousAdminInstanceId = authState.adminInstanceId;
   if (!window.confirm("Return the Admin Console to the last known-good running EMS build?")) {
     return;

@@ -3,9 +3,10 @@
 
 Verifying workflow and preview authority once proves a mutation *may* start; it
 does not keep the workflow alive while the mutation runs. Every Setup operation
-that changes durable state therefore holds a named claim on its workflow for as
-long as its irreversible work can still commit, and every terminal operation
-holds a mutually exclusive one:
+that changes durable state — including the routes that *create* the System Build
+transition — therefore holds a named claim on its workflow for as long as its
+irreversible work can still commit, and every terminal operation holds a mutually
+exclusive one:
 
 * a mutation claim is refused while any claim is held (``setup_operation_in_progress``)
   and once terminalization has begun (``setup_workflow_not_active``);
@@ -41,6 +42,11 @@ SETUP_OPERATION_IN_PROGRESS = "setup_operation_in_progress"
 
 MUTATION_OPERATIONS = frozenset(
     {
+        "system_build_update_admin",
+        "system_build_confirm",
+        # Both release-prepare routes share one handler and differ only in the
+        # transition mode they open, so they share one claim name.
+        "setup_release_prepare",
         "config_write",
         "config_apply",
         "deployment_prepare",

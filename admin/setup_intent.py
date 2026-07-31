@@ -1,5 +1,15 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Short-lived proof that an authenticated user selected Fresh Setup."""
+"""Short-lived proof that one session confirmed Fresh Setup for one workflow.
+
+A setup intent is a one-shot user confirmation, not an identity. It is bound to
+the authenticated session, to the installation state it was issued against and
+to the exact Guided Setup workflow it was issued for. The workflow binding is
+what stops a confirmation from outliving its subject: an intent issued for a
+workflow that was since abandoned or superseded can never authorize the
+replacement, not even from the session that issued it.
+
+See ``docs/technical/admin-workflow-state.md``.
+"""
 
 import hashlib
 import json
@@ -15,10 +25,21 @@ DEFAULT_SETUP_INTENT_TTL_SECONDS = 20 * 60
 DEFAULT_CONSUMED_TTL_SECONDS = 5 * 60
 MAX_SETUP_INTENTS = 128
 
+SETUP_INTENT_WORKFLOW_MISMATCH = "setup_intent_workflow_mismatch"
+
+# Why an intent id is no longer usable, so a retried or racing request learns the
+# actionable reason instead of a bare "unknown intent".
+TOMBSTONE_CONSUMED = "consumed"
+TOMBSTONE_WORKFLOW_RETIRED = "workflow_retired"
+
 _REQUIRED_MESSAGE = "Confirm Fresh Setup before changing setup state."
 _EXPIRED_MESSAGE = "The Fresh Setup confirmation expired. Confirm it again."
 _CHANGED_MESSAGE = "The installation state changed. Confirm Fresh Setup again."
 _CONSUMED_MESSAGE = "Confirm Fresh Setup again before starting another operation."
+_WORKFLOW_MESSAGE = (
+    "This Fresh Setup confirmation belongs to an earlier setup session and can "
+    "no longer change the current workflow."
+)
 
 
 class SetupIntentError(Exception):
@@ -33,6 +54,7 @@ class SetupIntentError(Exception):
 class SetupIntent:
     intent_id: str
     session_id: str
+    workflow_id: str
     action: str
     install_state_fingerprint: str
     created_at: float
@@ -140,10 +162,12 @@ def installation_state_fingerprint(base_dir=None, runtime_provider=None):
 
 
 class SetupIntentStore:
-    """Thread-safe process-local setup intents that cannot cross sessions.
+    """Thread-safe process-local setup intents bound to a session and a workflow.
 
     Session binding prevents an intent copied from another authenticated browser
-    from authorizing a Fresh Setup mutation here.
+    from authorizing a Fresh Setup mutation here. Workflow binding prevents an
+    intent from surviving the workflow it confirmed: terminalizing that workflow
+    invalidates every remaining intent for it, in every session.
     """
 
     def __init__(
@@ -169,19 +193,23 @@ class SetupIntentStore:
         self.state_fingerprint = state_fingerprint or installation_state_fingerprint
         self.id_factory = id_factory or (lambda: secrets.token_urlsafe(32))
         self._records = {}
-        # A claimed intent leaves a short-lived tombstone (intent_id -> (session,
-        # expiry)) so a duplicate or racing request reliably learns the intent was
-        # already used instead of a bare "unknown intent". Bounded by its own TTL.
-        self._consumed = {}
+        # A retired intent leaves a short-lived tombstone (intent_id -> (session,
+        # workflow, expiry, reason)) so a duplicate or racing request reliably
+        # learns *why* it can no longer be used — already claimed, or its workflow
+        # was terminalized. Bounded by its own TTL and the record limit.
+        self._tombstones = {}
         self._lock = threading.Lock()
 
-    def issue(self, *, session_id, action=PATH_SETUP_NEW):
+    def issue(self, *, session_id, workflow_id, action=PATH_SETUP_NEW):
         if not session_id:
             raise ValueError("an authenticated session id is required")
+        if not workflow_id or not isinstance(workflow_id, str):
+            raise ValueError("the active setup workflow id is required")
         now = self.time_fn()
         record = SetupIntent(
             intent_id=self.id_factory(),
             session_id=session_id,
+            workflow_id=workflow_id,
             action=action,
             install_state_fingerprint=self.state_fingerprint(),
             created_at=now,
@@ -194,46 +222,58 @@ class SetupIntentStore:
             self._enforce_limit_locked()
         return record
 
-    def validate(self, intent_id, *, session_id, action=PATH_SETUP_NEW):
+    def validate(self, intent_id, *, session_id, workflow_id, action=PATH_SETUP_NEW):
         """Read-only check that ``intent_id`` is still usable; never consumes it."""
 
         with self._lock:
             now = self.time_fn()
-            record = self._resolve_locked(intent_id, session_id, action, now)
+            record = self._resolve_locked(
+                intent_id, session_id, workflow_id, action, now
+            )
             self._prune_locked(now)
             return record
 
-    def claim(self, intent_id, *, session_id, action=PATH_SETUP_NEW):
+    def claim(self, intent_id, *, session_id, workflow_id, action=PATH_SETUP_NEW):
         """Atomically consume ``intent_id`` for exactly one setup mutation.
 
-        The status, expiry, fingerprint and consume step all run under one lock so
-        two concurrent mutations can never both proceed on the same intent: the
-        second sees ``setup_intent_consumed``. An intent is never re-released, even
-        if the mutation it authorized later fails.
+        The status, workflow, expiry, fingerprint and consume step all run under
+        one lock so two concurrent mutations can never both proceed on the same
+        intent: the second sees ``setup_intent_consumed``. An intent is never
+        re-released, even if the mutation it authorized later fails. A rejected
+        claim consumes nothing, so a foreign-workflow attempt cannot spend the
+        confirmation its own workflow still needs.
         """
 
         with self._lock:
             now = self.time_fn()
-            record = self._resolve_locked(intent_id, session_id, action, now)
-            self._records.pop(intent_id, None)
-            self._consumed[intent_id] = (
-                session_id,
-                now + self.consumed_ttl_seconds,
+            record = self._resolve_locked(
+                intent_id, session_id, workflow_id, action, now
             )
+            self._records.pop(intent_id, None)
+            self._tombstone_locked(record, now, TOMBSTONE_CONSUMED)
             self._prune_locked(now)
             self._enforce_limit_locked()
         return record
 
-    def _resolve_locked(self, intent_id, session_id, action, now):
+    def _resolve_locked(self, intent_id, session_id, workflow_id, action, now):
         if not isinstance(intent_id, str) or not intent_id:
             raise SetupIntentError("setup_intent_required", _REQUIRED_MESSAGE)
         record = self._records.get(intent_id)
         if record is None:
-            if intent_id in self._consumed:
-                raise SetupIntentError("setup_intent_consumed", _CONSUMED_MESSAGE)
-            raise SetupIntentError("setup_intent_required", _REQUIRED_MESSAGE)
+            tombstone = self._tombstones.get(intent_id)
+            if tombstone is None:
+                raise SetupIntentError("setup_intent_required", _REQUIRED_MESSAGE)
+            if tombstone[3] == TOMBSTONE_WORKFLOW_RETIRED:
+                raise SetupIntentError(
+                    SETUP_INTENT_WORKFLOW_MISMATCH, _WORKFLOW_MESSAGE
+                )
+            raise SetupIntentError("setup_intent_consumed", _CONSUMED_MESSAGE)
         if record.session_id != session_id or record.action != action:
             raise SetupIntentError("setup_intent_required", _REQUIRED_MESSAGE)
+        if not workflow_id or record.workflow_id != workflow_id:
+            raise SetupIntentError(
+                SETUP_INTENT_WORKFLOW_MISMATCH, _WORKFLOW_MESSAGE
+            )
         if record.expires_at <= now:
             self._records.pop(intent_id, None)
             raise SetupIntentError("setup_intent_expired", _EXPIRED_MESSAGE)
@@ -261,6 +301,36 @@ class SetupIntentStore:
         with self._lock:
             self._invalidate_session_locked(session_id)
 
+    def invalidate_workflow(self, workflow_id):
+        """Retire every remaining intent for ``workflow_id``, in every session.
+
+        Called when the workflow becomes terminal: its confirmations must not
+        survive it, no matter which browser is holding them.
+        """
+
+        if not workflow_id:
+            return
+        with self._lock:
+            now = self.time_fn()
+            stale = [
+                record
+                for record in self._records.values()
+                if record.workflow_id == workflow_id
+            ]
+            for record in stale:
+                self._records.pop(record.intent_id, None)
+                self._tombstone_locked(record, now, TOMBSTONE_WORKFLOW_RETIRED)
+            self._prune_locked(now)
+            self._enforce_limit_locked()
+
+    def _tombstone_locked(self, record, now, reason):
+        self._tombstones[record.intent_id] = (
+            record.session_id,
+            record.workflow_id,
+            now + self.consumed_ttl_seconds,
+            reason,
+        )
+
     def _invalidate_session_locked(self, session_id):
         stale = [
             intent_id
@@ -271,11 +341,11 @@ class SetupIntentStore:
             self._records.pop(intent_id, None)
         consumed = [
             intent_id
-            for intent_id, (owner, _expiry) in self._consumed.items()
-            if owner == session_id
+            for intent_id, tombstone in self._tombstones.items()
+            if tombstone[0] == session_id
         ]
         for intent_id in consumed:
-            self._consumed.pop(intent_id, None)
+            self._tombstones.pop(intent_id, None)
 
     def _prune_locked(self, now):
         expired = [
@@ -287,11 +357,11 @@ class SetupIntentStore:
             self._records.pop(intent_id, None)
         stale_tombstones = [
             intent_id
-            for intent_id, (_owner, expiry) in self._consumed.items()
-            if expiry <= now
+            for intent_id, tombstone in self._tombstones.items()
+            if tombstone[2] <= now
         ]
         for intent_id in stale_tombstones:
-            self._consumed.pop(intent_id, None)
+            self._tombstones.pop(intent_id, None)
 
     def _enforce_limit_locked(self):
         # Expired records are already pruned before this runs; when still over the
@@ -305,10 +375,10 @@ class SetupIntentStore:
             )
             for intent_id, _record in oldest[:overflow]:
                 self._records.pop(intent_id, None)
-        tombstone_overflow = len(self._consumed) - self.max_records
+        tombstone_overflow = len(self._tombstones) - self.max_records
         if tombstone_overflow > 0:
             oldest_tombstones = sorted(
-                self._consumed.items(), key=lambda item: item[1][1]
+                self._tombstones.items(), key=lambda item: item[1][2]
             )
             for intent_id, _meta in oldest_tombstones[:tombstone_overflow]:
-                self._consumed.pop(intent_id, None)
+                self._tombstones.pop(intent_id, None)

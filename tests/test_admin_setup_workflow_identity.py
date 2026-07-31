@@ -125,7 +125,7 @@ def test_an_abandoned_workflows_tab_cannot_mutate_the_replacement(tmp_path):
     srv, base = _serve(release_manager=_control_export_manager(tmp_path))
     _write_live('{"live": "A"}\n')
     try:
-        old_workflow = _start_workflow(base)
+        old_workflow = _start_workflow(base, srv)
         old_preview = _preview(base, old_workflow, _draft_a())["config_preview_id"]
 
         status, _, payload = _request(

@@ -22,7 +22,7 @@ import tempfile
 import threading
 import uuid
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -459,6 +459,11 @@ SUPPORTED_TRANSITION_MODES = frozenset(
         TRANSITION_MODE_ALIGN_EXISTING,
     }
 )
+# The modes a Guided Setup workflow can own. Defined here with the modes
+# themselves so every consumer classifies a transition the same way.
+SETUP_TRANSITION_MODES = frozenset(
+    {TRANSITION_MODE_FRESH_INSTALL, TRANSITION_MODE_AUTOMATED_SETUP}
+)
 
 TRANSITION_STAGE_ADMIN_UPDATE_PENDING = "admin_update_pending"
 TRANSITION_STAGE_ADMIN_RECONNECT_PENDING = "admin_reconnect_pending"
@@ -496,6 +501,22 @@ CANCELLABLE_TRANSITION_STAGES = frozenset(
         TRANSITION_STAGE_FAILED_RECOVERABLE,
     }
 )
+
+
+def transition_resource_verification_active(record) -> bool:
+    """True while a claimed resource import may still write the shared cache.
+
+    The claim is taken before the import and the stage only advances after it
+    returns, so ``admin_aligned`` plus a claim is externally mutating even though
+    the visible stage has not moved. At ``resources_verified`` the same claim is
+    history, and at ``failed_recoverable`` the attempt is over.
+    """
+
+    return bool(
+        getattr(record, "stage", None) == TRANSITION_STAGE_ADMIN_ALIGNED
+        and getattr(record, "resources_claimed_at", None)
+    )
+
 
 _TRANSITION_EDGES = {
     TRANSITION_STAGE_ADMIN_UPDATE_PENDING: {
@@ -794,6 +815,36 @@ class TransitionRecord:
             "orchestrator_admin": self._orchestrator_override(),
             "selected_ems_build": self.selected_ems_build,
         }
+
+
+TRANSITION_MUTABLE_FIELDS = frozenset(
+    {
+        "stage",
+        "updated_at",
+        "failed_stage",
+        "resume_stage",
+        "error_code",
+        "error_message",
+        "admin_update_claimed_at",
+        "resources_claimed_at",
+    }
+)
+
+# Everything a record carries that is *not* lifecycle state: the fields
+# ``make_transition_record`` fixes when the operation is created and no store
+# mutation may ever change. Derived by exclusion, so a field added to the record
+# is immutable identity unless it is declared mutable above.
+TRANSITION_IDENTITY_FIELDS = tuple(
+    field.name
+    for field in fields(TransitionRecord)
+    if field.name not in TRANSITION_MUTABLE_FIELDS
+)
+
+
+def transition_identity(record) -> tuple:
+    """The immutable projection that defines *which* operation a record is."""
+
+    return tuple(getattr(record, name, None) for name in TRANSITION_IDENTITY_FIELDS)
 
 
 def _require_transition_str(data, key):
@@ -1477,10 +1528,11 @@ class PendingTransitionStore:
         """Mark the current transition cancelled (terminal, not resumable).
 
         A fresh transition may only be cancelled outside externally-mutating
-        stages. An expired one may be cancelled from any non-terminal stage:
-        expiry already refuses every forward path, so without cancel the
-        record would wedge the store permanently (``begin`` never replaces a
-        non-terminal record).
+        stages — including a claimed resource verification, whose visible stage
+        is still the cancellable ``admin_aligned``. An expired one may be
+        cancelled from any non-terminal stage: expiry already refuses every
+        forward path, so without cancel the record would wedge the store
+        permanently (``begin`` never replaces a non-terminal record).
         """
 
         with self._locked():
@@ -1495,13 +1547,18 @@ class PendingTransitionStore:
             if record.stage == TRANSITION_STAGE_CANCELLED:
                 return record
             self._require_mutable(record)
-            if record.stage not in CANCELLABLE_TRANSITION_STAGES and not (
-                _transition_is_expired(record, now or _now_utc())
-            ):
-                raise TransitionStateError(
-                    "mutation_in_progress",
-                    f"transition cannot be cancelled while {record.stage} is running",
-                )
+            if not _transition_is_expired(record, now or _now_utc()):
+                if record.stage not in CANCELLABLE_TRANSITION_STAGES:
+                    raise TransitionStateError(
+                        "mutation_in_progress",
+                        f"transition cannot be cancelled while {record.stage} is running",
+                    )
+                if transition_resource_verification_active(record):
+                    raise TransitionStateError(
+                        "mutation_in_progress",
+                        "transition cannot be cancelled while System Build "
+                        "resources are being prepared",
+                    )
             cancelled = replace(
                 record,
                 stage=TRANSITION_STAGE_CANCELLED,

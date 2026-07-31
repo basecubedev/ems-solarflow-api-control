@@ -21,6 +21,7 @@ import pytest
 from admin.install_context import detect_install_context
 from tests.test_admin_server import (
     _control_export_manager,
+    _own_active_setup_transition,
     _request,
     _serve,
 )
@@ -102,7 +103,15 @@ def _broker_body(password):
     }
 
 
-def _start_workflow(base):
+def _start_workflow(base, srv=None):
+    """Confirm Fresh Setup and return the durable workflow id.
+
+    Pass ``srv`` when the test later terminates or advances the harness's
+    pre-seeded Setup transition: production links a transition into its workflow
+    inside the pre-commit boundary, so a workflow that reached a transition always
+    names its exact ``operation_id``, and a workflow that cannot is refused.
+    """
+
     # ``confirm`` acknowledges an existing install; harmless on a fresh one.
     status, _, payload = _request(
         f"{base}/api/admin/start-path",
@@ -113,6 +122,8 @@ def _start_workflow(base):
     assert payload["ok"] is True
     workflow_id = payload.get("setup_workflow_id")
     assert workflow_id, "start-path must issue a durable setup_workflow_id"
+    if srv is not None:
+        _own_active_setup_transition(srv, base, workflow_id)
     return workflow_id
 
 

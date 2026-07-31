@@ -37,7 +37,7 @@ from admin.admin_update import (
 )
 from admin.development_catalogue import development_catalogue_source
 from admin.models import utc_now_iso
-from admin.setup_workflow import SetupWorkflowArtifacts
+from admin.setup_workflow import SETUP_TRANSITION_MODES, SetupWorkflowArtifacts
 from admin.embedded_resources import (
     EmbeddedReleaseResources,
     ReleaseArchiveResources,
@@ -46,6 +46,7 @@ from admin.embedded_resources import (
 from admin.image_identity import identify_image
 from admin.install_context import detect_install_context
 from admin.known_good import KnownGoodStore
+from admin.operation_coordinator import OperationCoordinator
 from admin.releases import ReleaseManager
 from admin.system_alignment import SystemAlignmentService
 from admin.system_build import SystemBuildResolver
@@ -414,7 +415,13 @@ def _build_embedded_bundle(bundle_dir: Path, tag: str):
 
 
 def build_test_system_alignment(
-    *, data_dir, docker, release_manager, instance_id_state, initial_running_tag
+    *,
+    data_dir,
+    docker,
+    release_manager,
+    instance_id_state,
+    initial_running_tag,
+    operation_coordinator=None,
 ):
     """Build the real alignment service driven by the deterministic adapters."""
 
@@ -462,7 +469,112 @@ def build_test_system_alignment(
             f"{ADMIN_IMAGE_REPO}:{docker._running_admin_tag}"
         ),
         launcher=launcher,
+        operation_coordinator=operation_coordinator,
     )
+
+
+def _install_setup_commit_hold(system_alignment):
+    """Let a browser test hold a Setup System Build start at its commit point.
+
+    The route takes its lifecycle claim before calling into System Alignment, so
+    blocking on entry here is exactly "the creation owns the workflow and its
+    transition has not been committed yet" — the state a concurrent Abandon has to
+    be refused in. Deterministic by construction: the test arms the hold, waits
+    until a request is actually parked in it, and releases it explicitly.
+    """
+
+    state = {
+        "armed": False,
+        "entered": threading.Event(),
+        "release": threading.Event(),
+    }
+
+    def gate(mode):
+        if not state["armed"] or mode not in SETUP_TRANSITION_MODES:
+            return
+        state["entered"].set()
+        state["release"].wait(60)
+
+    real_start_resolved = system_alignment.start_resolved
+    real_confirm = system_alignment.confirm_setup_build
+
+    def start_resolved(*, mode, **kwargs):
+        gate(mode)
+        return real_start_resolved(mode=mode, **kwargs)
+
+    def confirm_setup_build(*, mode, **kwargs):
+        gate(mode)
+        return real_confirm(mode=mode, **kwargs)
+
+    system_alignment.start_resolved = start_resolved
+    system_alignment.confirm_setup_build = confirm_setup_build
+    return state
+
+
+def _install_resource_import_hold(system_alignment):
+    """Let a browser test park a real resource import inside its cache mutation.
+
+    The importer runs under the operation's coordinator claim, so parking here is
+    exactly "a live worker still owns this operation" — the state an expired
+    transition must not be abandoned in. Deterministic by construction: the test
+    arms the hold, the seed returns only once a request is actually parked, and
+    the release is explicit.
+    """
+
+    state = {
+        "armed": False,
+        "entered": threading.Event(),
+        "release": threading.Event(),
+        "worker": None,
+    }
+    state["release"].set()
+
+    def wrap(provider):
+        if provider is None:
+            return
+        real = provider.import_into_cache
+
+        def import_into_cache(**kwargs):
+            if state["armed"]:
+                state["entered"].set()
+                state["release"].wait(60)
+            return real(**kwargs)
+
+        provider.import_into_cache = import_into_cache
+
+    wrap(system_alignment._embedded)
+    wrap(system_alignment._release_archive)
+    return state
+
+
+def _expire_transition(system_alignment):
+    """Move the durable transition's TTL into the past under the store's lock.
+
+    A controllable clock rather than a delay: the record's own ``expires_at`` is
+    what every expiry check reads, so rewriting it is the whole simulation.
+    """
+
+    store = system_alignment._transitions
+    with store._locked():
+        raw = store._read_raw()
+        if raw is None:
+            return False
+        raw["expires_at"] = "2000-01-01T00:00:00Z"
+        store._write_raw(raw)
+    return True
+
+
+def _settle_resource_import_hold(resource_hold):
+    """Release a parked import and wait for its worker to finish."""
+
+    resource_hold["armed"] = False
+    resource_hold["release"].set()
+    worker = resource_hold["worker"]
+    resource_hold["worker"] = None
+    if worker is None:
+        return True
+    worker.join(30)
+    return not worker.is_alive()
 
 
 def build_test_runtime(*, data_dir):
@@ -480,16 +592,23 @@ def build_test_runtime(*, data_dir):
         urlopen=_offline_opener,
         development_source=development_source,
     )
+    # One coordinator for the injected alignment service and the runtime, so the
+    # deterministic runtime proves the same worker ownership production does.
+    operation_coordinator = OperationCoordinator()
     system_alignment = build_test_system_alignment(
         data_dir=data_dir,
         docker=docker,
         release_manager=release_manager,
         instance_id_state=instance_id_state,
         initial_running_tag=initial_running_tag,
+        operation_coordinator=operation_coordinator,
     )
+    commit_hold = _install_setup_commit_hold(system_alignment)
+    resource_hold = _install_resource_import_hold(system_alignment)
     runtime = create_admin_runtime(
         release_manager=release_manager,
         system_alignment=system_alignment,
+        operation_coordinator=operation_coordinator,
     )
     original_instance_id = runtime.admin_instance_id
     instance_id_state["value"] = original_instance_id
@@ -1131,6 +1250,24 @@ def build_test_runtime(*, data_dir):
             _build_embedded_bundle(
                 Path(data_dir) / "embedded-bundle", _DEVELOPMENT_TAG
             )
+        elif scenario == "setup_transition_hold_commit":
+            # Park the next Setup System Build start inside its lifecycle claim,
+            # before its transition is committed, so a browser test can prove that
+            # exactly one of creation and abandonment wins.
+            commit_hold["release"].clear()
+            commit_hold["entered"].clear()
+            commit_hold["armed"] = True
+        elif scenario == "setup_transition_await_commit":
+            # Deterministic handshake instead of a delay: this returns only once a
+            # request is actually parked in the hold.
+            return {
+                "ok": True,
+                "scenario": scenario,
+                "holding": commit_hold["entered"].wait(30),
+            }
+        elif scenario == "setup_transition_release_commit":
+            commit_hold["armed"] = False
+            commit_hold["release"].set()
         elif scenario == "system_build_selection_race":
             docker._delay_latest_until_development = True
             docker._latest_validation_waiting.clear()
@@ -1143,6 +1280,62 @@ def build_test_runtime(*, data_dir):
             system_alignment._transitions.claim_resource_verification(
                 started["operation_id"]
             )
+        elif scenario == "setup_resource_import_running":
+            # A Setup transition whose resource importer really is running: it
+            # holds both the durable claim and the operation's coordinator claim,
+            # and it stays parked inside the cache mutation until released.
+            resource_hold["release"].clear()
+            resource_hold["entered"].clear()
+            resource_hold["armed"] = True
+            started = system_alignment.start(
+                requested_tag="v9.9.10",
+                mode="fresh_install",
+            )
+            operation_id = started["operation_id"]
+            system_alignment.resume(operation_id=operation_id)
+            # Link the operation to the active Guided Setup workflow exactly as
+            # the confirm route does, so a browser already inside Fresh Setup can
+            # prove ownership of the transition it is shown.
+            owner = runtime.setup_workflows.active()
+            if owner is not None:
+                runtime.setup_workflows.record_transition(
+                    owner["workflow_id"],
+                    operation_id=operation_id,
+                    transition_mode="fresh_install",
+                    selected_system_tag="v9.9.10",
+                )
+
+            def run_import():
+                try:
+                    system_alignment.verify_resources(operation_id=operation_id)
+                except Exception:
+                    # The outcome belongs to the browser assertions; a released
+                    # import that can no longer advance must not kill the runtime.
+                    pass
+
+            worker = threading.Thread(
+                target=run_import, name="e2e-resource-import", daemon=True
+            )
+            resource_hold["worker"] = worker
+            worker.start()
+            return {
+                "ok": True,
+                "scenario": scenario,
+                "operation_id": operation_id,
+                "holding": resource_hold["entered"].wait(30),
+            }
+        elif scenario == "setup_transition_expire":
+            return {
+                "ok": True,
+                "scenario": scenario,
+                "expired": _expire_transition(system_alignment),
+            }
+        elif scenario == "setup_resource_import_release":
+            return {
+                "ok": True,
+                "scenario": scenario,
+                "settled": _settle_resource_import_hold(resource_hold),
+            }
         elif scenario == "system_build_v070_resource_failure":
             _BROKEN_RESOURCE_TAGS.add("v0.7.0")
         elif scenario == "setup_cleanup_pending":
@@ -1197,6 +1390,9 @@ def build_test_runtime(*, data_dir):
     def test_reset():
         """Return the deterministic runtime to a known first-run state."""
 
+        # Before the durable state goes away: a still-parked import would
+        # otherwise keep running against a transition that no longer exists.
+        _settle_resource_import_hold(resource_hold)
         state_dir = Path(data_dir) / "state"
         for name in (
             "pending-transition.json",
@@ -1228,6 +1424,8 @@ def build_test_runtime(*, data_dir):
         docker._delay_latest_until_development = False
         docker._latest_validation_waiting.clear()
         docker._development_validation_seen.clear()
+        commit_hold["armed"] = False
+        commit_hold["release"].set()
         docker.restore_images()
         _BROKEN_RESOURCE_TAGS.clear()
         _BROKEN_RESOURCE_TAGS.add(_BROKEN_RESOURCE_TAG)

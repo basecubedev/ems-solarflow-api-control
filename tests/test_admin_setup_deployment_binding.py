@@ -29,7 +29,12 @@ from admin.deployment import DeploymentService
 from admin.guided_setup_workflow import GuidedSetupWorkflowStore
 from admin.setup_lifecycle import SetupLifecycleCoordinator
 from admin.setup_workflow import SetupWorkflowArtifacts
-from tests.test_admin_server import _FakeDeployment, _request, _serve
+from tests.test_admin_server import (
+    _FakeDeployment,
+    _own_active_setup_transition,
+    _request,
+    _serve,
+)
 
 pytestmark = pytest.mark.simulation
 
@@ -395,6 +400,7 @@ def test_abandon_refused_while_prepare_worker_is_active(tmp_path):
     srv, base = _serve(deployment=deployment)
     try:
         workflow_id = srv.setup_workflows.ensure_active()["workflow_id"]
+        _own_active_setup_transition(srv, base, workflow_id)
         status, _, job = _request(
             f"{base}/api/setup/deployment/prepare",
             method="POST",

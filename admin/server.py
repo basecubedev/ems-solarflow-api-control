@@ -147,6 +147,7 @@ from admin.known_good import KnownGoodStore
 from admin.setup_config import build_setup_catalog
 from admin.guided_setup_workflow import (
     GuidedSetupWorkflowError,
+    GuidedSetupWorkflowReadError,
     GuidedSetupWorkflowStore,
     PREVIEW_MISMATCH_MESSAGE,
     SETUP_PREVIEW_MISMATCH,
@@ -160,10 +161,18 @@ from admin.guided_setup_workflow import (
 )
 from admin.setup_lifecycle import SetupLifecycleCoordinator
 from admin.setup_workflow import (
+    OWNERSHIP_MISMATCH,
+    OWNERSHIP_UNPROVEN,
+    SETUP_TRANSITION_LINK_FAILED,
+    SETUP_TRANSITION_LINK_UNRECONCILED,
     SETUP_TRANSITION_MODES,
+    SetupTransitionLinkError,
+    SetupTransitionLinkRollbackError,
     SetupWorkflowAbandonError,
     SetupWorkflowArtifacts,
     abandon_setup_workflow,
+    transition_ownership,
+    transition_ownership_error,
 )
 from admin.setup_intent import (
     SetupIntentError,
@@ -171,6 +180,8 @@ from admin.setup_intent import (
     default_runtime_state_fingerprint,
 )
 from admin.system_alignment import (
+    COMMIT_UNPROVABLE_CODES,
+    SETUP_RETURN_UNSUPPORTED,
     SystemAlignmentError,
     SystemAlignmentService,
     terminal_system_build_action_state,
@@ -603,7 +614,9 @@ def _running_ems_identity(docker):
     return identify_image(docker, image_ref) if image_ref else identify_image(docker, "")
 
 
-def _build_system_alignment(*, release_manager, admin_data_dir, docker):
+def _build_system_alignment(
+    *, release_manager, admin_data_dir, docker, operation_coordinator=None
+):
     """Compose the single productive alignment service for this Admin runtime."""
 
     state_dir = Path(admin_data_dir) / "state"
@@ -632,6 +645,7 @@ def _build_system_alignment(*, release_manager, admin_data_dir, docker):
             docker=docker,
             release_manager=release_manager,
         ),
+        operation_coordinator=operation_coordinator,
     )
 
 
@@ -655,9 +669,17 @@ def create_admin_runtime(
     admin_update=None,
     backup_service=None,
     setup_intents=None,
+    operation_coordinator=None,
 ):
-    """Build the shared Admin service graph once, for one or more listeners."""
+    """Build the shared Admin service graph once, for one or more listeners.
 
+    ``operation_coordinator`` is accepted so a caller that injects its own
+    ``system_alignment`` can build it against the very coordinator this runtime
+    will hold — worker liveness is only meaningful when the claiming service and
+    the abandoning route share one instance.
+    """
+
+    operation_coordinator = operation_coordinator or OperationCoordinator()
     registry = registry or ScanRegistry()
     network_detector = network_detector or detect_network_suggestions
     gateway_prober = gateway_prober or probe_gateway_candidates
@@ -738,6 +760,7 @@ def create_admin_runtime(
         release_manager=release_manager,
         admin_data_dir=admin_data_dir,
         docker=docker,
+        operation_coordinator=operation_coordinator,
     )
     # Admin self-update: read-only status/plan plus an out-of-request updater. It
     # reuses the release manager's Admin data dir for the pending-state file and a
@@ -784,6 +807,7 @@ def create_admin_runtime(
         setup_intents=setup_intents or SetupIntentStore(),
         identity_token_key=identity_token_key,
         static_assets=static_assets,
+        operation_coordinator=operation_coordinator,
     )
 
 
@@ -1569,7 +1593,9 @@ class AdminHandler(BaseHTTPRequestHandler):
             except GuidedSetupWorkflowError as exc:
                 self._send_workflow_rejection(exc)
                 return
-            intent = self.server.setup_intents.issue(session_id=session_id)
+            intent = self.server.setup_intents.issue(
+                session_id=session_id, workflow_id=workflow["workflow_id"]
+            )
             result["setup_intent_id"] = intent.intent_id
             result["setup_workflow_id"] = workflow["workflow_id"]
             result["existing_install_confirmed"] = bool(
@@ -1578,14 +1604,17 @@ class AdminHandler(BaseHTTPRequestHandler):
         status = 409 if result.get("requires_confirmation") else 200
         self._send_json(result, status=status)
 
-    def _claim_setup_intent(self):
+    def _claim_setup_intent(self, workflow_id):
         # A setup mutation atomically consumes its intent: after this returns True
         # the same intent can never authorize a second operation, even a parallel
-        # one or a retry after the mutation itself fails.
+        # one or a retry after the mutation itself fails. The intent must have been
+        # issued for this exact workflow, so a confirmation from a superseded
+        # workflow cannot authorize its replacement.
         try:
             self.server.setup_intents.claim(
                 self.headers.get("X-Setup-Intent-ID"),
                 session_id=self._admin_session_cookie_value(),
+                workflow_id=workflow_id,
             )
         except SetupIntentError as exc:
             self._send_json(
@@ -1630,6 +1659,10 @@ class AdminHandler(BaseHTTPRequestHandler):
     def _alignment_error_status(code):
         if code == "system_build_registry_rate_limited":
             return 429
+        # An unprovable commit outcome is a server-side state failure, not a
+        # request the caller can correct.
+        if code in COMMIT_UNPROVABLE_CODES:
+            return 500
         if code in {
             "acknowledgement_required",
             "unsupported_field",
@@ -1643,7 +1676,9 @@ class AdminHandler(BaseHTTPRequestHandler):
             "transition_context_mismatch",
             "operation_mismatch",
             "invalid_transition",
+            "mutation_in_progress",
             "not_resumable",
+            SETUP_RETURN_UNSUPPORTED,
             "system_build_mismatch",
             "system_build_resources_invalid",
             "system_build_alignment_required",
@@ -1914,27 +1949,6 @@ class AdminHandler(BaseHTTPRequestHandler):
         )
         return None
 
-    def _start_system_alignment(
-        self, requested_tag, mode, *, development_risk_acknowledged=False
-    ):
-        result = self.server.system_alignment.start(
-            requested_tag=requested_tag,
-            mode=mode,
-            development_risk_acknowledged=development_risk_acknowledged,
-        )
-        if not isinstance(result, dict):
-            raise SystemAlignmentError(
-                "system_alignment_failed", "System Build alignment returned no result"
-            )
-        # An already-aligned Admin still commits resource verification as its
-        # own stage before any config/Compose/EMS handoff.
-        if result.get("stage") == "admin_aligned":
-            verifier = getattr(self.server.system_alignment, "verify_resources", None)
-            if callable(verifier) and result.get("operation_id"):
-                verified = verifier(operation_id=result["operation_id"])
-                result = {**result, **verified, "system_build": result.get("system_build")}
-        return result
-
     def _guided_upgrade_stored_acknowledgement(self, requested_tag):
         checker = getattr(
             self.server.system_alignment,
@@ -2114,6 +2128,7 @@ class AdminHandler(BaseHTTPRequestHandler):
                 workflow_id=record["workflow_id"], operation="complete"
             ):
                 workflows.finish(record["workflow_id"], status=STATUS_COMPLETED)
+                self.server.setup_intents.invalidate_workflow(record["workflow_id"])
         except GuidedSetupWorkflowError:
             # A mutation still owns the workflow. The durable transition
             # completion stands; the record stays active and its artifacts stay
@@ -3768,10 +3783,8 @@ class AdminHandler(BaseHTTPRequestHandler):
         if not isinstance(body, dict):
             self._send_json({"error": "expected a JSON object"}, status=400)
             return
-        if set(body) - {"tag", "acknowledge_risk"}:
+        if set(body) - {"tag", "acknowledge_risk", "setup_workflow_id"}:
             self._send_json({"error": "unsupported_field"}, status=400)
-            return
-        if not self._claim_setup_intent():
             return
         preparer = getattr(self.server.system_alignment, "prepare_setup_resources", None)
         if not callable(preparer):
@@ -3779,140 +3792,305 @@ class AdminHandler(BaseHTTPRequestHandler):
                 {"ok": False, "error": "system_alignment_unavailable"}, status=503
             )
             return
-        try:
-            result = preparer(
-                requested_tag=body.get("tag"),
-                mode=mode,
-                # Guided Setup authorizes the server-validated build behind a valid
-                # setup intent; the selection is the explicit decision.
-                development_risk_acknowledged=True,
+        record, claim = self._setup_build_authority(
+            body, operation="setup_release_prepare"
+        )
+        if record is None:
+            return
+        with claim:
+            try:
+                result = preparer(
+                    requested_tag=body.get("tag"),
+                    mode=mode,
+                    # Guided Setup authorizes the server-validated build behind a
+                    # valid setup intent; the selection is the explicit decision.
+                    development_risk_acknowledged=True,
+                    pre_launch=self._setup_transition_link(
+                        record["workflow_id"], mode, body.get("tag")
+                    ),
+                )
+            except SetupTransitionLinkError as exc:
+                self._send_transition_link_failure(exc)
+                return
+            except (SystemBuildError, SystemAlignmentError) as exc:
+                self._send_alignment_error(exc, requested_tag=body.get("tag"))
+                return
+            build = result.get("system_build") or {}
+            result.setdefault("tag", build.get("canonical_tag") or body.get("tag"))
+            result.setdefault("resources", {})
+            result.setdefault("warnings", [])
+            if self._alignment_resources_verified():
+                result["status"] = "ready_for_ems"
+                self._send_json(result)
+                return
+            status = self._alignment_status()
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": "system_alignment_incomplete",
+                    "message": "System Build resources have not been verified.",
+                    "transition": status.get("transition"),
+                },
+                status=409,
             )
-        except (SystemBuildError, SystemAlignmentError) as exc:
-            self._send_alignment_error(exc, requested_tag=body.get("tag"))
-            return
-        build = result.get("system_build") or {}
-        result.setdefault("tag", build.get("canonical_tag") or body.get("tag"))
-        result.setdefault("resources", {})
-        result.setdefault("warnings", [])
-        self._record_setup_transition_link(
-            result.get("operation_id"), mode, result.get("tag")
-        )
-        if self._alignment_resources_verified():
-            result["status"] = "ready_for_ems"
-            self._send_json(result)
-            return
-        status = self._alignment_status()
-        self._send_json(
-            {
-                "ok": False,
-                "error": "system_alignment_incomplete",
-                "message": "System Build resources have not been verified.",
-                "transition": status.get("transition"),
-            },
-            status=409,
-        )
 
     def _handle_setup_update_admin(self):
         """Align the Admin to the selected System Build from Guided Setup Step 1.
 
         Revalidates the pair, starts the shared ``SystemAlignmentService`` (the v2
         transition) and returns reconnect information. It never prepares a legacy
-        Admin-update plan, writes Setup config, or deploys EMS.
+        Admin-update plan, writes Setup config, or deploys EMS. The transition it
+        starts is owned by the exact workflow named in the request before it can
+        commit — see ``_setup_build_authority``.
         """
 
         body = self._read_json_body()
         if body is None:
             return
-        if not isinstance(body, dict) or set(body) - {"tag", "acknowledge_risk"}:
+        if not isinstance(body, dict) or set(body) - {
+            "tag",
+            "acknowledge_risk",
+            "setup_workflow_id",
+        }:
             self._send_json({"ok": False, "error": "unsupported_field"}, status=400)
             return
-        if not self._claim_setup_intent():
-            return
-        try:
-            result = self._start_system_alignment(
-                body.get("tag"),
-                TRANSITION_MODE_FRESH_INSTALL,
-                # A valid setup intent from the authenticated Fresh Setup workflow
-                # authorizes the server-validated build itself; the build choice is
-                # the explicit decision (no browser risk flag is trusted).
-                development_risk_acknowledged=True,
-            )
-        except (SystemBuildError, SystemAlignmentError) as exc:
-            self._send_alignment_error(exc, requested_tag=body.get("tag"))
-            return
-        self._record_setup_transition_link(
-            result.get("operation_id"),
-            TRANSITION_MODE_FRESH_INSTALL,
-            body.get("tag"),
+        tag = body.get("tag")
+        record, claim = self._setup_build_authority(
+            body, operation="system_build_update_admin"
         )
-        if result.get("status") == "admin_alignment_started" or result.get("reconnect"):
-            self._send_json(result, status=202)
+        if record is None:
             return
-        self._send_json(result)
+        with claim:
+            try:
+                # Resolve first, then start the resolved pair, so the exact
+                # transition ownership can be persisted inside the pre-commit
+                # boundary of the same start.
+                system_build = self.server.system_alignment.resolve(tag)
+                result = self._start_resolved_system_alignment(
+                    system_build,
+                    TRANSITION_MODE_FRESH_INSTALL,
+                    # A valid setup intent from the authenticated Fresh Setup
+                    # workflow authorizes the server-validated build itself; the
+                    # build choice is the explicit decision (no browser risk flag
+                    # is trusted).
+                    development_risk_acknowledged=True,
+                    pre_launch=self._setup_transition_link(
+                        record["workflow_id"], TRANSITION_MODE_FRESH_INSTALL, tag
+                    ),
+                )
+            except SetupTransitionLinkError as exc:
+                self._send_transition_link_failure(exc)
+                return
+            except (SystemBuildError, SystemAlignmentError) as exc:
+                self._send_alignment_error(exc, requested_tag=tag)
+                return
+            if (
+                result.get("status") == "admin_alignment_started"
+                or result.get("reconnect")
+            ):
+                self._send_json(result, status=202)
+                return
+            self._send_json(result)
 
     def _handle_setup_system_build_confirm(self):
         body = self._read_json_body()
         if body is None:
             return
-        if not isinstance(body, dict) or set(body) - {"tag", "acknowledge_risk"}:
+        if not isinstance(body, dict) or set(body) - {
+            "tag",
+            "acknowledge_risk",
+            "setup_workflow_id",
+        }:
             self._send_json({"ok": False, "error": "unsupported_field"}, status=400)
             return
         tag = body.get("tag")
-        if not self._claim_setup_intent():
-            return
         confirmer = getattr(self.server.system_alignment, "confirm_setup_build", None)
         if not callable(confirmer):
             self._send_json(
                 {"ok": False, "error": "system_alignment_unavailable"}, status=503
             )
             return
-        try:
-            result = confirmer(
-                requested_tag=tag,
-                mode=TRANSITION_MODE_FRESH_INSTALL,
-                # Fresh Setup authorizes the server-validated build behind a valid
-                # setup intent; the selection is the explicit decision.
-                development_risk_acknowledged=True,
-            )
-        except (SystemBuildError, SystemAlignmentError) as exc:
-            self._send_alignment_error(exc, requested_tag=tag)
+        record, claim = self._setup_build_authority(
+            body, operation="system_build_confirm"
+        )
+        if record is None:
             return
-        if not isinstance(result, dict) or result.get("resources_verified") is not True:
+        with claim:
+            try:
+                result = confirmer(
+                    requested_tag=tag,
+                    mode=TRANSITION_MODE_FRESH_INSTALL,
+                    # Fresh Setup authorizes the server-validated build behind a
+                    # valid setup intent; the selection is the explicit decision.
+                    development_risk_acknowledged=True,
+                    pre_launch=self._setup_transition_link(
+                        record["workflow_id"], TRANSITION_MODE_FRESH_INSTALL, tag
+                    ),
+                )
+            except SetupTransitionLinkError as exc:
+                self._send_transition_link_failure(exc)
+                return
+            except (SystemBuildError, SystemAlignmentError) as exc:
+                self._send_alignment_error(exc, requested_tag=tag)
+                return
+            if (
+                not isinstance(result, dict)
+                or result.get("resources_verified") is not True
+            ):
+                self._send_json(
+                    {
+                        "ok": False,
+                        "error": "system_alignment_incomplete",
+                        "message": "System Build resources have not been verified.",
+                        "transition": self._alignment_status().get("transition"),
+                    },
+                    status=409,
+                )
+                return
+            self._send_json(result)
+
+    def _setup_build_authority(self, body, *, operation):
+        """Exact-workflow authority for one Setup System Build mutation.
+
+        Returns ``(record, claim)``, or ``(None, None)`` after the rejection has
+        been sent. The order is deliberate: the request must name the active
+        workflow, the lifecycle claim then keeps it that way for as long as a
+        transition can still commit, the workflow must be able to prove it owns
+        any transition that is already active, and only then is the one-shot
+        setup intent consumed — so a refused authority check never spends the
+        user's confirmation.
+        """
+
+        try:
+            record = self.server.setup_workflows.require_active(
+                body.get("setup_workflow_id")
+            )
+            claim = self.server.setup_lifecycle.claim_mutation(
+                workflow_id=record["workflow_id"], operation=operation
+            )
+        except GuidedSetupWorkflowError as exc:
+            self._send_workflow_rejection(exc)
+            return None, None
+        authorized = False
+        try:
+            if not self._setup_transition_ownership_proven(record):
+                return None, None
+            if not self._claim_setup_intent(record["workflow_id"]):
+                return None, None
+            authorized = True
+            return record, claim
+        finally:
+            if not authorized:
+                claim.release()
+
+    def _setup_transition_ownership_proven(self, record):
+        """Refuse to adopt a transition this workflow cannot prove it owns.
+
+        A transition that is already active is *resumed* by a System Build start,
+        so adopting one whose operation id the workflow does not name would let a
+        replacement workflow advance work it never started. An unreadable
+        transition state fails closed for the same reason.
+        """
+
+        status = self._alignment_status()
+        if status.get("ok") is False:
             self._send_json(
                 {
                     "ok": False,
-                    "error": "system_alignment_incomplete",
-                    "message": "System Build resources have not been verified.",
-                    "transition": self._alignment_status().get("transition"),
+                    "error": "transition_status_unavailable",
+                    "message": (
+                        status.get("message")
+                        or "The System Build transition state could not be read."
+                    ),
                 },
                 status=409,
             )
-            return
-        self._record_setup_transition_link(
-            result.get("operation_id"), TRANSITION_MODE_FRESH_INSTALL, tag
-        )
-        self._send_json(result)
+            return False
+        ownership = transition_ownership(record, status.get("transition"))
+        if ownership in {OWNERSHIP_UNPROVEN, OWNERSHIP_MISMATCH}:
+            code, message = transition_ownership_error(ownership)
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": code,
+                    "message": message,
+                    "transition": status.get("transition"),
+                },
+                status=409,
+            )
+            return False
+        return True
 
-    def _record_setup_transition_link(self, operation_id, mode, tag):
-        """Best-effort link from the workflow record to its transition.
+    def _setup_transition_link(self, workflow_id, mode, tag):
+        """The pre-commit callback that makes ``workflow_id`` the exact owner.
 
-        The record only references System Alignment authority — a failed link
-        never blocks the setup step that created the transition.
+        System Alignment runs this after minting the operation id and before
+        committing the transition or launching any Admin replacement, so raising
+        here means no transition exists and nothing was launched. An unownable
+        transition must never come into existence.
+
+        The returned undo is the other half of that guarantee: System Alignment
+        invokes it for any failure of the transition commit itself — a normalized
+        store error and a raw filesystem error alike — and it restores the exact
+        reference this attempt replaced. The restore is compare-and-restore, so a
+        compensation that lost the race to a newer successful link changes
+        nothing, while a durable record it could not read at all is reported as
+        unreconciled rather than mistaken for that stale race.
         """
 
-        workflows = self.server.setup_workflows
-        record = workflows.active() if workflows else None
-        if record is None:
-            return
-        try:
-            workflows.record_transition(
-                record["workflow_id"],
-                operation_id=operation_id,
-                transition_mode=mode,
-                selected_system_tag=tag,
+        def link(transition):
+            operation_id = getattr(transition, "operation_id", None)
+            if not operation_id:
+                raise SetupTransitionLinkError(
+                    "the System Build transition has no operation id to own"
+                )
+            try:
+                linked, previous = self.server.setup_workflows.link_transition(
+                    workflow_id,
+                    operation_id=operation_id,
+                    transition_mode=mode,
+                    selected_system_tag=tag,
+                )
+            except OSError as exc:
+                raise SetupTransitionLinkError(str(exc)) from exc
+            if linked is None or linked.get("operation_id") != str(operation_id):
+                raise SetupTransitionLinkError(
+                    "the Guided Setup workflow no longer accepts this transition"
+                )
+
+            def undo():
+                try:
+                    self.server.setup_workflows.restore_transition_link(
+                        workflow_id,
+                        expected_operation_id=str(operation_id),
+                        previous_operation_id=previous,
+                    )
+                except (OSError, GuidedSetupWorkflowReadError) as exc:
+                    raise SetupTransitionLinkRollbackError(str(exc)) from exc
+
+            return undo
+
+        return link
+
+    def _send_transition_link_failure(self, exc):
+        code = getattr(exc, "code", SETUP_TRANSITION_LINK_FAILED)
+        if code == SETUP_TRANSITION_LINK_UNRECONCILED:
+            message = (
+                "The System Build operation could not be started, and the Guided "
+                "Setup state still refers to it. Nothing was started or changed "
+                "on the system. Check the Admin data directory, then discard this "
+                "setup and start it again."
             )
-        except OSError:
-            pass
+        else:
+            message = (
+                "The Guided Setup state could not record this System Build "
+                "operation, so nothing was started. Check the Admin data "
+                "directory and try again."
+            )
+        self._send_json(
+            {"ok": False, "error": code, "message": message, "detail": exc.message},
+            status=500,
+        )
 
     def _handle_setup_system_build_supersede(self):
         """Backend-owned build change: retire the old Setup workflow as one unit.
@@ -3963,7 +4141,8 @@ class AdminHandler(BaseHTTPRequestHandler):
             self._send_workflow_rejection(exc)
             return
         intent = self.server.setup_intents.issue(
-            session_id=self._admin_session_cookie_value()
+            session_id=self._admin_session_cookie_value(),
+            workflow_id=replacement["workflow_id"],
         )
         self._send_json(
             {
@@ -4752,7 +4931,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             return None
         try:
             with claim:
-                return abandon_setup_workflow(
+                result = abandon_setup_workflow(
                     alignment=self.server.system_alignment,
                     coordinator=self.server.operation_coordinator,
                     status=self._alignment_status(),
@@ -4760,6 +4939,11 @@ class AdminHandler(BaseHTTPRequestHandler):
                     workflow_id=workflow_id,
                     **extra,
                 )
+                # The workflow is terminal here even when its cleanup did not
+                # converge, so every confirmation still held for it — in any
+                # session — must stop being authority.
+                self.server.setup_intents.invalidate_workflow(workflow_id)
+                return result
         except SystemAlignmentError as exc:
             self._send_json(
                 {"ok": False, "error": exc.code, "message": exc.message},

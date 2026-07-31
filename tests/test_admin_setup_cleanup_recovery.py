@@ -27,6 +27,7 @@ from tests.test_admin_server import (
     _attach_system_alignment,
     _authorized_body,
     _control_export_manager,
+    _own_active_setup_transition,
     _request,
     _serve,
 )
@@ -40,12 +41,21 @@ def _isolate(isolated_install_root):
     return isolated_install_root
 
 
-def _start_workflow(base):
+def _start_workflow(base, srv=None):
+    """Confirm Fresh Setup; with ``srv`` also take ownership of its transition.
+
+    Production links a Setup transition into its workflow inside the pre-commit
+    boundary, so a workflow that reached the harness's pre-seeded transition has
+    to name its exact operation id before it may cancel it.
+    """
+
     status, _, payload = _request(
         f"{base}/api/admin/start-path",
         method="POST",
         body={"choice": "setup_new", "confirm": True},
     )
+    if srv is not None and payload.get("setup_workflow_id"):
+        _own_active_setup_transition(srv, base, payload["setup_workflow_id"])
     return status, payload
 
 
@@ -124,7 +134,7 @@ def test_cleanup_failure_remains_owned_after_restart(tmp_path):
     manager = _control_export_manager(tmp_path)
     srv, base = _serve(release_manager=manager)
     try:
-        _, payload = _start_workflow(base)
+        _, payload = _start_workflow(base, srv)
         workflow_id = payload["setup_workflow_id"]
         generated = _write_generated(base)
         _fail_cleanup_once(base, workflow_id, generated)
@@ -154,7 +164,7 @@ def test_cleanup_failure_remains_owned_after_restart(tmp_path):
 def test_cleanup_summary_redacts_server_paths(tmp_path):
     srv, base = _serve(release_manager=_control_export_manager(tmp_path))
     try:
-        _, payload = _start_workflow(base)
+        _, payload = _start_workflow(base, srv)
         workflow_id = payload["setup_workflow_id"]
         generated = _write_generated(base)
         _fail_cleanup_once(base, workflow_id, generated)
@@ -181,7 +191,7 @@ def test_cleanup_record_validation_fails_closed(tmp_path):
 
     srv, base = _serve(release_manager=_control_export_manager(tmp_path))
     try:
-        _, payload = _start_workflow(base)
+        _, payload = _start_workflow(base, srv)
         workflow_id = payload["setup_workflow_id"]
         record_path = srv.setup_workflows.path
         record = json.loads(record_path.read_text(encoding="utf-8"))
@@ -209,12 +219,12 @@ def test_cleanup_record_validation_fails_closed(tmp_path):
 def test_cleanup_pending_blocks_new_setup(tmp_path):
     srv, base = _serve(release_manager=_control_export_manager(tmp_path))
     try:
-        _, payload = _start_workflow(base)
+        _, payload = _start_workflow(base, srv)
         workflow_id = payload["setup_workflow_id"]
         generated = _write_generated(base)
         _fail_cleanup_once(base, workflow_id, generated)
 
-        status, payload = _start_workflow(base)
+        status, payload = _start_workflow(base, srv)
 
         assert status == 409, payload
         assert payload["error"] == "setup_cleanup_required"
@@ -233,7 +243,7 @@ def test_cleanup_pending_blocks_upgrade_validation(tmp_path):
     srv, base = _serve(release_manager=_control_export_manager(tmp_path))
     _attach_system_alignment(srv, alignment)
     try:
-        _, payload = _start_workflow(base)
+        _, payload = _start_workflow(base, srv)
         workflow_id = payload["setup_workflow_id"]
         generated = _write_generated(base)
         _fail_cleanup_once(base, workflow_id, generated)
@@ -253,7 +263,7 @@ def test_cleanup_pending_blocks_upgrade_execution(tmp_path):
     srv, base = _serve(release_manager=_control_export_manager(tmp_path))
     _attach_system_alignment(srv, alignment)
     try:
-        _, payload = _start_workflow(base)
+        _, payload = _start_workflow(base, srv)
         workflow_id = payload["setup_workflow_id"]
         generated = _write_generated(base)
         _fail_cleanup_once(base, workflow_id, generated)
@@ -276,7 +286,7 @@ def test_cleanup_pending_blocks_upgrade_execution(tmp_path):
 def test_retry_requires_matching_terminal_workflow_id(tmp_path):
     srv, base = _serve(release_manager=_control_export_manager(tmp_path))
     try:
-        _, payload = _start_workflow(base)
+        _, payload = _start_workflow(base, srv)
         workflow_id = payload["setup_workflow_id"]
         generated = _write_generated(base)
         _fail_cleanup_once(base, workflow_id, generated)
@@ -300,7 +310,7 @@ def test_retry_requires_matching_terminal_workflow_id(tmp_path):
 def test_retry_cleanup_converges_and_unblocks_setup(tmp_path):
     srv, base = _serve(release_manager=_control_export_manager(tmp_path))
     try:
-        _, payload = _start_workflow(base)
+        _, payload = _start_workflow(base, srv)
         workflow_id = payload["setup_workflow_id"]
         generated = _write_generated(base)
         _fail_cleanup_once(base, workflow_id, generated)
@@ -316,7 +326,7 @@ def test_retry_cleanup_converges_and_unblocks_setup(tmp_path):
         assert status == 200, again
         assert again["ok"] is True
 
-        status, payload = _start_workflow(base)
+        status, payload = _start_workflow(base, srv)
         assert status == 200, payload
         assert payload["setup_workflow_id"] != workflow_id
         assert payload.get("setup_intent_id")
@@ -330,7 +340,7 @@ def test_retry_cleanup_converges_and_unblocks_upgrade(tmp_path):
     srv, base = _serve(release_manager=_control_export_manager(tmp_path))
     _attach_system_alignment(srv, alignment)
     try:
-        _, payload = _start_workflow(base)
+        _, payload = _start_workflow(base, srv)
         workflow_id = payload["setup_workflow_id"]
         generated = _write_generated(base)
         _fail_cleanup_once(base, workflow_id, generated)
@@ -349,7 +359,7 @@ def test_retry_cleanup_converges_and_unblocks_upgrade(tmp_path):
 def test_retry_after_restart_uses_the_same_workflow_id(tmp_path):
     srv, base = _serve(release_manager=_control_export_manager(tmp_path))
     try:
-        _, payload = _start_workflow(base)
+        _, payload = _start_workflow(base, srv)
         workflow_id = payload["setup_workflow_id"]
         generated = _write_generated(base)
         _fail_cleanup_once(base, workflow_id, generated)

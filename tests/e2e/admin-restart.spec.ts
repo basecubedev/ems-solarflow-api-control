@@ -38,9 +38,14 @@ async function workflow(session: Session) {
   return body.workflow ?? null;
 }
 
-async function post(session: Session, url: string, data: unknown) {
+async function post(
+  session: Session,
+  url: string,
+  data: unknown,
+  headers?: Record<string, string>,
+) {
   const res = await session.ctx.post(url, {
-    headers: { "X-CSRF-Token": session.csrf },
+    headers: { "X-CSRF-Token": session.csrf, ...(headers ?? {}) },
     data: data as any,
   });
   return { status: res.status(), body: await res.json().catch(() => ({})) };
@@ -72,16 +77,9 @@ async function diagnostics(session: Session) {
 test("a real Admin restart preserves one workflow interpretation", async () => {
   const first = await connect();
 
-  // 01 — a persisted transition plus an owned artifact.
-  const seeded = await post(first, "/api/admin/test/seed", {
-    scenario: "system_build_admin_aligned",
-  });
-  expect(seeded.status, JSON.stringify(seeded.body)).toBe(200);
-  const started = await alignment(first);
-  const verified = await post(first, "/api/admin/system-alignment/verify-resources", {
-    operation_id: started.transition.operation_id,
-  });
-  expect(verified.status, JSON.stringify(verified.body)).toBe(200);
+  // 01 — a persisted transition plus an owned artifact, created exactly the way
+  // Guided Setup creates them: the workflow confirms its System Build, so the
+  // transition is linked to its owner before it is committed.
   const draft = {
     devices: [
       {
@@ -102,6 +100,13 @@ test("a real Admin restart preserves one workflow interpretation", async () => {
   expect(startPath.status, JSON.stringify(startPath.body)).toBe(200);
   const workflowId = startPath.body.setup_workflow_id as string;
   expect(workflowId).toBeTruthy();
+  const confirmed = await post(
+    first,
+    "/api/setup/system-build/confirm",
+    { tag: "latest", setup_workflow_id: workflowId },
+    { "X-Setup-Intent-ID": startPath.body.setup_intent_id as string },
+  );
+  expect(confirmed.status, JSON.stringify(confirmed.body)).toBe(200);
   const reviewed = await post(first, "/api/setup/config-preview", {
     ...draft,
     setup_workflow_id: workflowId,

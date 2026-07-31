@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Shared pytest fixtures for the EMS test suite."""
 
+import os
+from pathlib import Path
+
 import pytest
 
 from ems import paths
@@ -89,3 +92,59 @@ def isolated_install_root(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(paths, "BASE_DIR", str(root))
     monkeypatch.setenv("EMS_ADMIN_DATA_DIR", str(root / "admin-data"))
     return root
+
+
+@pytest.fixture
+def rename_fault(monkeypatch):
+    """Fault the real atomic rename for one exact destination path.
+
+    Everything a production atomic writer does up to ``os.replace`` still runs —
+    its own lock, record validation, temp file, ``fsync`` — so the write fails
+    the way a full or read-only disk fails it: a raw ``OSError`` out of the
+    store, not an already-normalized store error.
+    """
+
+    faults = {}
+    real_replace = os.replace
+
+    def replace(source, destination, *args, **kwargs):
+        error = faults.get(str(Path(destination)))
+        if error is not None:
+            raise error
+        return real_replace(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", replace)
+
+    def arm(path, error=None):
+        key = str(Path(path))
+        if error is None:
+            faults.pop(key, None)
+        else:
+            faults[key] = error
+
+    return arm
+
+
+@pytest.fixture
+def read_fault(monkeypatch):
+    """Fault a production record read for one exact path."""
+
+    faults = {}
+    real_read = Path.read_bytes
+
+    def read_bytes(self):
+        error = faults.get(str(self))
+        if error is not None:
+            raise error
+        return real_read(self)
+
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+
+    def arm(path, error=None):
+        key = str(Path(path))
+        if error is None:
+            faults.pop(key, None)
+        else:
+            faults[key] = error
+
+    return arm

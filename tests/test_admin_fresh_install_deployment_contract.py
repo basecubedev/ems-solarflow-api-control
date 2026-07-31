@@ -71,7 +71,9 @@ def _request(url, method="GET", body=None, extra_headers=None):
         return exc.code, exc.headers, json.loads(exc.read() or b"null")
 
 
-def _fresh_setup_intent(base):
+def _fresh_setup_authority(base):
+    """The exact workflow id and the one-shot intent issued for it."""
+
     status, _, payload = _request(
         f"{base}/api/admin/start-path",
         method="POST",
@@ -79,7 +81,7 @@ def _fresh_setup_intent(base):
     )
     assert status == 200
     assert payload["ok"] is True
-    return payload["setup_intent_id"]
+    return payload["setup_workflow_id"], payload["setup_intent_id"]
 
 
 def _fake_scan(cidr, timeout_ms=600, max_workers=32, progress_callback=None):
@@ -338,11 +340,15 @@ def _walk_to_started_deployment(base, deployment):
     assert validated["valid"] is True
     assert validated["next_allowed"] is True
 
-    intent_id = _fresh_setup_intent(base)
+    workflow_id, intent_id = _fresh_setup_authority(base)
     status, _, confirmed = _request(
         f"{base}/api/setup/system-build/confirm",
         method="POST",
-        body={"tag": TAG, "acknowledge_risk": False},
+        body={
+            "tag": TAG,
+            "acknowledge_risk": False,
+            "setup_workflow_id": workflow_id,
+        },
         extra_headers={"X-Setup-Intent-ID": intent_id},
     )
     assert status == 200

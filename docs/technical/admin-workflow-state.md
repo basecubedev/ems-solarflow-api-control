@@ -29,11 +29,16 @@ A raw, browser-held `config_revision` proves **nothing** about which draft was
 reviewed; it survives in preview responses for explanation only and is never
 mutation authority.
 
-Beside these five sits one **arbiter**, not an authority:
-`SetupLifecycleCoordinator` (`admin/setup_lifecycle.py`) decides *who may act on
-the Guided Setup workflow right now*. It stores no durable state — a restart
-holds no claims — and duplicates neither transition stage nor worker liveness.
-See §5.4.
+Beside these five sit two **arbiters**, not authorities. Neither stores durable
+state — a restart holds no claims — and neither duplicates transition stage or
+worker liveness:
+
+* `SetupLifecycleCoordinator` (`admin/setup_lifecycle.py`) decides *who may act
+  on the Guided Setup workflow right now* (§5.4);
+* `ReplacementDispatchCoordinator` (`admin/replacement_dispatch.py`) decides
+  *which concurrent caller performs a dispatch attempt's one Admin replacement
+  launch* — one attempt per normal dispatch, one more per accepted explicit
+  retry (§5.5).
 
 ---
 
@@ -64,11 +69,12 @@ See §5.4.
 
 | # | State | Owner | Restart behavior |
 |---|---|---|---|
-| P1 | `OperationCoordinator._active` / `._abandoned` | worker liveness | Lost — a restart makes every worker claim look inactive |
+| P1 | `OperationCoordinator._active` / `._abandoned` | worker liveness | Lost — a restart makes every worker claim look inactive, which is what keeps an expired orphan escapable (§5.3); the claim is held by Guided Upgrade/deployment workers **and** by every resource import |
 | P2 | `DeploymentJobRegistry` / `StartJob` registries | deployment jobs | Lost — job IDs 404 after restart |
 | P3 | `SetupIntentStore` (in-memory, TTL 20 min) | Fresh Setup confirmation | Lost — re-confirmation required |
 | P4 | `DeploymentService._active_job` / `_active_start_job` | deployment serialization | Lost |
 | P5 | `SetupLifecycleCoordinator._claims` / `._terminalized` | Setup mutation vs. terminal exclusion (§5.4) | Lost — **fail closed by design**: a restart holds no claims, so nothing pretends a pre-restart worker is still live; every commit stays gated by B0 and by the durable marker checks |
+| P6 | `ReplacementDispatchCoordinator._entries` | Admin replacement dispatch exclusion per operation id, one entry per dispatch attempt (§5.5) | Lost — by design: a restart holds no claim and no published dispatch, which is exactly why the crash window between a durable `admin_reconnect_pending` and the launch stays a documented limitation (§5.5, §6.5) |
 
 ### 1.3 Browser (`localStorage`; survives refresh, survives logout, survives Admin restart)
 
@@ -213,28 +219,41 @@ Every mutating Setup route and exactly what authority it demands. Enforced by
 `tests/test_admin_setup_route_contracts.py`, which also fails when a new POST
 route under `/api/setup/` is added without a row here.
 
-| Route | `setup_workflow_id` | `config_preview_id` | bound generated artifact | transition `operation_id` | lifecycle claim |
-|---|---|---|---|---|---|
-| `POST /api/setup/config/write` | required, exact | required, exact | writes it | — | `config_write` (mutation) |
-| `POST /api/setup/config/apply` | required, exact | required, exact | — | — | `config_apply` (mutation) |
-| `POST /api/setup/deployment/prepare` | required, exact | — | required (B2a proves workflow + preview + hash + baseline) | mirrors the current one, never advances it | `deployment_prepare` (mutation, held for the whole worker) |
-| `POST /api/setup/deployment/start` | required, exact | — | via B3, whose `owner`/`workflow_id` must match | claims the EMS operation | `deployment_start` (mutation, held for the whole worker) |
-| `POST /api/setup/deployment/repair-permissions` | required, exact | — | via B3 owner match | — | `permission_repair` (mutation) |
-| `POST /api/setup/deployment/resolve-container-conflict` | required, exact | — | via B3 owner match | may acknowledge its own conflict recovery | `container_conflict_resolution` (mutation) |
-| `POST /api/setup/abandon` | **required whenever B0 exists**; also the retry-cleanup entry point | — | — | cancels only its **own** `operation_id` (§5.3) | `abandon` / `cleanup_retry` (terminal) |
-| `POST /api/setup/system-build/supersede` | required, exact | — | — | same | `supersede` (terminal) |
-| workflow completion (deployment worker's terminal callback) | the worker's carried id | — | — | the completed operation | `complete` (terminal) |
-| `POST /api/setup/system-build/confirm` | — (see below) | — | — | creates it | — |
-| `POST /api/setup/system-build/update-admin` | — (see below) | — | — | creates it | — |
-| `POST /api/setup/releases/prepare`, `…/automated/releases/prepare` | — | — | — | — | — |
+Four terms, four distinct jobs — none of them substitutes for another:
 
-`confirm` and `update-admin` deliberately do **not** take a workflow id: they
-*create* the transition a workflow then links to, and remove, overwrite or
-terminalize nothing. Their authority is the one-shot, session-bound
-`setup_intent_id`, which an old tab does not hold, and the link they write targets
-the single stored B0 record rather than a chosen candidate. Release preparation
-fills the shared release cache (B8/B4) — installed-system state that outlives
-every workflow.
+| Term | What it is | Lifetime |
+|---|---|---|
+| `setup_intent_id` | a **workflow-bound one-shot user confirmation**: this session confirmed Fresh Setup, for this workflow, against this installation state | consumed by one mutation; retired with its workflow |
+| `setup_workflow_id` | the **durable owner** of the Setup state (B0) | until the workflow is terminal and its cleanup converged |
+| transition `operation_id` | the **exact System Alignment transition reference** the workflow owns | the transition's own lifecycle |
+| lifecycle claim | **mutual exclusion** while a mutation's irreversible work — including transition creation — can still commit | one request (or one worker) |
+
+| Route | `setup_workflow_id` | `setup_intent_id` | `config_preview_id` | bound generated artifact | transition `operation_id` | lifecycle claim |
+|---|---|---|---|---|---|---|
+| `POST /api/setup/config/write` | required, exact | — | required, exact | writes it | — | `config_write` (mutation) |
+| `POST /api/setup/config/apply` | required, exact | — | required, exact | — | — | `config_apply` (mutation) |
+| `POST /api/setup/deployment/prepare` | required, exact | — | — | required (B2a proves workflow + preview + hash + baseline) | mirrors the current one, never advances it | `deployment_prepare` (mutation, held for the whole worker) |
+| `POST /api/setup/deployment/start` | required, exact | — | — | via B3, whose `owner`/`workflow_id` must match | claims the EMS operation | `deployment_start` (mutation, held for the whole worker) |
+| `POST /api/setup/deployment/repair-permissions` | required, exact | — | — | via B3 owner match | — | `permission_repair` (mutation) |
+| `POST /api/setup/deployment/resolve-container-conflict` | required, exact | — | — | via B3 owner match | may acknowledge its own conflict recovery | `container_conflict_resolution` (mutation) |
+| `POST /api/setup/abandon` | **required whenever B0 exists**; also the retry-cleanup entry point | — | — | — | cancels only the **exact** `operation_id` it stores (§5.3) | `abandon` / `cleanup_retry` (terminal) |
+| `POST /api/setup/system-build/supersede` | required, exact | — | — | — | same | `supersede` (terminal) |
+| workflow completion (deployment worker's terminal callback) | the worker's carried id | — | — | — | the completed operation | `complete` (terminal) |
+| `POST /api/setup/system-build/update-admin` | required, exact | required, bound to that workflow | — | — | **creates and owns it before it exists** (§5.5) | `system_build_update_admin` (mutation) |
+| `POST /api/setup/system-build/confirm` | required, exact | required, bound to that workflow | — | — | same | `system_build_confirm` (mutation) |
+| `POST /api/setup/releases/prepare` | required, exact | required, bound to that workflow | — | — | same | `setup_release_prepare` (mutation) |
+| `POST /api/setup/automated/releases/prepare` | required, exact | required, bound to that workflow | — | — | same (`automated_setup` mode) | `setup_release_prepare` (mutation) |
+
+The four System Build routes are in the matrix with the *same* authority as every
+other Setup mutation. They used to be exempt on the argument that they only
+*create* the transition a workflow later links to — but creating a transition is
+exactly what makes a workflow the owner of an irreversible operation, and a
+workflow-less create could be raced by an abandon, adopt an existing transition it
+never started, or be linked afterwards on a best-effort basis. Both release-prepare
+routes share one handler and differ only in the transition mode they open, so they
+share one claim name. Release preparation still fills the shared release cache
+(B8/B4) — installed-system state that outlives every workflow — but it may only do
+so on behalf of the workflow that owns the transition it advances.
 
 Read-only routes and `POST /api/setup/config/download` (serializes a draft to the
 browser, touches no durable state) are outside the matrix.
@@ -269,6 +288,9 @@ browser, touches no durable state) are outside the matrix.
 | 16d | selected build changed after a Setup transition exists | yes, **one backend operation** `POST /api/setup/system-build/supersede` | Setup → Setup (new workflow) | non-terminal → `cancelled` | old workflow dir + B3 removed; B0 old → `superseded`, replacement `active` with the new tag; fresh intent issued | untouched | available | Setup step 1, new identity |
 | 17 | active → `failed_recoverable` | yes | → Recovery | → `failed_recoverable` | retained (B6 kept for upgrade recovery) | untouched | available | recovery panel |
 | 18 | `failed_recoverable` → Recovery/abandon | yes | Recovery | → `resume_stage` or `cancelled` | abandon removes the workflow dir + B3 | untouched | n/a | recovery panel |
+| 18a | **Setup**-owned `failed_recoverable` → Return to running build | **refused**, 409 `setup_return_unsupported` (§5.6) | Setup | **unchanged** | **unchanged** | untouched | available | the action is not offered; Resume and Discard setup are |
+| 18b | Guided Upgrade / align-existing `failed_recoverable` → Return to running build | yes, unchanged | Recovery → align-existing | old op `cancelled`, new `align_existing_install` committed | B6 retained for the old operation | untouched | n/a | reconnect overlay |
+| 18c | Setup-owned transition mid-resource-import → Discard setup | **refused**, 409 `mutation_in_progress` (§5.3) | Setup | **unchanged** (`admin_aligned`, claimed) | **unchanged** | untouched | available | wait for the import, then discard |
 | 19 | `failed_recoverable` → unrelated Maintenance action | writes blocked until terminal | Maintenance | unchanged | retained | may change | available | Maintenance |
 | 20 | Setup abandoned → Maintenance write | yes | Maintenance | terminal | already removed | may change | available | Maintenance, apply allowed |
 | 21 | Maintenance changed live config → stale Setup deploy | **rejected** | Setup | unchanged | retained | **untouched** | available | deployment error, `stale_generated_config` |
@@ -380,10 +402,10 @@ Scoped deliberately: the hardening covers Guided Setup, not every workflow.
 
 | Invariant | Before hardening | After hardening | Remaining gap |
 |---|---|---|---|
-| I1 Workflow ownership | violated | **held** — B0 records the workflow identity; B2/B2a live in the workflow's own directory; B3 is ownership-stamped; B6 clears on its operation's terminal events; B5 is reclassified as installed-system state; the workflow's selected tag lives in B0 | B4 (`selected-release.json`) stays a shared cache by design |
-| I2 Safe abandonment | violated | **held** — abandon/supersede name their workflow exactly, hold an exclusive terminal claim (§5.4), cancel only their **own** transition, remove only provably owned artifacts and keep the same `workflow_id` owning whatever remains (§5.3); the public cancel primitive refuses Setup-owned modes | a failed removal is reported and blocks follow-ups, not rolled back (see 5.3 and 6.4) |
+| I1 Workflow ownership | violated | **held** — B0 records the workflow identity; the transition `operation_id` is persisted **before** the transition is committed (§5.5); B2/B2a live in the workflow's own directory; B3 is ownership-stamped; B6 clears on its operation's terminal events; B5 is reclassified as installed-system state; the workflow's selected tag lives in B0 | B4 (`selected-release.json`) stays a shared cache by design |
+| I2 Safe abandonment | violated | **held** — abandon/supersede name their workflow exactly, hold an exclusive terminal claim (§5.4), cancel only the **exact** `operation_id` they store, remove only provably owned artifacts and keep the same `workflow_id` owning whatever remains (§5.3); an unprovable owner cancels and cleans nothing; a claimed resource verification is refused as `mutation_in_progress` so a successful abandon never precedes a resource-cache write (§5.3); the public cancel primitive refuses Setup-owned modes | a failed removal is reported and blocks follow-ups, not rolled back (see 5.3 and 6.5) |
 | I3 Config freshness | violated | **held for W1, W2 and W3** — the exact preview (workflow ID + preview ID + fingerprint + baseline + payload hash, §2.3) blocks a stale or cross-draft apply/write, and workflow-owned B2a blocks a stale or foreign deploy (§2.2) | — |
-| I4 Recovery independence | held | held — `failed_recoverable` stays cancellable and abandonable | — |
+| I4 Recovery independence | held | held — `failed_recoverable` stays cancellable and abandonable, and every recovery action offered has a durable owner: the Setup return path is refused rather than left unowned (§5.6) | Setup recovery is Resume or Discard setup; no Setup→align-existing handoff exists yet (§6.5) |
 | I5 Refresh consistency | held | held | — |
 | I6 Restart consistency | held | held — B0, its preview and its `cleanup` state persist across a real process restart, tested | in-process state (P1–P5) is still lost by design, and fails closed |
 | I7 Single authority | violated | **held** — mutation authority is server-issued and server-verified; the browser renders identity (L9) but cannot mint it; Restart setup / Discard / supersede clear browser state only after backend success | — |
@@ -397,6 +419,7 @@ Each action names exactly what it does, and appears only where it is accurate.
 | **Restart setup** | Guided Setup header | `POST /api/setup/abandon` (workflow-verified), then a fresh workflow via start-path | setup draft, generated config, deployment plan, setup progress; returns to step 1 | installed EMS, live config, runtime data, containers, volumes, backups |
 | **Discard setup** | recovery panel, `fresh_install`/`automated_setup`; the stale-conflict panel; the Setup-to-Upgrade conflict dialog | `POST /api/setup/abandon` (workflow-verified) | same as above | same as above |
 | **Cancel upgrade** | recovery panel, `guided_upgrade` | `POST /api/admin/system-alignment/cancel` | the transition and **its own operation's upgrade context (B6)** | running EMS build, live config, backups, known-good (B5), **and Setup artifacts — it does not own them** |
+| **Return to running build** | recovery panel, **non-Setup modes only** | `POST /api/admin/system-alignment/return-to-running-build` | the failed transition; starts an `align_existing_install` one for the known-good build | live config, backups, known-good (B5). **Not offered for `fresh_install`/`automated_setup`** — the new operation would have no durable owner (§5.6) |
 | **Review current configuration** | preview-conflict panel | `POST /api/setup/config-preview` | nothing | the draft; earns a new exact preview |
 | **Open current setup** | workflow-conflict panel (old tab) | `GET /api/setup/workflow` | nothing | the local draft; adopts the current workflow identity |
 | **Discard local draft** | workflow-conflict panel (old tab) | none (local) + `GET /api/setup/workflow` | only this tab's local draft | the newer session's server-side setup |
@@ -419,11 +442,86 @@ separate facts and are reported separately: B0 goes terminal (mutation and
 preview authority revoked immediately) while its `cleanup` records what is still
 on disk.
 
-**A workflow cancels only its own transition.** A Setup-owned *mode* is not
-ownership: once B0 names an `operation_id`, only that transition may be cancelled,
-so one workflow can never terminate another's. A record that never linked a
-transition falls back to the mode check — B0 holds a single workflow, so there is
-no other candidate.
+**A workflow cancels only the exact operation ID it stores.**
+`transition_ownership(record, transition)` (`admin/setup_workflow.py`) is the one
+verdict, and it is strict:
+
+| Situation | Verdict | Abandon / cleanup-retry result |
+|---|---|---|
+| no transition, or its stage is `completed`/`cancelled` | `none` | nothing to cancel; **cleanup proceeds** |
+| Setup-mode transition, B0's `operation_id` **is** its operation id | `owned` | cancel, then clean up |
+| Setup-mode transition, B0 names **no** `operation_id` | `unproven` | 409 `setup_transition_owner_unproven` — **nothing cancelled, nothing cleaned** |
+| Setup-mode transition, B0 names a **different** `operation_id` | `mismatch` | 409 `setup_transition_context_mismatch` — nothing cancelled, nothing cleaned |
+| the active transition is **not** Setup-owned (e.g. `guided_upgrade`) | `unproven` | 409 — a Setup owner never terminates or cleans around a foreign transition |
+
+> **A Setup-owned mode is never proof of transition ownership.** The mode only
+> *classifies* a transition. Only the exact `operation_id` identifies which
+> workflow started it.
+
+An unproven or mismatched owner fails **closed on both halves**: a workflow that
+cannot name the transition also cannot know which artifacts belong to it, so it
+must not delete any. The one exception is the documented pre-workflow path: with
+**no** B0 record at all (and therefore no submitted id) there is no workflow that
+could be named and no newer workflow whose state could be lost, so a Setup-mode
+transition is still cancellable. That is also the operator escape hatch if a
+pre-hardening install ever presents an unlinked workflow beside an active
+transition: remove `state/guided-setup-workflow.json`, then discard.
+
+**An owned cancel can still be refused while its operation is mutating.**
+Ownership decides *whether* this workflow may cancel; the transition store
+decides *whether now is a safe moment*. `PendingTransitionStore.cancel()` refuses
+a non-expired transition outside `CANCELLABLE_TRANSITION_STAGES`, and — the case
+the visible stage hides — also while a **resource verification is claimed**:
+
+| Stage | `resources_claimed_at` | Cancellable | Why |
+|---|---|---|---|
+| `admin_aligned` | absent | yes | nothing external is running |
+| `admin_aligned` | present | **no** — `mutation_in_progress` | the claim is taken *before* `import_into_cache` and the stage advances only *after* it returns, so the shared resource cache is being written under a stage that still reads `admin_aligned` |
+| `resources_verified` | present | yes | the import finished; the claim is history |
+| `failed_recoverable` | present | yes | the attempt is over and a retry clears the claim |
+| any non-terminal stage, **expired** | any | yes *by the durable store* — but see the worker rule below | expiry closes every forward path; without this the record would wedge the store permanently |
+
+`SystemAlignmentService.status()` reports `cancel_available: false` for that
+window, so the console does not offer an action the store will refuse, and
+`POST /api/setup/abandon` returns the same actionable 409 `mutation_in_progress`
+and **cleans nothing** — B0 stays `active` and its artifacts stay on disk. The
+claimed verification then finishes or fails under its own claim, and the abandon
+succeeds on retry. Both resource strategies (embedded bundle and release
+archive) take the same claim, so both are covered by the same gate.
+
+**Expiry is not a worker verdict.** The durable store deliberately bypasses the
+`resources_claimed_at` gate once the TTL passes: an orphaned record left behind by
+a crashed Admin must stay escapable, and the marker alone cannot distinguish
+"crashed mid-import" from "still importing". So the *live* worker is proven
+separately, through the same `OperationCoordinator` (P1) that already gates
+abandonment. Every execution of `verify_resources` holds that operation's claim
+for its whole duration — taken before the durable claim, released in `finally` on
+success and on failure alike — and a claim refused because abandonment already
+won means the importer never starts at all:
+
+| Expired | Live coordinator worker | Recovery cancellation |
+|---|---|---|
+| no | any | as the table above (`mutation_in_progress` while claimed) |
+| yes | **yes** | **refused** — 409 `transition_worker_active`, nothing cancelled and nothing cleaned |
+| yes | no | allowed — the recovery escape |
+| yes | unreadable liveness | refused — `transition_worker_status_unavailable` (fails closed) |
+
+The claim is bound to the service once, at construction, rather than passed by
+each caller, so it covers every path into the importer: the shared
+`verify-resources` route, `confirm_setup_build` / `prepare_setup_resources`,
+`_start_resolved_system_alignment`, the resume helper and the Guided Upgrade
+reconnect advance. `import_into_cache` has exactly one caller and it is inside the
+claim, so there is no route-specific way to reach the importer unregistered.
+
+**After an Admin restart the escape returns.** Coordinator state is in-process
+(P1), so a restarted Admin holds no claim: an expired transition with a *stale*
+durable `resources_claimed_at` reports `worker_active: false` and stays
+abandonable. That is the intended asymmetry — a claim can only be missing when the
+process that held it is gone, and it can only be present while a mutation is
+genuinely live.
+
+A successful abandon can therefore never precede a resource-cache mutation from
+the operation it abandoned, expired or not.
 
 **Cleanup is best-effort per owned artifact; ownership never is.**
 
@@ -472,7 +570,8 @@ statements is true of a Guided Setup mutation at any moment:
 > it owns the workflow until its irreversible work has finished, **or** the
 > workflow was abandoned/superseded before it started.
 
-- Claims are non-overlapping per workflow: `config_write`, `config_apply`,
+- Claims are non-overlapping per workflow: `system_build_update_admin`,
+  `system_build_confirm`, `setup_release_prepare`, `config_write`, `config_apply`,
   `deployment_prepare`, `deployment_start`, `permission_repair`,
   `container_conflict_resolution` (mutations) and `abandon`, `supersede`,
   `cleanup_retry`, `complete` (terminal).
@@ -499,6 +598,422 @@ statements is true of a Guided Setup mutation at any moment:
 - **Restart fails closed.** Claims are in-process (P5). After a restart nothing
   is claimed, so no phantom worker blocks recovery; the durable checks (B0 status,
   B2a ownership, B3 `owner`/`workflow_id`) are what still refuse orphaned work.
+
+### 5.5 Setup transition creation and ownership
+
+A Setup System Build transition may be **created, resumed or changed only by the
+exact active Guided Setup workflow that owns the authorizing setup intent**, and
+it must never become active after that workflow was abandoned or superseded.
+
+The four creation routes therefore run one fixed order:
+
+```text
+parse request
+→ require the exact active workflow (setup_workflow_id, never "whichever is stored")
+→ acquire the lifecycle mutation claim for that workflow
+→ prove ownership of any already-active transition (§5.3 verdicts)
+→ claim the workflow-bound one-shot setup intent
+→ resolve/validate the System Build
+→ pre-commit: persist operation_id + mode + selected tag into B0
+→ commit the transition / launch the Admin replacement
+→ release the claim
+```
+
+The claim comes **before** the intent on purpose: a refused claim or an unprovable
+transition owner then leaves the user's one-shot confirmation unspent, so the
+retry after the blocking operation finishes needs no re-confirmation. The intent
+is still consumed atomically, exactly once, the moment the request is authorized.
+
+**Operation linking is not best-effort.** The link runs inside
+`SystemAlignmentService.start_resolved(..., pre_launch=…)` — and, for
+`confirm_setup_build` / `prepare_setup_resources`, the same callback threaded
+through to the same primitive. That boundary guarantees:
+
+```text
+operation id minted
+→ workflow link persisted
+→ transition committed
+→ optional Admin launcher invoked
+```
+
+That sequence crosses **two** durable boundaries, and they are classified
+separately — neither the pair nor the whole operation is atomic:
+
+| Boundary | Durable write | Decides |
+|---|---|---|
+| **B0 link → B1 transition creation** | `PendingTransitionStore.begin` writes B1 | whether the `pre_launch` undo may compensate B0 |
+| **B1 `admin_update_pending` → B1 `admin_reconnect_pending`** | `PendingTransitionStore.advance` rewrites B1 | whether the Admin replacement may be launched |
+
+Both use the same rule — the durable record, never the exception, is the
+outcome — and the same operation-identity proof (below). The second boundary is
+not reached at all when the Admin is already aligned: that transition is
+committed straight to `admin_aligned` and no launcher exists for it.
+
+The boundary has two failure sides, and both end with B0 and B1 agreeing.
+
+**Link failure before the commit.** A persistence failure raises
+`SetupTransitionLinkError` inside the boundary, so **no transition is committed
+and no Admin replacement is launched**. The route answers 500
+`setup_transition_link_failed`, B0 stays `active` with `operation_id: null`, and
+a retry starts cleanly once the Admin data directory is writable again. An
+unownable transition must never come into existence — that state is precisely
+what §5.3 has to refuse afterwards.
+
+**Commit failure after the link.** The link is written first, so a failure of
+the transition commit that follows it is the one window where B0 could name an
+operation that never reached B1. `pre_launch` therefore returns an **undo** — but
+the exception alone never authorizes it. `begin()` writes through `os.replace`
+and then still has work to do (leaving its file lock, returning through any
+instrumented wrapper), so an exception can be raised with the exact operation
+*already durable*. Compensating there would delete the owner of a live
+transition. `_start_resolved` therefore classifies the exact operation against
+the durable state before it decides:
+
+```text
+PendingTransitionStore.begin raises
+→ read B1 once (SystemAlignmentService._commit_outcome)
+   not_committed  the exact operation is absent from B1
+                  → undo: compare-and-restore the exact previous B0 reference
+                  → raise the store error (400 transition_state_write_failed)
+   committed      B1 holds the exact operation id and its transition identity
+                  → no undo; B0 keeps ownership
+                  → continue the normal post-commit path exactly once
+   unprovable     B1 cannot be read, or names the operation with a different
+                  identity
+                  → no undo, nothing launched
+                  → 500 transition_commit_unprovable
+```
+
+**The exact transition identity.** "The same operation" is the operation id
+*plus* the canonical immutable projection of the record —
+`transition_identity()` over `TRANSITION_IDENTITY_FIELDS`
+(`admin/admin_update.py`). That projection is derived by **exclusion**: every
+field of `TransitionRecord` except the eight the store actually mutates
+(`TRANSITION_MUTABLE_FIELDS`: `stage`, `updated_at`, `admin_update_claimed_at`,
+`resources_claimed_at` and the four recoverable-failure fields `failed_stage`,
+`resume_stage`, `error_code`, `error_message`). So identity is not "the
+selected build": it also covers `request_fingerprint`, `admin_alignment_required`,
+`compatibility_mode`, `resource_strategy`, the orchestrator Admin identity, the
+development acknowledgement and its tag, and `created_at` / `expires_at` /
+`next_step` / `resume_path` — all fixed by `make_transition_record` and never
+rewritten afterwards. A field added to the record is therefore immutable
+identity unless it is explicitly declared mutable, which fails closed rather
+than open.
+
+That matters beyond bookkeeping: a durable record that shared the operation id
+but carried a different `resource_strategy` would have the transition prepare
+resources through a different provider than the one the caller resolved and
+linked. Any such mismatch is `unprovable` — never blindly compensated, never
+continued.
+
+`committed` is a real outcome, not a retry: the transition exists, so the
+post-commit path (stage advance and, when alignment requires it, the single
+Admin launcher invocation) continues and any later failure keeps the committed
+link like every other post-commit failure. A retry then *resumes* that exact
+operation instead of minting a second one.
+
+**Any** operational failure of that commit is classified, not only an
+already-normalized `TransitionStateError`: the real writer reaches `os.replace`,
+so a full or read-only disk surfaces as a raw `OSError` straight out of `begin()`.
+`_start_resolved` catches normal exceptions there (never `BaseException`). For a
+proven non-commit it invokes the undo exactly once and reports through the same
+stable contract — a store error keeps its own `reason`, an `OSError` becomes
+`transition_state_write_failed`. The raw filesystem error never reaches the route
+or the browser. An exception that is neither is not an ordinary state-write
+failure: the compensation still runs (the durable proof is what authorizes it),
+but the error keeps its own type rather than being reported as one.
+
+**Operator recovery for `transition_commit_unprovable`.** The durable transition
+state could not be read back, so the server cannot say whether the operation was
+started — and refuses to guess in either direction: nothing is launched, no
+workflow ownership is removed, no artifact is cleaned. B0 keeps naming the
+operation, which is what keeps §5.3 able to refuse an adoption afterwards. The
+recovery is manual and read-first: check the Admin data directory
+(`state/pending-transition.json` and its lock file — permissions, free space,
+mount state), then read that file to decide. If it names the operation the
+workflow names, the transition is real: reconnect or resume it, or Discard setup
+to cancel it as one owned unit. If it is absent or corrupt, discard the setup and
+start it again; the workflow record is never rewritten by this failure, so it
+still identifies whatever is on disk.
+
+**Reconnect-stage failure after the commit.** When alignment is required, the
+committed transition still has one durable write before anything is launched:
+`advance` moves B1 from `admin_update_pending` to `admin_reconnect_pending`. The
+order is deliberate — the sidecar may begin immediately and must always find a
+state it can fail recoverably — and it has the same post-commit window as
+`begin()`. Treating the exception as failure skipped the launcher while
+`admin_reconnect_pending` was already durable, so B1 claimed a replacement Admin
+was expected that had never been started, and a retry read that stage and
+reported it without launching. `_start_admin_replacement` classifies it the same
+way:
+
+```text
+PendingTransitionStore.advance raises
+→ read B1 once (SystemAlignmentService._stage_commit_outcome)
+   committed      B1 is the exact operation at admin_reconnect_pending
+                  → continue the post-stage path: launch exactly once
+                  → normal result, or the unchanged launcher-failure contract
+   not_committed  B1 is the exact operation still at admin_update_pending
+                  → launch nothing; B0 keeps ownership
+                  → the stable store failure (400 transition_state_write_failed)
+   unprovable     B1 cannot be read, holds another operation, has a different
+                  identity, or a stage that is neither
+                  → launch nothing, remove no ownership, start no second
+                    transition
+                  → 500 transition_stage_commit_unprovable
+```
+
+`not_committed` stays retryable *because* the launcher runs strictly after the
+stage write: a transition parked at `admin_update_pending` provably launched
+nothing. `start_resolved` therefore resumes such a record — same operation id,
+same owner, no second transition — performs the missing stage write and the one
+launch. Once B1 reads `admin_reconnect_pending` the launch is considered done
+and a *later* retry only reports it. The worker side holds the last guard:
+`claim_admin_update` accepts one claim, and only at `admin_reconnect_pending`.
+
+**One dispatch per operation, including under overlap.** Classifying the stage
+serializes *sequential* retries; it does not serialize two that overlap. Both
+read `admin_update_pending`, both enter the replacement start, one advances the
+stage and the other sees the advance already done and returns idempotently — and
+then both invoked the launcher. The second dispatch is the real Docker sidecar
+name collision, so it raised, and the losing request marked the transition
+`failed_recoverable` with `admin_update_launch_failed` while the first
+replacement was already running. Guided Setup routes hold a lifecycle mutation
+claim (§5.4) and were already serialized; Guided Upgrade runs on
+`ThreadingHTTPServer` with no equivalent claim, so two browser tabs, a replayed
+request or a network retry reached it.
+
+Three ownerships now guard the replacement, and they answer different questions:
+
+| Ownership | Where | Survives restart | Decides |
+|---|---|---|---|
+| durable stage | B1 `admin_update_pending` → `admin_reconnect_pending` | yes | whether a replacement is expected at all |
+| transient dispatch | `ReplacementDispatchCoordinator` (P6, `admin/replacement_dispatch.py`) | no | which concurrent caller performs a dispatch attempt's one launcher call |
+| worker-side Admin update | `claim_admin_update()` in the sidecar | yes | which sidecar may act on the transition |
+
+`_start_admin_replacement` is the **only** start path to the launcher: `start`,
+`start_resolved`, `confirm_setup_build`, `prepare_setup_resources` and
+`return_to_running_build` all reach it through `_start_resolved`. `retry()` is the
+second entry, `_retry_dispatch_attempt`, and both reach the launcher through the
+same `_commit_reconnect_and_launch`, so there is exactly one `self._launcher(...)`
+call site in the service. Each holds an exclusive dispatch claim, keyed by
+operation id, around the whole sequence — re-read B1, decide, advance the
+reconnect stage, invoke the launcher, publish the result. A concurrent caller
+blocks (it must answer the authoritative transition, not "try again"), then:
+
+```text
+dispatch already completed in this process
+   launch succeeded  → re-read B1 under the claim and report that transition
+                       (never failed_recoverable, never a second launcher call)
+   launch failed     → report the dispatching caller's exact
+                       admin_update_launch_failed, attempt nothing
+no dispatch completed
+   → re-read B1 under the claim; only the durable stage authorizes a launch
+     admin_update_pending       → this caller owns it: advance/classify the
+                                  stage, launch exactly once
+     admin_reconnect_pending    → already handed off → report that transition,
+                                  launch nothing
+     failed_recoverable         → raise its durable error_code, launch nothing
+                                  (explicit retry stays the way forward)
+     any later stage            → report that transition, launch nothing
+     missing/unreadable/foreign → fail closed, launch nothing
+                                  → 500 transition_stage_commit_unprovable
+```
+
+**Why the claim alone is not enough.** The claim is transient and is dropped as
+soon as its last live caller leaves it. A request that read `admin_update_pending`
+and was then descheduled *before* entering the coordinator arrives at an **empty**
+claim: nothing in this process still records that the single dispatch happened,
+and `advance()` answers the already-committed edge idempotently rather than
+refusing — so that request launched a second replacement, with the same operation
+id, and the Docker sidecar name collision then marked a `failed_recoverable` over
+a replacement that was already running. Only B1, re-read under the claim, still
+knows. The claim serializes the callers that overlap in time; the durable stage
+covers the ones that do not.
+
+**An explicit retry is a new dispatch attempt.** A claim covers one *attempt*,
+and the outcome an accepted retry owes the operator is a **new** launcher call —
+so it may never be answered from the attempt whose failure it is recovering
+from. That attempt's entry is alive for as long as it still has waiters, and the
+first fix reopened `admin_update_pending` durably *before* entering the claim,
+walked into that live entry, was handed its published
+`admin_update_launch_failed`, launched nothing, and left the operation stranded
+at a reopened `admin_update_pending`: accepted retry + reopened durable state +
+no dispatch.
+
+The recovery edge therefore belongs **inside** the retry's own attempt:
+
+```text
+own a retry attempt (owned_retry)
+→ re-read B1 under it and prove the exact immutable operation identity
+→ take the atomic recovery edge (failed_recoverable → resume_stage), which is
+   what decides that this stage may be reopened at all
+→ admin_update_pending? advance to admin_reconnect_pending and launch once
+   anything else?         report that transition, launch nothing
+→ publish this attempt's outcome
+```
+
+`owned_retry` **detaches** a settled attempt instead of answering from it, and
+detaches rather than clears:
+
+| Caller | Attempt | Receives |
+|---|---|---|
+| the old owner and its waiters | the settled one | the old attempt's published outcome, unchanged |
+| the retry that detached it | a new one | the new launcher call's outcome |
+| a second retry, or a start/resume caller that reads the reopened stage | the same new one | the retry attempt's outcome — it launches nothing itself |
+
+Detaching happens once, under the registry guard, so two simultaneous retries
+share one new attempt and one launch. The old entry is not retained: it
+disappears with its own last waiter, exactly as before, so nothing accumulates
+per operation and a retry that really fails is recorded `failed_recoverable` and
+stays explicitly retryable — the next retry detaches *that* settled attempt in
+turn. A missing, unreadable or foreign B1 fails the retry closed under its claim
+with `transition_stage_commit_unprovable`; a stage that may not be reopened is
+refused by the store's own edge (`invalid_transition`, `not_resumable`,
+`expired`). Nothing is reopened and nothing is launched in either case.
+
+The stage is authoritative in **one direction only**: it may withdraw a launch,
+never demand one. `admin_reconnect_pending` is still not proof that a dispatch
+happened — the stage can become durable without one (the post-commit case, and
+the crash window below) — which is why nothing ever relaunches from it. The one
+caller that may launch on an already-committed reconnect stage is the caller that
+committed it *itself*, inside its own claim, and caught the exception after the
+write; that is `_stage_commit_outcome`'s classification, and it happens between
+the authority read and the launcher call.
+
+The claim records the outcome of the **launcher call**, not of the stage write.
+A failure raised before the launcher — a proven non-commit, an unprovable stage
+— dispatched nothing, publishes nothing and leaves the next caller free to
+perform the single dispatch, so both remain exactly as retryable and as
+fail-closed as above.
+
+The claim never holds the transition-store file lock while Docker runs, and it
+is released on success and on exception alike.
+
+**Not crash-atomic (known limitation).** Classification covers a failing
+`advance` and the dispatch claim covers concurrent callers in one process —
+neither covers a dying process. The claim is in-process state (P6) and is gone
+after a restart, by design: nothing may pretend a pre-restart dispatch is still
+owned. If the Admin is killed after
+`admin_reconnect_pending` is durable but before the launcher has started the
+detached sidecar, nothing relaunches it: the Admin has no startup transition
+reconciler, `retry()` only relaunches from `failed_recoverable`, and the resume
+route verifies the *replacement* Admin identity, which the un-replaced Admin
+fails. `admin_reconnect_pending` is not in `CANCELLABLE_TRANSITION_STAGES`, so
+the escape is expiry: after `DEFAULT_TRANSITION_TTL_SECONDS` (1 h) the record may
+be cancelled from any non-terminal stage, and the detached sidecar holds no local
+worker claim, so an expired orphan reports inactive and Discard setup / abandon
+succeeds. Until then the operation waits. Closing this would need a durable
+"launcher dispatched" marker plus a restart-time reconciler — see §6.5.
+
+The restore is `GuidedSetupWorkflowStore.restore_transition_link`, a
+compare-and-restore that writes only while B0 still names the operation this
+attempt wrote. The replaced value is read under the same store lock as the write
+(`link_transition`), so it can never be sampled stale, and a compensation that
+lost the race to a newer successful link changes nothing. For the normal first
+creation the restored value is `null`; B0 keeps its selected tag and mode
+(selection metadata, not ownership), stays `active` and stays retryable, and no
+Admin launcher ran.
+
+**The compensation reads strictly.** Ordinary authority reads (`load()`,
+`active()`, `require_active()`) fail closed: an unreadable, oversized, malformed or
+foreign-shaped record reads as `None`, because refusing a mutation is the safe
+answer there. For a compensation that same `None` would be a *wrong* answer — it is
+indistinguishable from a genuinely stale compare-and-restore, but the conclusion is
+the opposite. `restore_transition_link` therefore uses an internal strict read,
+under the same store lock:
+
+| Durable B0 state during compensation | Result |
+|---|---|
+| names a different operation | harmless stale no-op — nothing is written |
+| belongs to a different workflow | harmless stale no-op — nothing is written |
+| absent | no-op — no record exists that could name a stale operation |
+| unreadable / oversized / malformed / invalid shape | `GuidedSetupWorkflowReadError` → 500 `setup_transition_link_unreconciled` |
+
+A record that is present but unusable is never cleared, replaced or reconstructed —
+it is the only ownership proof for whatever that workflow left on disk.
+
+The undo runs **only** for a proven non-commit. Once the transition is durable —
+whether `begin()` returned or failed after committing — the link is correct, so a
+failing Admin launcher, a failing response or a failing reconnect all keep the
+committed `operation_id` — the workflow must stay able to resume or abandon the operation
+that does exist. If the compensating write or its strict read fails, the route
+answers 500 `setup_transition_link_unreconciled` and launches nothing: nothing was
+started, but B0 and B1 genuinely disagree, so the operator is told to discard and
+restart the setup rather than being shown a "nothing happened" that is not quite
+true.
+
+**A resume is not an adoption.** When a non-terminal transition already exists,
+`_start_resolved` reuses it instead of creating one, so the creation routes verify
+ownership *before* calling System Alignment: `unproven` and `mismatch` are refused
+with 409 and the transition is never advanced (no resource verification, no stage
+change). Mode and build context are still matched by System Alignment itself
+(`transition_active` / `transition_context_mismatch`).
+
+**Setup intents are workflow-bound.** `SetupIntent` carries
+`(intent_id, session_id, workflow_id, action, install_state_fingerprint)`. `issue()`
+requires the active workflow id; `validate()` and `claim()` require the same one and
+answer `setup_intent_workflow_mismatch` otherwise. Abandon, supersede and
+completion invalidate **every remaining intent for that workflow in every
+session** — so two browsers in one Fresh Setup can each hold a confirmation, but
+neither confirmation survives the workflow it was issued for. Issuing a second
+intent for the same workflow in another session grants neither session authority
+over a later workflow.
+
+A retired intent leaves a short-lived tombstone, so a stale copy is answered
+`setup_intent_workflow_mismatch` rather than a bare unknown id. Re-confirming in
+the same session clears that session's tombstones (pre-existing behavior), after
+which the same stale copy reads as `setup_intent_required`. All three refusals are
+409, authorize nothing, and land in the same browser recovery surface — which of
+them a caller sees depends on whose session terminalized the workflow, never on
+what it may change.
+
+### 5.6 Setup return-to-running contract
+
+`POST /api/admin/system-alignment/return-to-running-build` is **refused for a
+Setup-mode transition** with 409 `setup_return_unsupported`. Guided Upgrade,
+align-existing and every other mode keep the unchanged operation-id-only
+contract.
+
+The primitive is two durable steps:
+
+```text
+cancel the failed operation   (B1 → cancelled)
+start a new align_existing    (B1 → a new operation id)
+```
+
+Nothing carries the Guided Setup workflow across that gap. Held open, an
+abandon terminalizes B0 between the two steps and **both** sides report success,
+leaving an `align_existing_install` transition whose owner no longer exists: B0
+still points at the cancelled operation, no record names the new one, and no
+workflow can complete, resume or abandon it. Even without the race, the
+successful path has no defined answer for who owns the new operation id, when
+the Setup artifacts are cleaned, when its intents are invalidated, or how any of
+that resumes after an Admin restart.
+
+The alternative would be an explicit durable Setup→align-existing handoff. For
+this RC the unsafe path is disabled instead, because a handoff without a durable
+owner is worse than no handoff: a Setup-owned recovery already has two actions
+that *do* have an owner —
+
+- **Resume** — the transition's own retry path (`resume_stage`), owned by B1;
+- **Discard setup** — `POST /api/setup/abandon`, owned by B0, which also removes
+  the workflow's temporary files.
+
+The refusal lives in `SystemAlignmentService.return_to_running_build`, before the
+first durable step, so it covers every caller rather than one HTTP route.
+`status()` stops reporting `return_available` for Setup modes and the recovery
+panel hides the action entirely — including when a stale payload still claims
+`return_available`, and in the click handler itself, so a refused action can
+never be sent from a rendered console.
+
+**Audited alongside it** (`resume`, `verify-resources`, the return primitive):
+after a successful `POST /api/setup/abandon` the record is `cancelled`, which is
+terminal, so every forward edge — `retry`, `resume_after_admin_reconnect`,
+`claim_resource_verification`, EMS recovery — and the return refusal already fail
+closed on the durable state alone. None of these routes needs an added workflow
+claim; the transition store's own terminal check and CAS stage gates provide the
+exclusion centrally.
 
 ---
 
@@ -591,8 +1106,7 @@ terminalized workflow stopped owning what it had left behind.
    requires `setup_workflow_id` whenever B0 exists (409
    `setup_workflow_required`); the same is true of supersede, deployment
    prepare/start, permission repair and container-conflict resolution. Nothing
-   falls back to "whichever workflow is stored". The per-route matrix, including
-   the two intent-gated routes that deliberately take no workflow id, is section
+   falls back to "whichever workflow is stored". The per-route matrix is section
    2.4.
 3. **Workers bound to immutable identity** — prepare/start resolve their workflow
    once, at submission, and carry it. The worker re-checks it before the workspace
@@ -618,9 +1132,194 @@ terminalized workflow stopped owning what it had left behind.
    claiming a discard, and a review-required outcome shows why a retry would not
    help.
 
-### 6.4 Deferred follow-up architecture
+### 6.4 Exact Setup transition authority (implemented)
+
+What 6.3 left open: the routes that *create* the Setup System Build transition
+held no claim, took no workflow id, and linked the transition afterwards on a
+best-effort basis — so an unlinked workflow could cancel a transition it never
+started, an abandon could win against an in-flight create (both returning
+success), and a setup intent outlived the workflow it confirmed.
+
+1. **Workflow-bound setup intents** — `SetupIntent` carries its `workflow_id`;
+   `issue`/`validate`/`claim` require it, and terminalizing a workflow retires every
+   remaining intent for it in every session. An intent from a superseded workflow
+   cannot authorize its replacement, not even from the session that issued it.
+2. **Lifecycle claims for transition creation** — `system_build_update_admin`,
+   `system_build_confirm` and `setup_release_prepare` join the mutation claim set,
+   so abandon/supersede and transition creation can never both succeed for one
+   workflow. Order and rationale: section 5.5.
+3. **Atomic ownership at the pre-commit boundary** — the workflow link is persisted
+   inside `start_resolved(..., pre_launch=…)`; a persistence failure commits no
+   transition and launches no Admin replacement (500
+   `setup_transition_link_failed`). `confirm_setup_build` /
+   `prepare_setup_resources` route through the same primitive.
+4. **Strict cancellation proof** — `transition_ownership()` replaces the mode-only
+   fallback with `none` / `owned` / `unproven` / `mismatch`, and the two unprovable
+   verdicts fail closed without cancelling *or* cleaning. Table: section 5.3.
+5. **Resume is owner-only** — an already-active transition is verified against B0's
+   `operation_id` before System Alignment is called, so a replacement workflow can
+   never adopt or advance work it did not start.
+6. **Browser parity** — the four System Build callers submit the server-issued
+   `setup_workflow_id`, and the workflow-conflict panel now also covers
+   `setup_intent_workflow_mismatch`, `setup_transition_owner_unproven` and
+   `setup_transition_context_mismatch`, dropping the local intent and preview
+   authority with it.
+
+### 6.4a Setup continuation ownership (implemented)
+
+What 6.4 left open: three narrow gaps at the boundary between B0 and B1, each of
+which let an operation outlive or contradict the workflow it was started for.
+
+1. **Compensated transition linking** — the link is written before the transition
+   commit, so a commit failure used to leave B0 naming an operation that never
+   reached B1. `pre_launch` now returns an undo that `_start_resolved` invokes for
+   exactly that failure; it compare-and-restores the reference the attempt
+   replaced and refuses if a newer link already won. A launcher failure *after* a
+   durable commit keeps the committed link. A failing compensation is reported as
+   500 `setup_transition_link_unreconciled`. Both sides: section 5.5.
+2. **A claimed resource verification is externally mutating** — cancel and
+   `cancel_available` now treat `admin_aligned` plus `resources_claimed_at` as
+   running work, so a successful Discard setup can no longer precede a
+   resource-cache write from the operation it abandoned. Table: section 5.3.
+3. **No unowned Setup return handoff** — `return-to-running-build` is refused for
+   Setup-mode transitions rather than shipping a two-step handoff with no durable
+   owner for the new operation, so a return and an abandon can never both succeed.
+   Rationale, alternatives and the audit of the other shared continuation routes:
+   section 5.6.
+
+### 6.4b Exact compensation and live-worker exclusion (implemented)
+
+What 6.4a left open: three narrower gaps behind the same boundary.
+
+1. **Every pre-commit failure compensates** — the undo was reached only for a
+   normalized `TransitionStateError`, but the real writer reaches `os.replace`, so a
+   raw `OSError` bypassed it and left B0 linked to an operation that never became
+   durable. The commit boundary now catches normal operational exceptions, runs the
+   exact undo once, and normalizes anything that is not a store error to
+   `transition_state_write_failed`. Section 5.5.
+2. **A compensation that cannot read is not a stale one** — `restore_transition_link`
+   used the fail-closed `load()`, so an unreadable or corrupt B0 record read as
+   "nothing to restore" and the route reported only the commit error while the stale
+   link stayed on disk. It now reads strictly under the store lock; an absent record
+   is the one defined no-op, everything else unusable answers 500
+   `setup_transition_link_unreconciled` and is never rewritten. Table: section 5.5.
+3. **Expiry does not outrank a live importer** — the durable store bypasses
+   `resources_claimed_at` once the TTL passes so an orphan stays escapable, which
+   also let an expired transition be abandoned mid-import. Every resource import now
+   holds the operation's `OperationCoordinator` claim, so `cancel_available` stays
+   false and abandon answers `transition_worker_active` while it runs, while a
+   restarted Admin — which holds no claim — keeps the escape. Table: section 5.3.
+
+### 6.4c Proven commit outcomes (implemented)
+
+What 6.4b left open: the compensation was reached for *every* normal exception out
+of `PendingTransitionStore.begin`, which silently assumed the transition had not
+become durable.
+
+1. **The exception is not the outcome** — a failure raised after the atomic replace
+   (leaving the store lock, an instrumented wrapper) left a durable transition whose
+   B0 owner was then removed by the undo: a Setup transition with no workflow owner,
+   which §5.3 must afterwards refuse to adopt. `_start_resolved` now reads B1 once
+   and classifies the exact operation as `not_committed` / `committed` /
+   `unprovable`; only the first compensates. Section 5.5.
+2. **A durable transition continues, it does not restart** — for `committed` the
+   post-commit path runs exactly once (stage advance, at most one Admin launcher
+   invocation), later failures keep the committed link, and a retry resumes that
+   exact operation rather than minting a second one. Section 5.5.
+3. **An unprovable outcome fails closed** — an unreadable B1, or one naming the
+   operation with a different transition identity, launches nothing, removes no
+   ownership and cleans nothing; the route answers 500
+   `transition_commit_unprovable` with the operator recovery path. Section 5.5.
+
+### 6.4d Proven reconnect-stage outcomes (implemented)
+
+What 6.4c left open: only the *first* durable boundary was classified. The stage
+write that immediately follows it — `admin_update_pending` →
+`admin_reconnect_pending`, committed before the Admin replacement is launched —
+still treated its exception as proof of failure, and the commit-identity proof
+compared only the selected build fields.
+
+1. **A committed stage must still launch** — a failure raised after `advance`
+   replaced B1 (a lock-release error on the way out) skipped the launcher, so B1
+   durably claimed a replacement Admin was expected while none had been started
+   and a retry only reported that stage. `_start_admin_replacement` now classifies
+   the stage against B1 and launches exactly once for a proven commit. Section 5.5.
+2. **A proven non-commit stays retryable** — the launcher runs strictly after the
+   stage write, so a transition parked at `admin_update_pending` provably launched
+   nothing; `start_resolved` resumes that exact operation, performs the missing
+   stage write and the single launch instead of minting a second transition.
+   Section 5.5.
+3. **An unprovable stage fails closed** — an unreadable B1, another operation, a
+   different transition identity or a stage that is neither the expected old nor
+   new one launches nothing, removes no workflow owner and starts no second
+   transition; the route answers 500 `transition_stage_commit_unprovable`.
+   Section 5.5.
+4. **Identity is the whole immutable projection** — commit classification compared
+   `mode`/tag/build/revision/images/digests only, so a durable record sharing the
+   operation id but differing in `request_fingerprint`, `resource_strategy`,
+   `compatibility_mode`, the Admin-alignment decision, the development
+   acknowledgement, the orchestrator Admin identity, `expires_at` or `next_step`
+   classified as *this* caller's commit. Both boundaries now compare
+   `transition_identity()`, derived by excluding the eight mutable lifecycle
+   fields. Section 5.5.
+
+Deliberately **not** closed here: overlapping callers of one operation (6.4e),
+and the process-restart window between the durable reconnect stage and the
+launcher invocation. The latter is a documented limitation, not an implemented
+guarantee — Section 5.5 and §6.5.
+
+### 6.4e Single Admin replacement dispatch (implemented)
+
+What 6.4d left open: it classified both durable boundaries for **one caller at a
+time**. Two overlapping retries of the same `admin_update_pending` transition
+both read that stage, both entered the replacement start, and both invoked the
+launcher — one advancing the stage, the other seeing the advance already done and
+returning idempotently. With the real Docker sidecar name collision the second
+dispatch raised, so the durable transition claimed `failed_recoverable` /
+`admin_update_launch_failed` while the first replacement was already dispatched.
+Guided Setup was already serialized by its lifecycle mutation claim (§5.4);
+Guided Upgrade, on `ThreadingHTTPServer`, had no equivalent claim.
+
+1. **One dispatch per operation** — `ReplacementDispatchCoordinator` (P6) gives
+   each operation id an exclusive, process-shared claim around the whole
+   reconcile/advance/launch/publish sequence. Section 5.5.
+2. **A waiting caller answers the authoritative transition** — after the claim is
+   released it re-reads B1 and reports it; it never launches and never marks a
+   successfully dispatched transition `failed_recoverable`. Section 5.5.
+3. **The claim records the launcher outcome, not the stage** — a proven
+   non-commit and an unprovable stage dispatched nothing, publish nothing and
+   stay exactly as retryable and as fail-closed as 6.4d made them; a launcher
+   that really failed is reported to every waiter instead of being attempted
+   twice. Section 5.5.
+4. **The sidecar guard is unchanged** — `claim_admin_update()` remains the
+   durable worker-side owner inside the replacement; the dispatch claim exists
+   because that guard runs too late to prevent a second launch. Section 5.5.
+
+Deliberately **not** closed here: the process-crash window. The claim is
+transient by design and holds nothing across a restart — §6.5.
+
+### 6.5 Deferred follow-up architecture
 
 Evaluated, deliberately **not** implemented:
+
+- **Crash recovery between the reconnect stage and the launcher** — the two
+  durable boundaries are each classified against B1 and concurrent callers in one
+  process are serialized by the dispatch claim (§6.4e), but the sequence is still
+  not crash-atomic: an Admin killed after `admin_reconnect_pending` is durable and
+  before the sidecar starts leaves an operation that nothing relaunches until the
+  transition expires (§5.5). The dispatch claim does not narrow this window — it
+  is in-process state (P6) and holds nothing across a restart, deliberately.
+  Closing it needs a durable "launcher dispatched"
+  marker written before the launch and a restart-time reconciler that may
+  relaunch only while that marker proves no sidecar was started — a third durable
+  state and a new startup path, both of which have to be safe against a sidecar
+  that *did* start and is mid-recreate.
+
+- **A durable Setup → align-existing handoff** — would restore Return to running
+  build for a Setup-owned recovery (§5.6). It needs a record that names the new
+  operation's owner, defines when Setup artifacts are cleaned and intents
+  invalidated, and resumes correctly after an Admin restart. Until that exists the
+  path stays refused; Resume and Discard setup cover the recovery.
 
 - **Transactional artifact cleanup** — removals stay best-effort **per owned
   artifact** and are reported per path (section 5.3). Ownership is never

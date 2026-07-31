@@ -1,8 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Align paired System Builds and own their durable transition lifecycle."""
 
+from contextlib import contextmanager
+
 from admin.admin_update import (
     CANCELLABLE_TRANSITION_STAGES,
+    SETUP_TRANSITION_MODES,
     TERMINAL_TRANSITION_STAGES,
     TRANSITION_MODE_ALIGN_EXISTING,
     TRANSITION_MODE_AUTOMATED_SETUP,
@@ -19,6 +22,8 @@ from admin.admin_update import (
     TRANSITION_STAGE_RESOURCES_VERIFIED,
     TransitionStateError,
     make_transition_record,
+    transition_identity,
+    transition_resource_verification_active,
 )
 from admin.system_build import (
     ALIGN_ADMIN_RECREATE_REQUIRED,
@@ -39,6 +44,7 @@ from admin.operation_coordinator import (
     OperationWorkerActive,
     OperationWorkerStatusUnavailable,
 )
+from admin.replacement_dispatch import ReplacementDispatchCoordinator
 from admin.system_build_id import validate_system_build_id
 
 SUPPORTED_ALIGNMENT_MODES = frozenset(
@@ -49,6 +55,22 @@ SUPPORTED_ALIGNMENT_MODES = frozenset(
         TRANSITION_MODE_ALIGN_EXISTING,
     }
 )
+
+SETUP_RETURN_UNSUPPORTED = "setup_return_unsupported"
+TRANSITION_COMMIT_UNPROVABLE_CODE = "transition_commit_unprovable"
+TRANSITION_STAGE_COMMIT_UNPROVABLE_CODE = "transition_stage_commit_unprovable"
+COMMIT_UNPROVABLE_CODES = frozenset(
+    {TRANSITION_COMMIT_UNPROVABLE_CODE, TRANSITION_STAGE_COMMIT_UNPROVABLE_CODE}
+)
+STAGE_UNREADABLE_MESSAGE = (
+    "the System Build transition stage could not be read back, so it is unknown "
+    "whether the Admin replacement may be started; check the Admin data "
+    "directory before retrying"
+)
+
+COMMIT_NOT_COMMITTED = "not_committed"
+COMMIT_COMMITTED = "committed"
+COMMIT_UNPROVABLE = "unprovable"
 
 _STRATEGY_EMBEDDED = BuildResourceStrategy.EMBEDDED.value
 _STRATEGY_RELEASE_ARCHIVE = BuildResourceStrategy.RELEASE_ARCHIVE.value
@@ -184,7 +206,7 @@ class SystemAlignmentService:
     def __init__(self, *, resolver, transition_store, embedded_resources,
                  known_good_store, current_identity, persistent_ref, launcher,
                  current_ems_identity=None, release_archive_resources=None,
-                 now=None):
+                 operation_coordinator=None, now=None):
         self._resolver = resolver
         self._transitions = transition_store
         self._embedded = embedded_resources
@@ -194,6 +216,12 @@ class SystemAlignmentService:
         self._current_ems_identity = current_ems_identity or (lambda: {})
         self._persistent_ref = persistent_ref
         self._launcher = launcher
+        # Bound once, so every path into the resource importer registers its
+        # worker rather than each caller having to remember to.
+        self._coordinator = operation_coordinator
+        # Transient launcher-dispatch ownership, distinct from the durable stage
+        # ownership B1 holds and from the sidecar's own claim_admin_update().
+        self._dispatch = ReplacementDispatchCoordinator()
         self._now = now
 
     # --- helpers ---------------------------------------------------------
@@ -208,6 +236,78 @@ class SystemAlignmentService:
     @staticmethod
     def _raise_store(exc):
         raise SystemAlignmentError(exc.reason, exc.message) from exc
+
+    @classmethod
+    def _raise_commit_failure(cls, exc):
+        """Report a proven non-commit through the stable store contract.
+
+        Only the expected operational failures are normalized: an unrelated
+        defect keeps its own type rather than being reported as a transition
+        state write failure.
+        """
+
+        if isinstance(exc, TransitionStateError):
+            cls._raise_store(exc)
+        if isinstance(exc, OSError):
+            raise SystemAlignmentError(
+                "transition_state_write_failed",
+                f"the transition state could not be written: {exc}",
+            ) from exc
+        raise exc
+
+    @staticmethod
+    def _is_same_operation(durable, record) -> bool:
+        """True when the durable record is the caller's exact operation.
+
+        One comparison shared by both commit boundaries, over the whole
+        immutable projection of a transition record: safety-relevant context
+        that is not part of the selected build — the request fingerprint, the
+        resource strategy, the Admin-alignment decision, the orchestrator
+        identity — can never silently differ from what the caller resolved.
+        """
+
+        return durable.operation_id == record.operation_id and transition_identity(
+            durable
+        ) == transition_identity(record)
+
+    def _commit_outcome(self, record):
+        """Classify what a failed ``begin`` actually left in the durable store.
+
+        The exception alone proves nothing: it can be raised after the atomic
+        replace already committed the transition. Only the durable state decides
+        whether the exact operation may be compensated.
+        """
+
+        try:
+            durable = self._transitions.read()
+        except (TransitionStateError, OSError):
+            return COMMIT_UNPROVABLE
+        if durable is None or durable.operation_id != record.operation_id:
+            return COMMIT_NOT_COMMITTED
+        if not self._is_same_operation(durable, record):
+            return COMMIT_UNPROVABLE
+        return COMMIT_COMMITTED
+
+    def _stage_commit_outcome(self, record, *, expected_stage, new_stage):
+        """Classify what a failed stage ``advance`` actually left durable.
+
+        Returns ``(outcome, durable_record)``. The exception proves nothing: the
+        store replaces the state file atomically and only then leaves its lock,
+        so a failure raised on the way out can carry an already-committed stage.
+        Only the durable stage decides whether the next step may run.
+        """
+
+        try:
+            durable = self._transitions.read()
+        except (TransitionStateError, OSError):
+            return COMMIT_UNPROVABLE, None
+        if durable is None or not self._is_same_operation(durable, record):
+            return COMMIT_UNPROVABLE, None
+        if durable.stage == new_stage:
+            return COMMIT_COMMITTED, durable
+        if durable.stage == expected_stage:
+            return COMMIT_NOT_COMMITTED, durable
+        return COMMIT_UNPROVABLE, None
 
     def _current_record(self, operation_id=None):
         try:
@@ -454,18 +554,23 @@ class SystemAlignmentService:
                 running_ems = self._identity_dict(self._current_ems_identity())
             except Exception:
                 running_ems = {}
+            # Never offered for a Setup-owned transition: the primitive cannot
+            # hand the new align-existing operation a durable owner.
             transition["return_available"] = bool(
                 record.stage == TRANSITION_STAGE_FAILED_RECOVERABLE
+                and record.mode not in SETUP_TRANSITION_MODES
                 and isinstance(known_good, dict)
                 and self._ems_identity_matches_known_good(running_ems, known_good)
             )
             # Abandon is the escape out of a wedged transition: offered for
             # recoverable failures and, once expired, from any non-terminal
-            # stage — but never while the worker is alive or its state unknown.
+            # stage — but never while the worker is alive or its state unknown,
+            # and never while a claimed resource import may still write the
+            # shared cache under a stage that still reads ``admin_aligned``.
             base_cancellable = (
                 record.stage in CANCELLABLE_TRANSITION_STAGES
-                or (expired and record.stage not in TERMINAL_TRANSITION_STAGES)
-            )
+                and not transition_resource_verification_active(record)
+            ) or (expired and record.stage not in TERMINAL_TRANSITION_STAGES)
             transition["cancel_available"] = bool(
                 base_cancellable
                 and worker_status_available
@@ -824,13 +929,27 @@ class SystemAlignmentService:
         }
 
     def return_to_running_build(self, *, operation_id, confirm) -> dict:
-        """Align Admin to the verified build of the EMS container now running."""
+        """Align Admin to the verified build of the EMS container now running.
+
+        Refused for a Setup-mode transition. The primitive is two durable steps —
+        cancel the old operation, then start a new ``align_existing`` one — and
+        the workflow that owns the Setup side is not carried across them, so the
+        new transition would have no owner able to complete, resume or abandon
+        it. Guided Setup recovery keeps Resume and Discard setup instead; see
+        ``docs/technical/admin-workflow-state.md``.
+        """
 
         if confirm is not True:
             raise SystemAlignmentError(
                 "confirmation_required", "returning Admin requires confirmation"
             )
         current = self._current_record(operation_id)
+        if current.mode in SETUP_TRANSITION_MODES:
+            raise SystemAlignmentError(
+                SETUP_RETURN_UNSUPPORTED,
+                "This System Build operation belongs to Guided Setup. Retry it, "
+                "or use Discard setup to stop it and remove its temporary files.",
+            )
         if current.stage != TRANSITION_STAGE_FAILED_RECOVERABLE:
             raise SystemAlignmentError(
                 "invalid_transition",
@@ -931,6 +1050,7 @@ class SystemAlignmentService:
         requested_tag,
         mode,
         development_risk_acknowledged=False,
+        pre_launch=None,
     ) -> dict:
         """Compatibility wrapper for explicit resource preparation."""
 
@@ -938,6 +1058,7 @@ class SystemAlignmentService:
             requested_tag=requested_tag,
             mode=mode,
             development_risk_acknowledged=development_risk_acknowledged,
+            pre_launch=pre_launch,
         )
 
     def confirm_setup_build(
@@ -946,8 +1067,15 @@ class SystemAlignmentService:
         requested_tag,
         mode,
         development_risk_acknowledged=False,
+        pre_launch=None,
     ) -> dict:
-        """Commit an aligned Setup build and verify/import its resources."""
+        """Commit an aligned Setup build and verify/import its resources.
+
+        ``pre_launch`` has the same meaning as in :meth:`start_resolved`: it runs
+        after the operation id is minted and before the transition is committed,
+        so a caller can persist durable ownership and fail closed on a
+        persistence error without leaving an orphan transition behind.
+        """
 
         self._require_mode(mode)
         build = self.resolve(requested_tag)
@@ -970,6 +1098,7 @@ class SystemAlignmentService:
             build=build,
             mode=mode,
             development_risk_acknowledged=development_risk_acknowledged,
+            pre_launch=pre_launch,
         )
         operation_id = result.get("operation_id")
         if result.get("stage") == TRANSITION_STAGE_ADMIN_ALIGNED and operation_id:
@@ -1101,7 +1230,15 @@ class SystemAlignmentService:
         record after the operation id is minted but *before* the transition is
         committed and any Admin-replacement launcher runs. If it raises, the
         transition is never committed and nothing is launched — the caller can
-        persist durable context and fail closed on a persistence error.
+        persist durable context and fail closed on a persistence error. It may
+        return a callable undo, which is invoked if and only if the exact
+        transition is *proven* not to be durable: that is the one failure that
+        leaves persisted context without the transition it names. A failure
+        raised after the commit already committed keeps the context and
+        continues the post-commit path, and an outcome that cannot be
+        established fails closed without touching it. Once the transition is
+        durable the context is correct and no later failure — launcher, response
+        or reconnect — undoes it.
         """
 
         self._require_mode(mode)
@@ -1152,13 +1289,15 @@ class SystemAlignmentService:
                     "transition_context_mismatch",
                     "the resumed operation options differ from the prepared transition",
                 )
+            if existing.stage == TRANSITION_STAGE_ADMIN_UPDATE_PENDING:
+                # The reconnect wait is committed before the launcher runs, so a
+                # transition still parked here provably launched no replacement:
+                # finishing it is the only way the operation can make progress.
+                return self._start_admin_replacement(existing, build)
             return self._result(
                 existing,
                 system_build=build.as_dict(),
-                reconnect=existing.stage in {
-                    TRANSITION_STAGE_ADMIN_UPDATE_PENDING,
-                    TRANSITION_STAGE_ADMIN_RECONNECT_PENDING,
-                },
+                reconnect=existing.stage == TRANSITION_STAGE_ADMIN_RECONNECT_PENDING,
                 config_written=False,
                 ems_started=False,
             )
@@ -1208,12 +1347,27 @@ class SystemAlignmentService:
         # Persist any durable execution context before committing the transition
         # or launching an Admin replacement. A failure here leaves no active
         # transition and never launches a replacement.
-        if pre_launch is not None:
-            pre_launch(record)
+        undo = pre_launch(record) if pre_launch is not None else None
         try:
             self._transitions.begin(record, now=self._now_value())
-        except TransitionStateError as exc:
-            self._raise_store(exc)
+        except Exception as exc:
+            # The only window where the context outlives its transition — but a
+            # failure raised after the atomic replace leaves the exact operation
+            # durable, so the durable state, never the exception, decides whether
+            # the caller's compensation may run. A committed transition continues
+            # the normal post-commit path with its context intact.
+            outcome = self._commit_outcome(record)
+            if outcome == COMMIT_UNPROVABLE:
+                raise SystemAlignmentError(
+                    TRANSITION_COMMIT_UNPROVABLE_CODE,
+                    "the System Build transition state could not be read back, so "
+                    "it is unknown whether this operation was started; check the "
+                    "Admin data directory before retrying",
+                ) from exc
+            if outcome == COMMIT_NOT_COMMITTED:
+                if callable(undo):
+                    undo()
+                self._raise_commit_failure(exc)
 
         if effective_alignment == ALIGN_ALIGNED:
             return self._result(
@@ -1224,8 +1378,163 @@ class SystemAlignmentService:
                 ems_started=False,
             )
 
-        # Commit the reconnect wait before launching. The sidecar may begin
-        # immediately, and must always see a state it can fail recoverably.
+        return self._start_admin_replacement(
+            record, build, decision=effective_alignment
+        )
+
+    def _start_admin_replacement(self, record, build, decision=None) -> dict:
+        """Own the dispatch, commit the reconnect wait, then launch exactly once.
+
+        This and :meth:`_retry_dispatch_attempt` are the only two entries into
+        the launcher, and both reach it through
+        :meth:`_commit_reconnect_and_launch` under an owned dispatch attempt.
+
+        Overlapping retries of one operation all observe ``admin_update_pending``
+        before any of them acts on it, so the stage a caller read on the way in
+        proves nothing about who is dispatching. Two ownerships answer that
+        together, and neither alone is enough:
+
+        * the dispatch claim serializes the callers that are live at the same
+          time, and publishes the one launcher outcome to those still waiting;
+        * B1, re-read *under* the claim, is what actually authorizes the launch —
+          the claim is transient, so a caller delayed past its release finds no
+          trace of it and only the durable stage can still refuse.
+
+        A caller that finds its exact operation past ``admin_update_pending``
+        reports the durable transition and launches nothing. The stage is the
+        authority in one direction only: it can withdraw a launch, never demand
+        one, because the same ``admin_reconnect_pending`` is also what an Admin
+        that died before its launcher call leaves behind.
+
+        The wait is committed before launching: the sidecar may begin
+        immediately, and must always see a state it can fail recoverably. A
+        failure raised out of that stage write is classified against the durable
+        record, because a stage that did commit must still be launched — never
+        left claiming a replacement that was never started. That classification
+        belongs to the owner that performed the write, inside this same claim.
+
+        ``decision`` is the fresh alignment verdict when there was one; a resumed
+        launch reports ``None`` rather than recomputing, because the durable
+        transition — not a new verdict — is what decides that it launches.
+        """
+
+        with self._dispatch.owned(record.operation_id) as dispatch:
+            if dispatch.completed:
+                return self._report_completed_dispatch(record, build, dispatch)
+            durable = self._dispatch_authority(record)
+            if durable.stage != TRANSITION_STAGE_ADMIN_UPDATE_PENDING:
+                return self._report_handed_off_dispatch(durable, build)
+            return self._commit_reconnect_and_launch(record, build, decision, dispatch)
+
+    def _retry_dispatch_attempt(self, record, build) -> dict:
+        """Own a new dispatch attempt, then take the durable recovery edge in it.
+
+        The reopening write belongs *inside* the claim. A retry that reopened B1
+        first and then entered the claim could be answered by the very attempt
+        whose failure it recovers from — leaving the transition reopened with
+        nothing dispatched — because that attempt's entry is still alive as long
+        as it has waiters.
+
+        A recovery that lands anywhere but ``admin_update_pending`` is reported
+        as itself; only the Admin replacement continues into the launcher.
+        """
+
+        with self._dispatch.owned_retry(record.operation_id) as dispatch:
+            if dispatch.completed:
+                return self._report_completed_dispatch(record, build, dispatch)
+            reopened = self._reopen_recoverable_failure(record)
+            if reopened.stage != TRANSITION_STAGE_ADMIN_UPDATE_PENDING:
+                return self._result(reopened)
+            return self._commit_reconnect_and_launch(reopened, build, None, dispatch)
+
+    def _reopen_recoverable_failure(self, record):
+        """Take the atomic recovery edge under this attempt's ownership.
+
+        B1 is re-read first, so the record this retry reopens is proven to be
+        the caller's exact operation before anything is written. Which stages
+        may be reopened stays with the store's atomic edge — the same authority
+        two concurrent recoveries race on — so its refusals keep their exact
+        codes and are never duplicated here.
+        """
+
+        self._dispatch_authority(record)
+        try:
+            return self._transitions.retry(
+                record.operation_id, now=self._now_value()
+            )
+        except TransitionStateError as exc:
+            self._raise_store(exc)
+
+    def _dispatch_authority(self, record):
+        """Read the durable record that decides whether this owner may act.
+
+        Called with the attempt's claim held, so the answer cannot change
+        underneath the dispatch that follows it. Anything that is not provably
+        this caller's exact operation fails closed: an unreadable, absent or
+        foreign B1 is never treated as permission to start a replacement.
+        """
+
+        try:
+            durable = self._transitions.read()
+        except (TransitionStateError, OSError) as exc:
+            raise SystemAlignmentError(
+                TRANSITION_STAGE_COMMIT_UNPROVABLE_CODE, STAGE_UNREADABLE_MESSAGE
+            ) from exc
+        if durable is None or not self._is_same_operation(durable, record):
+            raise SystemAlignmentError(
+                TRANSITION_STAGE_COMMIT_UNPROVABLE_CODE, STAGE_UNREADABLE_MESSAGE
+            )
+        return durable
+
+    def _report_handed_off_dispatch(self, durable, build) -> dict:
+        """Answer a caller whose operation left ``admin_update_pending`` without it.
+
+        Either another caller already performed the single dispatch or an
+        earlier attempt failed; both are recorded durably, and both forbid a
+        second launcher call. A recoverable failure is raised as itself, so a
+        late caller gets the same answer as one that waited inside the claim and
+        the operator's explicit retry stays the only way forward.
+        """
+
+        if durable.stage == TRANSITION_STAGE_FAILED_RECOVERABLE:
+            raise SystemAlignmentError(
+                durable.error_code or "admin_update_launch_failed",
+                durable.error_message or "the Admin replacement could not be started",
+            )
+        return self._result(
+            durable,
+            system_build=build.as_dict(),
+            reconnect=durable.stage == TRANSITION_STAGE_ADMIN_RECONNECT_PENDING,
+            config_written=False,
+            ems_started=False,
+        )
+
+    def _report_completed_dispatch(self, record, build, dispatch) -> dict:
+        """Answer a caller that waited for this operation's single dispatch.
+
+        The stage this caller read before waiting is stale, so B1 is re-read
+        under the claim and reported. Only a B1 that cannot be read back or no
+        longer names the caller's exact operation falls back to the result the
+        dispatching caller published.
+        """
+
+        if dispatch.failure is not None:
+            raise SystemAlignmentError(*dispatch.failure)
+        try:
+            durable = self._transitions.read()
+        except (TransitionStateError, OSError):
+            durable = None
+        if durable is None or not self._is_same_operation(durable, record):
+            return dispatch.result
+        return self._result(
+            durable,
+            system_build=build.as_dict(),
+            reconnect=durable.stage == TRANSITION_STAGE_ADMIN_RECONNECT_PENDING,
+            config_written=False,
+            ems_started=False,
+        )
+
+    def _commit_reconnect_and_launch(self, record, build, decision, dispatch) -> dict:
         try:
             waiting = self._transitions.advance(
                 record.operation_id,
@@ -1233,8 +1542,19 @@ class SystemAlignmentService:
                 new_stage=TRANSITION_STAGE_ADMIN_RECONNECT_PENDING,
                 now=self._now_value(),
             )
-        except TransitionStateError as exc:
-            self._raise_store(exc)
+        except Exception as exc:
+            outcome, durable = self._stage_commit_outcome(
+                record,
+                expected_stage=TRANSITION_STAGE_ADMIN_UPDATE_PENDING,
+                new_stage=TRANSITION_STAGE_ADMIN_RECONNECT_PENDING,
+            )
+            if outcome == COMMIT_UNPROVABLE:
+                raise SystemAlignmentError(
+                    TRANSITION_STAGE_COMMIT_UNPROVABLE_CODE, STAGE_UNREADABLE_MESSAGE
+                ) from exc
+            if outcome == COMMIT_NOT_COMMITTED:
+                self._raise_commit_failure(exc)
+            waiting = durable
         try:
             self._launcher(record)
         except Exception as exc:
@@ -1248,21 +1568,26 @@ class SystemAlignmentService:
                 )
             except TransitionStateError:
                 pass
-            raise SystemAlignmentError(
+            # A dispatch was attempted, so no concurrent caller may attempt a
+            # second one: they answer this exact failure instead.
+            dispatch.publish_failure(
                 "admin_update_launch_failed",
                 f"Admin update could not be launched: {exc}",
-            ) from exc
-        return {
+            )
+            raise SystemAlignmentError(*dispatch.failure) from exc
+        result = {
             "ok": True,
             "status": "admin_alignment_started",
             "stage": waiting.stage,
-            "decision": effective_alignment,
+            "decision": decision,
             "reconnect": True,
             "system_build": build.as_dict(),
             "operation_id": record.operation_id,
             "config_written": False,
             "ems_started": False,
         }
+        dispatch.publish_result(result)
+        return result
 
     # --- resume ----------------------------------------------------------
 
@@ -1309,14 +1634,47 @@ class SystemAlignmentService:
             return self._release_archive
         return self._embedded
 
+    @contextmanager
+    def _resource_worker_claim(self, operation_id):
+        """Register this import as the operation's live worker for its duration.
+
+        The durable ``resources_claimed_at`` marker is bypassed once the
+        transition expires — an orphaned record has to stay escapable — so the
+        in-process claim is what still proves a *live* importer owns the
+        operation. It is taken before the durable claim and released when the
+        import settles, success or failure. A claim refused by a won abandonment
+        means the importer must not start at all.
+        """
+
+        coordinator = self._coordinator
+        if coordinator is None:
+            yield
+            return
+        token = coordinator.claim(operation_id)
+        if token is None:
+            raise SystemAlignmentError(
+                "invalid_transition",
+                "the System Build transition is no longer active",
+            )
+        try:
+            yield
+        finally:
+            coordinator.release(token)
+
     def verify_resources(self, *, operation_id) -> dict:
         """Verify/prepare the selected build's resources once, after Admin aligns.
 
         The resource *source* follows the build's compatibility mode: a modern
         paired build verifies the embedded bundle, a legacy release prepares the
-        exact historical release archive.
+        exact historical release archive. Every execution runs inside the
+        operation's worker claim, so abandonment cannot win mid-import.
         """
 
+        current = self._current_record(operation_id)
+        with self._resource_worker_claim(current.operation_id):
+            return self._verify_resources(operation_id=current.operation_id)
+
+    def _verify_resources(self, *, operation_id) -> dict:
         record = self._current_record(operation_id)
         build = self._resolved_transition_build(record)
         self._require_stored_development_acknowledgement(record, build)
@@ -1378,42 +1736,22 @@ class SystemAlignmentService:
         operation_id,
         development_risk_acknowledged=False,
     ) -> dict:
+        """Leave a recoverable failure explicitly, at its recorded safe stage.
+
+        Reopening ``admin_update_pending`` is the second way into the Admin
+        launcher, and it is a new dispatch attempt: the recovery edge, the stage
+        advance and the launcher call all happen under one claim, so the retry
+        is never answered by the attempt it recovers from and two retries still
+        launch one replacement between them.
+        """
+
         current = self._current_record(operation_id)
         build = self._resolved_transition_build(current)
         self._require_explicit_development_acknowledgement(
             build, development_risk_acknowledged
         )
         self._require_stored_development_acknowledgement(current, build)
-        try:
-            record = self._transitions.retry(operation_id, now=self._now_value())
-        except TransitionStateError as exc:
-            self._raise_store(exc)
-        if record.stage == TRANSITION_STAGE_ADMIN_UPDATE_PENDING:
-            try:
-                waiting = self._transitions.advance(
-                    operation_id,
-                    expected_stage=TRANSITION_STAGE_ADMIN_UPDATE_PENDING,
-                    new_stage=TRANSITION_STAGE_ADMIN_RECONNECT_PENDING,
-                    now=self._now_value(),
-                )
-                self._launcher(record)
-            except Exception as exc:
-                try:
-                    self._transitions.mark_failed(
-                        operation_id,
-                        error_code="admin_update_launch_failed",
-                        error_message=str(exc) or "Admin update could not be launched",
-                        resume_stage=TRANSITION_STAGE_ADMIN_UPDATE_PENDING,
-                        now=self._now_value(),
-                    )
-                except TransitionStateError:
-                    pass
-                raise SystemAlignmentError(
-                    "admin_update_launch_failed",
-                    f"Admin update could not be launched: {exc}",
-                ) from exc
-            return self._result(waiting, reconnect=True)
-        return self._result(record)
+        return self._retry_dispatch_attempt(current, build)
 
     def begin_ems_operation(self, *, operation_id) -> dict:
         try:
