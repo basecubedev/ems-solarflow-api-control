@@ -1986,6 +1986,16 @@ def _safe_container_suffix(plan_id) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]", "_", str(plan_id))[:64] or "unknown"
 
 
+def admin_update_sidecar_container_name(plan_id) -> str:
+    """The exact container name an Admin replacement sidecar runs under.
+
+    One format for the launcher that creates it and for every reader that has
+    to prove whether such a replacement is still around.
+    """
+
+    return f"ems-admin-updater-{_safe_container_suffix(plan_id)}"
+
+
 def _positive_id(value):
     """Return an all-digit, strictly-positive id, else ``None``.
 
@@ -2148,7 +2158,7 @@ class AdminUpdateLauncher:
             "docker", "run", "--rm", "-d",
             "--user", f"{puid}:{pgid}",
             "--group-add", docker_gid,
-            "--name", f"ems-admin-updater-{_safe_container_suffix(plan_id)}",
+            "--name", admin_update_sidecar_container_name(plan_id),
             "-v", f"{DOCKER_SOCKET_PATH}:{DOCKER_SOCKET_PATH}",
             "-v", f"{install_root}:{install_root}",
             "-v", f"{admin_data_dir}:{admin_data_dir}",

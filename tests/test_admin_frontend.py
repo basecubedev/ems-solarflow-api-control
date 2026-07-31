@@ -4197,15 +4197,16 @@ def test_maintenance_cards_are_collapsed_by_default_with_summaries():
     html = _read("index.html")
     maintenance = _maintenance_section(html)
     # Each card starts collapsed: closed state + hidden body + a toggle button
-    # carrying a one-line summary in the header. (6 overview cards plus the
+    # carrying a one-line summary in the header. (7 overview cards plus the
     # static Zendure MQTT broker hardware card in the config editor.)
-    assert maintenance.count('data-open="false"') == 8
+    assert maintenance.count('data-open="false"') == 9
     for card in (
         "maintenance-layout",
         "maintenance-containers",
         "maintenance-versions",
         "maintenance-diagnostics",
         "maintenance-zendure-mqtt",
+        "maintenance-workflow-recovery",
     ):
         assert 'data-maintenance-toggle="' + card + '"' in maintenance
         assert 'id="' + card + '-body"' in maintenance
@@ -4251,10 +4252,14 @@ def test_maintenance_dashboard_link_is_a_real_anchor():
 
 def test_maintenance_toggle_expands_and_collapses_card():
     js = _read("admin.js")
-    fn = js.split("function toggleMaintenanceCard", 1)[1].split("\nfunction ", 1)[0]
+    # One state writer, so a card opened by a toggle and one opened by a
+    # blocking backend verdict are the same open state.
+    fn = js.split("function setMaintenanceCardOpen", 1)[1].split("\nfunction ", 1)[0]
     assert 'setAttribute("data-open"' in fn
     assert "body.hidden = !open" in fn
     assert 'setAttribute("aria-expanded"' in fn
+    toggle = js.split("function toggleMaintenanceCard", 1)[1].split("\nfunction ", 1)[0]
+    assert "setMaintenanceCardOpen(" in toggle
     # A delegated click handler drives the collapse/expand.
     assert "[data-maintenance-toggle]" in js
 
@@ -11577,14 +11582,17 @@ def test_stale_workflow_tab_stops_previewing_and_config_changes_revoke_authority
     assert "setConfigExportReady(false)" in render
 
 
-def test_discard_active_setup_clears_identity_only_after_backend_success():
+def test_switching_clears_identity_only_after_backend_success():
     js = _read("admin.js")
-    discard = _async_fn_body(js, "async function discardActiveSetup")
-    assert '"/api/setup/abandon"' in discard
-    # Local identity clears strictly behind the confirmed backend result.
-    assert discard.index("data.ok === true") < discard.index(
-        "setSetupWorkflowId(null)"
+    switch = _async_fn_body(js, "async function startGuidedSetupThroughLifecycle")
+    # Local identity is dropped strictly behind the confirmed backend switch;
+    # a refusal returns before the projection is touched.
+    assert switch.index("if (!outcome.ok) return outcome;") < switch.index(
+        "clearWorkflowTaskProjection()"
     )
+    projection = _extract_fn(js, "clearWorkflowTaskProjection")
+    assert "setSetupWorkflowId(null)" in projection
+    assert "clearGuidedSetupTimers()" in projection
 
 
 def test_upgrade_verify_resolves_a_setup_conflict_through_its_owner():
@@ -11598,16 +11606,16 @@ def test_upgrade_verify_resolves_a_setup_conflict_through_its_owner():
         "resolveSetupConflictForUpgrade()"
     )
     resolve = _async_fn_body(js, "async function resolveSetupConflictForUpgrade")
-    # It is an explicit, named confirmation followed by the backend abandon —
-    # never the narrow transition primitive.
-    assert "window.confirm(DISCARD_SETUP_CONFIRM)" in resolve
-    assert "discardActiveSetup()" in resolve
+    # One previewed, confirmed backend switch through the lifecycle arbiter —
+    # never the narrow transition primitive, and never a second discard path.
+    assert 'requestWorkflowSwitch("guided_upgrade")' in resolve
     assert "system-alignment/cancel" not in resolve
-    # An incomplete cleanup keeps the upgrade blocked and offers Retry cleanup,
-    # and an operation still in progress is never reported as a discard.
-    assert "setupCleanupStateFor(discarded.data)" in resolve
+    assert "/api/setup/abandon" not in resolve
+    # An incomplete cleanup keeps the upgrade blocked and names the recovery,
+    # and a refusal is never reported as a discard.
+    assert "setupCleanupStateFor(switched.data)" in resolve
     assert "showSetupCleanupIncomplete" in resolve
-    assert "isSetupOperationInProgress(discarded.data)" in resolve
+    assert "Workflow recovery" in resolve
     prepare = _async_fn_body(js, "async function prepareUpgradeTarget")
     # A cleanup-pending Setup is its own conflict: only its retry unblocks the
     # upgrade, so validation must not offer a fresh Discard setup for it.
@@ -11827,32 +11835,42 @@ def test_a_converged_terminal_workflow_is_dropped_after_a_reload():
     assert out["retryHidden"] is True
 
 
-def test_operation_in_progress_never_reports_a_successful_discard():
+def test_operation_in_progress_never_reports_a_successful_switch():
     js = _read("admin.js")
     helpers = "\n".join(
         [
             _extract_decl(js, "const SETUP_OPERATION_LABELS"),
             _extract_decl(js, "function isSetupOperationInProgress"),
             _extract_decl(js, "function setupOperationInProgressMessage"),
-            "async function fetchSetupWorkflowSnapshot"
-            + _async_fn_body(js, "async function fetchSetupWorkflowSnapshot"),
-            "async function fetchOwningSetupWorkflowId"
-            + _async_fn_body(js, "async function fetchOwningSetupWorkflowId"),
-            _extract_decl(js, "async function discardActiveSetup"),
+            _extract_decl(js, "const WORKFLOW_LIFECYCLE_BASE"),
+            _extract_decl(js, "const WORKFLOW_OWNER_LABELS"),
+            _extract_decl(js, "const WORKFLOW_BLOCKED_CODES"),
+            _extract_decl(js, "const WORKFLOW_RECOVERABLE_CODES"),
+            _extract_decl(js, "function workflowOwnerLabel"),
+            _extract_decl(js, "function workflowSwitchConfirmText"),
+            _extract_decl(js, "function workflowSwitchRefusal"),
+            _extract_decl(js, "async function postWorkflowLifecycle"),
+            _extract_decl(js, "async function requestWorkflowSwitch"),
         ]
     )
     preamble = """
-let setupWorkflowId = "wf-live";
 const identityWrites = [];
 function setSetupWorkflowId(value) { identityWrites.push(value); }
-function showSetupCleanupIncomplete() {}
-function setupCleanupStateFor() { return null; }
+global.window = { confirm: () => true };
 global.fetch = async (url) => {
-  if (String(url).indexOf("/api/setup/workflow") === 0) {
+  if (String(url).indexOf("/switch/preview") >= 0) {
     return {
       ok: true,
       json: async () => ({
-        workflow: { workflow_id: "wf-live", status: "active", cleanup: {} },
+        ok: true,
+        target: "guided_upgrade",
+        target_owner: "guided_upgrade",
+        action: "discard_guided_setup",
+        blocked: false,
+        confirmation_required: true,
+        will_reset: ["Guided Setup workflow"],
+        will_preserve: ["live EMS configuration"],
+        fingerprint: "sha256:one",
       }),
     };
   }
@@ -11869,11 +11887,11 @@ global.fetch = async (url) => {
 """
     epilogue = """
 (async () => {
-  const result = await discardActiveSetup();
+  const result = await requestWorkflowSwitch("guided_upgrade");
   console.log(JSON.stringify({
     ok: result.ok,
-    status: result.status,
-    error: result.data.error,
+    blocked: result.blocked,
+    error: result.code,
     identityWrites: identityWrites,
     message: setupOperationInProgressMessage(result.data),
   }));
@@ -11881,7 +11899,7 @@ global.fetch = async (url) => {
 """
     out = _run_node(preamble + helpers + "\n" + epilogue)
     assert out["ok"] is False
-    assert out["status"] == 409
+    assert out["blocked"] is True
     assert out["error"] == "setup_operation_in_progress"
     # The local identity and draft survive: nothing was abandoned.
     assert out["identityWrites"] == []

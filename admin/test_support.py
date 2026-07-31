@@ -1528,6 +1528,42 @@ def build_test_runtime(*, data_dir):
                 "scenario": scenario,
                 "setup_workflow_id": workflow_id,
             }
+        elif scenario == "guided_upgrade_transition":
+            # A cancellable Guided Upgrade transition, so a browser test can
+            # switch away from it without driving a whole upgrade first.
+            started = system_alignment.start(
+                requested_tag="v9.9.10",
+                mode="guided_upgrade",
+            )
+            system_alignment.resume(operation_id=started["operation_id"])
+            return {
+                "ok": True,
+                "scenario": scenario,
+                "operation_id": started["operation_id"],
+            }
+        elif scenario == "workflow_state_corrupt":
+            # The state an old or crashed Admin can leave behind: a durable
+            # workflow record no reader can validate, which every authority read
+            # then refuses. Only the advanced release resolves it.
+            record_path = runtime.setup_workflows.path
+            record_path.parent.mkdir(parents=True, exist_ok=True)
+            record_path.write_text("{ not a workflow record", encoding="utf-8")
+            return {
+                "ok": True,
+                "scenario": scenario,
+                "digest": hashlib.sha256(record_path.read_bytes()).hexdigest(),
+            }
+        elif scenario == "workflow_recovery_backups":
+            # Read back what the advanced release quarantined, so a browser test
+            # can assert the backup without reaching into the filesystem itself.
+            root = Path(data_dir) / "state" / "workflow-recovery"
+            manifests = []
+            if root.is_dir():
+                for entry in sorted(root.iterdir()):
+                    manifest = entry / "recovery-manifest.json"
+                    if manifest.is_file():
+                        manifests.append(json.loads(manifest.read_text("utf-8")))
+            return {"ok": True, "scenario": scenario, "manifests": manifests}
         elif scenario == "guided_upgrade_target_moved":
             # The verified upgrade target (v9.9.10) is re-pushed to a new EMS
             # digest, so a re-resolve at execute time yields a different pair.
@@ -1562,6 +1598,11 @@ def build_test_runtime(*, data_dir):
 
         _shutil.rmtree(Path(data_dir) / "workflows", ignore_errors=True)
         _shutil.rmtree(Path(data_dir) / "generated", ignore_errors=True)
+        # A recovery backup from an earlier spec would otherwise be counted by
+        # the next one as its own quarantine.
+        _shutil.rmtree(
+            Path(data_dir) / "state" / "workflow-recovery", ignore_errors=True
+        )
         releases_dir = Path(data_dir) / "releases"
         if releases_dir.exists():
             import shutil

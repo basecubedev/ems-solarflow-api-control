@@ -8,10 +8,12 @@ can write configuration, and the invariants those must satisfy. Companion to
 Scope: Guided Setup, Maintenance, Guided Upgrade, Recovery, authentication loss,
 Admin restart.
 
-**How to read this.** Sections 1–3 and 5 describe the system **as it is now**,
+**How to read this.** Sections 1–3, 5 and 7 describe the system **as it is now**,
 after the server-owned workflow-authority hardening. Section 4 is the original
 audit that motivated the first hardening pass and is deliberately kept in the
-past tense — it records what was broken, not what is.
+past tense — it records what was broken, not what is. Section 7 is the unified
+cross-workflow lifecycle: which guided workflow owns the Admin, how a switch
+between them runs, and how a stranded one is recovered.
 
 ## 0. Authority layers
 
@@ -29,8 +31,8 @@ A raw, browser-held `config_revision` proves **nothing** about which draft was
 reviewed; it survives in preview responses for explanation only and is never
 mutation authority.
 
-Beside these five sit two **arbiters**, not authorities. Neither stores durable
-state — a restart holds no claims — and neither duplicates transition stage or
+Beside these five sit three **arbiters**, not authorities. None stores durable
+state — a restart holds no claims — and none duplicates transition stage or
 worker liveness:
 
 * `SetupLifecycleCoordinator` (`admin/setup_lifecycle.py`) decides *who may act
@@ -38,7 +40,11 @@ worker liveness:
 * `ReplacementDispatchCoordinator` (`admin/replacement_dispatch.py`) decides
   *which concurrent caller performs a dispatch attempt's one Admin replacement
   launch* — one attempt per normal dispatch, one more per accepted explicit
-  retry (§5.5).
+  retry (§5.5);
+* `AdminWorkflowLifecycleService` (`admin/workflow_lifecycle.py`) decides *which
+  guided workflow owns the Admin, whether it may be switched away from, and
+  whether a recovery is safe* (§7). It reads the five authorities together,
+  creates none of its own, and delegates every mutation back to the owner.
 
 ---
 
@@ -268,9 +274,11 @@ browser, touches no durable state) are outside the matrix.
 |---|---|---|---|---|---|---|---|---|
 | 1 | Setup → Maintenance | **reads yes, writes blocked** | Setup → Maintenance | unchanged | **all retained** | untouched | available | Maintenance, config apply returns 409 |
 | 2 | Maintenance → Setup | yes | Maintenance → Setup | unchanged | retained | untouched | available | Setup |
-| 3 | Setup → Guided Upgrade | **only through the Setup owner** — upgrade validate *and* execute return 409 `setup_abandon_required` until an explicit Discard setup runs `POST /api/setup/abandon`, and 409 `setup_cleanup_required` while a terminal workflow's cleanup has not converged | Setup → Upgrade | `fresh_install`/`automated_setup` → `cancelled` by the abandon | **removed with the abandon**; unfinished cleanup keeps both Upgrade phases blocked and offers Retry cleanup | untouched | available | Upgrade |
+| 3 | Setup → Guided Upgrade | **only through the Setup owner** — upgrade validate *and* execute return 409 `setup_abandon_required` until the Setup is terminated, and 409 `setup_cleanup_required` while a terminal workflow's cleanup has not converged. The console resolves it with one previewed lifecycle switch (§7.3), which runs that same owner | Setup → Upgrade | `fresh_install`/`automated_setup` → `cancelled` by the termination | **removed with it**; unfinished cleanup keeps both Upgrade phases blocked and offers Retry cleanup | untouched | available | Upgrade |
 | 4 | Guided Upgrade → Maintenance | yes | Upgrade → Maintenance | unchanged | retained | untouched | available | Maintenance |
 | 5 | Maintenance → Guided Upgrade | yes | Maintenance → Upgrade | unchanged | retained | untouched | available | Upgrade |
+| 5a | Guided Upgrade → Guided Setup | yes, **one previewed lifecycle switch** (§7.3) when the transition is cancellable; refused `workflow_operation_in_progress` otherwise | Upgrade → Setup | `guided_upgrade` → `cancelled` | Setup artifacts unaffected; the upgrade's own B6 cleared, operation-bound | untouched | available | Setup step 1, fresh workflow + intent |
+| 5b | task selection reached by navigation alone | yes | unchanged | unchanged | retained | untouched | available | the workflow resumes when reopened |
 | 6 | Setup → session loss | yes | Setup → none | unchanged | retained | untouched | available | Login |
 | 7 | Maintenance → session loss | yes | — | unchanged | retained | untouched | available | Login |
 | 8 | Upgrade → session loss | yes | — | unchanged | retained | untouched | available | Login |
@@ -315,7 +323,7 @@ offering the artifact-less bypass (internal Setup abandonment still calls
 `SystemAlignmentService.cancel` after owner and worker checks). Row 21 protects
 any historical state where a transition ended without its artifacts.
 
-Rows 15, 16–16d, 18, 20–26c are covered by tests — see
+Rows 3, 5a and 5b are covered by §7's tests. Rows 15, 16–16d, 18, 20–26c — see
 `tests/test_admin_setup_lifecycle_exclusion.py`,
 `tests/test_admin_setup_cleanup_ownership.py`,
 `tests/test_admin_setup_cleanup_recovery.py`,
@@ -346,12 +354,13 @@ Two independent gates read the transition:
   `/api/admin/config/migrate-legacy` on `is_transition_pending()`, which is true
   for **every** non-terminal transition regardless of mode or expiry.
 
-The second gate is the user-visible failure mode: an abandoned Guided Setup
-leaves its transition at a non-terminal stage, so **Maintenance can no longer
-save a config change** even though Setup is no longer in use. Because
-`startGuidedSetupOver()` never cancels the transition, the only escapes are the
-System Build recovery panel's Abandon button or deleting
-`pending-transition.json` by hand.
+The second gate is the user-visible failure mode: a Guided Setup that is no
+longer in use leaves its transition at a non-terminal stage, so **Maintenance
+can no longer save a config change**. Every escape is now a supported backend
+operation — Restart setup, Discard setup, the recovery panel, a lifecycle switch
+(§7.3) or Maintenance → Workflow recovery (§7.4) — and each cancels the exact
+operation its owner named. Deleting `pending-transition.json` by hand is not a
+supported recovery path.
 
 `failed_recoverable` **is** in `CANCELLABLE_TRANSITION_STAGES`, and
 `OperationCoordinator.abandon` is the atomic prove-inactive-then-cancel. Recovery
@@ -1385,3 +1394,203 @@ Evaluated, deliberately **not** implemented:
 - **A workflow record for Guided Upgrade** — its durable context (B6) now has an
   owned lifecycle, but Upgrade has no multi-artifact directory of its own;
   introducing a second record today would duplicate transition state.
+
+---
+
+## 7. Unified guided workflow lifecycle
+
+What §6 left open: every authority had an owner, but *no* service read them
+together. The start path, the upgrade conflict gate, the unrelated-transition
+write gate and two browser helpers each answered "who owns the Admin right now"
+for themselves, so a user could reach a state none of them could resolve — and
+the documented escape was deleting a JSON file over SSH.
+
+`AdminWorkflowLifecycleService` (`admin/workflow_lifecycle.py`) is that one
+reading. It owns no durable state: B0, B1 and B6 stay authoritative for their own
+concern, and every mutation is delegated to the service that owns it.
+
+### 7.1 Owner and state
+
+Ownership is decided by the durable records, never by the open UI, the selected
+release or the browser URL:
+
+```text
+non-terminal transition?
+  fresh_install / automated_setup -> guided_setup
+  guided_upgrade                  -> guided_upgrade
+  align_existing_install          -> a separate owner; not switchable here
+  unknown mode                    -> unknown; fail closed
+else
+  B0 active, or its cleanup still blocking -> guided_setup
+  otherwise                                -> none
+```
+
+An unreadable B0 or B1 makes the owner `unknown` and the state `malformed`.
+
+| State | Meaning | Switchable |
+|---|---|---|
+| `idle` | nothing owns the console | yes |
+| `active` | a guided workflow is in progress | yes |
+| `operation_running` | a Setup mutation claim is held, or the transition is non-terminal and not cancellable | no |
+| `cleanup_pending` | a terminal Setup's owned removal failed | no — safe recovery converges it |
+| `review_required` | a terminal Setup kept an artifact whose owner it could not prove | no — an operator decides |
+| `malformed` | a durable record could not be read | no — advanced release |
+
+A running mutation outranks an unreadable record on purpose: recovery must stay
+blocked while anything can still write, whatever else is corrupt.
+
+`inspect()` normalizes one thing on the way — a review state that only ever named
+installed-system files (§5.3) — which changes the record and no file. Everything
+else is read-only.
+
+### 7.2 The fingerprint
+
+Every mutating switch or recovery must present the fingerprint of the state it
+was decided on. It covers exactly the durable facts behind the verdict:
+
+```text
+B0  present, readable, workflow id, status, cleanup state, artifact claims, operation id
+B1  present, readable, operation id, mode, stage
+B6  present, readable, operation id, target tag
+```
+
+An **unreadable** file additionally contributes a SHA-256 of its bytes, because
+identity fields cannot distinguish two different corrupt records and a preview
+must bind the exact bytes it was shown for. In-process liveness is deliberately
+out: a claim that comes and goes must not invalidate a preview the operator is
+still reading, and the running-operation gate is re-evaluated at execution time
+anyway. A mismatch is refused with 409 `workflow_lifecycle_changed`; nothing
+changes.
+
+### 7.3 Switching
+
+`POST /api/admin/workflow-lifecycle/switch/preview` says what one switch would
+do; `POST …/switch` performs it. They are separate endpoints so a confirmation is
+always shown against the state it was computed for.
+
+| Target | Current owner | Action | Delegated to |
+|---|---|---|---|
+| `guided_upgrade` | `guided_setup` | `discard_guided_setup` | `abandon_setup_workflow` (exact operation cancel + claim-aware cleanup + intent retirement) |
+| `guided_setup` | `guided_upgrade` | `cancel_guided_upgrade` | `SystemAlignmentService.cancel` + `clear_for_operation`, then `ensure_active` + a fresh session intent |
+| `guided_setup` | `guided_setup` (active) | `resume_guided_setup` | `ensure_active` |
+| `guided_setup` | `none` | `start_guided_setup` | `ensure_active` |
+| `none` | either | the owner's own termination | as above, without a replacement |
+| any | already satisfied | `none` | — |
+
+A blocked switch lists no reset scope: it promises nothing because it will do
+nothing. What it always preserves is fixed and stated in the preview: live EMS
+configuration, runtime data, deployment marker, containers, volumes, backups.
+
+Refusals, all leaving every durable record untouched:
+
+| Situation | Code |
+|---|---|
+| a Setup mutation claim is held | `setup_operation_in_progress` |
+| the transition is non-terminal and not cancellable (reconnect pending, EMS operation running, healthcheck pending, claimed resource import, live worker) | `workflow_operation_in_progress` |
+| a terminal Setup's cleanup is `pending` or `review_required` | `workflow_recovery_required` |
+| the Setup cannot prove it owns the active transition | `workflow_switch_blocked` + the exact `setup_transition_*` detail |
+| the transition mode is `align_existing_install` or unknown | `workflow_owner_unknown` |
+| B0 or B1 is unreadable | `workflow_state_malformed` |
+| the presented fingerprint is not current | `workflow_lifecycle_changed` |
+| `confirm` was not `true` | `confirmation_required` (400) |
+
+Concurrency: the arbiter serializes the decide-then-act sequence in process, and
+the loser re-reads a changed state and is refused by the fingerprint. Two
+simultaneous switches therefore perform exactly one termination, one
+cancellation and one new target workflow — never a partial cross-owner state.
+
+**Navigation is not termination.** Leaving the task selection, opening
+Diagnostics or Backup keeps the durable workflow; only an explicit switch,
+"Start over" or a workflow reset terminates it.
+
+### 7.4 Recovery
+
+`POST /api/admin/workflow-lifecycle/recovery/preview` and `POST …/recovery`,
+same split, same fingerprint rule. Both modes are refused outright while
+`state` is `operation_running`, with 409 `workflow_recovery_unsafe`.
+
+**`safe`** uses nothing but normal domain operations, and deletes no state file:
+
+```text
+cancel a cancellable non-Setup transition through SystemAlignmentService
+clear that operation's upgrade context
+terminalize / retry cleanup of the Setup through abandon_setup_workflow
+clear an orphaned upgrade context, bound to the operation the file names
+```
+
+An unreadable record is refused here (`workflow_recovery_unsafe`, detail
+`workflow_state_malformed`): the normal operations cannot resolve what they
+cannot read.
+
+**`release_stale_state`** may quarantine durable Admin workflow metadata. It
+requires a preview, the exact fingerprint, explicit confirmation and a reason,
+and it refuses while a claim, a worker or a replacement may still be running —
+the Docker probe additionally looks for that operation's replacement sidecar,
+and a probe that raises fails closed. The allowlist is derived from the Admin's
+own stores; a browser can never name a path:
+
+```text
+state/guided-setup-workflow.json
+state/pending-transition.json
+state/guided-upgrade-context.json
+```
+
+Only files that exist *and* cannot be read as valid state are in scope. Each
+target's parent must resolve to the canonical Admin state directory, which must
+not be a symlink; otherwise the release is refused. The order is fixed: back up
+every file with its hash, write the manifest, then unlink. Never in scope:
+`state/.admin-deployment.json`, `state/known-good-system-build.json`,
+`config/config.json`, `docker-compose.yml`, `data/runtime-state.json`,
+dashboard databases, InfluxDB data, backups and credential stores.
+
+Backups land in `<admin_data>/state/workflow-recovery/<UTC timestamp>/` beside a
+`recovery-manifest.json`:
+
+```text
+manifest_version, created_at, mode, reason, admin_revision,
+lifecycle_fingerprint, files[{name, sha256, bytes}]
+```
+
+The manifest carries identity and hashes only — no file content, so no secret a
+malformed record happened to contain reaches it. Backups are never pruned by the
+Admin.
+
+A second release finds nothing left in scope and answers `released: []`.
+
+### 7.5 Route integration
+
+| Route | Uses the arbiter for |
+|---|---|
+| `GET /api/admin/workflow-lifecycle` | the normalized view |
+| `POST /api/admin/workflow-lifecycle/switch{,/preview}` | the switch decision and execution |
+| `POST /api/admin/workflow-lifecycle/recovery{,/preview}` | both recovery modes |
+| `_setup_owned_conflict()` (upgrade validate + execute) | the owner verdict; its public `setup_abandon_required` / `setup_cleanup_required` codes are unchanged |
+| browser start path (`setup_new`) | consults the view first and switches when another workflow owns the console |
+
+`POST /api/setup/abandon`, `POST /api/setup/system-build/supersede` and
+`POST /api/admin/system-alignment/cancel` keep their existing narrow contracts:
+they are the owners the arbiter delegates to, and remain reachable for the
+Restart setup / recovery-panel actions that already name one owner.
+
+`_reject_unrelated_transition_write` is deliberately **not** folded in: it is
+operation-specific validation owned by System Alignment ("do not write config
+while a build transition is pending"), not a cross-workflow ownership decision.
+
+### 7.6 Accepted limitations
+
+- The in-process serialization covers concurrent callers in one process. A dying
+  process holds no claim, by design (P1/P5/P6); the durable records are what a
+  restarted Admin re-reads.
+- A crash between the backup write and the unlink of a released file leaves the
+  backup plus the original — safe, and a second release re-quarantines whatever
+  is still unreadable.
+- The Docker replacement probe is a positive confirmation only. A daemon that
+  cannot be reached answers "no replacement seen"; the durable stage is what
+  actually blocks every replacement window.
+- Coverage: `tests/test_admin_workflow_lifecycle.py`,
+  `tests/test_admin_workflow_switching.py`,
+  `tests/test_admin_workflow_recovery.py`,
+  `tests/test_admin_workflow_recovery_routes.py`,
+  `tests/test_admin_workflow_lifecycle_frontend.py`,
+  `tests/e2e/workflow-switching.spec.ts` and
+  `tests/e2e/workflow-recovery.spec.ts`.

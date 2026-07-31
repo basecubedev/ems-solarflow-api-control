@@ -87,6 +87,33 @@ for its cleanup. See
 [admin-workflow-state.md](admin-workflow-state.md) for the full inventory,
 config write paths and transition matrix.
 
+### One lifecycle arbiter across the guided workflows
+
+Each durable record keeps its own authority, and exactly one service reads them
+together:
+
+| Authority | Owns |
+|---|---|
+| durable Guided Setup record | Setup identity, status, artifact claims, cleanup state, linked operation id |
+| durable pending transition | System Build mode, operation id, stage |
+| Guided Upgrade context | the operation-bound, secret-free upgrade execution context |
+| Docker / EMS / live config | what is actually installed and running |
+| `AdminWorkflowLifecycleService` (`admin/workflow_lifecycle.py`) | the only interpretation of those together: may a workflow resume, switch, cancel or be recovered |
+
+The arbiter creates **no** durable "current workflow" record of its own. It
+normalizes the existing authorities into one owner/state verdict, binds the
+exact durable facts behind that verdict into a fingerprint, and delegates every
+mutation to the owning service — Setup termination through the claim-aware
+abandon, transition cancellation through `SystemAlignmentService`, context
+clearing through `clear_for_operation`. One instance lives in `AdminRuntime` and
+is shared by the HTTP and HTTPS listeners; nothing is constructed per request.
+
+Cross-workflow decisions (which task may start, what a switch stops, whether a
+recovery is safe) belong to that arbiter. Operation-specific validation stays in
+the owning service: the transition store still decides whether *now* is a safe
+moment to cancel, and `_reject_unrelated_transition_write` still gates
+Maintenance writes on a pending transition.
+
 ## Authentication
 
 The Admin Console is protected by the shared EMS/Dashboard password — there is

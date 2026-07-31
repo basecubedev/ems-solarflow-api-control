@@ -3644,6 +3644,9 @@ def _attach_system_alignment(server, alignment):
     # the currently-missing create_server keyword.
     server.system_alignment = alignment
     server.runtime.system_alignment = alignment
+    # The lifecycle arbiter is one shared instance; a runtime that swaps its
+    # alignment service has to rebind it, or the arbiter reads a detached one.
+    server.runtime.workflow_lifecycle.bind_alignment(alignment)
 
 
 def test_admin_runtime_accepts_one_shared_system_alignment_service(tmp_path):
@@ -5788,9 +5791,9 @@ def test_production_alignment_status_calls_are_worker_aware():
     The transition dict is embedded in many response families (dedicated
     status, job polls, start accepts, transition-in-progress rejections). A
     single bare ``status()`` call would let one of them report a live worker
-    as proven inactive, so the only permitted call site is the
-    ``_alignment_status`` helper and it must always pass
-    ``operation_active=self._operation_active``.
+    as proven inactive, so there is exactly one call site in the package —
+    ``worker_aware_alignment_status`` — and the route helper reaches it with
+    ``self._operation_active``.
     """
 
     import ast
@@ -5815,26 +5818,54 @@ def test_production_alignment_status_calls_are_worker_aware():
             and _touches_system_alignment(node.func.value)
         ]
 
+    def _named_function(tree, name):
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+                and node.name == name
+            ):
+                return node
+        return None
+
     offenders = []
-    helper_calls = []
-    helper_def = None
     for path in sorted(admin_dir.glob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for func in ast.walk(tree):
             if not isinstance(func, ast.FunctionDef | ast.AsyncFunctionDef):
                 continue
-            calls = _status_calls(func)
-            if not calls:
-                continue
-            if path.name == "server.py" and func.name == "_alignment_status":
-                helper_def = func
-                helper_calls.extend(calls)
-            else:
+            if _status_calls(func):
                 offenders.append(f"{path.name}:{func.name}")
 
     assert offenders == [], (
-        "system_alignment.status() must only be called through the "
-        f"_alignment_status helper; bypasses: {offenders}"
+        "system_alignment.status() must only be read through "
+        f"worker_aware_alignment_status; bypasses: {offenders}"
+    )
+
+    shared = _named_function(
+        ast.parse(
+            (admin_dir / "workflow_lifecycle.py").read_text(encoding="utf-8")
+        ),
+        "worker_aware_alignment_status",
+    )
+    assert shared is not None, "worker_aware_alignment_status is missing"
+    shared_calls = [
+        node
+        for node in ast.walk(shared)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "status"
+    ]
+    assert len(shared_calls) == 1
+    forwarded = {kw.arg: kw.value for kw in shared_calls[0].keywords}.get(
+        "operation_active"
+    )
+    assert isinstance(forwarded, ast.Name) and forwarded.id == "operation_active", (
+        "the shared status read must forward the injected liveness probe"
+    )
+
+    helper_def = _named_function(
+        ast.parse((admin_dir / "server.py").read_text(encoding="utf-8")),
+        "_alignment_status",
     )
     assert helper_def is not None, "_alignment_status helper not found"
 
@@ -5844,11 +5875,21 @@ def test_production_alignment_status_calls_are_worker_aware():
     )
     assert args.kwonlyargs == [] and args.vararg is None and args.kwarg is None
 
-    assert len(helper_calls) == 1
-    keywords = {kw.arg: kw.value for kw in helper_calls[0].keywords}
-    probe = keywords.get("operation_active")
-    assert isinstance(probe, ast.Attribute) and probe.attr == "_operation_active", (
-        "_alignment_status must pass operation_active=self._operation_active"
+    delegations = [
+        node
+        for node in ast.walk(helper_def)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "worker_aware_alignment_status"
+    ]
+    assert len(delegations) == 1
+    probes = [
+        argument
+        for argument in delegations[0].args
+        if isinstance(argument, ast.Attribute) and argument.attr == "_operation_active"
+    ]
+    assert probes, (
+        "_alignment_status must hand over self._operation_active as the probe"
     )
 
 

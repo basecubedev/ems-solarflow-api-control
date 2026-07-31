@@ -306,6 +306,52 @@ class GuidedUpgradeContextStore:
             return None
         return self._to_context({**data, "options": normalized})
 
+    def describe(self) -> dict:
+        """Presence and identity of the stored context, without trusting it.
+
+        :meth:`load` is the authority for *using* a context and refuses anything
+        it cannot reproduce. A lifecycle view also has to report the contexts
+        that can never be used again — orphaned, foreign or corrupt — so this
+        read reports only the identity fields, which carry no secrets.
+        """
+
+        absent = {
+            "present": False,
+            "readable": True,
+            "operation_id": None,
+            "target_system_tag": None,
+        }
+        unreadable = {
+            "present": True,
+            "readable": False,
+            "operation_id": None,
+            "target_system_tag": None,
+        }
+        try:
+            raw = self.path.read_bytes()
+        except FileNotFoundError:
+            return absent
+        except OSError:
+            return unreadable
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return unreadable
+        if not isinstance(data, dict):
+            return unreadable
+        operation_id = data.get("operation_id")
+        target_system_tag = data.get("target_system_tag")
+        if not (isinstance(operation_id, str) and operation_id):
+            return unreadable
+        return {
+            "present": True,
+            "readable": True,
+            "operation_id": operation_id,
+            "target_system_tag": (
+                target_system_tag if isinstance(target_system_tag, str) else None
+            ),
+        }
+
     def clear(self) -> None:
         with self._lock:
             try:

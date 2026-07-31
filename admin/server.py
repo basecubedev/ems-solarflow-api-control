@@ -172,7 +172,6 @@ from admin.setup_workflow import (
     SetupWorkflowArtifacts,
     abandon_setup_workflow,
     reconcile_unclaimed_review,
-    setup_artifact_claims,
     transition_ownership,
     transition_ownership_error,
 )
@@ -191,6 +190,15 @@ from admin.system_alignment import (
 from admin.system_health import (
     HealthValidationResult,
     validate_system_health_result,
+)
+from admin.workflow_lifecycle import (
+    AdminWorkflowLifecycleError,
+    AdminWorkflowLifecycleService,
+    OWNER_GUIDED_SETUP,
+    RECOVERY_MODES,
+    SWITCH_TARGETS,
+    admin_replacement_container_active,
+    worker_aware_alignment_status,
 )
 from admin.system_build import (
     CachingBuildResolver,
@@ -546,6 +554,10 @@ class AdminRuntime:
     admin_instance_id: str
     setup_intents: SetupIntentStore
     identity_token_key: bytes
+    # The one cross-workflow arbiter, shared by both listeners: it reads the
+    # durable Setup/transition/upgrade-context authorities together and is the
+    # only place that decides whether a guided workflow may switch or recover.
+    workflow_lifecycle: AdminWorkflowLifecycleService
     static_assets: dict = field(default_factory=dict)
     # The single authority for worker liveness and atomic abandonment, shared by
     # both listeners. Guided Upgrade and deployment workers claim it before they
@@ -617,12 +629,17 @@ def _running_ems_identity(docker):
 
 
 def _build_system_alignment(
-    *, release_manager, admin_data_dir, docker, operation_coordinator=None
+    *,
+    release_manager,
+    admin_data_dir,
+    docker,
+    operation_coordinator=None,
+    transition_store=None,
 ):
     """Compose the single productive alignment service for this Admin runtime."""
 
     state_dir = Path(admin_data_dir) / "state"
-    transition_store = PendingTransitionStore(state_dir)
+    transition_store = transition_store or PendingTransitionStore(state_dir)
     return SystemAlignmentService(
         # One verified resolution is reused across validate → Continue / Update
         # Admin Server / re-render, so the explicit verification pulls each image
@@ -758,11 +775,30 @@ def create_admin_runtime(
     guided_upgrade_context = guided_upgrade_context or GuidedUpgradeContextStore(
         Path(admin_data_dir) / "state"
     )
+    # One transition store for the alignment service and for the lifecycle
+    # arbiter's recovery allowlist, so both name the same durable file.
+    transition_store = PendingTransitionStore(Path(admin_data_dir) / "state")
     system_alignment = system_alignment or _build_system_alignment(
         release_manager=release_manager,
         admin_data_dir=admin_data_dir,
         docker=docker,
         operation_coordinator=operation_coordinator,
+        transition_store=transition_store,
+    )
+    setup_intents = setup_intents or SetupIntentStore()
+    setup_lifecycle = SetupLifecycleCoordinator()
+    workflow_lifecycle = AdminWorkflowLifecycleService(
+        workflows=setup_workflows,
+        alignment=system_alignment,
+        lifecycle=setup_lifecycle,
+        coordinator=operation_coordinator,
+        upgrade_contexts=guided_upgrade_context,
+        setup_intents=setup_intents,
+        admin_data_dir=admin_data_dir,
+        transition_store=transition_store,
+        install_state_probe=lambda operation_id: admin_replacement_container_active(
+            docker, operation_id
+        ),
     )
     # Admin self-update: read-only status/plan plus an out-of-request updater. It
     # reuses the release manager's Admin data dir for the pending-state file and a
@@ -806,10 +842,12 @@ def create_admin_runtime(
         auth_login_limiter=LoginRateLimiter(),
         auth_setup_limiter=LoginRateLimiter(max_failures=10, window_seconds=60),
         admin_instance_id=uuid.uuid4().hex,
-        setup_intents=setup_intents or SetupIntentStore(),
+        setup_intents=setup_intents,
         identity_token_key=identity_token_key,
+        workflow_lifecycle=workflow_lifecycle,
         static_assets=static_assets,
         operation_coordinator=operation_coordinator,
+        setup_lifecycle=setup_lifecycle,
     )
 
 
@@ -857,6 +895,7 @@ class AdminServer(ThreadingHTTPServer):
         )
         self.setup_intents = runtime.setup_intents
         self.identity_token_key = runtime.identity_token_key
+        self.workflow_lifecycle = runtime.workflow_lifecycle
         self.static_assets = runtime.static_assets
         # Present only for the gated browser-test runtime; ``None`` (and its route
         # 404s) in every normal deployment.
@@ -908,6 +947,9 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/admin/system-alignment/status":
             self._handle_system_alignment_status()
+            return
+        if path == "/api/admin/workflow-lifecycle":
+            self._send_json(self.server.workflow_lifecycle.inspect())
             return
         if path == "/api/admin/install-state":
             self._send_json(
@@ -1116,6 +1158,18 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/admin/system-alignment/cancel":
             self._handle_system_alignment_cancel()
+            return
+        if path == "/api/admin/workflow-lifecycle/switch/preview":
+            self._handle_workflow_lifecycle_switch_preview()
+            return
+        if path == "/api/admin/workflow-lifecycle/switch":
+            self._handle_workflow_lifecycle_switch()
+            return
+        if path == "/api/admin/workflow-lifecycle/recovery/preview":
+            self._handle_workflow_lifecycle_recovery_preview()
+            return
+        if path == "/api/admin/workflow-lifecycle/recovery":
+            self._handle_workflow_lifecycle_recovery()
             return
         if path == "/api/admin/maintenance/diagnostics/run":
             self._handle_maintenance_diagnostics()
@@ -1716,25 +1770,9 @@ class AdminHandler(BaseHTTPRequestHandler):
         ``OperationCoordinator.abandon``'s cancel callback builds status.
         """
 
-        try:
-            payload = self.server.system_alignment.status(
-                operation_active=self._operation_active
-            )
-        except Exception as exc:
-            return {
-                "ok": False,
-                "active": True,
-                "error": "system_alignment_status_failed",
-                "message": str(exc),
-                "transition": None,
-                "known_good": None,
-            }
-        return payload if isinstance(payload, dict) else {
-            "ok": False,
-            "active": True,
-            "transition": None,
-            "known_good": None,
-        }
+        return worker_aware_alignment_status(
+            self.server.system_alignment, self._operation_active
+        )
 
     def _alignment_resources_verified(self):
         checker = getattr(self.server.system_alignment, "resources_verified", None)
@@ -2281,6 +2319,110 @@ class AdminHandler(BaseHTTPRequestHandler):
             self._clear_guided_upgrade_context(body.get("operation_id"))
         self._send_json(result)
 
+    # --- unified guided workflow lifecycle ---------------------------------
+
+    def _workflow_lifecycle_body(self, allowed):
+        """Read and shape-check a lifecycle request body, or answer and stop."""
+
+        body = self._read_optional_json_body()
+        if body is None:
+            return None
+        if not isinstance(body, dict) or set(body) - allowed:
+            self._send_json({"ok": False, "error": "unsupported_field"}, status=400)
+            return None
+        return body
+
+    def _send_workflow_lifecycle_error(self, exc):
+        self._send_json(exc.as_payload(), status=exc.status)
+
+    def _handle_workflow_lifecycle_switch_preview(self):
+        """Say exactly what a switch would stop and what it would preserve.
+
+        Read-only on purpose: preview and mutation stay separate endpoints so a
+        confirmation is always shown against the state it was computed for.
+        """
+
+        body = self._workflow_lifecycle_body({"target"})
+        if body is None:
+            return
+        target = body.get("target")
+        if target not in SWITCH_TARGETS:
+            self._send_json(
+                {"ok": False, "error": "unsupported_workflow_target"}, status=400
+            )
+            return
+        self._send_json(self.server.workflow_lifecycle.plan_switch(target))
+
+    def _handle_workflow_lifecycle_switch(self):
+        body = self._workflow_lifecycle_body({"target", "confirm", "fingerprint"})
+        if body is None:
+            return
+        target = body.get("target")
+        if target not in SWITCH_TARGETS:
+            self._send_json(
+                {"ok": False, "error": "unsupported_workflow_target"}, status=400
+            )
+            return
+        fingerprint = body.get("fingerprint")
+        if not isinstance(fingerprint, str) or not fingerprint:
+            self._send_json(
+                {"ok": False, "error": "workflow_fingerprint_required"}, status=400
+            )
+            return
+        try:
+            result = self.server.workflow_lifecycle.switch(
+                target,
+                expected_fingerprint=fingerprint,
+                confirm=body.get("confirm") is True,
+                session_id=self._admin_session_cookie_value(),
+            )
+        except AdminWorkflowLifecycleError as exc:
+            self._send_workflow_lifecycle_error(exc)
+            return
+        self._send_json(result)
+
+    def _handle_workflow_lifecycle_recovery_preview(self):
+        body = self._workflow_lifecycle_body(set())
+        if body is None:
+            return
+        self._send_json(self.server.workflow_lifecycle.plan_recovery())
+
+    def _handle_workflow_lifecycle_recovery(self):
+        body = self._workflow_lifecycle_body(
+            {"mode", "confirm", "fingerprint", "reason"}
+        )
+        if body is None:
+            return
+        mode = body.get("mode")
+        if mode not in RECOVERY_MODES:
+            self._send_json(
+                {"ok": False, "error": "unsupported_recovery_mode"}, status=400
+            )
+            return
+        fingerprint = body.get("fingerprint")
+        if not isinstance(fingerprint, str) or not fingerprint:
+            self._send_json(
+                {"ok": False, "error": "workflow_fingerprint_required"}, status=400
+            )
+            return
+        reason = body.get("reason")
+        if reason is not None and not isinstance(reason, str):
+            self._send_json(
+                {"ok": False, "error": "recovery_reason_invalid"}, status=400
+            )
+            return
+        try:
+            result = self.server.workflow_lifecycle.recover(
+                mode=mode,
+                expected_fingerprint=fingerprint,
+                confirm=body.get("confirm") is True,
+                reason=reason,
+            )
+        except AdminWorkflowLifecycleError as exc:
+            self._send_workflow_lifecycle_error(exc)
+            return
+        self._send_json(result)
+
     def _clear_guided_upgrade_context(self, operation_id):
         """Operation-bound context cleanup on a terminal upgrade lifecycle event."""
 
@@ -2805,9 +2947,12 @@ class AdminHandler(BaseHTTPRequestHandler):
         """
 
         workflows = self.server.setup_workflows
-        # A review state that only ever named installed-system files is stale
-        # bookkeeping from the pre-claim cleanup; reconciling it deletes nothing.
-        reconcile_unclaimed_review(workflows)
+        # One reading for the whole decision. inspect() also reconciles a review
+        # state that only ever named installed-system files — stale bookkeeping
+        # from the pre-claim cleanup, whose reconciliation deletes nothing.
+        view = self.server.workflow_lifecycle.inspect()
+        if view["owner"] != OWNER_GUIDED_SETUP:
+            return None
         record = workflows.load() if workflows else None
         if cleanup_blocks(record):
             exc = cleanup_conflict_error(record)
@@ -2816,22 +2961,18 @@ class AdminHandler(BaseHTTPRequestHandler):
                 "error": exc.code,
                 "message": exc.message,
                 "workflow": workflows.redacted_view(),
+                "lifecycle": view,
             }
-        status = self._alignment_status()
-        transition = status.get("transition") or {}
-        if (
-            status.get("active")
+        transition = view["transition"] or {}
+        setup = view["setup"] or {}
+        # A Setup that owns a live transition blocks; so does one that claimed
+        # artifacts. Durable claims, not file existence: an installed system's
+        # generated config and deployment marker exist for every install and say
+        # nothing about what this workflow owns.
+        blocking = (
+            not transition.get("terminal")
             and transition.get("mode") in SETUP_TRANSITION_MODES
-            and transition.get("stage") not in {"completed", "cancelled"}
-        ):
-            blocking = True
-        else:
-            blocking = False
-            if record is not None and record["status"] == "active":
-                # Durable claims, not file existence: an installed system's
-                # generated config and deployment marker exist for every install
-                # and say nothing about what this workflow owns.
-                blocking = setup_artifact_claims(record).claims_anything()
+        ) or (setup.get("status") == "active" and setup.get("artifacts_claimed"))
         if not blocking:
             return None
         return {
@@ -2841,7 +2982,8 @@ class AdminHandler(BaseHTTPRequestHandler):
                 "An unfinished Guided Setup is still active. Discard the setup "
                 "so its temporary files are removed, then validate the upgrade."
             ),
-            "transition": transition or None,
+            "transition": self._alignment_status().get("transition"),
+            "lifecycle": view,
         }
 
     def _handle_maintenance_upgrade_execute(self):

@@ -392,6 +392,84 @@ InfluxDB restore is orchestrated through the existing EMS CLI restore flow
 (replace-style, preview and confirmation required); external InfluxDB is not
 covered. See [Backup and restore](admin-backup-restore.md).
 
+## Workflow recovery
+
+**Manual configuration / existing system → Workflow recovery** resolves a Guided
+Setup or Guided Upgrade that can no longer be finished, switched away from, or
+started again. The card stays collapsed and quiet while nothing needs it, and
+opens by itself when the Admin Console reports a blocked workflow.
+
+You normally do not need SSH or manual JSON deletion. Use Maintenance → Workflow
+recovery instead.
+
+It shows which guided workflow currently owns the console, its state and age, a
+shortened workflow/operation reference, and whether an operation is still
+running. Two actions can appear, and only when the Admin Console says they are
+available:
+
+- **Reset guided workflow** — the normal path. It stops the current workflow
+  through its own owner: a cancellable System Build transition is cancelled, a
+  Guided Setup is terminated with its claim-aware cleanup, and a Guided Upgrade
+  context is cleared only for the operation it belongs to. No state file is
+  deleted.
+- **Release stale Admin workflow state** — for old Admin versions, corrupt
+  workflow metadata and orphaned records left by a crash. It asks twice, backs
+  the affected Admin workflow files up with their hashes, and only then clears
+  them.
+
+While an Admin workflow operation is still running, neither action is offered:
+the console shows the running stage and offers **Resume** instead. There is no
+force reset.
+
+### What recovery never touches
+
+Both actions leave the installed system alone:
+
+```text
+config/config.json
+data/runtime-state.json
+docker-compose.yml
+state/.admin-deployment.json
+state/known-good-system-build.json
+backups, containers and volumes
+```
+
+Only Admin workflow metadata is ever released:
+`state/guided-setup-workflow.json`, `state/pending-transition.json` and
+`state/guided-upgrade-context.json`. The Admin Console derives that list itself;
+a browser can never name a file.
+
+### Recovery backups
+
+A release writes its backup under the Admin data directory:
+
+```text
+<admin data>/state/workflow-recovery/<UTC timestamp>/
+```
+
+The directory holds a byte-exact copy of each released file plus a
+`recovery-manifest.json` recording when it ran, the selected reason, the Admin
+revision, each file's SHA-256 and size, and the exact workflow-state fingerprint
+the recovery was previewed against. Backups are kept until you remove them; the
+Admin Console never deletes them by itself, and no credential material is copied
+into the manifest.
+
+### Switching between Guided Setup and Guided Upgrade
+
+You do not need to find a discard action first. Choosing the other guided
+workflow shows a preview of exactly what will be stopped and what stays
+untouched, asks once, and then performs the switch as one backend operation.
+
+Simply returning to the task selection does **not** discard your work: your
+Guided Setup draft is still there when you come back. Only an explicit switch,
+"Start over", or a workflow reset ends it.
+
+Two cases are deliberately not switched automatically:
+
+- an operation is still running — resume or wait for it;
+- the previous Setup left files it cannot prove it owns — this is an ownership
+  question an operator decides, so Workflow recovery is offered instead.
+
 ## Safety
 
 Maintenance is conservative by default:

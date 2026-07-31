@@ -1813,6 +1813,66 @@
           </div>
         </div>
       </section>
+
+      <section class="control-pipeline-stage maintenance-card" id="maintenance-workflow-recovery" aria-label="Workflow recovery" data-open="false">
+        <div class="control-stage-head maintenance-card-head">
+          <button type="button" class="maintenance-card-summary" data-maintenance-toggle="maintenance-workflow-recovery" aria-expanded="false" aria-controls="maintenance-workflow-recovery-body">
+            <span class="control-stage-title">Workflow recovery</span>
+            <span class="maintenance-summary" id="maintenance-workflow-recovery-summary">Not loaded yet.</span>
+            <span class="maintenance-card-status" aria-hidden="true"></span>
+            <span class="maintenance-caret" aria-hidden="true">▸</span>
+          </button>
+        </div>
+        <div class="maintenance-card-body setup-block" id="maintenance-workflow-recovery-body" hidden>
+          <p class="maintenance-note">
+            Resolve a Guided Setup or Guided Upgrade that can no longer be
+            finished or switched away from. The installed EMS, live
+            configuration, runtime data, containers, volumes and backups are
+            never changed here.
+          </p>
+          <div class="maintenance-facts">
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Current workflow</span>
+              <span class="maintenance-fact-value" id="maintenance-workflow-recovery-owner">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">State</span>
+              <span class="maintenance-fact-value" id="maintenance-workflow-recovery-state">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Reference</span>
+              <span class="maintenance-fact-value muted" id="maintenance-workflow-recovery-reference">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Last change</span>
+              <span class="maintenance-fact-value muted" id="maintenance-workflow-recovery-age">…</span>
+            </div>
+          </div>
+          <p class="maintenance-note" id="maintenance-workflow-recovery-message" role="status" aria-live="polite"></p>
+          <div class="mconfig-actions">
+            <button type="button" id="maintenance-workflow-recovery-inspect" class="secondary-button compact">Inspect state</button>
+            <button type="button" id="maintenance-workflow-recovery-safe" class="primary-button compact" hidden>Reset guided workflow</button>
+            <button type="button" id="maintenance-workflow-recovery-advanced" class="secondary-button compact" hidden>Release stale Admin workflow state</button>
+          </div>
+          <details class="advanced-details" id="maintenance-workflow-recovery-details" hidden>
+            <summary>Show technical details</summary>
+            <div class="maintenance-facts">
+              <div class="maintenance-fact">
+                <span class="maintenance-fact-label">Affected Admin state</span>
+                <span class="maintenance-fact-value muted" id="maintenance-workflow-recovery-files">none</span>
+              </div>
+              <div class="maintenance-fact">
+                <span class="maintenance-fact-label">Always preserved</span>
+                <span class="maintenance-fact-value muted" id="maintenance-workflow-recovery-preserved">…</span>
+              </div>
+              <div class="maintenance-fact">
+                <span class="maintenance-fact-label">State fingerprint</span>
+                <span class="maintenance-fact-value muted" id="maintenance-workflow-recovery-fingerprint">…</span>
+              </div>
+            </div>
+          </details>
+        </div>
+      </section>
       </div>
 
       <div id="maintenance-upgrade-panel" hidden>

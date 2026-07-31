@@ -3753,27 +3753,6 @@ async function openCurrentSetupWorkflow() {
   renderConfigPreview();
 }
 
-// Discard the active Setup through its backend owner. Returns the abandon
-// response; local identity is cleared only after the backend confirmed.
-async function discardActiveSetup() {
-  const current = await fetchOwningSetupWorkflowId();
-  const res = await fetch("/api/setup/abandon", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(current ? { setup_workflow_id: current } : {}),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (isSetupOperationInProgress(data)) {
-    // Another Setup operation still owns the workflow: nothing was discarded,
-    // so the local identity and draft must stay exactly as they are.
-    return { ok: false, status: res.status, data };
-  }
-  if (res.ok && data.ok === true) {
-    setSetupWorkflowId(null);
-  }
-  return { ok: res.ok && data.ok === true, status: res.status, data };
-}
-
 let activeConfigTemplate = null;
 let activeConfigTemplateTag = null;
 let latestConfigPreview = null;
@@ -9772,10 +9751,9 @@ function renderMaintenanceError() {
   ]);
 }
 
-function toggleMaintenanceCard(id) {
+function setMaintenanceCardOpen(id, open) {
   const section = document.getElementById(id);
   if (!section) return;
-  const open = section.getAttribute("data-open") !== "true";
   section.setAttribute("data-open", open ? "true" : "false");
   const body = document.getElementById(id + "-body");
   if (body) body.hidden = !open;
@@ -9783,6 +9761,12 @@ function toggleMaintenanceCard(id) {
   if (button) button.setAttribute("aria-expanded", open ? "true" : "false");
   const caret = section.querySelector(".maintenance-caret");
   if (caret) caret.textContent = open ? "▾" : "▸";
+}
+
+function toggleMaintenanceCard(id) {
+  const section = document.getElementById(id);
+  if (!section) return;
+  setMaintenanceCardOpen(id, section.getAttribute("data-open") !== "true");
 }
 
 document.addEventListener("click", (event) => {
@@ -9820,6 +9804,10 @@ async function loadMaintenanceOverview(options = {}) {
   }
   await loadZendureMqttRuntimeStatus();
   await loadMqttMigrationReview();
+  // Read the lifecycle verdict with the rest of Maintenance, so a blocked
+  // workflow is visible in the collapsed summary instead of only after the
+  // operator guesses that this card is the one to open.
+  await loadWorkflowRecovery({ quiet: true });
 }
 
 if (maintenanceEls.refresh) {
@@ -11412,40 +11400,34 @@ function upgradeValidationAccepted(ok, data) {
 // it is the Setup owner's job: an explicit Discard setup confirmation, the
 // backend abandon operation (which removes the Setup transition together with
 // its artifacts), and only then may validation start.
+// One backend switch, previewed and confirmed: it terminates the Setup through
+// the Setup owner and unblocks the upgrade, or refuses without changing state.
 async function resolveSetupConflictForUpgrade() {
-  if (!window.confirm(DISCARD_SETUP_CONFIRM)) {
+  const switched = await requestWorkflowSwitch("guided_upgrade");
+  if (switched.ok) {
+    clearWorkflowTaskProjection();
+    loadSystemAlignmentStatus();
+    return { ok: true };
+  }
+  if (switched.cancelled) {
     return {
       ok: false,
       message: "Discard the unfinished setup before validating an upgrade.",
     };
   }
-  const discarded = await discardActiveSetup();
-  if (discarded.ok) {
-    showSetupCleanupIncomplete(null);
-    loadSystemAlignmentStatus();
-    return { ok: true };
-  }
-  if (isSetupOperationInProgress(discarded.data)) {
-    return { ok: false, message: setupOperationInProgressMessage(discarded.data) };
-  }
-  const cleanupState = setupCleanupStateFor(discarded.data);
+  const cleanupState = setupCleanupStateFor(switched.data);
   if (cleanupState !== null) {
-    showSetupCleanupIncomplete(discarded.data);
+    showSetupCleanupIncomplete(switched.data);
+  }
+  if (switched.recoverable) {
     return {
       ok: false,
       message:
-        cleanupState === "review_required"
-          ? SETUP_CLEANUP_REVIEW_MESSAGE
-          : "Setup has stopped, but some temporary setup files could not be " +
-            "removed. Retry cleanup, then verify the build again.",
+        switched.message +
+        " Use Maintenance → Workflow recovery to resolve it.",
     };
   }
-  return {
-    ok: false,
-    message:
-      (discarded.data && (discarded.data.message || discarded.data.error)) ||
-      "The unfinished setup could not be discarded.",
-  };
+  return { ok: false, message: switched.message };
 }
 
 // The explicit verification: download or reuse the Admin/EMS images and verify
@@ -16421,6 +16403,15 @@ function setupIntentHeaders(initial) {
 
 // Open a landing path (Guided setup / Maintenance) directly from its card. The
 // busy guard prevents a double-click from firing two start-path requests.
+// Which task choices the lifecycle arbiter has to be consulted for before the
+// normal start path runs: only the ones that would otherwise walk into another
+// workflow's durable state and fail later, with no supported way back.
+const LIFECYCLE_SWITCH_OWNERS = new Set([
+  "guided_upgrade",
+  "align_existing_install",
+  "unknown",
+]);
+
 async function startPath(choice) {
   if (startPathBusy || !choice) return;
   setupIntentId = null;
@@ -16428,6 +16419,21 @@ async function startPath(choice) {
   setStartError("");
   startPathBusy = true;
   try {
+    if (choice === "setup_new") {
+      // Another guided workflow may own the console. Switching is one backend
+      // operation that cancels it and returns the new Setup identity, so the
+      // user never has to find a separate discard action first.
+      const lifecycle = await fetchWorkflowLifecycle();
+      if (lifecycle && LIFECYCLE_SWITCH_OWNERS.has(lifecycle.owner)) {
+        const switched = await startGuidedSetupThroughLifecycle();
+        if (!switched.ok) {
+          if (!switched.cancelled) setStartError(switched.message);
+          return;
+        }
+        enterSetup();
+        return;
+      }
+    }
     let { result } = await postStartPath(choice, false);
     if (result.requires_confirmation) {
       const proceed = window.confirm(
@@ -16474,6 +16480,406 @@ async function startPath(choice) {
 document.querySelectorAll("[data-start-path]").forEach((card) => {
   card.addEventListener("click", () => startPath(card.dataset.startPath));
 });
+
+// --- Unified guided workflow lifecycle -------------------------------------
+// The backend arbiter decides who owns the console and whether it may change.
+// This code renders that verdict and asks for confirmation; it never decides
+// ownership, never assumes a switch succeeded, and never names a server path.
+
+const WORKFLOW_LIFECYCLE_BASE = "/api/admin/workflow-lifecycle";
+
+const WORKFLOW_OWNER_LABELS = {
+  guided_setup: "Guided Setup",
+  guided_upgrade: "Guided Upgrade",
+  align_existing_install: "System alignment",
+  none: "None",
+  unknown: "Unknown",
+};
+
+const WORKFLOW_STATE_LABELS = {
+  idle: "Idle",
+  active: "In progress",
+  operation_running: "Operation running",
+  cleanup_pending: "Cleanup unfinished",
+  review_required: "Ownership review required",
+  malformed: "Unreadable state",
+};
+
+// Codes the console must answer with Resume or Workflow recovery — never with
+// a force action, because the backend refused for a reason it can still prove.
+const WORKFLOW_BLOCKED_CODES = new Set([
+  "workflow_operation_in_progress",
+  "setup_operation_in_progress",
+  "workflow_switch_blocked",
+  "workflow_owner_unknown",
+]);
+
+const WORKFLOW_RECOVERABLE_CODES = new Set([
+  "workflow_recovery_required",
+  "workflow_state_malformed",
+  "setup_cleanup_required",
+]);
+
+function workflowOwnerLabel(owner) {
+  return WORKFLOW_OWNER_LABELS[owner] || "Unknown";
+}
+
+function workflowStateLabel(state) {
+  return WORKFLOW_STATE_LABELS[state] || "Unknown";
+}
+
+// Identifiers are opaque and long; the console shows enough to match a support
+// bundle without turning the card into a wall of tokens.
+function shortWorkflowReference(value) {
+  const text = typeof value === "string" ? value : "";
+  if (!text) return "—";
+  return text.length <= 12 ? text : text.slice(0, 12) + "…";
+}
+
+async function postWorkflowLifecycle(path, body) {
+  const res = await fetch(WORKFLOW_LIFECYCLE_BASE + path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+  const data = await res.json().catch(() => ({}));
+  return { ok: res.ok, status: res.status, data };
+}
+
+async function fetchWorkflowLifecycle() {
+  try {
+    const res = await fetch(WORKFLOW_LIFECYCLE_BASE);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data && data.ok === true ? data : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+function workflowSwitchConfirmText(plan) {
+  const reset = Array.isArray(plan.will_reset) ? plan.will_reset : [];
+  const preserve = Array.isArray(plan.will_preserve) ? plan.will_preserve : [];
+  return (
+    "Switch to " +
+    workflowOwnerLabel(plan.target_owner || plan.target) +
+    "?\n\n" +
+    "The following Admin state is stopped and removed:\n" +
+    reset.map((entry) => "• " + entry).join("\n") +
+    "\n\nThe installed system is not changed:\n" +
+    preserve.map((entry) => "• " + entry).join("\n")
+  );
+}
+
+function workflowSwitchRefusal(data) {
+  const code = (data && data.error) || "";
+  return {
+    ok: false,
+    data,
+    code,
+    blocked: WORKFLOW_BLOCKED_CODES.has(code),
+    recoverable:
+      WORKFLOW_RECOVERABLE_CODES.has(code) ||
+      Boolean(data && data.lifecycle && data.lifecycle.recoverable),
+    message:
+      (data && (data.message || data.error)) ||
+      "The guided workflow could not be switched.",
+  };
+}
+
+// Preview, confirm, execute — in that order, against one exact state. A stale
+// fingerprint re-previews once so the operator confirms what is true now.
+async function requestWorkflowSwitch(target, { attempt = 0 } = {}) {
+  const preview = await postWorkflowLifecycle("/switch/preview", { target });
+  if (!preview.ok || preview.data.ok !== true) {
+    return workflowSwitchRefusal(preview.data);
+  }
+  const plan = preview.data;
+  if (plan.blocked) {
+    return {
+      ok: false,
+      blocked: true,
+      plan,
+      recoverable: Boolean(plan.recoverable),
+      resumeAvailable: Boolean(plan.resume_available),
+      message:
+        "The current workflow cannot be switched away from right now. " +
+        (plan.resume_available
+          ? "Resume it, or use Maintenance → Workflow recovery."
+          : "Use Maintenance → Workflow recovery."),
+    };
+  }
+  if (plan.confirmation_required && !window.confirm(workflowSwitchConfirmText(plan))) {
+    return { ok: false, cancelled: true, plan, message: "Switch cancelled." };
+  }
+  const executed = await postWorkflowLifecycle("/switch", {
+    target,
+    confirm: true,
+    fingerprint: plan.fingerprint,
+  });
+  if (executed.ok && executed.data.ok === true) {
+    return { ok: true, result: executed.data };
+  }
+  if (executed.data && executed.data.error === "workflow_lifecycle_changed" && attempt < 1) {
+    return requestWorkflowSwitch(target, { attempt: attempt + 1 });
+  }
+  return workflowSwitchRefusal(executed.data);
+}
+
+// Only the browser's own projections are dropped, and only after the backend
+// reported the switch. Clearing them is never proof that anything was reset.
+function clearWorkflowTaskProjection() {
+  guidedSetupGeneration += 1;
+  clearGuidedSetupTimers();
+  setupIntentId = null;
+  setSetupWorkflowId(null);
+  showSetupCleanupIncomplete(null);
+}
+
+// The Guided Setup entry point when another workflow owns the console: the
+// lifecycle switch cancels it and returns the new workflow and intent, so the
+// normal start path is not needed (and must not mint a second identity).
+async function startGuidedSetupThroughLifecycle() {
+  const outcome = await requestWorkflowSwitch("guided_setup");
+  if (!outcome.ok) return outcome;
+  const result = outcome.result || {};
+  if (!result.setup_workflow_id || !result.setup_intent_id) {
+    return {
+      ok: false,
+      message: "Fresh Setup confirmation was not recorded. Try again.",
+    };
+  }
+  clearWorkflowTaskProjection();
+  setupIntentId = result.setup_intent_id;
+  setSetupWorkflowId(result.setup_workflow_id);
+  return { ok: true, result };
+}
+
+// --- Maintenance → Workflow recovery ---------------------------------------
+
+const workflowRecoveryEls = {
+  card: document.getElementById("maintenance-workflow-recovery"),
+  summary: document.getElementById("maintenance-workflow-recovery-summary"),
+  owner: document.getElementById("maintenance-workflow-recovery-owner"),
+  state: document.getElementById("maintenance-workflow-recovery-state"),
+  reference: document.getElementById("maintenance-workflow-recovery-reference"),
+  age: document.getElementById("maintenance-workflow-recovery-age"),
+  message: document.getElementById("maintenance-workflow-recovery-message"),
+  inspect: document.getElementById("maintenance-workflow-recovery-inspect"),
+  safe: document.getElementById("maintenance-workflow-recovery-safe"),
+  advanced: document.getElementById("maintenance-workflow-recovery-advanced"),
+  details: document.getElementById("maintenance-workflow-recovery-details"),
+  files: document.getElementById("maintenance-workflow-recovery-files"),
+  preserved: document.getElementById("maintenance-workflow-recovery-preserved"),
+  fingerprint: document.getElementById("maintenance-workflow-recovery-fingerprint"),
+};
+
+let workflowRecoveryPlan = null;
+let workflowRecoveryBusy = false;
+
+const WORKFLOW_ADVANCED_CONFIRM =
+  "Release stale Admin workflow state?\n\n" +
+  "The unreadable Admin workflow metadata is backed up with its hashes and " +
+  "then removed, so Guided Setup and Guided Upgrade become available again.\n\n" +
+  "The installed EMS, live configuration, runtime data, deployment marker, " +
+  "containers, volumes and backups are not touched.";
+
+const WORKFLOW_ADVANCED_SECOND_CONFIRM =
+  "This is the last confirmation.\n\n" +
+  "The affected Admin workflow metadata will be quarantined into a timestamped " +
+  "backup under the Admin state directory. Continue?";
+
+function setWorkflowRecoveryMessage(text, tone) {
+  if (!workflowRecoveryEls.message) return;
+  workflowRecoveryEls.message.textContent = text || "";
+  workflowRecoveryEls.message.hidden = !text;
+  workflowRecoveryEls.message.classList.toggle("is-error", tone === "error");
+}
+
+function workflowRecoveryAge(lifecycle) {
+  const setup = (lifecycle && lifecycle.setup) || null;
+  const transition = (lifecycle && lifecycle.transition) || null;
+  const stamp =
+    (transition && transition.updated_at) || (setup && setup.updated_at) || "";
+  if (!stamp) return "—";
+  const parsed = Date.parse(stamp);
+  if (Number.isNaN(parsed)) return stamp;
+  const minutes = Math.max(0, Math.round((Date.now() - parsed) / 60000));
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return minutes + " min ago";
+  const hours = Math.round(minutes / 60);
+  return hours < 48 ? hours + " h ago" : Math.round(hours / 24) + " d ago";
+}
+
+function workflowRecoveryReference(lifecycle) {
+  const setup = (lifecycle && lifecycle.setup) || null;
+  const transition = (lifecycle && lifecycle.transition) || null;
+  if (transition && transition.operation_id) {
+    return "operation " + shortWorkflowReference(transition.operation_id);
+  }
+  if (setup && setup.workflow_id) {
+    return "workflow " + shortWorkflowReference(setup.workflow_id);
+  }
+  return "—";
+}
+
+function workflowRecoverySummaryText(plan) {
+  const lifecycle = (plan && plan.lifecycle) || {};
+  if (plan && plan.operation_running) {
+    return "An Admin workflow operation is running. Recovery stays blocked.";
+  }
+  if (plan && plan.blocking) {
+    return (
+      workflowOwnerLabel(lifecycle.owner) +
+      " is blocked: " +
+      workflowStateLabel(lifecycle.state).toLowerCase() +
+      "."
+    );
+  }
+  if (plan && (plan.safe.available || plan.advanced.available)) {
+    return "A guided workflow can be reset from here.";
+  }
+  return "No guided workflow needs recovery.";
+}
+
+function renderWorkflowRecovery(plan) {
+  workflowRecoveryPlan = plan;
+  const lifecycle = (plan && plan.lifecycle) || {};
+  if (workflowRecoveryEls.summary) {
+    workflowRecoveryEls.summary.textContent = workflowRecoverySummaryText(plan);
+  }
+  if (workflowRecoveryEls.owner) {
+    workflowRecoveryEls.owner.textContent = workflowOwnerLabel(lifecycle.owner);
+  }
+  if (workflowRecoveryEls.state) {
+    workflowRecoveryEls.state.textContent = workflowStateLabel(lifecycle.state);
+  }
+  if (workflowRecoveryEls.reference) {
+    workflowRecoveryEls.reference.textContent = workflowRecoveryReference(lifecycle);
+  }
+  if (workflowRecoveryEls.age) {
+    workflowRecoveryEls.age.textContent = workflowRecoveryAge(lifecycle);
+  }
+  const safeAvailable = Boolean(plan && plan.safe && plan.safe.available);
+  const advancedAvailable = Boolean(plan && plan.advanced && plan.advanced.available);
+  if (workflowRecoveryEls.safe) workflowRecoveryEls.safe.hidden = !safeAvailable;
+  if (workflowRecoveryEls.advanced) {
+    workflowRecoveryEls.advanced.hidden = !advancedAvailable;
+  }
+  if (workflowRecoveryEls.details) {
+    workflowRecoveryEls.details.hidden = !(safeAvailable || advancedAvailable);
+  }
+  if (workflowRecoveryEls.files) {
+    const files = (plan && plan.advanced && plan.advanced.files) || [];
+    workflowRecoveryEls.files.textContent = files.length ? files.join(", ") : "none";
+  }
+  if (workflowRecoveryEls.preserved) {
+    workflowRecoveryEls.preserved.textContent = (
+      (plan && plan.will_preserve) || []
+    ).join(", ");
+  }
+  if (workflowRecoveryEls.fingerprint) {
+    workflowRecoveryEls.fingerprint.textContent = shortWorkflowReference(
+      plan && plan.fingerprint
+    );
+  }
+  if (plan && plan.blocking) setMaintenanceCardOpen("maintenance-workflow-recovery", true);
+}
+
+async function loadWorkflowRecovery(options = {}) {
+  const { open = false, quiet = false } = options;
+  const preview = await postWorkflowLifecycle("/recovery/preview", {});
+  if (!preview.ok || preview.data.ok !== true) {
+    if (!quiet) {
+      setWorkflowRecoveryMessage(
+        (preview.data && preview.data.message) ||
+          "The Admin workflow state could not be read.",
+        "error"
+      );
+    }
+    return null;
+  }
+  renderWorkflowRecovery(preview.data);
+  if (open) setMaintenanceCardOpen("maintenance-workflow-recovery", true);
+  return preview.data;
+}
+
+// The reason is selected by the state the operator acted on, never typed: a
+// free-text field would be one more untrusted value on a recovery path.
+function workflowRecoveryReason(plan) {
+  const lifecycle = (plan && plan.lifecycle) || {};
+  return (
+    "maintenance release: " +
+    (lifecycle.state || "unknown") +
+    "/" +
+    (lifecycle.blocking_reason || "none")
+  );
+}
+
+async function runWorkflowRecovery(mode) {
+  if (workflowRecoveryBusy) return;
+  const plan = await loadWorkflowRecovery();
+  if (!plan) return;
+  if (mode === "safe" && !plan.safe.available) return;
+  if (mode === "release_stale_state" && !plan.advanced.available) return;
+  if (mode === "release_stale_state") {
+    if (!window.confirm(WORKFLOW_ADVANCED_CONFIRM)) return;
+    if (!window.confirm(WORKFLOW_ADVANCED_SECOND_CONFIRM)) return;
+  } else if (
+    !window.confirm(
+      "Reset the current guided workflow?\n\n" +
+        "It is stopped through its own owner and its temporary files are " +
+        "cleared. The installed system is not changed."
+    )
+  ) {
+    return;
+  }
+  workflowRecoveryBusy = true;
+  try {
+    const executed = await postWorkflowLifecycle("/recovery", {
+      mode,
+      confirm: true,
+      fingerprint: plan.fingerprint,
+      reason: workflowRecoveryReason(plan),
+    });
+    if (!executed.ok || executed.data.ok !== true) {
+      setWorkflowRecoveryMessage(
+        (executed.data && (executed.data.message || executed.data.error)) ||
+          "The recovery did not run.",
+        "error"
+      );
+      await loadWorkflowRecovery({ quiet: true });
+      return;
+    }
+    clearWorkflowTaskProjection();
+    setWorkflowRecoveryMessage(
+      mode === "release_stale_state"
+        ? "Stale Admin workflow state was backed up and released."
+        : "The guided workflow was reset."
+    );
+    await loadWorkflowRecovery({ quiet: true });
+    loadSystemAlignmentStatus();
+  } finally {
+    workflowRecoveryBusy = false;
+  }
+}
+
+if (workflowRecoveryEls.inspect) {
+  workflowRecoveryEls.inspect.addEventListener("click", () => {
+    setWorkflowRecoveryMessage("");
+    loadWorkflowRecovery({ open: true });
+  });
+}
+if (workflowRecoveryEls.safe) {
+  workflowRecoveryEls.safe.addEventListener("click", () =>
+    runWorkflowRecovery("safe")
+  );
+}
+if (workflowRecoveryEls.advanced) {
+  workflowRecoveryEls.advanced.addEventListener("click", () =>
+    runWorkflowRecovery("release_stale_state")
+  );
+}
 
 // --- Paired System Build selection / recovery ------------------------------
 // The browser supplies one immutable tag only. Image repositories, digests and
