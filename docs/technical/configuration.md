@@ -581,6 +581,14 @@ python3 emsctl.py device WR1 pv-priority-factor 1.3
 `min_soc` and `max_soc` are static SOC boundaries in percent. Use `0` to leave
 the corresponding value unmanaged.
 
+`enabled` is optional and defaults to `true`. It means the same thing for every
+transport: `"enabled": false` removes the device from the control loop, for a
+local-API device exactly as for a Zendure MQTT control device. A non-boolean
+value (for example the string `"false"`) is never trusted as enabled and also
+removes the device, so a mistyped flag cannot silently keep an inverter under
+EMS control. A config whose only devices are disabled has no control device and
+does not start.
+
 Static device metadata stays in `config.json`, not in runtime-state.
 `pv_priority_factor` is an exception: the config value remains the installation
 default, while runtime-state can override the active weighting.
@@ -1040,7 +1048,11 @@ Notes:
   (`mqtt_source_mismatch`) so device config can never pick a different gate.
 - Disabled broker profiles may exist as long as no enabled device references them.
 - `capabilities.write_output_limit=true` opts a device in to **MQTT output
-  control** (see below). Without it, the device stays telemetry-only.
+  control** (see below). Without it, the device stays telemetry-only. An enabled
+  device whose pinned hardware profile does resolve to a supported write method
+  but stays telemetry-only is reported by `diagnose` as
+  `zendure_mqtt_control_ready_but_telemetry_only`, so an unnoticed downgrade
+  cannot hide as a normal telemetry-only entry.
 - Backward compatible: an old single-broker block (top-level `host`/`port` with
   no `brokers`) maps to an implicit `default` broker, and devices without a
   `mqtt.broker_ref` use it. API-only devices need no migration.

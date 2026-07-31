@@ -135,11 +135,11 @@ def has_enabled_mqtt_control_device(config: Any) -> bool:
 def has_runtime_control_device(config: Any) -> bool:
     """True when startup can build at least one control-loop device.
 
-    Every non-MQTT entry is an HTTP/API control device, matching
+    Every enabled non-MQTT entry is an HTTP/API control device, matching
     :func:`ems.config.http_control_device_configs`. An MQTT entry participates
-    only when it explicitly requests output control and is enabled. Telemetry-
-    only MQTT entries therefore do not make an otherwise empty EMS config
-    bootable.
+    only when it explicitly requests output control. Telemetry-only MQTT entries
+    and disabled entries of either transport therefore do not make an otherwise
+    empty EMS config bootable.
     """
 
     if not isinstance(config, Mapping):
@@ -149,12 +149,10 @@ def has_runtime_control_device(config: Any) -> bool:
         return False
     return any(
         isinstance(item, Mapping)
+        and config_entry_enabled(item)
         and (
             not is_zendure_mqtt_device_config(item)
-            or (
-                is_control_zendure_mqtt_device_config(item)
-                and config_entry_enabled(item)
-            )
+            or is_control_zendure_mqtt_device_config(item)
         )
         for item in devices
     )

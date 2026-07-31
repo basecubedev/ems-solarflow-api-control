@@ -63,6 +63,10 @@ _HELPERS = (
     "mqttProposalBrokerRef",
     "mqttProposalBrokerProfile",
     "mconfigZendureMqttDraftFromProposal",
+    "mconfigIsMqttDevice",
+    "mconfigDeviceIsActive",
+    "mconfigDeviceInactiveByChoice",
+    "mconfigApplyTransportSwitchActivation",
     "mconfigSwitchInverterTransport",
 )
 

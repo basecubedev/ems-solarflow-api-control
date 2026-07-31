@@ -818,6 +818,16 @@ def diagnose_config_plausibility(checks, args, config_data):
         if not isinstance(item, dict):
             diagnose_add(checks, "config", "error", "device_not_object", f"devices.{index} must be an object", index=index)
             continue
+        if not zendure_mqtt_entries.config_entry_enabled(item):
+            device_name = item.get("name") if isinstance(item.get("name"), str) else f"device-{index}"
+            diagnose_add(
+                checks,
+                "config",
+                "info",
+                "device_disabled",
+                f"{device_name} is disabled and does not join the EMS control loop",
+                index=index,
+            )
         if zendure_mqtt_entries.is_zendure_mqtt_device_config(item):
             diagnose_zendure_mqtt_device_config(
                 checks, index, item, broker_sources=broker_sources
@@ -899,6 +909,30 @@ def diagnose_config_plausibility(checks, args, config_data):
     diagnose_deprecated_keys(checks, config_data)
 
 
+def diagnose_control_ready_telemetry_only(item):
+    """True for an enabled MQTT entry that could control but is telemetry-only.
+
+    This is the state a transport switch used to leave behind silently: the
+    pinned hardware profile resolves to a supported write method, yet the entry
+    never joins the control loop. A disabled entry is excluded — its inactivity
+    is the operator's explicit decision, not an unnoticed downgrade.
+    """
+
+    from ems.zendure_mqtt.capability import mqtt_output_control_capability
+
+    if not zendure_mqtt_entries.is_telemetry_only_zendure_mqtt_device_config(item):
+        return False
+    if not zendure_mqtt_entries.config_entry_enabled(item):
+        return False
+    mqtt = item.get("mqtt") if isinstance(item.get("mqtt"), dict) else {}
+    capability = mqtt_output_control_capability(
+        topic_family=zendure_mqtt_entries.zendure_mqtt_topic_family(item),
+        hardware_profile=zendure_mqtt_entries.zendure_mqtt_hardware_profile(item),
+        write_protocol=mqtt.get("write_protocol"),
+    )
+    return bool(capability.supported)
+
+
 def diagnose_zendure_mqtt_device_config(checks, index, item, *, broker_sources=None):
     path = f"devices.{index}"
     name = item.get("name") if isinstance(item.get("name"), str) else f"device-{index}"
@@ -933,6 +967,16 @@ def diagnose_zendure_mqtt_device_config(checks, index, item, *, broker_sources=N
                     "schedules and other systems that write inverter power",
                     index=index,
                 )
+        elif diagnose_control_ready_telemetry_only(item):
+            diagnose_add(
+                checks,
+                "config",
+                "warning",
+                "zendure_mqtt_control_ready_but_telemetry_only",
+                f"{name} supports output control but is configured telemetry-only; "
+                "enable output control in Admin Maintenance to let EMS regulate it",
+                index=index,
+            )
         else:
             diagnose_add(
                 checks,

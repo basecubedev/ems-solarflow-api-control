@@ -189,6 +189,11 @@ python3 -B ems-solarflow-api-control.py --simulate --max-cycles 1
 python3 -B ems-solarflow-api-control.py --replay /path/to/trace.jsonl --once
 ```
 
+A device entry with `"enabled": false` is not part of the control loop and
+receives no writes. This holds for every transport: a disabled local-API device
+is skipped exactly like a disabled Zendure MQTT control device, and a
+non-boolean flag is treated as disabled rather than trusted as enabled.
+
 ## Dashboard/authenticated write controls
 
 The read-only dashboard does not perform control writes. Authenticated dashboard

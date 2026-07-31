@@ -161,6 +161,9 @@ the Admin Console (see **Start** above), open `http://127.0.0.1:8090`, and pick
    control loop as a local API device — without
    hand-editing the config file (see
    [Zendure MQTT output control](../technical/configuration.md#zendure-mqtt-output-control)).
+   Switching a device to another connection keeps its activation state in both
+   directions, the same rule the Admin maintenance flow follows: active stays
+   active, and a device you deactivated stays deactivated.
 
    For the **grid meter**, a Zendure D0 or Smart Meter 3CT found over local HTTP
    is the simplest choice ("Zendure Grid Meter via local HTTP", no MQTT setup).

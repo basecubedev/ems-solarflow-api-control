@@ -5,9 +5,12 @@ import { SetupPage } from "./pages/setup-page";
 import {
   authorizeSetupMutation,
   currentWorkflowId,
+  holdBrowserPreviews,
   post,
+  seedSetupInverter,
   startSetupWorkflow,
   storedWorkflow,
+  waitForConfigApplyReady,
 } from "./helpers/setup-authority";
 
 // A Setup draft may only be applied when the server can prove two things: the
@@ -67,10 +70,11 @@ async function reachResourcesVerified(page: Page) {
 }
 
 test.describe("Stale Setup apply", () => {
-  test.beforeEach(async ({ page }) => {
+  test.beforeEach(async ({ page, seedAdminScenario }) => {
     const login = new LoginPage(page);
     await login.open();
     await login.authenticate();
+    await seedSetupInverter(page, seedAdminScenario);
     const setup = new SetupPage(page);
     await setup.chooseFreshInstall();
     await setup.selectBuild("v0.7.0");
@@ -83,47 +87,56 @@ test.describe("Stale Setup apply", () => {
   }) => {
     // Revision A: the browser creates the live config through its own Apply,
     // so the whole scenario runs on the client that owns the workflow.
-    const firstPreview = page.waitForResponse(
-      (r) => r.url().includes("/api/setup/config-preview") && r.ok(),
-    );
     await page.locator('[data-setup-step="config"]').click();
-    await firstPreview;
-    await page.locator("#config-preview-details > summary").click();
-    const created = page.waitForResponse((r) =>
-      r.url().includes("/api/setup/config/apply"),
-    );
-    await page.locator("#config-apply").click();
-    expect((await created).status()).toBe(200);
+    await waitForConfigApplyReady(page);
+    const [created] = await Promise.all([
+      page.waitForResponse(
+        (r) =>
+          r.url().includes("/api/setup/config/apply") &&
+          r.request().method() === "POST",
+      ),
+      page.locator("#config-apply").click(),
+    ]);
+    expect(created.status()).toBe(200);
 
     // A successful Apply consumes its preview, so the browser reviews again —
     // this is the valid, unspent preview bound to revision A.
-    const reviewed = page.waitForResponse(
-      (r) => r.url().includes("/api/setup/config-preview") && r.ok(),
-    );
     await page.reload();
     await page.locator('[data-setup-step="config"]').click();
-    await reviewed;
-    await expect
-      .poll(async () => (await storedWorkflow(page))?.preview_id)
-      .toBeTruthy();
-    const reviewedPreview = (await storedWorkflow(page))!.preview_id;
+    const { previewId: reviewedPreview } = await waitForConfigApplyReady(page);
 
-    // The live config changes underneath that open draft, without issuing a
-    // new preview — exactly the state the baseline check exists for.
+    // Revision A's preview authority has to survive the backend change below,
+    // so no later render/poll preview may replace it.
+    const releasePreviews = await holdBrowserPreviews(page);
     const revisionA = (await maintenanceConfig(page)).revision;
-    await seedAdminScenario("mqtt_mutate");
-    const revisionB = (await maintenanceConfig(page)).revision;
-    expect(revisionB).not.toBe(revisionA);
+    let revisionB: string;
+    let draftBefore: string | null;
+    let previewBefore: string | null;
+    try {
+      // The live config changes underneath that open draft, without issuing a
+      // new preview — exactly the state the baseline check exists for.
+      await seedAdminScenario("mqtt_mutate");
+      revisionB = (await maintenanceConfig(page)).revision;
+      expect(revisionB).not.toBe(revisionA);
 
-    // The real Apply button, still carrying the now-stale preview.
-    const draftBefore = await storedDraft(page);
-    const previewBefore = await page.locator("#config-preview").textContent();
-    await page.locator("#config-preview-details > summary").click();
-    const refused = page.waitForResponse(
-      (r) => r.url().includes("/api/setup/config/apply") && r.status() === 409,
-    );
-    await page.locator("#config-apply").click();
-    expect((await (await refused).json()).error).toBe("stale_setup_config");
+      // The real Apply button, still carrying the now-stale preview.
+      draftBefore = await storedDraft(page);
+      previewBefore = await page.locator("#config-preview").textContent();
+      expect((await storedWorkflow(page))!.preview_id).toBe(reviewedPreview);
+      await expect(page.locator("#config-apply")).toBeEnabled();
+      const [refused] = await Promise.all([
+        page.waitForResponse(
+          (r) =>
+            r.url().includes("/api/setup/config/apply") &&
+            r.request().method() === "POST" &&
+            r.status() === 409,
+        ),
+        page.locator("#config-apply").click(),
+      ]);
+      expect((await refused.json()).error).toBe("stale_setup_config");
+    } finally {
+      await releasePreviews();
+    }
 
     // The UI explains it and offers both ways forward; the draft is untouched.
     const conflict = page.locator("#setup-config-conflict");
@@ -140,22 +153,23 @@ test.describe("Stale Setup apply", () => {
     expect((await maintenanceConfig(page)).revision).toBe(revisionB);
 
     // Reviewing the current configuration earns a NEW exact preview…
-    const rereviewed = page.waitForResponse(
-      (r) => r.url().includes("/api/setup/config-preview") && r.ok(),
-    );
     await page.locator("#setup-config-conflict-review").click();
-    await rereviewed;
     await expect(conflict).toBeHidden();
     await expect
       .poll(async () => (await storedWorkflow(page))?.preview_id)
       .not.toBe(reviewedPreview);
+    await waitForConfigApplyReady(page);
 
     // …and only then does Apply succeed.
-    const accepted = page.waitForResponse((r) =>
-      r.url().includes("/api/setup/config/apply"),
-    );
-    await page.locator("#config-apply").click();
-    expect((await accepted).status()).toBe(200);
+    const [accepted] = await Promise.all([
+      page.waitForResponse(
+        (r) =>
+          r.url().includes("/api/setup/config/apply") &&
+          r.request().method() === "POST",
+      ),
+      page.locator("#config-apply").click(),
+    ]);
+    expect(accepted.status()).toBe(200);
   });
 
   test("a preview for one draft cannot authorize a different draft", async ({

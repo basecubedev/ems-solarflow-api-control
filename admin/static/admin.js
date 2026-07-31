@@ -4362,7 +4362,14 @@ function switchInverterTransport(serial, targetSource, options) {
   const current = configuredInverterConnection(probe);
   const preservedName = inverterConfigNameForSerial(probe) || nextInverterName();
   const preservedValues = preservedInverterValues(current && current.item);
-  const preservedEnabled = current ? current.item.enabled !== false : true;
+  // Same rule as Maintenance: an active device stays active, a device the
+  // operator turned off stays off, and telemetry-only for lack of a verified
+  // write method is a capability, not a decision to carry over.
+  const preservedEnabled = current
+    ? !mconfigDeviceInactiveByChoice(
+        inverterActivationView(current.item, current.source)
+      )
+    : true;
 
   // Resolve the exact target before mutating anything: a stale or ambiguous
   // reference must leave the draft untouched rather than half-switch it.
@@ -13898,10 +13905,72 @@ function mconfigMqttControlSupported(device, generation, model) {
 
 function mconfigMqttShouldDefaultControl(device, supported, hasWriteTarget) {
   if (!device) return false;
-  if (device.original_name) return false;
+  // A saved entry keeps whatever it was saved as — except right after a
+  // transport switch, which is a fresh connection and therefore a fresh control
+  // decision even though the entry it replaces keeps its original_name.
+  if (device.original_name && device.transport_switched !== true) return false;
   if (device.output_control_user_set === true) return false;
   if (device.output_control === true) return false;
   return supported === true && hasWriteTarget === true;
+}
+
+// One activation state per logical device, expressed per transport: an MQTT
+// device is active only while it also controls output, an API device by being
+// enabled. Adding a device makes it active; only an operator makes it inactive.
+function mconfigDeviceIsActive(device) {
+  if (!device) return false;
+  if (device.enabled === false) return false;
+  if (mconfigIsMqttDevice(device)) return device.output_control === true;
+  return true;
+}
+
+// Inactive *and* able to be active: the operator turned this device off. A
+// device that cannot control output on its transport is telemetry-only by
+// capability, which is no decision to carry into the next transport.
+function mconfigDeviceInactiveByChoice(device) {
+  if (!device) return false;
+  if (mconfigDeviceIsActive(device)) return false;
+  if (!mconfigIsMqttDevice(device)) return true;
+  if (device.enabled === false) return true;
+  return (
+    device.supports_output_control === true ||
+    (device.control_readiness && device.control_readiness.ready === true)
+  );
+}
+
+// Normalize a Guided Setup entry — a Local-API draft item or a selected MQTT
+// proposal — onto the shape the shared activation rule reads, so Setup and
+// Maintenance decide "active" from the same code.
+function inverterActivationView(item, source) {
+  const entry = item || {};
+  if (String(source || "") === "local_api") {
+    return { kind: "local_api", enabled: entry.enabled !== false };
+  }
+  const fragment = entry.config_fragment || {};
+  const capabilities = fragment.capabilities || {};
+  return {
+    kind: "zendure_mqtt",
+    enabled: entry.enabled !== false,
+    output_control: capabilities.write_output_limit === true,
+    supports_output_control:
+      entry.output_control_supported === true ||
+      capabilities.write_output_limit === true,
+  };
+}
+
+function mconfigApplyTransportSwitchActivation(replacement, current) {
+  replacement.transport_switched = true;
+  replacement.enabled = !mconfigDeviceInactiveByChoice(current);
+  replacement.has_enabled_key = true;
+  if (!mconfigIsMqttDevice(replacement)) return replacement;
+  if (replacement.supports_output_control === true) {
+    replacement.output_control = true;
+    if (!replacement.capabilities) {
+      replacement.capabilities = { read_power: true, read_soc: true };
+    }
+    replacement.capabilities.write_output_limit = true;
+  }
+  return replacement;
 }
 
 function mconfigAddZendureMqttDevice() {
@@ -14598,7 +14667,6 @@ function mconfigSwitchInverterTransport(identity, targetSource, context) {
   const current = devices[index];
   const preserved = {
     original_name: current.original_name || null,
-    enabled: current.enabled !== false,
     has_enabled_key: true,
   };
   if (current.name) preserved.name = current.name;
@@ -14630,6 +14698,7 @@ function mconfigSwitchInverterTransport(identity, targetSource, context) {
     cardId = "maintenance-mqtt-device-" + index;
   }
   mconfigApplyCommonDefaults(replacement);
+  mconfigApplyTransportSwitchActivation(replacement, current);
   devices[index] = replacement;
   mconfigState.openHardware.add(cardId);
   renderMaintenanceInverters();

@@ -349,6 +349,14 @@ This path inspects and edits an existing installation.
   checkbox to keep it telemetry-only instead. An existing device's model and
   control setting are preserved on a no-op apply and never silently changed (see
   [Zendure MQTT output control](../technical/configuration.md#zendure-mqtt-output-control)).
+
+  Switching an inverter between the local API and Zendure MQTT keeps its
+  activation state, in both directions: a device that was under EMS control
+  stays under EMS control on the new connection — including output control when
+  the new transport can control it — and a device you deactivated stays
+  deactivated. A device that is telemetry-only because its transport has no
+  verified write method is not treated as a decision: switching it to the local
+  API activates it. Only you make a device inactive.
   Stored passwords (broker or MQTT grid meter) are never displayed; leave the
   password field blank to keep one, or use the clear checkbox to remove it.
 

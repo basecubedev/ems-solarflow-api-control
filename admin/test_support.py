@@ -36,7 +36,7 @@ from admin.admin_update import (
     PendingTransitionStore,
 )
 from admin.development_catalogue import development_catalogue_source
-from admin.models import utc_now_iso
+from admin.models import DiscoveredDevice, utc_now_iso
 from admin.setup_workflow import SETUP_TRANSITION_MODES, SetupWorkflowArtifacts
 from admin.embedded_resources import (
     EmbeddedReleaseResources,
@@ -46,6 +46,7 @@ from admin.embedded_resources import (
 from admin.image_identity import identify_image
 from admin.install_context import detect_install_context
 from admin.known_good import KnownGoodStore
+from admin.mdns import MdnsProvider, build_candidate
 from admin.operation_coordinator import OperationCoordinator
 from admin.releases import ReleaseManager
 from admin.system_alignment import SystemAlignmentService
@@ -577,6 +578,85 @@ def _settle_resource_import_hold(resource_hold):
     return not worker.is_alive()
 
 
+SEEDED_INVERTER_IP = "192.168.90.40"
+SEEDED_INVERTER_SERIAL = "E2ESETUPSN0001"
+
+
+def _build_test_mdns_provider():
+    """A real ``MdnsProvider`` with no multicast and no network verification.
+
+    Browser-test discovery must be a property of the scenario, never of the
+    host network: with a real provider the same spec finds the developer's own
+    hardware locally and nothing at all on a CI runner. The inert browser
+    factory keeps the whole lifecycle (enable/disable/refresh/status) real while
+    the only devices that can ever appear are the seeded ones.
+    """
+
+    seeded = {}
+    provider = MdnsProvider(
+        verifier=lambda ip, port: seeded.get((ip, int(port))),
+        browser_factory=lambda service_type, handler: object(),
+    )
+    return provider, seeded
+
+
+def _seed_local_api_inverter(provider, seeded, *, ip, serial):
+    """Publish one verified Local-API inverter through the real merge path.
+
+    Guided Setup auto-adds a discovered inverter, so this single seeded device
+    is what makes the browser's own draft previewable without it selecting
+    anything — the scenario, not the host network, decides that it exists.
+    """
+
+    seeded[(ip, 80)] = DiscoveredDevice(
+        ip=ip,
+        api_family="zendure_local_http",
+        device_type="zendure_solarflow_800_pro2",
+        role_suggestion="inverter",
+        port=80,
+        display_name="SolarFlow 800 Pro 2",
+        model="SolarFlow 800 Pro 2",
+        serial_number=serial,
+        confidence=0.95,
+        config_ready=True,
+    )
+    pending = provider.handle_candidate(
+        build_candidate(
+            service_name=f"Zendure-800Pro2-{serial}",
+            hostname="zendure-e2e.local.",
+            addresses=[ip],
+            port=80,
+            properties={b"sn": serial.encode(), b"model": b"800Pro2"},
+        ),
+        force_verify=True,
+    )
+    result = getattr(pending, "result", None)
+    if callable(result):
+        result(30)
+
+
+def _reset_test_mdns_provider(provider, seeded):
+    """Return the inert provider to the empty state it is constructed in.
+
+    Disabling first is what makes the rest safe: it shuts the verify executor
+    down and drops it, so nothing can merge a device into the store afterwards.
+    Nothing else can be in flight either — the inert browser factory never calls
+    the handler, and both paths that do submit a candidate (the seeder and
+    ``refresh``) block on their own futures before returning.
+
+    The device store is cleared through its public API. The two candidate maps
+    have none, so they are cleared here under the provider's own lock — the same
+    one ``handle_candidate`` and ``_verify_and_merge`` take to touch them.
+    """
+
+    provider.disable()
+    seeded.clear()
+    provider._store.clear()
+    with provider._lock:
+        provider._candidate_cache.clear()
+        provider._known_candidates.clear()
+
+
 def build_test_runtime(*, data_dir):
     """Compose the deterministic Admin runtime for ``EMS_ADMIN_TEST_MODE``."""
 
@@ -605,10 +685,12 @@ def build_test_runtime(*, data_dir):
     )
     commit_hold = _install_setup_commit_hold(system_alignment)
     resource_hold = _install_resource_import_hold(system_alignment)
+    mdns_provider, seeded_mdns_devices = _build_test_mdns_provider()
     runtime = create_admin_runtime(
         release_manager=release_manager,
         system_alignment=system_alignment,
         operation_coordinator=operation_coordinator,
+        mdns_provider=mdns_provider,
     )
     original_instance_id = runtime.admin_instance_id
     instance_id_state["value"] = original_instance_id
@@ -1219,6 +1301,13 @@ def build_test_runtime(*, data_dir):
             write_install_config(serialless_cloud_route_enrichment_config())
             clear_local_mqtt_candidates()
             seed_serialized_same_route_candidate()
+        elif scenario == "setup_local_api_inverter":
+            _seed_local_api_inverter(
+                mdns_provider,
+                seeded_mdns_devices,
+                ip=SEEDED_INVERTER_IP,
+                serial=SEEDED_INVERTER_SERIAL,
+            )
         elif scenario == "mqtt_mutate":
             target = detect_install_context().config_path
             config = json.loads(target.read_text(encoding="utf-8"))
@@ -1435,6 +1524,7 @@ def build_test_runtime(*, data_dir):
             pass
         runtime.zendure_cloud_discovery._trusted_candidates = []
         runtime.zendure_cloud_discovery._candidates = []
+        _reset_test_mdns_provider(mdns_provider, seeded_mdns_devices)
         clear_local_mqtt_candidates()
         _restore_initial_bundle(
             Path(data_dir) / "embedded-bundle", initial_running_tag

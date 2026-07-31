@@ -104,6 +104,10 @@ _SWITCH_HELPERS = _IDENTITY_HELPERS + (
     "connectionBrokerScope",
     "configuredInverterConnection",
     "serializeMqttProposalSelection",
+    "mconfigIsMqttDevice",
+    "mconfigDeviceIsActive",
+    "mconfigDeviceInactiveByChoice",
+    "inverterActivationView",
     "switchInverterTransport",
 )
 
@@ -462,6 +466,10 @@ _MSWITCH_HELPERS = _IDENTITY_HELPERS + (
     "mqttProposalBrokerRef",
     "mqttProposalBrokerProfile",
     "mconfigZendureMqttDraftFromProposal",
+    "mconfigIsMqttDevice",
+    "mconfigDeviceIsActive",
+    "mconfigDeviceInactiveByChoice",
+    "mconfigApplyTransportSwitchActivation",
     "mconfigSwitchInverterTransport",
 )
 

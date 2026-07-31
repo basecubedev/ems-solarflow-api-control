@@ -2158,3 +2158,81 @@ def test_diagnose_zendure_mqtt_runtime_flags_unknown_broker_ref():
     )
     levels = _levels_by_code(checks)
     assert levels.get("zendure_mqtt_broker_ref_unknown") == "error"
+
+
+def _control_ready_telemetry_only_device(**overrides):
+    device = {
+        "type": "zendure_mqtt",
+        "name": "INV_2",
+        "hardware_profile": "solarflow_800_pro_2",
+        "mqtt": {
+            "topic_family": "legacy_zendure_json_alt",
+            "device_id": "DEV1",
+            "product_key": "PK1",
+        },
+        "capabilities": {"read_power": True, "write_output_limit": False},
+    }
+    device.update(overrides)
+    return device
+
+
+def test_diagnose_flags_a_control_ready_device_saved_telemetry_only():
+    checks = []
+    diagnostics.diagnose_zendure_mqtt_device_config(
+        checks, 0, _control_ready_telemetry_only_device()
+    )
+    levels = _levels_by_code(checks)
+    assert levels.get("zendure_mqtt_control_ready_but_telemetry_only") == "warning"
+    assert "zendure_mqtt_telemetry_only" not in levels
+
+
+def test_diagnose_keeps_an_unwritable_telemetry_only_device_ok():
+    checks = []
+    diagnostics.diagnose_zendure_mqtt_device_config(
+        checks,
+        0,
+        {
+            "type": "zendure_mqtt",
+            "name": "Zendure Battery",
+            "mqtt": {"topic_family": "zensdk_ha_scalar", "device_id": "DEV1"},
+        },
+    )
+    levels = _levels_by_code(checks)
+    assert levels.get("zendure_mqtt_telemetry_only") == "ok"
+    assert "zendure_mqtt_control_ready_but_telemetry_only" not in levels
+
+
+def test_diagnose_does_not_flag_a_disabled_control_ready_device():
+    checks = []
+    diagnostics.diagnose_zendure_mqtt_device_config(
+        checks, 0, _control_ready_telemetry_only_device(enabled=False)
+    )
+    levels = _levels_by_code(checks)
+    assert "zendure_mqtt_control_ready_but_telemetry_only" not in levels
+
+
+def test_emsctl_diagnose_reports_a_disabled_api_device(tmp_path):
+    config = _base_diagnose_config(tmp_path)
+    config["devices"] = [
+        {"name": "WR1", "max_power": 800, "sn": "SER1"},
+        {"name": "WR2", "max_power": 800, "sn": "SER2", "enabled": False},
+    ]
+    _, codes = _diagnose_codes(tmp_path, config)
+    assert "device_disabled" in codes
+
+
+def test_emsctl_diagnose_reports_a_disabled_mqtt_device(tmp_path):
+    config = _base_diagnose_config(tmp_path)
+    config["devices"] = [
+        {"name": "WR1", "max_power": 800, "sn": "SER1"},
+        _mqtt_device("MQTT1", "DEV1", enabled=False),
+    ]
+    _, codes = _diagnose_codes(tmp_path, config)
+    assert "device_disabled" in codes
+
+
+def test_emsctl_diagnose_stays_silent_for_enabled_devices(tmp_path):
+    config = _base_diagnose_config(tmp_path)
+    config["devices"] = [{"name": "WR1", "max_power": 800, "sn": "SER1"}]
+    _, codes = _diagnose_codes(tmp_path, config)
+    assert "device_disabled" not in codes

@@ -789,6 +789,27 @@ def zendure_mqtt_device_draft(device, *, broker_sources=None):
     return draft
 
 
+def _has_addressable_write_target(device):
+    """True when control writes for ``device`` could actually be addressed.
+
+    Same rule the control validation applies: a route device id plus either a
+    product key for the canonical profile topic or an explicit write topic.
+    """
+
+    from ems.zendure_mqtt.config_entries import (
+        zendure_mqtt_product_key,
+        zendure_mqtt_route_device_id,
+        zendure_mqtt_write_topic,
+    )
+
+    if zendure_mqtt_route_device_id(device) is None:
+        return False
+    return (
+        zendure_mqtt_product_key(device) is not None
+        or zendure_mqtt_write_topic(device) is not None
+    )
+
+
 def _apply_output_control(device, item, *, new_device, model_changed=False):
     """Resolve a draft entry's output-control choice onto a config device.
 
@@ -810,20 +831,30 @@ def _apply_output_control(device, item, *, new_device, model_changed=False):
         if isinstance(capabilities, dict)
         else False
     )
-    requested = _requested_output_control(item)
-    if requested is None:
-        requested = False if new_device else stored
     mqtt = device.get("mqtt") if isinstance(device.get("mqtt"), dict) else {}
-    # A genuine no-op on an existing device (intent unchanged, model unchanged)
-    # preserves the stored config so validation — not this projection — decides
-    # whether an unchanged control entry is valid.
-    if not new_device and not model_changed and requested == stored:
-        return
     capability = mqtt_output_control_capability(
         topic_family=mqtt.get("topic_family"),
         hardware_profile=zendure_mqtt_hardware_profile(device),
         write_protocol=mqtt.get("write_protocol"),
     )
+    requested = _requested_output_control(item)
+    if requested is None:
+        # A new entry — including one whose transport just changed, which reaches
+        # this projection with the stale block stripped — has no stored decision
+        # to keep. A device that can control does, so an added inverter is never
+        # silently telemetry-only just because the draft stayed quiet. The
+        # implicit default also requires an addressable write target: capability
+        # without an address would write a control entry validation must reject.
+        requested = (
+            capability.supported and _has_addressable_write_target(device)
+            if new_device
+            else stored
+        )
+    # A genuine no-op on an existing device (intent unchanged, model unchanged)
+    # preserves the stored config so validation — not this projection — decides
+    # whether an unchanged control entry is valid.
+    if not new_device and not model_changed and requested == stored:
+        return
     # Preserve an explicit operator request even when its target/capability is
     # incomplete. Validation then returns the actionable error (for example
     # ``write_target_missing``) instead of silently changing the checkbox back

@@ -6,9 +6,12 @@ import {
   authorizeSetupMutation,
   currentWorkflow,
   currentWorkflowId,
+  holdBrowserPreviews,
   post,
+  seedSetupInverter,
   startSetupWorkflow,
   storedWorkflow,
+  waitForConfigApplyReady,
 } from "./helpers/setup-authority";
 
 // Server-owned workflow authority end to end: an old tab cannot mutate the
@@ -34,10 +37,16 @@ async function alignment(page: Page) {
   return (await (await page.request.get("/api/admin/system-alignment/status")).json()) as any;
 }
 
-async function enterSetup(page: Page) {
+async function enterSetup(
+  page: Page,
+  seedAdminScenario?: (scenario: string) => Promise<void>,
+) {
   const login = new LoginPage(page);
   await login.open();
   await login.authenticate();
+  if (seedAdminScenario) {
+    await seedSetupInverter(page, seedAdminScenario);
+  }
   const setup = new SetupPage(page);
   await setup.chooseFreshInstall();
   await setup.selectBuild("v0.7.0");
@@ -90,33 +99,45 @@ test.describe("Setup workflow authority", () => {
 
   test("the browser surfaces an old workflow and offers the recovery actions", async ({
     page,
+    seedAdminScenario,
   }) => {
-    await enterSetup(page);
+    await enterSetup(page, seedAdminScenario);
 
     // The browser previews its own draft, then its workflow is retired by
     // another session while this tab keeps the stale identity.
-    const previewed = page.waitForResponse(
-      (r) => r.url().includes("/api/setup/config-preview") && r.ok(),
-    );
     await page.locator('[data-setup-step="config"]').click();
-    await previewed;
-    await expect.poll(async () => (await storedWorkflow(page))?.workflow_id).toBeTruthy();
-    const stale = (await storedWorkflow(page))!.workflow_id;
+    const { workflowId: stale, previewId: stalePreview } =
+      await waitForConfigApplyReady(page);
 
-    const discarded = await post(page, "/api/setup/abandon", {
-      setup_workflow_id: stale,
-    });
-    expect(discarded.status, JSON.stringify(discarded.body)).toBe(200);
-    const replacement = await startSetupWorkflow(page);
-    expect(replacement).not.toBe(stale);
+    // A background preview would detect the retirement below and disable Apply
+    // before the intended stale click ever reaches the server.
+    const releasePreviews = await holdBrowserPreviews(page);
+    let replacement: string;
+    try {
+      const discarded = await post(page, "/api/setup/abandon", {
+        setup_workflow_id: stale,
+      });
+      expect(discarded.status, JSON.stringify(discarded.body)).toBe(200);
+      replacement = await startSetupWorkflow(page);
+      expect(replacement).not.toBe(stale);
 
-    // The stale tab's Apply is refused and the panel names the situation.
-    await page.locator("#config-preview-details > summary").click();
-    const refused = page.waitForResponse(
-      (r) => r.url().includes("/api/setup/config/apply") && r.status() === 409,
-    );
-    await page.locator("#config-apply").click();
-    expect((await (await refused).json()).error).toBe("setup_workflow_not_active");
+      // The stale tab's Apply is refused and the panel names the situation.
+      const held = (await storedWorkflow(page))!;
+      expect(held.workflow_id).toBe(stale);
+      expect(held.preview_id).toBe(stalePreview);
+      const [refused] = await Promise.all([
+        page.waitForResponse(
+          (r) =>
+            r.url().includes("/api/setup/config/apply") &&
+            r.request().method() === "POST" &&
+            r.status() === 409,
+        ),
+        page.locator("#config-apply").click(),
+      ]);
+      expect((await refused.json()).error).toBe("setup_workflow_not_active");
+    } finally {
+      await releasePreviews();
+    }
 
     const panel = page.locator("#setup-workflow-conflict");
     await expect(panel).toBeVisible();

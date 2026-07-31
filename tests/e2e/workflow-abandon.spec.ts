@@ -113,6 +113,16 @@ test.describe("Workflow abandonment", () => {
     await seedAdminScenario("guided_upgrade_blocking_setup");
     await page.reload();
 
+    // Loading Setup resumes the seeded transition from the page itself, and that
+    // resume verifies resources under the operation's worker claim. Abandonment
+    // is refused while such a worker is live, so the recovery assertions below
+    // must observe a settled worker, never race the browser's own request.
+    await expect
+      .poll(async () => (await alignment(page)).transition?.worker_active ?? null, {
+        message: "the page-driven resume must settle before abandonment",
+      })
+      .toBe(false);
+
     const status = await alignment(page);
     expect(status.transition, JSON.stringify(await diagnostics(page))).not.toBeNull();
     expect(status.transition.mode).toBe("fresh_install");

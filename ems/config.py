@@ -1921,10 +1921,16 @@ def http_control_device_configs(devices=None):
     """Return devices[] entries that build an HTTP-controllable ZendureClient.
 
     Telemetry-only Zendure MQTT entries carry no ip/sn and are not controlled;
-    they are excluded so startup never passes them to ZendureClient.
+    they are excluded so startup never passes them to ZendureClient. A disabled
+    entry is excluded for the same reason it is on the MQTT control path:
+    ``enabled`` means the same thing for every transport, so an operator who
+    disables a device really removes it from the control loop.
     """
 
-    from ems.zendure_mqtt.config_entries import is_zendure_mqtt_device_config
+    from ems.zendure_mqtt.config_entries import (
+        config_entry_enabled,
+        is_zendure_mqtt_device_config,
+    )
 
     if devices is None:
         devices = ZENDURE_CONFIG
@@ -1933,7 +1939,9 @@ def http_control_device_configs(devices=None):
     return [
         item
         for item in devices
-        if isinstance(item, dict) and not is_zendure_mqtt_device_config(item)
+        if isinstance(item, dict)
+        and not is_zendure_mqtt_device_config(item)
+        and config_entry_enabled(item)
     ]
 
 

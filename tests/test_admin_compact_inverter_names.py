@@ -309,6 +309,10 @@ def test_manual_transport_switch_preserves_config_name_both_directions():
             "configuredInverterConnection",
             "preservedInverterValues",
             "serializeMqttProposalSelection",
+            "mconfigIsMqttDevice",
+            "mconfigDeviceIsActive",
+            "mconfigDeviceInactiveByChoice",
+            "inverterActivationView",
             "switchInverterTransport",
         ],
         """

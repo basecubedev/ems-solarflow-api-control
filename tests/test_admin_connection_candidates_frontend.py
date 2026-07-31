@@ -458,6 +458,10 @@ _SWITCH_HELPERS = _IDENTITY_HELPERS + (
     "preservedInverterValues",
     "configuredInverterConnection",
     "serializeMqttProposalSelection",
+    "mconfigIsMqttDevice",
+    "mconfigDeviceIsActive",
+    "mconfigDeviceInactiveByChoice",
+    "inverterActivationView",
     "switchInverterTransport",
 )
 

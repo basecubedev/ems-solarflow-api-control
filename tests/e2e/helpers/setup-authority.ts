@@ -119,3 +119,87 @@ export async function discardSetup(page: Page) {
   const workflow = await currentWorkflowId(page);
   return post(page, "/api/setup/abandon", workflow ? { setup_workflow_id: workflow } : {});
 }
+
+/**
+ * Seed the one discovered inverter a previewable Setup draft needs.
+ *
+ * Guided Setup auto-adds a discovered inverter; without one the browser's own
+ * draft never reaches a ready preview and Apply stays disabled. The test mDNS
+ * provider is inert, so nothing appears unless a scenario seeds it — and the
+ * device list is fetched on load and then only every `MDNS_POLL_INTERVAL_MS`,
+ * so the reload is what puts the seeded device there before the page reads it.
+ */
+export async function seedSetupInverter(
+  page: Page,
+  seedAdminScenario: (scenario: string) => Promise<void>,
+) {
+  await seedAdminScenario("setup_local_api_inverter");
+  await page.reload();
+}
+
+/** Expand the generated-config disclosure that holds Apply; idempotent. */
+export async function openConfigPreviewDetails(page: Page) {
+  const details = page.locator("#config-preview-details");
+  await expect(details).toBeVisible();
+  if (!(await details.evaluate((el) => (el as HTMLDetailsElement).open))) {
+    await page.locator("#config-preview-details > summary").click();
+  }
+  await expect(details).toHaveAttribute("open", "");
+}
+
+/**
+ * Wait until Apply carries real authority, not merely a successful response.
+ *
+ * A 200 config-preview proves nothing about the UI: the frontend drops a
+ * response whose request id or generation was superseded, and a preview that is
+ * not `ready` (no control device yet) issues no preview id at all. Apply is
+ * authoritative only once the accepted preview, its persisted id and the
+ * enabled button agree.
+ *
+ * `#config-preview-ready` is deliberately not the signal: it reports validation
+ * tone, so a benign warning such as a missing grid meter paints "Needs
+ * attention" over a preview that is ready and applicable.
+ */
+export async function waitForConfigApplyReady(
+  page: Page,
+): Promise<{ workflowId: string; previewId: string }> {
+  await expect(page.locator("#config-preview-ready")).not.toHaveText(/Checking/i);
+  await expect
+    .poll(async () => (await storedWorkflow(page))?.preview_id ?? null)
+    .not.toBeNull();
+  await openConfigPreviewDetails(page);
+  await expect(page.locator("#config-apply")).toBeVisible();
+  await expect(page.locator("#config-apply")).toBeEnabled();
+  const stored = (await storedWorkflow(page))!;
+  expect(stored.workflow_id, JSON.stringify(stored)).toBeTruthy();
+  return {
+    workflowId: stored.workflow_id as string,
+    previewId: stored.preview_id as string,
+  };
+}
+
+/**
+ * Hold every later page-originated config-preview until `release()` is called.
+ *
+ * The wizard re-previews on its own render/poll cycle, which would replace the
+ * exact preview a stale-Apply assertion has to keep. `page.request` calls are
+ * unaffected, so the test can still drive the backend directly.
+ */
+export async function holdBrowserPreviews(page: Page) {
+  const held: { abort: () => Promise<void> }[] = [];
+  let releasing = false;
+  await page.route("**/api/setup/config-preview", async (route) => {
+    if (releasing) {
+      await route.continue();
+      return;
+    }
+    held.push(route);
+  });
+  return async function release() {
+    releasing = true;
+    await page.unroute("**/api/setup/config-preview");
+    for (const route of held.splice(0)) {
+      await route.abort().catch(() => {});
+    }
+  };
+}
