@@ -8,13 +8,16 @@ the deployment marker remaining at its install-state-contract location. It never
 touches the live config, the running EMS, or resources shared with Guided
 Upgrade.
 
-Removal is ownership-proving, not path-matching: the workflow directory is
-removed only when its normalized path *is* the requested workflow's own
-directory, and a global artifact only when its validated content names that same
-workflow as owner. Anything else — a foreign workflow, a malformed sidecar, a
-sidecar-less legacy config, a marker from an install that predates workflow
-ownership — is kept and reported as review-required. Cleanup is best-effort per
-owned artifact; ownership never is.
+Ownership is decided in two separate stages. *Claim authority* comes from the
+durable workflow record: only an artifact the record says this workflow created
+is part of its cleanup plan, so a file that merely sits at a known path is
+observed, never adopted. *Deletion proof* then decides whether a claimed
+artifact is safe to remove: the workflow directory only when its normalized path
+*is* that workflow's own directory, a global artifact only when its validated
+content names that same workflow as owner. A claimed artifact whose owner cannot
+be proven — a foreign workflow, a malformed sidecar, a marker from an install
+that predates workflow ownership — is kept and reported as review-required.
+Cleanup is best-effort per owned artifact; ownership never is.
 
 See ``docs/technical/admin-workflow-state.md``.
 """
@@ -23,6 +26,7 @@ import json
 import os
 import shutil
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 from admin.admin_update import SETUP_TRANSITION_MODES
@@ -37,6 +41,7 @@ from admin.guided_setup_workflow import (
     SETUP_WORKFLOW_NOT_ACTIVE,
     SETUP_WORKFLOW_REQUIRED,
     STATUS_ABANDONED,
+    STATUS_ACTIVE,
     WORKFLOW_NOT_ACTIVE_MESSAGE,
     WORKFLOW_REQUIRED_MESSAGE,
 )
@@ -56,6 +61,99 @@ REASON_LEGACY_ARTIFACT_REVIEW = "legacy_artifact_review_required"
 REASON_OWNER_MISMATCH = "setup_artifact_owner_mismatch"
 
 MAX_META_BYTES = 64 * 1024
+
+
+@dataclass(frozen=True)
+class SetupArtifactClaims:
+    """What a workflow record says this workflow itself created.
+
+    Relative paths exactly as the durable record stores them, or ``None`` where
+    the workflow never claimed the artifact. ``generated_preview_id`` is
+    authority metadata, not a filesystem target, so it is not represented here.
+    """
+
+    generated_config: str | None = None
+    generated_metadata: str | None = None
+    deployment_marker: str | None = None
+
+    def claims_anything(self):
+        return any(
+            (self.generated_config, self.generated_metadata, self.deployment_marker)
+        )
+
+
+# The global locations a workflow can observe but never owns without a claim.
+# A review state naming only these was produced by cleanup that inferred
+# ownership from a path; nothing about it needs an operator.
+UNCLAIMABLE_ARTIFACT_KINDS = frozenset(
+    {"legacy_generated_config", "legacy_generated_metadata", "deployment_marker"}
+)
+
+
+def stale_unclaimed_review(record):
+    """True when a stored review state blames artifacts the workflow never claimed.
+
+    Reconciling such a record changes only the record: the files it named belong
+    to the installed system and stay exactly as they are. A review state that
+    names a claimed artifact, or this workflow's own directory, is a genuine
+    ownership question and is never stale.
+    """
+
+    if not isinstance(record, dict) or record.get("status") == STATUS_ACTIVE:
+        return False
+    cleanup = record.get("cleanup")
+    if not isinstance(cleanup, dict):
+        return False
+    if cleanup.get("state") != CLEANUP_REVIEW_REQUIRED:
+        return False
+    claims = setup_artifact_claims(record)
+    if claims is None or claims.claims_anything():
+        return False
+    unresolved = {
+        entry.get("kind")
+        for entry in cleanup.get("artifacts") or []
+        if isinstance(entry, dict)
+        and entry.get("status") in {ARTIFACT_REVIEW_REQUIRED, ARTIFACT_FAILED}
+    }
+    return bool(unresolved) and unresolved <= UNCLAIMABLE_ARTIFACT_KINDS
+
+
+def reconcile_unclaimed_review(workflows):
+    """Persist ``complete`` for a record stranded by path-inferred ownership.
+
+    Idempotent and filesystem-free; returns the reconciled record or ``None``
+    when there was nothing to reconcile.
+    """
+
+    if workflows is None:
+        return None
+    record = workflows.load()
+    if not stale_unclaimed_review(record):
+        return None
+    return workflows.finish(
+        record["workflow_id"],
+        status=record["status"],
+        cleanup=cleanup_state_from_results([]),
+    )
+
+
+def setup_artifact_claims(record):
+    """Read the artifact claims out of a validated workflow record.
+
+    Returns ``None`` for a missing record: without one there is no claim
+    evidence at all, and cleanup has to stay in its conservative legacy mode.
+    """
+
+    if not isinstance(record, dict):
+        return None
+    artifacts = record.get("artifacts")
+    if not isinstance(artifacts, dict):
+        return SetupArtifactClaims()
+    return SetupArtifactClaims(
+        generated_config=artifacts.get("generated_config"),
+        generated_metadata=artifacts.get("generated_metadata"),
+        deployment_marker=artifacts.get("deployment_marker"),
+    )
 
 
 class SetupWorkflowArtifacts:
@@ -137,8 +235,14 @@ class SetupWorkflowArtifacts:
             },
         }
 
-    def clear(self):
+    def clear(self, claims=None):
         """Remove only what this workflow can prove it owns; attempt all of it.
+
+        With ``claims`` — the durable record's artifact claims — only artifacts
+        this workflow recorded are inspected at all: files it never created are
+        another owner's business, so they are neither read, removed nor reported.
+        Without claims (no record exists) every known location stays in scope,
+        because nothing can prove which of them this cleanup is responsible for.
 
         One failure must not skip the rest, and nothing whose owner cannot be
         proven is deleted. Returns a per-artifact
@@ -148,11 +252,91 @@ class SetupWorkflowArtifacts:
         the durable record keeps kind and status only.
         """
 
+        if claims is None:
+            results = []
+            if self.workflow_dir is not None:
+                results.extend(self._clear_workflow_directory())
+            results.extend(self._clear_legacy_generated())
+            results.append(self._clear_deployment_marker())
+            return results
+        return self._clear_claimed(claims)
+
+    # --- claim-scoped cleanup planning -------------------------------------
+
+    def _relative_claim(self, path):
+        try:
+            return Path(path).relative_to(self.admin_data_dir).as_posix()
+        except ValueError:  # pragma: no cover - paths are built from the base
+            return None
+
+    def _generated_claim_scope(self, claims):
+        """Which generated pair a record's claims address, if any.
+
+        ``"unrecognized"`` is fail-closed on purpose: a claim that names no
+        canonical generated path is not resolved into a deletion target.
+        """
+
+        claimed = {
+            value
+            for value in (claims.generated_config, claims.generated_metadata)
+            if value
+        }
+        if not claimed:
+            return None
+        legacy = {
+            self._relative_claim(self.legacy_generated_config_path),
+            self._relative_claim(self.legacy_generated_meta_path),
+        }
+        if self.workflow_dir is not None:
+            scoped = {
+                self._relative_claim(self.generated_config_path),
+                self._relative_claim(self.generated_meta_path),
+            }
+            if claimed <= scoped:
+                return "scoped"
+        if claimed <= legacy:
+            return "legacy"
+        return "unrecognized"
+
+    def _unrecognized_claim(self, kind, path):
+        return {
+            "kind": kind,
+            "path": str(path),
+            "status": ARTIFACT_REVIEW_REQUIRED,
+            "reason": REASON_OWNER_MISMATCH,
+        }
+
+    def _clear_claimed(self, claims):
         results = []
+        # The workflow's own directory is namespaced by its id and proven by path
+        # identity, so it needs no claim: it can hold nothing but this workflow's
+        # files, including one written in the crash window before the record
+        # claim was persisted.
         if self.workflow_dir is not None:
             results.extend(self._clear_workflow_directory())
-        results.extend(self._clear_legacy_generated())
-        results.append(self._clear_deployment_marker())
+        scope = self._generated_claim_scope(claims)
+        # An artifact whose own sidecar/content names this workflow is in scope
+        # even without a record claim: it can only be this workflow's, and the
+        # claim may be missing because the process died between writing the file
+        # and persisting the claim. Content that does not name this workflow is
+        # someone else's file and stays out of scope entirely.
+        if scope == "legacy" or (scope is None and self._legacy_owner_proven()):
+            results.extend(self._clear_legacy_generated())
+        elif scope == "unrecognized" or (scope == "scoped" and self.workflow_dir is None):
+            results.append(
+                self._unrecognized_claim("generated_config", self.generated_config_path)
+            )
+        marker_claim = claims.deployment_marker
+        if marker_claim and marker_claim != self._relative_claim(
+            self.deployment_marker_path
+        ):
+            results.append(
+                self._unrecognized_claim(
+                    "deployment_marker", self.deployment_marker_path
+                )
+            )
+        elif marker_claim or self._marker_owner_proven():
+            results.append(self._clear_deployment_marker())
         return results
 
     # --- ownership-proving removals ----------------------------------------
@@ -273,6 +457,19 @@ class SetupWorkflowArtifacts:
             results.append(entry)
         return results
 
+    def _marker_owner_proven(self):
+        """True when the marker's own content names this exact workflow."""
+
+        if not self.workflow_id:
+            return False
+        marker = _read_json_document(self.deployment_marker_path)
+        return bool(
+            isinstance(marker, dict)
+            and marker.get("owner") == GENERATED_CONFIG_OWNER
+            and isinstance(marker.get("workflow_id"), str)
+            and marker.get("workflow_id") == self.workflow_id
+        )
+
     def _clear_deployment_marker(self):
         """Remove the global marker only when its content names this owner."""
 
@@ -281,14 +478,7 @@ class SetupWorkflowArtifacts:
         if not path.exists():
             entry["status"] = ARTIFACT_ABSENT
             return entry
-        marker = _read_json_document(path)
-        owned = bool(
-            self.workflow_id
-            and isinstance(marker, dict)
-            and marker.get("owner") == GENERATED_CONFIG_OWNER
-            and isinstance(marker.get("workflow_id"), str)
-            and marker.get("workflow_id") == self.workflow_id
-        )
+        owned = self._marker_owner_proven()
         if not owned:
             entry["status"] = ARTIFACT_REVIEW_REQUIRED
             entry["reason"] = REASON_OWNER_MISMATCH
@@ -538,7 +728,7 @@ def abandon_setup_workflow(
             operation_id=transition["operation_id"], coordinator=coordinator
         )
         transition["stage"] = (cancelled or {}).get("stage", "cancelled")
-    cleanup = artifacts.clear()
+    cleanup = artifacts.clear(claims=setup_artifact_claims(record))
     failed = [entry for entry in cleanup if entry["status"] == ARTIFACT_FAILED]
     review = [
         entry for entry in cleanup if entry["status"] == ARTIFACT_REVIEW_REQUIRED

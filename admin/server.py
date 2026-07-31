@@ -171,6 +171,8 @@ from admin.setup_workflow import (
     SetupWorkflowAbandonError,
     SetupWorkflowArtifacts,
     abandon_setup_workflow,
+    reconcile_unclaimed_review,
+    setup_artifact_claims,
     transition_ownership,
     transition_ownership_error,
 )
@@ -981,6 +983,7 @@ class AdminHandler(BaseHTTPRequestHandler):
         if path == "/api/setup/workflow":
             # Redacted view of the durable Guided Setup workflow record:
             # identifiers, lifecycle and artifact existence — never secrets.
+            reconcile_unclaimed_review(self.server.setup_workflows)
             self._send_json(
                 {"workflow": self.server.setup_workflows.redacted_view()}
             )
@@ -1589,6 +1592,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             # identity, and a previous workflow whose cleanup has not converged
             # blocks a replacement — including its setup intent.
             try:
+                reconcile_unclaimed_review(self.server.setup_workflows)
                 workflow = self.server.setup_workflows.ensure_active()
             except GuidedSetupWorkflowError as exc:
                 self._send_workflow_rejection(exc)
@@ -2801,6 +2805,9 @@ class AdminHandler(BaseHTTPRequestHandler):
         """
 
         workflows = self.server.setup_workflows
+        # A review state that only ever named installed-system files is stale
+        # bookkeeping from the pre-claim cleanup; reconciling it deletes nothing.
+        reconcile_unclaimed_review(workflows)
         record = workflows.load() if workflows else None
         if cleanup_blocks(record):
             exc = cleanup_conflict_error(record)
@@ -2821,14 +2828,10 @@ class AdminHandler(BaseHTTPRequestHandler):
         else:
             blocking = False
             if record is not None and record["status"] == "active":
-                artifacts = SetupWorkflowArtifacts(
-                    workflows.admin_data_dir,
-                    workflow_id=record["workflow_id"],
-                ).state()
-                blocking = (
-                    artifacts["generated_config"]["exists"]
-                    or artifacts["deployment_marker"]["exists"]
-                )
+                # Durable claims, not file existence: an installed system's
+                # generated config and deployment marker exist for every install
+                # and say nothing about what this workflow owns.
+                blocking = setup_artifact_claims(record).claims_anything()
         if not blocking:
             return None
         return {
@@ -4136,6 +4139,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             )
             return
         try:
+            reconcile_unclaimed_review(workflows)
             replacement = workflows.start_replacement(selected_system_tag=tag.strip())
         except GuidedSetupWorkflowError as exc:
             self._send_workflow_rejection(exc)

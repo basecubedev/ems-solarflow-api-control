@@ -258,3 +258,120 @@ test.describe("Setup lifecycle and cleanup recovery", () => {
     expect(validate.status, JSON.stringify(validate.body)).not.toBe(409);
   });
 });
+
+// --- installed-system files are not a workflow's cleanup responsibility ------
+
+// The abandoned workflow that blocked the console: it created nothing, but the
+// old cleanup inspected every known path, found the installed system's
+// generated config and deployment marker, and reported an ownership review no
+// operator could resolve.
+
+async function seedInstalledArtifacts(page) {
+  // An upgradable installation first: Guided Upgrade verification is only
+  // meaningful when a concrete older System Build is running.
+  const upgradable = await post(page, "/api/admin/test/seed", {
+    scenario: "mqtt_migration",
+  });
+  expect(upgradable.status, JSON.stringify(upgradable.body)).toBe(200);
+  const { status, body } = await post(page, "/api/admin/test/seed", {
+    scenario: "installed_system_artifacts",
+  });
+  expect(status, JSON.stringify(body)).toBe(200);
+  return body;
+}
+
+async function installedDigests(page) {
+  const { status, body } = await post(page, "/api/admin/test/seed", {
+    scenario: "installed_system_artifact_digests",
+  });
+  expect(status, JSON.stringify(body)).toBe(200);
+  return {
+    legacy_generated_config: body.legacy_generated_config,
+    deployment_marker: body.deployment_marker,
+  };
+}
+
+async function verifyUpgradeTarget(page) {
+  await page.locator('[data-start-path="manage_existing"]').click();
+  await page.locator('[data-open-maintenance-path="upgrade"]').click();
+  const select = page.locator("#upgrade-release-select");
+  await expect(select).toBeEnabled();
+  await select.selectOption("v9.9.10");
+  const validation = page.waitForResponse((response) =>
+    response.url().endsWith("/maintenance/upgrade/validate"),
+  );
+  await page.locator("#upgrade-prepare-btn").click();
+  const body = await (await validation).json();
+  expect(body.error, JSON.stringify(body)).not.toBe("setup_cleanup_required");
+  expect(body.error, JSON.stringify(body)).not.toBe("setup_abandon_required");
+  await expect(page.locator("#upgrade-release-status")).toHaveText(
+    /System Build verified/i,
+  );
+}
+
+test.describe("Installed-system artifacts stay out of Setup cleanup", () => {
+  test("an empty setup leaves them untouched and keeps Guided Upgrade available", async ({
+    page,
+  }) => {
+    const login = new LoginPage(page);
+    await login.open();
+    await login.authenticate();
+    await seedInstalledArtifacts(page);
+    const before = await installedDigests(page);
+    await page.reload();
+
+    // A Guided Setup that creates nothing: started and abandoned, exactly the
+    // sequence that stranded the live console.
+    const workflowId = await startSetupWorkflow(page);
+    const discarded = await post(page, "/api/setup/abandon", {
+      setup_workflow_id: workflowId,
+    });
+    expect(discarded.status, JSON.stringify(discarded.body)).toBe(200);
+    expect(discarded.body.ok, JSON.stringify(discarded.body)).toBe(true);
+
+    await expect
+      .poll(async () => (await currentWorkflow(page))?.cleanup?.state ?? "absent", {
+        message: "an empty setup must converge without an operator review",
+      })
+      .toMatch(/^(complete|not_required|absent)$/);
+    await expect(page.locator("#system-alignment-recheck-cleanup")).toBeHidden();
+    await expect(page.locator("#system-alignment-retry-cleanup")).toBeHidden();
+
+    await page.reload();
+    await verifyUpgradeTarget(page);
+    expect(await installedDigests(page)).toEqual(before);
+
+    await page.reload();
+    await verifyUpgradeTarget(page);
+    expect(await installedDigests(page)).toEqual(before);
+  });
+
+  test("a workflow stranded by the old cleanup recovers without deleting anything", async ({
+    page,
+  }) => {
+    const login = new LoginPage(page);
+    await login.open();
+    await login.authenticate();
+    await seedInstalledArtifacts(page);
+    const before = await installedDigests(page);
+    const { status, body } = await post(page, "/api/admin/test/seed", {
+      scenario: "setup_cleanup_stranded_review",
+    });
+    expect(status, JSON.stringify(body)).toBe(200);
+    await page.reload();
+
+    await expect
+      .poll(async () => (await currentWorkflow(page))?.cleanup?.state ?? "absent", {
+        message: "a zero-claim review state must reconcile itself",
+      })
+      .toBe("complete");
+    await expect(page.locator("#system-alignment-warning")).toBeHidden();
+
+    await verifyUpgradeTarget(page);
+    expect(await installedDigests(page)).toEqual(before);
+
+    await page.reload();
+    await verifyUpgradeTarget(page);
+    expect(await installedDigests(page)).toEqual(before);
+  });
+});

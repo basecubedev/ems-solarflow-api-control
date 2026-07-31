@@ -389,3 +389,162 @@ class _UpgradeRecordingAlignment(_CancelRecordingAlignment):
     def resolve(self, requested_tag):
         self.resolve_calls.append(requested_tag)
         raise AssertionError("a blocked upgrade must not resolve a build")
+
+
+# --- migration: records stranded by the pre-claim cleanup ---------------------
+
+
+_STRANDED_CLEANUP = {
+    "state": "review_required",
+    "attempted_at": "2026-07-31T21:15:47Z",
+    "failed_count": 0,
+    "review_count": 2,
+    "artifacts": [
+        {"kind": "legacy_generated_config", "status": "review_required"},
+        {"kind": "deployment_marker", "status": "review_required"},
+    ],
+}
+
+
+def _strand_workflow(srv, workflow_id, cleanup=None):
+    """Write the exact record shape the old cleanup left behind."""
+
+    store = srv.setup_workflows
+    record = store.load()
+    record["status"] = "abandoned"
+    record["preview"] = None
+    record["cleanup"] = dict(cleanup or _STRANDED_CLEANUP)
+    assert record["workflow_id"] == workflow_id
+    store.path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    return record
+
+
+def _seed_installed_files(srv):
+    data_dir = Path(srv.setup_workflows.admin_data_dir)
+    generated = data_dir / "generated" / "config.json"
+    generated.parent.mkdir(parents=True, exist_ok=True)
+    generated.write_text('{"devices": [{"name": "INV_1"}]}\n', encoding="utf-8")
+    marker = data_dir / "state" / ".admin-deployment.json"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(
+        json.dumps({"release": "v0.6.0-rc", "source": "admin_install"}) + "\n",
+        encoding="utf-8",
+    )
+    return generated, marker
+
+
+def test_stranded_zero_claim_review_is_reconciled_without_touching_files(tmp_path):
+    alignment = _UpgradeRecordingAlignment()
+    srv, base = _serve(release_manager=_control_export_manager(tmp_path))
+    _attach_system_alignment(srv, alignment)
+    try:
+        _, payload = _start_workflow(base, srv)
+        workflow_id = payload["setup_workflow_id"]
+        generated, marker = _seed_installed_files(srv)
+        generated_bytes = generated.read_bytes()
+        marker_bytes = marker.read_bytes()
+        _strand_workflow(srv, workflow_id)
+
+        view = _workflow_view(base)
+
+        assert view["cleanup"]["state"] == "complete"
+        assert generated.read_bytes() == generated_bytes
+        assert marker.read_bytes() == marker_bytes
+
+        status, _, payload = _request(
+            f"{base}/api/admin/maintenance/upgrade/validate",
+            method="POST",
+            body={"tag": "v0.9.0"},
+        )
+        assert payload.get("error") != "setup_cleanup_required", payload
+
+        status, payload = _start_workflow(base, srv)
+        assert status == 200, payload
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_reconciled_state_survives_a_fresh_read(tmp_path):
+    srv, base = _serve(release_manager=_control_export_manager(tmp_path))
+    try:
+        _, payload = _start_workflow(base, srv)
+        workflow_id = payload["setup_workflow_id"]
+        _seed_installed_files(srv)
+        _strand_workflow(srv, workflow_id)
+
+        _workflow_view(base)
+
+        assert srv.setup_workflows.load()["cleanup"]["state"] == "complete"
+        assert _workflow_view(base)["cleanup"]["state"] == "complete"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_a_claimed_review_state_is_never_reconciled(tmp_path):
+    srv, base = _serve(release_manager=_control_export_manager(tmp_path))
+    try:
+        _, payload = _start_workflow(base, srv)
+        workflow_id = payload["setup_workflow_id"]
+        _seed_installed_files(srv)
+        srv.setup_workflows.record_deployment_marker(workflow_id)
+        _strand_workflow(srv, workflow_id)
+
+        view = _workflow_view(base)
+
+        assert view["cleanup"]["state"] == "review_required"
+
+        status, payload = _start_workflow(base, srv)
+        assert status == 409, payload
+        assert payload["error"] == "setup_cleanup_required"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_a_workflow_directory_review_is_never_reconciled(tmp_path):
+    srv, base = _serve(release_manager=_control_export_manager(tmp_path))
+    try:
+        _, payload = _start_workflow(base, srv)
+        workflow_id = payload["setup_workflow_id"]
+        _strand_workflow(
+            srv,
+            workflow_id,
+            cleanup={
+                "state": "review_required",
+                "attempted_at": "2026-07-31T21:15:47Z",
+                "failed_count": 0,
+                "review_count": 1,
+                "artifacts": [
+                    {"kind": "workflow_directory", "status": "review_required"}
+                ],
+            },
+        )
+
+        assert _workflow_view(base)["cleanup"]["state"] == "review_required"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_a_stranded_record_does_not_block_a_new_setup_on_first_contact(tmp_path):
+    """The recovery must not depend on the browser reading the workflow first."""
+
+    srv, base = _serve(release_manager=_control_export_manager(tmp_path))
+    try:
+        _, payload = _start_workflow(base, srv)
+        workflow_id = payload["setup_workflow_id"]
+        generated, marker = _seed_installed_files(srv)
+        generated_bytes = generated.read_bytes()
+        marker_bytes = marker.read_bytes()
+        _strand_workflow(srv, workflow_id)
+
+        status, payload = _start_workflow(base, srv)
+
+        assert status == 200, payload
+        assert generated.read_bytes() == generated_bytes
+        assert marker.read_bytes() == marker_bytes
+    finally:
+        srv.shutdown()
+        srv.server_close()

@@ -336,3 +336,172 @@ def test_cleanup_state_records_no_paths_and_no_os_errors():
     serialized = json.dumps(state)
     assert "/data" not in serialized
     assert "Permission denied" not in serialized
+
+
+# --- claim authority: a workflow only cleans up what it recorded --------------
+
+
+_INSTALLED_MARKER = {
+    "format_version": 1,
+    "release": "v0.6.0-rc",
+    "installed_at": "2026-06-01T10:00:00Z",
+    "source": "admin_install",
+}
+
+
+def test_empty_workflow_ignores_preexisting_legacy_config_and_deployment_marker(
+    tmp_path,
+):
+    """The production deadlock: an empty workflow blocked on foreign files.
+
+    A workflow that recorded no artifact has nothing to clean up. The installed
+    system's generated config and deployment marker are not its leftovers, so
+    they are neither inspected nor reported as unresolved — keeping them was
+    always right, blocking on them was not.
+    """
+
+    data_dir = _admin_data(tmp_path)
+    store, workflow_id, artifacts = _workflow(data_dir)
+    legacy = artifacts.legacy_generated_config_path
+    legacy.write_text('{"devices": [{"name": "INV_1"}]}\n', encoding="utf-8")
+    marker = _marker(data_dir, _INSTALLED_MARKER)
+    legacy_bytes = legacy.read_bytes()
+    marker_bytes = marker.read_bytes()
+    assert store.load()["artifacts"] == {
+        "generated_config": None,
+        "generated_metadata": None,
+        "generated_preview_id": None,
+        "deployment_marker": None,
+    }
+
+    result = abandon_setup_workflow(
+        artifacts=artifacts,
+        alignment=_Alignment(),
+        workflows=store,
+        workflow_id=workflow_id,
+    )
+
+    assert result["ok"] is True
+    assert "error" not in result
+    assert result["cleanup_state"] == "complete"
+    assert legacy.read_bytes() == legacy_bytes
+    assert marker.read_bytes() == marker_bytes
+    unresolved = {
+        entry["kind"]
+        for entry in result["cleanup"]
+        if entry["status"] in {"review_required", "failed"}
+    }
+    assert unresolved == set()
+    kinds = {entry["kind"] for entry in result["cleanup"]}
+    assert not kinds & {
+        "legacy_generated_config",
+        "legacy_generated_metadata",
+        "deployment_marker",
+    }
+    stored = store.load()
+    assert stored["status"] == "abandoned"
+    assert stored["cleanup"]["state"] == "complete"
+    assert stored["cleanup"]["artifacts"] == []
+
+
+def test_recorded_deployment_marker_is_still_reviewed_when_foreign(tmp_path):
+    data_dir = _admin_data(tmp_path)
+    store, workflow_id, artifacts = _workflow(data_dir)
+    marker = _marker(data_dir, _INSTALLED_MARKER)
+    store.record_deployment_marker(workflow_id)
+    marker_bytes = marker.read_bytes()
+
+    result = abandon_setup_workflow(
+        artifacts=artifacts,
+        alignment=_Alignment(),
+        workflows=store,
+        workflow_id=workflow_id,
+    )
+
+    assert result["cleanup_state"] == "review_required"
+    assert marker.read_bytes() == marker_bytes
+    assert _statuses(result["cleanup"])["deployment_marker"] == "review_required"
+
+
+def test_recorded_generated_artifacts_are_still_removed(tmp_path):
+    data_dir = _admin_data(tmp_path)
+    store, workflow_id, artifacts = _workflow(data_dir)
+    scoped = _scoped_generated(artifacts)
+    store.bind_generated_artifacts(workflow_id, preview_id="pv-" + "0" * 16)
+
+    result = abandon_setup_workflow(
+        artifacts=artifacts,
+        alignment=_Alignment(),
+        workflows=store,
+        workflow_id=workflow_id,
+    )
+
+    assert result["ok"] is True
+    assert not scoped.exists()
+    assert store.load()["cleanup"]["state"] == "complete"
+
+
+def test_legacy_cleanup_without_a_record_stays_fail_closed(tmp_path):
+    """No record means no claim evidence at all — the old rules still apply."""
+
+    data_dir = _admin_data(tmp_path)
+    _store, _workflow_id, artifacts = _workflow(data_dir)
+    artifacts.legacy_generated_config_path.write_text("{}\n", encoding="utf-8")
+    _marker(data_dir, _INSTALLED_MARKER)
+
+    result = abandon_setup_workflow(artifacts=artifacts, alignment=_Alignment())
+
+    assert result["cleanup_state"] == "review_required"
+    assert artifacts.legacy_generated_config_path.exists()
+
+
+def test_unclaimed_but_self_owned_artifacts_are_still_this_workflow_s(tmp_path):
+    """Content that names this workflow is scope evidence, not just proof.
+
+    The claim can be missing because the process died between writing the file
+    and persisting the claim; the file is still nobody else's.
+    """
+
+    data_dir = _admin_data(tmp_path)
+    store, workflow_id, artifacts = _workflow(data_dir)
+    legacy = artifacts.legacy_generated_config_path
+    legacy.write_text('{"devices": []}\n', encoding="utf-8")
+    artifacts.legacy_generated_meta_path.write_text(
+        json.dumps({"owner": "guided_setup", "workflow_id": workflow_id}) + "\n",
+        encoding="utf-8",
+    )
+    marker = _marker(
+        data_dir,
+        {"release": "v0.8.0", "owner": "guided_setup", "workflow_id": workflow_id},
+    )
+
+    result = abandon_setup_workflow(
+        artifacts=artifacts,
+        alignment=_Alignment(),
+        workflows=store,
+        workflow_id=workflow_id,
+    )
+
+    assert result["ok"] is True
+    assert not legacy.exists()
+    assert not marker.exists()
+
+
+def test_a_claim_outside_the_canonical_paths_is_never_resolved(tmp_path):
+    data_dir = _admin_data(tmp_path)
+    store, workflow_id, artifacts = _workflow(data_dir)
+    record = store.load()
+    record["artifacts"]["deployment_marker"] = "state/other-marker.json"
+    store.path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    marker = _marker(data_dir, _INSTALLED_MARKER)
+    marker_bytes = marker.read_bytes()
+
+    result = abandon_setup_workflow(
+        artifacts=artifacts,
+        alignment=_Alignment(),
+        workflows=store,
+        workflow_id=workflow_id,
+    )
+
+    assert result["cleanup_state"] == "review_required"
+    assert marker.read_bytes() == marker_bytes

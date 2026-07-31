@@ -20,6 +20,7 @@ explicit mismatch/failure fixtures:
   installable by the modern Admin without a downgrade.
 """
 
+import hashlib
 import io
 import json
 import os
@@ -1458,6 +1459,67 @@ def build_test_runtime(*, data_dir):
                     "review_count": 0,
                     "artifacts": [
                         {"kind": "generated_config", "status": "failed"}
+                    ],
+                },
+            )
+            return {
+                "ok": True,
+                "scenario": scenario,
+                "setup_workflow_id": workflow_id,
+            }
+        elif scenario == "installed_system_artifacts":
+            # What every installed system carries and no Guided Setup workflow
+            # owns: the pre-workflow generated config and the deployment marker.
+            legacy = Path(data_dir) / "generated" / "config.json"
+            legacy.parent.mkdir(parents=True, exist_ok=True)
+            legacy.write_text('{"devices": [{"name": "INV_1"}]}\n', encoding="utf-8")
+            marker = Path(data_dir) / "state" / ".admin-deployment.json"
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text(
+                json.dumps({"release": "v0.6.0-rc", "source": "admin_install"}) + "\n",
+                encoding="utf-8",
+            )
+            return {
+                "ok": True,
+                "scenario": scenario,
+                "legacy_generated_config": hashlib.sha256(
+                    legacy.read_bytes()
+                ).hexdigest(),
+                "deployment_marker": hashlib.sha256(marker.read_bytes()).hexdigest(),
+            }
+        elif scenario == "installed_system_artifact_digests":
+            legacy = Path(data_dir) / "generated" / "config.json"
+            marker = Path(data_dir) / "state" / ".admin-deployment.json"
+            return {
+                "ok": True,
+                "scenario": scenario,
+                "legacy_generated_config": (
+                    hashlib.sha256(legacy.read_bytes()).hexdigest()
+                    if legacy.is_file()
+                    else None
+                ),
+                "deployment_marker": (
+                    hashlib.sha256(marker.read_bytes()).hexdigest()
+                    if marker.is_file()
+                    else None
+                ),
+            }
+        elif scenario == "setup_cleanup_stranded_review":
+            # The record the pre-claim cleanup left behind: terminal, blocking,
+            # and blaming installed-system files this workflow never created.
+            record = runtime.setup_workflows.ensure_active()
+            workflow_id = record["workflow_id"]
+            runtime.setup_workflows.finish(
+                workflow_id,
+                status="abandoned",
+                cleanup={
+                    "state": "review_required",
+                    "attempted_at": utc_now_iso(),
+                    "failed_count": 0,
+                    "review_count": 2,
+                    "artifacts": [
+                        {"kind": "legacy_generated_config", "status": "review_required"},
+                        {"kind": "deployment_marker", "status": "review_required"},
                     ],
                 },
             )

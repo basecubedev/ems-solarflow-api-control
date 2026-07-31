@@ -301,7 +301,8 @@ browser, touches no durable state) are outside the matrix.
 | 22 | Admin restart (any workflow) | yes | unchanged | unchanged | unchanged (B0 and its preview read back identically) | untouched | available | same interpretation; P1–P4 lost |
 | 22a | upgrade completes (durable known-good + `completed`) | yes | Upgrade → none | `completed` | **B6 cleared** (operation-bound), B5 written | untouched | n/a | done |
 | 23 | abandon with a failed artifact removal | partial | Setup → none | `cancelled` | some removed, rest reported `failed`; B0 stays terminal **under the same `workflow_id`** with `cleanup.state = pending`; a replacement Setup and both Upgrade phases stay blocked | untouched | available | error, Retry cleanup under the same id converges |
-| 23a | abandon finds an artifact it cannot prove it owns | partial | Setup → none | `cancelled` | the artifact is **kept**; B0 terminal with `cleanup.state = review_required`; a retry does not convert this to clean | untouched | available | 409 `setup_artifact_review_required`, review-required copy, **no** Retry cleanup button |
+| 23a | abandon finds a **claimed** artifact it cannot prove it owns | partial | Setup → none | `cancelled` | the artifact is **kept**; B0 terminal with `cleanup.state = review_required`; a retry does not convert this to clean | untouched | available | 409 `setup_artifact_review_required`, review-required copy, **no** Retry cleanup button, **Recheck setup cleanup** offered |
+| 23b | abandon of a workflow that claimed nothing, with installed-system files present | yes | Setup → none | `cancelled` | the files are **not inspected**; B0 terminal with `cleanup.state = complete` | untouched | available | 200, no review copy, Setup and Guided Upgrade stay available |
 | 26 | mutation still running → abandon/supersede | **refused**, 409 `setup_operation_in_progress` (with the operation kind) | Setup | **unchanged** | **unchanged** | untouched | available | the workflow stays open; nothing claims to have been discarded |
 | 26a | terminalization begun → apply/write | **refused**, 409 `setup_workflow_not_active` before any credential is staged | Setup | unchanged | unchanged | **untouched** | available | workflow-conflict panel |
 | 26b | prepare/start worker live → abandon/supersede | **refused**, 409 `setup_operation_in_progress` until the worker settles | Setup | unchanged | unchanged | untouched | available | wait, then discard |
@@ -525,6 +526,34 @@ the operation it abandoned, expired or not.
 
 **Cleanup is best-effort per owned artifact; ownership never is.**
 
+Ownership is two independent decisions, and they must not be conflated:
+
+| Stage | Source of truth | Question |
+|---|---|---|
+| Claim authority | the durable workflow record's `artifacts` map | is this artifact this workflow's responsibility at all? |
+| Deletion proof | sidecar metadata, marker content, canonical path identity | is removing it safe? |
+
+**Known path existence alone never creates workflow ownership.** A workflow with
+no artifact claims ignores the installed system's pre-existing files: they are
+not read as leftovers, not deleted, and never reported as unresolved. Before
+this split, an abandoned workflow that had created nothing still inspected
+`<admin_data>/generated/config.json` and `<admin_data>/state/.admin-deployment.json`,
+could not prove it owned them (correctly — it did not), and left a permanent
+`review_required` that blocked every later Setup and Guided Upgrade.
+
+Two artifacts are in scope without a record claim, and only because nothing else
+can own them:
+
+- `workflows/guided-setup/<id>/` — namespaced by workflow id and proven by path
+  identity, so it can hold nothing but this workflow's files, including one
+  written in the crash window before its claim was persisted;
+- an artifact whose own sidecar or marker content names *this exact workflow* —
+  content that specific is itself the claim, and it is exactly what a foreign or
+  installed-system file never carries.
+
+`review_required` is reserved for an artifact the workflow claimed (or proved it
+owns) but cannot prove safe to delete.
+
 | Artifact | Removed only when | Otherwise |
 |---|---|---|
 | `workflows/guided-setup/<id>/` | its realpath **is** `<admin_data>/workflows/guided-setup/<matching id>` — traversal-shaped ids, symlinks and foreign directories are rejected | kept, `review_required` (`setup_artifact_owner_mismatch`) |
@@ -560,6 +589,24 @@ right next action differs:
 
 The frontend treats `ok !== true` as a failed reset: it keeps the local draft and
 never shows the completed-reset message.
+
+**Recovering records stranded by path-inferred ownership.** A terminal record
+whose `cleanup.state` is `review_required` while it claims *no* artifact, and
+whose unresolved entries name only the global locations a workflow cannot own
+without a claim (`legacy_generated_config`, `legacy_generated_metadata`,
+`deployment_marker`), is stale bookkeeping from the pre-claim cleanup. Every
+authoritative read — the workflow view, the Setup/Upgrade conflict check and
+workflow creation — reconciles it to `complete`. The reconciliation touches no
+file: it changes the record and nothing else, so the installed system's generated
+config and deployment marker (and with it `install_state: admin_prepared_install`)
+stay byte-exact.
+
+A review state that names a claimed artifact, or this workflow's own directory,
+is a genuine ownership question and is never reconciled. For those the UI offers
+**Recheck setup cleanup**, which re-runs the same exact-id abandon route: the
+backend re-evaluates ownership under the claim-aware plan and either converges or
+keeps the review. It never overrides ownership and never deletes anything an
+owner could not be proven for.
 
 ### 5.4 Mutation / termination exclusion
 

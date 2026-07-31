@@ -326,3 +326,73 @@ def test_worker_active_supersede_refusal_keeps_the_old_workflow(tmp_path):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+# --- an active workflow blocks on what it owns, not on what exists ------------
+
+
+def _seed_installed_artifacts(srv):
+    """Installed-system files in the server's real Admin data directory."""
+
+    data_dir = Path(srv.setup_workflows.admin_data_dir)
+    generated = data_dir / "generated" / "config.json"
+    generated.parent.mkdir(parents=True, exist_ok=True)
+    generated.write_text('{"devices": [{"name": "INV_1"}]}\n', encoding="utf-8")
+    marker = data_dir / "state" / ".admin-deployment.json"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(
+        json.dumps({"release": "v0.6.0-rc", "source": "admin_install"}) + "\n",
+        encoding="utf-8",
+    )
+    return generated, marker
+
+
+def test_empty_active_workflow_does_not_block_on_installed_artifacts(tmp_path):
+    alignment = _CancelRecordingAlignment(stage="cancelled", mode="fresh_install")
+    alignment.active = False
+    srv, base = _serve(release_manager=_control_export_manager(tmp_path))
+    _attach_system_alignment(srv, alignment)
+    try:
+        _start_workflow(base, srv)
+        generated, marker = _seed_installed_artifacts(srv)
+        generated_bytes = generated.read_bytes()
+        marker_bytes = marker.read_bytes()
+
+        status, _, payload = _request(
+            f"{base}/api/admin/maintenance/upgrade/validate",
+            method="POST",
+            body={"tag": "v0.9.0"},
+        )
+
+        assert payload.get("error") != "setup_abandon_required", payload
+        assert status != 409, payload
+        assert generated.read_bytes() == generated_bytes
+        assert marker.read_bytes() == marker_bytes
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_active_workflow_with_a_recorded_artifact_still_blocks(tmp_path):
+    alignment = _CancelRecordingAlignment(stage="cancelled", mode="fresh_install")
+    alignment.active = False
+    srv, base = _serve(release_manager=_control_export_manager(tmp_path))
+    _attach_system_alignment(srv, alignment)
+    try:
+        workflow_id = _start_workflow(base, srv)
+        _seed_installed_artifacts(srv)
+        srv.setup_workflows.bind_generated_artifacts(
+            workflow_id, preview_id="pv-" + "0" * 16
+        )
+
+        status, _, payload = _request(
+            f"{base}/api/admin/maintenance/upgrade/validate",
+            method="POST",
+            body={"tag": "v0.9.0"},
+        )
+
+        assert status == 409, payload
+        assert payload["error"] == "setup_abandon_required"
+    finally:
+        srv.shutdown()
+        srv.server_close()

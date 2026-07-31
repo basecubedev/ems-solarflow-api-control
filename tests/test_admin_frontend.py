@@ -11339,8 +11339,8 @@ const configEls = {
   conflictDiscard: el(), conflictDetails: el(), conflictDetail: el(),
 };
 const systemAlignmentEls = {
-  warning: el(), retryCleanup: el(), partial: el(), partialMessage: el(),
-  resume: el(), returnToRunning: el(), abandon: el(),
+  warning: el(), retryCleanup: el(), recheckCleanup: el(), partial: el(),
+  partialMessage: el(), resume: el(), returnToRunning: el(), abandon: el(),
 };
 let setupCleanupState = null;
 let configDraftItems = [{ role: "inverter" }];
@@ -11747,8 +11747,8 @@ def _restore_workflow_node(workflow):
         """
 const el = () => ({ hidden: true, textContent: "" });
 const systemAlignmentEls = {
-  warning: el(), retryCleanup: el(), partial: el(), partialMessage: el(),
-  resume: el(), returnToRunning: el(), abandon: el(),
+  warning: el(), retryCleanup: el(), recheckCleanup: el(), partial: el(),
+  partialMessage: el(), resume: el(), returnToRunning: el(), abandon: el(),
 };
 let setupCleanupState = null;
 let setupWorkflowId = null;
@@ -11887,3 +11887,50 @@ global.fetch = async (url) => {
     assert out["identityWrites"] == []
     assert "applying the configuration" in out["message"]
     assert "Nothing was discarded." in out["message"]
+
+
+def test_review_required_offers_recheck_instead_of_retry():
+    out = _run_setup_conflict_node(
+        """
+showSetupCleanupIncomplete({
+  error: "setup_cleanup_required",
+  workflow: { cleanup: { state: "review_required", blocking: true } },
+});
+const review = {
+  retryHidden: systemAlignmentEls.retryCleanup.hidden,
+  recheckHidden: systemAlignmentEls.recheckCleanup.hidden,
+};
+showSetupCleanupIncomplete({ error: "abandon_cleanup_incomplete" });
+const pending = {
+  retryHidden: systemAlignmentEls.retryCleanup.hidden,
+  recheckHidden: systemAlignmentEls.recheckCleanup.hidden,
+};
+showSetupCleanupIncomplete(null);
+console.log(JSON.stringify({
+  review,
+  pending,
+  clearedRecheckHidden: systemAlignmentEls.recheckCleanup.hidden,
+}));
+"""
+    )
+    # An unknown owner cannot be retried into convergence, but it can be
+    # re-evaluated: the action re-reads ownership, it never overrides it.
+    assert out["review"]["retryHidden"] is True
+    assert out["review"]["recheckHidden"] is False
+    assert out["pending"]["retryHidden"] is False
+    assert out["pending"]["recheckHidden"] is True
+    assert out["clearedRecheckHidden"] is True
+
+
+def test_recheck_cleanup_uses_the_owning_workflow_abandon_route():
+    js = _read("admin.js")
+    body = js.split("function renderSetupCleanupRecovery", 1)[1].split(
+        "\nasync function", 1
+    )[0]
+    assert "recheckCleanup" in body
+    markup = _read("index.html")
+    assert 'id="system-alignment-recheck-cleanup"' in markup
+    assert "Recheck setup cleanup" in markup
+    assert "system-alignment-recheck-cleanup" in js
+    handler = js.split("systemAlignmentEls.recheckCleanup.addEventListener", 1)[1]
+    assert handler.startswith('("click", retrySetupCleanup)')

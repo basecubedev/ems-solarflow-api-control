@@ -16496,6 +16496,7 @@ const systemAlignmentEls = {
   returnToRunning: document.getElementById("system-alignment-return"),
   abandon: document.getElementById("system-alignment-abandon"),
   retryCleanup: document.getElementById("system-alignment-retry-cleanup"),
+  recheckCleanup: document.getElementById("system-alignment-recheck-cleanup"),
 };
 
 // The recovery action is chosen by the transition's owner, never by the panel:
@@ -16580,6 +16581,13 @@ function renderSetupCleanupRecovery() {
     // Only a failed removal converges on a retry; an unknown owner needs an
     // operator, so the action is not offered as if it would help.
     systemAlignmentEls.retryCleanup.hidden = setupCleanupState !== "pending";
+  }
+  if (systemAlignmentEls.recheckCleanup) {
+    // Re-evaluating an unknown owner is safe and sometimes decisive: the
+    // backend re-reads what this workflow actually recorded. It never
+    // overrides ownership, so a genuine dispute simply stays.
+    systemAlignmentEls.recheckCleanup.hidden =
+      setupCleanupState !== "review_required";
   }
   // While cleanup owns the workflow, no other recovery action applies.
   for (const element of [
@@ -18347,6 +18355,9 @@ if (systemAlignmentEls.returnToRunning) {
 }
 if (systemAlignmentEls.abandon) {
   systemAlignmentEls.abandon.addEventListener("click", abandonSystemAlignment);
+}
+if (systemAlignmentEls.recheckCleanup) {
+  systemAlignmentEls.recheckCleanup.addEventListener("click", retrySetupCleanup);
 }
 if (systemAlignmentEls.retryCleanup) {
   systemAlignmentEls.retryCleanup.addEventListener("click", retrySetupCleanup);
