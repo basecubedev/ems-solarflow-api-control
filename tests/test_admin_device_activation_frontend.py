@@ -4,10 +4,12 @@
 Switching an inverter between the local API and Zendure MQTT keeps one logical
 device, so it must also keep one activation state: an active device stays
 active — including output control when the new transport can control it — and a
-device the operator deactivated stays deactivated. Before this contract, an
-API → MQTT switch silently landed telemetry-only because the replacement kept
-the ``original_name`` of the entry it replaces, and MQTT → API silently started
-controlling a device that was deliberately telemetry-only.
+device the operator deactivated stays deactivated.
+
+Activation is the logical device's ``enabled`` flag and nothing else. Output
+control is a capability EMS/Core derives from the pinned model, the transport
+and the write route, exactly as a Local API inverter has no such switch, so it
+never doubles as an activation decision (``agent-rules.md`` §2).
 """
 
 import json
@@ -49,7 +51,6 @@ _HELPERS = (
     "mconfigDeviceIsActive",
     "mconfigDeviceInactiveByChoice",
     "mconfigApplyTransportSwitchActivation",
-    "mconfigMqttShouldDefaultControl",
     "mconfigSwitchInverterTransport",
 )
 
@@ -202,7 +203,15 @@ def test_active_mqtt_device_switched_to_api_stays_active():
     assert device["enabled"] is True
 
 
-def test_deliberately_telemetry_only_device_switched_to_api_stays_inactive():
+def test_a_control_capable_device_not_controlling_is_still_active():
+    """Output control is a transport capability, never an activation choice.
+
+    Local API inverters have no such switch: a configured, enabled device is
+    controlled. MQTT now answers the same way, so ``write_output_limit=false``
+    on a control-capable device no longer reads as "the operator turned this
+    device off" and does not deactivate it on the next transport.
+    """
+
     out = _switch_to_api(
         [
             _mqtt_device(
@@ -212,7 +221,7 @@ def test_deliberately_telemetry_only_device_switched_to_api_stays_inactive():
         ]
     )
 
-    assert out["devices"][0]["enabled"] is False
+    assert out["devices"][0]["enabled"] is True
 
 
 def test_uncontrollable_telemetry_only_device_switched_to_api_becomes_active():
@@ -227,6 +236,16 @@ def test_uncontrollable_telemetry_only_device_switched_to_api_becomes_active():
     )
 
     assert out["devices"][0]["enabled"] is True
+
+
+def test_only_an_explicit_disable_deactivates_a_device():
+    """The one activation authority is the logical device's enabled flag."""
+
+    for device in (
+        _mqtt_device(enabled=False, output_control=True),
+        _mqtt_device(enabled=False, output_control=False),
+    ):
+        assert _switch_to_api([device])["devices"][0]["enabled"] is False
 
 
 def test_disabled_mqtt_device_switched_to_api_stays_disabled():
@@ -244,6 +263,12 @@ def test_switching_to_an_uncontrollable_connection_stays_telemetry_only():
 
 
 def test_switch_marks_a_fresh_control_decision_for_the_renderer():
+    """The replacement is a fresh connection, so its capability is re-derived.
+
+    ``transport_switched`` tells the card renderer not to carry the previous
+    entry's stored control state into the new transport.
+    """
+
     out = _run(
         [_api_device()],
         "mconfigSwitchInverterTransport('PHYS-1', 'local_mqtt', {\n"
@@ -251,21 +276,10 @@ def test_switch_marks_a_fresh_control_decision_for_the_renderer():
         "});\n"
         "const device = mconfigState.draft.devices[0];\n"
         "console.log(JSON.stringify({\n"
-        "  defaultsControl: mconfigMqttShouldDefaultControl(\n"
-        "    Object.assign({}, device, { output_control: false }), true, true\n"
-        "  ),\n"
-        "  savedEntry: mconfigMqttShouldDefaultControl(\n"
-        "    { original_name: 'WR1', output_control: false }, true, true\n"
-        "  ),\n"
-        "  optedOut: mconfigMqttShouldDefaultControl(\n"
-        "    Object.assign({}, device, {\n"
-        "      output_control: false,\n"
-        "      output_control_user_set: true,\n"
-        "    }), true, true\n"
-        "  ),\n"
+        "  transportSwitched: device.transport_switched === true,\n"
+        "  outputControl: device.output_control === true,\n"
         "}));",
     )
 
-    assert out["defaultsControl"] is True
-    assert out["savedEntry"] is False
-    assert out["optedOut"] is False
+    assert out["transportSwitched"] is True
+    assert out["outputControl"] is True

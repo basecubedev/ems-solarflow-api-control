@@ -67,6 +67,45 @@ The GitHub Actions job `Simulated power-control regression tests` can be used
 as a required status check for `main` in branch protection or repository
 rulesets.
 
+## GitNexus Indexing
+
+GitNexus skips files larger than 512 KB by default. This repository sets the
+supported `maxFileSize` analyze option to 2048 KB in `.gitnexusrc`, which is the
+single source of truth for the project threshold. The limit includes
+`admin/static/admin.js` with growth headroom without admitting arbitrarily large
+generated or binary files.
+
+Use the project launcher for manual and automated analysis:
+
+```bash
+gitnexus-project analyze --force
+gitnexus-project status
+scripts/check_gitnexus_index.sh
+```
+
+`gitnexus-project` can be a symlink to `scripts/gitnexus-project` in a directory
+on `PATH`. MCP configurations should invoke the same launcher with the `mcp`
+argument, so MCP and analyzer subprocesses inherit the threshold from
+`.gitnexusrc`. The launcher preserves all arguments and exit statuses.
+
+MCP and read-only CLI commands hold a shared project `flock`; analyze commands
+require its exclusive counterpart. Analyzers also refuse to start while an
+unmanaged MCP or CLI reader has the LadybugDB file open; set
+`GITNEXUS_DB_WAIT_TIMEOUT` to a bounded number of seconds when a caller should
+wait for GitNexus's read-only connection pool to become idle. Exit status 75
+means another analyzer or reader still owns the required resource. Read-only
+queries never take the exclusive analyzer lock. Stop or restart project MCP
+servers before a planned rebuild so they release their shared locks.
+
+GitNexus 1.6.9 can leave this index's LadybugDB/FTS state inconsistent after an
+incremental update even when every changed source file is valid UTF-8. Analyze
+paths therefore use the supported `--force` option until that upstream failure
+is resolved. The post-commit hook also uses a zero-second analyzer-lock timeout
+and a short, bounded database wait. A skipped or failed run remains visible in
+`.gitnexus/post-commit-analyze.log`; failures are never treated as a successful
+refresh. Do not run a direct `gitnexus analyze` concurrently with the project
+launcher.
+
 ## Third-Party Assets
 
 When adding new dashboard icon, font, image, chart, UI asset, or frontend

@@ -525,6 +525,59 @@ the `confirmation_metric`, the `confirmation_tolerance_w` (passed into the
 confirmation, never a hard-coded default) and the `confirmation_timeout_seconds`.
 There is **no** automatic retry after an uncertain execution.
 
+### Live Cloud latency measurement
+
+The `telemetry_confirmed` event includes `elapsed_ms`, measured with one
+monotonic clock from successful local MQTT submission (`published_monotonic`) to
+the first fresh, target-compatible telemetry confirmation. It therefore includes
+broker/cloud transfer, device application and the telemetry return path. It does
+**not** include the wait for the next EMS loop before publication, and it is not
+the device's unobservable internal receive timestamp. The physical device must
+have applied the confirmed property no later than this observation.
+
+The following passive live-control sample was captured without injecting test
+targets; the running EMS generated every command normally:
+
+| Condition | Value |
+| --- | --- |
+| Date and region | 2026-08-01, Zendure EU Cloud MQTT |
+| Hardware profile | `solarflow_800_pro_2` |
+| Broker endpoint | `mqtteu.zen-iot.com:8883` |
+| Observation window | 10 min 16 s |
+| EMS loop interval | 3 s |
+| Confirmed target range | 541–725 W |
+| MQTT publishes / telemetry confirmations | 165 / 165 (100%) |
+| Broker delivery | 165 / 165 `delivered` |
+| Timeouts / rejected commands | 0 / 0 |
+
+| Publish-to-confirmation statistic | Latency |
+| --- | ---: |
+| Minimum | 2.192 s |
+| Mean | 2.884 s |
+| Population standard deviation | 0.109 s |
+| Median (p50) | 2.886 s |
+| p90 | 2.941 s |
+| p95 | 3.012 s |
+| p99 | 3.367 s |
+| Maximum | 3.395 s |
+
+Nearest-rank percentiles are used. Of the 165 confirmations, 155 (93.9%) arrived
+within 3 seconds, 10 (6.1%) took more than 3 seconds, and none took more than
+4 seconds. The p95 already exceeds a 3-second loop; this is the measurement
+basis for the 5-second Cloud MQTT recommendation in the
+[configuration reference](configuration.md#system-settings). The full time from
+an external load change to confirmation additionally includes 0–1 loop
+intervals before publish; filters and ramps can intentionally require further
+cycles.
+
+This is one device, firmware, internet connection, cloud region and short time
+window—not a service-level guarantee. Other models, regions, network conditions
+and Zendure service load can produce different results. Use the
+[hardware latency probe](../developer/mqtt-write-latency-probe.md) when a local
+HTTP read-back is available and the goal is to isolate when the setpoint first
+became visible on the inverter rather than measuring the full cloud telemetry
+confirmation round trip.
+
 ### Live wiring
 
 Every write builds one correlated `CommandRecord` (`message_id`, `device_id`,
@@ -535,12 +588,11 @@ device:
 - no active command → publish immediately;
 - the same target while active → coalesce (no republish);
 - a *changed* target while a **no-ack** command awaits telemetry confirmation →
-  **supersede**: the in-flight command settles only via slow telemetry (up to
-  the ~30 s report cadence on the cloud broker), so the latest intent retires it
-  as terminal `superseded` and publishes now — regulation is never capped at
-  one command per report cycle, and a dead write path can never hide behind
-  queued targets. Publish rate stays bounded by the controller's own
-  deadband/ramp upstream;
+  **supersede**: the in-flight command can settle only via transport- and
+  device-dependent telemetry, so the latest intent retires it as terminal
+  `superseded` and publishes now — regulation is never capped at one command per
+  report cycle, and a dead write path can never hide behind queued targets.
+  Publish rate stays bounded by the controller's own deadband/ramp upstream;
 - a *changed* non-safety target while an **ack-capable** command is in flight →
   store the single **`pending_latest_target`** (never an unbounded queue); its
   acknowledgement window is short and bounded;

@@ -319,17 +319,22 @@ test("API then MQTT: proposal for a configured serial switches the transport in 
   await openMaintenanceEditor(page);
   await expect(configuredCards(page)).toHaveCount(3);
 
-  // The proposal matches the configured Local API inverter's serial: the only
-  // offer is the connection switch.
+  // The proposal matches the configured Local API inverter's serial, so the
+  // only offer is the connection switch. Its transport is a scalar family that
+  // cannot carry a power write, so taking it gives up the regulation - the card
+  // says so and offers it as a telemetry source rather than an equal swap.
   await runDiscovery(page);
   const results = page.locator("#maintenance-discovery-results");
   const switchButton = results.getByRole("button", {
-    name: "Use connection",
+    name: "Add as telemetry source",
   });
   await expect(switchButton).toHaveCount(1);
   await expect(
     results.getByRole("button", { name: "Add inverter" }),
   ).toHaveCount(0);
+  await expect(results.locator(".candidate-downgrade-note")).toContainText(
+    "cannot replace the current control connection",
+  );
 
   await switchButton.click();
   await expect(configuredCards(page)).toHaveCount(3);

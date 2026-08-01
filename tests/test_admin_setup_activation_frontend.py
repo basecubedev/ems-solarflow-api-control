@@ -92,8 +92,14 @@ def test_controlling_mqtt_selection_switches_to_an_active_api_device():
     assert _switched_enabled(_mqtt_selection(), "local_mqtt") is True
 
 
-def test_telemetry_only_mqtt_selection_switches_to_an_inactive_api_device():
-    assert _switched_enabled(_mqtt_selection(control=False), "local_mqtt") is False
+def test_a_control_capable_selection_not_controlling_stays_active():
+    """Not controlling is a capability gap, never a deactivation.
+
+    Setup answers this the same way Maintenance and the Local API path do:
+    activation is the logical device's enabled flag alone.
+    """
+
+    assert _switched_enabled(_mqtt_selection(control=False), "local_mqtt") is True
 
 
 def test_uncontrollable_mqtt_selection_switches_to_an_active_api_device():

@@ -268,6 +268,10 @@ videos before committing unless requested.
 When GitNexus is available and indexed, use impact analysis before editing
 important symbols, query/context for unfamiliar flows, and `detect_changes`
 before committing. Tool-managed GitNexus blocks MUST NOT be edited manually.
+Repository-local GitNexus CLI and MCP invocations MUST use
+`scripts/gitnexus-project` so `.gitnexusrc` and the shared analyzer lock apply.
+Repository-local analyze invocations MUST pass `--force` until the documented
+GitNexus 1.6.9 incremental LadybugDB/FTS failure is resolved.
 
 If GitNexus is unavailable, stale or fails, do not pretend it was used. Perform
 a manual blast-radius review with symbol/reference searches; inspect callers,

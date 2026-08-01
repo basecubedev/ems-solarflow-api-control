@@ -210,3 +210,28 @@ def test_maintenance_does_not_make_supported_inverter_telemetry_only():
         },
     )
     assert device["capabilities"]["write_output_limit"] is True
+
+
+@pytest.mark.parametrize(
+    ("security", "expected_tls"),
+    [
+        ("plain", False),
+        ("tls", True),
+        ("mqtts", True),
+        ("ssl", True),
+        ("system_ca", True),
+        ("secure", True),
+    ],
+)
+def test_both_flows_read_a_broker_tls_mode_the_same_way(security, expected_tls):
+    """One vocabulary for both flows, and it is the one EMS Core defines.
+
+    Setup and Maintenance each used to carry their own alias list. A broker
+    that reads as TLS in one flow and as plaintext in the other is a silent
+    downgrade for whichever flow the operator happens to use.
+    """
+
+    from admin.zendure_mqtt_broker_profiles import broker_tls_metadata
+
+    tls, _insecure = broker_tls_metadata({"security": security})
+    assert tls is expected_tls

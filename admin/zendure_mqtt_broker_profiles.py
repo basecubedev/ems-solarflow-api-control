@@ -42,6 +42,39 @@ LOCAL_BROKER_REF = "local_mqtt"
 _HOST_LABEL = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
 
 
+class BrokerSecurityError(ValueError):
+    """A draft broker names a TLS mode this installation cannot resolve."""
+
+
+def broker_tls_metadata(broker):
+    """Resolve a draft broker's ``(tls, tls_insecure)`` exactly as Core does.
+
+    The one TLS reading for both Admin flows. Setup's manual form sends a
+    ``security`` mode, Maintenance's legacy broker form sends a ``tls`` boolean,
+    and both are reconciled by the shared EMS resolver — so the alias vocabulary
+    can never be narrower here than the one the runtime accepts, which would
+    provision a plaintext broker for a mode the operator wrote as secure.
+
+    An unresolvable mode raises rather than falling back to plain: silently
+    downgrading transport security is the one answer this must never give.
+    """
+
+    if not isinstance(broker, dict):
+        return False, False
+    mode = broker.get("security")
+    mode = str(mode).strip() if mode is not None else ""
+    try:
+        return resolve_mqtt_tls_metadata(
+            tls_mode=mode or None,
+            tls=optional_json_bool(broker.get("tls"), "tls", default=None),
+            tls_insecure=optional_json_bool(
+                broker.get("tls_insecure"), "tls_insecure", default=None
+            ),
+        )
+    except ValueError as exc:
+        raise BrokerSecurityError(str(exc)) from exc
+
+
 class BrokerEndpointError(ValueError):
     """A proposal's broker endpoint is explicitly invalid (bad port/TLS metadata)."""
 

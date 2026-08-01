@@ -83,8 +83,36 @@ API, no broker redirect, no reflashing.
   is used to reach the cloud broker (TLS-only) and list your devices.
 - **Latency note:** because this connection runs over an online link through
   Zendure's cloud infrastructure, it is **slower and less predictable than a
-  local connection**. For responsive, fully local control prefer the Local API
-  or a Local MQTT setup where your hardware supports it.
+  local connection**. In one 10-minute SolarFlow 800 Pro 2 measurement, the
+  inverter confirmed 165 of 165 commands: typically after about 2.9 seconds,
+  with a slowest result of 3.4 seconds. These are measured values, not a
+  guaranteed cloud response time. For responsive, fully local control prefer
+  the Local API or a Local MQTT setup where your hardware supports it.
+
+### What cloud latency means in daily use
+
+The EMS loop and the cloud transfer happen one after the other:
+
+```text
+load changes → wait for next EMS loop → send through Zendure Cloud → device confirms
+```
+
+Once EMS sent a command, the tested inverter usually confirmed it in about
+2.9 seconds. Before sending, a load change may wait up to one configured loop
+interval. With the recommended **5-second loop**, confirmation therefore
+arrived about 2.9 to 7.9 seconds after a load change under the measured
+conditions, before any additional filtering or ramping; the inverter may start
+applying the value earlier than the confirmation arrives.
+
+Use **5 seconds** for `system.loop_interval` with Zendure Cloud MQTT. A 3-second
+loop is possible, but the measured p95 was already 3.01 seconds, leaving no
+useful margin when the cloud is briefly slower. This setting does not make the
+cloud itself faster; it prevents a new normal regulation cycle from immediately
+overlapping the previous command's usual confirmation window. See the
+[technical measurement](../technical/zendure-mqtt-power-control.md#live-cloud-latency-measurement)
+for the exact test conditions and statistics, and the
+[configuration reference](../technical/configuration.md#system-settings) for
+the authoritative setting guidance.
 
 > **Status: supported for telemetry; output control requires an exact supported
 > model.** Applying a selected cloud device provisions the runtime MQTT
@@ -111,9 +139,9 @@ API, no broker redirect, no reflashing.
 > **Run only one controller:** disable Zendure HEMS, Smart Matching and
 > Zendure schedules when EMS controls a device over the cloud broker. The
 > corrected cloud command path is protocol-verified against reference
-> implementations, captured hardware traffic and a real-broker test harness;
-> re-validation of live cloud control on physical hardware (SolarFlow 800
-> Pro 2) with the corrected path is pending. Prefer a local transport for live
+> implementations, captured hardware traffic and a real-broker test harness,
+> and was live-validated on a physical SolarFlow 800 Pro 2 on 2026-08-01
+> (165/165 commands telemetry-confirmed). Prefer a local transport for live
 > control (lower latency) — [reports welcome](#help-improve-compatibility).
 
 Details: [Zendure MQTT discovery (cloud)](../technical/admin-discovery.md#zendure-mqtt-discovery-cloud)

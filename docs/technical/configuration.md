@@ -284,7 +284,16 @@ value used by strict night/minSoc idle. Use `0` to disable this floor and the
 idle parking behavior.
 
 `system.loop_interval` is the control loop interval in seconds (Admin label:
-**Loop interval**). New configurations default to 5 seconds.
+**Loop interval**). New configurations default to 5 seconds. Keep that default
+for Zendure Cloud MQTT control: a live SolarFlow 800 Pro 2 measurement observed
+a 2.886 s median and 3.012 s p95 from MQTT publish to confirmed device
+telemetry. A 3 s loop therefore has effectively no cloud-latency margin, whereas
+5 s leaves useful headroom for normal jitter. This interval is the time between
+EMS decisions; a load change can wait up to one additional interval before its
+command is published, and filtering or ramp limits may intentionally spread the
+final target over several cycles. See the
+[live Cloud MQTT latency measurement](zendure-mqtt-power-control.md#live-cloud-latency-measurement)
+for the measurement definition, complete statistics and limitations.
 
 `system.redistribute_clamped_power` redistributes target power when one device
 is clamped by limits.
@@ -1071,6 +1080,17 @@ topic family, decided by the shared helper
 `ems.zendure_mqtt.capability.mqtt_output_control_capability`. Admin Setup,
 Maintenance and manual entry all create a controllable device for a supported
 model without hand-editing `config.json`.
+
+`write_output_limit` is a **capability, not an operator preference**. Admin
+derives it from the pinned model, the transport and a complete write route and
+shows it read-only, so a control-capable inverter is controlled whenever it is
+enabled — the same rule a Local API device follows, which carries no such key at
+all. Whether a device participates at all is its `enabled` flag, and that is the
+only activation authority: a device that cannot control output on its transport
+is telemetry-only by capability and stays active. Hand-editing
+`write_output_limit=false` on a control-capable device remains valid config and
+keeps the device telemetry-only, but Admin will re-derive it to `true` on the
+next Maintenance apply, where it appears in the preview diff.
 
 **Scope of MQTT control.** Output-limit control is supported where the resolved
 hardware profile carries an implemented write method: `zensdk_properties_write`

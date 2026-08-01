@@ -156,11 +156,13 @@ the Admin Console (see **Start** above), open `http://127.0.0.1:8090`, and pick
    control can be enabled. Choosing **Unknown / telemetry only**, omitting the
    model, or receiving conflicting model evidence always keeps the device
    read-only; generation or topic family alone never authorizes writes. A
-   supported exact model on a compatible transport exposes **Enable EMS output
-   control over MQTT** — which requires the MQTT device ID — and joins the same
-   control loop as a local API device — without
-   hand-editing the config file (see
+   supported exact model on a compatible transport joins the same control loop
+   as a local API device without hand-editing the config file (see
    [Zendure MQTT output control](../technical/configuration.md#zendure-mqtt-output-control)).
+   Output control is not a checkbox: it follows the model and the write route,
+   so the form states what is still missing — the MQTT device ID, and the
+   product key where the generation needs one — and adds the device as a
+   telemetry source until you supply them.
    Switching a device to another connection keeps its activation state in both
    directions, the same rule the Admin maintenance flow follows: active stays
    active, and a device you deactivated stays deactivated.

@@ -307,3 +307,61 @@ def test_switch_http_to_mqtt_writes_nested_settings(tmp_path):
     assert merged["grid_meter"]["mqtt"]["topic"] == "meter/power"
     assert "ip" not in merged["grid_meter"], "stale HTTP fields must be stripped"
     assert _core_accepts_grid_meter(merged)
+
+
+# --- Contract C: a variant switch obeys the EMS-owned catalog ---------------
+
+
+def test_switch_between_mqtt_variants_drops_fields_the_variant_cannot_carry(tmp_path):
+    """A D0 meter must not inherit the generic MQTT meter's value_path.
+
+    The catalog decides which keys each variant may carry, and the fresh-install
+    preview already strips by exactly that. Maintenance used its own coarse
+    MQTT/non-MQTT split, so a switch inside the MQTT family left keys behind
+    that the target variant does not know.
+    """
+
+    from ems.config_catalog import grid_meter_variant_field_spec
+
+    config = _base_config()
+    config["grid_meter"] = {
+        "type": "mqtt",
+        "mqtt": {
+            "host": "192.168.1.20",
+            "port": 1883,
+            "topic": "meter/power",
+            "payload_format": "json",
+            "value_path": "total.power",
+            "max_age_seconds": 30,
+        },
+    }
+    _write_config(tmp_path, config)
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    draft = loaded["draft"]
+    draft["grid_meter"]["type"] = "zendure_smartmeter_d0"
+    # D0 only reads a plain number, so the operator switches this along with
+    # the type; value_path is the key that has no D0 meaning at all.
+    draft["grid_meter"]["mqtt"]["payload_format"] = "number"
+
+    prepared = prepare_maintenance_config_apply(
+        draft, loaded["revision"], base_dir=str(tmp_path)
+    )
+    assert prepared["status"] == "ok", prepared
+    merged = json.loads(prepared["payload"])
+
+    allowed = grid_meter_variant_field_spec("zendure_smartmeter_d0")["mqtt_keys"]
+    assert set(merged["grid_meter"]["mqtt"]) <= set(allowed)
+    assert "value_path" not in merged["grid_meter"]["mqtt"]
+    assert merged["grid_meter"]["mqtt"]["topic"] == "meter/power"
+
+
+def test_editable_mqtt_grid_meter_keys_come_from_the_catalog(tmp_path):
+    """The editable set is derived, so a new catalog field is editable at once."""
+
+    from admin.maintenance_config import _MQTT_GRID_METER_EDIT_KEYS
+    from ems.config_catalog import GRID_METER_KNOWN_MQTT_KEYS
+
+    editable = set(_MQTT_GRID_METER_EDIT_KEYS)
+    assert editable == (set(GRID_METER_KNOWN_MQTT_KEYS) - {"password"}) | {
+        "broker_ref"
+    }

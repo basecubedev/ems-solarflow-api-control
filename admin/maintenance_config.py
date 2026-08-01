@@ -24,9 +24,13 @@ from admin.setup_config import (
     _set_path,
     grid_meter_variant_catalog,
     hardware_section_catalog,
+    mqtt_grid_meter_keys,
+    strip_incompatible_grid_meter_fields,
 )
 from admin.zendure_mqtt_broker_profiles import (
     BrokerEndpointError,
+    BrokerSecurityError,
+    broker_tls_metadata,
     default_zendure_cloud_auth_available,
     draft_broker_endpoint,
     endpoint_broker_profile,
@@ -51,11 +55,13 @@ from ems.config import (
     resolve_grid_meter_mqtt_settings,
 )
 from ems.config_catalog import (
+    GRID_METER_KNOWN_TOP_KEYS,
     ZENDURE_MQTT_BROKER_HELP,
     device_common_defaults,
     device_common_field_keys,
     get_config_feature_field_index,
     get_config_feature_sections,
+    grid_meter_variant_field_spec,
     http_grid_meter_types,
 )
 from ems.mqtt_credentials import find_mqtt_credential_consumer_issues
@@ -93,28 +99,16 @@ from ems.zendure_mqtt.config_entries import (
 # validated here without a duplicated maintenance-only list.
 _HOST_GRID_METER_TYPES = http_grid_meter_types()
 _MQTT_GRID_METER_TYPES = tuple(MQTT_GRID_METER_TYPES)
-# Flat MQTT keys that may linger under grid_meter from a legacy/other meter type.
-_MQTT_GRID_METER_FLAT_KEYS = (
-    "host",
-    "port",
-    "username",
-    "password",
-    "topic",
-    "payload_format",
-    "value_path",
-    "max_age_seconds",
-)
+# Flat MQTT keys that may linger under grid_meter from a legacy/other meter
+# type. Derived from the catalog: the legacy flat representation carries the
+# same key names the nested block does, only one level higher.
+_MQTT_GRID_METER_FLAT_KEYS = tuple(sorted(mqtt_grid_meter_keys()))
 # Non-secret MQTT grid-meter values the editor may change. The password is
-# handled separately (keep/clear/set) and never round-trips through the draft.
-_MQTT_GRID_METER_EDIT_KEYS = (
-    "broker_ref",
-    "host",
-    "port",
-    "username",
-    "topic",
-    "payload_format",
-    "value_path",
-    "max_age_seconds",
+# handled separately (keep/clear/set) and never round-trips through the draft;
+# broker_ref names a profile rather than a connection value, so the catalog
+# does not list it as a meter field.
+_MQTT_GRID_METER_EDIT_KEYS = tuple(
+    sorted((mqtt_grid_meter_keys() - {"password"}) | {"broker_ref"})
 )
 
 _SERIAL_PLACEHOLDER = "YOUR_SN"
@@ -549,10 +543,20 @@ def _device_draft(device, broker_sources=None):
     return draft
 
 
-def _broker_uses_tls(broker):
-    if broker.get("tls") is True:
+def _stored_broker_uses_tls(broker):
+    """TLS flag for the editable view of a stored legacy broker.
+
+    A view cannot refuse, so an unresolvable stored mode is presented as TLS
+    rather than as plaintext: showing it as plain is the one reading that could
+    talk an operator into saving a downgrade of a broker EMS Core would have
+    rejected at startup.
+    """
+
+    try:
+        tls, _insecure = broker_tls_metadata(broker)
+    except BrokerSecurityError:
         return True
-    return str(broker.get("security") or "").strip().lower() in ("tls", "mqtts", "ssl")
+    return tls
 
 
 def _has_named_brokers(broker):
@@ -609,7 +613,7 @@ def _zendure_mqtt_broker_draft(broker):
         "enabled": bool(top_host),
         "host": top_host,
         "port": broker.get("port"),
-        "tls": _broker_uses_tls(broker),
+        "tls": _stored_broker_uses_tls(broker),
         "username": str(broker.get("username") or "").strip(),
         "has_password": bool(broker.get("password")),
     }
@@ -1587,7 +1591,7 @@ def _merge_grid_meter(merged, grid_meter, issues):
     if new_type != original_type:
         _strip_stale_grid_meter_keys(target)
     if new_type in _MQTT_GRID_METER_TYPES:
-        _merge_grid_meter_mqtt(target, grid_meter.get("mqtt"))
+        _merge_grid_meter_mqtt(target, grid_meter.get("mqtt"), new_type)
         broker = grid_meter.get("broker")
         if isinstance(broker, dict) and broker:
             _resolve_draft_broker_ref(
@@ -1613,7 +1617,22 @@ def _grid_meter_mqtt_container(target):
     return nested
 
 
-def _merge_grid_meter_mqtt(target, draft_mqtt):
+def _editable_mqtt_grid_meter_keys(meter_type):
+    """Editable MQTT keys for one variant, or the union for an unknown type.
+
+    ``broker_ref`` names a broker profile rather than a connection value, so it
+    is editable for every MQTT variant; the password never round-trips through
+    the draft and is handled separately.
+    """
+
+    spec = grid_meter_variant_field_spec(meter_type) if meter_type else None
+    if spec is None:
+        return _MQTT_GRID_METER_EDIT_KEYS
+    allowed = (set(spec["mqtt_keys"]) - {"password"}) | {"broker_ref"}
+    return tuple(key for key in _MQTT_GRID_METER_EDIT_KEYS if key in allowed)
+
+
+def _merge_grid_meter_mqtt(target, draft_mqtt, meter_type=None):
     """Write edited MQTT grid-meter values, preserving the stored representation.
 
     A value is only written when it differs from the currently stored one, so
@@ -1622,10 +1641,15 @@ def _merge_grid_meter_mqtt(target, draft_mqtt):
     meter stays flat, a nested one stays nested). The password follows the
     broker rules: blank keeps the stored secret, ``clear_password`` removes it,
     a non-empty value replaces it.
+
+    Editable keys are narrowed to what the selected variant may carry. A draft
+    still holds the values of the variant it was loaded from, so without this a
+    type switch would strip a foreign key and then write it straight back.
     """
 
     if not isinstance(draft_mqtt, dict) or not draft_mqtt:
         return
+    editable = _editable_mqtt_grid_meter_keys(meter_type)
     current = grid_meter_mqtt_settings(target)
     nested = target.get("mqtt")
     has_nested = isinstance(nested, dict)
@@ -1642,7 +1666,7 @@ def _merge_grid_meter_mqtt(target, draft_mqtt):
         has_nested = True
         return nested
 
-    for key in _MQTT_GRID_METER_EDIT_KEYS:
+    for key in editable:
         if key not in draft_mqtt:
             continue
         value = draft_mqtt.get(key)
@@ -1673,22 +1697,22 @@ def _merge_grid_meter_mqtt(target, draft_mqtt):
 def _strip_stale_grid_meter_keys(target):
     """Drop keys that do not belong to the selected grid meter type.
 
-    Keeps a type switch clean, e.g. moving from Tasmota/MQTT to a plain HTTP/IP
-    meter must not leave ``url``/``power_path``/``mqtt`` (or flat MQTT keys) behind.
+    The per-variant decision is the shared catalog-driven one, so a switch
+    inside the MQTT family is cleaned up as precisely as a switch between HTTP
+    and MQTT. Flat legacy MQTT keys are a maintenance-only concern — the setup
+    preview never writes that representation — so they are removed here, on top
+    of the shared cleanup, whenever the target variant does not read them from
+    the top level.
     """
+
     meter_type = str(target.get("type") or "").strip().lower()
-    if meter_type in _MQTT_GRID_METER_TYPES:
-        for key in ("ip", "url", "power_path", "channels", *_MQTT_GRID_METER_FLAT_KEYS):
-            target.pop(key, None)
-        return
-    target.pop("mqtt", None)
+    strip_incompatible_grid_meter_fields(target, meter_type)
     for key in _MQTT_GRID_METER_FLAT_KEYS:
+        if key in GRID_METER_KNOWN_TOP_KEYS:
+            # Also a legitimate nested-variant top key (e.g. ``port``); the
+            # shared cleanup already decided it.
+            continue
         target.pop(key, None)
-    if meter_type != "tasmota_http":
-        target.pop("url", None)
-        target.pop("power_path", None)
-    if meter_type not in ("shelly", "shelly_3em_gen1"):
-        target.pop("channels", None)
 
 
 def _merge_features(merged, features):

@@ -100,7 +100,7 @@ test("Fresh Setup manual entry has separate physical serial and MQTT device ID f
   await expect(page.locator("#config-mqtt-device-error")).toBeHidden();
 });
 
-test("Fresh Setup manual output control requires the explicit MQTT device ID", async ({
+test("Fresh Setup manual output control follows the write route, and says so", async ({
   page,
 }) => {
   test.setTimeout(90_000);
@@ -111,22 +111,26 @@ test("Fresh Setup manual output control requires the explicit MQTT device ID", a
   await page.locator("#config-mqtt-device-generation").selectOption("hub_hyper_legacy");
   await page.locator("#config-mqtt-device-model").selectOption("hyper_2000");
   await page.locator("#config-mqtt-device-serial").fill("PHYSICAL-SERIAL");
-  const control = page.locator("#config-mqtt-device-control");
-  await expect(control).toBeVisible();
-  await control.check();
 
-  // Enabling control without an explicit MQTT device ID is rejected inline: the
-  // serial is never the route id.
-  await page.locator("#config-mqtt-device-add").click();
-  const error = page.locator("#config-mqtt-device-error");
-  await expect(error).toBeVisible();
-  await expect(error).toContainText("MQTT device ID is required");
-  const list = page.locator("#config-mqtt-device-list");
-  await expect(list.locator(".config-mqtt-device-row")).toHaveCount(0);
+  // Output control is a capability, not a checkbox: without the explicit route
+  // id the form states that the device would be added as a telemetry source.
+  // The serial is never the route id.
+  await expect(page.locator("#config-mqtt-device-control")).toHaveCount(0);
+  const controlHelp = page.locator("#config-mqtt-device-control-help");
+  await expect(controlHelp).toBeVisible();
+  await expect(controlHelp).toContainText("MQTT device ID");
+  await expect(controlHelp).toContainText("telemetry source");
 
-  // Providing the explicit route id makes the entry addressable and it is added.
+  // The route id alone is not the whole write route on this generation; the
+  // hint moves on to the next missing part instead of claiming control.
   await page.locator("#config-mqtt-device-mqttid").fill("ROUTE-DEV-ID");
+  await expect(controlHelp).toContainText("product key");
+
+  await page.locator("#config-mqtt-device-productkey").fill("PRODUCT-KEY");
+  await expect(controlHelp).toContainText("Output control: enabled");
+
   await page.locator("#config-mqtt-device-add").click();
-  await expect(error).toBeHidden();
+  await expect(page.locator("#config-mqtt-device-error")).toBeHidden();
+  const list = page.locator("#config-mqtt-device-list");
   await expect(list.locator(".config-mqtt-device-row")).toHaveCount(1);
 });

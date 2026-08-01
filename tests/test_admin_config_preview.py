@@ -1894,3 +1894,83 @@ def test_cloud_auth_with_mqtt_device_present_does_not_warn(tmp_path):
     )
     result = generator.generate([_device(1, config_name="WR1")])
     assert "zendure_mqtt_cloud_devices_not_selected" not in _warning_codes(result)
+
+
+# --- TLS mode is read exactly as EMS Core reads it --------------------------
+
+
+@pytest.mark.parametrize("security", ["tls", "mqtts", "ssl", "system_ca", "secure"])
+def test_every_core_tls_alias_provisions_a_tls_broker(security):
+    """Admin must not read a mode as plain that Core reads as TLS.
+
+    Both sides accepting the same vocabulary is what keeps a broker from being
+    provisioned without transport security while the operator asked for it.
+    """
+
+    result = ConfigPreviewGenerator(_ReleaseManager()).generate(
+        [_device(1), _meter()],
+        1,
+        zendure_mqtt_broker={
+            "name": "local_mqtt",
+            "host": "192.168.1.20",
+            "security": security,
+        },
+        zendure_mqtt_manual_devices=[_manual_mqtt()],
+    )
+
+    assert result["ready"] is True, result["validation"]
+    profile = result["config"]["zendure_mqtt"]["brokers"]["local_mqtt"]
+    assert profile["tls"] is True
+    assert profile["port"] == 8883, "a TLS broker defaults to the TLS port"
+
+
+def test_the_insecure_tls_mode_keeps_its_verification_opt_out():
+    """Silently upgrading to verified TLS would break the connection instead."""
+
+    result = ConfigPreviewGenerator(_ReleaseManager()).generate(
+        [_device(1), _meter()],
+        1,
+        zendure_mqtt_broker={
+            "name": "local_mqtt",
+            "host": "192.168.1.20",
+            "security": "insecure_no_verify",
+        },
+        zendure_mqtt_manual_devices=[_manual_mqtt()],
+    )
+
+    assert result["ready"] is True, result["validation"]
+    profile = result["config"]["zendure_mqtt"]["brokers"]["local_mqtt"]
+    assert profile["tls"] is True
+    assert profile["tls_insecure"] is True
+
+
+def test_an_unknown_security_mode_is_refused_not_silently_plain():
+    """Core raises on an unknown mode; Admin must not answer it with plaintext."""
+
+    result = ConfigPreviewGenerator(_ReleaseManager()).generate(
+        [_device(1), _meter()],
+        1,
+        zendure_mqtt_broker={
+            "name": "local_mqtt",
+            "host": "192.168.1.20",
+            "security": "sort-of-secure",
+        },
+        zendure_mqtt_manual_devices=[_manual_mqtt()],
+    )
+
+    assert result["ready"] is False
+    codes = {issue["code"] for issue in result["validation"]["errors"]}
+    assert "zendure_mqtt_broker_security_invalid" in codes
+
+
+def test_plain_stays_plain():
+    result = ConfigPreviewGenerator(_ReleaseManager()).generate(
+        [_device(1), _meter()],
+        1,
+        zendure_mqtt_broker=dict(_LOCAL_BROKER, security="plain"),
+        zendure_mqtt_manual_devices=[_manual_mqtt()],
+    )
+
+    profile = result["config"]["zendure_mqtt"]["brokers"]["local_mqtt"]
+    assert profile["tls"] is False
+    assert profile.get("tls_insecure") in (None, False)

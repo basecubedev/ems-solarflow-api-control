@@ -340,23 +340,29 @@ This path inspects and edits an existing installation.
   identity. Choose **Unknown / telemetry only** when the exact model cannot be
   established. The write protocol, validation maturity, supported operations,
   and current control readiness are shown read-only from the Core catalog.
-  Output control is offered only for a supported exact model on a compatible
-  transport; a topic family or generation alone never enables it. Conflicting
-  discovery evidence stays telemetry-only until you review and correct the
-  model. A newly added device that resolves to a control-ready model with a
-  write target enables output control by default, so a supported inverter you
-  add is controllable without a second step; clear the **Output control**
-  checkbox to keep it telemetry-only instead. An existing device's model and
-  control setting are preserved on a no-op apply and never silently changed (see
+  **Output control** is shown read-only, because it is a capability rather than
+  a setting: EMS/Core derives it from the exact model, the transport and a
+  complete write route. A supported exact model on a compatible transport is
+  controlled; a topic family or hardware generation alone never enables it, and
+  conflicting discovery evidence stays telemetry-only until you review and
+  correct the model. When control is unavailable the card names the reason. A
+  supported inverter you add or switch to is therefore controllable without a
+  second step, exactly like a Local API inverter, which has no such switch
+  either (see
   [Zendure MQTT output control](../technical/configuration.md#zendure-mqtt-output-control)).
 
   Switching an inverter between the local API and Zendure MQTT keeps its
   activation state, in both directions: a device that was under EMS control
   stays under EMS control on the new connection — including output control when
   the new transport can control it — and a device you deactivated stays
-  deactivated. A device that is telemetry-only because its transport has no
-  verified write method is not treated as a decision: switching it to the local
-  API activates it. Only you make a device inactive.
+  deactivated. Activation is the device's **Enabled** state and nothing else; a
+  device that cannot control output on its transport is telemetry-only by
+  capability, which never deactivates it. Only you make a device inactive.
+
+  A discovered connection that cannot control output is offered as **Add as
+  telemetry source** rather than as a connection swap, with a warning, so
+  replacing a working control connection with a telemetry-only one is a visible
+  decision instead of a silent loss of regulation.
   Stored passwords (broker or MQTT grid meter) are never displayed; leave the
   password field blank to keep one, or use the clear checkbox to remove it.
 

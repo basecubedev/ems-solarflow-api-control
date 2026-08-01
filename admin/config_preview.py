@@ -9,11 +9,17 @@ from admin.device_common_fields import materialize_common_device_defaults
 from admin.install_context import detect_install_context
 from admin.inverter_names import next_compact_inverter_name
 from admin.releases import ReleaseError
-from admin.setup_config import apply_device_config_values, apply_setup_features
+from admin.setup_config import (
+    apply_device_config_values,
+    apply_setup_features,
+    strip_incompatible_grid_meter_fields,
+)
 from admin.zendure_mqtt_broker_profiles import (
     LOCAL_BROKER_REF as _LOCAL_BROKER_REF,
     BrokerEndpointError as _BrokerEndpointError,
+    BrokerSecurityError,
     broker_endpoint as _broker_endpoint,
+    broker_tls_metadata,
     default_zendure_cloud_auth_available as _default_zendure_cloud_auth_available,
     existing_broker_profiles as _existing_broker_profiles,
     resolve_broker_ref as _resolve_broker_ref,
@@ -38,8 +44,6 @@ from ems.config import (
     zendure_smartmeter_d0_topic,
 )
 from ems.config_catalog import (
-    GRID_METER_KNOWN_MQTT_KEYS,
-    GRID_METER_KNOWN_TOP_KEYS,
     grid_meter_types,
     grid_meter_variant_field_spec,
 )
@@ -678,12 +682,6 @@ def _validated_d0_serial(proposal):
     return resolved, None
 
 
-def _broker_uses_tls(broker):
-    if broker.get("tls") is True:
-        return True
-    return str(broker.get("security") or "").strip().lower() in ("tls", "mqtts", "ssl")
-
-
 def manual_broker_name(broker):
     """The broker-profile ref a manual broker entry maps to (with default)."""
 
@@ -733,7 +731,16 @@ def _apply_manual_zendure_mqtt_broker(preview, broker, validation):
             )
         )
         return name
-    tls = _broker_uses_tls(broker)
+    try:
+        tls, tls_insecure = broker_tls_metadata(broker)
+    except BrokerSecurityError as exc:
+        validation["errors"].append(
+            _issue(
+                "zendure_mqtt_broker_security_invalid",
+                f"The Zendure MQTT broker has an unusable connection security: {exc}.",
+            )
+        )
+        return name
     try:
         port = parse_mqtt_port(broker.get("port"), default=default_mqtt_port(tls))
     except ValueError as exc:
@@ -751,6 +758,8 @@ def _apply_manual_zendure_mqtt_broker(preview, broker, validation):
         "port": port,
         "tls": tls,
     }
+    if tls_insecure:
+        profile["tls_insecure"] = True
     username = str(broker.get("username") or "").strip()
     password = broker.get("password")
     has_password = isinstance(password, str) and bool(password)
@@ -934,37 +943,6 @@ def _apply_d0_defaults(grid, meter, validation):
         mqtt["topic"] = existing_topic
     mqtt["payload_format"] = "number"
     mqtt.pop("value_path", None)
-
-
-def _strip_incompatible_grid_meter_fields(grid, grid_type):
-    """Drop fields that belong to a different grid-meter variant.
-
-    The allowed keys come from the EMS-owned catalog (``config_catalog``), so the
-    preview stays internally consistent after a variant switch. Only keys that
-    belong to some known variant are eligible for removal; operator-defined custom
-    keys unrelated to any known grid-meter variant are preserved.
-    """
-
-    spec = grid_meter_variant_field_spec(grid_type)
-    if spec is None:
-        # Unknown type: fall back to the coarse HTTP<->MQTT split.
-        grid.pop("mqtt", None)
-        return
-
-    allowed = spec["keys"]
-    for key in list(grid.keys()):
-        if key in GRID_METER_KNOWN_TOP_KEYS and key not in allowed:
-            grid.pop(key, None)
-
-    mqtt = grid.get("mqtt")
-    if isinstance(mqtt, dict):
-        allowed_mqtt = spec["mqtt_keys"]
-        if not allowed_mqtt:
-            grid.pop("mqtt", None)
-        else:
-            for key in list(mqtt.keys()):
-                if key in GRID_METER_KNOWN_MQTT_KEYS and key not in allowed_mqtt:
-                    mqtt.pop(key, None)
 
 
 def _normalize_bundled_influx_secret(config):
@@ -1410,7 +1388,7 @@ class ConfigPreviewGenerator:
         meter = meters[0] if meters else {}
         if grid_type == ZENDURE_SMARTMETER_D0_GRID_METER_TYPE:
             _apply_d0_defaults(grid, meter, validation)
-        _strip_incompatible_grid_meter_fields(grid, grid_type)
+        strip_incompatible_grid_meter_fields(grid, grid_type)
 
     def _apply_grid_meter(
         self, preview, meters, template, names, validation,

@@ -11,6 +11,8 @@ duplicates EMS runtime logic.
 import copy
 
 from ems.config_catalog import (
+    GRID_METER_KNOWN_MQTT_KEYS,
+    GRID_METER_KNOWN_TOP_KEYS,
     GRID_METER_VARIANTS,
     INVERTER_CONNECTION_VARIANTS,
     SETUP_GROUPS,
@@ -19,6 +21,7 @@ from ems.config_catalog import (
     ZENDURE_MQTT_GENERATIONS,
     get_config_feature_field_index,
     get_config_feature_sections,
+    grid_meter_variant_field_spec,
 )
 from ems.mqtt_control.zendure_profiles import hardware_profile_selector_options
 from admin.device_common_fields import coerce_field_value
@@ -57,6 +60,49 @@ def grid_meter_variant_catalog():
             "level": variant.get("level", "normal"),
         }
     return variants
+
+
+def mqtt_grid_meter_keys():
+    """Every ``grid_meter.mqtt`` key any known variant may carry.
+
+    Derived, so a field added to ``GRID_METER_VARIANTS`` is known to both Admin
+    flows at once instead of waiting for a hand-maintained mirror list.
+    """
+
+    return frozenset(GRID_METER_KNOWN_MQTT_KEYS)
+
+
+def strip_incompatible_grid_meter_fields(grid, grid_type):
+    """Drop grid-meter fields that belong to a different variant.
+
+    The allowed keys come from the EMS-owned catalog
+    (:func:`grid_meter_variant_field_spec`), so both Admin flows clean up a
+    variant switch the same way — including a switch *inside* the MQTT family,
+    where a coarse MQTT/non-MQTT split leaves keys the target variant cannot
+    carry. Only keys belonging to some known variant are eligible for removal;
+    operator-defined custom keys survive untouched.
+    """
+
+    spec = grid_meter_variant_field_spec(grid_type)
+    if spec is None:
+        # Unknown type: fall back to the coarse HTTP<->MQTT split.
+        grid.pop("mqtt", None)
+        return
+
+    allowed = spec["keys"]
+    for key in list(grid.keys()):
+        if key in GRID_METER_KNOWN_TOP_KEYS and key not in allowed:
+            grid.pop(key, None)
+
+    mqtt = grid.get("mqtt")
+    if isinstance(mqtt, dict):
+        allowed_mqtt = spec["mqtt_keys"]
+        if not allowed_mqtt:
+            grid.pop("mqtt", None)
+        else:
+            for key in list(mqtt.keys()):
+                if key in GRID_METER_KNOWN_MQTT_KEYS and key not in allowed_mqtt:
+                    mqtt.pop(key, None)
 
 
 def hardware_section_catalog(mode):

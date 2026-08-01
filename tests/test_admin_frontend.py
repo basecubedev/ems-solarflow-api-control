@@ -5942,11 +5942,13 @@ def test_js_manual_mqtt_payload_carries_explicit_route_device_id():
 
 def test_js_manual_mqtt_control_requires_explicit_route_device_id():
     js = _read("admin.js")
-    adder = js.split("function addManualMqttDevice", 1)[1].split("\nfunction ", 1)[0]
+    available = _extract_fn(js, "manualMqttControlAvailable")
     # Output control cannot be enabled from manual entry without an explicit MQTT
-    # device ID; the serial is never used as the route id.
-    assert "wantsControl && !mqttId" in adder
-    assert "MQTT device ID is required" in adder
+    # device ID; the serial is never used as the route id. Without one the device
+    # is added as a telemetry source and the form says so before it is added.
+    assert 'deviceMqttId.value' in available
+    assert 'if (!routeId) return { supported: true, enabled: false' in available
+    assert "MQTT device ID" in available
 
 
 def test_maintenance_config_has_zendure_mqtt_broker_fields():
@@ -6011,7 +6013,7 @@ def test_maintenance_mqtt_control_default_is_route_aware():
     # that includes the explicit MQTT route device id.
     assert "routeDeviceId" in sync
     assert "routeComplete" in sync
-    assert "mconfigMqttShouldDefaultControl(device, supported, routeComplete)" in sync
+    assert "const shouldControl = supported && routeComplete" in sync
 
 
 def test_maintenance_discovery_review_can_show_mqtt_proposals():
@@ -7128,24 +7130,22 @@ def test_setup_mqtt_proposal_card_shows_friendly_write_protocol_and_reason():
     assert "mqttControlReasonLabel(" in card
 
 
-def test_maintenance_existing_mqtt_device_gets_real_control_checkbox():
+def test_maintenance_mqtt_device_reports_control_instead_of_offering_it():
     js = _read("admin.js")
     card = _extract_fn(js, "renderMaintenanceZendureMqttDevice")
-    # The real, accessible checkbox is the Maintenance control for new and
-    # existing devices alike — never a read-only status note in its place.
-    assert "controlRow.hidden = !supported;" in card
-    assert "mconfigCheckboxControl(device.output_control === true" in card
+    # Output control is a capability EMS/Core derives, so the card reports the
+    # verdict for new and existing devices alike and offers no second decision.
+    assert "outputControlStatus" in card
+    assert "mconfigCheckboxControl(device.output_control" not in card
     assert "isNewDevice" not in card
 
 
-def test_maintenance_output_control_toggle_invalidates_reviewed_preview():
+def test_maintenance_control_status_names_the_backend_block_reason():
     js = _read("admin.js")
     card = _extract_fn(js, "renderMaintenanceZendureMqttDevice")
-    callback = card.split(
-        "mconfigCheckboxControl(device.output_control === true", 1
-    )[1].split("),", 1)[0]
 
-    assert 'mconfigMarkDraftChanged("manual")' in callback
+    assert "mqttControlReasonLabel(" in card
+    assert "mconfigDeviceControlBlockReason(device)" in card
 
 
 def test_maintenance_proposal_draft_keeps_opaque_server_resolution_identity():

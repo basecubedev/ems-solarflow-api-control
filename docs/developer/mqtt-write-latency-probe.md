@@ -7,13 +7,15 @@ It publishes the **exact production command** the EMS control loop would build
 (the atomic model-specific property set — `smartMode`/`acMode`/`outputLimit`/
 `inputLimit` for ZenSDK models — at QoS 1, never retained, on the `iot/…`
 topic) and reads the state back over the device's **local HTTP API**, polled
-fast. This sidesteps the ~30 s MQTT telemetry cadence: the HTTP
+fast. This decouples the measurement from device- and transport-dependent MQTT
+report scheduling: a live 800 Pro 2 Cloud run produced fresh matching telemetry
+in about 3 s, while periodic reports can be slower. The HTTP
 `/properties/report` endpoint can be read several times per second, so the
-measured latency is the real end-to-end time from immediately before local
-submission to *"new `outputLimit` visible on the device"*, bounded only by the
-poll interval instead of the telemetry report period. Broker delivery, HTTP
-setpoint and physical-output latency share that same monotonic origin, so they
-remain comparable even when local submission is slow.
+measured latency is the end-to-end time from immediately before local submission
+to *"new `outputLimit` visible on the device"*, bounded by the poll interval
+rather than the MQTT report schedule. Broker delivery, HTTP setpoint and
+physical-output latency share that same monotonic origin, so they remain
+comparable even when local submission is slow.
 
 Tool: [`scripts/mqtt_write_latency_probe.py`](../../scripts/mqtt_write_latency_probe.py).
 Tests: [`tests/test_mqtt_write_latency_probe.py`](../../tests/test_mqtt_write_latency_probe.py)
@@ -173,9 +175,14 @@ reported value.
 
 Why the HTTP read-back rather than an MQTT signal: the cloud-MQTT ZenSDK
 `properties/write` profile (used by the 800 Pro 2) has **no command
-acknowledgement**, and its only telemetry echo arrives with the periodic report
-(~30 s). Measuring the MQTT echo would measure the report cadence, not the command
-latency. Only the legacy `function/invoke` (hub/object) profile has a real ACK.
+acknowledgement**. A matching MQTT report can prove eventual application—the live
+EMS uses exactly that evidence—but its latency includes both cloud directions and
+the device's report scheduling. The local HTTP read-back instead isolates when
+the setpoint first becomes visible on the inverter and gives a polling-bounded
+measurement independent of the MQTT telemetry schedule. Only the legacy
+`function/invoke` (hub/object) profile has a real device ACK. See the
+[live Cloud latency measurement](../technical/zendure-mqtt-power-control.md#live-cloud-latency-measurement)
+for the complementary publish-to-MQTT-confirmation statistic.
 
 ## Running it
 
