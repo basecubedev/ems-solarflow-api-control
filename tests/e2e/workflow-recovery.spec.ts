@@ -26,7 +26,18 @@ async function recoveryBackups(page: Page): Promise<Record<string, any>[]> {
   return body.manifests as Record<string, any>[];
 }
 
+/** Walk back to the task selection from whichever panel a workflow reopened. */
+async function returnToTaskSelection(page: Page) {
+  const start = page.locator('[data-start-path="manage_existing"]');
+  if (await start.isVisible()) return;
+  await page.locator("[data-back]:visible").first().click();
+  if (await start.isVisible()) return;
+  await page.locator('#maintenance-hub [data-back="landing"]').click();
+  await expect(start).toBeVisible();
+}
+
 async function openRecoveryCard(page: Page) {
+  await returnToTaskSelection(page);
   await page.locator('[data-start-path="manage_existing"]').click();
   const loaded = page.waitForResponse((response) =>
     response.url().endsWith("/api/admin/workflow-lifecycle/recovery/preview"),
@@ -149,7 +160,7 @@ test.describe("Workflow recovery", () => {
     ).toBeVisible();
     await page.locator("#maintenance-workflow-recovery-details > summary").click();
     await expect(page.locator("#maintenance-workflow-recovery-files")).toHaveText(
-      "state/guided-setup-workflow.json",
+      "state/guided-setup-workflow.json (cannot be read)",
     );
     await expect(page.locator("#maintenance-workflow-recovery-preserved")).toContainText(
       "config/config.json",
@@ -175,6 +186,7 @@ test.describe("Workflow recovery", () => {
     expect(manifests[0].files).toEqual([
       {
         name: "state/guided-setup-workflow.json",
+        reason: "unreadable_state",
         sha256: seeded.body.digest,
         bytes: expect.any(Number),
       },
@@ -196,6 +208,79 @@ test.describe("Workflow recovery", () => {
     await page.goto("/");
     await page.locator('[data-start-path="setup_new"]').click();
     await expect(page.getByTestId("system-build-select")).toBeVisible();
+  });
+
+  test("two records claiming the console are named, not silently resolved", async ({
+    page,
+    seedAdminScenario,
+  }) => {
+    await login(page);
+    await seedAdminScenario("workflow_owner_conflict");
+    await page.reload();
+
+    const conflicted = await lifecycle(page);
+    expect(conflicted.owner, JSON.stringify(conflicted)).toBe("conflict");
+    expect(conflicted.state).toBe("conflict");
+    expect(conflicted.switchable).toBe(false);
+    expect(conflicted.blocking_reason).toBe("workflow_owner_conflict");
+
+    // Neither workflow may be entered around it.
+    const refused = await post(page, "/api/admin/workflow-lifecycle/switch", {
+      target: "guided_upgrade",
+      confirm: true,
+      fingerprint: conflicted.fingerprint,
+    });
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toBe("workflow_owner_conflict");
+    const start = await post(page, "/api/admin/start-path", {
+      choice: "setup_new",
+      confirm: true,
+    });
+    expect(start.status).toBe(409);
+    expect(start.body.error).toBe("workflow_switch_required");
+
+    await openRecoveryCard(page);
+    await expect(page.locator("#maintenance-workflow-recovery-owner")).toHaveText(
+      /Conflicting workflow records/i,
+    );
+    // The contradiction survives inspection untouched.
+    expect((await lifecycle(page)).owner).toBe("conflict");
+  });
+
+  test("recovery is refused while a replacement cannot be disproven", async ({
+    page,
+    seedAdminScenario,
+  }) => {
+    await login(page);
+    await seedAdminScenario("workflow_state_corrupt");
+    await seedAdminScenario("workflow_replacement_status_unknown");
+    await page.reload();
+
+    const blocked = await lifecycle(page);
+    const refused = await post(page, "/api/admin/workflow-lifecycle/recovery", {
+      mode: "release_stale_state",
+      confirm: true,
+      reason: "corrupt workflow metadata",
+      fingerprint: blocked.fingerprint,
+    });
+
+    expect(refused.status, JSON.stringify(refused.body)).toBe(409);
+    expect(refused.body.error).toBe("workflow_recovery_unsafe");
+    expect(refused.body.detail).toBe("install_state_unavailable");
+    expect(await recoveryBackups(page)).toEqual([]);
+
+    // Once Docker proves there is no replacement, the same release succeeds.
+    await seedAdminScenario("workflow_replacement_status_inactive");
+    const released = await post(page, "/api/admin/workflow-lifecycle/recovery", {
+      mode: "release_stale_state",
+      confirm: true,
+      reason: "corrupt workflow metadata",
+      fingerprint: (await lifecycle(page)).fingerprint,
+    });
+
+    expect(released.status, JSON.stringify(released.body)).toBe(200);
+    expect(released.body.released).toEqual(["state/guided-setup-workflow.json"]);
+    expect(await recoveryBackups(page)).toHaveLength(1);
   });
 
   test("a stale recovery preview cannot execute", async ({

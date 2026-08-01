@@ -421,6 +421,19 @@ While an Admin workflow operation is still running, neither action is offered:
 the console shows the running stage and offers **Resume** instead. There is no
 force reset.
 
+Two more states show up here rather than in a guided workflow:
+
+- **Conflicting workflow records** — a Guided Setup and a Guided Upgrade both
+  claim the console. Neither workflow can be entered around it, and nothing is
+  discarded on its own; the recovery card is where you resolve it.
+- **Unsupported or stale state** — Admin workflow metadata this version cannot
+  use, for example an operation type from a newer Admin. The technical details
+  name each affected file and why it is stuck.
+
+If the Admin Console cannot reach Docker, the advanced release is refused: it
+cannot prove that no Admin replacement is still running, and an unreachable
+daemon is not proof that nothing is. Restore Docker access and try again.
+
 ### What recovery never touches
 
 Both actions leave the installed system alone:

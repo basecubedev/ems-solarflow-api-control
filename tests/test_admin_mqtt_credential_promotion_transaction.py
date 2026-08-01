@@ -54,8 +54,10 @@ def _workflow_request(url, method="GET", body=None):
     return status, {}, payload
 
 
-def _authorized(base, body, **kwargs):
-    return authorize_setup_mutation(base, _workflow_request, body, **kwargs)
+def _authorized(base, body, srv=None, **kwargs):
+    return authorize_setup_mutation(
+        base, _workflow_request, body, srv=srv, **kwargs
+    )
 
 
 def _device_observation(credentials_ref="home"):

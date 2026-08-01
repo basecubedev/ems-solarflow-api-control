@@ -184,6 +184,88 @@ def test_a_setup_transition_mismatch_fails_the_switch_closed(tmp_path):
     assert service._workflows.load()["status"] == "active"
 
 
+@pytest.mark.parametrize(
+    ("operation_id", "reason"),
+    [
+        ("op-other", "setup_transition_context_mismatch"),
+        (None, "setup_transition_owner_unproven"),
+    ],
+)
+def test_an_unprovable_setup_transition_blocks_entering_setup(
+    tmp_path, operation_id, reason
+):
+    """Entering the owner must not walk through a contradiction it cannot fix.
+
+    The entry exception exists for a reason that clears itself — an operation
+    the same workflow is still finishing. A transition this workflow cannot
+    prove it owns is structural: resuming leaves it exactly as blocking as it
+    was, so the arbiter would be reporting success while its own verdict stays
+    ``switchable=false``.
+    """
+
+    alignment = FakeAlignment(mode="fresh_install", stage="resources_verified")
+    service = _service(tmp_path, alignment)
+    _start_setup(service, operation_id=operation_id)
+    before = service._workflows.load()
+
+    plan = service.plan_switch(TARGET_GUIDED_SETUP)
+    assert plan["blocked"] is True
+    assert plan["blocking_reason"] == reason
+
+    with pytest.raises(AdminWorkflowLifecycleError) as excinfo:
+        _switch(service, TARGET_GUIDED_SETUP, session_id="session-a")
+
+    assert excinfo.value.code == WORKFLOW_SWITCH_BLOCKED
+    assert excinfo.value.detail == reason
+    assert alignment.cancelled == []
+    assert service._workflows.load() == before
+
+
+@pytest.mark.parametrize(
+    "operation_id", ["op-other", None]
+)
+def test_a_blocked_setup_entry_still_offers_advanced_recovery(tmp_path, operation_id):
+    """Refusing entry must leave a route out, or the console is wedged.
+
+    Switching away is already refused for the same reason, so Advanced Recovery
+    is the only remaining exit and has to name the workflow record.
+    """
+
+    alignment = FakeAlignment(mode="fresh_install", stage="resources_verified")
+    service = _service(tmp_path, alignment)
+    _start_setup(service, operation_id=operation_id)
+
+    plan = service.plan_recovery()
+
+    assert plan["blocking"] is True
+    assert plan["advanced"]["available"] is True
+    assert "state/guided-setup-workflow.json" in {
+        entry["name"] for entry in plan["advanced"]["files"]
+    }
+
+
+def test_a_running_setup_operation_still_lets_the_owner_back_in(tmp_path):
+    """The narrow entry exception survives: a running operation is transient.
+
+    Its blocking reason disappears when the operation finishes, so locking the
+    operator out of their own workflow would help nobody.
+    """
+
+    service = _service(tmp_path)
+    workflow_id = _start_setup(service)
+
+    with service._lifecycle.claim_mutation(
+        workflow_id=workflow_id, operation="config_apply"
+    ):
+        plan = service.plan_switch(TARGET_GUIDED_SETUP)
+        result = _switch(service, TARGET_GUIDED_SETUP, session_id="session-a")
+
+    assert plan["blocked"] is False
+    assert result["ok"] is True
+    assert result["action"] == "resume_guided_setup"
+    assert result["setup_workflow_id"] == workflow_id
+
+
 def test_a_genuine_review_required_state_refuses_an_automatic_switch(tmp_path):
     service = _service(tmp_path)
     workflow_id = _start_setup(service)

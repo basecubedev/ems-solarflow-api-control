@@ -5485,14 +5485,16 @@ def test_setup_mutations_require_an_active_resource_verified_transition(
 def test_setup_config_write_requires_current_setup_operation(
     tmp_path, stage, active, mode
 ):
-    alignment = _FakeSystemAlignment(stage=stage, active=active, mode=mode)
     srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
-    _attach_system_alignment(srv, alignment)
     try:
+        # The Setup authority is earned on a free console; the conflicting
+        # transition arrives afterwards, which is what this gate has to refuse.
+        body = _authorized_body(base, _control_export_body())
+        _attach_system_alignment(
+            srv, _FakeSystemAlignment(stage=stage, active=active, mode=mode)
+        )
         status, _, payload = _request(
-            base + "/api/setup/config/write",
-            method="POST",
-            body=_authorized_body(base, _control_export_body()),
+            base + "/api/setup/config/write", method="POST", body=body
         )
     finally:
         srv.shutdown()

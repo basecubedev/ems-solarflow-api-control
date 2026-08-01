@@ -33,6 +33,7 @@ import json
 import os
 import threading
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 
 from admin.admin_update import (
@@ -42,6 +43,7 @@ from admin.admin_update import (
     TERMINAL_TRANSITION_STAGES,
     TRANSITION_MODE_ALIGN_EXISTING,
     TRANSITION_MODE_GUIDED_UPGRADE,
+    ADMIN_UPDATER_CONTAINER_PREFIX,
     admin_update_sidecar_container_name,
 )
 from admin.guided_setup_workflow import (
@@ -71,6 +73,9 @@ OWNER_GUIDED_UPGRADE = "guided_upgrade"
 OWNER_ALIGN_EXISTING = TRANSITION_MODE_ALIGN_EXISTING
 OWNER_NONE = "none"
 OWNER_UNKNOWN = "unknown"
+# Two durable records claim the console at once. Naming it is the whole point:
+# picking one of them would silently discard the other one's state.
+OWNER_CONFLICT = "conflict"
 
 TARGET_GUIDED_SETUP = OWNER_GUIDED_SETUP
 TARGET_GUIDED_UPGRADE = OWNER_GUIDED_UPGRADE
@@ -82,6 +87,7 @@ STATE_ACTIVE = "active"
 STATE_OPERATION_RUNNING = "operation_running"
 STATE_CLEANUP_PENDING = "cleanup_pending"
 STATE_REVIEW_REQUIRED = "review_required"
+STATE_CONFLICT = "conflict"
 STATE_MALFORMED = "malformed"
 
 ACTION_NONE = "none"
@@ -89,6 +95,12 @@ ACTION_DISCARD_SETUP = "discard_guided_setup"
 ACTION_CANCEL_UPGRADE = "cancel_guided_upgrade"
 ACTION_START_SETUP = "start_guided_setup"
 ACTION_RESUME_SETUP = "resume_guided_setup"
+
+# Who owns the active transition, as far as the narrow cancel primitive cares.
+CANCEL_VERDICT_ABSENT = "absent"
+CANCEL_VERDICT_SETUP_OWNED = "setup_owned"
+CANCEL_VERDICT_GUIDED_UPGRADE = "guided_upgrade"
+CANCEL_VERDICT_UNSUPPORTED = "unsupported"
 
 RECOVERY_MODE_SAFE = "safe"
 RECOVERY_MODE_RELEASE_STALE_STATE = "release_stale_state"
@@ -101,9 +113,20 @@ WORKFLOW_RECOVERY_REQUIRED = "workflow_recovery_required"
 WORKFLOW_RECOVERY_UNSAFE = "workflow_recovery_unsafe"
 WORKFLOW_STATE_MALFORMED = "workflow_state_malformed"
 WORKFLOW_OWNER_UNKNOWN = "workflow_owner_unknown"
+WORKFLOW_OWNER_CONFLICT = "workflow_owner_conflict"
 WORKFLOW_RECOVERY_FAILED = "workflow_recovery_failed"
+WORKFLOW_SWITCH_REQUIRED = "workflow_switch_required"
 CONFIRMATION_REQUIRED = "confirmation_required"
 RECOVERY_REASON_REQUIRED = "recovery_reason_required"
+
+REPLACEMENT_ACTIVE = "replacement_active"
+INSTALL_STATE_UNAVAILABLE = "install_state_unavailable"
+
+# Why a durable Admin workflow file cannot be used and cannot be repaired by the
+# normal domain operations. Reported per file so a release says what it releases.
+STALE_UNREADABLE_STATE = "unreadable_state"
+STALE_UNSUPPORTED_TRANSITION_MODE = "unsupported_transition_mode"
+STALE_UNUSABLE_UPGRADE_CONTEXT = "unusable_upgrade_context"
 
 # What a guided workflow switch or recovery never touches. Listed for the
 # preview so the operator reads the same promise the implementation keeps.
@@ -137,10 +160,29 @@ _BLOCKING_ERROR_CODES = {
     SETUP_OPERATION_IN_PROGRESS: SETUP_OPERATION_IN_PROGRESS,
     WORKFLOW_OPERATION_IN_PROGRESS: WORKFLOW_OPERATION_IN_PROGRESS,
     WORKFLOW_OWNER_UNKNOWN: WORKFLOW_OWNER_UNKNOWN,
+    WORKFLOW_OWNER_CONFLICT: WORKFLOW_OWNER_CONFLICT,
     WORKFLOW_STATE_MALFORMED: WORKFLOW_STATE_MALFORMED,
     WORKFLOW_RECOVERY_REQUIRED: WORKFLOW_RECOVERY_REQUIRED,
     SETUP_CLEANUP_REQUIRED: WORKFLOW_RECOVERY_REQUIRED,
 }
+
+# Reasons that block even *entering* the workflow that already owns the console:
+# an unreadable or contradictory state, an unconverged cleanup that is the only
+# ownership record for the files it left behind, and a transition this workflow
+# cannot prove it owns. What is left out is the one thing entry may walk
+# through: an operation the same workflow is still finishing, whose reason
+# clears itself once it does.
+_ENTRY_BLOCKING_REASONS = frozenset(
+    {
+        WORKFLOW_STATE_MALFORMED,
+        WORKFLOW_OWNER_CONFLICT,
+        WORKFLOW_OWNER_UNKNOWN,
+        WORKFLOW_RECOVERY_REQUIRED,
+        SETUP_CLEANUP_REQUIRED,
+        SETUP_TRANSITION_CONTEXT_MISMATCH,
+        SETUP_TRANSITION_OWNER_UNPROVEN,
+    }
+)
 
 _BLOCKING_MESSAGES = {
     SETUP_OPERATION_IN_PROGRESS: (
@@ -154,6 +196,10 @@ _BLOCKING_MESSAGES = {
     WORKFLOW_OWNER_UNKNOWN: (
         "The current System Build operation is not owned by a guided workflow "
         "this Admin can switch away from."
+    ),
+    WORKFLOW_OWNER_CONFLICT: (
+        "Two Admin workflow records claim the console at once. Resolve it in "
+        "Maintenance → Workflow recovery; nothing was changed."
     ),
     WORKFLOW_STATE_MALFORMED: (
         "The stored Admin workflow state could not be read. Use Maintenance → "
@@ -199,26 +245,76 @@ class AdminWorkflowLifecycleError(Exception):
         return payload
 
 
-def admin_replacement_container_active(docker, operation_id):
-    """True only when this operation's replacement sidecar is positively seen.
+class ReplacementActivity(str, Enum):
+    """Whether an Admin replacement sidecar is running, gone, or unprovable."""
 
-    A Docker daemon that cannot be reached answers ``False`` on purpose: the
-    durable transition stage already blocks recovery for every replacement
-    window, and an unreadable daemon must not make an otherwise safe recovery
-    permanently impossible.
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+    UNKNOWN = "unknown"
+
+
+_LIVE_CONTAINER_STATES = frozenset({"created", "restarting", "running"})
+# Docker's terminal container states. Naming them explicitly is what makes an
+# unrecognised state answerable: a row this build cannot classify must not be
+# read as "not live", because that reads on as "gone".
+_DEAD_CONTAINER_STATES = frozenset({"dead", "exited", "paused", "removing"})
+
+
+def _container_activity(container):
+    """``ACTIVE``/``INACTIVE`` for a recognised state, ``UNKNOWN`` otherwise."""
+
+    if not isinstance(container, dict):
+        return ReplacementActivity.UNKNOWN
+    status = container.get("status")
+    if status in _LIVE_CONTAINER_STATES:
+        return ReplacementActivity.ACTIVE
+    if status in _DEAD_CONTAINER_STATES:
+        return ReplacementActivity.INACTIVE
+    return ReplacementActivity.UNKNOWN
+
+
+def admin_replacement_activity(docker, operation_id):
+    """Prove whether an Admin replacement is running for ``operation_id``.
+
+    Exactly the states an advanced recovery has to tell apart: a daemon that
+    cannot be reached is ``UNKNOWN``, never ``INACTIVE``. The durable transition
+    stage cannot stand in for this — the states that need a release (unreadable
+    transition, unknown mode, missing operation identity) are precisely the ones
+    where no stage can be trusted. Without an operation id the canonical updater
+    prefix is scanned, and an abstraction that cannot list stays ``UNKNOWN``.
+
+    ``INACTIVE`` is a proof and never a default: it takes either Docker
+    answering that no such container exists, or every container it did report
+    naming a state this build recognises as terminal.
     """
 
-    if docker is None or not operation_id:
-        return False
+    if docker is None:
+        return ReplacementActivity.UNKNOWN
+    if not operation_id:
+        listing = getattr(docker, "list_containers", None)
+        if not callable(listing):
+            return ReplacementActivity.UNKNOWN
+        try:
+            containers = listing(ADMIN_UPDATER_CONTAINER_PREFIX)
+        except Exception:
+            return ReplacementActivity.UNKNOWN
+        if not isinstance(containers, list):
+            return ReplacementActivity.UNKNOWN
+        activities = [_container_activity(entry) for entry in containers]
+        if ReplacementActivity.ACTIVE in activities:
+            return ReplacementActivity.ACTIVE
+        if ReplacementActivity.UNKNOWN in activities:
+            return ReplacementActivity.UNKNOWN
+        return ReplacementActivity.INACTIVE
     try:
         container = docker.inspect_container(
             admin_update_sidecar_container_name(operation_id)
         )
     except Exception:
-        return False
-    if not isinstance(container, dict):
-        return False
-    return container.get("status") in {"created", "restarting", "running"}
+        return ReplacementActivity.UNKNOWN
+    if container is None:
+        return ReplacementActivity.INACTIVE
+    return _container_activity(container)
 
 
 def worker_aware_alignment_status(alignment, operation_active=None):
@@ -300,6 +396,11 @@ class AdminWorkflowLifecycleService:
         """
 
         self._alignment = alignment
+
+    def bind_install_state_probe(self, probe):
+        """Point the arbiter at the runtime's replacement-activity probe."""
+
+        self._install_state_probe = probe
 
     # --- inspection ---------------------------------------------------------
 
@@ -441,11 +542,14 @@ class AdminWorkflowLifecycleService:
             return None
         operation_id = described.get("operation_id")
         transition_operation = (transition or {}).get("operation_id")
-        readable = bool(described.get("readable"))
+        identity_readable = bool(described.get("identity_readable"))
+        domain_valid = bool(described.get("domain_valid"))
         return {
             "present": True,
-            "readable": readable,
-            "digest": None if readable else _content_digest(store.path),
+            "identity_readable": identity_readable,
+            "domain_valid": domain_valid,
+            "reason": described.get("reason"),
+            "digest": None if domain_valid else _content_digest(store.path),
             "operation_id": operation_id,
             "target_system_tag": described.get("target_system_tag"),
             "matches_transition": bool(
@@ -459,11 +563,42 @@ class AdminWorkflowLifecycleService:
         return self._lifecycle.active_operation(setup["workflow_id"])
 
     @staticmethod
-    def _resolve_owner(setup, transition):
+    def _setup_record_owns(setup):
+        """Whether the durable Setup record still claims the console."""
+
+        return bool(
+            setup
+            and setup["readable"]
+            and (
+                setup["status"] == STATUS_ACTIVE
+                or setup["cleanup"] in {CLEANUP_PENDING, CLEANUP_REVIEW_REQUIRED}
+            )
+        )
+
+    @classmethod
+    def _owner_conflict(cls, setup, transition):
+        """Two readable records claiming the console for different owners.
+
+        A Setup-mode transition is the Setup record's own operation, so it is
+        never a conflict — an operation *mismatch* there is a different, already
+        fail-closed contract. Any other live transition beside an owning Setup
+        record is a contradiction that must not be resolved by preferring one.
+        """
+
+        if not (transition and transition["readable"] and not transition["terminal"]):
+            return False
+        if transition["mode"] in SETUP_TRANSITION_MODES:
+            return False
+        return cls._setup_record_owns(setup)
+
+    @classmethod
+    def _resolve_owner(cls, setup, transition):
         if (setup and not setup["readable"]) or (
             transition and not transition["readable"]
         ):
             return OWNER_UNKNOWN
+        if cls._owner_conflict(setup, transition):
+            return OWNER_CONFLICT
         if transition and not transition["terminal"]:
             mode = transition["mode"]
             if mode in SETUP_TRANSITION_MODES:
@@ -473,10 +608,7 @@ class AdminWorkflowLifecycleService:
             if mode == TRANSITION_MODE_ALIGN_EXISTING:
                 return OWNER_ALIGN_EXISTING
             return OWNER_UNKNOWN
-        if setup and (
-            setup["status"] == STATUS_ACTIVE
-            or setup["cleanup"] in {CLEANUP_PENDING, CLEANUP_REVIEW_REQUIRED}
-        ):
+        if cls._setup_record_owns(setup):
             return OWNER_GUIDED_SETUP
         return OWNER_NONE
 
@@ -498,6 +630,8 @@ class AdminWorkflowLifecycleService:
             or (transition and not transition["readable"])
         ):
             return STATE_MALFORMED
+        if owner == OWNER_CONFLICT:
+            return STATE_CONFLICT
         if setup and setup["cleanup"] == CLEANUP_PENDING:
             return STATE_CLEANUP_PENDING
         if setup and setup["cleanup"] == CLEANUP_REVIEW_REQUIRED:
@@ -510,6 +644,8 @@ class AdminWorkflowLifecycleService:
     def _resolve_blocking_reason(owner, setup, transition, state):
         if state == STATE_MALFORMED:
             return WORKFLOW_STATE_MALFORMED
+        if owner == OWNER_CONFLICT:
+            return WORKFLOW_OWNER_CONFLICT
         if owner in {OWNER_UNKNOWN, OWNER_ALIGN_EXISTING}:
             return WORKFLOW_OWNER_UNKNOWN
         if state == STATE_OPERATION_RUNNING:
@@ -539,7 +675,10 @@ class AdminWorkflowLifecycleService:
     def _resolve_recoverable(state, blocking, context):
         if state == STATE_OPERATION_RUNNING:
             return False
-        orphaned_context = bool(context and not context["matches_transition"])
+        orphaned_context = bool(
+            context
+            and (not context["matches_transition"] or not context["domain_valid"])
+        )
         return bool(blocking is not None or orphaned_context)
 
     def _fingerprint(self, setup, transition, context):
@@ -586,7 +725,8 @@ class AdminWorkflowLifecycleService:
                 key: context[key]
                 for key in (
                     "present",
-                    "readable",
+                    "identity_readable",
+                    "domain_valid",
                     "digest",
                     "operation_id",
                     "target_system_tag",
@@ -599,6 +739,27 @@ class AdminWorkflowLifecycleService:
         return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
     # --- switching ----------------------------------------------------------
+
+    def transition_cancel_verdict(self):
+        """Who owns the active transition, for the narrow cancel primitive.
+
+        The primitive still performs its own cancellation; only the ownership
+        question is answered here, so ``server.py`` keeps no second classifier.
+        """
+
+        view = self.inspect()
+        transition = view["transition"] or {}
+        if not transition.get("present"):
+            return CANCEL_VERDICT_ABSENT
+        if not transition.get("readable"):
+            return CANCEL_VERDICT_UNSUPPORTED
+        if transition.get("mode") in SETUP_TRANSITION_MODES:
+            return CANCEL_VERDICT_SETUP_OWNED
+        if view["owner"] == OWNER_CONFLICT:
+            return CANCEL_VERDICT_UNSUPPORTED
+        if transition.get("mode") == TRANSITION_MODE_GUIDED_UPGRADE:
+            return CANCEL_VERDICT_GUIDED_UPGRADE
+        return CANCEL_VERDICT_UNSUPPORTED
 
     def plan_switch(self, target):
         """Preview one switch without changing anything."""
@@ -639,7 +800,7 @@ class AdminWorkflowLifecycleService:
     def _switch_plan(self, view, target):
         owner = view["owner"]
         action = self._switch_action(view, target)
-        blocked = view["blocking_reason"] is not None and action != ACTION_NONE
+        blocked = self._switch_is_blocked(view, target, action)
         # A blocked switch resets nothing, so it promises nothing: the scope is
         # what this request will do, never what some other state would allow.
         will_reset = [] if blocked else self._switch_reset_scope(view, action)
@@ -661,6 +822,56 @@ class AdminWorkflowLifecycleService:
             "fingerprint": view["fingerprint"],
             "lifecycle": view,
         }
+
+    @classmethod
+    def _switch_is_blocked(cls, view, target, action):
+        """Whether this request may not run against the current state.
+
+        A blocking reason blocks by default. The two exceptions are narrow and
+        named: a no-op whose target is already safely in charge, and *entering*
+        the owner that already owns the console — resuming Guided Setup is not a
+        switch away from it, so an operation it is still finishing must not lock
+        the operator out of their own workflow.
+
+        Entry never walks through a reason that resuming cannot clear. An
+        unprovable transition owner is structural: it is exactly as blocking
+        after the resume as before, so answering ``ok`` there would contradict
+        the verdict this same arbiter keeps reporting.
+        """
+
+        reason = view["blocking_reason"]
+        if reason is None:
+            return False
+        if cls._noop_satisfies_target(view, target, action):
+            return False
+        entering_owner = target == view["owner"] and action in {
+            ACTION_RESUME_SETUP,
+            ACTION_START_SETUP,
+            ACTION_NONE,
+        }
+        return not (entering_owner and reason not in _ENTRY_BLOCKING_REASONS)
+
+    @staticmethod
+    def _noop_satisfies_target(view, target, action):
+        """Whether doing nothing genuinely leaves ``target`` in charge.
+
+        Only then may a no-op answer through a blocking reason. An unknown,
+        conflicting or unreadable owner never qualifies: reporting success there
+        is what turned a block into a silent bypass.
+        """
+
+        if action != ACTION_NONE:
+            return False
+        owner = view["owner"]
+        if owner in {OWNER_UNKNOWN, OWNER_CONFLICT, OWNER_ALIGN_EXISTING}:
+            return False
+        if view["state"] == STATE_MALFORMED:
+            return False
+        if target == TARGET_GUIDED_UPGRADE:
+            return owner in {OWNER_NONE, OWNER_GUIDED_UPGRADE}
+        if target == TARGET_NONE:
+            return owner == OWNER_NONE
+        return False
 
     @staticmethod
     def _switch_action(view, target):
@@ -833,7 +1044,10 @@ class AdminWorkflowLifecycleService:
 
         view = self.inspect()
         safe_actions = self._safe_recovery_scope(view)
-        stale = [name for name, _path in self._stale_state_targets(view)]
+        stale = [
+            {"name": name, "reason": reason}
+            for name, _path, reason in self._stale_state_targets(view)
+        ]
         running = view["state"] == STATE_OPERATION_RUNNING
         return {
             "ok": True,
@@ -915,36 +1129,54 @@ class AdminWorkflowLifecycleService:
             self._require_no_external_mutation(view)
 
     def _require_no_external_mutation(self, view):
-        """Confirm through the installed system that no replacement is running.
+        """Require positive proof that no Admin replacement is running.
 
-        The durable stage is the primary gate — every replacement window is a
-        non-cancellable stage and already blocks recovery. This probe only adds
-        a positive Docker confirmation for the operation the transition names.
+        The durable stage cannot stand in for this: the states that need a
+        release — unreadable transition, unsupported mode, no operation identity
+        — are exactly the ones whose stage proves nothing. So only a probe that
+        answers ``INACTIVE`` may continue; unreachable, malformed and missing
+        probes are all refusals.
         """
 
         probe = self._install_state_probe
         if not callable(probe):
-            return
+            raise AdminWorkflowLifecycleError(
+                WORKFLOW_RECOVERY_UNSAFE,
+                "This Admin cannot prove that no replacement is running, so "
+                "releasing Admin workflow state is refused.",
+                detail=INSTALL_STATE_UNAVAILABLE,
+                lifecycle=view,
+            )
         try:
-            active = bool(probe((view["transition"] or {}).get("operation_id")))
+            activity = probe((view["transition"] or {}).get("operation_id"))
         except Exception as exc:
             raise AdminWorkflowLifecycleError(
                 WORKFLOW_RECOVERY_UNSAFE,
                 "The installed system state could not be inspected, so "
                 "releasing Admin workflow state is refused.",
-                detail="install_state_unavailable",
+                detail=INSTALL_STATE_UNAVAILABLE,
                 lifecycle=view,
             ) from exc
-        if active:
+        if activity is ReplacementActivity.ACTIVE:
             raise AdminWorkflowLifecycleError(
                 WORKFLOW_RECOVERY_UNSAFE,
-                "A container replacement may still be running. Releasing Admin "
+                "An Admin replacement is still running. Releasing Admin "
                 "workflow state is refused.",
-                detail="replacement_active",
+                detail=REPLACEMENT_ACTIVE,
+                lifecycle=view,
+            )
+        if activity is not ReplacementActivity.INACTIVE:
+            raise AdminWorkflowLifecycleError(
+                WORKFLOW_RECOVERY_UNSAFE,
+                "Whether an Admin replacement is running could not be proven, "
+                "so releasing Admin workflow state is refused.",
+                detail=INSTALL_STATE_UNAVAILABLE,
                 lifecycle=view,
             )
 
     def _safe_recovery_scope(self, view):
+        """What the normal domain operations can still resolve by themselves."""
+
         actions = []
         transition = view["transition"] or {}
         if (
@@ -956,13 +1188,29 @@ class AdminWorkflowLifecycleService:
         ):
             actions.append("transition_cancel")
         setup = view["setup"] or {}
-        if setup.get("readable") and (
-            setup.get("status") == STATUS_ACTIVE
-            or setup.get("cleanup") in {CLEANUP_PENDING, CLEANUP_REVIEW_REQUIRED}
+        # An abandon that cannot name the transition refuses on both halves, so
+        # offering it as a recovery would promise a convergence it never reaches.
+        unprovable_owner = view["blocking_reason"] in {
+            SETUP_TRANSITION_CONTEXT_MISMATCH,
+            SETUP_TRANSITION_OWNER_UNPROVEN,
+        }
+        if (
+            setup.get("readable")
+            and not unprovable_owner
+            and (
+                setup.get("status") == STATUS_ACTIVE
+                or setup.get("cleanup") in {CLEANUP_PENDING, CLEANUP_REVIEW_REQUIRED}
+            )
         ):
             actions.append("setup_cleanup")
         context = view["upgrade_context"] or {}
-        if context.get("readable") and not context.get("matches_transition"):
+        # Only a context the loader still accepts may be cleared as an ordinary
+        # orphan; an unusable one is evidence an operator has to see backed up.
+        if (
+            context.get("present")
+            and context.get("domain_valid")
+            and not context.get("matches_transition")
+        ):
             actions.append("upgrade_context_clear")
         return actions
 
@@ -1017,30 +1265,67 @@ class AdminWorkflowLifecycleService:
             ),
         )
 
-    def _stale_state_targets(self, view):
-        """Allowlisted files that exist and cannot be read as valid state."""
+    def _stale_state_reasons(self, view):
+        """Why each allowlisted file is beyond the normal domain operations.
 
-        unreadable = {
-            "state/guided-setup-workflow.json": bool(
-                view["setup"] and not view["setup"]["readable"]
-            ),
-            "state/pending-transition.json": bool(
-                view["transition"] and not view["transition"]["readable"]
-            ),
-            "state/guided-upgrade-context.json": bool(
-                view["upgrade_context"] and not view["upgrade_context"]["readable"]
-            ),
-        }
+        Unreadable state is the obvious case, but a *readable* record can be
+        just as unusable: a transition mode this Admin does not support, a
+        contradiction between two records, a Setup that cannot name the
+        transition it would have to cancel, or a context that no longer
+        reproduces. Every one of those is a deadlock without a release.
+        """
+
+        reasons = {}
+        setup = view["setup"]
+        transition = view["transition"]
+        context = view["upgrade_context"]
+        if setup and not setup["readable"]:
+            reasons["state/guided-setup-workflow.json"] = STALE_UNREADABLE_STATE
+        if transition and not transition["readable"]:
+            reasons["state/pending-transition.json"] = STALE_UNREADABLE_STATE
+        elif (
+            transition
+            and not transition["terminal"]
+            and transition["mode"] not in SUPPORTED_TRANSITION_MODES
+        ):
+            reasons["state/pending-transition.json"] = (
+                STALE_UNSUPPORTED_TRANSITION_MODE
+            )
+        blocking = view["blocking_reason"]
+        if blocking == WORKFLOW_OWNER_CONFLICT:
+            reasons.setdefault(
+                "state/guided-setup-workflow.json", WORKFLOW_OWNER_CONFLICT
+            )
+            reasons.setdefault(
+                "state/pending-transition.json", WORKFLOW_OWNER_CONFLICT
+            )
+        elif blocking in {
+            SETUP_TRANSITION_CONTEXT_MISMATCH,
+            SETUP_TRANSITION_OWNER_UNPROVEN,
+        }:
+            reasons.setdefault("state/guided-setup-workflow.json", blocking)
+            reasons.setdefault("state/pending-transition.json", blocking)
+        if context and context["present"] and not context["domain_valid"]:
+            reasons["state/guided-upgrade-context.json"] = (
+                STALE_UNUSABLE_UPGRADE_CONTEXT
+            )
+        return reasons
+
+    def _stale_state_targets(self, view):
+        """Allowlisted files that exist and cannot be repaired normally."""
+
+        reasons = self._stale_state_reasons(view)
         targets = []
         for name, path in self._recoverable_state_files():
-            if not unreadable.get(name):
+            reason = reasons.get(name)
+            if reason is None:
                 continue
             try:
                 exists = path.is_file()
             except OSError:
                 exists = False
             if exists:
-                targets.append((name, path))
+                targets.append((name, path, reason))
         return targets
 
     def _verify_state_directory(self, view):
@@ -1099,18 +1384,19 @@ class AdminWorkflowLifecycleService:
             }
         resolved_state_dir = self._verify_state_directory(view)
         verified = [
-            (name, self._verified_target(path, resolved_state_dir, view))
-            for name, path in targets
+            (name, self._verified_target(path, resolved_state_dir, view), reason)
+            for name, path, reason in targets
         ]
         try:
             directory = self._backup_directory(resolved_state_dir)
             entries = []
-            for name, path in verified:
+            for name, path, target_reason in verified:
                 raw = path.read_bytes()
                 (directory / path.name).write_bytes(raw)
                 entries.append(
                     {
                         "name": name,
+                        "reason": target_reason,
                         "sha256": hashlib.sha256(raw).hexdigest(),
                         "bytes": len(raw),
                     }
@@ -1130,7 +1416,7 @@ class AdminWorkflowLifecycleService:
                 json.dumps(manifest, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
-            for _name, path in verified:
+            for _name, path, _reason in verified:
                 path.unlink()
         except OSError as exc:
             raise AdminWorkflowLifecycleError(
@@ -1142,7 +1428,7 @@ class AdminWorkflowLifecycleService:
         return {
             "ok": True,
             "mode": RECOVERY_MODE_RELEASE_STALE_STATE,
-            "released": [name for name, _path in verified],
+            "released": [name for name, _path, _reason in verified],
             "backup": {
                 "directory": f"state/{RECOVERY_BACKUP_DIRECTORY}/{directory.name}",
                 "files": [entry["name"] for entry in entries],
@@ -1181,8 +1467,14 @@ __all__ = [
     "ACTION_START_SETUP",
     "AdminWorkflowLifecycleError",
     "AdminWorkflowLifecycleService",
+    "CANCEL_VERDICT_ABSENT",
+    "CANCEL_VERDICT_GUIDED_UPGRADE",
+    "CANCEL_VERDICT_SETUP_OWNED",
+    "CANCEL_VERDICT_UNSUPPORTED",
     "CONFIRMATION_REQUIRED",
+    "INSTALL_STATE_UNAVAILABLE",
     "OWNER_ALIGN_EXISTING",
+    "OWNER_CONFLICT",
     "OWNER_GUIDED_SETUP",
     "OWNER_GUIDED_UPGRADE",
     "OWNER_NONE",
@@ -1193,8 +1485,14 @@ __all__ = [
     "RECOVERY_MODE_RELEASE_STALE_STATE",
     "RECOVERY_MODE_SAFE",
     "RECOVERY_REASON_REQUIRED",
+    "REPLACEMENT_ACTIVE",
+    "ReplacementActivity",
+    "STALE_UNREADABLE_STATE",
+    "STALE_UNSUPPORTED_TRANSITION_MODE",
+    "STALE_UNUSABLE_UPGRADE_CONTEXT",
     "STATE_ACTIVE",
     "STATE_CLEANUP_PENDING",
+    "STATE_CONFLICT",
     "STATE_IDLE",
     "STATE_MALFORMED",
     "STATE_OPERATION_RUNNING",
@@ -1205,12 +1503,14 @@ __all__ = [
     "TARGET_NONE",
     "WORKFLOW_LIFECYCLE_CHANGED",
     "WORKFLOW_OPERATION_IN_PROGRESS",
+    "WORKFLOW_OWNER_CONFLICT",
     "WORKFLOW_OWNER_UNKNOWN",
     "WORKFLOW_RECOVERY_FAILED",
     "WORKFLOW_RECOVERY_REQUIRED",
     "WORKFLOW_RECOVERY_UNSAFE",
     "WORKFLOW_STATE_MALFORMED",
     "WORKFLOW_SWITCH_BLOCKED",
-    "admin_replacement_container_active",
+    "WORKFLOW_SWITCH_REQUIRED",
+    "admin_replacement_activity",
     "worker_aware_alignment_status",
 ]

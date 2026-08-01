@@ -153,6 +153,33 @@ test.describe("Guided workflow switching", () => {
     expect(resumed.setup.workflow_id).toBe(body.setup_workflow_id);
   });
 
+  test("a direct start-path call cannot open Setup beside a live Upgrade", async ({
+    page,
+    seedAdminScenario,
+  }) => {
+    await login(page);
+    await seedAdminScenario("guided_upgrade_transition");
+
+    // No lifecycle call, no fingerprint — an old console or a script.
+    const started = await post(page, "/api/admin/start-path", {
+      choice: "setup_new",
+      confirm: true,
+    });
+
+    expect(started.status, JSON.stringify(started.body)).toBe(409);
+    expect(started.body.error).toBe("workflow_switch_required");
+    expect(started.body.switch_preview).toBe(
+      "/api/admin/workflow-lifecycle/switch/preview",
+    );
+    expect(started.body.setup_workflow_id).toBeUndefined();
+
+    // The upgrade still owns the console, alone.
+    const after = await lifecycle(page);
+    expect(after.owner).toBe("guided_upgrade");
+    expect(after.setup).toBeNull();
+    expect((await alignment(page)).transition?.stage).not.toBe("cancelled");
+  });
+
   test("a running operation blocks the switch and offers no force action", async ({
     page,
     seedAdminScenario,

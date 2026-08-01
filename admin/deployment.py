@@ -59,6 +59,8 @@ MAX_MARKER_BYTES = 64 * 1024
 # (Docker-out-of-Docker). Its presence is what distinguishes deployment
 # controller mode from discovery-only preview mode.
 DOCKER_SOCKET_PATH = os.environ.get("EMS_ADMIN_DOCKER_SOCKET", "/var/run/docker.sock")
+# Container-name prefixes may only come from Admin code, never from a request.
+_CONTAINER_PREFIX_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$")
 
 # Stable state → error-code mapping shared by probe() and check(). ``ready`` has
 # no code because it is not an error.
@@ -133,6 +135,36 @@ class DockerError(Exception):
         self.conflict = conflict
 
 
+def _container_rows(stdout):
+    """Every ``docker ps --format {{json .}}`` row, or raise if one is unusable.
+
+    A successful exit code only says the command ran. Skipping a line that does
+    not parse would turn an unreadable answer into a shorter container list —
+    and a shorter list is exactly what "nothing is running" looks like. Blank
+    lines carry no row and are not evidence of anything, so they are skipped;
+    everything else must read as a JSON object.
+    """
+
+    rows = []
+    for line in (stdout or "").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError as exc:
+            raise DockerError(
+                "docker_container_inspect_unreadable",
+                "Docker returned container output this Admin cannot read.",
+            ) from exc
+        if not isinstance(row, dict):
+            raise DockerError(
+                "docker_container_inspect_unreadable",
+                "Docker returned container output this Admin cannot read.",
+            )
+        rows.append(row)
+    return rows
+
+
 class DockerCli:
     """Thin ``docker`` CLI wrapper: availability check and image pull.
 
@@ -205,7 +237,13 @@ class DockerCli:
             raise _docker_pull_error("\n".join(tail))
 
     def inspect_container(self, container_name):
-        """Return one exact-name container from Docker, or ``None``."""
+        """Return one exact-name container from Docker, or ``None``.
+
+        ``None`` means Docker answered and nothing matched. Output this wrapper
+        cannot read raises instead: it proves nothing about what is running,
+        and callers that must not act on a guess cannot tell a silent skip from
+        a verified absence.
+        """
 
         try:
             result = self._run(
@@ -237,13 +275,7 @@ class DockerCli:
                 "Could not inspect existing Docker containers.",
                 _safe_command_detail(result.stderr),
             )
-        for line in (result.stdout or "").splitlines():
-            try:
-                row = json.loads(line)
-            except ValueError:
-                continue
-            if not isinstance(row, dict):
-                continue
+        for row in _container_rows(result.stdout):
             name = str(row.get("Names") or row.get("Name") or "").lstrip("/")
             if name == container_name:
                 return {
@@ -254,6 +286,62 @@ class DockerCli:
                     "status_detail": str(row.get("Status") or ""),
                 }
         return None
+
+    def list_containers(self, name_prefix):
+        """Return every container whose name starts with a server-owned prefix.
+
+        Only a fixed, code-derived prefix is accepted — a name from a request
+        must never reach the daemon filter.
+        """
+
+        if not _CONTAINER_PREFIX_RE.match(str(name_prefix or "")):
+            raise DockerError(
+                "docker_container_prefix_invalid",
+                "Only a server-derived container prefix can be listed.",
+            )
+        try:
+            result = self._run(
+                [
+                    "docker",
+                    "ps",
+                    "-a",
+                    "--filter",
+                    f"name=^/{name_prefix}",
+                    "--format",
+                    "{{json .}}",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except FileNotFoundError as exc:
+            raise DockerError(
+                "docker_cli_missing", _DOCKER_MESSAGES["client_missing"]
+            ) from exc
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise DockerError(
+                "docker_container_inspect_failed",
+                "Could not inspect existing Docker containers.",
+            ) from exc
+        if result.returncode != 0:
+            raise DockerError(
+                "docker_container_inspect_failed",
+                "Could not inspect existing Docker containers.",
+                _safe_command_detail(result.stderr),
+            )
+        containers = []
+        for row in _container_rows(result.stdout):
+            name = str(row.get("Names") or row.get("Name") or "").lstrip("/")
+            if not name.startswith(name_prefix):
+                continue
+            containers.append(
+                {
+                    "container_name": name,
+                    "status": str(row.get("State") or "").lower(),
+                    "status_detail": str(row.get("Status") or ""),
+                }
+            )
+        return containers
 
     def inspect_container_image_id(self, container_name):
         """Return the immutable image ID used by an exact running container.

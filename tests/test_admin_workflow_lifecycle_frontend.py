@@ -363,6 +363,8 @@ def _render_driver(plan, *, epilogue):
             "function workflowRecoveryAge",
             "function workflowRecoveryReference",
             "function workflowRecoverySummaryText",
+            "const WORKFLOW_STALE_REASON_LABELS",
+            "function workflowStaleFileText",
             "function renderWorkflowRecovery",
         )
     )
@@ -471,7 +473,12 @@ def test_the_recovery_card_lists_the_affected_admin_state_only():
             blocking=True,
             advanced={
                 "available": True,
-                "files": ["state/guided-setup-workflow.json"],
+                "files": [
+                    {
+                        "name": "state/guided-setup-workflow.json",
+                        "reason": "unreadable_state",
+                    }
+                ],
             },
             lifecycle={
                 "owner": "unknown",
@@ -490,7 +497,7 @@ console.log(JSON.stringify({
 """,
     )
 
-    assert out["files"] == "state/guided-setup-workflow.json"
+    assert out["files"] == "state/guided-setup-workflow.json (cannot be read)"
     assert "config/config.json" in out["preserved"]
     assert "docker-compose.yml" in out["preserved"]
     assert out["fingerprint"].endswith("…")
@@ -531,3 +538,136 @@ def test_the_recovery_card_never_writes_dynamic_values_as_markup():
 
     assert "innerHTML" not in render
     assert render.count("textContent") >= 6
+
+
+# --- conflicting and unsupported owners ---------------------------------------
+
+
+def test_an_owner_conflict_is_never_reported_as_a_successful_switch():
+    out = _switch_driver(
+        responses={
+            "preview": [
+                {
+                    "ok": True,
+                    "data": _plan(
+                        blocked=True,
+                        blocking_reason="workflow_owner_conflict",
+                        confirmation_required=False,
+                        recoverable=True,
+                        will_reset=[],
+                        lifecycle={
+                            "owner": "conflict",
+                            "state": "conflict",
+                            "blocking_reason": "workflow_owner_conflict",
+                        },
+                    ),
+                }
+            ],
+            "execute": [{"ok": True, "data": {"ok": True}}],
+        },
+        epilogue="""
+(async () => {
+  const result = await requestWorkflowSwitch("guided_upgrade");
+  console.log(JSON.stringify({
+    ok: result.ok,
+    blocked: result.blocked,
+    recoverable: result.recoverable,
+    message: result.message,
+    urls: calls.map((call) => call.url),
+  }));
+})();
+""",
+    )
+
+    assert out["ok"] is False
+    assert out["blocked"] is True
+    assert out["recoverable"] is True
+    assert "Workflow recovery" in out["message"]
+    assert len(out["urls"]) == 1
+
+
+def test_a_conflict_and_an_unsupported_owner_are_named_in_the_card():
+    conflict = _render_driver(
+        _recovery_plan(
+            blocking=True,
+            safe={"available": False, "actions": []},
+            advanced={
+                "available": True,
+                "files": [
+                    {
+                        "name": "state/pending-transition.json",
+                        "reason": "workflow_owner_conflict",
+                    }
+                ],
+            },
+            lifecycle={
+                "owner": "conflict",
+                "state": "conflict",
+                "blocking_reason": "workflow_owner_conflict",
+                "setup": None,
+                "transition": None,
+            },
+        ),
+        epilogue="""
+console.log(JSON.stringify({
+  owner: workflowRecoveryEls.owner.textContent,
+  state: workflowRecoveryEls.state.textContent,
+  summary: workflowRecoveryEls.summary.textContent,
+  files: workflowRecoveryEls.files.textContent,
+  safeHidden: workflowRecoveryEls.safe.hidden,
+  advancedHidden: workflowRecoveryEls.advanced.hidden,
+}));
+""",
+    )
+    unsupported = _render_driver(
+        _recovery_plan(
+            blocking=True,
+            advanced={
+                "available": True,
+                "files": [
+                    {
+                        "name": "state/pending-transition.json",
+                        "reason": "unsupported_transition_mode",
+                    }
+                ],
+            },
+            lifecycle={
+                "owner": "unknown",
+                "state": "active",
+                "blocking_reason": "workflow_owner_unknown",
+                "setup": None,
+                "transition": None,
+            },
+        ),
+        epilogue="""
+console.log(JSON.stringify({
+  owner: workflowRecoveryEls.owner.textContent,
+  files: workflowRecoveryEls.files.textContent,
+  advancedHidden: workflowRecoveryEls.advanced.hidden,
+}));
+""",
+    )
+
+    assert conflict["owner"] == "Conflicting workflow records"
+    assert conflict["state"] == "Two records claim the console"
+    assert "claim the console" in conflict["summary"]
+    assert conflict["files"] == (
+        "state/pending-transition.json (conflicts with another record)"
+    )
+    assert conflict["safeHidden"] is True
+    assert conflict["advancedHidden"] is False
+    assert unsupported["owner"] == "Unsupported or stale state"
+    assert unsupported["files"] == (
+        "state/pending-transition.json (unsupported operation type)"
+    )
+    assert unsupported["advancedHidden"] is False
+
+
+def test_an_unprovable_replacement_is_explained_and_never_forced():
+    js = _read("admin.js")
+    run = _decl(js, "async function runWorkflowRecovery")
+
+    # The backend refusal message is what the operator reads; the console adds
+    # no force path of its own.
+    assert "executed.data.message" in run
+    assert "force" not in run.lower()

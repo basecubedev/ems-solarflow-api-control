@@ -154,12 +154,12 @@ def _workflow_request(url, method="GET", body=None):
     return status, {}, payload
 
 
-def _apply(base, selection):
+def _apply(base, selection, srv=None):
     body = authorize_setup_mutation(base, _workflow_request, {
         "devices": [],
         "supported_grid_meter_count": 0,
         "zendure_mqtt_proposals": [selection],
-    })
+    }, srv=srv)
     return _request(f"{base}/api/setup/config/apply", "POST", body)
 
 
@@ -207,7 +207,7 @@ def test_apply_persists_cloud_runtime_credentials_end_to_end(
     srv, base = _serve(tmp_path, fetch)
     try:
         selection = _cloud_selection(base)
-        status, payload = _apply(base, selection)
+        status, payload = _apply(base, selection, srv)
         assert status == 200 and payload.get("ok") is True, payload
 
         config_path, secrets_dir = _paths(isolated_install_root)
@@ -247,7 +247,7 @@ def test_apply_blocks_when_cloud_secret_persistence_fails(
     try:
         selection = _cloud_selection(base)
         fetch.fail = True
-        status, payload = _apply(base, selection)
+        status, payload = _apply(base, selection, srv)
         assert status >= 400, payload
         assert payload.get("ok") is False
         assert payload.get("message"), payload
@@ -274,7 +274,7 @@ def test_apply_fails_closed_when_cloud_credential_encryption_fails(
     try:
         selection = _cloud_selection(base)  # saves the API key with a real cipher
         _poison_fernet_encrypt(monkeypatch)
-        status, payload = _apply(base, selection)
+        status, payload = _apply(base, selection, srv)
         assert status >= 400, payload
         assert payload.get("ok") is False
 
@@ -311,7 +311,7 @@ def test_setup_apply_reuses_valid_cloud_credential_without_refetch(
         )
         calls_before_apply = fetch.calls
         fetch.fail = True
-        status, payload = _apply(base, selection)
+        status, payload = _apply(base, selection, srv)
         assert status == 200 and payload.get("ok") is True, payload
         assert fetch.calls == calls_before_apply
         _, secrets_dir = _paths(isolated_install_root)
@@ -338,7 +338,7 @@ def test_setup_apply_reprovisions_incomplete_cloud_record(
             password="stale-secret",
             client_id="stale-client",
         )
-        status, payload = _apply(base, selection)
+        status, payload = _apply(base, selection, srv)
         assert status == 200 and payload.get("ok") is True, payload
         _, secrets_dir = _paths(isolated_install_root)
         resolved = FileMqttCredentialResolver(secrets_dir).resolve(CLOUD_REF)
@@ -367,7 +367,7 @@ def test_setup_apply_blocks_invalid_cloud_record_without_api_key(
             client_id="stale-client",
         )
         srv.credential_store.zendure.delete_token()
-        status, payload = _apply(base, selection)
+        status, payload = _apply(base, selection, srv)
         assert status == 400, payload
         assert payload.get("ok") is False
         assert payload.get("code") == "credential_provisioning_failed"
@@ -386,7 +386,7 @@ def test_cloud_credential_rotation_replaces_runtime_record(
     srv, base = _serve(tmp_path, fetch)
     try:
         selection = _cloud_selection(base)
-        status, payload = _apply(base, selection)
+        status, payload = _apply(base, selection, srv)
         assert status == 200 and payload.get("ok") is True, payload
         old_password = fetch.password
 
@@ -402,7 +402,7 @@ def test_cloud_credential_rotation_replaces_runtime_record(
 
         fetch.password = "cloud-mqtt-secret-2"
         fetch.app_key = "cloud-app-key-2"
-        status, payload = _apply(base, selection)
+        status, payload = _apply(base, selection, srv)
         assert status == 200 and payload.get("ok") is True, payload
 
         credentials = FileMqttCredentialResolver(secrets_dir).resolve(CLOUD_REF)
@@ -677,7 +677,7 @@ def test_config_write_failure_removes_new_cloud_record(
             raise OSError("disk full")
 
         srv.config_apply.apply = _boom
-        status, payload = _apply(base, selection)
+        status, payload = _apply(base, selection, srv)
         assert status == 500, payload
         assert payload.get("ok") is False
 
@@ -697,7 +697,7 @@ def test_config_write_failure_restores_rotated_cloud_record(
     srv, base = _serve(tmp_path, fetch)
     try:
         selection = _cloud_selection(base)
-        status, payload = _apply(base, selection)
+        status, payload = _apply(base, selection, srv)
         assert status == 200 and payload.get("ok") is True, payload
 
         fetch.password = "cloud-mqtt-secret-2"
@@ -707,7 +707,7 @@ def test_config_write_failure_restores_rotated_cloud_record(
             raise OSError("disk full")
 
         srv.config_apply.apply = _boom
-        status, payload = _apply(base, selection)
+        status, payload = _apply(base, selection, srv)
         assert status == 500, payload
         assert payload.get("ok") is False
 
@@ -745,7 +745,7 @@ def test_rollback_failure_reports_high_severity_error(
         monkeypatch.setattr(
             credential_store_module._EncryptedFiles, "delete_file", _broken_delete
         )
-        status, payload = _apply(base, selection)
+        status, payload = _apply(base, selection, srv)
         assert status == 500, payload
         # The apply must not claim success, and the failed rollback is an
         # explicit, actionable, high-severity part of the response.
@@ -771,7 +771,7 @@ def test_missing_runtime_credential_reports_broker_auth_missing(
     srv, base = _serve(tmp_path, fetch)
     try:
         selection = _cloud_selection(base)
-        status, payload = _apply(base, selection)
+        status, payload = _apply(base, selection, srv)
         assert status == 200 and payload.get("ok") is True, payload
     finally:
         srv.shutdown()

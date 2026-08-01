@@ -1427,6 +1427,27 @@ else
 
 An unreadable B0 or B1 makes the owner `unknown` and the state `malformed`.
 
+**Two records may not both claim the console.** A live transition whose mode is
+*not* Setup-owned, beside a B0 that is active or still owns an unconverged
+cleanup, is a contradiction — resolving it by preferring one side would silently
+discard the other's state. It is reported as its own owner:
+
+```text
+owner            conflict
+state            conflict
+switchable       false
+recoverable      true
+blocking_reason  workflow_owner_conflict
+```
+
+`inspect()` never resolves it: no transition is cancelled, no record is
+terminalized, no file is touched. Only a previewed, fingerprinted, confirmed
+switch or recovery may act on it.
+
+A Setup-mode transition beside B0 is *not* a conflict — that is the workflow's
+own operation, and a wrong `operation_id` there stays the existing fail-closed
+`setup_transition_context_mismatch` / `setup_transition_owner_unproven` contract.
+
 | State | Meaning | Switchable |
 |---|---|---|
 | `idle` | nothing owns the console | yes |
@@ -1478,7 +1499,11 @@ always shown against the state it was computed for.
 | any | already satisfied | `none` | — |
 
 A blocked switch lists no reset scope: it promises nothing because it will do
-nothing. What it always preserves is fixed and stated in the preview: live EMS
+nothing. **A no-op is never a way past a block**: `action: "none"` may answer
+successfully only when the requested target is already safely in charge — an
+idle console asked for Guided Upgrade, or Guided Upgrade asked for itself. An
+unknown, conflicting, align-existing or unreadable owner is always blocked, so a
+refusal can never be reported as a completed switch. What it always preserves is fixed and stated in the preview: live EMS
 configuration, runtime data, deployment marker, containers, volumes, backups.
 
 Refusals, all leaving every durable record untouched:
@@ -1490,6 +1515,7 @@ Refusals, all leaving every durable record untouched:
 | a terminal Setup's cleanup is `pending` or `review_required` | `workflow_recovery_required` |
 | the Setup cannot prove it owns the active transition | `workflow_switch_blocked` + the exact `setup_transition_*` detail |
 | the transition mode is `align_existing_install` or unknown | `workflow_owner_unknown` |
+| two durable records claim the console | `workflow_owner_conflict` |
 | B0 or B1 is unreadable | `workflow_state_malformed` |
 | the presented fingerprint is not current | `workflow_lifecycle_changed` |
 | `confirm` was not `true` | `confirmation_required` (400) |
@@ -1524,10 +1550,9 @@ cannot read.
 
 **`release_stale_state`** may quarantine durable Admin workflow metadata. It
 requires a preview, the exact fingerprint, explicit confirmation and a reason,
-and it refuses while a claim, a worker or a replacement may still be running —
-the Docker probe additionally looks for that operation's replacement sidecar,
-and a probe that raises fails closed. The allowlist is derived from the Admin's
-own stores; a browser can never name a path:
+and it refuses while a claim or a worker is running — and, separately, until an
+Admin replacement is *proven* not to be running (§7.4.1). The allowlist is
+derived from the Admin's own stores; a browser can never name a path:
 
 ```text
 state/guided-setup-workflow.json
@@ -1535,7 +1560,20 @@ state/pending-transition.json
 state/guided-upgrade-context.json
 ```
 
-Only files that exist *and* cannot be read as valid state are in scope. Each
+**Unreadable is not the only unusable.** A perfectly readable record can be just
+as stuck, and every one of these is a deadlock without a release. The preview
+names the file *and* why:
+
+| Reason | State |
+|---|---|
+| `unreadable_state` | the file cannot be parsed or validated |
+| `unsupported_transition_mode` | a live transition whose mode this Admin does not support |
+| `workflow_owner_conflict` | two records claiming the console, where no normal cancellation applies |
+| `setup_transition_context_mismatch` / `setup_transition_owner_unproven` | a Setup that cannot name the transition it would have to cancel, so abandonment refuses on both halves |
+| `unusable_upgrade_context` | a context whose identity reads but which `load()` no longer accepts |
+
+A healthy, supported transition is never stale, and a state the normal domain
+operations *can* resolve is offered as `safe` instead. Each
 target's parent must resolve to the canonical Admin state directory, which must
 not be a symlink; otherwise the release is refused. The order is fixed: back up
 every file with its hash, write the manifest, then unlink. Never in scope:
@@ -1548,8 +1586,25 @@ Backups land in `<admin_data>/state/workflow-recovery/<UTC timestamp>/` beside a
 
 ```text
 manifest_version, created_at, mode, reason, admin_revision,
-lifecycle_fingerprint, files[{name, sha256, bytes}]
+lifecycle_fingerprint, files[{name, reason, sha256, bytes}]
 ```
+
+#### 7.4.1 Replacement activity is proven, never assumed
+
+`admin_replacement_activity()` answers three states, and only one of them lets a
+release continue:
+
+| Answer | When | Release |
+|---|---|---|
+| `ACTIVE` | the operation's updater sidecar is `created`/`restarting`/`running`, or any `ems-admin-updater-*` container is when no operation is named | refused, `replacement_active` |
+| `INACTIVE` | the daemon answered and there is no such container | allowed |
+| `UNKNOWN` | no daemon, an inspection error, a malformed answer, or no operation id *and* no listing capability | refused, `install_state_unavailable` |
+
+A Docker communication failure is therefore never proof of inactivity. The
+durable stage cannot stand in for the probe here: the states that need a release
+— unreadable transition, unsupported mode, missing operation identity — are
+exactly the ones whose stage proves nothing. An Admin with no probe wired at all
+refuses too.
 
 The manifest carries identity and hashes only — no file content, so no secret a
 malformed record happened to contain reaches it. Backups are never pruned by the
@@ -1561,22 +1616,49 @@ A second release finds nothing left in scope and answers `released: []`.
 
 | Route | Uses the arbiter for |
 |---|---|
+| `POST /api/admin/start-path` (`setup_new`) | creating **and** resuming Guided Setup: it delegates to `switch(guided_setup)` and refuses `workflow_switch_required` (409) when another workflow owns the console, so no client can create a Setup beside a live Guided Upgrade |
 | `GET /api/admin/workflow-lifecycle` | the normalized view |
 | `POST /api/admin/workflow-lifecycle/switch{,/preview}` | the switch decision and execution |
 | `POST /api/admin/workflow-lifecycle/recovery{,/preview}` | both recovery modes |
 | `_setup_owned_conflict()` (upgrade validate + execute) | the owner verdict; its public `setup_abandon_required` / `setup_cleanup_required` codes are unchanged |
 | browser start path (`setup_new`) | consults the view first and switches when another workflow owns the console |
 
-`POST /api/setup/abandon`, `POST /api/setup/system-build/supersede` and
-`POST /api/admin/system-alignment/cancel` keep their existing narrow contracts:
-they are the owners the arbiter delegates to, and remain reachable for the
-Restart setup / recovery-panel actions that already name one owner.
+An unconverged cleanup keeps its established `setup_cleanup_required` contract
+on the start path; every other refusal is the arbiter's own code. The route
+never terminates a workflow by itself — that needs the previewed switch.
+
+`POST /api/setup/abandon` and `POST /api/setup/system-build/supersede` keep
+their existing narrow contracts: they are the owners the arbiter delegates to,
+and remain reachable for the Restart setup / recovery-panel actions that already
+name one owner.
+
+`POST /api/admin/system-alignment/cancel` keeps its contract too
+(`setup_abandon_required`, `transition_cancel_unsupported`) but no longer
+classifies the owner itself: it asks the arbiter's `transition_cancel_verdict()`
+and only performs the cancellation it is allowed to perform. An unreadable
+transition and a contradiction are `unsupported` there, so the narrow primitive
+can never cancel one side of a conflict.
 
 `_reject_unrelated_transition_write` is deliberately **not** folded in: it is
 operation-specific validation owned by System Alignment ("do not write config
 while a build transition is pending"), not a cross-workflow ownership decision.
 
-### 7.6 Accepted limitations
+### 7.6 The Guided Upgrade context: identity is not validity
+
+`GuidedUpgradeContextStore.describe()` reports two separate facts, because
+conflating them once let an unusable context be deleted as ordinary litter:
+
+| Fact | Means |
+|---|---|
+| `identity_readable` | the file names an operation id and a target tag |
+| `domain_valid` | `load()` — the one validation authority — accepts it for exactly that pair |
+
+Safe recovery clears only a `domain_valid` orphan. One that reads but no longer
+reproduces is evidence: it goes through the advanced release, so it is backed up
+with its hash before it is removed. `describe()` re-validates nothing itself; it
+calls `load()`, so the two answers cannot drift apart.
+
+### 7.7 Accepted limitations
 
 - The in-process serialization covers concurrent callers in one process. A dying
   process holds no claim, by design (P1/P5/P6); the durable records are what a
@@ -1588,6 +1670,7 @@ while a build transition is pending"), not a cross-workflow ownership decision.
   cannot be reached answers "no replacement seen"; the durable stage is what
   actually blocks every replacement window.
 - Coverage: `tests/test_admin_workflow_lifecycle.py`,
+  `tests/test_admin_workflow_conflicts.py`,
   `tests/test_admin_workflow_switching.py`,
   `tests/test_admin_workflow_recovery.py`,
   `tests/test_admin_workflow_recovery_routes.py`,

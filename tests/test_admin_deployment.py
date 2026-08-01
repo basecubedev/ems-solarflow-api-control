@@ -1667,3 +1667,66 @@ def test_parse_pull_progress_counts_completed_layers():
     parse_pull_progress(state, "l2: Pulling fs layer")
     assert parse_pull_progress(state, "l1: Pull complete") == 50
     assert parse_pull_progress(state, "Status: Downloaded newer image") == 100
+
+
+def _ps_run(stdout):
+    def _run(cmd, **kwargs):
+        del cmd, kwargs
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    return _run
+
+
+@pytest.mark.parametrize(
+    "stdout",
+    [
+        "not-json\n",
+        "{ broken\n",
+        '{"Names": "ems-admin-updater-op-1"}\nnot-json\n',
+    ],
+)
+def test_inspect_container_refuses_to_read_unusable_docker_output(stdout):
+    """Unreadable output is a failure, never proof that a container is absent.
+
+    ``docker ps`` exiting 0 with output this wrapper cannot parse says nothing
+    about what is running. Returning ``None`` there is indistinguishable from a
+    verified absence, and callers that must not act on a guess would act.
+    """
+
+    docker = DockerCli(run=_ps_run(stdout))
+
+    with pytest.raises(DockerError) as excinfo:
+        docker.inspect_container("ems-admin-updater-op-1")
+
+    assert excinfo.value.code == "docker_container_inspect_unreadable"
+
+
+@pytest.mark.parametrize("stdout", ["not-json\n", "{ broken\n"])
+def test_list_containers_refuses_to_read_unusable_docker_output(stdout):
+    docker = DockerCli(run=_ps_run(stdout))
+
+    with pytest.raises(DockerError) as excinfo:
+        docker.list_containers("ems-admin-updater-")
+
+    assert excinfo.value.code == "docker_container_inspect_unreadable"
+
+
+def test_container_reads_survive_blank_and_absent_docker_output():
+    """Empty output is a valid answer: nothing matched the filter."""
+
+    docker = DockerCli(run=_ps_run("\n\n"))
+
+    assert docker.inspect_container("ems-admin-updater-op-1") is None
+    assert docker.list_containers("ems-admin-updater-") == []
+
+
+def test_inspect_container_still_reads_a_well_formed_row():
+    row = json.dumps(
+        {"Names": "/ems-admin-updater-op-1", "ID": "abc", "State": "running"}
+    )
+    docker = DockerCli(run=_ps_run(row + "\n"))
+
+    container = docker.inspect_container("ems-admin-updater-op-1")
+
+    assert container["container_name"] == "ems-admin-updater-op-1"
+    assert container["status"] == "running"

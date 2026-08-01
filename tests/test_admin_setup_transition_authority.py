@@ -35,6 +35,7 @@ from types import SimpleNamespace
 import pytest
 
 from admin.system_alignment import SystemAlignmentError
+from tests.admin_auth_helpers import auth_headers
 from tests.test_admin_server import (
     _FakeSystemAlignment,
     _attach_system_alignment,
@@ -211,6 +212,23 @@ def _authority(base, *, confirm=True):
     assert status == 200, payload
     assert payload["ok"] is True, payload
     return payload["setup_workflow_id"], payload["setup_intent_id"]
+
+
+def _direct_intent(srv, base, workflow_id):
+    """Mint a setup intent without going through the entry route.
+
+    Once a transition cannot be proven to belong to the active workflow, the
+    lifecycle arbiter refuses entry — including ``/api/admin/start-path``, the
+    only route that issues an intent. The creation routes keep their own
+    ownership check as defence in depth, and reaching it now takes an intent
+    minted directly.
+    """
+
+    cookie = auth_headers(f"{base}/", "POST").get("Cookie", "")
+    session_id = cookie.split("=", 1)[1] if "=" in cookie else ""
+    return srv.setup_intents.issue(
+        session_id=session_id, workflow_id=workflow_id
+    ).intent_id
 
 
 def _post_creation(base, route, workflow_id, intent_id, *, tag="v0.8.0"):
@@ -392,10 +410,12 @@ def test_setup_owner_cannot_cancel_a_foreign_transition_mode(tmp_path):
 
     alignment = _ActiveTransitionAlignment(mode="guided_upgrade")
     srv, base = _serve(release_manager=_control_export_manager(tmp_path))
-    _attach_system_alignment(srv, alignment)
     try:
+        # The Setup authority is earned on a free console; the foreign upgrade
+        # transition arrives afterwards, which is what abandonment must refuse.
         workflow_id = _start_workflow(base)
         generated = _own_generated_artifact(srv, workflow_id)
+        _attach_system_alignment(srv, alignment)
 
         status, _, payload = _abandon(base, workflow_id)
 
@@ -675,7 +695,15 @@ def test_existing_transition_requires_exact_workflow_operation_id(tmp_path):
         )
 
         _link(srv, workflow_id, operation_id="op-somewhere-else")
-        _workflow_id, mismatch_intent = _authority(base)
+        entry_status, _, entry = _request(
+            f"{base}/api/admin/start-path",
+            method="POST",
+            body={"choice": "setup_new", "confirm": True},
+        )
+        assert entry_status == 409, entry
+        assert entry["detail"] == "setup_transition_context_mismatch"
+
+        mismatch_intent = _direct_intent(srv, base, workflow_id)
         mismatch_status, _, mismatch = _post_creation(
             base, CONFIRM, workflow_id, mismatch_intent
         )
@@ -824,9 +852,11 @@ def test_status_read_failure_refuses_the_creation_routes(tmp_path):
 
     alignment = _UnreadableStatus()
     srv, base = _serve(release_manager=_control_export_manager(tmp_path))
-    _attach_system_alignment(srv, alignment)
     try:
+        # The authority is earned while the transition is still readable; the
+        # unreadable status is what the creation route then has to refuse.
         workflow_id, intent_id = _authority(base)
+        _attach_system_alignment(srv, alignment)
 
         status, _, payload = _post_creation(base, CONFIRM, workflow_id, intent_id)
 

@@ -175,8 +175,8 @@ def test_start_path_returns_the_existing_active_workflow(tmp_path):
 
     srv, base = _serve(release_manager=_control_export_manager(tmp_path))
     try:
-        first = _start_workflow(base)
-        second = _start_workflow(base)
+        first = _start_workflow(base, srv)
+        second = _start_workflow(base, srv)
         assert first == second
     finally:
         srv.shutdown()

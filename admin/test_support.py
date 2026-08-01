@@ -52,6 +52,10 @@ from admin.operation_coordinator import OperationCoordinator
 from admin.releases import ReleaseManager
 from admin.system_alignment import SystemAlignmentService
 from admin.system_build import SystemBuildResolver
+from admin.workflow_lifecycle import (
+    ReplacementActivity,
+    admin_replacement_activity,
+)
 
 TEST_MODE_ENV = "EMS_ADMIN_TEST_MODE"
 PACKAGED_RESOURCES_ENV = "EMS_ADMIN_TEST_PACKAGED_RESOURCES"
@@ -279,6 +283,13 @@ class _TestDocker:
         if name == _ADMIN_CONTAINER:
             return f"{ADMIN_IMAGE_REPO}:{self._running_admin_tag}"
         return None
+
+    @staticmethod
+    def list_containers(name_prefix):
+        # The deterministic runtime never starts a real updater sidecar, so it
+        # can prove there is none — which is what a release has to establish.
+        del name_prefix
+        return []
 
     # --- simulated Admin replacement ------------------------------------
     def set_running_admin_tag(self, tag):
@@ -692,6 +703,7 @@ def build_test_runtime(*, data_dir):
         system_alignment=system_alignment,
         operation_coordinator=operation_coordinator,
         mdns_provider=mdns_provider,
+        docker=docker,
     )
     original_instance_id = runtime.admin_instance_id
     instance_id_state["value"] = original_instance_id
@@ -1553,6 +1565,31 @@ def build_test_runtime(*, data_dir):
                 "scenario": scenario,
                 "digest": hashlib.sha256(record_path.read_bytes()).hexdigest(),
             }
+        elif scenario == "workflow_owner_conflict":
+            # Two durable records claiming the console at once: a Guided Setup
+            # workflow beside a live Guided Upgrade transition.
+            started = system_alignment.start(
+                requested_tag="v9.9.10",
+                mode="guided_upgrade",
+            )
+            system_alignment.resume(operation_id=started["operation_id"])
+            record = runtime.setup_workflows.ensure_active()
+            return {
+                "ok": True,
+                "scenario": scenario,
+                "operation_id": started["operation_id"],
+                "setup_workflow_id": record["workflow_id"],
+            }
+        elif scenario == "workflow_replacement_status_unknown":
+            # A Docker daemon that cannot answer. Releasing durable state then
+            # has to refuse: unreachable is not proof of an idle replacement.
+            runtime.workflow_lifecycle.bind_install_state_probe(
+                lambda _operation_id: ReplacementActivity.UNKNOWN
+            )
+        elif scenario == "workflow_replacement_status_inactive":
+            runtime.workflow_lifecycle.bind_install_state_probe(
+                lambda _operation_id: ReplacementActivity.INACTIVE
+            )
         elif scenario == "workflow_recovery_backups":
             # Read back what the advanced release quarantined, so a browser test
             # can assert the backup without reaching into the filesystem itself.
@@ -1611,6 +1648,9 @@ def build_test_runtime(*, data_dir):
                 shutil.rmtree(child, ignore_errors=True)
         docker.set_running_admin_tag(initial_running_tag)
         docker._running_ems_tag = initial_running_tag
+        runtime.workflow_lifecycle.bind_install_state_probe(
+            lambda operation_id: admin_replacement_activity(docker, operation_id)
+        )
         instance_id_state["value"] = original_instance_id
         backup_failure_state["enabled"] = False
         docker._delay_latest_until_development = False

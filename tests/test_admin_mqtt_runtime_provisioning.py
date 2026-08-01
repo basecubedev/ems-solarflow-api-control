@@ -1348,7 +1348,7 @@ def test_setup_apply_rotates_changed_local_credentials(tmp_path):
     srv, base = _serve_setup(discovery, tmp_path)
     srv.credential_store.save_mqtt_discovery_secret("home", "ems", "old-password")
     try:
-        body = _authorized(base, _write_body(discovery))
+        body = _authorized(base, _write_body(discovery), srv)
         status, payload = _request(f"{base}/api/setup/config/apply", "POST", body)
         assert status == 200 and payload.get("ok") is True, payload
 
@@ -1358,7 +1358,7 @@ def test_setup_apply_rotates_changed_local_credentials(tmp_path):
         status, payload = _request(
             f"{base}/api/setup/config/apply",
             "POST",
-            _authorized(base, _write_body(discovery)),
+            _authorized(base, _write_body(discovery), srv),
         )
         assert status == 200 and payload.get("ok") is True, payload
         # Setup and Maintenance share the rotation contract.

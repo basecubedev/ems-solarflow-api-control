@@ -16493,7 +16493,8 @@ const WORKFLOW_OWNER_LABELS = {
   guided_upgrade: "Guided Upgrade",
   align_existing_install: "System alignment",
   none: "None",
-  unknown: "Unknown",
+  conflict: "Conflicting workflow records",
+  unknown: "Unsupported or stale state",
 };
 
 const WORKFLOW_STATE_LABELS = {
@@ -16502,7 +16503,18 @@ const WORKFLOW_STATE_LABELS = {
   operation_running: "Operation running",
   cleanup_pending: "Cleanup unfinished",
   review_required: "Ownership review required",
+  conflict: "Two records claim the console",
   malformed: "Unreadable state",
+};
+
+// Why a durable Admin workflow file cannot be repaired by the normal actions.
+const WORKFLOW_STALE_REASON_LABELS = {
+  unreadable_state: "cannot be read",
+  unsupported_transition_mode: "unsupported operation type",
+  unusable_upgrade_context: "upgrade context no longer usable",
+  workflow_owner_conflict: "conflicts with another record",
+  setup_transition_context_mismatch: "names a different operation",
+  setup_transition_owner_unproven: "names no operation",
 };
 
 // Codes the console must answer with Resume or Workflow recovery — never with
@@ -16512,11 +16524,15 @@ const WORKFLOW_BLOCKED_CODES = new Set([
   "setup_operation_in_progress",
   "workflow_switch_blocked",
   "workflow_owner_unknown",
+  "workflow_owner_conflict",
 ]);
 
 const WORKFLOW_RECOVERABLE_CODES = new Set([
   "workflow_recovery_required",
   "workflow_state_malformed",
+  "workflow_owner_conflict",
+  "workflow_owner_unknown",
+  "workflow_switch_required",
   "setup_cleanup_required",
 ]);
 
@@ -16526,6 +16542,14 @@ function workflowOwnerLabel(owner) {
 
 function workflowStateLabel(state) {
   return WORKFLOW_STATE_LABELS[state] || "Unknown";
+}
+
+// "state/pending-transition.json (unsupported operation type)" — the backend
+// names both the file and the reason; the console only renders them.
+function workflowStaleFileText(entry) {
+  if (!entry || typeof entry !== "object") return "";
+  const label = WORKFLOW_STALE_REASON_LABELS[entry.reason] || entry.reason || "";
+  return label ? entry.name + " (" + label + ")" : String(entry.name || "");
 }
 
 // Identifiers are opaque and long; the console shows enough to match a support
@@ -16728,6 +16752,9 @@ function workflowRecoverySummaryText(plan) {
   if (plan && plan.operation_running) {
     return "An Admin workflow operation is running. Recovery stays blocked.";
   }
+  if (lifecycle.blocking_reason === "workflow_owner_conflict") {
+    return "Two Admin workflow records claim the console at once.";
+  }
   if (plan && plan.blocking) {
     return (
       workflowOwnerLabel(lifecycle.owner) +
@@ -16771,7 +16798,9 @@ function renderWorkflowRecovery(plan) {
   }
   if (workflowRecoveryEls.files) {
     const files = (plan && plan.advanced && plan.advanced.files) || [];
-    workflowRecoveryEls.files.textContent = files.length ? files.join(", ") : "none";
+    workflowRecoveryEls.files.textContent = files.length
+      ? files.map(workflowStaleFileText).join(", ")
+      : "none";
   }
   if (workflowRecoveryEls.preserved) {
     workflowRecoveryEls.preserved.textContent = (

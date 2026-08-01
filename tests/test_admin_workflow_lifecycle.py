@@ -25,6 +25,7 @@ from admin.operation_coordinator import OperationCoordinator
 from admin.setup_lifecycle import SetupLifecycleCoordinator
 from admin.workflow_lifecycle import (
     AdminWorkflowLifecycleService,
+    ReplacementActivity,
     OWNER_ALIGN_EXISTING,
     OWNER_GUIDED_SETUP,
     OWNER_GUIDED_UPGRADE,
@@ -122,7 +123,17 @@ class FakeAlignment:
 
 
 def build_service(tmp_path, alignment=None, **kwargs):
+    """A service wired like production, with a Docker that proves inactivity.
+
+    The productive runtime always injects a replacement probe; a test that is
+    not about that probe would otherwise be refused by the fail-closed gate for
+    a reason it never meant to exercise.
+    """
+
     alignment = alignment if alignment is not None else FakeAlignment()
+    kwargs.setdefault(
+        "install_state_probe", lambda _operation_id: ReplacementActivity.INACTIVE
+    )
     kwargs.setdefault("workflows", GuidedSetupWorkflowStore(tmp_path))
     kwargs.setdefault("lifecycle", SetupLifecycleCoordinator())
     kwargs.setdefault("coordinator", OperationCoordinator())

@@ -1986,6 +1986,9 @@ def _safe_container_suffix(plan_id) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]", "_", str(plan_id))[:64] or "unknown"
 
 
+ADMIN_UPDATER_CONTAINER_PREFIX = "ems-admin-updater-"
+
+
 def admin_update_sidecar_container_name(plan_id) -> str:
     """The exact container name an Admin replacement sidecar runs under.
 
@@ -1993,7 +1996,7 @@ def admin_update_sidecar_container_name(plan_id) -> str:
     to prove whether such a replacement is still around.
     """
 
-    return f"ems-admin-updater-{_safe_container_suffix(plan_id)}"
+    return ADMIN_UPDATER_CONTAINER_PREFIX + _safe_container_suffix(plan_id)
 
 
 def _positive_id(value):

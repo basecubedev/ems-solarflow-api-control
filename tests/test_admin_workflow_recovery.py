@@ -28,6 +28,8 @@ from admin.workflow_lifecycle import (
     WORKFLOW_LIFECYCLE_CHANGED,
     WORKFLOW_RECOVERY_UNSAFE,
 )
+from admin.guided_upgrade import guided_upgrade_request_fingerprint
+from admin.guided_upgrade_context import GuidedUpgradeContextStore
 from tests.test_admin_workflow_lifecycle import FakeAlignment, write_upgrade_context
 from tests.test_admin_workflow_switching import _claim_artifacts, _start_setup, _service
 
@@ -154,9 +156,22 @@ def test_safe_recovery_cancels_an_expired_upgrade_transition(tmp_path):
     assert (tmp_path / "state" / "guided-upgrade-context.json").exists() is False
 
 
-def test_safe_recovery_clears_an_orphaned_upgrade_context(tmp_path):
+def test_safe_recovery_clears_a_usable_orphaned_upgrade_context(tmp_path):
+    """Only a context the loader still accepts is an ordinary orphan.
+
+    One that no longer reproduces is evidence, not litter: it goes through the
+    advanced release so an operator gets it backed up first.
+    """
+
     service = _service(tmp_path)
-    write_upgrade_context(tmp_path, "op-gone")
+    store = GuidedUpgradeContextStore(tmp_path / "state")
+    options = GuidedUpgradeContextStore._normalize_options({})
+    store.save(
+        operation_id="op-gone",
+        target_system_tag="v0.9.0",
+        options=options,
+        request_fingerprint=guided_upgrade_request_fingerprint("v0.9.0", options),
+    )
 
     result = _recover(service, RECOVERY_MODE_SAFE)
 
@@ -225,7 +240,9 @@ def test_a_corrupt_setup_record_produces_an_advanced_plan(tmp_path):
     assert plan["ok"] is True
     assert plan["safe"]["available"] is False
     assert plan["advanced"]["available"] is True
-    assert plan["advanced"]["files"] == ["state/guided-setup-workflow.json"]
+    assert plan["advanced"]["files"] == [
+        {"name": "state/guided-setup-workflow.json", "reason": "unreadable_state"}
+    ]
     assert plan["advanced"]["confirmation_required"] is True
     for preserved in ("config/config.json", "docker-compose.yml"):
         assert preserved in plan["will_preserve"]
@@ -240,7 +257,10 @@ def test_a_corrupt_transition_produces_an_advanced_plan(tmp_path):
     plan = service.plan_recovery()
 
     assert plan["advanced"]["available"] is True
-    assert "state/pending-transition.json" in plan["advanced"]["files"]
+    assert {
+        "name": "state/pending-transition.json",
+        "reason": "unreadable_state",
+    } in plan["advanced"]["files"]
 
 
 def test_a_healthy_console_offers_no_recovery(tmp_path):
@@ -324,6 +344,7 @@ def test_the_recovery_manifest_records_reason_hashes_and_fingerprint(tmp_path):
     assert manifest["files"] == [
         {
             "name": "state/guided-setup-workflow.json",
+            "reason": "unreadable_state",
             "sha256": digest,
             "bytes": len(original),
         }

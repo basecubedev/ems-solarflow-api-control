@@ -194,10 +194,16 @@ from admin.system_health import (
 from admin.workflow_lifecycle import (
     AdminWorkflowLifecycleError,
     AdminWorkflowLifecycleService,
+    CANCEL_VERDICT_SETUP_OWNED,
+    CANCEL_VERDICT_UNSUPPORTED,
+    OWNER_CONFLICT,
     OWNER_GUIDED_SETUP,
+    OWNER_NONE,
     RECOVERY_MODES,
     SWITCH_TARGETS,
-    admin_replacement_container_active,
+    TARGET_GUIDED_SETUP,
+    WORKFLOW_SWITCH_REQUIRED,
+    admin_replacement_activity,
     worker_aware_alignment_status,
 )
 from admin.system_build import (
@@ -689,6 +695,7 @@ def create_admin_runtime(
     backup_service=None,
     setup_intents=None,
     operation_coordinator=None,
+    docker=None,
 ):
     """Build the shared Admin service graph once, for one or more listeners.
 
@@ -705,7 +712,7 @@ def create_admin_runtime(
     # Give the release manager a read-only Docker inspector so it can compare a
     # running build's identity against release targets; harmless when the daemon
     # is absent (all inspections degrade to an unknown identity).
-    docker = DockerCli()
+    docker = docker or DockerCli()
     # Give the release manager a productive development-build catalogue source
     # (the CI-published, read-only JSON index) so installable development builds
     # appear in Setup without any test injection; a missing catalogue is empty.
@@ -796,7 +803,7 @@ def create_admin_runtime(
         setup_intents=setup_intents,
         admin_data_dir=admin_data_dir,
         transition_store=transition_store,
-        install_state_probe=lambda operation_id: admin_replacement_container_active(
+        install_state_probe=lambda operation_id: admin_replacement_activity(
             docker, operation_id
         ),
     )
@@ -1641,26 +1648,66 @@ class AdminHandler(BaseHTTPRequestHandler):
             self.server.setup_intents.invalidate_session(session_id)
         elif result.get("ok"):
             # The durable workflow identity outlives the one-shot intent: it is
-            # what every Setup config mutation must present. Re-entering Fresh
-            # Setup continues the active workflow instead of forking a second
-            # identity, and a previous workflow whose cleanup has not converged
-            # blocks a replacement — including its setup intent.
-            try:
-                reconcile_unclaimed_review(self.server.setup_workflows)
-                workflow = self.server.setup_workflows.ensure_active()
-            except GuidedSetupWorkflowError as exc:
-                self._send_workflow_rejection(exc)
+            # what every Setup config mutation must present. Creating or resuming
+            # it goes through the lifecycle arbiter, so this route cannot start a
+            # Setup beside another workflow that already owns the console — not
+            # for an old console, a direct API client or a retry.
+            entered = self._enter_guided_setup(session_id)
+            if entered is None:
                 return
-            intent = self.server.setup_intents.issue(
-                session_id=session_id, workflow_id=workflow["workflow_id"]
-            )
-            result["setup_intent_id"] = intent.intent_id
-            result["setup_workflow_id"] = workflow["workflow_id"]
+            result.update(entered)
             result["existing_install_confirmed"] = bool(
                 result.get("state") != "none" and confirm
             )
         status = 409 if result.get("requires_confirmation") else 200
         self._send_json(result, status=status)
+
+    def _enter_guided_setup(self, session_id):
+        """Create or resume Guided Setup through the one lifecycle arbiter.
+
+        Returns the workflow/intent identity, or ``None`` after the refusal has
+        already been answered. A workflow that owns the console and would have
+        to be cancelled is never terminated here: that needs the previewed,
+        confirmed switch, so this answers ``workflow_switch_required``.
+        """
+
+        lifecycle = self.server.workflow_lifecycle
+        view = lifecycle.inspect()
+        if view["owner"] not in {OWNER_GUIDED_SETUP, OWNER_NONE}:
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": WORKFLOW_SWITCH_REQUIRED,
+                    "message": (
+                        "Another guided workflow owns the Admin Console. Review "
+                        "the switch before Guided Setup can start."
+                    ),
+                    "lifecycle": view,
+                    "switch_preview": "/api/admin/workflow-lifecycle/switch/preview",
+                },
+                status=409,
+            )
+            return None
+        try:
+            switched = lifecycle.switch(
+                TARGET_GUIDED_SETUP,
+                expected_fingerprint=view["fingerprint"],
+                confirm=True,
+                session_id=session_id,
+            )
+        except AdminWorkflowLifecycleError as exc:
+            # An unconverged cleanup keeps its own established contract: the
+            # console already routes that to the cleanup retry, not to a switch.
+            record = self.server.setup_workflows.load()
+            if cleanup_blocks(record):
+                self._send_workflow_rejection(cleanup_conflict_error(record))
+                return None
+            self._send_workflow_lifecycle_error(exc)
+            return None
+        return {
+            "setup_workflow_id": switched.get("setup_workflow_id"),
+            "setup_intent_id": switched.get("setup_intent_id"),
+        }
 
     def _claim_setup_intent(self, workflow_id):
         # A setup mutation atomically consumes its intent: after this returns True
@@ -2274,8 +2321,10 @@ class AdminHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "confirmation_required"}, status=400)
             return
         transition = self._alignment_status().get("transition") or {}
-        mode = transition.get("mode")
-        if mode in SETUP_TRANSITION_MODES:
+        # The ownership question is the arbiter's; this route only performs the
+        # cancellation it is allowed to perform.
+        verdict = self.server.workflow_lifecycle.transition_cancel_verdict()
+        if verdict == CANCEL_VERDICT_SETUP_OWNED:
             self._send_json(
                 {
                     "ok": False,
@@ -2289,7 +2338,7 @@ class AdminHandler(BaseHTTPRequestHandler):
                 status=409,
             )
             return
-        if transition and mode != TRANSITION_MODE_GUIDED_UPGRADE:
+        if verdict == CANCEL_VERDICT_UNSUPPORTED:
             self._send_json(
                 {
                     "ok": False,
@@ -2303,6 +2352,7 @@ class AdminHandler(BaseHTTPRequestHandler):
                 status=409,
             )
             return
+        mode = transition.get("mode")
         try:
             result = self.server.system_alignment.cancel(
                 operation_id=body.get("operation_id"),
@@ -2951,7 +3001,7 @@ class AdminHandler(BaseHTTPRequestHandler):
         # state that only ever named installed-system files — stale bookkeeping
         # from the pre-claim cleanup, whose reconciliation deletes nothing.
         view = self.server.workflow_lifecycle.inspect()
-        if view["owner"] != OWNER_GUIDED_SETUP:
+        if view["owner"] not in {OWNER_GUIDED_SETUP, OWNER_CONFLICT}:
             return None
         record = workflows.load() if workflows else None
         if cleanup_blocks(record):

@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from admin.workflow_lifecycle import ReplacementActivity
 from tests.admin_auth_helpers import raw_request
 from tests.test_admin_setup_cancellation_ownership import _CancelRecordingAlignment
 from tests.test_admin_server import (
@@ -293,6 +294,169 @@ def test_unsupported_switch_fields_and_targets_are_refused(tmp_path):
         srv.server_close()
 
 
+# --- the start path cannot bypass the arbiter ---------------------------------
+
+
+def _start_path(base, confirm=True):
+    return _request(
+        f"{base}/api/admin/start-path",
+        method="POST",
+        body={"choice": "setup_new", "confirm": confirm},
+    )
+
+
+def test_start_path_cannot_bypass_active_guided_upgrade(tmp_path):
+    """A direct API client must not create Setup beside a live Guided Upgrade.
+
+    The console asks the arbiter first, but the route is what has to be safe: an
+    old frontend, a script or a retry reaches it without any lifecycle call.
+    """
+
+    alignment = _UpgradeAlignment()
+    srv, base = _serve(release_manager=_control_export_manager(tmp_path))
+    _attach_system_alignment(srv, alignment)
+    try:
+        status, _, payload = _start_path(base)
+
+        assert status == 409, payload
+        assert payload["error"] == "workflow_switch_required"
+        assert payload["lifecycle"]["owner"] == "guided_upgrade"
+        assert payload["switch_preview"] == (
+            "/api/admin/workflow-lifecycle/switch/preview"
+        )
+        assert payload.get("setup_workflow_id") is None
+        assert payload.get("setup_intent_id") is None
+        # Neither authority was touched: no Setup record, upgrade still live.
+        assert srv.setup_workflows.load() is None
+        assert alignment.cancelled == []
+        assert alignment.active is True
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_start_path_cannot_bypass_a_workflow_owner_conflict(tmp_path):
+    alignment = _UpgradeAlignment()
+    srv, base = _serve(release_manager=_control_export_manager(tmp_path))
+    _attach_system_alignment(srv, alignment)
+    try:
+        srv.setup_workflows.ensure_active()
+
+        status, _, payload = _start_path(base)
+
+        assert status == 409, payload
+        assert payload["error"] == "workflow_switch_required"
+        assert payload["lifecycle"]["blocking_reason"] == "workflow_owner_conflict"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_start_path_still_starts_setup_on_a_free_console(tmp_path):
+    srv, base = _serve(release_manager=_control_export_manager(tmp_path))
+    try:
+        status, _, payload = _start_path(base)
+
+        assert status == 200, payload
+        assert payload["setup_workflow_id"]
+        assert payload["setup_intent_id"]
+        assert srv.setup_workflows.load()["status"] == "active"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_start_path_keeps_the_cleanup_conflict_contract(tmp_path):
+    srv, base = _serve(release_manager=_control_export_manager(tmp_path))
+    try:
+        workflow_id = _start_setup(base, srv)
+        srv.setup_workflows.finish(
+            workflow_id,
+            status="abandoned",
+            cleanup={
+                "state": "pending",
+                "attempted_at": "2026-01-01T00:00:00Z",
+                "failed_count": 1,
+                "review_count": 0,
+                "artifacts": [{"kind": "generated_config", "status": "failed"}],
+            },
+        )
+
+        status, _, payload = _start_path(base)
+
+        assert status == 409, payload
+        assert payload["error"] == "setup_cleanup_required"
+        assert srv.setup_workflows.load()["workflow_id"] == workflow_id
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_start_path_resumes_the_active_setup_workflow(tmp_path):
+    srv, base = _serve(release_manager=_control_export_manager(tmp_path))
+    try:
+        first = _start_setup(base, srv)
+
+        status, _, payload = _start_path(base)
+
+        assert status == 200, payload
+        assert payload["setup_workflow_id"] == first
+        assert payload["setup_intent_id"]
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_a_direct_start_path_race_never_creates_a_second_owner(tmp_path):
+    """Interleaving: a start-path request and a lifecycle switch overlap.
+
+    Both read one lifecycle state; the arbiter serializes them and the loser is
+    refused, so an active Setup can never end up beside an active Upgrade.
+    """
+
+    import threading
+
+    alignment = _UpgradeAlignment()
+    srv, base = _serve(release_manager=_control_export_manager(tmp_path))
+    _attach_system_alignment(srv, alignment)
+    try:
+        fingerprint = _inspect(base)["fingerprint"]
+        ready = threading.Barrier(2, timeout=10)
+        outcomes = {}
+
+        def run_start_path():
+            ready.wait()
+            outcomes["start_path"] = _start_path(base)[0]
+
+        def run_switch():
+            ready.wait()
+            outcomes["switch"] = _switch(base, "guided_setup", fingerprint=fingerprint)[
+                0
+            ]
+
+        threads = [
+            threading.Thread(target=run_start_path),
+            threading.Thread(target=run_switch),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=20)
+
+        record = srv.setup_workflows.load()
+        view = _inspect(base)
+        # Either the switch won (Setup owns the console, upgrade cancelled) or
+        # the start path was refused; never both owners at once.
+        assert view["owner"] in {"guided_setup", "guided_upgrade"}
+        if view["owner"] == "guided_setup":
+            assert alignment.cancelled == ["op-1"]
+        else:
+            assert record is None
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
 # --- recovery ------------------------------------------------------------------
 
 
@@ -328,8 +492,17 @@ def test_safe_recovery_resets_a_stranded_setup_through_the_normal_owner(tmp_path
         srv.server_close()
 
 
+def _prove_no_replacement(srv):
+    """Bind a replacement probe that answers without a real Docker daemon."""
+
+    srv.runtime.workflow_lifecycle.bind_install_state_probe(
+        lambda _operation_id: ReplacementActivity.INACTIVE
+    )
+
+
 def test_advanced_release_backs_up_and_preserves_the_installed_system(tmp_path):
     srv, base = _serve(release_manager=_control_export_manager(tmp_path))
+    _prove_no_replacement(srv)
     try:
         data_dir = Path(srv.setup_workflows.admin_data_dir)
         record = srv.setup_workflows.path
@@ -342,7 +515,12 @@ def test_advanced_release_backs_up_and_preserves_the_installed_system(tmp_path):
         status, _, payload = _recover(base, "release_stale_state")
 
         assert preview == 200, plan
-        assert plan["advanced"]["files"] == ["state/guided-setup-workflow.json"]
+        assert plan["advanced"]["files"] == [
+            {
+                "name": "state/guided-setup-workflow.json",
+                "reason": "unreadable_state",
+            }
+        ]
         assert status == 200, payload
         assert payload["released"] == ["state/guided-setup-workflow.json"]
         backup_root = data_dir / "state" / "workflow-recovery"
@@ -362,6 +540,7 @@ def test_advanced_release_backs_up_and_preserves_the_installed_system(tmp_path):
 
 def test_the_recovery_route_never_accepts_a_filesystem_path(tmp_path):
     srv, base = _serve(release_manager=_control_export_manager(tmp_path))
+    _prove_no_replacement(srv)
     try:
         record = srv.setup_workflows.path
         record.parent.mkdir(parents=True, exist_ok=True)
@@ -412,6 +591,7 @@ def test_an_unknown_recovery_mode_is_refused(tmp_path):
 
 def test_advanced_release_requires_a_reason(tmp_path):
     srv, base = _serve(release_manager=_control_export_manager(tmp_path))
+    _prove_no_replacement(srv)
     try:
         record = srv.setup_workflows.path
         record.parent.mkdir(parents=True, exist_ok=True)

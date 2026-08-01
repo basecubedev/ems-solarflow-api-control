@@ -307,49 +307,67 @@ class GuidedUpgradeContextStore:
         return self._to_context({**data, "options": normalized})
 
     def describe(self) -> dict:
-        """Presence and identity of the stored context, without trusting it.
+        """Report the stored context's identity and its domain validity apart.
 
-        :meth:`load` is the authority for *using* a context and refuses anything
-        it cannot reproduce. A lifecycle view also has to report the contexts
-        that can never be used again — orphaned, foreign or corrupt — so this
-        read reports only the identity fields, which carry no secrets.
+        Two different facts, and conflating them is what let an unusable context
+        be treated as an ordinary orphan: *identity-readable* means the file
+        names an operation and a target, *domain-valid* means :meth:`load` — the
+        one validation authority — accepts it for that exact pair. Only the
+        identity fields are returned; they carry no secrets.
         """
 
         absent = {
             "present": False,
-            "readable": True,
+            "identity_readable": True,
+            "domain_valid": True,
             "operation_id": None,
             "target_system_tag": None,
+            "reason": None,
         }
-        unreadable = {
-            "present": True,
-            "readable": False,
-            "operation_id": None,
-            "target_system_tag": None,
-        }
+
+        def unusable(reason):
+            return {
+                "present": True,
+                "identity_readable": False,
+                "domain_valid": False,
+                "operation_id": None,
+                "target_system_tag": None,
+                "reason": reason,
+            }
+
         try:
             raw = self.path.read_bytes()
         except FileNotFoundError:
             return absent
         except OSError:
-            return unreadable
+            return unusable("unreadable_context_file")
         try:
             data = json.loads(raw.decode("utf-8"))
         except (ValueError, UnicodeDecodeError):
-            return unreadable
+            return unusable("corrupt_context_file")
         if not isinstance(data, dict):
-            return unreadable
+            return unusable("corrupt_context_file")
         operation_id = data.get("operation_id")
         target_system_tag = data.get("target_system_tag")
         if not (isinstance(operation_id, str) and operation_id):
-            return unreadable
+            return unusable("missing_context_identity")
+        if not (isinstance(target_system_tag, str) and target_system_tag):
+            return unusable("missing_context_identity")
+        # The authoritative loader decides usability; nothing is re-validated
+        # here, so the two answers can never drift apart.
+        domain_valid = (
+            self.load(
+                operation_id=operation_id, target_system_tag=target_system_tag
+            )
+            is not None
+        )
         return {
             "present": True,
-            "readable": True,
+            "identity_readable": True,
+            "domain_valid": domain_valid,
             "operation_id": operation_id,
-            "target_system_tag": (
-                target_system_tag if isinstance(target_system_tag, str) else None
-            ),
+            "target_system_tag": target_system_tag,
+            "reason": None if domain_valid else "unreproducible_context",
         }
 
     def clear(self) -> None:

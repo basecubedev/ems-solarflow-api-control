@@ -114,6 +114,24 @@ the owning service: the transition store still decides whether *now* is a safe
 moment to cancel, and `_reject_unrelated_transition_write` still gates
 Maintenance writes on a pending transition.
 
+No route may reach around it, and `server.py` keeps no owner classifier of its
+own. `POST /api/admin/start-path` creates and resumes Guided Setup **through**
+the arbiter, so an old console, a script or a retry cannot open a Setup beside a
+live Guided Upgrade; the narrow `system-alignment/cancel` primitive asks the
+arbiter who owns the transition before it cancels anything. Four rules follow from the
+same principle, and each of them fails closed:
+
+- **contradictory durable owners are named, not resolved** — two records
+  claiming the console report `workflow_owner_conflict`; nothing is cancelled or
+  cleaned until a previewed, confirmed switch or recovery says so;
+- **a no-op never hides a block** — `action: "none"` may answer successfully only
+  when the requested target is already safely in charge;
+- **readable is not usable** — an unsupported transition mode, a contradiction or
+  an unreproducible upgrade context is advanced-recovery material with an exact
+  reason, not a permanent deadlock;
+- **Docker unknown is not Docker inactive** — releasing durable state requires a
+  positive answer that no Admin replacement is running.
+
 ## Authentication
 
 The Admin Console is protected by the shared EMS/Dashboard password — there is

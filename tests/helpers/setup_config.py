@@ -81,8 +81,37 @@ def adopt_generated_config(service, *, draft_fingerprint="sha256:" + "0" * 64):
     return store
 
 
-def start_setup_workflow(base, request):
-    """Confirm Fresh Setup and return the durable ``setup_workflow_id``."""
+def own_active_setup_transition(srv, base, request, workflow_id):
+    """Give ``workflow_id`` the transition ownership production writes pre-commit.
+
+    Production links a Setup transition into its workflow record inside the
+    System Alignment pre-commit boundary, so a workflow that reached a
+    transition always names its exact ``operation_id``. A harness that
+    *pre-seeds* an active Setup transition has to establish the same fact, or
+    the workflow it starts is an unlinked owner — a state the ownership rules
+    refuse on purpose, entry included.
+    """
+
+    _status, _headers, payload = request(f"{base}/api/admin/system-alignment/status")
+    transition = (payload or {}).get("transition") or {}
+    if transition.get("mode") not in {"fresh_install", "automated_setup"}:
+        return None
+    return srv.setup_workflows.record_transition(
+        workflow_id,
+        operation_id=transition.get("operation_id"),
+        transition_mode=transition["mode"],
+        selected_system_tag=transition.get("system_tag"),
+    )
+
+
+def start_setup_workflow(base, request, srv=None):
+    """Confirm Fresh Setup and return the durable ``setup_workflow_id``.
+
+    Pass ``srv`` whenever the harness pre-seeds an active Setup transition
+    (``SetupReadySystemAlignment`` and friends): the started workflow then owns
+    it exactly as production would, so a second entry is not refused as an
+    unprovable owner.
+    """
 
     status, _, payload = request(
         f"{base}/api/admin/start-path",
@@ -92,19 +121,22 @@ def start_setup_workflow(base, request):
     assert status == 200 and payload.get("ok") is True, payload
     workflow_id = payload.get("setup_workflow_id")
     assert workflow_id, "start-path must issue a setup_workflow_id"
+    if srv is not None:
+        own_active_setup_transition(srv, base, request, workflow_id)
     return workflow_id
 
 
-def authorize_setup_mutation(base, request, body, *, workflow_id=None):
+def authorize_setup_mutation(base, request, body, *, workflow_id=None, srv=None):
     """Return ``body`` carrying real workflow and exact-preview authority.
 
     ``request`` is the caller's authenticated HTTP helper
     (``request(url, method=..., body=...) -> (status, headers, payload)``).
     The preview must be ready — a draft that cannot preview cannot be
-    authorized, exactly like in the browser.
+    authorized, exactly like in the browser. ``srv`` is forwarded to
+    :func:`start_setup_workflow` for harnesses that pre-seed a transition.
     """
 
-    workflow_id = workflow_id or start_setup_workflow(base, request)
+    workflow_id = workflow_id or start_setup_workflow(base, request, srv)
     authorized = {
         key: value
         for key, value in dict(body or {}).items()
