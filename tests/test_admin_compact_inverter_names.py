@@ -149,6 +149,7 @@ def test_maintenance_creation_paths_share_the_allocator():
             "mconfigNextInverterName",
             "normalizeSerial",
             "usableSerialValue",
+            "issuedPhysicalIdentity",
             "physicalInverterIdentity",
             "mconfigDeviceCommonDefaults",
             "mconfigApplyCommonDefaults",
@@ -337,7 +338,7 @@ const localMqtt = {
 function undismissSerial() {}
 function availableConfigDevices() { return [local]; }
 function availableMqttDeviceProposals() { return [localMqtt, mqtt]; }
-function deviceKey(device) { return device.id; }
+function observationKey(device) { return device.observation_id || device.id; }
 function draftHasSource(id) { return configDraftItems.some((item) => item.source_id === id); }
 function draftItemFromDevice(device) {
   return {source_id: device.id, role: "inverter", serial_number: device.serial_number,

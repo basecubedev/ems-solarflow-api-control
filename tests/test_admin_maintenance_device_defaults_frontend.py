@@ -146,6 +146,7 @@ _COMMON_HELPERS = (
 _OPTIONAL_HELPERS = (
     "normalizeSerial",
     "usableSerialValue",
+    "issuedPhysicalIdentity",
     "physicalInverterIdentity",
     "inverterVisibleSerial",
     "inverterIdentityTokens",

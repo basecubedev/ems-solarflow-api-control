@@ -32,6 +32,7 @@ from ems.config import (
 from ems.device_identity import (
     PHYSICAL_IDENTITY_ALIAS_TOKENS_FIELD,
     PHYSICAL_IDENTITY_TOKEN_FIELD,
+    is_masked_identity_value,
     legacy_route_folded_tokens,
     normalize_mqtt_route_segment,
     resolve_inverter_identity_evidence,
@@ -121,15 +122,18 @@ _DEVICE_ID_KEYS = ("device_id", "serial_number")
 _DEVICE_LIST_ONLY_FAMILY = "device_list_only"
 WAITING_FOR_MQTT_TELEMETRY = "waiting_for_mqtt_telemetry"
 
-# Markers used when masking display-only ids (…abcd / ••••). A value carrying
-# either is not a usable identifier and must never reach config.
-_MASK_MARKERS = ("•", "…")
-
-
 def is_masked_zendure_identifier(value: Any) -> bool:
-    """True if ``value`` is a display-masked id unsafe to write into config."""
+    """True if ``value`` is a display-masked id unsafe to write into config.
 
-    return isinstance(value, str) and any(marker in value for marker in _MASK_MARKERS)
+    The placeholder vocabulary is Core's. An absent or empty value is not a
+    mask here — it carries no placeholder to write back.
+    """
+
+    return (
+        isinstance(value, str)
+        and value.strip() != ""
+        and is_masked_identity_value(value)
+    )
 
 
 def _unmasked(value: Any) -> str | None:

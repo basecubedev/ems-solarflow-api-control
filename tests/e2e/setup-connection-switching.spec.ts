@@ -15,6 +15,9 @@ const API_IP = "192.168.100.78";
 
 function httpInverter() {
   return {
+    // The backend stamps every discovered observation; the browser keys its
+    // collections on this id and never on the displayed serial.
+    observation_id: `obs:v1:HTTP${SERIAL}`,
     serial_number: SERIAL,
     role_suggestion: "inverter",
     ip: API_IP,
@@ -313,7 +316,7 @@ test("Zendure MQTT to API: switching back keeps one inverter and its values", as
 
   await expect(inverterCards(page)).toHaveCount(1);
   const switched = inverterCards(page).first();
-  await expect(switched).toHaveAttribute("data-source-id", /^zendure_local_http:/);
+  await expect(switched).toHaveAttribute("data-source-id", /^obs:v1:HTTP/);
   await expect(switched).toContainText("INV_1");
   await expect(switched.locator(".connection-pill")).toHaveText("API");
 

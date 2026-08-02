@@ -14,6 +14,9 @@ const SERIAL_B = "EOD1BBB222";
 
 function httpInverter(serial: string, ip: string) {
   return {
+    // The backend stamps every discovered observation; the browser keys its
+    // collections on this id and never on the displayed serial.
+    observation_id: `obs:v1:HTTP${serial}`,
     serial_number: serial,
     role_suggestion: "inverter",
     ip,
@@ -227,7 +230,7 @@ test("late Zendure MQTT priority reconfigures the auto-added Local-API inverters
   await page.locator('[data-setup-step="config"]').click();
   await expect(inverterCards(page)).toHaveCount(2);
   const initialCard = inverterCards(page).first();
-  await expect(initialCard).toHaveAttribute("data-source-id", /^zendure_local_http:/);
+  await expect(initialCard).toHaveAttribute("data-source-id", /^obs:v1:HTTP/);
   await initialCard.locator(".hardware-card-toggle").click();
   await expect(initialCard).toContainText("API");
 
@@ -293,7 +296,7 @@ test("Add more devices offers the API connection as an alternative", async ({ pa
   // One logical inverter, same name, now over API.
   await expect(inverterCards(page)).toHaveCount(2);
   const switched = inverterCards(page).first();
-  await expect(switched).toHaveAttribute("data-source-id", /^zendure_local_http:/);
+  await expect(switched).toHaveAttribute("data-source-id", /^obs:v1:HTTP/);
   await expect(switched).toContainText("INV_1");
   await expect(switched).toContainText("API");
 

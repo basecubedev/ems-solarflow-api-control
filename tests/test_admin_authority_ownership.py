@@ -67,6 +67,21 @@ def test_secret_markers_are_declared_once():
     assert offenders == []
 
 
+def test_catalog_field_classification_is_not_reimplemented_in_admin():
+    """Admin re-exports the catalog's answer; it never re-reads the metadata."""
+
+    from admin import secret_policy
+    from ems import config_catalog
+
+    assert secret_policy.is_secret_catalog_field is config_catalog.is_secret_catalog_field
+    source = pathlib.Path(secret_policy.__file__).read_text()
+    # No second body, and no local re-reading of the catalog's metadata keys.
+    # The name-marker vocabulary is a different mechanism and stays here.
+    assert "def is_secret_catalog_field" not in source
+    assert 'field.get("risk")' not in source
+    assert 'field.get("type")' not in source
+
+
 def test_every_admin_classifier_delegates_to_the_policy():
     import admin.guided_setup_workflow as workflow
     import admin.maintenance_config as maintenance
@@ -154,3 +169,79 @@ def test_frontend_reads_the_backend_control_verdict():
         "control_block_reason",
     ):
         assert field in source, field
+
+
+# --- physical identity and connection planning -------------------------------
+def test_physical_identity_has_one_core_owner():
+    """Only Core resolves or compares physical inverter identity."""
+
+    import ems.device_identity as identity
+
+    assert identity.resolve_physical_identity is not None
+    offenders = [
+        path.name
+        for path in _admin_modules()
+        # Re-implementing the mask vocabulary or the evidence ranking beside
+        # Core is the regression this guards: both were duplicated before.
+        if '_MASK_MARKERS = ("•", "…")' in path.read_text()
+        or "EVIDENCE_PRECEDENCE = (" in path.read_text()
+    ]
+    assert offenders == []
+
+
+def test_replacement_eligibility_has_one_planner():
+    """No Admin module decides same-device/replacement beside the planner."""
+
+    offenders = [
+        path.name
+        for path in _admin_modules(exclude=("connection_planner.py",))
+        if "same_physical_inverter_evidence" in path.read_text()
+    ]
+    assert offenders == []
+
+
+def test_maintenance_reaches_the_planner_rather_than_its_own_rule():
+    import admin.maintenance_config as maintenance
+
+    source = pathlib.Path(maintenance.__file__).read_text()
+    assert "from admin.connection_planner import" in source
+    assert "plan_connection_change(" in source
+
+
+def test_browser_ids_are_issued_by_one_admin_module():
+    """observation/connection/physical ids come from one stamper."""
+
+    import admin.observation_identity as observation_identity
+
+    assert observation_identity.OBSERVATION_ID_FIELD == "observation_id"
+    offenders = [
+        path.name
+        for path in _admin_modules(exclude=("observation_identity.py",))
+        if "opaque_observation_id" in path.read_text()
+    ]
+    assert offenders == []
+
+
+def test_frontend_carries_no_physical_identity_decision_table():
+    """The browser projects server-issued identity; it never derives one.
+
+    Pins ownership, not formatting: the removed helpers are named, and the
+    collection key must not be reachable from a displayed hardware field.
+    """
+
+    source = ADMIN_JS.read_text()
+    for removed in ("function deviceKey(", "function discoveryDeviceMatch("):
+        assert removed not in source, removed
+    assert "function observationKey(" in source
+    assert "function hasObservationIdentity(" in source
+
+
+def test_browser_collection_key_reads_only_the_issued_observation_id():
+    """observationKey must not consult a serial to decide equality."""
+
+    source = ADMIN_JS.read_text()
+    start = source.index("function observationKey(")
+    body = source[start : source.index("\nfunction ", start)]
+    assert "observation_id" in body
+    for hardware_field in ("serial_number", "sn", "product_key", "physical_identity_token"):
+        assert hardware_field not in body, hardware_field

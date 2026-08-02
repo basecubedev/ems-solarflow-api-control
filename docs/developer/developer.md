@@ -196,7 +196,9 @@ result or enforce it — they never recompute it. The structural contracts in
 | Concern | Owner | Adapters / projections |
 |---|---|---|
 | Output-control eligibility | `ems/mqtt_control/power_capability.py` (model, write route, broker source), composed with route completeness by `ems/zendure_mqtt/capability.py` | `admin/zendure_mqtt_config_draft.py` (enforce/project), runtime `device_client`, migration, diagnostics, `admin.js` (labels only) |
-| Physical inverter identity | `ems/device_identity.py` | `admin/maintenance_config.py`, `admin/zendure_mqtt_config_proposals.py`; browser compares server-issued `opaque:v1:` tokens |
+| Physical inverter identity | `ems/device_identity.py` (`resolve_physical_identity`, `compare_physical_identity`, `is_masked_identity_value`, `EVIDENCE_PRECEDENCE`) | `admin/maintenance_config.py`, `admin/zendure_mqtt_config_proposals.py`, `admin/zendure_mqtt_config_draft.py`; browser compares server-issued `opaque:v1:` tokens |
+| Connection keep/replace/add/block | `admin/connection_planner.py` | Maintenance switching, Setup adoption; browser renders the returned action and reason |
+| Browser-facing device ids | `admin/observation_identity.py` (`observation_id`, `physical_device_id`, `connection_id`) | discovery run, mDNS and scan responses; `admin.js` keys its collections on them |
 | MQTT TLS/broker semantics | `ems/config.py` (`normalize_mqtt_tls_mode`, `resolve_mqtt_tls_metadata`, `canonical_mqtt_tls_mode`, `mqtt_tls_mode_name`, `MQTT_TLS_OBSERVED_MODES`) | `admin/zendure_mqtt_broker_profiles.py`, `discovery_connections.py`, `mqtt_topic_discovery.py`, `zendure_mqtt_config_proposals.py` |
 | Secret classification | `admin/secret_policy.py` (catalog metadata via `ems/config_catalog.py::is_secret_catalog_field`) | draft strip, browser redaction, workflow fingerprint |
 | Catalog fields and editability | `ems/config_catalog.py` (`config_field_index`, `is_editable_catalog_field`, `grid_meter_variant_field_spec`) | `setup_config.py`, `maintenance_config.py`, `device_common_fields.py` |
@@ -209,15 +211,55 @@ result or enforce it — they never recompute it. The structural contracts in
 | broker source | `ems/mqtt_control/power_capability.py` (`KNOWN_BROKER_SOURCES`, `_BROKER_SOURCE_VERIFIED_FAMILIES`) | `tests/test_zendure_mqtt_broker_source_capability.py` |
 | TLS mode alias | `ems/config.py` alias sets | `tests/test_mqtt_tls_and_bool_helpers.py` |
 | secret field | `ems/config_catalog.py` field metadata, or a marker in `admin/secret_policy.py` | `tests/test_admin_secret_policy.py` |
+| identity evidence kind | `ems/device_identity.py` (`IdentityKind`, `EVIDENCE_PRECEDENCE`, `PHYSICAL_EVIDENCE_KINDS`) | `tests/test_device_identity.py` |
+| placeholder / mask form | `ems/device_identity.py::is_masked_identity_value` | `tests/test_device_identity.py` |
+| connection plan action | `admin/connection_planner.py` | `tests/test_admin_connection_planner.py` |
 | grid-meter field | `ems/config_catalog.py::GRID_METER_VARIANTS` | `tests/test_admin_shared_config_normalization.py` |
 | catalog field for an editor | `ems/config_catalog.py` (scope/level/editable/risk) | `tests/test_config_field_index.py` |
 
+### Device identity and connection planning
+
+The browser never decides physical equivalence. The chain is:
+
+```text
+ems/device_identity.py        physical identity, evidence policy, placeholders
+  -> admin/connection_planner.py   keep / replace / add / block
+  -> admin/observation_identity.py stable public ids
+  -> admin.js                      renders ids, actions and reasons
+```
+
+- Identity states are `confirmed`, `probable`, `unresolved`, `ambiguous` and
+  `conflict`. Only `confirmed`/`probable` identify hardware; an unresolved
+  observation never receives a `physical_device_id`.
+- Evidence precedence, strongest first: verified physical serial, verified
+  scoped MQTT device anchor, precise scoped MQTT route, local API endpoint. The
+  endpoint is *route* evidence and never confirms hardware on its own.
+- A masked, redacted or placeholder value is never positive evidence
+  (`is_masked_identity_value`). Two observations that only display the same
+  placeholder stay separate observations.
+- Physical identity and write-route ambiguity are separate answers: one inverter
+  seen on two precise product routes is still one inverter, and only its write
+  address became ambiguous (`IdentityComparison.route_ambiguous`).
+- The three public ids mean different things and are not interchangeable:
+  `observation_id` (`obs:v1:`) is this device reached this way,
+  `physical_device_id` (`opaque:v1:`) is the hardware, `connection_id`
+  (`conn:v1:`) is one transport route. All are keyed tokens, so no host, serial
+  or route segment is recoverable from them.
+- Setup and Maintenance may differ in workflow, never in identity or
+  replacement rules — both call `plan_connection_change`.
+- When the backend issues no ids, the browser fails closed: it still renders,
+  but destructive actions gate on `hasObservationIdentity`.
+
 ### Test layering
 
-- **Core / shared authority tests** own the complete combinatorial matrix.
+- **Core / shared authority tests** own the complete combinatorial matrix. The
+  physical-identity evidence matrix lives in `tests/test_device_identity.py`;
+  the plan action matrix in `tests/test_admin_connection_planner.py`.
 - **Endpoint tests** cover auth, CSRF, request parsing, delegation, error
   mapping, preview/apply persistence and rollback — a representative case per
   domain, never the whole matrix.
 - **Frontend tests** cover passive projection, event handling, DOM escaping and
-  renderer purity.
+  renderer purity. They must not restate Core's physical-equivalence rules.
 - **Playwright** keeps a small set of critical journeys, not domain permutations.
+- **Structural contracts** in `tests/test_admin_authority_ownership.py` fail when
+  a second identity, planning or id-issuing owner appears.

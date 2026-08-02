@@ -16,15 +16,27 @@ from admin.maintenance_config import (
 )
 from admin.zendure_mqtt_config_proposals import build_proposals
 from ems.device_identity import (
+    EVIDENCE_PRECEDENCE,
+    STATUS_AMBIGUOUS,
+    STATUS_CONFIRMED,
+    STATUS_CONFLICT,
+    STATUS_PROBABLE,
+    STATUS_UNRESOLVED,
     broker_sources_from_config,
+    compare_physical_identity,
+    connection_coordinates,
     identity_evidence_conflict,
+    is_masked_identity_value,
     legacy_route_folded_tokens,
     mqtt_route_conflict,
     normalize_mqtt_route_segment,
     normalize_physical_serial,
+    opaque_connection_id,
     opaque_identity_token,
+    opaque_observation_id,
     resolve_inverter_identity,
     resolve_inverter_identity_evidence,
+    resolve_physical_identity,
     same_inverter_evidence,
     same_physical_inverter_evidence,
 )
@@ -746,3 +758,246 @@ def test_maintenance_masks_name_only_cloud_route_in_mixed_partial_config(tmp_pat
     assert route not in redacted_text
     assert "Local inverter" in loaded_text
     assert "LOCAL_ROUTE_1234" in redacted_text
+
+
+# --- canonical identity status contract --------------------------------------
+# The complete evidence matrix lives here, in Core, so no endpoint, planner or
+# browser test needs to restate what counts as physical identity.
+
+
+def test_evidence_precedence_is_declared_once_and_ordered_strongest_first():
+    assert EVIDENCE_PRECEDENCE == (
+        "physical_serial",
+        "scoped_mqtt_device_anchor",
+        "scoped_mqtt_route",
+        "local_api_endpoint",
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "••••",
+        "…abcd",
+        "****",
+        "----",
+        "<redacted>",
+        "[REDACTED]",
+        "redacted",
+        "YOUR_SN",
+        "your-serial",
+        "",
+        "   ",
+        None,
+        123,
+    ],
+)
+def test_masked_values_are_never_identity_evidence(value):
+    assert is_masked_identity_value(value) is True
+
+
+@pytest.mark.parametrize("value", ["EOD1AAA111", " ab-1 ", "S1_9", "0"])
+def test_real_identifiers_are_not_masked(value):
+    assert is_masked_identity_value(value) is False
+
+
+def test_verified_serial_confirms_a_physical_device():
+    result = resolve_physical_identity(
+        {"serial_number": "EOD1AAA111"}, token_key=TOKEN_KEY
+    )
+
+    assert result.status == STATUS_CONFIRMED
+    assert result.resolved is True
+    assert result.reason == "verified_physical_serial"
+    assert result.public_identity_id.startswith("opaque:v1:")
+
+
+def test_verified_backend_device_identifier_is_probable_not_confirmed():
+    result = resolve_physical_identity(_mqtt_device(), token_key=TOKEN_KEY)
+
+    assert result.status == STATUS_PROBABLE
+    assert result.reason == "scoped_mqtt_device_identifier"
+    assert result.public_identity_id.startswith("opaque:v1:")
+
+
+def test_endpoint_only_evidence_stays_unresolved_and_gets_no_public_identity():
+    """Host/IP is route evidence: two inverters can trade addresses."""
+
+    result = resolve_physical_identity(
+        {"ip": "10.0.0.1", "port": 80}, token_key=TOKEN_KEY
+    )
+
+    assert result.status == STATUS_UNRESOLVED
+    assert result.resolved is False
+    assert result.reason == "endpoint_evidence_only"
+    assert result.public_identity_id is None
+
+
+def test_masked_serial_alone_stays_unresolved():
+    result = resolve_physical_identity({"serial_number": "••••"}, token_key=TOKEN_KEY)
+
+    assert result.status == STATUS_UNRESOLVED
+    assert result.reason == "no_identity_evidence"
+    assert result.public_identity_id is None
+
+
+def test_missing_identity_is_unresolved_rather_than_a_new_device():
+    result = resolve_physical_identity({}, token_key=TOKEN_KEY)
+
+    assert result.status == STATUS_UNRESOLVED
+    assert result.evidence is None
+    assert result.public_identity_id is None
+
+
+def test_comparison_of_two_masked_observations_is_unresolved_never_same():
+    left = resolve_physical_identity({"serial_number": "••••", "ip": "10.0.0.1"})
+    right = resolve_physical_identity({"serial_number": "••••", "ip": "10.0.0.2"})
+
+    comparison = compare_physical_identity(left, right)
+
+    assert comparison.status == STATUS_UNRESOLVED
+    assert comparison.same_physical_device is False
+    assert comparison.identity_conflict is False
+
+
+def test_shared_serial_compares_as_one_confirmed_device():
+    left = resolve_physical_identity({"serial_number": "EOD1AAA111"})
+    right = resolve_physical_identity({"sn": "eod1aaa111", "ip": "10.0.0.9"})
+
+    comparison = compare_physical_identity(left, right)
+
+    assert comparison.status == STATUS_CONFIRMED
+    assert comparison.same_physical_device is True
+    assert comparison.reason == "shared_physical_serial"
+
+
+def test_shared_scoped_identifier_without_serial_compares_as_probable():
+    left = resolve_physical_identity(_mqtt_device())
+    right = resolve_physical_identity(_mqtt_device())
+
+    comparison = compare_physical_identity(left, right)
+
+    assert comparison.status == STATUS_PROBABLE
+    assert comparison.same_physical_device is True
+    assert comparison.reason == "shared_scoped_identifier"
+
+
+def test_contradictory_strong_evidence_produces_a_conflict():
+    left = resolve_physical_identity(_mqtt_device(serial_number="SERIAL-1"))
+    right = resolve_physical_identity(_mqtt_device(serial_number="SERIAL-2"))
+
+    comparison = compare_physical_identity(left, right)
+
+    assert comparison.status == STATUS_CONFLICT
+    assert comparison.same_physical_device is False
+    assert comparison.identity_conflict is True
+
+
+def test_weak_alias_never_overrides_a_strong_conflict():
+    """A shared host must not rescue two contradicting serials into one device."""
+
+    left = resolve_physical_identity(
+        {"serial_number": "SERIAL-1", "ip": "10.0.0.5", "port": 80}
+    )
+    right = resolve_physical_identity(
+        {"serial_number": "SERIAL-2", "ip": "10.0.0.5", "port": 80}
+    )
+
+    comparison = compare_physical_identity(left, right)
+
+    assert comparison.status == STATUS_CONFLICT
+    assert comparison.same_physical_device is False
+
+
+def test_ambiguous_write_route_is_reported_separately_from_a_conflict():
+    left = resolve_physical_identity(_mqtt_device(product_key="PK_A"))
+    right = resolve_physical_identity(_mqtt_device(product_key="PK_B"))
+
+    comparison = compare_physical_identity(left, right)
+
+    assert comparison.status == STATUS_AMBIGUOUS
+    assert comparison.same_physical_device is False
+    assert comparison.identity_conflict is False
+
+
+def test_public_view_carries_no_raw_identity_material():
+    device = _mqtt_device(serial_number="SECRET-SERIAL-1")
+    result = resolve_physical_identity(device, token_key=TOKEN_KEY)
+
+    view = json.dumps(result.public_view())
+
+    assert "SECRET-SERIAL-1" not in view
+    assert "ROUTE_1234" not in view
+    assert "PRODUCT_A" not in view
+    assert result.public_identity_id in view
+
+
+# --- observation and connection coordinates ----------------------------------
+
+
+def test_connection_coordinates_separate_two_hosts_behind_one_masked_serial():
+    left = connection_coordinates({"serial_number": "••••", "ip": "10.0.0.1"})
+    right = connection_coordinates({"serial_number": "••••", "ip": "10.0.0.2"})
+
+    assert left != right
+    assert left[0] == "local_endpoint"
+
+
+def test_connection_coordinates_prefer_the_precise_mqtt_route():
+    coordinates = connection_coordinates(_mqtt_device())
+
+    assert coordinates[0] == "mqtt_route"
+    assert "PRODUCT_A" in coordinates
+
+
+def test_connection_coordinates_fall_back_to_the_device_anchor():
+    device = _mqtt_device()
+    device["mqtt"].pop("product_key")
+
+    coordinates = connection_coordinates(device)
+
+    assert coordinates[0] == "mqtt_anchor"
+
+
+def test_unaddressable_observation_has_no_coordinates():
+    assert connection_coordinates({"serial_number": "EOD1AAA111"}) is None
+
+
+def test_observation_and_connection_ids_are_stable_keyed_and_distinct():
+    coordinates = ("local_endpoint", "10.0.0.1", "80")
+
+    observation = opaque_observation_id(coordinates, TOKEN_KEY)
+    connection = opaque_connection_id(coordinates, TOKEN_KEY)
+
+    assert observation.startswith("obs:v1:")
+    assert connection.startswith("conn:v1:")
+    # Same coordinates, different meaning: the two namespaces never collide, so
+    # a browser cannot pass an observation id where a connection id is required.
+    assert observation.split(":")[-1] != connection.split(":")[-1]
+    assert observation == opaque_observation_id(coordinates, TOKEN_KEY)
+    assert "10.0.0.1" not in observation
+
+
+def test_observation_id_rejects_a_weak_key():
+    with pytest.raises(ValueError):
+        opaque_observation_id(("a",), b"short")
+
+
+def test_route_ambiguity_does_not_deny_a_shared_serial_identity():
+    """A shared serial identifies the inverter; only its write address is
+    ambiguous. Denying identity here would let one inverter be configured
+    twice."""
+
+    left = resolve_physical_identity(
+        _mqtt_device(device_id="DEV", product_key="PK-A", serial_number="SERIAL-1")
+    )
+    right = resolve_physical_identity(
+        _mqtt_device(device_id="DEV", product_key="PK-B", serial_number="SERIAL-1")
+    )
+
+    comparison = compare_physical_identity(left, right)
+
+    assert comparison.same_physical_device is True
+    assert comparison.status == STATUS_CONFIRMED
+    assert comparison.identity_conflict is False
+    assert comparison.route_ambiguous is True

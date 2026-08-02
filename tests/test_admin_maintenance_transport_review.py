@@ -67,7 +67,7 @@ const mconfigState = {
   },
 };
 function isConfigCandidate(d) { return true; }
-function deviceKey(d) { return (d && (d.id || d.ip || d.serial_number)) || ""; }
+function observationKey(d) { return (d && (d.observation_id || d.id)) || ""; }
 function mconfigIdentity(v) { return String(v == null ? "" : v).trim().toLowerCase(); }
 function mconfigDiscoveryRole(d) { return "inverter"; }
 function mconfigFindInverterMatch() { return null; }

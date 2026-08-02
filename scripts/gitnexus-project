@@ -50,14 +50,8 @@ LOG_DIR=$REPO_ROOT/.gitnexus
 LOG_FILE=$LOG_DIR/analyze-wrapper.log
 DB_FILE=$LOG_DIR/lbug
 mkdir -p "$LOG_DIR" || exit 1
-LOCK_FILE=$LOG_DIR/analyze.lock
-exec 9>"$LOCK_FILE" || exit 1
 
 case ${2:-} in
-  mcp|status|list|query|context|impact|trace|cypher|detect-changes|detect_changes|check)
-    flock -s 9 || exit 1
-    exec "$@"
-    ;;
   analyze)
     ;;
   *)
@@ -65,6 +59,8 @@ case ${2:-} in
     ;;
 esac
 
+LOCK_FILE=$LOG_DIR/analyze-writer.lock
+exec 9>"$LOCK_FILE" || exit 1
 LOCK_TIMEOUT=${GITNEXUS_ANALYZE_LOCK_TIMEOUT:-60}
 DB_WAIT_TIMEOUT=${GITNEXUS_DB_WAIT_TIMEOUT:-0}
 case $LOCK_TIMEOUT:$DB_WAIT_TIMEOUT in

@@ -68,6 +68,7 @@ def _node(script):
 _IDENTITY_HELPERS = (
     "normalizeSerial",
     "usableSerialValue",
+    "issuedPhysicalIdentity",
     "physicalInverterIdentity",
     "inverterVisibleSerial",
     "inverterIdentityTokens",
@@ -96,7 +97,7 @@ _SWITCH_HELPERS = _IDENTITY_HELPERS + (
     "rememberInverterName",
     "inverterConfigNameForSerial",
     "draftHasSource",
-    "deviceKey",
+    "observationKey",
     "sourcesOf",
     "uniqueDisplayName",
     "draftItemFromDevice",

@@ -53,7 +53,11 @@ def test_duplicate_serial_across_sources_selects_local_api_by_default():
     )
     assert len(devices) == 1
     device = devices[0]
-    assert device["id"] == "serial:ABC123"
+    # The grouping id carries Core's normalized serial match key, so it no
+    # longer depends on which source happened to win. The displayed serial keeps
+    # its original case.
+    assert device["id"] == "serial:abc123"
+    assert device["serial_number"] == "ABC123"
     assert device["selected_source"] == SOURCE_LOCAL_API
     assert set(device["sources"]) == {SOURCE_LOCAL_API, SOURCE_ZENDURE_MQTT}
     assert device["confidence"] == "high"

@@ -34,6 +34,7 @@ STATIC_DIR = os.path.join(
 _PURE_HELPERS = (
     "normalizeSerial",
     "usableSerialValue",
+    "issuedPhysicalIdentity",
     "physicalInverterIdentity",
     "inverterVisibleSerial",
     "inverterIdentityTokens",
@@ -699,6 +700,7 @@ def test_mqtt_selection_changes_invalidate_preview():
 _IDENTITY_HELPERS = (
     "normalizeSerial",
     "usableSerialValue",
+    "issuedPhysicalIdentity",
     "physicalInverterIdentity",
     "inverterVisibleSerial",
     "inverterIdentityTokens",

@@ -88,14 +88,19 @@ on `PATH`. MCP configurations should invoke the same launcher with the `mcp`
 argument, so MCP and analyzer subprocesses inherit the threshold from
 `.gitnexusrc`. The launcher preserves all arguments and exit statuses.
 
-MCP and read-only CLI commands hold a shared project `flock`; analyze commands
-require its exclusive counterpart. Analyzers also refuse to start while an
-unmanaged MCP or CLI reader has the LadybugDB file open; set
+Analyze commands hold an exclusive project writer `flock`. MCP and read-only CLI
+commands do not take that lock because a long-lived MCP process would otherwise
+block every later analysis. Analyzers separately refuse to start while an MCP or
+CLI reader has the LadybugDB file open; set
 `GITNEXUS_DB_WAIT_TIMEOUT` to a bounded number of seconds when a caller should
 wait for GitNexus's read-only connection pool to become idle. Exit status 75
-means another analyzer or reader still owns the required resource. Read-only
-queries never take the exclusive analyzer lock. Stop or restart project MCP
-servers before a planned rebuild so they release their shared locks.
+means another analyzer owns the writer lock or a reader still has LadybugDB
+open. Read-only queries never take the analyzer lock. Stop or restart only the
+MCP server that still holds LadybugDB before a planned rebuild when its
+connection does not become idle within the bounded wait.
+The presence of `.gitnexus/analyze-writer.lock` does not indicate ownership;
+`flock` ownership exists only while a live process holds the file descriptor.
+Never delete the file to clear a suspected lock.
 
 GitNexus 1.6.9 can leave this index's LadybugDB/FTS state inconsistent after an
 incremental update even when every changed source file is valid UTF-8. Analyze

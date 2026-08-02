@@ -62,6 +62,7 @@ from admin.discovery_connections import (
 )
 from admin.credential_store import CredentialStore, CredentialStoreError
 from admin.discovery_run import run_discovery
+from admin.observation_identity import stamp_observations
 from admin.ems_cli import EmsCliDiagnostics
 from admin.embedded_resources import (
     EmbeddedReleaseResources,
@@ -1083,8 +1084,10 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         if path in ("/api/discovery/devices", "/api/discovery/results"):
             self._send_json({
-                "devices": self.server.mdns_provider.devices(),
-                "ignored_devices": (
+                "devices": self._stamped_observations(
+                    self.server.mdns_provider.devices()
+                ),
+                "ignored_devices": self._stamped_observations(
                     self.server.mdns_provider.ignored_devices()
                     if hasattr(self.server.mdns_provider, "ignored_devices") else []
                 ),
@@ -5810,7 +5813,9 @@ class AdminHandler(BaseHTTPRequestHandler):
         record = self.server.registry.start(
             body["cidr"].strip(), ports, timeout_ms, max_workers
         )
-        self._send_json(_result_view(record), status=202)
+        self._send_json(
+            _result_view(record, self.server.identity_token_key), status=202
+        )
 
     def _handle_gateway_probe(self):
         body = self._read_optional_json_body()
@@ -6267,6 +6272,7 @@ class AdminHandler(BaseHTTPRequestHandler):
                 mdns_provider=self.server.mdns_provider,
                 mqtt_discovery=self.server.mqtt_discovery,
                 zendure_cloud_discovery=self.server.zendure_cloud_discovery,
+                identity_token_key=self.server.identity_token_key,
             )
         )
 
@@ -6290,12 +6296,23 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         self._send_json({"ok": True, "source": source, "result": result})
 
+    def _stamped_observations(self, devices):
+        """Attach the browser-facing observation identity to a device list.
+
+        Every device-bearing discovery response goes through here, so the
+        browser never has to derive a collection key from a displayed serial.
+        """
+
+        return stamp_observations(
+            list(devices or []), key=self.server.identity_token_key
+        )
+
     def _send_result(self, scan_id):
         record = self.server.registry.get(scan_id.strip("/"))
         if record is None:
             self._send_json({"error": "unknown scan_id"}, status=404)
             return
-        self._send_json(_result_view(record))
+        self._send_json(_result_view(record, self.server.identity_token_key))
 
     def _normalize_ports(self, ports):
         if not isinstance(ports, list):
@@ -6392,7 +6409,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             pass
 
 
-def _result_view(record):
+def _result_view(record, identity_token_key=None):
     """Public result shape returned by the scan/result endpoints."""
 
     return {
@@ -6401,7 +6418,9 @@ def _result_view(record):
         "cidr": record["cidr"],
         "started_at": record["started_at"],
         "finished_at": record["finished_at"],
-        "devices": record["devices"],
+        "devices": stamp_observations(
+            list(record["devices"] or []), key=identity_token_key
+        ),
         "errors": record["errors"],
         "progress": record.get("progress") or {
             "total_hosts": 0,

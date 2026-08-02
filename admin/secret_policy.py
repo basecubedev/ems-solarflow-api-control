@@ -25,9 +25,13 @@ genuinely different questions:
     per-key digesting keeps raw credentials out of the intermediate structure.
 
 Catalog-backed fields do not guess at all: an explicit ``risk``/``type`` in the
-central config catalog is authoritative and checked first.
+central config catalog is authoritative and checked first. Interpreting that
+metadata belongs to the catalog, so ``is_secret_catalog_field`` is re-exported
+from ``ems.config_catalog`` rather than reimplemented here — Admin consumers
+still reach the whole secret policy through this one module.
 """
 
+from ems.config_catalog import is_secret_catalog_field
 from ems.device_identity import (
     PHYSICAL_IDENTITY_ALIAS_TOKENS_FIELD,
     PHYSICAL_IDENTITY_TOKEN_FIELD,
@@ -128,14 +132,6 @@ def is_secret_key(key, *, scope):
     return classify_config_key(key, scope=scope) == CLASS_SECRET
 
 
-def is_secret_catalog_field(field):
-    """True for a catalog field whose value must never be surfaced.
-
-    Explicit catalog metadata, never a name guess: the central catalog already
-    declares which fields hold credentials.
-    """
-
-    return field.get("risk") == "secret" or field.get("type") == "password"
 
 
 __all__ = [

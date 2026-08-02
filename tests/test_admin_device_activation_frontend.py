@@ -32,6 +32,7 @@ _HELPERS = (
     "mconfigNextInverterName",
     "normalizeSerial",
     "usableSerialValue",
+    "issuedPhysicalIdentity",
     "physicalInverterIdentity",
     "inverterVisibleSerial",
     "inverterIdentityTokens",

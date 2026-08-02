@@ -77,6 +77,7 @@ def _node(script):
 _IDENTITY_HELPERS = (
     "normalizeSerial",
     "usableSerialValue",
+    "issuedPhysicalIdentity",
     "physicalInverterIdentity",
     "inverterVisibleSerial",
     "inverterIdentityTokens",
@@ -111,14 +112,15 @@ def _state_env(draft_items, mqtt_entries):
 
 
 def _candidate_ref(candidate, source):
-    """The reference the production renderers pass: proposal id, or deviceKey."""
+    """The reference the production renderers pass: proposal id, or observationKey.
+
+    For a discovered Local-API connection that is the server-issued observation
+    id — never a serial-derived key, which two redacted devices would share.
+    """
 
     if source != "local_api":
         return str(candidate.get("id") or "")
-    serial = candidate.get("serial_number")
-    if serial:
-        return (candidate.get("api_family") or "device") + ":" + serial
-    return str(candidate.get("id") or "")
+    return str(candidate.get("observation_id") or candidate.get("id") or "")
 
 
 def _resolve(draft_items, mqtt_entries, candidate, source):
@@ -189,7 +191,7 @@ def test_setup_and_maintenance_cards_render_the_short_labels():
 
 
 _API_ITEM = {
-    "source_id": "zendure:PHYS-1",
+    "source_id": "obs:v1:api-phys-1",
     "role": "inverter",
     "config_name": "INV_1",
     "serial_number": "PHYS-1",
@@ -215,6 +217,7 @@ _CLOUD_CANDIDATE = {
 
 _API_CANDIDATE = {
     "id": "zendure:PHYS-1",
+    "observation_id": "obs:v1:api-phys-1",
     "serial_number": "PHYS-1",
     "api_family": "zendure",
     "role_suggestion": "inverter",
@@ -293,7 +296,7 @@ def test_candidate_state_other_broker_scope_is_an_alternative_not_active():
 _CARD_HELPERS = _STATE_HELPERS + (
     "escapeHtml",
     "fact",
-    "deviceKey",
+    "observationKey",
     "hardwareCardKindForRole",
     "hardwareCardClass",
     "sourcesOf",
@@ -451,7 +454,7 @@ _SWITCH_HELPERS = _IDENTITY_HELPERS + (
     "forgetInverterName",
     "inverterConfigNameForSerial",
     "draftHasSource",
-    "deviceKey",
+    "observationKey",
     "sourcesOf",
     "uniqueDisplayName",
     "draftItemFromDevice",
@@ -526,7 +529,7 @@ _COMMON_VALUES = {
 }
 
 _SWITCH_API_ITEM = {
-    "source_id": "zendure:PHYS-1",
+    "source_id": "obs:v1:api-phys-1",
     "role": "inverter",
     "config_name": "INV_1",
     "display_name": "SolarFlow 800 Pro 2",
@@ -548,6 +551,7 @@ _SWITCH_PROPOSAL = {
 
 _SWITCH_DEVICE = {
     "id": "zendure:PHYS-1",
+    "observation_id": "obs:v1:api-phys-1",
     "ip": "192.168.1.100",
     "port": 80,
     "serial_number": "PHYS-1",

@@ -14,6 +14,10 @@ import json
 
 from admin.config_preview import _GRID_TYPE_CHOICES, _valid_host
 from admin.config_runtime_overlap import overlap_provenance_for_context
+from admin.connection_planner import (
+    INTENT_SWITCH_CONNECTION,
+    plan_connection_change,
+)
 from admin.device_common_fields import (
     coerce_field_value as _coerce,
     common_device_value_fields,
@@ -78,7 +82,6 @@ from ems.device_identity import (
     identity_evidence_conflict,
     resolve_inverter_identity,
     resolve_inverter_identity_evidence,
-    same_physical_inverter_evidence,
     supplied_identity_token,
 )
 from ems.external_status import (
@@ -1006,23 +1009,56 @@ def _declared_ref_for_selected_endpoint(config, item):
     return None
 
 
-def selected_connection_identity_evidence(
-    config, item, *, broker_sources=None, identity_token_key=None
-):
-    """Identity evidence of a resolved connection selection, scoped like config."""
+def selected_connection_probe(config, item):
+    """The selection as the server reads it, scoped the way config is scoped.
 
-    probe = item
+    A proposal names its endpoint under a freshly generated broker ref, so the
+    probe is rewritten onto the already declared ref before any identity is
+    resolved — otherwise one connection would compare as two scopes.
+    """
+
     declared = _declared_ref_for_selected_endpoint(config, item)
     mqtt = item.get("mqtt") if isinstance(item.get("mqtt"), dict) else {}
     if declared and declared != str(mqtt.get("broker_ref") or "").strip():
         probe = copy.deepcopy(item)
         probe.setdefault("mqtt", {})["broker_ref"] = declared
+        return probe
+    return item
+
+
+def selected_connection_identity_evidence(
+    config, item, *, broker_sources=None, identity_token_key=None
+):
+    """Identity evidence of a resolved connection selection, scoped like config."""
+
     return resolve_inverter_identity_evidence(
-        probe,
+        selected_connection_probe(config, item),
         broker_sources=broker_sources
         if broker_sources is not None
         else broker_sources_from_config(config),
         token_key=identity_token_key,
+    )
+
+
+def plan_trusted_selection(
+    config, original, item, *, broker_sources=None, identity_token_key=None
+):
+    """The canonical plan for a trusted connection selection on a stored device.
+
+    Both sides are read server-side — the stored config entry and the connection
+    the resolver wrote onto the entry — so dropping or rewriting the browser's
+    identity fields cannot make a foreign selection pass. The decision itself
+    belongs to ``admin.connection_planner``; Maintenance only adapts the inputs.
+    """
+
+    return plan_connection_change(
+        current_device=original,
+        candidate=selected_connection_probe(config, item),
+        intent=INTENT_SWITCH_CONNECTION,
+        identity_token_key=identity_token_key,
+        broker_sources=broker_sources
+        if broker_sources is not None
+        else broker_sources_from_config(config),
     )
 
 
@@ -1032,29 +1068,20 @@ def trusted_selection_targets_other_inverter(
     """True when a trusted connection selection names another physical inverter.
 
     A resolved proposal proves the connection exists, not that it belongs to the
-    device the draft edits. Both sides are read server-side — the stored config
-    entry and the connection the resolver wrote onto the entry — so dropping or
-    rewriting the browser's identity fields cannot make a foreign selection pass.
+    device the draft edits.
     """
 
     if not isinstance(item, dict) or item.get(TRUSTED_CONNECTION_SELECTION_FIELD) is not True:
         return False
     if not isinstance(original, dict):
         return False
-    stored = resolve_inverter_identity_evidence(
-        original,
-        broker_sources=broker_sources
-        if broker_sources is not None
-        else broker_sources_from_config(config),
-        token_key=identity_token_key,
-    )
-    selected = selected_connection_identity_evidence(
+    return not plan_trusted_selection(
         config,
+        original,
         item,
         broker_sources=broker_sources,
         identity_token_key=identity_token_key,
-    )
-    return not same_physical_inverter_evidence(stored, selected)
+    ).same_physical_device
 
 
 def trusted_selection_conflicts_with_stored_device(

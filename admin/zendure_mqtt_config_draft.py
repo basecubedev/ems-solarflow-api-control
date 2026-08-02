@@ -30,6 +30,7 @@ from admin.device_common_fields import (
     common_device_draft_values,
 )
 from ems.config_catalog import ZENDURE_MQTT_GENERATIONS
+from ems.device_identity import is_masked_identity_value
 from ems.mqtt_control.power_capability import (
     BLOCK_BROKER_SOURCE_UNKNOWN,
     BLOCK_BROKER_SOURCE_WRITE_UNVERIFIED,
@@ -146,10 +147,6 @@ def normalize_zendure_mqtt_draft(item):
 # Which keys are secret is the shared policy's answer, not this module's.
 MASKED_IDENTITY_KEYS = SENSITIVE_IDENTITY_KEYS
 
-# Display-mask markers (…abcd / ••••). A value carrying either is not a usable
-# identifier and must never reach config.
-_MASK_MARKERS = ("•", "…")
-
 # Reverse map: an internal topic family resolves back to the user-facing
 # generation id so an existing device renders with a friendly label instead of a
 # raw family name. The leading-slash "alt" JSON layout is generation-ambiguous
@@ -182,7 +179,14 @@ def _issue(code, message):
 
 
 def _is_masked_identifier(value):
-    return isinstance(value, str) and any(marker in value for marker in _MASK_MARKERS)
+    """True for a display placeholder. An empty value is an explicit clear, not
+    a mask, so it stays out of Core's "no evidence" answer here."""
+
+    return (
+        isinstance(value, str)
+        and value.strip() != ""
+        and is_masked_identity_value(value)
+    )
 
 
 # Draft states of an editable, non-secret field. A key the browser never sent is

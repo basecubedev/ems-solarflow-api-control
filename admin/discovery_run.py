@@ -195,6 +195,8 @@ def run_discovery(
     mdns_provider,
     mqtt_discovery,
     zendure_cloud_discovery,
+    identity_token_key=None,
+    broker_sources=None,
 ):
     """One unified discovery run over the saved preparation settings.
 
@@ -225,7 +227,10 @@ def run_discovery(
         "priority": preparation["discovery_priority"],
         "sources": preparation["sources"],
         "devices": build_unified_devices(
-            candidates, preparation["discovery_priority"]
+            candidates,
+            preparation["discovery_priority"],
+            identity_token_key=identity_token_key,
+            broker_sources=broker_sources,
         ),
         "details": discovery_details(
             registry=registry,

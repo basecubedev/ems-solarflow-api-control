@@ -312,25 +312,6 @@ const discoverySessions = {
 };
 const keptDevices = discoverySessions.setup.devices;
 
-function discoveryDeviceType(device) {
-  return String(
-    device.device_type || device.api_family || device.role_suggestion || "device"
-  ).toLowerCase();
-}
-
-function discoveryDeviceMatch(existing, incoming) {
-  const serialA = String(existing.serial_number || "").trim().toLowerCase();
-  const serialB = String(incoming.serial_number || "").trim().toLowerCase();
-  if (serialA && serialB) return serialA === serialB;
-  if (discoveryDeviceType(existing) !== discoveryDeviceType(incoming)) return false;
-  const ipA = String(existing.ip || "").trim().toLowerCase();
-  const ipB = String(incoming.ip || "").trim().toLowerCase();
-  if (ipA && ipB) return ipA === ipB;
-  const hostA = String(existing.host || existing.hostname || "").trim().toLowerCase();
-  const hostB = String(incoming.host || incoming.hostname || "").trim().toLowerCase();
-  return Boolean(hostA && hostB && hostA === hostB);
-}
-
 function normalizeDiscoverySource(source) {
   const value = String(source || "network_scan").toLowerCase();
   if (value === "manual") return "manual_scan";
@@ -349,15 +330,11 @@ function mergeDiscoveryDevice(session, device, source) {
   const incomingSources = source
     ? [normalizeDiscoverySource(source)]
     : sourcesOf(incoming).map(normalizeDiscoverySource);
-  let matchKey = null;
-  let existing = null;
-  for (const [key, candidate] of session.devices) {
-    if (discoveryDeviceMatch(candidate, incoming)) {
-      matchKey = key;
-      existing = candidate;
-      break;
-    }
-  }
+  // Whether two observations are the same device is the backend's decision,
+  // projected as the observation id. The browser only looks the id up; it never
+  // compares serials, hosts or product keys to reach that answer itself.
+  const key = observationKey(incoming);
+  const existing = session.devices.get(key) || null;
   const sources = Array.from(
     new Set((existing ? sourcesOf(existing) : []).map(normalizeDiscoverySource).concat(incomingSources))
   );
@@ -389,7 +366,6 @@ function mergeDiscoveryDevice(session, device, source) {
       delete merged.port;
     }
   }
-  const key = matchKey || deviceKey(merged);
   session.devices.set(key, merged);
   return merged;
 }
@@ -628,17 +604,42 @@ async function runScans(cidrs, source) {
   runInitialScan();
 }
 
-function deviceKey(device) {
-  if (device.serial_number) {
-    return (device.api_family || "device") + ":" + device.serial_number;
-  }
-  if (device.id) return device.id;
+// The browser's collection key for one discovery observation. It is the
+// server-issued `observation_id` and nothing else: physical equivalence is the
+// backend's decision, and a displayed serial may be a redaction placeholder
+// that several unrelated devices share.
+//
+// When the backend issued no id the browser must not invent physical identity.
+// It falls back to a per-object handle that is unique to this object, so a card
+// still renders and two observations still stay apart, and destructive actions
+// gate on `hasObservationIdentity` instead.
+function observationKey(device) {
+  if (!device || typeof device !== "object") return "unresolved:invalid";
+  const issued = String(device.observation_id || "").trim();
+  if (/^obs:v1:[A-Za-z0-9_-]+$/.test(issued)) return issued;
+  // Degraded rendering only, for a payload that predates or failed to carry an
+  // issued id: a deterministic handle built from where the device was reached,
+  // never from what it displays. It keeps two cards apart and stays stable
+  // across polls; destructive actions gate on hasObservationIdentity instead.
   return (
-    (device.source || "unknown") +
-    ":" +
-    (device.ip || "unknown") +
-    ":" +
-    (device.port || 80)
+    "unresolved:" +
+    [
+      String(
+        device.device_type || device.api_family || device.role_suggestion || "device"
+      ).toLowerCase(),
+      String(device.id || ""),
+      String(device.ip || device.host || device.hostname || "").toLowerCase(),
+      String(device.port || ""),
+      String((device.mqtt && device.mqtt.device_id) || device.device_id || ""),
+    ].join("|")
+  );
+}
+
+// True when the server issued an authoritative observation id. Destructive
+// actions (replace a configured connection, dismiss, adopt) require this.
+function hasObservationIdentity(device) {
+  return /^obs:v1:[A-Za-z0-9_-]+$/.test(
+    String((device && device.observation_id) || "").trim()
   );
 }
 
@@ -652,7 +653,7 @@ function sourcesOf(device) {
 // marker would leak onto a device the scan just reached. mDNS-only devices keep
 // their own staleness — a scan never marks anything stale, only clears it.
 function mergeDevice(map, device, fresh) {
-  const key = deviceKey(device);
+  const key = observationKey(device);
   const existing = map.get(key);
   if (!existing) {
     const entry = Object.assign({}, device, { sources: sourcesOf(device) });
@@ -692,7 +693,7 @@ function commitDevices(devices, source) {
 function buildDiscoverySignature(devices, ignored) {
   const entries = devices
     .map((device) => ({
-      id: deviceKey(device),
+      id: observationKey(device),
       role: String(device.role_suggestion || ""),
       ip: device.ip || "",
       port: device.port || "",
@@ -706,7 +707,7 @@ function buildDiscoverySignature(devices, ignored) {
     .sort((a, b) => a.id.localeCompare(b.id));
   const skipped = (ignored || [])
     .map((device) => ({
-      id: deviceKey(device),
+      id: observationKey(device),
       reason: device.reason || "",
       device_type: device.device_type || "",
     }))
@@ -1914,12 +1915,12 @@ async function pollMdns() {
     }
     renderMdnsStatus(status);
     for (const device of Array.isArray(result.devices) ? result.devices : []) {
-      mdnsDevices.set(deviceKey(device), device);
+      mdnsDevices.set(observationKey(device), device);
       mergeDiscoveryDevice(discoverySessions.setup, device, "mdns");
     }
     ignoredMdnsDevices.clear();
     for (const device of Array.isArray(result.ignored_devices) ? result.ignored_devices : []) {
-      ignoredMdnsDevices.set(deviceKey(device), device);
+      ignoredMdnsDevices.set(observationKey(device), device);
     }
     renderIgnoredDevices();
     if (!scanning) renderAggregate();
@@ -4258,7 +4259,7 @@ function draftItemFromDevice(device, role) {
   const sources = sourcesOf(device);
   if (role === "grid_meter") {
     return {
-      source_id: deviceKey(device),
+      source_id: observationKey(device),
       config_name: "grid_meter",
       display_name: uniqueDisplayName(
         device.display_name || device.model || DEFAULT_GRID_METER_DISPLAY,
@@ -4276,7 +4277,7 @@ function draftItemFromDevice(device, role) {
     };
   }
   return {
-    source_id: deviceKey(device),
+    source_id: observationKey(device),
     config_name:
       rememberedInverterName(device) || nextInverterName(),
     display_name: uniqueDisplayName(
@@ -4288,6 +4289,10 @@ function draftItemFromDevice(device, role) {
     ip: device.ip || "",
     port: device.port || "",
     serial_number: device.serial_number || "",
+    // Carry the server-issued physical identity, so a device the backend could
+    // identify without a readable serial (a serial-less Cloud route) keeps a
+    // usable identity in the draft instead of none.
+    physical_identity_token: issuedPhysicalIdentity(device),
     device_type: device.device_type || "",
     api_family: device.api_family || "",
     discovery_source: sources[0] || "",
@@ -4444,7 +4449,7 @@ function switchInverterTransport(serial, targetSource, options) {
         String(candidate.role_suggestion) === "inverter" && matches(candidate)
     );
     device = candidateRef
-      ? offered.find((candidate) => deviceKey(candidate) === candidateRef) || null
+      ? offered.find((candidate) => observationKey(candidate) === candidateRef) || null
       : offered[0] || null;
     if (!device) return;
   } else {
@@ -4470,7 +4475,7 @@ function switchInverterTransport(serial, targetSource, options) {
       if (matches(entry)) zendureMqttPreviewProposals.delete(id);
     }
     saveMqttPreviewProposals();
-    const sourceId = deviceKey(device);
+    const sourceId = observationKey(device);
     configDismissed.delete(sourceId);
     saveConfigDismissed();
     if (!draftHasSource(sourceId)) {
@@ -4600,16 +4605,29 @@ function usableSerialValue(value) {
   return key;
 }
 
+// The server-issued physical identity a payload carries, under either field
+// name: discovery observations are stamped with `physical_device_id`, config
+// entries and MQTT proposals with `physical_identity_token`. Both hold the same
+// keyed token for the same hardware.
+function issuedPhysicalIdentity(device) {
+  if (!device) return "";
+  for (const value of [device.physical_identity_token, device.physical_device_id]) {
+    const token = String(value || "").trim();
+    if (/^opaque:v1:[A-Za-z0-9_-]+$/.test(token)) return token;
+  }
+  return "";
+}
+
 // One browser-safe inverter equality key across transports: an explicit
 // physical serial wins; otherwise only the server-issued opaque token may be
 // used. MQTT routing ids are account-scoped write targets and never identity
-// material in the browser. Placeholder and display-masked values are ignored.
+// material in the browser. Placeholder and display-masked values are ignored,
+// so a redacted view can never make two devices compare equal.
 function physicalInverterIdentity(device) {
   if (!device) return "";
   const serial = usableSerialValue(device.sn) || usableSerialValue(device.serial_number);
   if (serial) return serial;
-  const token = String(device.physical_identity_token || "").trim();
-  return /^opaque:v1:[A-Za-z0-9_-]+$/.test(token) ? token : "";
+  return issuedPhysicalIdentity(device);
 }
 
 function inverterVisibleSerial(device) {
@@ -4630,6 +4648,7 @@ function inverterIdentityTokens(device) {
     if (/^opaque:v1:[A-Za-z0-9_-]+$/.test(token)) tokens.add(token);
   };
   add(device.physical_identity_token);
+  add(device.physical_device_id);
   const aliases = device.physical_identity_alias_tokens;
   if (Array.isArray(aliases)) aliases.forEach(add);
   return tokens;
@@ -5155,7 +5174,7 @@ function autoAddInverters() {
   for (const device of availableConfigDevices()) {
     if (String(device.role_suggestion) !== "inverter") continue;
     if (!isAutoConfigReady(device)) continue;
-    const sourceId = deviceKey(device);
+    const sourceId = observationKey(device);
     if (draftHasSource(sourceId) || configDismissed.has(sourceId)) continue;
     if (inverterDismissed(device)) continue;
     if (serialSelectedOverMqtt(device.serial_number)) continue;
@@ -5175,7 +5194,7 @@ function autoSelectGridMeter() {
   if (gridMeterItem()) return false;
   const meters = supportedGridMeters();
   if (meters.length !== 1) return false;
-  const sourceId = deviceKey(meters[0]);
+  const sourceId = observationKey(meters[0]);
   if (configDismissed.has(sourceId)) return false;
   const item = draftItemFromDevice(meters[0], "grid_meter");
   item.auto_selected = true;
@@ -5381,7 +5400,7 @@ function renderConfigAvailable() {
   const devices = availableConfigDevices();
   configAvailableIndex.clear();
   for (const device of devices) {
-    configAvailableIndex.set(deviceKey(device), device);
+    configAvailableIndex.set(observationKey(device), device);
   }
   const mqttCandidates = unselectedMqttDeviceProposals();
   const total = devices.length + mqttCandidates.length;
@@ -5488,7 +5507,7 @@ function addMqttInverterFromCandidate(proposalId) {
 // Setup discovered candidates reuse the Maintenance hardware-card layout so the
 // two lists read the same; only the action stays "Add as ..." instead of Remove.
 function renderConfigAvailableCard(device) {
-  const sourceId = deviceKey(device);
+  const sourceId = observationKey(device);
   const role = String(device.role_suggestion || "unknown");
   const isGridMeter = role === "grid_meter";
   const hardwareRole = isGridMeter ? "grid_meter" : "inverter";
@@ -6224,7 +6243,7 @@ function renderGridMeterSelection() {
         '<div class="config-grid-option">' +
         '<button type="button" class="primary-button compact config-grid-use"' +
         ' data-source-id="' +
-        escapeHtml(deviceKey(device)) +
+        escapeHtml(observationKey(device)) +
         '">Use this</button>' +
         '<span class="config-grid-option-name">' +
         name +
@@ -7511,7 +7530,7 @@ if (configEls.clearDraft) {
   configEls.clearDraft.addEventListener("click", () => {
     // Dismiss every discovered source and identity so the cleared draft stays clear.
     for (const device of availableConfigDevices()) {
-      configDismissed.add(deviceKey(device));
+      configDismissed.add(observationKey(device));
       dismissSerial(device);
     }
     for (const proposal of availableMqttDeviceProposals()) {
@@ -14252,7 +14271,7 @@ function mconfigFindInverterMatch(configured, discovered, used) {
   if (serial) {
     const bySerial = discovered.find(
       (device) =>
-        !used.has(deviceKey(device)) &&
+        !used.has(observationKey(device)) &&
         mconfigDiscoveryRole(device) === "inverter" &&
         mconfigIdentity(device.serial_number) === serial
     );
@@ -14263,7 +14282,7 @@ function mconfigFindInverterMatch(configured, discovered, used) {
   if (!ip) return null;
   const byIp = discovered.find(
     (device) =>
-      !used.has(deviceKey(device)) &&
+      !used.has(observationKey(device)) &&
       mconfigDiscoveryRole(device) === "inverter" &&
       mconfigIdentity(device.ip) === ip
   );
@@ -14287,7 +14306,7 @@ function buildMaintenanceDiscoveryReview(discovered) {
       }
       return;
     }
-    used.add(deviceKey(match.device));
+    used.add(observationKey(match.device));
     if (isMqtt) {
       // Same physical inverter observed over Local API: offer the alternative
       // transport on the configured device instead of a duplicate add.
@@ -14322,11 +14341,11 @@ function buildMaintenanceDiscoveryReview(discovered) {
   if (meter) {
     const found = supported.find(
       (device) =>
-        !used.has(deviceKey(device)) &&
+        !used.has(observationKey(device)) &&
         mconfigDiscoveryRole(device) === "grid_meter" &&
         mconfigIdentity(device.ip) === mconfigIdentity(meter.ip)
     );
-    if (found) used.add(deviceKey(found));
+    if (found) used.add(observationKey(found));
     results.push({
       role: "grid_meter",
       state: found ? "found" : "missing",
@@ -14336,7 +14355,7 @@ function buildMaintenanceDiscoveryReview(discovered) {
   }
 
   supported.forEach((device) => {
-    if (!used.has(deviceKey(device))) {
+    if (!used.has(observationKey(device))) {
       results.push({
         role: mconfigDiscoveryRole(device),
         state: "new",
@@ -15092,7 +15111,7 @@ function renderMaintenanceDiscoveryCard(item) {
   const isGridMeter = role === "grid_meter";
   const cardId =
     "maintenance-candidate-" +
-    String(found.id || deviceKey(found) || configured.name || role);
+    String(found.id || observationKey(found) || configured.name || role);
 
   const endpoint = String(found.ip || configured.ip || "");
   const serial = found.serial_number || configured.sn || "";

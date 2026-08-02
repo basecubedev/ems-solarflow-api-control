@@ -17,6 +17,8 @@ from admin.discovery_preparation import (
 )
 from admin.models import SOURCE_LOCAL_MQTT as CANDIDATE_LOCAL_MQTT
 from admin.models import SOURCE_ZENDURE_CLOUD_MQTT as CANDIDATE_ZENDURE_CLOUD
+from admin.observation_identity import stamp_observations
+from ems.device_identity import normalize_physical_serial
 
 CONFIDENCE_HIGH = "high"
 CONFIDENCE_LOW = "low"
@@ -109,24 +111,29 @@ def _candidate_view(source, raw):
 def _identity_key(view, order_index):
     """Strong identity by serial; otherwise a per-candidate weak identity.
 
-    Weak candidates are never merged with each other, so a missing serial can
-    never fold two unrelated devices together.
+    "Strong" is Core's answer, not this module's: a masked or placeholder serial
+    normalizes to ``None`` and therefore groups nothing. Weak candidates are
+    never merged with each other, so neither a missing nor a redacted serial can
+    fold two unrelated devices together.
     """
 
-    if view["serial_number"]:
-        return ("serial", view["serial_number"].lower())
+    serial = normalize_physical_serial(view["serial_number"])
+    if serial:
+        return ("serial", serial)
     weak = view["stable_id"] or view["device_id"] or f"anon-{order_index}"
     return ("weak", view["source"], weak)
 
 
 def _unified_id(identity, view):
     if identity[0] == "serial":
-        return f"serial:{view['serial_number']}"
+        return f"serial:{identity[1]}"
     token = view["stable_id"] or view["device_id"] or "unknown"
     return f"{view['source']}:{token}"
 
 
-def build_unified_devices(candidates_by_source, priority):
+def build_unified_devices(
+    candidates_by_source, priority, *, identity_token_key=None, broker_sources=None
+):
     """Group per-source candidates by identity and select a source by priority.
 
     ``candidates_by_source`` maps a preparation source key to a list of
@@ -134,6 +141,10 @@ def build_unified_devices(candidates_by_source, priority):
     the ordered list of source keys; sources missing from it are appended last.
     Returns a list of unified device dicts, ordered high-confidence first then
     by display name.
+
+    With an ``identity_token_key`` every returned device also carries the
+    browser-facing ``observation_id``/``physical_device_id``/``identity_status``
+    the UI keys its collections on.
     """
 
     ordered_sources = [s for s in priority if s in candidates_by_source]
@@ -221,5 +232,11 @@ def build_unified_devices(candidates_by_source, priority):
 
     devices.sort(
         key=lambda d: (0 if d["confidence"] == CONFIDENCE_HIGH else 1, d["display_name"])
+    )
+    stamp_observations(
+        devices,
+        key=identity_token_key,
+        broker_sources=broker_sources,
+        include_connection_id=True,
     )
     return devices

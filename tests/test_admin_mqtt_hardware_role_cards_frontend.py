@@ -93,7 +93,7 @@ _PROPOSAL_CARD_HELPERS = _ROLE_HELPERS + (
 _AVAILABLE_CARD_HELPERS = _ROLE_HELPERS + (
     "escapeHtml",
     "fact",
-    "deviceKey",
+    "observationKey",
     "renderConfigAvailableCard",
 )
 

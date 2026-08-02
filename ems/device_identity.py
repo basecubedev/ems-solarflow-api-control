@@ -18,6 +18,36 @@ IdentityKind = Literal[
     "local_api_endpoint",
 ]
 
+IdentityStatus = Literal[
+    "confirmed",
+    "probable",
+    "unresolved",
+    "ambiguous",
+    "conflict",
+]
+
+STATUS_CONFIRMED = "confirmed"
+STATUS_PROBABLE = "probable"
+STATUS_UNRESOLVED = "unresolved"
+STATUS_AMBIGUOUS = "ambiguous"
+STATUS_CONFLICT = "conflict"
+
+# The one ordered evidence policy. Everything that ranks, resolves or compares
+# physical identity reads this tuple; a new evidence kind is declared here and
+# nowhere else.
+EVIDENCE_PRECEDENCE: tuple[IdentityKind, ...] = (
+    "physical_serial",
+    "scoped_mqtt_device_anchor",
+    "scoped_mqtt_route",
+    "local_api_endpoint",
+)
+
+# Evidence that can identify a *physical* device. A local endpoint is route
+# evidence only: two inverters can trade IPs, so it never confirms hardware.
+PHYSICAL_EVIDENCE_KINDS = frozenset(
+    {"physical_serial", "scoped_mqtt_device_anchor", "scoped_mqtt_route"}
+)
+
 SOURCE_LOCAL_MQTT = "local_mqtt"
 SOURCE_ZENDURE_CLOUD_MQTT = "zendure_cloud_mqtt"
 DEFAULT_BROKER_REF = "default"
@@ -26,7 +56,34 @@ PHYSICAL_IDENTITY_TOKEN_FIELD = "physical_identity_token"
 PHYSICAL_IDENTITY_ALIAS_TOKENS_FIELD = "physical_identity_alias_tokens"
 
 _MASK_MARKERS = ("•", "…")
+_REDACTED_WORDS = frozenset({"<redacted>", "[redacted]", "redacted"})
+_PLACEHOLDER_PREFIXES = ("your_", "your-")
 _MQTT_SOURCES = frozenset({SOURCE_LOCAL_MQTT, SOURCE_ZENDURE_CLOUD_MQTT})
+
+
+def is_masked_identity_value(value: Any) -> bool:
+    """True when a value only *displays* an identifier and proves nothing.
+
+    The single placeholder policy for the whole project: the mask markers a
+    redacted view emits (``••••``, ``…abcd``), the ``redacted`` word forms, the
+    template's ``your_…`` placeholders, and any string with no alphanumeric
+    content at all (``****``, ``----``) — an identifier without a single
+    alphanumeric character identifies nothing. Non-strings are masked by
+    definition, because only a string can carry an identifier.
+    """
+
+    if not isinstance(value, str):
+        return True
+    cleaned = value.strip()
+    if not cleaned:
+        return True
+    folded = cleaned.casefold()
+    return (
+        any(marker in cleaned for marker in _MASK_MARKERS)
+        or folded in _REDACTED_WORDS
+        or folded.startswith(_PLACEHOLDER_PREFIXES)
+        or not any(char.isalnum() for char in cleaned)
+    )
 
 
 @dataclass(frozen=True)
@@ -123,16 +180,9 @@ class InverterIdentityEvidence:
 
 
 def _clean(value: Any, *, fold_case: bool = False) -> str | None:
-    if not isinstance(value, str):
+    if is_masked_identity_value(value):
         return None
     cleaned = value.strip()
-    if (
-        not cleaned
-        or any(marker in cleaned for marker in _MASK_MARKERS)
-        or cleaned.casefold() in {"<redacted>", "[redacted]", "redacted"}
-        or cleaned.casefold().startswith(("your_", "your-"))
-    ):
-        return None
     return cleaned.casefold() if fold_case else cleaned
 
 
@@ -425,6 +475,193 @@ def mqtt_route_conflict(
     return left.route_conflict(right)
 
 
+@dataclass(frozen=True)
+class PhysicalIdentityResult:
+    """The canonical answer to "which physical device is this observation?".
+
+    ``evidence`` and ``physical_identity`` are server-side detail (they carry
+    raw serials and route segments). Only ``public_identity_id``, ``status``,
+    ``confidence``, ``conflict`` and ``reason`` are safe to hand to a browser.
+    """
+
+    status: IdentityStatus
+    evidence: InverterIdentityEvidence | None = None
+    physical_identity: InverterIdentity | None = None
+    public_identity_id: str | None = None
+    confidence: str = ""
+    conflict: bool = False
+    reason: str = ""
+
+    @property
+    def resolved(self) -> bool:
+        """True when the evidence identifies a physical device at all."""
+
+        return self.status in (STATUS_CONFIRMED, STATUS_PROBABLE)
+
+    def public_view(self) -> dict[str, Any]:
+        """The browser-facing projection: never raw serials or route segments."""
+
+        return {
+            "status": self.status,
+            "public_identity_id": self.public_identity_id,
+            "confidence": self.confidence,
+            "identity_conflict": self.conflict,
+            "reason": self.reason,
+        }
+
+
+def resolve_physical_identity(
+    item: Any,
+    *,
+    broker_sources: Mapping[str, str] | None = None,
+    token_key: bytes | None = None,
+) -> PhysicalIdentityResult:
+    """Resolve one observation's physical identity, status included.
+
+    A verified serial confirms; a verified scoped MQTT device identifier makes
+    it probable; endpoint-only or masked-only evidence stays unresolved, because
+    neither proves which hardware answered. An unresolved observation never
+    receives a public identity id, so no caller can mistake "we do not know" for
+    "this device".
+    """
+
+    evidence = resolve_inverter_identity_evidence(
+        item, broker_sources=broker_sources, token_key=token_key
+    )
+    if evidence is None:
+        return PhysicalIdentityResult(
+            status=STATUS_UNRESOLVED, reason="no_identity_evidence"
+        )
+    physical = next(
+        (
+            identity
+            for identity in evidence.identities
+            if identity.kind in PHYSICAL_EVIDENCE_KINDS
+        ),
+        None,
+    )
+    if physical is None:
+        return PhysicalIdentityResult(
+            status=STATUS_UNRESOLVED,
+            evidence=evidence,
+            confidence=evidence.confidence,
+            reason="endpoint_evidence_only",
+        )
+    if physical.kind == "physical_serial":
+        status: IdentityStatus = STATUS_CONFIRMED
+        reason = "verified_physical_serial"
+    else:
+        status = STATUS_PROBABLE
+        reason = "scoped_mqtt_device_identifier"
+    return PhysicalIdentityResult(
+        status=status,
+        evidence=evidence,
+        physical_identity=physical,
+        public_identity_id=physical.opaque_token,
+        confidence=physical.confidence,
+        reason=reason,
+    )
+
+
+@dataclass(frozen=True)
+class IdentityComparison:
+    """How two observations relate physically, and why.
+
+    ``route_ambiguous`` is deliberately independent of ``same_physical_device``:
+    one inverter observed on two precise product routes is still one inverter,
+    its *write address* is what became ambiguous.
+    """
+
+    status: IdentityStatus
+    same_physical_device: bool
+    identity_conflict: bool
+    reason: str
+    route_ambiguous: bool = False
+
+
+def compare_physical_identity(
+    left: PhysicalIdentityResult | None, right: PhysicalIdentityResult | None
+) -> IdentityComparison:
+    """Compare two resolved observations under the one evidence policy.
+
+    Ordered so that a strong contradiction always wins: contradictory serials
+    conflict, and a shared weaker alias can never promote either back to "same
+    device". Absent physical evidence on either side the answer is
+    ``unresolved``, never ``different``: the caller must not treat "we cannot
+    tell" as proof of two devices.
+
+    An ambiguous write route is reported through ``route_ambiguous`` rather than
+    denying identity, because a shared serial identifies the inverter even when
+    two precise product routes make the write address ambiguous. Without a
+    shared serial the route conflict does keep the two apart.
+    """
+
+    left_evidence = left.evidence if left is not None and left.resolved else None
+    right_evidence = right.evidence if right is not None and right.resolved else None
+    if left_evidence is None or right_evidence is None:
+        return IdentityComparison(
+            status=STATUS_UNRESOLVED,
+            same_physical_device=False,
+            identity_conflict=False,
+            reason="insufficient_identity_evidence",
+        )
+    if identity_evidence_conflict(left_evidence, right_evidence):
+        return IdentityComparison(
+            status=STATUS_CONFLICT,
+            same_physical_device=False,
+            identity_conflict=True,
+            reason="contradictory_physical_serials",
+        )
+    route_ambiguous = mqtt_route_conflict(left_evidence, right_evidence)
+    if not same_physical_inverter_evidence(left_evidence, right_evidence):
+        return IdentityComparison(
+            status=STATUS_AMBIGUOUS if route_ambiguous else STATUS_UNRESOLVED,
+            same_physical_device=False,
+            identity_conflict=False,
+            reason="ambiguous_mqtt_write_route"
+            if route_ambiguous
+            else "no_shared_identity_evidence",
+            route_ambiguous=route_ambiguous,
+        )
+    shared_serial = not left_evidence.serial_keys().isdisjoint(
+        right_evidence.serial_keys()
+    )
+    return IdentityComparison(
+        status=STATUS_CONFIRMED if shared_serial else STATUS_PROBABLE,
+        same_physical_device=True,
+        identity_conflict=False,
+        reason="shared_physical_serial" if shared_serial else "shared_scoped_identifier",
+        route_ambiguous=route_ambiguous,
+    )
+
+
+def connection_coordinates(
+    item: Any, *, broker_sources: Mapping[str, str] | None = None
+) -> tuple[str, ...] | None:
+    """The transport address of one observation: where it was reached, not who it is.
+
+    Deliberately independent of physical identity, so two observations with the
+    same masked serial still get distinct coordinates when they answer on
+    different hosts or routes. Returns ``None`` when nothing addressable is
+    known — the caller must then supply its own discriminator rather than let
+    two unaddressable observations collapse.
+    """
+
+    if not isinstance(item, Mapping):
+        return None
+    fragment = _fragment(item)
+    for identity in _scoped_route_identities(item, fragment, broker_sources):
+        if identity.kind == "scoped_mqtt_route":
+            return ("mqtt_route", *identity.normalized_components)
+    for identity in _scoped_route_identities(item, fragment, broker_sources):
+        if identity.kind == "scoped_mqtt_device_anchor":
+            return ("mqtt_anchor", *identity.normalized_components)
+    endpoint = _endpoint_identity(item, fragment)
+    if endpoint is not None:
+        return ("local_endpoint", *endpoint.normalized_components)
+    return None
+
+
 def legacy_route_folded_tokens(
     evidence: InverterIdentityEvidence | None, key: bytes
 ) -> tuple[str, ...]:
@@ -458,19 +695,50 @@ def legacy_route_folded_tokens(
     return tuple(tokens)
 
 
+def _keyed_token(payload: Any, prefix: str, key: bytes) -> str:
+    if not isinstance(key, bytes) or len(key) < 32:
+        raise ValueError("identity token key must contain at least 32 bytes")
+    encoded_payload = json.dumps(
+        payload, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
+    digest = hmac.new(key, encoded_payload, hashlib.sha256).digest()
+    encoded = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+    return f"{prefix}:{encoded}"
+
+
 def opaque_identity_token(identity: InverterIdentity, key: bytes) -> str:
     """Return a versioned keyed token safe only for browser equality."""
 
-    if not isinstance(key, bytes) or len(key) < 32:
-        raise ValueError("identity token key must contain at least 32 bytes")
-    payload = json.dumps(
+    return _keyed_token(
         ["inverter-identity-v1", identity.kind, list(identity.normalized_components)],
-        ensure_ascii=False,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    digest = hmac.new(key, payload, hashlib.sha256).digest()
-    encoded = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
-    return f"opaque:v1:{encoded}"
+        "opaque:v1",
+        key,
+    )
+
+
+def opaque_observation_id(components: Any, key: bytes) -> str:
+    """A stable browser-safe id for *one observation* of a device.
+
+    Distinct from a physical identity: an observation is "this device, reached
+    this way", so two observations that only display the same masked serial keep
+    different ids. Keyed, so no host or route segment is reconstructable.
+    """
+
+    return _keyed_token(
+        ["discovery-observation-v1", [str(part) for part in components]],
+        "obs:v1",
+        key,
+    )
+
+
+def opaque_connection_id(coordinates: Any, key: bytes) -> str:
+    """A stable browser-safe id for one configured or proposed transport route."""
+
+    return _keyed_token(
+        ["connection-route-v1", [str(part) for part in coordinates]],
+        "conn:v1",
+        key,
+    )
 
 
 def _with_token(
@@ -525,22 +793,37 @@ def supplied_identity_token(item: Any) -> str | None:
 __all__ = [
     "DEFAULT_BROKER_REF",
     "DEFAULT_CLOUD_ACCOUNT_SCOPE",
-    "InverterIdentity",
-    "InverterIdentityEvidence",
+    "EVIDENCE_PRECEDENCE",
+    "PHYSICAL_EVIDENCE_KINDS",
     "PHYSICAL_IDENTITY_ALIAS_TOKENS_FIELD",
     "PHYSICAL_IDENTITY_TOKEN_FIELD",
     "SOURCE_LOCAL_MQTT",
     "SOURCE_ZENDURE_CLOUD_MQTT",
+    "STATUS_AMBIGUOUS",
+    "STATUS_CONFIRMED",
+    "STATUS_CONFLICT",
+    "STATUS_PROBABLE",
+    "STATUS_UNRESOLVED",
+    "IdentityComparison",
+    "InverterIdentity",
+    "InverterIdentityEvidence",
+    "PhysicalIdentityResult",
     "broker_sources_from_config",
+    "compare_physical_identity",
+    "connection_coordinates",
     "identity_conflict",
     "identity_evidence_conflict",
+    "is_masked_identity_value",
     "legacy_route_folded_tokens",
     "mqtt_route_conflict",
     "normalize_mqtt_route_segment",
     "normalize_physical_serial",
+    "opaque_connection_id",
     "opaque_identity_token",
+    "opaque_observation_id",
     "resolve_inverter_identity",
     "resolve_inverter_identity_evidence",
+    "resolve_physical_identity",
     "same_inverter_evidence",
     "same_physical_inverter",
     "same_physical_inverter_evidence",

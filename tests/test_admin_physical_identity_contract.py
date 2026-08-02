@@ -71,7 +71,12 @@ def test_backend_and_frontend_identity_resolvers_agree():
         js = handle.read()
     helpers = "\n".join(
         _extract_fn(js, name)
-        for name in ("normalizeSerial", "usableSerialValue", "physicalInverterIdentity")
+        for name in (
+            "normalizeSerial",
+            "usableSerialValue",
+            "issuedPhysicalIdentity",
+            "physicalInverterIdentity",
+        )
     )
     script = (
         helpers
@@ -101,7 +106,12 @@ def test_maintenance_identity_matches_fresh_setup_serial_grouping():
         js = handle.read()
     helpers = "\n".join(
         _extract_fn(js, name)
-        for name in ("normalizeSerial", "usableSerialValue", "physicalInverterIdentity")
+        for name in (
+            "normalizeSerial",
+            "usableSerialValue",
+            "issuedPhysicalIdentity",
+            "physicalInverterIdentity",
+        )
     )
     serials = ["EOD1AAA111", " eod1AAA111 ", "S1-x_9", "0"]
     script = (
@@ -139,7 +149,12 @@ def test_frontend_uses_server_token_but_never_reconstructs_masked_cloud_route():
         js = handle.read()
     helpers = "\n".join(
         _extract_fn(js, name)
-        for name in ("normalizeSerial", "usableSerialValue", "physicalInverterIdentity")
+        for name in (
+            "normalizeSerial",
+            "usableSerialValue",
+            "issuedPhysicalIdentity",
+            "physicalInverterIdentity",
+        )
     )
     cases = [
         {
@@ -219,6 +234,7 @@ console.log(JSON.stringify([
 PROPOSAL_STATE_HELPER_NAMES = (
     "normalizeSerial",
     "usableSerialValue",
+    "issuedPhysicalIdentity",
     "physicalInverterIdentity",
     "inverterVisibleSerial",
     "inverterIdentityTokens",

@@ -2160,7 +2160,7 @@ def _run_signature_node(setup):
     js = _read("admin.js")
     helpers = "\n".join(
         _extract_fn(js, name)
-        for name in ("deviceKey", "isAutoConfigReady", "buildDiscoverySignature")
+        for name in ("observationKey", "isAutoConfigReady", "buildDiscoverySignature")
     )
     script = helpers + "\n" + setup
     result = subprocess.run(
@@ -4733,11 +4733,12 @@ def _run_maintenance_discovery_node(setup):
     helpers = "\n".join(
         _extract_fn(js, name)
         for name in (
-            "deviceKey",
+            "observationKey",
             "isConfigCandidate",
             "mconfigIdentity",
             "normalizeSerial",
             "usableSerialValue",
+            "issuedPhysicalIdentity",
             "physicalInverterIdentity",
             "mconfigDiscoveryRole",
             "mconfigFindInverterMatch",
@@ -4871,25 +4872,27 @@ def test_shared_discovery_sessions_merge_sources_and_isolate_modes():
         _extract_fn(js, name)
         for name in (
             "createDiscoverySession",
-            "discoveryDeviceType",
-            "discoveryDeviceMatch",
+            "observationKey",
             "normalizeDiscoverySource",
             "mergeDiscoveryDevice",
         )
     )
+    # Two sightings the backend resolved to one observation. Whether they are one
+    # device is Core's answer (tests/test_device_identity.py); here only the
+    # session behavior is under test: union the sources, let the reachable scan
+    # win the address, and keep the two session modes isolated.
     script = (
         "function sourcesOf(device) { return device.sources || [device.source || 'network_scan']; }\n"
-        "function deviceKey(device) { return device.serial_number || device.ip; }\n"
         + helpers
         + """
 const setup = createDiscoverySession("setup");
 const maintenance = createDiscoverySession("maintenance");
 mergeDiscoveryDevice(setup, {
-  source: "mdns", serial_number: "ABC", ip: "192.168.1.20",
+  observation_id: "obs:v1:same", source: "mdns", ip: "192.168.1.20",
   device_type: "inverter", display_name: "Device"
 }, "mdns");
 mergeDiscoveryDevice(setup, {
-  source: "network_scan", serial_number: "ABC", ip: "192.168.1.21",
+  observation_id: "obs:v1:same", source: "network_scan", ip: "192.168.1.21",
   device_type: "inverter"
 }, "manual_scan");
 console.log(JSON.stringify({
@@ -7015,6 +7018,7 @@ def run_mconfig_add_mqtt_proposal(proposal):
             "mconfigIdentity",
             "normalizeSerial",
             "usableSerialValue",
+            "issuedPhysicalIdentity",
             "physicalInverterIdentity",
             "inverterVisibleSerial",
             "inverterIdentityTokens",
@@ -11122,13 +11126,13 @@ function discoverySourceEnabled(source) {
 function isMqttGridMeterProposal(p) { return String(p.target || "") === "grid_meter"; }
 function availableConfigDevices() { return availableDevices; }
 function isAutoConfigReady(device) { return device.ready !== false; }
-function deviceKey(device) { return String(device.serial_number || device.id || ""); }
+function observationKey(device) { return String(device.observation_id || device.id || ""); }
 function draftHasSource(id) { return configDraftItems.some((it) => it.source_id === id); }
 function draftItemFromDevice(device, role) {
   inverterSeq += 1;
   return {
     role: role,
-    source_id: deviceKey(device),
+    source_id: observationKey(device),
     serial_number: device.serial_number || "",
     config_name: "inverter_" + inverterSeq,
   };
