@@ -2,84 +2,25 @@ import { type Page, type Route } from "@playwright/test";
 import { test, expect } from "./fixtures/admin";
 import { LoginPage } from "./pages/login-page";
 import { SetupPage } from "./pages/setup-page";
+import {
+  SHELLY_METER,
+  apiInverter,
+  cloudInverter,
+  setDiscoveryPriority,
+} from "./helpers/discovery-state";
 
 // One physical inverter discovered over both API and Zendure MQTT. Its
 // alternative connection stays offered under "Add more devices" and switching to
 // it replaces the configured connection in place: one logical inverter, same
 // name, same common EMS values, no confirmation dialog, and the previous
-// connection is offered right back. Discovery + preview are deterministically
-// mocked; the browser candidate/switch behavior is what is under test.
+// connection is offered right back.
+//
+// Discovery is the deterministic Admin's own state — Setup's device plan is
+// computed from it — so the journey seeds it. Only the preview is mocked, to
+// keep the browser's candidate/switch behavior the thing under test.
 
 const SERIAL = "EOD1SWITCH01";
 const API_IP = "192.168.100.78";
-
-function httpInverter() {
-  return {
-    // The backend stamps every discovered observation; the browser keys its
-    // collections on this id and never on the displayed serial.
-    observation_id: `obs:v1:HTTP${SERIAL}`,
-    serial_number: SERIAL,
-    role_suggestion: "inverter",
-    ip: API_IP,
-    port: 8080,
-    api_family: "zendure_local_http",
-    device_type: "zendure_solarflow_800_pro",
-    display_name: "SolarFlow 800 Pro 2",
-    model: "SolarFlow 800 Pro 2",
-    verified: true,
-    usable_for_config: true,
-    config_ready: true,
-  };
-}
-
-const SHELLY = {
-  serial_number: "SHELLY123",
-  role_suggestion: "grid_meter",
-  ip: "192.168.100.93",
-  port: 80,
-  api_family: "shelly_gen2",
-  device_type: "shelly_pro_3em",
-  display_name: "Shelly Pro 3EM",
-  model: "Shelly Pro 3EM",
-  verified: true,
-  usable_for_config: true,
-  config_ready: true,
-};
-
-function mqttProposal() {
-  return {
-    id: `zendure-mqtt:${SERIAL}`,
-    serial_number: SERIAL,
-    device_id: SERIAL,
-    target: "device",
-    connection_source: "zendure_cloud_mqtt",
-    topic_family: "zensdk_ha_scalar",
-    broker_ref: "cloud",
-    output_control_supported: true,
-    display_name: "SolarFlow 800 Pro 2",
-    hardware_model: "solarFlow800Pro2",
-    hardware_generation_label: "SolarFlow 800 Pro 2",
-    confidence: "high",
-    role_hint: "inverter",
-    capabilities: [],
-    metrics: [],
-    warnings: [],
-    seen_topics: [],
-    config_fragment: {
-      type: "zendure_mqtt",
-      serial_number: SERIAL,
-      enabled: true,
-      name: "Zendure SolarFlow 800 Pro 2",
-      mqtt: {
-        broker_ref: "cloud",
-        source: "zendure_cloud_mqtt",
-        topic_family: "zensdk_ha_scalar",
-        device_id: SERIAL,
-      },
-      capabilities: { read_power: true, read_soc: true, write_output_limit: true },
-    },
-  };
-}
 
 function json(route: Route, body: unknown) {
   return route.fulfill({
@@ -91,49 +32,8 @@ function json(route: Route, body: unknown) {
 
 type State = { priority: string[]; lastPreview: Record<string, unknown> | null };
 
-async function mockDiscovery(page: Page, state: State) {
-  await page.route("**/api/discovery/**", (route) => json(route, {}));
-  await page.route("**/api/discovery/devices", (route) =>
-    json(route, { devices: [httpInverter(), SHELLY], ignored_devices: [] }),
-  );
-  await page.route("**/api/discovery/mdns/status", (route) =>
-    json(route, { state: "enabled", message: "", devices_found: 2 }),
-  );
-  await page.route("**/api/discovery/mdns/refresh", (route) => json(route, { state: "enabled" }));
+async function mockCloudAndPreview(page: Page, state: State) {
   await page.route("**/api/discovery/networks", (route) => json(route, { networks: [] }));
-  await page.route("**/api/discovery/mqtt-brokers", (route) => json(route, { candidates: [] }));
-  await page.route("**/api/discovery/mqtt-brokers/**", (route) => json(route, { candidates: [] }));
-  await page.route("**/api/discovery/mqtt-proposals", (route) =>
-    json(route, { proposals: [mqttProposal()] }),
-  );
-  await page.route("**/api/discovery/preparation", (route) => {
-    if (route.request().method() === "POST") {
-      const body = route.request().postDataJSON() || {};
-      state.priority = body.discovery_priority || state.priority;
-      return json(route, { discovery_priority: state.priority, sources: body.sources });
-    }
-    return json(route, {
-      discovery_priority: state.priority,
-      sources: {
-        local_api: { enabled: true },
-        local_mqtt: { enabled: true },
-        zendure_mqtt: { enabled: true },
-      },
-    });
-  });
-  await page.route("**/api/discovery/run", (route) =>
-    json(route, {
-      priority: state.priority,
-      sources: {
-        local_api: { enabled: true },
-        local_mqtt: { enabled: true },
-        zendure_mqtt: { enabled: true },
-      },
-      devices: [],
-      details: {},
-      refresh: true,
-    }),
-  );
   await page.route("**/api/discovery/zendure-cloud-mqtt/settings", (route) =>
     json(route, { token_saved: true, broker: "mqtt.zen-iot.com", tls_mode: "system_ca" }),
   );
@@ -198,11 +98,21 @@ async function mockDiscovery(page: Page, state: State) {
   });
 }
 
-async function reachConfig(page: Page, state: State) {
-  await mockDiscovery(page, state);
+async function reachConfig(
+  page: Page,
+  state: State,
+  seed: (spec: Record<string, unknown>) => Promise<void>,
+) {
+  await mockCloudAndPreview(page, state);
   const login = new LoginPage(page);
   await login.open();
   await login.authenticate();
+  await seed({
+    local_api_devices: [apiInverter(SERIAL, API_IP), SHELLY_METER],
+    cloud_devices: [cloudInverter(SERIAL)],
+  });
+  await setDiscoveryPriority(page, state.priority);
+  await page.reload();
   const setup = new SetupPage(page);
   await setup.chooseFreshInstall();
   await setup.selectBuild("latest");
@@ -252,10 +162,11 @@ function trackDialogs(page: Page) {
 
 test("API to Zendure MQTT: the alternative connection replaces the inverter in place", async ({
   page,
+  seedDiscoveryState,
 }) => {
   const state: State = { priority: ["local_api", "local_mqtt", "zendure_mqtt"], lastPreview: null };
   const dialogs = trackDialogs(page);
-  await reachConfig(page, state);
+  await reachConfig(page, state, seedDiscoveryState);
 
   // 01-03: the inverter is configured over API and the card says so.
   await expect(inverterCards(page)).toHaveCount(1);
@@ -299,10 +210,13 @@ test("API to Zendure MQTT: the alternative connection replaces the inverter in p
   );
 });
 
-test("Zendure MQTT to API: switching back keeps one inverter and its values", async ({ page }) => {
+test("Zendure MQTT to API: switching back keeps one inverter and its values", async ({
+  page,
+  seedDiscoveryState,
+}) => {
   const state: State = { priority: ["zendure_mqtt", "local_api", "local_mqtt"], lastPreview: null };
   const dialogs = trackDialogs(page);
-  await reachConfig(page, state);
+  await reachConfig(page, state, seedDiscoveryState);
 
   // Configured over Zendure MQTT from the start.
   await expect(inverterCards(page)).toHaveCount(1);
@@ -316,7 +230,7 @@ test("Zendure MQTT to API: switching back keeps one inverter and its values", as
 
   await expect(inverterCards(page)).toHaveCount(1);
   const switched = inverterCards(page).first();
-  await expect(switched).toHaveAttribute("data-source-id", /^obs:v1:HTTP/);
+  await expect(switched).toHaveAttribute("data-source-id", /^obs:v1:/);
   await expect(switched).toContainText("INV_1");
   await expect(switched.locator(".connection-pill")).toHaveText("API");
 
@@ -332,9 +246,12 @@ test("Zendure MQTT to API: switching back keeps one inverter and its values", as
   await expect(page.locator("#config-preview-ready")).toHaveText(/Ready/i);
 });
 
-test("the selected connection and its values survive a reload", async ({ page }) => {
+test("the selected connection and its values survive a reload", async ({
+  page,
+  seedDiscoveryState,
+}) => {
   const state: State = { priority: ["local_api", "local_mqtt", "zendure_mqtt"], lastPreview: null };
-  await reachConfig(page, state);
+  await reachConfig(page, state, seedDiscoveryState);
 
   const configured = inverterCards(page).first();
   await configured.locator(".hardware-card-toggle").click();

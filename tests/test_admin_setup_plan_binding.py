@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from admin.device_plan_registry import DevicePlanRegistry
 from admin.install_context import detect_install_context
 from admin.mqtt_discovery import MqttBrokerDiscovery, MqttBrokerStore
 from tests.test_admin_server import _control_export_manager, _request, _serve
@@ -125,11 +126,6 @@ def _apply(base, workflow_id, preview_id, device_plan_id, body=None):
     return _request(f"{base}/api/setup/config/apply", method="POST", body=request)
 
 
-def _authorized(base, provider_devices=(_inverter(),)):
-    srv, base_url = _serve(mdns_provider=_Devices(provider_devices))
-    return srv, base_url
-
-
 # --- preview binding ---------------------------------------------------------
 def test_preview_refuses_to_issue_authority_without_a_device_plan(tmp_path):
     srv, base = _serve(
@@ -226,6 +222,12 @@ def test_preview_refuses_a_plan_with_an_unconfirmed_switch(tmp_path):
     _write_live()
     try:
         workflow_id = _start_workflow(base)
+        status, _, _ = _request(
+            f"{base}/api/discovery/preparation",
+            method="POST",
+            body={"discovery_priority": ["local_mqtt", "zendure_mqtt", "local_api"]},
+        )
+        assert status == 200
         plan = _device_plan(
             base,
             {
@@ -236,12 +238,9 @@ def test_preview_refuses_a_plan_with_an_unconfirmed_switch(tmp_path):
                         "serial_number": SERIAL,
                         "ip": "10.0.0.11",
                         "port": 8080,
+                        "auto_added": True,
                     }
                 ]
-            },
-            preparation={
-                "discovery_priority": ["local_mqtt", "zendure_mqtt", "local_api"],
-                "sources": {},
             },
         )
         assert plan["confirmation_required"] is True, plan["groups"]
@@ -354,6 +353,42 @@ def test_apply_refuses_a_missing_device_plan(tmp_path):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+# --- the registry the preview check reads ------------------------------------
+def test_the_registry_forgets_the_oldest_plans_first():
+    """Bounded on purpose: a forgotten plan makes the browser re-plan."""
+
+    registry = DevicePlanRegistry(limit=2)
+    for index in range(3):
+        registry.record(
+            f"plan:v1:{index}", generation="gen", confirmation_required=False
+        )
+
+    assert registry.get("plan:v1:0") is None
+    assert registry.get("plan:v1:2")["generation"] == "gen"
+
+
+def test_the_registry_never_answers_for_a_plan_it_did_not_record():
+    registry = DevicePlanRegistry()
+    assert registry.get("plan:v1:forged") is None
+    assert registry.get("") is None
+    assert registry.record("", generation="gen", confirmation_required=False) is None
+
+
+def test_re_recording_a_plan_keeps_it_current():
+    registry = DevicePlanRegistry(limit=2)
+    registry.record("plan:v1:a", generation="one", confirmation_required=True)
+    registry.record("plan:v1:b", generation="one", confirmation_required=False)
+    registry.record("plan:v1:a", generation="two", confirmation_required=False)
+    registry.record("plan:v1:c", generation="two", confirmation_required=False)
+
+    assert registry.get("plan:v1:b") is None
+    assert registry.get("plan:v1:a") == {
+        "plan_id": "plan:v1:a",
+        "generation": "two",
+        "confirmation_required": False,
+    }
 
 
 def test_the_full_chain_applies(tmp_path):

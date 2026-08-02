@@ -24,14 +24,21 @@ keep / replace / add / block for one pair
 output-control capability
     resolved by the caller and passed in, never re-derived here
 
-The second reason this module exists is that the browser may hold Setup state
-persisted by an earlier release, whose entries carry no issued identity at all:
-a ``<api_family>:<serial>`` source id, bare-serial dismissals, MQTT selections
-without opaque tokens. Once the browser stops comparing serials, hosts and route
-ids, nothing there can relate such an entry to a current observation. So this
-module does, from the fields the entry already persists, and returns explicit
-per-entry mappings. Unmappable state stays unresolved and is preserved — never
-silently merged, dropped or re-homed.
+Two rules shape everything below.
+
+**Trusted candidates are the only evidence.** ``observations`` and ``proposals``
+are the server's own current discovery state. Persisted browser state — draft
+items, MQTT selections, dismissals — is a *lookup hint*: it says which device an
+entry believes it is about, and the answer is whatever the trusted candidates
+say. A hint that matches exactly one of them inherits that candidate's already
+issued ids; a hint that matches nothing or several things stays unresolved and
+is preserved untouched. No issued id is ever minted from a hint, because signing
+a value the browser supplied only makes the browser's word unforgeable.
+
+**The verdict decides which operations are executable.** A transport switch is
+emitted as an executable operation only when the canonical pairwise planner
+allows it outright. A switch it wants confirmed is returned as a *proposal* with
+a confirmation token; a switch it blocks is returned as nothing at all.
 
 See ``docs/developer/developer.md``.
 """
@@ -43,8 +50,13 @@ from ems.device_identity import (
     resolve_physical_identity,
 )
 from admin.connection_planner import (
+    ACTION_ADD_AS_NEW_DEVICE,
+    ACTION_KEEP_CURRENT,
+    ACTION_REPLACE_WITH_CONFIRMATION,
+    ACTION_USE_CANDIDATE,
     INTENT_REVIEW,
     INTENT_SWITCH_CONNECTION,
+    ConnectionPlan,
     plan_connection_change,
 )
 from admin.observation_identity import resolve_identity_fields
@@ -63,6 +75,17 @@ ORIGIN_MANUAL = "manual"
 ORIGIN_AUTOMATIC = "automatic"
 ORIGIN_PRIORITY = "priority"
 ORIGIN_NONE = "none"
+
+# How a persisted entry related to the current trusted candidates.
+MATCH_NONE = "none"
+MATCH_MATCHED = "matched"
+MATCH_UNMATCHED = "unmatched"
+MATCH_AMBIGUOUS = "ambiguous"
+
+# What may be done with a group's transition.
+_MODE_EXECUTE = "execute"
+_MODE_PROPOSE = "propose"
+_MODE_REFUSE = "refuse"
 
 _INVERTER_ROLE = "inverter"
 
@@ -118,7 +141,13 @@ def legacy_observation_key(device):
 
 
 class _Entry:
-    """One thing that can belong to a physical device group."""
+    """One thing that can belong to a physical device group.
+
+    A *trusted* entry (observation, proposal) carries the server's own record
+    and resolves its own identity. A *hint* entry (draft item, MQTT selection)
+    carries what the browser persisted until it is anchored to a trusted entry,
+    at which point it adopts that entry's payload and issued ids wholesale.
+    """
 
     __slots__ = (
         "kind",
@@ -130,6 +159,7 @@ class _Entry:
         "identity_tokens",
         "connection_id",
         "observation_id",
+        "legacy_match",
     )
 
     def __init__(self, kind, ref, payload, source, origin=ORIGIN_AUTOMATIC):
@@ -142,13 +172,16 @@ class _Entry:
         self.identity_tokens = ()
         self.connection_id = None
         self.observation_id = None
+        self.legacy_match = MATCH_NONE
 
     @property
     def unresolved(self):
         return self.identity is None or self.identity.public_identity_id is None
 
 
-def _resolve(entry, *, key, broker_sources, fallback):
+def _resolve_trusted(entry, *, key, broker_sources, fallback):
+    """Issue the public identity of a server-owned record."""
+
     entry.identity = resolve_physical_identity(
         entry.payload, broker_sources=broker_sources, token_key=key
     )
@@ -159,13 +192,23 @@ def _resolve(entry, *, key, broker_sources, fallback):
     # The observation id is a *collection label*: which card this is, not what
     # hardware it is. A payload that already carries a well-formed one keeps it,
     # so the operations reference the cards the browser is actually rendering.
-    # Everything that decides anything — physical identity, connection route,
-    # status — is recomputed below regardless of what the payload claimed.
     supplied = _text(entry.payload.get("observation_id"))
     entry.observation_id = (
         supplied if supplied.startswith("obs:v1:") else issued["observation_id"]
     )
     entry.identity_tokens = tuple(issued["physical_identity_alias_tokens"] or ())
+    return entry
+
+
+def _adopt(entry, anchor):
+    """Give a hint the trusted candidate's payload and issued ids."""
+
+    entry.payload = anchor.payload
+    entry.identity = anchor.identity
+    entry.identity_tokens = anchor.identity_tokens
+    entry.connection_id = anchor.connection_id
+    entry.observation_id = anchor.observation_id
+    entry.legacy_match = MATCH_MATCHED
     return entry
 
 
@@ -183,7 +226,7 @@ class _Relations:
         self._sources = broker_sources
         self._cache = {}
 
-    def _plan(self, left, right):
+    def plan(self, left, right):
         cache_key = (id(left), id(right))
         plan = self._cache.get(cache_key)
         if plan is None:
@@ -198,10 +241,17 @@ class _Relations:
         return plan
 
     def same_device(self, left, right):
-        return self._plan(left, right).same_physical_device
+        return self.plan(left, right).same_physical_device
 
     def conflict(self, left, right):
-        return self._plan(left, right).identity_conflict
+        return self.plan(left, right).identity_conflict
+
+    def same_route(self, left, right):
+        plan = self.plan(left, right)
+        return (
+            plan.current_connection_id is not None
+            and plan.current_connection_id == plan.candidate_connection_id
+        )
 
 
 def _group_entries(entries, relations):
@@ -233,6 +283,77 @@ def _group_entries(entries, relations):
             primary.extend(absorbed)
             groups.remove(absorbed)
     return groups
+
+
+# --- legacy hints ------------------------------------------------------------
+def _anchor_hint(entry, trusted, relations):
+    """The one trusted candidate a persisted entry is about, or none.
+
+    The persisted fields say which device the entry believes it is; the trusted
+    candidates say what is actually there. Only an unambiguous answer resolves:
+    one physical identity among the matches, and one connection within it —
+    otherwise the entry stays exactly as the browser stored it.
+    """
+
+    matches = [
+        candidate for candidate in trusted if relations.same_device(entry, candidate)
+    ]
+    if not matches:
+        entry.legacy_match = MATCH_UNMATCHED
+        return None
+    identities = {
+        candidate.identity.public_identity_id
+        for candidate in matches
+        if candidate.identity is not None
+        and candidate.identity.public_identity_id is not None
+    }
+    if len(identities) > 1:
+        entry.legacy_match = MATCH_AMBIGUOUS
+        return None
+    exact = [
+        candidate for candidate in matches if relations.same_route(entry, candidate)
+    ]
+    anchor = _only(exact) or _only(matches)
+    if anchor is None:
+        anchor = _only([c for c in matches if c.source == entry.source])
+    if anchor is None:
+        entry.legacy_match = MATCH_AMBIGUOUS
+        return None
+    return _adopt(entry, anchor)
+
+
+def _only(items):
+    return items[0] if len(items) == 1 else None
+
+
+def _dismissed_identity(value, *, key, broker_sources, trusted, relations):
+    """The issued physical identity a stored dismissal key refers to.
+
+    Accepts the three shapes a dismissal store has ever held: an already-issued
+    opaque token, the ``serial:`` sentinel of the previous release, and a bare
+    serial from the one before that. The first is the browser's migrated store
+    and stands on its own; the other two are hints and resolve only through a
+    unique current trusted candidate, so an arbitrary serial can never hide a
+    device. A masked or placeholder value resolves to nothing either way.
+    """
+
+    raw = _text(value)
+    if not raw:
+        return None
+    if raw.startswith("opaque:v1:"):
+        return raw
+    serial = raw[len("serial:"):] if raw.startswith("serial:") else raw
+    if is_masked_identity_value(serial):
+        return None
+    hint = _Entry("dismissal", raw, {"sn": serial}, SOURCE_LOCAL_API)
+    identities = {
+        candidate.identity.public_identity_id
+        for candidate in trusted
+        if relations.same_device(hint, candidate)
+        and candidate.identity is not None
+        and candidate.identity.public_identity_id is not None
+    }
+    return identities.pop() if len(identities) == 1 else None
 
 
 # --- per-group source selection ---------------------------------------------
@@ -320,27 +441,39 @@ def plan_setup_connection_switch(
     )
 
 
-def _dismissal_identity(value, *, key, broker_sources):
-    """The issued physical identity a stored dismissal key refers to.
+def _empty_operations():
+    return {
+        "drop_draft_items": [],
+        "drop_mqtt_selections": [],
+        "select_mqtt_proposals": [],
+        "adopt_observations": [],
+    }
 
-    Accepts the three shapes a dismissal store has ever held: an already-issued
-    opaque token, the ``serial:`` sentinel of the previous release, and a bare
-    serial from the one before that. A masked or placeholder value resolves to
-    nothing, so a redaction can never dismiss a device.
+
+def setup_candidate_generation(
+    *, observations, proposals, priority, enabled_sources, identity_token_key
+):
+    """The opaque generation of one candidate set.
+
+    Derived from server-owned state only — the issued observation ids, the
+    current proposal ids and the operator's source preference — so any holder of
+    the key can recompute it later and prove a device plan still describes the
+    world it was planned in.
     """
 
-    raw = _text(value)
-    if not raw:
-        return None
-    if raw.startswith("opaque:v1:"):
-        return raw
-    serial = raw[len("serial:"):] if raw.startswith("serial:") else raw
-    if is_masked_identity_value(serial):
-        return None
-    identity = resolve_physical_identity(
-        {"sn": serial}, broker_sources=broker_sources, token_key=key
+    return opaque_plan_id(
+        [
+            "setup-candidates-v1",
+            sorted(observations),
+            sorted(proposals),
+            list(priority or []),
+            sorted(
+                f"{name}={bool(value)}"
+                for name, value in dict(enabled_sources or {}).items()
+            ),
+        ],
+        identity_token_key,
     )
-    return identity.public_identity_id
 
 
 def build_setup_plan(
@@ -353,13 +486,17 @@ def build_setup_plan(
     identity_token_key,
     broker_sources=None,
     control_supported=None,
+    confirmed_switches=(),
+    declined_switches=(),
+    unresolved_references=(),
 ):
     """Rehydrate persisted Setup state and plan one connection per device.
 
     ``state`` is what the browser persisted (draft items, MQTT selections,
-    dismissals); ``observations`` and ``proposals`` are the current candidates,
-    read server-side. The result carries only issued ids, typed operations and
-    stable reason codes — never a serial, host or route segment.
+    dismissals) and is treated as hints; ``observations`` and ``proposals`` are
+    the current trusted candidates, read server-side. The result carries only
+    issued ids, typed operations and stable reason codes — never a serial, host
+    or route segment.
     """
 
     key = identity_token_key
@@ -367,11 +504,56 @@ def build_setup_plan(
     state = _mapping(state)
     priority = [source for source in (priority or []) if source]
     enabled = dict(enabled_sources or {})
-    capability = control_supported if callable(control_supported) else lambda _entry: None
+    capability = control_supported if callable(control_supported) else lambda _e: None
+    confirmed = {_text(token) for token in confirmed_switches or () if _text(token)}
+    declined = {_text(token) for token in declined_switches or () if _text(token)}
 
     warnings = []
-    entries = []
+    relations = _Relations(identity_token_key=key, broker_sources=sources)
 
+    # --- trusted candidates ---------------------------------------------------
+    observation_entries = []
+    observation_views = []
+    for index, raw in enumerate(observations or []):
+        device = _mapping(raw)
+        # The caller's own handle for this card. Like `draft_item_id` it is local
+        # and carries no evidence; it exists so the returned operations name
+        # something the caller can resolve, whatever id the record arrived with.
+        supplied = _text(device.get(OBSERVATION_REF_FIELD))
+        entry = _Entry("observation", supplied, device, SOURCE_LOCAL_API)
+        _resolve_trusted(entry, key=key, broker_sources=sources, fallback=str(index))
+        if not supplied:
+            entry.ref = entry.observation_id or f"observation:{index}"
+        observation_views.append(
+            dict(_entry_view(entry, OBSERVATION_REF_FIELD), source=SOURCE_LOCAL_API)
+        )
+        if _text(device.get("role_suggestion")) == _INVERTER_ROLE:
+            observation_entries.append(entry)
+
+    proposal_by_id = {}
+    for raw in proposals or []:
+        proposal = _mapping(raw)
+        identifier = _text(proposal.get("id"))
+        if identifier:
+            proposal_by_id[identifier] = proposal
+
+    proposal_entries = []
+    for identifier, proposal in proposal_by_id.items():
+        entry = _Entry(
+            "proposal",
+            identifier,
+            proposal,
+            mqtt_source_of(proposal.get("connection_source")),
+        )
+        proposal_entries.append(
+            _resolve_trusted(entry, key=key, broker_sources=sources, fallback=identifier)
+        )
+    proposal_tokens = {
+        entry.ref: set(entry.identity_tokens) for entry in proposal_entries
+    }
+    trusted = observation_entries + proposal_entries
+
+    # --- persisted hints ------------------------------------------------------
     draft_entries = []
     for index, raw in enumerate(state.get("draft_items") or []):
         item = _mapping(raw)
@@ -385,33 +567,8 @@ def build_setup_plan(
             SOURCE_LOCAL_API,
             ORIGIN_AUTOMATIC if item.get("auto_added") is True else ORIGIN_MANUAL,
         )
-        draft_entries.append(_resolve(entry, key=key, broker_sources=sources, fallback=ref))
-
-    proposal_by_id = {}
-    for raw in proposals or []:
-        proposal = _mapping(raw)
-        identifier = _text(proposal.get("id"))
-        if identifier:
-            proposal_by_id[identifier] = proposal
-
-    # Every current proposal is a candidate, including the one a stored
-    # selection already points at: that is how a card renders as "active" and
-    # how a stale stored id finds the proposal that superseded it. Their alias
-    # sets are derived here, never taken from what the browser echoed back.
-    proposal_entries = []
-    for identifier, proposal in proposal_by_id.items():
-        entry = _Entry(
-            "proposal",
-            identifier,
-            proposal,
-            mqtt_source_of(proposal.get("connection_source")),
-        )
-        proposal_entries.append(
-            _resolve(entry, key=key, broker_sources=sources, fallback=identifier)
-        )
-    proposal_tokens = {
-        entry.ref: set(entry.identity_tokens) for entry in proposal_entries
-    }
+        _anchor_hint(entry, trusted, relations)
+        draft_entries.append(entry)
 
     selection_entries = []
     for index, raw in enumerate(state.get("mqtt_selections") or []):
@@ -419,26 +576,29 @@ def build_setup_plan(
         identifier = _text(item.get("id"))
         if _text(item.get("target") or "device").lower() == "grid_meter":
             continue
-        # The stored selection is a browser echo; its trusted twin is the
-        # current proposal with that id, or — when the id predates a serial or
-        # route enrichment — the proposal whose issued alias set it still shares.
-        # Identity is always resolved from the trusted side.
-        trusted = proposal_by_id.get(identifier) or _remap_stale_selection(
-            item, proposal_by_id, proposal_tokens
+        # The stored selection names a proposal id and carries the issued tokens
+        # that response gave it. Both sides of the lookup are therefore
+        # server-issued: the current proposal with that id, or — when the id
+        # predates a serial or route enrichment — the one whose issued alias set
+        # it still shares.
+        anchor = _proposal_entry(proposal_entries, identifier) or _remap_stale_selection(
+            item, proposal_entries, proposal_tokens
         )
-        payload = trusted if trusted is not None else item
         entry = _Entry(
             "selection",
             identifier or f"selection:{index}",
-            payload,
-            mqtt_source_of(payload.get("connection_source") or item.get("connection_source")),
+            item,
+            mqtt_source_of(
+                (anchor.payload if anchor is not None else item).get("connection_source")
+            ),
             ORIGIN_MANUAL
             if _text(item.get("selection_origin")) == ORIGIN_MANUAL
             else ORIGIN_AUTOMATIC,
         )
-        entry.payload = payload
-        _resolve(entry, key=key, broker_sources=sources, fallback=entry.ref)
-        if trusted is None:
+        if anchor is not None:
+            _adopt(entry, anchor)
+        else:
+            entry.legacy_match = MATCH_UNMATCHED
             warnings.append(
                 {
                     "code": "mqtt_selection_not_offered",
@@ -446,48 +606,47 @@ def build_setup_plan(
                     "message": "the selected connection is no longer offered",
                 }
             )
-        entry.origin = (
-            ORIGIN_MANUAL
-            if _text(item.get("selection_origin")) == ORIGIN_MANUAL
-            else ORIGIN_AUTOMATIC
-        )
         selection_entries.append(entry)
 
-    observation_entries = []
-    observation_views = []
-    for index, raw in enumerate(observations or []):
-        device = _mapping(raw)
-        # The caller's own handle for this card. Like `draft_item_id` it is local
-        # and carries no evidence; it exists so the returned operations name
-        # something the caller can resolve, whatever id the payload did or did
-        # not arrive with.
-        supplied = _text(device.get(OBSERVATION_REF_FIELD))
-        entry = _Entry("observation", supplied, device, SOURCE_LOCAL_API)
-        _resolve(entry, key=key, broker_sources=sources, fallback=str(index))
-        # A caller that supplied no handle keys its cards on the issued id, which
-        # is what discovery stamped onto this payload. Only a card that has
-        # neither falls back to its position in the response.
-        if not supplied:
-            entry.ref = entry.observation_id or f"observation:{index}"
-        observation_views.append(
-            dict(_entry_view(entry, OBSERVATION_REF_FIELD), source=SOURCE_LOCAL_API)
-        )
-        if _text(device.get("role_suggestion")) != _INVERTER_ROLE:
-            continue
-        entry.payload = device
-        observation_entries.append(entry)
+    for entry in draft_entries + selection_entries:
+        if entry.legacy_match == MATCH_UNMATCHED:
+            warnings.append(
+                {
+                    "code": "legacy_state_unresolved",
+                    "id": entry.ref,
+                    "kind": entry.kind,
+                    "message": "no current connection matches this stored entry",
+                }
+            )
+        elif entry.legacy_match == MATCH_AMBIGUOUS:
+            warnings.append(
+                {
+                    "code": "legacy_state_ambiguous",
+                    "id": entry.ref,
+                    "kind": entry.kind,
+                    "message": "several current connections match this stored entry",
+                }
+            )
 
-    relations = _Relations(identity_token_key=key, broker_sources=sources)
-    for entry in draft_entries:
-        _adopt_live_observation(entry, observation_entries, relations)
+    # An anchored hint sits in its anchor's group; an unresolved one keeps its
+    # own, so nothing it failed to identify is merged, replaced or dropped.
+    groups = _group_entries(trusted, relations)
+    for entry in draft_entries + selection_entries:
+        host = _host_group(entry, groups)
+        if host is None:
+            groups.append([entry])
+        else:
+            # Appended in persisted order: which stored entry counts as the
+            # current connection is decided by that order, not by grouping.
+            host.append(entry)
 
-    entries = draft_entries + selection_entries + observation_entries + proposal_entries
-    groups = _group_entries(entries, relations)
-
+    # --- dismissals -----------------------------------------------------------
     dismissed_physical = set()
     unresolved_dismissals = []
     for value in state.get("physical_dismissals") or []:
-        identity = _dismissal_identity(value, key=key, broker_sources=sources)
+        identity = _dismissed_identity(
+            value, key=key, broker_sources=sources, trusted=trusted, relations=relations
+        )
         if identity is None:
             unresolved_dismissals.append({"value": _text(value), "scope": "physical"})
             continue
@@ -519,16 +678,22 @@ def build_setup_plan(
                 "observation_id": view["observation_id"],
             }
         )
-
-    operations = {
-        "drop_draft_items": [],
-        "drop_mqtt_selections": [],
-        "select_mqtt_proposals": [],
-        "adopt_observations": [],
-    }
     dismissed_observation_ids = {
         entry[OBSERVATION_REF_FIELD] for entry in dismissed_observations
     }
+
+    generation = setup_candidate_generation(
+        observations=[view["observation_id"] or "" for view in observation_views],
+        proposals=list(proposal_by_id),
+        priority=priority,
+        enabled_sources=enabled,
+        identity_token_key=key,
+    )
+
+    # --- one connection per physical device -----------------------------------
+    operations = _empty_operations()
+    proposed = _empty_operations()
+    confirmations = []
     group_views = []
 
     for group in groups:
@@ -541,13 +706,14 @@ def build_setup_plan(
         physical_device_id = identities[0] if identities else None
         available_sources = sorted({entry.source for entry in group})
         group_tokens = {token for entry in group for token in entry.identity_tokens}
-        dismissed = bool(group_tokens & dismissed_physical)
 
-        if dismissed:
+        if group_tokens & dismissed_physical:
             operations["drop_draft_items"].extend(entry.ref for entry in drafts)
             operations["drop_mqtt_selections"].extend(entry.ref for entry in selections)
             group_views.append(
-                _group_view(group, physical_device_id, available_sources, None, ORIGIN_NONE, False, None)
+                _group_view(
+                    group, physical_device_id, available_sources, None, ORIGIN_NONE, False, None
+                )
             )
             continue
 
@@ -558,88 +724,42 @@ def build_setup_plan(
             previous,
         )
         selected = resolved["source"]
-
-        if selected == SOURCE_LOCAL_API:
-            operations["drop_mqtt_selections"].extend(entry.ref for entry in selections)
-            if not drafts:
-                adoptable = [
-                    entry
-                    for entry in candidates
-                    if entry.kind == "observation"
-                    and _auto_config_ready(entry.payload)
-                    and entry.ref not in dismissed_observation_ids
-                ]
-                for entry in adoptable[:1]:
-                    operations["adopt_observations"].append(
-                        {
-                            OBSERVATION_REF_FIELD: entry.ref,
-                            "observation_id": entry.observation_id,
-                            "connection_id": entry.connection_id,
-                            "physical_device_id": _public_identity(entry),
-                            "role": _INVERTER_ROLE,
-                        }
-                    )
-        elif selected in MQTT_SOURCES:
-            operations["drop_draft_items"].extend(entry.ref for entry in drafts)
-            operations["drop_mqtt_selections"].extend(
-                entry.ref for entry in selections if entry.source != selected
-            )
-            same_source = [entry for entry in selections if entry.source == selected]
-            offered_entries = [
-                entry
-                for entry in candidates
-                if entry.kind == "proposal" and entry.source == selected
-            ]
-            # One source can offer several brokers for one device. The proposal a
-            # current selection already names wins, or the operator's choice
-            # would be replaced by whichever other broker happened to come first.
-            selected_ids = {entry.ref for entry in same_source}
-            offered = next(
-                (entry for entry in offered_entries if entry.ref in selected_ids),
-                offered_entries[0] if offered_entries else None,
-            )
-            if offered is not None:
-                stale = [entry for entry in same_source if entry.ref != offered.ref]
-                if stale:
-                    # A stored selection predates the current proposal id (a
-                    # route-only selection since enriched). Replace it so exactly
-                    # one selected entry remains, preserving a manual choice.
-                    operations["drop_mqtt_selections"].extend(entry.ref for entry in stale)
-                    operations["select_mqtt_proposals"].append(
-                        {
-                            "id": offered.ref,
-                            "selection_origin": ORIGIN_MANUAL
-                            if any(entry.origin == ORIGIN_MANUAL for entry in stale)
-                            else resolved["origin"],
-                            "connection_id": offered.connection_id,
-                            "physical_device_id": _public_identity(offered),
-                        }
-                    )
-                elif not same_source and SOURCE_LOCAL_API in available_sources:
-                    # Auto-select only when Local API also offers this device;
-                    # an MQTT-only device is added by the operator.
-                    operations["select_mqtt_proposals"].append(
-                        {
-                            "id": offered.ref,
-                            "selection_origin": resolved["origin"],
-                            "connection_id": offered.connection_id,
-                            "physical_device_id": _public_identity(offered),
-                        }
-                    )
-        else:
-            # Nothing resolved: drop auto-added drafts only, keep manual entries.
-            operations["drop_draft_items"].extend(
-                entry.ref for entry in drafts if entry.origin == ORIGIN_AUTOMATIC
-            )
-
-        action = _group_action(
+        decision = _decide_transition(
             group,
             previous,
             selected,
+            generation=generation,
             identity_token_key=key,
             broker_sources=sources,
             capability=capability,
+            confirmed=confirmed,
+            declined=declined,
         )
+        if decision["declined"]:
+            selected = previous["source"] if previous else selected
+            resolved = {"source": selected, "origin": ORIGIN_MANUAL, "available": True}
+        if decision["confirmation"] is not None:
+            confirmations.append(decision["confirmation"])
+
+        target = (
+            operations
+            if decision["mode"] == _MODE_EXECUTE
+            else proposed
+            if decision["mode"] == _MODE_PROPOSE
+            else None
+        )
+        if target is not None:
+            _emit_group_operations(
+                target,
+                selected=selected,
+                drafts=drafts,
+                selections=selections,
+                candidates=candidates,
+                available_sources=available_sources,
+                origin=resolved["origin"],
+                dismissed_observation_ids=dismissed_observation_ids,
+            )
+
         group_views.append(
             _group_view(
                 group,
@@ -648,7 +768,7 @@ def build_setup_plan(
                 selected,
                 resolved["origin"],
                 resolved["available"],
-                action,
+                decision["action"],
             )
         )
 
@@ -659,11 +779,7 @@ def build_setup_plan(
         relations,
     )
     proposal_views = [
-        dict(
-            _entry_view(entry, "id"),
-            source=entry.source,
-        )
-        for entry in _proposal_views(proposal_by_id, key, sources)
+        dict(_entry_view(entry, "id"), source=entry.source) for entry in proposal_entries
     ]
     draft_views = [_entry_view(entry, "draft_item_id") for entry in draft_entries]
     selection_views = [
@@ -674,16 +790,6 @@ def build_setup_plan(
         for entry in selection_entries
     ]
 
-    generation = opaque_plan_id(
-        [
-            "setup-candidates-v1",
-            sorted(known_observations),
-            sorted(proposal_by_id),
-            list(priority),
-            sorted(f"{name}={bool(value)}" for name, value in enabled.items()),
-        ],
-        key,
-    )
     plan_id = opaque_plan_id(
         [
             "setup-plan-v1",
@@ -693,6 +799,8 @@ def build_setup_plan(
             sorted(dismissed_physical),
             sorted(entry[OBSERVATION_REF_FIELD] for entry in dismissed_observations),
             operations,
+            proposed,
+            sorted(entry["token"] for entry in confirmations),
         ],
         key,
     )
@@ -715,39 +823,314 @@ def build_setup_plan(
         },
         "groups": group_views,
         "operations": operations,
+        "proposed_operations": proposed,
+        "confirmations": confirmations,
+        "confirmation_required": bool(confirmations),
+        "unresolved_references": [dict(entry) for entry in unresolved_references or ()],
         "warnings": warnings,
     }
 
 
-def _adopt_live_observation(entry, observations, relations):
-    """Give a persisted entry the issued id of the observation it *is*.
+def _host_group(entry, groups):
+    """The trusted group an anchored hint belongs to."""
 
-    A store written before observation ids existed derives its own id from the
-    fields it kept, which is not the id the current discovery response carries
-    for the same device. The match is made here, from Core's identity answer and
-    the transport coordinates — never in the browser, and never on a display
-    value: an exact connection wins, and otherwise only an unambiguous single
-    physical match counts, so two candidates leave the entry as it is.
+    if entry.payload is None:
+        return None
+    for group in groups:
+        for member in group:
+            if member.payload is entry.payload and member is not entry:
+                return group
+    return None
+
+
+def _proposal_entry(entries, identifier):
+    if not identifier:
+        return None
+    return next((entry for entry in entries if entry.ref == identifier), None)
+
+
+def _trusted_route_record(
+    item, *, observations, proposals, identity_token_key, broker_sources
+):
+    """The trusted record that *is* this persisted entry's connection.
+
+    Route equality only. A pairwise switch asks about the connection the entry
+    names, so a device merely identified as the same hardware on a different
+    address must stay a different connection — otherwise the question would
+    silently become one about a route the operator never chose.
     """
 
-    if entry.connection_id is not None:
-        exact = [
-            observation
-            for observation in observations
-            if observation.connection_id == entry.connection_id
-        ]
-        if len(exact) == 1:
-            entry.observation_id = exact[0].observation_id
-            return
-    physical = [
-        observation
-        for observation in observations
-        if relations.same_device(entry, observation)
+    if identity_token_key is None:
+        return None
+    sources = dict(broker_sources or {})
+    relations = _Relations(
+        identity_token_key=identity_token_key, broker_sources=sources
+    )
+    trusted = []
+    for index, raw in enumerate(observations or []):
+        device = _mapping(raw)
+        if _text(device.get("role_suggestion")) != _INVERTER_ROLE:
+            continue
+        entry = _Entry("observation", str(index), device, SOURCE_LOCAL_API)
+        trusted.append(
+            _resolve_trusted(
+                entry, key=identity_token_key, broker_sources=sources, fallback=str(index)
+            )
+        )
+    for raw in proposals or []:
+        proposal = _mapping(raw)
+        identifier = _text(proposal.get("id"))
+        if not identifier:
+            continue
+        entry = _Entry(
+            "proposal",
+            identifier,
+            proposal,
+            mqtt_source_of(proposal.get("connection_source")),
+        )
+        trusted.append(
+            _resolve_trusted(
+                entry,
+                key=identity_token_key,
+                broker_sources=sources,
+                fallback=identifier,
+            )
+        )
+    hint = _Entry("draft", "current", item, SOURCE_LOCAL_API)
+    matches = [
+        candidate for candidate in trusted if relations.same_route(hint, candidate)
     ]
-    if len(physical) == 1:
-        entry.observation_id = physical[0].observation_id
-        if entry.connection_id is None:
-            entry.connection_id = physical[0].connection_id
+    anchor = _only(matches)
+    return anchor.payload if anchor is not None else None
+
+
+def _emit_group_operations(
+    target,
+    *,
+    selected,
+    drafts,
+    selections,
+    candidates,
+    available_sources,
+    origin,
+    dismissed_observation_ids,
+):
+    if selected == SOURCE_LOCAL_API:
+        target["drop_mqtt_selections"].extend(entry.ref for entry in selections)
+        if not drafts:
+            adoptable = [
+                entry
+                for entry in candidates
+                if entry.kind == "observation"
+                and _auto_config_ready(entry.payload)
+                and entry.ref not in dismissed_observation_ids
+            ]
+            for entry in adoptable[:1]:
+                target["adopt_observations"].append(
+                    {
+                        OBSERVATION_REF_FIELD: entry.ref,
+                        "observation_id": entry.observation_id,
+                        "connection_id": entry.connection_id,
+                        "physical_device_id": _public_identity(entry),
+                        "role": _INVERTER_ROLE,
+                    }
+                )
+        return
+    if selected not in MQTT_SOURCES:
+        # Nothing resolved: drop auto-added drafts only, keep manual entries.
+        target["drop_draft_items"].extend(
+            entry.ref for entry in drafts if entry.origin == ORIGIN_AUTOMATIC
+        )
+        return
+
+    target["drop_draft_items"].extend(entry.ref for entry in drafts)
+    target["drop_mqtt_selections"].extend(
+        entry.ref for entry in selections if entry.source != selected
+    )
+    same_source = [entry for entry in selections if entry.source == selected]
+    offered_entries = [
+        entry for entry in candidates if entry.kind == "proposal" and entry.source == selected
+    ]
+    # One source can offer several brokers for one device. The proposal a
+    # current selection already names wins, or the operator's choice would be
+    # replaced by whichever other broker happened to come first.
+    selected_ids = {entry.ref for entry in same_source}
+    offered = next(
+        (entry for entry in offered_entries if entry.ref in selected_ids),
+        offered_entries[0] if offered_entries else None,
+    )
+    if offered is None:
+        return
+    stale = [entry for entry in same_source if entry.ref != offered.ref]
+    if stale:
+        # A stored selection predates the current proposal id (a route-only
+        # selection since enriched). Replace it so exactly one selected entry
+        # remains, preserving a manual choice.
+        target["drop_mqtt_selections"].extend(entry.ref for entry in stale)
+        target["select_mqtt_proposals"].append(
+            {
+                "id": offered.ref,
+                "selection_origin": ORIGIN_MANUAL
+                if any(entry.origin == ORIGIN_MANUAL for entry in stale)
+                else origin,
+                "connection_id": offered.connection_id,
+                "physical_device_id": _public_identity(offered),
+            }
+        )
+    elif not same_source and SOURCE_LOCAL_API in available_sources:
+        # Auto-select only when Local API also offers this device; an MQTT-only
+        # device is added by the operator.
+        target["select_mqtt_proposals"].append(
+            {
+                "id": offered.ref,
+                "selection_origin": origin,
+                "connection_id": offered.connection_id,
+                "physical_device_id": _public_identity(offered),
+            }
+        )
+
+
+def _decide_transition(
+    group,
+    previous,
+    selected,
+    *,
+    generation,
+    identity_token_key,
+    broker_sources,
+    capability,
+    confirmed,
+    declined,
+):
+    """What this group's transition is, and what may be done about it.
+
+    A group whose recorded source is already the selected one is not switching:
+    its operations only remove the duplicates that switch left behind. A group
+    that *is* switching gets the canonical pairwise verdict, and only
+    ``use_candidate``/``add_as_new_device`` — or the candidate turning out to be
+    the current connection under a new id — may be executed.
+    """
+
+    blank = {"mode": _MODE_EXECUTE, "action": None, "confirmation": None, "declined": False}
+    if selected is None:
+        return blank
+    previous_source = previous.get("source") if previous else None
+    current = _entry_for_source(group, previous_source)
+    candidate = _entry_for_source(group, selected, prefer_candidate=True)
+    if candidate is None:
+        return blank
+    if current is not None and current.ref == candidate.ref:
+        return blank
+
+    plan = plan_setup_connection_switch(
+        current_device=current.payload if current is not None else None,
+        candidate=candidate.payload,
+        identity_token_key=identity_token_key,
+        broker_sources=broker_sources,
+        current_control_supported=capability(current) if current is not None else None,
+        candidate_control_supported=capability(candidate),
+    )
+    if previous_source is None or previous_source == selected:
+        return {
+            "mode": _MODE_EXECUTE,
+            "action": plan.to_dict(),
+            "confirmation": None,
+            "declined": False,
+        }
+
+    if plan.action in (ACTION_USE_CANDIDATE, ACTION_ADD_AS_NEW_DEVICE):
+        return {
+            "mode": _MODE_EXECUTE,
+            "action": plan.to_dict(),
+            "confirmation": None,
+            "declined": False,
+        }
+    if plan.action == ACTION_KEEP_CURRENT:
+        # The candidate turned out to be the current connection under another
+        # reference; adopting that reference is not a replacement.
+        same_connection = (
+            plan.current_connection_id is not None
+            and plan.current_connection_id == plan.candidate_connection_id
+        )
+        return {
+            "mode": _MODE_EXECUTE if same_connection else _MODE_REFUSE,
+            "action": plan.to_dict(),
+            "confirmation": None,
+            "declined": False,
+        }
+    if plan.action != ACTION_REPLACE_WITH_CONFIRMATION:
+        return {
+            "mode": _MODE_REFUSE,
+            "action": plan.to_dict(),
+            "confirmation": None,
+            "declined": False,
+        }
+
+    token = opaque_plan_id(
+        [
+            "setup-confirmation-v1",
+            generation,
+            plan.physical_device_id or "",
+            plan.current_connection_id or "",
+            plan.candidate_connection_id or "",
+            current.ref if current is not None else "",
+            candidate.ref,
+            selected,
+        ],
+        identity_token_key,
+    )
+    if token in declined:
+        kept = ConnectionPlan(
+            action=ACTION_KEEP_CURRENT,
+            same_physical_device=plan.same_physical_device,
+            identity_status=plan.identity_status,
+            control_continuity=plan.control_continuity,
+            reason="operator_declined_replacement",
+            current_connection_id=plan.current_connection_id,
+            candidate_connection_id=plan.candidate_connection_id,
+            physical_device_id=plan.physical_device_id,
+            notes=plan.notes,
+        )
+        return {
+            "mode": _MODE_EXECUTE,
+            "action": kept.to_dict(),
+            "confirmation": None,
+            "declined": True,
+        }
+    if token in confirmed:
+        accepted = plan_setup_connection_switch(
+            current_device=current.payload if current is not None else None,
+            candidate=candidate.payload,
+            identity_token_key=identity_token_key,
+            broker_sources=broker_sources,
+            current_control_supported=capability(current) if current is not None else None,
+            candidate_control_supported=capability(candidate),
+            operator_confirmed=True,
+        )
+        return {
+            "mode": _MODE_EXECUTE if not accepted.blocked else _MODE_REFUSE,
+            "action": accepted.to_dict(),
+            "confirmation": None,
+            "declined": False,
+        }
+    return {
+        "mode": _MODE_PROPOSE,
+        "action": plan.to_dict(),
+        "confirmation": {
+            "token": token,
+            "physical_device_id": plan.physical_device_id,
+            "current_ref": current.ref if current is not None else None,
+            "current_source": current.source if current is not None else None,
+            "candidate_ref": candidate.ref,
+            "candidate_source": selected,
+            "current_connection_id": plan.current_connection_id,
+            "candidate_connection_id": plan.candidate_connection_id,
+            "action": plan.action,
+            "reason": plan.reason,
+            "control_continuity": plan.control_continuity,
+        },
+        "declined": False,
+    }
 
 
 def _issued_tokens(payload):
@@ -767,7 +1150,7 @@ def _issued_tokens(payload):
     return tokens
 
 
-def _remap_stale_selection(item, proposal_by_id, proposal_tokens):
+def _remap_stale_selection(item, proposal_entries, proposal_tokens):
     """The current proposal a stored selection still shares an issued alias with.
 
     Both sides are server-issued tokens: the browser stored what an earlier
@@ -779,23 +1162,9 @@ def _remap_stale_selection(item, proposal_by_id, proposal_tokens):
     if not stored:
         return None
     matches = [
-        identifier
-        for identifier, tokens in proposal_tokens.items()
-        if tokens & stored
+        identifier for identifier, tokens in proposal_tokens.items() if tokens & stored
     ]
-    return None if len(matches) != 1 else proposal_by_id[matches[0]]
-
-
-def _proposal_views(proposal_by_id, key, broker_sources):
-    """Every current proposal as a resolved entry, selected or not."""
-
-    views = []
-    for identifier, proposal in proposal_by_id.items():
-        entry = _Entry(
-            "proposal", identifier, proposal, mqtt_source_of(proposal.get("connection_source"))
-        )
-        views.append(_resolve(entry, key=key, broker_sources=broker_sources, fallback=identifier))
-    return views
+    return _proposal_entry(proposal_entries, matches[0]) if len(matches) == 1 else None
 
 
 # --- what one discovered connection offers -----------------------------------
@@ -830,9 +1199,7 @@ def _candidate_views(groups, configured, candidates, relations):
             "current_ref": None,
             "current_source": None,
         }
-        conflicting = any(
-            relations.conflict(entry, candidate) for entry in configured
-        )
+        conflicting = any(relations.conflict(entry, candidate) for entry in configured)
         if conflicting:
             view["state"] = CANDIDATE_IDENTITY_CONFLICT
             views.append(view)
@@ -864,7 +1231,7 @@ def _public_identity(entry):
 
 def _entry_view(entry, ref_field):
     identity = entry.identity
-    return {
+    view = {
         ref_field: entry.ref,
         "observation_id": entry.observation_id,
         "connection_id": entry.connection_id,
@@ -873,6 +1240,9 @@ def _entry_view(entry, ref_field):
         "identity_reason": identity.reason if identity else "no_identity_evidence",
         "unresolved": entry.unresolved,
     }
+    if entry.kind in ("draft", "selection"):
+        view["legacy_match"] = entry.legacy_match
+    return view
 
 
 def _group_view(group, physical_device_id, sources, selected, origin, available, action):
@@ -887,28 +1257,6 @@ def _group_view(group, physical_device_id, sources, selected, origin, available,
         ),
         "action": action,
     }
-
-
-def _group_action(group, previous, selected, *, identity_token_key, broker_sources, capability):
-    """The pairwise planner's verdict for this group's actual transition."""
-
-    if selected is None:
-        return None
-    current = _entry_for_source(group, previous.get("source") if previous else None)
-    candidate = _entry_for_source(group, selected, prefer_candidate=True)
-    if candidate is None:
-        return None
-    if current is not None and current.ref == candidate.ref:
-        return None
-    plan = plan_setup_connection_switch(
-        current_device=current.payload if current is not None else None,
-        candidate=candidate.payload,
-        identity_token_key=identity_token_key,
-        broker_sources=broker_sources,
-        current_control_supported=capability(current) if current is not None else None,
-        candidate_control_supported=capability(candidate),
-    )
-    return plan.to_dict()
 
 
 def _entry_for_source(group, source, *, prefer_candidate=False):
@@ -926,14 +1274,27 @@ def _entry_for_source(group, source, *, prefer_candidate=False):
     return None
 
 
-def resolve_current_connection(state, current_ref, proposals):
+def resolve_current_connection(
+    state,
+    current_ref,
+    proposals,
+    *,
+    observations=None,
+    identity_token_key=None,
+    broker_sources=None,
+):
     """The connection a switch is replacing, read from trusted state.
 
     A stored MQTT selection is a browser echo: it names an id and carries the
     tokens it was given, but no evidence. Resolving it against the current
     proposals — by id, or by the issued alias set when the id predates an
-    enrichment — is what makes it comparable at all. A draft item persists its
-    own connection fields and is usable as it stands.
+    enrichment — is what makes it comparable at all.
+
+    A draft item is resolved the same way when it can be: its persisted fields
+    are matched against the current trusted candidates and, on a unique hit,
+    that record is what the switch compares against. A draft nothing currently
+    observes — a hand-entered device, or one that went offline — falls back to
+    what it persists, which is the only description of it that exists.
     """
 
     ref = _text(current_ref)
@@ -942,8 +1303,16 @@ def resolve_current_connection(state, current_ref, proposals):
     state = _mapping(state)
     for item in state.get("draft_items") or []:
         entry = _mapping(item)
-        if _text(entry.get("draft_item_id")) == ref:
-            return entry
+        if _text(entry.get("draft_item_id")) != ref:
+            continue
+        anchor = _trusted_route_record(
+            entry,
+            observations=observations,
+            proposals=proposals,
+            identity_token_key=identity_token_key,
+            broker_sources=broker_sources,
+        )
+        return anchor if anchor is not None else entry
     proposal_by_id = {}
     for raw in proposals or []:
         proposal = _mapping(raw)
@@ -958,11 +1327,15 @@ def resolve_current_connection(state, current_ref, proposals):
         entry = _mapping(item)
         if _text(entry.get("id")) != ref:
             continue
-        return (
-            proposal_by_id.get(ref)
-            or _remap_stale_selection(entry, proposal_by_id, proposal_tokens)
-            or entry
-        )
+        if ref in proposal_by_id:
+            return proposal_by_id[ref]
+        stored = _issued_tokens(entry)
+        matches = [
+            identifier
+            for identifier, tokens in proposal_tokens.items()
+            if tokens & stored
+        ] if stored else []
+        return proposal_by_id[matches[0]] if len(matches) == 1 else entry
     return None
 
 
@@ -975,4 +1348,5 @@ __all__ = [
     "plan_setup_connection_switch",
     "resolve_current_connection",
     "resolve_selected_source",
+    "setup_candidate_generation",
 ]

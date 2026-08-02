@@ -612,39 +612,53 @@ def _build_test_mdns_provider():
     return provider, seeded
 
 
-def _seed_local_api_inverter(provider, seeded, *, ip, serial):
-    """Publish one verified Local-API inverter through the real merge path.
+def _seed_local_api_device(provider, seeded, spec):
+    """Publish one verified Local-API observation through the real merge path.
 
-    Guided Setup auto-adds a discovered inverter, so this single seeded device
-    is what makes the browser's own draft previewable without it selecting
-    anything — the scenario, not the host network, decides that it exists.
+    Browser specs describe the discovery state their journey needs; the device
+    still reaches the store the way a real one does, so the plan the Setup
+    endpoint computes is over the server's own trusted view rather than over
+    anything the browser said. ``spec`` is a plain description
+    (ip/port/serial/role/model), never an identity — the merge path and
+    ``admin/observation_identity.py`` decide what it becomes.
     """
 
-    seeded[(ip, 80)] = DiscoveredDevice(
+    ip = str(spec.get("ip") or "")
+    port = int(spec.get("port") or 80)
+    serial = str(spec.get("serial") or "")
+    role = str(spec.get("role") or "inverter")
+    model = str(spec.get("model") or "SolarFlow 800 Pro 2")
+    seeded[(ip, port)] = DiscoveredDevice(
         ip=ip,
-        api_family="zendure_local_http",
-        device_type="zendure_solarflow_800_pro2",
-        role_suggestion="inverter",
-        port=80,
-        display_name="SolarFlow 800 Pro 2",
-        model="SolarFlow 800 Pro 2",
-        serial_number=serial,
+        api_family=str(spec.get("api_family") or "zendure_local_http"),
+        device_type=str(spec.get("device_type") or "zendure_solarflow_800_pro2"),
+        role_suggestion=role,
+        port=port,
+        display_name=str(spec.get("display_name") or model),
+        model=model,
+        serial_number=serial or None,
         confidence=0.95,
-        config_ready=True,
+        config_ready=bool(spec.get("config_ready", True)),
     )
     pending = provider.handle_candidate(
         build_candidate(
-            service_name=f"Zendure-800Pro2-{serial}",
+            service_name=f"Zendure-{role}-{serial or ip}",
             hostname="zendure-e2e.local.",
             addresses=[ip],
-            port=80,
-            properties={b"sn": serial.encode(), b"model": b"800Pro2"},
+            port=port,
+            properties={b"sn": serial.encode(), b"model": model.encode()},
         ),
         force_verify=True,
     )
     result = getattr(pending, "result", None)
     if callable(result):
         result(30)
+
+
+def _seed_local_api_inverter(provider, seeded, *, ip, serial):
+    """The one seeded inverter the plain Guided Setup scenarios rely on."""
+
+    _seed_local_api_device(provider, seeded, {"ip": ip, "serial": serial})
 
 
 def _reset_test_mdns_provider(provider, seeded):
@@ -1138,6 +1152,27 @@ def build_test_runtime(*, data_dir):
             success=True,
         )
 
+    def _seed_local_mqtt_brokers(brokers):
+        """Publish a described local-broker discovery state through the store."""
+
+        generation = runtime.mqtt_discovery.store.begin_refresh()
+        runtime.mqtt_discovery.store.complete_refresh(
+            generation,
+            [
+                {
+                    "id": f"mqtt:{broker.get('host')}:{broker.get('port', 1883)}",
+                    "host": broker.get("host"),
+                    "port": int(broker.get("port") or 1883),
+                    "tls": bool(broker.get("tls")),
+                    "reachable": True,
+                    "topic_refresh_success": True,
+                    "devices": [dict(device) for device in broker.get("devices") or []],
+                }
+                for broker in brokers or []
+            ],
+            success=True,
+        )
+
     def seed_api_serial_local_candidate():
         """A real local observation of the configured Local API inverter.
 
@@ -1206,6 +1241,64 @@ def build_test_runtime(*, data_dir):
                     "outputHomePower",
                     "outputLimit",
                 ],
+            }
+        ]
+        runtime.zendure_cloud_discovery._candidates = []
+
+    def _seed_setup_local_scalar_candidate():
+        """The seeded Setup inverter, also seen on a local scalar broker."""
+
+        generation = runtime.mqtt_discovery.store.begin_refresh()
+        runtime.mqtt_discovery.store.complete_refresh(
+            generation,
+            [
+                {
+                    "id": "mqtt:192.168.90.30:1883",
+                    "host": "192.168.90.30",
+                    "port": 1883,
+                    "tls": False,
+                    "reachable": True,
+                    "topic_refresh_success": True,
+                    "devices": [
+                        {
+                            "broker_id": "local_mqtt:192.168.90.30:1883",
+                            "broker_host": "192.168.90.30",
+                            "broker_port": 1883,
+                            "source_type": "local_mqtt",
+                            "topic_family": "zensdk_ha_scalar",
+                            "device_id": SEEDED_INVERTER_SERIAL,
+                            "serial_number": SEEDED_INVERTER_SERIAL,
+                            "product_key": "E2ESETUPPK",
+                            "model_hint": "SolarFlow 800 Pro 2",
+                            "display_name": "SolarFlow 800 Pro 2",
+                            "metrics_seen": ["electricLevel", "outputHomePower"],
+                            "topics_seen": [
+                                f"Zendure/sensor/{SEEDED_INVERTER_SERIAL}/electricLevel"
+                            ],
+                        }
+                    ],
+                }
+            ],
+            success=True,
+        )
+
+    def _seed_setup_controllable_cloud_candidate():
+        """The seeded Setup inverter on the cloud broker, route complete."""
+
+        runtime.zendure_cloud_discovery._trusted_candidates = [
+            {
+                "broker_id": "zendure_cloud_mqtt:mqtt.zen-iot.com:8883",
+                "broker_host": "mqtt.zen-iot.com",
+                "broker_port": 8883,
+                "tls_mode": "encrypted_no_verify",
+                "source_type": "zendure_cloud_mqtt",
+                "topic_family": "zensdk_ha_scalar",
+                "device_id": SEEDED_INVERTER_SERIAL,
+                "serial_number": SEEDED_INVERTER_SERIAL,
+                "product_key": "E2ESETUPPK",
+                "model_hint": "SolarFlow 800 Pro 2",
+                "display_name": "SolarFlow 800 Pro 2",
+                "metrics_seen": ["electricLevel", "outputHomePower", "outputLimit"],
             }
         ]
         runtime.zendure_cloud_discovery._candidates = []
@@ -1330,7 +1423,29 @@ def build_test_runtime(*, data_dir):
             json.dumps(config, indent=2) + "\n", encoding="utf-8"
         )
 
-    def test_seed(scenario):
+    def test_seed(
+        scenario,
+        *,
+        local_api_devices=None,
+        local_mqtt_brokers=None,
+        cloud_devices=None,
+    ):
+        described = (
+            local_api_devices is not None
+            or local_mqtt_brokers is not None
+            or cloud_devices is not None
+        )
+        for spec in local_api_devices or ():
+            _seed_local_api_device(mdns_provider, seeded_mdns_devices, spec)
+        if local_mqtt_brokers is not None:
+            _seed_local_mqtt_brokers(local_mqtt_brokers)
+        if cloud_devices is not None:
+            runtime.zendure_cloud_discovery._trusted_candidates = [
+                dict(entry) for entry in cloud_devices
+            ]
+            runtime.zendure_cloud_discovery._candidates = []
+        if scenario is None and described:
+            return {"ok": True, "scenario": None}
         backup_failure_state["enabled"] = scenario == "mqtt_backup_failure"
         if scenario in {"mqtt_migration", "mqtt_backup_failure"}:
             write_install_config(legacy_mqtt_config())
@@ -1407,6 +1522,28 @@ def build_test_runtime(*, data_dir):
                 ip=SEEDED_INVERTER_IP,
                 serial=SEEDED_INVERTER_SERIAL,
             )
+        elif scenario == "setup_api_and_local_scalar":
+            # One inverter, two connections: the local API endpoint the EMS can
+            # write to, and a local broker publishing scalar telemetry whose
+            # write path is unproven. Guided Setup must not move the device
+            # there on discovery priority alone.
+            _seed_local_api_inverter(
+                mdns_provider,
+                seeded_mdns_devices,
+                ip=SEEDED_INVERTER_IP,
+                serial=SEEDED_INVERTER_SERIAL,
+            )
+            _seed_setup_local_scalar_candidate()
+        elif scenario == "setup_api_and_controllable_cloud":
+            # The same pair, except the alternative carries the canonical cloud
+            # write route: control is preserved, so priority may move it.
+            _seed_local_api_inverter(
+                mdns_provider,
+                seeded_mdns_devices,
+                ip=SEEDED_INVERTER_IP,
+                serial=SEEDED_INVERTER_SERIAL,
+            )
+            _seed_setup_controllable_cloud_candidate()
         elif scenario == "mqtt_mutate":
             target = detect_install_context().config_path
             config = json.loads(target.read_text(encoding="utf-8"))

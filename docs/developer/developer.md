@@ -195,10 +195,11 @@ result or enforce it — they never recompute it. The structural contracts in
 
 | Concern | Owner | Adapters / projections |
 |---|---|---|
-| Output-control eligibility | `ems/mqtt_control/power_capability.py` (model, write route, broker source), composed with route completeness by `ems/zendure_mqtt/capability.py` | `admin/zendure_mqtt_config_draft.py` (enforce/project), runtime `device_client`, migration, diagnostics, `admin.js` (labels only) |
+| Output-control eligibility | `ems/mqtt_control/power_capability.py` (model, write route, broker source), composed with route completeness by `ems/zendure_mqtt/capability.py` | `admin/zendure_mqtt_config_draft.py` (enforce/project), `admin/connection_capability.py` (discovered connections, for Setup planning), runtime `device_client`, migration, diagnostics, `admin.js` (labels only) |
 | Physical inverter identity | `ems/device_identity.py` (`resolve_physical_identity`, `compare_physical_identity`, `is_masked_identity_value`, `EVIDENCE_PRECEDENCE`) | `admin/maintenance_config.py`, `admin/zendure_mqtt_config_proposals.py`, `admin/zendure_mqtt_config_draft.py`; browser compares server-issued `opaque:v1:` tokens |
 | Connection keep/replace/add/block | `admin/connection_planner.py` | Maintenance switching, Setup switching and batch planning; browser renders the returned action and reason |
-| Setup batch planning and legacy-state rehydration | `admin/setup_planner.py` (`build_setup_plan`, `plan_setup_connection_switch`) | `POST /api/setup/device-plan`; `admin.js` applies the returned typed operations |
+| Setup batch planning and legacy-state rehydration | `admin/setup_planner.py` (`build_setup_plan`, `plan_setup_connection_switch`, `setup_candidate_generation`) | `POST /api/setup/device-plan`; `admin.js` applies the returned executable operations |
+| Device-plan mutation authority | `admin/device_plan_registry.py` plus the durable preview record in `admin/guided_setup_workflow.py` | Setup config preview, write and apply |
 | Browser-facing device ids | `admin/observation_identity.py` (`observation_id`, `physical_device_id`, `connection_id`) | discovery run, mDNS and scan responses; `admin.js` keys its collections on them |
 | MQTT TLS/broker semantics | `ems/config.py` (`normalize_mqtt_tls_mode`, `resolve_mqtt_tls_metadata`, `canonical_mqtt_tls_mode`, `mqtt_tls_mode_name`, `MQTT_TLS_OBSERVED_MODES`) | `admin/zendure_mqtt_broker_profiles.py`, `discovery_connections.py`, `mqtt_topic_discovery.py`, `zendure_mqtt_config_proposals.py` |
 | Secret classification | `admin/secret_policy.py` (catalog metadata via `ems/config_catalog.py::is_secret_catalog_field`) | draft strip, browser redaction, workflow fingerprint |
@@ -216,7 +217,9 @@ result or enforce it — they never recompute it. The structural contracts in
 | placeholder / mask form | `ems/device_identity.py::is_masked_identity_value` | `tests/test_device_identity.py` |
 | connection plan action | `admin/connection_planner.py` | `tests/test_admin_connection_planner.py` |
 | Setup selection/adoption rule | `admin/setup_planner.py` | `tests/test_admin_setup_batch_planner.py` |
-| persisted Setup identity shape | `admin/setup_planner.py` (`IDENTITY_SCHEMA_VERSION`) | `tests/test_admin_setup_identity_migration.py` |
+| persisted Setup identity shape | `admin/setup_planner.py` (`IDENTITY_SCHEMA_VERSION`), `admin.js` (`setupStoreEnvelope`) | `tests/test_admin_setup_identity_migration.py` |
+| device-plan request field | `admin/server.py` (`_setup_plan_references`) | `tests/test_admin_setup_trust_boundary.py` |
+| device-plan conflict code | `admin/server.py` (`DEVICE_PLAN_*`) | `tests/test_admin_setup_plan_binding.py` |
 | grid-meter field | `ems/config_catalog.py::GRID_METER_VARIANTS` | `tests/test_admin_shared_config_normalization.py` |
 | catalog field for an editor | `ems/config_catalog.py` (scope/level/editable/risk) | `tests/test_config_field_index.py` |
 
@@ -273,9 +276,19 @@ question and is therefore keyed differently:
 | `ems-admin-config-mqtt-manual-devices` | manual entry | local index |
 | `transportInverterNames` (memory) | display name | issued identity, else local handle |
 
-No schema-version field was added. The stores are distinguished by *shape*
-rather than by a version marker, because the legacy shapes are unambiguous and a
-version field would have to be invented for stores that never had one:
+Each store is a versioned envelope written by `setupStoreEnvelope()` in
+`admin.js`:
+
+```json
+{"schema_version": 1, "items": []}
+```
+
+`readSetupStore()` also accepts the bare array an older release wrote, so a
+store written before the envelope existed reads as the unversioned contract and
+is rewritten in envelope form on its first save. The migration is therefore
+idempotent and needs no separate pass. `SETUP_IDENTITY_SCHEMA_VERSION` in
+`admin.js` and `IDENTITY_SCHEMA_VERSION` in `admin/setup_planner.py` name the
+same contract, and the legacy shapes stay recognizable on their own terms:
 
 - a legacy draft item has no `draft_item_id`, and its `source_id` is the old
   `<api_family>:<serial>` / `<source>:<ip>:<port>` key rather than `obs:v1:…`;
@@ -283,35 +296,104 @@ version field would have to be invented for stores that never had one:
   `ems-admin-config-dismissed-serials`, which the typed store replaces;
 - a legacy MQTT selection carries no `physical_identity_token`.
 
-`SETUP_IDENTITY_SCHEMA_VERSION` in `admin.js` and `IDENTITY_SCHEMA_VERSION` in
-`admin/setup_planner.py` name the contract the two sides speak, so a future
-incompatible change has a place to declare itself.
+#### Trusted candidates, handles and hints
 
-Two kinds of reference travel in that plan and must not be confused. Issued ids
-(`observation_id`, `connection_id`, `physical_device_id`) say *what* something
-is and are minted server-side. Local handles — `draft_item_id` for a form row,
-`observation_ref` for a discovered card — say *which* entry an operation is
-about; the browser supplies them, they carry no evidence, and the plan echoes
-them so its operations always name something the caller can resolve, even when a
-payload arrived without an issued id.
+Three kinds of value travel between the browser and the planner, and conflating
+them is exactly the failure this boundary exists to prevent.
 
-Rehydration is one request. The browser posts what it persisted to
-`POST /api/setup/device-plan`; the backend resolves every entry from the fields
-it already carries, issues the typed ids, and returns explicit mappings plus the
-plan. The browser then replaces its identity-keyed stores with the returned ids.
-It is idempotent (re-planning migrated state returns the same `plan_id`) and
-fail-closed: an entry the backend cannot place stays unresolved, is preserved
-with its original values, and produces a warning rather than a merge or a drop.
-A response whose ticket is not the newest is discarded, and operations are
-applied only when the plan's `plan_id` is still the current one.
+| Kind | Examples | What it may decide |
+|---|---|---|
+| Trusted candidate | a current discovery observation, a current MQTT proposal | everything: identity, grouping, capability, verdict |
+| Handle | `observation_id`, proposal `id`, `draft_item_id`, `observation_ref`, a confirmation token | *which* server-owned record or local row is meant |
+| Hint | a persisted `serial_number`, `ip`, `mqtt.device_id`, a bare-serial dismissal | *where to look* — never what was found |
 
-Apply does not trust that. `/api/setup/config-preview` re-resolves every MQTT
-selection against current trusted proposals and re-runs
+`POST /api/setup/device-plan` accepts handles and hints, never candidates. Its
+candidate set is the server's own discovery view (`mdns_provider.devices()`
+stamped by `admin/observation_identity.py`, plus `_trusted_mqtt_proposals()`);
+source priority comes from the preparation store rather than the request. A
+submitted observation handle may attach the caller's `observation_ref` to a
+record that is still offered, and nothing else; a handle that no longer resolves
+appears in `unresolved_references` and contributes no operation. Client trust
+booleans (`verified`, `usable_for_config`, `identity_status`,
+`physical_device_id`) are ignored wherever they appear.
+
+Rehydration then treats every persisted entry as a hint. It is compared against
+the trusted candidates through the same canonical planner that grouping uses,
+and:
+
+| Match | Result |
+|---|---|
+| exactly one physical identity, one connection | `legacy_match: "matched"` — the candidate's issued ids are copied over |
+| none | `legacy_match: "unmatched"` — no issued ids, entry preserved, `legacy_state_unresolved` warning |
+| several | `legacy_match: "ambiguous"` — no issued ids, entry preserved, `legacy_state_ambiguous` warning |
+
+A dismissal resolves on physical identity alone (two routes to one device are
+still one dismissal); an already-issued `opaque:v1:` token is the browser's
+migrated store rather than a hint and stands on its own. A masked or placeholder
+value never resolves. Rehydration is idempotent: re-planning migrated state
+returns the same `plan_id`.
+
+#### Verdict-to-operation enforcement
+
+`build_setup_plan` derives its operations from the final canonical verdict, not
+from the selected source:
+
+| Verdict | `operations` | `proposed_operations` | `confirmations` |
+|---|---|---|---|
+| `use_candidate`, `add_as_new_device` | replacement emitted | — | — |
+| `keep_current` (candidate *is* the current connection) | id refresh only | — | — |
+| `keep_current` (any other reason) | — | — | — |
+| `replace_with_confirmation` | — | full switch | one token |
+| `block_identity_conflict`, `block_unresolved_identity`, `block_capability_loss` | — | — | — |
+
+A group whose recorded source already *is* the selected one is not switching;
+its operations only remove the duplicates an earlier switch left behind. Setup's
+output-control verdicts come from `admin/connection_capability.py`, which adapts
+the canonical resolver — so a local MQTT scalar or an unresolved write route is
+`control_continuity: "lost"`/`"unknown"` and can never be auto-selected over a
+controllable connection.
+
+A confirmation token binds the candidate generation, the physical identity, both
+connection ids and both entry references. The browser sends it back in
+`confirmed_switches` (the backend re-plans with `operator_confirmed=True` and
+returns executable operations) or `declined_switches` (the group keeps its
+current connection). A token minted under a different generation authorizes
+nothing.
+
+#### Device plan → config preview → apply
+
+Planning only matters if the plan is what reaches `config/config.json`, so the
+three steps are one authority chain:
+
+```text
+device_plan_id  (keyed token, recorded with its candidate generation)
+  -> POST /api/setup/config-preview   verifies plan, generation, confirmations
+       -> config_preview_id           fingerprint includes device_plan_id
+            -> POST /api/setup/config/{write,apply}
+```
+
+`admin/device_plan_registry.py` records the plans this process issued together
+with their candidate generation and whether a confirmation is still outstanding.
+Preview refuses a request that presents none (`device_plan_required`), one this
+process did not issue or whose generation has moved on (`stale_device_plan`), or
+one still awaiting an answer (`device_plan_confirmation_required`). The accepted
+plan id enters `setup_mutation_fingerprint` (version 2) and, with its generation,
+the durable preview record — so mutation authority survives an Admin restart
+while a discovery change between review and apply is still a `stale_device_plan`
+conflict. The registry itself is transient on purpose: a lost entry makes the
+browser re-plan, which is the safe direction.
+
+Apply does not rely on the plan alone. `/api/setup/config-preview` re-resolves
+every MQTT selection against current trusted proposals and re-runs
 `find_duplicate_zendure_device_identities` over the submitted draft, so a draft
 that two physical devices would collapse into — however the browser got there —
 is rejected as `zendure_device_identity_duplicate` before anything is written.
-The plan is advisory for the browser's own draft; the invariant is enforced
-where the config is produced.
+The plan governs what the browser may do to its own draft; the invariant is
+enforced where the config is produced.
+
+On the browser side, a response whose ticket is not the newest is discarded, and
+operations are applied only when the plan's `plan_id` *and* `generation` are
+still the current ones.
 
 ### Test layering
 

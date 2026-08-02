@@ -286,14 +286,26 @@ identity and picks a source strictly by the configured priority:
 API:
 
 - `POST /api/setup/device-plan` — the Setup identity and planning boundary
-  (`admin/setup_planner.py`). Read-only: the browser posts the state it
-  persisted plus the candidate set it was served, and receives issued ids for
-  every entry, one connection per physical device, and the typed
-  drop/select/adopt operations to apply. Identity, conflict and replacement are
-  decided here; the browser only renders and applies. Legacy Setup state (a
-  serial-derived draft id, bare-serial dismissals, selections without tokens) is
-  rehydrated on the same call, fail-closed: what cannot be placed stays
-  unresolved and is preserved.
+  (`admin/setup_planner.py`). Read-only. The request carries `state` (what the
+  browser persisted, treated as lookup hints), `candidates` (handles into the
+  server's *own* current discovery view: `{observation_id, observation_ref}` and
+  `{id}`), and `confirmed_switches`/`declined_switches` (operator answers). It
+  never carries candidate bodies, identity evidence or trust flags — those are
+  ignored, and a handle that no longer resolves is reported in
+  `unresolved_references` and produces no operation.
+
+  The response carries issued ids for every entry, one connection per physical
+  device, the *executable* `operations` (drop/select/adopt), the
+  `proposed_operations` plus `confirmations` for a switch that needs an explicit
+  answer, `generation` (the candidate set it was planned over) and `plan_id`
+  (mutation authority for Config Preview). Identity, conflict, capability and
+  replacement are decided here; the browser only renders and applies.
+
+  Legacy Setup state (a serial-derived draft id, bare-serial dismissals,
+  selections without tokens) is rehydrated on the same call, fail-closed: a hint
+  that matches exactly one trusted candidate inherits its issued ids, and one
+  that matches none or several stays unresolved, keeps its values and is
+  reported per entry as `legacy_match` plus a warning.
 - `GET /api/discovery/preparation` — current priority + enabled flags.
 - `POST /api/discovery/preparation` — save priority/enabled (normalized; returns
   the stored payload). No secrets are accepted or echoed.

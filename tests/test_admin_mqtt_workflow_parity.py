@@ -37,7 +37,11 @@ from tests.admin_auth_helpers import auth_headers, authenticate
 from tests.helpers.fake_mqtt import FakeMqttNetwork
 from tests.helpers.system_alignment import SetupReadySystemAlignment
 from tests.test_admin_maintenance_config import _draft_item_from_proposal
-from tests.helpers.setup_config import authorize_setup_mutation, start_setup_workflow
+from tests.helpers.setup_config import (
+    authorize_setup_mutation,
+    current_device_plan_id,
+    start_setup_workflow,
+)
 from tests.test_admin_server import (
     _FakeReleaseManager,
     _fake_gateway_prober,
@@ -862,6 +866,7 @@ def test_setup_and_maintenance_reject_invalid_configured_ref_identically(
                 {"id": proposal["id"], "broker_ref": proposal["broker_ref"]}
             ],
             "setup_workflow_id": start_setup_workflow(base, _workflow_request),
+            "device_plan_id": current_device_plan_id(base, _workflow_request),
         }
         s_status, s_preview = _request(
             f"{base}/api/setup/config-preview", "POST", setup_body
@@ -951,6 +956,7 @@ def test_setup_and_maintenance_reject_cross_source_shared_ref_identically(
                 {"id": cloud["id"], "broker_ref": cloud["broker_ref"]},
             ],
             "setup_workflow_id": start_setup_workflow(base, _workflow_request),
+            "device_plan_id": current_device_plan_id(base, _workflow_request),
         }
         s_status, s_preview = _request(
             f"{base}/api/setup/config-preview", "POST", setup_body

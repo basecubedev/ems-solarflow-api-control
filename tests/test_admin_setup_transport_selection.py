@@ -78,6 +78,7 @@ def _run(names, setup):
 
 
 _INDEX_HELPERS = (
+    "emptySetupPlanOperations",
     "emptySetupPlan",
     "emptySetupPlanIndex",
     "indexSetupPlan",
@@ -616,3 +617,257 @@ console.log(JSON.stringify({
     )
 
     assert out == {"drafts": ["item-1"], "selections": 0}
+
+
+# --- the request carries references, never evidence --------------------------
+def test_the_plan_request_submits_handles_and_nothing_else():
+    """A candidate the browser describes is a candidate the browser invented."""
+
+    out = _run(
+        ("setupPlanCandidateHandles",),
+        """
+function observationKey(device) { return "card:" + device.observation_id; }
+function availableConfigDevices() {
+  return [{
+    observation_id: "obs:v1:one",
+    serial_number: "SERIAL-1",
+    ip: "10.0.0.11",
+    verified: true,
+    usable_for_config: true,
+    physical_device_id: "opaque:v1:claimed",
+    identity_status: "confirmed",
+  }];
+}
+function availableMqttDeviceProposals() {
+  return [{ id: "cloud-1", serial_number: "SERIAL-1", output_control_supported: true }];
+}
+console.log(JSON.stringify(setupPlanCandidateHandles()));
+""",
+    )
+
+    assert out == {
+        "observations": [
+            {"observation_id": "obs:v1:one", "observation_ref": "card:obs:v1:one"}
+        ],
+        "proposals": [{"id": "cloud-1"}],
+    }
+
+
+def test_a_plan_from_another_generation_never_mutates_the_draft():
+    """Same plan id, different world: the answer is not about this state."""
+
+    out = _run(
+        _INDEX_HELPERS + ("applySetupPlanOperations",),
+        """
+let setupPlanIndex = emptySetupPlanIndex();
+let setupPlan = { plan_id: "plan:v1:current", generation: "plan:v1:genB" };
+let configDraftItems = [{ role: "inverter", draft_item_id: "item-1" }];
+const zendureMqttPreviewProposals = new Map();
+const latestMqttProposals = [];
+const configAvailableIndex = new Map();
+function serializeMqttProposalSelection(p) { return { id: p.id }; }
+function saveMqttPreviewProposals() {}
+function renderMqttProposals() {}
+function saveConfigDraft() {}
+function observationKey(d) { return d.observation_id; }
+function draftHasSource() { return false; }
+function draftItemFromDevice() { return {}; }
+function rememberedConfigName() { return ""; }
+
+const changed = applySetupPlanOperations({
+  plan_id: "plan:v1:current",
+  generation: "plan:v1:genA",
+  operations: { drop_draft_items: ["item-1"] },
+});
+console.log(JSON.stringify({
+  changed,
+  drafts: configDraftItems.map((item) => item.draft_item_id),
+}));
+""",
+    )
+
+    assert out == {"changed": False, "drafts": ["item-1"]}
+
+
+def test_proposed_operations_are_never_applied():
+    """A switch that needs an answer is described, not performed."""
+
+    out = _run(
+        _INDEX_HELPERS + ("applySetupPlanOperations",),
+        """
+let setupPlanIndex = emptySetupPlanIndex();
+let setupPlan = { plan_id: "plan:v1:current", generation: "gen" };
+let configDraftItems = [{ role: "inverter", draft_item_id: "item-1" }];
+const zendureMqttPreviewProposals = new Map([["sel-1", {}]]);
+const latestMqttProposals = [];
+const configAvailableIndex = new Map();
+function serializeMqttProposalSelection(p) { return { id: p.id }; }
+function saveMqttPreviewProposals() {}
+function renderMqttProposals() {}
+function saveConfigDraft() {}
+function observationKey(d) { return d.observation_id; }
+function draftHasSource() { return false; }
+function draftItemFromDevice() { return {}; }
+function rememberedConfigName() { return ""; }
+
+const changed = applySetupPlanOperations({
+  plan_id: "plan:v1:current",
+  generation: "gen",
+  confirmation_required: true,
+  operations: {},
+  proposed_operations: {
+    drop_draft_items: ["item-1"],
+    drop_mqtt_selections: ["sel-1"],
+  },
+});
+console.log(JSON.stringify({
+  changed,
+  drafts: configDraftItems.map((item) => item.draft_item_id),
+  selections: [...zendureMqttPreviewProposals.keys()],
+}));
+""",
+    )
+
+    assert out == {"changed": False, "drafts": ["item-1"], "selections": ["sel-1"]}
+
+
+def test_answering_a_switch_only_records_the_token():
+    """The answer travels to the backend; it never mutates state on its way."""
+
+    out = _run(
+        ("answerSetupSwitch",),
+        """
+const setupConfirmedSwitches = new Set();
+const setupDeclinedSwitches = new Set(["plan:v1:tokenB"]);
+const replans = [];
+function refreshSetupPlan() { replans.push(1); return null; }
+let configDraftItems = [{ role: "inverter", draft_item_id: "item-1" }];
+
+answerSetupSwitch("plan:v1:tokenA", true);
+answerSetupSwitch("plan:v1:tokenB", true);
+answerSetupSwitch("", true);
+console.log(JSON.stringify({
+  confirmed: [...setupConfirmedSwitches].sort(),
+  declined: [...setupDeclinedSwitches],
+  replans: replans.length,
+  drafts: configDraftItems.length,
+}));
+""",
+    )
+
+    assert out == {
+        "confirmed": ["plan:v1:tokenA", "plan:v1:tokenB"],
+        "declined": [],
+        "replans": 2,
+        "drafts": 1,
+    }
+
+
+def test_switch_answers_are_dropped_when_the_candidate_set_moves_on():
+    out = _run(
+        ("forgetSupersededSwitchAnswers",),
+        """
+const setupConfirmedSwitches = new Set(["plan:v1:tokenA"]);
+const setupDeclinedSwitches = new Set(["plan:v1:tokenB"]);
+let setupSwitchAnswerGeneration = "gen-1";
+
+forgetSupersededSwitchAnswers({ generation: "gen-1" });
+const kept = [...setupConfirmedSwitches].length + [...setupDeclinedSwitches].length;
+forgetSupersededSwitchAnswers({ generation: "gen-2" });
+console.log(JSON.stringify({
+  kept,
+  afterChange: [...setupConfirmedSwitches].length + [...setupDeclinedSwitches].length,
+}));
+""",
+    )
+
+    assert out == {"kept": 2, "afterChange": 0}
+
+
+def test_a_pending_switch_is_rendered_with_both_connections_and_its_cost():
+    out = _run(
+        (
+            "connectionLabelFor",
+            "setupSwitchConfirmationCard",
+            "renderSetupSwitchConfirmations",
+        ),
+        """
+const CONTROL_CONTINUITY_TEXT = {
+  lost: "output control would be lost on this connection",
+  unknown: "output control on this connection is not proven",
+};
+function node(tag) {
+  return {
+    tag, className: "", textContent: "", dataset: {}, children: [], hidden: false,
+    appendChild(child) { this.children.push(child); return child; },
+    addEventListener() {},
+    set type(value) { this._type = value; },
+  };
+}
+const document = { createElement: node };
+const host = node("div");
+const configEls = { switchConfirmations: host };
+const setupConfirmedSwitches = new Set();
+let setupPlan = {
+  confirmations: [{
+    token: "plan:v1:tokenA",
+    current_source: "local_api",
+    candidate_source: "local_mqtt",
+    control_continuity: "lost",
+  }],
+};
+
+renderSetupSwitchConfirmations();
+const card = host.children[0];
+const texts = card.children.map((child) => child.textContent).filter(Boolean);
+const buttons = card.children[card.children.length - 1].children.map(
+  (child) => child.textContent,
+);
+console.log(JSON.stringify({ hidden: host.hidden, texts, buttons }));
+""",
+    )
+
+    assert out["hidden"] is False
+    assert out["texts"] == [
+        "Change this device from API to MQTT?",
+        "output control would be lost on this connection",
+    ]
+    assert out["buttons"] == ["Use MQTT", "Keep API"]
+
+
+def test_an_answered_switch_stops_being_asked():
+    out = _run(
+        (
+            "connectionLabelFor",
+            "setupSwitchConfirmationCard",
+            "renderSetupSwitchConfirmations",
+        ),
+        """
+const CONTROL_CONTINUITY_TEXT = {};
+function node(tag) {
+  return {
+    tag, className: "", textContent: "", dataset: {}, children: [], hidden: false,
+    appendChild(child) { this.children.push(child); return child; },
+    addEventListener() {},
+    set type(value) { this._type = value; },
+  };
+}
+const document = { createElement: node };
+const host = node("div");
+const configEls = { switchConfirmations: host };
+const setupConfirmedSwitches = new Set(["plan:v1:tokenA"]);
+let setupPlan = {
+  confirmations: [{
+    token: "plan:v1:tokenA",
+    current_source: "local_api",
+    candidate_source: "local_mqtt",
+    control_continuity: "lost",
+  }],
+};
+
+renderSetupSwitchConfirmations();
+console.log(JSON.stringify({ hidden: host.hidden, cards: host.children.length }));
+""",
+    )
+
+    assert out == {"hidden": True, "cards": 0}

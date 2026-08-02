@@ -51,6 +51,14 @@ async function post(
   return { status: res.status(), body: await res.json().catch(() => ({})) };
 }
 
+/** The device plan Config Preview will demand, as the browser obtains one. */
+async function currentDevicePlanId(session: Session): Promise<string> {
+  const plan = await post(session, "/api/setup/device-plan", { state: {} });
+  expect(plan.status, JSON.stringify(plan.body)).toBe(200);
+  expect(plan.body.plan_id, JSON.stringify(plan.body)).toBeTruthy();
+  return plan.body.plan_id as string;
+}
+
 /** Everything a failure needs to be explained without re-running the test. */
 async function diagnostics(session: Session) {
   const status = await alignment(session);
@@ -107,9 +115,11 @@ test("a real Admin restart preserves one workflow interpretation", async () => {
     { "X-Setup-Intent-ID": startPath.body.setup_intent_id as string },
   );
   expect(confirmed.status, JSON.stringify(confirmed.body)).toBe(200);
+  const devicePlanId = await currentDevicePlanId(first);
   const reviewed = await post(first, "/api/setup/config-preview", {
     ...draft,
     setup_workflow_id: workflowId,
+    device_plan_id: devicePlanId,
   });
   expect(reviewed.status, JSON.stringify(reviewed.body)).toBe(200);
   const previewId = reviewed.body.config_preview_id as string;
@@ -118,6 +128,7 @@ test("a real Admin restart preserves one workflow interpretation", async () => {
     ...draft,
     setup_workflow_id: workflowId,
     config_preview_id: previewId,
+    device_plan_id: devicePlanId,
   });
   expect(written.status, JSON.stringify(written.body)).toBe(200);
 
@@ -165,6 +176,10 @@ test("a real Admin restart preserves one workflow interpretation", async () => {
     overwrite: true,
     setup_workflow_id: before.workflowId,
     config_preview_id: before.previewId,
+    // The restarted process issued no device plan, so the reviewed plan is
+    // presented again: the mismatch must come from the draft, not from a
+    // missing link earlier in the chain.
+    device_plan_id: devicePlanId,
   });
   expect(forged.status, JSON.stringify(forged.body)).toBe(409);
   expect(forged.body.error).toBe("setup_preview_mismatch");
@@ -173,6 +188,10 @@ test("a real Admin restart preserves one workflow interpretation", async () => {
     overwrite: true,
     setup_workflow_id: before.workflowId,
     config_preview_id: before.previewId,
+    // The reviewed device plan is presented again after the restart: its
+    // authority lives in the durable preview record, not in the process that
+    // issued it.
+    device_plan_id: devicePlanId,
   });
   expect(rewritten.status, JSON.stringify(rewritten.body)).toBe(200);
 

@@ -89,8 +89,15 @@ export async function storedWorkflow(page: Page) {
   return raw ? JSON.parse(raw) : null;
 }
 
+/** The device plan the server currently considers authoritative. */
+export async function currentDevicePlanId(page: Page): Promise<string> {
+  const plan = await post(page, "/api/setup/device-plan", { state: {} });
+  expect(plan.status, JSON.stringify(plan.body)).toBe(200);
+  return plan.body.plan_id as string;
+}
+
 /**
- * Return `body` carrying real workflow + exact-preview authority.
+ * Return `body` carrying real workflow, device-plan and exact-preview authority.
  *
  * The draft must produce a ready preview — a draft that cannot be previewed can
  * never be authorized, exactly like in the browser.
@@ -104,6 +111,9 @@ export async function authorizeSetupMutation(
   const authorized: Record<string, unknown> = { ...body };
   delete authorized.config_revision;
   authorized.setup_workflow_id = workflow;
+  // Config Preview issues mutation authority only for a device plan the server
+  // issued and still considers current, so plan first — as the browser does.
+  authorized.device_plan_id ??= await currentDevicePlanId(page);
   const preview = await post(page, "/api/setup/config-preview", authorized);
   expect(preview.status, JSON.stringify(preview.body)).toBe(200);
   expect(

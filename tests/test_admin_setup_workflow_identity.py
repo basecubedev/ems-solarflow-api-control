@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from admin.install_context import detect_install_context
+from tests.helpers.setup_config import current_device_plan_id
 from tests.test_admin_server import (
     _control_export_manager,
     _request,
@@ -47,7 +48,9 @@ def _write_live(payload):
 
 
 def _mutate(base, path, body):
-    return _request(f"{base}{path}", method="POST", body=body)
+    request = dict(body)
+    request.setdefault("device_plan_id", current_device_plan_id(base, _request))
+    return _request(f"{base}{path}", method="POST", body=request)
 
 
 # --- missing / wrong workflow identity --------------------------------------
@@ -191,7 +194,13 @@ def test_an_admin_restart_preserves_workflow_and_preview_authority(tmp_path):
     srv, base = _serve(release_manager=_control_export_manager(tmp_path))
     try:
         workflow_id = _start_workflow(base)
-        preview_id = _preview(base, workflow_id, _draft_a())["config_preview_id"]
+        # The plan a browser would hold when it reviewed this preview. The
+        # process that issued it is about to disappear; the authority it granted
+        # must not, so the same id is presented after the restart.
+        device_plan_id = current_device_plan_id(base, _request)
+        preview_id = _preview(base, workflow_id, _draft_a(), device_plan_id)[
+            "config_preview_id"
+        ]
     finally:
         srv.shutdown()
         srv.server_close()
@@ -212,6 +221,7 @@ def test_an_admin_restart_preserves_workflow_and_preview_authority(tmp_path):
                 **_draft_a(),
                 "setup_workflow_id": workflow_id,
                 "config_preview_id": preview_id,
+                "device_plan_id": device_plan_id,
             },
         )
         assert status == 200, payload

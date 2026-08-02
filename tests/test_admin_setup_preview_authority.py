@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from admin.install_context import detect_install_context
+from tests.helpers.setup_config import current_device_plan_id
 from tests.test_admin_server import (
     _control_export_manager,
     _own_active_setup_transition,
@@ -127,11 +128,21 @@ def _start_workflow(base, srv=None):
     return workflow_id
 
 
-def _preview(base, workflow_id, body):
+def _device_plan_id(base):
+    """The current device plan, exactly as the browser obtains one."""
+
+    return current_device_plan_id(base, _request)
+
+
+def _preview(base, workflow_id, body, device_plan_id=None):
     status, _, payload = _request(
         f"{base}/api/setup/config-preview",
         method="POST",
-        body={**body, "setup_workflow_id": workflow_id},
+        body={
+            **body,
+            "setup_workflow_id": workflow_id,
+            "device_plan_id": device_plan_id or _device_plan_id(base),
+        },
     )
     assert status == 200, payload
     preview_id = payload.get("config_preview_id")
@@ -146,6 +157,7 @@ def _mutate(base, path, body, workflow_id, preview_id):
         request["setup_workflow_id"] = workflow_id
     if preview_id is not None:
         request["config_preview_id"] = preview_id
+    request.setdefault("device_plan_id", _device_plan_id(base))
     return _request(f"{base}{path}", method="POST", body=request)
 
 

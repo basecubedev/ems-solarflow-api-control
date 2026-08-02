@@ -224,8 +224,8 @@ def test_device_plan_rejects_a_non_object_state(server):
     assert payload["error"]
 
 
-def test_a_browser_supplied_candidate_is_planned_but_never_trusted_for_identity(server):
-    """The echo may add a card; it may not assert what that card is."""
+def test_a_browser_supplied_candidate_body_is_not_a_candidate(server):
+    """A handle names a server-owned record; a body describes nothing."""
 
     plan = _plan(
         server,
@@ -247,23 +247,20 @@ def test_a_browser_supplied_candidate_is_planned_but_never_trusted_for_identity(
         },
     )
 
-    echoed = next(
-        entry for entry in plan["observations"] if entry["observation_id"] == "obs:v1:forged"
+    assert [entry["observation_id"] for entry in plan["observations"]] != ["obs:v1:forged"]
+    assert all(
+        entry["observation_id"] != "obs:v1:forged" for entry in plan["observations"]
     )
-    # The observation id is kept as a label so the plan can name the card the
-    # browser renders. Every claim that decides something is re-derived: this
-    # payload proves only an endpoint, so it has no physical identity at all and
-    # the asserted "confirmed" status does not survive.
-    assert echoed["physical_device_id"] is None
-    assert echoed["identity_status"] == "unresolved"
-    assert echoed["connection_id"].startswith("conn:v1:")
+    assert plan["unresolved_references"] == [
+        {"kind": "observation", "handle": "obs:v1:forged"}
+    ]
+    # The one trusted device is still planned normally.
+    assert len(plan["operations"]["adopt_observations"]) == 1
 
 
-def test_switching_away_from_a_stored_mqtt_selection_resolves_its_connection(server):
-    """A stored selection is an echo; the planner reads the proposal it names."""
+def test_a_stored_mqtt_selection_for_no_current_proposal_is_unresolved(server):
+    """A selection is a hint: without a current proposal it resolves to nothing."""
 
-    discovered = _plan(server, {})
-    observation_id = discovered["observations"][0]["observation_id"]
     plan = _plan(
         server,
         {
@@ -276,27 +273,10 @@ def test_switching_away_from_a_stored_mqtt_selection_resolves_its_connection(ser
                 }
             ]
         },
-        candidates={
-            "proposals": [
-                {
-                    "id": "cloud-1",
-                    "connection_source": "zendure_cloud_mqtt",
-                    "broker_ref": "zendure_cloud",
-                    "serial_number": SERIAL,
-                    "config_fragment": {
-                        "mqtt": {
-                            "source": "zendure_cloud_mqtt",
-                            "broker_ref": "zendure_cloud",
-                            "device_id": "DEV1",
-                        }
-                    },
-                }
-            ]
-        },
-        switch={"current_ref": "cloud-1", "candidate_id": observation_id},
     )
 
-    verdict = plan["switch"]["plan"]
-    # Same serial on both sides: the switch is offered, not blocked as unresolved.
-    assert verdict["same_physical_device"] is True
-    assert verdict["action"] in ("use_candidate", "replace_with_confirmation")
+    entry = plan["mqtt_selections"][0]
+    assert entry["unresolved"] is True
+    assert entry["physical_device_id"] is None
+    assert entry["legacy_match"] == "unmatched"
+    assert plan["operations"]["drop_mqtt_selections"] == []

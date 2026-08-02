@@ -178,24 +178,30 @@ def setup_mutation_fingerprint(
     zendure_mqtt_proposals,
     zendure_mqtt_broker,
     zendure_mqtt_manual_devices,
+    device_plan_id=None,
 ):
     """Deterministic digest of every input that can change the generated config
     bytes or the credential-staging decisions.
 
     Called with the *resolved* trusted proposal set (never raw browser proposal
     content), so a discovery-state change between preview and mutation changes
-    the fingerprint and forces a re-review. Transport-only fields (``overwrite``,
-    the workflow/preview IDs, the legacy ``config_revision``) stay out.
+    the fingerprint and forces a re-review. ``device_plan_id`` is the identity
+    of the device plan the draft was built from: it is not a config input, but
+    it *is* mutation authority, so a mutation presented under a different plan
+    can never match a preview issued under this one. Transport-only fields
+    (``overwrite``, the workflow/preview IDs, the legacy ``config_revision``)
+    stay out.
     """
 
     body = {
-        "fingerprint_version": 1,
+        "fingerprint_version": 2,
         "draft": _canonical(draft),
         "supported_grid_meter_count": supported_grid_meter_count,
         "features": _canonical(features),
         "zendure_mqtt_proposals": _canonical(zendure_mqtt_proposals),
         "zendure_mqtt_broker": _canonical(zendure_mqtt_broker),
         "zendure_mqtt_manual_devices": _canonical(zendure_mqtt_manual_devices),
+        "device_plan_id": device_plan_id,
     }
     encoded = json.dumps(
         body, ensure_ascii=True, separators=(",", ":"), sort_keys=True
@@ -228,9 +234,15 @@ def _valid_preview(preview):
         "draft_fingerprint",
         "base_config_revision",
         "prepared_config_sha256",
+        "device_plan_id",
+        "device_plan_generation",
         "issued_at",
     }:
         return False
+    for key in ("device_plan_id", "device_plan_generation"):
+        value = preview[key]
+        if value is not None and not (isinstance(value, str) and value):
+            return False
     if not (
         isinstance(preview["preview_id"], str)
         and _ID_RE.match(preview["preview_id"])
@@ -570,6 +582,8 @@ class GuidedSetupWorkflowStore:
         draft_fingerprint,
         base_config_revision,
         prepared_config_sha256,
+        device_plan_id=None,
+        device_plan_generation=None,
     ):
         if not (
             isinstance(draft_fingerprint, str)
@@ -590,6 +604,13 @@ class GuidedSetupWorkflowStore:
                 "draft_fingerprint": draft_fingerprint,
                 "base_config_revision": dict(base_config_revision),
                 "prepared_config_sha256": prepared_config_sha256,
+                # The device plan this preview was reviewed under, and the
+                # candidate generation it was planned in. Durable on purpose:
+                # the issuing process may be gone by the time the mutation
+                # arrives, but its authority must survive the restart exactly
+                # as the preview ID does.
+                "device_plan_id": device_plan_id,
+                "device_plan_generation": device_plan_generation,
                 "issued_at": utc_now_iso(),
             }
             return self._persist(record)

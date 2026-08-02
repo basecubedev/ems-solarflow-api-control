@@ -119,6 +119,13 @@ the Admin Console (see **Start** above), open `http://127.0.0.1:8090`, and pick
    MQTT instead — the same physical device is never listed twice. Discovery
    priority chooses the connection only; it never enables output control by
    itself (see step 3 and **04**).
+
+   Priority moves a device on its own only when the new connection keeps output
+   control. If the preferred connection cannot write, or its write path is not
+   proven, the device is *not* switched: **03 Config** shows the change as a
+   question naming both connections and what happens to output control, with
+   **Use …** and **Keep …**. Nothing changes until you answer, and answering
+   again is required if discovery finds different devices in the meantime.
 3. **03 Config** — review and complete the generated config. The selected
    connection shows as a short pill on each device card: **API**, **MQTT** or
    **Zendure MQTT**. Every newly added inverter receives a short sequential EMS
@@ -132,10 +139,12 @@ the Admin Console (see **Start** above), open `http://127.0.0.1:8090`, and pick
    inverter**; a second connection for an inverter you already configured shows
    *Already configured as INV_1 via API* and offers **Use connection**, which
    switches that one logical inverter to the other connection immediately —
-   no confirmation dialog, no duplicate device, and the EMS name, enabled state
-   and all common values are preserved. The connection you left stays listed,
-   so you can switch back without removing the inverter. A manual choice is
-   kept even if you later change discovery priority. A
+   clicking it *is* the confirmation, so there is no second dialog, no duplicate
+   device, and the EMS name, enabled state and all common values are preserved.
+   (A switch the backend refuses outright — two different serials on one route,
+   or an unresolved identity — is reported instead of performed.) The connection
+   you left stays listed, so you can switch back without removing the inverter.
+   A manual choice is kept even if you later change discovery priority. A
    serial-less Cloud MQTT inverter you select before its serial is known is
    recognized as the **same** inverter once discovery later reports the same
    Cloud route carrying a physical serial: it keeps your custom name and any

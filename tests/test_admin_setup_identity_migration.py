@@ -519,14 +519,17 @@ def test_a_bare_serial_dismissal_without_a_trusted_match_hides_nothing():
     assert len(plan["operations"]["adopt_observations"]) == 1
 
 
-def test_a_bare_serial_dismissal_matching_two_trusted_candidates_stays_unresolved():
+def test_a_bare_serial_dismissal_covers_one_device_on_two_routes():
+    """A dismissal names hardware, so two routes to it are still one dismissal."""
+
     plan = _plan(
         {"physical_dismissals": [SERIAL_A]},
         observations=[_observation(), _observation(ip="10.0.0.12")],
     )
 
-    assert plan["dismissals"]["physical"] == []
-    assert {"value": SERIAL_A, "scope": "physical"} in plan["dismissals"]["unresolved"]
+    assert len(plan["dismissals"]["physical"]) == 1
+    assert plan["dismissals"]["unresolved"] == []
+    assert plan["operations"]["adopt_observations"] == []
 
 
 def test_an_issued_physical_dismissal_survives_without_a_current_candidate():

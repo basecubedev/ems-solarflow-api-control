@@ -74,6 +74,7 @@ def _node(script):
 
 
 _STATE_HELPERS = (
+    "emptySetupPlanOperations",
     "emptySetupPlan",
     "emptySetupPlanIndex",
     "indexSetupPlan",

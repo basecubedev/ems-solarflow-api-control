@@ -45,6 +45,7 @@ from tests.helpers.fake_mqtt import FakeMqttNetwork
 from tests.helpers.system_alignment import SetupReadySystemAlignment
 from tests.helpers.setup_config import (
     authorize_setup_mutation,
+    current_device_plan_id,
     start_setup_workflow,
 )
 from tests.test_admin_server import (
@@ -416,6 +417,9 @@ class ReleaseContractHarness:
             body={
                 **self._body(devices, selections, supported_grid_meter_count),
                 "setup_workflow_id": self.setup_workflow_id,
+                "device_plan_id": current_device_plan_id(
+                    self._base, self._authority_request
+                ),
             },
         )
 

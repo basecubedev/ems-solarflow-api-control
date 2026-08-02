@@ -63,10 +63,17 @@ from admin.discovery_connections import (
 from admin.credential_store import CredentialStore, CredentialStoreError
 from admin.discovery_run import run_discovery
 from admin.observation_identity import stamp_observations
+from admin.connection_capability import (
+    connection_output_control,
+    payload_output_control,
+)
+from admin.device_plan_registry import DevicePlanRegistry
 from admin.setup_planner import (
+    OBSERVATION_REF_FIELD,
     build_setup_plan,
     plan_setup_connection_switch,
     resolve_current_connection,
+    setup_candidate_generation,
 )
 from admin.ems_cli import EmsCliDiagnostics
 from admin.embedded_resources import (
@@ -239,6 +246,83 @@ MAX_CONFIG_PREVIEW_BODY_BYTES = 64 * 1024
 SETUP_CONFIG_STALE = "stale_setup_config"
 SETUP_ABANDON_REQUIRED = "setup_abandon_required"
 TRANSITION_CANCEL_UNSUPPORTED = "transition_cancel_unsupported"
+# The Setup device plan is the first link of the mutation authority chain
+# (device plan → config preview → apply), so it has its own conflict codes.
+DEVICE_PLAN_REQUIRED = "device_plan_required"
+DEVICE_PLAN_STALE = "stale_device_plan"
+DEVICE_PLAN_CONFIRMATION_REQUIRED = "device_plan_confirmation_required"
+
+
+def _setup_plan_references(body, kind):
+    """The candidate handles a device-plan request submitted, normalized.
+
+    A reference is a lookup key and may be sent as the bare id or as an object
+    carrying the caller's own card handle beside it. Anything else in the object
+    is ignored: the record behind the handle is read server-side.
+    """
+
+    candidates = body.get("candidates")
+    if not isinstance(candidates, dict):
+        return []
+    submitted = candidates.get(kind)
+    if not isinstance(submitted, list):
+        return []
+    field = "observation_id" if kind == "observations" else "id"
+    references = []
+    for entry in submitted:
+        if isinstance(entry, str):
+            references.append({field: entry})
+        elif isinstance(entry, dict):
+            references.append(entry)
+    return references
+
+
+def _setup_plan_tokens(value):
+    if not isinstance(value, list):
+        return ()
+    return tuple(entry for entry in value if isinstance(entry, str) and entry.strip())
+
+
+def _device_plan_required_rejection():
+    return (
+        {
+            "ok": False,
+            "error": DEVICE_PLAN_REQUIRED,
+            "message": (
+                "This setup step needs a current device plan. Reload the device "
+                "list and try again."
+            ),
+        },
+        409,
+    )
+
+
+def _device_plan_stale_rejection():
+    return (
+        {
+            "ok": False,
+            "error": DEVICE_PLAN_STALE,
+            "message": (
+                "The discovered devices changed after this setup was planned. "
+                "Review the device list again."
+            ),
+        },
+        409,
+    )
+
+
+def _device_plan_confirmation_rejection():
+    return (
+        {
+            "ok": False,
+            "error": DEVICE_PLAN_CONFIRMATION_REQUIRED,
+            "message": (
+                "A connection change still needs your confirmation before this "
+                "configuration can be prepared."
+            ),
+        },
+        409,
+    )
 
 
 def _stale_setup_rejection(expected_revision, expect_absent):
@@ -585,6 +669,10 @@ class AdminRuntime:
     setup_lifecycle: SetupLifecycleCoordinator = field(
         default_factory=SetupLifecycleCoordinator
     )
+    # The device plans this process issued, shared by both listeners. Transient
+    # like the lifecycle coordinator above: a lost entry makes Preview refuse
+    # and the browser re-plan, which is the safe direction.
+    device_plans: DevicePlanRegistry = field(default_factory=DevicePlanRegistry)
     # Whether the process started an optional HTTPS listener at all (global; the
     # per-request transport is reported separately via AdminServer.https_active).
     https_configured: bool = False
@@ -896,6 +984,7 @@ class AdminServer(ThreadingHTTPServer):
         self.system_alignment = runtime.system_alignment
         self.operation_coordinator = runtime.operation_coordinator
         self.setup_lifecycle = runtime.setup_lifecycle
+        self.device_plans = runtime.device_plans
         self.admin_update = runtime.admin_update
         self.backup_service = runtime.backup_service
         self.backup_jobs = runtime.backup_jobs
@@ -1144,10 +1233,30 @@ class AdminHandler(BaseHTTPRequestHandler):
             body = self._read_json_body()
             if body is None:
                 return
-            if not isinstance(body, dict) or set(body) != {"scenario"}:
+            described = ("local_api_devices", "local_mqtt_brokers", "cloud_devices")
+            if not isinstance(body, dict) or not set(body) <= {
+                "scenario",
+                *described,
+            }:
                 self._send_json({"error": "scenario is required"}, status=400)
                 return
-            result = seed(body.get("scenario"))
+            for field in described:
+                value = body.get(field)
+                if value is not None and not (
+                    isinstance(value, list)
+                    and all(isinstance(entry, dict) for entry in value)
+                ):
+                    self._send_json(
+                        {"error": f"{field} must be a JSON array of objects"},
+                        status=400,
+                    )
+                    return
+            result = seed(
+                body.get("scenario"),
+                local_api_devices=body.get("local_api_devices"),
+                local_mqtt_brokers=body.get("local_mqtt_brokers"),
+                cloud_devices=body.get("cloud_devices"),
+            )
             if not result.get("ok"):
                 self._send_json(result, status=400)
                 return
@@ -4374,9 +4483,11 @@ class AdminHandler(BaseHTTPRequestHandler):
     # --- Guided Setup device planning -----------------------------------
     #
     # The one authority boundary for Setup's device identity and transport
-    # selection. The browser posts what it persisted; every candidate, every
-    # issued id and every keep/replace/add/block verdict is read and decided
-    # here, so no physical equivalence is ever concluded in the browser.
+    # selection. The browser submits *handles* into the server's own current
+    # discovery state plus what it persisted and what the operator chose; every
+    # candidate, every issued id and every keep/replace/add/block verdict is read
+    # and decided here from server-owned records, so neither physical
+    # equivalence nor a replacement is ever concluded in the browser.
     def _handle_setup_device_plan(self):
         body = self._read_json_body(MAX_CONFIG_PREVIEW_BODY_BYTES)
         if body is None:
@@ -4388,25 +4499,25 @@ class AdminHandler(BaseHTTPRequestHandler):
         if not isinstance(state, dict):
             self._send_json({"error": "state must be a JSON object"}, status=400)
             return
-        # Source priority and per-source enablement are operator preference, not
-        # authority: the browser is showing the same values it fetched, and an
-        # order can neither identify a device nor authorize a replacement. The
-        # echo is accepted so the plan matches the screen; every identity,
-        # conflict and replacement verdict is still decided here.
-        preparation = self._setup_plan_preparation(body)
-        sources = preparation.get("sources") or {}
-        observations = self._setup_plan_observations(body)
-        proposals = self._setup_plan_proposals(body)
+        proposals = self._trusted_mqtt_proposals()
+        observations, unresolved = self._setup_plan_observations(body, proposals)
+        priority, enabled = self._setup_source_preference()
         response = build_setup_plan(
             state,
             observations=observations,
             proposals=proposals,
-            priority=preparation.get("discovery_priority") or [],
-            enabled_sources={
-                source: (sources.get(source) or {}).get("enabled", True)
-                for source in DISCOVERY_SOURCES
-            },
+            priority=priority,
+            enabled_sources=enabled,
             identity_token_key=self.server.identity_token_key,
+            control_supported=connection_output_control,
+            confirmed_switches=_setup_plan_tokens(body.get("confirmed_switches")),
+            declined_switches=_setup_plan_tokens(body.get("declined_switches")),
+            unresolved_references=unresolved,
+        )
+        self.server.device_plans.record(
+            response["plan_id"],
+            generation=response["generation"],
+            confirmation_required=response["confirmation_required"],
         )
         switch = body.get("switch")
         if isinstance(switch, dict):
@@ -4415,62 +4526,102 @@ class AdminHandler(BaseHTTPRequestHandler):
             )
         self._send_json(response)
 
-    def _setup_plan_preparation(self, body):
-        stored = self.server.discovery_preparation.load()
-        echoed = body.get("preparation")
-        if not isinstance(echoed, dict):
-            return stored
-        priority = [
-            source
-            for source in (echoed.get("discovery_priority") or [])
-            if source in DISCOVERY_SOURCES
-        ]
-        sources = echoed.get("sources")
-        return {
-            "discovery_priority": priority or stored.get("discovery_priority") or [],
-            "sources": sources if isinstance(sources, dict) else stored.get("sources"),
-        }
+    def _setup_source_preference(self):
+        """Stored source priority and per-source enablement.
 
-    def _setup_plan_candidates(self, body, key):
-        """The candidate set to plan over: server state first, browser echo after.
-
-        The server's own discovery view is authoritative and, in a normal
-        install, complete — the browser's echo of what it was served then adds
-        nothing. It is accepted because the browser may legitimately hold a view
-        the server no longer serves directly, and because refusing it would make
-        the plan silently ignore cards the operator can see. It grants no
-        authority: identity, grouping and every action are still resolved here
-        from the payload, and a device only reaches the installed config through
-        the config apply path, which validates independently.
+        Read from the server's own preparation store rather than echoed back by
+        the caller. The browser persists a reorder before it re-plans, so the
+        stored value is the current one — and a plan computed from server-held
+        preference is one the Preview and Apply routes can recompute later to
+        prove it still describes the same candidate set.
         """
 
-        candidates = body.get("candidates")
-        if not isinstance(candidates, dict):
-            return []
-        echoed = candidates.get(key)
-        return [entry for entry in echoed if isinstance(entry, dict)] if isinstance(echoed, list) else []
+        preparation = self.server.discovery_preparation.load()
+        sources = preparation.get("sources") or {}
+        priority = [
+            source
+            for source in (preparation.get("discovery_priority") or [])
+            if source in DISCOVERY_SOURCES
+        ]
+        return priority, {
+            source: (sources.get(source) or {}).get("enabled", True)
+            for source in DISCOVERY_SOURCES
+        }
 
-    def _setup_plan_observations(self, body):
+    def _current_device_plan_generation(self):
+        """The candidate generation a device plan must still match."""
+
+        priority, enabled = self._setup_source_preference()
+        observations = self._stamped_observations(self.server.mdns_provider.devices())
+        return setup_candidate_generation(
+            observations=[
+                str(device.get("observation_id") or "") for device in observations
+            ],
+            proposals=[
+                str(proposal.get("id") or "")
+                for proposal in self._trusted_mqtt_proposals()
+            ],
+            priority=priority,
+            enabled_sources=enabled,
+            identity_token_key=self.server.identity_token_key,
+        )
+
+    def _verify_device_plan(self, device_plan_id):
+        """``None`` when this plan may be reviewed into config, else a rejection.
+
+        Three separate facts, all fail-closed: this process issued the plan, the
+        candidate set it was planned over is still the current one, and it has
+        no switch left waiting for an operator answer. The registry is
+        deliberately transient — a restart makes the browser re-plan, which is
+        the safe direction — so the accepted binding is copied onto the durable
+        preview record and re-checked there at mutation time.
+        """
+
+        plan_id = device_plan_id.strip() if isinstance(device_plan_id, str) else ""
+        if not plan_id:
+            return _device_plan_required_rejection()
+        record = self.server.device_plans.get(plan_id)
+        if record is None or record["generation"] != self._current_device_plan_generation():
+            return _device_plan_stale_rejection()
+        if record["confirmation_required"]:
+            return _device_plan_confirmation_rejection()
+        return None
+
+    def _setup_plan_observations(self, body, proposals):
+        """Trusted observations, carrying the caller's handle for each card.
+
+        The candidate set is the server's own discovery view and nothing else.
+        A reference the browser submits may attach its local card handle to a
+        record that is still offered — it can neither add a candidate nor
+        describe one, because a handle is a lookup key and the evidence behind
+        it is read here. A reference that no longer resolves is reported back so
+        the browser can drop the card, and contributes no operation.
+        """
+
         known = self._stamped_observations(self.server.mdns_provider.devices())
-        seen = {str(device.get("observation_id") or "") for device in known}
-        merged = list(known)
-        for device in self._setup_plan_candidates(body, "observations"):
+        by_id = {}
+        for device in known:
             identifier = str(device.get("observation_id") or "")
-            if identifier and identifier in seen:
+            if identifier:
+                by_id[identifier] = device
+        offered_proposals = {
+            str(proposal.get("id") or "") for proposal in proposals or []
+        }
+        unresolved = []
+        for reference in _setup_plan_references(body, "observations"):
+            handle = str(reference.get("observation_id") or "").strip()
+            device = by_id.get(handle)
+            if device is None:
+                unresolved.append({"kind": "observation", "handle": handle})
                 continue
-            merged.append(device)
-        return merged
-
-    def _setup_plan_proposals(self, body):
-        trusted = self._trusted_mqtt_proposals()
-        seen = {str(proposal.get("id") or "") for proposal in trusted}
-        merged = list(trusted)
-        for proposal in self._setup_plan_candidates(body, "proposals"):
-            identifier = str(proposal.get("id") or "")
-            if identifier and identifier in seen:
-                continue
-            merged.append(proposal)
-        return merged
+            ref = str(reference.get(OBSERVATION_REF_FIELD) or "").strip()
+            if ref:
+                device[OBSERVATION_REF_FIELD] = ref
+        for reference in _setup_plan_references(body, "proposals"):
+            handle = str(reference.get("id") or "").strip()
+            if handle not in offered_proposals:
+                unresolved.append({"kind": "proposal", "handle": handle})
+        return known, unresolved
 
     def _setup_switch_plan(self, switch, *, state, observations, proposals):
         """The pairwise verdict for one operator-chosen connection.
@@ -4506,9 +4657,16 @@ class AdminHandler(BaseHTTPRequestHandler):
                 "candidate_id": candidate_id,
             }
         current_ref = str(switch.get("current_ref") or "").strip()
-        # A stored MQTT selection carries no evidence of its own; the planner
-        # resolves it against the trusted proposal it names.
-        current = resolve_current_connection(state, current_ref, proposals)
+        # Neither side of the pair is described by the caller: a stored MQTT
+        # selection resolves to the proposal it names, and a draft item to the
+        # trusted record it uniquely matches.
+        current = resolve_current_connection(
+            state,
+            current_ref,
+            proposals,
+            observations=observations,
+            identity_token_key=self.server.identity_token_key,
+        )
         # In Setup nothing is installed yet: the operator picking a connection on
         # a draft *is* the affirmative answer, so a switch is confirmed unless the
         # caller says otherwise. The blocking verdicts are unaffected — an
@@ -4517,6 +4675,10 @@ class AdminHandler(BaseHTTPRequestHandler):
             current_device=current,
             candidate=candidate,
             identity_token_key=self.server.identity_token_key,
+            # The same canonical capability verdicts the batch plan uses, so the
+            # control continuity the operator is shown is the real one.
+            current_control_supported=payload_output_control(current),
+            candidate_control_supported=payload_output_control(candidate),
             operator_confirmed=switch.get("confirmed") is not False,
         )
         return {
@@ -4559,11 +4721,20 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         workflows = self.server.setup_workflows
         record = None
+        device_plan_id = body.get("device_plan_id")
         if issue_authority:
             try:
                 record = workflows.require_active(body.get("setup_workflow_id"))
             except GuidedSetupWorkflowError as exc:
                 self._send_workflow_rejection(exc)
+                return
+            # The device plan decided what each device is and how it is reached;
+            # nothing may be prepared for writing unless that decision is still
+            # the current one.
+            rejection = self._verify_device_plan(device_plan_id)
+            if rejection is not None:
+                payload, status = rejection
+                self._send_json(payload, status=status)
                 return
         preview = self.server.config_preview.generate(
             draft, count, features, proposals, broker, manual_devices
@@ -4583,6 +4754,7 @@ class AdminHandler(BaseHTTPRequestHandler):
         response["config_revision"] = self._live_config_revision()
         if issue_authority:
             response["setup_workflow_id"] = record["workflow_id"]
+            response["device_plan_id"] = device_plan_id
             preview_id = self._issue_preview_authority(
                 record,
                 preview,
@@ -4593,6 +4765,7 @@ class AdminHandler(BaseHTTPRequestHandler):
                 proposals,
                 broker,
                 manual_devices,
+                device_plan_id,
             )
             if preview_id is not None:
                 response["config_preview_id"] = preview_id
@@ -4609,6 +4782,7 @@ class AdminHandler(BaseHTTPRequestHandler):
         proposals,
         broker,
         manual_devices,
+        device_plan_id,
     ):
         """Persist exact preview authority for a ready preview; else revoke.
 
@@ -4636,6 +4810,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             zendure_mqtt_proposals=proposals,
             zendure_mqtt_broker=broker,
             zendure_mqtt_manual_devices=manual_devices,
+            device_plan_id=device_plan_id,
         )
         try:
             updated = workflows.record_preview(
@@ -4643,6 +4818,8 @@ class AdminHandler(BaseHTTPRequestHandler):
                 draft_fingerprint=fingerprint,
                 base_config_revision=config_revision,
                 prepared_config_sha256=prepared_sha256,
+                device_plan_id=device_plan_id,
+                device_plan_generation=self._current_device_plan_generation(),
             )
         except GuidedSetupWorkflowError:
             return None
@@ -5092,11 +5269,15 @@ class AdminHandler(BaseHTTPRequestHandler):
         # only: mutation authority is the workflow ID plus the exact preview ID.
         workflow_id = body.get("setup_workflow_id")
         preview_id = body.get("config_preview_id")
+        device_plan_id = body.get("device_plan_id")
         if workflow_id is not None and not isinstance(workflow_id, str):
             self._send_json({"error": "setup_workflow_id must be a string"}, status=400)
             return None
         if preview_id is not None and not isinstance(preview_id, str):
             self._send_json({"error": "config_preview_id must be a string"}, status=400)
+            return None
+        if device_plan_id is not None and not isinstance(device_plan_id, str):
+            self._send_json({"error": "device_plan_id must be a string"}, status=400)
             return None
         return (
             draft,
@@ -5108,6 +5289,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             manual_devices,
             workflow_id,
             preview_id,
+            device_plan_id,
         )
 
     def _handle_config_download(self):
@@ -5116,7 +5298,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         (
             draft, count, _overwrite, features, proposals, broker,
-            manual_devices, _workflow_id, _preview_id,
+            manual_devices, _workflow_id, _preview_id, _device_plan_id,
         ) = request
         try:
             payload, _preview = self.server.config_export.serialize(
@@ -5137,7 +5319,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         (
             draft, count, overwrite, features, proposals, broker,
-            manual_devices, workflow_id, preview_id,
+            manual_devices, workflow_id, preview_id, device_plan_id,
         ) = request
         # Workflow identity precedes the alignment gate: an old tab must learn
         # its workflow is gone, not a misleading resource-verification error.
@@ -5171,6 +5353,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             failure_message="Could not save generated config: {exc}",
             workflow_id=workflow_id,
             preview_id=preview_id,
+            device_plan_id=device_plan_id,
             operation="config_write",
         )
         self._send_json(payload, status=status_code)
@@ -5181,7 +5364,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         (
             draft, count, _overwrite, features, proposals, broker,
-            manual_devices, workflow_id, preview_id,
+            manual_devices, workflow_id, preview_id, device_plan_id,
         ) = request
         try:
             self.server.setup_workflows.require_active(workflow_id)
@@ -5210,6 +5393,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             failure_message="Could not apply the config to the EMS installation: {exc}",
             workflow_id=workflow_id,
             preview_id=preview_id,
+            device_plan_id=device_plan_id,
             operation="config_apply",
             consume_preview=True,
         )
@@ -5383,6 +5567,7 @@ class AdminHandler(BaseHTTPRequestHandler):
         failure_message,
         workflow_id,
         preview_id,
+        device_plan_id,
         operation,
         consume_preview=False,
     ):
@@ -5415,6 +5600,11 @@ class AdminHandler(BaseHTTPRequestHandler):
 
         workflows = self.server.setup_workflows
         changes = []
+        # Checked before the lifecycle claim: a mutation with no planning basis
+        # at all must not take the workflow hostage. Whether it is the *right*
+        # plan is settled inside, against the preview's own durable binding.
+        if not (isinstance(device_plan_id, str) and device_plan_id.strip()):
+            return _device_plan_required_rejection()
         try:
             claim = self.server.setup_lifecycle.claim_mutation(
                 workflow_id=workflow_id, operation=operation
@@ -5431,6 +5621,7 @@ class AdminHandler(BaseHTTPRequestHandler):
                     zendure_mqtt_proposals=proposals,
                     zendure_mqtt_broker=broker,
                     zendure_mqtt_manual_devices=manual_devices,
+                    device_plan_id=device_plan_id,
                 )
                 preview = workflows.verify_preview_authority(
                     record,
@@ -5439,6 +5630,13 @@ class AdminHandler(BaseHTTPRequestHandler):
                 )
             except GuidedSetupWorkflowError as exc:
                 return self._workflow_rejection_payload(exc)
+            # The fingerprint already binds this mutation to the reviewed device
+            # plan. What it cannot say is whether that plan still describes the
+            # current devices, so the generation is compared here and a moved
+            # discovery state revokes the preview.
+            if preview["device_plan_generation"] != self._current_device_plan_generation():
+                workflows.clear_preview(record["workflow_id"])
+                return _device_plan_stale_rejection()
             # Re-read the live config under the transaction and compare it to
             # the baseline the preview was issued against: a Maintenance edit
             # after the review must reject even a matching draft fingerprint.

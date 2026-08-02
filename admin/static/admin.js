@@ -2474,13 +2474,12 @@ const zendureMqttPreviewProposals = loadMqttPreviewProposals();
 function loadMqttPreviewProposals() {
   const map = new Map();
   try {
-    const raw = window.localStorage.getItem(CONFIG_MQTT_PREVIEW_STORAGE_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    if (Array.isArray(parsed)) {
-      for (const entry of parsed) {
-        if (entry && typeof entry === "object" && entry.id != null) {
-          map.set(String(entry.id), entry);
-        }
+    const entries = readSetupStore(
+      window.localStorage.getItem(CONFIG_MQTT_PREVIEW_STORAGE_KEY)
+    );
+    for (const entry of entries) {
+      if (entry && typeof entry === "object" && entry.id != null) {
+        map.set(String(entry.id), entry);
       }
     }
   } catch (err) {
@@ -2493,7 +2492,7 @@ function saveMqttPreviewProposals() {
   try {
     window.localStorage.setItem(
       CONFIG_MQTT_PREVIEW_STORAGE_KEY,
-      JSON.stringify(Array.from(zendureMqttPreviewProposals.values()))
+      setupStoreEnvelope(zendureMqttPreviewProposals.values())
     );
   } catch (err) {
     /* localStorage may be unavailable; selection still lives in memory. */
@@ -3624,8 +3623,34 @@ const CONFIG_DISMISSED_DEVICES_STORAGE_KEY = "ems-admin-config-dismissed-devices
 // The pre-identity store of the same concept: bare serials. Read once, handed
 // to the backend for rehydration, then replaced by the ids it issues.
 const CONFIG_DISMISSED_SERIALS_STORAGE_KEY = "ems-admin-config-dismissed-serials";
-// The identity contract the persisted Setup stores speak.
+// The identity contract the persisted Setup stores speak. It is written into
+// the stores themselves, not only into requests, so a store can say which
+// contract produced it instead of being guessed at by shape.
 const SETUP_IDENTITY_SCHEMA_VERSION = 1;
+
+// Every identity-bearing Setup store is a versioned envelope:
+//
+//   {"schema_version": 1, "items": [...]}
+//
+// A store written before the envelope existed is a bare array and reads as the
+// unversioned contract. Reading normalizes, writing always emits the envelope,
+// so migration happens on the first save and is a no-op from then on.
+function readSetupStore(raw) {
+  if (!raw) return [];
+  const parsed = JSON.parse(raw);
+  if (Array.isArray(parsed)) return parsed;
+  if (parsed && typeof parsed === "object" && Array.isArray(parsed.items)) {
+    return parsed.items;
+  }
+  return [];
+}
+
+function setupStoreEnvelope(items) {
+  return JSON.stringify({
+    schema_version: SETUP_IDENTITY_SCHEMA_VERSION,
+    items: [...items],
+  });
+}
 const CONFIG_FEATURES_STORAGE_KEY = "ems-admin-config-features";
 const DEFAULT_INVERTER_DISPLAY = "SolarFlow 800 Pro 2";
 const DEFAULT_GRID_METER_DISPLAY = "Shelly Pro 3EM";
@@ -3643,6 +3668,7 @@ const configEls = {
   manualPort: document.getElementById("config-manual-port"),
   manualSerial: document.getElementById("config-manual-serial"),
   manualError: document.getElementById("config-manual-error"),
+  switchConfirmations: document.getElementById("config-switch-confirmations"),
   gridMeterSelection: document.getElementById("config-grid-meter-selection"),
   validation: document.getElementById("config-validation"),
   draftEmpty: document.getElementById("config-draft-empty"),
@@ -3856,6 +3882,9 @@ let activeConfigTemplateTag = null;
 let latestConfigPreview = null;
 let configPreviewRequest = 0;
 let configPreviewTimer = null;
+// The device plan the last preview was requested under. A preview issued for a
+// superseded plan carries no mutation authority, so a new plan re-previews.
+let configPreviewPlanId = "";
 
 // Flat, ordered list of draft items keyed by their discovery source id. Order
 // is display order; inverter numbering and preview grouping derive from it.
@@ -4014,10 +4043,9 @@ function setConfigBaseline(value) {
 
 function loadConfigDraft() {
   try {
-    const raw = window.localStorage.getItem(CONFIG_DRAFT_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    const items = Array.isArray(parsed) ? parsed : [];
+    const items = readSetupStore(
+      window.localStorage.getItem(CONFIG_DRAFT_STORAGE_KEY)
+    );
     // A draft written before form ids existed gets a stable local handle. This
     // is the only thing the browser mints: device identity comes from the
     // backend plan, which resolves these items from the fields they persist.
@@ -4032,7 +4060,7 @@ function saveConfigDraft() {
   try {
     window.localStorage.setItem(
       CONFIG_DRAFT_STORAGE_KEY,
-      JSON.stringify(configDraftItems)
+      setupStoreEnvelope(configDraftItems)
     );
   } catch (err) {
     /* localStorage may be unavailable; draft still lives in memory. */
@@ -4086,9 +4114,9 @@ function upgradeStoredInverterNames() {
 
 function loadConfigDismissed() {
   try {
-    const raw = window.localStorage.getItem(CONFIG_DISMISSED_STORAGE_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return new Set(Array.isArray(parsed) ? parsed : []);
+    return new Set(
+      readSetupStore(window.localStorage.getItem(CONFIG_DISMISSED_STORAGE_KEY))
+    );
   } catch (err) {
     return new Set();
   }
@@ -4098,7 +4126,7 @@ function saveConfigDismissed() {
   try {
     window.localStorage.setItem(
       CONFIG_DISMISSED_STORAGE_KEY,
-      JSON.stringify([...configDismissed])
+      setupStoreEnvelope(configDismissed)
     );
   } catch (err) {
     /* localStorage may be unavailable; dismissed set still lives in memory. */
@@ -4111,10 +4139,10 @@ function saveConfigDismissed() {
 // unrelated inverter.
 function loadDismissedPhysicalIds() {
   try {
-    const raw = window.localStorage.getItem(CONFIG_DISMISSED_DEVICES_STORAGE_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
     return new Set(
-      (Array.isArray(parsed) ? parsed : [])
+      readSetupStore(
+        window.localStorage.getItem(CONFIG_DISMISSED_DEVICES_STORAGE_KEY)
+      )
         .map((value) => String(value == null ? "" : value).trim())
         .filter((value) => /^opaque:v1:[A-Za-z0-9_-]+$/.test(value))
     );
@@ -4127,7 +4155,7 @@ function saveDismissedPhysicalIds() {
   try {
     window.localStorage.setItem(
       CONFIG_DISMISSED_DEVICES_STORAGE_KEY,
-      JSON.stringify([...dismissedPhysicalIds])
+      setupStoreEnvelope(dismissedPhysicalIds)
     );
   } catch (err) {
     /* localStorage may be unavailable; the set still lives in memory. */
@@ -4139,9 +4167,9 @@ function saveDismissedPhysicalIds() {
 // this store as soon as the backend has issued an id for them.
 function loadLegacyPhysicalDismissals() {
   try {
-    const raw = window.localStorage.getItem(CONFIG_DISMISSED_SERIALS_STORAGE_KEY);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return (Array.isArray(parsed) ? parsed : [])
+    return readSetupStore(
+      window.localStorage.getItem(CONFIG_DISMISSED_SERIALS_STORAGE_KEY)
+    )
       .map((value) => String(value == null ? "" : value).trim())
       .filter(Boolean);
   } catch (err) {
@@ -4154,7 +4182,7 @@ function saveLegacyPhysicalDismissals() {
     if (legacyPhysicalDismissals.length) {
       window.localStorage.setItem(
         CONFIG_DISMISSED_SERIALS_STORAGE_KEY,
-        JSON.stringify([...legacyPhysicalDismissals])
+        setupStoreEnvelope(legacyPhysicalDismissals)
       );
     } else {
       window.localStorage.removeItem(CONFIG_DISMISSED_SERIALS_STORAGE_KEY);
@@ -4599,6 +4627,15 @@ function commitDraftChange() {
 
 const SETUP_DEVICE_PLAN_URL = "/api/setup/device-plan";
 
+function emptySetupPlanOperations() {
+  return {
+    drop_draft_items: [],
+    drop_mqtt_selections: [],
+    select_mqtt_proposals: [],
+    adopt_observations: [],
+  };
+}
+
 function emptySetupPlan() {
   return {
     identity_schema_version: 0,
@@ -4611,15 +4648,23 @@ function emptySetupPlan() {
     mqtt_selections: [],
     dismissals: { physical: [], observations: [], unresolved: [] },
     groups: [],
-    operations: {
-      drop_draft_items: [],
-      drop_mqtt_selections: [],
-      select_mqtt_proposals: [],
-      adopt_observations: [],
-    },
+    // Only `operations` may be applied. `proposed_operations` describes what a
+    // switch the backend refused to make on its own would do, and exists so the
+    // operator can be shown the consequence before answering.
+    operations: emptySetupPlanOperations(),
+    proposed_operations: emptySetupPlanOperations(),
+    confirmations: [],
+    confirmation_required: false,
+    unresolved_references: [],
     warnings: [],
   };
 }
+
+// Operator answers to connection switches the backend proposed. Kept in memory
+// only: an unanswered switch must be asked again after a reload, never assumed.
+const setupConfirmedSwitches = new Set();
+const setupDeclinedSwitches = new Set();
+let setupSwitchAnswerGeneration = "";
 
 function emptySetupPlanIndex() {
   return {
@@ -4939,6 +4984,23 @@ function setupPlanStatePayload() {
   };
 }
 
+// The candidate handles this browser is rendering. A handle is a lookup key
+// into the server's own discovery state — never a description of the device
+// behind it, which the backend reads for itself. `observation_ref` is this
+// browser's local card key so the returned operations name something it can
+// resolve; it carries no evidence.
+function setupPlanCandidateHandles() {
+  return {
+    observations: availableConfigDevices().map((device) => ({
+      observation_id: String((device && device.observation_id) || ""),
+      observation_ref: observationKey(device),
+    })),
+    proposals: availableMqttDeviceProposals().map((proposal) => ({
+      id: String((proposal && proposal.id) || ""),
+    })),
+  };
+}
+
 // Ask the backend to resolve the persisted state and plan the connections. A
 // response that is no longer the newest is discarded rather than applied.
 async function requestSetupPlan(options) {
@@ -4953,24 +5015,12 @@ async function requestSetupPlan(options) {
         Object.assign(
           {
             state: setupPlanStatePayload(),
-            // What discovery served this browser. The backend prefers its own
-            // view and re-resolves every identity either way; this only makes
-            // sure the plan covers the cards actually on screen.
-            candidates: {
-              // Each card carries the handle this browser knows it by, so the
-              // returned operations name something resolvable even when the
-              // payload arrived without an issued observation id.
-              observations: availableConfigDevices().map((device) =>
-                Object.assign({}, device, { observation_ref: observationKey(device) })
-              ),
-              proposals: availableMqttDeviceProposals(),
-            },
-            // Source priority and enablement as this browser has them. They are
-            // operator preference, never identity evidence.
-            preparation: {
-              discovery_priority: discoveryPreparation.discovery_priority || [],
-              sources: discoveryPreparation.sources || {},
-            },
+            candidates: setupPlanCandidateHandles(),
+            // Operator answers to switches the backend refused to make on its
+            // own. Each token names one exact transition in one exact candidate
+            // generation, and the backend re-decides under it.
+            confirmed_switches: [...setupConfirmedSwitches],
+            declined_switches: [...setupDeclinedSwitches],
           },
           request.switch ? { switch: request.switch } : {}
         )
@@ -4986,7 +5036,21 @@ async function requestSetupPlan(options) {
   setupPlan = Object.assign(emptySetupPlan(), payload);
   indexSetupPlan(setupPlan);
   adoptPlannedIdentityState(setupPlan);
+  forgetSupersededSwitchAnswers(setupPlan);
   return setupPlan;
+}
+
+// A confirmation token is minted for one candidate generation. When discovery
+// moves on, every answer given under the old one is spent: the operator agreed
+// to a switch between two specific connections, not to whatever the next scan
+// finds. The backend refuses the stale token anyway; dropping it here is what
+// makes the question reappear instead of silently vanishing.
+function forgetSupersededSwitchAnswers(plan) {
+  const generation = String(plan.generation || "");
+  if (generation === setupSwitchAnswerGeneration) return;
+  setupSwitchAnswerGeneration = generation;
+  setupConfirmedSwitches.clear();
+  setupDeclinedSwitches.clear();
 }
 
 // Replace the identity-keyed stores with the ids the backend issued. This is
@@ -5029,8 +5093,11 @@ function adoptPlannedIdentityState(plan) {
 
 // Apply the plan's typed operations. Nothing is decided here: every id comes
 // from the response, and a plan that is no longer current is never applied.
+// Only `operations` is read — `proposed_operations` describes a switch the
+// backend refused to make on its own and is rendered as a question instead.
 function applySetupPlanOperations(plan) {
   if (!plan || plan.plan_id !== setupPlan.plan_id) return false;
+  if (plan.generation !== setupPlan.generation) return false;
   const operations = plan.operations || {};
   let changed = false;
 
@@ -5080,6 +5147,87 @@ function applySetupPlanOperations(plan) {
   return changed;
 }
 
+// --- connection switches the backend will not make on its own ----------------
+//
+// A candidate that would take over a configured device without a proven write
+// path (or whose capability the backend could not resolve) comes back as a
+// proposal plus a confirmation token, never as an operation. The operator sees
+// the consequence and answers; the answer is a token in the next plan request,
+// and the backend re-decides the switch against current state under it.
+const CONTROL_CONTINUITY_TEXT = {
+  lost: "output control would be lost on this connection",
+  unknown: "output control on this connection is not proven",
+  preserved: "output control is preserved",
+  gained: "output control would become available",
+  not_required: "this device is telemetry-only either way",
+};
+
+function renderSetupSwitchConfirmations() {
+  const host = configEls.switchConfirmations;
+  if (!host) return;
+  const pending = (setupPlan.confirmations || []).filter(
+    (entry) => entry && entry.token && !setupConfirmedSwitches.has(entry.token)
+  );
+  host.textContent = "";
+  host.hidden = pending.length === 0;
+  if (!pending.length) return;
+  for (const entry of pending) {
+    host.appendChild(setupSwitchConfirmationCard(entry));
+  }
+}
+
+function setupSwitchConfirmationCard(entry) {
+  const card = document.createElement("div");
+  card.className = "config-switch-confirmation";
+  card.dataset.token = entry.token;
+  const title = document.createElement("p");
+  title.className = "config-switch-confirmation-title";
+  title.textContent =
+    "Change this device from " +
+    connectionLabelFor(entry.current_source) +
+    " to " +
+    connectionLabelFor(entry.candidate_source) +
+    "?";
+  card.appendChild(title);
+  const detail = document.createElement("p");
+  detail.className = "future-note";
+  detail.textContent =
+    CONTROL_CONTINUITY_TEXT[String(entry.control_continuity || "")] ||
+    "the consequence of this change could not be resolved";
+  card.appendChild(detail);
+  const actions = document.createElement("div");
+  actions.className = "config-switch-confirmation-actions";
+  const confirm = document.createElement("button");
+  confirm.type = "button";
+  confirm.className = "primary-button compact";
+  confirm.textContent = "Use " + connectionLabelFor(entry.candidate_source);
+  confirm.addEventListener("click", () => answerSetupSwitch(entry.token, true));
+  const decline = document.createElement("button");
+  decline.type = "button";
+  decline.className = "secondary-button compact";
+  decline.textContent = "Keep " + connectionLabelFor(entry.current_source);
+  decline.addEventListener("click", () => answerSetupSwitch(entry.token, false));
+  actions.appendChild(confirm);
+  actions.appendChild(decline);
+  card.appendChild(actions);
+  return card;
+}
+
+function answerSetupSwitch(token, accepted) {
+  const value = String(token || "");
+  if (!value) return;
+  if (accepted) {
+    setupDeclinedSwitches.delete(value);
+    setupConfirmedSwitches.add(value);
+  } else {
+    setupConfirmedSwitches.delete(value);
+    setupDeclinedSwitches.add(value);
+  }
+  // The answer only reaches the backend as a token on the next plan; nothing is
+  // mutated here.
+  return refreshSetupPlan();
+}
+
 // One pass: ask, apply, redraw. Every caller of the old reconciler goes through
 // here, so no path mutates Setup state without a current backend plan.
 async function refreshSetupPlan() {
@@ -5094,9 +5242,14 @@ async function refreshSetupPlan() {
     const settled = await requestSetupPlan();
     if (settled) applySetupPlanOperations(settled);
   }
+  renderSetupSwitchConfirmations();
   renderConfigAvailable();
   if (changed) renderConfigDraft();
   else renderConfigDraftView();
+  // Preview authority is issued against one device plan. A plan that arrived
+  // after (or replaced) the last preview invalidates it, so re-preview rather
+  // than leave Apply enabled on authority the server will now refuse.
+  if (configPreviewPlanId !== setupPlan.plan_id) renderConfigPreview();
   return changed;
 }
 
@@ -6891,12 +7044,16 @@ async function requestConfigPreview() {
   if (setupWorkflowStale) return;
   const requestId = ++configPreviewRequest;
   const generation = guidedSetupGeneration;
+  configPreviewPlanId = setupPlan.plan_id;
   try {
     const res = await fetch("/api/setup/config-preview", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         setup_workflow_id: setupWorkflowId,
+        // The device plan this draft was built from. Preview only issues
+        // mutation authority when it is still the current one.
+        device_plan_id: setupPlan.plan_id,
         devices: configDraftItems,
         supported_grid_meter_count: supportedGridMeters().length,
         features: featureValues,
@@ -6915,7 +7072,9 @@ async function requestConfigPreview() {
       handleSetupWorkflowConflict(data);
       return;
     }
-    if (!res.ok) throw new Error(data.error || "Config preview unavailable.");
+    if (!res.ok) {
+      throw new Error(data.message || data.error || "Config preview unavailable.");
+    }
     latestConfigPreview = data;
     setSetupPreviewId(data.config_preview_id || null);
     setConfigBaseline(data.config_revision);
@@ -6962,10 +7121,12 @@ async function requestConfigPreview() {
 }
 
 function configExportBody(overwrite) {
-  // Mutation authority is the workflow ID plus the exact server-issued
-  // preview ID; the raw live revision is display-only and never sent back.
+  // Mutation authority is the workflow ID, the device plan the draft was built
+  // from and the exact server-issued preview ID for it; the raw live revision
+  // is display-only and never sent back.
   return {
     setup_workflow_id: setupWorkflowId,
+    device_plan_id: setupPlan.plan_id,
     config_preview_id: setupConfigPreviewId,
     devices: configDraftItems,
     supported_grid_meter_count: supportedGridMeters().length,

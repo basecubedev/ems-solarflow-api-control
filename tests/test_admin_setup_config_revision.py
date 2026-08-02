@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from admin.install_context import detect_install_context
-from tests.helpers.setup_config import start_setup_workflow
+from tests.helpers.setup_config import current_device_plan_id, start_setup_workflow
 from tests.test_admin_server import (
     _control_export_body,
     _control_export_manager,
@@ -87,7 +87,11 @@ def test_a_matching_revision_with_a_workflow_still_needs_the_exact_preview(
         status, _, payload = _request(
             f"{base}/api/setup/config/apply",
             method="POST",
-            body={**_legacy_body(revision), "setup_workflow_id": workflow_id},
+            body={
+                **_legacy_body(revision),
+                "setup_workflow_id": workflow_id,
+                "device_plan_id": current_device_plan_id(base, _request),
+            },
         )
 
         assert status == 409, payload

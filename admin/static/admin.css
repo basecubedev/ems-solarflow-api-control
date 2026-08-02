@@ -1453,6 +1453,32 @@ code {
 .config-manual-form select:focus,
 .config-manual-form .field input:focus { outline: 2px solid var(--accent2); outline-offset: 1px; }
 
+/* A connection switch the backend will not make on its own (Control / Energy
+   stage tone, warning accent). */
+.config-switch-confirmations {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.config-switch-confirmation {
+  border: 1px solid color-mix(in srgb, var(--pv) 45%, var(--border));
+  border-left: 3px solid color-mix(in srgb, var(--pv) 70%, var(--border));
+  border-radius: 12px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--pv) 7%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.config-switch-confirmation-title {
+  margin: 0;
+  color: var(--pv);
+  font-size: 12px;
+  font-weight: 850;
+}
+.config-switch-confirmation-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
 .config-draft-list { display: flex; flex-direction: column; gap: 8px; }
 .config-section-title { margin: 14px 0 8px; font-size: 13px; }
 

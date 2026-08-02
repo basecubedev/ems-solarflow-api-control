@@ -11433,6 +11433,7 @@ let configDraftItems = [{ role: "inverter" }];
 let setupConfigBaseline = null;
 let setupWorkflowId = null;
 let setupConfigPreviewId = null;
+let setupPlan = { plan_id: "" };
 let featureValues = {};
 function supportedGridMeters() { return []; }
 function mqttPreviewPayload() { return []; }
@@ -11466,16 +11467,21 @@ def test_mutation_body_carries_workflow_and_exact_preview_ids():
         """
 setupWorkflowId = "wf-1";
 setupConfigPreviewId = "pv-1";
+setupPlan = { plan_id: "plan:v1:one" };
 const body = configExportBody(false);
 console.log(JSON.stringify({
   workflow: body.setup_workflow_id,
   preview: body.config_preview_id,
+  devicePlan: body.device_plan_id,
   hasLegacyRevision: "config_revision" in body,
 }));
 """
     )
     assert out["workflow"] == "wf-1"
     assert out["preview"] == "pv-1"
+    # The whole chain travels: the plan the draft was built from, and the exact
+    # preview issued for it.
+    assert out["devicePlan"] == "plan:v1:one"
     # The raw live revision is display-only; it is never mutation authority.
     assert out["hasLegacyRevision"] is False
 
@@ -11750,6 +11756,8 @@ let setupConfigPreviewId = null;
 let latestConfigPreview = null;
 let configPreviewRequest = 0;
 let configPreviewTimer = null;
+let configPreviewPlanId = "";
+let setupPlan = { plan_id: "plan:v1:one" };
 let guidedSetupGeneration = 1;
 let configDraftItems = [];
 let featureValues = {};

@@ -4,6 +4,7 @@ import { LoginPage } from "./pages/login-page";
 import { SetupPage } from "./pages/setup-page";
 import {
   authorizeSetupMutation,
+  currentDevicePlanId,
   currentWorkflowId,
   holdBrowserPreviews,
   post,
@@ -185,6 +186,7 @@ test.describe("Stale Setup apply", () => {
       ...OTHER_DRAFT,
       setup_workflow_id: workflow,
       config_preview_id: authorizedForA.config_preview_id,
+      device_plan_id: authorizedForA.device_plan_id,
     });
     expect(forged.status, JSON.stringify(forged.body)).toBe(409);
     expect(forged.body.error).toBe("setup_preview_mismatch");
@@ -298,6 +300,7 @@ test.describe("Stale Setup apply", () => {
     const refused = await post(page, "/api/setup/config/apply", {
       ...DRAFT,
       setup_workflow_id: workflow,
+      device_plan_id: await currentDevicePlanId(page),
     });
     expect(refused.status, JSON.stringify(refused.body)).toBe(409);
     expect(refused.body.error).toBe("setup_preview_required");

@@ -1059,14 +1059,21 @@ def test_config_apply_is_blocked_when_validation_fails(tmp_path):
     apply = _apply_service(manager, tmp_path / "admin", install_root)
     srv, base = _serve(release_manager=manager, config_apply=apply)
     try:
-        from tests.helpers.setup_config import start_setup_workflow
+        from tests.helpers.setup_config import (
+            current_device_plan_id,
+            start_setup_workflow,
+        )
 
         workflow_id = start_setup_workflow(base, _request)
         invalid = {"devices": [], "supported_grid_meter_count": 0}
         status, _, preview = _request(
             f"{base}/api/setup/config-preview",
             method="POST",
-            body={**invalid, "setup_workflow_id": workflow_id},
+            body={
+                **invalid,
+                "setup_workflow_id": workflow_id,
+                "device_plan_id": current_device_plan_id(base, _request),
+            },
         )
         assert status == 200
         assert "config_preview_id" not in preview
@@ -1075,7 +1082,11 @@ def test_config_apply_is_blocked_when_validation_fails(tmp_path):
         status, _, payload = _request(
             f"{base}/api/setup/config/apply",
             method="POST",
-            body={**invalid, "setup_workflow_id": workflow_id},
+            body={
+                **invalid,
+                "setup_workflow_id": workflow_id,
+                "device_plan_id": current_device_plan_id(base, _request),
+            },
         )
         assert status == 409
         assert payload["error"] == "setup_preview_required"

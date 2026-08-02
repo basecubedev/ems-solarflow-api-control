@@ -22,6 +22,7 @@ and the parity that proves Setup and Maintenance cannot drift apart.
 
 import pytest
 
+from admin.connection_capability import connection_output_control
 from admin.connection_planner import (
     ACTION_BLOCK_IDENTITY_CONFLICT,
     INTENT_SWITCH_CONNECTION,
@@ -65,6 +66,10 @@ def _proposal(proposal_id="cloud-1", serial=SERIAL_A, device_id="DEV1", **overri
         "serial_number": serial,
         "device_id": device_id,
         "product_key": "PK1",
+        # Core's own capability verdict for this proposal. Discovery resolves it;
+        # the planner only reads it, and a proposal that carries none is treated
+        # as "not resolved" rather than capable.
+        "output_control_supported": True,
         "config_fragment": {
             "mqtt": {
                 "source": "zendure_cloud_mqtt",
@@ -103,6 +108,7 @@ def _selection(proposal_id="cloud-1", origin="automatic", **overrides):
 
 
 def _plan(state, *, observations=(), proposals=(), priority=None, enabled=None, **kwargs):
+    kwargs.setdefault("control_supported", connection_output_control)
     return build_setup_plan(
         state,
         observations=list(observations),
@@ -249,22 +255,30 @@ def test_an_mqtt_only_device_is_not_auto_selected():
 
 # --- composition: every pairwise decision comes from the canonical planner ----
 def test_batch_groups_carry_the_canonical_pairwise_action():
-    """The group's action is the pairwise planner's answer, verbatim."""
+    """The group's action is the pairwise planner's answer, verbatim.
 
-    draft = _draft()
+    Both sides are the *trusted* records — the observation the draft resolved
+    to, not the fields the draft persisted — and both capability verdicts come
+    from the canonical resolver, so the batch plan cannot answer this pair
+    differently than a single Maintenance edit would.
+    """
+
+    observation = _observation()
     proposal = _proposal()
     plan = _plan(
-        {"draft_items": [draft]},
-        observations=[_observation()],
+        {"draft_items": [_draft()]},
+        observations=[observation],
         proposals=[proposal],
         priority=MQTT_FIRST,
     )
 
     assert plan["groups"][0]["action"] == plan_connection_change(
-        current_device=draft,
+        current_device=observation,
         candidate=proposal,
         intent=INTENT_SWITCH_CONNECTION,
         identity_token_key=KEY,
+        current_control_supported=True,
+        candidate_control_supported=True,
     ).to_dict()
     assert plan["groups"][0]["action"]["same_physical_device"] is True
 
@@ -604,3 +618,249 @@ def test_a_server_served_observation_is_addressed_by_its_issued_id():
     assert [op["observation_ref"] for op in plan["operations"]["adopt_observations"]] == [
         issued
     ]
+
+
+# --- the verdict decides which operations are executable ---------------------
+#
+# The batch plan may only *propose* a replacement the canonical pairwise planner
+# refuses to make unconditionally. A plan that reports
+# ``confirmation_required`` while dropping the current entry and selecting the
+# candidate has already performed the switch it says needs asking about.
+def _empty_operations():
+    return {
+        "drop_draft_items": [],
+        "drop_mqtt_selections": [],
+        "select_mqtt_proposals": [],
+        "adopt_observations": [],
+    }
+
+
+def test_a_confirmation_required_switch_emits_no_executable_operation():
+    plan = _plan(
+        {"draft_items": [_draft()]},
+        observations=[_observation()],
+        proposals=[_proposal(output_control_supported=False)],
+        priority=MQTT_FIRST,
+    )
+
+    group = plan["groups"][0]
+    assert group["action"]["action"] == "replace_with_confirmation"
+    assert group["action"]["control_continuity"] == "lost"
+    assert plan["confirmation_required"] is True
+    assert plan["operations"] == _empty_operations()
+    # The switch is offered, in full, as something the operator must accept.
+    assert plan["proposed_operations"]["drop_draft_items"] == ["item-1"]
+    assert [
+        op["id"] for op in plan["proposed_operations"]["select_mqtt_proposals"]
+    ] == ["cloud-1"]
+
+
+def test_an_unresolved_candidate_capability_also_needs_confirmation():
+    """``None`` is "not resolved" and never silently counts as capable."""
+
+    plan = _plan(
+        {"draft_items": [_draft()]},
+        observations=[_observation()],
+        proposals=[_proposal()],
+        priority=MQTT_FIRST,
+        control_supported=lambda entry: True if entry.source == "local_api" else None,
+    )
+
+    assert plan["groups"][0]["action"]["control_continuity"] == "unknown"
+    assert plan["operations"] == _empty_operations()
+    assert plan["confirmation_required"] is True
+
+
+def test_confirming_the_exact_switch_makes_its_operations_executable():
+    state = {"draft_items": [_draft()]}
+    proposed = _plan(
+        state,
+        observations=[_observation()],
+        proposals=[_proposal(output_control_supported=False)],
+        priority=MQTT_FIRST,
+    )
+    token = proposed["confirmations"][0]["token"]
+
+    confirmed = _plan(
+        state,
+        observations=[_observation()],
+        proposals=[_proposal(output_control_supported=False)],
+        priority=MQTT_FIRST,
+        confirmed_switches=[token],
+    )
+
+    assert confirmed["confirmation_required"] is False
+    assert confirmed["operations"]["drop_draft_items"] == ["item-1"]
+    assert [
+        op["id"] for op in confirmed["operations"]["select_mqtt_proposals"]
+    ] == ["cloud-1"]
+
+
+def test_a_confirmation_for_another_switch_does_not_authorize_this_one():
+    plan = _plan(
+        {"draft_items": [_draft()]},
+        observations=[_observation()],
+        proposals=[_proposal(output_control_supported=False)],
+        priority=MQTT_FIRST,
+        confirmed_switches=["cnf:v1:somethingelse"],
+    )
+
+    assert plan["confirmation_required"] is True
+    assert plan["operations"] == _empty_operations()
+
+
+def test_a_confirmation_token_does_not_survive_a_changed_candidate_set():
+    state = {"draft_items": [_draft()]}
+    first = _plan(
+        state,
+        observations=[_observation()],
+        proposals=[_proposal(output_control_supported=False)],
+        priority=MQTT_FIRST,
+    )
+    token = first["confirmations"][0]["token"]
+
+    # A second broker now offers the same inverter: the candidate set, and with
+    # it the generation the token was minted under, is no longer the same.
+    later = _plan(
+        state,
+        observations=[_observation()],
+        proposals=[
+            _proposal(output_control_supported=False),
+            _proposal(proposal_id="cloud-2", output_control_supported=False),
+        ],
+        priority=MQTT_FIRST,
+        confirmed_switches=[token],
+    )
+
+    assert later["operations"] == _empty_operations()
+    assert later["confirmation_required"] is True
+
+
+def test_declining_a_switch_keeps_the_current_connection():
+    state = {"draft_items": [_draft()]}
+    proposed = _plan(
+        state,
+        observations=[_observation()],
+        proposals=[_proposal(output_control_supported=False)],
+        priority=MQTT_FIRST,
+    )
+    token = proposed["confirmations"][0]["token"]
+
+    declined = _plan(
+        state,
+        observations=[_observation()],
+        proposals=[_proposal(output_control_supported=False)],
+        priority=MQTT_FIRST,
+        declined_switches=[token],
+    )
+
+    assert declined["confirmation_required"] is False
+    assert declined["operations"] == _empty_operations()
+    assert declined["groups"][0]["action"]["action"] == "keep_current"
+
+
+def test_a_blocked_identity_conflict_emits_no_operation_at_all():
+    configured = dict(
+        _draft(serial=SERIAL_A),
+        connection_source="zendure_cloud_mqtt",
+        mqtt={
+            "source": "zendure_cloud_mqtt",
+            "broker_ref": "zendure_cloud",
+            "device_id": "DEV1",
+            "product_key": "PK1",
+        },
+    )
+    plan = _plan(
+        {"draft_items": [configured]},
+        proposals=[_proposal(serial=SERIAL_B)],
+        priority=MQTT_FIRST,
+    )
+
+    assert plan["operations"] == _empty_operations()
+    assert plan["proposed_operations"] == _empty_operations()
+
+
+# --- output-control capability continuity ------------------------------------
+def test_cloud_mqtt_with_a_complete_route_keeps_control_and_switches():
+    plan = _plan(
+        {"draft_items": [_draft()]},
+        observations=[_observation()],
+        proposals=[_proposal(output_control_supported=True)],
+        priority=MQTT_FIRST,
+    )
+
+    assert plan["groups"][0]["action"]["control_continuity"] == "preserved"
+    assert plan["operations"]["drop_draft_items"] == ["item-1"]
+
+
+def test_a_local_mqtt_scalar_candidate_is_never_auto_selected():
+    """Fail closed: an unproven scalar write path does not take over a device."""
+
+    scalar = _proposal(
+        proposal_id="local-1",
+        connection_source="local_mqtt",
+        broker_ref="house-broker",
+        output_control_supported=False,
+    )
+    plan = _plan(
+        {"draft_items": [_draft()]},
+        observations=[_observation()],
+        proposals=[scalar],
+        priority=["local_mqtt", "zendure_mqtt", "local_api"],
+    )
+
+    assert plan["operations"] == _empty_operations()
+    assert plan["groups"][0]["action"]["control_continuity"] == "lost"
+
+
+def test_an_unknown_candidate_route_is_never_auto_selected():
+    incomplete = {
+        "id": "cloud-unknown",
+        "connection_source": "zendure_cloud_mqtt",
+        "broker_ref": "zendure_cloud",
+        "serial_number": SERIAL_A,
+        "config_fragment": {
+            "mqtt": {
+                "source": "zendure_cloud_mqtt",
+                "broker_ref": "zendure_cloud",
+                "device_id": "DEV1",
+            }
+        },
+    }
+    plan = _plan(
+        {"draft_items": [_draft()]},
+        observations=[_observation()],
+        proposals=[incomplete],
+        priority=MQTT_FIRST,
+    )
+
+    assert plan["operations"] == _empty_operations()
+    assert plan["groups"][0]["action"]["control_continuity"] in ("unknown", "lost")
+
+
+def test_switching_back_to_local_api_regains_control():
+    plan = _plan(
+        {"mqtt_selections": [_selection(origin="automatic")]},
+        observations=[_observation()],
+        proposals=[_proposal(output_control_supported=False)],
+        priority=API_FIRST,
+    )
+
+    assert plan["groups"][0]["action"]["control_continuity"] == "gained"
+    assert plan["operations"]["drop_mqtt_selections"] == ["cloud-1"]
+
+
+def test_a_confirmation_carries_no_raw_identity_evidence():
+    """The question the operator answers is asked in issued ids and codes only."""
+
+    plan = _plan(
+        {"draft_items": [_draft()]},
+        observations=[_observation()],
+        proposals=[_proposal(output_control_supported=False)],
+        priority=MQTT_FIRST,
+    )
+
+    encoded = repr(plan["confirmations"]) + repr(plan["proposed_operations"])
+    for secret in (SERIAL_A, SERIAL_A.lower(), "10.0.0.11", "DEV1", "PK1"):
+        assert secret not in encoded, f"{secret!r} leaked into the confirmation"
+    assert plan["confirmations"][0]["token"].startswith("plan:v1:")

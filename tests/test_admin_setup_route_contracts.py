@@ -32,6 +32,7 @@ from tests.test_admin_server import (
     _request,
     _serve,
 )
+from tests.helpers.setup_config import current_device_plan_id
 from tests.test_admin_setup_preview_authority import _draft_a, _start_workflow
 from tests.test_admin_setup_transition_authority import _ActiveTransitionAlignment
 
@@ -181,7 +182,9 @@ def test_a_foreign_workflow_id_is_refused(tmp_path, route):
 
 
 @pytest.mark.parametrize("route", _routes("preview_id"))
-def test_a_missing_preview_id_is_refused(tmp_path, route):
+def test_a_missing_device_plan_id_is_refused(tmp_path, route):
+    """The first link of the mutation chain, refused on its own terms."""
+
     srv, base = _matrix_server(tmp_path)
     try:
         workflow_id = _start_workflow(base)
@@ -189,6 +192,28 @@ def test_a_missing_preview_id_is_refused(tmp_path, route):
             f"{base}{route}",
             method="POST",
             body={**_body(route), "setup_workflow_id": workflow_id},
+        )
+
+        assert status == 409, (route, payload)
+        assert payload["error"] == "device_plan_required", (route, payload)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+@pytest.mark.parametrize("route", _routes("preview_id"))
+def test_a_missing_preview_id_is_refused(tmp_path, route):
+    srv, base = _matrix_server(tmp_path)
+    try:
+        workflow_id = _start_workflow(base)
+        status, _, payload = _request(
+            f"{base}{route}",
+            method="POST",
+            body={
+                **_body(route),
+                "setup_workflow_id": workflow_id,
+                "device_plan_id": current_device_plan_id(base, _request),
+            },
         )
 
         assert status == 409, (route, payload)
