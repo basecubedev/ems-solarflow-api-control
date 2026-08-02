@@ -12,7 +12,6 @@ from admin.releases import ReleaseError
 from admin.setup_config import (
     apply_device_config_values,
     apply_setup_features,
-    strip_incompatible_grid_meter_fields,
 )
 from admin.zendure_mqtt_broker_profiles import (
     LOCAL_BROKER_REF as _LOCAL_BROKER_REF,
@@ -48,6 +47,7 @@ from ems.config_catalog import (
     grid_meter_types,
     grid_meter_variant_field_spec,
 )
+from ems.config_mutation import strip_incompatible_grid_meter_fields
 from ems.device_identity import broker_sources_from_config
 from ems.influx_setup import DOCKER_FIRST_SECRET_FILE
 from ems.zendure_mqtt.config_entries import (

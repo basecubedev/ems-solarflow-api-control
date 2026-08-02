@@ -18,62 +18,11 @@ from ems.config_catalog import (
     device_common_defaults,
     is_editable_catalog_field,
 )
+from ems.config_mutation import apply_common_values, coerce_catalog_value
 
-
-def coerce_field_value(field, value):
-    """Coerce a browser-supplied value by its catalog field type."""
-
-    if value is None:
-        return None
-    field_type = field.get("type")
-    if field_type == "boolean":
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            return value.strip().lower() in ("1", "true", "yes", "on")
-        return bool(value)
-    if field_type == "integer":
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return value
-    if field_type == "number":
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            return value
-        return int(number) if number.is_integer() else number
-    if field_type in ("month_list", "integer_list"):
-        return _coerce_int_list(value)
-    if field_type == "string_list":
-        return _coerce_string_list(value)
-    return value
-
-
-def _coerce_int_list(value):
-    items = value
-    if isinstance(value, str):
-        items = [part for part in value.replace(";", ",").split(",")]
-    if not isinstance(items, (list, tuple)):
-        return value
-    result = []
-    for item in items:
-        text = str(item).strip()
-        if not text:
-            continue
-        try:
-            result.append(int(float(text)))
-        except (TypeError, ValueError):
-            return value
-    return result
-
-
-def _coerce_string_list(value):
-    if isinstance(value, (list, tuple)):
-        return [str(item).strip() for item in value if str(item).strip()]
-    if isinstance(value, str):
-        return [part.strip() for part in value.split(",") if part.strip()]
-    return value
+# Coercion is a config semantic, so it is owned by ems.config_mutation. Admin
+# consumers keep reaching it through this module.
+coerce_field_value = coerce_catalog_value
 
 
 def is_editable_maintenance_field(field):
@@ -106,9 +55,7 @@ def apply_common_device_values(device, item, fields=None):
 
     if fields is None:
         fields = common_device_value_fields()
-    for key, field in fields.items():
-        if key in item:
-            device[key] = coerce_field_value(field, item[key])
+    return apply_common_values(device, item, fields)
 
 
 def common_device_draft_values(device):

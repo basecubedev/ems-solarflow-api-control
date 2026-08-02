@@ -208,6 +208,25 @@ After setup, open the dashboard at `http://<host-ip>:8080`, work through the
 If a legacy root `config.json` is present, the Admin Console can use it as source
 data, but the applied target is always `config/config.json`.
 
+## How your answers are read
+
+Guided Setup and Maintenance read a configuration field the same way, so the
+same answer produces the same stored setting no matter which flow you gave it
+in:
+
+- Leading and trailing spaces are removed. A hostname pasted with a trailing
+  space is stored without it.
+- **Emptying a field removes the setting** rather than storing an empty value,
+  so EMS falls back to its own default instead of reading a blank where a
+  number belongs.
+- A list field (such as the Shelly channels) accepts a comma-separated entry.
+- **Passwords are the exception**: leaving a password box blank keeps the stored
+  secret, because the console never shows one back to you. Use the explicit
+  clear control to remove a stored password.
+- Changing a grid meter's type removes the fields the new type cannot use — an
+  HTTP meter's address does not linger on an MQTT meter — while any extra key
+  you added to the config by hand is left alone.
+
 ## Restarting or discarding a setup
 
 **Restart setup** in Guided Setup discards the whole wizard run, not just the

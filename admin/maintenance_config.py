@@ -19,7 +19,7 @@ from admin.connection_planner import (
     plan_connection_change,
 )
 from admin.device_common_fields import (
-    coerce_field_value as _coerce,
+    apply_common_device_values,
     common_device_value_fields,
 )
 from admin.inverter_names import next_compact_inverter_name
@@ -30,11 +30,8 @@ from admin.secret_policy import (
 )
 from admin.install_context import detect_install_context
 from admin.setup_config import (
-    _set_path,
     grid_meter_variant_catalog,
     hardware_section_catalog,
-    mqtt_grid_meter_keys,
-    strip_incompatible_grid_meter_fields,
 )
 from admin.zendure_mqtt_broker_profiles import (
     BrokerEndpointError,
@@ -64,15 +61,24 @@ from ems.config import (
     resolve_grid_meter_mqtt_settings,
 )
 from ems.config_catalog import (
-    GRID_METER_KNOWN_TOP_KEYS,
     ZENDURE_MQTT_BROKER_HELP,
     config_field_index,
     device_common_defaults,
     device_common_field_keys,
     get_config_feature_sections,
     is_editable_catalog_field,
-    grid_meter_variant_field_spec,
     http_grid_meter_types,
+)
+from ems.config_mutation import (
+    MAINTENANCE_POLICY,
+    ConfigChange,
+    CredentialIntent,
+    apply_config_changes,
+    apply_grid_meter_changes,
+    coerce_catalog_value,
+    editable_grid_meter_mqtt_keys,
+    mqtt_grid_meter_keys,
+    mutation_diff,
 )
 from ems.mqtt_credentials import find_mqtt_credential_consumer_issues
 from ems.device_identity import (
@@ -121,13 +127,10 @@ _MQTT_GRID_METER_TYPES = tuple(MQTT_GRID_METER_TYPES)
 # type. Derived from the catalog: the legacy flat representation carries the
 # same key names the nested block does, only one level higher.
 _MQTT_GRID_METER_FLAT_KEYS = tuple(sorted(mqtt_grid_meter_keys()))
-# Non-secret MQTT grid-meter values the editor may change. The password is
-# handled separately (keep/clear/set) and never round-trips through the draft;
-# broker_ref names a profile rather than a connection value, so the catalog
-# does not list it as a meter field.
-_MQTT_GRID_METER_EDIT_KEYS = tuple(
-    sorted((mqtt_grid_meter_keys() - {"password"}) | {"broker_ref"})
-)
+# Non-secret MQTT grid-meter values the editor may change, across every
+# variant. The password is handled separately (keep/clear/set) and never
+# round-trips through the draft.
+_MQTT_GRID_METER_EDIT_KEYS = editable_grid_meter_mqtt_keys(None)
 
 _SERIAL_PLACEHOLDER = "YOUR_SN"
 _MAX_STRING_LEN = 160
@@ -1565,15 +1568,10 @@ def _merge_zendure_mqtt_broker(merged, broker):
 
 
 def _apply_device_fields(device, item):
-    if "name" in item:
-        device["name"] = str(item.get("name") or "").strip()
-    if "ip" in item:
-        device["ip"] = str(item.get("ip") or "").strip()
-    if "sn" in item:
-        device["sn"] = str(item.get("sn") or "").strip()
-    for key, field in _DEVICE_VALUE_FIELDS.items():
+    for key in ("name", "ip", "sn"):
         if key in item:
-            device[key] = _coerce(field, item[key])
+            device[key] = str(item.get(key) or "").strip()
+    apply_common_device_values(device, item, _DEVICE_VALUE_FIELDS)
     # Keep unknown (non-catalog) device keys untouched; only surface an
     # explicit enabled flag so a disabled draft device reads as a real change.
     enabled = bool(item.get("enabled", True))
@@ -1582,21 +1580,47 @@ def _apply_device_fields(device, item):
 
 
 def _coerce_number(value):
+    # Broker-profile ports are not catalog fields, but they read the same way a
+    # catalog number does; a bool is left alone because it is never a port.
     if isinstance(value, bool):
         return value
-    if isinstance(value, (int, float)):
-        return value
-    text = str(value).strip()
-    if not text:
-        return value
-    try:
-        number = float(text)
-    except ValueError:
-        return value
-    return int(number) if number.is_integer() else number
+    return coerce_catalog_value({"type": "number"}, value)
+
+
+_GRID_METER_DRAFT_KEYS = ("type", "ip", "port", "url", "power_path", "channels")
+
+
+def _grid_meter_changes(grid_meter):
+    """Turn the grid-meter draft into typed changes for the canonical mutation.
+
+    Only keys the draft actually carries become changes, so a value the editor
+    never rendered cannot clear a stored one. Narrowing to what the target
+    variant may hold is the canonical mutation's job, not this adapter's.
+    """
+
+    changes = []
+    for key in _GRID_METER_DRAFT_KEYS:
+        if key not in grid_meter:
+            continue
+        value = grid_meter[key]
+        if key == "port" and value is None:
+            continue
+        changes.append(ConfigChange(key, value))
+    mqtt = grid_meter.get("mqtt")
+    if isinstance(mqtt, dict):
+        changes.extend(ConfigChange(f"mqtt.{key}", value) for key, value in mqtt.items())
+    return changes
 
 
 def _merge_grid_meter(merged, grid_meter, issues):
+    """Apply the grid-meter draft, then resolve any broker the draft names.
+
+    Field interpretation, the variant switch and the nested/legacy-flat decision
+    all belong to the canonical mutation; what stays here is the Maintenance
+    policy around it — an absent meter may be removed, and a draft broker is
+    resolved against this config's own profiles.
+    """
+
     if not isinstance(grid_meter, dict):
         return
     if grid_meter.get("present") is False:
@@ -1606,32 +1630,16 @@ def _merge_grid_meter(merged, grid_meter, issues):
     if not isinstance(target, dict):
         target = {}
         merged["grid_meter"] = target
-    original_type = str(target.get("type") or "").strip().lower()
-    if grid_meter.get("type"):
-        target["type"] = str(grid_meter["type"]).strip().lower()
+
+    apply_grid_meter_changes(
+        target,
+        _grid_meter_changes(grid_meter),
+        MAINTENANCE_POLICY,
+        credential=CredentialIntent.from_draft(grid_meter.get("mqtt")),
+    )
+
     new_type = str(target.get("type") or "").strip().lower()
-    if "ip" in grid_meter:
-        ip_value = str(grid_meter.get("ip") or "").strip()
-        # Never introduce an empty ip on a meter that never had one: a flat MQTT
-        # meter keeps its connection in flat/nested MQTT fields, not in ip.
-        if ip_value or "ip" in target:
-            target["ip"] = ip_value
-    if grid_meter.get("port") is not None:
-        target["port"] = _coerce_number(grid_meter["port"])
-    for key in ("url", "power_path"):
-        if grid_meter.get(key):
-            target[key] = str(grid_meter[key]).strip()
-    channels = grid_meter.get("channels")
-    if isinstance(channels, list):
-        target["channels"] = [str(item).strip() for item in channels if str(item).strip()]
-    # Stale-key cleanup belongs only to an explicit type change. A no-op apply
-    # must not migrate a Core-supported legacy flat MQTT meter by deleting its
-    # connection fields (host/port/topic/…), which would pass Maintenance
-    # validation yet be rejected by EMS Core at startup.
-    if new_type != original_type:
-        _strip_stale_grid_meter_keys(target)
     if new_type in _MQTT_GRID_METER_TYPES:
-        _merge_grid_meter_mqtt(target, grid_meter.get("mqtt"), new_type)
         broker = grid_meter.get("broker")
         if isinstance(broker, dict) and broker:
             _resolve_draft_broker_ref(
@@ -1650,120 +1658,22 @@ def _grid_meter_mqtt_container(target):
     nested = target.get("mqtt")
     if isinstance(nested, dict):
         return nested
-    if any(key in target for key in _MQTT_GRID_METER_FLAT_KEYS):
+    if any(key in target for key in mqtt_grid_meter_keys()):
         return target
     nested = {}
     target["mqtt"] = nested
     return nested
 
 
-def _editable_mqtt_grid_meter_keys(meter_type):
-    """Editable MQTT keys for one variant, or the union for an unknown type.
-
-    ``broker_ref`` names a broker profile rather than a connection value, so it
-    is editable for every MQTT variant; the password never round-trips through
-    the draft and is handled separately.
-    """
-
-    spec = grid_meter_variant_field_spec(meter_type) if meter_type else None
-    if spec is None:
-        return _MQTT_GRID_METER_EDIT_KEYS
-    allowed = (set(spec["mqtt_keys"]) - {"password"}) | {"broker_ref"}
-    return tuple(key for key in _MQTT_GRID_METER_EDIT_KEYS if key in allowed)
-
-
-def _merge_grid_meter_mqtt(target, draft_mqtt, meter_type=None):
-    """Write edited MQTT grid-meter values, preserving the stored representation.
-
-    A value is only written when it differs from the currently stored one, so
-    an unchanged draft stays a byte-level no-op for both nested and legacy flat
-    configs; edits keep the representation the config already uses (a flat
-    meter stays flat, a nested one stays nested). The password follows the
-    broker rules: blank keeps the stored secret, ``clear_password`` removes it,
-    a non-empty value replaces it.
-
-    Editable keys are narrowed to what the selected variant may carry. A draft
-    still holds the values of the variant it was loaded from, so without this a
-    type switch would strip a foreign key and then write it straight back.
-    """
-
-    if not isinstance(draft_mqtt, dict) or not draft_mqtt:
-        return
-    editable = _editable_mqtt_grid_meter_keys(meter_type)
-    current = grid_meter_mqtt_settings(target)
-    nested = target.get("mqtt")
-    has_nested = isinstance(nested, dict)
-    has_flat = any(key in target for key in _MQTT_GRID_METER_FLAT_KEYS)
-
-    def container():
-        nonlocal nested, has_nested
-        if has_nested:
-            return nested
-        if has_flat:
-            return target
-        nested = {}
-        target["mqtt"] = nested
-        has_nested = True
-        return nested
-
-    for key in editable:
-        if key not in draft_mqtt:
-            continue
-        value = draft_mqtt.get(key)
-        if value == current.get(key):
-            continue
-        if isinstance(value, str):
-            value = value.strip()
-        if key in ("port", "max_age_seconds") and value not in (None, ""):
-            value = _coerce_number(value)
-        if value == current.get(key):
-            continue
-        dest = container()
-        if value in (None, ""):
-            dest.pop(key, None)
-        else:
-            dest[key] = value
-
-    secret_container = nested if has_nested else (target if has_flat else None)
-    if draft_mqtt.get("clear_password"):
-        if secret_container is not None:
-            secret_container.pop("password", None)
-    else:
-        password = draft_mqtt.get("password")
-        if isinstance(password, str) and password:
-            container()["password"] = password
-
-
-def _strip_stale_grid_meter_keys(target):
-    """Drop keys that do not belong to the selected grid meter type.
-
-    The per-variant decision is the shared catalog-driven one, so a switch
-    inside the MQTT family is cleaned up as precisely as a switch between HTTP
-    and MQTT. Flat legacy MQTT keys are a maintenance-only concern — the setup
-    preview never writes that representation — so they are removed here, on top
-    of the shared cleanup, whenever the target variant does not read them from
-    the top level.
-    """
-
-    meter_type = str(target.get("type") or "").strip().lower()
-    strip_incompatible_grid_meter_fields(target, meter_type)
-    for key in _MQTT_GRID_METER_FLAT_KEYS:
-        if key in GRID_METER_KNOWN_TOP_KEYS:
-            # Also a legitimate nested-variant top key (e.g. ``port``); the
-            # shared cleanup already decided it.
-            continue
-        target.pop(key, None)
-
-
 def _merge_features(merged, features):
     if not isinstance(features, dict):
         return
-    index = _maintenance_field_index()
-    for path, raw_value in features.items():
-        field = index.get(path)
-        if field is None:
-            continue
-        _set_path(merged, path, _coerce(field, raw_value))
+    apply_config_changes(
+        merged,
+        [ConfigChange(path, value) for path, value in features.items()],
+        MAINTENANCE_POLICY,
+        field_index=_maintenance_field_index(),
+    )
 
 
 # --- validation ----------------------------------------------------------
@@ -1981,60 +1891,17 @@ def _append_mqtt_credential_consumer_issues(validation, config):
 def summarize_config_changes(before, after):
     """Return a compact, bounded diff of leaf-value changes between two configs.
 
-    Dict keys flatten with dots and list indices with ``[i]`` (so per-device
-    fields read as ``devices[0].max_power``). Scalar lists compare as a single
-    leaf; comment keys are skipped. Values are bounded for safe UI rendering.
+    The flattening, ordering and secret suppression are the canonical ones; the
+    Admin half is which keys count as secret and how far a value is bounded for
+    UI rendering.
     """
 
-    before_leaves = {}
-    after_leaves = {}
-    _flatten(before, "", before_leaves)
-    _flatten(after, "", after_leaves)
-
-    def _bound(path, value):
-        # A secret leaf (broker password, token, app key) is never surfaced in a
-        # diff, even when its value changed.
-        return _REDACTED if _is_secret_leaf(path) else _bounded(value)
-
-    changes, added, removed = [], [], []
-    for path in sorted(set(before_leaves) | set(after_leaves)):
-        in_before = path in before_leaves
-        in_after = path in after_leaves
-        if in_before and in_after:
-            if before_leaves[path] != after_leaves[path]:
-                changes.append(
-                    {
-                        "path": path,
-                        "before": _bound(path, before_leaves[path]),
-                        "after": _bound(path, after_leaves[path]),
-                    }
-                )
-        elif in_after:
-            added.append({"path": path, "after": _bound(path, after_leaves[path])})
-        else:
-            removed.append({"path": path, "before": _bound(path, before_leaves[path])})
-
-    return {
-        "changed": bool(changes or added or removed),
-        "changes": changes,
-        "added": added,
-        "removed": removed,
-    }
-
-
-def _flatten(value, prefix, out):
-    if isinstance(value, dict):
-        for key, child in value.items():
-            if isinstance(key, str) and key.startswith("_"):
-                continue
-            path = f"{prefix}.{key}" if prefix else str(key)
-            _flatten(child, path, out)
-        return
-    if isinstance(value, list) and any(isinstance(item, dict) for item in value):
-        for index, child in enumerate(value):
-            _flatten(child, f"{prefix}[{index}]", out)
-        return
-    out[prefix] = value
+    return mutation_diff(
+        before,
+        after,
+        is_secret_leaf=_is_secret_leaf,
+        bound_value=_bounded,
+    )
 
 
 __all__ = [

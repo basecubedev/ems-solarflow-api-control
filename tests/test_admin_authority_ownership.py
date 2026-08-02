@@ -111,15 +111,66 @@ def test_admin_builds_no_field_index_of_its_own():
     assert offenders == []
 
 
+# --- config mutation ---------------------------------------------------------
+def test_catalog_coercion_has_one_owner():
+    """No Admin module reimplements how a catalog type reads a raw value."""
+
+    from admin.device_common_fields import coerce_field_value
+    from ems.config_mutation import coerce_catalog_value
+
+    assert coerce_field_value is coerce_catalog_value
+    offenders = [
+        path.name
+        for path in _admin_modules()
+        if "def coerce_field_value" in path.read_text()
+        or "def coerce_catalog_value" in path.read_text()
+    ]
+    assert offenders == []
+
+
 def test_grid_meter_variant_cleanup_has_one_authority():
+    """The variant cleanup is defined in Core and imported by both flows."""
+
+    offenders = [
+        path.name
+        for path in _admin_modules()
+        if "def strip_incompatible_grid_meter_fields" in path.read_text()
+        or "def strip_stale_grid_meter_keys" in path.read_text()
+    ]
+    assert offenders == []
+
+    import admin.config_preview as preview
+    import ems.config_mutation as mutation
+
+    assert (
+        preview.strip_incompatible_grid_meter_fields
+        is mutation.strip_incompatible_grid_meter_fields
+    )
+
+
+def test_both_workflows_mutate_through_the_shared_core():
+    """Setup and Maintenance adapt inputs; neither applies a field itself."""
+
     import admin.maintenance_config as maintenance
     import admin.setup_config as setup
 
-    assert "grid_meter_variant_field_spec" in pathlib.Path(setup.__file__).read_text()
-    # Maintenance reaches the same catalog spec through the shared cleanup.
-    assert "strip_incompatible_grid_meter_fields" in (
-        pathlib.Path(maintenance.__file__).read_text()
-    )
+    for module in (setup, maintenance):
+        source = pathlib.Path(module.__file__).read_text()
+        assert "from ems.config_mutation import" in source
+        assert "apply_grid_meter_changes" in source
+        assert "apply_config_changes" in source or "apply_common_values" in source
+
+
+def test_the_browser_holds_no_config_mutation_rule():
+    """Variant cleanup and credential intent stay server-side."""
+
+    source = ADMIN_JS.read_text()
+    for marker in (
+        "strip_incompatible_grid_meter",
+        "GRID_METER_KNOWN_TOP_KEYS",
+        "grid_meter_variant_field_spec",
+    ):
+        assert marker not in source
 
 
 # --- output-control capability ----------------------------------------------

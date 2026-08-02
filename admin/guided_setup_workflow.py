@@ -30,6 +30,7 @@ from pathlib import Path
 
 from admin.models import utc_now_iso
 from admin.secret_policy import SCOPE_FINGERPRINT, is_secret_key
+from ems.config_mutation import CONFIG_MUTATION_CONTRACT_VERSION
 
 GUIDED_SETUP_WORKFLOW_FILE = "guided-setup-workflow.json"
 # 2 adds the validated ``cleanup`` state. A version-1 record reads as absent
@@ -188,13 +189,17 @@ def setup_mutation_fingerprint(
     the fingerprint and forces a re-review. ``device_plan_id`` is the identity
     of the device plan the draft was built from: it is not a config input, but
     it *is* mutation authority, so a mutation presented under a different plan
-    can never match a preview issued under this one. Transport-only fields
-    (``overwrite``, the workflow/preview IDs, the legacy ``config_revision``)
-    stay out.
+    can never match a preview issued under this one. The canonical mutation
+    contract version joins them: the same inputs read under different mutation
+    semantics are a different config, so a preview issued by an older contract
+    cannot be applied by a process that would now write something else.
+    Transport-only fields (``overwrite``, the workflow/preview IDs, the legacy
+    ``config_revision``) stay out.
     """
 
     body = {
-        "fingerprint_version": 2,
+        "fingerprint_version": 3,
+        "mutation_contract_version": CONFIG_MUTATION_CONTRACT_VERSION,
         "draft": _canonical(draft),
         "supported_grid_meter_count": supported_grid_meter_count,
         "features": _canonical(features),

@@ -204,6 +204,63 @@ result or enforce it — they never recompute it. The structural contracts in
 | MQTT TLS/broker semantics | `ems/config.py` (`normalize_mqtt_tls_mode`, `resolve_mqtt_tls_metadata`, `canonical_mqtt_tls_mode`, `mqtt_tls_mode_name`, `MQTT_TLS_OBSERVED_MODES`) | `admin/zendure_mqtt_broker_profiles.py`, `discovery_connections.py`, `mqtt_topic_discovery.py`, `zendure_mqtt_config_proposals.py` |
 | Secret classification | `admin/secret_policy.py` (catalog metadata via `ems/config_catalog.py::is_secret_catalog_field`) | draft strip, browser redaction, workflow fingerprint |
 | Catalog fields and editability | `ems/config_catalog.py` (`config_field_index`, `is_editable_catalog_field`, `grid_meter_variant_field_spec`) | `setup_config.py`, `maintenance_config.py`, `device_common_fields.py` |
+| Config mutation semantics | `ems/config_mutation.py` (`coerce_catalog_value`, `resolve_change`, `apply_config_changes`, `apply_grid_meter_changes`, `strip_incompatible_grid_meter_fields`, `mutation_diff`) | `admin/setup_config.py` and `admin/config_preview.py` (Setup adapter), `admin/maintenance_config.py` (Maintenance adapter), `admin/device_common_fields.py` (device value set) |
+
+### Shared config mutation
+
+A field means the same thing on every screen. The workflows differ in *policy*,
+not in interpretation, so both hand the change to one core:
+
+```text
+base config + typed changes + explicit policy
+  -> ems/config_mutation.py
+       -> normalized config
+       -> issues
+       -> deterministic, secret-safe mutation record
+```
+
+`ConfigChange(path, value, operation)` carries an intent rather than a bare
+value, and `MutationPolicy` carries the workflow half:
+
+| Policy field | Setup | Maintenance |
+|---|---|---|
+| `scope` | `setup` | `maintenance` |
+| `allow_secret` | yes (a new install enters its own credentials) | no (secrets never round-trip through the editor) |
+| `preserve_legacy_representations` | no — a generated config gets the canonical nested shape | yes — an existing flat MQTT grid meter is edited where it lives |
+| `allow_remove` | yes | yes |
+
+The `set`/`clear`/`keep` rules the core owns:
+
+- an explicit operation always wins;
+- an empty answer **clears** the key, so an emptied number never becomes `""`
+  in a config EMS Core has to parse;
+- a **secret** inverts that default: an empty credential box means "not
+  retyped" and keeps the stored value, so only `clear_password` removes one.
+  `CredentialIntent.from_draft()` is the one reader of that fragment;
+- unknown paths are not writable, and existing unknown config keys an operator
+  added by hand are never touched.
+
+Grid-meter mutation is one function. It applies the type first, then the
+top-level values, *then* the variant cleanup — a draft still holds the values of
+the variant it was loaded from, so a cleanup that ran first would have stale
+keys written back in behind it. MQTT values are narrowed to what the target
+variant may carry and land in the representation the block already uses
+(Maintenance) or in the canonical nested block (Setup).
+
+`mutation_diff` flattens both configs to sorted leaf paths (`devices[0].max_power`),
+never renders a secret on either side, and is stable against dict ordering — so
+it is safe both for the browser and as preview input. Admin supplies which keys
+count as secret (`admin/secret_policy.py`) and how far a value is bounded.
+
+The canonical semantics are versioned: `CONFIG_MUTATION_CONTRACT_VERSION` enters
+`setup_mutation_fingerprint` (version 3), so a preview issued under older
+mutation rules cannot be applied by a process that would now write something
+else from the same answers.
+
+Domain matrices live in `tests/test_config_mutation.py`; the Setup/Maintenance
+equivalence cases in `tests/test_admin_setup_maintenance_mutation_parity.py`;
+the ownership pins in `tests/test_admin_authority_ownership.py` and
+`tests/test_admin_shared_config_normalization.py`.
 
 ### Where a new thing is declared
 
@@ -222,6 +279,8 @@ result or enforce it — they never recompute it. The structural contracts in
 | device-plan conflict code | `admin/server.py` (`DEVICE_PLAN_*`) | `tests/test_admin_setup_plan_binding.py` |
 | grid-meter field | `ems/config_catalog.py::GRID_METER_VARIANTS` | `tests/test_admin_shared_config_normalization.py` |
 | catalog field for an editor | `ems/config_catalog.py` (scope/level/editable/risk) | `tests/test_config_field_index.py` |
+| config-mutation rule (coercion, clear/keep, grid-meter normalization) | `ems/config_mutation.py` | `tests/test_config_mutation.py`, `tests/test_admin_setup_maintenance_mutation_parity.py` |
+| `ems/` module Admin imports | the module **and** a `COPY` line in `deploy/admin/Dockerfile` (the Admin image ships an explicit file list, not all of `ems/`) | `tests/test_admin_docker_image_contract.py` |
 
 ### Device identity and connection planning
 

@@ -11,8 +11,6 @@ duplicates EMS runtime logic.
 import copy
 
 from ems.config_catalog import (
-    GRID_METER_KNOWN_MQTT_KEYS,
-    GRID_METER_KNOWN_TOP_KEYS,
     GRID_METER_VARIANTS,
     INVERTER_CONNECTION_VARIANTS,
     SETUP_GROUPS,
@@ -21,10 +19,16 @@ from ems.config_catalog import (
     config_field_index,
     get_config_feature_sections,
     is_editable_catalog_field,
-    grid_meter_variant_field_spec,
+)
+from ems.config_mutation import (
+    GRID_METER_PREFIX,
+    SETUP_POLICY,
+    ConfigChange,
+    apply_common_values,
+    apply_config_changes,
+    apply_grid_meter_changes,
 )
 from ems.mqtt_control.zendure_profiles import hardware_profile_selector_options
-from admin.device_common_fields import coerce_field_value
 from admin.secret_policy import is_secret_catalog_field
 from admin.zendure_mqtt_config_draft import generation_catalog
 
@@ -61,49 +65,6 @@ def grid_meter_variant_catalog():
             "level": variant.get("level", "normal"),
         }
     return variants
-
-
-def mqtt_grid_meter_keys():
-    """Every ``grid_meter.mqtt`` key any known variant may carry.
-
-    Derived, so a field added to ``GRID_METER_VARIANTS`` is known to both Admin
-    flows at once instead of waiting for a hand-maintained mirror list.
-    """
-
-    return frozenset(GRID_METER_KNOWN_MQTT_KEYS)
-
-
-def strip_incompatible_grid_meter_fields(grid, grid_type):
-    """Drop grid-meter fields that belong to a different variant.
-
-    The allowed keys come from the EMS-owned catalog
-    (:func:`grid_meter_variant_field_spec`), so both Admin flows clean up a
-    variant switch the same way — including a switch *inside* the MQTT family,
-    where a coarse MQTT/non-MQTT split leaves keys the target variant cannot
-    carry. Only keys belonging to some known variant are eligible for removal;
-    operator-defined custom keys survive untouched.
-    """
-
-    spec = grid_meter_variant_field_spec(grid_type)
-    if spec is None:
-        # Unknown type: fall back to the coarse HTTP<->MQTT split.
-        grid.pop("mqtt", None)
-        return
-
-    allowed = spec["keys"]
-    for key in list(grid.keys()):
-        if key in GRID_METER_KNOWN_TOP_KEYS and key not in allowed:
-            grid.pop(key, None)
-
-    mqtt = grid.get("mqtt")
-    if isinstance(mqtt, dict):
-        allowed_mqtt = spec["mqtt_keys"]
-        if not allowed_mqtt:
-            grid.pop("mqtt", None)
-        else:
-            for key in list(mqtt.keys()):
-                if key in GRID_METER_KNOWN_MQTT_KEYS and key not in allowed_mqtt:
-                    mqtt.pop(key, None)
 
 
 def hardware_section_catalog(mode):
@@ -239,48 +200,41 @@ def _device_field_index():
     )
 
 
-# Catalog field coercion is shared with the Zendure MQTT draft path; it lives
-# in admin.device_common_fields (below this module in the import graph).
-_coerce = coerce_field_value
-
-
-def _set_path(config, path, value):
-    parts = path.split(".")
-    cursor = config
-    for part in parts[:-1]:
-        child = cursor.get(part)
-        if not isinstance(child, dict):
-            child = {}
-            cursor[part] = child
-        cursor = child
-    cursor[parts[-1]] = value
-
-
 def apply_setup_features(config, features):
     """Apply catalog-driven setup feature values onto a config preview.
 
     ``features`` maps stable catalog config paths to user-entered values. Unknown
     paths and hidden/read-only fields are ignored so the UI cannot write outside
     the catalog. Device entries are owned by the device draft, not by features.
-    Returns the list of applied paths.
+    Grid-meter paths go through the canonical grid-meter mutation so a variant
+    switch, a cleared field and a padded value read the same here as they do in
+    Maintenance. Returns the list of applied paths.
     """
 
-    if not isinstance(features, dict) or not features:
+    if not isinstance(config, dict) or not isinstance(features, dict) or not features:
         return []
 
     index = _setup_field_index()
-    applied = []
+    grid_changes, other_changes = [], []
     for path, raw_value in features.items():
         if not isinstance(path, str):
             continue
-        field = index.get(path)
-        if field is None:
-            continue
-        if "[]" in path:
-            # Repeated device entries flow through the device draft, not here.
-            continue
-        _set_path(config, path, _coerce(field, raw_value))
-        applied.append(path)
+        if path.startswith(GRID_METER_PREFIX):
+            grid_changes.append(ConfigChange(path[len(GRID_METER_PREFIX):], raw_value))
+        else:
+            other_changes.append(ConfigChange(path, raw_value))
+
+    applied = list(apply_config_changes(config, other_changes, SETUP_POLICY, field_index=index).applied_paths)
+    if grid_changes:
+        grid = config.get("grid_meter")
+        if not isinstance(grid, dict):
+            grid = {}
+            config["grid_meter"] = grid
+        applied.extend(
+            apply_grid_meter_changes(
+                grid, grid_changes, SETUP_POLICY, field_index=index
+            ).applied_paths
+        )
     return applied
 
 
@@ -297,17 +251,8 @@ def apply_device_config_values(device, values):
     if not isinstance(device, dict) or not isinstance(values, dict) or not values:
         return []
 
-    index = _device_field_index()
-    applied = []
-    for key, raw_value in values.items():
-        if not isinstance(key, str):
-            continue
-        field = index.get(key)
-        if field is None:
-            continue
-        device[key] = _coerce(field, raw_value)
-        applied.append(key)
-    return applied
+    applied = apply_common_values(device, values, _device_field_index())
+    return [change.path for change in applied]
 
 
 __all__ = [

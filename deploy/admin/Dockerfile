@@ -63,6 +63,9 @@ COPY ems/__init__.py ./ems/__init__.py
 COPY ems/paths.py ./ems/paths.py
 COPY ems/config_catalog.py ./ems/config_catalog.py
 COPY ems/config.py ./ems/config.py
+# The canonical config mutation semantics both Admin workflows apply changes
+# through; Core-owned and client-free.
+COPY ems/config_mutation.py ./ems/config_mutation.py
 # Shared Admin/Core identity and browser/support redaction contracts. Admin
 # derives opaque scoped device tokens and sanitizes diagnostics through these
 # modules; they contain no network client or broker connection code.

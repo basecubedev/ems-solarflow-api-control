@@ -13204,28 +13204,17 @@ function mconfigGridMeterValue(meter, path) {
   return meter[key];
 }
 
+// The operator's answer travels as given. What an emptied field means — clear
+// the setting, or keep a stored secret that was never shown — is a config
+// semantic the backend owns (ems/config_mutation.py), so dropping the key here
+// would hide the answer rather than express it.
 function mconfigSetGridMeterValue(meter, path, value) {
   if (path.startsWith(MCONFIG_GRID_MQTT_PREFIX)) {
     const key = path.slice(MCONFIG_GRID_MQTT_PREFIX.length);
-    const mqtt = mconfigGridMqtt(meter);
-    if (String(value).trim() === "") delete mqtt[key];
-    else mqtt[key] = value;
+    mconfigGridMqtt(meter)[key] = value;
     return;
   }
-  const key = path.replace("grid_meter.", "");
-  if (key === "channels") {
-    const parts = String(value)
-      .split(",")
-      .map((part) => part.trim())
-      .filter(Boolean);
-    if (parts.length) meter.channels = parts;
-    else delete meter.channels;
-    return;
-  }
-  // The IP always writes (backend guards empty-ip semantics); other endpoint
-  // values fall back to "unset" when cleared.
-  if (key !== "ip" && String(value).trim() === "") delete meter[key];
-  else meter[key] = value;
+  meter[path.replace("grid_meter.", "")] = value;
 }
 
 // The stored MQTT password is never displayed: an empty field keeps it, the
