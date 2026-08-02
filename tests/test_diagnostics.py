@@ -1701,6 +1701,7 @@ def test_diagnose_zendure_mqtt_control_device_is_control_capable():
             "name": "Zendure Battery",
             "hardware_profile": "solarflow_800_pro_2",
             "mqtt": {
+                "source": "local_mqtt",
                 "topic_family": "legacy_zendure_json",
                 "device_id": "DEV1",
                 "product_key": "PK1",
@@ -2166,6 +2167,7 @@ def _control_ready_telemetry_only_device(**overrides):
         "name": "INV_2",
         "hardware_profile": "solarflow_800_pro_2",
         "mqtt": {
+            "source": "local_mqtt",
             "topic_family": "legacy_zendure_json_alt",
             "device_id": "DEV1",
             "product_key": "PK1",

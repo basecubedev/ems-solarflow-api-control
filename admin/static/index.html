@@ -518,9 +518,10 @@
             </summary>
             <p class="mdns-message" role="status">
               Supported Zendure MQTT inverters join the same EMS control loop as
-              local API devices; output control is enabled where a verified write method exists.
-              Devices whose topic family has no verified write method are added as
-              telemetry-only.
+              local API devices. Output control is enabled for a known model whose
+              write route is verified on the MQTT broker source that connection
+              uses; every other device is added as a telemetry source, with the
+              reason shown on its card.
             </p>
             <p id="mqtt-proposals-message" class="mdns-message" role="status" hidden></p>
             <div id="mqtt-proposals-empty" class="results-empty">
@@ -819,10 +820,10 @@
                           <select id="config-mqtt-device-model"></select>
                         </label>
                         <label class="field" id="config-mqtt-device-productkey-field" hidden>
-                          <span class="field-label">Product key (optional)</span>
+                          <span class="field-label">Product key</span>
                           <input id="config-mqtt-device-productkey" type="text">
                         </label>
-                        <p class="future-note" id="config-mqtt-device-control-help" hidden></p>
+                        <p class="future-note" id="config-mqtt-device-control-help"></p>
                         <p class="future-note" id="config-mqtt-device-generation-help"></p>
                         <p class="future-note" id="config-mqtt-device-model-help"></p>
                         <button id="config-mqtt-device-add" type="submit" class="primary-button compact">

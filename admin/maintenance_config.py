@@ -19,6 +19,11 @@ from admin.device_common_fields import (
     common_device_value_fields,
 )
 from admin.inverter_names import next_compact_inverter_name
+from admin.secret_policy import (
+    REDACTED_PLACEHOLDER,
+    SCOPE_BROWSER_VIEW,
+    is_secret_key,
+)
 from admin.install_context import detect_install_context
 from admin.setup_config import (
     _set_path,
@@ -57,10 +62,11 @@ from ems.config import (
 from ems.config_catalog import (
     GRID_METER_KNOWN_TOP_KEYS,
     ZENDURE_MQTT_BROKER_HELP,
+    config_field_index,
     device_common_defaults,
     device_common_field_keys,
-    get_config_feature_field_index,
     get_config_feature_sections,
+    is_editable_catalog_field,
     grid_meter_variant_field_spec,
     http_grid_meter_types,
 )
@@ -114,31 +120,7 @@ _MQTT_GRID_METER_EDIT_KEYS = tuple(
 _SERIAL_PLACEHOLDER = "YOUR_SN"
 _MAX_STRING_LEN = 160
 
-# Leaf key fragments whose value is a secret and must never be surfaced to the
-# browser (draft, diff or preview JSON). Username is not a secret and is kept.
-_SECRET_LEAF_FRAGMENTS = (
-    "password",
-    "passphrase",
-    "token",
-    "secret",
-    "credential",
-    "app_key",
-    "apikey",
-    "product_key",
-)
-# Reference keys that merely *name* an external secret record; the reference is
-# not a secret and the setup preview shows it, so maintenance must too.
-_NON_SECRET_LEAF_KEYS = (
-    "credentials_ref",
-    # A keyed, non-reversible equality helper deliberately issued to the
-    # browser; it is neither a bearer token nor config source-of-truth.
-    PHYSICAL_IDENTITY_TOKEN_FIELD,
-    PHYSICAL_IDENTITY_ALIAS_TOKENS_FIELD,
-    # Boolean presence metadata used by the browser to render keep/clear/set
-    # controls. It carries no credential value and must remain a boolean.
-    "has_password",
-)
-_REDACTED = "••••"
+_REDACTED = REDACTED_PLACEHOLDER
 
 
 def _issue(code, message):
@@ -146,10 +128,7 @@ def _issue(code, message):
 
 
 def _is_secret_leaf(key):
-    lowered = str(key).lower()
-    if lowered in _NON_SECRET_LEAF_KEYS:
-        return False
-    return any(fragment in lowered for fragment in _SECRET_LEAF_FRAGMENTS)
+    return is_secret_key(key, scope=SCOPE_BROWSER_VIEW)
 
 
 def _redact_secrets(value):
@@ -334,26 +313,16 @@ def _is_maintenance_field(field):
     surface a secret value or write outside the catalog.
     """
 
-    if field.get("scope") not in ("maintenance", "both"):
-        return False
-    if field.get("level") == "deprecated":
-        return False
-    if field.get("editable") is False:
-        return False
-    if field.get("risk") == "secret" or field.get("type") == "password":
-        return False
-    return True
+    return is_editable_catalog_field(field, scope="maintenance", allow_secret=False)
 
 
 def _maintenance_field_index():
-    index = {}
-    for path, field in get_config_feature_field_index().items():
-        if "[]" in path or path.startswith("devices") or path.startswith("grid_meter"):
-            continue
-        if not _is_maintenance_field(field):
-            continue
-        index[path] = field
-    return index
+    return config_field_index(
+        scope="maintenance",
+        allow_secret=False,
+        exclude_repeated=True,
+        exclude_prefixes=("devices", "grid_meter"),
+    )
 
 
 # Catalog device fields (beyond name/ip/sn identity) the editor may write.
@@ -953,7 +922,13 @@ def _strip_stale_connection_keys(device):
 
 
 def materialize_maintenance_device(
-    *, existing_device, draft_item, transport, defaults, connection_switched=False
+    *,
+    existing_device,
+    draft_item,
+    transport,
+    defaults,
+    connection_switched=False,
+    broker_sources=None,
 ):
     """Materialize one maintenance draft entry into a config device.
 
@@ -982,7 +957,9 @@ def materialize_maintenance_device(
     else:
         device = copy.deepcopy(existing_device)
     if is_mqtt:
-        apply_zendure_mqtt_draft_fields(device, draft_item)
+        apply_zendure_mqtt_draft_fields(
+            device, draft_item, broker_sources=broker_sources
+        )
     else:
         _apply_device_fields(device, draft_item)
     if new_device or switched:
@@ -1395,6 +1372,7 @@ def _merge_devices(merged, devices, issues, *, identity_token_key=None):
                 transport="zendure_mqtt",
                 defaults=defaults,
                 connection_switched=connection_switched,
+                broker_sources=broker_sources,
             )
             # A newly added device, a transport switch and an MQTT device moved
             # to another concrete connection provision their broker; an ordinary
@@ -1800,6 +1778,10 @@ def _validate(config, merge_issues=()):
         known_refs = set(broker_views)
         zmqtt = config.get("zendure_mqtt")
         brokers_defined = isinstance(zmqtt, dict) and bool(zmqtt.get("brokers"))
+        # The broker profile is authoritative for a device's transport source,
+        # which is a write-capability axis: validating without it would refuse
+        # every control device as having no resolvable source.
+        device_broker_sources = broker_sources_from_config(config)
         names = []
         for index, device in enumerate(devices, 1):
             if not isinstance(device, dict):
@@ -1827,6 +1809,7 @@ def _validate(config, merge_issues=()):
                     device,
                     known_broker_refs=known_refs,
                     brokers_defined=brokers_defined,
+                    broker_sources=device_broker_sources,
                 ):
                     if issue.get("severity") == "error":
                         validation["errors"].append(

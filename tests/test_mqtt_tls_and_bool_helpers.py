@@ -33,9 +33,75 @@ def test_normalize_mqtt_tls_mode(mode, expected):
     assert cfg.normalize_mqtt_tls_mode(mode) == expected
 
 
+@pytest.mark.parametrize(
+    "alias", ["", "plaintext", "plain", "disabled", "none", "tcp"]
+)
+def test_plain_aliases_resolve_to_plaintext(alias):
+    assert cfg.normalize_mqtt_tls_mode(alias) == (False, False)
+
+
+@pytest.mark.parametrize(
+    "alias", ["system_ca", "tls", "mqtts", "ssl", "secure", "  TLS  "]
+)
+def test_system_ca_aliases_resolve_to_verified_tls(alias):
+    assert cfg.normalize_mqtt_tls_mode(alias) == (True, False)
+
+
 def test_unknown_tls_mode_raises_never_downgrades():
     with pytest.raises(ValueError):
         cfg.normalize_mqtt_tls_mode("totally_unknown")
+
+
+# --- canonical mode names (one alias vocabulary) -----------------------------
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (None, None),
+        ("", ""),
+        ("system_ca", "system_ca"),
+        ("insecure_no_verify", "insecure_no_verify"),
+        # Transport-security modes the Zendure cloud discovery client reports.
+        ("encrypted_no_verify", "insecure_no_verify"),
+        ("pinned_ca", "insecure_no_verify"),
+        ("  Pinned_CA  ", "insecure_no_verify"),
+        # Anything else is passed through untouched so strict validation, not a
+        # silent rewrite, decides what an unknown mode means.
+        ("totally_unknown", "totally_unknown"),
+    ],
+)
+def test_canonical_mqtt_tls_mode(value, expected):
+    assert cfg.canonical_mqtt_tls_mode(value) == expected
+
+
+@pytest.mark.parametrize(
+    "tls,tls_insecure,expected",
+    [
+        (False, False, None),
+        (None, False, None),
+        (True, False, "system_ca"),
+        (True, True, "insecure_no_verify"),
+    ],
+)
+def test_mqtt_tls_mode_name(tls, tls_insecure, expected):
+    assert cfg.mqtt_tls_mode_name(tls=tls, tls_insecure=tls_insecure) == expected
+
+
+def test_cloud_discovery_modes_come_from_core():
+    from admin import zendure_cloud_mqtt as cloud
+
+    assert set(cloud.TLS_MODES) == set(cfg.MQTT_TLS_OBSERVED_MODES)
+    assert {cloud.TLS_SYSTEM_CA, cloud.TLS_PINNED_CA, cloud.TLS_ENCRYPTED_NO_VERIFY} == (
+        set(cfg.MQTT_TLS_OBSERVED_MODES)
+    )
+    # Every observed mode a cloud connection can report resolves canonically.
+    for mode in cfg.MQTT_TLS_OBSERVED_MODES:
+        assert cfg.normalize_mqtt_tls_mode(cfg.canonical_mqtt_tls_mode(mode))[0] is True
+
+
+def test_canonical_mode_names_round_trip_through_metadata():
+    for name in ("system_ca", "insecure_no_verify"):
+        tls, insecure = cfg.normalize_mqtt_tls_mode(name)
+        assert cfg.mqtt_tls_mode_name(tls=tls, tls_insecure=insecure) == name
 
 
 def test_resolve_tls_metadata_mode_is_authoritative():

@@ -35,6 +35,7 @@ def test_manual_supported_model_control_selected_enables_write():
             "output_control": True,
         },
         "local_a",
+        broker_source="local_mqtt",
     )
     assert issues == []
     assert fragment["capabilities"]["write_output_limit"] is True
@@ -54,6 +55,7 @@ def test_manual_supported_generation_telemetry_only_when_control_not_selected():
             "output_control": False,
         },
         "local_a",
+        broker_source="local_mqtt",
     )
     assert issues == []
     assert fragment["capabilities"]["write_output_limit"] is False
@@ -65,6 +67,7 @@ def test_manual_default_is_telemetry_only():
         {"name": "Hyper", "generation": "hub_hyper_legacy",
          "serial_number": "SN1", "product_key": "PK1"},
         "local_a",
+        broker_source="local_mqtt",
     )
     assert issues == []
     assert fragment["capabilities"]["write_output_limit"] is False
@@ -81,6 +84,7 @@ def test_manual_unsupported_generation_control_request_falls_back_to_telemetry()
             "output_control": True,
         },
         "local_a",
+        broker_source="local_mqtt",
     )
     assert fragment is not None
     assert fragment["capabilities"]["write_output_limit"] is False
@@ -103,6 +107,7 @@ def test_manual_control_requires_write_target():
             "output_control": True,
         },
         "local_a",
+        broker_source="local_mqtt",
     )
     assert fragment is None
     assert issues
@@ -125,6 +130,7 @@ def test_new_device_projection_enables_control_for_concrete_model():
             "product_key": "PK9",
             "mqtt": {
                 "broker_ref": "local_a",
+            "source": "local_mqtt",
                 "topic_family": "legacy_zendure_json",
                 "device_id": "SN9",
                 "product_key": "PK9",
@@ -146,6 +152,7 @@ def test_new_device_projection_stays_telemetry_only_without_control():
             "hardware_profile": "hub_hyper_legacy",
             "mqtt": {
                 "broker_ref": "local_a",
+            "source": "local_mqtt",
                 "topic_family": "legacy_zendure_json",
                 "device_id": "SN9",
                 "product_key": "PK9",
@@ -167,6 +174,7 @@ def test_new_device_projection_cannot_force_control_on_unsupported_family():
             "output_control": True,
             "mqtt": {
                 "broker_ref": "local_a",
+            "source": "local_mqtt",
                 "topic_family": "zensdk_ha_scalar",
                 "device_id": "SN9",
             },
@@ -189,6 +197,7 @@ def _existing_supported_device(write_output_limit):
         "power_write_profile": "legacy_object_device_automation",
         "mqtt": {
             "broker_ref": "local_a",
+            "source": "local_mqtt",
             "topic_family": "legacy_zendure_json",
             "base_topic": "iot",
             "device_id": "SN1",
@@ -260,14 +269,17 @@ def test_existing_device_edit_without_control_field_preserves_state():
         assert device["capabilities"]["write_output_limit"] is stored
 
 
-def test_existing_device_cannot_be_forced_writable_on_unsupported_family():
+def _scalar_device_and_request(model):
     device = {
         "type": "zendure_mqtt",
         "name": "SF800",
         "enabled": True,
         "serial_number": "SN2",
         "mqtt": {
-            "broker_ref": "local_a",
+            "broker_ref": "cloud",
+            # Scalar telemetry is carried by the Zendure cloud broker here: that
+            # is the source on which the canonical write route is proven.
+            "source": "zendure_cloud_mqtt",
             "topic_family": "zensdk_ha_scalar",
             "base_topic": "Zendure",
             "device_id": "SN2",
@@ -278,14 +290,49 @@ def test_existing_device_cannot_be_forced_writable_on_unsupported_family():
         "name": "SF800",
         "original_name": "SF800",
         "serial_number": "SN2",
-        "hardware_profile": "solarflow_800_pro_2",
+        "hardware_profile": model,
         "output_control": True,
         "capabilities": {"read_power": True, "read_soc": True, "write_output_limit": True},
         "mqtt": dict(device["mqtt"]),
     }
+    return device, item
+
+
+def test_existing_device_cannot_be_forced_writable_without_a_supported_model():
+    device, item = _scalar_device_and_request("ace_1500")
     apply_zendure_mqtt_draft_fields(device, item)
     assert device["capabilities"]["write_output_limit"] is False
     assert "write_protocol" not in device["mqtt"]
+
+
+def test_a_known_model_without_a_product_key_is_refused_by_validation():
+    """The write route, not the telemetry family, is the missing precondition.
+
+    The projection keeps the operator's explicit request so validation returns
+    the actionable error instead of silently reverting the entry.
+    """
+
+    from ems.zendure_mqtt.config_entries import (
+        validate_zendure_mqtt_control_device_config,
+    )
+
+    device, item = _scalar_device_and_request("solarflow_800_pro_2")
+    apply_zendure_mqtt_draft_fields(device, item)
+
+    assert [issue["code"] for issue in
+            validate_zendure_mqtt_control_device_config(device)] == [
+        "write_target_missing"
+    ]
+
+
+def test_a_known_model_with_a_complete_route_stays_writable_on_a_scalar_family():
+    device, item = _scalar_device_and_request("solarflow_800_pro_2")
+    device["mqtt"]["product_key"] = "PKSCALAR"
+    item["mqtt"] = dict(device["mqtt"])
+    apply_zendure_mqtt_draft_fields(device, item)
+
+    assert device["capabilities"]["write_output_limit"] is True
+    assert device["hardware_profile"] == "solarflow_800_pro_2"
 
 
 def test_existing_alt_layout_device_stays_controllable_with_concrete_model():
@@ -303,6 +350,7 @@ def test_existing_alt_layout_device_stays_controllable_with_concrete_model():
         "power_write_profile": "zensdk_properties_write",
         "mqtt": {
             "broker_ref": "local_a",
+            "source": "local_mqtt",
             "topic_family": "legacy_zendure_json_alt",
             "base_topic": None,
             "device_id": "P2DEV",
@@ -440,6 +488,7 @@ def test_manual_control_without_route_device_id_is_not_writable():
             "output_control": True,
         },
         "local_a",
+        broker_source="local_mqtt",
     )
     assert fragment is None
     assert any(issue["code"] == "mqtt_device_id_missing" for issue in issues)
@@ -457,6 +506,7 @@ def test_manual_preserves_distinct_serial_and_route_device_id():
             "output_control": True,
         },
         "local_a",
+        broker_source="local_mqtt",
     )
     assert issues == []
     assert fragment["serial_number"] == "PHYSICAL-SERIAL"
@@ -474,6 +524,7 @@ def test_manual_does_not_copy_serial_into_route_device_id():
             "serial_number": "PHYSICAL-SERIAL",
         },
         "local_a",
+        broker_source="local_mqtt",
     )
     assert issues == []
     assert fragment["serial_number"] == "PHYSICAL-SERIAL"
@@ -491,6 +542,7 @@ def test_manual_does_not_copy_top_level_device_id_into_route_device_id():
             "device_id": "TOPLEVEL-ID",
         },
         "local_a",
+        broker_source="local_mqtt",
     )
     assert issues == []
     assert "device_id" not in fragment["mqtt"]

@@ -23,6 +23,7 @@ def _draft_item(**overrides):
         "product_key": "PK2",
         "mqtt": {
             "broker_ref": "local_a",
+            "source": "local_mqtt",
             "topic_family": "legacy_zendure_json",
             "device_id": "DEV2",
             "product_key": "PK2",
@@ -66,6 +67,7 @@ def test_new_addressable_device_needs_a_write_target_to_default_on():
             product_key="",
             mqtt={
                 "broker_ref": "local_a",
+                "source": "local_mqtt",
                 "topic_family": "legacy_zendure_json",
                 "device_id": "DEV2",
             },
@@ -83,6 +85,7 @@ def test_new_device_without_a_route_id_does_not_default_on():
         _draft_item(
             mqtt={
                 "broker_ref": "local_a",
+                "source": "local_mqtt",
                 "topic_family": "legacy_zendure_json",
                 "product_key": "PK2",
             }
@@ -104,6 +107,7 @@ def test_an_explicit_request_survives_a_missing_write_target():
             product_key="",
             mqtt={
                 "broker_ref": "local_a",
+                "source": "local_mqtt",
                 "topic_family": "legacy_zendure_json",
                 "device_id": "DEV2",
             },
@@ -122,6 +126,7 @@ def test_new_uncontrollable_device_stays_telemetry_only():
             hardware_model="",
             mqtt={
                 "broker_ref": "local_a",
+                "source": "local_mqtt",
                 "topic_family": "zensdk_ha_scalar",
                 "device_id": "DEV2",
             },

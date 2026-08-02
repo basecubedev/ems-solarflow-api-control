@@ -155,14 +155,22 @@ the Admin Console (see **Start** above), open `http://127.0.0.1:8090`, and pick
    protocol, supported operations, and validation maturity are displayed before
    control can be enabled. Choosing **Unknown / telemetry only**, omitting the
    model, or receiving conflicting model evidence always keeps the device
-   read-only; generation or topic family alone never authorizes writes. A
-   supported exact model on a compatible transport joins the same control loop
-   as a local API device without hand-editing the config file (see
+   read-only; a generation or topic family alone never authorizes writes — but it
+   never blocks one either. What *is* evaluated per connection is the **MQTT
+   broker source**: the manual broker form provisions a local broker, so a
+   ZenSDK/Cloud-scalar generation entered there is added as a telemetry source
+   with the reason *"Output control is not verified for this MQTT broker
+   source"*, while the older Hub/Hyper generation stays controllable. A supported
+   exact model on a connection that carries its write route joins the same
+   control loop as a local API device, without hand-editing the config file
+   (see
    [Zendure MQTT output control](../technical/configuration.md#zendure-mqtt-output-control)).
-   Output control is not a checkbox: it follows the model and the write route,
-   so the form states what is still missing — the MQTT device ID, and the
-   product key where the generation needs one — and adds the device as a
-   telemetry source until you supply them.
+   Output control is not a checkbox: it follows the model and the write route.
+   That route is `iot/<productKey>/<deviceId>/…` for every hardware generation,
+   so the form asks for a **Product key** and an **MQTT device ID** whenever a
+   control-capable model is selected, reports *Available*, *Not ready* (naming
+   the missing identifier) or *Unknown*, and adds the device as a telemetry
+   source until the route is complete.
    Switching a device to another connection keeps its activation state in both
    directions, the same rule the Admin maintenance flow follows: active stays
    active, and a device you deactivated stays deactivated.

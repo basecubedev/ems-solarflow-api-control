@@ -104,7 +104,14 @@ def test_last_command_state_is_published_never_confirmed_after_write():
     assert dev.describe(now_monotonic=0.0)["last_command_state"] == "published"
 
 
-def test_transport_incompatible_profile_reports_block_reason():
+def test_a_scalar_telemetry_family_does_not_block_a_writable_profile():
+    """Commands go to iot/<pk>/<dev>/…; the telemetry family is unrelated.
+
+    The broker source is: this device is on the Zendure cloud broker, which
+    carries that route on every family. Its local-broker counterpart is covered
+    by ``test_zendure_mqtt_broker_source_enforcement.py``.
+    """
+
     from ems.zendure_mqtt.topics import FAMILY_ZENSDK_HA_SCALAR
 
     dev = ZendureMqttDeviceClient(
@@ -112,10 +119,27 @@ def test_transport_incompatible_profile_reports_block_reason():
         FakeService(),
         device_id="DEV",
         topic_family=FAMILY_ZENSDK_HA_SCALAR,
-        source="local_mqtt",
+        source="zendure_cloud_mqtt",
         product_key="PK",
         hardware_profile="hyper_2000",
     )
     d = dev.describe(now_monotonic=0.0)
+    assert d["control_supported"] is True
+    assert d["control_block_reason"] is None
+
+
+def test_a_telemetry_only_profile_reports_its_block_reason():
+    from ems.zendure_mqtt.topics import FAMILY_LEGACY_JSON
+
+    dev = ZendureMqttDeviceClient(
+        "WR",
+        FakeService(),
+        device_id="DEV",
+        topic_family=FAMILY_LEGACY_JSON,
+        source="local_mqtt",
+        product_key="PK",
+        hardware_profile="ace_1500",
+    )
+    d = dev.describe(now_monotonic=0.0)
     assert d["control_supported"] is False
-    assert d["control_block_reason"] == "transport_incompatible"
+    assert d["control_block_reason"] == "hardware_profile_deferred"

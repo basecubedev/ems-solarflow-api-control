@@ -1178,6 +1178,85 @@ def build_test_runtime(*, data_dir):
             success=True,
         )
 
+    def seed_api_serial_controllable_cloud_candidate():
+        """The same inverter on the Zendure cloud broker with a complete route.
+
+        The telemetry family is scalar, but the cloud broker carries the
+        canonical write route on every family and the route
+        iot/<productKey>/<deviceId>/… is complete, so the connection is
+        control-capable — the classification of its telemetry topics is not what
+        decides that.
+        """
+
+        runtime.zendure_cloud_discovery._trusted_candidates = [
+            {
+                "broker_id": "zendure_cloud_mqtt:mqtt.zen-iot.com:8883",
+                "broker_host": "mqtt.zen-iot.com",
+                "broker_port": 8883,
+                "tls_mode": "encrypted_no_verify",
+                "source_type": "zendure_cloud_mqtt",
+                "topic_family": "zensdk_ha_scalar",
+                "device_id": "API-SERIAL",
+                "serial_number": "API-SERIAL",
+                "product_key": "API-PK",
+                "model_hint": "SolarFlow 800 Pro 2",
+                "display_name": "SolarFlow 800 Pro 2",
+                "metrics_seen": [
+                    "electricLevel",
+                    "outputHomePower",
+                    "outputLimit",
+                ],
+            }
+        ]
+        runtime.zendure_cloud_discovery._candidates = []
+
+    def seed_api_serial_controllable_local_candidate():
+        """The same inverter on a *local* broker publishing scalar metrics only.
+
+        Every other axis is complete — supported model, product key, MQTT route
+        id — so this connection isolates the broker-source axis: no hardware
+        evidence exists that such a broker relays a command back to the device,
+        so output control must stay unavailable.
+        """
+
+        generation = runtime.mqtt_discovery.store.begin_refresh()
+        runtime.mqtt_discovery.store.complete_refresh(
+            generation,
+            [
+                {
+                    "id": "mqtt:192.168.50.30:1883",
+                    "host": "192.168.50.30",
+                    "port": 1883,
+                    "tls": False,
+                    "reachable": True,
+                    "topic_refresh_success": True,
+                    "devices": [
+                        {
+                            "broker_id": "local_mqtt:192.168.50.30:1883",
+                            "broker_host": "192.168.50.30",
+                            "broker_port": 1883,
+                            "source_type": "local_mqtt",
+                            "topic_family": "zensdk_ha_scalar",
+                            "device_id": "API-SERIAL",
+                            "serial_number": "API-SERIAL",
+                            "product_key": "API-PK",
+                            "model_hint": "SolarFlow 800 Pro 2",
+                            "display_name": "SolarFlow 800 Pro 2",
+                            "metrics_seen": [
+                                "electricLevel",
+                                "outputHomePower",
+                                "outputLimit",
+                            ],
+                            "topics_seen": [
+                                "Zendure/sensor/API-SERIAL/electricLevel"
+                            ],
+                        }
+                    ],
+                }
+            ],
+            success=True,
+        )
+
     def _switchback_observation(*, source, host, port, device_id, serial=None):
         return {
             "broker_id": f"{source}:{host}:{port}",
@@ -1273,6 +1352,13 @@ def build_test_runtime(*, data_dir):
         elif scenario == "mixed_transports_api_mqtt_switch":
             write_install_config(mixed_transport_config())
             seed_api_serial_local_candidate()
+        elif scenario == "mixed_transports_api_mqtt_control_switch":
+            write_install_config(mixed_transport_config())
+            clear_local_mqtt_candidates()
+            seed_api_serial_controllable_cloud_candidate()
+        elif scenario == "mixed_transports_api_local_scalar_switch":
+            write_install_config(mixed_transport_config())
+            seed_api_serial_controllable_local_candidate()
         elif scenario == "maintenance_local_broker_switchback":
             write_install_config(local_broker_switchback_config())
             seed_switchback_local_candidates(

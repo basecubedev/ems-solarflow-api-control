@@ -13,7 +13,7 @@ import time
 from dataclasses import dataclass
 
 from admin.models import MqttHardwareCandidate
-from ems.config import MQTT_TLS_MODE_PLAIN, MQTT_TLS_MODE_SYSTEM_CA
+from ems.config import MQTT_TLS_MODE_PLAIN, mqtt_tls_mode_name
 
 
 def _effective_tls_mode(broker):
@@ -27,7 +27,7 @@ def _effective_tls_mode(broker):
     mode = broker.get("tls_mode")
     if isinstance(mode, str) and mode.strip():
         return mode.strip()
-    return MQTT_TLS_MODE_SYSTEM_CA if broker.get("tls") else MQTT_TLS_MODE_PLAIN
+    return mqtt_tls_mode_name(tls=broker.get("tls")) or MQTT_TLS_MODE_PLAIN
 
 FAMILY_ZENSDK_HA_SCALAR = "zensdk_ha_scalar"
 FAMILY_LEGACY_JSON = "legacy_zendure_json"

@@ -29,6 +29,7 @@ import threading
 from pathlib import Path
 
 from admin.models import utc_now_iso
+from admin.secret_policy import SCOPE_FINGERPRINT, is_secret_key
 
 GUIDED_SETUP_WORKFLOW_FILE = "guided-setup-workflow.json"
 # 2 adds the validated ``cleanup`` state. A version-1 record reads as absent
@@ -122,7 +123,6 @@ MAX_RECORD_BYTES = 64 * 1024
 
 # Keys whose values are (or may carry) secrets. They contribute presence and a
 # value digest to the fingerprint, never the raw value.
-_SECRET_KEY_MARKERS = ("password", "token", "secret", "api_key", "apikey")
 
 
 class GuidedSetupWorkflowError(Exception):
@@ -146,8 +146,7 @@ class GuidedSetupWorkflowReadError(Exception):
 
 
 def _is_secret_key(key):
-    lowered = key.lower()
-    return any(marker in lowered for marker in _SECRET_KEY_MARKERS)
+    return is_secret_key(key, scope=SCOPE_FINGERPRINT)
 
 
 def _canonical(value):

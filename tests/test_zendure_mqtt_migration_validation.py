@@ -33,6 +33,10 @@ def _control_device(**over):
         "name": "Legacy",
         "mqtt": {
             "broker_ref": "local_a",
+            # The broker profile is authoritative for the transport; a stored
+            # entry commonly mirrors it, and it is the write carrier the
+            # capability layer reads when no profile map is supplied.
+            "source": "local_mqtt",
             "topic_family": "legacy_zendure_json",
             "device_id": "DEV",
             "product_key": "PK",
@@ -44,7 +48,19 @@ def _control_device(**over):
 
 
 def _config(*devices):
-    return {"devices": list(devices)}
+    return {
+        "zendure_mqtt": {
+            "brokers": {
+                "local_a": {
+                    "enabled": True,
+                    "source": "local_mqtt",
+                    "host": "10.0.0.10",
+                    "port": 1883,
+                }
+            }
+        },
+        "devices": list(devices),
+    }
 
 
 # --- canonicalization --------------------------------------------------------

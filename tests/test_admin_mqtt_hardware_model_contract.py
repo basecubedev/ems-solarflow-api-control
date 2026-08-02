@@ -24,6 +24,7 @@ def _controlled_device(model="hyper_2000"):
         "power_write_profile": "legacy_object_device_automation",
         "mqtt": {
             "broker_ref": "local-a",
+            "source": "local_mqtt",
             "topic_family": "legacy_zendure_json",
             "base_topic": "iot",
             "device_id": "SERIAL-1",
@@ -100,6 +101,7 @@ def test_normalized_dto_writes_canonical_core_config_fields():
             "output_control": True,
             "mqtt": {
                 "broker_ref": "local-a",
+                "source": "local_mqtt",
                 "topic_family": "legacy_zendure_json_alt",
                 "device_id": "SERIAL-2",
                 "product_key": "PRODUCT-2",

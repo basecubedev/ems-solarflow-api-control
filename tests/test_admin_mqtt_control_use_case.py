@@ -40,6 +40,7 @@ def test_manual_supported_inverter_is_controllable_without_editing_config():
             "output_control": True,
         },
         "local_a",
+        broker_source="local_mqtt",
     )
     assert issues == []
     assert fragment["capabilities"]["write_output_limit"] is True
@@ -52,6 +53,7 @@ def test_manual_setup_device_defaults_to_telemetry_only():
         {"name": "Manual", "generation": "hub_hyper_legacy",
          "serial_number": "SN1", "product_key": "PK1"},
         "local_a",
+        broker_source="local_mqtt",
     )
     assert issues == []
     assert fragment["capabilities"]["write_output_limit"] is False
@@ -67,6 +69,7 @@ def test_manual_unsupported_family_stays_telemetry_only():
             "output_control": True,
         },
         "local_a",
+        broker_source="local_mqtt",
     )
     assert fragment["capabilities"]["write_output_limit"] is False
 
@@ -308,21 +311,26 @@ def test_modern_device_on_alt_json_layout_stays_modern_and_controllable():
     assert "write_protocol" not in device["mqtt"]
 
 
-def test_observed_scalar_family_wins_over_controllable_hub_label():
+def test_a_scalar_observation_without_a_product_key_has_no_write_route():
     from tests.test_admin_frontend import run_mconfig_add_mqtt_proposal
 
-    proposal = build_proposals([_hub_model_on_scalar_observation()])[0]
+    observation = dict(_hub_model_on_scalar_observation())
+    # Judged on the cloud broker, which carries the write route on every family,
+    # so the only remaining blocker is the address itself.
+    observation["source_type"] = "zendure_cloud_mqtt"
+    observation["tls_mode"] = "encrypted_no_verify"
+    proposal = build_proposals([observation])[0]
     assert proposal["hardware_generation"] == "hub_hyper_legacy"
     assert proposal["hardware_model"] == "hyper_2000"
     assert proposal["output_control_supported"] is False
-    # A known model on a scalar transport cannot take an MQTT write.
-    assert proposal["output_control_reason"] == "transport_incompatible"
+    # The blocker is the incomplete write route, not the observed family: a
+    # scalar topic carries no product key, and iot/<pk>/<dev>/… needs one.
+    assert proposal["output_control_reason"] == "write_target_missing"
 
     draft = run_mconfig_add_mqtt_proposal(proposal)["device"]
     device = {}
     apply_zendure_mqtt_draft_fields(device, draft)
-    # The hardware label must not re-home the observed transport schema or
-    # unlock a write capability the actual topic family does not have.
+    # The hardware label must not re-home the observed transport schema.
     assert device["mqtt"]["topic_family"] == "zensdk_ha_scalar"
     assert device["capabilities"]["write_output_limit"] is False
     assert "write_protocol" not in device["mqtt"]

@@ -10,25 +10,37 @@ Secret-free by construction: no broker password/token/app key is ever copied
 into a device fragment, and raw topic-family names never leave this module as
 user-facing labels. Output control is capability-gated by the shared EMS helper
 (:func:`ems.zendure_mqtt.capability.mqtt_output_control_capability`): it is
-enabled only for a topic family with a verified write method, so a forged or
+enabled only for a pinned model with an implemented write route, so a forged or
 unsupported control request is downgraded to telemetry-only.
+:func:`manual_output_control_capability` is the projection both manual editors
+render, so the browser never re-derives that verdict.
 """
 
 import copy
 import re
 from collections.abc import Mapping
 
+from admin.secret_policy import (
+    SCOPE_DRAFT,
+    SENSITIVE_IDENTITY_KEYS,
+    is_secret_key,
+)
 from admin.device_common_fields import (
     apply_common_device_values,
     common_device_draft_values,
 )
 from ems.config_catalog import ZENDURE_MQTT_GENERATIONS
+from ems.mqtt_control.power_capability import (
+    BLOCK_BROKER_SOURCE_UNKNOWN,
+    BLOCK_BROKER_SOURCE_WRITE_UNVERIFIED,
+)
 from ems.zendure_mqtt.capability import mqtt_output_control_capability
 from ems.zendure_mqtt.config_entries import (
     is_control_zendure_mqtt_device_config,
     validate_zendure_mqtt_control_device_config,
     validate_zendure_mqtt_device_config,
     zendure_mqtt_broker_ref,
+    zendure_mqtt_effective_broker_source,
     zendure_mqtt_hardware_profile,
     zendure_mqtt_source,
 )
@@ -130,19 +142,9 @@ def normalize_zendure_mqtt_draft(item):
     return normalized
 
 
-# Secret key fragments stripped from any untrusted proposal fragment, and the
-# identifier keys that must never carry a display-masked value into config.
-SECRET_KEY_FRAGMENTS = (
-    "password",
-    "passphrase",
-    "token",
-    "secret",
-    "credential",
-    "app_key",
-    "apikey",
-    "username",
-)
-MASKED_IDENTITY_KEYS = ("product_key", "device_key", "device_id", "serial_number")
+# The identifier keys that must never carry a display-masked value into config.
+# Which keys are secret is the shared policy's answer, not this module's.
+MASKED_IDENTITY_KEYS = SENSITIVE_IDENTITY_KEYS
 
 # Display-mask markers (…abcd / ••••). A value carrying either is not a usable
 # identifier and must never reach config.
@@ -220,6 +222,29 @@ def _store_editable_value(target, key, state, value):
         target.pop(key, None)
 
 
+def generation_control_broker_sources(generation_id):
+    """Broker sources that carry a write route for this generation's telemetry.
+
+    Derived from the Core broker-source axis, never restated in the browser: the
+    UI renders which connections can control a device of this generation instead
+    of deciding it. An unknown generation contributes no source.
+    """
+
+    from ems.mqtt_control.power_capability import (
+        KNOWN_BROKER_SOURCES,
+        resolve_broker_source_write_support,
+    )
+
+    profile = generation_profile(generation_id)
+    if profile is None:
+        return []
+    return sorted(
+        source
+        for source in KNOWN_BROKER_SOURCES
+        if resolve_broker_source_write_support(source, profile["topic_family"]).supported
+    )
+
+
 def generation_catalog():
     """User-facing Zendure hardware generations for the UI (no internal names)."""
 
@@ -228,11 +253,13 @@ def generation_catalog():
             "id": gen_id,
             "label": profile["label"],
             "description": profile["description"],
+            # Whether this generation's telemetry topics embed a product key.
+            # Output control needs one regardless: the canonical write route is
+            # iot/<productKey>/<deviceId>/… on every generation.
             "product_key": profile["product_key"],
             "default": profile["default"],
-            # Whether output control can be enabled for this generation's topic
-            # family. The UI offers the control option only when this is true.
-            "supports_output_control": generation_supports_output_control(gen_id),
+            "control_requires_product_key": True,
+            "control_broker_sources": generation_control_broker_sources(gen_id),
         }
         for gen_id, profile in ZENDURE_MQTT_GENERATIONS.items()
     ]
@@ -321,8 +348,7 @@ def telemetry_schema_for_topic_family(topic_family):
 
 
 def _is_secret_key(key):
-    lowered = str(key).lower()
-    return any(fragment in lowered for fragment in SECRET_KEY_FRAGMENTS)
+    return is_secret_key(key, scope=SCOPE_DRAFT)
 
 
 def _strip_secrets(value):
@@ -340,13 +366,14 @@ def _strip_secrets(value):
     return value
 
 
-def _enforce_output_control_capability(entry):
-    """Downgrade output control unless the topic family has a verified write method.
+def enforce_zendure_mqtt_output_control_capability(entry, broker_sources=None):
+    """Downgrade output control unless a verified write method actually applies.
 
-    The device may request ``write_output_limit`` only when its topic family (and
-    any explicit write protocol) resolves to a supported write method; otherwise
-    it is forced telemetry-only and the write protocol is dropped. This is the
-    capability-based enforcement point for untrusted/forged fragments.
+    The device may request ``write_output_limit`` only when its pinned model, its
+    broker source (and any explicit write protocol) resolve to a supported write
+    method; otherwise it is forced telemetry-only and the write protocol is
+    dropped. This is the capability-based enforcement point for untrusted/forged
+    fragments, so an unresolvable broker source fails closed here too.
     """
 
     if not isinstance(entry, dict):
@@ -360,6 +387,7 @@ def _enforce_output_control_capability(entry):
     capability = mqtt_output_control_capability(
         topic_family=mqtt.get("topic_family"),
         hardware_profile=zendure_mqtt_hardware_profile(entry),
+        broker_source=zendure_mqtt_effective_broker_source(entry, broker_sources),
         write_protocol=mqtt.get("write_protocol"),
     )
     control = requested and capability.supported
@@ -374,22 +402,23 @@ def _enforce_output_control_capability(entry):
             entry["mqtt"].pop("write_protocol", None)
 
 
-def sanitize_zendure_mqtt_fragment(value):
+def sanitize_zendure_mqtt_fragment(value, broker_sources=None):
     """Deep-copy an untrusted fragment, dropping secrets and capability-gating writes.
 
     Any secret-looking key is removed and a masked identifier value is dropped.
-    Output control is preserved only when the fragment's topic family has a
-    verified write method (see the shared EMS capability rule); an unsupported or
-    forged control request is downgraded to telemetry-only so a hostile fragment
-    can never enable writes on a family that cannot safely accept them.
+    Output control is preserved only when the fragment resolves to a verified
+    write method on a verified broker source (see the shared EMS capability
+    rule); an unsupported or forged control request is downgraded to
+    telemetry-only so a hostile fragment can never enable writes on a route that
+    cannot safely accept them.
     """
 
     cleaned = _strip_secrets(value)
-    _enforce_output_control_capability(cleaned)
+    enforce_zendure_mqtt_output_control_capability(cleaned, broker_sources)
     return cleaned
 
 
-def validate_zendure_mqtt_fragment(entry):
+def validate_zendure_mqtt_fragment(entry, broker_sources=None):
     """Validation issues as ``{code, message}`` (errors only).
 
     Control entries (``write_output_limit=true``) are validated with the control
@@ -397,9 +426,13 @@ def validate_zendure_mqtt_fragment(entry):
     """
 
     if is_control_zendure_mqtt_device_config(entry):
-        issues = validate_zendure_mqtt_control_device_config(entry)
+        issues = validate_zendure_mqtt_control_device_config(
+            entry, broker_sources=broker_sources
+        )
     else:
-        issues = validate_zendure_mqtt_device_config(entry)
+        issues = validate_zendure_mqtt_device_config(
+            entry, broker_sources=broker_sources
+        )
     return [
         _issue(issue["code"], issue["message"])
         for issue in issues
@@ -428,24 +461,90 @@ def _draft_requests_output_control(item):
     return _requested_output_control(item) is True
 
 
-def generation_supports_output_control(generation_id):
-    """Whether a concrete model on this generation's transport could be controllable.
+_UNRESOLVED_MANUAL_CAPABILITY = {
+    "supported": False,
+    "reason": "hardware_generation_unknown",
+    "model_supported": False,
+    "transport_supported": False,
+    "broker_source_supported": False,
+    "write_route_ready": False,
+    "telemetry_family": None,
+    "write_family": None,
+    "broker_source": None,
+}
 
-    Informational for the UI only: a hardware generation never authorizes a write
-    (see the module contract). It reports whether the generation's *transport* is a
-    JSON-report family that a concrete registry model could write over; the actual
-    write is always authorized by the pinned concrete model, never the generation.
+
+def manual_output_control_capability(
+    generation_id,
+    hardware_model,
+    *,
+    product_key=None,
+    device_id=None,
+    broker_source=None,
+):
+    """EMS/Core verdict for a manually entered Zendure MQTT profile.
+
+    The one projection both manual editors (Fresh Setup and Maintenance) render,
+    so the browser never re-derives write eligibility. Returns the model,
+    transport, broker-source and write-route axes separately plus the first
+    missing precondition as ``reason``.
     """
 
-    from ems.zendure_mqtt.topics import JSON_FAMILIES
+    from ems.mqtt_control.zendure_profiles import (
+        hardware_profile_by_name,
+        hardware_profile_matches_generation,
+    )
+    from ems.zendure_mqtt.capability import resolve_output_control_capability
 
     profile = generation_profile(generation_id)
     if profile is None:
-        return False
-    return profile["topic_family"] in JSON_FAMILIES
+        return dict(_UNRESOLVED_MANUAL_CAPABILITY)
+    model = str(hardware_model or "").strip()
+    resolved = hardware_profile_by_name(model) if model else None
+    if resolved is None or not hardware_profile_matches_generation(
+        resolved, generation_id
+    ):
+        model = ""
+    capability = resolve_output_control_capability(
+        topic_family=profile["topic_family"],
+        hardware_profile=model,
+        broker_source=broker_source,
+        product_key=product_key,
+        device_id=device_id,
+    )
+    return {
+        "supported": capability.supported,
+        "reason": capability.reason,
+        "model_supported": capability.model_supported,
+        "transport_supported": capability.transport_supported,
+        "broker_source_supported": capability.broker_source_supported,
+        "write_route_ready": capability.write_route_ready,
+        "telemetry_family": capability.telemetry_family,
+        "write_family": capability.write_family,
+        "broker_source": capability.broker_source,
+    }
 
 
-def build_manual_zendure_mqtt_fragment(item, broker_ref):
+_MANUAL_CONTROL_UNAVAILABLE_DETAIL = {
+    BLOCK_BROKER_SOURCE_WRITE_UNVERIFIED: (
+        "output control is not verified for this MQTT broker source"
+    ),
+    BLOCK_BROKER_SOURCE_UNKNOWN: (
+        "output control needs a known MQTT broker source and none was resolved"
+    ),
+}
+
+
+def _manual_control_unavailable_detail(capability):
+    """Name the actual missing capability in a manual-entry issue message."""
+
+    return _MANUAL_CONTROL_UNAVAILABLE_DETAIL.get(
+        capability.block_reason,
+        "output control is not available for this hardware model",
+    )
+
+
+def build_manual_zendure_mqtt_fragment(item, broker_ref, *, broker_source=None):
     """Build a device fragment from a manual UI entry.
 
     The user picks a friendly hardware generation, never a raw topic family; the
@@ -495,11 +594,12 @@ def build_manual_zendure_mqtt_fragment(item, broker_ref):
     }
     if route_device_id:
         mqtt["device_id"] = route_device_id
-    product_key = ""
-    if profile["product_key"]:
-        product_key = str(item.get("product_key") or "").strip()
-        if product_key:
-            mqtt["product_key"] = product_key
+    # The product key addresses the canonical write route on every generation, so
+    # it is read regardless of whether this generation's telemetry topics embed
+    # one.
+    product_key = str(item.get("product_key") or "").strip()
+    if product_key:
+        mqtt["product_key"] = product_key
 
     wants_control = _draft_requests_output_control(item)
     # Control is authorized only by a concrete registry hardware model, never by
@@ -507,7 +607,9 @@ def build_manual_zendure_mqtt_fragment(item, broker_ref):
     model = normalized.get("hardware_model") or ""
     capability = (
         mqtt_output_control_capability(
-            topic_family=profile["topic_family"], hardware_profile=model
+            topic_family=profile["topic_family"],
+            hardware_profile=model,
+            broker_source=broker_source,
         )
         if model
         else None
@@ -528,8 +630,8 @@ def build_manual_zendure_mqtt_fragment(item, broker_ref):
         issues.append(
             _issue(
                 "zendure_mqtt_control_unavailable",
-                f"{label}: output control is not available for this hardware model; "
-                "adding it as telemetry only.",
+                f"{label}: {_manual_control_unavailable_detail(capability)}; adding "
+                "it as telemetry only.",
             )
         )
     elif wants_control and not route_device_id:
@@ -696,6 +798,7 @@ def zendure_mqtt_device_draft(device, *, broker_sources=None):
     control_capability = mqtt_output_control_capability(
         topic_family=topic_family,
         hardware_profile=zendure_mqtt_hardware_profile(device),
+        broker_source=zendure_mqtt_effective_broker_source(device, broker_sources),
         write_protocol=write_protocol or None,
     )
     # Route addressability requires an explicit mqtt.device_id (never the physical
@@ -810,7 +913,9 @@ def _has_addressable_write_target(device):
     )
 
 
-def _apply_output_control(device, item, *, new_device, model_changed=False):
+def _apply_output_control(
+    device, item, *, new_device, model_changed=False, broker_sources=None
+):
     """Resolve a draft entry's output-control choice onto a config device.
 
     Control is authorized only by the pinned concrete hardware model (or the
@@ -835,6 +940,7 @@ def _apply_output_control(device, item, *, new_device, model_changed=False):
     capability = mqtt_output_control_capability(
         topic_family=mqtt.get("topic_family"),
         hardware_profile=zendure_mqtt_hardware_profile(device),
+        broker_source=zendure_mqtt_effective_broker_source(device, broker_sources),
         write_protocol=mqtt.get("write_protocol"),
     )
     requested = _requested_output_control(item)
@@ -872,7 +978,7 @@ def _apply_output_control(device, item, *, new_device, model_changed=False):
             device["mqtt"].pop("write_protocol", None)
 
 
-def apply_zendure_mqtt_draft_fields(device, item):
+def apply_zendure_mqtt_draft_fields(device, item, *, broker_sources=None):
     """Write editable Zendure MQTT fields from a draft entry onto a config device.
 
     Identity (topic family/base topic) follows the selected hardware generation
@@ -997,7 +1103,11 @@ def apply_zendure_mqtt_draft_fields(device, item):
     )
 
     _apply_output_control(
-        device, item, new_device=new_device, model_changed=model_changed
+        device,
+        item,
+        new_device=new_device,
+        model_changed=model_changed,
+        broker_sources=broker_sources,
     )
 
     # Common (transport-independent) tuning values round-trip through the same
@@ -1011,7 +1121,6 @@ def apply_zendure_mqtt_draft_fields(device, item):
 
 
 __all__ = [
-    "SECRET_KEY_FRAGMENTS",
     "TRUSTED_CONNECTION_SELECTION_FIELD",
     "zendure_mqtt_untrusted_connection_block",
     "MASKED_IDENTITY_KEYS",
@@ -1021,12 +1130,13 @@ __all__ = [
     "normalize_zendure_mqtt_draft",
     "generation_profile",
     "generation_label",
-    "generation_supports_output_control",
+    "manual_output_control_capability",
     "hardware_profile_for_topic_family",
     "hardware_generation_for_model",
     "resolve_hardware_generation",
     "telemetry_schema_for_topic_family",
     "zendure_mqtt_connection_switched",
+    "enforce_zendure_mqtt_output_control_capability",
     "sanitize_zendure_mqtt_fragment",
     "validate_zendure_mqtt_fragment",
     "build_manual_zendure_mqtt_fragment",

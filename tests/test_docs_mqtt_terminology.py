@@ -198,11 +198,13 @@ def test_supported_setups_requires_exact_model_and_both_write_gates():
     # Unknown or conflicting model evidence stays telemetry-only.
     assert "telemetry-only" in text
     assert "unknown or conflicting model evidence" in text
-    # ZenSDK scalar MQTT topics stay telemetry-only until a writable topic exists.
-    assert (
-        "zensdk scalar mqtt topics remain telemetry-only until a verified "
-        "writable output topic is available" in text
-    )
+    # A local broker seen publishing scalar metrics only is not a verified write
+    # carrier, and the page must say which broker source that restriction is
+    # about rather than blaming the telemetry family in general.
+    assert "local" in text
+    assert "scalar" in text
+    assert "stays telemetry-only" in text or "stay telemetry-only" in text
+    assert "zendure cloud broker" in text
     # Unvalidated legacy hardware is clearly identified as not physically
     # validated. Accept the honest phrasings ("validated"/"confirmed") tied to
     # physical/real hardware, rather than one brittle exact sentence.

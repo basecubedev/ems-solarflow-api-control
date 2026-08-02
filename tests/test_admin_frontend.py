@@ -575,7 +575,7 @@ def test_ui_has_zendure_mqtt_config_proposals_section():
     # MQTT is a first-class control transport: the intro must not claim every
     # MQTT device is telemetry-only, and must explain capability-based control.
     assert "same EMS control loop" in html
-    assert "output control is enabled where a verified write method exists" in html
+    assert "write route is verified on the MQTT broker source" in html
     assert "no MQTT control commands are ever sent" not in html
 
 
@@ -585,9 +585,11 @@ def test_ui_proposal_cards_show_safety_state_and_facts():
         "\nfunction ", 1
     )[0]
     # The card is capability-aware: a supported inverter advertises output
-    # control, an unsupported family explains why control is unavailable.
+    # control, and a blocked one renders the Core reason instead of naming the
+    # telemetry family.
     assert "Output control available" in card
-    assert "Output control not available for this topic family" in card
+    assert "topic family" not in card
+    assert "mqttControlReasonLabel(mqttProposalControlReason(proposal))" in card
     assert "output_control_supported" in card
     # The blanket "no MQTT control commands" claim must not apply to every card.
     assert "No MQTT control commands" not in card
@@ -5940,15 +5942,76 @@ def test_js_manual_mqtt_payload_carries_explicit_route_device_id():
     assert "mqtt_device_id:" in payload
 
 
-def test_js_manual_mqtt_control_requires_explicit_route_device_id():
+def _run_manual_mqtt_control(*, model, route_id, product_key):
+    """Run the shipped manual-capability helper against a stubbed form."""
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is required for the manual MQTT capability test")
     js = _read("admin.js")
-    available = _extract_fn(js, "manualMqttControlAvailable")
+    from admin.zendure_mqtt_config_draft import generation_catalog
+
+    generation = next(
+        entry for entry in generation_catalog() if entry["id"] == "solarflow_zensdk"
+    )
+    script = (
+        "const MANUAL_MQTT_BROKER_SOURCE = 'local_mqtt';\n"
+        "const mqttManualEls = {"
+        "  deviceMqttId: { value: " + json.dumps(route_id) + " },"
+        "  deviceProductKey: { value: " + json.dumps(product_key) + " },"
+        "};\n"
+        "function selectedMqttGeneration() { return "
+        + json.dumps(generation)
+        + "; }\n"
+        "function selectedMqttModel() { return " + json.dumps(model) + "; }\n"
+        + _extract_fn(js, "manualMqttControlAvailable")
+        + "\nconsole.log(JSON.stringify("
+        + "manualMqttControlAvailable('zendure_cloud_mqtt')));"
+    )
+    result = subprocess.run(
+        [node, "-e", script], text=True, capture_output=True, check=False
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def test_js_manual_mqtt_control_requires_explicit_route_device_id():
     # Output control cannot be enabled from manual entry without an explicit MQTT
     # device ID; the serial is never used as the route id. Without one the device
     # is added as a telemetry source and the form says so before it is added.
-    assert 'deviceMqttId.value' in available
-    assert 'if (!routeId) return { supported: true, enabled: false' in available
-    assert "MQTT device ID" in available
+    model = {"id": "solarflow_800_pro_2", "control_supported": True}
+
+    ready = _run_manual_mqtt_control(model=model, route_id="ROUTE1", product_key="PK1")
+    assert ready["enabled"] is True
+    assert ready["status"] == "available"
+
+    without_route = _run_manual_mqtt_control(
+        model=model, route_id="", product_key="PK1"
+    )
+    assert without_route["enabled"] is False
+    assert without_route["status"] == "not_ready"
+    assert without_route["missing"] == "MQTT device ID"
+
+
+def test_js_manual_mqtt_control_requires_a_product_key_on_every_generation():
+    # The canonical write route is iot/<productKey>/<deviceId>/…, so the product
+    # key is part of it even for a generation whose telemetry topics omit one.
+    answer = _run_manual_mqtt_control(
+        model={"id": "solarflow_800_pro_2", "control_supported": True},
+        route_id="ROUTE1",
+        product_key="",
+    )
+    assert answer["enabled"] is False
+    assert answer["missing"] == "product key"
+
+
+def test_js_manual_mqtt_control_is_unknown_without_a_pinned_model():
+    for model in (None, {"id": "", "control_supported": True}):
+        answer = _run_manual_mqtt_control(
+            model=model, route_id="ROUTE1", product_key="PK1"
+        )
+        assert answer["status"] == "unknown"
+        assert answer["enabled"] is False
 
 
 def test_maintenance_config_has_zendure_mqtt_broker_fields():
@@ -5991,10 +6054,10 @@ def test_maintenance_renders_zendure_mqtt_device_without_ip_host():
     assert '"Validation maturity"' in render
     assert '"Supported operations"' in render
     assert '"Current control readiness"' in render
-    # The maintenance editor is capability-aware: it offers output control for a
-    # supported generation and stays telemetry-only otherwise.
+    # The maintenance editor is capability-aware: it reports the derived output
+    # control verdict and stays telemetry-only otherwise.
     assert '"Output control"' in render
-    assert "mconfigMqttControlSupported" in render
+    assert "mconfigMqttControlProjection(device)" in render
     # Control is gated by capability, never forced on an unsupported family.
     assert "does not send MQTT control commands" not in render
     # Exactly one MQTT device ID field is rendered (no duplicate row).
@@ -6008,12 +6071,12 @@ def test_maintenance_renders_zendure_mqtt_device_without_ip_host():
 
 def test_maintenance_mqtt_control_default_is_route_aware():
     js = _read("admin.js")
-    sync = js.split("const syncGenerationFields", 1)[1].split("\n  };", 1)[0]
+    projection = _extract_fn(js, "mconfigMqttControlProjection")
     # Output control can only default on, or stay on, with a complete write route
     # that includes the explicit MQTT route device id.
-    assert "routeDeviceId" in sync
-    assert "routeComplete" in sync
-    assert "const shouldControl = supported && routeComplete" in sync
+    assert "routeDeviceId" in projection
+    assert "routeComplete" in projection
+    assert "shouldControl: supported && routeComplete" in projection
 
 
 def test_maintenance_discovery_review_can_show_mqtt_proposals():
@@ -7018,10 +7081,9 @@ def test_js_maintenance_selection_keeps_unsupported_proposal_telemetry_only():
 
     proposal = build_proposals([_local_scalar_observation()])[0]
     assert proposal["output_control_supported"] is False
-    assert proposal["output_control_reason"] in (
-        "scalar_write_not_verified",
-        "transport_incompatible",
-    )
+    # A local broker seen publishing scalar metrics only is not a verified write
+    # carrier, so control is refused before the incomplete route is even reached.
+    assert proposal["output_control_reason"] == "broker_source_write_unverified"
     out = run_mconfig_add_mqtt_proposal(proposal)
     assert out["added"] is True
     device = out["device"]
@@ -7030,13 +7092,35 @@ def test_js_maintenance_selection_keeps_unsupported_proposal_telemetry_only():
     assert not device["mqtt"].get("write_protocol")
 
 
+def test_js_maintenance_selection_keeps_a_masked_route_as_display_identity():
+    """A serial-less Cloud device must stay recognizable in the card.
+
+    Its only distinguishing label is the masked route id the proposal carries.
+    Dropping it from the display identity left the card reading "Identifier
+    missing" for a device the server addresses perfectly well through its
+    trusted proposal. The masked value stays display-only: it must never enter
+    the write route, which apply reads exclusively from ``mqtt.device_id``.
+    """
+
+    from admin.zendure_mqtt_config_proposals import build_proposals
+
+    proposal = build_proposals([_local_control_observation()])[0]
+    proposal["device_id"] = "…7501"
+    proposal["config_fragment"]["mqtt"].pop("device_id", None)
+
+    device = run_mconfig_add_mqtt_proposal(proposal)["device"]
+
+    assert device["device_id"] == "…7501"
+    assert device["mqtt"]["device_id"] == ""
+
+
 def test_maintenance_mqtt_card_derives_control_support_from_device_capability():
     js = _read("admin.js")
     card = _extract_fn(js, "renderMaintenanceZendureMqttDevice")
-    # Whether control can be offered comes from the device's backend capability
-    # (observed topic family), never from the hardware-generation label.
+    # Whether control can be offered comes from the device's backend capability,
+    # never from the hardware-generation label.
     assert "generation.supports_output_control" not in card
-    assert "mconfigMqttControlSupported(device" in card
+    assert "mconfigMqttControlProjection(device)" in card
 
 
 def test_mqtt_control_support_helper_prefers_device_capability():
@@ -7094,8 +7178,9 @@ def test_mqtt_write_protocol_and_reason_render_with_friendly_labels():
         + """
 console.log(JSON.stringify({
   legacy: mqttWriteProtocolLabel("legacy_properties_write"),
-  scalar: mqttControlReasonLabel("scalar_write_not_verified"),
+  unknownReason: mqttControlReasonLabel("something_unmapped"),
   missing: mqttControlReasonLabel("write_method_missing"),
+  route: mqttControlReasonLabel("missing_product_key"),
   unobserved: mqttControlReasonLabel("output_control_not_observed"),
 }));
 """
@@ -7107,9 +7192,12 @@ console.log(JSON.stringify({
     labels = json.loads(result.stdout)
     # Raw internal enum values never render; every label is user-facing text.
     assert labels["legacy"] == "Properties write"
-    assert labels["scalar"] == "No verified write protocol for this topic family"
-    assert labels["missing"] == "No verified write protocol for this topic family"
+    assert labels["unknownReason"] == "No verified MQTT write method for this device"
+    assert "hardware model" in labels["missing"]
+    assert "Product key" in labels["route"]
     assert labels["unobserved"] == "No output control observed in telemetry yet"
+    # The telemetry family is never named as the cause of a blocked write.
+    assert not any("topic family" in label for label in labels.values())
 
 
 def test_maintenance_mqtt_proposal_card_shows_protocol_transport_and_reason():

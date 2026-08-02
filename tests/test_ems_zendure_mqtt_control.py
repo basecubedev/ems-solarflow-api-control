@@ -349,7 +349,7 @@ def test_reconciliation_skip_is_capability_based_not_type_based():
 
 
 def _control_entry(**mqtt):
-    base = {"topic_family": "legacy_zendure_json", "device_id": "DEV", "product_key": "PK"}
+    base = {"source": "local_mqtt", "topic_family": "legacy_zendure_json", "device_id": "DEV", "product_key": "PK"}
     base.update(mqtt)
     return {
         "type": "zendure_mqtt",

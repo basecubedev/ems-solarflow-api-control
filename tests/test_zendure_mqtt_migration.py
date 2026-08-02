@@ -27,6 +27,10 @@ def _control_device(**over):
         "name": "Legacy",
         "mqtt": {
             "broker_ref": "local_a",
+            # The broker profile is authoritative for the transport; a stored
+            # entry commonly mirrors it, and it is the write carrier the
+            # capability layer reads when no profile map is supplied.
+            "source": "local_mqtt",
             "topic_family": "legacy_zendure_json",
             "device_id": "DEV",
             "product_key": "PK",
@@ -37,8 +41,35 @@ def _control_device(**over):
     return device
 
 
+def _cloud_config(device):
+    config = _config(device)
+    config["zendure_mqtt"]["brokers"]["local_a"] = {
+        "enabled": True,
+        "source": "zendure_cloud_mqtt",
+        "host": "mqtteu.zen-iot.com",
+        "port": 8883,
+        "tls": True,
+        "credentials_ref": "cloud-cred",
+    }
+    return config
+
+
 def _config(device):
-    return {"devices": [device]}
+    # A legacy control config always had a broker profile; its source is the
+    # write carrier and therefore a capability axis the migration reads.
+    return {
+        "zendure_mqtt": {
+            "brokers": {
+                "local_a": {
+                    "enabled": True,
+                    "source": "local_mqtt",
+                    "host": "10.0.0.10",
+                    "port": 1883,
+                }
+            }
+        },
+        "devices": [device],
+    }
 
 
 def test_legacy_control_with_model_evidence_pins_profile():
@@ -220,9 +251,38 @@ def test_disabled_device_is_idempotent():
     assert warnings == []
 
 
-def test_scalar_model_evidence_incompatible_transport_is_disabled():
-    # A ZenSDK model whose config transport is scalar cannot take an MQTT write.
+def test_scalar_transport_with_model_evidence_keeps_control_on_the_cloud_broker():
+    # The write route is iot/<pk>/<dev>/properties/write on every family, so a
+    # ZenSDK model with a complete route stays controllable on a scalar one —
+    # on the broker source that carries that route.
     device = _control_device(product="SolarFlow 800")
+    device["mqtt"]["topic_family"] = "zensdk_ha_scalar"
+    device["mqtt"]["source"] = "zendure_cloud_mqtt"
+    _cfg, warnings = migrate_zendure_mqtt_control_configs(
+        _cloud_config(device)
+    )
+    assert device["hardware_profile"] == "solarflow_800"
+    assert device["capabilities"]["write_output_limit"] is True
+    assert any(w["code"] == "zendure_mqtt_control_model_pinned" for w in warnings)
+
+
+def test_local_scalar_control_is_disabled_but_keeps_its_resolved_model():
+    # Same device on a local broker: the write route is not verified there, so
+    # migration turns control off while preserving the identity it resolved.
+    device = _control_device(
+        product="SolarFlow 800", hardware_profile="solarflow_800"
+    )
+    device["mqtt"]["topic_family"] = "zensdk_ha_scalar"
+    _cfg, warnings = migrate_zendure_mqtt_control_configs(_config(device))
+    assert device["capabilities"]["write_output_limit"] is False
+    assert device["hardware_profile"] == "solarflow_800"
+    assert any(
+        w["code"] == "zendure_mqtt_control_disabled_broker_source" for w in warnings
+    )
+
+
+def test_scalar_transport_without_model_evidence_is_still_disabled():
+    device = _control_device()
     device["mqtt"]["topic_family"] = "zensdk_ha_scalar"
     _cfg, warnings = migrate_zendure_mqtt_control_configs(_config(device))
     assert device["capabilities"]["write_output_limit"] is False

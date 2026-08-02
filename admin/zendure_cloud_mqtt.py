@@ -34,6 +34,7 @@ from admin.mqtt_topic_discovery import (
     parse_report_payload,
 )
 from admin.secret_store import ZendureTokenStore
+from ems.config import MQTT_TLS_OBSERVED_MODES
 from admin.zendure_cloud_auth import (
     ZendureCloudError,
     fetch_device_list,
@@ -44,7 +45,9 @@ from admin.zendure_cloud_auth import (
 TLS_SYSTEM_CA = "system_ca"
 TLS_PINNED_CA = "pinned_ca"
 TLS_ENCRYPTED_NO_VERIFY = "encrypted_no_verify"
-TLS_MODES = (TLS_SYSTEM_CA, TLS_PINNED_CA, TLS_ENCRYPTED_NO_VERIFY)
+# The accepted set is Core's; these names only select the CA strategy for the
+# discovery client's own connection.
+TLS_MODES = tuple(sorted(MQTT_TLS_OBSERVED_MODES))
 
 SOURCE_LABEL = "Zendure MQTT discovery"
 AUTH_MODE_TOKEN = "api_token"

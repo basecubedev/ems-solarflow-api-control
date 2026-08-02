@@ -31,12 +31,14 @@ from ems.mqtt_control.zendure_profiles import (
     make_hardware_profile_evidence,
     resolve_hardware_profile_evidence,
 )
+from ems.device_identity import broker_sources_from_config
 from ems.zendure_mqtt.config_entries import (
     config_entry_enabled,
     is_control_zendure_mqtt_device_config,
     validate_zendure_mqtt_control_device_config,
     zendure_mqtt_control_addressability,
     zendure_mqtt_device_identifier,
+    zendure_mqtt_effective_broker_source,
     zendure_mqtt_hardware_profile,
     zendure_mqtt_product_key,
     zendure_mqtt_topic_family,
@@ -57,6 +59,12 @@ MIGRATION_UNADDRESSABLE_WARNING = (
     "explicit mqtt.device_id; a custom write needs mqtt.write_topic and "
     "mqtt.device_id. The physical serial_number is not an MQTT route device id. "
     "Add the missing write address in Maintenance before enabling control again."
+)
+
+MIGRATION_BROKER_SOURCE_WARNING = (
+    "MQTT power control was disabled because output control is not verified for "
+    "this device's MQTT broker source. Move the device to a broker source whose "
+    "write route is verified, or keep it as a telemetry source."
 )
 
 ACTION_PIN_PROFILE = "pin_profile"
@@ -88,11 +96,14 @@ _MIGRATION_VALIDATION_CODES = frozenset(
         "hardware_profile_unknown",
         "hardware_profile_deferred",
         "transport_incompatible",
+        "transport_write_not_implemented",
         "operation_unsupported",
         "write_protocol_unsupported",
         "write_topic_required",
         "write_topic_invalid",
         "power_write_profile_mismatch",
+        "broker_source_unknown",
+        "broker_source_write_unverified",
     }
 )
 
@@ -240,15 +251,16 @@ def _custom_write_already_safe(device):
     return _addressing_complete(device, profile_backed=False)
 
 
-def _already_safe(device):
+def _already_safe(device, broker_source):
     """A control device is safe only when its write method is fully consistent.
 
-    A pinned model must be known, writable, transport-compatible, completely
-    write-addressable, carry a ``power_write_profile`` matching the registry (or
-    none) and no leftover ``mqtt.write_protocol``. Without a pinned model the only
-    safe config is a complete ``custom_properties_write`` escape hatch (explicit
-    valid topic + explicit route device id). The removed ``legacy_properties_write``
-    inference is never authority.
+    A pinned model must be known, writable, carry an implemented write route on a
+    verified ``broker_source``, be completely write-addressable, carry a
+    ``power_write_profile`` matching the registry (or none) and no leftover
+    ``mqtt.write_protocol``. Without a pinned model the only safe config is a
+    complete ``custom_properties_write`` escape hatch (explicit valid topic +
+    explicit route device id). The removed ``legacy_properties_write`` inference
+    is never authority.
     """
 
     hardware_profile = zendure_mqtt_hardware_profile(device)
@@ -258,6 +270,7 @@ def _already_safe(device):
     cap = resolve_power_write_capability(
         topic_family=zendure_mqtt_topic_family(device),
         hardware_profile=hardware_profile,
+        broker_source=broker_source,
     )
     if not cap.supported or not _addressing_complete(device, profile_backed=True):
         return False
@@ -343,7 +356,9 @@ def _normalize_write_topic_change(device, index, name, device_id):
     )
 
 
-def _disable_change(device, index, name, device_id, *, code, message):
+def _disable_change(
+    device, index, name, device_id, *, code, message, keep_identity=False
+):
     prefix = f"devices[{index}]"
     changes = []
     caps = device.get("capabilities")
@@ -352,7 +367,7 @@ def _disable_change(device, index, name, device_id, *, code, message):
         changes.append(
             _diff(f"{prefix}.capabilities.write_output_limit", before_cap, False)
         )
-    if device.get("hardware_profile") is not None:
+    if not keep_identity and device.get("hardware_profile") is not None:
         changes.append(_diff(f"{prefix}.hardware_profile", device.get("hardware_profile"), None))
     mqtt = device.get("mqtt")
     if isinstance(mqtt, dict) and mqtt.get("write_protocol") is not None:
@@ -360,7 +375,7 @@ def _disable_change(device, index, name, device_id, *, code, message):
     return ZendureMqttMigrationChange(
         device=name,
         action=ACTION_DISABLE_CONTROL,
-        hardware_profile=None,
+        hardware_profile=device.get("hardware_profile") if keep_identity else None,
         power_write_profile=None,
         code=code,
         severity="warning",
@@ -371,7 +386,7 @@ def _disable_change(device, index, name, device_id, *, code, message):
     )
 
 
-def _plan_device(device, index) -> ZendureMqttMigrationChange | None:
+def _plan_device(device, index, broker_source=None) -> ZendureMqttMigrationChange | None:
     """The change needed to make one device safe, or ``None`` if already safe.
 
     Pure: it never mutates ``device`` so the same helper backs both the read-only
@@ -385,7 +400,7 @@ def _plan_device(device, index) -> ZendureMqttMigrationChange | None:
         return None
     name = device.get("name") if isinstance(device.get("name"), str) else "device"
     device_id = zendure_mqtt_device_identifier(device)
-    if _already_safe(device):
+    if _already_safe(device, broker_source):
         if _obsolete_write_topic(device) is not None:
             return _normalize_write_topic_change(device, index, name, device_id)
         return None
@@ -395,7 +410,23 @@ def _plan_device(device, index) -> ZendureMqttMigrationChange | None:
         cap = resolve_power_write_capability(
             topic_family=zendure_mqtt_topic_family(device),
             hardware_profile=profile_id,
+            broker_source=broker_source,
         )
+        if not cap.supported and cap.model_supported and cap.transport_supported:
+            # The model and its write route are fine; only the broker source is
+            # unverified. Pinning would produce a config the runtime refuses, so
+            # control is disabled and the device stays a telemetry source.
+            return _disable_change(
+                device,
+                index,
+                name,
+                device_id,
+                code="zendure_mqtt_control_disabled_broker_source",
+                message=f"{name}: {MIGRATION_BROKER_SOURCE_WARNING}",
+                # The model and its route are correct; only the carrier is
+                # unproven, so the resolved identity is worth preserving.
+                keep_identity=True,
+            )
         if cap.supported:
             if _addressing_complete(device, profile_backed=True):
                 return _pin_change(
@@ -445,8 +476,13 @@ def plan_zendure_mqtt_migration(config) -> list[ZendureMqttMigrationChange]:
     """
 
     changes = []
+    broker_sources = broker_sources_from_config(config)
     for index, device in enumerate(_iter_devices(config)):
-        change = _plan_device(device, index)
+        change = _plan_device(
+            device,
+            index,
+            zendure_mqtt_effective_broker_source(device, broker_sources),
+        )
         if change is not None:
             changes.append(change)
     return changes
@@ -468,6 +504,7 @@ def validate_zendure_mqtt_control_configs(config) -> list:
     """
 
     errors = []
+    broker_sources = broker_sources_from_config(config)
     for index, device in enumerate(_iter_devices(config)):
         if not isinstance(device, dict):
             continue
@@ -475,7 +512,9 @@ def validate_zendure_mqtt_control_configs(config) -> list:
             continue
         if not config_entry_enabled(device):
             continue
-        for issue in validate_zendure_mqtt_control_device_config(device):
+        for issue in validate_zendure_mqtt_control_device_config(
+            device, broker_sources=broker_sources
+        ):
             if issue.get("severity") == "error" and issue.get("code") in _MIGRATION_VALIDATION_CODES:
                 errors.append({**issue, "index": index})
     return errors
@@ -489,8 +528,13 @@ def validate_migrated_zendure_mqtt_config(config) -> list:
     """
 
     migrated = copy.deepcopy(config) if isinstance(config, dict) else config
+    broker_sources = broker_sources_from_config(migrated)
     for index, device in enumerate(_iter_devices(migrated)):
-        change = _plan_device(device, index)
+        change = _plan_device(
+            device,
+            index,
+            zendure_mqtt_effective_broker_source(device, broker_sources),
+        )
         if change is not None:
             _apply_change(device, change)
     return validate_zendure_mqtt_control_configs(migrated)
@@ -551,9 +595,12 @@ def _apply_change(device, change: ZendureMqttMigrationChange) -> None:
     if isinstance(caps, dict):
         caps["write_output_limit"] = False
     # A disabled control device drops any writable identity so it can't be
-    # re-enabled with a stale/unaddressable model; the telemetry entry stays.
-    device.pop("hardware_profile", None)
-    device.pop("power_write_profile", None)
+    # re-enabled with a stale/unaddressable model; the telemetry entry stays. A
+    # change that kept the identity (the model is fine, its broker source is not)
+    # preserves the pinned model instead.
+    if change.hardware_profile is None:
+        device.pop("hardware_profile", None)
+        device.pop("power_write_profile", None)
     if isinstance(mqtt, dict):
         mqtt.pop("write_protocol", None)
 
@@ -575,8 +622,13 @@ def migrate_zendure_mqtt_control_configs(config):
             "the migrated Zendure MQTT control config would be invalid", errors
         )
     warnings = []
+    broker_sources = broker_sources_from_config(config)
     for index, device in enumerate(_iter_devices(config)):
-        change = _plan_device(device, index)
+        change = _plan_device(
+            device,
+            index,
+            zendure_mqtt_effective_broker_source(device, broker_sources),
+        )
         if change is None:
             continue
         _apply_change(device, change)
@@ -585,6 +637,7 @@ def migrate_zendure_mqtt_control_configs(config):
 
 
 __all__ = [
+    "MIGRATION_BROKER_SOURCE_WARNING",
     "MIGRATION_DISABLED_WARNING",
     "MIGRATION_UNADDRESSABLE_WARNING",
     "MIGRATION_REQUIRED_CODE",

@@ -66,6 +66,10 @@ def test_setup_discovery_and_maintenance_projection_agree():
         "product_key": setup_fragment["mqtt"].get("product_key"),
         "mqtt": {
             "broker_ref": setup_fragment["mqtt"].get("broker_ref"),
+            # The connection source travels with the projected connection: it is
+            # a capability axis, so dropping it would make Maintenance disagree
+            # with the Setup fragment it came from.
+            "source": setup_fragment["mqtt"].get("source"),
             "topic_family": setup_fragment["mqtt"].get("topic_family"),
             "device_id": setup_fragment["mqtt"].get("device_id"),
             "product_key": setup_fragment["mqtt"].get("product_key"),
@@ -93,6 +97,7 @@ def test_manual_entry_matches_discovery_for_supported_inverter():
             "output_control": True,
         },
         setup_fragment["mqtt"].get("broker_ref"),
+        broker_source="local_mqtt",
     )
     assert issues == []
     assert _control_signature(manual_fragment) == _control_signature(setup_fragment)
@@ -203,6 +208,7 @@ def test_maintenance_does_not_make_supported_inverter_telemetry_only():
             "product_key": fragment["mqtt"].get("product_key"),
             "mqtt": {
                 "broker_ref": fragment["mqtt"].get("broker_ref"),
+                "source": fragment["mqtt"].get("source"),
                 "topic_family": fragment["mqtt"].get("topic_family"),
                 "device_id": fragment["mqtt"].get("device_id"),
                 "product_key": fragment["mqtt"].get("product_key"),

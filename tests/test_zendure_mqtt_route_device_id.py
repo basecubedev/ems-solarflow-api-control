@@ -40,6 +40,10 @@ def _control_device(**over):
         "power_write_profile": "zensdk_properties_write",
         "mqtt": {
             "broker_ref": "local_a",
+            # The broker profile is authoritative for the transport source; a
+            # detached entry mirrors it so the capability layer can resolve the
+            # write carrier without a profile map.
+            "source": "local_mqtt",
             "topic_family": FAMILY_LEGACY_JSON,
             "device_id": "DEV",
             "product_key": "PK-A",
@@ -71,7 +75,7 @@ def test_supported_snapshot_without_device_id_is_not_writable():
         metrics={"outputLimit": 0, "electricLevel": 50},
         capabilities={"output_control", "battery_storage"},
     )
-    proposal = map_snapshot_to_proposal(snap)
+    proposal = map_snapshot_to_proposal(snap, source="local_mqtt")
     assert proposal.output_control_supported is False
     assert proposal.output_control_reason == "write_target_missing"
     assert proposal.control_block_reason == "write_target_missing"
@@ -231,6 +235,10 @@ def test_custom_write_without_device_id_is_invalid():
         "serial_number": "SERIAL-1",
         "mqtt": {
             "broker_ref": "local_a",
+            # The broker profile is authoritative for the transport source; a
+            # detached entry mirrors it so the capability layer can resolve the
+            # write carrier without a profile map.
+            "source": "local_mqtt",
             "topic_family": FAMILY_LEGACY_JSON,
             "write_protocol": "custom_properties_write",
             "write_topic": "iot/PK-A/DEV/properties/write",
@@ -278,7 +286,7 @@ def test_supported_model_without_product_key_is_telemetry_only():
         metrics={"outputLimit": 0, "electricLevel": 50},
         capabilities={"output_control", "battery_storage"},
     )
-    proposal = map_snapshot_to_proposal(snap)
+    proposal = map_snapshot_to_proposal(snap, source="local_mqtt")
     assert proposal.output_control_supported is False
     assert proposal.control_block_reason == "write_target_missing"
     assert proposal.config_fragment["capabilities"]["write_output_limit"] is False
@@ -294,7 +302,7 @@ def test_complete_route_is_writable():
         metrics={"outputLimit": 0, "electricLevel": 50},
         capabilities={"output_control", "battery_storage"},
     )
-    proposal = map_snapshot_to_proposal(snap)
+    proposal = map_snapshot_to_proposal(snap, source="local_mqtt")
     assert proposal.output_control_supported is True
     assert proposal.config_fragment["mqtt"]["device_id"] == "DEV"
     assert proposal.config_fragment["mqtt"]["product_key"] == "PK-A"
@@ -353,6 +361,10 @@ def test_runtime_rejects_custom_without_write_topic_no_serial_fallback():
         "serial_number": "SERIAL-1",
         "mqtt": {
             "broker_ref": "local_a",
+            # The broker profile is authoritative for the transport source; a
+            # detached entry mirrors it so the capability layer can resolve the
+            # write carrier without a profile map.
+            "source": "local_mqtt",
             "topic_family": FAMILY_LEGACY_JSON,
             "write_protocol": "custom_properties_write",
         },

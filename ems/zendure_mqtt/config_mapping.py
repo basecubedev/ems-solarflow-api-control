@@ -560,6 +560,10 @@ def _build_proposal(
     capability = mqtt_output_control_capability(
         topic_family=topic_family,
         hardware_profile=hardware_profile,
+        # The broker this observation came from is the write carrier; discovery
+        # knows it exactly, so the proposal carries the source-aware Core verdict
+        # rather than leaving the browser to infer it from the topic family.
+        broker_source=source,
         observed_capabilities=view.capabilities,
     )
     output_control, control_reason = proposal_output_control(capability)

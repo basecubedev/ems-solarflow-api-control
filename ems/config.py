@@ -2266,6 +2266,46 @@ def normalize_mqtt_tls_mode(tls_mode):
     raise ValueError(f"unknown MQTT TLS mode: {tls_mode!r}")
 
 
+# Transport-security modes the Zendure cloud discovery client reports for its own
+# connection. ``pinned_ca`` verifies against a CA bundle only that client
+# carries, so a stored config records both as ``insecure_no_verify`` rather than
+# claiming a verification the EMS runtime cannot reproduce.
+_MQTT_TLS_OBSERVED_INSECURE_ALIASES = frozenset({"encrypted_no_verify", "pinned_ca"})
+
+# Every mode such an observed connection may report. The discovery client picks
+# its CA strategy from the individual names; the accepted set is owned here so
+# the two vocabularies cannot drift apart.
+MQTT_TLS_OBSERVED_MODES = (
+    frozenset({MQTT_TLS_MODE_SYSTEM_CA}) | _MQTT_TLS_OBSERVED_INSECURE_ALIASES
+)
+
+
+def canonical_mqtt_tls_mode(tls_mode):
+    """Map an observed TLS-mode name onto the canonical stored vocabulary.
+
+    The single owner of every TLS-mode alias, including the ones only a
+    discovery observation carries. An unrecognized value is returned unchanged
+    so strict validation — not a silent rewrite — decides what it means.
+    """
+
+    mode = str(tls_mode or "").strip().lower()
+    if mode in _MQTT_TLS_OBSERVED_INSECURE_ALIASES:
+        return MQTT_TLS_MODE_INSECURE
+    return tls_mode
+
+
+def mqtt_tls_mode_name(*, tls, tls_insecure=False):
+    """Canonical stored mode name for a resolved ``(tls, tls_insecure)`` pair.
+
+    ``None`` for a plain connection, so a caller can store "no TLS mode" instead
+    of the string ``plaintext`` where the surrounding record uses absence.
+    """
+
+    if not tls:
+        return None
+    return MQTT_TLS_MODE_INSECURE if tls_insecure else MQTT_TLS_MODE_SYSTEM_CA
+
+
 def resolve_mqtt_tls_metadata(*, tls_mode=None, tls=None, tls_insecure=None):
     """Reconcile TLS metadata into a canonical ``(tls, tls_insecure)`` pair.
 

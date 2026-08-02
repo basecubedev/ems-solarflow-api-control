@@ -112,25 +112,78 @@ test("Fresh Setup manual output control follows the write route, and says so", a
   await page.locator("#config-mqtt-device-model").selectOption("hyper_2000");
   await page.locator("#config-mqtt-device-serial").fill("PHYSICAL-SERIAL");
 
-  // Output control is a capability, not a checkbox: without the explicit route
-  // id the form states that the device would be added as a telemetry source.
-  // The serial is never the route id.
+  // Output control is a capability, not a checkbox: the form names the missing
+  // part of the write route instead of claiming control. The serial is never
+  // the route id.
   await expect(page.locator("#config-mqtt-device-control")).toHaveCount(0);
   const controlHelp = page.locator("#config-mqtt-device-control-help");
   await expect(controlHelp).toBeVisible();
-  await expect(controlHelp).toContainText("MQTT device ID");
+  await expect(controlHelp).toContainText("Output control: Not ready");
+  await expect(controlHelp).toContainText("product key");
   await expect(controlHelp).toContainText("telemetry source");
 
-  // The route id alone is not the whole write route on this generation; the
-  // hint moves on to the next missing part instead of claiming control.
-  await page.locator("#config-mqtt-device-mqttid").fill("ROUTE-DEV-ID");
-  await expect(controlHelp).toContainText("product key");
-
   await page.locator("#config-mqtt-device-productkey").fill("PRODUCT-KEY");
-  await expect(controlHelp).toContainText("Output control: enabled");
+  await expect(controlHelp).toContainText("MQTT device ID");
+
+  await page.locator("#config-mqtt-device-mqttid").fill("ROUTE-DEV-ID");
+  await expect(controlHelp).toContainText("Output control: Available");
 
   await page.locator("#config-mqtt-device-add").click();
   await expect(page.locator("#config-mqtt-device-error")).toBeHidden();
   const list = page.locator("#config-mqtt-device-list");
   await expect(list.locator(".config-mqtt-device-row")).toHaveCount(1);
+});
+
+test("Fresh Setup manual entry names the broker source for a ZenSDK model", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  await reachDevices(page);
+  await openManualMqttForm(page);
+
+  // The manual broker form provisions a *local* broker. A ZenSDK generation
+  // there publishes scalar telemetry, and no hardware evidence exists that such
+  // a broker relays a command back to the device — so the form must say exactly
+  // that rather than offering control or blaming the model. The product key
+  // field stays visible: the model is control-capable, the carrier is not.
+  await page
+    .locator("#config-mqtt-device-generation")
+    .selectOption("solarflow_zensdk");
+  await page
+    .locator("#config-mqtt-device-model")
+    .selectOption("solarflow_800_pro_2");
+  await page.locator("#config-mqtt-device-serial").fill("PHYSICAL-SERIAL");
+  await page.locator("#config-mqtt-device-productkey").fill("PRODUCT-KEY");
+  await page.locator("#config-mqtt-device-mqttid").fill("ROUTE-DEV-ID");
+
+  const controlHelp = page.locator("#config-mqtt-device-control-help");
+  await expect(controlHelp).toContainText("Output control: Not available");
+  await expect(controlHelp).toContainText("MQTT broker source");
+  // The blocked axis is named precisely: not the model, not the identifiers.
+  await expect(controlHelp).not.toContainText("hardware model");
+  await expect(controlHelp).not.toContainText("Not ready");
+
+  await page.locator("#config-mqtt-device-add").click();
+  await expect(page.locator("#config-mqtt-device-error")).toBeHidden();
+  await expect(
+    page.locator("#config-mqtt-device-list .config-mqtt-device-row"),
+  ).toHaveCount(1);
+});
+
+test("Fresh Setup manual entry stays telemetry-only for an unresolved model", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  await reachDevices(page);
+  await openManualMqttForm(page);
+
+  await page
+    .locator("#config-mqtt-device-generation")
+    .selectOption("solarflow_zensdk");
+  await page.locator("#config-mqtt-device-serial").fill("PHYSICAL-SERIAL");
+
+  // No exact model resolved: the verdict is unknown, never optimistically on.
+  const controlHelp = page.locator("#config-mqtt-device-control-help");
+  await expect(controlHelp).toContainText("Output control: Unknown");
+  await expect(controlHelp).toContainText("hardware model");
 });

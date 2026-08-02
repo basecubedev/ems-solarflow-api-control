@@ -23,6 +23,7 @@ def _control_entry(**top):
         "type": "zendure_mqtt",
         "name": "Ctrl",
         "mqtt": {
+            "source": "local_mqtt",
             "topic_family": "legacy_zendure_json",
             "device_id": "DEV",
             "product_key": "PK",
@@ -70,7 +71,7 @@ def test_telemetry_only_profile_rejects_writable_metadata():
     entry = {
         "type": "zendure_mqtt",
         "name": "Ace",
-        "mqtt": {"topic_family": "legacy_zendure_json", "device_id": "DEV"},
+        "mqtt": {"source": "local_mqtt", "topic_family": "legacy_zendure_json", "device_id": "DEV"},
         "hardware_profile": "ace_1500",
         "power_write_profile": "legacy_object_device_automation",
     }
@@ -82,7 +83,7 @@ def test_telemetry_only_profile_with_matching_metadata_validates():
     entry = {
         "type": "zendure_mqtt",
         "name": "Ace",
-        "mqtt": {"topic_family": "legacy_zendure_json", "device_id": "DEV"},
+        "mqtt": {"source": "local_mqtt", "topic_family": "legacy_zendure_json", "device_id": "DEV"},
         "hardware_profile": "ace_1500",
         "power_write_profile": "telemetry_only",
     }

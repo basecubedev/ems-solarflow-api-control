@@ -31,7 +31,9 @@ function localInverterProposal() {
     device_id: "DEV-LOCAL",
     target: "device",
     connection_source: "local_mqtt",
-    topic_family: "zensdk_ha_scalar",
+    // A local broker carries the write route where it publishes the device's own
+    // JSON report family, so this mock stays a realistic controllable proposal.
+    topic_family: "legacy_zendure_json",
     broker_ref: "default",
     display_name: "Local MQTT Inverter",
     hardware_model: "solarflow_800_pro_2",
@@ -52,7 +54,7 @@ function localInverterProposal() {
       mqtt: {
         broker_ref: "default",
         source: "local_mqtt",
-        topic_family: "zensdk_ha_scalar",
+        topic_family: "legacy_zendure_json",
         device_id: "DEV-LOCAL",
         write_protocol: "legacy_properties_write",
       },

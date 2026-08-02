@@ -93,17 +93,48 @@ def test_proposal_carries_no_secrets():
     assert proposals[0]["config_fragment"]["mqtt"]["app_key"] is None
 
 
-def test_scalar_inverter_stays_telemetry_only():
-    # A scalar (ZenSDK/HA) inverter has no verified output-write topic, so it
-    # remains capability-based telemetry-only even with output_control observed.
-    proposals = build_proposals([_scalar_candidate().to_dict()])
+def _cloud_scalar_candidate(**overrides):
+    """The same scalar observation, but on the broker that carries the write route."""
+
+    fields = dict(
+        source_type="zendure_cloud_mqtt",
+        tls_mode="encrypted_no_verify",
+        broker_host="mqtteu.zen-iot.com",
+        broker_port=8883,
+    )
+    fields.update(overrides)
+    return _scalar_candidate(**fields)
+
+
+def test_scalar_inverter_without_a_product_key_stays_telemetry_only():
+    # A scalar (ZenSDK/HA) topic carries no product key, so the canonical write
+    # route iot/<pk>/<dev>/properties/write cannot be built — the family itself
+    # does not block the write.
+    proposals = build_proposals([_cloud_scalar_candidate().to_dict()])
     proposal = proposals[0]
     caps = proposal["config_fragment"]["capabilities"]
     assert caps["write_output_limit"] is False
     assert proposal["output_control_supported"] is False
-    # A known ZenSDK model on a scalar HA transport cannot take an MQTT power
-    # write (it is controlled over the local HTTP API): transport-incompatible.
-    assert proposal["output_control_reason"] == "transport_incompatible"
+    assert proposal["output_control_reason"] == "write_target_missing"
+
+
+def test_scalar_inverter_with_a_complete_route_is_controllable():
+    proposals = build_proposals(
+        [_cloud_scalar_candidate(product_key="PKSCALAR").to_dict()]
+    )
+    proposal = proposals[0]
+    assert proposal["output_control_supported"] is True
+    assert proposal["config_fragment"]["capabilities"]["write_output_limit"] is True
+
+
+def test_a_local_scalar_inverter_is_not_control_capable():
+    """The same complete route on a local broker is not a verified write path."""
+
+    proposals = build_proposals([_scalar_candidate(product_key="PKSCALAR").to_dict()])
+    proposal = proposals[0]
+    assert proposal["output_control_supported"] is False
+    assert proposal["control_block_reason"] == "broker_source_write_unverified"
+    assert proposal["config_fragment"]["capabilities"]["write_output_limit"] is False
 
 
 def _legacy_inverter_candidate(**overrides):

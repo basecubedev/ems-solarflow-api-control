@@ -320,20 +320,23 @@ test("API then MQTT: proposal for a configured serial switches the transport in 
   await expect(configuredCards(page)).toHaveCount(3);
 
   // The proposal matches the configured Local API inverter's serial, so the
-  // only offer is the connection switch. Its transport is a scalar family that
-  // cannot carry a power write, so taking it gives up the regulation - the card
-  // says so and offers it as a telemetry source rather than an equal swap.
+  // only offer is the connection switch. This observation carries no product
+  // key, so no write route resolves and taking it gives up the regulation - the
+  // action names the replacement it performs instead of reading as an addition.
   await runDiscovery(page);
   const results = page.locator("#maintenance-discovery-results");
   const switchButton = results.getByRole("button", {
-    name: "Add as telemetry source",
+    name: "Replace control connection",
   });
   await expect(switchButton).toHaveCount(1);
+  await expect(
+    results.getByRole("button", { name: "Add as telemetry source" }),
+  ).toHaveCount(0);
   await expect(
     results.getByRole("button", { name: "Add inverter" }),
   ).toHaveCount(0);
   await expect(results.locator(".candidate-downgrade-note")).toContainText(
-    "cannot replace the current control connection",
+    "can no longer be controlled by EMS",
   );
 
   await switchButton.click();
@@ -354,6 +357,89 @@ test("API then MQTT: proposal for a configured serial switches the transport in 
   await expect(configuredCards(page)).toHaveCount(3);
   const persisted = cardByText(page, "Local API inverter");
   await expectInverterConnection(persisted, "local_mqtt");
+});
+
+test("API to Zendure Cloud MQTT on a scalar family keeps the inverter controllable", async ({
+  page,
+  seedAdminScenario,
+}) => {
+  const state: DiscoveryState = { apiDevices: [], proposals: [] };
+  await mockDiscovery(page, state);
+  // The connection switch is proposal-authorized, so the backend must resolve
+  // its own candidate for that serial.
+  await page.route("**/api/discovery/mqtt-proposals**", (route) =>
+    route.continue(),
+  );
+  await login(page);
+  await seedAdminScenario("mixed_transports_api_mqtt_control_switch");
+  await page.reload();
+  await openMaintenanceEditor(page);
+  await expect(configuredCards(page)).toHaveCount(3);
+
+  // Same physical inverter, scalar telemetry family, complete write route, on
+  // the broker source that carries that route: the connection is
+  // control-capable, so it is offered as an equal swap and never as a downgrade.
+  await runDiscovery(page);
+  const results = page.locator("#maintenance-discovery-results");
+  const useConnection = results.getByRole("button", { name: "Use connection" });
+  await expect(useConnection).toHaveCount(1);
+  await expect(
+    results.getByRole("button", { name: "Replace control connection" }),
+  ).toHaveCount(0);
+  await expect(results.locator(".candidate-downgrade-note")).toHaveCount(0);
+
+  await useConnection.click();
+  await expect(configuredCards(page)).toHaveCount(3);
+  const switched = cardByText(page, "Local API inverter");
+  await expectInverterConnection(switched, "zendure_mqtt");
+  await openCard(page, switched);
+  await expect(fieldInput(switched, "Enabled")).toBeChecked();
+  await expect(
+    switched.locator("label.feature-field-row", { hasText: "Output control" }),
+  ).toContainText("Available");
+
+  // The preview agrees with the card: it treats the switched device as a cloud
+  // *control* device and raises the single-controller advisory that only a
+  // control-capable cloud device produces. Apply is not exercised here — the
+  // deterministic test runtime holds no Zendure account credential, so writing
+  // a cloud broker profile is refused by design. That is a credential
+  // precondition, not a capability verdict, and the switchback spec stops at
+  // preview for the same reason.
+  await page.locator("#maintenance-config-preview-btn").click();
+  await expect(page.locator("#maintenance-config-warnings")).toContainText(
+    "Zendure Cloud MQTT output control is enabled",
+  );
+});
+
+test("API to a local scalar MQTT connection does not become control-capable", async ({
+  page,
+  seedAdminScenario,
+}) => {
+  const state: DiscoveryState = { apiDevices: [], proposals: [] };
+  await mockDiscovery(page, state);
+  await page.route("**/api/discovery/mqtt-proposals**", (route) =>
+    route.continue(),
+  );
+  await login(page);
+  await seedAdminScenario("mixed_transports_api_local_scalar_switch");
+  await page.reload();
+  await openMaintenanceEditor(page);
+  await expect(configuredCards(page)).toHaveCount(3);
+
+  // Identical device, identical complete write route — only the broker source
+  // differs. A local broker seen publishing scalar metrics only is not a proven
+  // write carrier, so the swap must not be offered as a control-capable one.
+  await runDiscovery(page);
+  const results = page.locator("#maintenance-discovery-results");
+  await expect(
+    results.getByRole("button", { name: "Replace control connection" }),
+  ).toHaveCount(1);
+  await expect(results.getByRole("button", { name: "Use connection" })).toHaveCount(
+    0,
+  );
+  await expect(results.locator(".candidate-downgrade-note")).toContainText(
+    "no longer be controlled",
+  );
 });
 
 test("serial-less Cloud identity survives apply, reload, rediscovery and scope changes", async ({

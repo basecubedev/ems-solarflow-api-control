@@ -69,6 +69,7 @@ def _control_device(**over):
         "name": "Legacy",
         "mqtt": {
             "broker_ref": "local_a",
+            "source": "local_mqtt",
             "topic_family": "legacy_zendure_json",
             "device_id": "DEV",
             "product_key": "PK",

@@ -918,13 +918,17 @@ class ZendureMqttDeviceClient:
         """Reject an operation the pinned model does not support (no publish)."""
 
         from ems.mqtt_control.power_capability import (
+            BLOCK_BROKER_SOURCE_UNKNOWN,
+            BLOCK_BROKER_SOURCE_WRITE_UNVERIFIED,
             BLOCK_OPERATION_UNSUPPORTED,
+            BLOCK_TRANSPORT_WRITE_NOT_IMPLEMENTED,
             resolve_power_write_capability,
         )
 
         cap = resolve_power_write_capability(
             topic_family=self._topic_family,
             hardware_profile=self.hardware_profile,
+            broker_source=self.source,
             operation=operation,
         )
         if cap.supported:
@@ -935,8 +939,12 @@ class ZendureMqttDeviceClient:
                 if operation == OPERATION_CHARGE
                 else "unsupported_power_operation"
             )
-        elif cap.block_reason == "transport_incompatible":
-            error = "transport_incompatible"
+        elif cap.block_reason in (
+            BLOCK_TRANSPORT_WRITE_NOT_IMPLEMENTED,
+            BLOCK_BROKER_SOURCE_UNKNOWN,
+            BLOCK_BROKER_SOURCE_WRITE_UNVERIFIED,
+        ):
+            error = cap.block_reason
         else:
             # Deferred/unknown writable profile → telemetry only.
             error = "telemetry_only_hardware"
@@ -1314,8 +1322,9 @@ class ZendureMqttDeviceClient:
         """Resolve this device's power-write capability for diagnostics.
 
         Returns ``(supported, power_write_profile, supported_operations,
-        block_reason)``. A pinned profile is the authority; an unknown pinned
-        profile and the explicit custom escape hatch are handled explicitly.
+        block_reason)``. The pinned profile plus the broker profile's source are
+        the authority; an unknown pinned profile and the explicit custom escape
+        hatch are handled explicitly.
         """
 
         from ems.mqtt_control.power_capability import (
@@ -1328,7 +1337,9 @@ class ZendureMqttDeviceClient:
             return False, None, (), BLOCK_HARDWARE_PROFILE_UNKNOWN
         if self._power_profile is not None:
             cap = resolve_power_write_capability(
-                topic_family=self._topic_family, hardware_profile=self.hardware_profile
+                topic_family=self._topic_family,
+                hardware_profile=self.hardware_profile,
+                broker_source=self.source,
             )
             return (
                 cap.supported,

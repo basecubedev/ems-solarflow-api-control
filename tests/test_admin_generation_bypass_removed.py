@@ -29,6 +29,7 @@ def test_admin_generation_cannot_authorize_write():
             "output_control": True,
         },
         "local_a",
+        broker_source="local_mqtt",
     )
     # Telemetry config may still be created, but never a control write.
     assert fragment is not None
@@ -52,6 +53,7 @@ def test_admin_new_device_projection_generation_cannot_authorize_write():
             "product_key": "PK9",
             "mqtt": {
                 "broker_ref": "local_a",
+                "source": "local_mqtt",
                 "topic_family": "legacy_zendure_json",
                 "device_id": "SN9",
                 "product_key": "PK9",
@@ -76,6 +78,7 @@ def test_admin_concrete_model_authorizes_write():
             "output_control": True,
         },
         "local_a",
+        broker_source="local_mqtt",
     )
     assert issues == []
     assert fragment["capabilities"]["write_output_limit"] is True
@@ -95,6 +98,7 @@ def test_clearing_profile_removes_stale_write_metadata():
         "power_write_profile": "legacy_object_device_automation",
         "mqtt": {
             "broker_ref": "local_a",
+            "source": "local_mqtt",
             "topic_family": "legacy_zendure_json",
             "base_topic": "iot",
             "device_id": "SN1",
@@ -115,6 +119,7 @@ def test_clearing_profile_removes_stale_write_metadata():
             "capabilities": {"read_power": True, "read_soc": True, "write_output_limit": True},
             "mqtt": {
                 "broker_ref": "local_a",
+                "source": "local_mqtt",
                 "topic_family": "legacy_zendure_json",
                 "device_id": "SN1",
                 "product_key": "PK1",

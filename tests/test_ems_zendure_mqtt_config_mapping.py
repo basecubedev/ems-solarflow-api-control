@@ -66,7 +66,7 @@ def test_zensdk_scalar_becomes_proposal():
             ("Zendure/sensor/SN1/acMode", "2"),
         ]
     )
-    proposal = map_snapshot_to_proposal(snap)
+    proposal = map_snapshot_to_proposal(snap, source="local_mqtt")
     assert isinstance(proposal, ZendureMqttConfigProposal)
     assert proposal.source == "zendure_mqtt"
     assert proposal.topic_family == FAMILY_ZENSDK_HA_SCALAR
@@ -80,7 +80,7 @@ def test_legacy_iot_json_becomes_proposal_with_product_key_and_device_id():
     snap = _snapshot_from(
         [("iot/PK/DEV/properties/report", json.dumps(_legacy_payload()))]
     )
-    proposal = map_snapshot_to_proposal(snap)
+    proposal = map_snapshot_to_proposal(snap, source="local_mqtt")
     assert proposal.topic_family == FAMILY_LEGACY_JSON
     assert proposal.base_topic == "iot"
     assert proposal.device_id == "DEV"
@@ -92,7 +92,7 @@ def test_legacy_slash_json_becomes_proposal():
     snap = _snapshot_from(
         [("/PK/DEV/properties/report", json.dumps(_legacy_payload()))]
     )
-    proposal = map_snapshot_to_proposal(snap)
+    proposal = map_snapshot_to_proposal(snap, source="local_mqtt")
     assert proposal.topic_family == FAMILY_LEGACY_JSON_ALT
     # The alt prefix is empty, so no base topic is proposed.
     assert proposal.base_topic is None
@@ -107,7 +107,7 @@ def test_cloud_scalar_keeps_base_topic_none_and_exposes_no_secret():
             (f"{secret}/sensor/DEV1/solarInputPower", "620"),
         ]
     )
-    proposal = map_snapshot_to_proposal(snap)
+    proposal = map_snapshot_to_proposal(snap, source="local_mqtt")
     assert proposal.topic_family == FAMILY_ZENDURE_CLOUD_SCALAR
     assert proposal.base_topic is None
     assert proposal.config_fragment["mqtt"]["app_key"] is None
@@ -132,7 +132,7 @@ def test_battery_storage_plus_output_control_is_battery_inverter():
         [("iot/PK/DEV/properties/report", json.dumps(_legacy_payload()))]
     )
     assert {"battery_storage", "output_control"} <= snap.capabilities
-    proposal = map_snapshot_to_proposal(snap)
+    proposal = map_snapshot_to_proposal(snap, source="local_mqtt")
     assert proposal.role_hint == ROLE_BATTERY_INVERTER
 
 
@@ -144,7 +144,7 @@ def test_grid_like_metrics_become_grid_meter_only_when_clear():
         metrics={"gridInputPower": -120, "total_power": -120},
         capabilities=set(),
     )
-    proposal = map_snapshot_to_proposal(snap)
+    proposal = map_snapshot_to_proposal(snap, source="local_mqtt")
     assert proposal.role_hint == ROLE_GRID_METER
 
 
@@ -155,7 +155,7 @@ def test_battery_device_with_grid_metric_is_not_grid_meter():
             ("Zendure/sensor/SN1/gridInputPower", "-120"),
         ]
     )
-    proposal = map_snapshot_to_proposal(snap)
+    proposal = map_snapshot_to_proposal(snap, source="local_mqtt")
     assert proposal.role_hint != ROLE_GRID_METER
 
 
@@ -167,7 +167,7 @@ def test_telemetry_without_output_control_is_telemetry_only():
         ]
     )
     assert "output_control" not in snap.capabilities
-    proposal = map_snapshot_to_proposal(snap)
+    proposal = map_snapshot_to_proposal(snap, source="local_mqtt")
     assert proposal.role_hint == ROLE_TELEMETRY_ONLY
 
 
@@ -179,7 +179,7 @@ def test_incomplete_snapshot_is_unknown_and_low_confidence():
         metrics={},
         capabilities=set(),
     )
-    proposal = map_snapshot_to_proposal(snap)
+    proposal = map_snapshot_to_proposal(snap, source="local_mqtt")
     assert proposal.role_hint == ROLE_UNKNOWN
     assert proposal.confidence == "low"
     assert "insufficient_telemetry" in proposal.warnings
@@ -196,7 +196,7 @@ def test_limited_metrics_are_medium_confidence():
         metrics={"solarInputPower": 100},
         capabilities={"pv_input"},
     )
-    proposal = map_snapshot_to_proposal(snap)
+    proposal = map_snapshot_to_proposal(snap, source="local_mqtt")
     assert proposal.confidence == "medium"
 
 
@@ -210,7 +210,7 @@ def test_legacy_inverter_fragment_enables_output_control():
     snap = _snapshot_from(
         [("iot/PK/DEV/properties/report", json.dumps(_legacy_payload(product="Hyper 2000")))]
     )
-    proposal = map_snapshot_to_proposal(snap)
+    proposal = map_snapshot_to_proposal(snap, source="local_mqtt")
     fragment = proposal.config_fragment
     assert fragment["type"] == "zendure_mqtt"
     assert fragment["enabled"] is True
@@ -231,7 +231,7 @@ def test_legacy_alt_layout_inverter_enables_output_control():
     snap = _snapshot_from(
         [("/PK/DEV/properties/report", json.dumps(_legacy_payload(product="Hyper 2000")))]
     )
-    proposal = map_snapshot_to_proposal(snap)
+    proposal = map_snapshot_to_proposal(snap, source="local_mqtt")
     fragment = proposal.config_fragment
     assert fragment["mqtt"]["topic_family"] == FAMILY_LEGACY_JSON_ALT
     assert fragment["capabilities"]["write_output_limit"] is True
@@ -249,12 +249,14 @@ def test_scalar_inverter_fragment_stays_telemetry_only():
         ]
     )
     assert "output_control" in snap.capabilities
-    proposal = map_snapshot_to_proposal(snap)
+    proposal = map_snapshot_to_proposal(snap, source="local_mqtt")
     fragment = proposal.config_fragment
     assert fragment["capabilities"]["write_output_limit"] is False
     assert "write_protocol" not in fragment["mqtt"]
     assert proposal.output_control_supported is False
-    assert proposal.output_control_reason == "scalar_write_not_verified"
+    # A scalar topic identifies neither the model nor a product key, so no write
+    # method resolves — the family itself is not the blocker.
+    assert proposal.output_control_reason == "write_method_missing"
 
 
 def test_write_addressable_legacy_model_defaults_to_output_control():
@@ -269,7 +271,7 @@ def test_write_addressable_legacy_model_defaults_to_output_control():
         metrics={"inputLimit": 0, "electricLevel": 50},
         capabilities={"battery_storage"},
     )
-    proposal = map_snapshot_to_proposal(snap)
+    proposal = map_snapshot_to_proposal(snap, source="local_mqtt")
     fragment = proposal.config_fragment
     assert fragment["capabilities"]["write_output_limit"] is True
     assert proposal.output_control_supported is True
@@ -283,7 +285,7 @@ def test_duplicate_snapshots_for_same_device_are_deduplicated():
     snap = _snapshot_from(
         [("iot/PK/DEV/properties/report", json.dumps(_legacy_payload()))]
     )
-    proposals = map_snapshots_to_proposals([snap, snap])
+    proposals = map_snapshots_to_proposals([snap, snap], source="local_mqtt")
     assert len(proposals) == 1
 
 
@@ -303,7 +305,7 @@ def test_snapshots_with_same_serial_merge_into_one_proposal():
         metrics={"outputLimit": 300},
         capabilities={"output_control"},
     )
-    proposals = map_snapshots_to_proposals([scalar, report])
+    proposals = map_snapshots_to_proposals([scalar, report], source="local_mqtt")
     assert len(proposals) == 1
     merged = proposals[0]
     assert merged.role_hint == ROLE_BATTERY_INVERTER
@@ -332,7 +334,7 @@ def test_same_model_devices_get_unique_names():
         topic_families={FAMILY_LEGACY_JSON_ALT},
         metrics={"electricLevel": 51, "outputLimit": 120},
     )
-    proposals = map_snapshots_to_proposals([a, b])
+    proposals = map_snapshots_to_proposals([a, b], source="local_mqtt")
     names = [p.config_fragment["name"] for p in proposals]
     display_names = [p.display_name for p in proposals]
     assert names == [
@@ -351,7 +353,7 @@ def test_single_device_keeps_plain_product_name():
         topic_families={FAMILY_LEGACY_JSON_ALT},
         metrics={"electricLevel": 43},
     )
-    proposal = map_snapshot_to_proposal(snap)
+    proposal = map_snapshot_to_proposal(snap, source="local_mqtt")
     assert proposal.config_fragment["name"] == "Zendure MQTT SolarFlow 800 Pro2"
     assert proposal.display_name == "Zendure MQTT SolarFlow 800 Pro2"
 
@@ -369,7 +371,7 @@ def test_distinct_devices_produce_distinct_proposals():
         topic_families={FAMILY_ZENSDK_HA_SCALAR},
         metrics={"electricLevel": 51},
     )
-    proposals = map_snapshots_to_proposals([a, b])
+    proposals = map_snapshots_to_proposals([a, b], source="local_mqtt")
     assert {p.proposal_id for p in proposals} == {
         "zendure-mqtt:SN1",
         "zendure-mqtt:SN2",
@@ -695,7 +697,7 @@ def test_mapper_does_not_mutate_input_snapshots():
     before = copy.deepcopy(
         (snap.metrics, snap.capabilities, snap.topic_families, snap.battery_packs)
     )
-    map_snapshots_to_proposals([snap])
+    map_snapshots_to_proposals([snap], source="local_mqtt")
     assert (
         snap.metrics,
         snap.capabilities,

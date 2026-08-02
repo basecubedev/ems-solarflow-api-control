@@ -319,25 +319,19 @@ class ControlAddressability:
 
 
 def _profile_backed_control(item: Any) -> bool:
-    """True when a pinned, known, writable, transport-compatible profile applies.
+    """True when a pinned, known, writable profile with a publish route applies.
 
     Such a device publishes to its canonical ``iot/<productKey>/<deviceId>``
     topic, so its write route needs a product key; a device without a pinned
     writable profile is addressed by the explicit custom ``mqtt.write_topic``.
+    This is the route *shape* only and stays broker-source independent — a device
+    blocked by its broker source is still canonically addressed, and must report
+    that block rather than a missing custom write topic.
     """
 
-    hardware_profile = zendure_mqtt_hardware_profile(item)
-    if not hardware_profile:
-        return False
-    from ems.mqtt_control.power_capability import resolve_power_write_capability
-    from ems.mqtt_control.zendure_profiles import hardware_profile_by_name
+    from ems.mqtt_control.power_capability import profile_write_route_implemented
 
-    if hardware_profile_by_name(hardware_profile) is None:
-        return False
-    return resolve_power_write_capability(
-        topic_family=zendure_mqtt_topic_family(item),
-        hardware_profile=hardware_profile,
-    ).supported
+    return profile_write_route_implemented(zendure_mqtt_hardware_profile(item))
 
 
 def zendure_mqtt_control_addressability(
@@ -446,6 +440,30 @@ def zendure_mqtt_source(item: Any) -> str | None:
             if isinstance(source, str) and source.strip():
                 return source.strip()
     return None
+
+
+def zendure_mqtt_effective_broker_source(
+    item: Any, broker_sources: Any = None
+) -> str | None:
+    """Canonical broker source a Zendure MQTT entry writes through, or ``None``.
+
+    Single source of truth for the broker-source capability axis. The broker
+    profile is authoritative (a device that contradicts it is rejected by
+    validation); an entry's own ``mqtt.source`` is read only when no profile map
+    is available, which is the case for the Admin fragment paths that work on a
+    single detached entry. An unresolvable source stays ``None`` so the
+    capability layer fails closed rather than assuming a transport.
+    """
+
+    from ems.mqtt_control.power_capability import normalize_broker_source
+
+    if isinstance(broker_sources, Mapping):
+        resolved = normalize_broker_source(
+            broker_sources.get(zendure_mqtt_broker_ref(item))
+        )
+        if resolved is not None:
+            return resolved
+    return normalize_broker_source(zendure_mqtt_source(item))
 
 
 def _normalized(value: Any) -> str | None:
@@ -772,7 +790,9 @@ def validate_zendure_mqtt_control_device_config(
     ``mqtt.product_key`` for the canonical profile topic or an explicit
     ``mqtt.write_topic`` for a custom write. When ``broker_sources`` is supplied a
     device that overrides its broker profile's transport source is rejected so
-    device config can never select a different write gate than the broker profile.
+    device config can never select a different write gate than the broker profile;
+    the resolved source is also the broker-source capability axis, and an entry
+    whose source cannot be resolved is refused rather than assumed controllable.
     """
 
     type_issue = _entry_type_issue(item)
@@ -826,7 +846,11 @@ def validate_zendure_mqtt_control_device_config(
             )
         )
 
-    issues.extend(_control_write_capability_issues(item))
+    issues.extend(
+        _control_write_capability_issues(
+            item, zendure_mqtt_effective_broker_source(item, broker_sources)
+        )
+    )
 
     return issues
 
@@ -837,20 +861,35 @@ _BLOCK_REASON_MESSAGES = {
         "this Zendure model is not yet validated for power control and stays "
         "telemetry-only"
     ),
+    "transport_write_not_implemented": (
+        "the pinned hardware_profile has no implemented MQTT write route"
+    ),
+    # Retired reason, kept so an upgraded config carrying it still explains itself.
     "transport_incompatible": (
         "the pinned hardware_profile is not compatible with this device's "
         "topic_family transport"
     ),
+    "broker_source_unknown": (
+        "the broker profile this control device references declares no known "
+        "connection source, so no write route can be authorized"
+    ),
+    "broker_source_write_unverified": (
+        "output control over this MQTT broker source is not verified for the "
+        "telemetry this device reports; it stays telemetry-only"
+    ),
 }
 
 
-def _control_write_capability_issues(item: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _control_write_capability_issues(
+    item: Mapping[str, Any], broker_source: str | None
+) -> list[dict[str, Any]]:
     """Require a verified write method before a control device may publish.
 
     A pinned ``hardware_profile`` is the primary authority: it must be known,
-    writable and compatible with the topic-family transport. Without a profile,
-    only an explicit supported ``mqtt.write_protocol`` (the operator-verified
-    custom escape hatch) authorizes a write — a bare topic family never does.
+    writable and carry an implemented write route, and ``broker_source`` must be
+    a proven carrier for that route. Without a profile, only an explicit
+    supported ``mqtt.write_protocol`` (the operator-verified custom escape hatch)
+    authorizes a write — a bare topic family never does.
     """
 
     from ems.mqtt_control.power_capability import resolve_power_write_capability
@@ -873,7 +912,9 @@ def _control_write_capability_issues(item: Mapping[str, Any]) -> list[dict[str, 
                 )
             ]
         cap = resolve_power_write_capability(
-            topic_family=topic_family, hardware_profile=hardware_profile
+            topic_family=topic_family,
+            hardware_profile=hardware_profile,
+            broker_source=broker_source,
         )
         if cap.supported:
             # A pinned model publishes to its canonical topic; a stored

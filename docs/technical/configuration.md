@@ -952,9 +952,10 @@ devices — those with `capabilities.write_output_limit=true`, a supported write
 method and an enabled write gate — see
 [Zendure MQTT output control](#zendure-mqtt-output-control)
 below. A discovered device is controllable only where an **exact supported
-hardware model** resolves to a verified write method on a compatible transport;
-a topic family or hardware generation alone never authorizes writes, and unknown
-or conflicting model evidence stays telemetry-only.
+hardware model** resolves to a verified write method, its **broker profile
+source** is a proven carrier for that route, and the write address is complete;
+a topic family or hardware generation alone never authorizes writes, and
+unknown or conflicting model evidence stays telemetry-only.
 
 Each MQTT device names exactly one broker profile via `mqtt.broker_ref`. There
 is no fallback and no implicit runtime priority: a device assigned to a broker is
@@ -1075,22 +1076,36 @@ source of truth for demand, distribution and write decisions; MQTT is a
 first-class control transport that builds the write topic and payload.
 
 Output control is enabled per device by capability: it is available where the
-pinned hardware profile resolves to a **verified write method** on a compatible
-topic family, decided by the shared helper
+pinned hardware profile resolves to a **verified write method** on the device's
+**broker source**, decided by the shared helper
 `ems.zendure_mqtt.capability.mqtt_output_control_capability`. Admin Setup,
 Maintenance and manual entry all create a controllable device for a supported
 model without hand-editing `config.json`.
 
 `write_output_limit` is a **capability, not an operator preference**. Admin
-derives it from the pinned model, the transport and a complete write route and
-shows it read-only, so a control-capable inverter is controlled whenever it is
-enabled — the same rule a Local API device follows, which carries no such key at
-all. Whether a device participates at all is its `enabled` flag, and that is the
-only activation authority: a device that cannot control output on its transport
-is telemetry-only by capability and stays active. Hand-editing
+derives it from four independent axes — the pinned model, an implemented write
+route for that model, a broker source that carries that route, and a complete
+write address (`mqtt.product_key` plus `mqtt.device_id`) — and shows it
+read-only, so a control-capable inverter is
+controlled whenever it is enabled, the same rule a Local API device follows
+(which carries no such key at all). Whether a device participates at all is its
+`enabled` flag, and that is the only activation authority: a device that cannot
+control output is telemetry-only by capability and stays active. Hand-editing
 `write_output_limit=false` on a control-capable device remains valid config and
-keeps the device telemetry-only, but Admin will re-derive it to `true` on the
-next Maintenance apply, where it appears in the preview diff.
+keeps the device telemetry-only, but Admin will re-derive it to `true` when the
+Maintenance draft is loaded, where it appears in the preview diff.
+
+Local API, Local MQTT and Zendure Cloud MQTT are **alternative control
+transports of the same logical device**. Switching between them preserves the
+device's identity, `enabled` state, limits, SoC settings and allocation
+parameters; `enabled` is never a capability decision. Whether the new connection
+can *control* the device is, however, evaluated per transport: the broker source
+is one of the capability axes, so a device moved to a broker whose write route
+is unverified stays enabled and becomes a telemetry source, with the reason
+shown on its card. See
+[Model-Aware Zendure MQTT Power Control](zendure-mqtt-power-control.md#broker-source)
+for the source matrix and the machine-readable reasons
+(`broker_source_write_unverified`, `broker_source_unknown`).
 
 **Scope of MQTT control.** Output-limit control is supported where the resolved
 hardware profile carries an implemented write method: `zensdk_properties_write`
@@ -1108,17 +1123,23 @@ before it can publish. The pinned `hardware_profile` selects it
 
 | Hardware profile | Write method | Notes |
 | --- | --- | --- |
-| SolarFlow 800 / 800 Plus / 800 Pro / 800 Pro 2 / 1600 AC+ / 2400 AC / 2400 AC+ / 2400 Pro / 4000 AC+ | `zensdk_properties_write` | Publishes `{deviceId, messageId, timestamp, properties:{outputLimit}}` to `iot/<productKey>/<deviceId>/properties/write` (leading-slash variant on the `legacy_zendure_json_alt` family). Needs `mqtt.product_key`. |
+| SolarFlow 800 / 800 Plus / 800 Pro / 800 Pro 2 / 1600 AC+ / 2400 AC / 2400 AC+ / 2400 Pro / 4000 AC+ | `zensdk_properties_write` | Publishes `{deviceId, messageId, timestamp, properties:{outputLimit}}` to `iot/<productKey>/<deviceId>/properties/write`. Needs `mqtt.product_key`. |
 | Hyper 2000 / AIO 2400 | `legacy_object_device_automation` | Publishes a `deviceAutomation` `function/invoke` command to `iot/<productKey>/<deviceId>/function/invoke`; acknowledged on `function/invoke/reply`. Needs `mqtt.product_key`. |
 | Hub 1200 / Hub 2000 | `legacy_hub_device_automation` | Same `function/invoke` topic with a scalar watt value; acknowledged on `function/invoke/reply`. Needs `mqtt.product_key`. |
 | ACE 1500 / SuperBase V4600 / SuperBase V6400 | `telemetry_only` — **read-only** | Never publishes. |
 | none pinned | none — **read-only** | A topic family or hardware generation alone never selects a write method; only the explicit escape hatch below can. |
 | none pinned, with explicit topic | `custom_properties_write` | Explicit advanced escape hatch: `mqtt.write_protocol` set to `custom_properties_write` plus an explicit valid `mqtt.write_topic`; publishes the same properties payload to that topic. |
 
-All built-in write methods are transport-bound to the JSON-report families
-(`legacy_zendure_json` / `legacy_zendure_json_alt`); on the scalar families
-(`zensdk_ha_scalar` / `zendure_cloud_scalar`) and `unknown`, a writable profile
-is transport-incompatible and the device stays read-only over MQTT. See
+**Telemetry family and write family are separate.** `mqtt.topic_family` names
+how a device's *reports* are parsed (`zensdk_ha_scalar`,
+`zendure_cloud_scalar`, `legacy_zendure_json`, `legacy_zendure_json_alt`). Every
+built-in write method publishes to `iot/<productKey>/<deviceId>/…` regardless of
+it, so the observed telemetry family never decides whether a device is
+controllable. What a scalar family does *not* carry is a product key — its
+topics have no such segment — so a device discovered only through scalar
+telemetry has an incomplete write route until the product key is known from the
+cloud device list, an existing config or manual entry. That is reported as
+`write_target_missing`, not as a transport problem. See
 `docs/technical/zendure-mqtt-power-control.md` for the full capability model.
 
 Pin `hardware_profile` to a supported model to make a device controllable;

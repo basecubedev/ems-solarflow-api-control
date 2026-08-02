@@ -5,8 +5,9 @@ A user who adds or switches to a control-ready MQTT inverter must not have to
 flip anything to make it a controllable EMS device. Output control is not an
 operator choice at all: EMS/Core derives it from the pinned hardware model, the
 transport and a complete write route, exactly as a Local API inverter has no
-such switch. The Maintenance card therefore re-derives it on every render and
-reports the verdict.
+such switch. The Maintenance card reports that verdict; the derivation itself
+runs on an explicit action (field edit, transport switch, proposal adoption,
+draft load), never as a render side effect.
 """
 
 import json
@@ -18,18 +19,18 @@ from tests.test_admin_frontend import _extract_fn, _read, run_mconfig_add_mqtt_p
 pytestmark = pytest.mark.simulation
 
 
-def test_the_card_derives_control_from_model_and_route_on_every_render():
+def test_control_is_derived_from_model_and_route():
     js = _read("admin.js")
-    render = _extract_fn(js, "renderMaintenanceZendureMqttDevice")
+    projection = _extract_fn(js, "mconfigMqttControlProjection")
+    normalize = _extract_fn(js, "mconfigNormalizeMqttControl")
 
     # A complete route is a known route plus a write target; the physical serial
     # is never the route id, and a proposal-backed device is routed by the
     # trusted proposal the server resolves at preview/apply.
-    assert "const routeComplete = routeKnown && hasWriteTarget" in render
-    assert "const routeKnown = !!routeDeviceId || proposalRouted" in render
-    assert "device.mqtt.device_id.trim()" in render
-    assert "const shouldControl = supported && routeComplete" in render
-    assert "device.capabilities.write_output_limit = shouldControl" in render
+    assert "const routeComplete = (!!routeDeviceId || proposalRouted) && hasWriteTarget" in projection
+    assert "device.mqtt.device_id.trim()" in projection
+    assert "shouldControl: supported && routeComplete" in projection
+    assert "device.capabilities.write_output_limit = shouldControl" in normalize
 
 
 def test_no_operator_opt_out_remains():

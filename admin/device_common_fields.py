@@ -14,8 +14,9 @@ import copy
 
 from ems.config_catalog import (
     DEVICE_IDENTITY_FIELD_KEYS,
+    config_field_index,
     device_common_defaults,
-    get_config_feature_field_index,
+    is_editable_catalog_field,
 )
 
 
@@ -82,15 +83,7 @@ def is_editable_maintenance_field(field):
     a secret value or write outside the catalog.
     """
 
-    if field.get("scope") not in ("maintenance", "both"):
-        return False
-    if field.get("level") == "deprecated":
-        return False
-    if field.get("editable") is False:
-        return False
-    if field.get("risk") == "secret" or field.get("type") == "password":
-        return False
-    return True
+    return is_editable_catalog_field(field, scope="maintenance", allow_secret=False)
 
 
 def common_device_value_fields():
@@ -100,17 +93,12 @@ def common_device_value_fields():
     never a flow-local copy; identity keys keep dedicated handling.
     """
 
-    fields = {}
-    for path, field in get_config_feature_field_index().items():
-        if not path.startswith("devices[]."):
-            continue
-        key = path[len("devices[].") :]
-        if key in DEVICE_IDENTITY_FIELD_KEYS:
-            continue
-        if not is_editable_maintenance_field(field):
-            continue
-        fields[key] = field
-    return fields
+    return config_field_index(
+        scope="maintenance",
+        allow_secret=False,
+        prefix="devices[].",
+        exclude_keys=DEVICE_IDENTITY_FIELD_KEYS,
+    )
 
 
 def apply_common_device_values(device, item, fields=None):

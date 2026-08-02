@@ -31,7 +31,7 @@ def _legacy_snapshot(serial, product):
 
 
 def _proposal_for(serial, product):
-    return map_snapshots_to_proposals([_legacy_snapshot(serial, product)])[0]
+    return map_snapshots_to_proposals([_legacy_snapshot(serial, product)], source="local_mqtt")[0]
 
 
 # --- Phase 6: telemetry-only identity is persisted --------------------------
@@ -77,7 +77,8 @@ def test_conflicting_models_produce_read_only_conflict():
         [
             _legacy_snapshot("SNC", "Hyper 2000"),
             _legacy_snapshot("SNC", "AIO 2400"),
-        ]
+        ],
+        source="local_mqtt",
     )
     assert len(proposals) == 1
     proposal = proposals[0]
@@ -94,7 +95,8 @@ def test_conflict_is_visible_in_admin_review_dict():
         [
             _legacy_snapshot("SNC", "Hyper 2000"),
             _legacy_snapshot("SNC", "AIO 2400"),
-        ]
+        ],
+        source="local_mqtt",
     )
     data = _proposal_to_dict(proposals[0])
     assert data["hardware_profile_confidence"] == "conflict"
@@ -108,7 +110,8 @@ def test_agreeing_models_are_not_a_conflict():
         [
             _legacy_snapshot("SNA", "Hyper 2000"),
             _legacy_snapshot("SNA", "Hyper2000"),
-        ]
+        ],
+        source="local_mqtt",
     )
     proposal = proposals[0]
     assert proposal.hardware_profile_confidence in ("exact", "canonical")

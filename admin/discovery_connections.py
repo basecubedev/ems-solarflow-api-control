@@ -23,7 +23,13 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ems.config import default_mqtt_port, parse_mqtt_port, resolve_mqtt_tls_metadata
+from ems.config import (
+    default_mqtt_port,
+    mqtt_tls_mode_name,
+    normalize_mqtt_tls_mode,
+    parse_mqtt_port,
+    resolve_mqtt_tls_metadata,
+)
 
 from admin.discovery_preparation import (
     DEFAULT_PRIORITY,
@@ -51,14 +57,21 @@ class DiscoveryConnectionsError(Exception):
     """A save failure whose message is safe to show to the operator."""
 
 
-TLS_MODES = ("system_ca", "insecure_no_verify")
-DEFAULT_TLS_MODE = "system_ca"
-
-
 def _normalize_tls_mode(value, tls):
+    """Stored mode name for a saved connection, never a downgrade.
+
+    The mode vocabulary is Core's; an unresolvable value keeps verified TLS,
+    because claiming less verification than the operator asked for is the one
+    reading that could weaken a saved endpoint.
+    """
+
     if not tls:
         return None
-    return value if value in TLS_MODES else DEFAULT_TLS_MODE
+    try:
+        _tls, insecure = normalize_mqtt_tls_mode(value)
+    except ValueError:
+        insecure = False
+    return mqtt_tls_mode_name(tls=True, tls_insecure=insecure)
 
 
 @dataclass(frozen=True)

@@ -2033,6 +2033,83 @@ def get_config_feature_field_index():
     }
 
 
+def is_secret_catalog_field(field):
+    """True for a catalog field whose value must never be surfaced.
+
+    Explicit catalog metadata, never a name guess. Admin re-exports this through
+    its secret policy so both layers answer from one declaration.
+    """
+
+    return field.get("risk") == "secret" or field.get("type") == "password"
+
+
+def is_editable_catalog_field(field, *, scope, allow_secret=True):
+    """True for a catalog field the given workflow scope may write.
+
+    Deprecated, hidden and read-only fields stay out of every scope. Whether a
+    secret-valued field is writable differs per consumer, so it is an explicit
+    argument rather than a per-module rule.
+    """
+
+    if field.get("scope") not in (scope, "both"):
+        return False
+    if field.get("level") == "deprecated":
+        return False
+    if field.get("editable") is False:
+        return False
+    if not allow_secret and is_secret_catalog_field(field):
+        return False
+    return True
+
+
+def config_field_index(
+    *,
+    scope,
+    allow_secret=True,
+    prefix=None,
+    flat_keys=False,
+    exclude_keys=(),
+    exclude_repeated=False,
+    exclude_prefixes=(),
+):
+    """The one catalog query every Admin field index is built from.
+
+    Filters are explicit because the consumers genuinely differ: the setup
+    feature index wants full config paths, the per-device indexes want the flat
+    key below ``devices[].``, and the maintenance index excludes the paths owned
+    by the dedicated hardware editors. What none of them may do is re-derive
+    *which* catalog fields exist or when one is editable.
+
+    With ``prefix`` the result is keyed by the remainder of the path;
+    ``flat_keys`` additionally drops nested and repeated remainders so a value
+    can never reach a nested structure.
+    """
+
+    excluded = frozenset(exclude_keys)
+    skipped = tuple(exclude_prefixes)
+    index = {}
+    for path, field in get_config_feature_field_index().items():
+        if not is_editable_catalog_field(field, scope=scope, allow_secret=allow_secret):
+            continue
+        if exclude_repeated and "[]" in path:
+            continue
+        if skipped and path.startswith(skipped):
+            continue
+        key = path
+        if prefix is not None:
+            if not path.startswith(prefix):
+                continue
+            key = path[len(prefix) :]
+            if not key:
+                continue
+            if flat_keys and ("." in key or "[" in key):
+                continue
+        if key in excluded:
+            continue
+        index[key] = field
+    return index
+
+
 def get_config_catalog():
     """Return the complete serializable catalog."""
 

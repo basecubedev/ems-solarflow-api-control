@@ -35,6 +35,16 @@ function cardInput(page: Page, card: ReturnType<Page["locator"]>, label: string)
     .first();
 }
 
+function cardOutputControl(page: Page, card: ReturnType<Page["locator"]>) {
+  return card
+    .locator("label")
+    .filter({
+      has: page.locator(".feature-field-label", { hasText: "Output control" }),
+    })
+    .locator(".feature-readonly-value")
+    .first();
+}
+
 function cardReadiness(page: Page, card: ReturnType<Page["locator"]>) {
   return card
     .locator("label")
@@ -195,16 +205,13 @@ test("Maintenance clearing the MQTT device ID cannot leave writes enabled", asyn
 
   const card = page.locator('[data-source-id="maintenance-mqtt-device-1"]');
   await card.locator(".hardware-card-summary").click();
-  const outputControl = card
-    .locator("label")
-    .filter({
-      has: page.locator(".feature-field-label", { hasText: "Output control" }),
-    })
-    .locator('input[type="checkbox"]')
-    .first();
-  await expect(outputControl).toBeChecked();
+  // Output control is a read-only verdict, not a checkbox: clearing the route
+  // id removes the write address, so the card must report it as unavailable and
+  // the derived capability must follow into the draft.
+  const outputControl = cardOutputControl(page, card);
+  await expect(outputControl).toHaveText("Available");
   await cardInput(page, card, "MQTT device ID").fill("");
-  await expect(outputControl).not.toBeChecked();
+  await expect(outputControl).toContainText("Not available");
   await previewAndApply(page);
 
   const after = await readDraft(page);

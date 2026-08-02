@@ -28,6 +28,7 @@ from admin.zendure_mqtt_broker_profiles import (
 )
 from admin.zendure_mqtt_config_draft import (
     build_manual_zendure_mqtt_fragment,
+    enforce_zendure_mqtt_output_control_capability,
     sanitize_zendure_mqtt_fragment,
     validate_zendure_mqtt_fragment,
 )
@@ -223,8 +224,10 @@ def _merge_zendure_mqtt_proposals(preview, proposals, validation, cloud_auth_ava
         # second claim on a physical identity either.
         if proposal.get("enabled") is False:
             continue
-        scan_entry = sanitize_zendure_mqtt_fragment(copy.deepcopy(fragment))
-        if validate_zendure_mqtt_fragment(scan_entry):
+        scan_entry = sanitize_zendure_mqtt_fragment(
+            copy.deepcopy(fragment), broker_sources
+        )
+        if validate_zendure_mqtt_fragment(scan_entry, broker_sources):
             continue
         scan_identity = zendure_config_device_identity(
             scan_entry, broker_sources=broker_sources
@@ -258,7 +261,7 @@ def _merge_zendure_mqtt_proposals(preview, proposals, validation, cloud_auth_ava
         # connection switch in both directions.
         if proposal.get("enabled") is False:
             continue
-        entry = sanitize_zendure_mqtt_fragment(copy.deepcopy(fragment))
+        entry = sanitize_zendure_mqtt_fragment(copy.deepcopy(fragment), broker_sources)
         if "config_name" in proposal:
             config_name = str(proposal.get("config_name") or "").strip()
         else:
@@ -330,6 +333,12 @@ def _merge_zendure_mqtt_proposals(preview, proposals, validation, cloud_auth_ava
         mqtt = entry.get("mqtt")
         if isinstance(mqtt, dict):
             mqtt["broker_ref"] = resolved_ref
+        # The broker profile the resolver settled on is the authoritative write
+        # carrier — not the source a proposal fragment claimed — so capability is
+        # re-enforced against it before the entry is written.
+        enforce_zendure_mqtt_output_control_capability(
+            entry, broker_sources_from_config(preview)
+        )
         if _upsert_zendure_mqtt_device(
             devices,
             base_index_by_identity,
@@ -783,13 +792,16 @@ def _apply_manual_zendure_mqtt_broker(preview, broker, validation):
     return name
 
 
-def _manual_zendure_mqtt_proposals(manual_devices, broker_ref, validation):
+def _manual_zendure_mqtt_proposals(
+    manual_devices, broker_ref, validation, broker_source=None
+):
     """Build config proposals from manual Zendure MQTT device inputs.
 
     Delegates fragment building to the shared ``zendure_mqtt_config_draft`` helper
     so manual setup and maintenance stay in sync, then reuses the discovered-
     proposal merge path (sanitize, capability validation, broker resolution,
-    duplicate detection).
+    duplicate detection). ``broker_source`` is the provisioned broker profile's
+    transport, which is a write-capability axis the manual form cannot invent.
     """
 
     if not isinstance(manual_devices, list) or not manual_devices:
@@ -798,7 +810,9 @@ def _manual_zendure_mqtt_proposals(manual_devices, broker_ref, validation):
     for item in manual_devices[:_MAX_ZENDURE_MQTT_PROPOSALS]:
         if not isinstance(item, dict):
             continue
-        fragment, issues = build_manual_zendure_mqtt_fragment(item, broker_ref)
+        fragment, issues = build_manual_zendure_mqtt_fragment(
+            item, broker_ref, broker_source=broker_source
+        )
         if fragment is None:
             for issue in issues:
                 validation["errors"].append(_issue(issue["code"], issue["message"]))
@@ -1139,7 +1153,10 @@ class ConfigPreviewGenerator:
         proposals = list(device_proposals)
         proposals.extend(
             _manual_zendure_mqtt_proposals(
-                zendure_mqtt_manual_devices, broker_ref, validation
+                zendure_mqtt_manual_devices,
+                broker_ref,
+                validation,
+                broker_sources_from_config(preview).get(broker_ref),
             )
         )
         mqtt_devices = _merge_zendure_mqtt_proposals(

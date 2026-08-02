@@ -18,18 +18,19 @@ from ems.config_catalog import (
     SETUP_GROUPS,
     ZENDURE_MQTT_BROKER_FIELDS,
     ZENDURE_MQTT_BROKER_HELP,
-    ZENDURE_MQTT_GENERATIONS,
-    get_config_feature_field_index,
+    config_field_index,
     get_config_feature_sections,
+    is_editable_catalog_field,
     grid_meter_variant_field_spec,
 )
 from ems.mqtt_control.zendure_profiles import hardware_profile_selector_options
 from admin.device_common_fields import coerce_field_value
-from admin.zendure_mqtt_config_draft import generation_supports_output_control
+from admin.secret_policy import is_secret_catalog_field
+from admin.zendure_mqtt_config_draft import generation_catalog
 
 
 def _is_secret(field):
-    return field.get("risk") == "secret" or field.get("type") == "password"
+    return is_secret_catalog_field(field)
 
 
 def _annotate_secret(field):
@@ -170,17 +171,10 @@ def build_setup_catalog():
     groups = [copy.deepcopy(group) for group in SETUP_GROUPS]
 
     broker_fields = [_annotate_secret(dict(field)) for field in ZENDURE_MQTT_BROKER_FIELDS]
-    generations = [
-        {
-            "id": key,
-            "label": profile["label"],
-            "description": profile["description"],
-            "product_key": profile["product_key"],
-            "default": profile["default"],
-            "supports_output_control": generation_supports_output_control(key),
-        }
-        for key, profile in ZENDURE_MQTT_GENERATIONS.items()
-    ]
+    # One generation projection for Setup and Maintenance: it carries the
+    # Core-derived broker sources that can control each generation, which the
+    # browser must never restate.
+    generations = generation_catalog()
 
     return {
         "mode": "setup",
@@ -212,29 +206,15 @@ def build_setup_catalog():
 
 
 def _is_setup_writable_field(field):
-    """True for catalog fields the guided setup flow is allowed to write.
+    """True for catalog fields the guided setup flow is allowed to write."""
 
-    Maintenance-only, deprecated, hidden and read-only fields stay out of the
-    setup scope even if a value for them is posted manually.
-    """
-
-    if field.get("scope") not in ("setup", "both"):
-        return False
-    if field.get("level") == "deprecated":
-        return False
-    if field.get("editable") is False:
-        return False
-    return True
+    return is_editable_catalog_field(field, scope="setup")
 
 
 def _setup_field_index():
     """Setup-writable catalog fields keyed by config path."""
 
-    return {
-        path: field
-        for path, field in get_config_feature_field_index().items()
-        if _is_setup_writable_field(field)
-    }
+    return config_field_index(scope="setup")
 
 
 _DEVICE_FIELD_PREFIX = "devices[]."
@@ -251,19 +231,12 @@ def _device_field_index():
     values can never reach nested structures or non-device config paths.
     """
 
-    index = {}
-    for path, field in get_config_feature_field_index().items():
-        if not path.startswith(_DEVICE_FIELD_PREFIX):
-            continue
-        if not _is_setup_writable_field(field):
-            continue
-        key = path[len(_DEVICE_FIELD_PREFIX):]
-        if not key or "." in key or "[" in key:
-            continue
-        if key in _DEVICE_MAPPED_KEYS:
-            continue
-        index[key] = field
-    return index
+    return config_field_index(
+        scope="setup",
+        prefix=_DEVICE_FIELD_PREFIX,
+        flat_keys=True,
+        exclude_keys=_DEVICE_MAPPED_KEYS,
+    )
 
 
 # Catalog field coercion is shared with the Zendure MQTT draft path; it lives

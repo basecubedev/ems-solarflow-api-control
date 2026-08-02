@@ -7,17 +7,68 @@ capability model implemented in `ems/mqtt_control/` and `ems/zendure_mqtt/`.
 ## The core rule
 
 ```text
-MQTT topic family      → identifies the telemetry transport.
 Hardware profile       → identifies the physical device model.
 Power-write profile    → identifies the verified command protocol.
+Write family           → identifies where a command is published.
+Broker source          → identifies which broker carries that command.
+Write route            → identifies the exact address it is published to.
+MQTT telemetry family  → identifies how reports are parsed.
 
-Transport alone must never authorize a hardware write.
+The telemetry family alone must never authorize a hardware write,
+and it must never block one either.
 ```
 
 A device may publish a power-control command only when its **exact hardware
-profile** is: known, supported, compatible with the transport, persisted in
-config, and validated at startup. Unknown, ambiguous, deferred or incompatible
-devices stay telemetry-only.
+profile** is known, supported, backed by an implemented write route, persisted
+in config and validated at startup, **and** the broker profile it is bound to is
+a proven carrier for that route. Unknown, ambiguous and deferred devices stay
+telemetry-only, and so does a device on an unverified or unresolvable broker
+source.
+
+The **telemetry family and the write family are independent**. Both write
+routes are addressed on `iot/<productKey>/<deviceId>/…` — `properties/write`
+for ZenSDK, `function/invoke` for the legacy automation profiles — and neither
+builder reads the telemetry family. A device whose reports were classified
+`zensdk_ha_scalar` or `zendure_cloud_scalar` is therefore *not* telemetry-only
+because of its family: what a scalar topic lacks is a `productKey` segment, so a
+device discovered *only* through scalar telemetry has an incomplete write route
+until the product key is known from the cloud device list, an existing config or
+manual entry. That is a route problem (`write_target_missing`), not a family
+problem.
+
+### Broker source
+
+The family does, however, carry the **evidence** the broker-source axis is
+judged on — "which broker" plus "what that broker was actually observed
+carrying":
+
+| Broker source | Telemetry observed | Output control |
+| --- | --- | --- |
+| `zendure_cloud_mqtt` | any family | available |
+| `local_mqtt` | `legacy_zendure_json`, `legacy_zendure_json_alt` | available |
+| `local_mqtt` | `zensdk_ha_scalar`, `zendure_cloud_scalar`, `unknown` | `broker_source_write_unverified` |
+| unresolved / unrecognized | any | `broker_source_unknown` |
+
+The Zendure cloud broker is the endpoint the device's own commands are addressed
+to and is hardware-confirmed there, so it carries the route on every family. A
+local broker publishing the device's **JSON report** families is the device
+itself speaking the Zendure protocol on that broker, and the `function/invoke`
+automation path over a local broker is exercised end to end (including against a
+real Mosquitto). A local broker that only ever produced **scalar** metrics is
+typically a bridge or integration republishing values; there is no hardware
+evidence that it relays a command back to the device, so that combination fails
+closed. The `custom_properties_write` escape hatch is exempt: it carries an
+operator-supplied publish topic instead of a source-derived canonical route.
+
+`resolve_broker_source_write_support()` in
+`ems/mqtt_control/power_capability.py` owns this axis, and
+`zendure_mqtt_effective_broker_source()` in `ems/zendure_mqtt/config_entries.py`
+is the single resolver for "which source does this entry use" (the broker
+profile is authoritative; an entry's own `mqtt.source` is read only where no
+profile map is available). No caller may substitute a default: `broker_source`
+is a required argument of `resolve_power_write_capability()`,
+`mqtt_output_control_capability()` and `resolve_output_control_capability()`,
+and `None` fails closed.
 
 Topic family is **not** hardware identity. The stored `legacy_zendure_json` /
 `legacy_zendure_json_alt` family names describe a JSON report layout only — new
@@ -93,19 +144,46 @@ into one resolution:
 Weaker (ambiguous/unknown) evidence never overrides an exact signal and never
 causes a conflict.
 
-## Transport / profile compatibility
+## Capability axes
 
-`resolve_power_write_capability(topic_family, hardware_profile, operation=None)`
-in `ems/mqtt_control/power_capability.py` is the single write-capability authority.
-Every MQTT power write — function/invoke automation and ZenSDK properties/write —
-is addressed over a JSON-report transport (`iot/<pk>/<dev>/...`). A scalar HA/cloud
-transport carries telemetry only (those devices are controlled over the local HTTP
-API), so a writable profile on a scalar family is `transport_incompatible`.
+`resolve_power_write_capability(topic_family, hardware_profile, broker_source,
+operation=None)` in `ems/mqtt_control/power_capability.py` is the single
+write-capability authority. It reports its axes separately:
+
+| Field | Question |
+| --- | --- |
+| `model_supported` | Is the pinned model known, supported and writable? |
+| `transport_supported` | Does its write profile have an implemented publish route? |
+| `broker_source_supported` | Does the bound broker carry that route? |
+| `write_family` | Which route — `iot_properties_write` or `iot_function_invoke`? |
+
+`telemetry_family` is carried through for diagnostics and never decides on its
+own; it is only evidence for `broker_source_supported`. Write *address*
+completeness (`mqtt.product_key`, `mqtt.device_id`) is the remaining axis and
+belongs to `zendure_mqtt_control_addressability`;
+`resolve_output_control_capability` in `ems/zendure_mqtt/capability.py` composes
+all of it into the single verdict Admin projects. That verdict reports **every**
+axis, even when an earlier one already blocks, and `reason` names the *first*
+missing precondition in the order model → write route → broker source → address.
 
 Block reasons are stable, machine-readable strings: `hardware_profile_missing`,
 `hardware_profile_unknown`, `hardware_profile_ambiguous`,
-`hardware_profile_deferred`, `transport_incompatible`, `operation_unsupported`,
-`control_not_enabled`, `identifiers_missing`, `hardware_profile_conflict`.
+`hardware_profile_deferred`, `transport_write_not_implemented`,
+`broker_source_write_unverified`, `broker_source_unknown`,
+`operation_unsupported`, `control_not_enabled`, `identifiers_missing`,
+`hardware_profile_conflict`. Route-completeness reasons come from the
+addressability helper: `missing_product_key`, `missing_device_id`,
+`missing_write_topic`, `invalid_write_topic` (surfaced by config validation as
+`write_target_missing` / `mqtt_device_id_missing`).
+
+`transport_incompatible` is **retired**. It meant "a writable profile on a
+scalar telemetry family" — a rule the write builders never implemented, and one
+that also blocked the hardware-confirmed cloud path. Stored values and historic
+diagnostics still render, but the capability layer no longer produces it. The
+real, narrower restriction it was reaching for is now
+`broker_source_write_unverified`. `scalar_write_not_verified` is likewise
+replaced by `write_method_missing`, which names the real blocker: no resolved
+model.
 
 ### Persisted identity and metadata consistency
 
@@ -139,6 +217,27 @@ Write profiles: ZenSDK → `zensdk_properties_write` (properties/write); Hyper/A
 `legacy_hub_device_automation` (scalar `function/invoke`); ACE/SuperBase/Unknown →
 `telemetry_only` (never writable).
 
+**Transport availability.** Every model with an implemented write profile is
+controllable over Local API and Zendure Cloud MQTT, and over Local MQTT wherever
+that broker was observed carrying the device's own JSON report family — the
+write route is the same `iot/<productKey>/<deviceId>/…` topic on each MQTT
+broker. No model in this registry is API-controllable but
+MQTT-uncontrollable; what varies is the broker, not the model. The
+telemetry-only rows (ACE 1500, SuperBase) are deferred on *every* transport, not
+only over MQTT. See "Broker source" above for the one combination that stays
+telemetry-only: a local broker seen publishing scalar metrics only.
+
+**What is validated where.** Only the ZenSDK row is confirmed on physical
+hardware (SolarFlow 800 Pro 2, Local API and Zendure Cloud MQTT, observed
+telemetry family `legacy_zendure_json_alt`). The cloud scalar-family path
+(`zensdk_ha_scalar`, `zendure_cloud_scalar` over the Zendure broker) is correct
+by construction — it builds the identical publish topic on the same confirmed
+endpoint — but has **not** itself been confirmed against physical hardware. The
+legacy `function/invoke` automation is fixture- and broker-verified, not
+hardware-verified. Local-broker scalar control is **unverified and disabled**;
+enabling it requires hardware evidence that such a broker relays the command,
+not a code change alone.
+
 **Charge adapter vs automatic charge.** The Hyper 2000 adapter can build a signed
 charge command, but the automatic EMS controller only ever emits discharge/idle
 targets. Diagnostics surface this honestly: `supported_operations` lists what the
@@ -156,10 +255,15 @@ before relying on them in production.
 ## Manual model selection
 
 The backend authorizes control only from a concrete, registry-resolved
-`hardware_profile`: control can be enabled only when the profile is writable, the
-transport is compatible, the write identifiers exist and the write gate is enabled;
-otherwise the control option is disabled with the block reason shown, and the
-device stays telemetry-only.
+`hardware_profile`: control can be enabled only when the profile is writable, its
+write route is implemented, the write identifiers exist and the write gate is
+enabled; otherwise the control option is disabled with the block reason shown,
+and the device stays telemetry-only. Admin renders that verdict through
+`admin.zendure_mqtt_config_draft.manual_output_control_capability`, the one
+projection both manual editors read — the browser never re-derives it. Because
+the write route needs a `productKey` on every generation, the manual form
+collects one for all of them, not only for those whose telemetry topics embed
+it.
 
 The concrete model-selector options are registry-derived
 (`hardware_profile_selector_options()` in `ems/mqtt_control/zendure_profiles.py`,

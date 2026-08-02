@@ -23,7 +23,12 @@ from admin.zendure_mqtt_config_draft import (
     resolve_hardware_generation,
     telemetry_schema_for_topic_family,
 )
-from ems.config import parse_mqtt_port, require_json_bool, resolve_mqtt_tls_metadata
+from ems.config import (
+    canonical_mqtt_tls_mode,
+    parse_mqtt_port,
+    require_json_bool,
+    resolve_mqtt_tls_metadata,
+)
 from ems.device_identity import (
     PHYSICAL_IDENTITY_ALIAS_TOKENS_FIELD,
     PHYSICAL_IDENTITY_TOKEN_FIELD,
@@ -55,22 +60,16 @@ BROKER_REF_ZENDURE_CLOUD = "zendure_cloud"
 BROKER_REF_LOCAL_MQTT = "local_mqtt"
 
 
-# Admin cloud discovery names its TLS modes itself (TLS is always on for the
-# cloud broker; only certificate verification differs). The shared normalizer
-# does not know those names, so they are translated to canonical modes before
-# resolution — otherwise every real cloud candidate would be dropped as
-# carrying an "unknown TLS mode" — and the canonical name is what a proposal
-# endpoint carries, so no Admin-only mode string leaks downstream.
-_ADMIN_TLS_MODE_ALIASES = {
-    "encrypted_no_verify": "insecure_no_verify",
-    "pinned_ca": "insecure_no_verify",
-}
-
-
 def _canonical_tls_mode(observation: Mapping[str, Any]) -> Any:
-    mode = observation.get("tls_mode")
-    key = str(mode or "").strip().lower()
-    return _ADMIN_TLS_MODE_ALIASES.get(key, mode)
+    """Canonical TLS mode of an observation's broker.
+
+    Cloud discovery names its own TLS modes (TLS is always on for the cloud
+    broker; only certificate verification differs). Translating them is Core's
+    job — this only says *which* value to translate, so no Admin-only mode
+    string leaks into a proposal endpoint.
+    """
+
+    return canonical_mqtt_tls_mode(observation.get("tls_mode"))
 
 
 def _observation_tls(observation: Mapping[str, Any]) -> tuple[bool, bool]:

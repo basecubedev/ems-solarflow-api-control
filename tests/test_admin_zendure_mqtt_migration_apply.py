@@ -56,6 +56,7 @@ def _legacy_control_config():
                 "product": "Hyper 2000",
                 "mqtt": {
                     "broker_ref": "local_a",
+                    "source": "local_mqtt",
                     "topic_family": "legacy_zendure_json",
                     "device_id": "DEV",
                     "product_key": "PK",

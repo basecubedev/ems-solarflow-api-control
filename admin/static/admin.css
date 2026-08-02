@@ -534,6 +534,11 @@ code {
   background: var(--panel-strong);
   border-color: var(--border);
 }
+.mconfig-discovery-add-button.is-transport-downgrade {
+  color: var(--text);
+  background: var(--panel-strong);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+}
 .mconfig-apply { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
 .mconfig-post-apply { margin-top: 10px; }
 .mconfig-sync-card {

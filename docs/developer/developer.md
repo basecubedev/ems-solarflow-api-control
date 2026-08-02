@@ -186,3 +186,38 @@ python3 scripts/serve_dashboard_preview.py --capture --scenario firmware-status 
 python3 scripts/capture_dashboard_previews.py                              # legacy helper (diagnose + logs JPGs)
 python3 scripts/capture_dashboard_previews.py --serve-only
 ```
+
+## Authority map and test layering
+
+Every fact below has exactly one owner. Other layers adapt inputs, project the
+result or enforce it — they never recompute it. The structural contracts in
+`tests/test_admin_authority_ownership.py` fail when a second owner appears.
+
+| Concern | Owner | Adapters / projections |
+|---|---|---|
+| Output-control eligibility | `ems/mqtt_control/power_capability.py` (model, write route, broker source), composed with route completeness by `ems/zendure_mqtt/capability.py` | `admin/zendure_mqtt_config_draft.py` (enforce/project), runtime `device_client`, migration, diagnostics, `admin.js` (labels only) |
+| Physical inverter identity | `ems/device_identity.py` | `admin/maintenance_config.py`, `admin/zendure_mqtt_config_proposals.py`; browser compares server-issued `opaque:v1:` tokens |
+| MQTT TLS/broker semantics | `ems/config.py` (`normalize_mqtt_tls_mode`, `resolve_mqtt_tls_metadata`, `canonical_mqtt_tls_mode`, `mqtt_tls_mode_name`, `MQTT_TLS_OBSERVED_MODES`) | `admin/zendure_mqtt_broker_profiles.py`, `discovery_connections.py`, `mqtt_topic_discovery.py`, `zendure_mqtt_config_proposals.py` |
+| Secret classification | `admin/secret_policy.py` (catalog metadata via `ems/config_catalog.py::is_secret_catalog_field`) | draft strip, browser redaction, workflow fingerprint |
+| Catalog fields and editability | `ems/config_catalog.py` (`config_field_index`, `is_editable_catalog_field`, `grid_meter_variant_field_spec`) | `setup_config.py`, `maintenance_config.py`, `device_common_fields.py` |
+
+### Where a new thing is declared
+
+| Adding a… | Declare it in | Tests that must change |
+|---|---|---|
+| hardware model / write profile | `ems/mqtt_control/zendure_profiles.py` | `tests/test_zendure_mqtt_write_capability_matrix.py` |
+| broker source | `ems/mqtt_control/power_capability.py` (`KNOWN_BROKER_SOURCES`, `_BROKER_SOURCE_VERIFIED_FAMILIES`) | `tests/test_zendure_mqtt_broker_source_capability.py` |
+| TLS mode alias | `ems/config.py` alias sets | `tests/test_mqtt_tls_and_bool_helpers.py` |
+| secret field | `ems/config_catalog.py` field metadata, or a marker in `admin/secret_policy.py` | `tests/test_admin_secret_policy.py` |
+| grid-meter field | `ems/config_catalog.py::GRID_METER_VARIANTS` | `tests/test_admin_shared_config_normalization.py` |
+| catalog field for an editor | `ems/config_catalog.py` (scope/level/editable/risk) | `tests/test_config_field_index.py` |
+
+### Test layering
+
+- **Core / shared authority tests** own the complete combinatorial matrix.
+- **Endpoint tests** cover auth, CSRF, request parsing, delegation, error
+  mapping, preview/apply persistence and rollback — a representative case per
+  domain, never the whole matrix.
+- **Frontend tests** cover passive projection, event handling, DOM escaping and
+  renderer purity.
+- **Playwright** keeps a small set of critical journeys, not domain permutations.

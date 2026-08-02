@@ -336,9 +336,12 @@ def _candidate(proposal):
     }
 
 
-def test_a_telemetry_only_connection_is_offered_as_a_telemetry_source():
-    """Replacing a controlling connection with one that cannot control is a
-    downgrade, and the action must say so instead of reading as an equal swap."""
+def test_a_telemetry_only_connection_names_the_replacement_it_performs():
+    """The action replaces the transport, so it must not read as an addition.
+
+    "Add as telemetry source" described something the action never did: it
+    delegates to the transport switch and removes the controlling entry.
+    """
 
     proposal = _telemetry_only_proposal()
     proposal["connection_source"] = "zendure_cloud_mqtt"
@@ -350,9 +353,10 @@ def test_a_telemetry_only_connection_is_offered_as_a_telemetry_source():
         }
     )
 
-    assert card["action"]["text"] == "Add as telemetry source"
+    assert card["action"]["text"] == "Replace control connection"
+    assert "Add as telemetry source" not in card["text"]
     assert "telemetry" in card["text"].lower()
-    assert "cannot replace" in card["text"].lower()
+    assert "can no longer be controlled by ems" in card["text"].lower()
 
 
 def test_a_control_capable_connection_is_still_offered_as_a_connection_swap():
@@ -393,12 +397,19 @@ def test_the_maintenance_card_shows_capability_instead_of_offering_a_choice():
     )
 
 
-def test_capability_is_derived_from_model_and_route_on_every_render():
+def test_capability_is_derived_by_an_explicit_action_not_by_rendering():
+    """One pure projection to display, one explicit writer to normalize."""
+
     js = _read_admin_js()
     render = _extract_fn(js, "renderMaintenanceZendureMqttDevice")
+    projection = _extract_fn(js, "mconfigMqttControlProjection")
+    normalize = _extract_fn(js, "mconfigNormalizeMqttControl")
 
-    assert "const shouldControl = supported && routeComplete" in render
-    assert "device.capabilities.write_output_limit = shouldControl" in render
+    assert "shouldControl: supported && routeComplete" in projection
+    assert "device.capabilities.write_output_limit = shouldControl" in normalize
+    assert "device.capabilities.write_output_limit =" not in render
+    assert "device.output_control =" not in render
+    assert "mconfigNormalizeMqttControl(device)" in render
 
 
 def test_the_separate_default_control_helper_is_gone():

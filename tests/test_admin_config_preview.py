@@ -722,6 +722,7 @@ def _control_mqtt_proposal():
         hardware_profile="hyper_2000",
         power_write_profile="legacy_object_device_automation",
         mqtt={
+            "source": "local_mqtt",
             "topic_family": "legacy_zendure_json",
             "base_topic": "iot",
             "device_id": "CTL123",

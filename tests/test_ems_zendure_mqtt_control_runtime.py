@@ -176,11 +176,9 @@ def _control_device(name, broker_ref, **mqtt):
         "product_key": "PK" + name,
     }
     base.update(mqtt)
-    # A legacy control device pins a concrete registry hardware profile; a scalar
-    # family is intentionally left without one so it stays rejected.
-    if base.get("topic_family") in ("legacy_zendure_json", "legacy_zendure_json_alt") and (
-        "write_protocol" not in base and "hardware_profile" not in base
-    ):
+    # A control device pins a concrete registry hardware profile unless the test
+    # deliberately omits one to exercise the fail-closed path.
+    if "write_protocol" not in base and "hardware_profile" not in base:
         base["hardware_profile"] = "solarflow_800_pro_2"
     return {
         "type": "zendure_mqtt",
@@ -265,14 +263,45 @@ def test_cloud_control_device_with_missing_runtime_credential_is_rejected():
     assert "broker_auth_missing" in {issue["code"] for issue in rejected.issues}
 
 
-def test_scalar_family_control_device_is_rejected():
+def test_control_device_without_a_pinned_model_is_rejected():
     config = _config()
     config["devices"].append(
-        _control_device("Scalar", "local_a", topic_family="zensdk_ha_scalar")
+        _control_device("NoModel", "local_a", hardware_profile="")
     )
     runtime = build_zendure_mqtt_control_runtime(config, service_factory=FakeService)
-    scalar = next(r for r in runtime.rejected if r.name == "Scalar")
-    assert "write_protocol_unsupported" in {i["code"] for i in scalar.issues}
+    rejected = next(r for r in runtime.rejected if r.name == "NoModel")
+    assert "write_protocol_unsupported" in {i["code"] for i in rejected.issues}
+
+
+def test_scalar_family_control_device_builds_a_write_capable_adapter():
+    """The runtime picks the write adapter from the model, not the family.
+
+    A device whose telemetry was classified scalar publishes its commands on the
+    same canonical route as any other, so it must reach the control loop.
+    """
+
+    config = _config()
+    # Bound to the cloud broker, which carries the canonical write route on
+    # every telemetry family; the local-broker counterpart is rejected and is
+    # covered by test_zendure_mqtt_broker_source_enforcement.py.
+    config["devices"].append(
+        _control_device("Scalar", "cloud", topic_family="zensdk_ha_scalar")
+    )
+    runtime = build_zendure_mqtt_control_runtime(config, service_factory=FakeService)
+
+    assert "Scalar" not in {r.name for r in runtime.rejected}
+    device = next(d for d in runtime.devices if d.name == "Scalar")
+    described = device.describe(now_monotonic=0.0)
+    assert described["control_supported"] is True
+    assert described["control_block_reason"] is None
+    assert described["power_write_profile"] == "zensdk_properties_write"
+    assert device.control_gate == "mqtt_zendure"
+
+    assert device.write_output_limit(300) is True
+    service = runtime.services_by_ref["cloud"]
+    topic, payload = service.published[-1]
+    assert topic == "iot/PKScalar/DEVScalar/properties/write"
+    assert json.loads(payload)["properties"]["outputLimit"] == 300
 
 
 def test_missing_identifier_control_device_is_rejected():
@@ -345,7 +374,7 @@ def test_gate_selection_always_follows_broker_profile_not_device():
 
 def test_status_lists_control_devices_without_credentials():
     config = _config()
-    config["devices"].append(_control_device("Scalar", "local_a", topic_family="zensdk_ha_scalar"))
+    config["devices"].append(_control_device("NoModel", "local_a", hardware_profile=""))
     runtime = build_zendure_mqtt_control_runtime(config, service_factory=FakeService)
     status = runtime.status()
 

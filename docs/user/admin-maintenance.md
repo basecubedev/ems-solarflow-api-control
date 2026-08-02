@@ -341,28 +341,41 @@ This path inspects and edits an existing installation.
   established. The write protocol, validation maturity, supported operations,
   and current control readiness are shown read-only from the Core catalog.
   **Output control** is shown read-only, because it is a capability rather than
-  a setting: EMS/Core derives it from the exact model, the transport and a
-  complete write route. A supported exact model on a compatible transport is
-  controlled; a topic family or hardware generation alone never enables it, and
-  conflicting discovery evidence stays telemetry-only until you review and
-  correct the model. When control is unavailable the card names the reason. A
+  a setting: EMS/Core derives it from the exact model, an implemented write
+  route for that model, the MQTT broker source that route would travel through,
+  and a complete write address (product key and MQTT device ID). A topic family
+  or hardware generation alone never enables control, and conflicting discovery
+  evidence stays telemetry-only until you review and correct the model. The
+  broker source is the one connection property that does decide: the Zendure
+  cloud broker carries the write route for every device, and a local broker
+  carries it where it publishes the device's own JSON report topics. A local
+  broker seen publishing scalar metrics only reads *"Output control is not
+  verified for this MQTT broker source"*. When control is unavailable the card
+  names the reason. A
   supported inverter you add or switch to is therefore controllable without a
   second step, exactly like a Local API inverter, which has no such switch
   either (see
   [Zendure MQTT output control](../technical/configuration.md#zendure-mqtt-output-control)).
+  The card only reports this verdict; the derived value is written when you
+  change a field or when the draft is loaded, so it always appears in the
+  preview diff before it is applied.
 
-  Switching an inverter between the local API and Zendure MQTT keeps its
-  activation state, in both directions: a device that was under EMS control
-  stays under EMS control on the new connection — including output control when
-  the new transport can control it — and a device you deactivated stays
-  deactivated. Activation is the device's **Enabled** state and nothing else; a
-  device that cannot control output on its transport is telemetry-only by
+  Local API, Local MQTT and Zendure Cloud MQTT are alternative control
+  transports of the same logical inverter. Switching between them keeps the
+  device's identity, activation state, limits, SoC settings and allocation
+  parameters, in every direction: a device you deactivated stays deactivated, and
+  one you did not stays active. Activation is the device's **Enabled** state and
+  nothing else; a device that cannot control output is telemetry-only by
   capability, which never deactivates it. Only you make a device inactive.
+  Control capability, unlike activation, is re-evaluated for the new connection:
+  moving a device to a broker whose write route is not verified keeps it enabled
+  and turns it into a telemetry source, and the card says why.
 
-  A discovered connection that cannot control output is offered as **Add as
-  telemetry source** rather than as a connection swap, with a warning, so
-  replacing a working control connection with a telemetry-only one is a visible
-  decision instead of a silent loss of regulation.
+  A discovered connection for which no write route resolves — an unknown model,
+  or a missing product key / MQTT device ID — is offered as **Replace control
+  connection** with a warning, because that is exactly what the action does. It
+  is a visible decision instead of a silent loss of regulation, and the change
+  still passes through the preview diff before anything is applied.
   Stored passwords (broker or MQTT grid meter) are never displayed; leave the
   password field blank to keep one, or use the clear checkbox to remove it.
 

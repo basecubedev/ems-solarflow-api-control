@@ -98,18 +98,23 @@ Control eligibility requires all five conditions:
 1. an **exact supported hardware model** resolved from verified device evidence;
 2. a **compatible broker transport**;
 3. a **verified write protocol** for that exact model;
-4. an **enabled control capability** (`write_output_limit`) on the device; and
-5. the matching **enabled transport write gate**
+4. a **broker connection that carries that write route** — the Zendure cloud
+   broker always does; a local broker does where it was seen publishing the
+   device's own JSON report topics;
+5. an **enabled control capability** (`write_output_limit`) on the device; and
+6. the matching **enabled transport write gate**
    (`allow_mqtt_local_control_writes` or
    `allow_mqtt_zendure_control_writes`).
 
 Topic family and generation are evidence and telemetry grouping only. Observing
 a legacy JSON layout does not by itself enable writes or prove the hardware
 model. Unknown or conflicting model evidence keeps the device telemetry-only
-until you review and correct the model. ZenSDK scalar MQTT topics remain
-telemetry-only until a verified writable output topic is available for the exact
-model. Transport write gates are on by default and can be switched off for
-read-only validation.
+until you review and correct the model. A device reached over a **local** broker
+that only publishes ZenSDK scalar metric topics — typically a bridge or Home
+Assistant integration republishing values — stays telemetry-only: there is no
+evidence yet that such a broker relays a command back to the inverter. The same
+device on the **Zendure cloud broker** is fully controllable. Transport write
+gates are on by default and can be switched off for read-only validation.
 
 The **SolarFlow 800 Pro 2** MQTT output-control path is **Validated** on the
 maintainer's own hardware over the Zendure cloud broker; the other ZenSDK models
@@ -119,8 +124,8 @@ physical hardware. Please report results (see below).
 
 | Generation | Example models | Connection | Status |
 |---|---|---|---|
-| New SolarFlow / ZenSDK | SolarFlow 800 Pro 2 (Validated); 800 / 800 Plus / 800 Pro / 1600 AC+ / 2400 AC / AC+ / Pro / 4000 AC+ (Family-supported) | Local API (preferred), plus output **control** over Zendure cloud MQTT | ZenSDK output control uses the exact-model `zensdk_properties_write` profile over the cloud/JSON-report transport; **Validated on the maintainer's 800 Pro 2** (Local API + cloud MQTT), other ZenSDK models Family-supported. Scalar HA MQTT topics stay telemetry-only. |
-| Older Hub / Hyper | Hub 1200, Hub 2000, Hyper 2000, AIO 2400, Ace 1500, SuperBase V | MQTT control (local or cloud) | Reverse-engineered: exact listed models carry a legacy JSON write profile derived from external projects; control still requires capability and transport gates; not confirmed on maintainer-owned physical hardware (Ace 1500 / SuperBase are telemetry-only). |
+| New SolarFlow / ZenSDK | SolarFlow 800 Pro 2 (Validated); 800 / 800 Plus / 800 Pro / 1600 AC+ / 2400 AC / AC+ / Pro / 4000 AC+ (Family-supported) | Local API (preferred), plus output **control** over Zendure cloud MQTT | ZenSDK output control uses the exact-model `zensdk_properties_write` profile; **Validated on the maintainer's 800 Pro 2** (Local API + cloud MQTT), other ZenSDK models Family-supported. Over a **local** broker seen publishing scalar HA topics only, the device stays telemetry-only until that write path is verified on hardware. |
+| Older Hub / Hyper | Hub 1200, Hub 2000, Hyper 2000, AIO 2400, Ace 1500, SuperBase V | MQTT control (local or cloud) | Reverse-engineered: exact listed models carry a legacy JSON write profile derived from external projects; that JSON report family is the local-broker path that stays enabled. Control still requires capability and transport gates; not confirmed on maintainer-owned physical hardware (Ace 1500 / SuperBase are telemetry-only). |
 | Any device via API key | Any Zendure device | Zendure cloud MQTT | Telemetry supported; Apply provisions the runtime broker credential; control requires an exact supported model and every control-eligibility condition above. |
 
 ## Help improve compatibility
@@ -190,9 +195,12 @@ while active.
 
 - MQTT output control on the **Reverse-engineered** older Hub/Hyper generations,
   which the maintainer has not been able to confirm on physical hardware (the
-  ZenSDK cloud-MQTT path is Validated on the 800 Pro 2). Only an exact supported
-  model with a compatible transport, verified write protocol, per-device
-  `write_output_limit` capability and enabled transport write gate can publish.
+  ZenSDK cloud-MQTT path is Validated on the 800 Pro 2, observed telemetry
+  family `legacy_zendure_json_alt`). Only an exact supported model with a
+  verified write protocol, a complete write route (product key and MQTT device
+  ID), the per-device `write_output_limit` capability and an enabled transport
+  write gate can publish. The scalar-telemetry path builds the identical publish
+  topic but has not been confirmed on physical hardware either.
   Please report both successful and failed hardware tests (see below).
 - Older MQTT-only Zendure devices without the local Zendure API / ZenSDK.
 - Any Zendure model not listed above, unless your own tested setup confirms the
