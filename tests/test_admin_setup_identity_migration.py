@@ -8,10 +8,13 @@ stops comparing serials, hosts and route ids, nothing in the browser can relate
 such an entry to a current observation — so the backend has to, from the fields
 the entry already persists.
 
-``admin.setup_planner`` is that boundary. It resolves every persisted entry
-through ``ems.device_identity``, issues the typed ids
-(``admin.observation_identity``) and returns explicit mappings. Nothing it
-returns lets the browser conclude physical equivalence on its own.
+``admin.setup_planner`` is that boundary, and it treats those fields as *lookup
+hints only*. A hint is matched against the current trusted candidates and, on
+exactly one acceptable match, that candidate's already-issued ids are copied
+onto the entry. A hint that matches nothing, or several things, never mints a
+physical identity of its own: a serial a browser persisted is the browser's
+word, and an HMAC over it would only make the browser's word unforgeable, not
+true.
 """
 
 import pytest
@@ -137,6 +140,134 @@ def test_legacy_draft_never_merges_with_a_different_serial():
     assert len(plan["groups"]) == 2
 
 
+# --- legacy hints are hints ---------------------------------------------------
+def test_a_legacy_hint_without_a_trusted_match_mints_no_physical_identity():
+    """Nothing current confirms this serial, so nothing is concluded from it."""
+
+    plan = _plan(
+        {
+            "draft_items": [
+                {
+                    "draft_item_id": "item-1",
+                    "source_id": "solarflow:" + SERIAL_A,
+                    "role": "inverter",
+                    "serial_number": SERIAL_A,
+                    "ip": "10.0.0.11",
+                    "port": 8080,
+                    "config_name": "INV_1",
+                }
+            ]
+        }
+    )
+
+    entry = _draft_map(plan)["item-1"]
+    assert entry["physical_device_id"] is None
+    assert entry["connection_id"] is None
+    assert entry["identity_status"] == "unresolved"
+    assert entry["unresolved"] is True
+    assert entry["legacy_match"] == "unmatched"
+    # Preserved, not dropped and not merged into anything.
+    assert entry["draft_item_id"] == "item-1"
+    assert plan["operations"]["drop_draft_items"] == []
+    assert any(
+        warning["code"] == "legacy_state_unresolved" for warning in plan["warnings"]
+    )
+
+
+def test_a_legacy_hint_with_one_trusted_match_rehydrates_the_issued_ids():
+    plan = _plan(
+        {
+            "draft_items": [
+                {
+                    "draft_item_id": "item-1",
+                    "source_id": "solarflow:" + SERIAL_A,
+                    "role": "inverter",
+                    "serial_number": SERIAL_A,
+                    "ip": "10.0.0.11",
+                    "port": 8080,
+                }
+            ]
+        },
+        observations=[_observation()],
+    )
+
+    entry = _draft_map(plan)["item-1"]
+    live = plan["observations"][0]
+    assert entry["legacy_match"] == "matched"
+    assert entry["physical_device_id"] == live["physical_device_id"]
+    assert entry["connection_id"] == live["connection_id"]
+    assert entry["observation_id"] == live["observation_id"]
+
+
+def test_a_legacy_hint_matching_two_trusted_candidates_stays_ambiguous():
+    """One serial, two current routes: the entry may not pick one of them."""
+
+    plan = _plan(
+        {
+            "draft_items": [
+                {
+                    "draft_item_id": "item-1",
+                    "role": "inverter",
+                    "serial_number": SERIAL_A,
+                }
+            ]
+        },
+        observations=[_observation(), _observation(ip="10.0.0.12")],
+    )
+
+    entry = _draft_map(plan)["item-1"]
+    assert entry["legacy_match"] == "ambiguous"
+    assert entry["physical_device_id"] is None
+    assert entry["unresolved"] is True
+    assert plan["operations"]["drop_draft_items"] == []
+    assert any(
+        warning["code"] == "legacy_state_ambiguous" for warning in plan["warnings"]
+    )
+
+
+def test_a_masked_legacy_hint_never_produces_physical_identity():
+    plan = _plan(
+        {
+            "draft_items": [
+                {
+                    "draft_item_id": "item-1",
+                    "role": "inverter",
+                    "serial_number": MASKED_SERIAL,
+                    "ip": "10.0.0.11",
+                    "port": 8080,
+                }
+            ]
+        },
+        observations=[_observation(serial_number=MASKED_SERIAL)],
+    )
+
+    entry = _draft_map(plan)["item-1"]
+    # The endpoint still matches (a route is a route), but the trusted candidate
+    # has no physical identity to hand over, so neither does the entry.
+    assert entry["physical_device_id"] is None
+    assert plan["observations"][0]["physical_device_id"] is None
+
+
+def test_legacy_rehydration_is_idempotent_for_an_unmatched_hint():
+    state = {
+        "draft_items": [
+            {
+                "draft_item_id": "item-1",
+                "role": "inverter",
+                "serial_number": SERIAL_A,
+                "ip": "10.0.0.11",
+                "port": 8080,
+            }
+        ]
+    }
+    first = _plan(state)
+    second = _plan(state)
+
+    assert first["draft_items"] == second["draft_items"]
+    assert first["operations"] == second["operations"]
+    assert first["plan_id"] == second["plan_id"]
+
+
 def test_legacy_masked_serial_draft_stays_unresolved_and_distinct():
     """A redaction placeholder is never physical identity, in any layer."""
 
@@ -165,12 +296,44 @@ def test_legacy_masked_serial_draft_stays_unresolved_and_distinct():
     assert first["physical_device_id"] is None
     assert second["physical_device_id"] is None
     assert first["identity_status"] == "unresolved"
-    assert first["connection_id"] != second["connection_id"]
+    # Two rows stay two rows because they are two rows — never because a
+    # placeholder serial was turned into two different identities.
+    assert first["connection_id"] is None
+    assert second["connection_id"] is None
     assert len(plan["groups"]) == 2
     assert plan["operations"]["drop_draft_items"] == []
 
 
-def test_serialless_cloud_draft_keeps_a_physical_identity():
+def test_serialless_cloud_draft_rehydrates_from_its_trusted_scoped_route():
+    """No serial anywhere: the scoped route is what the trusted proposal proves."""
+
+    plan = _plan(
+        {
+            "draft_items": [
+                {
+                    "draft_item_id": "item-1",
+                    "role": "inverter",
+                    "connection_source": "zendure_cloud_mqtt",
+                    "mqtt": {
+                        "source": "zendure_cloud_mqtt",
+                        "broker_ref": "zendure_cloud",
+                        "device_id": "DEV1",
+                        "product_key": "PK1",
+                    },
+                }
+            ]
+        },
+        proposals=[_cloud_proposal()],
+    )
+
+    entry = _draft_map(plan)["item-1"]
+    assert entry["legacy_match"] == "matched"
+    assert entry["physical_device_id"] == plan["proposals"][0]["physical_device_id"]
+    assert entry["identity_status"] == "probable"
+    assert entry["unresolved"] is False
+
+
+def test_serialless_cloud_draft_without_a_trusted_route_stays_unresolved():
     plan = _plan(
         {
             "draft_items": [
@@ -190,9 +353,9 @@ def test_serialless_cloud_draft_keeps_a_physical_identity():
     )
 
     entry = _draft_map(plan)["item-1"]
-    assert entry["physical_device_id"].startswith("opaque:v1:")
-    assert entry["identity_status"] == "probable"
-    assert entry["unresolved"] is False
+    assert entry["physical_device_id"] is None
+    assert entry["legacy_match"] == "unmatched"
+    assert entry["unresolved"] is True
 
 
 def test_rehydration_is_idempotent():
@@ -339,6 +502,42 @@ def test_unmappable_dismissal_is_preserved_as_unresolved():
 
     assert plan["dismissals"]["physical"] == []
     assert MASKED_SERIAL in [entry["value"] for entry in plan["dismissals"]["unresolved"]]
+
+
+def test_a_bare_serial_dismissal_without_a_trusted_match_hides_nothing():
+    """An arbitrary serial is a hint; it may not become a device-wide dismissal."""
+
+    plan = _plan(
+        {"physical_dismissals": [SERIAL_A]},
+        observations=[_observation(serial_number=SERIAL_B, ip="10.0.0.12")],
+    )
+
+    assert plan["dismissals"]["physical"] == []
+    unresolved = plan["dismissals"]["unresolved"]
+    assert {"value": SERIAL_A, "scope": "physical"} in unresolved
+    # The unrelated current device stays offered.
+    assert len(plan["operations"]["adopt_observations"]) == 1
+
+
+def test_a_bare_serial_dismissal_matching_two_trusted_candidates_stays_unresolved():
+    plan = _plan(
+        {"physical_dismissals": [SERIAL_A]},
+        observations=[_observation(), _observation(ip="10.0.0.12")],
+    )
+
+    assert plan["dismissals"]["physical"] == []
+    assert {"value": SERIAL_A, "scope": "physical"} in plan["dismissals"]["unresolved"]
+
+
+def test_an_issued_physical_dismissal_survives_without_a_current_candidate():
+    """Already-issued tokens are the browser's migrated store, not a hint."""
+
+    issued = _plan({}, observations=[_observation()])["observations"][0][
+        "physical_device_id"
+    ]
+    plan = _plan({"physical_dismissals": [issued]})
+
+    assert plan["dismissals"]["physical"] == [{"physical_device_id": issued}]
 
 
 # --- schema versioning ------------------------------------------------------
