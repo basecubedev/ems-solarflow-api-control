@@ -46,13 +46,9 @@ def _extract_fn(js, name):
 _HELPERS = (
     "nextCompactInverterName",
     "mconfigNextInverterName",
-    "normalizeSerial",
-    "usableSerialValue",
     "issuedPhysicalIdentity",
-    "physicalInverterIdentity",
-    "inverterVisibleSerial",
-    "inverterIdentityTokens",
-    "inverterIdentitySet",
+    "issuedIdentityTokens",
+    "isConfirmedIdentity",
     "inverterHasIdentity",
     "inverterIdentityConflict",
     "inverterIdentitiesMatch",
@@ -63,7 +59,9 @@ _HELPERS = (
     "mconfigApplyCommonDefaults",
     "mqttProposalBrokerRef",
     "mqttProposalBrokerProfile",
+    "normalizeInverterAliasTokens",
     "mconfigZendureMqttDraftFromProposal",
+    "issuedConnectionId",
     "mconfigIsMqttDevice",
     "mconfigDeviceIsActive",
     "mconfigDeviceInactiveByChoice",
@@ -100,8 +98,15 @@ def _run(devices, action):
     if not node:
         pytest.skip("node is required for the transport switch tests")
     js = _read()
-    helpers = "\n".join(_extract_fn(js, name) for name in _HELPERS)
+    constants = "\n".join(
+        line
+        for line in js.split("\n")
+        if line.startswith("const ") and "PATTERN = /" in line
+    )
+    helpers = constants + "\n" + "\n".join(_extract_fn(js, name) for name in _HELPERS)
     stub = (
+        "const PHYSICAL_ID = " + json.dumps(PHYSICAL_ID) + ";\n"
+        "const OTHER_PHYSICAL_ID = " + json.dumps(OTHER_PHYSICAL_ID) + ";\n"
         "const MCONFIG_DEVICE_IDENTITY_KEYS = new Set(['name', 'ip', 'sn']);\n"
         "function renderMaintenanceInverters() {}\n"
         "function mconfigRerenderDiscoveryReview() {}\n"
@@ -128,12 +133,19 @@ def _run(devices, action):
     return json.loads(result.stdout)
 
 
+# The identity the backend issued for this device, and one it never issued for
+# anything in the draft. The browser switches on these, never on "PHYS-1".
+PHYSICAL_ID = "opaque:v1:PHYS-1"
+OTHER_PHYSICAL_ID = "opaque:v1:OTHER-SN"
+
 _MQTT_DEVICE = {
     "kind": "zendure_mqtt",
     "original_name": "WR1",
     "name": "WR1",
     "enabled": True,
     "has_enabled_key": True,
+    "physical_device_id": PHYSICAL_ID,
+    "identity_status": "confirmed",
     "serial_number": "PHYS-1",
     "device_id": "PHYS-1",
     "max_power": 640,
@@ -177,7 +189,7 @@ _PROPOSAL = {
 def test_switch_mqtt_to_api_preserves_identity_and_common_values():
     out = _run(
         [_MQTT_DEVICE],
-        "const changed = mconfigSwitchInverterTransport('PHYS-1', 'local_api', {\n"
+        "const changed = mconfigSwitchInverterTransport(PHYSICAL_ID, 'local_api', {\n"
         "  discovered: { ip: '192.0.2.10', serial_number: 'PHYS-1' },\n"
         "});\n"
         "console.log(JSON.stringify({ changed, devices: mconfigState.draft.devices }));",
@@ -206,6 +218,8 @@ def test_switch_api_to_mqtt_preserves_identity_and_common_values():
     api_device = {
         "original_name": "WR1",
         "name": "INV_1",
+        "physical_device_id": PHYSICAL_ID,
+        "identity_status": "confirmed",
         "ip": "192.168.1.100",
         "sn": "PHYS-1",
         "enabled": True,
@@ -214,7 +228,7 @@ def test_switch_api_to_mqtt_preserves_identity_and_common_values():
     }
     out = _run(
         [api_device],
-        "const changed = mconfigSwitchInverterTransport('PHYS-1', 'local_mqtt', {\n"
+        "const changed = mconfigSwitchInverterTransport(PHYSICAL_ID, 'local_mqtt', {\n"
         "  proposal: " + json.dumps(_PROPOSAL) + ",\n"
         "});\n"
         "console.log(JSON.stringify({ changed, devices: mconfigState.draft.devices }));",
@@ -239,7 +253,7 @@ def test_switch_api_to_mqtt_preserves_identity_and_common_values():
 def test_switch_unknown_identity_is_a_noop():
     out = _run(
         [_MQTT_DEVICE],
-        "const changed = mconfigSwitchInverterTransport('OTHER-SN', 'local_api', {\n"
+        "const changed = mconfigSwitchInverterTransport(OTHER_PHYSICAL_ID, 'local_api', {\n"
         "  discovered: { ip: '192.0.2.10', serial_number: 'OTHER-SN' },\n"
         "});\n"
         "console.log(JSON.stringify({ changed, devices: mconfigState.draft.devices }));",

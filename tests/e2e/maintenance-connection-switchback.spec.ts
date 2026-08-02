@@ -49,11 +49,41 @@ function json(route: Route, body: unknown) {
   });
 }
 
+// The issued identity the backend holds for a serial, read from its own trusted
+// proposals. page.request bypasses page.route, so this never re-enters a mock.
+async function stampObservations(page: Page, devices: unknown[]) {
+  let issued = new Map<string, string>();
+  try {
+    const response = await page.request.get("/api/discovery/mqtt-proposals");
+    if (response.ok()) {
+      const payload = await response.json();
+      for (const proposal of payload.proposals || []) {
+        const serial = String(proposal.serial_number || "");
+        const token = String(proposal.physical_identity_token || "");
+        if (serial && token) issued.set(serial, token);
+      }
+    }
+  } catch {
+    issued = new Map();
+  }
+  return (devices as Record<string, unknown>[]).map((device) => {
+    const token = issued.get(String(device.serial_number || ""));
+    return token
+      ? { ...device, physical_device_id: token, identity_status: "confirmed" }
+      : device;
+  });
+}
+
 async function mockDiscovery(page: Page, state: DiscoveryState) {
   await page.route("**/api/discovery/**", (route) => json(route, {}));
-  await page.route("**/api/discovery/devices**", (route) =>
-    json(route, { devices: state.apiDevices, ignored_devices: [] }),
-  );
+  // Discovery stamps every observation it serves with the identity it resolved.
+  // These devices are mocked, so the stamp is taken from the backend's own
+  // proposals for the same serial — the same token, from the same key, exactly
+  // as a real discovery response would carry.
+  await page.route("**/api/discovery/devices**", async (route) => {
+    const devices = await stampObservations(page, state.apiDevices);
+    return json(route, { devices, ignored_devices: [] });
+  });
   await page.route("**/api/discovery/mdns/refresh**", (route) =>
     json(route, { state: "enabled" }),
   );

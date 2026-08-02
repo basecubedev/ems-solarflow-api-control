@@ -741,6 +741,17 @@ def opaque_connection_id(coordinates: Any, key: bytes) -> str:
     )
 
 
+def opaque_plan_id(components: Any, key: bytes) -> str:
+    """A stable browser-safe fingerprint of a computed plan and its inputs.
+
+    Not an identity: it names *this answer, over these candidates*, so a browser
+    can prove the plan it is about to apply is still the current one. Keyed like
+    every other public id, so its inputs cannot be recovered or forged.
+    """
+
+    return _keyed_token(["setup-plan-v1", components], "plan:v1", key)
+
+
 def _with_token(
     identity: InverterIdentity, token_key: bytes | None
 ) -> InverterIdentity:
@@ -821,6 +832,7 @@ __all__ = [
     "opaque_connection_id",
     "opaque_identity_token",
     "opaque_observation_id",
+    "opaque_plan_id",
     "resolve_inverter_identity",
     "resolve_inverter_identity_evidence",
     "resolve_physical_identity",

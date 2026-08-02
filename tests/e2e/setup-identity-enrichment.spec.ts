@@ -10,7 +10,7 @@ import { SetupPage } from "./pages/setup-page";
 // unknown-proposal / stale-id error. The same raw route in two broker scopes
 // stays two distinct candidates. Discovery + preview are deterministically
 // mocked; only opaque identity tokens (never a raw Cloud route) cross into the
-// browser. See admin/static/admin.js reconcileTransportSelection.
+// browser. The grouping itself is admin/setup_planner.py's.
 
 const ROUTE_TOKEN = "opaque:v1:E2EROUTE7501TOKEN";
 const SERIAL_TOKEN = "opaque:v1:E2ESERIAL7501TOKEN";

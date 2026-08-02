@@ -140,17 +140,14 @@ _COMMON_HELPERS = (
     "mconfigDeviceCatalogFields",
     "mconfigHardwareSection",
     "deviceFieldKey",
-    "mconfigIdentity",
 )
 
 _OPTIONAL_HELPERS = (
-    "normalizeSerial",
-    "usableSerialValue",
+    "sameIssuedDevice",
     "issuedPhysicalIdentity",
-    "physicalInverterIdentity",
-    "inverterVisibleSerial",
-    "inverterIdentityTokens",
-    "inverterIdentitySet",
+    "issuedConnectionId",
+    "issuedIdentityTokens",
+    "isConfirmedIdentity",
     "inverterHasIdentity",
     "inverterIdentityConflict",
     "inverterIdentitiesMatch",
@@ -162,6 +159,7 @@ _OPTIONAL_HELPERS = (
     "mconfigMqttProposalIdentity",
     "mqttProposalBrokerRef",
     "mqttProposalBrokerProfile",
+    "normalizeInverterAliasTokens",
     "mconfigZendureMqttDraftFromProposal",
 )
 
@@ -267,6 +265,7 @@ def test_mqtt_proposal_add_materializes_central_defaults():
             "mconfigIsMqttDevice",
             "mconfigDraftDevicesMatchingCandidate",
             "mconfigPristineHasCandidateConnection",
+            "mconfigDraftHasProposal",
             "mconfigMqttProposalState",
             "mconfigAddZendureMqttProposal",
         ),
@@ -292,6 +291,8 @@ def test_configured_mqtt_serial_blocks_api_add():
         "original_name": "WR1",
         "name": "WR1",
         "serial_number": "PHYSICAL-001",
+        "physical_device_id": "opaque:v1:PHYSICAL-001",
+        "identity_status": "confirmed",
         "device_id": "PHYSICAL-001",
         "enabled": True,
     }
@@ -302,7 +303,9 @@ def test_configured_mqtt_serial_blocks_api_add():
         + "const inDraft = mconfigDiscoveredAlreadyInDraft({\n"
         + "  role: 'inverter',\n"
         + "  state: 'new',\n"
-        + "  discovered: { ip: '192.0.2.10', serial_number: 'PHYSICAL-001' },\n"
+        + "  discovered: { ip: '192.0.2.10', serial_number: 'PHYSICAL-001',"
+        + " physical_device_id: 'opaque:v1:PHYSICAL-001',"
+        + " identity_status: 'confirmed' },\n"
         + "});\n"
         + "console.log(JSON.stringify({ inDraft }));",
         optional=_OPTIONAL_HELPERS,
@@ -319,6 +322,8 @@ def test_configured_api_serial_blocks_mqtt_proposal_add():
         "name": "WR1",
         "ip": "192.168.1.100",
         "sn": "PHYSICAL-001",
+        "physical_device_id": "opaque:v1:PHYSICAL-001",
+        "identity_status": "confirmed",
         "enabled": True,
     }
     out = _run(
@@ -327,12 +332,15 @@ def test_configured_api_serial_blocks_mqtt_proposal_add():
             "mconfigIsMqttDevice",
             "mconfigDraftDevicesMatchingCandidate",
             "mconfigPristineHasCandidateConnection",
+            "mconfigDraftHasProposal",
             "mconfigMqttProposalState",
         ),
         _state_stub([api_device])
         + "const state = mconfigMqttProposalState({\n"
         + "  id: 'local-mqtt:PHYSICAL-001',\n"
         + "  serial_number: 'PHYSICAL-001',\n"
+        + "  physical_device_id: 'opaque:v1:PHYSICAL-001',\n"
+        + "  identity_status: 'confirmed',\n"
         + "  connection_source: 'local_mqtt',\n"
         + "});\n"
         + "console.log(JSON.stringify({ state }));",

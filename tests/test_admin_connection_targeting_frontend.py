@@ -1,11 +1,16 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""A connection candidate action targets the exact discovered connection.
+"""Maintenance targets the exact discovered connection.
 
-The clicked card, not "the first proposal with the same source", decides what
-the draft ends up using: two brokers for one physical inverter are two concrete
-connections. Maintenance applies the same rule — it compares MQTT source and
-broker scope, and it resolves the configured device through trusted identity
-aliases instead of primary-key equality.
+Two brokers for one physical inverter are two concrete connections, and the
+clicked card — not "the first proposal with the same source" — decides which one
+the draft ends up using. Maintenance resolves the configured device through the
+identity the backend issued for it and compares connections by their issued
+connection id, so an enriched route is recognized and a contradicting one is
+refused.
+
+Setup's half of this rule moved to the backend: candidate classification is
+pinned in ``tests/test_admin_setup_batch_planner.py`` and its application in
+``tests/test_admin_setup_transport_selection.py``.
 
 The real admin.js helpers are extracted (brace-matched) and executed in node.
 """
@@ -65,337 +70,51 @@ def _node(script):
     return json.loads(result.stdout)
 
 
+_CONSTANTS = None
+
+
+def _constants(js):
+    return "\n".join(
+        line
+        for line in js.split("\n")
+        if line.startswith("const ") and "PATTERN = /" in line
+    )
+
+
 _IDENTITY_HELPERS = (
-    "normalizeSerial",
-    "usableSerialValue",
     "issuedPhysicalIdentity",
-    "physicalInverterIdentity",
-    "inverterVisibleSerial",
-    "inverterIdentityTokens",
-    "inverterIdentitySet",
+    "issuedConnectionId",
+    "issuedIdentityTokens",
+    "isConfirmedIdentity",
     "inverterHasIdentity",
     "inverterIdentityConflict",
     "inverterIdentitiesMatch",
-    "inverterIdentitySetOf",
     "normalizeInverterAliasTokens",
     "mqttSourceOfConnection",
 )
 
 
-# --- Finding 1: the clicked connection is the one that gets selected -------
-
-_SWITCH_HELPERS = _IDENTITY_HELPERS + (
-    "connectionLabelFor",
-    "dismissalStorageKey",
-    "dismissalKeysForInverter",
-    "dismissSerial",
-    "undismissSerial",
-    "nextCompactInverterName",
-    "inverterItems",
-    "selectedMqttDeviceEntries",
-    "rememberedInverterName",
-    "rememberInverterName",
-    "inverterConfigNameForSerial",
-    "draftHasSource",
-    "observationKey",
-    "sourcesOf",
-    "uniqueDisplayName",
-    "draftItemFromDevice",
-    "preservedInverterValues",
-    "connectionBrokerScope",
-    "configuredInverterConnection",
-    "serializeMqttProposalSelection",
-    "mconfigIsMqttDevice",
-    "mconfigDeviceIsActive",
-    "mconfigDeviceInactiveByChoice",
-    "inverterActivationView",
-    "switchInverterTransport",
-)
-
-_SWITCH_STUB = """
-const DEVICE_MAPPED_FIELD_KEYS = { name: 'config_name', ip: 'ip', sn: 'serial_number' };
-const DEFAULT_INVERTER_DISPLAY = 'SolarFlow 800 Pro 2';
-const DEFAULT_GRID_METER_DISPLAY = 'Grid meter';
-const transportInverterNames = new Map();
-const dismissedSerials = new Set();
-const configDismissed = new Set();
-function saveDismissedSerials() {}
-function saveConfigDismissed() {}
-function saveConfigDraft() {}
-function saveMqttPreviewProposals() {}
-function renderMqttProposals() {}
-function renderConfigDraft() {}
-function renderConfigAvailable() {}
-function forgetInverterName() {}
-function nextInverterName(excludeEntry) {
-  const names = [
-    ...inverterItems().filter((i) => i !== excludeEntry).map((i) => i.config_name),
-    ...selectedMqttDeviceEntries().filter((e) => e !== excludeEntry).map((e) => e.config_name),
-  ].filter(Boolean);
-  return nextCompactInverterName(names, names.length);
-}
-"""
-
-
-def _switch(draft_items, mqtt_entries, devices, proposals, call):
-    js = _read()
-    helpers = "\n".join(_extract_fn(js, name) for name in _SWITCH_HELPERS)
-    env = (
-        "let configDraftItems = " + json.dumps(draft_items) + ";\n"
-        "const zendureMqttPreviewProposals = new Map("
-        + json.dumps([[str(e.get("id", "")), e] for e in mqtt_entries])
-        + ");\n"
-        "const _devices = " + json.dumps(devices) + ";\n"
-        "const _proposals = " + json.dumps(proposals) + ";\n"
-        "function availableConfigDevices() { return _devices; }\n"
-        "function availableMqttDeviceProposals() { return _proposals; }\n"
-        "const latestMqttProposals = _proposals;\n"
-    )
-    script = (
-        helpers
-        + "\n"
-        + _SWITCH_STUB
-        + env
-        + call
-        + "\nconsole.log(JSON.stringify({\n"
-        "  draft: configDraftItems,\n"
-        "  mqtt: Array.from(zendureMqttPreviewProposals.values()),\n"
-        "}));"
-    )
-    return _node(script)
-
-
-def _local_proposal(scope, route):
-    return {
-        "id": "local-mqtt:PHYS-1:" + scope,
-        "serial_number": "PHYS-1",
-        "device_id": route,
-        "display_name": "SolarFlow 800 Pro 2",
-        "connection_source": "local_mqtt",
-        "broker_ref": scope,
-        "config_fragment": {
-            "type": "zendure_mqtt",
-            "serial_number": "PHYS-1",
-            "mqtt": {"broker_ref": scope, "source": "local_mqtt", "device_id": route},
-        },
-    }
-
-
-_B1 = _local_proposal("local_b1", "ROUTE-B1")
-_B2 = _local_proposal("local_b2", "ROUTE-B2")
-
-_SELECTED_B1 = {
-    "id": _B1["id"],
-    "target": "device",
-    "config_name": "INV_1",
-    "serial_number": "PHYS-1",
-    "connection_source": "local_mqtt",
-    "broker_ref": "local_b1",
-    "device_id": "ROUTE-B1",
-    "config_fragment": _B1["config_fragment"],
-    "config_values": {"max_power": 640},
-}
-
-_API_DEVICE = {
-    "id": "zendure:PHYS-1",
-    "ip": "192.168.1.100",
-    "serial_number": "PHYS-1",
-    "api_family": "zendure",
-    "role_suggestion": "inverter",
-    "display_name": "SolarFlow 800 Pro 2",
-}
-
-
-def test_clicking_the_second_local_broker_selects_that_exact_connection():
-    out = _switch(
-        [],
-        [_SELECTED_B1],
-        [_API_DEVICE],
-        [_B1, _B2],
-        "switchInverterTransport('PHYS-1', 'local_mqtt', "
-        "{ candidateRef: " + json.dumps(_B2["id"]) + " });",
-    )
-    assert len(out["mqtt"]) == 1
-    entry = out["mqtt"][0]
-    assert entry["broker_ref"] == "local_b2"
-    assert entry["device_id"] == "ROUTE-B2"
-    assert entry["config_fragment"]["mqtt"]["broker_ref"] == "local_b2"
-    assert entry["config_name"] == "INV_1"
-    assert entry["config_values"] == {"max_power": 640}
-    assert out["draft"] == []
-
-
-def test_switching_back_selects_the_first_broker_exactly():
-    selected_b2 = dict(
-        _SELECTED_B1,
-        id=_B2["id"],
-        broker_ref="local_b2",
-        device_id="ROUTE-B2",
-        config_fragment=_B2["config_fragment"],
-    )
-    out = _switch(
-        [],
-        [selected_b2],
-        [_API_DEVICE],
-        [_B1, _B2],
-        "switchInverterTransport('PHYS-1', 'local_mqtt', "
-        "{ candidateRef: " + json.dumps(_B1["id"]) + " });",
-    )
-    assert len(out["mqtt"]) == 1
-    assert out["mqtt"][0]["broker_ref"] == "local_b1"
-    assert out["mqtt"][0]["device_id"] == "ROUTE-B1"
-
-
-def test_an_ambiguous_mqtt_target_without_a_reference_changes_nothing():
-    # Two concrete connections share identity and source: picking "the first"
-    # would silently bind the wrong broker/route.
-    out = _switch(
-        [],
-        [_SELECTED_B1],
-        [_API_DEVICE],
-        [_B1, _B2],
-        "switchInverterTransport('PHYS-1', 'local_mqtt');",
-    )
-    assert len(out["mqtt"]) == 1
-    assert out["mqtt"][0]["broker_ref"] == "local_b1"
-
-
-def test_a_stale_candidate_reference_never_changes_the_draft():
-    out = _switch(
-        [],
-        [_SELECTED_B1],
-        [_API_DEVICE],
-        [_B1, _B2],
-        "switchInverterTransport('PHYS-1', 'local_mqtt', "
-        "{ candidateRef: 'local-mqtt:PHYS-1:gone' });",
-    )
-    assert len(out["mqtt"]) == 1
-    assert out["mqtt"][0]["broker_ref"] == "local_b1"
-
-
-def test_a_reference_whose_source_disagrees_is_refused():
-    out = _switch(
-        [],
-        [_SELECTED_B1],
-        [_API_DEVICE],
-        [_B1, _B2],
-        "switchInverterTransport('PHYS-1', 'zendure_mqtt', "
-        "{ candidateRef: " + json.dumps(_B2["id"]) + " });",
-    )
-    assert len(out["mqtt"]) == 1
-    assert out["mqtt"][0]["broker_ref"] == "local_b1"
-
-
-def test_candidate_actions_never_expose_a_proposal_id_in_the_dom():
-    # A serial-less Cloud proposal id falls back to the raw route device id or
-    # product key, so only an opaque per-render token may reach the DOM.
-    js = _read()
-    action = _extract_fn(js, "renderConnectionCandidateAction")
-    assert "data-candidate-token" in action
-    assert "data-proposal-id" not in action
-    assert "connectionCandidateToken(" in action
-    for name in (
-        "connectionCandidateToken",
-        "resolveConnectionCandidateToken",
-        "resetConnectionCandidateTokens",
-    ):
-        assert "function " + name + "(" in js, name
-    # The pool render mints a fresh generation, so a click on a stale card fails.
-    pool = _extract_fn(js, "renderConfigAvailable")
-    assert "resetConnectionCandidateTokens()" in pool
-
-
-# --- Finding 4: duplicate observations of the active connection -----------
-
-_POOL_HELPERS = _IDENTITY_HELPERS + (
-    "connectionBrokerScope",
-    "sameMqttConnectionScope",
-    "concreteMqttConnectionKey",
-    "selectedMqttDeviceEntries",
-    "unselectedMqttDeviceProposals",
-)
-
-
-def _pool(selected, proposals):
-    js = _read()
-    helpers = "\n".join(_extract_fn(js, name) for name in _POOL_HELPERS)
-    stub = (
-        "const zendureMqttPreviewProposals = new Map("
-        + json.dumps([[str(e.get("id", "")), e] for e in selected])
-        + ");\n"
-        "const latestMqttProposals = " + json.dumps(proposals) + ";\n"
-        "function isMqttGridMeterProposal() { return false; }\n"
-        "function availableMqttDeviceProposals() {\n"
-        "  return latestMqttProposals.filter((p) => !isMqttGridMeterProposal(p) && p.config_fragment);\n"
-        "}\n"
-        "console.log(JSON.stringify(unselectedMqttDeviceProposals().map((p) => p.id)));"
-    )
-    return _node(helpers + "\n" + stub)
-
-
-_CLOUD_P1 = {
-    "id": "zendure-mqtt:PHYS-1",
-    "serial_number": "PHYS-1",
-    "connection_source": "zendure_cloud_mqtt",
-    "broker_ref": "zendure_cloud",
-    "config_fragment": {},
-}
-_CLOUD_P2 = dict(_CLOUD_P1, id="zendure-mqtt:PHYS-1:dup")
-
-
-def test_a_duplicate_observation_of_the_active_connection_is_hidden():
-    selected = dict(_CLOUD_P1, target="device", config_name="INV_1")
-    assert _pool([selected], [_CLOUD_P1, _CLOUD_P2]) == []
-
-
-def test_a_distinct_local_connection_stays_visible_next_to_a_cloud_selection():
-    selected = dict(_CLOUD_P1, target="device", config_name="INV_1")
-    assert _pool([selected], [_CLOUD_P1, _B1]) == [_B1["id"]]
-
-
-def test_a_second_local_broker_stays_visible():
-    selected = dict(_SELECTED_B1)
-    assert _pool([selected], [_B1, _B2]) == [_B2["id"]]
-
-
-def test_an_alias_only_duplicate_of_the_active_connection_is_hidden():
-    selected = {
-        "id": "zendure-mqtt:route",
-        "target": "device",
-        "config_name": "INV_1",
-        "serial_number": "PHYS-1",
-        "physical_identity_alias_tokens": ["opaque:v1:routeA"],
-        "connection_source": "zendure_cloud_mqtt",
-        "broker_ref": "zendure_cloud",
-    }
-    duplicate = {
-        "id": "zendure-mqtt:route:other",
-        "physical_identity_token": "opaque:v1:routeA",
-        "connection_source": "zendure_cloud_mqtt",
-        "broker_ref": "zendure_cloud",
-        "config_fragment": {},
-    }
-    assert _pool([selected], [duplicate]) == []
-
-
 # --- Finding 2: Maintenance compares source and broker scope --------------
 
 _MSTATE_HELPERS = _IDENTITY_HELPERS + (
-    "connectionBrokerScope",
     "mconfigIsMqttDevice",
+    "connectionBrokerScope",
     "mconfigDeviceMqttSource",
     "mconfigDeviceConnectionSource",
     "mconfigSameMqttConnection",
     "mconfigProposalIdentityView",
     "mconfigDraftDevicesMatchingCandidate",
     "mconfigPristineHasCandidateConnection",
+    "mconfigDraftHasProposal",
     "mconfigMqttProposalState",
 )
 
 
 def _mstate(devices, proposal, pristine=None):
     js = _read()
-    helpers = "\n".join(_extract_fn(js, name) for name in _MSTATE_HELPERS)
+    helpers = _constants(js) + "\n" + "\n".join(
+        _extract_fn(js, name) for name in _MSTATE_HELPERS
+    )
     stub = (
         "function maintenanceMqttProposals() { return []; }\n"
         "const mconfigState = { pristine: "
@@ -408,11 +127,15 @@ def _mstate(devices, proposal, pristine=None):
     return _node(helpers + "\n" + stub)
 
 
+# Both sides carry what the backend issued for them: the physical identity, the
+# connection id of the route they answer on, and why that identity is what it is.
 def _mqtt_device(scope, source="local_mqtt", serial="PHYS-1"):
     return {
         "kind": "zendure_mqtt",
         "name": "INV_1",
-        "serial_number": serial,
+        "physical_device_id": "opaque:v1:" + serial,
+        "identity_status": "confirmed",
+        "connection_id": "conn:v1:" + source + "-" + scope,
         "mqtt": {"broker_ref": scope, "source": source, "device_id": "ROUTE"},
     }
 
@@ -420,7 +143,9 @@ def _mqtt_device(scope, source="local_mqtt", serial="PHYS-1"):
 def _mqtt_candidate(scope, source="local_mqtt", serial="PHYS-1"):
     return {
         "id": "mqtt:" + scope,
-        "serial_number": serial,
+        "physical_device_id": "opaque:v1:" + serial,
+        "identity_status": "confirmed",
+        "connection_id": "conn:v1:" + source + "-" + scope,
         "connection_source": source,
         "broker_ref": scope,
         "config_fragment": {"mqtt": {"broker_ref": scope, "source": source}},
@@ -441,7 +166,14 @@ def test_maintenance_other_mqtt_source_is_an_alternative_connection():
 
 
 def test_maintenance_configured_api_stays_an_alternative_connection():
-    api = {"name": "INV_1", "ip": "192.168.1.100", "sn": "PHYS-1"}
+    api = {
+        "name": "INV_1",
+        "ip": "192.168.1.100",
+        "sn": "PHYS-1",
+        "physical_device_id": "opaque:v1:PHYS-1",
+        "identity_status": "confirmed",
+        "connection_id": "conn:v1:local_api-192.168.1.100",
+    }
     assert _mstate([api], _mqtt_candidate("local_b1")) == "transport"
 
 
@@ -486,7 +218,9 @@ _MSWITCH_CENTRAL = {"max_power": 800, "min_soc": 10}
 
 def _mswitch(devices, action):
     js = _read()
-    helpers = "\n".join(_extract_fn(js, name) for name in _MSWITCH_HELPERS)
+    helpers = _constants(js) + "\n" + "\n".join(
+        _extract_fn(js, name) for name in _MSWITCH_HELPERS
+    )
     stub = (
         "const MCONFIG_DEVICE_IDENTITY_KEYS = new Set(['name', 'ip', 'sn']);\n"
         "function renderMaintenanceInverters() {}\n"

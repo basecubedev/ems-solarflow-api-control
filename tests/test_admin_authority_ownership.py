@@ -208,6 +208,47 @@ def test_maintenance_reaches_the_planner_rather_than_its_own_rule():
     assert "plan_connection_change(" in source
 
 
+def test_setup_reaches_the_planner_rather_than_its_own_rule():
+    import admin.setup_planner as setup
+
+    source = pathlib.Path(setup.__file__).read_text()
+    assert "from admin.connection_planner import" in source
+    assert "plan_connection_change(" in source
+    # Even the grouping asks the planner; nothing here compares evidence itself.
+    assert "compare_physical_identity" not in source
+
+
+def test_setup_and_maintenance_adapt_the_same_planner():
+    import admin.maintenance_config as maintenance
+    import admin.setup_planner as setup
+
+    for module in (maintenance, setup):
+        source = pathlib.Path(module.__file__).read_text()
+        assert "INTENT_SWITCH_CONNECTION" in source, module.__name__
+
+
+def test_the_browser_cannot_mint_an_issued_id():
+    """admin.js may test and compare issued ids; it may never construct one."""
+
+    source = ADMIN_JS.read_text()
+    for prefix in ("obs:v1:", "conn:v1:", "opaque:v1:", "plan:v1:"):
+        for minting in (f'"{prefix}" +', f"'{prefix}' +", f'"{prefix}" +'):
+            assert minting not in source, f"admin.js concatenates a {prefix} id"
+
+
+def test_setup_state_is_rehydrated_through_the_backend():
+    """Legacy Setup stores are resolved by the planner, not re-matched locally."""
+
+    source = ADMIN_JS.read_text()
+    assert '"/api/setup/device-plan"' in source
+    for adopted in (
+        "function adoptPlannedIdentityState(",
+        "function applySetupPlanOperations(",
+        "legacyPhysicalDismissals",
+    ):
+        assert adopted in source, adopted
+
+
 def test_browser_ids_are_issued_by_one_admin_module():
     """observation/connection/physical ids come from one stamper."""
 
@@ -245,3 +286,13 @@ def test_browser_collection_key_reads_only_the_issued_observation_id():
     assert "observation_id" in body
     for hardware_field in ("serial_number", "sn", "product_key", "physical_identity_token"):
         assert hardware_field not in body, hardware_field
+
+
+def test_setup_apply_revalidates_physical_identity_server_side():
+    """A plan the browser applied is never the reason a config is accepted."""
+
+    import admin.config_preview as preview
+
+    source = pathlib.Path(preview.__file__).read_text()
+    assert "find_duplicate_zendure_device_identities(" in source
+    assert "zendure_device_identity_duplicate" in source

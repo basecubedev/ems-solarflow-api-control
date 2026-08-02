@@ -63,6 +63,11 @@ from admin.discovery_connections import (
 from admin.credential_store import CredentialStore, CredentialStoreError
 from admin.discovery_run import run_discovery
 from admin.observation_identity import stamp_observations
+from admin.setup_planner import (
+    build_setup_plan,
+    plan_setup_connection_switch,
+    resolve_current_connection,
+)
 from admin.ems_cli import EmsCliDiagnostics
 from admin.embedded_resources import (
     EmbeddedReleaseResources,
@@ -1255,6 +1260,9 @@ class AdminHandler(BaseHTTPRequestHandler):
             "/api/setup/config-preview/validate",
         ):
             self._handle_config_preview()
+            return
+        if path == "/api/setup/device-plan":
+            self._handle_setup_device_plan()
             return
         if path == "/api/setup/config/download":
             self._handle_config_download()
@@ -4363,6 +4371,161 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         self._send_json(result)
 
+    # --- Guided Setup device planning -----------------------------------
+    #
+    # The one authority boundary for Setup's device identity and transport
+    # selection. The browser posts what it persisted; every candidate, every
+    # issued id and every keep/replace/add/block verdict is read and decided
+    # here, so no physical equivalence is ever concluded in the browser.
+    def _handle_setup_device_plan(self):
+        body = self._read_json_body(MAX_CONFIG_PREVIEW_BODY_BYTES)
+        if body is None:
+            return
+        if not isinstance(body, dict):
+            self._send_json({"error": "expected a JSON object"}, status=400)
+            return
+        state = body.get("state")
+        if not isinstance(state, dict):
+            self._send_json({"error": "state must be a JSON object"}, status=400)
+            return
+        # Source priority and per-source enablement are operator preference, not
+        # authority: the browser is showing the same values it fetched, and an
+        # order can neither identify a device nor authorize a replacement. The
+        # echo is accepted so the plan matches the screen; every identity,
+        # conflict and replacement verdict is still decided here.
+        preparation = self._setup_plan_preparation(body)
+        sources = preparation.get("sources") or {}
+        observations = self._setup_plan_observations(body)
+        proposals = self._setup_plan_proposals(body)
+        response = build_setup_plan(
+            state,
+            observations=observations,
+            proposals=proposals,
+            priority=preparation.get("discovery_priority") or [],
+            enabled_sources={
+                source: (sources.get(source) or {}).get("enabled", True)
+                for source in DISCOVERY_SOURCES
+            },
+            identity_token_key=self.server.identity_token_key,
+        )
+        switch = body.get("switch")
+        if isinstance(switch, dict):
+            response["switch"] = self._setup_switch_plan(
+                switch, state=state, observations=observations, proposals=proposals
+            )
+        self._send_json(response)
+
+    def _setup_plan_preparation(self, body):
+        stored = self.server.discovery_preparation.load()
+        echoed = body.get("preparation")
+        if not isinstance(echoed, dict):
+            return stored
+        priority = [
+            source
+            for source in (echoed.get("discovery_priority") or [])
+            if source in DISCOVERY_SOURCES
+        ]
+        sources = echoed.get("sources")
+        return {
+            "discovery_priority": priority or stored.get("discovery_priority") or [],
+            "sources": sources if isinstance(sources, dict) else stored.get("sources"),
+        }
+
+    def _setup_plan_candidates(self, body, key):
+        """The candidate set to plan over: server state first, browser echo after.
+
+        The server's own discovery view is authoritative and, in a normal
+        install, complete — the browser's echo of what it was served then adds
+        nothing. It is accepted because the browser may legitimately hold a view
+        the server no longer serves directly, and because refusing it would make
+        the plan silently ignore cards the operator can see. It grants no
+        authority: identity, grouping and every action are still resolved here
+        from the payload, and a device only reaches the installed config through
+        the config apply path, which validates independently.
+        """
+
+        candidates = body.get("candidates")
+        if not isinstance(candidates, dict):
+            return []
+        echoed = candidates.get(key)
+        return [entry for entry in echoed if isinstance(entry, dict)] if isinstance(echoed, list) else []
+
+    def _setup_plan_observations(self, body):
+        known = self._stamped_observations(self.server.mdns_provider.devices())
+        seen = {str(device.get("observation_id") or "") for device in known}
+        merged = list(known)
+        for device in self._setup_plan_candidates(body, "observations"):
+            identifier = str(device.get("observation_id") or "")
+            if identifier and identifier in seen:
+                continue
+            merged.append(device)
+        return merged
+
+    def _setup_plan_proposals(self, body):
+        trusted = self._trusted_mqtt_proposals()
+        seen = {str(proposal.get("id") or "") for proposal in trusted}
+        merged = list(trusted)
+        for proposal in self._setup_plan_candidates(body, "proposals"):
+            identifier = str(proposal.get("id") or "")
+            if identifier and identifier in seen:
+                continue
+            merged.append(proposal)
+        return merged
+
+    def _setup_switch_plan(self, switch, *, state, observations, proposals):
+        """The pairwise verdict for one operator-chosen connection.
+
+        Both sides are resolved from server-held state by issued id, so a
+        browser can neither name a connection that is not currently offered nor
+        describe one differently than discovery did.
+        """
+
+        candidate_id = str(switch.get("candidate_id") or "").strip()
+        candidate = next(
+            (
+                device
+                for device in observations
+                if str(device.get("observation_id") or "") == candidate_id
+            ),
+            None,
+        )
+        candidate_kind = "observation"
+        if candidate is None:
+            candidate = next(
+                (
+                    proposal
+                    for proposal in proposals
+                    if str(proposal.get("id") or "") == candidate_id
+                ),
+                None,
+            )
+            candidate_kind = "proposal"
+        if candidate is None:
+            return {
+                "error": "unknown_candidate_connection",
+                "candidate_id": candidate_id,
+            }
+        current_ref = str(switch.get("current_ref") or "").strip()
+        # A stored MQTT selection carries no evidence of its own; the planner
+        # resolves it against the trusted proposal it names.
+        current = resolve_current_connection(state, current_ref, proposals)
+        # In Setup nothing is installed yet: the operator picking a connection on
+        # a draft *is* the affirmative answer, so a switch is confirmed unless the
+        # caller says otherwise. The blocking verdicts are unaffected — an
+        # identity conflict or unresolved identity still refuses the switch.
+        plan = plan_setup_connection_switch(
+            current_device=current,
+            candidate=candidate,
+            identity_token_key=self.server.identity_token_key,
+            operator_confirmed=switch.get("confirmed") is not False,
+        )
+        return {
+            "plan": plan.to_dict(),
+            "current_ref": current_ref,
+            "candidate_id": candidate_id,
+            "candidate_kind": candidate_kind,
+        }
+
     def _handle_config_preview(self):
         # Only the primary preview route issues mutation authority; the
         # ``/validate`` alias stays a read-only validation with no workflow
@@ -4614,6 +4777,8 @@ class AdminHandler(BaseHTTPRequestHandler):
                     if key in {
                         "sn",
                         "serial_number",
+                        "connection_id",
+                        "identity_status",
                         PHYSICAL_IDENTITY_TOKEN_FIELD,
                         PHYSICAL_IDENTITY_ALIAS_TOKENS_FIELD,
                     }:

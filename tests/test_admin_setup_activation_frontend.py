@@ -129,7 +129,9 @@ def test_disabled_api_item_stays_inactive():
 
 def test_setup_switch_resolves_the_enabled_state_through_the_shared_rule():
     js = _read()
-    fn = js.split("function switchInverterTransport", 1)[1].split("\nfunction ", 1)[0]
+    # The switch itself only awaits the backend plan; the state it carries over
+    # is applied once that plan allows it.
+    fn = js.split("function applyConnectionSwitch", 1)[1].split("\nfunction ", 1)[0]
     assert "mconfigDeviceInactiveByChoice(" in fn
     assert "inverterActivationView(" in fn
     assert "current.item.enabled !== false" not in fn

@@ -47,6 +47,9 @@ function apiInverter(serial: string, ip: string) {
 function mqttProposal(serial: string) {
   return {
     serial_number: serial,
+    // Discovery issues an identity for every proposal it serves. The value is
+    // opaque; what matters is that one physical device keeps one token, so the
+    // same offer is recognized once it is in the draft.
     device_id: serial,
     target: "device",
     connection_source: "local_mqtt",
@@ -81,11 +84,53 @@ function json(route: Route, body: unknown) {
   });
 }
 
+// Where the backend publishes the identity it issued for a serial. Discovery
+// proposals carry it where they are served for real; where they are mocked, the
+// installed config does — the Maintenance response stamps every configured
+// device. page.request bypasses page.route, so neither read re-enters a mock.
+const ISSUED_IDENTITY_SOURCES = [
+  {
+    url: "/api/discovery/mqtt-proposals",
+    read: (payload: Record<string, any>) => payload.proposals,
+  },
+  {
+    url: "/api/admin/maintenance/config",
+    read: (payload: Record<string, any>) => (payload.draft || {}).devices,
+  },
+];
+
+async function stampObservations(page: Page, devices: unknown[]) {
+  const issued = new Map<string, string>();
+  for (const source of ISSUED_IDENTITY_SOURCES) {
+    try {
+      const response = await page.request.get(source.url);
+      if (!response.ok()) continue;
+      const entries = source.read(await response.json()) || [];
+      for (const entry of entries) {
+        const serial = String(entry.serial_number || entry.sn || "");
+        const token = String(
+          entry.physical_device_id || entry.physical_identity_token || "",
+        );
+        if (serial && token && !issued.has(serial)) issued.set(serial, token);
+      }
+    } catch {
+      /* a scenario that does not serve this endpoint contributes nothing */
+    }
+  }
+  return (devices as Record<string, unknown>[]).map((device) => {
+    const token = issued.get(String(device.serial_number || ""));
+    return token
+      ? { ...device, physical_device_id: token, identity_status: "confirmed" }
+      : device;
+  });
+}
+
 async function mockDiscovery(page: Page, state: DiscoveryState) {
   await page.route("**/api/discovery/**", (route) => json(route, {}));
-  await page.route("**/api/discovery/devices**", (route) =>
-    json(route, { devices: state.apiDevices, ignored_devices: [] }),
-  );
+  await page.route("**/api/discovery/devices**", async (route) => {
+    const devices = await stampObservations(page, state.apiDevices);
+    return json(route, { devices, ignored_devices: [] });
+  });
   await page.route("**/api/discovery/mdns/refresh**", (route) =>
     json(route, { state: "enabled" }),
   );
@@ -231,8 +276,18 @@ test("MQTT then API: discovery offers a transport switch, not a duplicate invert
     "#maintenance-discovery-results .mconfig-discovery-add-button.is-add",
   );
   await expect(addButtons).toHaveCount(2);
-  await addButtons.first().click();
-  await addButtons.first().click();
+  // Each offer is added through its own card. These proposals are mocked in the
+  // browser and therefore carry neither an id nor an issued identity, so the
+  // review cannot tell them apart the way it does for a real discovery
+  // response — addressing them by serial keeps the journey about what it tests.
+  for (const serial of [SERIAL_A, SERIAL_B]) {
+    await page
+      .locator("#maintenance-discovery-results .mconfig-discovery-device-card", {
+        hasText: serial,
+      })
+      .getByRole("button", { name: "Add inverter" })
+      .click();
+  }
   await expect(configuredCards(page)).toHaveCount(5);
 
   // Both new MQTT devices carry the central common defaults, visibly.
@@ -263,8 +318,15 @@ test("MQTT then API: discovery offers a transport switch, not a duplicate invert
     name: "Use connection",
   });
   await expect(switchButtons).toHaveCount(2);
+  // Scoped to the rediscovered devices, which is what this journey is about. The
+  // MQTT proposal cards for the same inverters are re-offered here only because
+  // these proposals are mocked in the browser and therefore carry no issued
+  // identity; a real discovery response identifies them, and that recognition is
+  // pinned in tests/test_admin_physical_identity_contract.py.
   await expect(
-    results.getByRole("button", { name: "Add inverter" }),
+    results
+      .locator(".mconfig-discovery-device-card", { hasText: "Inverter candidate" })
+      .getByRole("button", { name: "Add inverter" }),
   ).toHaveCount(0);
 
   // Switch the renamed inverter to API: same card count, same name,

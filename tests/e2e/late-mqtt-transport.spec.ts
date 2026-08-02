@@ -7,7 +7,7 @@ import { SetupPage } from "./pages/setup-page";
 // selected transport into Config: two Local-API inverters discovered first are
 // reconfigured over Zendure Cloud MQTT once MQTT is prioritized and rescanned.
 // Discovery + preview are deterministically mocked (the backend trust set is
-// empty in test mode); the reconciler behavior itself is what is under test.
+// empty in test mode); the backend transport plan is what is under test.
 
 const SERIAL_A = "EOD1AAA111";
 const SERIAL_B = "EOD1BBB222";

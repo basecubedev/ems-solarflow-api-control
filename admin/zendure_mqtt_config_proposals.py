@@ -32,10 +32,13 @@ from ems.config import (
 from ems.device_identity import (
     PHYSICAL_IDENTITY_ALIAS_TOKENS_FIELD,
     PHYSICAL_IDENTITY_TOKEN_FIELD,
+    connection_coordinates,
     is_masked_identity_value,
     legacy_route_folded_tokens,
     normalize_mqtt_route_segment,
+    opaque_connection_id,
     resolve_inverter_identity_evidence,
+    resolve_physical_identity,
 )
 from ems.zendure_mqtt.config_entries import (
     normalized_broker_identity,
@@ -540,6 +543,17 @@ def annotate_identity_tokens(
     for proposal in proposals:
         if not isinstance(proposal, dict):
             continue
+        # The transport route this proposal offers, as an issued id: what a
+        # replacement plan keeps or replaces, and the only thing the browser may
+        # compare to decide "this is the same connection".
+        coordinates = connection_coordinates(proposal.get("config_fragment"))
+        if coordinates is not None:
+            proposal["connection_id"] = opaque_connection_id(coordinates, token_key)
+        # Why this identity is what it is: "confirmed" means a verified physical
+        # serial, and only two confirmed identities can contradict each other.
+        proposal["identity_status"] = resolve_physical_identity(
+            proposal.get("config_fragment"), token_key=token_key
+        ).status
         evidence = resolve_inverter_identity_evidence(
             proposal.get("config_fragment"), token_key=token_key
         )

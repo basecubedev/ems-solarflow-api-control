@@ -1498,10 +1498,16 @@ def test_config_inverter_list_excludes_grid_meter_items():
     assert "selectedInverterCards()" in fn
     assert "inverterItems()" in cards
     assert "selectedMqttDeviceEntries()" in cards
+    # The draft renderer delegates the view and then revokes preview authority;
+    # the list itself is drawn by the view-only half.
     draft = js.split("function renderConfigDraft(", 1)[1].split(
         "\nfunction ", 1
     )[0]
-    assert "renderInverterList()" in draft
+    assert "renderConfigDraftView()" in draft
+    view = js.split("function renderConfigDraftView(", 1)[1].split(
+        "\nfunction ", 1
+    )[0]
+    assert "renderInverterList()" in view
     # A selected grid meter keeps a compact change/remove path in its own area.
     selected = js.split("function renderSelectedGridMeter", 1)[1].split(
         "\nfunction ", 1
@@ -1793,14 +1799,21 @@ def test_js_config_renders_on_setup_switch():
     assert "syncConfigFromDiscovery()" in switch
 
 
-def test_js_config_auto_adds_verified_inverters():
+def test_js_config_adopts_only_what_the_plan_names():
+    """Which inverter is added is admin/setup_planner.py's answer, not a scan's.
+
+    The adoption *rule* (verified, config-ready, not dismissed, not already
+    configured over another transport) is pinned in
+    tests/test_admin_setup_batch_planner.py and
+    tests/test_admin_setup_device_plan_api.py.
+    """
+
     js = _read("admin.js")
-    assert "function autoAddInverters" in js
-    assert "function isAutoConfigReady" in js
-    # Auto-add skips devices already in the draft or removed by the user.
-    assert "draftHasSource(sourceId) || configDismissed.has(sourceId)" in js
-    # Sequential inverter naming is reused for auto-added inverters.
-    assert 'draftItemFromDevice(device, "inverter")' in js
+    assert "function autoAddInverters" not in js
+    adopt = _extract_fn(js, "applySetupPlanOperations")
+    assert "operations.adopt_observations" in adopt
+    assert "configAvailableIndex.get(String(adoption.observation_ref" in adopt
+    assert 'draftItemFromDevice(device, "inverter")' in adopt
 
 
 def test_js_config_zero_grid_meters_not_auto_selected():
@@ -4600,12 +4613,16 @@ def test_maintenance_source_slots_move_parked_nodes_instead_of_copies():
     assert "parkMaintenanceSourceConfigs()" in view
 
 
-def test_maintenance_discovery_matches_serial_before_ip_and_keeps_missing():
+def test_maintenance_discovery_matches_identity_before_route_and_keeps_missing():
     js = _read("admin.js")
     match = js.split("function mconfigFindInverterMatch", 1)[1].split(
         "\nfunction ", 1
     )[0]
-    assert match.index("serial_number") < match.index("configured.ip")
+    # Hardware first, route second — and both are ids the backend issued, so a
+    # configured device with neither is not matched at all.
+    assert match.index("issuedPhysicalIdentity") < match.index("issuedConnectionId")
+    for raw in ("serial_number", "device.ip", "broker_ref"):
+        assert raw not in match, raw
     review = js.split("function buildMaintenanceDiscoveryReview", 1)[1].split(
         "\nfunction ", 1
     )[0]
@@ -4616,9 +4633,9 @@ def test_maintenance_discovery_matches_serial_before_ip_and_keeps_missing():
     add = js.split("function mconfigAddDiscovered", 1)[1].split(
         "\nfunction ", 1
     )[0]
-    # Duplicate detection is cross-transport: the physical identity matcher
-    # also covers configured MQTT devices (serial_number), not only device.sn.
-    assert "physicalInverterIdentity(device) === serial" in add
+    # Duplicate detection is cross-transport: one issued physical identity
+    # covers a configured MQTT device and a Local-API one alike.
+    assert "sameIssuedDevice(issuedPhysicalIdentity(device), identity)" in add
     assert "port: found.port ||" not in add
     assert 'gridMeter.port = found.port' in add
 
@@ -4735,11 +4752,10 @@ def _run_maintenance_discovery_node(setup):
         for name in (
             "observationKey",
             "isConfigCandidate",
-            "mconfigIdentity",
-            "normalizeSerial",
-            "usableSerialValue",
             "issuedPhysicalIdentity",
-            "physicalInverterIdentity",
+            "issuedConnectionId",
+            "sameIssuedDevice",
+            "mconfigDisplayValue",
             "mconfigDiscoveryRole",
             "mconfigFindInverterMatch",
             "maintenanceMqttProposals",
@@ -4764,8 +4780,8 @@ def test_maintenance_discovery_behavior_preserves_missing_and_deduplicates_seria
         """
 const pristine = {
   devices: [
-    {name: "WR1", ip: "192.168.1.77", sn: "AAA"},
-    {name: "WR2", ip: "192.168.1.78", sn: "BBB"},
+    {name: "WR1", ip: "192.168.1.77", sn: "AAA", identity_status: "confirmed", physical_device_id: "opaque:v1:AAA", connection_id: "conn:v1:77"},
+    {name: "WR2", ip: "192.168.1.78", sn: "BBB", identity_status: "confirmed", physical_device_id: "opaque:v1:BBB", connection_id: "conn:v1:78"},
   ],
   grid_meter: {present: true, type: "shelly", ip: "192.168.1.50"},
 };
@@ -4779,10 +4795,14 @@ const discovered = [
   {
     id: "zendure:AAA", api_family: "zendure", role_suggestion: "inverter",
     ip: "192.168.1.81", serial_number: "AAA",
+    physical_device_id: "opaque:v1:AAA", identity_status: "confirmed",
+    connection_id: "conn:v1:81",
   },
   {
     id: "zendure:CCC", api_family: "zendure", role_suggestion: "inverter",
     ip: "192.168.1.82", serial_number: "CCC",
+    physical_device_id: "opaque:v1:CCC", identity_status: "confirmed",
+    connection_id: "conn:v1:82",
   },
   {
     id: "shelly:meter", api_family: "shelly", role_suggestion: "grid_meter",
@@ -4814,8 +4834,8 @@ def test_maintenance_discovery_grid_meter_without_port_omits_port():
         for name in (
             "nextCompactInverterName",
             "mconfigNextInverterName",
-            "mconfigIdentity",
             "mconfigMarkDraftChanged",
+            "sameIssuedDevice",
             "mconfigAddDiscovered",
         )
     )
@@ -6507,7 +6527,8 @@ const CONFIG_DRAFT_STORAGE_KEY = "d";
 const CONFIG_DISMISSED_STORAGE_KEY = "x";
 const CONFIG_DISMISSED_SERIALS_STORAGE_KEY = "s";
 const CONFIG_FEATURES_STORAGE_KEY = "f";
-const dismissedSerials = new Set(["eod1aaa"]);
+const dismissedPhysicalIds = new Set(["opaque:v1:AAA"]);
+const legacyPhysicalDismissals = [];
 // startGuidedSetupOver's extraction tail registers event listeners guarded by
 // setupEls.*; an empty object makes every guard falsy so none of them run.
 const setupEls = {};
@@ -6581,7 +6602,7 @@ console.log(JSON.stringify({
   fetchCalls: fetchCalls,
   fetchUrls: fetchUrls,
   latestConfigPreview: latestConfigPreview,
-  dismissedSerialsSize: dismissedSerials.size,
+  dismissedSerialsSize: dismissedPhysicalIds.size,
   alignmentRefreshes: alignmentRefreshes,
   polled: polled,
   liveTimers: liveTimers,
@@ -7015,14 +7036,10 @@ def run_mconfig_add_mqtt_proposal(proposal):
         for name in (
             "nextCompactInverterName",
             "mconfigNextInverterName",
-            "mconfigIdentity",
-            "normalizeSerial",
-            "usableSerialValue",
             "issuedPhysicalIdentity",
-            "physicalInverterIdentity",
-            "inverterVisibleSerial",
-            "inverterIdentityTokens",
-            "inverterIdentitySet",
+            "issuedConnectionId",
+            "issuedIdentityTokens",
+            "isConfirmedIdentity",
             "inverterHasIdentity",
             "inverterIdentityConflict",
             "inverterIdentitiesMatch",
@@ -7034,9 +7051,11 @@ def run_mconfig_add_mqtt_proposal(proposal):
             "mconfigMqttDeviceIdentity",
             "mconfigDraftDevicesMatchingCandidate",
             "mconfigPristineHasCandidateConnection",
+            "mconfigDraftHasProposal",
             "mconfigMqttProposalState",
             "mqttProposalBrokerRef",
             "mqttProposalBrokerProfile",
+            "normalizeInverterAliasTokens",
             "mconfigZendureMqttDraftFromProposal",
             "mconfigAddZendureMqttProposal",
         )
@@ -11103,7 +11122,6 @@ def _run_autoadd_node(setup):
     helpers = "\n".join(
         _extract_fn(js, name)
         for name in (
-            "normalizeSerial",
             "zendureMqttPreferredOverLocalApi",
             "serialOfferedOverZendureMqtt",
             "autoAddInverters",
@@ -11146,40 +11164,11 @@ function draftItemFromDevice(device, role) {
     return json.loads(result.stdout)
 
 
-def test_js_auto_add_defers_device_offered_over_prioritized_zendure_mqtt():
-    out = _run_autoadd_node(
-        """
-discoveryPreparation.discovery_priority = ["zendure_mqtt", "local_api", "local_mqtt"];
-availableDevices = [
-  { serial_number: "SN-A", role_suggestion: "inverter" },
-  { serial_number: "SN-B", role_suggestion: "inverter" },
-];
-latestMqttProposals = [{ target: "device", serial_number: "SN-A" }];
-autoAddInverters();
-console.log(JSON.stringify({ serials: configDraftItems.map((i) => i.serial_number) }));
-"""
-    )
-    # SN-A is offered over the higher-priority MQTT source, so it is left for the
-    # user to select over MQTT instead of auto-grabbed as local HTTP.
-    assert out["serials"] == ["SN-B"]
-
-
-def test_js_auto_add_keeps_http_when_local_api_prioritized():
-    out = _run_autoadd_node(
-        """
-availableDevices = [{ serial_number: "SN-A", role_suggestion: "inverter" }];
-latestMqttProposals = [{ target: "device", serial_number: "SN-A" }];
-autoAddInverters();
-console.log(JSON.stringify({ serials: configDraftItems.map((i) => i.serial_number) }));
-"""
-    )
-    # Default priority is local_api-first, so the HTTP device is still auto-added.
-    assert out["serials"] == ["SN-A"]
-
-
-# The old drop-only dropAutoAddedHttpForMqtt was replaced by the unified
-# reconcileTransportSelection planner; its drop-and-select behavior is covered
-# by tests/test_admin_setup_transport_selection.py.
+# Auto-add is no longer a browser rule at all: which inverter is adopted, and
+# which transport it is adopted over, is decided by admin/setup_planner.py.
+# The rule matrix lives in tests/test_admin_setup_batch_planner.py; the browser
+# only applies the returned adopt/drop/select operations
+# (tests/test_admin_setup_transport_selection.py).
 
 
 def _run_clear_mqtt_node(setup):

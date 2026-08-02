@@ -62,21 +62,18 @@ def _node(script):
 
 
 _HELPERS = (
-    "normalizeSerial",
-    "usableSerialValue",
     "issuedPhysicalIdentity",
-    "physicalInverterIdentity",
-    "inverterVisibleSerial",
-    "inverterIdentityTokens",
-    "inverterIdentitySet",
+    "issuedConnectionId",
+    "issuedIdentityTokens",
+    "isConfirmedIdentity",
     "inverterHasIdentity",
     "inverterIdentityConflict",
     "inverterIdentitiesMatch",
     "normalizeInverterAliasTokens",
     "mqttSourceOfConnection",
     "connectionLabelFor",
-    "connectionBrokerScope",
     "mconfigIsMqttDevice",
+    "connectionBrokerScope",
     "mconfigDeviceMqttSource",
     "mconfigDeviceConnectionSource",
     "mconfigProposalIdentityView",
@@ -193,9 +190,11 @@ def test_single_matching_draft_device_owns_the_candidate():
         "kind": "zendure_mqtt",
         "name": "INV_1",
         "serial_number": "PHYS-1",
+        "physical_device_id": "opaque:v1:PHYS-1",
+        "identity_status": "confirmed",
         "mqtt": {"broker_ref": "local_b1", "source": "local_mqtt"},
     }
-    owner = _candidate_owner([device], {"serial_number": "PHYS-1"})
+    owner = _candidate_owner([device], {"physical_device_id": "opaque:v1:PHYS-1"})
     assert owner is not None and owner["name"] == "INV_1"
 
 

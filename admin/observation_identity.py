@@ -21,6 +21,8 @@ host, serial or route segment from one, and cannot forge one.
 """
 
 from ems.device_identity import (
+    PHYSICAL_EVIDENCE_KINDS,
+    PHYSICAL_IDENTITY_ALIAS_TOKENS_FIELD,
     connection_coordinates,
     opaque_connection_id,
     opaque_observation_id,
@@ -73,6 +75,54 @@ def observation_components(device, *, broker_sources=None, fallback=""):
     if coordinates is None:
         coordinates = _discriminator(device, fallback)
     return (observation_kind(device), *coordinates)
+
+
+def resolve_identity_fields(device, *, key, broker_sources=None, fallback=""):
+    """The browser-facing identity of one payload, without touching it.
+
+    The same four answers :func:`stamp_observation_identity` writes onto a
+    discovery response — issued here too, so every public id in Admin is minted
+    by this module and a caller that must not mutate its input (a persisted
+    draft entry, a stored selection) still gets them.
+    """
+
+    if key is None:
+        return {
+            OBSERVATION_ID_FIELD: None,
+            CONNECTION_ID_FIELD: None,
+            PHYSICAL_DEVICE_ID_FIELD: None,
+            IDENTITY_STATUS_FIELD: None,
+        }
+    components = observation_components(
+        device, broker_sources=broker_sources, fallback=fallback
+    )
+    identity = resolve_physical_identity(
+        device, broker_sources=broker_sources, token_key=key
+    )
+    coordinates = connection_coordinates(device, broker_sources=broker_sources)
+    return {
+        OBSERVATION_ID_FIELD: opaque_observation_id(components, key),
+        CONNECTION_ID_FIELD: (
+            opaque_connection_id(coordinates, key) if coordinates is not None else None
+        ),
+        PHYSICAL_DEVICE_ID_FIELD: identity.public_identity_id,
+        IDENTITY_STATUS_FIELD: identity.status,
+        # Every physical identity this payload proves, not only the strongest.
+        # A device known by a route keeps that route's id after a serial
+        # appears, so state stored under the route id still finds it.
+        PHYSICAL_IDENTITY_ALIAS_TOKENS_FIELD: _physical_alias_tokens(identity),
+    }
+
+
+def _physical_alias_tokens(identity):
+    evidence = identity.evidence
+    if evidence is None:
+        return ()
+    return tuple(
+        alias.opaque_token
+        for alias in evidence.identities
+        if alias.kind in PHYSICAL_EVIDENCE_KINDS and alias.opaque_token is not None
+    )
 
 
 def stamp_observation_identity(
@@ -136,6 +186,7 @@ __all__ = [
     "PHYSICAL_DEVICE_ID_FIELD",
     "observation_components",
     "observation_kind",
+    "resolve_identity_fields",
     "stamp_observation_identity",
     "stamp_observations",
 ]

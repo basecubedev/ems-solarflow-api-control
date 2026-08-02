@@ -30,13 +30,10 @@ pytestmark = pytest.mark.simulation
 _HELPERS = (
     "nextCompactInverterName",
     "mconfigNextInverterName",
-    "normalizeSerial",
-    "usableSerialValue",
     "issuedPhysicalIdentity",
-    "physicalInverterIdentity",
-    "inverterVisibleSerial",
-    "inverterIdentityTokens",
-    "inverterIdentitySet",
+    "issuedConnectionId",
+    "issuedIdentityTokens",
+    "isConfirmedIdentity",
     "inverterHasIdentity",
     "inverterIdentityConflict",
     "inverterIdentitiesMatch",
@@ -47,6 +44,7 @@ _HELPERS = (
     "mconfigApplyCommonDefaults",
     "mqttProposalBrokerRef",
     "mqttProposalBrokerProfile",
+    "normalizeInverterAliasTokens",
     "mconfigZendureMqttDraftFromProposal",
     "mconfigIsMqttDevice",
     "mconfigDeviceIsActive",
@@ -89,11 +87,17 @@ def _run(devices, action):
     return json.loads(result.stdout)
 
 
+# The identity the backend issued for this device; the browser switches on it.
+PHYSICAL_ID = "opaque:v1:PHYS-1"
+
+
 def _api_device(**overrides):
     device = {
         "kind": "local_api",
         "original_name": "WR1",
         "name": "WR1",
+        "physical_device_id": PHYSICAL_ID,
+        "identity_status": "confirmed",
         "ip": "192.168.1.100",
         "sn": "PHYS-1",
         "enabled": True,
@@ -108,6 +112,8 @@ def _mqtt_device(**overrides):
         "kind": "zendure_mqtt",
         "original_name": "WR1",
         "name": "WR1",
+        "physical_device_id": PHYSICAL_ID,
+        "identity_status": "confirmed",
         "enabled": True,
         "has_enabled_key": True,
         "serial_number": "PHYS-1",
@@ -163,7 +169,7 @@ def _proposal(*, controllable=True):
 def _switch_to_mqtt(devices, *, controllable=True):
     return _run(
         devices,
-        "const changed = mconfigSwitchInverterTransport('PHYS-1', 'local_mqtt', {\n"
+        "const changed = mconfigSwitchInverterTransport('opaque:v1:PHYS-1', 'local_mqtt', {\n"
         "  proposal: " + json.dumps(_proposal(controllable=controllable)) + ",\n"
         "});\n"
         "console.log(JSON.stringify({ changed, devices: mconfigState.draft.devices }));",
@@ -173,7 +179,7 @@ def _switch_to_mqtt(devices, *, controllable=True):
 def _switch_to_api(devices):
     return _run(
         devices,
-        "const changed = mconfigSwitchInverterTransport('PHYS-1', 'local_api', {\n"
+        "const changed = mconfigSwitchInverterTransport('opaque:v1:PHYS-1', 'local_api', {\n"
         "  discovered: { ip: '192.0.2.10', serial_number: 'PHYS-1' },\n"
         "});\n"
         "console.log(JSON.stringify({ changed, devices: mconfigState.draft.devices }));",
@@ -272,7 +278,7 @@ def test_switch_marks_a_fresh_control_decision_for_the_renderer():
 
     out = _run(
         [_api_device()],
-        "mconfigSwitchInverterTransport('PHYS-1', 'local_mqtt', {\n"
+        "mconfigSwitchInverterTransport('opaque:v1:PHYS-1', 'local_mqtt', {\n"
         "  proposal: " + json.dumps(_proposal()) + ",\n"
         "});\n"
         "const device = mconfigState.draft.devices[0];\n"

@@ -233,6 +233,9 @@ def test_the_matrix_covers_every_mutating_setup_route():
         "/api/setup/config-preview",
         "/api/setup/config-preview/validate",
         "/api/setup/config/download",
+        # Read-only planning: it resolves identities and returns operations for
+        # the browser's own draft. It writes nothing and claims no authority.
+        "/api/setup/device-plan",
         "/api/setup/scan",
         "/api/setup/discovery/run",
     }

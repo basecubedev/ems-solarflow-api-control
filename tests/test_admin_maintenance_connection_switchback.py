@@ -57,29 +57,26 @@ def _node(script):
 
 
 _HELPERS = (
-    "normalizeSerial",
-    "usableSerialValue",
     "issuedPhysicalIdentity",
-    "physicalInverterIdentity",
-    "inverterVisibleSerial",
-    "inverterIdentityTokens",
-    "inverterIdentitySet",
+    "issuedConnectionId",
+    "issuedIdentityTokens",
+    "isConfirmedIdentity",
     "inverterHasIdentity",
     "inverterIdentityConflict",
     "inverterIdentitiesMatch",
-    "inverterIdentitySetOf",
     "normalizeInverterAliasTokens",
     "mqttSourceOfConnection",
-    "connectionBrokerScope",
     "nextCompactInverterName",
     "mconfigNextInverterName",
     "mconfigIsMqttDevice",
+    "connectionBrokerScope",
     "mconfigDeviceMqttSource",
     "mconfigDeviceConnectionSource",
     "mconfigSameMqttConnection",
     "mconfigProposalIdentityView",
     "mconfigDraftDevicesMatchingCandidate",
     "mconfigPristineHasCandidateConnection",
+    "mconfigDraftHasProposal",
     "mconfigMqttProposalState",
     "mconfigHardwareSection",
     "mconfigDeviceCatalogFields",
@@ -144,6 +141,13 @@ def _state(devices, proposal, pristine=None):
 
 
 SERIAL = "PHYS-1"
+# What the backend issued for this hardware and for each concrete route. The
+# browser compares these; the serial above is only what a card displays.
+PHYSICAL_ID = "opaque:v1:PHYS-1"
+
+
+def _connection_id(scope):
+    return "conn:v1:" + scope
 
 
 def _mqtt_device(scope, source="local_mqtt", name="INV_1"):
@@ -154,6 +158,9 @@ def _mqtt_device(scope, source="local_mqtt", name="INV_1"):
         "enabled": True,
         "has_enabled_key": True,
         "serial_number": SERIAL,
+        "physical_device_id": PHYSICAL_ID,
+        "identity_status": "confirmed",
+        "connection_id": _connection_id(scope),
         "max_power": 642,
         "min_soc": 22,
         "mqtt": {"broker_ref": scope, "source": source, "device_id": "ROUTE-" + scope},
@@ -167,6 +174,9 @@ def _api_device(name="INV_1"):
         "original_name": "INV_1",
         "ip": "192.168.1.100",
         "sn": SERIAL,
+        "physical_device_id": PHYSICAL_ID,
+        "identity_status": "confirmed",
+        "connection_id": _connection_id("local_api"),
         "enabled": True,
         "has_enabled_key": True,
         "max_power": 642,
@@ -178,6 +188,9 @@ def _proposal(scope, source="local_mqtt"):
     return {
         "id": "mqtt:" + scope,
         "serial_number": SERIAL,
+        "physical_device_id": PHYSICAL_ID,
+        "identity_status": "confirmed",
+        "connection_id": _connection_id(scope),
         "device_id": "ROUTE-" + scope,
         "connection_source": source,
         "broker_ref": scope,
@@ -307,6 +320,8 @@ def test_contradictory_serial_evidence_stays_an_identity_conflict():
         "kind": "zendure_mqtt",
         "name": "INV_1",
         "serial_number": "SERIAL-001",
+        "identity_status": "confirmed",
+        "physical_device_id": "opaque:v1:serial-1",
         "physical_identity_token": "opaque:v1:route-1",
         "physical_identity_alias_tokens": ["opaque:v1:route-1"],
         "mqtt": {"broker_ref": "local_b1", "source": "local_mqtt"},
@@ -316,6 +331,8 @@ def test_contradictory_serial_evidence_stays_an_identity_conflict():
         "serial_number": "SERIAL-002",
         "connection_source": "local_mqtt",
         "broker_ref": "local_b1",
+        "identity_status": "confirmed",
+        "physical_device_id": "opaque:v1:serial-2",
         "physical_identity_token": "opaque:v1:route-1",
         "physical_identity_alias_tokens": ["opaque:v1:route-1"],
         "config_fragment": {"mqtt": {"broker_ref": "local_b1"}},
@@ -336,7 +353,7 @@ def _switch_sequence(devices, pristine, steps):
         action += (
             "trace.push({\n"
             "  changed: mconfigSwitchInverterTransport("
-            + json.dumps(SERIAL)
+            + json.dumps(PHYSICAL_ID)
             + ", "
             + json.dumps(target_source)
             + ", "
@@ -407,7 +424,7 @@ def test_api_to_zendure_mqtt_and_back_in_one_session():
             ("zendure_mqtt", {"proposal": cloud}, [cloud]),
             (
                 "local_api",
-                {"discovered": {"ip": "192.168.1.100", "serial_number": SERIAL}},
+                {"discovered": {"ip": "192.168.1.100", "serial_number": SERIAL, "physical_device_id": PHYSICAL_ID, "identity_status": "confirmed", "connection_id": _connection_id("local_api")}},
                 [cloud],
             ),
         ],
@@ -438,7 +455,7 @@ def test_zendure_mqtt_to_api_and_back_in_one_session():
         [
             (
                 "local_api",
-                {"discovered": {"ip": "192.168.1.100", "serial_number": SERIAL}},
+                {"discovered": {"ip": "192.168.1.100", "serial_number": SERIAL, "physical_device_id": PHYSICAL_ID, "identity_status": "confirmed", "connection_id": _connection_id("local_api")}},
                 [cloud],
             ),
             ("zendure_mqtt", {"proposal": cloud}, [cloud]),
@@ -464,12 +481,16 @@ def test_ambiguous_alias_is_never_switched():
         "kind": "zendure_mqtt",
         "name": "INV_1",
         "sn": SERIAL,
+        "physical_device_id": PHYSICAL_ID,
+        "identity_status": "confirmed",
         "mqtt": {"broker_ref": "local_b1", "source": "local_mqtt"},
     }
     second = {
         "kind": "zendure_mqtt",
         "name": "INV_2",
         "sn": SERIAL,
+        "physical_device_id": PHYSICAL_ID,
+        "identity_status": "confirmed",
         "mqtt": {"broker_ref": "local_b2", "source": "local_mqtt"},
     }
     trace = _switch_sequence(

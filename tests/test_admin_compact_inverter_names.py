@@ -147,10 +147,9 @@ def test_maintenance_creation_paths_share_the_allocator():
         [
             "nextCompactInverterName",
             "mconfigNextInverterName",
-            "normalizeSerial",
-            "usableSerialValue",
             "issuedPhysicalIdentity",
-            "physicalInverterIdentity",
+            "issuedConnectionId",
+            "sameIssuedDevice",
             "mconfigDeviceCommonDefaults",
             "mconfigApplyCommonDefaults",
             "mconfigAddInverter",
@@ -158,6 +157,7 @@ def test_maintenance_creation_paths_share_the_allocator():
             "mconfigAddDiscovered",
             "mqttProposalBrokerRef",
             "mqttProposalBrokerProfile",
+            "normalizeInverterAliasTokens",
             "mconfigZendureMqttDraftFromProposal",
             "mconfigAddZendureMqttProposal",
         ],
@@ -285,117 +285,6 @@ console.log(JSON.stringify({
     }
 
 
-def test_manual_transport_switch_preserves_config_name_both_directions():
-    result = _run_node(
-        [
-            "nextCompactInverterName",
-            "inverterItems",
-            "selectedMqttDeviceEntries",
-            "freshInverterConfigNames",
-            "nextInverterName",
-            "normalizeSerial",
-            "usableSerialValue",
-            "inverterVisibleSerial",
-            "inverterIdentityTokens",
-            "inverterIdentitySet",
-            "inverterHasIdentity",
-            "inverterIdentityConflict",
-            "inverterIdentitiesMatch",
-            "inverterIdentitySetOf",
-            "mqttSourceOfConnection",
-            "rememberedInverterName",
-            "rememberInverterName",
-            "inverterConfigNameForSerial",
-            "normalizeInverterAliasTokens",
-            "configuredInverterConnection",
-            "preservedInverterValues",
-            "serializeMqttProposalSelection",
-            "mconfigIsMqttDevice",
-            "mconfigDeviceIsActive",
-            "mconfigDeviceInactiveByChoice",
-            "inverterActivationView",
-            "switchInverterTransport",
-        ],
-        """
-const DEVICE_MAPPED_FIELD_KEYS = {name: "config_name", ip: "ip", sn: "serial_number"};
-let configDraftItems = [{
-  source_id: "local:1", role: "inverter", config_name: "INV_1",
-  serial_number: "SERIAL-1", auto_added: false,
-}];
-const zendureMqttPreviewProposals = new Map();
-const transportInverterNames = new Map();
-let manualMqttDevices = [];
-const configDismissed = new Set();
-const local = {id: "local:1", role_suggestion: "inverter", serial_number: "SERIAL-1"};
-const mqtt = {
-  id: "mqtt:1", target: "device", serial_number: "SERIAL-1",
-  connection_source: "zendure_cloud_mqtt", display_name: "SolarFlow 800 Pro",
-  config_fragment: {name: "Zendure MQTT SolarFlow 800 Pro SERIAL-1"},
-};
-const localMqtt = {
-  ...mqtt, id: "mqtt:local", connection_source: "local_mqtt",
-};
-function undismissSerial() {}
-function availableConfigDevices() { return [local]; }
-function availableMqttDeviceProposals() { return [localMqtt, mqtt]; }
-function observationKey(device) { return device.observation_id || device.id; }
-function draftHasSource(id) { return configDraftItems.some((item) => item.source_id === id); }
-function draftItemFromDevice(device) {
-  return {source_id: device.id, role: "inverter", serial_number: device.serial_number,
-    config_name: rememberedInverterName(device.serial_number) || nextInverterName()};
-}
-function saveConfigDismissed() {}
-function saveConfigDraft() {}
-function saveMqttPreviewProposals() {}
-function renderMqttProposals() {}
-function renderConfigDraft() {}
-function renderConfigAvailable() {}
-const latestMqttProposals = [localMqtt, mqtt];
-switchInverterTransport("SERIAL-1", "zendure_mqtt");
-const mqttName = zendureMqttPreviewProposals.get("mqtt:1").config_name;
-switchInverterTransport("SERIAL-1", "local_api");
-const localName = configDraftItems[0].config_name;
-configDraftItems = [];
-zendureMqttPreviewProposals.set("mqtt:local", {
-  ...serializeMqttProposalSelection(localMqtt, {target: "device"}),
-  config_name: "INV_1",
-});
-switchInverterTransport("SERIAL-1", "zendure_mqtt");
-console.log(JSON.stringify({
-  mqttName,
-  localName,
-  mqttCount: zendureMqttPreviewProposals.size,
-  mqttIds: Array.from(zendureMqttPreviewProposals.keys()),
-}));
-""",
-    )
-    assert result == {
-        "mqttName": "INV_1",
-        "localName": "INV_1",
-        "mqttCount": 1,
-        "mqttIds": ["mqtt:1"],
-    }
-
-
-class _ReleaseManager:
-    def config_template(self):
-        return {
-            "tag": "test",
-            "template": {
-                "system": {"max_total_power": 1600},
-                "devices": [
-                    {
-                        "name": "WR1",
-                        "ip": "192.0.2.10",
-                        "sn": "YOUR_SN",
-                        "max_power": 800,
-                    }
-                ],
-                "grid_meter": {"type": "shelly", "ip": "192.0.2.20"},
-            },
-        }
-
-
 def _generator():
     return ConfigPreviewGenerator(
         _ReleaseManager(), install_context_provider=lambda: None
@@ -452,6 +341,26 @@ def _mqtt_proposal(config_name_marker=True):
     if config_name_marker is not False:
         proposal["config_name"] = config_name_marker
     return proposal
+
+
+
+class _ReleaseManager:
+    def config_template(self):
+        return {
+            "tag": "test",
+            "template": {
+                "system": {"max_total_power": 1600},
+                "devices": [
+                    {
+                        "name": "WR1",
+                        "ip": "192.0.2.10",
+                        "sn": "YOUR_SN",
+                        "max_power": 800,
+                    }
+                ],
+                "grid_meter": {"type": "shelly", "ip": "192.0.2.20"},
+            },
+        }
 
 
 def test_backend_falls_back_for_missing_names_but_rejects_explicit_empty():

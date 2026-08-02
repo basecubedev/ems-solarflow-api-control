@@ -40,6 +40,9 @@ function extractFunction(name) {
 const input = JSON.parse(fs.readFileSync(0, "utf8"));
 
 const HELPERS = [
+  "issuedPhysicalIdentity",
+  "issuedConnectionId",
+  "normalizeInverterAliasTokens",
   "mconfigMqttControlSupported",
   "mconfigIsMqttDevice",
   "mconfigDeviceIsActive",

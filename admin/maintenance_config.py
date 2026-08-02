@@ -76,13 +76,22 @@ from ems.config_catalog import (
 )
 from ems.mqtt_credentials import find_mqtt_credential_consumer_issues
 from ems.device_identity import (
+    PHYSICAL_EVIDENCE_KINDS,
     PHYSICAL_IDENTITY_ALIAS_TOKENS_FIELD,
     PHYSICAL_IDENTITY_TOKEN_FIELD,
     broker_sources_from_config,
+    connection_coordinates,
     identity_evidence_conflict,
+    opaque_connection_id,
     resolve_inverter_identity,
     resolve_inverter_identity_evidence,
+    resolve_physical_identity,
     supplied_identity_token,
+)
+from admin.observation_identity import (
+    CONNECTION_ID_FIELD,
+    IDENTITY_STATUS_FIELD,
+    PHYSICAL_DEVICE_ID_FIELD,
 )
 from ems.external_status import (
     mask_external_mqtt_string,
@@ -177,7 +186,15 @@ def redact_config_for_browser(
 
 
 def _attach_physical_identity_tokens(value, token_key, *, broker_sources=None):
-    """Attach derived equality tokens to each browser-visible devices list."""
+    """Attach the browser-facing identity of each configured device.
+
+    Three separate answers, three separate fields, exactly as discovery stamps
+    them: ``physical_device_id`` only when Core resolved actual hardware,
+    ``connection_id`` for the transport route, ``identity_status`` for why.
+    The equality tokens stay physical-evidence only — a device known solely by
+    the endpoint it answers on has a route, not an identity, and must not be
+    handed one the browser would then compare as hardware.
+    """
 
     def walk(node, inherited_sources=None):
         if not isinstance(node, dict):
@@ -191,16 +208,34 @@ def _attach_physical_identity_tokens(value, token_key, *, broker_sources=None):
             for device in devices:
                 if not isinstance(device, dict):
                     continue
+                coordinates = connection_coordinates(device, broker_sources=sources)
+                if coordinates is not None:
+                    device[CONNECTION_ID_FIELD] = opaque_connection_id(
+                        coordinates, token_key
+                    )
+                identity = resolve_physical_identity(
+                    device, broker_sources=sources, token_key=token_key
+                )
+                device[IDENTITY_STATUS_FIELD] = identity.status
+                device[PHYSICAL_DEVICE_ID_FIELD] = identity.public_identity_id
                 evidence = resolve_inverter_identity_evidence(
                     device, broker_sources=sources, token_key=token_key
                 )
                 if evidence is None:
                     continue
-                if evidence.primary.opaque_token is not None:
+                if (
+                    evidence.primary.opaque_token is not None
+                    and evidence.primary.kind in PHYSICAL_EVIDENCE_KINDS
+                ):
                     device[PHYSICAL_IDENTITY_TOKEN_FIELD] = (
                         evidence.primary.opaque_token
                     )
-                alias_tokens = list(evidence.opaque_tokens)
+                alias_tokens = [
+                    identity.opaque_token
+                    for identity in evidence.identities
+                    if identity.kind in PHYSICAL_EVIDENCE_KINDS
+                    and identity.opaque_token is not None
+                ]
                 if alias_tokens:
                     device[PHYSICAL_IDENTITY_ALIAS_TOKENS_FIELD] = alias_tokens
         for child in node.values():
