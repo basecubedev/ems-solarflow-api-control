@@ -58,6 +58,12 @@ Offline power-control regression tests:
 pytest tests/ -m "simulation and power_control"
 ```
 
+Third-party license inventory:
+
+```bash
+python tools/check_third_party_licenses.py
+```
+
 These tests are deterministic simulated checks for pull requests. They do not
 require Home Assistant, Shelly, Zendure devices, InfluxDB, secrets, or network
 access, and they do not replace longer runtime tests, InfluxDB analysis, or
@@ -111,11 +117,48 @@ and a short, bounded database wait. A skipped or failed run remains visible in
 refresh. Do not run a direct `gitnexus analyze` concurrently with the project
 launcher.
 
-## Third-Party Assets
+## Third-Party Licenses
 
-When adding new dashboard icon, font, image, chart, UI asset, or frontend
-package dependencies, update `THIRD_PARTY_LICENSES.md` and preserve the
-upstream copyright and license notice.
+[`THIRD_PARTY_LICENSES.md`](../../THIRD_PARTY_LICENSES.md) is the authoritative
+human-readable inventory of every third-party component: runtime dependencies,
+development dependencies, vendored assets, container base images, optional
+platform packages and generated assets. It records version, SPDX identifier,
+purpose, upstream, and whether a component runs at runtime and whether this
+project redistributes it.
+
+Update the inventory in the same commit as the dependency change:
+
+1. Add a row to the section that matches how the component reaches users
+   (runtime, development, vendored, base image, optional platform).
+2. Fill every required column: `Component`, `Version`, `License (SPDX)`,
+   `Used for`, `Runtime`, `Distributed`, `Upstream`. Use `✅` / `❌` for the two
+   flag columns.
+3. Take the license from upstream package metadata, the upstream `LICENSE` file
+   or the upstream repository — never guess. If it cannot be determined, say so
+   in the row and in `License Notes` instead of inventing an identifier.
+4. For a vendored asset, record its origin, upstream version and SHA-256, and
+   add the upstream license text next to the files when the license requires the
+   notice to travel with the code (as `dashboard/static/uPlot.LICENSE` does).
+5. Runtime dependencies also need a `Runtime`/`Distributed` review of the
+   transitive closure: everything pip installs into the images belongs in the
+   transitive table.
+
+Verify:
+
+```bash
+python tools/check_third_party_licenses.py
+pytest -q -m documentation
+```
+
+The checker fails when a direct dependency from `requirements.txt`,
+`requirements-dev.txt`, `deploy/admin/requirements.txt` or `package.json` has no
+row, when an optional platform package in `package-lock.json` is undocumented,
+when a static asset without the project license header is not listed as
+vendored, when a documented entry no longer exists in any manifest, when a
+component appears twice in one section, or when a table is missing a required
+column. It runs in the CI `Static checks` job and through
+`tests/test_third_party_licenses.py`. Transitive resolution is deliberately out
+of scope — that table is maintained by hand.
 
 Log event checks:
 

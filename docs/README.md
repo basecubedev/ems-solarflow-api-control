@@ -123,5 +123,6 @@ For contributors and maintainers. Git clone and build-from-source belong here.
 | Testing | [developer/testing.md](developer/testing.md) | Compile checks, self-test, simulation and the pytest suite. |
 | MQTT write-latency probe | [developer/mqtt-write-latency-probe.md](developer/mqtt-write-latency-probe.md) | On-hardware tool measuring how fast an MQTT `outputLimit` write reaches the inverter. |
 | CI / release | [developer/ci-release.md](developer/ci-release.md) | Continuous integration, image publishing and release archives. |
+| Third-party licenses | [../THIRD_PARTY_LICENSES.md](../THIRD_PARTY_LICENSES.md) | Full inventory of runtime, development, vendored, optional and container dependencies. |
 | Dashboard style guide | [developer/dashboard-style-guide.md](developer/dashboard-style-guide.md) | Dashboard UI style conventions. |
 | Design notes | [developer/design-notes/](developer/design-notes/) | Development tools and deeper design notes. |
