@@ -5,7 +5,7 @@ router that points you at one of three setup paths; this page lists everything.
 
 Documentation is split by audience:
 
-- **[docs/user/](user/)** — start here for setup, everyday operation and help.
+- **[docs/user/](user/index.md)** — start here for setup, everyday operation and help.
 - **[docs/technical/](technical/)** — architecture, internals and reference.
 - **[docs/developer/](developer/)** — source checkout, tests, CI and design notes.
 
@@ -30,6 +30,17 @@ source-checkout path for development and contributing, not a normal user setup.
 ## User documentation
 
 Setup, everyday operation and help. Normal users only need this section.
+[user/index.md](user/index.md) is the "Start here" landing page.
+
+### Step-by-step guides
+
+Screenshot-led walkthroughs. Each states what you see, what to select, what it
+changes, and what to do when the result differs.
+
+| Area | Document | Use |
+|---|---|---|
+| Admin Console | [user/admin/index.md](user/admin/index.md) | First start, Guided Setup, Guided Upgrade, Maintenance, devices, MQTT, backups, recovery. |
+| EMS Dashboard | [user/dashboard/index.md](user/dashboard/index.md) | Overview, device cards, energy, control pipeline, runtime settings, diagnostics. |
 
 ### Setup paths
 

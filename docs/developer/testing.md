@@ -271,6 +271,13 @@ Several tests protect docs and public contracts rather than runtime behavior:
 
 - `tests/test_docs_user_structure.py` — the user / technical / developer
   documentation split and README routing.
+- `tests/test_docs_user_guides.py` — the step-by-step guides under
+  `docs/user/admin/` and `docs/user/dashboard/`: required pages, the shared
+  section shape, resolvable image and relative links, every committed screenshot
+  embedded somewhere, pairwise-distinct screenshots, descriptive alt text, the
+  capture manifests matching the committed files, and the no-secrets scan.
+- `tests/test_docs_admin_media.py` — the Admin demo videos and their static
+  screenshot fallbacks.
 - `tests/test_agent_rules_contract.py` — the canonical rule set and supported
   agent entry-point links.
 - `tests/test_docker_docs_contract.py`, `tests/test_docker_first_setup.py` —
@@ -282,6 +289,41 @@ Several tests protect docs and public contracts rather than runtime behavior:
 
 When you move or rename docs, update these tests (or the redirect stubs) so the
 links stay honest.
+
+## Regenerating the documentation screenshots
+
+The user guides are screenshot-led. Regenerate every image with:
+
+```bash
+./scripts/capture-docs-screenshots.sh            # Admin + Dashboard
+./scripts/capture-docs-screenshots.sh admin      # Admin Console only
+./scripts/capture-docs-screenshots.sh dashboard  # EMS Dashboard only
+```
+
+Both capture scripts start their own loopback-only preview server from the
+deterministic fixtures in `tests/fixtures/admin_docs/` and
+`scripts/dashboard_preview_data.py`, and shut it down again when they finish.
+No Docker, hardware, discovery, MQTT broker, Zendure credential, `config.json`
+or runtime state is involved, unrelated containers are untouched, and nothing is
+pushed. Requirements: headless `firefox` and ImageMagick `convert`.
+
+Add a screen by extending `SCREENS` in `scripts/capture_admin_docs.py` or
+`scripts/capture_dashboard_docs.py` (plus a driver in
+`scripts/admin_docs_preview.js` for Admin), then embed it in a guide —
+`tests/test_docs_user_guides.py` enforces that the manifest, the committed files
+and the asset README stay in step.
+
+Two traps worth knowing:
+
+- Guided Setup steps 02–05 are authorized by a **server-confirmed setup
+  transition**, so the preview must serve one. Without it every setup screen
+  silently falls back to step 01 and the captures become byte-identical
+  duplicates; the distinctness test is what catches that.
+- The Admin driver only runs after the SPA's own authenticated workflow resume
+  has finished, because that resume re-opens Guided Setup on step 01.
+
+After a run, review `git status --short docs/assets/screenshots` before
+committing.
 
 ## What tests do not cover
 

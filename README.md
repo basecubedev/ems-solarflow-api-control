@@ -97,6 +97,7 @@ upfront. EMS reaches your devices over any one of:
 
 ## Documentation
 
+- Step-by-step guides: [Admin Console](docs/user/admin/index.md) · [EMS Dashboard](docs/user/dashboard/index.md)
 - [User documentation](docs/user/)
 - [Technical reference](docs/technical/)
 - [Developer documentation](docs/developer/)

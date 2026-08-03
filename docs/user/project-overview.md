@@ -399,6 +399,28 @@ Reports from both successful and unsuccessful hardware tests are valuable. They 
 
 ## Learn more
 
+**Start here:** [User documentation](index.md) routes you by situation — new
+installation, existing installation, upgrade, problem diagnosis, or a device
+compatibility report.
+
+Step-by-step, screenshot-led guides:
+
+- [Admin Console guides](admin/index.md) —
+  [Guided Setup](admin/guided-setup.md) ·
+  [Guided Upgrade](admin/guided-upgrade.md) ·
+  [Maintenance](admin/maintenance.md) ·
+  [MQTT](admin/mqtt.md) ·
+  [Backup and restore](admin/backup-restore.md) ·
+  [Diagnostics and recovery](admin/diagnostics-recovery.md)
+- [EMS Dashboard guides](dashboard/index.md) —
+  [Overview](dashboard/overview.md) ·
+  [Devices](dashboard/devices.md) ·
+  [Energy](dashboard/energy.md) ·
+  [Control pipeline](dashboard/control.md) ·
+  [Runtime settings](dashboard/runtime-settings.md)
+
+Reference:
+
 - [Supported setups](supported-setups.md)
 - [Connection types](connection-types.md)
 - [Admin Console](admin-console.md)
