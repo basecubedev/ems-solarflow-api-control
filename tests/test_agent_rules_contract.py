@@ -8,6 +8,7 @@ import pytest
 
 pytestmark = [
     pytest.mark.contract,
+    pytest.mark.documentation,
 ]
 
 

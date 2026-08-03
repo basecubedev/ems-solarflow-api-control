@@ -17,6 +17,7 @@ import pytest
 pytestmark = [
     pytest.mark.mqtt,
     pytest.mark.contract,
+    pytest.mark.documentation,
     pytest.mark.simulation,
 ]
 

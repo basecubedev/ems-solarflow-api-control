@@ -84,6 +84,7 @@ Every test module carries exactly one **execution level** and any number of
 | `power_control` | power allocation and output safety |
 | `backup_restore` | backup, restore and recovery workflows |
 | `system_build` | System Build and deployment transitions |
+| `documentation` | documentation, licensing and third-party inventory contracts |
 
 `simulation`, `regression` and `mqtt_release` stay registered for the existing
 gates. Every marker lives in `pytest.ini` and `--strict-markers` is enabled, so
@@ -117,6 +118,7 @@ pytest -q -m "power_control and not slow"
 pytest -q -m "system_build and not docker and not slow"
 pytest -q -m "backup_restore"
 pytest -q -m "docker"
+pytest -q -m "documentation"
 ```
 
 ### Pull-request groups
@@ -267,7 +269,9 @@ python3 scripts/check_log_events.py /tmp/ems-sim.log \
 
 ## Documentation and contract tests
 
-Several tests protect docs and public contracts rather than runtime behavior:
+Several tests protect docs and public contracts rather than runtime behavior.
+The documentation-content ones carry the `documentation` marker, so
+`pytest -q -m documentation` runs the whole set:
 
 - `tests/test_docs_user_structure.py` — the user / technical / developer
   documentation split and README routing.
@@ -278,6 +282,10 @@ Several tests protect docs and public contracts rather than runtime behavior:
   capture manifests matching the committed files, and the no-secrets scan.
 - `tests/test_docs_admin_media.py` — the Admin demo videos and their static
   screenshot fallbacks.
+- `tests/test_third_party_licenses.py` — `THIRD_PARTY_LICENSES.md` against the
+  requirements files, `package.json`, `package-lock.json`, the vendored static
+  assets and the container base images, plus the negative cases that prove
+  `tools/check_third_party_licenses.py` actually rejects drift.
 - `tests/test_agent_rules_contract.py` — the canonical rule set and supported
   agent entry-point links.
 - `tests/test_docker_docs_contract.py`, `tests/test_docker_first_setup.py` —

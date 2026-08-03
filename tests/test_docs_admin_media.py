@@ -19,6 +19,7 @@ import pytest
 
 pytestmark = [
     pytest.mark.contract,
+    pytest.mark.documentation,
 ]
 
 ROOT = Path(__file__).resolve().parents[1]

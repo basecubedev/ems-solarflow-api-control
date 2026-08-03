@@ -34,7 +34,7 @@ LEVELS = frozenset({"unit", "contract", "integration", "e2e"})
 EXECUTION = frozenset({"docker", "browser", "slow"})
 AREAS = frozenset({
     "admin", "setup", "maintenance", "workflow", "authority", "config",
-    "mqtt", "power_control", "backup_restore", "system_build",
+    "mqtt", "power_control", "backup_restore", "system_build", "documentation",
 })
 LEGACY = frozenset({"simulation", "regression", "mqtt_release"})
 
@@ -123,6 +123,7 @@ DOCUMENTED_SELECTORS = [
     "config",
     "docker",
     "authority",
+    "documentation",
 ]
 
 
