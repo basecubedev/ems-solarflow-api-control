@@ -41,13 +41,24 @@ from serve_admin_docs_preview import (  # noqa: E402
 # is retried rather than a half-rendered frame being kept. Screen ids match the
 # ?screen= values the drive script (admin_docs_preview.js) understands.
 SCREENS = {
+    "password-setup": ("admin-first-start-password.png", 260),
+    "login": ("admin-login.png", 200),
     "landing": ("admin-landing.png", 420),
     "guided-setup-start": ("admin-guided-setup-start.png", 680),
-    "config-preview": ("admin-guided-setup-config-preview.png", 1000),
     "discovery": ("admin-discovery-preview.png", 850),
+    "config-preview": ("admin-guided-setup-config-preview.png", 1000),
+    "setup-deployment": ("admin-setup-deployment.png", 500),
+    "setup-start-done": ("admin-setup-start.png", 500),
+    "maintenance-hub": ("admin-maintenance-hub.png", 300),
     "maintenance-overview": ("admin-maintenance-overview.png", 950),
+    "maintenance-diagnostics": ("admin-maintenance-diagnostics.png", 600),
+    "maintenance-config-hardware": ("admin-maintenance-config-hardware.png", 700),
+    "maintenance-mqtt": ("admin-maintenance-mqtt.png", 600),
+    "maintenance-recovery": ("admin-maintenance-recovery.png", 600),
     "backup-restore": ("admin-backup-restore.png", 800),
     "guided-upgrade": ("admin-guided-upgrade-plan.png", 1200),
+    "upgrade-run-3": ("admin-upgrade-running.png", 700),
+    "upgrade-done": ("admin-upgrade-completed.png", 700),
     "admin-update-reconnect": ("admin-admin-update-reconnect.png", 850),
 }
 MAX_ATTEMPTS = 5
