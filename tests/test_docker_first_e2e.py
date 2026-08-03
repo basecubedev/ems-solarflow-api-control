@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from docker_e2e_utils import assert_no_root_owned_files
+from docker_e2e_utils import assert_no_root_owned_files, compose_env
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SH = ROOT / "install-docker.sh"
@@ -53,6 +53,8 @@ def docker_available():
 
 
 pytestmark = [
+    pytest.mark.setup,
+    pytest.mark.e2e,
     pytest.mark.docker,
     pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX-only Docker e2e"),
     pytest.mark.skipif(not docker_available(), reason="Docker is not available"),
@@ -121,12 +123,11 @@ class Project:
     def __init__(self, path, image):
         self.path = path
         self.name = "ems-first-e2e-" + uuid.uuid4().hex[:10]
-        self.env = {
-            **os.environ,
-            "COMPOSE_PROJECT_NAME": self.name,
-            "PUID": str(os.getuid()),
-            "PGID": str(os.getgid()),
-        }
+        self.env = compose_env(
+            COMPOSE_PROJECT_NAME=self.name,
+            PUID=str(os.getuid()),
+            PGID=str(os.getgid()),
+        )
         (path / "docker-compose.override.yml").write_text(_OVERRIDE.format(image=image))
 
     def install(self, *args):

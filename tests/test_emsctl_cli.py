@@ -6,6 +6,8 @@ import subprocess
 import sys
 
 import emsctl
+import pytest
+
 from ems import config as cfg
 from ems import config_init as config_init_mod
 
@@ -22,6 +24,10 @@ from _emsctl_test_helpers import (
     write_config,
     write_discovery_config,
 )
+
+pytestmark = [
+    pytest.mark.integration,
+]
 
 
 def visible_input(responses):

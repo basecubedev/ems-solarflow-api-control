@@ -16,7 +16,12 @@ from admin.server import _running_ems_identity
 from admin.system_alignment import SystemAlignmentService
 from admin.system_build import SystemBuild
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.system_build,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 
 REVISION = "f7265fc747c2223f126f0ee7801e030c6226edf4"

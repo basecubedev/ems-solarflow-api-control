@@ -50,7 +50,7 @@ async function stageSetupArtifacts(page: Page) {
   expect((await generatedConfig(page)).exists).toBe(true);
 }
 
-test.describe("Recovery ownership", () => {
+test.describe("Recovery ownership", { tag: ["@setup", "@authority"] }, () => {
   test.beforeEach(async ({ page }) => {
     const login = new LoginPage(page);
     await login.open();

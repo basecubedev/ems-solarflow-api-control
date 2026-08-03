@@ -10,7 +10,12 @@ from admin.discovery_preparation import (
 )
 from admin.discovery_unify import build_unified_devices
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.setup,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 DEFAULT_PRIORITY = [SOURCE_LOCAL_API, SOURCE_LOCAL_MQTT, SOURCE_ZENDURE_MQTT]
 

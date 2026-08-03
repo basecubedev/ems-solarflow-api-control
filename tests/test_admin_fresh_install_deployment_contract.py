@@ -35,7 +35,13 @@ from admin.system_build import SystemBuild
 from tests.admin_auth_helpers import auth_headers, authenticate
 from tests.helpers.setup_config import authorize_setup_mutation
 
-pytestmark = [pytest.mark.simulation, pytest.mark.system_build]
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.setup,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+    pytest.mark.system_build,
+]
 
 TAG = "v0.8.0"
 REVISION = "f7265fc747c2223f126f0ee7801e030c6226edf4"

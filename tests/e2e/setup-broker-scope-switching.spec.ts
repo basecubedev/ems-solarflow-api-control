@@ -226,7 +226,7 @@ async function reachConfig(page: Page, state: State) {
 // pinned by tests/test_admin_setup_batch_planner.py
 // (`test_one_route_seen_in_two_broker_scopes_stays_two_groups`,
 // `test_a_manual_broker_choice_survives_the_next_plan`).
-test.fixme("a second local broker is a separate connection and binds exactly", async ({ page }) => {
+test.fixme("a second local broker is a separate connection and binds exactly", { tag: ["@setup"] }, async ({ page }) => {
   const dialogs: string[] = [];
   page.on("dialog", async (dialog) => {
     dialogs.push(dialog.message());
@@ -269,7 +269,7 @@ test.fixme("a second local broker is a separate connection and binds exactly", a
   await expect(preview).toContainText('"device_id": "ROUTE-B1"');
 });
 
-test.fixme("candidate cards use the short connection labels", async ({ page }) => {
+test.fixme("candidate cards use the short connection labels", { tag: ["@setup"] }, async ({ page }) => {
   const state: State = { priority: ["local_api", "local_mqtt", "zendure_mqtt"] };
   await reachConfig(page, state);
 

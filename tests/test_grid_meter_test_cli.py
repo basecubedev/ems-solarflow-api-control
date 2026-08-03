@@ -2,8 +2,15 @@
 from types import SimpleNamespace
 
 import emsctl
+import pytest
+
 from ems import clients as clients_mod
 from ems.health import CommHealth
+
+pytestmark = [
+    pytest.mark.power_control,
+    pytest.mark.unit,
+]
 
 
 class FakeMeterClient:

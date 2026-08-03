@@ -11,6 +11,11 @@ from ems.zendure_mqtt.control_runtime import (
     build_zendure_mqtt_control_runtime_or_abort,
 )
 
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+]
+
 
 class FakeService:
     def __init__(self, broker_config):

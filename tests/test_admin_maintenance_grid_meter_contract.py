@@ -27,7 +27,13 @@ from ems.config import (
     resolve_grid_meter_mqtt_settings,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.maintenance,
+    pytest.mark.mqtt,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 
 @pytest.fixture(autouse=True)

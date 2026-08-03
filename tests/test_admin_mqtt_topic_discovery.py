@@ -24,7 +24,12 @@ from admin.mqtt_topic_discovery import (
     parse_report_payload,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.mqtt,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 def _broker(host="192.168.1.20", port=1883):

@@ -25,7 +25,12 @@ from admin.image_identity import (
     parse_labels,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.system_build,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 IMAGE_REF = "ghcr.io/basecubedev/ems-solarflow-api-control:latest"

@@ -28,7 +28,12 @@ from ems.zendure_mqtt.config_entries import (
     validate_zendure_mqtt_control_device_config,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.maintenance,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 MASK = "••••"
 

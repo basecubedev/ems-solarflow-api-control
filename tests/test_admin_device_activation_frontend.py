@@ -25,7 +25,12 @@ from tests.test_admin_maintenance_transport_switch_frontend import (
     _read,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.setup,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 _HELPERS = (
     "nextCompactInverterName",

@@ -12,6 +12,7 @@ from ems.target_control import calculate_targets
 
 
 pytestmark = [
+    pytest.mark.e2e,
     pytest.mark.simulation,
     pytest.mark.power_control,
     pytest.mark.regression,

@@ -16,7 +16,11 @@ from admin.mqtt_topic_discovery import (
 )
 from tools import zendure_mqtt_mock_service as mock
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+]
 
 SECRET = "super-secret-pw"
 

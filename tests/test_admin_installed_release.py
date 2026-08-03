@@ -20,7 +20,12 @@ from admin.installed_release import (
     running_image_ref,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.system_build,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 _EMS = "ghcr.io/basecubedev/ems-solarflow-api-control"
 _DIGEST_A = "sha256:" + "a" * 64

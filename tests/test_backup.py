@@ -11,6 +11,11 @@ import pytest
 
 from ems import backup, backup_crypto
 
+pytestmark = [
+    pytest.mark.backup_restore,
+    pytest.mark.integration,
+]
+
 
 def write_project(tmp_path, *, influx=None, with_auth=False, with_secret=False):
     """Create a minimal project tree and return (base_dir, config, config_path)."""

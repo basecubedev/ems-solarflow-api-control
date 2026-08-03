@@ -12,7 +12,14 @@ import pytest
 from ems.config import http_control_device_configs, mqtt_control_device_configs
 from ems.zendure_mqtt.config_entries import has_runtime_control_device
 
-pytestmark = [pytest.mark.simulation, pytest.mark.power_control]
+pytestmark = [
+    pytest.mark.authority,
+    pytest.mark.config,
+    pytest.mark.setup,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+    pytest.mark.power_control,
+]
 
 
 def _api_device(name, **overrides):

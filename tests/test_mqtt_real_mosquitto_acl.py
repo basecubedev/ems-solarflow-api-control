@@ -18,7 +18,11 @@ from tests.helpers.mosquitto import (
     publish_until,
 )
 
-pytestmark = pytest.mark.docker
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.e2e,
+    pytest.mark.docker,
+]
 
 
 require_real_broker_environment()

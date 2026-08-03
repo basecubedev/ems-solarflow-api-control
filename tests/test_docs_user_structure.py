@@ -8,6 +8,12 @@ check for headings/links and short copy snippets, not exact long paragraphs.
 """
 from pathlib import Path
 
+import pytest
+
+pytestmark = [
+    pytest.mark.contract,
+]
+
 ROOT = Path(__file__).resolve().parents[1]
 
 

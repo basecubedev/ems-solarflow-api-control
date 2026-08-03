@@ -25,7 +25,13 @@ from admin.maintenance_config import (
 )
 from admin.setup_config import apply_device_config_values, apply_setup_features
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.maintenance,
+    pytest.mark.setup,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 @pytest.fixture

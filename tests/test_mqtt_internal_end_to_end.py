@@ -35,7 +35,12 @@ from tests.helpers.mqtt_scenarios import (
     build_installation,
 )
 
-pytestmark = [pytest.mark.simulation, pytest.mark.power_control]
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.e2e,
+    pytest.mark.simulation,
+    pytest.mark.power_control,
+]
 
 _LOAD_W = 2000.0
 LOCAL_A = BrokerSpec(ref="local_a", source="local_mqtt", host="10.0.0.10")

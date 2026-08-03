@@ -10,7 +10,11 @@ import pytest
 
 from ems import config as cfg
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+]
 
 
 @pytest.mark.parametrize("value", [1, 1883, 8883, 65535, "1883", "8883"])

@@ -4,6 +4,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+import pytest
+
 from ems.config import BATTERY_FULL_CHARGE_ASSIST_DEFAULTS
 from ems.config_catalog import (
     GRID_METER_KNOWN_MQTT_KEYS,
@@ -14,6 +16,11 @@ from ems.config_catalog import (
     grid_meter_variant_field_spec,
     render_default_template,
 )
+
+pytestmark = [
+    pytest.mark.config,
+    pytest.mark.contract,
+]
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE = ROOT / "config" / "config.template.json"

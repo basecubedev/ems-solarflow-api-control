@@ -20,6 +20,7 @@ def docker_available():
 
 
 pytestmark = [
+    pytest.mark.e2e,
     pytest.mark.docker,
     pytest.mark.skipif(
         not docker_available(),

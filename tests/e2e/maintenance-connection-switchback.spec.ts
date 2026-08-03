@@ -245,7 +245,7 @@ async function expectPreservedCommonValues(page: Page) {
   await expect(card).toHaveAttribute("data-disabled", "false");
 }
 
-test("Local MQTT b1 -> b2 -> b1 switches back without a rescan", async ({
+test("Local MQTT b1 -> b2 -> b1 switches back without a rescan", { tag: ["@maintenance"] }, async ({
   page,
   seedAdminScenario,
 }) => {
@@ -309,7 +309,7 @@ test("Local MQTT b1 -> b2 -> b1 switches back without a rescan", async ({
 // One physical inverter observed on a local broker and on the Zendure account
 // at the same time: both connections stay on offer, so either direction of the
 // switch is reachable inside one discovery session.
-test("Local MQTT -> Zendure MQTT -> Local MQTT switches back without a rescan", async ({
+test("Local MQTT -> Zendure MQTT -> Local MQTT switches back without a rescan", { tag: ["@maintenance"] }, async ({
   page,
   seedAdminScenario,
 }) => {
@@ -355,7 +355,7 @@ test("Local MQTT -> Zendure MQTT -> Local MQTT switches back without a rescan", 
   await expect(page.locator("#maintenance-config-apply-btn")).toBeVisible();
 });
 
-test("Zendure MQTT -> Local MQTT -> Zendure MQTT switches back without a rescan", async ({
+test("Zendure MQTT -> Local MQTT -> Zendure MQTT switches back without a rescan", { tag: ["@maintenance"] }, async ({
   page,
   seedAdminScenario,
 }) => {
@@ -395,7 +395,7 @@ test("Zendure MQTT -> Local MQTT -> Zendure MQTT switches back without a rescan"
   await expect(page.locator("#maintenance-config-apply-btn")).toBeVisible();
 });
 
-test("API -> Zendure MQTT -> API switches back in one session", async ({
+test("API -> Zendure MQTT -> API switches back in one session", { tag: ["@maintenance"] }, async ({
   page,
   seedAdminScenario,
 }) => {
@@ -427,7 +427,7 @@ test("API -> Zendure MQTT -> API switches back in one session", async ({
   );
 });
 
-test("Zendure MQTT -> API -> Zendure MQTT switches back in one session", async ({
+test("Zendure MQTT -> API -> Zendure MQTT switches back in one session", { tag: ["@maintenance"] }, async ({
   page,
   seedAdminScenario,
 }) => {
@@ -467,7 +467,7 @@ test("Zendure MQTT -> API -> Zendure MQTT switches back in one session", async (
 // The browser's broker endpoint block is not proof that a proposal exists: with
 // the server-resolvable selection stripped from the submitted draft, the switch
 // must be refused rather than re-homing the device onto the submitted broker.
-test("a connection switch without its proposal id is refused", async ({
+test("a connection switch without its proposal id is refused", { tag: ["@maintenance"] }, async ({
   page,
   seedAdminScenario,
 }) => {
@@ -537,7 +537,7 @@ for (const tampering of [
   { name: "keeping the foreign identity fields", drop: false },
   { name: "dropping the stored identity fields", drop: true },
 ]) {
-  test(`a proposal for another inverter is refused when ${tampering.name}`, async ({
+  test(`a proposal for another inverter is refused when ${tampering.name}`, { tag: ["@maintenance"] }, async ({
     page,
     seedAdminScenario,
   }) => {

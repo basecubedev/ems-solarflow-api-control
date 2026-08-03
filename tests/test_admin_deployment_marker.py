@@ -2,7 +2,15 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from admin.deployment import DeploymentService
+
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.system_build,
+    pytest.mark.integration,
+]
 
 
 def test_deployment_marker_images_are_not_duplicated(tmp_path):

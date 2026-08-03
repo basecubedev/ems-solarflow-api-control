@@ -7,7 +7,12 @@ import pytest
 
 from admin.releases import ReleaseError, ReleaseManager, default_admin_data_dir
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.system_build,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 ROOT = Path(__file__).resolve().parent.parent
 

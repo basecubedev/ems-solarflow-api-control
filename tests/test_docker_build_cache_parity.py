@@ -16,6 +16,10 @@ from pathlib import Path
 import pytest
 import yaml
 
+pytestmark = [
+    pytest.mark.contract,
+]
+
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE = ROOT / ".github" / "workflows" / "docker-publish.yml"
 FEATURE = ROOT / ".github" / "workflows" / "docker-feature-publish.yml"

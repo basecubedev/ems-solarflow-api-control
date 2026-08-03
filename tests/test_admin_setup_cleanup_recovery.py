@@ -33,7 +33,14 @@ from tests.test_admin_server import (
 )
 from tests.test_admin_setup_cancellation_ownership import _CancelRecordingAlignment
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.backup_restore,
+    pytest.mark.setup,
+    pytest.mark.workflow,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 @pytest.fixture(autouse=True)

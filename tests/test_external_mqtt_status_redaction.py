@@ -11,7 +11,11 @@ from ems.external_status import (
     sanitize_external_mqtt_status,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+]
 
 
 def test_route_and_canonical_topic_masking_are_centralized():

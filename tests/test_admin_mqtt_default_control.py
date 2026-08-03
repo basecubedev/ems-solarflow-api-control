@@ -16,7 +16,12 @@ import pytest
 
 from tests.test_admin_frontend import _extract_fn, _read, run_mconfig_add_mqtt_proposal
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.mqtt,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 def test_control_is_derived_from_model_and_route():

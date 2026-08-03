@@ -20,7 +20,12 @@ from ems.zendure_mqtt.runtime import (
     load_zendure_mqtt_broker_configs,
 )
 
-pytestmark = [pytest.mark.simulation, pytest.mark.power_control]
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+    pytest.mark.power_control,
+]
 
 
 class _RecordingService:

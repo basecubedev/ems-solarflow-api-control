@@ -10,7 +10,11 @@ import pytest
 from ems import build_info
 from ems.build_info import collect_build_info
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.system_build,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 _EMPTY_GIT = {
     "git_commit": None,

@@ -12,7 +12,13 @@ import pytest
 
 from admin.zendure_mqtt_config_draft import apply_zendure_mqtt_draft_fields
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.authority,
+    pytest.mark.setup,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 def _draft_item(**overrides):

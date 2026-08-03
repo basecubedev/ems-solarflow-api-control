@@ -48,7 +48,7 @@ async function seed(page: Page, scenario: string) {
   return body;
 }
 
-test.describe("Setup transition authority", () => {
+test.describe("Setup transition authority", { tag: ["@setup", "@authority"] }, () => {
   test("a superseded workflow's intent cannot authorize its replacement", async ({
     page,
     browser,

@@ -19,7 +19,12 @@ import subprocess
 
 import pytest
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.maintenance,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 STATIC_DIR = os.path.join(ROOT, "admin", "static")

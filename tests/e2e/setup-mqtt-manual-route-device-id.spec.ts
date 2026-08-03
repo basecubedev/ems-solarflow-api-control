@@ -77,7 +77,7 @@ async function openManualMqttForm(page: Page) {
   await expect(page.locator("#config-mqtt-device-serial")).toBeVisible();
 }
 
-test("Fresh Setup manual entry has separate physical serial and MQTT device ID fields", async ({
+test("Fresh Setup manual entry has separate physical serial and MQTT device ID fields", { tag: ["@setup"] }, async ({
   page,
 }) => {
   test.setTimeout(90_000);
@@ -100,7 +100,7 @@ test("Fresh Setup manual entry has separate physical serial and MQTT device ID f
   await expect(page.locator("#config-mqtt-device-error")).toBeHidden();
 });
 
-test("Fresh Setup manual output control follows the write route, and says so", async ({
+test("Fresh Setup manual output control follows the write route, and says so", { tag: ["@setup"] }, async ({
   page,
 }) => {
   test.setTimeout(90_000);
@@ -134,7 +134,7 @@ test("Fresh Setup manual output control follows the write route, and says so", a
   await expect(list.locator(".config-mqtt-device-row")).toHaveCount(1);
 });
 
-test("Fresh Setup manual entry names the broker source for a ZenSDK model", async ({
+test("Fresh Setup manual entry names the broker source for a ZenSDK model", { tag: ["@setup"] }, async ({
   page,
 }) => {
   test.setTimeout(90_000);
@@ -170,7 +170,7 @@ test("Fresh Setup manual entry names the broker source for a ZenSDK model", asyn
   ).toHaveCount(1);
 });
 
-test("Fresh Setup manual entry stays telemetry-only for an unresolved model", async ({
+test("Fresh Setup manual entry stays telemetry-only for an unresolved model", { tag: ["@setup"] }, async ({
   page,
 }) => {
   test.setTimeout(90_000);

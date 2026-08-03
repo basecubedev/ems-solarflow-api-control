@@ -17,7 +17,11 @@ from ems.mqtt_control.zendure_profiles import (
     resolve_hardware_profile_detail,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+]
 
 
 # --- future / over-broad models never inherit a family write profile --------

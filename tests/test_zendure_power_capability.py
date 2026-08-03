@@ -31,7 +31,12 @@ from ems.zendure_mqtt.topics import (
     FAMILY_ZENSDK_HA_SCALAR,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.power_control,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+]
 
 
 # --- writable models on a compatible transport ------------------------------

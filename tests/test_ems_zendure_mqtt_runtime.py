@@ -21,6 +21,11 @@ from ems.zendure_mqtt import (
 )
 from ems.zendure_mqtt.runtime import ZendureMqttTelemetryRuntime
 
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.contract,
+]
+
 
 class _Snap:
     def __init__(self, device_id, serial_number=None):

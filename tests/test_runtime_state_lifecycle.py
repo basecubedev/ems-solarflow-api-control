@@ -12,11 +12,17 @@ empty/unreadable config), takes a one-step backup, and is audit-logged.
 import json
 import logging
 
+import pytest
+
 from ems.runtime_state import (
     RuntimeState,
     merge_runtime_defaults,
     reconcile_runtime_devices,
 )
+
+pytestmark = [
+    pytest.mark.contract,
+]
 
 
 def _defaults(devices):

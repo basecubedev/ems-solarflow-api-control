@@ -22,7 +22,12 @@ from admin.guided_setup_workflow import setup_mutation_fingerprint
 from admin.maintenance_config import redact_config_for_browser
 from admin.zendure_mqtt_config_draft import _is_secret_key as fragment_is_secret
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.config,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 TEMPLATE = pathlib.Path(__file__).resolve().parents[1] / "config" / "config.template.json"
 

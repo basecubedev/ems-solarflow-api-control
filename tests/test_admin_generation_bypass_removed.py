@@ -16,7 +16,12 @@ from admin.zendure_mqtt_config_draft import (
     build_manual_zendure_mqtt_fragment,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.authority,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 def test_admin_generation_cannot_authorize_write():

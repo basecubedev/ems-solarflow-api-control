@@ -2,9 +2,15 @@
 import json
 import logging
 
+import pytest
+
 from dashboard.auth import write_password_file
 from ems.log_buffer import RingBufferLogHandler
 from test_dashboard_server import StoreStub, json_response, with_server
+
+pytestmark = [
+    pytest.mark.integration,
+]
 
 
 def make_buffer(name, lines):

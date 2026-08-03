@@ -339,7 +339,7 @@ async function rescanZendureMqtt(page: Page) {
 // mint those tokens. The grouping itself is pinned by
 // tests/test_admin_setup_batch_planner.py (`test_a_transitive_chain_is_one_group`,
 // `test_a_route_only_selection_and_its_enriched_proposal_are_one_group`).
-test.fixme("Fresh Setup: a Local-API serial, a route-only Cloud selection and a serial bridge are one inverter", async ({
+test.fixme("Fresh Setup: a Local-API serial, a route-only Cloud selection and a serial bridge are one inverter", { tag: ["@setup", "@authority"] }, async ({
   page,
 }) => {
   test.setTimeout(90_000);
@@ -381,7 +381,7 @@ test.fixme("Fresh Setup: a Local-API serial, a route-only Cloud selection and a 
   await expect(page.locator("#setup-next")).toBeEnabled();
 });
 
-test("Fresh Setup: a semantic (product-key/topic-family) rediscovery keeps the same selection", async ({
+test("Fresh Setup: a semantic (product-key/topic-family) rediscovery keeps the same selection", { tag: ["@setup", "@authority"] }, async ({
   page,
 }) => {
   test.setTimeout(90_000);
@@ -421,7 +421,7 @@ test("Fresh Setup: a semantic (product-key/topic-family) rediscovery keeps the s
   await expect(page.locator("#config-validation")).not.toContainText(/not present/i);
 });
 
-test("Fresh Setup: two product keys on one device id never become one writable proposal", async ({
+test("Fresh Setup: two product keys on one device id never become one writable proposal", { tag: ["@setup", "@authority"] }, async ({
   page,
 }) => {
   test.setTimeout(90_000);
@@ -446,7 +446,7 @@ test("Fresh Setup: two product keys on one device id never become one writable p
   await expect(page.locator("body")).not.toContainText("E2EROUTEPKA7501");
 });
 
-test("Fresh Setup: case-distinct MQTT routes stay two candidates and never merge", async ({
+test("Fresh Setup: case-distinct MQTT routes stay two candidates and never merge", { tag: ["@setup", "@authority"] }, async ({
   page,
 }) => {
   test.setTimeout(90_000);
@@ -472,7 +472,7 @@ test("Fresh Setup: case-distinct MQTT routes stay two candidates and never merge
   await expect(page.locator("body")).not.toContainText("E2Eroutelower7501");
 });
 
-test("Fresh Setup: a serial with two precise routes is one blocked inverter", async ({
+test("Fresh Setup: a serial with two precise routes is one blocked inverter", { tag: ["@setup", "@authority"] }, async ({
   page,
 }) => {
   test.setTimeout(90_000);

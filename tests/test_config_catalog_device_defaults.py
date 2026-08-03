@@ -18,7 +18,11 @@ from ems.config_catalog import (
     get_config_feature_field_index,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.config,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 
 def test_common_defaults_derive_from_template_prototype():

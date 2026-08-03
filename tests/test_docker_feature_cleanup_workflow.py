@@ -9,6 +9,12 @@ from pathlib import Path
 
 from workflow_contract import run_output_step
 
+import pytest
+
+pytestmark = [
+    pytest.mark.contract,
+]
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "docker-feature-cleanup.yml"
 

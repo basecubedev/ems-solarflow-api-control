@@ -18,7 +18,11 @@ from tests.helpers.mosquitto import (
     _await_connack_and_publish,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+]
 
 pytest.importorskip("paho.mqtt.client")
 

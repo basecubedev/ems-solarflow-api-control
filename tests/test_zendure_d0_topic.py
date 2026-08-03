@@ -5,7 +5,11 @@ import pytest
 
 from ems import config
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+]
 
 
 def test_topic_generated_from_serial():

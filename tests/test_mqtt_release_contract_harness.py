@@ -16,7 +16,11 @@ from tests.helpers.mqtt_release_contract import (
     device_observation,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+]
 
 SECRET = "HARNESS_SECRET_PASSWORD"
 

@@ -1,10 +1,17 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
+import pytest
+
 from ems.runtime_intents import (
     DeviceRuntimeRole,
     ac_input_intent,
     ac_output_intent,
     runtime_intent_from_role,
 )
+
+pytestmark = [
+    pytest.mark.power_control,
+    pytest.mark.unit,
+]
 
 
 def test_ac_output_intent_targets_ac_mode_2_and_allows_output():

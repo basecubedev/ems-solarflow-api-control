@@ -24,7 +24,11 @@ from ems.mqtt_control.zendure_profiles import (
     resolve_hardware_profile_evidence,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+]
 
 
 def _ev(source, value, observed_at=None):

@@ -70,7 +70,7 @@ async function reachResourcesVerified(page: Page) {
   expect(verified.status, JSON.stringify(verified.body)).toBe(200);
 }
 
-test.describe("Stale Setup apply", () => {
+test.describe("Stale Setup apply", { tag: ["@setup", "@authority"] }, () => {
   test.beforeEach(async ({ page, seedAdminScenario }) => {
     const login = new LoginPage(page);
     await login.open();

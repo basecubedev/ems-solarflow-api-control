@@ -26,7 +26,11 @@ from ems.zendure_mqtt.write_protocols import (
     build_output_limit_message,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+]
 
 
 def _control_device(**over):

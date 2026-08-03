@@ -8,7 +8,13 @@ import pytest
 from admin.guided_upgrade import guided_upgrade_request_fingerprint
 from admin.guided_upgrade_context import GuidedUpgradeContextStore
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.system_build,
+    pytest.mark.workflow,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 TAG = "v0.8.0"
 OPERATION_ID = "op-guided-1"

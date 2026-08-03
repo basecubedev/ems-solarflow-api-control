@@ -18,7 +18,11 @@ from ems.zendure_mqtt.runtime import (
     load_zendure_mqtt_broker_configs,
 )
 
-pytestmark = [pytest.mark.simulation]
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+]
 
 
 def _named_broker(enabled):

@@ -71,7 +71,7 @@ function draftInverterCards(page: Page) {
   return page.locator("#config-draft-list .hardware-card-inverter");
 }
 
-test("Fresh Setup: a legacy draft is rehydrated instead of duplicated", async ({
+test("Fresh Setup: a legacy draft is rehydrated instead of duplicated", { tag: ["@setup"] }, async ({
   page,
   seedDiscoveryState,
 }) => {
@@ -104,7 +104,7 @@ test("Fresh Setup: a legacy draft is rehydrated instead of duplicated", async ({
   await expect(page.locator("#config-draft-list")).toContainText("INV_LEGACY");
 });
 
-test("Fresh Setup: a legacy bare-serial removal spares a same-name device", async ({
+test("Fresh Setup: a legacy bare-serial removal spares a same-name device", { tag: ["@setup"] }, async ({
   page,
   seedDiscoveryState,
 }) => {
@@ -122,7 +122,7 @@ test("Fresh Setup: a legacy bare-serial removal spares a same-name device", asyn
   await expect(page.locator("#config-draft-list")).not.toContainText(LEGACY_SERIAL);
 });
 
-test("Fresh Setup: a masked legacy entry stays distinct and unresolved", async ({
+test("Fresh Setup: a masked legacy entry stays distinct and unresolved", { tag: ["@setup"] }, async ({
   page,
   seedDiscoveryState,
 }) => {

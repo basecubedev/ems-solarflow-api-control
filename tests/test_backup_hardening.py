@@ -11,6 +11,11 @@ import pytest
 
 from ems import backup
 
+pytestmark = [
+    pytest.mark.backup_restore,
+    pytest.mark.integration,
+]
+
 
 def write_project(tmp_path):
     base = tmp_path / "proj"

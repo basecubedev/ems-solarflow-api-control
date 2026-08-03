@@ -15,7 +15,12 @@ from ems.zendure_mqtt.config_entries import (
     validate_zendure_mqtt_device_config,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.power_control,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+]
 
 
 def _control_entry(**top):

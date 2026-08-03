@@ -77,7 +77,7 @@ function acceptConfirmations(page: Page, count: number): Promise<string[]> {
   });
 }
 
-test.describe("Workflow recovery", () => {
+test.describe("Workflow recovery", { tag: ["@authority", "@workflow"] }, () => {
   test("a healthy console keeps the recovery card quiet", async ({ page }) => {
     await login(page);
     await openRecoveryCard(page);

@@ -7,22 +7,49 @@ the local test commands these mirror, see [testing.md](testing.md).
 
 Workflow: `.github/workflows/simulated-regression-tests.yml` (job name
 **Continuous Integration**). It runs on every pull request and on pushes to
-`main`, across supported Python versions (currently 3.11 and 3.14):
+`main`:
 
-- verify dependency imports
-- Ruff lint (`ruff check .`)
-- compile check (`python -m compileall ems dashboard scripts tests …`)
-- the full Python test suite, including the offline power-control regression
-  tests (`pytest -m "simulation and power_control"`)
+- `Static checks` — Ruff lint, compile check, generated config template and
+  `node --check admin/static/admin.js`
+- `python-<group> (<python-version>)` — the four functional groups (`core`,
+  `admin`, `mqtt`, `power-control`) across the supported Python versions
+  (currently 3.11 and 3.14), each through `scripts/test-pr.sh`
+- `Simulated power-control regression tests`
+- `System Build compatibility gate`
+- `Docker smoke test`, `Docker-first setup e2e`, `InfluxDB analytics e2e`
+
+The groups partition the non-Docker suite: `core` is defined as the complement
+of the functional groups, so a module without a functional marker still runs in
+exactly one group. `tests/test_test_classification.py` fails when the union
+stops covering the full collection, and each job fails when its selection
+unexpectedly collects nothing.
 
 The offline power-control regression tests are the intended required status
 check for `main` in branch protection or repository rulesets. They are
 deterministic and need no hardware, network, or secrets.
 
-Other coverage that runs in CI includes Docker image smoke tests, Docker Compose
-first-run checks, and InfluxDB analytics end-to-end tests. See
-[../quality-and-maintenance.md](../quality-and-maintenance.md) for the
-user-facing summary of what is checked before release.
+The former monolithic `Full Python test suite (<version>)` job moved to
+`.github/workflows/nightly-full-suite.yml`; branch protection referring to it
+by name has to be repointed at the group jobs.
+
+See [testing.md](testing.md) for the marker dimensions and the matching local
+commands, and [../quality-and-maintenance.md](../quality-and-maintenance.md)
+for the user-facing summary of what is checked before release.
+
+## Nightly full suite
+
+Workflow: `.github/workflows/nightly-full-suite.yml` (schedule plus
+`workflow_dispatch`). It runs what the pull-request workflow deliberately
+splits or narrows:
+
+- the full non-Docker Python suite on 3.11 and 3.14, plus the strict
+  deprecation-warning run
+- the complete Chromium and Firefox Admin suites
+- the Docker-first tier and the System Build tier
+- the Admin replacement and recovery journey
+
+`./scripts/test-rc.sh` runs the same gates locally before a release
+candidate.
 
 ## Generated config template
 

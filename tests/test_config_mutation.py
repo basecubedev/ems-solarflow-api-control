@@ -28,7 +28,12 @@ from ems.config_mutation import (
     resolve_change,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.authority,
+    pytest.mark.config,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+]
 
 
 # --- catalog coercion ------------------------------------------------------

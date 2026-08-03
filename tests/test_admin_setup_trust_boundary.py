@@ -21,7 +21,13 @@ import pytest
 from admin.server import ScanRegistry, create_server
 from tests.admin_auth_helpers import authenticate, request
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.authority,
+    pytest.mark.setup,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 KNOWN_SERIAL = "EOD1AAA111"
 INVENTED_SERIAL = "EOD9ZZZ999"

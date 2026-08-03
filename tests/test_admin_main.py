@@ -5,7 +5,11 @@ import pytest
 
 from admin import __main__ as admin_main
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 def test_https_disabled_by_default(monkeypatch):

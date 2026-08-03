@@ -18,7 +18,12 @@ from admin.discovery_preparation import (
     source_settings,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.setup,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 def test_default_priority_is_local_api_local_mqtt_zendure():

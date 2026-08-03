@@ -28,7 +28,12 @@ from ems.zendure_mqtt.control import (
 )
 from ems.zendure_mqtt.control_runtime import build_zendure_mqtt_control_runtime
 
-pytestmark = [pytest.mark.simulation, pytest.mark.power_control]
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.e2e,
+    pytest.mark.simulation,
+    pytest.mark.power_control,
+]
 
 
 class FakeMqttClient:

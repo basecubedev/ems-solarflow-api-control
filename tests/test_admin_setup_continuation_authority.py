@@ -86,7 +86,15 @@ from tests.test_admin_server import (
     _serve,
 )
 
-pytestmark = [pytest.mark.simulation, pytest.mark.system_build]
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.authority,
+    pytest.mark.setup,
+    pytest.mark.workflow,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+    pytest.mark.system_build,
+]
 
 REVISION = "f7265fc747c2223f126f0ee7801e030c6226edf4"
 T0 = datetime(2026, 7, 14, 12, 0, 0, tzinfo=timezone.utc)

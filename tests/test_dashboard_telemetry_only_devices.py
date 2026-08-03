@@ -20,7 +20,10 @@ import pytest
 
 from dashboard.telemetry import build_dashboard_snapshot
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 ROOT = Path(__file__).resolve().parents[1]
 

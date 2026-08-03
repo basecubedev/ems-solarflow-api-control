@@ -8,6 +8,8 @@ exercised deterministically without a network broker and without sleeping.
 import json
 import sys
 
+import pytest
+
 from ems.zendure_mqtt import (
     build_zendure_mqtt_runtime,
     summarize_zendure_mqtt_devices,
@@ -18,6 +20,11 @@ from ems.zendure_mqtt.runtime import (
 )
 from ems.zendure_mqtt.service import ZendureMqttRuntimeConfig
 from ems.zendure_mqtt.snapshot import ZendureMqttSnapshot
+
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+]
 
 
 class FakeService:

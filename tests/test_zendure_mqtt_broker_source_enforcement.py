@@ -31,7 +31,11 @@ from ems.zendure_mqtt.control_runtime import build_zendure_mqtt_control_runtime
 from ems.zendure_mqtt.migration import plan_zendure_mqtt_migration
 from ems.zendure_mqtt.topics import FAMILY_ZENSDK_HA_SCALAR
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+]
 
 PRODUCT_KEY = "TESTPK0001"
 ROUTE_DEVICE_ID = "TESTROUTE01"

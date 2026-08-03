@@ -4,8 +4,15 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+import pytest
+
 from ems.controller import EMSController
 from ems.models import DeviceState
+
+pytestmark = [
+    pytest.mark.power_control,
+    pytest.mark.unit,
+]
 
 
 class ShellyStub:

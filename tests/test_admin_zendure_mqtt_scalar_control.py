@@ -24,7 +24,12 @@ from admin.models import MqttHardwareCandidate
 from admin.zendure_mqtt_config_draft import build_manual_zendure_mqtt_fragment
 from admin.zendure_mqtt_config_proposals import build_proposals
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.mqtt,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 PRODUCT_KEY = "TESTPK0001"
 ROUTE_DEVICE_ID = "TESTROUTE01"

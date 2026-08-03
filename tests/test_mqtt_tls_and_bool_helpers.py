@@ -14,7 +14,11 @@ from ems.zendure_mqtt.config_entries import (
     stable_local_broker_ref,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+]
 
 
 # --- TLS mode normalization (defect 1) --------------------------------------

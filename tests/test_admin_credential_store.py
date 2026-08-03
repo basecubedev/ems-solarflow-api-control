@@ -15,7 +15,11 @@ from admin.credential_store import (
 )
 from admin.secret_store import ZendureTokenStore
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 TOKEN = "super-secret-zendure-api-token-value"
 

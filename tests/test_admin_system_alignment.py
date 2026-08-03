@@ -37,7 +37,12 @@ from admin.system_alignment import (
 from admin.system_build import SystemBuild, SystemBuildError
 from admin.system_health import validate_system_health_result
 
-pytestmark = [pytest.mark.simulation, pytest.mark.system_build]
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+    pytest.mark.system_build,
+]
 
 REVISION = "f7265fc747c2223f126f0ee7801e030c6226edf4"
 T0 = datetime(2026, 7, 14, 12, 0, 0, tzinfo=timezone.utc)

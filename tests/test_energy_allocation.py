@@ -6,8 +6,15 @@ from contextlib import ExitStack
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from ems.models import DeviceCapabilities, DeviceState
 from ems.target_control import calculate_targets, detect_capabilities
+
+pytestmark = [
+    pytest.mark.power_control,
+    pytest.mark.unit,
+]
 
 
 def device(

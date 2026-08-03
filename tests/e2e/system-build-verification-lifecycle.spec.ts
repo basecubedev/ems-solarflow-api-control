@@ -27,7 +27,7 @@ function countValidations(page: Page) {
   return state;
 }
 
-test.describe("System Build verification lifecycle", () => {
+test.describe("System Build verification lifecycle", { tag: ["@system-build"] }, () => {
   test.beforeEach(async ({ page }) => {
     await authenticate(page);
   });

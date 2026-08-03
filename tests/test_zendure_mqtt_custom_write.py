@@ -21,7 +21,11 @@ from ems.zendure_mqtt.write_protocols import (
     publish_topic_error,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+]
 
 
 # --- topic validation --------------------------------------------------------

@@ -2,7 +2,13 @@
 import json
 import os
 
+import pytest
+
 from dashboard import auth
+
+pytestmark = [
+    pytest.mark.integration,
+]
 
 
 def test_password_hash_generation_and_verification(tmp_path):

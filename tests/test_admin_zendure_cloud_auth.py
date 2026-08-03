@@ -17,7 +17,12 @@ from admin.zendure_cloud_auth import (
     sign_request,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.mqtt,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 API_URL = "https://app.zendure.tech/eu"
 APP_KEY = "app-key-secret-123"

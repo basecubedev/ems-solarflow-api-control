@@ -37,7 +37,13 @@ from ems.device_identity import (
     STATUS_UNRESOLVED,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.maintenance,
+    pytest.mark.mqtt,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 TOKEN_KEY = b"connection-planner-test-key-32by"
 

@@ -12,7 +12,12 @@ from admin.zendure_mqtt_config_draft import (
     zendure_mqtt_device_draft,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.mqtt,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 
 def _controlled_device(model="hyper_2000"):

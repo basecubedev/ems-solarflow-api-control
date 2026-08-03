@@ -17,7 +17,12 @@ from admin.discovery import (
     validate_cidr,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.setup,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 ZENDURE_REPORT = {

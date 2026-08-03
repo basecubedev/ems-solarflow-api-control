@@ -51,7 +51,14 @@ from tests.test_admin_setup_plan_binding import (
     _write_live,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.authority,
+    pytest.mark.setup,
+    pytest.mark.workflow,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 LIVE = '{"live": "A"}\n'
 

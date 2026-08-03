@@ -15,7 +15,12 @@ import pathlib
 
 import pytest
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.authority,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 ADMIN = REPO / "admin"

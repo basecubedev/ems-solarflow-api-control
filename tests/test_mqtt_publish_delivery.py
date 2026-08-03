@@ -21,7 +21,12 @@ from ems.zendure_mqtt.service import ZendureMqttRuntimeConfig
 from ems.zendure_mqtt.topics import FAMILY_LEGACY_JSON
 from ems.zendure_mqtt.write_protocols import CONTROL_PUBLISH_QOS
 
-pytestmark = [pytest.mark.simulation, pytest.mark.power_control]
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+    pytest.mark.power_control,
+]
 
 
 class FakePahoClient:

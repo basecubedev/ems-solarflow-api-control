@@ -21,7 +21,12 @@ from admin.zendure_mqtt_migration_review import (
     prepare_migration_apply,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.mqtt,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 def _write_config(base, config):

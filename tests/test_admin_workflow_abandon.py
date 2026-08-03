@@ -38,7 +38,12 @@ from admin.setup_workflow import (
 from admin.system_build import SystemBuild
 from tests.helpers.setup_config import adopt_generated_config
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.workflow,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 REVISION = "f7265fc747c2223f126f0ee7801e030c6226edf4"

@@ -25,7 +25,13 @@ from admin.releases import ReleaseManager
 from admin.system_alignment import SystemAlignmentError, SystemAlignmentService
 from admin.system_build import SystemBuild
 
-pytestmark = [pytest.mark.simulation, pytest.mark.system_build]
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.setup,
+    pytest.mark.e2e,
+    pytest.mark.simulation,
+    pytest.mark.system_build,
+]
 
 LEGACY_TAG = "v0.7.0"
 LEGACY_REVISION = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0"

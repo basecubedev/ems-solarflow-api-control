@@ -23,7 +23,12 @@ from admin.guided_setup_workflow import GuidedSetupWorkflowStore
 from admin.releases import ReleaseError
 from tests.helpers.setup_config import adopt_generated_config
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.system_build,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 # --- fakes ---------------------------------------------------------------

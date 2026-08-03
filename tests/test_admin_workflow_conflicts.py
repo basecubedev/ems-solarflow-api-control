@@ -48,7 +48,12 @@ from admin.workflow_lifecycle import (
 from tests.test_admin_workflow_lifecycle import FakeAlignment
 from tests.test_admin_workflow_switching import _claim_artifacts, _service, _start_setup
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.workflow,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 def _terminal_setup_with_cleanup(service, state="pending"):

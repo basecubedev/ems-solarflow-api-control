@@ -8,7 +8,12 @@ from ems.mqtt_control.zensdk_operations import (
     build_zensdk_power_operation,
 )
 
-pytestmark = [pytest.mark.simulation, pytest.mark.power_control]
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+    pytest.mark.power_control,
+]
 
 
 def test_discharge_contract_is_the_atomic_source_backed_set():

@@ -6,7 +6,7 @@ import { SetupPage } from "./pages/setup-page";
 // a contradictory stale state; after confirmation it must resume the correct
 // transition rather than duplicate it.
 
-test.describe("Setup reload and resume", () => {
+test.describe("Setup reload and resume", { tag: ["@smoke", "@setup"] }, () => {
   test.beforeEach(async ({ page }) => {
     const login = new LoginPage(page);
     await login.open();

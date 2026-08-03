@@ -6,7 +6,11 @@ from ems import config as cfg
 from ems.clients import create_grid_meter_client
 from ems.mqtt_credentials import MqttCredentialError, MqttCredentials
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+]
 
 
 class Resolver:

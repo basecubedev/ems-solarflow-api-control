@@ -13,7 +13,14 @@ from admin.config_preview import ConfigPreviewGenerator
 from admin.mqtt_topic_discovery import MqttTopicAggregator
 from admin.zendure_mqtt_config_proposals import build_proposals
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.authority,
+    pytest.mark.config,
+    pytest.mark.mqtt,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 @pytest.fixture(autouse=True)

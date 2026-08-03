@@ -3,7 +3,14 @@
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 import ems.config as cfg
+
+pytestmark = [
+    pytest.mark.power_control,
+    pytest.mark.unit,
+]
 
 
 def _enabled_preconditions():

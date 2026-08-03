@@ -67,12 +67,34 @@ must be installed for the Admin server to start.
 
 ## CI
 
-`.github/workflows/playwright-e2e.yml` runs `playwright-chromium-smoke` and
-`playwright-firefox-smoke` on every relevant PR (path-filtered to `admin/**`,
-shared EMS config modules, `deploy/admin/**`, `tests/e2e/**` and the package
-files). Reports, traces and screenshots are uploaded on failure. WebKit runs the
-same set on demand (`workflow_dispatch`) so a WebKit-only flake never blocks a
-PR.
+`.github/workflows/playwright-e2e.yml` runs `playwright-chromium-critical`
+(`--grep "@smoke|@authority"`) and `playwright-firefox-smoke` (`--grep @smoke`)
+on every relevant PR (path-filtered to `admin/**`, shared EMS config modules,
+`deploy/admin/**`, `tests/e2e/**` and the package files). Reports, traces and
+screenshots are uploaded on failure. WebKit runs the smoke group on demand
+(`workflow_dispatch`) so a WebKit-only flake never blocks a PR.
+
+The complete Chromium and Firefox suites run in
+`.github/workflows/nightly-full-suite.yml` and in `./scripts/test-rc.sh`.
+The former `playwright-chromium-smoke` job is now
+`playwright-chromium-critical`; branch protection referring to the old name has
+to be repointed.
+
+## Groups
+
+Specs carry Playwright tags, so one configuration serves every group:
+
+```bash
+npx playwright test --project=chromium --grep @smoke
+npx playwright test --project=chromium --grep @authority
+npx playwright test --project=firefox --grep @smoke
+npx playwright test --project=chromium --grep "@setup|@authority"
+```
+
+Tags: `@smoke` (fast critical journeys), `@setup`, `@maintenance`,
+`@authority`, `@workflow`, `@system-build`. Add the tag on the top-level
+`test.describe(...)` where a spec has one, otherwise on each top-level
+`test(...)`.
 
 ## Writing tests
 

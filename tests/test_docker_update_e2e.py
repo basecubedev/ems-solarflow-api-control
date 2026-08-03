@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import json
-import os
 import shutil
 import sqlite3
 import subprocess
@@ -10,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from docker_e2e_utils import assert_no_root_owned_files
+from docker_e2e_utils import assert_no_root_owned_files, compose_env
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,6 +35,8 @@ def docker_compose_available():
 
 
 pytestmark = [
+    pytest.mark.system_build,
+    pytest.mark.e2e,
     pytest.mark.docker,
     pytest.mark.skipif(
         not docker_compose_available(),
@@ -52,7 +53,7 @@ def run(project_dir, *args, input_text=None, env=None):
         input=input_text,
         capture_output=True,
         check=False,
-        env={**os.environ, **(env or {})},
+        env=compose_env(**(env or {})),
     )
 
 

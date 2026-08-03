@@ -5,6 +5,12 @@ from pathlib import Path
 
 from scripts.check_log_events import extract_events
 
+import pytest
+
+pytestmark = [
+    pytest.mark.contract,
+]
+
 
 ROOT = Path(__file__).resolve().parents[1]
 CHECK_LOG_EVENTS = ROOT / "scripts/check_log_events.py"

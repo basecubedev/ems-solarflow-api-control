@@ -33,7 +33,13 @@ from admin.guided_upgrade_context import GuidedUpgradeContextStore
 from tests.test_admin_workflow_lifecycle import FakeAlignment, write_upgrade_context
 from tests.test_admin_workflow_switching import _claim_artifacts, _start_setup, _service
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.backup_restore,
+    pytest.mark.workflow,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 def _corrupt_setup_record(service):

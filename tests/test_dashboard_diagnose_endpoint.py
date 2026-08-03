@@ -18,6 +18,10 @@ from test_dashboard_server import (
     with_server,
 )
 
+pytestmark = [
+    pytest.mark.integration,
+]
+
 SECRET_TOKEN = "leakytoken-SECRET-9999"
 
 

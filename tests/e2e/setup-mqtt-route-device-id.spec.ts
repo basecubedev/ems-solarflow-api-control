@@ -220,7 +220,7 @@ async function loadProposalsPanel(page: Page) {
   await expect(page.locator("#mqtt-proposals-list")).toBeVisible();
 }
 
-test("Fresh Setup: a supported inverter without a route device id is telemetry-only", async ({
+test("Fresh Setup: a supported inverter without a route device id is telemetry-only", { tag: ["@setup"] }, async ({
   page,
 }) => {
   test.setTimeout(90_000);
@@ -240,7 +240,7 @@ test("Fresh Setup: a supported inverter without a route device id is telemetry-o
   await expect(card).not.toContainText("Output control available");
 });
 
-test("Fresh Setup: a two-route physical inverter shows the route-conflict reason", async ({
+test("Fresh Setup: a two-route physical inverter shows the route-conflict reason", { tag: ["@setup"] }, async ({
   page,
 }) => {
   test.setTimeout(90_000);

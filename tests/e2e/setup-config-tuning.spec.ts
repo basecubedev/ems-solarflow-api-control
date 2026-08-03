@@ -29,7 +29,7 @@ const PROMOTED_LABELS = [
   "Device ramp down",
 ];
 
-test.describe("Fresh Install — promoted control tuning", () => {
+test.describe("Fresh Install — promoted control tuning", { tag: ["@setup"] }, () => {
   test("promoted system and device tuning fields are primary, not Advanced-only", async ({
     page,
   }) => {

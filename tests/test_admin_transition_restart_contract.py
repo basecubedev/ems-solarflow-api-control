@@ -19,7 +19,13 @@ from admin.system_alignment import SystemAlignmentError, SystemAlignmentService
 from admin.system_build import SystemBuild
 
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.system_build,
+    pytest.mark.workflow,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 REVISION = "f7265fc747c2223f126f0ee7801e030c6226edf4"
 NOW = datetime(2026, 7, 14, 12, 0, 0, tzinfo=timezone.utc)

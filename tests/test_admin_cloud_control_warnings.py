@@ -11,7 +11,12 @@ from admin.maintenance_config import (
 )
 from ems.diagnostics import diagnose_zendure_mqtt_device_config
 
-pytestmark = [pytest.mark.simulation]
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.mqtt,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 WARNING_CODE = "zendure_cloud_mqtt_single_controller"
 

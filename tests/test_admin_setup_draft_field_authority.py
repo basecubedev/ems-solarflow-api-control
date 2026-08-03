@@ -42,7 +42,13 @@ from admin.setup_planner import (
     draft_field_authority,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.authority,
+    pytest.mark.setup,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 ADMIN_JS = REPO / "admin" / "static" / "admin.js"

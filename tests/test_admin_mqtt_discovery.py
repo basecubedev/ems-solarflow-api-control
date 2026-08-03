@@ -12,7 +12,12 @@ from admin.mqtt_discovery import (
     build_mqtt_mdns_candidate,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.mqtt,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 def _mdns_candidate(port=1883):

@@ -35,7 +35,13 @@ from tests.test_admin_setup_preview_authority import (
     _write_live,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.setup,
+    pytest.mark.workflow,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 @pytest.fixture(autouse=True)

@@ -28,7 +28,11 @@ from ems.mqtt_control.command_state import (
     mark_published,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "zendure_mqtt"
 

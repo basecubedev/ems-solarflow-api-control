@@ -1,7 +1,15 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """CLI setup assistant grid-meter coverage for the Zendure 3CT HTTP type."""
 
+import pytest
+
 from ems import config_init
+
+pytestmark = [
+    pytest.mark.config,
+    pytest.mark.setup,
+    pytest.mark.unit,
+]
 
 
 def test_supported_grid_meter_types_include_zendure_http_types():

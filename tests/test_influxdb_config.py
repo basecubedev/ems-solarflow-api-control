@@ -2,6 +2,8 @@
 import copy
 import unittest
 
+import pytest
+
 from ems.config import (
     INFLUXDB_DEFAULTS,
     influx_duration_seconds,
@@ -11,6 +13,11 @@ from ems.config import (
     resolve_influx_token,
     sanitize_bucket_prefix,
 )
+
+pytestmark = [
+    pytest.mark.config,
+    pytest.mark.unit,
+]
 
 
 class InfluxDurationTest(unittest.TestCase):

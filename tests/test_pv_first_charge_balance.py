@@ -3,8 +3,15 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from ems.models import DeviceState
 from ems.target_control import calculate_targets
+
+pytestmark = [
+    pytest.mark.power_control,
+    pytest.mark.unit,
+]
 
 
 def device(name):

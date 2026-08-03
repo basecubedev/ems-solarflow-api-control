@@ -32,7 +32,13 @@ from tests.test_admin_setup_transition_authority import (
     _workflow_view,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.authority,
+    pytest.mark.setup,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 # The three ways a stale confirmation is refused, all 409 and all authorizing
 # nothing: its workflow is gone (``setup_workflow_not_active``), the intent names

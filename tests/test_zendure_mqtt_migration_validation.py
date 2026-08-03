@@ -24,7 +24,11 @@ from ems.zendure_mqtt.migration import (
     zendure_mqtt_control_migration_startup_error,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+]
 
 
 def _control_device(**over):

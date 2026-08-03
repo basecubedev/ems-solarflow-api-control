@@ -22,7 +22,14 @@ import pytest
 
 from admin.deployment import DeploymentService
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.authority,
+    pytest.mark.setup,
+    pytest.mark.workflow,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 def _admin_data(tmp_path):

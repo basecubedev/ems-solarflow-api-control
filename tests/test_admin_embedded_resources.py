@@ -22,7 +22,11 @@ from admin.embedded_resources import (
 )
 from admin.releases import ReleaseManager
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 
 REVISION = "f7265fc747c2223f126f0ee7801e030c6226edf4"

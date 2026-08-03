@@ -15,7 +15,13 @@ from admin.config_export import (
 from admin.config_preview import ConfigPreviewGenerator
 from admin.install_context import detect_install_context
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.authority,
+    pytest.mark.config,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 TEMPLATE = {

@@ -22,7 +22,14 @@ from ems.zendure_mqtt.config_entries import (
     stable_local_broker_ref,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.authority,
+    pytest.mark.config,
+    pytest.mark.mqtt,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 TEMPLATE = {
     "system": {"max_total_power": 1600},

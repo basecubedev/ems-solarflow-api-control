@@ -14,7 +14,12 @@ from admin.zendure_cloud_mqtt import FakeCloudMqttListener, ZendureCloudDiscover
 from admin.server import ScanRegistry, create_server
 from tests.admin_auth_helpers import authenticate, request
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.setup,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 SHARED_SERIAL = "SN123456"
 # base64 of "<api_url>.<app_key>"; the fetcher is faked so only decodability matters.

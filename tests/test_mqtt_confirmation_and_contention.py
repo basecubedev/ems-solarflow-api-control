@@ -8,7 +8,12 @@ import pytest
 from ems.zendure_mqtt.device_client import ZendureMqttDeviceClient
 from ems.zendure_mqtt.topics import FAMILY_LEGACY_JSON
 
-pytestmark = [pytest.mark.simulation, pytest.mark.power_control]
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+    pytest.mark.power_control,
+]
 
 APPLIED = {"outputLimit": 300, "acMode": 2, "smartMode": 1, "inputLimit": 0}
 

@@ -31,7 +31,12 @@ from admin.models import MqttHardwareCandidate
 from admin.zendure_mqtt_config_proposals import build_proposals
 from ems.clients import close_grid_meter_client, create_grid_meter_client
 
-pytestmark = [pytest.mark.simulation, pytest.mark.power_control]
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.e2e,
+    pytest.mark.simulation,
+    pytest.mark.power_control,
+]
 
 _SERIALIZER_RUNNER = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "js", "mqtt_serializer_runner.js"

@@ -11,7 +11,12 @@ from admin.maintenance import (
     run_maintenance_overview,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.maintenance,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 COMPOSE_TEXT = """

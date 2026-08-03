@@ -18,7 +18,11 @@ from admin import auth as admin_auth
 from admin.server import create_server
 from dashboard.auth import verify_password_file, write_password_file
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 # --- path resolution --------------------------------------------------------

@@ -22,7 +22,12 @@ from admin.zendure_cloud_mqtt import (
     credential_mode_is_supported,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.mqtt,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 APP_KEY = "app-key-secret"
 

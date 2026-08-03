@@ -2,7 +2,13 @@
 import json
 import logging
 
+import pytest
+
 from ems.runtime_state import RuntimeState, merge_runtime_defaults
+
+pytestmark = [
+    pytest.mark.contract,
+]
 
 
 DEFAULTS = {

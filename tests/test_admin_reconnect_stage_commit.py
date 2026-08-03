@@ -75,7 +75,13 @@ from tests.test_admin_setup_continuation_authority import (
     _workflows,
 )
 
-pytestmark = [pytest.mark.simulation, pytest.mark.system_build]
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.workflow,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+    pytest.mark.system_build,
+]
 
 STAGE_UPDATE_PENDING = "admin_update_pending"
 STAGE_RECONNECT_PENDING = "admin_reconnect_pending"

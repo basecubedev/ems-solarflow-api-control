@@ -12,7 +12,13 @@ from admin.server import ScanRegistry, create_server
 from admin.zendure_cloud_mqtt import ZendureCloudDiscovery
 from tests.admin_auth_helpers import authenticate, request
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.mqtt,
+    pytest.mark.setup,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 VALID_TOKEN = base64.b64encode(b"https://app.zendure.tech.APP-KEY-SECRET").decode("ascii")
 

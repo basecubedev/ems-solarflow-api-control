@@ -15,7 +15,13 @@ from admin.models import MqttHardwareCandidate
 from admin.zendure_mqtt_config_proposals import build_proposals
 from ems.config_catalog import device_common_field_keys
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.authority,
+    pytest.mark.config,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 @pytest.fixture(autouse=True)

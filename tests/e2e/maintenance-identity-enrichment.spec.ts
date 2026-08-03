@@ -136,7 +136,7 @@ async function loadRealMqttProposals(page: Page, state: DiscoveryState) {
   state.proposals = payload.proposals;
 }
 
-test("route-to-serial: a serial-bearing rediscovery of a serial-less Cloud route is the same inverter", async ({
+test("route-to-serial: a serial-bearing rediscovery of a serial-less Cloud route is the same inverter", { tag: ["@maintenance"] }, async ({
   page,
   seedAdminScenario,
 }) => {

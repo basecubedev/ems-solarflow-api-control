@@ -14,6 +14,11 @@ from types import SimpleNamespace
 
 import pytest
 
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+]
+
 _PROBE_PATH = os.path.join(
     os.path.dirname(os.path.dirname(__file__)),
     "scripts",

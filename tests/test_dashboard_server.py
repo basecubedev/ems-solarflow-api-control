@@ -24,6 +24,10 @@ from dashboard.server import (
 from dashboard.auth import LoginRateLimiter
 from dashboard.runtime_write import build_validation_context
 
+pytestmark = [
+    pytest.mark.integration,
+]
+
 
 class StoreStub:
     def __init__(self):

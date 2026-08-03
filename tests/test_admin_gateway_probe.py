@@ -13,7 +13,12 @@ from admin.gateway_probe import (
     probe_gateway_candidates,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.setup,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 def _by_network(result, network):

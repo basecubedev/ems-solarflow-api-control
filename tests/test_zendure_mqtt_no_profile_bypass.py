@@ -18,7 +18,11 @@ from ems.zendure_mqtt.control_runtime import build_zendure_mqtt_control_runtime
 from ems.zendure_mqtt.device_client import ZendureMqttDeviceClient
 from ems.zendure_mqtt.topics import FAMILY_LEGACY_JSON
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+]
 
 
 class _FakeService:

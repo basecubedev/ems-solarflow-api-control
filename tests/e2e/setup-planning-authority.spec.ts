@@ -102,7 +102,7 @@ async function devicePlan(page: Page, state: unknown = {}, candidates?: unknown)
   return response.json();
 }
 
-test("Fresh Setup: an invented discovery card never enters the config", async ({
+test("Fresh Setup: an invented discovery card never enters the config", { tag: ["@setup", "@authority"] }, async ({
   page,
   seedLocalApiDevices,
 }) => {
@@ -146,7 +146,7 @@ test("Fresh Setup: an invented discovery card never enters the config", async ({
   );
 });
 
-test("Fresh Setup: a legacy draft nothing confirms stays unresolved", async ({
+test("Fresh Setup: a legacy draft nothing confirms stays unresolved", { tag: ["@setup", "@authority"] }, async ({
   page,
 }) => {
   test.setTimeout(90_000);
@@ -185,7 +185,7 @@ test("Fresh Setup: a legacy draft nothing confirms stays unresolved", async ({
   expect(plan.operations.drop_draft_items).toEqual([]);
 });
 
-test("Fresh Setup: a legacy draft the server confirms is rehydrated", async ({
+test("Fresh Setup: a legacy draft the server confirms is rehydrated", { tag: ["@setup", "@authority"] }, async ({
   page,
   seedLocalApiDevices,
 }) => {
@@ -250,7 +250,7 @@ const CONFIGURED_DRAFT = {
   ],
 };
 
-test("Fresh Setup: a capability-losing priority switch waits for an answer", async ({
+test("Fresh Setup: a capability-losing priority switch waits for an answer", { tag: ["@setup", "@authority"] }, async ({
   page,
   seedAdminScenario,
 }) => {
@@ -278,7 +278,7 @@ test("Fresh Setup: a capability-losing priority switch waits for an answer", asy
   expect((await preview.json()).error).toBe("device_plan_confirmation_required");
 });
 
-test("Fresh Setup: confirming the switch makes its operations executable", async ({
+test("Fresh Setup: confirming the switch makes its operations executable", { tag: ["@setup", "@authority"] }, async ({
   page,
   seedAdminScenario,
 }) => {
@@ -298,7 +298,7 @@ test("Fresh Setup: confirming the switch makes its operations executable", async
   expect(answered.operations.drop_draft_items).toEqual(["item-1"]);
 });
 
-test("Fresh Setup: the confirmation is shown before anything changes", async ({
+test("Fresh Setup: the confirmation is shown before anything changes", { tag: ["@setup", "@authority"] }, async ({
   page,
   seedAdminScenario,
 }) => {
@@ -329,7 +329,7 @@ test("Fresh Setup: the confirmation is shown before anything changes", async ({
   await expect(draftInverterCards(page)).toHaveCount(1);
 });
 
-test("Fresh Setup: a superseded device plan cannot preview or apply", async ({
+test("Fresh Setup: a superseded device plan cannot preview or apply", { tag: ["@setup", "@authority"] }, async ({
   page,
   seedLocalApiDevices,
 }) => {
@@ -422,7 +422,7 @@ async function startedWorkflowId(page: Page) {
   return (await started.json()).setup_workflow_id as string;
 }
 
-test("Fresh Setup: a valid device plan cannot authorize an invented device", async ({
+test("Fresh Setup: a valid device plan cannot authorize an invented device", { tag: ["@setup", "@authority"] }, async ({
   page,
   seedLocalApiDevices,
 }) => {
@@ -453,7 +453,7 @@ test("Fresh Setup: a valid device plan cannot authorize an invented device", asy
   expect(accepted.body.error).toBeUndefined();
 });
 
-test("Fresh Setup: a server-side identity change blocks the old preview", async ({
+test("Fresh Setup: a server-side identity change blocks the old preview", { tag: ["@setup", "@authority"] }, async ({
   page,
   seedLocalApiDevices,
 }) => {
@@ -472,7 +472,7 @@ test("Fresh Setup: a server-side identity change blocks the old preview", async 
   expect(refused.body.error).toBe("stale_device_plan");
 });
 
-test("Fresh Setup: a device plan cannot be spent in another run", async ({
+test("Fresh Setup: a device plan cannot be spent in another run", { tag: ["@setup", "@authority"] }, async ({
   page,
   seedLocalApiDevices,
 }) => {

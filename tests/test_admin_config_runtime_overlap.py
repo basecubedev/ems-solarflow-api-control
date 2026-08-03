@@ -12,7 +12,14 @@ from admin.config_runtime_overlap import (
     resolve_runtime_state_path,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.authority,
+    pytest.mark.config,
+    pytest.mark.maintenance,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 def _config():

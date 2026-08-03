@@ -15,7 +15,13 @@ import subprocess
 
 import pytest
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.authority,
+    pytest.mark.maintenance,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUNNER = os.path.join(ROOT, "tests", "js", "maintenance_device_card_runner.js")

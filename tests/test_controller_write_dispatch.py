@@ -17,7 +17,11 @@ from ems.controller import EMSController
 from ems.mqtt_control import dispatch
 from ems.mqtt_control.dispatch import WriteDispatchStatus
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.power_control,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+]
 
 
 def _allowed_gate():

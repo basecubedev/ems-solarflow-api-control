@@ -27,7 +27,7 @@ async function readDraft(page: Page) {
   return (await response.json()).draft;
 }
 
-test("mixed API, Local MQTT and Cloud MQTT identities survive save and reload", async ({
+test("mixed API, Local MQTT and Cloud MQTT identities survive save and reload", { tag: ["@smoke", "@maintenance"] }, async ({
   page,
   seedAdminScenario,
 }) => {
@@ -100,7 +100,7 @@ test("mixed API, Local MQTT and Cloud MQTT identities survive save and reload", 
   ).toContainText("Cloud MQTT inverter");
 });
 
-test("Maintenance additions use one compact sequence without renaming existing devices", async ({
+test("Maintenance additions use one compact sequence without renaming existing devices", { tag: ["@smoke", "@maintenance"] }, async ({
   page,
   seedAdminScenario,
 }) => {

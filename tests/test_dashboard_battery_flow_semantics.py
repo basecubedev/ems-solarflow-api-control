@@ -15,6 +15,10 @@ from ems.target_control import (
     DeviceControlExplanation,
 )
 
+pytestmark = [
+    pytest.mark.contract,
+]
+
 
 ROOT = Path(__file__).resolve().parents[1]
 

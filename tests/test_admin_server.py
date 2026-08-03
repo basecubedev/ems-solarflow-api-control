@@ -38,7 +38,11 @@ from tests.admin_auth_helpers import auth_headers, authenticate, raw_request
 from tests.helpers.system_alignment import SetupReadySystemAlignment
 from tests.helpers.setup_config import authorize_setup_mutation
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 @pytest.fixture(autouse=True)

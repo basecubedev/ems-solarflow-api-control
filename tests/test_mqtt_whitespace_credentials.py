@@ -25,7 +25,11 @@ from ems.zendure_mqtt.config_entries import (
 )
 from ems.zendure_mqtt.runtime import _cloud_runtime_ready
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 # The genuinely-whitespace values that used to slip through a non-empty check.
 WHITESPACE = [" ", "   ", "\t", "\n", "\r\n"]

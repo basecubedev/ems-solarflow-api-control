@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
+import pytest
+
 from ems.health import (
     CommHealth,
     percentile,
@@ -6,6 +8,10 @@ from ems.health import (
     render_device_health,
     render_grid_meter_health,
 )
+
+pytestmark = [
+    pytest.mark.contract,
+]
 
 
 def test_unattempted_health_is_unknown():

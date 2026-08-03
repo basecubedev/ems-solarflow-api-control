@@ -14,6 +14,12 @@ from ems import paths
 # Mosquitto lifecycle tests are a separate Docker tier (marked ``docker``) and
 # are intentionally NOT listed here so this gate stays fast and deterministic.
 # Run it with: pytest -m mqtt_release
+#
+# This name-based allowlist is the one remaining compatibility bridge: every
+# other classification lives in a module-level ``pytestmark``. It is kept
+# because the gate is a curated subset rather than a functional area, and
+# ``tests/test_test_classification.py`` fails when it names a module that no
+# longer exists. Classify anything new with markers instead.
 MQTT_RELEASE_MODULES = frozenset(
     {
         # MQTT command lifecycle

@@ -15,7 +15,11 @@ from admin.ems_cli import (
     EmsCliDiagnostics,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 COMPOSE_TEXT = """

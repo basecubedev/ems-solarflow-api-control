@@ -18,7 +18,11 @@ from ems.zendure_mqtt.topics import (
     FAMILY_ZENSDK_HA_SCALAR,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+]
 
 
 def test_legacy_json_family_with_writable_profile_is_supported():

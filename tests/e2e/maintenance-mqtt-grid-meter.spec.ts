@@ -257,7 +257,7 @@ function brokerProfiles(preview: any) {
   return (preview.zendure_mqtt ?? {}).brokers ?? {};
 }
 
-test("Maintenance: a D0 grid meter on an unknown broker is provisioned through preview and apply", async ({
+test("Maintenance: a D0 grid meter on an unknown broker is provisioned through preview and apply", { tag: ["@maintenance"] }, async ({
   page,
   seedAdminScenario,
 }) => {
@@ -323,7 +323,7 @@ test("Maintenance: a D0 grid meter on an unknown broker is provisioned through p
   expect(persisted.grid_meter.mqtt.broker_ref).toBe(NEW_BROKER);
 });
 
-test("Maintenance: a grid meter on a configured broker adds no second profile", async ({
+test("Maintenance: a grid meter on a configured broker adds no second profile", { tag: ["@maintenance"] }, async ({
   page,
   seedAdminScenario,
 }) => {
@@ -365,7 +365,7 @@ test("Maintenance: a grid meter on a configured broker adds no second profile", 
   );
 });
 
-test("Maintenance: declining the grid-meter replacement leaves no broker profile behind", async ({
+test("Maintenance: declining the grid-meter replacement leaves no broker profile behind", { tag: ["@maintenance"] }, async ({
   page,
   seedAdminScenario,
 }) => {
@@ -407,7 +407,7 @@ test("Maintenance: declining the grid-meter replacement leaves no broker profile
   expect(preview.grid_meter).toEqual({ type: "shelly", ip: "192.168.50.2" });
 });
 
-test("Maintenance: a Local MQTT D0 proposal is adopted as the grid meter, not as an inverter", async ({
+test("Maintenance: a Local MQTT D0 proposal is adopted as the grid meter, not as an inverter", { tag: ["@maintenance"] }, async ({
   page,
   seedAdminScenario,
 }) => {
@@ -481,7 +481,7 @@ test("Maintenance: a Local MQTT D0 proposal is adopted as the grid meter, not as
   await expect(persisted).toContainText(`Broker profile ${LOCAL_BROKER}`);
 });
 
-test("Maintenance: a Local MQTT 3CT grid meter uses the same adoption action", async ({
+test("Maintenance: a Local MQTT 3CT grid meter uses the same adoption action", { tag: ["@maintenance"] }, async ({
   page,
   seedAdminScenario,
 }) => {
@@ -509,7 +509,7 @@ test("Maintenance: a Local MQTT 3CT grid meter uses the same adoption action", a
   await applyDraft(page);
 });
 
-test("Maintenance: a Zendure MQTT grid meter is never offered as an inverter", async ({
+test("Maintenance: a Zendure MQTT grid meter is never offered as an inverter", { tag: ["@maintenance"] }, async ({
   page,
   seedAdminScenario,
 }) => {

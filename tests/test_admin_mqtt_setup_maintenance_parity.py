@@ -18,7 +18,14 @@ from admin.zendure_mqtt_config_draft import (
 )
 from admin.zendure_mqtt_config_proposals import build_proposals
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.maintenance,
+    pytest.mark.mqtt,
+    pytest.mark.setup,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 def _legacy_inverter_candidate():

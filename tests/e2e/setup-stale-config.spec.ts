@@ -28,7 +28,7 @@ async function maintenanceConfig(page: Page) {
   return (await (await page.request.get("/api/admin/maintenance/config")).json()) as any;
 }
 
-adminTest.describe("Stale generated config", () => {
+adminTest.describe("Stale generated config", { tag: ["@setup", "@authority"] }, () => {
   adminTest(
     "a live-config change blocks the stale Setup deployment and survives it",
     async ({ page, seedAdminScenario }) => {

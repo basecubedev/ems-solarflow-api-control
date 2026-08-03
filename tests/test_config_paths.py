@@ -1,7 +1,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 from pathlib import Path
 
+import pytest
+
 from ems import paths
+
+pytestmark = [
+    pytest.mark.config,
+    pytest.mark.contract,
+]
 
 
 def test_explicit_config_path_wins(tmp_path, monkeypatch):

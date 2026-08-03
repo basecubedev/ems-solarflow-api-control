@@ -39,7 +39,12 @@ from tests.test_admin_server import (
     _fake_scan,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.mqtt,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 CLOUD_REF = "zendure-cloud"
 API_KEY = "raw-account-api-key"

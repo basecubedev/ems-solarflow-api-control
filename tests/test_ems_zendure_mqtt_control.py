@@ -9,6 +9,8 @@ tests/test_control_write_gates.py; here we exercise the mechanism.
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from ems.zendure_mqtt.config import ZendureMqttClientConfig
 from ems.zendure_mqtt.control import (
     ZendureMqttControlClient,
@@ -29,6 +31,11 @@ from ems.zendure_mqtt.write_protocols import (
     next_message_id,
     resolve_write_protocol,
 )
+
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+]
 
 
 class FakeMqttClient:

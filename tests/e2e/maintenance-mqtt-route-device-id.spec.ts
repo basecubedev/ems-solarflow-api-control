@@ -76,7 +76,7 @@ async function previewAndApply(page: Page) {
   );
 }
 
-test("Maintenance renders exactly one MQTT device ID field per inverter", async ({
+test("Maintenance renders exactly one MQTT device ID field per inverter", { tag: ["@maintenance"] }, async ({
   page,
   seedAdminScenario,
 }) => {
@@ -94,7 +94,7 @@ test("Maintenance renders exactly one MQTT device ID field per inverter", async 
   await expect(cardInput(page, card, "MQTT device ID")).toHaveValue("LOCAL-MQTT-ID");
 });
 
-test("Maintenance MQTT device ID edit changes only the route id", async ({
+test("Maintenance MQTT device ID edit changes only the route id", { tag: ["@maintenance"] }, async ({
   page,
   seedAdminScenario,
 }) => {
@@ -120,7 +120,7 @@ test("Maintenance MQTT device ID edit changes only the route id", async ({
   expect(mqtt[0].device_id).toBe(mqtt[0].mqtt.device_id);
 });
 
-test("Maintenance serial edit does not change the MQTT device ID field", async ({
+test("Maintenance serial edit does not change the MQTT device ID field", { tag: ["@maintenance"] }, async ({
   page,
   seedAdminScenario,
 }) => {
@@ -141,7 +141,7 @@ test("Maintenance serial edit does not change the MQTT device ID field", async (
   await expect(routeId).toHaveValue("LOCAL-MQTT-ID");
 });
 
-test("Maintenance MQTT device ID edit does not change the serial field", async ({
+test("Maintenance MQTT device ID edit does not change the serial field", { tag: ["@maintenance"] }, async ({
   page,
   seedAdminScenario,
 }) => {
@@ -160,7 +160,7 @@ test("Maintenance MQTT device ID edit does not change the serial field", async (
   await expect(serial).toHaveValue("LOCAL-MQTT-SERIAL");
 });
 
-test("Maintenance clearing the MQTT device ID removes the stored route id", async ({
+test("Maintenance clearing the MQTT device ID removes the stored route id", { tag: ["@maintenance"] }, async ({
   page,
   seedAdminScenario,
 }) => {
@@ -192,7 +192,7 @@ test("Maintenance clearing the MQTT device ID removes the stored route id", asyn
   await expect(cardReadiness(page, reloaded)).toHaveText("MQTT device ID is missing");
 });
 
-test("Maintenance clearing the MQTT device ID cannot leave writes enabled", async ({
+test("Maintenance clearing the MQTT device ID cannot leave writes enabled", { tag: ["@maintenance"] }, async ({
   page,
   seedAdminScenario,
 }) => {
@@ -219,7 +219,7 @@ test("Maintenance clearing the MQTT device ID cannot leave writes enabled", asyn
   expect(mqtt[0].capabilities.write_output_limit).toBe(false);
 });
 
-test("Maintenance clearing the physical serial is not silently restored", async ({
+test("Maintenance clearing the physical serial is not silently restored", { tag: ["@maintenance"] }, async ({
   page,
   seedAdminScenario,
 }) => {

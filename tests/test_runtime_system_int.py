@@ -2,7 +2,13 @@
 import unittest
 from unittest.mock import patch
 
+import pytest
+
 from ems.controller import EMSController
+
+pytestmark = [
+    pytest.mark.e2e,
+]
 
 
 class RuntimeStateStub:

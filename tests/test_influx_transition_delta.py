@@ -7,6 +7,12 @@ from scripts.analyze_influx_state_transitions import (
     state_change_flux,
 )
 
+import pytest
+
+pytestmark = [
+    pytest.mark.unit,
+]
+
 
 class InfluxTransitionDeltaTest(unittest.TestCase):
     def test_flux_renames_difference_value_to_delta(self):

@@ -17,6 +17,11 @@ from ems.zendure_mqtt import (
     ZendureMqttService,
 )
 
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+]
+
 
 class FakeMessage:
     def __init__(self, topic, payload):

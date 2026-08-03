@@ -13,7 +13,12 @@ from admin.setup_config import (
 )
 from ems.config_catalog import get_config_feature_field_index
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.setup,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 def _sections():

@@ -10,7 +10,7 @@ const DISPLAY_NAME = process.env.CANARY_DISPLAY_NAME as string;
 const ADMIN_DIGEST = process.env.CANARY_ADMIN_DIGEST as string;
 const EMS_DIGEST = process.env.CANARY_EMS_DIGEST as string;
 
-test("remote packaged Admin selects and executes the exact catalogue pair", async ({
+test("remote packaged Admin selects and executes the exact catalogue pair", { tag: ["@system-build"] }, async ({
   page,
 }, testInfo) => {
   for (const [name, value] of Object.entries({

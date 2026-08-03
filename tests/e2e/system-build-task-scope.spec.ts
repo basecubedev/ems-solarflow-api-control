@@ -56,7 +56,7 @@ function transitionFor(mode: string, tag: string, stage: string) {
 const freshInstall = (stage: string) => transitionFor("fresh_install", "latest", stage);
 const guidedUpgrade = (stage: string) => transitionFor("guided_upgrade", "v9.9.10", stage);
 
-test.describe("System Build ownership — Guided Upgrade", () => {
+test.describe("System Build ownership — Guided Upgrade", { tag: ["@authority", "@system-build"] }, () => {
   test("pipeline is scoped to Guided Upgrade and restores on return", async ({
     page,
     seedAdminScenario,
@@ -104,7 +104,7 @@ test.describe("System Build ownership — Guided Upgrade", () => {
   });
 });
 
-test.describe("System Build cross-task isolation", () => {
+test.describe("System Build cross-task isolation", { tag: ["@authority", "@system-build"] }, () => {
   test.beforeEach(async ({ page }) => {
     const login = new LoginPage(page);
     await login.open();
@@ -175,7 +175,7 @@ test.describe("System Build cross-task isolation", () => {
   });
 });
 
-test.describe("System Build reconnect overlay", () => {
+test.describe("System Build reconnect overlay", { tag: ["@authority", "@system-build"] }, () => {
   test.beforeEach(async ({ page }) => {
     const login = new LoginPage(page);
     await login.open();

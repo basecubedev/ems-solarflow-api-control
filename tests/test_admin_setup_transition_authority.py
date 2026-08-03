@@ -46,7 +46,14 @@ from tests.test_admin_server import (
 from tests.test_admin_setup_lifecycle_exclusion import _Mutation
 from tests.test_admin_setup_preview_authority import _start_workflow
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.authority,
+    pytest.mark.setup,
+    pytest.mark.workflow,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 CONFIRM = "/api/setup/system-build/confirm"
 UPDATE_ADMIN = "/api/setup/system-build/update-admin"

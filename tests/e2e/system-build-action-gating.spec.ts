@@ -5,7 +5,7 @@ import { SetupPage } from "./pages/setup-page";
 
 const DEVELOPMENT_TAG = "dev-development-deadbee-100-1";
 
-test.describe("Fresh Install System Build action gating", () => {
+test.describe("Fresh Install System Build action gating", { tag: ["@system-build"] }, () => {
   test.beforeEach(async ({ page }) => {
     const login = new LoginPage(page);
     await login.open();

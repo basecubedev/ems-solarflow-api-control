@@ -11,7 +11,12 @@ validity of the result.
 
 import pytest
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.mqtt,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 # --- concrete model selector -------------------------------------------------

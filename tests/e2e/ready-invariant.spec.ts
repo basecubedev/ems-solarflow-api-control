@@ -6,7 +6,7 @@ import { assertReadyActionInvariant } from "./helpers/invariants";
 // Phase 8: a ready state never disables every valid action. Applied to each
 // installable System Build so the deadlock class of bug cannot regress silently.
 
-test.describe("System Build ready/action invariant", () => {
+test.describe("System Build ready/action invariant", { tag: ["@smoke", "@system-build"] }, () => {
   test.beforeEach(async ({ page }) => {
     const login = new LoginPage(page);
     await login.open();

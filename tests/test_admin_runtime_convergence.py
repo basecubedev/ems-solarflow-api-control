@@ -11,7 +11,14 @@ from admin.runtime_convergence import (
     reset_targets_to_config,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.authority,
+    pytest.mark.config,
+    pytest.mark.maintenance,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 def _config(**system):

@@ -54,7 +54,7 @@ async function enterSetup(
   return setup;
 }
 
-test.describe("Setup workflow authority", () => {
+test.describe("Setup workflow authority", { tag: ["@setup", "@authority"] }, () => {
   test("an old tab cannot mutate the workflow that replaced it", async ({
     page,
   }) => {

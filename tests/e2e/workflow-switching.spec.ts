@@ -39,7 +39,7 @@ function acceptOneConfirmation(page: Page): Promise<string> {
   });
 }
 
-test.describe("Guided workflow switching", () => {
+test.describe("Guided workflow switching", { tag: ["@smoke", "@authority", "@workflow"] }, () => {
   test("Guided Setup switches to Guided Upgrade and leaves the install alone", async ({
     page,
     seedAdminScenario,

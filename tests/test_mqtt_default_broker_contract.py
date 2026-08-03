@@ -20,7 +20,11 @@ from ems.zendure_mqtt.config_entries import (
     iter_effective_mqtt_broker_profiles,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 
 def _device(sn="SN1", broker_ref=None):

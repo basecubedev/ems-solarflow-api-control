@@ -29,7 +29,13 @@ from tests.test_admin_server import (
     _fake_scan,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.maintenance,
+    pytest.mark.mqtt,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 BROKER_B1_REF = "local_b1"
 BROKER_B1_HOST = "10.0.0.10"

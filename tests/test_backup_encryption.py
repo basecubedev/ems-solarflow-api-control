@@ -10,6 +10,11 @@ import pytest
 
 from ems import backup_crypto
 
+pytestmark = [
+    pytest.mark.backup_restore,
+    pytest.mark.contract,
+]
+
 
 def _read_header(enc_path):
     with open(enc_path, "rb") as handle:

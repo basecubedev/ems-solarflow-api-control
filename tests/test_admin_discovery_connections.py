@@ -16,7 +16,13 @@ from admin.discovery_connections import (
 from admin.discovery_preparation import DiscoveryPreparationStore
 from admin.mqtt_discovery import MqttBrokerDiscovery
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.mqtt,
+    pytest.mark.setup,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 def _store(tmp_path):

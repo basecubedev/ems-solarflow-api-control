@@ -33,7 +33,12 @@ from ems.config_catalog import (
     render_default_template,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.config,
+    pytest.mark.power_control,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATE_PATH = ROOT / "config" / "config.template.json"

@@ -13,7 +13,11 @@ import pytest
 
 from ems import paths
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 pytest.importorskip("cryptography")
 

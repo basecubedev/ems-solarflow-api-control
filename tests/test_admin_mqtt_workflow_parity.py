@@ -48,7 +48,13 @@ from tests.test_admin_server import (
     _fake_scan,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.mqtt,
+    pytest.mark.workflow,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 API_KEY = "raw-account-api-key"
 MQTT_USER = "cloud-mqtt-user"

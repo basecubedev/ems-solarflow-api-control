@@ -20,6 +20,11 @@ from ems.zendure_mqtt.config_entries import (
 )
 from ems.zendure_mqtt.runtime import build_zendure_mqtt_runtime
 
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.contract,
+]
+
 
 def _store(tmp_path):
     return CredentialStore(config_dir=tmp_path)

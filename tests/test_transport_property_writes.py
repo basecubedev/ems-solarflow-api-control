@@ -22,7 +22,12 @@ from ems.property_writes import write_device_properties
 from ems.zendure_mqtt.device_client import ZendureMqttDeviceClient
 from ems.zendure_mqtt.topics import FAMILY_LEGACY_JSON
 
-pytestmark = [pytest.mark.simulation, pytest.mark.power_control]
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+    pytest.mark.power_control,
+]
 
 
 class _FakeService:

@@ -11,7 +11,11 @@ from docker_build_context_contract import (
     validate_repository_copy_sources,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCKERFILE = ROOT / "deploy" / "admin" / "Dockerfile"

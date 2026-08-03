@@ -7,9 +7,16 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import emsctl
+import pytest
+
 from ems.controller import EMSController
 from ems.models import DeviceState
 from ems.runtime_state import build_runtime_defaults
+
+pytestmark = [
+    pytest.mark.power_control,
+    pytest.mark.contract,
+]
 
 
 ROOT = Path(__file__).resolve().parents[1]

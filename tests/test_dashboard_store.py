@@ -9,6 +9,10 @@ import pytest
 from dashboard.telemetry import build_dashboard_snapshot
 from dashboard.sqlite_store import DashboardStore, empty_snapshot
 
+pytestmark = [
+    pytest.mark.integration,
+]
+
 
 def snapshot(timestamp, pv=100, output=80, target=90):
     return {

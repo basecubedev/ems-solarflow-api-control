@@ -6,7 +6,7 @@ import { SetupPage } from "./pages/setup-page";
 // deterministic catalog offers Latest (modern aligned), v9.9.10 (Admin update
 // required) and v0.7.0 (legacy release installable by the modern Admin).
 
-test.describe("Fresh Install — System Build selection", () => {
+test.describe("Fresh Install — System Build selection", { tag: ["@smoke", "@setup"] }, () => {
   test.beforeEach(async ({ page }) => {
     const login = new LoginPage(page);
     await login.open();

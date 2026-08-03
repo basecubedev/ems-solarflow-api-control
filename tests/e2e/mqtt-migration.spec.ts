@@ -27,7 +27,7 @@ async function openMigration(
   );
 }
 
-test.describe("Zendure MQTT migration", () => {
+test.describe("Zendure MQTT migration", { tag: ["@maintenance"] }, () => {
   test("review and apply succeeds without rendering secrets", async ({
     page,
     seedAdminScenario,

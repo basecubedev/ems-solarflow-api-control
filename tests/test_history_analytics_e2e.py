@@ -28,6 +28,10 @@ import pytest
 from dashboard.server import start_dashboard_server
 from dashboard.sqlite_store import DashboardStore
 
+pytestmark = [
+    pytest.mark.e2e,
+]
+
 
 def _get_json(url):
     try:

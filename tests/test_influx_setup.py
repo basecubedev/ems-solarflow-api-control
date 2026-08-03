@@ -18,6 +18,10 @@ import emsctl
 from ems import influx_setup
 from ems.config import normalize_influxdb_config
 
+pytestmark = [
+    pytest.mark.integration,
+]
+
 ROOT = Path(__file__).resolve().parents[1]
 EMSCTL = ROOT / "emsctl.py"
 

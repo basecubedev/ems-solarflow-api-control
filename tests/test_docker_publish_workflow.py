@@ -10,6 +10,12 @@ from pathlib import Path
 
 import yaml
 
+import pytest
+
+pytestmark = [
+    pytest.mark.contract,
+]
+
 ROOT = Path(__file__).resolve().parents[1]
 PUBLISH_WORKFLOW = ROOT / ".github" / "workflows" / "docker-publish.yml"
 DOCKERFILE = ROOT / "Dockerfile"

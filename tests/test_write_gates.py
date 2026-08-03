@@ -4,6 +4,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+import pytest
+
 from ems.controller import EMSController
 from ems.models import DeviceState
 from ems.runtime_intents import (
@@ -11,6 +13,11 @@ from ems.runtime_intents import (
     ac_input_intent,
     ac_output_intent,
 )
+
+pytestmark = [
+    pytest.mark.power_control,
+    pytest.mark.unit,
+]
 
 
 class RuntimeStateStub:

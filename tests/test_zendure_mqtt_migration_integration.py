@@ -11,7 +11,11 @@ import json
 
 import pytest
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.e2e,
+    pytest.mark.simulation,
+]
 
 
 def _control_device(**over):

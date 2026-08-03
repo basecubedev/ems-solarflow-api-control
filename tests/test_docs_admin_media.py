@@ -15,6 +15,12 @@ capture tooling contract so the media stays refreshable.
 import re
 from pathlib import Path
 
+import pytest
+
+pytestmark = [
+    pytest.mark.contract,
+]
+
 ROOT = Path(__file__).resolve().parents[1]
 SHOTS = ROOT / "docs" / "assets" / "screenshots" / "admin"
 VIDEOS = ROOT / "docs" / "assets" / "videos" / "admin"

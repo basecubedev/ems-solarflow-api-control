@@ -57,7 +57,7 @@ async function diagnostics(page: Page): Promise<Diagnostics> {
   };
 }
 
-test.describe("Workflow abandonment", () => {
+test.describe("Workflow abandonment", { tag: ["@authority", "@workflow"] }, () => {
   test.beforeEach(async ({ page }) => {
     const login = new LoginPage(page);
     await login.open();

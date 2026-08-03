@@ -22,7 +22,13 @@ from tests.test_admin_maintenance_mqtt_apply import (
     _write_config,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.maintenance,
+    pytest.mark.mqtt,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 SECRET = "grid-meter-password"
 

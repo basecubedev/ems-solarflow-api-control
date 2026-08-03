@@ -228,7 +228,7 @@ function fullState(): DiscoveryState {
   };
 }
 
-test("Maintenance discovery: MQTT proposals take their card colour from the hardware role", async ({
+test("Maintenance discovery: MQTT proposals take their card colour from the hardware role", { tag: ["@maintenance"] }, async ({
   page,
   seedAdminScenario,
 }) => {
@@ -282,7 +282,7 @@ test("Maintenance discovery: MQTT proposals take their card colour from the hard
   expect(await leftBorder(gridMeter)).toEqual(probe.gridMeter);
 });
 
-test("Maintenance draft: an added MQTT inverter keeps the inverter card through apply and reload", async ({
+test("Maintenance draft: an added MQTT inverter keeps the inverter card through apply and reload", { tag: ["@maintenance"] }, async ({
   page,
   seedAdminScenario,
 }) => {
@@ -328,7 +328,7 @@ test("Maintenance draft: an added MQTT inverter keeps the inverter card through 
   await expect(persisted.locator(".connection-pill")).toHaveText("MQTT");
 });
 
-test("Maintenance: configured API and MQTT inverters share one inverter card", async ({
+test("Maintenance: configured API and MQTT inverters share one inverter card", { tag: ["@maintenance"] }, async ({
   page,
   seedAdminScenario,
 }) => {

@@ -286,7 +286,7 @@ async function rescanZendureMqtt(page: Page) {
   await page.locator('[data-setup-step="config"]').click();
 }
 
-test("Fresh Setup: a serial-bearing rediscovery of a serial-less Cloud route is the same inverter", async ({
+test("Fresh Setup: a serial-bearing rediscovery of a serial-less Cloud route is the same inverter", { tag: ["@setup"] }, async ({
   page,
 }) => {
   test.setTimeout(90_000);
@@ -340,7 +340,7 @@ test("Fresh Setup: a serial-bearing rediscovery of a serial-less Cloud route is 
   await expect(page.locator("#setup-next")).toBeEnabled();
 });
 
-test("Fresh Setup: the same raw route in two broker scopes stays two distinct candidates", async ({
+test("Fresh Setup: the same raw route in two broker scopes stays two distinct candidates", { tag: ["@setup"] }, async ({
   page,
 }) => {
   test.setTimeout(90_000);

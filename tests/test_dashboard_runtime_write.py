@@ -13,6 +13,10 @@ from dashboard.runtime_write import (
 )
 from ems.runtime_state import RuntimeState
 
+pytestmark = [
+    pytest.mark.integration,
+]
+
 
 def test_runtime_write_uses_config_aware_power_limits(tmp_path):
     runtime_state = RuntimeState(

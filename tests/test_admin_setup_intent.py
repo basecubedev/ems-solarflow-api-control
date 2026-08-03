@@ -13,7 +13,13 @@ from admin.setup_intent import (
     sha256_file,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.authority,
+    pytest.mark.setup,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 RUNTIME_DOWN = {"available": False}
 

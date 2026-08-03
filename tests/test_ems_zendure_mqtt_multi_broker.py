@@ -13,7 +13,11 @@ import pytest
 from ems.zendure_mqtt import build_zendure_mqtt_runtime
 from ems.zendure_mqtt.snapshot import ZendureMqttSnapshot
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+]
 
 
 class FakeService:

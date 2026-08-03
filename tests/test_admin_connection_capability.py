@@ -18,7 +18,13 @@ import pytest
 
 from admin.connection_capability import connection_output_control, payload_output_control
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.maintenance,
+    pytest.mark.mqtt,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 class _Entry:

@@ -21,7 +21,12 @@ import pytest
 
 from admin.setup_planner import build_setup_plan
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.setup,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 KEY = b"setup-planner-identity-migration-key-0123456789"
 

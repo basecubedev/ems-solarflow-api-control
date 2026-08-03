@@ -25,7 +25,12 @@ from admin.zendure_mqtt_config_draft import (
 )
 from admin.zendure_mqtt_config_proposals import build_proposals
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.mqtt,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 def test_manual_supported_inverter_is_controllable_without_editing_config():

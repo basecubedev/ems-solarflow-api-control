@@ -24,7 +24,12 @@ from admin.maintenance_config import (
 )
 from ems.config_catalog import build_default_template
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.maintenance,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 @pytest.fixture(autouse=True)

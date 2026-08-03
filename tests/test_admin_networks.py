@@ -14,7 +14,12 @@ from admin.networks import (
     detect_network_suggestions,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.setup,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 def _by_cidr(result, cidr):

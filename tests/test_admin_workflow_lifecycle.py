@@ -43,7 +43,12 @@ from admin.workflow_lifecycle import (
     WORKFLOW_STATE_MALFORMED,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.workflow,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 class FakeAlignment:

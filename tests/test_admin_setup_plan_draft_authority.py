@@ -31,7 +31,13 @@ from admin.setup_planner import (
 )
 from tests.test_admin_server import _control_export_manager, _request, _serve
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.authority,
+    pytest.mark.setup,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 SERIAL = "EOD1AAA111"
 HOST = "10.0.0.11"

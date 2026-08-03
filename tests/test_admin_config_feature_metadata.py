@@ -12,6 +12,12 @@ from admin.config_feature_metadata import (
     get_config_feature_sections,
 )
 
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.config,
+    pytest.mark.integration,
+]
+
 
 TEMPLATE_PATH = Path(__file__).parents[1] / "config" / "config.template.json"
 SECTION_KEYS = {

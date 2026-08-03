@@ -14,7 +14,11 @@ import pytest
 
 from ems.zendure_mqtt.control_runtime import build_zendure_mqtt_control_runtime
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+]
 
 
 class FakeControlService:

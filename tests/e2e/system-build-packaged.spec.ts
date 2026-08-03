@@ -31,7 +31,7 @@ async function clickAuthorizedAction(
   await setup.continueToDevices();
 }
 
-test.describe("system_build_browser_gate packaged Admin", () => {
+test.describe("system_build_browser_gate packaged Admin", { tag: ["@system-build"] }, () => {
   test("production catalogue labels immutable Development builds newest first", async ({
     page,
   }) => {

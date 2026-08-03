@@ -89,7 +89,7 @@ function validationPayload(tag: string): ProgressPayload {
   };
 }
 
-test.describe("Authoritative System Build progress", () => {
+test.describe("Authoritative System Build progress", { tag: ["@system-build"] }, () => {
   test.beforeEach(async ({ page }) => {
     await authenticate(page);
   });

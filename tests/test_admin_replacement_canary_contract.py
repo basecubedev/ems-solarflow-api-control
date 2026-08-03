@@ -3,6 +3,14 @@
 
 from pathlib import Path
 
+import pytest
+
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.system_build,
+    pytest.mark.contract,
+]
+
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "admin-replacement-canary.yml"

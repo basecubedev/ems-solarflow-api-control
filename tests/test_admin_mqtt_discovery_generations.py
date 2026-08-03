@@ -1,7 +1,15 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
+import pytest
+
 from admin.mqtt_discovery import MqttBrokerStore
 from admin.zendure_mqtt_config_proposals import proposals_from_brokers
+
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.mqtt,
+    pytest.mark.integration,
+]
 
 
 def _broker(serial="SERIAL"):

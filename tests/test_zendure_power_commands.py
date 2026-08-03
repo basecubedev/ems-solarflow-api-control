@@ -19,7 +19,12 @@ from ems.mqtt_control.zendure_commands import (
     next_power_message_id,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.power_control,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "zendure_mqtt"
 _PRODUCT_KEY = "PRODUCT_KEY"

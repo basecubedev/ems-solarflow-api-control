@@ -16,7 +16,11 @@ import pytest
 
 from tests.helpers.mosquitto import docker_available
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.e2e,
+    pytest.mark.simulation,
+]
 
 ROOT = Path(__file__).resolve().parents[1]
 # The documented real-broker release contract. The publish workflow runs exactly

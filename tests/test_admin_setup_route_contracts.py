@@ -36,7 +36,12 @@ from tests.helpers.setup_config import current_device_plan_id
 from tests.test_admin_setup_preview_authority import _draft_a, _start_workflow
 from tests.test_admin_setup_transition_authority import _ActiveTransitionAlignment
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.setup,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 @pytest.fixture(autouse=True)

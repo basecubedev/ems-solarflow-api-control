@@ -20,7 +20,13 @@ from admin.zendure_mqtt_config_proposals import (
     index_trusted_proposals,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.authority,
+    pytest.mark.mqtt,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 def _device_proposals(serial="REAL", host="10.0.0.10", port=1883):

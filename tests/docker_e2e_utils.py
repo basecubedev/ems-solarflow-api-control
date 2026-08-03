@@ -1,6 +1,31 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Shared assertions for the Docker end-to-end suites."""
+"""Shared helpers and assertions for the Docker end-to-end suites."""
+import os
 from pathlib import Path
+
+# Compose reads its project/profile/file selection from the environment. A
+# developer or CI shell exporting any of these would silently change which
+# services a generated test project starts, so they never reach a test project.
+AMBIENT_COMPOSE_VARS = (
+    "COMPOSE_PROFILES",
+    "COMPOSE_FILE",
+    "COMPOSE_ENV_FILES",
+    "COMPOSE_PATH_SEPARATOR",
+    "COMPOSE_PROJECT_NAME",
+    "COMPOSE_IGNORE_ORPHANS",
+    "COMPOSE_REMOVE_ORPHANS",
+)
+
+
+def compose_env(**overrides):
+    """Return an ``os.environ`` copy without ambient Compose selection."""
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in AMBIENT_COMPOSE_VARS
+    }
+    env.update(overrides)
+    return env
 
 
 def assert_no_root_owned_files(*bases, exclude=()):

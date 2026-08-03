@@ -23,7 +23,11 @@ from admin.system_health import (
 )
 from tests.admin_auth_helpers import auth_headers, authenticate
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 
 @pytest.fixture(autouse=True)

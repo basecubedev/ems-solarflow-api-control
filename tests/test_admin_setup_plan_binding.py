@@ -28,7 +28,13 @@ from admin.install_context import detect_install_context
 from admin.mqtt_discovery import MqttBrokerDiscovery, MqttBrokerStore
 from tests.test_admin_server import _control_export_manager, _request, _serve
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.authority,
+    pytest.mark.setup,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 SERIAL = "EOD1AAA111"
 

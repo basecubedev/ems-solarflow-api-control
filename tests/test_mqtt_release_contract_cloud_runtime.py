@@ -25,7 +25,12 @@ from ems.zendure_mqtt.runtime import (
 )
 from tests.helpers.fake_mqtt import FakeMqttNetwork
 
-pytestmark = [pytest.mark.simulation, pytest.mark.power_control]
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+    pytest.mark.power_control,
+]
 
 CLOUD_REF = "zendure-cloud"
 CLOUD_USER = "cloud-user-xyz"

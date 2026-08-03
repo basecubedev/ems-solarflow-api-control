@@ -26,6 +26,11 @@ from ems.clients import (
     zendure_write_succeeded,
 )
 
+pytestmark = [
+    pytest.mark.power_control,
+    pytest.mark.unit,
+]
+
 
 class ResponseStub:
     def __init__(self, status_code=200, payload=None, text=""):

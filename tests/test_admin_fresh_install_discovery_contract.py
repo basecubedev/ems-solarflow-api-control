@@ -35,7 +35,13 @@ from admin.zendure_cloud_auth import ZendureCloudError
 from admin.zendure_cloud_mqtt import FakeCloudMqttListener, ZendureCloudDiscovery
 from tests.admin_auth_helpers import authenticate, request
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.setup,
+    pytest.mark.system_build,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 SERIAL = "SN-PRIORITY-001"
 LOWER_SERIAL = "sn-priority-001"

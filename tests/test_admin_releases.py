@@ -23,7 +23,12 @@ from admin.releases import (
     legacy_release_resource_url,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.system_build,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 LEGACY_REVISION = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0"
 OTHER_LEGACY_REVISION = "b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0"

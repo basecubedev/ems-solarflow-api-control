@@ -7,6 +7,8 @@ act on a device whose broker disconnected or stopped publishing.
 
 from types import SimpleNamespace
 
+import pytest
+
 from ems.zendure_mqtt.device_client import ZendureMqttDeviceClient
 from ems.zendure_mqtt.service import (
     SNAPSHOT_FRESH,
@@ -15,6 +17,11 @@ from ems.zendure_mqtt.service import (
     classify_snapshot,
 )
 from ems.zendure_mqtt.topics import FAMILY_LEGACY_JSON
+
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+]
 
 
 def _snapshot(last_seen_monotonic, metrics=None):

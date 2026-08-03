@@ -30,7 +30,12 @@ from tests.helpers.mqtt_scenarios import (
     scenario_compatibility_issues,
 )
 
-pytestmark = [pytest.mark.simulation, pytest.mark.power_control]
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+    pytest.mark.power_control,
+]
 
 _KNOWN_SECRETS = ("mqttpass-SECRET", "cloud-token-ref")
 

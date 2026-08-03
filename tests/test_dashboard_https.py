@@ -55,6 +55,10 @@ pytest.importorskip("cryptography")
 from cryptography import x509  # noqa: E402
 from cryptography.x509.oid import NameOID  # noqa: E402
 
+pytestmark = [
+    pytest.mark.integration,
+]
+
 
 def test_self_signed_certificate_generation_restricts_private_key(tmp_path):
     cert_file = tmp_path / "dashboard.crt"

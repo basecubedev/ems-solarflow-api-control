@@ -14,7 +14,11 @@ import pytest
 
 from tests.conftest import MQTT_RELEASE_MODULES
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 TESTS_DIR = Path(__file__).resolve().parent
 

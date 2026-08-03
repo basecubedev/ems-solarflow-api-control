@@ -14,7 +14,12 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.system_build,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 DEPLOY_ADMIN_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "deploy", "admin"

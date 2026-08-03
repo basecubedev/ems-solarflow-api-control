@@ -28,7 +28,12 @@ import pytest
 from ems.zendure_mqtt.device_client import ZendureMqttDeviceClient
 from ems.zendure_mqtt.topics import FAMILY_LEGACY_JSON, FAMILY_LEGACY_JSON_ALT
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.power_control,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+]
 
 # Telemetry captured from the live symptom: device healthy but not in AC output
 # mode. A bare outputLimit write has no physical effect in this state.

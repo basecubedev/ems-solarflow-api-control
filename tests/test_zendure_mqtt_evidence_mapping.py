@@ -15,7 +15,11 @@ from ems.zendure_mqtt import map_snapshots_to_proposals
 from ems.zendure_mqtt.snapshot import ZendureMqttSnapshot
 from ems.zendure_mqtt.topics import FAMILY_LEGACY_JSON
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+]
 
 
 def _legacy_snapshot(serial, product):

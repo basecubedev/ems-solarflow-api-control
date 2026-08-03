@@ -20,6 +20,10 @@ from _emsctl_test_helpers import (
     write_two_device_config,
 )
 
+pytestmark = [
+    pytest.mark.integration,
+]
+
 
 def test_emsctl_diagnose_service_entry_points(tmp_path):
     args = diagnose_args(tmp_path)

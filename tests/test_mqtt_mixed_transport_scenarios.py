@@ -32,7 +32,12 @@ from tests.helpers.mqtt_scenarios import (
     build_installation,
 )
 
-pytestmark = [pytest.mark.simulation, pytest.mark.power_control]
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+    pytest.mark.power_control,
+]
 
 _LOAD_W = 2000.0
 

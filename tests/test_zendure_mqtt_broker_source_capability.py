@@ -44,6 +44,11 @@ from ems.zendure_mqtt.capability import (
     resolve_output_control_capability,
 )
 
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+]
+
 ZENSDK_MODEL = "solarflow_800_pro_2"
 LEGACY_MODEL = "hyper_2000"
 PRODUCT_KEY = "73bkTV"

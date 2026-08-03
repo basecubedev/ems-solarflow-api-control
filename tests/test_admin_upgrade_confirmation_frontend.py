@@ -8,7 +8,12 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.system_build,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 ROOT = Path(__file__).resolve().parents[1]
 ADMIN_JS = ROOT / "admin" / "static" / "admin.js"

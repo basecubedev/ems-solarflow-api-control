@@ -19,7 +19,13 @@ from admin.zendure_mqtt_config_proposals import (
     resolve_selected_proposals,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.authority,
+    pytest.mark.mqtt,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 TOKEN_KEY = b"identity-test-key-material-32b!!"
 

@@ -16,7 +16,11 @@ from ems.config_catalog import (
     is_secret_catalog_field,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.config,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 
 # --- editability predicate ---------------------------------------------------

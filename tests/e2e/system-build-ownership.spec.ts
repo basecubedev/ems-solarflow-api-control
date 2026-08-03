@@ -65,7 +65,7 @@ async function expectNoLeakedBuildMetadata(page: Page) {
   await expect(page.locator("#system-alignment-ems-image")).toHaveText("Unknown");
 }
 
-test.describe("System Build ownership — Fresh Install", () => {
+test.describe("System Build ownership — Fresh Install", { tag: ["@authority", "@system-build"] }, () => {
   test.beforeEach(async ({ page }) => {
     const login = new LoginPage(page);
     await login.open();

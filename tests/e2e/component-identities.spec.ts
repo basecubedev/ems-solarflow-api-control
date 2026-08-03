@@ -15,7 +15,7 @@ for (const scenario of [
     emsTag: "v0.7.0",
   },
 ]) {
-  test(`Maintenance shows ${scenario.name} as separate identities`, async ({
+  test(`Maintenance shows ${scenario.name} as separate identities`, { tag: ["@smoke"] }, async ({
     page,
     seedAdminScenario,
   }) => {

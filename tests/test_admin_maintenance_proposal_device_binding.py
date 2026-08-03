@@ -26,7 +26,13 @@ from admin.maintenance_config import (
 )
 from admin.zendure_mqtt_config_draft import TRUSTED_CONNECTION_SELECTION_FIELD
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.authority,
+    pytest.mark.maintenance,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 @pytest.fixture

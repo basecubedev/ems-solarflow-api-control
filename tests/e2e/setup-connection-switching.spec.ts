@@ -160,7 +160,7 @@ function trackDialogs(page: Page) {
   return dialogs;
 }
 
-test("API to Zendure MQTT: the alternative connection replaces the inverter in place", async ({
+test("API to Zendure MQTT: the alternative connection replaces the inverter in place", { tag: ["@setup"] }, async ({
   page,
   seedDiscoveryState,
 }) => {
@@ -210,7 +210,7 @@ test("API to Zendure MQTT: the alternative connection replaces the inverter in p
   );
 });
 
-test("Zendure MQTT to API: switching back keeps one inverter and its values", async ({
+test("Zendure MQTT to API: switching back keeps one inverter and its values", { tag: ["@setup"] }, async ({
   page,
   seedDiscoveryState,
 }) => {
@@ -246,7 +246,7 @@ test("Zendure MQTT to API: switching back keeps one inverter and its values", as
   await expect(page.locator("#config-preview-ready")).toHaveText(/Ready/i);
 });
 
-test("the selected connection and its values survive a reload", async ({
+test("the selected connection and its values survive a reload", { tag: ["@setup"] }, async ({
   page,
   seedDiscoveryState,
 }) => {

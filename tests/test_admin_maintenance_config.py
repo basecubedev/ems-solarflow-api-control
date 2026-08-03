@@ -18,7 +18,13 @@ from admin.maintenance_config import (
 from admin.server import ScanRegistry, create_server
 from tests.admin_auth_helpers import auth_headers, authenticate
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.config,
+    pytest.mark.maintenance,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 @pytest.fixture(autouse=True)

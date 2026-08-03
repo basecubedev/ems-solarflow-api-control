@@ -8,6 +8,13 @@ outside the prefix.
 import importlib.util
 from pathlib import Path
 
+import pytest
+
+pytestmark = [
+    pytest.mark.system_build,
+    pytest.mark.contract,
+]
+
 ROOT = Path(__file__).resolve().parents[1]
 _spec = importlib.util.spec_from_file_location(
     "prune_development_builds", ROOT / "scripts" / "prune_development_builds.py"

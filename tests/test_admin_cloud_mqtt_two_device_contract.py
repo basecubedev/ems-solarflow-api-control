@@ -26,7 +26,13 @@ from ems import config as ems_config
 from ems.mqtt_credentials import FileMqttCredentialResolver
 from ems.zendure_mqtt.control_runtime import build_zendure_mqtt_control_runtime
 
-pytestmark = [pytest.mark.simulation, pytest.mark.power_control]
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.mqtt,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+    pytest.mark.power_control,
+]
 
 CLOUD_REF = "zendure_cloud"
 CREDENTIALS_REF = "zendure-cloud-account"

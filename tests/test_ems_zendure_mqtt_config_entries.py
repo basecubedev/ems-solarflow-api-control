@@ -24,7 +24,12 @@ from ems.zendure_mqtt.config_entries import (
     zendure_mqtt_broker_profile_views,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.config,
+    pytest.mark.mqtt,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 
 def _telemetry_only_entry():

@@ -87,7 +87,7 @@ async function diagnostics(session: Session) {
   };
 }
 
-test("a real Admin restart preserves one workflow interpretation", async () => {
+test("a real Admin restart preserves one workflow interpretation", { tag: ["@smoke", "@workflow"] }, async () => {
   const first = await connect();
 
   // 01 — a persisted transition plus an owned artifact, created exactly the way
@@ -220,7 +220,7 @@ test("a real Admin restart preserves one workflow interpretation", async () => {
   await third.ctx.dispose();
 });
 
-test("the restarted Admin serves the same workflow to a browser", async ({ page }) => {
+test("the restarted Admin serves the same workflow to a browser", { tag: ["@smoke", "@workflow"] }, async ({ page }) => {
   await page.goto(`${admin.baseURL}/`);
   // Auth state lives in the preserved data directory, so the login form is the
   // one the earlier process created.

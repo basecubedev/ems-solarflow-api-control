@@ -15,7 +15,12 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.setup,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 ROOT = Path(__file__).resolve().parents[1]
 DEPLOY_ADMIN_DIR = ROOT / "deploy" / "admin"

@@ -12,7 +12,13 @@ import pytest
 
 from admin.maintenance_config import build_maintenance_draft
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.maintenance,
+    pytest.mark.mqtt,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 def _mqtt_device(name, broker_ref, **mqtt):

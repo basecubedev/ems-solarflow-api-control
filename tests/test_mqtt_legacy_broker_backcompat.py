@@ -27,7 +27,11 @@ from ems.mqtt_credentials import (
 from ems.zendure_mqtt.runtime import build_zendure_mqtt_runtime
 from tests.helpers.fake_mqtt import FakeMqttNetwork
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+]
 
 
 def _device():

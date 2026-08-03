@@ -146,7 +146,7 @@ async function confirmAndExecute(page: Page) {
   await expect(page.locator("#upgrade-execute-btn")).toHaveText("Upgrade system");
 }
 
-test.describe("Guided Upgrade", () => {
+test.describe("Guided Upgrade", { tag: ["@workflow"] }, () => {
   test("preflight shows migration and backup, then renders ordered progress", async ({
     page,
     seedAdminScenario,
@@ -697,7 +697,7 @@ test.describe("Guided Upgrade", () => {
   });
 });
 
-test.describe("Guided Upgrade verified-fingerprint enforcement", () => {
+test.describe("Guided Upgrade verified-fingerprint enforcement", { tag: ["@workflow"] }, () => {
   test("a prepared release is not treated as a verified System Build", async ({
     page,
     seedAdminScenario,

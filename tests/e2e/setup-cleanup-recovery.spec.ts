@@ -35,7 +35,7 @@ async function seedCleanupPending(page) {
   return body.setup_workflow_id as string;
 }
 
-test.describe("Setup lifecycle and cleanup recovery", () => {
+test.describe("Setup lifecycle and cleanup recovery", { tag: ["@setup", "@authority", "@workflow"] }, () => {
   test("an old tab cannot abandon a newer workflow with an empty request", async ({
     page,
   }) => {
@@ -309,7 +309,7 @@ async function verifyUpgradeTarget(page) {
   );
 }
 
-test.describe("Installed-system artifacts stay out of Setup cleanup", () => {
+test.describe("Installed-system artifacts stay out of Setup cleanup", { tag: ["@setup", "@authority", "@workflow"] }, () => {
   test("an empty setup leaves them untouched and keeps Guided Upgrade available", async ({
     page,
   }) => {

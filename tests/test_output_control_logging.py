@@ -2,7 +2,14 @@
 import logging
 import types
 
+import pytest
+
 from ems.controller import EMSController
+
+pytestmark = [
+    pytest.mark.power_control,
+    pytest.mark.unit,
+]
 
 
 def make_controller():

@@ -31,7 +31,13 @@ from admin.connection_planner import (
 from admin.maintenance_config import plan_trusted_selection
 from admin.setup_planner import build_setup_plan, plan_setup_connection_switch
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.authority,
+    pytest.mark.setup,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 KEY = b"setup-batch-planner-contract-key-0123456789abcdef"
 

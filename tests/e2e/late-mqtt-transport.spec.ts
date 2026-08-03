@@ -144,7 +144,7 @@ async function openCandidatePool(page: Page) {
   }).toPass();
 }
 
-test("late Zendure MQTT priority reconfigures the auto-added Local-API inverters", async ({
+test("late Zendure MQTT priority reconfigures the auto-added Local-API inverters", { tag: ["@maintenance"] }, async ({
   page,
   seedDiscoveryState,
 }) => {
@@ -206,7 +206,7 @@ test("late Zendure MQTT priority reconfigures the auto-added Local-API inverters
   await expect(page.locator("#setup-next")).toBeEnabled();
 });
 
-test("Add more devices offers the API connection as an alternative", async ({
+test("Add more devices offers the API connection as an alternative", { tag: ["@maintenance"] }, async ({
   page,
   seedDiscoveryState,
 }) => {

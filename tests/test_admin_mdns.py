@@ -22,7 +22,12 @@ from admin.mdns import (
 )
 from admin.models import DiscoveredDevice
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.setup,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 OBSERVED_ZENDURE_HTTP_NAME = (
     "Zendure-solarFlow800Pro2-EOD1NLN9P010611._http._tcp.local."

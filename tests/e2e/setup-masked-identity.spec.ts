@@ -67,7 +67,7 @@ async function reachConfig(
   return ids.filter(Boolean);
 }
 
-test("Fresh Setup: two unidentified observations stay two devices", async ({
+test("Fresh Setup: two unidentified observations stay two devices", { tag: ["@setup"] }, async ({
   page,
   seedDiscoveryState,
 }) => {
@@ -85,7 +85,7 @@ test("Fresh Setup: two unidentified observations stay two devices", async ({
   }
 });
 
-test("Fresh Setup: dismissing one unidentified observation keeps the other", async ({
+test("Fresh Setup: dismissing one unidentified observation keeps the other", { tag: ["@setup"] }, async ({
   page,
   seedDiscoveryState,
 }) => {
@@ -111,7 +111,7 @@ test("Fresh Setup: dismissing one unidentified observation keeps the other", asy
   await expect(draftInverterCards(page)).toHaveCount(1);
 });
 
-test("Fresh Setup: a masked serial never becomes a browser collection key", async ({
+test("Fresh Setup: a masked serial never becomes a browser collection key", { tag: ["@setup"] }, async ({
   page,
   seedDiscoveryState,
 }) => {

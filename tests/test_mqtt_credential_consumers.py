@@ -17,7 +17,11 @@ from ems.mqtt_credentials import (
     find_mqtt_credential_consumer_issues,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+]
 
 
 def _by_component(config):

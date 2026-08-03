@@ -14,7 +14,12 @@ import pytest
 from admin import zendure_mqtt_runtime_status as bridge
 from ems import paths
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.mqtt,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 def _write_config(base_dir, config):

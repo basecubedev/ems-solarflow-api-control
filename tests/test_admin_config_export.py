@@ -8,7 +8,12 @@ import pytest
 from admin.config_export import ConfigExportService, ConfigExportValidationError
 from admin.config_preview import ConfigPreviewGenerator
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.config,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 @pytest.fixture(autouse=True)

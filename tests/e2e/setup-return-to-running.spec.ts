@@ -33,7 +33,7 @@ async function failedSetupTransition(page: Page, seed: (s: string) => Promise<vo
   return status.transition.operation_id as string;
 }
 
-test.describe("Setup return-to-running ownership", () => {
+test.describe("Setup return-to-running ownership", { tag: ["@setup", "@workflow"] }, () => {
   test.beforeEach(async ({ page }) => {
     const login = new LoginPage(page);
     await login.open();

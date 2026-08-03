@@ -17,7 +17,11 @@ from ems.config import (
     MqttBrokerReferenceAmbiguousError,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+]
 
 
 def _broker_ref_grid_config(**inline):

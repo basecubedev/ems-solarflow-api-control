@@ -37,7 +37,13 @@ from tests.test_admin_mqtt_credential_promotion_transaction import (
     _write_body,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.authority,
+    pytest.mark.config,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 WAIT_S = 30  # generous failsafe for event waits; never used for sequencing
 

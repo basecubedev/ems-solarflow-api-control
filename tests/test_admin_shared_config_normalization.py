@@ -28,7 +28,13 @@ from ems.config_mutation import (
     strip_stale_grid_meter_keys,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.authority,
+    pytest.mark.config,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 def _grid_with_every_known_key(grid_type):

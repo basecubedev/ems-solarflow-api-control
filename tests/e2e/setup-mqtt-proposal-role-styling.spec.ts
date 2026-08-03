@@ -313,7 +313,7 @@ function fullState(): DiscoveryState {
   };
 }
 
-test("Guided Setup: MQTT proposals take their card colour from the hardware role", async ({
+test("Guided Setup: MQTT proposals take their card colour from the hardware role", { tag: ["@setup"] }, async ({
   page,
 }) => {
   test.setTimeout(90_000);
@@ -354,7 +354,7 @@ test("Guided Setup: MQTT proposals take their card colour from the hardware role
   await expect(unknown).toContainText("Telemetry only");
 });
 
-test("Guided Setup: MQTT role colours resolve from the shared --output/--grid tokens", async ({
+test("Guided Setup: MQTT role colours resolve from the shared --output/--grid tokens", { tag: ["@setup"] }, async ({
   page,
 }) => {
   test.setTimeout(90_000);
@@ -396,7 +396,7 @@ test("Guided Setup: MQTT role colours resolve from the shared --output/--grid to
   expect(gridBorder).toEqual(probe.gridMeter);
 });
 
-test("Guided Setup: role styling leaves proposal selection and markup intact", async ({
+test("Guided Setup: role styling leaves proposal selection and markup intact", { tag: ["@setup"] }, async ({
   page,
 }) => {
   test.setTimeout(90_000);

@@ -26,7 +26,12 @@ from ems.zendure_mqtt.topics import (
     FAMILY_ZENSDK_HA_SCALAR,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.config,
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+]
 
 
 def _snapshot_from(messages):

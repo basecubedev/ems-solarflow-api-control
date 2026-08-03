@@ -23,7 +23,7 @@ async function alignment(page: Page) {
   ).json()) as any;
 }
 
-test.describe("Expired Setup resource-worker ownership", () => {
+test.describe("Expired Setup resource-worker ownership", { tag: ["@setup", "@authority", "@workflow"] }, () => {
   test.beforeEach(async ({ page }) => {
     const login = new LoginPage(page);
     await login.open();

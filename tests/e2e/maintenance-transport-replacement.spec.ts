@@ -253,7 +253,7 @@ async function loadRealMqttProposals(
   state.proposals = payload.proposals;
 }
 
-test("MQTT then API: discovery offers a transport switch, not a duplicate inverter", async ({
+test("MQTT then API: discovery offers a transport switch, not a duplicate inverter", { tag: ["@maintenance"] }, async ({
   page,
   seedAdminScenario,
 }) => {
@@ -361,7 +361,7 @@ test("MQTT then API: discovery offers a transport switch, not a duplicate invert
   await expect(fieldInput(persisted, "Device output limit")).toHaveValue("800");
 });
 
-test("API then MQTT: proposal for a configured serial switches the transport in place", async ({
+test("API then MQTT: proposal for a configured serial switches the transport in place", { tag: ["@maintenance"] }, async ({
   page,
   seedAdminScenario,
 }) => {
@@ -421,7 +421,7 @@ test("API then MQTT: proposal for a configured serial switches the transport in 
   await expectInverterConnection(persisted, "local_mqtt");
 });
 
-test("API to Zendure Cloud MQTT on a scalar family keeps the inverter controllable", async ({
+test("API to Zendure Cloud MQTT on a scalar family keeps the inverter controllable", { tag: ["@maintenance"] }, async ({
   page,
   seedAdminScenario,
 }) => {
@@ -473,7 +473,7 @@ test("API to Zendure Cloud MQTT on a scalar family keeps the inverter controllab
   );
 });
 
-test("API to a local scalar MQTT connection does not become control-capable", async ({
+test("API to a local scalar MQTT connection does not become control-capable", { tag: ["@maintenance"] }, async ({
   page,
   seedAdminScenario,
 }) => {
@@ -504,7 +504,7 @@ test("API to a local scalar MQTT connection does not become control-capable", as
   );
 });
 
-test("serial-less Cloud identity survives apply, reload, rediscovery and scope changes", async ({
+test("serial-less Cloud identity survives apply, reload, rediscovery and scope changes", { tag: ["@maintenance"] }, async ({
   page,
   seedAdminScenario,
 }) => {

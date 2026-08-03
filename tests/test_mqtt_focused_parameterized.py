@@ -45,7 +45,12 @@ from tests.helpers.mqtt_scenarios import (
     build_installation,
 )
 
-pytestmark = [pytest.mark.simulation, pytest.mark.power_control]
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+    pytest.mark.power_control,
+]
 
 _HTTP_METER = GridMeterSpec(
     meter_type="shelly", transport=TRANSPORT_GRID_METER_HTTP, power_w=3000.0

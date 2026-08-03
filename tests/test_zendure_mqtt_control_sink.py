@@ -8,7 +8,11 @@ import pytest
 
 from tools import zendure_mqtt_control_sink as sink
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+]
 
 
 def test_parse_write_extracts_iot_command():

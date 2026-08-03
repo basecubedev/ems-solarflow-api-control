@@ -14,7 +14,11 @@ import pytest
 from ems.zendure_mqtt.control_runtime import build_zendure_mqtt_control_runtime
 from tests.helpers.fake_mqtt import FakeClock, FakeMqttNetwork
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.e2e,
+    pytest.mark.simulation,
+]
 
 
 def _config(hardware_profile="hyper_2000"):

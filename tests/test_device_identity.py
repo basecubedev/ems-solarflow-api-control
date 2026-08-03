@@ -41,7 +41,11 @@ from ems.device_identity import (
     same_physical_inverter_evidence,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.setup,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 TOKEN_KEY = b"identity-test-key-material-32b!!"
 

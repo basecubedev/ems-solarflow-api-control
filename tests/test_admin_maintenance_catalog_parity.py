@@ -16,7 +16,12 @@ from admin.maintenance_config import load_maintenance_config
 from admin.setup_config import build_setup_catalog
 from ems.config_catalog import get_config_feature_field_index
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.maintenance,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 @pytest.fixture(autouse=True)

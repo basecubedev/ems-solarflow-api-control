@@ -5,7 +5,11 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.system_build,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCKER_CONTRACT = ROOT / "tests" / "test_system_build_docker_contract.py"

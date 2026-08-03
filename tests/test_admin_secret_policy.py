@@ -24,7 +24,12 @@ from admin.secret_policy import (
     is_secret_key,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.config,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 CREDENTIAL_KEYS = (
     "password",

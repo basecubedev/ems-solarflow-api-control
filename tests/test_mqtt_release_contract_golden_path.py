@@ -21,7 +21,12 @@ from tests.helpers.mqtt_release_contract import (
     device_observation,
 )
 
-pytestmark = [pytest.mark.simulation, pytest.mark.power_control]
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+    pytest.mark.power_control,
+]
 
 RELEASE_SECRET_PASSWORD = "RELEASE_SECRET_PASSWORD"
 RELEASE_USER = "release-user"

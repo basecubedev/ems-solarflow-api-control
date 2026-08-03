@@ -23,7 +23,11 @@ from ems.mqtt_control.zendure_profiles import (
     resolve_hardware_profile,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.unit,
+    pytest.mark.simulation,
+]
 
 
 # --- object-automation profiles (Hyper 2000, AIO 2400) ----------------------

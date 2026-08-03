@@ -27,7 +27,12 @@ from admin.releases import ReleaseManager
 from admin.system_build import SystemBuild, SystemBuildError, SystemBuildResolver
 from workflow_contract import run_output_step
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.system_build,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 ROOT = Path(__file__).resolve().parents[1]
 PUBLISH_WORKFLOW = ROOT / ".github" / "workflows" / "docker-publish.yml"

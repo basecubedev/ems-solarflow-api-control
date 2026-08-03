@@ -11,7 +11,12 @@ import pytest
 from admin.config_preview import ConfigPreviewGenerator
 
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.setup,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 ROOT = Path(__file__).resolve().parents[1]
 ADMIN_JS = ROOT / "admin" / "static" / "admin.js"

@@ -18,7 +18,11 @@ import sys
 
 import pytest
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.mqtt,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 
 def _import_first(module: str) -> subprocess.CompletedProcess:

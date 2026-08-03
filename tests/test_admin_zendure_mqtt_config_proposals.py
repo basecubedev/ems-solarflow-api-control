@@ -6,6 +6,8 @@ import subprocess
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 from admin.models import MqttHardwareCandidate
 from admin.server import AdminHandler
 from admin import zendure_mqtt_config_proposals as proposal_module
@@ -15,6 +17,13 @@ from admin.zendure_mqtt_config_proposals import (
     proposals_from_brokers,
     proposals_from_sources,
 )
+
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.config,
+    pytest.mark.mqtt,
+    pytest.mark.contract,
+]
 
 
 def _scalar_candidate(**overrides):

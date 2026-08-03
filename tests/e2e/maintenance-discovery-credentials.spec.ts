@@ -70,7 +70,7 @@ async function openMaintenanceSourceRow(page: Page, source: string, formId: stri
   }).toPass();
 }
 
-test("Maintenance Zendure credential lifecycle stays on generic discovery routes", async ({
+test("Maintenance Zendure credential lifecycle stays on generic discovery routes", { tag: ["@maintenance"] }, async ({
   page,
   seedAdminScenario,
 }) => {
@@ -180,7 +180,7 @@ test("Maintenance Zendure credential lifecycle stays on generic discovery routes
   expect(setupAliasRequests).toEqual([]);
 });
 
-test("Maintenance local MQTT credential save and delete use the real generic routes", async ({
+test("Maintenance local MQTT credential save and delete use the real generic routes", { tag: ["@maintenance"] }, async ({
   page,
   seedAdminScenario,
 }) => {

@@ -5,7 +5,7 @@ import { SetupPage } from "./pages/setup-page";
 // The deterministic server rotates its process identity when the replacement
 // launcher succeeds, so this covers the complete browser reconnect handoff.
 
-test.describe("Admin update required", () => {
+test.describe("Admin update required", { tag: ["@workflow"] }, () => {
   test.beforeEach(async ({ page }) => {
     const login = new LoginPage(page);
     await login.open();

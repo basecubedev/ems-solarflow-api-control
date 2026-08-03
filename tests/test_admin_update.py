@@ -44,7 +44,12 @@ from admin.image_identity import ImageIdentity
 from admin.server import ScanRegistry, create_server
 from tests.admin_auth_helpers import authenticate, raw_request
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.system_build,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 CURRENT_REF = f"{ADMIN_IMAGE_REPO}:v0.6.2"

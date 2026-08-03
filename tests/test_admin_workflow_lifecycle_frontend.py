@@ -17,7 +17,12 @@ import subprocess
 
 import pytest
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.workflow,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 STATIC_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "admin", "static"

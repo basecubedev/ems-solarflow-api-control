@@ -41,7 +41,12 @@ from tests.test_admin_workflow_lifecycle import (
     write_upgrade_context,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.workflow,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 PRESERVED_INSTALL_STATE = (
     "live EMS configuration",

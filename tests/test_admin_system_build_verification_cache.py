@@ -29,7 +29,12 @@ from admin.system_build import (
     SystemBuildResolver,
 )
 
-pytestmark = [pytest.mark.simulation, pytest.mark.system_build]
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+    pytest.mark.system_build,
+]
 
 REVISION = "f7265fc747c2223f126f0ee7801e030c6226edf4"
 DEV_TAG = "dev-feature-zendure-mqtt-device-support-f7265fc-123456789-1"
