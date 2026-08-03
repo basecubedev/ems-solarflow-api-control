@@ -126,16 +126,28 @@ def start_setup_workflow(base, request, srv=None):
     return workflow_id
 
 
-def current_device_plan_id(base, request, state=None):
-    """Plan the current devices and return the issued ``device_plan_id``.
+def current_device_plan_id(
+    base, request, state=None, *, devices=None, selections=None, body=None
+):
+    """Plan the current draft and return the issued ``device_plan_id``.
 
     Setup Config Preview only issues mutation authority for a device plan this
-    server issued and still considers current, so a test that drives the
-    mutation routes performs the same planning step the browser does.
+    server issued, still considers current, and issued *for this draft* — so a
+    test that drives the mutation routes performs the same planning step the
+    browser does, over the same draft it goes on to review. Pass ``body`` to
+    plan over a whole mutation request; it carries both halves of the draft.
     """
 
+    if body is not None:
+        devices = body.get("devices", devices)
+        selections = body.get("zendure_mqtt_proposals", selections)
+    if state is None:
+        state = {
+            "draft_items": list(devices or []),
+            "mqtt_selections": list(selections or []),
+        }
     status, _, plan = request(
-        f"{base}/api/setup/device-plan", method="POST", body={"state": state or {}}
+        f"{base}/api/setup/device-plan", method="POST", body={"state": state}
     )
     assert status == 200, plan
     return plan["plan_id"]
@@ -158,7 +170,9 @@ def authorize_setup_mutation(base, request, body, *, workflow_id=None, srv=None)
         if key != "config_revision"
     }
     authorized["setup_workflow_id"] = workflow_id
-    authorized.setdefault("device_plan_id", current_device_plan_id(base, request))
+    authorized.setdefault(
+        "device_plan_id", current_device_plan_id(base, request, body=authorized)
+    )
     status, _, preview = request(
         f"{base}/api/setup/config-preview", method="POST", body=authorized
     )

@@ -3720,6 +3720,25 @@ const SETUP_CONFLICT_MESSAGES = {
     "current configuration again before saving or applying it.",
 };
 
+// The device plan no longer authorizes this draft: the world it was planned in
+// moved, it belongs to a superseded run, or the draft is not the one it decided
+// on. All three are repaired the same way — plan again against current state —
+// so none of them may leave preview authority behind.
+const SETUP_DEVICE_PLAN_CONFLICT_ERRORS = new Set([
+  "device_plan_required",
+  "stale_device_plan",
+  "device_plan_draft_mismatch",
+  "device_plan_confirmation_required",
+]);
+
+const SETUP_DEVICE_PLAN_CONFLICT_MESSAGE =
+  "The discovered devices changed after this configuration was planned. " +
+  "The device list was re-planned; review it and try again.";
+
+function isSetupDevicePlanConflict(data) {
+  return Boolean(data && SETUP_DEVICE_PLAN_CONFLICT_ERRORS.has(data.error));
+}
+
 // Workflow-identity conflicts are terminal for this tab's authority (unlike
 // preview conflicts, which a re-review repairs), so they get their own panel.
 // A refused setup intent or an unprovable transition owner means the same thing:
@@ -3782,6 +3801,30 @@ function showSetupConfigConflict(data) {
     configEls.conflictDetail.textContent = detail;
     configEls.conflictDetails.hidden = !detail;
   }
+}
+
+// Nothing is retried automatically: Apply stays disabled until a fresh plan and
+// a fresh review have been earned against current state.
+function handleSetupDevicePlanConflict(data) {
+  setSetupPreviewId(null);
+  setConfigExportReady(false);
+  latestConfigPreview = {
+    ready: false,
+    validation: {
+      errors: [
+        {
+          message: data.message || SETUP_DEVICE_PLAN_CONFLICT_MESSAGE,
+        },
+      ],
+      warnings: [],
+      info: [],
+    },
+  };
+  renderConfigValidation();
+  if (configEls.previewReady) configEls.previewReady.textContent = "Needs attention";
+  // Only the response for the plan still in hand asks for a new one; a later
+  // refresh is already under way otherwise.
+  if (configPreviewPlanId === setupPlan.plan_id) refreshSetupPlan();
 }
 
 // The exact preview is spent or stale: a new one is only ever earned by a real
@@ -4953,19 +4996,23 @@ function inverterIdentityConflict(a, b) {
 }
 
 // --- asking the backend -----------------------------------------------------
+// Every draft entry, not only the inverters that get planned: the plan the
+// backend issues authorizes the draft it was computed over, so an entry left
+// out here is an entry no plan covers.
 function setupPlanStatePayload() {
   return {
     identity_schema_version: SETUP_IDENTITY_SCHEMA_VERSION,
-    draft_items: inverterItems().map((item) => ({
+    draft_items: configDraftItems.map((item) => ({
       draft_item_id: item.draft_item_id,
       source_id: item.source_id,
-      role: "inverter",
+      role: item.role === "grid_meter" ? "grid_meter" : "inverter",
       serial_number: item.serial_number,
       physical_identity_token: item.physical_identity_token,
       ip: item.ip,
       port: item.port,
       api_family: item.api_family,
       device_type: item.device_type,
+      grid_meter_type: item.grid_meter_type,
       auto_added: item.auto_added === true,
     })),
     mqtt_selections: selectedMqttDeviceEntries().map((entry) => ({
@@ -5395,6 +5442,9 @@ function addManualDevice() {
   saveConfigDismissed();
   const item = {
     source_id: sourceId,
+    // Without one, an operation naming this entry cannot be applied to it and
+    // the plan would keep re-issuing a drop the browser never performs.
+    draft_item_id: nextDraftItemId(),
     config_name: role === "grid_meter" ? "grid_meter" : nextInverterName(),
     display_name: uniqueDisplayName(displayBase, role),
     role,
@@ -7072,6 +7122,10 @@ async function requestConfigPreview() {
       handleSetupWorkflowConflict(data);
       return;
     }
+    if (isSetupDevicePlanConflict(data)) {
+      handleSetupDevicePlanConflict(data);
+      return;
+    }
     if (!res.ok) {
       throw new Error(data.message || data.error || "Config preview unavailable.");
     }
@@ -7230,6 +7284,14 @@ async function applyGeneratedConfig() {
       showConfigApplyStatus(SETUP_WORKFLOW_STALE_MESSAGE, "error");
       return;
     }
+    if (isSetupDevicePlanConflict(data)) {
+      handleSetupDevicePlanConflict(data);
+      showConfigApplyStatus(
+        data.message || SETUP_DEVICE_PLAN_CONFLICT_MESSAGE,
+        "error",
+      );
+      return;
+    }
     if (isSetupConfigConflict(data)) {
       setSetupPreviewId(null);
       showSetupConfigConflict(data);
@@ -7333,7 +7395,9 @@ if (configEls.gridMeterSelection) {
       syncGridMeterFeatureValues(meter);
       saveConfigDraft();
       renderGridMeterSelection();
-      renderConfigPreview();
+      // The variant is part of the draft a plan authorizes, so the preview may
+      // only ask for authority once the backend has planned under it.
+      refreshSetupPlan().then(renderConfigPreview);
       return;
     }
     if (target.matches("[data-feature-path]")) {
@@ -8055,6 +8119,12 @@ async function continueFromConfig() {
     if (isSetupWorkflowConflict(data)) {
       handleSetupWorkflowConflict(data);
       showSetupNavError(SETUP_WORKFLOW_STALE_MESSAGE);
+      renderSetupNav();
+      return;
+    }
+    if (isSetupDevicePlanConflict(data)) {
+      handleSetupDevicePlanConflict(data);
+      showSetupNavError(data.message || SETUP_DEVICE_PLAN_CONFLICT_MESSAGE);
       renderSetupNav();
       return;
     }

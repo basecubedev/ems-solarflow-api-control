@@ -300,7 +300,7 @@ test.describe("Stale Setup apply", () => {
     const refused = await post(page, "/api/setup/config/apply", {
       ...DRAFT,
       setup_workflow_id: workflow,
-      device_plan_id: await currentDevicePlanId(page),
+      device_plan_id: await currentDevicePlanId(page, DRAFT.devices),
     });
     expect(refused.status, JSON.stringify(refused.body)).toBe(409);
     expect(refused.body.error).toBe("setup_preview_required");

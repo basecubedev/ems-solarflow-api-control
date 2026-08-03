@@ -412,16 +412,16 @@ class ReleaseContractHarness:
         )
 
     def preview(self, *, devices=None, selections=(), supported_grid_meter_count=0):
-        return self.request(
-            "/api/setup/config-preview",
-            body={
-                **self._body(devices, selections, supported_grid_meter_count),
-                "setup_workflow_id": self.setup_workflow_id,
-                "device_plan_id": current_device_plan_id(
-                    self._base, self._authority_request
-                ),
-            },
+        body = {
+            **self._body(devices, selections, supported_grid_meter_count),
+            "setup_workflow_id": self.setup_workflow_id,
+        }
+        # The plan authorizes the draft it was computed over, so it is issued
+        # for this exact body — as the browser re-plans for its own draft.
+        body["device_plan_id"] = current_device_plan_id(
+            self._base, self._authority_request, body=body
         )
+        return self.request("/api/setup/config-preview", body=body)
 
     def download(self, *, devices=None, selections=(), supported_grid_meter_count=0):
         return self.request(

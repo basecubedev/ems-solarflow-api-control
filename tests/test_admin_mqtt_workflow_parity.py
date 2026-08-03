@@ -866,8 +866,10 @@ def test_setup_and_maintenance_reject_invalid_configured_ref_identically(
                 {"id": proposal["id"], "broker_ref": proposal["broker_ref"]}
             ],
             "setup_workflow_id": start_setup_workflow(base, _workflow_request),
-            "device_plan_id": current_device_plan_id(base, _workflow_request),
         }
+        setup_body["device_plan_id"] = current_device_plan_id(
+            base, _workflow_request, body=setup_body
+        )
         s_status, s_preview = _request(
             f"{base}/api/setup/config-preview", "POST", setup_body
         )
@@ -956,8 +958,10 @@ def test_setup_and_maintenance_reject_cross_source_shared_ref_identically(
                 {"id": cloud["id"], "broker_ref": cloud["broker_ref"]},
             ],
             "setup_workflow_id": start_setup_workflow(base, _workflow_request),
-            "device_plan_id": current_device_plan_id(base, _workflow_request),
         }
+        setup_body["device_plan_id"] = current_device_plan_id(
+            base, _workflow_request, body=setup_body
+        )
         s_status, s_preview = _request(
             f"{base}/api/setup/config-preview", "POST", setup_body
         )

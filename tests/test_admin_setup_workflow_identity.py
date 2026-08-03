@@ -49,7 +49,10 @@ def _write_live(payload):
 
 def _mutate(base, path, body):
     request = dict(body)
-    request.setdefault("device_plan_id", current_device_plan_id(base, _request))
+    request.setdefault(
+        "device_plan_id",
+        current_device_plan_id(base, _request, devices=body.get("devices")),
+    )
     return _request(f"{base}{path}", method="POST", body=request)
 
 
@@ -197,7 +200,9 @@ def test_an_admin_restart_preserves_workflow_and_preview_authority(tmp_path):
         # The plan a browser would hold when it reviewed this preview. The
         # process that issued it is about to disappear; the authority it granted
         # must not, so the same id is presented after the restart.
-        device_plan_id = current_device_plan_id(base, _request)
+        device_plan_id = current_device_plan_id(
+            base, _request, devices=_draft_a().get("devices")
+        )
         preview_id = _preview(base, workflow_id, _draft_a(), device_plan_id)[
             "config_preview_id"
         ]

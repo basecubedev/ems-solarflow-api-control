@@ -89,9 +89,20 @@ export async function storedWorkflow(page: Page) {
   return raw ? JSON.parse(raw) : null;
 }
 
-/** The device plan the server currently considers authoritative. */
-export async function currentDevicePlanId(page: Page): Promise<string> {
-  const plan = await post(page, "/api/setup/device-plan", { state: {} });
+/**
+ * The device plan the server currently considers authoritative for `devices`.
+ *
+ * A plan authorizes the draft it was computed over, so planning happens against
+ * the same device list the caller goes on to review — exactly as the browser
+ * does, which re-plans whenever its draft changes.
+ */
+export async function currentDevicePlanId(
+  page: Page,
+  devices?: unknown[],
+): Promise<string> {
+  const plan = await post(page, "/api/setup/device-plan", {
+    state: { draft_items: devices ?? [] },
+  });
   expect(plan.status, JSON.stringify(plan.body)).toBe(200);
   return plan.body.plan_id as string;
 }
@@ -113,7 +124,10 @@ export async function authorizeSetupMutation(
   authorized.setup_workflow_id = workflow;
   // Config Preview issues mutation authority only for a device plan the server
   // issued and still considers current, so plan first — as the browser does.
-  authorized.device_plan_id ??= await currentDevicePlanId(page);
+  authorized.device_plan_id ??= await currentDevicePlanId(
+    page,
+    (authorized.devices as unknown[]) ?? [],
+  );
   const preview = await post(page, "/api/setup/config-preview", authorized);
   expect(preview.status, JSON.stringify(preview.body)).toBe(200);
   expect(

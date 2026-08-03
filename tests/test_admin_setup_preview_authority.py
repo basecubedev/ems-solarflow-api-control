@@ -128,10 +128,10 @@ def _start_workflow(base, srv=None):
     return workflow_id
 
 
-def _device_plan_id(base):
+def _device_plan_id(base, devices=None):
     """The current device plan, exactly as the browser obtains one."""
 
-    return current_device_plan_id(base, _request)
+    return current_device_plan_id(base, _request, devices=devices)
 
 
 def _preview(base, workflow_id, body, device_plan_id=None):
@@ -141,7 +141,8 @@ def _preview(base, workflow_id, body, device_plan_id=None):
         body={
             **body,
             "setup_workflow_id": workflow_id,
-            "device_plan_id": device_plan_id or _device_plan_id(base),
+            "device_plan_id": device_plan_id
+            or _device_plan_id(base, body.get("devices")),
         },
     )
     assert status == 200, payload
@@ -157,7 +158,7 @@ def _mutate(base, path, body, workflow_id, preview_id):
         request["setup_workflow_id"] = workflow_id
     if preview_id is not None:
         request["config_preview_id"] = preview_id
-    request.setdefault("device_plan_id", _device_plan_id(base))
+    request.setdefault("device_plan_id", _device_plan_id(base, body.get("devices")))
     return _request(f"{base}{path}", method="POST", body=request)
 
 

@@ -51,9 +51,14 @@ async function post(
   return { status: res.status(), body: await res.json().catch(() => ({})) };
 }
 
-/** The device plan Config Preview will demand, as the browser obtains one. */
-async function currentDevicePlanId(session: Session): Promise<string> {
-  const plan = await post(session, "/api/setup/device-plan", { state: {} });
+/** The device plan Config Preview will demand for `devices`, as a browser gets one. */
+async function currentDevicePlanId(
+  session: Session,
+  devices: unknown[] = [],
+): Promise<string> {
+  const plan = await post(session, "/api/setup/device-plan", {
+    state: { draft_items: devices },
+  });
   expect(plan.status, JSON.stringify(plan.body)).toBe(200);
   expect(plan.body.plan_id, JSON.stringify(plan.body)).toBeTruthy();
   return plan.body.plan_id as string;
@@ -115,7 +120,7 @@ test("a real Admin restart preserves one workflow interpretation", async () => {
     { "X-Setup-Intent-ID": startPath.body.setup_intent_id as string },
   );
   expect(confirmed.status, JSON.stringify(confirmed.body)).toBe(200);
-  const devicePlanId = await currentDevicePlanId(first);
+  const devicePlanId = await currentDevicePlanId(first, draft.devices);
   const reviewed = await post(first, "/api/setup/config-preview", {
     ...draft,
     setup_workflow_id: workflowId,

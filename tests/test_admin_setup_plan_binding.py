@@ -18,7 +18,12 @@ from pathlib import Path
 
 import pytest
 
-from admin.device_plan_registry import DevicePlanRegistry
+from admin.device_plan_registry import (
+    CONTRACT_FIELDS,
+    DevicePlanRegistry,
+    mutation_authority_fingerprint,
+    plan_fingerprint,
+)
 from admin.install_context import detect_install_context
 from admin.mqtt_discovery import MqttBrokerDiscovery, MqttBrokerStore
 from tests.test_admin_server import _control_export_manager, _request, _serve
@@ -100,10 +105,14 @@ def _start_workflow(base):
 
 
 def _device_plan(base, state=None, **extra):
+    # A plan authorizes the draft it was computed over, so the default state is
+    # the default draft these tests go on to review.
+    if state is None:
+        state = {"draft_items": _draft()["devices"]}
     status, _, payload = _request(
         f"{base}/api/setup/device-plan",
         method="POST",
-        body=dict({"state": state or {}}, **extra),
+        body=dict({"state": state}, **extra),
     )
     assert status == 200, payload
     return payload
@@ -356,39 +365,101 @@ def test_apply_refuses_a_missing_device_plan(tmp_path):
 
 
 # --- the registry the preview check reads ------------------------------------
+def _contract(**overrides):
+    contract = {
+        "workflow_id": "wf-1",
+        "workflow_revision": "sha256:" + "1" * 64,
+        "draft_revision": "plan:v1:state",
+        "candidate_authority_fingerprint": "gen",
+        "confirmation_fingerprint": "plan:v1:settled",
+        "decision_fingerprint": "plan:v1:decisions",
+        "executable_operations_fingerprint": "plan:v1:operations",
+        "expected_draft_fingerprint": "plan:v1:draft",
+    }
+    contract.update(overrides)
+    return contract
+
+
 def test_the_registry_forgets_the_oldest_plans_first():
     """Bounded on purpose: a forgotten plan makes the browser re-plan."""
 
     registry = DevicePlanRegistry(limit=2)
     for index in range(3):
-        registry.record(
-            f"plan:v1:{index}", generation="gen", confirmation_required=False
-        )
+        registry.record(f"plan:v1:{index}", **_contract())
 
     assert registry.get("plan:v1:0") is None
-    assert registry.get("plan:v1:2")["generation"] == "gen"
+    assert registry.get("plan:v1:2")["candidate_authority_fingerprint"] == "gen"
 
 
 def test_the_registry_never_answers_for_a_plan_it_did_not_record():
     registry = DevicePlanRegistry()
     assert registry.get("plan:v1:forged") is None
     assert registry.get("") is None
-    assert registry.record("", generation="gen", confirmation_required=False) is None
+    assert registry.record("", **_contract()) is None
+
+
+def test_the_registry_refuses_an_incomplete_authority_contract():
+    """A plan recorded without one of its facts would validate against nothing."""
+
+    registry = DevicePlanRegistry()
+    for missing in CONTRACT_FIELDS:
+        contract = _contract()
+        contract.pop(missing)
+        with pytest.raises(TypeError):
+            registry.record("plan:v1:a", **contract)
+    with pytest.raises(TypeError):
+        registry.record("plan:v1:a", **_contract(), confirmation_required=False)
 
 
 def test_re_recording_a_plan_keeps_it_current():
     registry = DevicePlanRegistry(limit=2)
-    registry.record("plan:v1:a", generation="one", confirmation_required=True)
-    registry.record("plan:v1:b", generation="one", confirmation_required=False)
-    registry.record("plan:v1:a", generation="two", confirmation_required=False)
-    registry.record("plan:v1:c", generation="two", confirmation_required=False)
+    registry.record("plan:v1:a", **_contract(candidate_authority_fingerprint="one"))
+    registry.record("plan:v1:b", **_contract(candidate_authority_fingerprint="one"))
+    registry.record("plan:v1:a", **_contract(candidate_authority_fingerprint="two"))
+    registry.record("plan:v1:c", **_contract(candidate_authority_fingerprint="two"))
 
     assert registry.get("plan:v1:b") is None
-    assert registry.get("plan:v1:a") == {
-        "plan_id": "plan:v1:a",
-        "generation": "two",
-        "confirmation_required": False,
-    }
+    entry = registry.get("plan:v1:a")
+    assert entry == dict(
+        _contract(candidate_authority_fingerprint="two"),
+        plan_id="plan:v1:a",
+        plan_fingerprint=plan_fingerprint(entry),
+        mutation_authority_fingerprint=mutation_authority_fingerprint(entry),
+    )
+
+
+def test_a_recorded_contract_reproduces_its_own_digests():
+    """Every part is bound: change one and the stored authority no longer holds."""
+
+    registry = DevicePlanRegistry()
+    entry = registry.record("plan:v1:a", **_contract())
+    assert entry["plan_fingerprint"] == plan_fingerprint(entry)
+    assert entry["mutation_authority_fingerprint"] == mutation_authority_fingerprint(
+        entry
+    )
+    for field in CONTRACT_FIELDS:
+        tampered = dict(entry, **{field: "moved"})
+        assert (
+            tampered["plan_fingerprint"] != plan_fingerprint(tampered)
+            or tampered["mutation_authority_fingerprint"]
+            != mutation_authority_fingerprint(tampered)
+        ), field
+
+
+def test_a_workflow_that_ends_takes_its_plans_with_it():
+    """Completion, abandonment and replacement all spend the run's plans."""
+
+    registry = DevicePlanRegistry()
+    for plan_id, workflow in (("plan:v1:a", "wf-1"), ("plan:v1:b", "wf-1"), ("plan:v1:c", "wf-2")):
+        registry.record(plan_id, **_contract(workflow_id=workflow))
+
+    assert registry.forget_workflow("wf-1") == 2
+    assert registry.get("plan:v1:a") is None
+    assert registry.get("plan:v1:b") is None
+    # Another run's plans are untouched, and forgetting twice is harmless.
+    assert registry.get("plan:v1:c")["workflow_id"] == "wf-2"
+    assert registry.forget_workflow("wf-1") == 0
+    assert registry.forget_workflow("") == 0
 
 
 def test_the_full_chain_applies(tmp_path):

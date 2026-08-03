@@ -214,6 +214,37 @@ def setup_mutation_fingerprint(
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
+def workflow_authority_revision(record):
+    """The ownership generation of one Guided Setup workflow record.
+
+    ``workflow_id`` alone answers "which run", not "which run, in which state":
+    a run that has been completed, abandoned or superseded is no longer an
+    owner, and a replacement run is a different owner even where a caller still
+    holds the old identity. Derived from the durable record's ownership fields
+    only — lifecycle and creation, never a preview, an artifact or a secret — so
+    any holder of the record can recompute it and nothing recoverable leaks into
+    a value that travels with a device plan.
+
+    ``None`` for a missing or unreadable record, which is what makes a plan
+    recorded outside a run fail closed against one recorded inside it.
+    """
+
+    if not isinstance(record, dict):
+        return None
+    body = {
+        "revision_version": 1,
+        "format_version": record.get("format_version"),
+        "workflow_id": record.get("workflow_id"),
+        "type": record.get("type"),
+        "status": record.get("status"),
+        "created_at": record.get("created_at"),
+    }
+    encoded = json.dumps(
+        body, ensure_ascii=True, separators=(",", ":"), sort_keys=True
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
 def _valid_base_revision(value):
     if not isinstance(value, dict) or set(value) != {
         "expected_revision",
@@ -893,4 +924,5 @@ __all__ = [
     "cleanup_state",
     "empty_cleanup_state",
     "setup_mutation_fingerprint",
+    "workflow_authority_revision",
 ]

@@ -43,6 +43,8 @@ a confirmation token; a switch it blocks is returned as nothing at all.
 See ``docs/developer/developer.md``.
 """
 
+import json
+
 from ems.device_identity import (
     STATUS_UNRESOLVED,
     is_masked_identity_value,
@@ -450,20 +452,107 @@ def _empty_operations():
     }
 
 
+def candidate_authority_fields(view, *, source, control=None):
+    """The authority-relevant projection of one trusted candidate.
+
+    A handle alone is not the candidate: the same route keeps its observation id
+    when the hardware behind it is replaced, so identity, the connection it is
+    reached over and whether it can be controlled all belong in what a plan is
+    validated against.
+    """
+
+    return "|".join(
+        [
+            _text(view.get("observation_id")),
+            _text(view.get("connection_id")),
+            _text(view.get("physical_device_id")),
+            _text(view.get("identity_status")) or STATUS_UNRESOLVED,
+            _text(source),
+            "unknown" if control is None else ("yes" if control else "no"),
+            # The discovery round this candidate was offered in. A broker that
+            # re-answers with the same route in a later round is a new
+            # observation of it, not the one the plan was computed over.
+            _text(view.get("discovery_generation")),
+        ]
+    )
+
+
+def trusted_proposals_by_id(proposals):
+    """The trusted proposal set, keyed by id, in first-seen order.
+
+    One normalization for both the planner and any caller that recomputes what
+    a plan was planned over. Ids are not unique in every discovery shape — one
+    inverter offered by two local brokers is issued the same serial-bearing id —
+    so a caller iterating the raw list would see a candidate set the planner
+    never had, and the two would never agree again.
+    """
+
+    by_id = {}
+    for raw in proposals or []:
+        proposal = _mapping(raw)
+        identifier = _text(proposal.get("id"))
+        if identifier:
+            by_id[identifier] = proposal
+    return by_id
+
+
+def entry_authority_fields(entry, *, control=None):
+    """The authority projection of one already-resolved trusted entry."""
+
+    identity = entry.identity
+    return candidate_authority_fields(
+        {
+            "observation_id": entry.observation_id,
+            "connection_id": entry.connection_id,
+            "physical_device_id": identity.public_identity_id if identity else None,
+            "identity_status": identity.status if identity else STATUS_UNRESOLVED,
+            "discovery_generation": _mapping(entry.payload).get(
+                "discovery_generation"
+            ),
+        },
+        source=entry.source,
+        control=control,
+    )
+
+
+def candidate_authority_of(
+    payload,
+    *,
+    source,
+    identity_token_key,
+    broker_sources=None,
+    fallback="",
+    control=None,
+):
+    """Resolve one trusted record and project its authority.
+
+    The entry point for a caller that holds discovery state but has not run the
+    planner — Config Preview recomputing what a stored plan was planned over.
+    It resolves through the same helper the planner uses, so the two can be
+    compared at all.
+    """
+
+    entry = _Entry("observation", "", _mapping(payload), source)
+    _resolve_trusted(
+        entry, key=identity_token_key, broker_sources=broker_sources, fallback=fallback
+    )
+    return entry_authority_fields(entry, control=control)
+
+
 def setup_candidate_generation(
     *, observations, proposals, priority, enabled_sources, identity_token_key
 ):
     """The opaque generation of one candidate set.
 
-    Derived from server-owned state only — the issued observation ids, the
-    current proposal ids and the operator's source preference — so any holder of
+    Derived from server-owned state only — the authority projection of every
+    trusted candidate and the operator's source preference — so any holder of
     the key can recompute it later and prove a device plan still describes the
     world it was planned in.
     """
 
     return opaque_plan_id(
         [
-            "setup-candidates-v1",
+            "setup-candidates-v2",
             sorted(observations),
             sorted(proposals),
             list(priority or []),
@@ -473,6 +562,294 @@ def setup_candidate_generation(
             ),
         ],
         identity_token_key,
+    )
+
+
+# What a draft entry *is*, as opposed to what an operator called it. Labels,
+# enablement and catalog values are operator intent and reach config through
+# the catalog mutation authority; these decide which hardware is configured and
+# how it is reached, which is exactly what a device plan decides.
+_DRAFT_IDENTITY_FIELDS = (
+    "role",
+    "source_id",
+    "serial_number",
+    "physical_identity_token",
+    "ip",
+    "port",
+    "api_family",
+    "device_type",
+    "grid_meter_type",
+)
+
+
+# Which authority model owns each field of a Setup draft entry. Exactly one
+# per field: an editable value with two owners is a value neither one can
+# actually hold, and one with none is a browser field that reaches config
+# unchecked. See ``docs/developer/developer.md`` — "Setup draft field
+# authority".
+AUTHORITY_DEVICE_PLAN = "device_plan"
+AUTHORITY_CATALOG_MUTATION = "catalog_mutation"
+AUTHORITY_EXACT_PREVIEW = "exact_preview"
+AUTHORITY_PRESENTATION = "presentation"
+
+DRAFT_FIELD_AUTHORITY = {
+    # The device plan decides which hardware is configured and how it is
+    # reached. Moving one of these after planning is a different draft, and the
+    # plan refuses it.
+    "role": AUTHORITY_DEVICE_PLAN,
+    "source_id": AUTHORITY_DEVICE_PLAN,
+    "serial_number": AUTHORITY_DEVICE_PLAN,
+    "physical_identity_token": AUTHORITY_DEVICE_PLAN,
+    "ip": AUTHORITY_DEVICE_PLAN,
+    "port": AUTHORITY_DEVICE_PLAN,
+    "api_family": AUTHORITY_DEVICE_PLAN,
+    "device_type": AUTHORITY_DEVICE_PLAN,
+    "grid_meter_type": AUTHORITY_DEVICE_PLAN,
+    # The plan's own handle for this entry: its operations name it. Deliberately
+    # outside the fingerprint — rekeying a card is not a change to what the plan
+    # decided, and a plan that refused it could never be repaired by re-planning.
+    "draft_item_id": AUTHORITY_DEVICE_PLAN,
+    # Catalog values, coerced and written by ``ems.config_mutation`` against the
+    # central catalog. An unknown key never becomes writable by appearing here.
+    "config_values": AUTHORITY_CATALOG_MUTATION,
+    # Operator intent about an already-authorized device. Not catalog fields,
+    # but they do change the generated bytes, so the exact preview fingerprint
+    # binds them from review to apply.
+    "config_name": AUTHORITY_EXACT_PREVIEW,
+    "display_name": AUTHORITY_EXACT_PREVIEW,
+    "enabled": AUTHORITY_EXACT_PREVIEW,
+    # Browser bookkeeping. Never read where the config is produced, so it
+    # authorizes nothing and needs no authority of its own.
+    "auto_added": AUTHORITY_PRESENTATION,
+    "auto_selected": AUTHORITY_PRESENTATION,
+    "connection_type": AUTHORITY_PRESENTATION,
+    "discovery_source": AUTHORITY_PRESENTATION,
+    "manual": AUTHORITY_PRESENTATION,
+}
+
+
+def draft_field_authority(field):
+    """Which authority model owns one draft field, or ``None`` if unclassified."""
+
+    return DRAFT_FIELD_AUTHORITY.get(_text(field))
+
+
+def draft_identity_projection(item):
+    """One draft entry reduced to what a device plan decided about it."""
+
+    item = _mapping(item)
+    values = []
+    for field in _DRAFT_IDENTITY_FIELDS:
+        value = item.get(field)
+        if field == "role":
+            value = _text(value) or _INVERTER_ROLE
+        values.append(_text(value))
+    return "|".join(values)
+
+
+def expected_draft_projections(state, operations):
+    """The draft this plan authorizes: the one it saw, minus what it drops.
+
+    An adoption is *additive advice* — the browser may not have reached it yet,
+    and a plan that predicted it would refuse the very draft it was computed
+    over. A drop is different: the plan has decided that entry is gone, so a
+    mutation still carrying it is not the draft the plan authorized. Either way
+    the browser re-plans after applying operations, so the settled plan's state
+    is the draft it presents.
+    """
+
+    dropped = {
+        _text(ref) for ref in (operations or {}).get("drop_draft_items") or ()
+    }
+    projections = []
+    for index, raw in enumerate(_mapping(state).get("draft_items") or []):
+        item = _mapping(raw)
+        ref = _text(item.get("draft_item_id")) or f"draft:{index}"
+        if ref in dropped:
+            continue
+        projections.append(draft_identity_projection(item))
+    return sorted(projections)
+
+
+def selection_projection(entry):
+    """One MQTT selection reduced to which offered connection it names."""
+
+    entry = _mapping(entry)
+    return "|".join([_text(entry.get("id")), _text(entry.get("broker_ref"))])
+
+
+def expected_selection_projections(state, operations):
+    """The MQTT selections this plan authorizes: seen, minus dropped.
+
+    Like an adoption, ``select_mqtt_proposals`` is additive advice the browser
+    may not have been able to take up — the offered proposal has to still be in
+    the list it is rendering. Predicting it would refuse the draft the plan was
+    computed over.
+    """
+
+    dropped = {
+        _text(ref) for ref in (operations or {}).get("drop_mqtt_selections") or ()
+    }
+    return sorted(
+        selection_projection(entry)
+        for entry in _mapping(state).get("mqtt_selections") or []
+        if _text(_mapping(entry).get("id")) not in dropped
+    )
+
+
+def setup_draft_fingerprint(projections, selections=(), *, identity_token_key):
+    """Keyed digest of one canonical draft and its selected connections."""
+
+    return opaque_plan_id(
+        ["setup-draft-v2", sorted(projections), sorted(selections)],
+        identity_token_key,
+    )
+
+
+def setup_state_revision(state, *, identity_token_key):
+    """Keyed digest of the persisted Setup state one plan was computed over.
+
+    The *whole* submitted state, not the part that survives: every draft entry
+    including the ones the plan goes on to drop, every stored selection, and the
+    dismissals — which no other fingerprint covers, and which decide what the
+    planner is allowed to re-add. Deliberately not the live-config baseline:
+    that is owned by the exact preview record, which re-reads it under the apply
+    transaction and reports a moved one as ``stale_setup_config``, with an
+    operator action to match. Re-checking it here would revoke a plan without
+    changing its id, and the browser repairs a refused plan by re-planning.
+    """
+
+    state = _mapping(state)
+    return opaque_plan_id(
+        [
+            "setup-state-v1",
+            sorted(
+                draft_identity_projection(item)
+                for item in state.get("draft_items") or ()
+            ),
+            sorted(
+                selection_projection(entry)
+                for entry in state.get("mqtt_selections") or ()
+            ),
+            sorted(_text(value) for value in state.get("physical_dismissals") or ()),
+            sorted(_text(value) for value in state.get("observation_dismissals") or ()),
+        ],
+        identity_token_key,
+    )
+
+
+def setup_confirmation_fingerprint(confirmations, *, identity_token_key):
+    """Keyed digest of the switch answers a plan is still waiting for.
+
+    A boolean only says *that* something is unanswered. This says *which*, so
+    the recorded value moves whenever confirmation-relevant state does — a
+    switch appearing, being answered, or being re-proposed under a different
+    candidate generation. Only the issued token contributes: it already binds
+    the generation, the physical identity, both connection ids and both entry
+    references, and it carries none of the evidence behind them.
+
+    The settled value — no confirmation outstanding — is the digest of the empty
+    set, so a caller with the key can recognize an executable plan without being
+    told anything about what a non-executable one is waiting for.
+    """
+
+    return opaque_plan_id(
+        [
+            "setup-confirmations-v1",
+            sorted(
+                _text(_mapping(entry).get("token"))
+                for entry in confirmations or ()
+            ),
+        ],
+        identity_token_key,
+    )
+
+
+def _operation_projection(entry):
+    """One executable operation reduced to the ids it names."""
+
+    if isinstance(entry, dict):
+        return "|".join(f"{name}={_text(entry[name])}" for name in sorted(entry))
+    return _text(entry)
+
+
+def setup_operations_fingerprint(operations, *, identity_token_key):
+    """Keyed digest of the executable operations one plan authorized.
+
+    The server's own canonical operation set, never the browser's echo of it:
+    what a plan is permitted to change about a draft is as much of its authority
+    as which draft it decided on. ``proposed_operations`` stays out — a switch
+    the planner refused to make on its own authorizes nothing until it is
+    answered, at which point the plan is recomputed anyway.
+    """
+
+    operations = _mapping(operations)
+    return opaque_plan_id(
+        [
+            "setup-operations-v1",
+            [
+                [name, sorted(_operation_projection(entry) for entry in
+                              (operations.get(name) or ()))]
+                for name in sorted(_empty_operations())
+            ],
+        ],
+        identity_token_key,
+    )
+
+
+def setup_decision_fingerprint(groups, *, identity_token_key):
+    """Keyed digest of the planner's per-device verdict and action.
+
+    Which connection each physical device ended up on, why it was chosen and
+    what the pairwise planner decided about the transition. Two plans can name
+    the same candidates and the same draft and still be different decisions;
+    this is what makes them different authority.
+    """
+
+    return opaque_plan_id(
+        [
+            "setup-decisions-v1",
+            sorted(
+                json.dumps(
+                    {
+                        "physical_device_id": _text(view.get("physical_device_id")),
+                        "selected_source": _text(view.get("selected_source")),
+                        "selection_origin": _text(view.get("selection_origin")),
+                        "available": bool(view.get("available")),
+                        "connection_ids": sorted(
+                            _text(value) for value in view.get("connection_ids") or ()
+                        ),
+                        "action": view.get("action"),
+                    },
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+                for view in (groups or ())
+                if isinstance(view, dict)
+            ),
+        ],
+        identity_token_key,
+    )
+
+
+def submitted_draft_projections(devices):
+    """Canonicalize the draft a mutation request submitted."""
+
+    return sorted(
+        draft_identity_projection(item)
+        for item in (devices or [])
+        if isinstance(item, dict)
+    )
+
+
+def submitted_selection_projections(proposals):
+    """Canonicalize the MQTT selections a mutation request submitted."""
+
+    return sorted(
+        selection_projection(entry)
+        for entry in (proposals or [])
+        if isinstance(entry, dict)
     )
 
 
@@ -513,6 +890,7 @@ def build_setup_plan(
 
     # --- trusted candidates ---------------------------------------------------
     observation_entries = []
+    observation_entries_all = []
     observation_views = []
     for index, raw in enumerate(observations or []):
         device = _mapping(raw)
@@ -527,15 +905,11 @@ def build_setup_plan(
         observation_views.append(
             dict(_entry_view(entry, OBSERVATION_REF_FIELD), source=SOURCE_LOCAL_API)
         )
+        observation_entries_all.append(entry)
         if _text(device.get("role_suggestion")) == _INVERTER_ROLE:
             observation_entries.append(entry)
 
-    proposal_by_id = {}
-    for raw in proposals or []:
-        proposal = _mapping(raw)
-        identifier = _text(proposal.get("id"))
-        if identifier:
-            proposal_by_id[identifier] = proposal
+    proposal_by_id = trusted_proposals_by_id(proposals)
 
     proposal_entries = []
     for identifier, proposal in proposal_by_id.items():
@@ -683,8 +1057,14 @@ def build_setup_plan(
     }
 
     generation = setup_candidate_generation(
-        observations=[view["observation_id"] or "" for view in observation_views],
-        proposals=list(proposal_by_id),
+        observations=[
+            entry_authority_fields(entry, control=capability(entry))
+            for entry in observation_entries_all
+        ],
+        proposals=[
+            entry_authority_fields(entry, control=capability(entry))
+            for entry in proposal_entries
+        ],
         priority=priority,
         enabled_sources=enabled,
         identity_token_key=key,
@@ -792,8 +1172,9 @@ def build_setup_plan(
 
     plan_id = opaque_plan_id(
         [
-            "setup-plan-v1",
+            "setup-plan-v2",
             generation,
+            [view["action"] or "" for view in group_views],
             draft_views,
             selection_views,
             sorted(dismissed_physical),
@@ -1340,13 +1721,23 @@ def resolve_current_connection(
 
 
 __all__ = [
+    "AUTHORITY_CATALOG_MUTATION",
+    "AUTHORITY_DEVICE_PLAN",
+    "AUTHORITY_EXACT_PREVIEW",
+    "AUTHORITY_PRESENTATION",
+    "DRAFT_FIELD_AUTHORITY",
     "IDENTITY_SCHEMA_VERSION",
     "OBSERVATION_REF_FIELD",
     "build_setup_plan",
+    "draft_field_authority",
     "legacy_observation_key",
     "mqtt_source_of",
     "plan_setup_connection_switch",
     "resolve_current_connection",
     "resolve_selected_source",
     "setup_candidate_generation",
+    "setup_confirmation_fingerprint",
+    "setup_decision_fingerprint",
+    "setup_operations_fingerprint",
+    "setup_state_revision",
 ]

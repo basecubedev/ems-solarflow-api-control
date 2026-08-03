@@ -23,6 +23,12 @@ import pytest
 
 from admin.install_context import detect_install_context
 from admin.mqtt_discovery import MqttBrokerDiscovery, MqttBrokerStore
+from admin.setup_planner import (
+    expected_selection_projections,
+    setup_draft_fingerprint,
+    submitted_selection_projections,
+    trusted_proposals_by_id,
+)
 from tests.test_admin_server import _control_export_manager, _request, _serve
 
 pytestmark = pytest.mark.simulation
@@ -462,6 +468,115 @@ def test_the_replacing_workflow_can_still_plan_for_itself(tmp_path):
         status, _, payload = _preview(base, workflow_b, plan_b["plan_id"], planned)
         assert status == 200, payload
         assert payload["config_preview_id"]
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+# --- the selection half of the same binding ---------------------------------
+def test_a_selection_the_plan_did_not_make_changes_the_fingerprint():
+    """A device reached over MQTT is a device the plan decided on too.
+
+    An untrusted selection is already refused a layer earlier, when it is
+    resolved against current discovery state. What this pins is the trusted but
+    *unplanned* one: swapping which offered connection is configured is a
+    different draft, and a plan that did not make that choice cannot authorize
+    it.
+    """
+
+    state = {"mqtt_selections": [{"id": "zendure-mqtt:A", "broker_ref": "local"}]}
+    operations = {"drop_mqtt_selections": [], "select_mqtt_proposals": []}
+    key = b"k" * 32
+
+    planned = setup_draft_fingerprint(
+        [],
+        expected_selection_projections(state, operations),
+        identity_token_key=key,
+    )
+    swapped = setup_draft_fingerprint(
+        [],
+        submitted_selection_projections(
+            [{"id": "zendure-mqtt:B", "broker_ref": "local"}]
+        ),
+        identity_token_key=key,
+    )
+    same = setup_draft_fingerprint(
+        [],
+        submitted_selection_projections(
+            [{"id": "zendure-mqtt:A", "broker_ref": "local"}]
+        ),
+        identity_token_key=key,
+    )
+
+    assert planned != swapped
+    assert planned == same
+
+
+def test_a_dropped_selection_leaves_the_expected_set():
+    """A drop is a decision; an offer the browser has not taken up is not."""
+
+    state = {
+        "mqtt_selections": [
+            {"id": "zendure-mqtt:A", "broker_ref": "local"},
+            {"id": "zendure-mqtt:B", "broker_ref": "local"},
+        ]
+    }
+    operations = {
+        "drop_mqtt_selections": ["zendure-mqtt:A"],
+        # Additive advice: the browser can only take it up if that proposal is
+        # still in the list it renders, so predicting it would refuse the draft
+        # this very plan was computed over.
+        "select_mqtt_proposals": [{"id": "zendure-mqtt:C", "broker_ref": "cloud"}],
+    }
+
+    assert expected_selection_projections(state, operations) == [
+        "zendure-mqtt:B|local"
+    ]
+
+
+# --- the two sides of the candidate fingerprint must normalize alike ---------
+def test_the_trusted_proposal_set_is_normalized_once():
+    """A duplicated proposal id must not split the two computations apart.
+
+    The planner keys proposals by id; a caller recomputing what a plan was
+    planned over has to do the same. Ids are not unique in every discovery
+    shape — one inverter offered by two local brokers is issued the same
+    serial-bearing id — so iterating the raw list would produce a candidate set
+    the planner never had, and every plan would read as stale forever.
+    """
+
+    duplicated = [
+        {"id": "zendure-mqtt:A", "connection_source": "local_mqtt", "n": 1},
+        {"id": "zendure-mqtt:A", "connection_source": "local_mqtt", "n": 2},
+        {"id": "", "connection_source": "local_mqtt"},
+        {"id": "zendure-mqtt:B", "connection_source": "local_mqtt"},
+    ]
+
+    normalized = trusted_proposals_by_id(duplicated)
+
+    assert list(normalized) == ["zendure-mqtt:A", "zendure-mqtt:B"]
+    # Last value wins, as the planner has always resolved it.
+    assert normalized["zendure-mqtt:A"]["n"] == 2
+    # Idempotent: normalizing an already-normalized set changes nothing.
+    assert trusted_proposals_by_id(normalized.values()) == normalized
+
+
+def test_a_duplicated_proposal_id_does_not_stale_every_plan(tmp_path):
+    """The generation is computed over the same normalized set on both sides."""
+
+    srv, base = _serve(
+        mdns_provider=_Devices([_inverter()]),
+        mqtt_discovery=_scalar_local_mqtt_discovery(),
+        release_manager=_control_export_manager(tmp_path),
+    )
+    _write_live()
+    try:
+        workflow_id = _start_workflow(base)
+        planned = [_draft_item(_observation_id(base))]
+        plan = _planned(base, workflow_id, planned)
+
+        status, _, payload = _preview(base, workflow_id, plan["plan_id"], planned)
+        assert status == 200, payload
     finally:
         srv.shutdown()
         srv.server_close()

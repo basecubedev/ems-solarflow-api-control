@@ -137,7 +137,7 @@ def test_empty_abandon_cannot_discard_newer_workflow(tmp_path):
                 **_draft_a(),
                 "setup_workflow_id": second,
                 "config_preview_id": preview_id,
-                "device_plan_id": current_device_plan_id(base, _request),
+                "device_plan_id": current_device_plan_id(base, _request, devices=_draft_a().get("devices")),
             },
         )
         assert status == 200, applied
@@ -170,7 +170,7 @@ def test_mutation_and_abandon_are_mutually_exclusive(tmp_path, path):
                 **_draft_a(),
                 "setup_workflow_id": workflow_id,
                 "config_preview_id": preview_id,
-                "device_plan_id": current_device_plan_id(base, _request),
+                "device_plan_id": current_device_plan_id(base, _request, devices=_draft_a().get("devices")),
             },
         )
         mutation.start()
@@ -209,7 +209,7 @@ def test_supersede_cannot_terminalize_running_apply(tmp_path):
                 **_draft_a(),
                 "setup_workflow_id": workflow_id,
                 "config_preview_id": preview_id,
-                "device_plan_id": current_device_plan_id(base, _request),
+                "device_plan_id": current_device_plan_id(base, _request, devices=_draft_a().get("devices")),
             },
         )
         mutation.start()
@@ -259,7 +259,7 @@ def test_apply_cannot_commit_after_abandon_claim(tmp_path):
                     **_draft_a(),
                     "setup_workflow_id": workflow_id,
                     "config_preview_id": preview_id,
-                    "device_plan_id": current_device_plan_id(base, _request),
+                    "device_plan_id": current_device_plan_id(base, _request, devices=_draft_a().get("devices")),
                 },
             )
 
@@ -292,7 +292,7 @@ def test_credential_staging_does_not_escape_terminal_barrier(tmp_path):
                     **body,
                     "setup_workflow_id": workflow_id,
                     "config_preview_id": preview_id,
-                    "device_plan_id": current_device_plan_id(base, _request),
+                    "device_plan_id": current_device_plan_id(base, _request, devices=_draft_a().get("devices")),
                 },
             )
 
@@ -319,7 +319,7 @@ def test_two_mutations_for_one_workflow_do_not_overlap(tmp_path):
             **_draft_a(),
             "setup_workflow_id": workflow_id,
             "config_preview_id": preview_id,
-            "device_plan_id": current_device_plan_id(base, _request),
+            "device_plan_id": current_device_plan_id(base, _request, devices=_draft_a().get("devices")),
         }
 
         first = _Mutation(base, "/api/setup/config/apply", body)

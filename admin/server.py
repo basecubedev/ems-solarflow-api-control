@@ -67,13 +67,30 @@ from admin.connection_capability import (
     connection_output_control,
     payload_output_control,
 )
-from admin.device_plan_registry import DevicePlanRegistry
+from admin.device_plan_registry import (
+    DevicePlanRegistry,
+    REASON_CONFIRMATION,
+    REASON_DRAFT,
+    device_plan_conflict,
+)
 from admin.setup_planner import (
     OBSERVATION_REF_FIELD,
     build_setup_plan,
+    candidate_authority_of,
+    expected_draft_projections,
+    expected_selection_projections,
+    mqtt_source_of,
     plan_setup_connection_switch,
     resolve_current_connection,
     setup_candidate_generation,
+    setup_confirmation_fingerprint,
+    setup_decision_fingerprint,
+    setup_draft_fingerprint,
+    setup_operations_fingerprint,
+    setup_state_revision,
+    submitted_draft_projections,
+    trusted_proposals_by_id,
+    submitted_selection_projections,
 )
 from admin.ems_cli import EmsCliDiagnostics
 from admin.embedded_resources import (
@@ -171,6 +188,7 @@ from admin.guided_setup_workflow import (
     cleanup_blocks,
     cleanup_conflict_error,
     setup_mutation_fingerprint,
+    workflow_authority_revision,
 )
 from admin.setup_lifecycle import SetupLifecycleCoordinator
 from admin.setup_workflow import (
@@ -251,6 +269,7 @@ TRANSITION_CANCEL_UNSUPPORTED = "transition_cancel_unsupported"
 DEVICE_PLAN_REQUIRED = "device_plan_required"
 DEVICE_PLAN_STALE = "stale_device_plan"
 DEVICE_PLAN_CONFIRMATION_REQUIRED = "device_plan_confirmation_required"
+DEVICE_PLAN_DRAFT_MISMATCH = "device_plan_draft_mismatch"
 
 
 def _setup_plan_references(body, kind):
@@ -305,6 +324,20 @@ def _device_plan_stale_rejection():
             "message": (
                 "The discovered devices changed after this setup was planned. "
                 "Review the device list again."
+            ),
+        },
+        409,
+    )
+
+
+def _device_plan_draft_rejection():
+    return (
+        {
+            "ok": False,
+            "error": DEVICE_PLAN_DRAFT_MISMATCH,
+            "message": (
+                "This device list is not the one that was planned. Review the "
+                "devices again before preparing the configuration."
             ),
         },
         409,
@@ -2338,6 +2371,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             ):
                 workflows.finish(record["workflow_id"], status=STATUS_COMPLETED)
                 self.server.setup_intents.invalidate_workflow(record["workflow_id"])
+                self.server.device_plans.forget_workflow(record["workflow_id"])
         except GuidedSetupWorkflowError:
             # A mutation still owns the workflow. The durable transition
             # completion stands; the record stays active and its artifacts stay
@@ -4452,6 +4486,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         try:
             reconcile_unclaimed_review(workflows)
+            self.server.device_plans.forget_workflow(record["workflow_id"])
             replacement = workflows.start_replacement(selected_system_tag=tag.strip())
         except GuidedSetupWorkflowError as exc:
             self._send_workflow_rejection(exc)
@@ -4514,10 +4549,32 @@ class AdminHandler(BaseHTTPRequestHandler):
             declined_switches=_setup_plan_tokens(body.get("declined_switches")),
             unresolved_references=unresolved,
         )
+        # A plan is a decision inside one Setup run, over one candidate set,
+        # against one config baseline, about one exact draft. All of it is
+        # recorded here from server-owned state — never from the request — so
+        # Preview can hold the plan to the contract it was issued under.
+        key = self.server.identity_token_key
+        active = self.server.setup_workflows.active()
         self.server.device_plans.record(
             response["plan_id"],
-            generation=response["generation"],
-            confirmation_required=response["confirmation_required"],
+            workflow_id=(active or {}).get("workflow_id"),
+            workflow_revision=workflow_authority_revision(active),
+            draft_revision=setup_state_revision(state, identity_token_key=key),
+            candidate_authority_fingerprint=response["generation"],
+            confirmation_fingerprint=setup_confirmation_fingerprint(
+                response["confirmations"], identity_token_key=key
+            ),
+            decision_fingerprint=setup_decision_fingerprint(
+                response["groups"], identity_token_key=key
+            ),
+            executable_operations_fingerprint=setup_operations_fingerprint(
+                response["operations"], identity_token_key=key
+            ),
+            expected_draft_fingerprint=setup_draft_fingerprint(
+                expected_draft_projections(state, response["operations"]),
+                expected_selection_projections(state, response["operations"]),
+                identity_token_key=key,
+            ),
         )
         switch = body.get("switch")
         if isinstance(switch, dict):
@@ -4549,43 +4606,109 @@ class AdminHandler(BaseHTTPRequestHandler):
         }
 
     def _current_device_plan_generation(self):
-        """The candidate generation a device plan must still match."""
+        """The candidate authority a device plan must still match.
+
+        Every authority-relevant property of every trusted candidate, not the
+        handles alone: an observation id is derived from the route, so the
+        hardware behind an address can be replaced without the handle moving.
+        """
 
         priority, enabled = self._setup_source_preference()
+        key = self.server.identity_token_key
         observations = self._stamped_observations(self.server.mdns_provider.devices())
         return setup_candidate_generation(
             observations=[
-                str(device.get("observation_id") or "") for device in observations
+                candidate_authority_of(
+                    device,
+                    source=SOURCE_LOCAL_API,
+                    identity_token_key=key,
+                    fallback=str(index),
+                    control=payload_output_control(device, SOURCE_LOCAL_API),
+                )
+                for index, device in enumerate(observations)
             ],
             proposals=[
-                str(proposal.get("id") or "")
-                for proposal in self._trusted_mqtt_proposals()
+                candidate_authority_of(
+                    proposal,
+                    source=mqtt_source_of(proposal.get("connection_source")),
+                    identity_token_key=key,
+                    fallback=str(proposal.get("id") or ""),
+                    control=payload_output_control(
+                        proposal, mqtt_source_of(proposal.get("connection_source"))
+                    ),
+                )
+                for proposal in trusted_proposals_by_id(
+                    self._trusted_mqtt_proposals()
+                ).values()
             ],
             priority=priority,
             enabled_sources=enabled,
-            identity_token_key=self.server.identity_token_key,
+            identity_token_key=key,
         )
 
-    def _verify_device_plan(self, device_plan_id):
+    def _settled_confirmation_fingerprint(self):
+        """What a plan's confirmation fingerprint reads as with nothing pending."""
+
+        return setup_confirmation_fingerprint(
+            (), identity_token_key=self.server.identity_token_key
+        )
+
+    def _verify_device_plan(
+        self, device_plan_id, *, workflow_id, devices=(), selections=()
+    ):
         """``None`` when this plan may be reviewed into config, else a rejection.
 
-        Three separate facts, all fail-closed: this process issued the plan, the
-        candidate set it was planned over is still the current one, and it has
-        no switch left waiting for an operator answer. The registry is
-        deliberately transient — a restart makes the browser re-plan, which is
-        the safe direction — so the accepted binding is copied onto the durable
-        preview record and re-checked there at mutation time.
+        Every fact the plan was recorded under is re-established here from
+        current server state, and all of them fail closed: this process issued
+        the plan, its stored contract still reproduces its own digests, the
+        Setup run that asked for it is the one asking now *and is still an
+        owner*, the candidate set it was planned over is still the current one,
+        it has no switch left waiting for an operator answer, and the draft in
+        front of it is the one it authorized — what it saw, minus what it drops.
+        Without the last one a valid plan is a permission slip for whatever the
+        browser posts next.
+
+        The draft comparison has no opt-out: a caller that presents no draft
+        presents an empty one, which matches only a plan that authorized
+        nothing. The registry is deliberately transient — a restart makes the
+        browser re-plan, which is the safe direction — so the accepted binding
+        is copied onto the durable preview record and re-checked there at
+        mutation time.
         """
 
         plan_id = device_plan_id.strip() if isinstance(device_plan_id, str) else ""
         if not plan_id:
             return _device_plan_required_rejection()
         record = self.server.device_plans.get(plan_id)
-        if record is None or record["generation"] != self._current_device_plan_generation():
+        if record is None:
             return _device_plan_stale_rejection()
-        if record["confirmation_required"]:
+        # The ownership context, not the id the request named: a run that has
+        # been completed, abandoned or replaced is no longer an owner, and its
+        # revision moves with it.
+        active = self.server.setup_workflows.active()
+        reason = device_plan_conflict(
+            record,
+            workflow_id=workflow_id,
+            workflow_revision=workflow_authority_revision(
+                active
+                if active is not None and active["workflow_id"] == workflow_id
+                else None
+            ),
+            candidate_authority_fingerprint=self._current_device_plan_generation(),
+            settled_confirmation_fingerprint=self._settled_confirmation_fingerprint(),
+            submitted_draft_fingerprint=setup_draft_fingerprint(
+                submitted_draft_projections(devices),
+                submitted_selection_projections(selections),
+                identity_token_key=self.server.identity_token_key,
+            ),
+        )
+        if reason is None:
+            return None
+        if reason == REASON_CONFIRMATION:
             return _device_plan_confirmation_rejection()
-        return None
+        if reason == REASON_DRAFT:
+            return _device_plan_draft_rejection()
+        return _device_plan_stale_rejection()
 
     def _setup_plan_observations(self, body, proposals):
         """Trusted observations, carrying the caller's handle for each card.
@@ -4730,8 +4853,13 @@ class AdminHandler(BaseHTTPRequestHandler):
                 return
             # The device plan decided what each device is and how it is reached;
             # nothing may be prepared for writing unless that decision is still
-            # the current one.
-            rejection = self._verify_device_plan(device_plan_id)
+            # the current one and this is the draft it decided on.
+            rejection = self._verify_device_plan(
+                device_plan_id,
+                workflow_id=record["workflow_id"],
+                devices=draft,
+                selections=body.get("zendure_mqtt_proposals"),
+            )
             if rejection is not None:
                 payload, status = rejection
                 self._send_json(payload, status=status)
@@ -5491,6 +5619,7 @@ class AdminHandler(BaseHTTPRequestHandler):
                 # converge, so every confirmation still held for it — in any
                 # session — must stop being authority.
                 self.server.setup_intents.invalidate_workflow(workflow_id)
+                self.server.device_plans.forget_workflow(workflow_id)
                 return result
         except SystemAlignmentError as exc:
             self._send_json(
@@ -5630,10 +5759,13 @@ class AdminHandler(BaseHTTPRequestHandler):
                 )
             except GuidedSetupWorkflowError as exc:
                 return self._workflow_rejection_payload(exc)
-            # The fingerprint already binds this mutation to the reviewed device
-            # plan. What it cannot say is whether that plan still describes the
-            # current devices, so the generation is compared here and a moved
-            # discovery state revokes the preview.
+            # The preview fingerprint covers this exact draft and the plan id it
+            # was reviewed under, and Preview only issued it after proving that
+            # plan authorized that draft — so the plan/draft binding travels
+            # with the preview and survives the transient registry. What the
+            # fingerprint cannot say is whether the plan still describes the
+            # current devices, so the candidate authority is recomputed here and
+            # a moved world revokes the preview.
             if preview["device_plan_generation"] != self._current_device_plan_generation():
                 workflows.clear_preview(record["workflow_id"])
                 return _device_plan_stale_rejection()

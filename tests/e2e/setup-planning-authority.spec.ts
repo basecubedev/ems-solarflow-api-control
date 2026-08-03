@@ -369,3 +369,132 @@ test("Fresh Setup: a superseded device plan cannot preview or apply", async ({
   });
   expect(applied.status()).toBe(409);
 });
+
+// --- a plan authorizes one draft, in one run, over one candidate set ---------
+
+async function plannedDraftItem(page: Page) {
+  const served = await (await page.request.get("/api/discovery/devices")).json();
+  const device = (served.devices || []).find(
+    (entry: Record<string, unknown>) => entry.ip === SEEDED_IP,
+  );
+  expect(device, JSON.stringify(served)).toBeTruthy();
+  return {
+    source_id: device.observation_id,
+    draft_item_id: "e2e-item-1",
+    role: "inverter",
+    enabled: true,
+    config_name: "WR1",
+    display_name: SHARED_DISPLAY,
+    ip: SEEDED_IP,
+    port: 80,
+    serial_number: SEEDED_SERIAL,
+    device_type: "zendure_solarflow_800_pro2",
+    api_family: "zendure_local_http",
+    auto_added: false,
+  };
+}
+
+async function previewWith(
+  page: Page,
+  workflowId: string,
+  planId: string,
+  devices: unknown[],
+) {
+  const auth = await (await page.request.get("/api/admin/auth/status")).json();
+  const response = await page.request.post("/api/setup/config-preview", {
+    headers: { "X-CSRF-Token": auth.csrf_token as string },
+    data: {
+      devices,
+      supported_grid_meter_count: 0,
+      setup_workflow_id: workflowId,
+      device_plan_id: planId,
+    },
+  });
+  return { status: response.status(), body: await response.json() };
+}
+
+async function startedWorkflowId(page: Page) {
+  const auth = await (await page.request.get("/api/admin/auth/status")).json();
+  const started = await page.request.post("/api/admin/start-path", {
+    headers: { "X-CSRF-Token": auth.csrf_token as string },
+    data: { choice: "setup_new", confirm: true },
+  });
+  return (await started.json()).setup_workflow_id as string;
+}
+
+test("Fresh Setup: a valid device plan cannot authorize an invented device", async ({
+  page,
+  seedLocalApiDevices,
+}) => {
+  test.setTimeout(120_000);
+  await signIn(page);
+  await seedLocalApiDevices([{ ip: SEEDED_IP, serial: SEEDED_SERIAL }]);
+  const workflowId = await startedWorkflowId(page);
+  const planned = await plannedDraftItem(page);
+  const plan = await devicePlan(page, { draft_items: [planned] });
+
+  const forged = {
+    ...planned,
+    source_id: "obs:v1:invented",
+    draft_item_id: "e2e-item-evil",
+    config_name: "WR-EVIL",
+    serial_number: "INVENTED999",
+    ip: "192.0.2.77",
+  };
+  const refused = await previewWith(page, workflowId, plan.plan_id, [forged]);
+  expect(refused.status, JSON.stringify(refused.body)).toBe(409);
+  expect(refused.body.config_preview_id).toBeUndefined();
+
+  // The draft the plan did cover is not refused, so the binding costs a real
+  // review nothing. Whether it also becomes *applicable* is the System Build's
+  // question, and belongs to the journeys that confirm one.
+  const accepted = await previewWith(page, workflowId, plan.plan_id, [planned]);
+  expect(accepted.status, JSON.stringify(accepted.body)).toBe(200);
+  expect(accepted.body.error).toBeUndefined();
+});
+
+test("Fresh Setup: a server-side identity change blocks the old preview", async ({
+  page,
+  seedLocalApiDevices,
+}) => {
+  test.setTimeout(120_000);
+  await signIn(page);
+  await seedLocalApiDevices([{ ip: SEEDED_IP, serial: SEEDED_SERIAL }]);
+  const workflowId = await startedWorkflowId(page);
+  const planned = await plannedDraftItem(page);
+  const plan = await devicePlan(page, { draft_items: [planned] });
+
+  // Same address, different hardware: the handle survives, the decision does not.
+  await seedLocalApiDevices([{ ip: SEEDED_IP, serial: OTHER_SERIAL }]);
+
+  const refused = await previewWith(page, workflowId, plan.plan_id, [planned]);
+  expect(refused.status, JSON.stringify(refused.body)).toBe(409);
+  expect(refused.body.error).toBe("stale_device_plan");
+});
+
+test("Fresh Setup: a device plan cannot be spent in another run", async ({
+  page,
+  seedLocalApiDevices,
+}) => {
+  test.setTimeout(120_000);
+  await signIn(page);
+  await seedLocalApiDevices([{ ip: SEEDED_IP, serial: SEEDED_SERIAL }]);
+  const firstWorkflowId = await startedWorkflowId(page);
+  const planned = await plannedDraftItem(page);
+  const plan = await devicePlan(page, { draft_items: [planned] });
+
+  // The setup is restarted: the run the plan belongs to ends and a new one
+  // takes over, exactly as "Restart setup" does.
+  const auth = await (await page.request.get("/api/admin/auth/status")).json();
+  const discarded = await page.request.post("/api/setup/abandon", {
+    headers: { "X-CSRF-Token": auth.csrf_token as string },
+    data: { setup_workflow_id: firstWorkflowId },
+  });
+  expect(discarded.status(), await discarded.text()).toBe(200);
+  const nextWorkflowId = await startedWorkflowId(page);
+  expect(nextWorkflowId).not.toBe(firstWorkflowId);
+
+  const refused = await previewWith(page, nextWorkflowId, plan.plan_id, [planned]);
+  expect(refused.status, JSON.stringify(refused.body)).toBe(409);
+  expect(refused.body.error).toBe("stale_device_plan");
+});

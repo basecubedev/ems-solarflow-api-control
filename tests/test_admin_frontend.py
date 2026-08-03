@@ -1816,6 +1816,69 @@ def test_js_config_adopts_only_what_the_plan_names():
     assert 'draftItemFromDevice(device, "inverter")' in adopt
 
 
+def test_js_plan_state_carries_the_whole_draft():
+    """A plan authorizes the draft it saw, so no entry may be left out of it."""
+
+    js = _read("admin.js")
+    payload = _extract_fn(js, "setupPlanStatePayload")
+    assert "configDraftItems.map(" in payload
+    assert "inverterItems()" not in payload
+    assert '"grid_meter"' in payload
+    assert "grid_meter_type: item.grid_meter_type" in payload
+
+
+def test_js_grid_meter_variant_change_replans_before_previewing():
+    js = _read("admin.js")
+    assert "refreshSetupPlan().then(renderConfigPreview)" in js
+
+
+def test_js_device_plan_conflict_clears_preview_authority():
+    """A refused plan must not leave Apply armed on the authority it refused."""
+
+    js = _read("admin.js")
+    handler = _extract_fn(js, "handleSetupDevicePlanConflict")
+    assert "setSetupPreviewId(null)" in handler
+    assert "setConfigExportReady(false)" in handler
+    assert "refreshSetupPlan()" in handler
+    # A fresh plan is asked for; the mutation itself is never retried here.
+    assert "config/apply" not in handler
+    assert "config/write" not in handler
+
+    for code in (
+        "stale_device_plan",
+        "device_plan_draft_mismatch",
+        "device_plan_required",
+        "device_plan_confirmation_required",
+    ):
+        assert code in js
+
+
+def test_js_device_plan_conflict_replans_at_most_once_per_response():
+    """A conflict storm must not become a plan-request storm."""
+
+    handler = _extract_fn(_read("admin.js"), "handleSetupDevicePlanConflict")
+    assert "if (configPreviewPlanId === setupPlan.plan_id) refreshSetupPlan();" in handler
+
+
+def test_js_apply_and_write_report_a_plan_conflict_as_such():
+    """The plan can still move between the review and the mutation."""
+
+    js = _read("admin.js")
+    for name in ("applyGeneratedConfig", "continueFromConfig"):
+        fn = _extract_fn(js, name)
+        assert "isSetupDevicePlanConflict(data)" in fn, name
+        assert "handleSetupDevicePlanConflict(data)" in fn, name
+
+
+def test_js_preview_checks_the_plan_conflict_before_reporting_failure():
+    js = _read("admin.js")
+    preview = _extract_fn(js, "requestConfigPreview")
+    assert "isSetupDevicePlanConflict(data)" in preview
+    assert preview.index("isSetupDevicePlanConflict(data)") < preview.index(
+        "if (!res.ok)"
+    )
+
+
 def test_js_config_zero_grid_meters_not_auto_selected():
     js = _read("admin.js")
     fn = js.split("function autoSelectGridMeter", 1)[1].split("\nfunction ", 1)[0]
