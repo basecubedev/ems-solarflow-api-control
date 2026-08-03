@@ -48,6 +48,10 @@ jobs:
         run: |
           python tools/build_config_template.py --check
 
+      - name: Check the third-party license inventory
+        run: |
+          python tools/check_third_party_licenses.py
+
       - name: Check the admin.js frontend parses
         run: |
           node --check admin/static/admin.js
