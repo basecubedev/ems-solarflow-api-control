@@ -114,6 +114,11 @@ export class SetupPage {
     return [...this.validationResponses];
   }
 
+  resetValidationHistory() {
+    this.validationResponse = null;
+    this.validationResponses = [];
+  }
+
   devicesTab(): Locator {
     return this.page.locator('[data-setup-step="devices"]');
   }

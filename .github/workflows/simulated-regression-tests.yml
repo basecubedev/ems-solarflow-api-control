@@ -52,9 +52,10 @@ jobs:
         run: |
           node --check admin/static/admin.js
 
-  # The four groups partition the non-Docker suite: `core` is the complement of
-  # the functional groups, so an unclassified module still runs exactly once.
-  # tests/test_test_classification.py enforces that property.
+  # The four groups are an exact partition of the non-Docker suite: ownership is
+  # resolved by the fixed priority power-control > mqtt > admin > core, so every
+  # test runs in exactly one group and none runs twice.
+  # tests/test_test_classification.py proves both directions.
   python-tests:
     name: python-${{ matrix.group }} (${{ matrix.python-version }})
     runs-on: ubuntu-latest
@@ -133,6 +134,9 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install -r requirements-dev.txt
 
+      - name: Report the selected marker expression
+        run: printf 'pytest -q tests/ -m "simulation and power_control"\n'
+
       - name: Run simulated regression tests
         run: |
           pytest -q tests/ -m "simulation and power_control"
@@ -162,6 +166,9 @@ jobs:
       # alignment and Continue gating, transition persistence, discovery
       # authorization, resource preparation and Known-Good — including the
       # original v0.7.0 deadlock reproduction.
+      - name: Report the selected marker expression
+        run: printf 'pytest -q -m system_build tests/\n'
+
       - name: Run System Build compatibility gate
         run: |
           pytest -q -m system_build tests/
@@ -229,6 +236,9 @@ jobs:
       # the image, run the documented Docker flow, print redacted compose logs
       # on failure, and clean up their own project in a finally block. Non-Docker
       # contract/unit tests run in the python-tests groups instead.
+      - name: Report the selected marker expression
+        run: printf 'pytest -q -rs -m docker tests/\n'
+
       - name: Run real-Docker e2e tests
         run: |
           pytest -q -rs -m docker tests/
@@ -279,6 +289,9 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
           python -m pip install -r requirements-dev.txt
+
+      - name: Report the selected marker expression
+        run: printf 'pytest -q -rs tests/test_history_analytics_e2e.py (explicit file selection)\n'
 
       - name: Run InfluxDB-backed analytics e2e
         env:

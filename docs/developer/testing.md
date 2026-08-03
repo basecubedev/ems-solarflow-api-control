@@ -133,11 +133,28 @@ Each group runs independently and mirrors one CI job:
 ./scripts/test-pr.sh firefox-smoke
 ```
 
-`core` is deliberately the *complement* of the functional groups
-(`not docker and not admin and not mqtt and not power_control`), so a module
-that carries no functional marker still runs in exactly one group. The union of
-the five Python groups equals the full collection, and
-`tests/test_test_classification.py` enforces that property.
+The five groups are an **exact partition**: every collected test runs in exactly
+one of them, and none runs twice. Functional markers stay overlapping
+descriptions of behavior — a module may be both `admin` and `mqtt`. Only
+*execution ownership* is exclusive, resolved by a fixed priority:
+
+```text
+docker > power-control > mqtt > admin > core
+```
+
+| Group | Marker expression |
+|---|---|
+| `power-control` | `power_control and not docker` |
+| `mqtt` | `mqtt and not power_control and not docker` |
+| `admin` | `admin and not mqtt and not power_control and not docker` |
+| `core` | `not admin and not mqtt and not power_control and not docker` |
+| `docker` | `docker` |
+
+`tests/test_test_classification.py` proves both directions: the union equals the
+full collection, every pair of Python groups is disjoint, and each non-Docker
+test has exactly one owner. To run a *functional area* rather than a CI group,
+use the plain marker (`pytest -m "admin and authority"`) — that selection is
+intentionally overlapping.
 
 ### Nightly
 
@@ -182,6 +199,15 @@ Tags: `@smoke` (fast critical journeys), `@setup`, `@maintenance`,
   Docker suites skip with a precise reason instead of failing.
 - Playwright tiers need `npm ci` and
   `npx playwright install chromium firefox`. No tier installs dependencies.
+- The RC `admin-replacement` gate replaces one published Admin container with
+  another, both pinned by digest, so it needs `ADMIN_REPLACEMENT_RUNTIME`,
+  `ADMIN_REPLACEMENT_EVENTS`, the source identity (`CANARY_SOURCE_TAG`,
+  `CANARY_SOURCE_REVISION`, `CANARY_SOURCE_BUILD_ID`,
+  `CANARY_SOURCE_ADMIN_DIGEST`) and the target identity (`CANARY_TAG`,
+  `CANARY_REVISION`, `CANARY_BUILD_ID`, `CANARY_ADMIN_DIGEST`,
+  `CANARY_EMS_DIGEST`). Both sides come from the Development catalogue;
+  `python3 scripts/resolve_canary_builds.py --catalogue <file>` prints them and
+  `./scripts/test-rc.sh` names the missing ones before running any gate.
 
 ## Classifying a new test
 

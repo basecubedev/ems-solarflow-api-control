@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # Release-candidate tier: every gate an RC must pass, in order, with no
-# deselection of known failures. Requires a reachable Docker daemon and
-# installed Playwright browsers (npm ci && npx playwright install chromium
-# firefox). Nothing is installed implicitly.
+# deselection of known failures. Requires a reachable Docker daemon, installed
+# Playwright browsers (npm ci && npx playwright install chromium firefox) and
+# the published image digests the Admin replacement canary replaces into.
+# Nothing is installed implicitly; missing prerequisites fail before the first
+# gate rather than an hour in.
 #
 #   ./scripts/test-rc.sh            run every gate
 #   ./scripts/test-rc.sh --list     print the gates without running them
@@ -26,6 +28,7 @@ fi
 
 require_docker
 require_playwright
+require_replacement_canary_env
 
 gate_static() {
     run_stage "static: ruff" ruff check .

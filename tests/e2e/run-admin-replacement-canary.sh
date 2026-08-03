@@ -3,7 +3,13 @@ set -euo pipefail
 
 : "${ADMIN_REPLACEMENT_RUNTIME:?ADMIN_REPLACEMENT_RUNTIME is required}"
 : "${ADMIN_REPLACEMENT_EVENTS:?ADMIN_REPLACEMENT_EVENTS is required}"
+: "${CANARY_SOURCE_TAG:?CANARY_SOURCE_TAG is required}"
+: "${CANARY_SOURCE_REVISION:?CANARY_SOURCE_REVISION is required}"
+: "${CANARY_SOURCE_BUILD_ID:?CANARY_SOURCE_BUILD_ID is required}"
+: "${CANARY_SOURCE_ADMIN_DIGEST:?CANARY_SOURCE_ADMIN_DIGEST is required}"
 : "${CANARY_TAG:?CANARY_TAG is required}"
+: "${CANARY_REVISION:?CANARY_REVISION is required}"
+: "${CANARY_BUILD_ID:?CANARY_BUILD_ID is required}"
 : "${CANARY_ADMIN_DIGEST:?CANARY_ADMIN_DIGEST is required}"
 : "${CANARY_EMS_DIGEST:?CANARY_EMS_DIGEST is required}"
 
@@ -12,6 +18,25 @@ RUNTIME_DIR="$ADMIN_REPLACEMENT_RUNTIME"
 INSTALL_DIR="$RUNTIME_DIR/install"
 COMPOSE_FILE="$INSTALL_DIR/docker-compose.admin.yml"
 CONTAINER_NAME="ems-solarflow-admin"
+ADMIN_REPO="ghcr.io/basecubedev/ems-solarflow-admin"
+EMS_REPO="ghcr.io/basecubedev/ems-solarflow-api-control"
+SOURCE_ADMIN="${ADMIN_REPO}@${CANARY_SOURCE_ADMIN_DIGEST}"
+TARGET_ADMIN="${ADMIN_REPO}@${CANARY_ADMIN_DIGEST}"
+TARGET_EMS="${EMS_REPO}@${CANARY_EMS_DIGEST}"
+
+require_digest() {
+  case "$2" in
+    sha256:*) ;;
+    *) echo "$1 must be an immutable sha256: digest, got: $2" >&2; exit 1 ;;
+  esac
+}
+require_digest CANARY_SOURCE_ADMIN_DIGEST "$CANARY_SOURCE_ADMIN_DIGEST"
+require_digest CANARY_ADMIN_DIGEST "$CANARY_ADMIN_DIGEST"
+require_digest CANARY_EMS_DIGEST "$CANARY_EMS_DIGEST"
+if [[ "$CANARY_SOURCE_ADMIN_DIGEST" == "$CANARY_ADMIN_DIGEST" ]]; then
+  echo "source and target Admin digests are identical; the replacement would assert nothing" >&2
+  exit 1
+fi
 
 case "$(basename "$RUNTIME_DIR")" in
   ems-admin-replacement-*) ;;
@@ -38,12 +63,23 @@ cleanup_replacement_canary() {
 }
 trap cleanup_replacement_canary EXIT INT TERM
 
-docker pull ghcr.io/basecubedev/ems-solarflow-admin:latest
-docker pull "ghcr.io/basecubedev/ems-solarflow-admin@${CANARY_ADMIN_DIGEST}"
-docker pull "ghcr.io/basecubedev/ems-solarflow-api-control@${CANARY_EMS_DIGEST}"
+docker pull "$SOURCE_ADMIN"
+docker pull "$TARGET_ADMIN"
+docker pull "$TARGET_EMS"
+
+# The shared page objects address one data-testid contract. Both published
+# Admins must serve it, and a gap has to be named here rather than surfacing as
+# a locator timeout deep inside the journey.
+python3 scripts/admin_test_contract.py --role source --image "$SOURCE_ADMIN"
+python3 scripts/admin_test_contract.py --role target --image "$TARGET_ADMIN"
+
+# Compose addresses the source by tag; bind that tag to the resolved digest so
+# the container that starts is the exact published image, not whatever the
+# registry currently serves for the tag.
+docker tag "$SOURCE_ADMIN" "${ADMIN_REPO}:${CANARY_SOURCE_TAG}"
 
 sh deploy/admin/install-admin-console.sh \
-  --tag latest --bridge --bind 127.0.0.1 --port "$E2E_PORT" \
+  --tag "$CANARY_SOURCE_TAG" --bridge --bind 127.0.0.1 --port "$E2E_PORT" \
   --install-dir "$INSTALL_DIR" --no-start
 
 docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true

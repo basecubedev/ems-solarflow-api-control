@@ -50,12 +50,12 @@ def _upsert(payload, entry):
         raise ValueError("entry must contain a tag")
     builds = [item for item in payload["builds"] if item.get("tag") != tag]
     builds.append(entry)
-    builds.sort(key=_build_sort_key, reverse=True)
+    builds.sort(key=build_sort_key, reverse=True)
 
     branch_counts = {}
     retained = []
     for item in builds:
-        branch = _feature_branch_prefix(item)
+        branch = feature_branch_prefix(item)
         count = branch_counts.get(branch, 0)
         if count >= MAX_BUILDS_PER_FEATURE_BRANCH:
             continue
@@ -74,7 +74,7 @@ def _positive_int(value):
     return parsed if parsed > 0 else 0
 
 
-def _build_sort_key(entry):
+def build_sort_key(entry):
     return (
         entry.get("created_at") or "",
         _positive_int(entry.get("run_id")),
@@ -83,7 +83,7 @@ def _build_sort_key(entry):
     )
 
 
-def _feature_branch_prefix(entry):
+def feature_branch_prefix(entry):
     tag = str(entry.get("tag") or "")
     match = _IMMUTABLE_DEVELOPMENT_TAG.fullmatch(tag)
     return match.group("prefix") if match else tag

@@ -41,6 +41,9 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install -r requirements-dev.txt
 
+      - name: Report the selected marker expression
+        run: printf 'pytest -q -m "not docker" tests/\n'
+
       - name: Run full test suite (excludes real-Docker e2e, see docker-first job)
         run: |
           pytest -q -m "not docker" tests/
@@ -123,6 +126,9 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt -r requirements-dev.txt
 
+      - name: Report the selected marker expression
+        run: printf 'pytest -q -rs -m docker tests/\n'
+
       - name: Run real-Docker e2e tests
         run: |
           pytest -q -rs -m docker tests/
@@ -154,53 +160,16 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt -r requirements-dev.txt
 
+      - name: Report the selected marker expression
+        run: printf 'pytest -q -m system_build tests/\n'
+
       - name: Run the System Build tier
         run: |
           pytest -q -m system_build tests/
 
-  upgrade-recovery:
-    name: upgrade-recovery
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    permissions:
-      contents: read
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt -r requirements-dev.txt
-
-      - name: Set up Node
-        uses: actions/setup-node@v5
-        with:
-          node-version: "20"
-
-      - name: Install Node dependencies
-        run: npm ci
-
-      - name: Install Playwright browser
-        run: npx playwright install --with-deps chromium
-
-      - name: Run the Admin replacement and recovery journey
-        env:
-          CI: "1"
-        run: npx playwright test --config=playwright.admin-replacement.config.ts
-
-      - name: Upload Playwright report
-        if: failure()
-        uses: actions/upload-artifact@v5
-        with:
-          name: nightly-upgrade-recovery-report
-          path: |
-            playwright-report/
-            test-results/
-          retention-days: 14
+# The Admin replacement and recovery journey is NOT duplicated here. It may only
+# run against immutable published digests resolved and verified from the
+# Development catalogue, which admin-replacement-canary.yml owns end to end
+# (resolve -> verify -> GHCR login -> replace). A second copy here would either
+# repeat that resolution logic or run the canary against mutable tags.
+# See docs/developer/ci-release.md.

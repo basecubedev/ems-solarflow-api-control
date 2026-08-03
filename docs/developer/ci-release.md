@@ -18,11 +18,13 @@ Workflow: `.github/workflows/simulated-regression-tests.yml` (job name
 - `System Build compatibility gate`
 - `Docker smoke test`, `Docker-first setup e2e`, `InfluxDB analytics e2e`
 
-The groups partition the non-Docker suite: `core` is defined as the complement
-of the functional groups, so a module without a functional marker still runs in
-exactly one group. `tests/test_test_classification.py` fails when the union
-stops covering the full collection, and each job fails when its selection
-unexpectedly collects nothing.
+The groups are an exact partition of the non-Docker suite. Functional markers
+overlap by design, so execution ownership is resolved by the fixed priority
+`docker > power-control > mqtt > admin > core`; each group subtracts the groups
+that outrank it. `tests/test_test_classification.py` fails when the union stops
+covering the full collection *and* when any two groups would run the same test.
+Each job prints its selection and fails when that selection unexpectedly
+collects nothing.
 
 The offline power-control regression tests are the intended required status
 check for `main` in branch protection or repository rulesets. They are
@@ -46,10 +48,56 @@ splits or narrows:
   deprecation-warning run
 - the complete Chromium and Firefox Admin suites
 - the Docker-first tier and the System Build tier
-- the Admin replacement and recovery journey
 
-`./scripts/test-rc.sh` runs the same gates locally before a release
-candidate.
+The Admin replacement journey is deliberately **not** part of this workflow. It
+may only run against immutable published digests, which
+`.github/workflows/admin-replacement-canary.yml` resolves from the Development
+build catalogue, verifies with `scripts/verify_development_catalogue.py` and
+pulls after a GHCR login. That workflow owns the gate end to end and runs on its
+own weekly schedule plus `workflow_dispatch`; a missing or mutable target fails
+it as a blocked precondition instead of skipping.
+
+**A successful Admin Replacement Canary run is part of RC readiness.** Record
+the run URL together with both tags, revisions, build IDs and digests it used.
+
+### Two immutable Development builds, no mutable source
+
+Both sides of the replacement are published Development builds, addressed by
+digest. `scripts/resolve_canary_builds.py` reads the public catalogue and
+returns a pair:
+
+- **target** — the newest installable build, or `target_tag` from
+  `workflow_dispatch`
+- **source** — the newest *older* installable build of the target's feature
+  branch, or `source_tag` from `workflow_dispatch`
+
+The source Admin used to be the mutable `:latest` release. That made the gate
+unrunnable before the first release cut from a branch: the shared page objects
+address the Admin through `data-testid` hooks (`start-fresh-install`,
+`system-build-select`, `system-build-status`, `system-build-reload`,
+`upgrade-system-build-reload`, `continue-button`, `admin-update-button`,
+`embedded-resources-check`), and a release predating those hooks fails at the
+first locator regardless of the target. Pinning the source to a published
+Development build of the same branch removes the dependency on a release
+without weakening anything: the resolver refuses a mutable digest, refuses a
+pair whose Admin digests are equal, and blocks when no pair exists.
+
+Test-hook compatibility is never inferred from tag naming.
+`tests/e2e/admin-test-contract.json` is the single source of truth for the
+version and the hook list. New catalogue entries declare it as
+`admin_test_contract`, and an entry declaring a different version is dropped
+during resolution. The authority for what an image actually serves is
+`scripts/admin_test_contract.py`, which the runner executes against the source
+and the target Admin before any container starts and which names every missing
+hook. Do not answer a failure there by teaching the shared page objects a
+second, legacy markup contract — that would couple every Setup spec to a
+released UI generation. Pick a build that serves the hooks instead.
+
+`./scripts/test-rc.sh` runs the same gates locally before a release candidate.
+Its `admin-replacement` gate needs the same immutable identities, so the script
+names the missing variables in its preflight rather than failing an hour in.
+`scripts/resolve_canary_builds.py --catalogue <file>` prints exactly those
+variable values for a downloaded catalogue.
 
 ## Generated config template
 

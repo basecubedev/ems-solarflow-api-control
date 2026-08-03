@@ -16,8 +16,10 @@ CI_WORKFLOW = ROOT / ".github" / "workflows" / "simulated-regression-tests.yml"
 NIGHTLY_WORKFLOW = ROOT / ".github" / "workflows" / "nightly-full-suite.yml"
 PLAYWRIGHT_WORKFLOW = ROOT / ".github" / "workflows" / "playwright-e2e.yml"
 PUBLISH_WORKFLOW = ROOT / ".github" / "workflows" / "docker-publish.yml"
+CANARY_WORKFLOW = ROOT / ".github" / "workflows" / "admin-replacement-canary.yml"
 
-# Mirrors scripts/test-pr.sh; `core` is the complement of the other groups.
+# Mirrors scripts/test-pr.sh; ownership is exclusive, see
+# tests/test_test_classification.py.
 PR_GROUPS = ("core", "admin", "mqtt", "power-control")
 
 
@@ -68,6 +70,57 @@ def test_browser_groups_are_split_between_pull_request_and_nightly():
 
 
 def test_no_job_suppresses_failures_unconditionally():
-    for workflow in (CI_WORKFLOW, NIGHTLY_WORKFLOW, PLAYWRIGHT_WORKFLOW):
+    for workflow in (CI_WORKFLOW, NIGHTLY_WORKFLOW, PLAYWRIGHT_WORKFLOW, CANARY_WORKFLOW):
         for line in _stripped_lines(workflow):
             assert line != "continue-on-error: true", workflow.name
+
+
+def test_only_the_canary_workflow_runs_the_admin_replacement_config():
+    # The replacement journey may only run against immutable digests resolved
+    # from the Development catalogue, so exactly one workflow owns it.
+    marker = "playwright.admin-replacement.config.ts"
+    owners = [
+        path.name
+        for path in ROOT.glob(".github/workflows/*.yml")
+        if marker in path.read_text(encoding="utf-8")
+    ]
+    assert owners == ["admin-replacement-canary.yml"], owners
+
+
+def test_canary_resolves_immutable_digests_for_both_replacement_sides():
+    text = CANARY_WORKFLOW.read_text(encoding="utf-8")
+    assert "CANARY_SOURCE_ADMIN_DIGEST: ${{ steps.pair.outputs.source_admin_digest }}" in text
+    assert "CANARY_ADMIN_DIGEST: ${{ steps.pair.outputs.target_admin_digest }}" in text
+    assert "CANARY_EMS_DIGEST: ${{ steps.pair.outputs.target_ems_digest }}" in text
+    # An absent pair, a mutable digest or one image replacing itself are blocked
+    # preconditions inside the resolver, never a skip.
+    assert "scripts/resolve_canary_builds.py" in text
+    assert text.count("verify_development_catalogue.py") == 2
+    assert "continue-on-error" not in text
+
+
+def _runs_pytest(step):
+    for line in step.get("run", "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith(("pytest ", "python -m pytest", "python3 -m pytest")):
+            return True
+    return False
+
+
+def _reports_selection(step):
+    run = step.get("run", "")
+    return "scripts/test-pr.sh" in run or "printf" in run and "pytest" in run
+
+
+def test_every_pytest_job_reports_its_selection():
+    import yaml
+
+    for workflow in (CI_WORKFLOW, NIGHTLY_WORKFLOW):
+        jobs = yaml.safe_load(workflow.read_text(encoding="utf-8"))["jobs"]
+        for name, job in jobs.items():
+            steps = job.get("steps", [])
+            if not any(_runs_pytest(step) for step in steps):
+                continue
+            assert any(_reports_selection(step) for step in steps), (
+                f"{workflow.name}:{name} runs pytest without reporting its selection"
+            )

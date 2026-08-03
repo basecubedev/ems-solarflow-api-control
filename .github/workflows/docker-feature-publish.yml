@@ -790,11 +790,13 @@ jobs:
             --arg admin_digest "$ADMIN_DIGEST" \
             --arg ems_image "ghcr.io/basecubedev/ems-solarflow-api-control:${TAG}" \
             --arg ems_digest "$EMS_DIGEST" \
+            --argjson admin_test_contract "$(jq -r .version tests/e2e/admin-test-contract.json)" \
             '{builds: [{tag: $tag, display_name: $display_name, channel: "development",
               revision: $revision, build_id: $build_id, run_id: $run_id,
               run_attempt: $run_attempt, created_at: $created_at,
               admin_image: $admin_image, admin_digest: $admin_digest,
-              ems_image: $ems_image, ems_digest: $ems_digest, installable: true}]}' \
+              ems_image: $ems_image, ems_digest: $ems_digest,
+              admin_test_contract: $admin_test_contract, installable: true}]}' \
             > remote-development-builds.json
       - name: Run Chromium against the pulled production Admin
         env:
@@ -861,11 +863,13 @@ jobs:
             --arg admin_digest "$ADMIN_DIGEST" \
             --arg ems_image "ghcr.io/basecubedev/ems-solarflow-api-control:${TAG}" \
             --arg ems_digest "$EMS_DIGEST" \
+            --argjson admin_test_contract "$(jq -r .version tests/e2e/admin-test-contract.json)" \
             '{tag: $tag, display_name: $display_name, channel: "development",
               revision: $revision, build_id: $build_id, run_id: $run_id,
               run_attempt: $run_attempt, created_at: $created_at,
               admin_image: $admin_image, admin_digest: $admin_digest,
-              ems_image: $ems_image, ems_digest: $ems_digest, installable: true}' \
+              ems_image: $ems_image, ems_digest: $ems_digest,
+              admin_test_contract: $admin_test_contract, installable: true}' \
             > catalogue-entry.json
           for retry in 1 2 3 4 5; do
             # gh api prints the 404 body to stdout and exits non-zero for a

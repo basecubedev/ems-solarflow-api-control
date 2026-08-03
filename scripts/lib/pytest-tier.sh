@@ -47,3 +47,25 @@ require_docker() {
         return 1
     fi
 }
+
+# The replacement canary replaces one published Admin container with another,
+# both pinned by digest. Those identities come from the Development catalogue, so
+# the gate cannot derive them locally — name them instead of failing deep inside
+# the Playwright web server. scripts/resolve_canary_builds.py prints exactly
+# these values for a catalogue.
+require_replacement_canary_env() {
+    missing=""
+    for name in ADMIN_REPLACEMENT_RUNTIME ADMIN_REPLACEMENT_EVENTS \
+        CANARY_SOURCE_TAG CANARY_SOURCE_REVISION CANARY_SOURCE_BUILD_ID \
+        CANARY_SOURCE_ADMIN_DIGEST CANARY_TAG CANARY_REVISION CANARY_BUILD_ID \
+        CANARY_ADMIN_DIGEST CANARY_EMS_DIGEST; do
+        eval "value=\${$name:-}"
+        [ -n "$value" ] || missing="${missing} ${name}"
+    done
+    if [ -n "$missing" ]; then
+        printf 'error: the Admin replacement canary needs published image digests.\n' >&2
+        printf '       missing:%s\n' "$missing" >&2
+        printf '       See .github/workflows/admin-replacement-canary.yml for how CI supplies them.\n' >&2
+        return 1
+    fi
+}

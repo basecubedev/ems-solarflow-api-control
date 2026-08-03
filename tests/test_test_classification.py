@@ -38,15 +38,18 @@ AREAS = frozenset({
 })
 LEGACY = frozenset({"simulation", "regression", "mqtt_release"})
 
-# The pull-request groups from scripts/test-pr.sh. `core` is deliberately the
-# complement of the functional groups so that an unclassified module still runs.
+# The pull-request groups from scripts/test-pr.sh. Functional markers overlap by
+# design, so execution ownership is resolved by a fixed priority:
+# docker > power-control > mqtt > admin > core. Each group subtracts the ones
+# that outrank it, which makes the five groups an exact partition.
 PR_GROUPS = {
-    "core": "not docker and not admin and not mqtt and not power_control",
-    "admin": "admin and not docker",
-    "mqtt": "mqtt and not docker",
     "power-control": "power_control and not docker",
+    "mqtt": "mqtt and not power_control and not docker",
+    "admin": "admin and not mqtt and not power_control and not docker",
+    "core": "not admin and not mqtt and not power_control and not docker",
     "docker": "docker",
 }
+PYTHON_PR_GROUPS = {name: expr for name, expr in PR_GROUPS.items() if name != "docker"}
 
 
 @functools.cache
@@ -243,6 +246,47 @@ def test_pull_request_groups_cover_every_collected_test():
         covered |= collect(expression)
     missing = sorted(everything - covered)
     assert not missing, f"tests outside every PR group: {missing[:10]}"
+
+
+def test_python_pull_request_groups_are_pairwise_disjoint():
+    names = sorted(PYTHON_PR_GROUPS)
+    for index, left in enumerate(names):
+        for right in names[index + 1:]:
+            shared = sorted(collect(PYTHON_PR_GROUPS[left]) & collect(PYTHON_PR_GROUPS[right]))
+            assert not shared, (
+                f"{left} and {right} both run {len(shared)} test(s), e.g. {shared[:5]}"
+            )
+
+
+def test_every_non_docker_test_has_exactly_one_python_group_owner():
+    owners = {}
+    duplicated = []
+    for name, expression in PYTHON_PR_GROUPS.items():
+        for node in collect(expression):
+            if node in owners:
+                duplicated.append((node, owners[node], name))
+            owners[node] = name
+
+    non_docker = collect("not docker")
+    unowned = sorted(non_docker - set(owners))
+    stray = sorted(set(owners) - non_docker)
+
+    assert not duplicated, f"tests owned by several groups: {duplicated[:5]}"
+    assert not unowned, f"non-Docker tests owned by no group: {unowned[:5]}"
+    assert not stray, f"Docker tests pulled into a Python group: {stray[:5]}"
+
+
+def test_docker_group_owns_exactly_the_docker_tests():
+    assert collect(PR_GROUPS["docker"]) == collect("docker")
+    assert not collect("docker") & collect("not docker")
+
+
+def test_group_sizes_add_up_to_the_full_collection():
+    total = sum(len(collect(expression)) for expression in PR_GROUPS.values())
+    assert total == len(collect()), (
+        f"groups collect {total} test runs for {len(collect())} tests; "
+        "the partition executes something twice"
+    )
 
 
 def test_every_test_module_declares_exactly_one_level():

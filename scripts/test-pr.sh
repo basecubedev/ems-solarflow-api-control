@@ -5,9 +5,12 @@
 #
 #   core admin mqtt power-control docker chromium-critical firefox-smoke
 #
-# The four Python groups partition the non-Docker suite: `core` is the
-# complement of the functional groups, so no test can fall out of PR coverage
-# by staying unclassified. See docs/developer/testing.md.
+# The five groups are an exact partition: every collected test is owned by
+# exactly one of them. Functional markers stay overlapping descriptions of
+# behavior; only execution ownership is exclusive, resolved by the fixed
+# priority docker > power-control > mqtt > admin > core.
+# tests/test_test_classification.py proves both directions.
+# See docs/developer/testing.md.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # shellcheck source=scripts/lib/pytest-tier.sh
@@ -19,13 +22,15 @@ group="${1:-}"
 case "$group" in
     core)
         run_pytest_tier "pr/core" -q \
-            -m "not docker and not admin and not mqtt and not power_control" "$@"
+            -m "not admin and not mqtt and not power_control and not docker" "$@"
         ;;
     admin)
-        run_pytest_tier "pr/admin" -q -m "admin and not docker" "$@"
+        run_pytest_tier "pr/admin" -q \
+            -m "admin and not mqtt and not power_control and not docker" "$@"
         ;;
     mqtt)
-        run_pytest_tier "pr/mqtt" -q -m "mqtt and not docker" "$@"
+        run_pytest_tier "pr/mqtt" -q \
+            -m "mqtt and not power_control and not docker" "$@"
         ;;
     power-control)
         run_pytest_tier "pr/power-control" -q -m "power_control and not docker" "$@"

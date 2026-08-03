@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "hooks": [
+    "start-fresh-install",
+    "system-build-select",
+    "system-build-status",
+    "system-build-reload",
+    "upgrade-system-build-reload",
+    "continue-button",
+    "admin-update-button",
+    "embedded-resources-check"
+  ]
+}
