@@ -50,8 +50,19 @@ ENV_HEADER = (
 
 
 def generate_secret():
-    """Return a secure URL-safe random token suitable for InfluxDB."""
-    return secrets.token_urlsafe(32)
+    """Return a secure URL-safe random token suitable for InfluxDB.
+
+    The token reaches ``influx setup`` inside the InfluxDB container as a
+    command-line argument, where a leading hyphen reads as a flag instead of a
+    value and shifts every following argument by one. Resampling rules that
+    shape out while keeping the alphabet and length; the entropy cost is a few
+    hundredths of a bit.
+    """
+
+    while True:
+        token = secrets.token_urlsafe(32)
+        if not token.startswith("-"):
+            return token
 
 
 def resolve_secret_file_path(influx_config, base_dir=None):
