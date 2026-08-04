@@ -9,6 +9,7 @@ the negative cases run against a mutated copy in ``tmp_path`` so the repository
 is never touched.
 """
 import hashlib
+import json
 import re
 import shutil
 import subprocess
@@ -200,20 +201,23 @@ def test_an_undeclared_python_development_dependency_is_rejected(repo_copy):
 
 
 def test_an_undeclared_node_dependency_is_rejected(repo_copy):
+    """Mutate the manifest structurally, never by matching a pinned version.
+
+    A textual replacement that names the current version silently stops
+    mutating anything the moment the dependency is bumped: the checker then has
+    nothing to reject and the test fails while the inventory is in fact intact.
+    """
+
     package = repo_copy / "package.json"
-    package.write_text(
-        package.read_text(encoding="utf-8").replace(
-            '"@playwright/test": "^1.61.1"',
-            '"@playwright/test": "^1.61.1",\n    "eslint": "^9.0.0"',
-        ),
-        encoding="utf-8",
-    )
+    manifest = json.loads(package.read_text(encoding="utf-8"))
+    manifest["devDependencies"]["eslint"] = "^9.0.0"
+    package.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     assert any("eslint" in problem for problem in collect_problems(repo_copy))
 
 
 def test_a_stale_inventory_entry_is_rejected(repo_copy):
     manifest = repo_copy / "requirements-dev.txt"
-    manifest.write_text("pytest\nruff==0.15.22\n", encoding="utf-8")
+    manifest.write_text("pytest\nruff\n", encoding="utf-8")
     assert any("pyyaml" in problem for problem in collect_problems(repo_copy))
 
 
