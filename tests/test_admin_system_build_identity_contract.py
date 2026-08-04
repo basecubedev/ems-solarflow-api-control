@@ -120,6 +120,8 @@ def test_authoritative_system_build_id_validator_exists():
         f"v0.8.0-{SHORT_REVISION}-123456789-1",
         f"v0.8.0-RC1-{SHORT_REVISION}",
         f"v0.8.0-RC1-{SHORT_REVISION}-123456789-2",
+        f"v0.8.0-RC-{SHORT_REVISION}",
+        f"v0.8.0-RC-{SHORT_REVISION}-123456789-1",
         f"latest-{SHORT_REVISION}-123456789-3",
         f"dev-feature-zendure-mqtt-device-support-{SHORT_REVISION}-123456789-1",
         f"local-{SHORT_REVISION}",
