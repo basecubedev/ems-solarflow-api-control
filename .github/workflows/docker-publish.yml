@@ -141,6 +141,8 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ghcr.io/basecubedev/ems-solarflow-api-control
+          flavor: |
+            latest=false
           tags: |
             type=ref,event=tag
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
@@ -239,6 +241,8 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ghcr.io/basecubedev/ems-solarflow-admin
+          flavor: |
+            latest=false
           tags: |
             type=ref,event=tag
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}

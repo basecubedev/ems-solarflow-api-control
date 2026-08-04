@@ -125,6 +125,24 @@ def test_existing_image_tags_are_unchanged():
     )
 
 
+def test_only_the_main_branch_rule_may_move_the_rolling_latest_tag():
+    """``latest`` must stay a main-branch channel, never a release tag.
+
+    docker/metadata-action defaults to ``latest=auto``, which appends ``latest``
+    to every Git tag push regardless of the explicit main-branch rule. A release
+    candidate would then own the rolling channel while its
+    ``org.opencontainers.image.version`` label still names the release tag, and
+    Admin rejects that pair with "image version label does not match the
+    requested build tag". Both metadata steps must disable the default.
+    """
+
+    for step_name in ("Generate Docker metadata", "Generate Admin Docker metadata"):
+        flavor = (_step(step_name).get("with") or {}).get("flavor", "")
+        assert "latest=false" in flavor, (
+            f"{step_name} must disable the metadata-action latest=auto default"
+        )
+
+
 def test_dockerfile_declares_runtime_build_identity_args_and_env():
     text = _dockerfile_text()
     for name in BUILD_IDENTITY_ARGS:
