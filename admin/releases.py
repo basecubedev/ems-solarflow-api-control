@@ -489,8 +489,10 @@ class ReleaseManager:
         # never selectable; hide them from Setup and Guided Upgrade entirely.
         releases = sorted(
             (item for item in by_tag.values() if item["channel"] != "legacy"),
-            key=self._release_sort_key,
+            key=self._release_version_sort_key,
+            reverse=True,
         )
+        releases.sort(key=self._release_channel_sort_key)
         # Development builds are a distinct, always-last group in the same
         # catalogue (never mixed into the versioned sort above).
         releases.extend(self._development_release_items())
@@ -1175,7 +1177,7 @@ class ReleaseManager:
         }
 
     @staticmethod
-    def _release_sort_key(item):
+    def _release_channel_sort_key(item):
         channel_order = {
             "latest": 0,
             "stable": 1,
@@ -1184,13 +1186,19 @@ class ReleaseManager:
             "legacy": 4,
             "unknown": 5,
         }
-        parsed = _version(item["tag"])
-        core = parsed[:3] if parsed else (0, 0, 0)
-        return (
-            channel_order.get(item["channel"], 5),
-            tuple(-part for part in core),
-            item["tag"],
-        )
+        return channel_order.get(item["channel"], 5)
+
+    @staticmethod
+    def _release_version_sort_key(item):
+        """Order one channel's releases by their full parsed version.
+
+        The prerelease part decides between ``v0.8.0-RC1`` and ``v0.8.0-RC2``
+        and places both below ``v0.8.0``, so it must stay in the key. It holds
+        strings, which is why the descending order comes from ``reverse`` rather
+        than from negating the key.
+        """
+
+        return (_version(item["tag"]) or (0, 0, 0, (0,)), item["tag"])
 
     def _download(self, url):
         request = urllib.request.Request(

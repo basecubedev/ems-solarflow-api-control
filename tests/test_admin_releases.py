@@ -173,6 +173,39 @@ def test_release_list_maps_stable_and_prerelease_metadata(tmp_path):
     assert "v0.5.9" not in by_tag
 
 
+def test_every_channel_group_is_ordered_newest_first(tmp_path):
+    """Prereleases must order like versions, not like strings.
+
+    The sort key dropped the prerelease part, so the RC number fell through to
+    the tag-string tiebreaker and ran the opposite way from the versions above
+    it: ``v0.8.0`` before ``v0.7.0``, but ``v0.8.0-RC1`` before ``v0.8.0-RC2``.
+    """
+
+    payload = [
+        {
+            "tag_name": tag,
+            "name": tag,
+            "published_at": "2026-07-01T10:00:00Z",
+            "prerelease": False,
+            "draft": False,
+            "zipball_url": f"https://example.test/{tag}.zip",
+        }
+        for tag in ("v0.7.0-RC1", "v0.8.0-RC2", "v0.8.0-RC1", "v0.7.0", "v0.8.0")
+    ]
+    manager = ReleaseManager(data_dir=tmp_path, urlopen=_opener(payload=payload))
+
+    tags = [item["tag"] for item in manager.list_releases()["releases"]]
+
+    assert tags == [
+        "latest",
+        "v0.8.0",
+        "v0.7.0",
+        "v0.8.0-RC2",
+        "v0.8.0-RC1",
+        "v0.7.0-RC1",
+    ]
+
+
 def test_release_default_prefers_stable_over_rolling_latest(tmp_path):
     # When a versioned stable release exists it is the default, never the rolling
     # ``latest`` channel — even though ``latest`` sorts first in the catalogue.
