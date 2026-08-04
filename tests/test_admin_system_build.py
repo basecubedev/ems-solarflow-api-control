@@ -19,6 +19,7 @@ from admin.system_build import (
     SystemBuildError,
     SystemBuildResolver,
     decide_alignment,
+    decide_upgrade_direction,
     digest_pinned_ref,
 )
 
@@ -43,6 +44,7 @@ def _labels(
     channel="stable",
     release_tag=None,
     version="v0.8.0",
+    build_serial=None,
 ):
     labels = {
         "org.opencontainers.image.version": version,
@@ -52,6 +54,8 @@ def _labels(
     }
     if release_tag:
         labels["de.basecubedev.ems.release_tag"] = release_tag
+    if build_serial is not None:
+        labels["de.basecubedev.ems.build_serial"] = str(build_serial)
     return labels
 
 
@@ -76,7 +80,7 @@ class FakeDocker:
 
 def _pair(tag, *, channel="stable", build_id="v0.8.0-f7265fc", revision=REVISION,
           release_tag=None, admin_digest="sha256:admin", ems_digest="sha256:ems",
-          admin_labels=None, ems_labels=None):
+          admin_labels=None, ems_labels=None, build_serial=None):
     admin_ref = f"{ADMIN_IMAGE_REPO}:{tag}"
     ems_ref = f"{EMS_IMAGE_REPO}:{tag}"
     images = {
@@ -89,6 +93,7 @@ def _pair(tag, *, channel="stable", build_id="v0.8.0-f7265fc", revision=REVISION
                 channel=channel,
                 release_tag=release_tag,
                 version=tag,
+                build_serial=build_serial,
             ),
         },
         ems_ref: {
@@ -100,6 +105,7 @@ def _pair(tag, *, channel="stable", build_id="v0.8.0-f7265fc", revision=REVISION
                 channel=channel,
                 release_tag=release_tag,
                 version=tag,
+                build_serial=build_serial,
             ),
         },
     }
@@ -138,6 +144,60 @@ def test_resolves_matching_latest_pair():
     assert build.channel == "latest"
     assert build.canonical_tag == "latest"
     assert build.release_tag == "latest"
+
+
+def test_resolved_build_carries_its_build_serial():
+    docker = FakeDocker(
+        _pair("v0.9.0-RC1", channel="rc", release_tag="v0.9.0-RC1", build_serial=118)
+    )
+    build = SystemBuildResolver(docker=docker).resolve("v0.9.0-RC1")
+    assert build.build_serial == 118
+
+
+def test_upgrade_from_a_running_latest_to_a_release_is_allowed():
+    """A running ``latest`` has no comparable SemVer, so the serial must decide.
+
+    ``latest`` is a rolling channel, not a version, so the SemVer rule cannot
+    settle the move and only the build serial proves the release is newer.
+    While the resolved build carried no serial this ended as
+    ``identity_unknown`` and Guided Upgrade refused an ordinary release install.
+    """
+
+    docker = FakeDocker(
+        _pair("v0.9.0-RC1", channel="rc", release_tag="v0.9.0-RC1", build_serial=118)
+    )
+    build = SystemBuildResolver(docker=docker).resolve("v0.9.0-RC1")
+    running = ImageIdentity(
+        digest="sha256:running",
+        version_label="latest",
+        release_tag="latest",
+        channel="latest",
+        build_serial=104,
+    )
+
+    direction = decide_upgrade_direction(running, build)
+
+    assert direction.allowed is True
+    assert direction.state == "upgrade_available"
+
+
+def test_release_older_than_the_running_latest_stays_refused():
+    docker = FakeDocker(
+        _pair("v0.9.0-RC1", channel="rc", release_tag="v0.9.0-RC1", build_serial=90)
+    )
+    build = SystemBuildResolver(docker=docker).resolve("v0.9.0-RC1")
+    running = ImageIdentity(
+        digest="sha256:running",
+        version_label="latest",
+        release_tag="latest",
+        channel="latest",
+        build_serial=104,
+    )
+
+    direction = decide_upgrade_direction(running, build)
+
+    assert direction.allowed is False
+    assert direction.state == "older_than_running_build"
 
 
 def test_rejects_latest_pair_without_canonical_release_tag():
