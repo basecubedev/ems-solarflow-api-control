@@ -6,6 +6,12 @@ import requests
 
 from scripts.influx_utils import InfluxHTTPClient, wait_for_influx_ready
 
+import pytest
+
+pytestmark = [
+    pytest.mark.e2e,
+]
+
 
 class HealthResponse:
     def __init__(self, status_code, payload=None):

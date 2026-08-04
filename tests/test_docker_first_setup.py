@@ -5,12 +5,20 @@ These keep the simple installer/compose/docs promise honest without requiring
 real hardware or a running Docker daemon. The one test that does touch Docker is
 gated behind availability.
 """
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+import docker_e2e_utils
+
+pytestmark = [
+    pytest.mark.setup,
+    pytest.mark.contract,
+]
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SH = ROOT / "install-docker.sh"
@@ -443,6 +451,27 @@ def test_compose_couples_optional_env_file_with_minimum_version():
     compose = read(COMPOSE)
     assert "required: false" in compose
     assert "2.24" in compose
+
+
+# --- Docker e2e environment isolation --------------------------------------
+
+
+def test_compose_env_drops_ambient_compose_selection(monkeypatch):
+    # An ambient COMPOSE_PROFILES=with-analytics pulls the profile-gated
+    # bundled InfluxDB into the EMS-only quickstart project, whose required
+    # config/influxdb.env does not exist there. The Docker e2e projects must
+    # therefore never inherit Compose selection from the developer shell.
+    for name in docker_e2e_utils.AMBIENT_COMPOSE_VARS:
+        monkeypatch.setenv(name, "ambient")
+    monkeypatch.setenv("PATH", os.environ.get("PATH", ""))
+
+    env = docker_e2e_utils.compose_env(COMPOSE_PROJECT_NAME="explicit")
+
+    assert env["COMPOSE_PROJECT_NAME"] == "explicit"
+    assert "PATH" in env
+    for name in docker_e2e_utils.AMBIENT_COMPOSE_VARS:
+        if name != "COMPOSE_PROJECT_NAME":
+            assert name not in env, name
 
 
 # --- Recording fake-Docker installer flow ---------------------------------

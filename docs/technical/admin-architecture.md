@@ -5,7 +5,9 @@ layout, and EMS/Core relate to each other. It is the architecture reference for
 the Admin path. For the full Admin internals (wizard, release/build-identity
 gating, network discovery, Docker setup and security) see
 [admin-discovery.md](admin-discovery.md). For the user-facing guide see
-[../user/admin-console.md](../user/admin-console.md).
+[../user/admin-console.md](../user/admin-console.md). For how Admin and EMS are
+resolved, aligned and installed as one paired **system build**, see
+[system-build-pairing.md](system-build-pairing.md).
 
 ## Roles and boundaries
 
@@ -33,6 +35,15 @@ The key rule:
 Because EMS/Core owns config, diagnostics and backup/restore semantics, the
 Admin Console never invents its own config format or its own backup format — it
 calls the same EMS tools a shell user would run directly.
+
+The Admin Console is config-authoritative and does not reconcile the
+runtime-state device lifecycle. The one exception is config → runtime
+convergence: on maintenance Apply it mirrors the whitelisted overlapping scalar
+keys it changed into `runtime-state.json`, but only through the EMS-owned
+runtime-write whitelist (`dashboard/runtime_write.py`) — the same validated
+writer the Dashboard uses — so it introduces no second runtime format and stays
+inside the whitelist safety property. It already writes `runtime-state.json`
+wholesale during restore.
 
 ## Standard deployment layout
 
@@ -65,6 +76,61 @@ admin state:
 `data/admin/` holds Admin-only data (release cache, staging areas, Admin logs
 and UI state). It is not EMS config and not part of the EMS control path.
 Removing it does not change EMS behavior; it only resets Admin Console state.
+
+Temporary workflow artifacts under `data/admin/` have an owner and a lifecycle.
+Guided Setup's are owned by `admin/setup_workflow.py` — the generated config
+(`generated/config.json` plus its `config.meta.json` base-revision record) and
+the deployment marker (`state/.admin-deployment.json`) — and are removed by
+`POST /api/setup/abandon`, the single backend-owned reset behind the wizard's
+"Start over". Browser state may render workflow state but is never the authority
+for its cleanup. See
+[admin-workflow-state.md](admin-workflow-state.md) for the full inventory,
+config write paths and transition matrix.
+
+### One lifecycle arbiter across the guided workflows
+
+Each durable record keeps its own authority, and exactly one service reads them
+together:
+
+| Authority | Owns |
+|---|---|
+| durable Guided Setup record | Setup identity, status, artifact claims, cleanup state, linked operation id |
+| durable pending transition | System Build mode, operation id, stage |
+| Guided Upgrade context | the operation-bound, secret-free upgrade execution context |
+| Docker / EMS / live config | what is actually installed and running |
+| `AdminWorkflowLifecycleService` (`admin/workflow_lifecycle.py`) | the only interpretation of those together: may a workflow resume, switch, cancel or be recovered |
+
+The arbiter creates **no** durable "current workflow" record of its own. It
+normalizes the existing authorities into one owner/state verdict, binds the
+exact durable facts behind that verdict into a fingerprint, and delegates every
+mutation to the owning service — Setup termination through the claim-aware
+abandon, transition cancellation through `SystemAlignmentService`, context
+clearing through `clear_for_operation`. One instance lives in `AdminRuntime` and
+is shared by the HTTP and HTTPS listeners; nothing is constructed per request.
+
+Cross-workflow decisions (which task may start, what a switch stops, whether a
+recovery is safe) belong to that arbiter. Operation-specific validation stays in
+the owning service: the transition store still decides whether *now* is a safe
+moment to cancel, and `_reject_unrelated_transition_write` still gates
+Maintenance writes on a pending transition.
+
+No route may reach around it, and `server.py` keeps no owner classifier of its
+own. `POST /api/admin/start-path` creates and resumes Guided Setup **through**
+the arbiter, so an old console, a script or a retry cannot open a Setup beside a
+live Guided Upgrade; the narrow `system-alignment/cancel` primitive asks the
+arbiter who owns the transition before it cancels anything. Four rules follow from the
+same principle, and each of them fails closed:
+
+- **contradictory durable owners are named, not resolved** — two records
+  claiming the console report `workflow_owner_conflict`; nothing is cancelled or
+  cleaned until a previewed, confirmed switch or recovery says so;
+- **a no-op never hides a block** — `action: "none"` may answer successfully only
+  when the requested target is already safely in charge;
+- **readable is not usable** — an unsupported transition mode, a contradiction or
+  an unreproducible upgrade context is advanced-recovery material with an exact
+  reason, not a permanent deadlock;
+- **Docker unknown is not Docker inactive** — releasing durable state requires a
+  positive answer that no Admin replacement is running.
 
 ## Authentication
 
@@ -141,9 +207,20 @@ socket with the `SSLContext` and sets `https_active=True`, which adds the
 
 ## Admin container update
 
-Admin update is a two-phase flow. The running Admin process writes a pending
-state file, starts an updater outside the current HTTP request, returns a
-reconnect response, and the replacement Admin resumes from `data/admin/state/`.
+Admin and EMS are managed as one strict paired system build through
+`SystemAlignmentService` (`admin/system_alignment.py`). The running Admin process
+writes a staged transition, starts an updater outside the current HTTP request,
+returns a reconnect response, and the replacement Admin resumes from
+`data/admin/state/`. Reconnect proves only the Admin stage; it does not complete
+the EMS operation or write known-good state.
+
+One operation dispatches at most one replacement. The durable transition stage
+decides that a replacement is expected; an exclusive per-operation claim
+(`ReplacementDispatchCoordinator`, `admin/replacement_dispatch.py`) decides which
+of several concurrent callers actually invokes the launcher — both listeners
+share it through the single `SystemAlignmentService` in `AdminRuntime`. The
+sidecar's own `claim_admin_update()` remains the durable guard inside the
+replacement. See `docs/technical/admin-workflow-state.md` §5.5.
 
 Admin image update decisions are made by digest/build identity, not by tag name
 alone.
@@ -163,12 +240,11 @@ Concretely:
   `docker image inspect`) against the target by digest. Equal digests mean the
   release only retagged an unchanged Admin image (no update). Unknown digests are
   treated as uncertain and require explicit confirmation.
-- **EMS-upgrade gate.** `ems_upgrade_allowed` enforces the "required Admin update
-  blocks the EMS upgrade" rule server-side, not just in the UI: `POST
-  …/upgrade/execute` is refused with `409 admin_update_required` while a required
-  update for the selected release is planned/started/failed, and when Docker is
-  unavailable or identity is uncertain (it never proceeds on doubt). A succeeded
-  update for *that* release, or "no update required", allows the upgrade.
+- **Strict EMS-upgrade gate.** Fresh Setup, Automated Setup and Guided Upgrade
+  resolve the same Admin/EMS pair and call `SystemAlignmentService`. Config and
+  EMS mutations remain blocked until the transition reaches
+  `resources_verified`; an uncertain or mismatched Admin identity is a hard
+  alignment failure, not a compatibility warning.
 - **Pending state.** `data/admin/state/pending-admin-update.json` is written
   atomically (temp file + fsync + rename), tolerates a missing file, and surfaces
   a clear recovery error for corrupt JSON instead of crashing. It holds no
@@ -195,6 +271,45 @@ Admin service. It never pulls or recreates the EMS/InfluxDB containers and never
 touches EMS config or data — those changes belong to the Guided EMS Upgrade,
 after user confirmation. All Admin update APIs require a valid Admin session and,
 for POST, the `X-CSRF-Token`.
+
+## System Build compatibility modes
+
+A resolved System Build has one compatibility mode
+(`admin/system_build.py: system_build_compatibility`), decided purely by its
+build-id kind, and one resource strategy derived from it
+(`system_build_resource_strategy`):
+
+- **`modern_paired` → `embedded`.** A modern release/RC/latest/dev build ships a
+  verified embedded resource bundle inside the running Admin image. The Admin is
+  aligned to the selected build; Step 1 readiness requires the embedded bundle to
+  verify.
+- **`local` → `embedded`.** A local checkout bakes its own bundle and verifies it
+  the same way.
+- **`legacy_release` → `release_archive`.** A pre-contract CI build id
+  (`<run>-<attempt>`, e.g. `123456789-1`) predates the embedded bundle and the
+  modern transition/resume protocol. The running **modern Admin is kept** as the
+  orchestration layer (never downgraded to the historical Admin image), and the
+  selected EMS image's resources are prepared from the **exact historical
+  tag/revision** through `ReleaseManager.prepare` (`ReleaseArchiveResources`) —
+  never the running Admin's embedded bundle and never `main`.
+
+`validate()` exposes `resource_strategy`, `embedded_resources_applicable` and an
+`embedded_resources_valid` that is `null` (not `false`) when embedded resources
+do not apply, so a legacy release is never blocked by a match it cannot satisfy.
+Step 1 readiness gates on the selected strategy, so selecting a legacy release
+never leaves both *Update Admin Server* and *Continue* disabled while reporting
+ready.
+
+**Identity separation.** For a legacy release the durable transition and the
+known-good record store the running **orchestrator Admin** identity (modern)
+separately from the **selected EMS build** (historical): the transition's
+`orchestrator_admin` block and the known-good `admin_*` fields hold the modern
+Admin, while the flat/`ems_*`/`selected_ems_build` fields hold the historical
+EMS. Setup discovery authorization and resume compare the running Admin to the
+orchestrator identity, not the selected build id. The legacy CI build id is
+accepted by the transition parser on its validated format alone (the modern
+revision-embedding integrity check still applies to modern build ids). Recovery
+never downgrades the Admin to the historical release.
 
 ## Why this split matters
 

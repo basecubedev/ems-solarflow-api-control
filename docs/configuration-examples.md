@@ -39,10 +39,10 @@ Use this for standalone EMS operation without Home Assistant.
     "log_level": "info",
     "max_total_power": 800,
     "max_device_power": 800,
-    "deadband": 10,
+    "deadband": 2,
     "runtime_state_path": "data/runtime-state.json",
     "min_output_limit": 35,
-    "loop_interval": 3,
+    "loop_interval": 5,
     "redistribute_clamped_power": true,
     "pv_kwp_weighting": true,
     "pv_charge_balance_enabled": true,
@@ -154,7 +154,7 @@ single-device template values for a two-inverter installation.
     "max_device_power": 800,
     "runtime_state_path": "data/runtime-state.json",
     "min_output_limit": 35,
-    "loop_interval": 3
+    "loop_interval": 5
   },
 
   "devices": [
@@ -370,34 +370,74 @@ OBIS-style key path:
 Positive power means grid import. Negative power means export/feed-in when the
 meter reports signed values that way.
 
-## Example 6b: Zendure Smart Meter 3CT HTTP Grid Meter
+## Example 6b: Zendure Grid Meter via local HTTP (recommended)
 
-Use `zendure_smartmeter_3ct_http` when the Zendure Smart Meter 3CT is reachable
-on the LAN but MQTT cannot be enabled (for example when the Zendure app greys out
-the MQTT configuration page). EMS reads the local REST endpoint
-`http://<ip>/properties/report` and uses the flat `total_power` field. No MQTT
-broker and no app MQTT configuration are required, and current known firmware
-serves the endpoint without authentication.
+Use `zendure_grid_meter_http` when a Zendure grid meter is reachable on the LAN.
+This is the **recommended** Zendure grid-meter connection and works for both a
+Zendure D0 and a Smart Meter 3CT: both expose a flat numeric `total_power` at the
+local REST endpoint `http://<ip>/properties/report`. No MQTT broker and no app
+MQTT configuration are required, and current known firmware serves the endpoint
+without authentication.
 
 ```json
 {
   "grid_meter": {
-    "type": "zendure_smartmeter_3ct_http",
+    "type": "zendure_grid_meter_http",
     "ip": "192.168.1.50"
   }
 }
 ```
 
-The sign is used as reported by the device. Per-phase fields such as
-`a_aprt_power`, `b_aprt_power`, and `c_aprt_power` are ignored for now.
+The discovered HTTP port is preserved (default 80). Numeric `total_power` is the
+functional read criterion, and its sign is used as reported by the device. The
+per-phase fields `a_aprt_power`, `b_aprt_power`, and `c_aprt_power` are **not**
+used to identify the model — a D0 reports the same fields — and `meterType` /
+`protocolType` are **not** treated as proven D0 identifiers. The Admin may show
+"Zendure Grid Meter via local HTTP" without claiming a specific model.
 
-## Example 7: Zendure SmartMeter D0 via MQTT
+The older `zendure_smartmeter_3ct_http` type remains accepted as a
+backward-compatible alias for the same client, so existing configs keep working.
 
-Use Zendure SmartMeter D0 (MQTT) when the D0 publishes signed `totalPower` to
-an existing broker. EMS subscribes as a client; it does not run a broker and
-does not publish or write values back to the meter.
+## Example 7: Zendure SmartMeter D0 via MQTT (optional alternative)
 
-Zendure SmartMeter D0 `totalPower` example:
+Local HTTP (Example 6b) is preferred. Use Zendure SmartMeter D0 (MQTT) only as an
+optional alternative when the D0 already publishes signed `totalPower` to an
+existing broker. EMS subscribes as a client; it does not run a broker and never
+publishes or writes values back to the meter. Only **one** central grid meter may
+be active.
+
+Preferred: reference a named broker profile with `broker_ref` so the connection
+(host, port, TLS, credentials) lives once in `zendure_mqtt.brokers` and the broker
+password is never duplicated into the `grid_meter` block:
+
+```json
+{
+  "grid_meter": {
+    "type": "zendure_smartmeter_d0",
+    "mqtt": {
+      "broker_ref": "local_mqtt",
+      "topic": "Zendure/sensor/YOUR_D0_SERIAL/totalPower",
+      "payload_format": "number",
+      "max_age_seconds": 15
+    }
+  },
+  "zendure_mqtt": {
+    "brokers": {
+      "local_mqtt": {
+        "enabled": true,
+        "source": "local_mqtt",
+        "host": "192.168.1.10",
+        "port": 1883,
+        "tls": false,
+        "username": "YOUR_MQTT_USER",
+        "password": "YOUR_MQTT_PASSWORD"
+      }
+    }
+  }
+}
+```
+
+The legacy inline form is still accepted so existing configs keep working:
 
 ```json
 {
@@ -416,9 +456,14 @@ Zendure SmartMeter D0 `totalPower` example:
 }
 ```
 
-Known D0 samples use positive values for grid import and negative values for
-grid export. This integration has unit-test coverage and mocked MQTT coverage;
-live D0 hardware validation depends on external tester feedback.
+Do not combine `broker_ref` with inline connection fields — that is rejected as
+ambiguous. TLS brokers are supported (`"tls": true`, and `"tls_insecure": true`
+only when you explicitly accept unverified certificates; it skips
+certificate-chain and hostname verification). A broker profile used
+for a D0 grid meter must have `source: local_mqtt`; Zendure Cloud MQTT D0 grid
+meters are not supported. Known D0 samples use positive values for grid import
+and negative values for grid export. This integration has unit-test and mocked
+MQTT coverage; live D0 hardware validation depends on external tester feedback.
 
 Generic JSON MQTT payload example:
 
@@ -602,12 +647,18 @@ python3 -B ems-solarflow-api-control.py --dry-run --once
 Most installations should keep these defaults. Change them only when the live
 logs show target oscillation, stale telemetry, or excessive write frequency.
 
+The slower down-ramps (`ramp_down_w_per_cycle`, `device_ramp_down_w_per_cycle`)
+are intentional: they help prevent undershoot when the inverter output reacts
+more slowly than the EMS control target. The values below are the defaults for
+newly created configurations; an existing `config.json` keeps whatever it
+already sets (see [Compatibility](#compatibility-note) below).
+
 ```json
 {
   "system": {
     "output_control": {
       "load_deadband_w": 5,
-      "target_deadband_w": 10,
+      "target_deadband_w": 5,
       "filter_enabled": true,
       "filter_method": "median_ema",
       "median_window": 2,
@@ -617,10 +668,10 @@ logs show target oscillation, stale telemetry, or excessive write frequency.
       "sign_change_filter_reset_factor": 1.0,
       "ramp_enabled": true,
       "ramp_up_w_per_cycle": 500,
-      "ramp_down_w_per_cycle": 500,
+      "ramp_down_w_per_cycle": 300,
       "device_ramp_enabled": true,
       "device_ramp_up_w_per_cycle": 400,
-      "device_ramp_down_w_per_cycle": 400,
+      "device_ramp_down_w_per_cycle": 200,
       "large_import_bypass_w": 600,
       "large_export_bypass_w": 600,
       "bypass_ramp_multiplier": 1.5,
@@ -636,3 +687,12 @@ Validate after tuning:
 ```bash
 python3 -B ems-solarflow-api-control.py --dry-run --duration 120
 ```
+
+## Compatibility note
+
+The default values documented here apply only to **newly created**
+configurations (Fresh Install, and the config template). Loading an existing
+`config.json` never rewrites values you already set: an explicit
+`loop_interval`, `deadband`, or ramp value is always preserved. Missing keys are
+resolved by the normal config-upgrade and default-resolution policy — this is
+not a forced migration of running installations.

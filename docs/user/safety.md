@@ -10,14 +10,54 @@ before you let it run unattended.
 - Check your grid meter direction (import positive, export negative).
 - Check the maximum output limit.
 - Check minimum and maximum battery SOC.
-- Make sure no other controller writes Zendure output limits (Zendure app HEMS,
-  another automation, or a second EMS).
+- Make sure no other controller writes Zendure output limits. Use only one
+  active controller: disable Zendure HEMS, Smart Matching, Zendure schedules /
+  energy plans, Home Assistant or ioBroker automations that set inverter power,
+  and any second EMS instance. This matters especially for Zendure Cloud MQTT
+  control — the cloud services write the same setpoints. The EMS cannot disable
+  them for you; it reports `external_control_suspected` when a foreign writer
+  repeatedly overrides a confirmed target.
 - Start with conservative settings.
 - Monitor the first live run.
 
 Until your real values are filled in, EMS stays in safe mode: it calculates
 targets but does not write to hardware. Review your settings, then enable live
 writes.
+
+## Zendure Cloud MQTT control confirmation
+
+Cloud MQTT control is only proven when the whole path checks out — a broker
+publish succeeding is **not** the same as the device applying the command. The
+EMS keeps these facts separate and honest:
+
+- **Broker delivery is not device acceptance.** `broker_delivery=delivered`
+  (the QoS 1 PUBACK) only means the broker received the publish; a command is
+  confirmed only when telemetry proves every commanded property (mode *and*
+  setpoint) actually took effect and has trustworthy per-property time
+  provenance. A matching cached value or a property with no observation time
+  cannot confirm a command. Late PUBACK evidence is retained independently of
+  newer commands within a bounded ledger. If an unresolved raw MQTT identifier
+  becomes ambiguous across a disconnect, EMS quarantines it rather than ever
+  attributing its callback to the wrong command.
+- **A known model always writes to its canonical topic.** A stale
+  `mqtt.write_topic` left in an upgraded config can never misroute control; it is
+  flagged and cleaned up by maintenance. Only the isolated custom escape hatch
+  uses an explicit topic.
+- **Validate before trusting it.** To prove Cloud MQTT control end to end on real
+  hardware, stop the EMS and use the hardware probe
+  ([developer/mqtt-write-latency-probe.md](../developer/mqtt-write-latency-probe.md)):
+  it confirms the masked canonical topic shape, broker delivery, an exact
+  setpoint match, the required mode properties, and a fully verified restore of
+  every property the operation can modify. Restore verification also requires an
+  observed post-command state transition before the complete initial state
+  returns, so an unchanged read cannot hide a still-pending test command. The
+  probe refuses the first write if any required initial value is missing and
+  never substitutes a normal atomic power command for a partial restore. A read
+  error during cleanup cannot skip the full restore attempt: the probe records
+  the fault, keeps verification fail-closed, exits non-zero without sufficient
+  evidence, and always stops the MQTT runtime it started.
+  Do not conclude "Cloud MQTT control works" from movement toward the target or a
+  broker PUBACK alone.
 
 ## During the first live run
 
@@ -48,6 +88,13 @@ substitute for keeping the appliance off the public internet.
 The Admin Console is intended for a trusted local network. Optional HTTPS can
 protect local browser traffic, but the generated self-signed certificate is not
 a replacement for a VPN or a properly secured reverse proxy for remote access.
+
+Like the Dashboard, the Admin Console can write runtime *overrides*, but only for
+a fixed whitelist of keys (system power/loop limits, winter/HA enable, per-device
+enabled/max power/PV priority/off-grid mode) and only through the same validated
+runtime-write limits — never the hardware `outputLimit` or state-reconciliation
+write gates. The safety property is the whitelist, not the store: no other key
+can reach `runtime-state.json` from the Admin.
 
 ## Technical safety model
 

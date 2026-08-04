@@ -1,0 +1,15 @@
+{
+  "function": "deviceAutomation",
+  "arguments": [
+    {
+      "autoModelProgram": 2,
+      "autoModelValue": 500,
+      "msgType": 1,
+      "autoModel": 8
+    }
+  ],
+  "messageId": 1,
+  "deviceKey": "DEVICE_ID",
+  "deviceId": "DEVICE_ID",
+  "timestamp": 1234567890
+}

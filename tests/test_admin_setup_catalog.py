@@ -13,7 +13,12 @@ from admin.setup_config import (
 )
 from ems.config_catalog import get_config_feature_field_index
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.setup,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 def _sections():
@@ -129,14 +134,17 @@ def test_grid_meter_variants_are_exposed_for_setup():
         "shelly",
         "shelly_3em_gen1",
         "ecotracker",
+        "zendure_grid_meter_http",
         "zendure_smartmeter_3ct_http",
+        "zendure_smartmeter_d0_http",
         "tasmota_http",
         "zendure_smartmeter_d0",
         "mqtt",
     } == set(variants)
     assert variants["mqtt"]["fields"]
     assert "grid_meter.mqtt.host" in variants["mqtt"]["fields"]
-    assert list(variants["zendure_smartmeter_3ct_http"]["fields"]) == ["grid_meter.ip"]
+    assert list(variants["zendure_grid_meter_http"]["fields"]) == ["grid_meter.ip"]
+    assert list(variants["zendure_smartmeter_d0_http"]["fields"]) == ["grid_meter.ip"]
 
 
 def test_manual_hardware_variants_are_role_specific():
@@ -146,13 +154,23 @@ def test_manual_hardware_variants_are_role_specific():
     assert variants["inverter"][0]["default_port"] == 80
     assert variants["inverter"][0]["default"] is True
     assert variants["inverter"][0]["required_fields"] == ["host", "port", "serial"]
+    # The manual "Add hardware" cards offer the concrete Zendure local-API
+    # meters (3CT and D0) as distinct choices; the internal generic
+    # zendure_grid_meter_http type stays a backward-compatible/discovery value,
+    # not a manual card.
     assert {item["id"] for item in variants["grid_meter"]} == {
         "shelly",
         "shelly_3em_gen1",
         "ecotracker",
         "zendure_smartmeter_3ct_http",
+        "zendure_smartmeter_d0_http",
         "tasmota_http",
     }
+    d0_http = next(
+        item for item in variants["grid_meter"] if item["id"] == "zendure_smartmeter_d0_http"
+    )
+    assert "D0" in d0_http["label"] and "Local API" in d0_http["label"]
+    assert "3CT" not in d0_http["label"]
     assert not ({item["id"] for item in variants["inverter"]} & {
         item["id"] for item in variants["grid_meter"]
     })
@@ -173,6 +191,48 @@ def test_secret_fields_are_marked_and_never_carry_a_value():
     token = fields["influxdb.token"]
     assert token["secret"] is True
     assert "default" not in token
+
+
+def test_catalog_exposes_zendure_mqtt_broker_fields():
+    broker = build_setup_catalog()["zendure_mqtt_broker"]
+    keys = [field["key"] for field in broker["fields"]]
+
+    assert {"name", "host", "port", "security", "username", "password"} <= set(keys)
+    assert broker["help"].strip()
+    host = next(field for field in broker["fields"] if field["key"] == "host")
+    assert host["required"] is True
+    port = next(field for field in broker["fields"] if field["key"] == "port")
+    assert port["default"] == 1883
+
+
+def test_catalog_broker_password_is_marked_secret_without_default():
+    broker = build_setup_catalog()["zendure_mqtt_broker"]
+    password = next(field for field in broker["fields"] if field["key"] == "password")
+
+    assert password["type"] == "password"
+    assert password["secret"] is True
+    assert "default" not in password
+
+
+def test_catalog_exposes_user_facing_generation_profiles():
+    generations = build_setup_catalog()["zendure_mqtt_generations"]
+    by_id = {item["id"]: item for item in generations}
+
+    assert {"solarflow_zensdk", "hub_hyper_legacy", "zendure_cloud"} == set(by_id)
+    assert by_id["solarflow_zensdk"]["label"] == "New SolarFlow / ZenSDK generation"
+    assert by_id["hub_hyper_legacy"]["label"] == "Older Zendure Hub / Hyper generation"
+    assert by_id["zendure_cloud"]["label"] == "Zendure Cloud MQTT"
+    assert by_id["solarflow_zensdk"]["default"] is True
+    # Only the legacy generation exposes the optional product key field.
+    assert by_id["hub_hyper_legacy"]["product_key"] is True
+    assert by_id["solarflow_zensdk"]["product_key"] is False
+
+
+def test_generation_profiles_never_expose_raw_topic_family_labels():
+    blob = json.dumps(build_setup_catalog()["zendure_mqtt_generations"])
+
+    for internal in ("zensdk_ha_scalar", "legacy_zendure_json", "topic_family", "base_topic"):
+        assert internal not in blob
 
 
 def test_catalog_payload_is_json_serializable():
@@ -236,6 +296,16 @@ def test_apply_setup_features_ignores_maintenance_only_ha_field():
 
     assert applied == []
     assert config == {"ha": {"enabled": False}}
+
+
+def test_apply_setup_features_ignores_zendure_mqtt_enabled():
+    # The removed always-on feature toggle may survive in stale localStorage
+    # feature values; it must never be written back into a config.
+    config = {}
+    applied = apply_setup_features(config, {"zendure_mqtt.enabled": True})
+
+    assert applied == []
+    assert config == {}
 
 
 def test_apply_setup_features_ignores_config_upgrade_field():

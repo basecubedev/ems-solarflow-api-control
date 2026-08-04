@@ -310,6 +310,8 @@ def zero_device_state():
 class ZendureClient:
     """Client for a single Zendure device."""
 
+    control_gate = "api"
+
     def __init__(
         self,
         name,
@@ -361,6 +363,41 @@ class ZendureClient:
             )
             logging.warning(f"{self.name} fetch failed: {e}")
             return None
+
+    def write_output_limit(self, value):
+        """POST outputLimit to the local device API; return success."""
+
+        return zendure_write(
+            self,
+            "outputLimit",
+            {"outputLimit": int(value)},
+            "write_output_limit_error",
+            target_w=value,
+        )
+
+    def write_properties(
+        self, properties, *, reason, field=None, error_event=None, log_fields=None
+    ):
+        """Transport-neutral property-write capability, HTTP implementation.
+
+        POSTs the properties to the device's local ``/properties/write``
+        endpoint and returns a structured dispatch result. ``reason`` names the
+        controller path for health/diagnostics; ``field``/``error_event`` keep
+        the historic write-health and error-log identities.
+        """
+
+        from ems.mqtt_control import dispatch
+
+        ok = zendure_write(
+            self,
+            field or ",".join(properties),
+            properties,
+            error_event or "write_properties_error",
+            **(log_fields or {}),
+        )
+        if ok:
+            return dispatch.published(None)
+        return dispatch.failed(None, reason="http_write_failed")
 
 
 class ShellyClient:
@@ -559,29 +596,36 @@ class TasmotaHttpClient:
         return self.last_value
 
 
-class ZendureSmartMeter3CTHttpClient:
-    """Client for the Zendure Smart Meter 3CT local REST endpoint."""
+class ZendureGridMeterHttpClient:
+    """Client for a Zendure local-HTTP grid meter (D0 or Smart Meter 3CT).
 
-    provider = "Zendure Smart Meter 3CT"
+    Both models serve a flat numeric ``total_power`` at ``/properties/report``.
+    The discovered port is preserved (default 80) so mDNS-advertised endpoints on
+    a non-default port keep working at runtime.
+    """
 
-    def __init__(self, ip, session):
+    provider = "Zendure Grid Meter (HTTP)"
+
+    def __init__(self, ip, session, *, port=80):
         self.ip = ip
+        self.port = int(port or 80)
         self.session = session
         self.last_value = 0
         self.health = CommHealth(self.provider, kind="read")
+
+    @property
+    def endpoint(self):
+        return f"http://{self.ip}:{self.port}/properties/report"
 
     def get_power(self):
         """Return current household/grid power usage."""
 
         start = time.monotonic()
         try:
-            r = self.session.get(
-                f"http://{self.ip}/properties/report",
-                timeout=3
-            )
+            r = self.session.get(self.endpoint, timeout=3)
 
             self.last_value = round(
-                _parse_zendure_smartmeter_3ct_power(r.json()),
+                _parse_zendure_grid_meter_http_power(r.json()),
                 1
             )
             self.health.record_success((time.monotonic() - start) * 1000.0)
@@ -594,13 +638,19 @@ class ZendureSmartMeter3CTHttpClient:
             )
             log_event(
                 logging.WARNING,
-                "zendure_smartmeter_3ct_http_read_error",
+                "zendure_grid_meter_http_read_error",
                 ip=self.ip,
+                port=self.port,
                 error=e,
                 stale_value=self.last_value
             )
 
         return self.last_value
+
+
+# Backward-compatible alias for external imports/tests that used the old,
+# 3CT-specific class name.
+ZendureSmartMeter3CTHttpClient = ZendureGridMeterHttpClient
 
 
 class MqttGridMeterClient:
@@ -620,6 +670,8 @@ class MqttGridMeterClient:
         payload_format="number",
         value_path="",
         max_age_seconds=15,
+        tls=False,
+        tls_insecure=False,
         client_factory=None,
         provider=None,
     ):
@@ -632,6 +684,8 @@ class MqttGridMeterClient:
         self.payload_format = str(payload_format or "number").strip().lower()
         self.value_path = str(value_path or "").strip()
         self.max_age_seconds = max(1, int(max_age_seconds))
+        self.tls = bool(tls)
+        self.tls_insecure = bool(tls_insecure)
         self.last_value = 0
         self.last_message_monotonic = None
         self.health = CommHealth(self.provider, kind="read")
@@ -645,6 +699,14 @@ class MqttGridMeterClient:
 
         if self.username:
             self._client.username_pw_set(self.username, password or None)
+
+        # TLS mirrors the Zendure MQTT read client: normal certificate
+        # verification by default; tls_insecure disables chain and hostname
+        # verification only when explicitly enabled (and is surfaced in
+        # diagnostics). Applied before connect.
+        cfg.configure_mqtt_client_tls(
+            self._client, tls=self.tls, tls_insecure=self.tls_insecure
+        )
 
         try:
             self._client.connect_async(self.host, self.port, keepalive=30)
@@ -801,7 +863,28 @@ class MqttGridMeterClient:
             pass
 
 
-def create_grid_meter_client(config, session):
+def close_grid_meter_client(client):
+    """Idempotently release a grid-meter client's runtime resources.
+
+    The MQTT grid-meter client owns a network loop, a broker connection and a
+    background thread; HTTP clients own none. This is safe on any grid-meter
+    client (a missing ``close`` is a no-op), safe after a partial startup, and
+    safe to call repeatedly. It never raises: a cleanup error is logged and
+    swallowed so it can never mask the primary shutdown or startup error.
+    """
+
+    if client is None:
+        return
+    close = getattr(client, "close", None)
+    if not callable(close):
+        return
+    try:
+        close()
+    except Exception as exc:
+        log_event(logging.WARNING, "grid_meter_client_close_failed", error=exc)
+
+
+def create_grid_meter_client(config, session, *, mqtt_credential_resolver=None):
     """Create the configured household/grid power meter client."""
 
     config = config if isinstance(config, dict) else {}
@@ -825,12 +908,16 @@ def create_grid_meter_client(config, session):
     if meter_type == "ecotracker":
         return EcoTrackerClient(ip, session)
 
-    if meter_type == cfg.ZENDURE_SMARTMETER_3CT_HTTP_GRID_METER_TYPE:
+    if meter_type in cfg.ZENDURE_HTTP_GRID_METER_TYPES:
         if not ip:
             raise ValueError(
-                "Zendure Smart Meter 3CT HTTP grid meter requires ip"
+                "Zendure HTTP grid meter requires ip"
             )
-        return ZendureSmartMeter3CTHttpClient(ip, session)
+        try:
+            port = int(config.get("port") or 80)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Zendure HTTP grid meter port must be an integer") from exc
+        return ZendureGridMeterHttpClient(ip, session, port=port)
 
     if meter_type == "tasmota_http":
         power_path = config.get("power_path")
@@ -847,6 +934,11 @@ def create_grid_meter_client(config, session):
 
     if meter_type in cfg.MQTT_GRID_METER_TYPES:
         mqtt_config = cfg.grid_meter_mqtt_settings(config)
+        from ems.mqtt_credentials import resolve_mqtt_profile_credentials
+
+        mqtt_config = resolve_mqtt_profile_credentials(
+            mqtt_config, resolver=mqtt_credential_resolver
+        )
         host = str(mqtt_config.get("host") or "").strip()
         topic = str(mqtt_config.get("topic") or "").strip()
         if not host:
@@ -855,9 +947,19 @@ def create_grid_meter_client(config, session):
             raise ValueError("MQTT grid meter requires topic")
 
         try:
-            port = int(mqtt_config.get("port", 1883))
-        except (TypeError, ValueError) as exc:
-            raise ValueError("MQTT grid meter port must be an integer") from exc
+            tls, tls_insecure = cfg.resolve_mqtt_tls_metadata(
+                tls_mode=mqtt_config.get("tls_mode"),
+                tls=mqtt_config.get("tls"),
+                tls_insecure=mqtt_config.get("tls_insecure"),
+            )
+            port = cfg.parse_mqtt_port(
+                mqtt_config.get("port"),
+                default=cfg.default_mqtt_port(tls),
+            )
+        except ValueError as exc:
+            # Covers both TLS and port validation; preserve the field-specific
+            # message rather than mislabeling a TLS error as a port error.
+            raise ValueError(f"MQTT grid meter connection is invalid: {exc}") from exc
 
         provider = (
             "Zendure SmartMeter D0"
@@ -873,6 +975,8 @@ def create_grid_meter_client(config, session):
             payload_format=mqtt_config.get("payload_format") or "number",
             value_path=mqtt_config.get("value_path") or "",
             max_age_seconds=mqtt_config.get("max_age_seconds") or 15,
+            tls=tls,
+            tls_insecure=tls_insecure,
             client_factory=mqtt_config.get("_mqtt_client_factory"),
             provider=provider,
         )
@@ -1098,15 +1202,17 @@ def _parse_tasmota_http_power(data, power_path):
     raise ValueError(f"Tasmota power path is not numeric: {power_path}")
 
 
-def _parse_zendure_smartmeter_3ct_power(data):
-    """Extract grid power from a Zendure Smart Meter 3CT payload.
+def _parse_zendure_grid_meter_http_power(data):
+    """Extract grid power from a Zendure local-HTTP grid-meter payload.
 
-    Only ``total_power`` is read for now; the reported sign is preserved.
+    Both a Zendure D0 and a Smart Meter 3CT report a flat numeric
+    ``total_power`` at ``/properties/report``; only that value is read and its
+    reported sign is preserved. The per-phase apparent-power fields are not used.
     """
 
     if not isinstance(data, dict):
         raise ValueError(
-            "Unsupported Zendure Smart Meter 3CT payload: expected object"
+            "Unsupported Zendure grid meter payload: expected object"
         )
 
     value = data.get("total_power")
@@ -1114,8 +1220,12 @@ def _parse_zendure_smartmeter_3ct_power(data):
         return float(value)
 
     raise ValueError(
-        "Unsupported Zendure Smart Meter 3CT payload: missing numeric total_power"
+        "Unsupported Zendure grid meter payload: missing numeric total_power"
     )
+
+
+# Backward-compatible alias for external imports/tests.
+_parse_zendure_smartmeter_3ct_power = _parse_zendure_grid_meter_http_power
 
 
 def _mqtt_rc_success(rc):

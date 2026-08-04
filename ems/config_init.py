@@ -16,8 +16,8 @@ GRID_METER_CHOICES = (
     ("shelly_3em_gen1", "Shelly 3EM Gen1"),
     ("ecotracker", "EcoTracker"),
     (
-        config_mod.ZENDURE_SMARTMETER_3CT_HTTP_GRID_METER_TYPE,
-        "Zendure Smart Meter 3CT HTTP",
+        config_mod.ZENDURE_GRID_METER_HTTP_GRID_METER_TYPE,
+        "Zendure Grid Meter via local HTTP (D0 / Smart Meter 3CT)",
     ),
     ("tasmota_http", "Tasmota HTTP / SmartMeter reader"),
     (
@@ -26,7 +26,18 @@ GRID_METER_CHOICES = (
     ),
     ("mqtt", "Generic MQTT grid meter"),
 )
-SUPPORTED_GRID_METER_TYPES = tuple(value for value, _ in GRID_METER_CHOICES)
+# Backward-compatible grid-meter types accepted from an existing config but not
+# offered as a new interactive menu choice. The 3CT and D0 HTTP types share the
+# generic local-HTTP client; the generic menu choice covers new setups while
+# these keep an existing typed config round-tripping instead of resetting to
+# Shelly.
+_LEGACY_GRID_METER_TYPES = (
+    config_mod.ZENDURE_SMARTMETER_3CT_HTTP_GRID_METER_TYPE,
+    config_mod.ZENDURE_SMARTMETER_D0_HTTP_GRID_METER_TYPE,
+)
+SUPPORTED_GRID_METER_TYPES = (
+    tuple(value for value, _ in GRID_METER_CHOICES) + _LEGACY_GRID_METER_TYPES
+)
 
 SECRET_KEYS = {"token", "password"}
 
@@ -36,12 +47,7 @@ class ConfigInitError(ValueError):
 
 
 def _zendure_d0_serial_from_topic(topic):
-    text = str(topic or "")
-    prefix = "Zendure/sensor/"
-    suffix = "/totalPower"
-    if text.startswith(prefix) and text.endswith(suffix):
-        return text[len(prefix):-len(suffix)]
-    return ""
+    return config_mod.zendure_smartmeter_d0_serial_from_topic(topic)
 
 
 def _load_template(base_dir):
@@ -254,7 +260,15 @@ def ask_grid_meter(
         print("Which grid meter do you use?")
         for index, (_, label) in enumerate(GRID_METER_CHOICES, start=1):
             print(f"{index}) {label}")
-        default_index = SUPPORTED_GRID_METER_TYPES.index(current_type) + 1
+        # Legacy types (e.g. the 3CT HTTP alias) are not menu entries, so their
+        # default points at the generic local-HTTP choice instead.
+        menu_types = [value for value, _ in GRID_METER_CHOICES]
+        default_type = (
+            current_type
+            if current_type in menu_types
+            else config_mod.ZENDURE_GRID_METER_HTTP_GRID_METER_TYPE
+        )
+        default_index = menu_types.index(default_type) + 1
         while True:
             raw = ask_text("Choice", str(default_index), required=True)
             if raw.isdigit() and 1 <= int(raw) <= len(GRID_METER_CHOICES):
@@ -303,7 +317,7 @@ def ask_grid_meter(
                 allow_placeholder_default=allow_placeholder_defaults,
             )
             generated_topic = (
-                f"Zendure/sensor/{serial}/totalPower"
+                config_mod.zendure_smartmeter_d0_topic(serial)
                 if serial
                 else mqtt_settings.get("topic", "")
             )
@@ -683,6 +697,8 @@ def _meter_summary(grid_meter):
         "shelly": "Shelly",
         "shelly_3em_gen1": "Shelly 3EM Gen1",
         "ecotracker": "EcoTracker",
+        config_mod.ZENDURE_GRID_METER_HTTP_GRID_METER_TYPE:
+            "Zendure Grid Meter via local HTTP",
         config_mod.ZENDURE_SMARTMETER_3CT_HTTP_GRID_METER_TYPE:
             "Zendure Smart Meter 3CT HTTP",
     }.get(meter_type, meter_type)

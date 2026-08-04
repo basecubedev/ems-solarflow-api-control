@@ -777,6 +777,47 @@ Examples:
         help="Write without creating a backup.",
     )
 
+    config_migrate_zendure = config_subparsers.add_parser(
+        "migrate-zendure-mqtt",
+        help="Plan or apply the safe Zendure MQTT control migration.",
+        description=(
+            "Resolve legacy Zendure MQTT control devices to a concrete, verified "
+            "hardware model, or disable control where the model is unknown or "
+            "conflicting. --dry-run shows the exact before/after diff without "
+            "writing; without --yes an apply prompts for confirmation."
+        ),
+        formatter_class=EMSHelpFormatter,
+    )
+    config_migrate_zendure.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show the migration plan without writing config.json.",
+    )
+    config_migrate_zendure.add_argument(
+        "--yes",
+        action="store_true",
+        help="Apply without interactive confirmation.",
+    )
+    config_migrate_zendure.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the migration plan as machine-readable JSON.",
+    )
+    migrate_backup_policy = config_migrate_zendure.add_mutually_exclusive_group()
+    migrate_backup_policy.add_argument(
+        "--backup",
+        dest="backup",
+        action="store_true",
+        default=None,
+        help="Create a normal config backup before writing.",
+    )
+    migrate_backup_policy.add_argument(
+        "--no-backup",
+        dest="backup",
+        action="store_false",
+        help="Write without creating a backup.",
+    )
+
     backup = subparsers.add_parser(
         "backup",
         help="Create, inspect or restore manual config backups.",
@@ -877,6 +918,15 @@ Examples:
         type=int,
         default=None,
         help="create: PBKDF2-SHA256 iteration count (default: 300000).",
+    )
+    backup.add_argument(
+        "--verify",
+        dest="verify",
+        action="store_true",
+        help=(
+            "create: after writing, open the archive and validate its manifest "
+            "and every member checksum; exit non-zero if verification fails."
+        ),
     )
     backup.add_argument(
         "--on-conflict",
@@ -1015,13 +1065,25 @@ def handle_grid_meter_command(args, config):
     from ems.clients import create_grid_meter_client, create_session
     from ems.health import percentile
 
+    import ems.config as cfg
+
     grid_meter = config.get("grid_meter")
     if not isinstance(grid_meter, dict) or not grid_meter:
         shelly = config.get("shelly")
         grid_meter = {"type": "shelly", **shelly} if isinstance(shelly, dict) else {}
 
+    # Resolve a named broker profile (broker_ref) into an effective inline block
+    # so the same code path works for legacy inline and broker_ref D0 configs.
+    effective = dict(grid_meter)
+    meter_type = str(grid_meter.get("type", "shelly")).strip().lower()
+    if meter_type in cfg.MQTT_GRID_METER_TYPES:
+        try:
+            effective["mqtt"] = cfg.resolve_grid_meter_mqtt_settings(config)
+        except ValueError as exc:
+            return fail(f"cannot resolve grid meter broker: {exc}", code=2)
+
     try:
-        client = create_grid_meter_client(grid_meter, create_session())
+        client = create_grid_meter_client(effective, create_session())
     except Exception as exc:
         return fail(f"cannot create grid meter client: {exc}", code=2)
 
@@ -1128,14 +1190,41 @@ def float_value(value, field, minimum=0.0):
     return parsed
 
 
+def _config_device_identity(item):
+    for key in ("sn", "serial_number"):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    mqtt = item.get("mqtt")
+    if isinstance(mqtt, dict):
+        value = mqtt.get("device_id")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 def config_device_defaults(config):
+    from ems.config import (
+        http_control_device_configs,
+        mqtt_control_device_configs,
+    )
+
     devices = {}
     max_device_power = (
         config.get("system", {})
         .get("max_device_power", 800)
     )
 
-    for item in config.get("devices", []):
+    device_list = config.get("devices", []) if isinstance(config, dict) else []
+    if not isinstance(device_list, list):
+        device_list = []
+
+    controllable = (
+        http_control_device_configs(device_list)
+        + mqtt_control_device_configs(device_list)
+    )
+
+    for item in controllable:
         if not isinstance(item, dict):
             continue
 
@@ -1143,7 +1232,7 @@ def config_device_defaults(config):
         if not name:
             continue
 
-        devices[name] = {
+        entry = {
             "enabled": True,
             "max_power": int_value(
                 item.get("max_power", max_device_power),
@@ -1157,6 +1246,10 @@ def config_device_defaults(config):
                 minimum=0.01
             )
         }
+        identity = _config_device_identity(item)
+        if identity:
+            entry["identity"] = identity
+        devices[name] = entry
 
     return devices
 
@@ -1435,23 +1528,11 @@ def merge_defaults(data, defaults):
     if not isinstance(devices, dict):
         devices = {}
 
-    merged_devices = {}
-    for name, default_device in defaults.get("devices", {}).items():
-        device = devices.get(name)
-        if not isinstance(device, dict):
-            device = {}
-        merged_devices[name] = {
-            **default_device,
-            **device
-        }
-        merged_devices[name].pop("offgrid_socket", None)
+    from ems.runtime_state import reconcile_runtime_devices
 
-    for name, device in devices.items():
-        if name not in merged_devices:
-            merged_devices[name] = device
-            if isinstance(merged_devices[name], dict):
-                merged_devices[name].pop("offgrid_socket", None)
-
+    merged_devices, _changes = reconcile_runtime_devices(
+        devices, defaults.get("devices", {}), prune=False
+    )
     merged["devices"] = merged_devices
     return merged
 
@@ -2784,6 +2865,24 @@ def handle_backup_create(args, config):
         **paths,
     )
     print(f"Backup created:\n  {path}")
+    return verify_created_backup(args, path, password)
+
+
+def verify_created_backup(args, path, password):
+    """Optionally verify a freshly-created archive (``backup create --verify``).
+
+    Returns the CLI exit code: ``0`` when verification is off or passes,
+    non-zero when the archive fails its manifest/checksum/decrypt validation so
+    an orchestrator (Guided Upgrade) never treats an unverified backup as safe.
+    """
+
+    if not getattr(args, "verify", False):
+        return 0
+    try:
+        summary = backup_mod.verify_backup(path, password=password)
+    except backup_mod.BackupError as exc:
+        return fail(f"backup verification failed: {exc}")
+    print(f"Verified: {summary['files']} files")
     return 0
 
 
@@ -2848,7 +2947,7 @@ def handle_backup_create_database(args, config):
         compression_level=options["compression_level"],
     )
     print(f"Backup created:\n  {path}")
-    return 0
+    return verify_created_backup(args, path, password)
 
 
 # ---------------------------------------------------------------------------
@@ -3083,7 +3182,7 @@ def handle_backup_create_influxdb(args, config):
     except backup_mod.BackupError as exc:
         return fail(str(exc))
     print(f"Backup created:\n  {path}")
-    return 0
+    return verify_created_backup(args, path, password)
 
 
 def print_influx_restore_done():
@@ -3901,9 +4000,83 @@ def handle_config_init_command(args, config):
     return 0
 
 
+def handle_config_migrate_zendure_command(args, config):
+    """Plan (dry-run) or apply the EMS-owned Zendure MQTT control migration.
+
+    EMS/Core owns config semantics: this renders the exact plan and applies it
+    only on explicit operator confirmation, never silently.
+    """
+
+    import json as _json
+
+    from ems.zendure_mqtt.migration import (
+        ZendureMqttMigrationError,
+        migrate_zendure_mqtt_control_configs,
+        plan_zendure_mqtt_migration,
+    )
+
+    changes = plan_zendure_mqtt_migration(config)
+    plan = [
+        {
+            "device": change.device,
+            "action": change.action,
+            "hardware_profile": change.hardware_profile,
+            "power_write_profile": change.power_write_profile,
+            "code": change.code,
+            "severity": change.severity,
+            "message": change.message,
+        }
+        for change in changes
+    ]
+
+    if args.json:
+        print(_json.dumps({"changes": plan, "count": len(plan)}, indent=2))
+    elif not plan:
+        print("No Zendure MQTT control migration is needed.")
+    else:
+        print("Planned Zendure MQTT control migration:")
+        for entry in plan:
+            print(f"  - {entry['device']}: {entry['action']} — {entry['message']}")
+
+    if args.dry_run or not plan:
+        return 0
+
+    if not args.yes:
+        print("\nApply this migration to config.json? [y/N] ", end="")
+        try:
+            answer = input().strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = ""
+        if answer not in ("y", "yes"):
+            print("Aborted.")
+            return 0
+
+    try:
+        migrated, _warnings = migrate_zendure_mqtt_control_configs(config)
+    except ZendureMqttMigrationError as exc:
+        print("Refused: the migrated config would be invalid.")
+        for err in exc.errors:
+            print(f"  - {err.get('code')}: {err.get('message')}")
+        return fail("zendure_mqtt_control_migration_invalid", code=2)
+    do_backup, status = resolve_config_upgrade_backup_policy(args)
+    if status == "abort":
+        print("Aborted.")
+        return 0
+    if status != "ok":
+        return fail(status, code=2)
+    result = write_config_upgrade(args, config, migrated, None, do_backup)
+    if result != 0:
+        return result
+    print(f"Applied Zendure MQTT control migration to {len(plan)} device(s).")
+    return 0
+
+
 def handle_config_command(args, config):
     if args.config_command == "init":
         return handle_config_init_command(args, config)
+
+    if args.config_command == "migrate-zendure-mqtt":
+        return handle_config_migrate_zendure_command(args, config)
 
     if args.config_command != "upgrade":
         return fail(f"unknown config command {args.config_command}", code=2)

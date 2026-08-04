@@ -20,6 +20,10 @@ from _emsctl_test_helpers import (
     write_two_device_config,
 )
 
+pytestmark = [
+    pytest.mark.integration,
+]
+
 
 def test_emsctl_diagnose_service_entry_points(tmp_path):
     args = diagnose_args(tmp_path)
@@ -146,6 +150,41 @@ def test_diagnose_redact_report_for_http_masks_structured_and_text_secrets():
     assert check["missing"] == ["ip", "sn"]
     assert secret not in check["message"]
     json.dumps(redacted, sort_keys=True)
+
+
+def test_diagnose_http_redaction_masks_cloud_route_in_name_and_arbitrary_topic():
+    route = "ACCOUNT_ROUTE_1234"
+    product = "PRODUCT_ACCOUNT_A"
+    topic = f"iot/{product}/{route}/properties/write"
+    report = {
+        "zendure_mqtt": {
+            "brokers": [
+                {
+                    "broker_ref": "cloud_a",
+                    "source": "zendure_cloud_mqtt",
+                    "password": "BROKER_PASSWORD",
+                }
+            ],
+            "devices": [
+                {
+                    "broker_ref": "cloud_a",
+                    "source": "zendure_cloud_mqtt",
+                    "device_id": route,
+                    "product_key": product,
+                    "name": f"WR {route}",
+                    "reason": f"publish {topic} pending",
+                    "authorization_code": "AUTH_CODE_SECRET",
+                }
+            ],
+        }
+    }
+
+    flattened = json.dumps(
+        diagnostics.diagnose_redact_report_for_http(report)
+    )
+
+    for raw in (route, product, topic, "BROKER_PASSWORD", "AUTH_CODE_SECRET"):
+        assert raw not in flattened
 
 
 def test_diagnose_docker_deep_warns_when_docker_cli_missing(tmp_path, monkeypatch):
@@ -362,6 +401,180 @@ def test_emsctl_diagnose_duplicate_device_names_produce_error(tmp_path):
     )
 
 
+def test_emsctl_diagnose_duplicate_mqtt_device_names_produce_error(tmp_path):
+    # Zendure MQTT entries take part in the same name-uniqueness gate as API
+    # devices; the check must not skip them.
+    config_path = tmp_path / "config.json"
+    write_config(config_path)
+    config = json.loads(config_path.read_text())
+    config["devices"] = [
+        _mqtt_device("Zendure MQTT SolarFlow 800 Pro2", "DEV1"),
+        _mqtt_device("Zendure MQTT SolarFlow 800 Pro2", "DEV2"),
+    ]
+    config_path.write_text(json.dumps(config))
+
+    result = run_emsctl(tmp_path, "diagnose", "--json")
+
+    assert result.returncode == 1, result.stderr
+    payload = json.loads(result.stdout)
+    assert any(
+        check["code"] == "device_name_duplicate"
+        for check in payload["checks"]
+    )
+
+
+def _diagnose_codes(tmp_path, config):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(config))
+    result = run_emsctl(tmp_path, "diagnose", "--json")
+    payload = json.loads(result.stdout)
+    return result, {check["code"] for check in payload["checks"]}
+
+
+def _base_diagnose_config(tmp_path):
+    config_path = tmp_path / "config.json"
+    write_config(config_path)
+    return json.loads(config_path.read_text())
+
+
+def _mqtt_device(name, device_id, **extra):
+    device = {
+        "type": "zendure_mqtt",
+        "enabled": True,
+        "name": name,
+        "mqtt": {"topic_family": "zensdk_ha_scalar", "device_id": device_id},
+    }
+    device.update(extra)
+    return device
+
+
+def test_emsctl_diagnose_duplicate_device_sn_produces_error(tmp_path):
+    config = _base_diagnose_config(tmp_path)
+    config["devices"] = [
+        {"name": "WR1", "max_power": 800, "sn": "SHARED"},
+        {"name": "WR2", "max_power": 800, "sn": "shared"},
+    ]
+    result, codes = _diagnose_codes(tmp_path, config)
+    assert result.returncode == 1, result.stderr
+    assert "zendure_device_identity_duplicate" in codes
+
+
+def test_emsctl_diagnose_local_sn_matches_mqtt_serial_number(tmp_path):
+    config = _base_diagnose_config(tmp_path)
+    config["devices"] = [
+        {"name": "WR1", "max_power": 800, "sn": "SHARED"},
+        _mqtt_device("MQTT1", "DEV1", serial_number="shared"),
+    ]
+    result, codes = _diagnose_codes(tmp_path, config)
+    assert result.returncode == 1, result.stderr
+    assert "zendure_device_identity_duplicate" in codes
+
+
+def test_emsctl_diagnose_duplicate_mqtt_device_id_produces_error(tmp_path):
+    config = _base_diagnose_config(tmp_path)
+    config["devices"] = [
+        {"name": "WR1", "max_power": 800, "sn": "SER1"},
+        _mqtt_device("MQTT1", "DEV1"),
+        _mqtt_device("MQTT2", "DEV1"),
+    ]
+    result, codes = _diagnose_codes(tmp_path, config)
+    assert result.returncode == 1, result.stderr
+    assert "zendure_device_identity_duplicate" in codes
+
+
+def test_emsctl_diagnose_case_distinct_mqtt_device_ids_are_not_duplicates(tmp_path):
+    # Defect 2: MQTT device ids are case-sensitive route segments, so "DEV1" and
+    # "dev1" are two distinct devices, not a duplicate.
+    config = _base_diagnose_config(tmp_path)
+    config["devices"] = [
+        {"name": "WR1", "max_power": 800, "sn": "SER1"},
+        _mqtt_device("MQTT1", "DEV1"),
+        _mqtt_device("MQTT2", "dev1"),
+    ]
+    _, codes = _diagnose_codes(tmp_path, config)
+    assert "zendure_device_identity_duplicate" not in codes
+
+
+def test_emsctl_diagnose_unique_mqtt_device_ids_pass(tmp_path):
+    config = _base_diagnose_config(tmp_path)
+    config["devices"] = [
+        {"name": "WR1", "max_power": 800, "sn": "SER1"},
+        _mqtt_device("MQTT1", "DEV1"),
+        _mqtt_device("MQTT2", "DEV2"),
+    ]
+    _, codes = _diagnose_codes(tmp_path, config)
+    assert "zendure_device_identity_duplicate" not in codes
+
+
+def test_emsctl_diagnose_reports_telemetry_only_device_root_cause(tmp_path):
+    config = _base_diagnose_config(tmp_path)
+    config["devices"] = [_mqtt_device("MQTT1", "DEV1")]
+    result, codes = _diagnose_codes(tmp_path, config)
+
+    assert result.returncode == 1
+    assert "no_control_devices" in codes
+
+
+def test_emsctl_diagnose_disabled_duplicate_does_not_error(tmp_path):
+    config = _base_diagnose_config(tmp_path)
+    config["devices"] = [
+        {"name": "WR1", "max_power": 800, "sn": "SER1"},
+        {"name": "WR2", "max_power": 800, "sn": "SER1", "enabled": False},
+    ]
+    _, codes = _diagnose_codes(tmp_path, config)
+    assert "zendure_device_identity_duplicate" not in codes
+
+
+def test_emsctl_diagnose_disabled_broker_ref_produces_error(tmp_path):
+    config = _base_diagnose_config(tmp_path)
+    config["zendure_mqtt"] = {
+        "enabled": True,
+        "brokers": {
+            "local_mqtt": {
+                "enabled": False,
+                "source": "local_mqtt",
+                "host": "broker.local",
+                "port": 1883,
+            }
+        },
+    }
+    config["devices"] = [
+        {"name": "WR1", "max_power": 800, "sn": "SER1"},
+        _mqtt_device("MQTT1", "DEV1", mqtt={
+            "broker_ref": "local_mqtt",
+            "topic_family": "zensdk_ha_scalar",
+            "device_id": "DEV1",
+        }),
+    ]
+    result, codes = _diagnose_codes(tmp_path, config)
+    assert result.returncode == 1, result.stderr
+    assert "zendure_mqtt_broker_ref_disabled" in codes
+
+
+def test_emsctl_diagnose_broker_issue_leaks_no_identifiers(tmp_path):
+    config = _base_diagnose_config(tmp_path)
+    config["zendure_mqtt"] = {"enabled": True, "brokers": {}}
+    config["devices"] = [
+        {"name": "WR1", "max_power": 800, "sn": "SER1"},
+        _mqtt_device("MQTT1", "SECRETDEV", mqtt={
+            "broker_ref": "ghost",
+            "topic_family": "zensdk_ha_scalar",
+            "device_id": "SECRETDEV",
+        }),
+    ]
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(config))
+    result = run_emsctl(tmp_path, "diagnose", "--json")
+    payload = json.loads(result.stdout)
+    messages = " ".join(
+        check.get("message", "")
+        for check in payload["checks"]
+        if check["code"] == "zendure_mqtt_broker_ref_unknown"
+    )
+    assert messages
+    assert "SECRETDEV" not in messages
+
+
 def test_emsctl_diagnose_invalid_dashboard_port_produces_error(tmp_path):
     config_path = tmp_path / "config.json"
     write_config(config_path)
@@ -467,6 +680,48 @@ def test_emsctl_diagnose_runtime_unknown_device_produces_warning(tmp_path):
         check["code"] == "runtime_device_unknown"
         for check in payload["checks"]
     )
+
+
+def test_emsctl_diagnose_does_not_flag_telemetry_only_device_as_missing(tmp_path):
+    config = _base_diagnose_config(tmp_path)
+    config["devices"] = [
+        {"name": "WR1", "max_power": 800, "sn": "SER1", "ip": "10.0.0.1"},
+        _mqtt_device("INV_2", "DEV2"),
+    ]
+    (tmp_path / "runtime-state.json").write_text(json.dumps({
+        "system": {"enabled": True},
+        "devices": {"WR1": {"enabled": True, "max_power": 800}},
+    }))
+
+    _, codes = _diagnose_codes(tmp_path, config)
+
+    assert "runtime_device_missing" not in codes
+
+
+def test_diagnose_controllable_config_device_names_excludes_telemetry_only():
+    config = {
+        "devices": [
+            {"name": "WR1", "sn": "S1", "ip": "10.0.0.1"},
+            {
+                "type": "zendure_mqtt",
+                "name": "TEL",
+                "mqtt": {"topic_family": "zensdk_ha_scalar", "device_id": "D1"},
+            },
+            {
+                "type": "zendure_mqtt",
+                "name": "CTRL",
+                "hardware_profile": "solarflow_800_pro_2",
+                "mqtt": {"topic_family": "legacy_zendure_json_alt", "device_id": "D2", "product_key": "P2"},
+                "capabilities": {"write_output_limit": True},
+            },
+        ]
+    }
+
+    names = set(diagnostics.diagnose_controllable_config_device_names(config))
+
+    assert "WR1" in names
+    assert "CTRL" in names
+    assert "TEL" not in names
 
 
 def test_emsctl_diagnose_support_bundle_redacts_secrets(tmp_path):
@@ -1162,6 +1417,113 @@ def test_diagnose_grid_meter_config_accepts_zendure_smartmeter_d0():
     assert levels.get("grid_meter_mqtt_payload_format") == "ok"
 
 
+def test_diagnose_grid_meter_config_accepts_zendure_grid_meter_http():
+    checks = []
+    diagnostics.diagnose_grid_meter_config(
+        checks,
+        {"grid_meter": {"type": "zendure_grid_meter_http", "ip": "192.0.2.80"}},
+    )
+    levels = _levels_by_code(checks)
+    assert levels.get("grid_meter_type") == "ok"
+    assert levels.get("grid_meter_ip_present") == "ok"
+
+
+def _grid_meter_type_check(checks):
+    return next(check for check in checks if check.get("code") == "grid_meter_type")
+
+
+def test_diagnose_grid_meter_config_accepts_zendure_smartmeter_d0_http():
+    import json
+
+    checks = []
+    diagnostics.diagnose_grid_meter_config(
+        checks,
+        {"grid_meter": {"type": "zendure_smartmeter_d0_http", "ip": "192.0.2.84"}},
+    )
+    levels = _levels_by_code(checks)
+    assert levels.get("grid_meter_type") == "ok"
+    assert levels.get("grid_meter_ip_present") == "ok"
+
+    # Diagnose must name the correct model and transport, and never call a D0 a 3CT.
+    details = _grid_meter_type_check(checks)["details"]
+    assert details.get("model") == "Zendure Smart Meter D0"
+    assert "HTTP" in str(details.get("transport"))
+    assert "3CT" not in json.dumps(checks)
+
+
+def test_diagnose_grid_meter_config_d0_mqtt_names_mqtt_transport():
+    checks = []
+    diagnostics.diagnose_grid_meter_config(
+        checks,
+        {
+            "grid_meter": {
+                "type": "zendure_smartmeter_d0",
+                "mqtt": {"host": "10.0.0.5", "topic": "Zendure/sensor/SN/totalPower"},
+            }
+        },
+    )
+    details = _grid_meter_type_check(checks)["details"]
+    assert details.get("model") == "Zendure Smart Meter D0"
+    assert "MQTT" in str(details.get("transport"))
+
+
+def test_diagnose_grid_meter_config_resolves_broker_ref_and_reports_tls():
+    checks = []
+    diagnostics.diagnose_grid_meter_config(
+        checks,
+        {
+            "grid_meter": {
+                "type": "zendure_smartmeter_d0",
+                "mqtt": {
+                    "broker_ref": "local_mqtt",
+                    "topic": "Zendure/sensor/SN/totalPower",
+                    "payload_format": "number",
+                },
+            },
+            "zendure_mqtt": {
+                "enabled": True,
+                "brokers": {
+                    "local_mqtt": {
+                        "enabled": True,
+                        "source": "local_mqtt",
+                        "host": "10.0.0.9",
+                        "port": 8883,
+                        "tls": True,
+                        "password": "secret",
+                    }
+                },
+            },
+        },
+    )
+    levels = _levels_by_code(checks)
+    assert levels.get("grid_meter_broker_ref") == "ok"
+    assert levels.get("grid_meter_mqtt_host_present") == "ok"
+    assert levels.get("grid_meter_mqtt_tls") == "ok"
+    # No credential ever appears in a diagnostic message.
+    import json
+
+    assert "secret" not in json.dumps(checks)
+
+
+def test_diagnose_grid_meter_config_flags_unknown_broker_ref():
+    checks = []
+    diagnostics.diagnose_grid_meter_config(
+        checks,
+        {
+            "grid_meter": {
+                "type": "zendure_smartmeter_d0",
+                "mqtt": {
+                    "broker_ref": "missing",
+                    "topic": "Zendure/sensor/SN/totalPower",
+                },
+            },
+            "zendure_mqtt": {"enabled": True, "brokers": {}},
+        },
+    )
+    levels = _levels_by_code(checks)
+    assert levels.get("grid_meter_broker_ref_invalid") == "error"
+
+
 def test_diagnose_grid_meter_config_requires_mqtt_json_value_path():
     checks = []
     diagnostics.diagnose_grid_meter_config(
@@ -1179,6 +1541,200 @@ def test_diagnose_grid_meter_config_requires_mqtt_json_value_path():
     assert levels.get("grid_meter_mqtt_value_path_missing") == "error"
     check = next(item for item in checks if item["code"] == "grid_meter_mqtt_value_path_missing")
     assert check["message"] == "MQTT JSON grid meter requires grid_meter.mqtt.value_path"
+
+
+def test_diagnose_zendure_mqtt_runtime_silent_when_feature_unused():
+    checks = []
+    diagnostics.diagnose_zendure_mqtt_runtime(checks, {"devices": []})
+    codes = {check["code"] for check in checks}
+    assert not any(code.startswith("zendure_mqtt_") for code in codes)
+
+
+def test_diagnose_zendure_mqtt_runtime_reports_inactive_with_devices():
+    checks = []
+    diagnostics.diagnose_zendure_mqtt_runtime(
+        checks,
+        {
+            "devices": [
+                {
+                    "type": "zendure_mqtt",
+                    "name": "Zendure Battery",
+                    "mqtt": {"topic_family": "zensdk_ha_scalar", "device_id": "DEV1"},
+                }
+            ],
+            "zendure_mqtt": {"enabled": False},
+        },
+    )
+    levels = _levels_by_code(checks)
+    assert levels.get("zendure_mqtt_telemetry_device_count") == "ok"
+    # The feature is always on; without a broker host it is inactive, not
+    # disabled, and never a config error.
+    assert levels.get("zendure_mqtt_runtime_inactive") == "info"
+    assert "zendure_mqtt_runtime_disabled" not in levels
+
+
+def _check_by_code(checks, code):
+    return next(check for check in checks if check["code"] == code)
+
+
+def _iter_strings(value):
+    """Yield every string reachable in a nested check structure (keys included)."""
+
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield str(key)
+            yield from _iter_strings(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _iter_strings(item)
+
+
+def _assert_no_secret(checks, *secrets):
+    # Recursively inspect structured keys and values rather than a serialized
+    # blob, so a secret nested anywhere in a check fails the assertion.
+    strings = list(_iter_strings(checks))
+    for secret in secrets:
+        offenders = [text for text in strings if secret in text]
+        assert offenders == [], f"secret {secret!r} leaked into diagnostics: {offenders}"
+
+
+def test_diagnose_zendure_mqtt_runtime_reports_configured_endpoint_without_secrets():
+    checks = []
+    diagnostics.diagnose_zendure_mqtt_runtime(
+        checks,
+        {
+            "devices": [],
+            "zendure_mqtt": {
+                "enabled": True,
+                "host": "broker.local",
+                "port": 8883,
+                "username": "secretuser",
+                "password": "sup3r-secret-pw",
+                "app_key": "secretAppKey",
+            },
+        },
+    )
+    configured = _check_by_code(checks, "zendure_mqtt_runtime_configured")
+    assert configured["level"] == "ok"
+    # Assert the actual structured endpoint field, not a substring of a blob.
+    assert configured["details"]["endpoint"] == "broker.local:8883"
+    _assert_no_secret(checks, "sup3r-secret-pw", "secretuser", "secretAppKey")
+
+
+def test_diagnose_zendure_mqtt_runtime_hostless_config_is_inactive_without_secrets():
+    checks = []
+    diagnostics.diagnose_zendure_mqtt_runtime(
+        checks,
+        {
+            "devices": [],
+            "zendure_mqtt": {"enabled": True, "password": "sup3r-secret-pw"},
+        },
+    )
+    levels = _levels_by_code(checks)
+    assert levels.get("zendure_mqtt_runtime_inactive") == "info"
+    assert "zendure_mqtt_runtime_config_invalid" not in levels
+    assert "sup3r-secret-pw" not in json.dumps(checks)
+
+
+def test_diagnose_zendure_mqtt_runtime_reports_invalid_config_without_secrets():
+    checks = []
+    diagnostics.diagnose_zendure_mqtt_runtime(
+        checks,
+        {
+            "devices": [],
+            "zendure_mqtt": {
+                "host": "broker.local",
+                "port": "not-a-port",
+                "password": "sup3r-secret-pw",
+            },
+        },
+    )
+    levels = _levels_by_code(checks)
+    assert levels.get("zendure_mqtt_runtime_config_invalid") == "error"
+    assert "sup3r-secret-pw" not in json.dumps(checks)
+
+
+def test_diagnose_zendure_mqtt_broker_profiles_report_missing_host_before_disabled():
+    checks = []
+    diagnostics.diagnose_zendure_mqtt_runtime(
+        checks,
+        {
+            "devices": [],
+            "zendure_mqtt": {
+                "brokers": {
+                    "hostless": {"enabled": True, "source": "local_mqtt"},
+                    "switched_off": {
+                        "enabled": False,
+                        "source": "local_mqtt",
+                        "host": "broker.local",
+                    },
+                }
+            },
+        },
+    )
+    levels = _levels_by_code(checks)
+    assert levels.get("zendure_mqtt_broker_endpoint_missing") == "warning"
+    assert levels.get("zendure_mqtt_broker_disabled") == "info"
+
+
+def test_diagnose_zendure_mqtt_control_device_without_write_target_is_flagged():
+    checks = []
+    diagnostics.diagnose_zendure_mqtt_device_config(
+        checks,
+        0,
+        {
+            "type": "zendure_mqtt",
+            "name": "Zendure Battery",
+            "mqtt": {"topic_family": "zensdk_ha_scalar", "device_id": "DEV1"},
+            "capabilities": {"write_output_limit": True},
+        },
+    )
+    levels = _levels_by_code(checks)
+    assert levels.get("zendure_mqtt_write_target_missing") == "error"
+
+
+def test_diagnose_zendure_mqtt_control_device_is_control_capable():
+    checks = []
+    diagnostics.diagnose_zendure_mqtt_device_config(
+        checks,
+        0,
+        {
+            "type": "zendure_mqtt",
+            "name": "Zendure Battery",
+            "hardware_profile": "solarflow_800_pro_2",
+            "mqtt": {
+                "source": "local_mqtt",
+                "topic_family": "legacy_zendure_json",
+                "device_id": "DEV1",
+                "product_key": "PK1",
+            },
+            "capabilities": {"write_output_limit": True},
+        },
+    )
+    levels = _levels_by_code(checks)
+    assert levels.get("zendure_mqtt_control_capable") == "ok"
+
+
+def test_diagnose_zendure_mqtt_scalar_control_reports_protocol_unsupported():
+    checks = []
+    diagnostics.diagnose_zendure_mqtt_device_config(
+        checks,
+        0,
+        {
+            "type": "zendure_mqtt",
+            "name": "Zendure Battery",
+            "mqtt": {
+                "topic_family": "zensdk_ha_scalar",
+                "device_id": "DEV1",
+                "product_key": "PK1",
+            },
+            "capabilities": {"write_output_limit": True},
+        },
+    )
+    levels = _levels_by_code(checks)
+    assert levels.get("zendure_mqtt_write_protocol_unsupported") == "error"
 
 
 def test_diagnose_hardware_checks_mqtt_broker_tcp(monkeypatch):
@@ -1458,3 +2014,231 @@ def test_diagnose_runtime_paths_no_warning_for_persistent_container_backup(
     assert "backup_persistent" in codes
     assert "container_backup_not_persistent" not in codes
     assert host_path["details"]["path"] == "data/backups"
+
+
+def test_diagnose_zendure_mqtt_runtime_reports_named_brokers_without_secrets():
+    checks = []
+    diagnostics.diagnose_zendure_mqtt_runtime(
+        checks,
+        {
+            "zendure_mqtt": {
+                "enabled": True,
+                "brokers": {
+                    "zendure_cloud": {
+                        "enabled": True,
+                        "source": "zendure_cloud_mqtt",
+                        "host": "mqtteu.zen-iot.com",
+                        "port": 8883,
+                        "username": "secretuser",
+                        "password": "sup3r-secret-pw",
+                    },
+                    "local_mqtt": {
+                        "enabled": True,
+                        "source": "local_mqtt",
+                        "host": "192.168.20.10",
+                        "port": 1883,
+                    },
+                },
+            },
+            "devices": [
+                {
+                    "type": "zendure_mqtt",
+                    "name": "Cloud",
+                    "mqtt": {
+                        "broker_ref": "zendure_cloud",
+                        "topic_family": "zensdk_ha_scalar",
+                        "device_id": "CLOUDDEV",
+                    },
+                }
+            ],
+        },
+    )
+    endpoints = {
+        check["details"].get("broker_ref"): check["details"].get("endpoint")
+        for check in checks
+        if check["code"] == "zendure_mqtt_broker_configured"
+    }
+    assert endpoints["zendure_cloud"] == "mqtteu.zen-iot.com:8883"
+    assert endpoints["local_mqtt"] == "192.168.20.10:1883"
+    _assert_no_secret(checks, "secretuser", "sup3r-secret-pw")
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "attacker:sup3r-secret@broker.local",  # userinfo
+        "mqtt://broker.local",  # scheme
+        "broker.local/path",  # path
+        "broker.local?token=sup3r-secret",  # query
+        "broker.local#sup3r-secret",  # fragment
+        "broker .local",  # embedded whitespace
+        "broker.local\x01",  # control character
+    ],
+)
+def test_diagnose_zendure_mqtt_runtime_rejects_credential_bearing_host(host):
+    checks = []
+    diagnostics.diagnose_zendure_mqtt_runtime(
+        checks,
+        {"devices": [], "zendure_mqtt": {"enabled": True, "host": host, "port": 8883}},
+    )
+    levels = _levels_by_code(checks)
+    assert levels.get("zendure_mqtt_runtime_host_invalid") == "error"
+    assert "zendure_mqtt_runtime_configured" not in levels
+    # The raw host — which may embed a credential — is never echoed anywhere.
+    _assert_no_secret(checks, host, "sup3r-secret")
+
+
+def test_diagnose_zendure_mqtt_named_broker_rejects_credential_bearing_host():
+    checks = []
+    diagnostics.diagnose_zendure_mqtt_runtime(
+        checks,
+        {
+            "devices": [
+                {
+                    "type": "zendure_mqtt",
+                    "name": "X",
+                    "mqtt": {
+                        "broker_ref": "evil",
+                        "topic_family": "zensdk_ha_scalar",
+                        "device_id": "D",
+                    },
+                }
+            ],
+            "zendure_mqtt": {
+                "enabled": True,
+                "brokers": {
+                    "evil": {
+                        "enabled": True,
+                        "source": "local_mqtt",
+                        "host": "user:sup3r-secret@broker.local",
+                        "port": 1883,
+                    }
+                },
+            },
+        },
+    )
+    levels = _levels_by_code(checks)
+    assert levels.get("zendure_mqtt_broker_host_invalid") == "error"
+    assert "zendure_mqtt_broker_configured" not in levels
+    _assert_no_secret(checks, "sup3r-secret")
+
+
+def test_diagnose_zendure_mqtt_runtime_accepts_hostname_ipv4_and_ipv6():
+    # Valid bare hosts (hostname, IPv4, bracketed IPv6) stay fully supported.
+    for host, port, expected in (
+        ("mqtteu.zen-iot.com", 8883, "mqtteu.zen-iot.com:8883"),
+        ("192.168.20.10", 1883, "192.168.20.10:1883"),
+        ("::1", 1883, "[::1]:1883"),
+    ):
+        checks = []
+        diagnostics.diagnose_zendure_mqtt_runtime(
+            checks,
+            {"devices": [], "zendure_mqtt": {"enabled": True, "host": host, "port": port}},
+        )
+        configured = _check_by_code(checks, "zendure_mqtt_runtime_configured")
+        assert configured["details"]["endpoint"] == expected
+
+
+def test_diagnose_zendure_mqtt_runtime_flags_unknown_broker_ref():
+    checks = []
+    diagnostics.diagnose_zendure_mqtt_runtime(
+        checks,
+        {
+            "zendure_mqtt": {
+                "enabled": True,
+                "brokers": {"local_mqtt": {"source": "local_mqtt", "host": "10.0.0.2"}},
+            },
+            "devices": [
+                {
+                    "type": "zendure_mqtt",
+                    "name": "Ghost",
+                    "mqtt": {
+                        "broker_ref": "nope",
+                        "topic_family": "zensdk_ha_scalar",
+                        "device_id": "DEVX",
+                    },
+                }
+            ],
+        },
+    )
+    levels = _levels_by_code(checks)
+    assert levels.get("zendure_mqtt_broker_ref_unknown") == "error"
+
+
+def _control_ready_telemetry_only_device(**overrides):
+    device = {
+        "type": "zendure_mqtt",
+        "name": "INV_2",
+        "hardware_profile": "solarflow_800_pro_2",
+        "mqtt": {
+            "source": "local_mqtt",
+            "topic_family": "legacy_zendure_json_alt",
+            "device_id": "DEV1",
+            "product_key": "PK1",
+        },
+        "capabilities": {"read_power": True, "write_output_limit": False},
+    }
+    device.update(overrides)
+    return device
+
+
+def test_diagnose_flags_a_control_ready_device_saved_telemetry_only():
+    checks = []
+    diagnostics.diagnose_zendure_mqtt_device_config(
+        checks, 0, _control_ready_telemetry_only_device()
+    )
+    levels = _levels_by_code(checks)
+    assert levels.get("zendure_mqtt_control_ready_but_telemetry_only") == "warning"
+    assert "zendure_mqtt_telemetry_only" not in levels
+
+
+def test_diagnose_keeps_an_unwritable_telemetry_only_device_ok():
+    checks = []
+    diagnostics.diagnose_zendure_mqtt_device_config(
+        checks,
+        0,
+        {
+            "type": "zendure_mqtt",
+            "name": "Zendure Battery",
+            "mqtt": {"topic_family": "zensdk_ha_scalar", "device_id": "DEV1"},
+        },
+    )
+    levels = _levels_by_code(checks)
+    assert levels.get("zendure_mqtt_telemetry_only") == "ok"
+    assert "zendure_mqtt_control_ready_but_telemetry_only" not in levels
+
+
+def test_diagnose_does_not_flag_a_disabled_control_ready_device():
+    checks = []
+    diagnostics.diagnose_zendure_mqtt_device_config(
+        checks, 0, _control_ready_telemetry_only_device(enabled=False)
+    )
+    levels = _levels_by_code(checks)
+    assert "zendure_mqtt_control_ready_but_telemetry_only" not in levels
+
+
+def test_emsctl_diagnose_reports_a_disabled_api_device(tmp_path):
+    config = _base_diagnose_config(tmp_path)
+    config["devices"] = [
+        {"name": "WR1", "max_power": 800, "sn": "SER1"},
+        {"name": "WR2", "max_power": 800, "sn": "SER2", "enabled": False},
+    ]
+    _, codes = _diagnose_codes(tmp_path, config)
+    assert "device_disabled" in codes
+
+
+def test_emsctl_diagnose_reports_a_disabled_mqtt_device(tmp_path):
+    config = _base_diagnose_config(tmp_path)
+    config["devices"] = [
+        {"name": "WR1", "max_power": 800, "sn": "SER1"},
+        _mqtt_device("MQTT1", "DEV1", enabled=False),
+    ]
+    _, codes = _diagnose_codes(tmp_path, config)
+    assert "device_disabled" in codes
+
+
+def test_emsctl_diagnose_stays_silent_for_enabled_devices(tmp_path):
+    config = _base_diagnose_config(tmp_path)
+    config["devices"] = [{"name": "WR1", "max_power": 800, "sn": "SER1"}]
+    _, codes = _diagnose_codes(tmp_path, config)
+    assert "device_disabled" not in codes

@@ -1,0 +1,100 @@
+#!/bin/sh
+
+set -u
+
+SELF=$(readlink -f -- "$0") || exit 1
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$SELF")" && pwd) || exit 1
+REPO_ROOT=$(git -C "$SCRIPT_DIR/.." rev-parse --show-toplevel 2>/dev/null) || exit 1
+NODE_BIN=${GITNEXUS_NODE:-$(command -v node 2>/dev/null || true)}
+
+if [ -n "${GITNEXUS_EXECUTABLE:-}" ]; then
+  GITNEXUS_BIN=$GITNEXUS_EXECUTABLE
+elif GITNEXUS_BIN=$(command -v gitnexus 2>/dev/null); then
+  :
+elif GITNEXUS_BIN=$(find "${NVM_DIR:-$HOME/.nvm}/versions/node" -path '*/bin/gitnexus' \( -type f -o -type l \) -print 2>/dev/null | sort -V | tail -1) && [ -n "$GITNEXUS_BIN" ]; then
+  :
+elif [ -n "$NODE_BIN" ] && [ -f "$REPO_ROOT/.gitnexus/run.cjs" ]; then
+  GITNEXUS_BIN=
+else
+  printf '%s\n' 'GitNexus executable not found.' >&2
+  exit 127
+fi
+
+if [ -n "$GITNEXUS_BIN" ]; then
+  [ -x "$GITNEXUS_BIN" ] || {
+    printf 'GitNexus executable is not runnable: %s\n' "$GITNEXUS_BIN" >&2
+    exit 126
+  }
+  PATH=$(dirname -- "$GITNEXUS_BIN"):$PATH
+  export PATH
+  set -- "$GITNEXUS_BIN" "$@"
+else
+  set -- "$NODE_BIN" "$REPO_ROOT/.gitnexus/run.cjs" "$@"
+fi
+
+CONFIGURED_MAX_FILE_SIZE=$(
+  "$NODE_BIN" -e '
+    const fs = require("fs");
+    const config = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const value = config.analyze?.maxFileSize ?? config.maxFileSize;
+    if (!Number.isInteger(Number(value)) || Number(value) <= 0) process.exit(1);
+    process.stdout.write(String(value));
+  ' "$REPO_ROOT/.gitnexusrc"
+) || {
+  printf '%s\n' 'Invalid maxFileSize in .gitnexusrc.' >&2
+  exit 2
+}
+export GITNEXUS_MAX_FILE_SIZE=$CONFIGURED_MAX_FILE_SIZE
+
+LOG_DIR=$REPO_ROOT/.gitnexus
+LOG_FILE=$LOG_DIR/analyze-wrapper.log
+DB_FILE=$LOG_DIR/lbug
+mkdir -p "$LOG_DIR" || exit 1
+
+case ${2:-} in
+  analyze)
+    ;;
+  *)
+    exec "$@"
+    ;;
+esac
+
+LOCK_FILE=$LOG_DIR/analyze-writer.lock
+exec 9>"$LOCK_FILE" || exit 1
+LOCK_TIMEOUT=${GITNEXUS_ANALYZE_LOCK_TIMEOUT:-60}
+DB_WAIT_TIMEOUT=${GITNEXUS_DB_WAIT_TIMEOUT:-0}
+case $LOCK_TIMEOUT:$DB_WAIT_TIMEOUT in
+  *[!0-9:]*|:*)
+    printf '%s\n' 'GitNexus lock timeouts must be non-negative integers.' >&2
+    exit 2
+    ;;
+esac
+
+printf '%s command=analyze threshold_kb=%s lock=waiting timeout_s=%s\n' \
+  "$(date -Is)" "$GITNEXUS_MAX_FILE_SIZE" "$LOCK_TIMEOUT" >>"$LOG_FILE"
+if ! flock -w "$LOCK_TIMEOUT" 9; then
+  printf '%s command=analyze threshold_kb=%s lock=refused exit=75\n' \
+    "$(date -Is)" "$GITNEXUS_MAX_FILE_SIZE" >>"$LOG_FILE"
+  printf '%s\n' 'Another GitNexus analyzer owns the project lock.' >&2
+  exit 75
+fi
+
+WAITED=0
+while [ -e "$DB_FILE" ] && fuser "$DB_FILE" >/dev/null 2>&1; do
+  if [ "$WAITED" -ge "$DB_WAIT_TIMEOUT" ]; then
+    printf '%s command=analyze threshold_kb=%s lock=acquired db=busy waited_s=%s exit=75\n' \
+      "$(date -Is)" "$GITNEXUS_MAX_FILE_SIZE" "$WAITED" >>"$LOG_FILE"
+    printf '%s\n' 'GitNexus readers still hold the LadybugDB index; analysis was not started.' >&2
+    exit 75
+  fi
+  sleep 1
+  WAITED=$((WAITED + 1))
+done
+
+printf '%s command=analyze threshold_kb=%s lock=acquired db=available waited_s=%s\n' \
+  "$(date -Is)" "$GITNEXUS_MAX_FILE_SIZE" "$WAITED" >>"$LOG_FILE"
+"$@"
+STATUS=$?
+printf '%s command=analyze threshold_kb=%s exit=%s\n' \
+  "$(date -Is)" "$GITNEXUS_MAX_FILE_SIZE" "$STATUS" >>"$LOG_FILE"
+exit "$STATUS"

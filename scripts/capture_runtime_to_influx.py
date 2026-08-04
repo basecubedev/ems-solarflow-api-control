@@ -33,6 +33,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from ems import config as ems_config
 from ems.clients import ShellyClient, ZendureClient, create_session, fetch_all_devices
 from ems.logging_utils import log_event, setup_logging
 from scripts.influx_utils import (
@@ -253,7 +254,7 @@ def main():
             item.get("battery_kwh", 1.0),
             item.get("pv_priority_factor", 1.0)
         )
-        for item in config.get("devices", [])
+        for item in ems_config.http_control_device_configs(config.get("devices", []))
     ]
 
     if not devices:

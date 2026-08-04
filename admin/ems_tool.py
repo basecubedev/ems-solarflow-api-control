@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from admin.deployment import DockerCli, DockerCompose, DockerError, _safe_command_detail
-from admin.maintenance import DEFAULT_EMS_CONTAINER
+from admin.container_names import DEFAULT_EMS_CONTAINER
 
 # Container paths inside the published EMS image.
 CONTAINER_EMSCTL_PATH = "/app/emsctl.py"

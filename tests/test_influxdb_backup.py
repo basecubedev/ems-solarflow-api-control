@@ -13,6 +13,11 @@ import pytest
 
 from ems import backup, backup_crypto, influx_setup
 
+pytestmark = [
+    pytest.mark.backup_restore,
+    pytest.mark.unit,
+]
+
 
 def bundled_config(**overrides):
     influx = {"enabled": True, "mode": "bundled", "org": "ems",

@@ -20,6 +20,10 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = [
+    pytest.mark.contract,
+]
+
 
 ROOT = Path(__file__).resolve().parents[1]
 APP_JS = ROOT / "dashboard" / "static" / "app.js"

@@ -7,7 +7,12 @@ import pytest
 
 from admin.releases import ReleaseError, ReleaseManager, default_admin_data_dir
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.system_build,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -40,7 +45,7 @@ def test_prepare_creates_missing_data_release_and_state_directories(
     monkeypatch.setattr(
         manager,
         "_prepare_locked",
-        lambda tag: {"status": "ready", "tag": tag},
+        lambda tag, *, revision=None: {"status": "ready", "tag": tag},
     )
 
     result = manager.prepare("v0.6.0")

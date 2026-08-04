@@ -29,8 +29,9 @@ two flows. It never acts silently.
 Mutating actions preview the change and ask for confirmation. Config apply,
 guided upgrade and restore back up what they replace first.
 
-When Admin updates itself, the browser may briefly show a reconnect screen. See
-[Updating the Admin Console](admin-maintenance.md#updating-the-admin-console).
+When Admin updates itself during a guided upgrade, the browser may briefly show a
+reconnect screen. Admin alignment is an automatic stage of the upgrade — see
+[Admin alignment (automatic)](admin-maintenance.md#admin-alignment-automatic).
 
 ## What the Admin Console looks like
 

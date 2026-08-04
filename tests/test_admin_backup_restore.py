@@ -25,7 +25,12 @@ from admin.backup_restore import (
 from admin.ems_tool import EmsToolResult
 from admin.install_context import detect_install_context
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.backup_restore,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 def _build_install(tmp_path, *, influx=None):

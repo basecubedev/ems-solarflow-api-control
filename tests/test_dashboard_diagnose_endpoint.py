@@ -18,6 +18,10 @@ from test_dashboard_server import (
     with_server,
 )
 
+pytestmark = [
+    pytest.mark.integration,
+]
+
 SECRET_TOKEN = "leakytoken-SECRET-9999"
 
 
@@ -301,6 +305,10 @@ def test_diagnose_does_not_leak_secrets(tmp_path):
 def test_diagnose_redacts_free_form_messages(tmp_path, monkeypatch):
     from ems import diagnostics
 
+    route_id = "ACCOUNT_ROUTE_1234"
+    product_key = "PRODUCT_ACCOUNT_A"
+    command_topic = f"iot/{product_key}/{route_id}/properties/write"
+
     def fake_install(_args):
         return {
             "schema_version": 1,
@@ -312,6 +320,25 @@ def test_diagnose_redacts_free_form_messages(tmp_path, monkeypatch):
                 "errors": [f"probe URL http://user:{SECRET_TOKEN}@example.test/path failed"],
                 "sections": [],
                 "root_causes": [],
+            },
+            "zendure_mqtt": {
+                "brokers": [
+                    {
+                        "broker_ref": "cloud_a",
+                        "source": "zendure_cloud_mqtt",
+                        "password": SECRET_TOKEN,
+                    }
+                ],
+                "devices": [
+                    {
+                        "broker_ref": "cloud_a",
+                        "source": "zendure_cloud_mqtt",
+                        "device_id": route_id,
+                        "product_key": product_key,
+                        "name": f"WR {route_id}",
+                        "reason": command_topic,
+                    }
+                ],
             },
         }
 
@@ -325,6 +352,9 @@ def test_diagnose_redacts_free_form_messages(tmp_path, monkeypatch):
         )
         assert status == 200
         assert SECRET_TOKEN.encode() not in body
+        assert route_id.encode() not in body
+        assert product_key.encode() not in body
+        assert command_topic.encode() not in body
         payload = json.loads(body.decode("utf-8"))
         assert payload["profile"] == "install"
         assert payload["diagnosis"]["status"] == "warning"

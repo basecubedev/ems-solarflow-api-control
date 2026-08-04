@@ -566,9 +566,11 @@ function renderDevices(devices) {
     const batteryFlow = normalizeBatteryPowerForDisplay(device.battery_power_w);
     const deviceBatteryState = batteryStateLabel(batteryFlow);
     const socClass = soc < 20 ? "low" : soc >= 90 ? "full" : "";
+    const readOnly = device.read_only === true;
     card.innerHTML = `
       <div class="device-head">
         <span class="device-name">${escapeHtml(name)}</span>
+        ${readOnly ? `<span class="pill muted">${icon("history")}Telemetry only</span>` : ""}
         <span class="pill ${device.online ? "" : "muted"}">${icon(device.online ? "live" : "warning")}${device.online ? "Online" : "Offline"}</span>
       </div>
       <div class="soc-block ${socClass}" aria-label="Battery state of charge">
@@ -583,7 +585,7 @@ function renderDevices(devices) {
         ${deviceValue("PV", watts(devicePvPower(device)), "solar")}
         ${deviceValue("Output", watts(deviceOutputPower(device)), "inverter")}
         ${deviceValue("Battery", signedWatts(batteryFlow.valueW), batteryFlow.isCharging ? "charge" : "battery")}
-        ${deviceValue("Target", watts(device.target_w), "gauge")}
+        ${readOnly ? "" : deviceValue("Target", watts(device.target_w), "gauge")}
         ${deviceValue("Limit", watts(device.output_limit_w), "warning")}
       </div>
       ${renderDeviceFirmwareStatus(device)}

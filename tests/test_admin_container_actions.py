@@ -16,7 +16,12 @@ from admin.container_actions import (
 )
 from admin.deployment import DockerError
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.system_build,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 def make_overview(

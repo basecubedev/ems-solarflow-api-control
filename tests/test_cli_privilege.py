@@ -7,6 +7,10 @@ import pytest
 
 from ems import cli_privilege
 
+pytestmark = [
+    pytest.mark.contract,
+]
+
 
 def _mkdir_owned(path, uid, gid, monkeypatch):
     """Pretend ``path`` is owned by ``uid``/``gid`` via a fake os.stat."""

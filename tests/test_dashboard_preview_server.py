@@ -23,6 +23,10 @@ from serve_dashboard_preview import (  # noqa: E402
     start_server,
 )
 
+pytestmark = [
+    pytest.mark.integration,
+]
+
 
 @pytest.fixture
 def preview_server():

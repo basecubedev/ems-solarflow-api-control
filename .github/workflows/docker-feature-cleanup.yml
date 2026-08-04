@@ -1,0 +1,181 @@
+name: Docker Feature Cleanup
+
+# When a feature branch is deleted, remove the GHCR image tags this branch
+# published via docker-feature-publish.yml. Only `dev-<safe-ref>` tags are
+# touched; release tags (`latest`, `v*`, `stable`, `rc`) are never matched.
+
+on:
+  delete:
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: development-build-catalogue
+  cancel-in-progress: false
+
+jobs:
+  cleanup-feature-tags:
+    name: Delete feature Docker tags
+    runs-on: ubuntu-latest
+    if: ${{ github.event.ref_type == 'branch' }}
+
+    steps:
+      - name: Checkout catalogue mutator
+        uses: actions/checkout@v7
+
+      - name: Resolve feature tag prefix
+        id: prefix
+        env:
+          DELETED_REF: ${{ github.event.ref }}
+        run: |
+          # Must match the sanitization in docker-feature-publish.yml exactly.
+          safe_ref="$(printf '%s' "${DELETED_REF}" \
+            | tr '[:upper:]' '[:lower:]' \
+            | sed 's#[^a-z0-9._-]#-#g' \
+            | sed 's#^[._-]*##; s#[._-]*$##' \
+            | cut -c1-80 \
+            | sed 's#[._-]*$##')"
+          if [[ -z "${safe_ref}" ]]; then
+            echo "The deleted ref does not contain a Docker-tag-safe name." >&2
+            exit 1
+          fi
+          ref_hash="$(printf '%s' "${DELETED_REF}" | sha256sum | cut -c1-10)"
+          echo "feature_tag_prefix=dev-${safe_ref}-${ref_hash}" >> "${GITHUB_OUTPUT}"
+
+      - name: Delete matching GHCR package versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          # GitHub Packages uses /users for packages owned by personal accounts.
+          PACKAGE_OWNER_TYPE: user
+          FEATURE_TAG_PREFIX: ${{ steps.prefix.outputs.feature_tag_prefix }}
+        run: |
+          set -euo pipefail
+
+          package_owner_path() {
+            case "${PACKAGE_OWNER_TYPE}" in
+              user) echo "/users/${OWNER}" ;;
+              organization) echo "/orgs/${OWNER}" ;;
+              *)
+                echo "Unknown package owner type: ${PACKAGE_OWNER_TYPE}" >&2
+                return 1
+                ;;
+            esac
+          }
+
+          report_api_failure() {
+            package="$1"
+            action="$2"
+            error_file="$3"
+            echo "Unexpected GitHub Packages API failure while ${action} ${package}:" >&2
+            sed -n '1,12p' "${error_file}" >&2
+            if grep -q 'HTTP 403' "${error_file}"; then
+              echo "HTTP 403: ensure the GHCR package is linked to this repository and grants Actions package access." >&2
+            fi
+          }
+
+          list_versions() {
+            package="$1"
+            output_file="$2"
+            error_file="${package}-api-error.log"
+            endpoint="$(package_owner_path)/packages/container/${package}/versions"
+            if gh api --paginate "${endpoint}" \
+              --jq '.[] | {id: .id, tags: .metadata.container.tags}' \
+              > "${output_file}" 2> "${error_file}"; then
+              return 0
+            fi
+            if grep -q 'HTTP 404' "${error_file}"; then
+              echo "Package ${package} is already absent (HTTP 404)."
+              : > "${output_file}"
+              return 0
+            fi
+            report_api_failure "${package}" "listing versions for" "${error_file}"
+            return 1
+          }
+
+          delete_matching_versions() {
+            package="$1"
+            echo "Scanning package ${package} for tags matching '${FEATURE_TAG_PREFIX}'"
+            versions_file="${package}-versions.jsonl"
+            list_versions "${package}" "${versions_file}"
+
+            while IFS= read -r version; do
+              [ -n "${version}" ] || continue
+              id="$(printf '%s' "${version}" | jq -r '.id')"
+              matches="$(printf '%s' "${version}" | jq -r --arg p "${FEATURE_TAG_PREFIX}" '
+                [.tags[] | select(. == $p or startswith($p + "-"))] | length')"
+              if [ "${matches}" -gt 0 ]; then
+                foreign_tags="$(printf '%s' "${version}" | jq -r --arg p "${FEATURE_TAG_PREFIX}" '
+                  [.tags[] | select(. != $p and (startswith($p + "-") | not))] | length')"
+                if [ "${foreign_tags}" -gt 0 ]; then
+                  echo "Refusing to delete version ${id} from ${package}: it also has non-feature tags." >&2
+                  return 1
+                fi
+                echo "Deleting version ${id} (tags: $(printf '%s' "${version}" | jq -c '.tags'))"
+                endpoint="$(package_owner_path)/packages/container/${package}/versions/${id}"
+                error_file="${package}-${id}-api-error.log"
+                if ! gh api --method DELETE "${endpoint}" 2> "${error_file}"; then
+                  if grep -q 'HTTP 404' "${error_file}"; then
+                    echo "Version ${id} in ${package} is already absent (HTTP 404)."
+                    continue
+                  fi
+                  report_api_failure "${package}" "deleting version ${id} from" "${error_file}"
+                  return 1
+                fi
+              fi
+            done < "${versions_file}"
+          }
+
+          verify_no_matching_versions() {
+            package="$1"
+            versions_file="${package}-verification.jsonl"
+            list_versions "${package}" "${versions_file}"
+            if jq -e --arg p "${FEATURE_TAG_PREFIX}" \
+              'select(any(.tags[]; . == $p or startswith($p + "-")))' \
+              "${versions_file}" >/dev/null; then
+              echo "Feature package versions still exist in ${package} after cleanup." >&2
+              return 1
+            fi
+          }
+
+          delete_matching_versions "ems-solarflow-admin"
+          delete_matching_versions "ems-solarflow-api-control"
+          verify_no_matching_versions "ems-solarflow-admin"
+          verify_no_matching_versions "ems-solarflow-api-control"
+
+      - name: Remove branch from development build catalogue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CATALOGUE_BRANCH: development-build-catalogue
+          CATALOGUE_FILE: development-builds.json
+          FEATURE_TAG_PREFIX: ${{ steps.prefix.outputs.feature_tag_prefix }}
+        run: |
+          set -euo pipefail
+          api="repos/${GITHUB_REPOSITORY}/contents/${CATALOGUE_FILE}"
+
+          for retry in 1 2 3 4 5; do
+            # gh api prints the 404 body to stdout and exits non-zero for a
+            # missing file; branch on its exit code, not on the captured output.
+            if ! metadata="$(gh api "${api}?ref=${CATALOGUE_BRANCH}" 2>/dev/null)"; then
+              echo "Development catalogue is not provisioned; nothing to remove."
+              exit 0
+            fi
+            sha="$(jq -r .sha <<< "$metadata")"
+            jq -r .content <<< "$metadata" | base64 --decode > "$CATALOGUE_FILE"
+            python3 scripts/development_catalogue.py \
+              --catalogue "$CATALOGUE_FILE" remove-prefix \
+              --tag-prefix "$FEATURE_TAG_PREFIX"
+            content="$(base64 -w0 "$CATALOGUE_FILE")"
+            if gh api --method PUT "$api" \
+              -f "message=ci: remove ${FEATURE_TAG_PREFIX}" \
+              -f "content=${content}" \
+              -f "branch=${CATALOGUE_BRANCH}" \
+              -f "sha=${sha}" >/dev/null; then
+              exit 0
+            fi
+            sleep "$retry"
+          done
+          echo "Could not update the development catalogue after retries." >&2
+          exit 1

@@ -5,7 +5,7 @@ router that points you at one of three setup paths; this page lists everything.
 
 Documentation is split by audience:
 
-- **[docs/user/](user/)** — start here for setup, everyday operation and help.
+- **[docs/user/](user/index.md)** — start here for setup, everyday operation and help.
 - **[docs/technical/](technical/)** — architecture, internals and reference.
 - **[docs/developer/](developer/)** — source checkout, tests, CI and design notes.
 
@@ -30,6 +30,17 @@ source-checkout path for development and contributing, not a normal user setup.
 ## User documentation
 
 Setup, everyday operation and help. Normal users only need this section.
+[user/index.md](user/index.md) is the "Start here" landing page.
+
+### Step-by-step guides
+
+Screenshot-led walkthroughs. Each states what you see, what to select, what it
+changes, and what to do when the result differs.
+
+| Area | Document | Use |
+|---|---|---|
+| Admin Console | [user/admin/index.md](user/admin/index.md) | First start, Guided Setup, Guided Upgrade, Maintenance, devices, MQTT, backups, recovery. |
+| EMS Dashboard | [user/dashboard/index.md](user/dashboard/index.md) | Overview, device cards, energy, control pipeline, runtime settings, diagnostics. |
 
 ### Setup paths
 
@@ -58,6 +69,7 @@ Normal users choose one of these two; both converge on the same standard
 | Common commands | [common-commands.md](common-commands.md) | Daily Docker-first command sheet with native equivalents. |
 | Config layout | [user/config-layout.md](user/config-layout.md) | Standard `config/config.json` layout and legacy migration. |
 | Supported setups | [user/supported-setups.md](user/supported-setups.md) | Whether your grid meter and devices fit EMS. |
+| Connection types | [user/connection-types.md](user/connection-types.md) | Local API, Local MQTT and Zendure cloud MQTT — which hardware fits which. |
 | FAQ | [user/faq.md](user/faq.md) | Short answers for Admin, Docker, config, dashboard, backups and updates. |
 | Troubleshooting | [user/troubleshooting.md](user/troubleshooting.md) | Short, Admin-first guide for common problems. |
 | Safety | [user/safety.md](user/safety.md) | Simple pre-live checklist for hardware writes. |
@@ -84,6 +96,8 @@ Architecture, internals and reference. You do not need this for a normal setup.
 | Architecture | [technical/architecture.md](technical/architecture.md) | Project structure and runtime component boundaries. |
 | Admin architecture | [technical/admin-architecture.md](technical/admin-architecture.md) | Admin Console = UI/orchestration, Docker Bootstrap layout, EMS/Core as source of truth. |
 | Admin discovery | [technical/admin-discovery.md](technical/admin-discovery.md) | Full Admin Console internals: wizard, release/build identity, discovery, Docker setup, security. |
+| System-build pairing | [technical/system-build-pairing.md](technical/system-build-pairing.md) | Admin and EMS as one paired system build: pair identity, alignment, embedded resources, known-good. |
+| Admin workflow state | [technical/admin-workflow-state.md](technical/admin-workflow-state.md) | Persisted workflow-state inventory, config write paths, transition matrix and abandonment invariants. |
 | Configuration | [technical/configuration.md](technical/configuration.md) | Static `config.json` keys, safety flags, devices, grid meters and winter settings. |
 | Configuration examples | [configuration-examples.md](configuration-examples.md) | Copy/paste starting points for standalone, HA, dry-run and live writes. |
 | Control logic | [technical/control-logic.md](technical/control-logic.md) | Target calculation, filtering, allocation and write suppression. |
@@ -102,10 +116,13 @@ For contributors and maintainers. Git clone and build-from-source belong here.
 
 | Topic | Document | Use |
 |---|---|---|
+| Agent rules | [developer/agent-rules.md](developer/agent-rules.md) | Canonical project-wide rules for coding agents and maintainers. |
 | Developer setup | [developer/developer-setup.md](developer/developer-setup.md) | Source checkout, venv, local config and dry-run validation. |
 | Development notes | [developer/development.md](developer/development.md) | Module layout and developer workflow. |
 | Developer notes | [developer/developer.md](developer/developer.md) | Additional development and maintenance context. |
 | Testing | [developer/testing.md](developer/testing.md) | Compile checks, self-test, simulation and the pytest suite. |
+| MQTT write-latency probe | [developer/mqtt-write-latency-probe.md](developer/mqtt-write-latency-probe.md) | On-hardware tool measuring how fast an MQTT `outputLimit` write reaches the inverter. |
 | CI / release | [developer/ci-release.md](developer/ci-release.md) | Continuous integration, image publishing and release archives. |
+| Third-party licenses | [../THIRD_PARTY_LICENSES.md](../THIRD_PARTY_LICENSES.md) | Full inventory of runtime, development, vendored, optional and container dependencies. |
 | Dashboard style guide | [developer/dashboard-style-guide.md](developer/dashboard-style-guide.md) | Dashboard UI style conventions. |
 | Design notes | [developer/design-notes/](developer/design-notes/) | Development tools and deeper design notes. |

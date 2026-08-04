@@ -1,4 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
+import pytest
+
 from admin.install_context import (
     SOURCE_CANONICAL,
     SOURCE_DOCKER,
@@ -8,6 +10,13 @@ from admin.install_context import (
     detect_install_context,
 )
 from ems import paths
+
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.setup,
+    pytest.mark.workflow,
+    pytest.mark.integration,
+]
 
 
 def test_canonical_config_is_preferred(tmp_path):

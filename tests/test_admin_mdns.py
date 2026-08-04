@@ -22,7 +22,12 @@ from admin.mdns import (
 )
 from admin.models import DiscoveredDevice
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.setup,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 OBSERVED_ZENDURE_HTTP_NAME = (
     "Zendure-solarFlow800Pro2-EOD1NLN9P010611._http._tcp.local."
@@ -192,7 +197,7 @@ def test_default_verifier_stores_specific_http_failure(
 ):
     import admin.mdns as mdns
 
-    def fail(ip, port, timeout_ms, failure_details):
+    def fail(ip, port, timeout_ms, failure_details, model_hint=None):
         failure_details.append(failure_reason)
         return None
 

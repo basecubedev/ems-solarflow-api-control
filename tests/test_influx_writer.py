@@ -12,10 +12,16 @@ import time
 from types import SimpleNamespace
 
 
+import pytest
+
 from ems.history.influx_writer import (
     InfluxTelemetryWriter,
     build_telemetry_lines,
 )
+
+pytestmark = [
+    pytest.mark.integration,
+]
 
 
 CONFIG = {

@@ -1,0 +1,5 @@
+{
+  "analyze": {
+    "maxFileSize": "2048"
+  }
+}

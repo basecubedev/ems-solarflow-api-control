@@ -45,10 +45,11 @@ Common first fixes:
 - Home Assistant not configured: Home Assistant is optional and not required
   for standalone EMS control.
 
-Zendure Local API must be available and enabled for local EMS control. Do not
-run Zendure HEMS, Home Assistant automations, MQTT writers, or any other
-controller in parallel if they write Zendure `outputLimit`. EMS assumes
-exclusive write control over `outputLimit` while active.
+At least one supported Zendure connection — Local API, Local MQTT, or Zendure
+cloud MQTT — must be available for EMS control. Do not run Zendure HEMS, Home
+Assistant automations, MQTT writers, or any other controller in parallel if they
+write Zendure `outputLimit`. EMS assumes exclusive write control over
+`outputLimit` while active.
 
 The EMS uses structured logs:
 
@@ -612,7 +613,7 @@ target_calculation
 Symptoms:
 
 - target jumps up and down every cycle
-- many repeated `write_output_limit` events
+- many repeated `write_output_limit_published` events
 - actual output never settles
 - grid import/export alternates quickly
 
@@ -645,7 +646,7 @@ Tuning hints:
 | devices fight each other | disable other controllers | check Zendure app, HEMS, HA automations |
 
 Relevant events (`output_control_deadband_hold` is a `debug` trace; the actual
-write `write_output_limit` stays at `info`):
+write `write_output_limit_published` stays at `info`):
 
 ```text
 output_control_deadband_hold
@@ -765,7 +766,19 @@ event=dry_run_output_limit
 Expected live-write event:
 
 ```text
-event=write_output_limit
+event=write_output_limit_published
+```
+
+For an MQTT device this event means only that the command was **dispatched to
+the transport** — never that the device accepted it. Follow the command
+lifecycle events to see what actually happened:
+
+```text
+mqtt_publish_delivered        broker acknowledged the QoS 1 publish (PUBACK)
+device_command_acknowledged   correlated device reply (legacy invoke profiles)
+telemetry_confirmed           telemetry proved the command effective
+confirmation_timed_out        no matching telemetry before the deadline
+external_control_suspected    a foreign writer keeps overriding a confirmed target
 ```
 
 Other relevant events:
@@ -776,10 +789,124 @@ device_disabled_skip_write
 offline_skip_write
 deadband_skip_write
 write_output_limit_error
+state_reconciliation_skipped
 ```
+
+### Cloud MQTT writes are published but the inverter never changes
+
+Symptoms:
+
+- `write_output_limit_published` appears for the cloud device
+- repeated `confirmation_timed_out` warnings
+- inverter output never follows the target
+
+Check, in order:
+
+1. `confirmation_timed_out` includes `broker_delivery`. `timeout` there means
+   the broker never acknowledged the publish — check the cloud credentials:
+   bidirectional cloud MQTT requires the Zendure App / Home Assistant
+   authorization credentials from the device-list login; the public read-only
+   developer account silently drops writes. Broker delivery and device
+   acceptance are **independent**: `broker_delivery=delivered` never means the
+   device applied the command, and a late PUBACK still updates its original
+   bounded ledger record after telemetry confirmation and after newer commands.
+   An unresolved MID that crosses a disconnect is quarantined instead of being
+   guessed after reuse, even once its bounded tombstone expires.
+   Confirmation also requires a trustworthy command publish time and a fresh
+   per-property observation time; missing provenance fails closed rather than
+   confirming a cached matching value.
+2. `broker_delivery=delivered` with no confirmation means the broker accepted
+   the command but the device did not apply it — verify the pinned
+   `hardware_profile` matches the physical model and the device identifiers
+   (`product_key`, `device_id`) are correct.
+3. **Obsolete write topic.** A profile-backed device that carries a stale
+   `mqtt.write_topic` cannot misroute control — the canonical
+   `iot/<productKey>/<deviceId>/properties/write` topic is always used — but a
+   `profile_write_topic_obsolete` validation warning flags it. Apply the
+   migration/maintenance preview to remove it. (`diagnose` reports the effective
+   write topic and its source, `canonical_profile` vs `custom_explicit`.)
+4. `external_control_suspected` means another controller is overriding EMS:
+   disable Zendure HEMS, Smart Matching, Zendure schedules and any other
+   system that writes inverter power. Only one controller may run.
+5. Validate the full path with the hardware probe
+   ([mqtt-write-latency-probe.md](../developer/mqtt-write-latency-probe.md)):
+   stop the EMS, run `--dry-preview` (it shows the canonical topic, whether an
+   obsolete override is ignored, and restore feasibility), then `--confirm-writes`
+   and check that the setpoint **matches the target** (movement toward it is not
+   a match) and the required mode properties match. The probe reports broker
+   delivery, setpoint HTTP-match and physical output from the same submission
+   origin, plus the physical delay after setpoint. It polls delivery and HTTP
+   evidence together, refuses to write when any potentially modified initial
+   property is missing, requires an observed away-then-initial HTTP transition
+   before calling restoration verified, has no unsafe atomic-profile partial
+   fallback, and exits non-zero if the initial state cannot be fully restored.
+   A restoration-time HTTP read fault is recorded and cannot suppress the full
+   restore submission; missing verification evidence remains a non-zero result.
+   The probe stops its MQTT runtime in an outer cleanup path even if restoration
+   raises.
+6. **Serial-less Cloud device: `--api-ip` reports "no MQTT control device has a
+   trusted physical serial …" or the write is blocked as unverified binding.**
+   A Cloud device without a stored physical serial cannot be auto-selected by the
+   HTTP serial (the Cloud route id and a physical serial are different identity
+   domains). Select it with exact `--device-name`, `--device-id` and
+   `--broker-ref`. The probe then treats the HTTP serial as *new, unverified*
+   binding evidence and blocks the write until you either pass
+   `--confirm-unbound-api-readback` (accept it for this run only — never
+   persisted) or bind the physical serial first through Admin discovery. A
+   configured serial that does **not** match the HTTP readback is a hard identity
+   conflict and always blocks. See
+   [mqtt-write-latency-probe.md](../developer/mqtt-write-latency-probe.md#cross-transport-identity-binding).
 
 More detail: [safety-model.md](safety-model.md),
 [configuration.md](configuration.md), [runtime-state.md](runtime-state.md).
+
+### Setup or Maintenance shows "Identity conflict" for a rediscovered device
+
+Symptoms:
+
+- A discovered Cloud MQTT proposal shows a disabled **Identity conflict** action
+  instead of *Add* / *In config*.
+- Preview/apply reports `device_identity_conflict`.
+
+Cause: the discovered Cloud **route** is already configured against a **different
+physical serial**. The route says "one inverter" while the serials say "two", so
+Admin refuses to merge or add it as an independent inverter rather than guess.
+Fresh Setup and Maintenance apply the same rule.
+
+Fix: confirm which physical inverter that Cloud route belongs to. If the existing
+entry has the wrong serial, correct or remove it, then rediscover. A route-only
+device gaining its *own* serial is **not** a conflict — it is recognized as the
+same inverter (shown *In config*), keeps its custom name and dismissal, and is
+enriched in place. See
+[admin-discovery.md](admin-discovery.md#physical-inverter-identity-and-route-aliases).
+
+### A selected Cloud inverter reports "not present in current discovery state"
+
+Symptom: after a rediscovery, a previously selected Cloud MQTT inverter is
+rejected with `zendure_mqtt_proposal_unknown` at preview/apply.
+
+Expected behavior: this should **not** happen for a route-only Cloud selection
+that is rediscovered on the same scoped route (with or without a new serial). A
+Cloud proposal's selection id is anchored to its scoped-route token so it stays
+stable through serial enrichment, and trust resolution additionally remaps a
+stored selection to the current proposal when a trusted alias token intersects
+within the same broker scope. If you still see this error, the selection is
+genuinely stale (a different route, a different broker/account scope, or a
+tampered id/token) — re-run discovery and select the inverter again.
+
+### Cloud MQTT topics look masked in status or support bundles
+
+This is expected. Zendure **Cloud** account-scoped routes
+(`iot/<product>/<device>/...`, including `function/invoke` and custom suffixes)
+are masked to `iot/…/…/...` at every browser and support-export boundary, in
+structured fields, log/error text and mapping keys alike, so a support bundle
+never carries account routing secrets. **Local** MQTT topics are *not* masked —
+they contain user-controlled local identifiers, not Cloud secrets, and stay
+visible as useful diagnostics. A mixed local+Cloud status masks only the Cloud
+route material, per device. Physical serials and non-secret context are retained;
+credentials are dropped. Full identifiers are kept internally where required for
+correct command routing and matching — only external boundaries redact. See
+[admin-discovery.md](admin-discovery.md#cloud-route-redaction-at-external-boundaries).
 
 ### Dashboard values do not add up exactly
 
@@ -1047,6 +1174,15 @@ rewrites the EMS image reference in `docker-compose.yml`, and force-recreates th
 detection, build-identity gating, SemVer fallback, release cache and Docker
 execution details, see [admin-discovery.md](admin-discovery.md).
 
+If **Upgrade system** stops with *System Build verification is no longer current*
+(HTTP 409 `system_build_verification_stale`, or `system_build_verification_required`
+when no verification was sent), the target image or build metadata changed after
+you verified it — most often a mutable tag such as `latest` re-pushed to a new
+digest. No preflight, backup, migration, or deployment ran. Select **Verify System
+Build** again to re-resolve and re-verify the current pair, then re-plan and
+retry. This check is deliberate: it guarantees the executed System Build is
+exactly the one you verified.
+
 For Docker Bootstrap or advanced shell use, the equivalent manual recreate is:
 
 ```bash
@@ -1057,6 +1193,68 @@ docker compose exec ems python3 emsctl.py diagnose
 
 Roll back a bad update by restoring a backup; see the backup and restore
 diagnostics above and [backup-restore.md](backup-restore.md).
+
+### Installed release shows as unknown
+
+The Maintenance Overview treats a **running** EMS container as the active
+baseline and reads its release from the immutable image identity. If a running
+container's identity cannot be established (for example a digest-pinned image
+whose build labels are missing), the overview shows the current release as
+**unknown** and adds a short warning instead of borrowing the Compose or
+last-known-good release. This is intentional: the Compose file and known-good
+record describe the desired or last-successful state, not the bits that are
+actually running. They are used only when no EMS container is active (absent,
+stopped, or Docker unavailable). Recreate the EMS container from the verified
+System Build to restore a readable release. The custom container name honored
+here is `EMS_CONTAINER_NAME` (falling back to the Compose `container_name`, then
+the canonical `ems-solarflow-api-control`).
+
+### Guided upgrade digest pull failed
+
+When the exact verified EMS digest is missing locally, guided upgrade pulls
+`ghcr.io/basecubedev/ems-solarflow-api-control@sha256:<digest>`. If that pull
+fails, the typed failure is preserved through the complete upgrade job — the
+executor step, the job result, the transition record, and the UI all keep the
+stable error code:
+
+- `image_pull_rate_limited` / `system_build_registry_rate_limited` — a GHCR
+  throttle (see the rate-limit section below);
+- `image_pull_network_error` — a network problem reaching the registry;
+- `image_pull_failed` — a generic pull failure (tag/repository/registry);
+- `target_digest_mismatch` — the pulled content digest did not equal the verified
+  digest (a moved or re-pushed image).
+
+In every case **no Compose change is written and the EMS container is not
+recreated**. Any backup or config steps that already ran before the pull are
+reported honestly in the step list. The verified target stays selected and you
+can retry. (Untrusted or unknown executor reasons are normalized to
+`ems_upgrade_failed` and never copied verbatim into the transition record.)
+
+### GitHub Container Registry rate limit reached
+
+When you select **Verify System Build** (or **Update Admin Server**) and the
+System Build images are downloaded, GitHub Container Registry (GHCR) may throttle
+the request. The Admin Console reports this as a distinct, actionable error:
+
+```text
+GitHub Container Registry rate limit reached.
+
+No installation changes were made. Wait before retrying, or authenticate
+Docker with a GitHub account to increase the available request quota.
+```
+
+What it means and what to do:
+
+- **Nothing was installed or changed.** The build is left unverified, Continue and
+  Update Admin Server stay disabled, and no deployment starts. The full Docker
+  output is in the expandable diagnostics area (credentials are never shown).
+- **Just wait and retry.** Selecting **Verify System Build** again after a short
+  wait is the normal fix — anonymous GHCR pulls share a per-IP quota that
+  replenishes over time. Simply *browsing* builds never consumes GHCR requests, so
+  the wait only applies to the verify/download step.
+- **Optional:** if you download builds often, authenticating Docker with a GitHub
+  account (`docker login ghcr.io`) raises the available quota. This is a
+  convenience, **not** a requirement — normal operation needs no GitHub token.
 
 ## Support bundle and issue reports
 

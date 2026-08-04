@@ -4,7 +4,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from ems.config import default_safe_config
+
+pytestmark = [
+    pytest.mark.e2e,
+]
 
 
 ROOT = Path(__file__).resolve().parents[1]

@@ -20,7 +20,12 @@ from tests.test_admin_backup_restore import (
     _make_influxdb_archive,
 )
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.backup_restore,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 @pytest.fixture(autouse=True)

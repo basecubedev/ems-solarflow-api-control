@@ -1,47 +1,64 @@
 # ems-solarflow-api-control
 
 [![Continuous Integration](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/simulated-regression-tests.yml/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/simulated-regression-tests.yml)
+[![Playwright E2E](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/playwright-e2e.yml/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/playwright-e2e.yml)
+[![CodeQL](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/github-code-scanning/codeql)
+[![Dependabot](https://img.shields.io/badge/Dependabot-enabled-brightgreen?logo=dependabot)](.github/dependabot.yml)
+![automated tests](https://img.shields.io/badge/automated%20tests-8400%2B-blue)
+[![Test-Driven Development](https://img.shields.io/badge/Test--Driven%20Development-contract--first-blue)](docs/developer/testing.md#development-approach)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.14-blue)
-![automated tests](https://img.shields.io/badge/automated%20tests-2100%2B-blue)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue)](LICENSE)
 
 Local-first EMS control for Zendure SolarFlow systems.
 It reads local grid meter and Zendure telemetry, controls inverter output,
 and provides a local dashboard.
 
+> [!TIP]
+> **New to EMS SolarFlow?**
+> Read the [Project Overview](docs/user/project-overview.md) for a non-technical introduction to the main features, supported setups, dashboards, energy management, and system administration.
+
 > EMS controls real power hardware.
 > Read the [safety guide](docs/user/safety.md) before enabling live writes.
 
+[![Local EMS dashboard — aggregated system view](docs/assets/preview-aggregated.jpg)](docs/dashboard.md)
+
 ## Supported hardware at a glance
 
-**Zendure devices:** EMS controls Zendure SolarFlow devices through the local
-Zendure API / ZenSDK-compatible HTTP API. Known ZenSDK-compatible models:
-SolarFlow 800, SolarFlow 800 Plus, SolarFlow 800 Pro, SolarFlow 1600 AC+,
-SolarFlow 2400 AC, SolarFlow 2400 AC+, SolarFlow 2400 Pro.
+Each device carries one status — **Validated**, **Family-supported**,
+**Reverse-engineered** or **User-reported**. The maintainer validates on a
+SolarFlow 800 Pro 2 and a Shelly Pro; wider coverage needs community
+reports. Definitions and the full matrix live in
+[docs/user/supported-setups.md](docs/user/supported-setups.md).
 
-**Grid meters:** Shelly Pro/Plus Gen2/Gen3, Shelly 3EM Gen1, EcoTracker,
-Zendure Smart Meter 3CT HTTP, Tasmota HTTP / SmartMeter, Zendure SmartMeter D0
-via MQTT, and generic MQTT grid meters.
-
-**Roadmap:** MQTT/ZHA-style Zendure device or inverter control is planned, but
-is not part of the current supported control path.
-
-Full list and notes:
-[docs/user/supported-setups.md](docs/user/supported-setups.md)
-
-## Choose your path
-
-Most users should start with the **Admin Console**. All three paths converge on
-the same standard `config/config.json` layout, so you can switch later.
-
-| Path | Choose this if | Continue |
+| Hardware / integration | Connection | Status |
 | --- | --- | --- |
-| **Admin Console** | You want browser-guided setup, discovery, updates, backups and maintenance | [docs/user/admin-console.md](docs/user/admin-console.md) |
-| **Docker Bootstrap** | You want shell-only Docker setup | [docs/user/docker-bootstrap.md](docs/user/docker-bootstrap.md) |
-| **Developer Setup** | You want to develop, debug or build from source | [docs/developer/developer-setup.md](docs/developer/developer-setup.md) |
+| SolarFlow ZenSDK inverters — 800 Pro 2, plus 800 / 800 Plus / 800 Pro / 1600 AC+ / 2400 AC / 2400 AC+ / SolarFlow 2400 Pro / 4000 AC+ | Local API (ZenSDK) + Zendure cloud MQTT | 800 Pro 2 Validated; rest Family-supported |
+| Older Hub / Hyper / AIO / Ace MQTT devices — Hub 1200/2000, Hyper 2000, AIO 2400, Ace 1500 | Local or Zendure cloud MQTT | Reverse-engineered |
+| Any Zendure device via API key | Zendure cloud MQTT | Telemetry for any device; control needs an exact supported model |
+| Zendure & Shelly grid meters — Shelly Pro, Zendure Smart Meter 3CT / Smart Meter D0 (Local API) | HTTP | Shelly Pro Validated; Zendure meters Reverse-engineered |
+| Other HTTP / MQTT grid meters — Shelly Plus/Gen2/Gen3, Shelly 3EM Gen1, everHome EcoTracker, Tasmota, generic MQTT, D0 over local MQTT | HTTP / MQTT | Family-supported / Reverse-engineered |
+| Home Assistant entity as a load signal | HA API | Legacy; not recommended for new setups |
 
-## Recommended: Admin Console
+**MQTT control is an implemented EMS transport**, not a future feature: a
+supported inverter joins the same control loop, target calculation and safety
+gates as the Local API, over a local broker or Zendure cloud MQTT. ZenSDK cloud
+control is **Validated** on the SolarFlow 800 Pro 2; the older legacy-JSON write
+path is **Reverse-engineered** and still needs broader hardware validation — the
+**Roadmap** is confirming it on more device generations, not building the
+feature. Every write still requires an exact supported model, a verified write
+protocol, the per-device control capability and the transport write gate.
+[Device compatibility reports](https://github.com/basecubedev/ems-solarflow-api-control/issues/new?template=device_compatibility_report.yml)
+(working *or* broken) are very welcome.
 
-Install and start the Admin Console in a local EMS folder:
+## Get started
+
+> [!TIP]
+> **New here? Start with the Admin Console — the recommended path for most
+> users.** Browser-guided setup, hardware discovery, updates, backups and
+> maintenance, with no shell or config-file editing. It finds your devices and
+> sets up the connection for you.
+
+Install and start it in a local EMS folder:
 
 ```bash
 mkdir -p ems-solarflow-api-control
@@ -50,36 +67,43 @@ curl -fsSLO https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-cont
 sh install-admin-console.sh
 ```
 
-Open:
-
-```text
-http://127.0.0.1:8090
-```
-
-On first start, create the shared EMS/Admin password in the browser.
-
-Default mode uses host networking for reliable local discovery.
-Use `--bridge` only if you need Docker bridge networking.
-
-The Admin Console provides guided setup, maintenance, backup/restore and guided
-upgrades. Short demo videos (fresh install with hardware discovery, and a guided
-software update) are in the
-[Admin Console user guide](docs/user/admin-console.md#what-the-admin-console-looks-like).
+Then open `http://127.0.0.1:8090` and create the shared EMS/Admin password in
+the browser. Host networking is the default (best for local discovery); add
+`--bridge` only if you need Docker bridge networking.
 
 ![Admin Console start page](docs/assets/screenshots/admin/admin-landing.png)
 
-Full guide: [docs/user/admin-console.md](docs/user/admin-console.md)
+Full guide with demo videos of a fresh install and a guided update:
+[docs/user/admin-console.md](docs/user/admin-console.md#what-the-admin-console-looks-like)
+
+### Other ways to install
+
+Prefer the shell? These converge on the same `config/config.json`, so you can
+switch later.
+
+| Path | Choose this if |
+| --- | --- |
+| [Docker Bootstrap](docs/user/docker-bootstrap.md) | Shell-only Docker setup |
+| [Developer Setup](docs/developer/developer-setup.md) | Develop, debug or build from source |
+
+### Connection types (reference)
+
+The Admin Console picks the right one during discovery — you don't choose
+upfront. EMS reaches your devices over any one of:
+
+- **[Local API (ZenSDK)](docs/user/connection-types.md#local-api-zensdk)** — newer SolarFlow / ZenSDK models on your LAN. Fastest, fully local.
+- **[Local MQTT](docs/user/connection-types.md#local-mqtt)** — devices re-pointed to your own broker. Low latency, no cloud.
+- **[Zendure MQTT (cloud)](docs/user/connection-types.md#zendure-mqtt-cloud)** — any Zendure device via your Zendure API key. Higher latency over the internet.
 
 ## Documentation
 
+- Step-by-step guides: [Admin Console](docs/user/admin/index.md) · [EMS Dashboard](docs/user/dashboard/index.md)
 - [User documentation](docs/user/)
 - [Technical reference](docs/technical/)
 - [Developer documentation](docs/developer/)
 - [Full documentation map](docs/README.md)
 
 ## Getting help
-
-Start with:
 
 - [FAQ](docs/user/faq.md)
 - [Troubleshooting](docs/user/troubleshooting.md)

@@ -10,14 +10,69 @@ permissions:
   contents: read
 
 jobs:
-  full-test-suite:
-    name: Full Python test suite (${{ matrix.python-version }})
+  static-checks:
+    name: Static checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install -r requirements-dev.txt
+
+      - name: Run Ruff lint
+        run: |
+          ruff check .
+
+      - name: Compile Python files
+        run: |
+          python -m compileall admin ems dashboard scripts tests emsctl.py ems-solarflow-api-control.py
+
+      - name: Check generated config template
+        run: |
+          python tools/build_config_template.py --check
+
+      - name: Check the third-party license inventory
+        run: |
+          python tools/check_third_party_licenses.py
+
+      - name: Check the admin.js frontend parses
+        run: |
+          node --check admin/static/admin.js
+
+  # The four groups are an exact partition of the non-Docker suite: ownership is
+  # resolved by the fixed priority power-control > mqtt > admin > core, so every
+  # test runs in exactly one group and none runs twice.
+  # tests/test_test_classification.py proves both directions.
+  python-tests:
+    name: python-${{ matrix.group }} (${{ matrix.python-version }})
     runs-on: ubuntu-latest
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
+        group:
+          - core
+          - admin
+          - mqtt
+          - power-control
         python-version:
           - "3.11"
           - "3.14"
@@ -51,28 +106,14 @@ jobs:
           print("zoneinfo ok", zoneinfo.ZoneInfo("Europe/Berlin"))
           PY
 
-      - name: Run Ruff lint
+      # The script prints the selected marker expression and fails when the
+      # group unexpectedly collects nothing.
+      - name: Run ${{ matrix.group }} group
         run: |
-          ruff check .
-
-      - name: Compile Python files
-        run: |
-          python -m compileall ems dashboard scripts tests emsctl.py ems-solarflow-api-control.py
-
-      - name: Check generated config template
-        run: |
-          python tools/build_config_template.py --check
-
-      - name: Run full test suite (excludes real-Docker e2e, see docker-first-e2e job)
-        run: |
-          pytest -q -m "not docker" tests/
-
-      - name: Run strict deprecation warning check
-        run: |
-          PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -W error::DeprecationWarning -m pytest -q -m "not docker" tests/
+          ./scripts/test-pr.sh ${{ matrix.group }}
 
       - name: Run Python 3.14 runtime simulation smoke
-        if: matrix.python-version == '3.14'
+        if: matrix.python-version == '3.14' && matrix.group == 'core'
         run: |
           python -B ems-solarflow-api-control.py --simulate --max-cycles 2
 
@@ -97,9 +138,44 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install -r requirements-dev.txt
 
+      - name: Report the selected marker expression
+        run: printf 'pytest -q tests/ -m "simulation and power_control"\n'
+
       - name: Run simulated regression tests
         run: |
           pytest -q tests/ -m "simulation and power_control"
+
+  system-build-compatibility:
+    name: System Build compatibility gate (paired + legacy Fresh Install)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install -r requirements-dev.txt
+
+      # Focused regression gate covering paired/legacy resource strategy, Admin
+      # alignment and Continue gating, transition persistence, discovery
+      # authorization, resource preparation and Known-Good — including the
+      # original v0.7.0 deadlock reproduction.
+      - name: Report the selected marker expression
+        run: printf 'pytest -q -m system_build tests/\n'
+
+      - name: Run System Build compatibility gate
+        run: |
+          pytest -q -m system_build tests/
 
   docker-smoke-test:
     name: Docker smoke test
@@ -163,7 +239,10 @@ jobs:
       # quickstarts, image-content checks, and update/backup flows. Tests build
       # the image, run the documented Docker flow, print redacted compose logs
       # on failure, and clean up their own project in a finally block. Non-Docker
-      # contract/unit tests run in the full-test-suite job instead.
+      # contract/unit tests run in the python-tests groups instead.
+      - name: Report the selected marker expression
+        run: printf 'pytest -q -rs -m docker tests/\n'
+
       - name: Run real-Docker e2e tests
         run: |
           pytest -q -rs -m docker tests/
@@ -214,6 +293,9 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
           python -m pip install -r requirements-dev.txt
+
+      - name: Report the selected marker expression
+        run: printf 'pytest -q -rs tests/test_history_analytics_e2e.py (explicit file selection)\n'
 
       - name: Run InfluxDB-backed analytics e2e
         env:

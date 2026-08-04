@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from ems.config import normalize_influxdb_config
 from ems.history import (
     HistoryResult,
@@ -361,6 +363,10 @@ if __name__ == "__main__":
 
 from ems import influx_setup as _influx_setup  # noqa: E402
 import ems.history.influx_client as _influx_client_mod  # noqa: E402
+
+pytestmark = [
+    pytest.mark.integration,
+]
 
 
 def _bundled_provider_config():

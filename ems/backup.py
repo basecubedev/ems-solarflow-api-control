@@ -1306,6 +1306,51 @@ def _read_member_bytes(tar, name):
 
 
 # ---------------------------------------------------------------------------
+# Verify
+# ---------------------------------------------------------------------------
+
+def verify_backup(archive_path, password=None, allowed_root=None):
+    """Verify a backup archive end to end and return a summary.
+
+    Opens the archive (decrypting when a password is given), validates the
+    manifest, then re-hashes every listed member and compares it to the manifest
+    checksum. Raises :class:`BackupError` on any failure (missing member,
+    checksum mismatch, unreadable/undecryptable archive, invalid manifest). This
+    is the authoritative integrity check Guided Upgrade relies on before making
+    any change. Returns ``{"path", "encrypted", "files", "verified"}``.
+    """
+
+    archive_path = _validated_existing_archive_path(
+        archive_path, allowed_root=allowed_root
+    )
+    encrypted = backup_crypto.is_encrypted_backup(
+        archive_path, allowed_root=allowed_root
+    )
+    if encrypted and not password:
+        raise BackupError(
+            "an encrypted backup needs a password to verify its integrity"
+        )
+    with open_backup_archive(
+        archive_path, password=password, allowed_root=allowed_root
+    ) as tar:
+        manifest = read_manifest(tar)
+        verified_files = 0
+        for entry in manifest["files"]:
+            arcname = entry["path"]
+            data = _read_member_bytes(tar, arcname)
+            manifest_sha = entry.get("sha256")
+            if manifest_sha is not None and _sha256_bytes(data) != manifest_sha:
+                raise BackupError(f"checksum mismatch for {arcname}")
+            verified_files += 1
+    return {
+        "path": archive_path,
+        "encrypted": encrypted,
+        "files": verified_files,
+        "verified": True,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Inspect
 # ---------------------------------------------------------------------------
 

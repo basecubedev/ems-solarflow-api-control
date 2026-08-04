@@ -75,3 +75,10 @@ __pycache__/
 *$py.class
 
 /reports
+
+# Playwright end-to-end tests
+node_modules/
+test-results/
+playwright-report/
+blob-report/
+.playwright/

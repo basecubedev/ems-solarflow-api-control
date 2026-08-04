@@ -1,0 +1,20 @@
+{
+  "function": "deviceAutomation",
+  "arguments": [
+    {
+      "autoModelProgram": 2,
+      "autoModelValue": {
+        "chargingType": 0,
+        "chargingPower": 0,
+        "freq": 0,
+        "outPower": 500
+      },
+      "msgType": 1,
+      "autoModel": 8
+    }
+  ],
+  "messageId": 1,
+  "deviceKey": "DEVICE_ID",
+  "deviceId": "DEVICE_ID",
+  "timestamp": 1234567890
+}

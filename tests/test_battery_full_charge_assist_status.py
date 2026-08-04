@@ -12,6 +12,11 @@ import pytest
 from dashboard.telemetry import build_dashboard_snapshot
 from ems.state_store import describe_full_charge_assist_status
 
+pytestmark = [
+    pytest.mark.power_control,
+    pytest.mark.contract,
+]
+
 
 ROOT = Path(__file__).resolve().parents[1]
 

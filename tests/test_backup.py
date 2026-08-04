@@ -11,6 +11,11 @@ import pytest
 
 from ems import backup, backup_crypto
 
+pytestmark = [
+    pytest.mark.backup_restore,
+    pytest.mark.integration,
+]
+
 
 def write_project(tmp_path, *, influx=None, with_auth=False, with_secret=False):
     """Create a minimal project tree and return (base_dir, config, config_path)."""
@@ -53,6 +58,50 @@ def create(tmp_path, config, base, config_path, **kwargs):
         backup_dir=os.path.join(base, "backup"),
         **kwargs,
     )
+
+
+def _rewrite_tampering_a_member(path):
+    """Rewrite a tar.gz backup with one data member's bytes corrupted."""
+
+    with tarfile.open(path, "r:gz") as tar:
+        entries = [
+            (m, tar.extractfile(m).read() if m.isfile() else b"")
+            for m in tar.getmembers()
+        ]
+    buffer = io.BytesIO()
+    corrupted = False
+    with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+        for member, data in entries:
+            if not corrupted and member.name != backup.MANIFEST_NAME and data:
+                data = data + b"tampered"
+                corrupted = True
+            info = tarfile.TarInfo(member.name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    with open(path, "wb") as handle:
+        handle.write(buffer.getvalue())
+
+
+def test_verify_backup_accepts_a_valid_archive(tmp_path):
+    base, config, config_path = write_project(tmp_path, with_auth=True)
+    path = create(tmp_path, config, base, config_path, backup_purpose="manual")
+
+    summary = backup.verify_backup(path)
+
+    assert summary["verified"] is True
+    assert summary["files"] >= 1
+    assert summary["path"] == path
+    assert summary["encrypted"] is False
+
+
+def test_verify_backup_rejects_a_tampered_member(tmp_path):
+    base, config, config_path = write_project(tmp_path, with_auth=True)
+    path = create(tmp_path, config, base, config_path, backup_purpose="manual")
+
+    _rewrite_tampering_a_member(path)
+
+    with pytest.raises(backup.BackupError):
+        backup.verify_backup(path)
 
 
 def test_running_in_container_truthy_env(tmp_path):

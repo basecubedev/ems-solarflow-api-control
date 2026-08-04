@@ -20,6 +20,10 @@
   --danger: #ff6b7a;
   --accent: #8b5cf6;
   --accent2: #22d3ee;
+  /* Shared "setup block" card treatment (frosted raised surface + lift shadow),
+     reused by every content block across Setup and Maintenance. */
+  --surface-raised: rgba(255, 255, 255, 0.035);
+  --card-lift: 0 10px 26px rgba(0, 0, 0, 0.28);
 }
 
 * { box-sizing: border-box; }
@@ -193,7 +197,8 @@ code {
 .maintenance-path-nav:focus-visible { outline: 2px solid var(--output); outline-offset: 2px; }
 .maintenance-path-arrow { margin-left: auto; font-size: 18px; color: var(--output); }
 
-.workspace-nav { margin-bottom: 12px; }
+.workspace-nav { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.workspace-view-title { font-size: 18px; font-weight: 800; min-width: 0; }
 .workspace-back {
   appearance: none;
   background: transparent;
@@ -319,6 +324,14 @@ code {
   border: 1px solid rgba(148, 163, 184, 0.12);
 }
 .maintenance-card-body { padding: 0 16px 14px; }
+/* The simple overview cards carry `.setup-block` (chrome + first-child reset are
+   shared); only the inset from the card edges is body-specific here. The
+   Configuration & hardware body is excluded — it holds its own `.mconfig-group`
+   cards, so a block there would nest cards two deep. */
+#maintenance-layout-body,
+#maintenance-containers-body,
+#maintenance-versions-body,
+#maintenance-diagnostics-body { margin: 0 12px 12px; }
 
 .maintenance-card[data-tone="ok"]::before { background: var(--battery); }
 .maintenance-card[data-tone="warn"]::before { background: var(--danger); }
@@ -447,9 +460,6 @@ code {
   margin-top: 8px;
 }
 .mconfig-fields { display: flex; flex-direction: column; }
-.mconfig-discovery-card { margin-top: 12px; padding: 12px; }
-.mconfig-discovery-head { align-items: flex-start; margin-bottom: 8px; }
-.mconfig-discovery-head .future-note { margin: 3px 0 0; }
 .mconfig-discovery-manual { margin-top: 10px; }
 .discovery-progress {
   display: grid;
@@ -478,6 +488,7 @@ code {
 .mconfig-discovery-review { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
 .mconfig-discovery-review h5 { margin: 0 0 8px; font-size: 12px; }
 .mconfig-discovery-results { display: flex; flex-direction: column; gap: 7px; }
+.config-available-list-style { display: flex; flex-direction: column; gap: 7px; }
 .mconfig-discovery-summary {
   display: flex;
   flex-direction: column;
@@ -489,27 +500,18 @@ code {
   font-size: 11px;
 }
 .mconfig-discovery-summary strong { color: var(--text); font-size: 12px; }
-.mconfig-discovery-grid { margin-top: 8px; }
+/* Maintenance MQTT proposals reuse the shared .hardware-card shell, so this
+   rule only restores the flat proposal layout and never sets a role colour. */
+.mconfig-discovery-proposal-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+}
 .mconfig-discovery-device-card[data-state="missing"] { opacity: .82; }
 .mconfig-discovery-device-card[data-state="conflict"] {
   border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
 }
-.mconfig-discovery-badge {
-  align-self: start;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 2px 6px;
-  color: var(--muted);
-  font-size: 9px;
-  font-weight: 800;
-  letter-spacing: .04em;
-}
-.mconfig-discovery-device-card[data-state="new"] .mconfig-discovery-badge,
-.mconfig-discovery-device-card[data-state="found"] .mconfig-discovery-badge { color: var(--output); }
-.mconfig-discovery-device-card[data-state="conflict"] .mconfig-discovery-badge,
-.mconfig-discovery-device-card[data-state="missing"] .mconfig-discovery-badge { color: var(--danger); }
-.mconfig-discovery-item-actions { display: flex; flex-wrap: wrap; gap: 6px; grid-column: 1 / -1; }
-.mconfig-discovery-device-card .mconfig-discovery-item-actions { margin-top: 0; }
 .mconfig-discovery-add-button:disabled {
   cursor: default;
 }
@@ -525,11 +527,17 @@ code {
   border-color: color-mix(in srgb, var(--accent2) 35%, var(--border));
 }
 .mconfig-discovery-add-button.is-configured-missing:disabled,
+.mconfig-discovery-add-button.is-unavailable:disabled,
 .mconfig-discovery-add-button.is-ignored:disabled {
   opacity: .58;
   color: var(--muted);
   background: var(--panel-strong);
   border-color: var(--border);
+}
+.mconfig-discovery-add-button.is-transport-downgrade {
+  color: var(--text);
+  background: var(--panel-strong);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
 }
 .mconfig-apply { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
 .mconfig-post-apply { margin-top: 10px; }
@@ -547,6 +555,19 @@ code {
 .upgrade-options { margin-top: 4px; }
 .mconfig-feature[data-disabled="true"] .feature-body { opacity: .72; }
 .mconfig-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+
+/* Guided Setup Step 1: the Align/Continue alternatives share one footer so they
+   read as two forms of the same "what next" decision, same width and family. */
+.setup-step-actions { margin-top: 14px; }
+.setup-step-actions-split {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+@media (max-width: 640px) {
+  /* Narrow viewport: stack the two actions; Align stays above Continue. */
+  .setup-step-actions-split { grid-template-columns: 1fr; }
+}
 .mconfig-result { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 10px; }
 .mconfig-changes { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
 .mconfig-changes:empty { display: none; }
@@ -675,6 +696,18 @@ code {
 .advanced-details[open] > summary { margin-bottom: 8px; }
 .advanced-details .networks-list { margin-bottom: 0; }
 
+/* "Add more devices" is a primary way to add hardware in both the guided setup
+   and the maintenance config steps. It stays collapsible, but renders as a
+   taller, clearer menu row (larger text, more height, brighter label) so users
+   do not overlook it as just another small advanced-details toggle. */
+.add-devices-details > summary {
+  font-size: 13px;
+  padding: 9px 6px;
+  color: var(--text);
+  border-radius: 8px;
+}
+.add-devices-details > summary:hover { background: rgba(255, 255, 255, 0.05); }
+
 /* Gateway candidate probe (runs automatically with network detection). */
 .gateway-probe-hint { margin: 0 0 12px; color: var(--muted2); font-size: 11px; max-width: 62ch; }
 
@@ -736,6 +769,19 @@ code {
   border-top-color: transparent;
   border-radius: 50%;
   animation: admin-spin .7s linear infinite;
+}
+/* Reduced motion keeps the busy ring visible but stops it spinning. */
+@media (prefers-reduced-motion: reduce) {
+  .primary-button.is-scanning::before { animation: none; }
+}
+
+/* A busy scan button doubles as its own cancel control: the spinner still shows
+   activity but the cursor and colour make it clearly clickable to stop. */
+.primary-button.is-cancel,
+.primary-button.is-cancel.is-scanning { cursor: pointer; }
+.primary-button.is-cancel {
+  background: linear-gradient(180deg, var(--danger), #7a1f2b);
+  color: #fff;
 }
 
 .scan-status { margin: 12px 0 0; color: var(--muted); font-size: 12px; }
@@ -827,6 +873,176 @@ code {
   border: 1px solid color-mix(in srgb, var(--pv) 45%, var(--border));
 }
 
+/* Shared setup block-card chrome. The primary titled sub-sections inside every
+   setup stage — the Discovery step (02) sub-sections, the Config step (03)
+   Hardware / Features groups, and the `.setup-block` groups the Prepare-
+   deployment (04) and Start-EMS (05) steps wrap their content in — all read as
+   the same family of distinct blocks: a clear boundary (stronger border) and a
+   lift shadow, so a step never collapses into one long flat list. Collapsible
+   `.advanced-details` sections and `.setup-summary` status strips stay lighter
+   on purpose. The Discovery step (02) sub-sections share the `.discovery-block`
+   class; keep this selector list and the per-step rules below in sync. */
+.discovery-block,
+.setup-group[data-setup-group="hardware"],
+.setup-group[data-setup-group="features"],
+.setup-group[data-setup-group="advanced"],
+.mconfig-group:not(.advanced-details),
+.setup-block {
+  padding: 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: var(--surface-raised);
+  box-shadow: var(--card-lift);
+}
+/* Even spacing between one `.setup-block` and the previous element. The card
+   padding supplies the inner spacing, so neutralise the leading child's own top
+   margin (and any redundant top divider on a list that starts the block). */
+.setup-block { margin-top: 14px; }
+.setup-block > :first-child { margin-top: 0; }
+.setup-block > .backup-list:first-child { border-top: 0; }
+/* Discovery blocks lay their content out as an even flex column, with a
+   deliberate gap to whatever follows each block (including the summary strip
+   after the device list) so each block's edges stay easy to see. */
+.discovery-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.discovery-block + * { margin-top: 14px; }
+.discovery-block .results-head { justify-content: space-between; }
+/* Keep the global networks/gateways context compact so it never dominates. */
+.discovery-networks .networks-empty,
+.discovery-networks .gateway-probe-hint { margin: 0; }
+.discovery-details-title { margin: 6px 0 0; }
+.prep-priority { display: flex; flex-direction: column; gap: 8px; }
+.prep-priority-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--muted);
+}
+.prep-priority-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.prep-priority-empty { color: var(--muted); font-size: 12px; }
+.prep-source-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.prep-source-row.is-disabled { opacity: 0.6; }
+.prep-source-rank {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--accent2);
+}
+.prep-source-toggle { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.prep-source-toggle input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--output);
+  cursor: pointer;
+}
+.prep-source-label { font-size: 13px; font-weight: 700; }
+.prep-source-off {
+  font-size: 9px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--muted);
+}
+.prep-source-actions { display: flex; gap: 6px; margin-left: auto; }
+.prep-source-actions button[disabled] { opacity: 0.4; cursor: not-allowed; }
+.prep-source-item { display: flex; flex-direction: column; gap: 6px; }
+.prep-source-item.is-configuring .prep-source-row {
+  border-color: color-mix(in srgb, var(--accent2) 45%, var(--border));
+}
+.prep-source-config {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  margin-left: 32px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.prep-config-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+}
+.prep-config-state { font-size: 12px; font-weight: 800; }
+.prep-config-detail { font-size: 11px; color: var(--muted); }
+.prep-config-slot { display: flex; flex-direction: column; gap: 8px; }
+.prep-config-slot:empty { display: none; }
+.prep-config-block { display: flex; flex-direction: column; gap: 8px; }
+.prep-config-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* Maintenance "Add more devices": collapsed Discovery sources rows. Opening a
+   row mounts the matching parked .prep-config-block into its slot. */
+.maintenance-discovery-sources { margin: 14px 0; }
+.maintenance-discovery-sources .maintenance-source-row { margin-bottom: 8px; }
+.maintenance-discovery-sources [data-maintenance-source-slot] {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Setup unified overview reuses the collapsible hardware-card list layout
+   (.hardware-card, shared with the config/maintenance hardware list); only the
+   source-selection badge highlight and the "Selected by priority" line below
+   are setup-specific. */
+.source-badge.source-unified { color: var(--muted); }
+.source-badge.source-unified.is-selected {
+  color: var(--output);
+  border-color: color-mix(in srgb, var(--output) 55%, var(--border));
+}
+.unified-selected { font-size: 11px; font-weight: 700; color: var(--output); }
+.prep-source-summary { display: flex; flex-wrap: wrap; gap: 8px; }
+.prep-source-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+.prep-source-chip:hover {
+  border-color: color-mix(in srgb, var(--accent2) 45%, var(--border));
+}
+.prep-chip-label {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+.prep-chip-count { font-size: 11px; color: var(--muted); }
+
 .results-section { display: flex; flex-direction: column; gap: 10px; }
 .mqtt-section {
   padding-top: 14px;
@@ -834,6 +1050,56 @@ code {
 }
 .mqtt-section .results-head { justify-content: space-between; }
 .mqtt-card .confidence { line-height: 1.4; }
+
+/* Broker candidate card that groups its own read-only hardware candidates. */
+.mqtt-broker-card.has-devices { border-color: color-mix(in srgb, var(--output) 40%, var(--border)); }
+.mqtt-broker-devices { display: flex; flex-direction: column; gap: 8px; }
+.mqtt-broker-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.mqtt-device-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.02);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mqtt-device-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.mqtt-device-title { font-size: 13px; font-weight: 800; }
+
+/* Zendure MQTT config proposals sit in the shared .hardware-card shell, which
+   owns the hardware-role colour. This rule only adds the proposal content
+   layout and must never set a border or background of its own. */
+.mqtt-proposal-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+}
+.proposal-safety { display: flex; flex-wrap: wrap; gap: 6px; }
+.proposal-safety-pill { background: rgba(255, 255, 255, 0.04); color: var(--muted); }
+.proposal-warnings { display: flex; flex-wrap: wrap; gap: 6px; }
+.proposal-warning-pill { color: var(--pv); border-color: color-mix(in srgb, var(--pv) 45%, var(--border)); }
+.proposal-action { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.mqtt-proposal-add.is-added { border-color: var(--accent2); color: var(--accent2); }
+.proposal-fragment > summary { font-size: 11px; color: var(--muted); cursor: pointer; }
+.proposal-fragment pre {
+  margin: 8px 0 0;
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 11px;
+  overflow-x: auto;
+}
+
+/* Zendure cloud MQTT discovery: same card system, distinct accent. */
+.zendure-cloud-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.zendure-cloud-status { margin: 10px 0; }
+.zendure-cloud-device-card { border-color: color-mix(in srgb, var(--output) 30%, var(--border)); }
 .results-head { display: flex; align-items: center; gap: 12px; }
 .section-title { margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; }
 .accumulate-label {
@@ -925,6 +1191,15 @@ code {
 .future-stage { opacity: .75; }
 .future-note { margin: 0 0 12px; color: var(--muted); font-size: 12px; }
 
+/* Plain-language System Build channel guidance shown above the selector.
+   The explanatory copy itself is the warning: no banners, cards or colours. */
+.system-build-channel-help { display: grid; gap: 8px; margin: 0 0 12px; }
+.system-build-channel-help > p { margin: 0; font-size: 13px; }
+.system-build-channel-help dl { display: grid; gap: 6px; margin: 0; }
+.system-build-channel-help dl > div { display: grid; gap: 2px; }
+.system-build-channel-help dt { font-weight: 700; font-size: 13px; }
+.system-build-channel-help dd { margin: 0; color: var(--muted); font-size: 12px; }
+
 /* Compact Setup summary: one key/value line per discovery signal. */
 .setup-summary {
   display: grid;
@@ -951,6 +1226,12 @@ code {
 }
 .setup-summary-val { font-size: 12px; font-weight: 700; margin-left: auto; }
 .advanced-details > summary .pill { margin-left: 6px; }
+
+/* Read-only Zendure MQTT telemetry status pills reuse existing semantic tones. */
+.pill[data-status="online"] { color: var(--battery); }
+.pill[data-status="stale"] { color: var(--pv); }
+.pill[data-status="invalid"] { color: var(--danger); }
+.pill[data-status="unseen"] { color: var(--muted); }
 
 /* Compact setup wizard stepper (Control / Energy stage tone). */
 .setup-stepper { display: flex; align-items: stretch; gap: 6px; flex-wrap: wrap; }
@@ -1021,12 +1302,14 @@ code {
 /* Config tab: guided setup draft (Control / Energy stage tone for the cards). */
 .config-validation-card {
   margin: 10px 0 12px;
-  padding: 10px 12px;
+  padding: 16px;
   border: 1px solid color-mix(in srgb, var(--output) 32%, var(--border));
-  border-radius: 12px;
+  border-radius: 14px;
   background:
     radial-gradient(circle at 4% 0%, rgba(56, 213, 255, .08), transparent 42%),
     rgba(8, 18, 29, .68);
+  /* Same lift as the shared setup block cards so step 03 reads as one family. */
+  box-shadow: var(--card-lift);
 }
 .config-validation-card[data-tone="ready"] {
   border-color: color-mix(in srgb, var(--battery) 38%, var(--border));
@@ -1083,6 +1366,19 @@ code {
 .config-validation-item-warn .config-validation-icon { color: var(--pv); }
 .config-validation-item-error,
 .config-validation-item-error .config-validation-icon { color: var(--danger); }
+/* display:grid above overrides the UA [hidden] rule, so restore it explicitly. */
+#setup-config-conflict[hidden],
+#setup-workflow-conflict[hidden] { display: none; }
+#setup-config-conflict,
+#setup-workflow-conflict { gap: 8px; grid-template-columns: minmax(0, 1fr); }
+/* Reuses the config-validation error/warn tones; only lays out the ref list. */
+.credential-rollback-warning { margin-top: 8px; }
+.credential-rollback-refs {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-weight: 700;
+  word-break: break-all;
+}
 .config-validation-facts {
   display: flex;
   gap: 6px 16px;
@@ -1157,8 +1453,78 @@ code {
 .config-manual-form select:focus,
 .config-manual-form .field input:focus { outline: 2px solid var(--accent2); outline-offset: 1px; }
 
+/* A connection switch the backend will not make on its own (Control / Energy
+   stage tone, warning accent). */
+.config-switch-confirmations {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.config-switch-confirmation {
+  border: 1px solid color-mix(in srgb, var(--pv) 45%, var(--border));
+  border-left: 3px solid color-mix(in srgb, var(--pv) 70%, var(--border));
+  border-radius: 12px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--pv) 7%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.config-switch-confirmation-title {
+  margin: 0;
+  color: var(--pv);
+  font-size: 12px;
+  font-weight: 850;
+}
+.config-switch-confirmation-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
 .config-draft-list { display: flex; flex-direction: column; gap: 8px; }
 .config-section-title { margin: 14px 0 8px; font-size: 13px; }
+
+.config-manual-mqtt {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.config-subhead { margin: 12px 0 6px; font-size: 13px; }
+.config-manual-mqtt .config-subhead:first-child { margin-top: 0; }
+.config-mqtt-device-list-style { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.config-mqtt-device-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(8, 12, 20, 0.5);
+}
+.config-mqtt-device-title { font-size: 13px; font-weight: 600; }
+.config-mqtt-device-meta { color: var(--muted); font-size: 12px; }
+.feature-readonly-value { color: var(--text); overflow-wrap: anywhere; }
+.migration-stage-list {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 12px 0;
+  padding: 0;
+  list-style: none;
+}
+.migration-stage-list li {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+.migration-stage-list li[data-state="done"] { color: var(--battery); border-color: var(--battery); }
+.migration-stage-list li[data-state="running"] { color: var(--output); border-color: var(--output); }
+.migration-stage-list li[data-state="failed"] { color: var(--danger); border-color: var(--danger); }
+.mqtt-migration-device { padding: 10px 12px; }
+.mqtt-migration-device strong,
+.mqtt-migration-device span { display: block; }
+.config-mqtt-device-row .config-mqtt-device-remove { margin-left: auto; }
 
 .hardware-card {
   border: 1px solid var(--border);
@@ -1219,6 +1585,27 @@ code {
   letter-spacing: .06em;
   text-transform: uppercase;
 }
+/* Short connection label on inverter cards and connection candidates. */
+.connection-pill {
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.connection-pill[data-connection="local_api"] { color: var(--output); }
+.connection-pill[data-connection="local_mqtt"],
+.connection-pill[data-connection="zendure_mqtt"] { color: var(--accent2); }
+.candidate-connection-note {
+  margin: 0;
+  padding: 0 12px 10px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.candidate-connection-note.is-conflict { color: var(--danger); }
 .hardware-card-remove.secondary-button.compact {
   min-height: 26px;
   padding: 0 8px;
@@ -1299,7 +1686,9 @@ code {
 }
 .deployment-image-state { margin-left: auto; color: var(--accent2); font-weight: 700; }
 
-.deployment-progress { margin-top: 14px; }
+/* Progress is a `.setup-block` card (chrome shared above); it keeps a small gap
+   above its step list. */
+.deployment-progress .deployment-steps { margin-top: 8px; }
 .deployment-steps { display: flex; flex-direction: column; gap: 4px; }
 .deployment-step {
   display: flex;
@@ -1316,13 +1705,8 @@ code {
 .setup-nav-inline { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
 .deployment-overwrite { margin-top: 10px; }
 
-.deployment-docker {
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: rgba(8, 12, 20, 0.4);
-  padding: 12px 14px;
-  margin-bottom: 16px;
-}
+/* `.deployment-docker` carries the shared `.setup-block` chrome; only its head
+   layout and child spacing are specific here. */
 .deployment-docker-head {
   display: flex;
   align-items: center;
@@ -1358,10 +1742,11 @@ code {
    opens the flow, mirroring the maintenance hub (.maintenance-path-nav). */
 .start-choice { display: flex; gap: 12px; align-items: center; padding: 12px 14px; border: 1px solid rgba(148,163,184,.20); border-radius: 12px; background: rgba(255,255,255,.03); cursor: pointer; transition: border-color .16s ease, background .16s ease, transform .1s ease; }
 .start-choice-nav { appearance: none; width: 100%; text-align: left; color: inherit; font: inherit; }
-.start-choice:hover { border-color: var(--border-strong); }
+.start-choice:hover { border-color: var(--output); }
 .start-choice-nav:active { transform: translateY(1px); }
 .start-choice-nav:focus-visible { outline: 2px solid var(--output); outline-offset: 2px; }
 .start-choice.is-recommended { border-color: rgba(34, 211, 238, 0.55); background: linear-gradient(180deg, rgba(34, 211, 238, 0.12), rgba(139, 92, 246, 0.08)); }
+.start-choice.is-recommended:hover { border-color: var(--output); }
 .start-choice-body { display: flex; flex-direction: column; gap: 3px; }
 .start-choice-title { font-size: 14px; font-weight: 850; color: var(--text); }
 .start-choice-desc { font-size: 12px; color: var(--muted); }
@@ -1373,6 +1758,14 @@ code {
 .config-feature-settings { margin-top: 12px; }
 .setup-group { margin-top: 16px; }
 .setup-group[data-setup-group="hardware"] { margin-top: 12px; }
+/* Hardware / Features render as setup block cards (chrome shared with the
+   Discovery step above) — both in Setup and in the maintenance config editor
+   (`.mconfig-group`). The card padding supplies the top spacing, so the leading
+   section heading drops its own top margin. */
+.setup-group[data-setup-group="hardware"] > .config-section-title,
+.setup-group[data-setup-group="features"] > .config-section-title,
+.setup-group[data-setup-group="advanced"] > .config-section-title,
+.mconfig-group:not(.advanced-details) > .config-section-title { margin-top: 0; }
 .config-subsection-title {
   margin: 14px 0 6px;
   font-size: 12px;
@@ -1480,6 +1873,23 @@ code {
   overflow-wrap: anywhere;
 }
 .feature-unit { color: var(--muted2); font-weight: 600; flex: 0 0 auto; }
+.mconfig-override-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  vertical-align: middle;
+  color: var(--pv);
+  border: 1px solid color-mix(in srgb, var(--pv) 45%, var(--border));
+  background: color-mix(in srgb, var(--pv) 12%, transparent);
+}
+.feature-status .mconfig-override-badge { margin-right: 0; margin-left: 6px; }
 
 @media (max-width: 760px) {
   .hardware-card-head { flex-direction: column; }
@@ -1523,7 +1933,7 @@ code {
   padding: 7px 11px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.035);
+  background: var(--surface-raised);
 }
 .backup-stage .control-pipeline-fact .maintenance-fact-label {
   color: var(--muted);
@@ -1668,3 +2078,85 @@ code {
   font-size: 12px;
 }
 .admin-update-overlay-hint[hidden] { display: none; }
+
+/* --- Paired System Build workflow --------------------------------------- */
+.system-alignment-workflow[hidden],
+#system-alignment-reconnect[hidden],
+#system-alignment-partial[hidden] { display: none; }
+.system-alignment-workflow { margin-bottom: 16px; }
+.system-alignment-stages {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.system-alignment-stages li {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 750;
+}
+.system-alignment-stages li span {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--muted2);
+  font-size: 9px;
+}
+/* The one active stage breathes so a long-running step (e.g. an image pull)
+   never looks frozen; only ever one stage animates at a time. */
+.system-alignment-stages li[data-state="active"] {
+  color: var(--output);
+  border-color: color-mix(in srgb, var(--output) 45%, var(--border));
+  background: color-mix(in srgb, var(--output) 8%, transparent);
+  animation: system-alignment-active-pulse 1.6s ease-in-out infinite;
+}
+@keyframes system-alignment-active-pulse {
+  0%, 100% { background: color-mix(in srgb, var(--output) 7%, transparent); }
+  50% { background: color-mix(in srgb, var(--output) 24%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .system-alignment-stages li[data-state="active"] { animation: none; }
+}
+.system-alignment-stages li[data-state="done"] {
+  color: var(--battery);
+  border-color: color-mix(in srgb, var(--battery) 35%, var(--border));
+}
+.system-alignment-stages li[data-state="skipped"] {
+  color: var(--muted2);
+  border-style: dashed;
+  background: color-mix(in srgb, var(--muted2) 5%, transparent);
+}
+.system-alignment-stages li[data-state="failed"] {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+.system-alignment-stage-state {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted2);
+  font-size: 9px;
+  font-weight: 650;
+}
+.system-alignment-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-top: 10px;
+  color: var(--muted2);
+  font-size: 10px;
+}
+.system-alignment-facts strong {
+  color: var(--muted);
+  word-break: break-word;
+}
+.development-build-panel { margin-top: 10px; }
+.development-build-acknowledgement { margin-top: 8px; }
+
+@media (max-width: 860px) {
+  .system-alignment-stages { grid-template-columns: 1fr; }
+}

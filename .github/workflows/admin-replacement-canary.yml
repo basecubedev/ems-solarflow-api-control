@@ -1,0 +1,101 @@
+name: Admin Replacement Canary
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_tag:
+        description: "Optional immutable Development source tag (newest older build of the target's branch by default)"
+        required: false
+        type: string
+      target_tag:
+        description: "Optional immutable Development target tag (newest installable by default)"
+        required: false
+        type: string
+  schedule:
+    - cron: "23 3 * * 2"
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  admin-replacement-canary:
+    name: Real Admin replacement and browser reconnect
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve immutable source and target Development builds
+        id: pair
+        env:
+          SOURCE_TAG: ${{ inputs.source_tag || '' }}
+          TARGET_TAG: ${{ inputs.target_tag || '' }}
+          SOURCE: https://raw.githubusercontent.com/basecubedev/ems-solarflow-api-control/development-build-catalogue/development-builds.json
+        run: |
+          curl --fail --silent --show-error "${SOURCE}?run=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" > development-builds.json
+          # Missing pair, mutable digest or identical Admin digests are blocked
+          # preconditions inside the resolver; nothing here may degrade to a skip.
+          python3 scripts/resolve_canary_builds.py \
+            --catalogue development-builds.json \
+            --source-tag "$SOURCE_TAG" \
+            --target-tag "$TARGET_TAG" \
+            --github-output "$GITHUB_OUTPUT"
+      - name: Verify selected public source entry
+        run: |
+          python3 scripts/verify_development_catalogue.py \
+            --source development-builds.json \
+            --tag "${{ steps.pair.outputs.source_tag }}" \
+            --revision "${{ steps.pair.outputs.source_revision }}" \
+            --build-id "${{ steps.pair.outputs.source_build_id }}" \
+            --admin-image "${{ steps.pair.outputs.source_admin_image }}" \
+            --admin-digest "${{ steps.pair.outputs.source_admin_digest }}" \
+            --ems-image "${{ steps.pair.outputs.source_ems_image }}" \
+            --ems-digest "${{ steps.pair.outputs.source_ems_digest }}"
+      - name: Verify selected public target entry
+        run: |
+          python3 scripts/verify_development_catalogue.py \
+            --source development-builds.json \
+            --tag "${{ steps.pair.outputs.target_tag }}" \
+            --revision "${{ steps.pair.outputs.target_revision }}" \
+            --build-id "${{ steps.pair.outputs.target_build_id }}" \
+            --admin-image "${{ steps.pair.outputs.target_admin_image }}" \
+            --admin-digest "${{ steps.pair.outputs.target_admin_digest }}" \
+            --ems-image "${{ steps.pair.outputs.target_ems_image }}" \
+            --ems-digest "${{ steps.pair.outputs.target_ems_digest }}"
+      - name: Install Chromium dependencies
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Run real Docker replacement and reconnect
+        env:
+          ADMIN_REPLACEMENT_RUNTIME: ${{ runner.temp }}/ems-admin-replacement-${{ github.run_id }}-${{ github.run_attempt }}
+          ADMIN_REPLACEMENT_EVENTS: ${{ runner.temp }}/admin-replacement-events-${{ github.run_id }}-${{ github.run_attempt }}.log
+          CANARY_SOURCE_TAG: ${{ steps.pair.outputs.source_tag }}
+          CANARY_SOURCE_REVISION: ${{ steps.pair.outputs.source_revision }}
+          CANARY_SOURCE_BUILD_ID: ${{ steps.pair.outputs.source_build_id }}
+          CANARY_SOURCE_ADMIN_DIGEST: ${{ steps.pair.outputs.source_admin_digest }}
+          CANARY_TAG: ${{ steps.pair.outputs.target_tag }}
+          CANARY_REVISION: ${{ steps.pair.outputs.target_revision }}
+          CANARY_BUILD_ID: ${{ steps.pair.outputs.target_build_id }}
+          CANARY_ADMIN_DIGEST: ${{ steps.pair.outputs.target_admin_digest }}
+          CANARY_EMS_DIGEST: ${{ steps.pair.outputs.target_ems_digest }}
+        run: npx playwright test --config=playwright.admin-replacement.config.ts
+      - name: Upload replacement diagnostics
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: admin-replacement-canary
+          path: |
+            playwright-report/
+            test-results/
+            ${{ runner.temp }}/admin-replacement-events-*.log
+            ${{ runner.temp }}/ems-admin-replacement-*/install/data/admin/logs/
+          if-no-files-found: ignore
+          retention-days: 14

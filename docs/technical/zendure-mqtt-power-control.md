@@ -1,0 +1,833 @@
+# Model-Aware Zendure MQTT Power Control
+
+This document describes how the EMS decides whether — and how — a Zendure device
+reached over MQTT may accept a power write. It is the source of truth for the
+capability model implemented in `ems/mqtt_control/` and `ems/zendure_mqtt/`.
+
+## The core rule
+
+```text
+Hardware profile       → identifies the physical device model.
+Power-write profile    → identifies the verified command protocol.
+Write family           → identifies where a command is published.
+Broker source          → identifies which broker carries that command.
+Write route            → identifies the exact address it is published to.
+MQTT telemetry family  → identifies how reports are parsed.
+
+The telemetry family alone must never authorize a hardware write,
+and it must never block one either.
+```
+
+A device may publish a power-control command only when its **exact hardware
+profile** is known, supported, backed by an implemented write route, persisted
+in config and validated at startup, **and** the broker profile it is bound to is
+a proven carrier for that route. Unknown, ambiguous and deferred devices stay
+telemetry-only, and so does a device on an unverified or unresolvable broker
+source.
+
+The **telemetry family and the write family are independent**. Both write
+routes are addressed on `iot/<productKey>/<deviceId>/…` — `properties/write`
+for ZenSDK, `function/invoke` for the legacy automation profiles — and neither
+builder reads the telemetry family. A device whose reports were classified
+`zensdk_ha_scalar` or `zendure_cloud_scalar` is therefore *not* telemetry-only
+because of its family: what a scalar topic lacks is a `productKey` segment, so a
+device discovered *only* through scalar telemetry has an incomplete write route
+until the product key is known from the cloud device list, an existing config or
+manual entry. That is a route problem (`write_target_missing`), not a family
+problem.
+
+### Broker source
+
+The family does, however, carry the **evidence** the broker-source axis is
+judged on — "which broker" plus "what that broker was actually observed
+carrying":
+
+| Broker source | Telemetry observed | Output control |
+| --- | --- | --- |
+| `zendure_cloud_mqtt` | any family | available |
+| `local_mqtt` | `legacy_zendure_json`, `legacy_zendure_json_alt` | available |
+| `local_mqtt` | `zensdk_ha_scalar`, `zendure_cloud_scalar`, `unknown` | `broker_source_write_unverified` |
+| unresolved / unrecognized | any | `broker_source_unknown` |
+
+The Zendure cloud broker is the endpoint the device's own commands are addressed
+to and is hardware-confirmed there, so it carries the route on every family. A
+local broker publishing the device's **JSON report** families is the device
+itself speaking the Zendure protocol on that broker, and the `function/invoke`
+automation path over a local broker is exercised end to end (including against a
+real Mosquitto). A local broker that only ever produced **scalar** metrics is
+typically a bridge or integration republishing values; there is no hardware
+evidence that it relays a command back to the device, so that combination fails
+closed. The `custom_properties_write` escape hatch is exempt: it carries an
+operator-supplied publish topic instead of a source-derived canonical route.
+
+`resolve_broker_source_write_support()` in
+`ems/mqtt_control/power_capability.py` owns this axis, and
+`zendure_mqtt_effective_broker_source()` in `ems/zendure_mqtt/config_entries.py`
+is the single resolver for "which source does this entry use" (the broker
+profile is authoritative; an entry's own `mqtt.source` is read only where no
+profile map is available). No caller may substitute a default: `broker_source`
+is a required argument of `resolve_power_write_capability()`,
+`mqtt_output_control_capability()` and `resolve_output_control_capability()`,
+and `None` fails closed.
+
+Topic family is **not** hardware identity. The stored `legacy_zendure_json` /
+`legacy_zendure_json_alt` family names describe a JSON report layout only — new
+ZenSDK devices also publish the leading-slash JSON report over the cloud broker,
+so the `legacy_` prefix must never be read as a hardware generation.
+
+### Hardware generation vs hardware profile
+
+A **hardware generation** (`hub_hyper_legacy`, `solarflow_zensdk`, `zendure_cloud`)
+is a display/telemetry grouping only: it maps to a default topic family and a
+telemetry schema. It **never** authorizes control, never selects a write protocol
+and never determines supported operations. A **hardware profile** is the exact
+registry model (`hyper_2000`, `hub_2000`, …) and is the sole write authority.
+`hub_hyper_legacy` therefore yields telemetry only until a concrete model is
+selected; the Admin generation control never synthesizes a write method.
+
+### Built-in vs custom write protocols
+
+No built-in Zendure protocol (`legacy_properties_write`,
+`legacy_hub_device_automation`, `legacy_object_device_automation`,
+`zensdk_properties_write`) authorizes control **without a concrete profile**: those
+shapes are reachable only through the pinned model. The single exception is
+`custom_properties_write` — an isolated, operator-verified escape hatch that
+authorizes a write only with an explicit `mqtt.write_topic`, is never inferred from
+a generation or topic family, and is never generated by the standard Admin hardware
+editor. `resolve_write_protocol()` config-authorizes only `custom_properties_write`;
+`build_output_limit_message()` still builds the legacy properties/write *shape* for
+a concrete ZenSDK profile, which is a message shape, not a config authorization.
+
+## Hardware profile registry
+
+`ems/mqtt_control/zendure_profiles.py` is the single model authority. Each profile
+declares its verified `power_write_profile` and the operations it supports.
+
+Hardware identity is resolved from an explicit product/model string, never from a
+topic family or a substring guess:
+
+- Product strings are normalized by splitting camelCase and letter/digit
+  boundaries, so `solarFlow800Pro` → `solar flow 800 pro` matches the alias
+  `SolarFlow 800 Pro`.
+- Only an **exact** (normalized) alias or the **canonical** id resolves to a
+  writable model.
+- A bare brand/family word (`Hyper`, `AIO`, `SolarFlow`) is **ambiguous** and
+  never writable; an unknown string is **unknown**. Neither authorizes a write.
+- A future or renamed model in a known line (`Hyper 3000`, `AIO 3000`) does **not**
+  inherit the write profile of a sibling — it resolves to nothing.
+
+`resolve_hardware_profile_detail()` returns structured metadata
+(`profile_id`, `confidence` ∈ `exact|canonical|ambiguous|unknown|conflict`,
+`evidence`, `matched_alias`, `source_value`). Its `writable` property is `True`
+only for an `exact`/`canonical` match to a resolved profile that carries an
+**implemented** write profile with at least one supported operation — so a
+read-only model (ACE 1500, SuperBase) that resolves with exact confidence is
+identified but **not** writable.
+
+### Multi-source evidence and conflict detection
+
+A device's model can be observed from several sources (a reviewed user selection,
+an already-persisted profile, the cloud device list, a full report, retained
+metadata, a product-key mapping). `resolve_hardware_profile_evidence()` folds them
+into one resolution:
+
+- a **decisive** source (reviewed user selection / persisted profile) wins
+  outright;
+- otherwise corroborating discovery evidence must **agree** — repeated exact
+  signals for the same model stay `exact`;
+- two exact signals for **different** models resolve to `conflict`
+  (`profile_id = None`, not writable). The discovery mapper surfaces this as
+  `hardware_profile_confidence = conflict` and `control_block_reason =
+  hardware_profile_conflict`, and pins **no** writable identity, so a
+  misidentified device can never authorize a write.
+
+Weaker (ambiguous/unknown) evidence never overrides an exact signal and never
+causes a conflict.
+
+## Capability axes
+
+`resolve_power_write_capability(topic_family, hardware_profile, broker_source,
+operation=None)` in `ems/mqtt_control/power_capability.py` is the single
+write-capability authority. It reports its axes separately:
+
+| Field | Question |
+| --- | --- |
+| `model_supported` | Is the pinned model known, supported and writable? |
+| `transport_supported` | Does its write profile have an implemented publish route? |
+| `broker_source_supported` | Does the bound broker carry that route? |
+| `write_family` | Which route — `iot_properties_write` or `iot_function_invoke`? |
+
+`telemetry_family` is carried through for diagnostics and never decides on its
+own; it is only evidence for `broker_source_supported`. Write *address*
+completeness (`mqtt.product_key`, `mqtt.device_id`) is the remaining axis and
+belongs to `zendure_mqtt_control_addressability`;
+`resolve_output_control_capability` in `ems/zendure_mqtt/capability.py` composes
+all of it into the single verdict Admin projects. That verdict reports **every**
+axis, even when an earlier one already blocks, and `reason` names the *first*
+missing precondition in the order model → write route → broker source → address.
+
+Block reasons are stable, machine-readable strings: `hardware_profile_missing`,
+`hardware_profile_unknown`, `hardware_profile_ambiguous`,
+`hardware_profile_deferred`, `transport_write_not_implemented`,
+`broker_source_write_unverified`, `broker_source_unknown`,
+`operation_unsupported`, `control_not_enabled`, `identifiers_missing`,
+`hardware_profile_conflict`. Route-completeness reasons come from the
+addressability helper: `missing_product_key`, `missing_device_id`,
+`missing_write_topic`, `invalid_write_topic` (surfaced by config validation as
+`write_target_missing` / `mqtt_device_id_missing`).
+
+`transport_incompatible` is **retired**. It meant "a writable profile on a
+scalar telemetry family" — a rule the write builders never implemented, and one
+that also blocked the hardware-confirmed cloud path. Stored values and historic
+diagnostics still render, but the capability layer no longer produces it. The
+real, narrower restriction it was reaching for is now
+`broker_source_write_unverified`. `scalar_write_not_verified` is likewise
+replaced by `write_method_missing`, which names the real blocker: no resolved
+model.
+
+### Persisted identity and metadata consistency
+
+A concrete resolved model is pinned into config even when it is **read-only**
+(ACE 1500, SuperBase → `power_write_profile = telemetry_only`, control disabled),
+so a future firmware/support upgrade never has to rediscover the model. A conflict
+pins no `hardware_profile`.
+
+`power_write_profile` is informational metadata mirroring the registry. Config
+validation rejects a stored `power_write_profile` that **contradicts** the pinned
+`hardware_profile` (`power_write_profile_mismatch`) — including a writable value on
+a telemetry-only model — and the runtime device adapter fails closed on the same
+mismatch even if validation was bypassed. A missing value is fine: the registry
+re-derives it.
+
+## Supported hardware matrix
+
+| Hardware profile | Discovery | Telemetry | Discharge | Idle | Charge adapter | Automatic charge | Validation            |
+| ---------------- | --------: | --------: | --------: | ---: | -------------: | ---------------: | --------------------- |
+| SolarFlow ZenSDK |       yes |       yes |       yes |  yes |             no |               no | Validated (800 Pro 2) |
+| Hyper 2000       |       yes |       yes |       yes |  yes |            yes |               no | Reverse-engineered    |
+| AIO 2400         |       yes |       yes |       yes |  yes |             no |               no | Reverse-engineered    |
+| Hub 1200         |       yes |       yes |       yes |  yes |             no |               no | Reverse-engineered    |
+| Hub 2000         |       yes |       yes |       yes |  yes |             no |               no | Reverse-engineered    |
+| ACE 1500         |       yes |       yes |        no |   no |             no |               no | deferred              |
+| SuperBase        |       yes |       yes |        no |   no |             no |               no | deferred              |
+| Unknown          |   partial |       yes |        no |   no |             no |               no | telemetry-only        |
+
+Write profiles: ZenSDK → `zensdk_properties_write` (properties/write); Hyper/AIO →
+`legacy_object_device_automation` (object `function/invoke`); Hub 1200/2000 →
+`legacy_hub_device_automation` (scalar `function/invoke`); ACE/SuperBase/Unknown →
+`telemetry_only` (never writable).
+
+**Transport availability.** Every model with an implemented write profile is
+controllable over Local API and Zendure Cloud MQTT, and over Local MQTT wherever
+that broker was observed carrying the device's own JSON report family — the
+write route is the same `iot/<productKey>/<deviceId>/…` topic on each MQTT
+broker. No model in this registry is API-controllable but
+MQTT-uncontrollable; what varies is the broker, not the model. The
+telemetry-only rows (ACE 1500, SuperBase) are deferred on *every* transport, not
+only over MQTT. See "Broker source" above for the one combination that stays
+telemetry-only: a local broker seen publishing scalar metrics only.
+
+**What is validated where.** Only the ZenSDK row is confirmed on physical
+hardware (SolarFlow 800 Pro 2, Local API and Zendure Cloud MQTT, observed
+telemetry family `legacy_zendure_json_alt`). The cloud scalar-family path
+(`zensdk_ha_scalar`, `zendure_cloud_scalar` over the Zendure broker) is correct
+by construction — it builds the identical publish topic on the same confirmed
+endpoint — but has **not** itself been confirmed against physical hardware. The
+legacy `function/invoke` automation is fixture- and broker-verified, not
+hardware-verified. Local-broker scalar control is **unverified and disabled**;
+enabling it requires hardware evidence that such a broker relays the command,
+not a code change alone.
+
+**Charge adapter vs automatic charge.** The Hyper 2000 adapter can build a signed
+charge command, but the automatic EMS controller only ever emits discharge/idle
+targets. Diagnostics surface this honestly: `supported_operations` lists what the
+adapter understands, `controller_reachable_operations` lists what the controller
+can actually emit (never charge).
+
+**Validation maturity.** `Validated` = confirmed on real hardware — the ZenSDK
+row is validated on the maintainer's SolarFlow 800 Pro 2 (Local API and Zendure
+cloud MQTT). `Reverse-engineered` = the command payloads match community-verified
+fixtures / external projects but are **not yet confirmed on physical hardware**.
+`deferred` = intentionally telemetry-only in this release. Physical-hardware
+validation of the reverse-engineered legacy automation models is still required
+before relying on them in production.
+
+## Manual model selection
+
+The backend authorizes control only from a concrete, registry-resolved
+`hardware_profile`: control can be enabled only when the profile is writable, its
+write route is implemented, the write identifiers exist and the write gate is
+enabled; otherwise the control option is disabled with the block reason shown,
+and the device stays telemetry-only. Admin renders that verdict through
+`admin.zendure_mqtt_config_draft.manual_output_control_capability`, the one
+projection both manual editors read — the browser never re-derives it. Because
+the write route needs a `productKey` on every generation, the manual form
+collects one for all of them, not only for those whose telemetry topics embed
+it.
+
+The concrete model-selector options are registry-derived
+(`hardware_profile_selector_options()` in `ems/mqtt_control/zendure_profiles.py`,
+re-exported by Admin as `zendure_hardware_profile_options()`): an "Automatically
+detected" sentinel plus every canonical model in registry order (SolarFlow ZenSDK,
+Hyper 2000, AIO 2400, Hub 1200, Hub 2000, ACE 1500 / SuperBase V4600 / V6400 /
+Unknown — telemetry only), each carrying its supported operations, write profile,
+telemetry-only flag and validation status. **`hardware_generation` is a
+telemetry/display grouping only; `hardware_profile` is the exact registry model
+and the sole control authority — they are separate normalized fields.**
+
+> **Status.** The concrete model-selector option data and its supported-operations
+> / write-profile / block-reason contract are backend-complete and tested; the
+> interactive Admin `<select>` consumes this. A legacy control device may also be
+> configured by pinning its concrete `hardware_profile` in config (or via the
+> migration flow below); the runtime **fails closed** on any control device without
+> a supported concrete profile.
+
+## Migration of existing configs
+
+Older configs enabled control by relying on the removed topic-family write
+inference (or the removed bare `write_protocol` escape hatch). Migration is a
+read-only dry-run plus an explicit apply, both EMS-owned
+(`ems/zendure_mqtt/migration.py`):
+
+- `plan_zendure_mqtt_migration(config)` returns the exact diff and **mutates
+  nothing** (dry-run);
+- `migrate_zendure_mqtt_control_configs(config)` applies that plan in place
+  (idempotent);
+- `zendure_mqtt_control_configs_need_migration(config)` reports whether any control
+  device is still unsafe.
+
+Outcomes (fail closed):
+
+- exact model evidence present → pin the resolved `hardware_profile`
+  (`power_write_profile` derived from the registry);
+- no exact evidence → disable output control (telemetry-only), strip the unsafe
+  write protocol, and attach the warning *"MQTT power control was disabled because
+  the exact Zendure hardware model is not configured…"*;
+- an already-safe profile-backed device that still carries an obsolete
+  `mqtt.write_topic` → a **non-blocking** `normalize_write_topic` change (severity
+  `info`) that removes the override while preserving `product_key`/`device_id`
+  and any custom fields. The runtime already ignores the override (the canonical
+  topic wins), so this never forces a migration before startup — it is a cleanup
+  offered in the plan/preview. A device addressed *only* by `write_topic` keeps
+  it, and a `custom_properties_write` entry always keeps its explicit topic.
+
+> **Migration note for old `mqtt.write_topic` entries.** If an upgraded config
+> has a profile-backed device with a stale `mqtt.write_topic` (for example a
+> leading-slash report topic copied by mistake), control is **not** broken — the
+> canonical `iot/…` topic is used regardless. Config validation surfaces a
+> `profile_write_topic_obsolete` warning and the migration/maintenance preview
+> shows the `write_topic` removal; apply it to clean up the config.
+
+Migration resolves the model from **all** available signals together
+(`product`, `model`, `mqtt.product`) via `resolve_hardware_profile_evidence`, so
+two exact-but-different hints become a `conflict` that disables control and never
+pins a writable profile — reading only the first value could otherwise pin a
+model another signal contradicts.
+
+`_already_safe()` treats a device as safe only when it pins a known, writable,
+transport-compatible `hardware_profile`, is write-addressable, and carries a
+`power_write_profile` consistent with the registry (or none) and no leftover
+`mqtt.write_protocol`; a bare `mqtt.write_protocol` is never safe on its own. The
+unsafe legacy write inference is never silently preserved.
+
+**Final validation and canonicalization.** The migration builds the complete
+result in memory and runs the normal control validation before writing
+(`validate_migrated_zendure_mqtt_config`); an invalid result is refused
+(`ZendureMqttMigrationError`), never committed. A pin strips obsolete write
+metadata (stale `mqtt.write_protocol`, an inconsistent `power_write_profile`) and
+re-derives the canonical `power_write_profile` from the registry. Exact model
+evidence with **incomplete addressing** — a missing explicit `mqtt.device_id`
+route id, or (profile-backed) no `product_key` / (custom) no `write_topic` —
+disables control (`zendure_mqtt_control_disabled_unaddressable`) and preserves
+telemetry, the physical serial and broker/profile metadata rather than reporting
+success while leaving an unaddressable route. Every planned change carries a stable device
+identity (`index`, `device_id`) and exact `{path, before, after}` entries, so
+duplicate device names are never ambiguous — for example
+`{"path": "devices[2].hardware_profile", "before": null, "after": "hyper_2000"}`.
+
+### Reachable through the product
+
+- **emsctl** — `emsctl config migrate-zendure-mqtt --dry-run [--json]` renders the
+  plan and writes nothing; without `--dry-run` it applies on explicit confirmation
+  (`--yes` to skip the prompt, with the normal `--backup`/`--no-backup` policy).
+- **Startup guard** — normal startup never silently rewrites the config. When an
+  *enabled* control device is unsafe, the EMS entry aborts with
+  `startup_abort reason=zendure_mqtt_control_migration_required`
+  (`zendure_mqtt_control_migration_startup_error()`). Telemetry-only, disabled and
+  already-pinned control devices never block.
+
+- **Admin Maintenance** — `admin/zendure_mqtt_migration_review.py` renders the
+  EMS-owned dry-run as a review DTO (`zendure_mqtt_migration_review`: exact
+  before/after changes, control-disable warnings, final validity) and applies it
+  through the same EMS-owned entry point (`apply_zendure_mqtt_migration`). Admin
+  **orchestrates** the EMS-owned workflow; it never implements a second algorithm.
+  The Guided Upgrade step reuses these functions before the new EMS container
+  starts.
+
+> **Status.** The EMS-owned dry-run/apply core, multi-evidence resolution, final
+> validation/canonicalization, the emsctl command, the startup fail-closed guard
+> and the Admin migration-review orchestration layer are implemented and tested.
+> The interactive frontends are wired to this backend: the Admin Maintenance
+> "Zendure MQTT migration" card (`renderMqttMigrationReview()` /
+> `applyMqttMigration()` in `admin/static/admin.js`, served by
+> `/api/admin/maintenance/zendure-mqtt/migration-review` and
+> `/api/admin/maintenance/zendure-mqtt/migration-apply` in `admin/server.py`)
+> and the Guided Upgrade `migration_review` / `mqtt_migration` steps
+> (`admin/guided_upgrade.py`; a stale review is rejected as
+> `mqtt_migration_review_stale` and re-loaded by the frontend). Covered by
+> `tests/test_admin_mqtt_migration_frontend.py`,
+> `tests/test_admin_zendure_mqtt_migration_endpoints.py` and
+> `tests/test_admin_guided_upgrade.py`.
+
+## Operation and target validation
+
+Before a message id is allocated or a payload is built, the adapter resolves the
+requested operation from the **sign** of the target (`> 0` discharge, `0` idle,
+`< 0` charge) and checks the model's capability for that operation, rejecting an
+unsupported one with a machine-readable error and no publish:
+
+| Profile / target        | Result                                            |
+| ----------------------- | ------------------------------------------------- |
+| `solarflow_zensdk` −500 | rejected `charge_target_unsupported` (no publish) |
+| `hub_2000` −500         | rejected `charge_target_unsupported` (no publish) |
+| `aio_2400` −500         | rejected `charge_target_unsupported` (no publish) |
+| `hyper_2000` −500       | adapter-supported charge command                  |
+| telemetry-only + any    | rejected `telemetry_only_hardware` (no publish)   |
+
+The `properties/write` path (ZenSDK and the custom escape hatch) **never**
+publishes a negative `outputLimit`. Targets are strictly validated — only an
+explicit integer watt value is accepted; a bool, numeric string, float, non-finite
+value or object is rejected `invalid_power_target` rather than coerced through
+`int()`. A defense-in-depth ceiling bounds both discharge and charge magnitude to
+the configured safe maximum (`target_above_maximum`); no per-model physical limit
+is invented without verified evidence. Machine-readable errors:
+`invalid_power_target`, `target_above_maximum`, `charge_target_unsupported`,
+`unsupported_power_operation`.
+
+## ZenSDK operation contracts
+
+A resolved ZenSDK profile never publishes a bare `outputLimit`: a device sitting
+in an inactive mode (`smartMode=0` / `acMode=1`) ignores a lone setpoint, and
+sending the mode fields separately would race it. Every ZenSDK power command is
+the **atomic** source-backed property set (`ems/mqtt_control/zensdk_operations.py`,
+mirroring the reference implementation):
+
+```json
+// discharge (target > 0)
+{"smartMode": 1, "acMode": 2, "outputLimit": 300, "inputLimit": 0}
+// idle (target == 0)
+{"smartMode": 1, "acMode": 2, "outputLimit": 0, "inputLimit": 0}
+```
+
+Idle deliberately stays in smart output regulation at 0 W instead of dropping to
+`smartMode: 0` standby (as the reference `power_off` does): the EMS five-second
+loop crosses 0 W routinely and must not toggle a flash-persistent operating mode
+on every crossing; long standby phases are governed upstream (strict night
+idle). AC charge (`{"smartMode": 1, "acMode": 1, "outputLimit": 0,
+"inputLimit": <w>}`) is known from the reference implementation but **fails
+closed** — no ZenSDK profile enables charge until it is validated on hardware.
+
+**Write topic.** For a known/profile-backed device, `properties/write` commands
+are always addressed on the **canonical** `iot/<productKey>/<deviceId>/
+properties/write` — for every topic family, derived from the product key and
+device id (`canonical_profile_write_topic`). Devices on the leading-slash report
+family publish their reports on `/…` topics but accept commands on `iot/…` only
+(live cloud capture: a getAll published to `iot/…/properties/read` is answered;
+the reference implementation writes to `iot/…` unconditionally). A leading-slash
+write topic is silently undelivered.
+
+A stored `mqtt.write_topic` **can never redirect a known-profile control write**:
+the message builder derives the canonical topic for `legacy_properties_write`
+and reads an explicit topic only for `custom_properties_write`. A profile-backed
+device carrying an obsolete `mqtt.write_topic` is flagged by config validation
+(`profile_write_topic_obsolete`, a warning — the device stays writable) and
+removed by migration/normalization (`normalize_write_topic`), preserving the
+product key, device id and custom fields. See "Migration of existing configs"
+for the migration note.
+
+**Write addressing: physical serial vs MQTT route device id.** These are two
+distinct identities and a physical serial is **never** used as a control route
+id:
+
+- `serial_number` (`sn`) identifies the physical inverter — the cross-adapter
+  match key. It is read case-insensitively (`normalize_physical_serial`) and used
+  for duplicate detection, telemetry matching and identity, never as an address.
+- `mqtt.device_id` is the exact MQTT route segment and payload `deviceId` a
+  control write targets. It is case-sensitive (`normalize_mqtt_route_segment`) and
+  read only from `mqtt.device_id` — `zendure_mqtt_route_device_id()` never falls
+  back to `serial_number` or a top-level `device_id`. The legacy
+  `zendure_mqtt_device_identifier()` (serial fallback) is kept only for read-only
+  telemetry matching.
+
+Every control-capable entry therefore requires an **explicit `mqtt.device_id`**.
+`zendure_mqtt_control_addressability()` is the single source of truth reused by
+config validation, migration, Maintenance readiness and diagnostics; a control
+route is complete only when:
+
+- profile-backed (canonical topic): `mqtt.product_key` **and** `mqtt.device_id`;
+- custom (`custom_properties_write`): a valid `mqtt.write_topic` **and**
+  `mqtt.device_id` (the payload always carries `deviceId`, so an explicit topic
+  never removes the need for an explicit route id).
+
+Config validation rejects a control entry with no route id
+(`mqtt_device_id_missing`) or no write target (`write_target_missing`); the
+proposal mapper keeps such a device telemetry-only; migration disables control
+(`zendure_mqtt_control_disabled_unaddressable`) while preserving telemetry, the
+physical serial and broker/profile metadata; the properties/write builder returns
+no message (never a `deviceId=null` payload); and Cloud device-scoped
+subscriptions contribute only for a complete `product_key`/`device_id` route.
+
+**Admin manual entry (Fresh Setup and Maintenance).** The UI carries the same
+separation, never inferring a route id from a serial. Fresh Setup's manual
+Zendure MQTT form has two distinct inputs — **Physical serial number** and
+**MQTT device ID** — and `build_manual_zendure_mqtt_fragment()` reads the serial
+only from `serial_number` and the route id only from `mqtt.device_id` (or the
+top-level `mqtt_device_id` draft field); enabling output control without an
+explicit MQTT device ID is rejected with `mqtt_device_id_missing`. A
+telemetry-only entry needs only the serial. In Maintenance each inverter card
+renders exactly one editable **MQTT device ID** field: editing the serial changes
+only `serial_number`, editing the route id changes only `mqtt.device_id`, and the
+projection/apply (`zendure_mqtt_device_draft` / `apply_zendure_mqtt_draft_fields`)
+never fall back to a legacy top-level `device_id` for the route — so an unchanged
+unsafe legacy entry stays `mqtt_device_id_missing` until the operator enters the
+real route id. The browser is untrusted: Preview/Apply re-run the same Core
+validation regardless of the editor state.
+
+**QoS and retain.** Every control and property publish is QoS 1 and never
+retained (`CONTROL_PUBLISH_QOS`): QoS 1 makes broker delivery observable via
+PUBACK, and a retained setpoint would be replayed to the device on every broker
+reconnect. The builder's QoS/retain metadata reaches the paho client unchanged.
+
+## Transport-neutral property writes and state reconciliation
+
+State/mode writes go through the per-device `write_properties()` capability
+(`ems/property_writes.py` dispatches): an HTTP device POSTs to its local
+`/properties/write`, an MQTT ZenSDK device publishes to its own
+`properties/write` topic (only its model-declared `state_property_writes` —
+`smartMode`/`acMode`/`outputLimit`/`inputLimit` — with range-checked integer
+values), legacy automation profiles reject arbitrary property writes, and a
+device with no capability fails closed. The controller never touches
+`dev.session` and never falls through from one transport to another.
+
+State reconciliation itself remains **API-only** (`supports_state_reconciliation
+= False` on MQTT devices); every reconciliation path skips an unsupported
+transport with an explicit `state_reconciliation_skipped` event. The gate policy
+is one resolver (`resolve_state_write_gate`): the device transport's own write
+gate (`allow_hardware_writes` / `allow_mqtt_local_control_writes` /
+`allow_mqtt_zendure_control_writes`) **plus**
+`allow_state_reconciliation_writes` — MQTT state writes never depend on the HTTP
+`allow_hardware_writes` gate.
+
+## Custom write escape hatch restrictions
+
+`custom_properties_write` requires an explicit advanced/custom mode and an
+explicit, valid publish topic — never generated by the standard Admin editor. The
+topic is validated (`publish_topic_error`): non-empty, valid UTF-8, bounded
+length, and never an MQTT subscription filter (no `+`, `#` or NUL). Config
+validation rejects an invalid custom topic (`write_topic_invalid`), the message
+builder refuses to build one, and the runtime device fails closed. A custom write
+still obeys strict integer targets, a non-negative `outputLimit`, the configured
+maximum and `retain=false`, and — lacking a verified reply contract — completes
+via timeout rather than a falsely-claimed acknowledgement.
+
+## Write gates
+
+A runtime MQTT `outputLimit` write additionally requires the transport's write
+gate: local broker → `allow_mqtt_local_control_writes`, Zendure cloud →
+`allow_mqtt_zendure_control_writes` (see `docs/user/safety.md`). Capability and the
+write gate are independent: a supported, compatible profile whose gate is off is
+`control_supported=true` but `control_ready=false`.
+
+## Acknowledgement vs telemetry confirmation
+
+A broker publish succeeding is **not** device acceptance. A no-ack profile has
+**no acknowledgement to wait for**, so the state model
+(`ems/mqtt_control/command_state.py`) supports two completion paths — one through
+an acknowledgement and one straight from telemetry:
+
+```text
+                  ┌─→ acknowledged ─→ telemetry_confirmed      (ack profile)
+                  │                └─→ completed_unconfirmed
+                  │                └─→ confirmation_timed_out
+queued → published┤─→ telemetry_confirmed                      (no-ack, confirmable)
+                  │─→ confirmation_timed_out                   (no-ack, confirmable)
+                  │─→ completed_unconfirmed                    (no-ack, non-confirmable)
+                  │─→ superseded                               (safety preemption)
+                  ├─→ rejected
+                  └─→ timed_out                                (ack profile only)
+```
+
+- `published` — the local MQTT client accepted the publish (transport
+  submission only, `rc == 0`). Broker delivery is tracked separately per
+  command: `broker_delivery` moves `pending` → `delivered` when the QoS 1
+  PUBACK is observed, `disconnected` when the connection is lost while evidence
+  is unresolved, or `timeout` when it never arrives within the bounded window
+  (`untracked` when the transport exposes no mid). Broker delivery is still
+  **not** device acceptance.
+- `acknowledged` — a device reply correlated by `messageId` + `deviceId` reported
+  success. A wrong-id, wrong-device, stale or duplicate reply is ignored. Only
+  profiles with a **verified reply contract** (legacy `function/invoke`) reach it.
+- `rejected` — a correlated failure reply (device response code/message exposed).
+- `timed_out` — an **ack profile** saw no reply before the acknowledgement
+  timeout. A no-ack profile has no acknowledgement to wait for and never uses
+  this state.
+- `telemetry_confirmed` — telemetry proved the command **effective**, not merely
+  echoed. An atomic ZenSDK command carries its expected property set and is
+  confirmed only when **every** participating property both matches (watt-like
+  `outputLimit`/`inputLimit` within tolerance, mode/enum `acMode`/`smartMode` as
+  **exact finite integers**) **and is fresh**: the command must have a trustworthy monotonic publish
+  time, captured only after the local MQTT client accepts the publish, and each
+  property's freshness is judged from its **own** report time
+  (`metric_monotonic[key]`, recorded per key by the aggregator), which must be
+  newer than or equal to the publish. Missing command or property time provenance
+  fails closed. `acMode` and `outputLimit` are
+  required; `smartMode`/`inputLimit` are checked when telemetry reports them, but a
+  *present* optional value must also match and be fresh. Because freshness is
+  per-property, a stale-but-matching `acMode`/`smartMode`/`inputLimit` — a merged
+  snapshot's cached value or a superseded command's late echo — can never confirm
+  a fresh command, even when `outputLimit` is fresh. An **ack profile** confirms
+  only an already-`acknowledged` command; a **no-ack profile** (ZenSDK
+  `properties/write`) confirms its `published` command directly. A command is
+  never reported `confirmed` from a publish, PUBACK or ack alone. Broker delivery
+  and device acceptance stay independent: a late PUBACK that arrives after
+  telemetry confirmation still updates `broker_delivery` (`pending` → `delivered`,
+  or `timeout` when none arrives) on the original retained terminal record, even
+  after a newer command becomes the latest command, and a
+  telemetry-confirmed command is never downgraded because broker evidence is
+  missing.
+- `completed_unconfirmed` — the strongest honest signal on a profile with **no
+  reliable telemetry confirmation**: the acknowledgement (ack profile) or the
+  successful publish (no-ack, non-confirmable profile — completed at publish
+  time, never held to a meaningless timeout). It is **not** equivalent to a
+  hardware-confirmed execution.
+- `confirmation_timed_out` — a confirmation-supported command saw no matching
+  telemetry before its confirmation deadline. The deadline runs from the
+  acknowledgement (ack profile) or from the **publish** (no-ack profile). The slot
+  is released and the uncertainty exposed rather than blocking control forever.
+  This is **never** conflated with a missing acknowledgement (`timed_out`).
+- `superseded` — a newer command retired this one out of the active slot (a
+  safety preemption, or a changed target replacing an unconfirmable no-ack
+  command; see *Live wiring*). It is terminal, so a late reply or late
+  telemetry for it can never confirm the replacement.
+
+Mode/enum matching is intentionally strict. The shared comparator
+(`property_matches` in `ems/mqtt_control/command_state.py`) normalizes a mode
+value through `exact_state_number`, which accepts an `int` (never a `bool`) and a
+finite `float` **only** when it is integer-valued (`2.0` → `2`), and rejects a
+fractional value, `NaN`, infinity, a boolean or a string. A fractional
+observation such as `acMode` `1.9` therefore never confirms a commanded `acMode`
+`1` — it is not a valid enum value. Only watt-like properties use the configured
+tolerance; every mode/enum property is compared as an exact integer. The same
+comparator backs mode-test verification, restore verification and foreign-writer
+detection in the hardware probe.
+
+The active `published` and `acknowledged` states both have bounded deadlines;
+every outcome after them is terminal, so a command can never occupy the single
+active slot indefinitely. The per-profile confirmation policy
+(`ems/mqtt_control/confirmation.py`) declares `telemetry_confirmation_supported`,
+the `confirmation_metric`, the `confirmation_tolerance_w` (passed into the
+confirmation, never a hard-coded default) and the `confirmation_timeout_seconds`.
+There is **no** automatic retry after an uncertain execution.
+
+### Live Cloud latency measurement
+
+The `telemetry_confirmed` event includes `elapsed_ms`, measured with one
+monotonic clock from successful local MQTT submission (`published_monotonic`) to
+the first fresh, target-compatible telemetry confirmation. It therefore includes
+broker/cloud transfer, device application and the telemetry return path. It does
+**not** include the wait for the next EMS loop before publication, and it is not
+the device's unobservable internal receive timestamp. The physical device must
+have applied the confirmed property no later than this observation.
+
+The following passive live-control sample was captured without injecting test
+targets; the running EMS generated every command normally:
+
+| Condition | Value |
+| --- | --- |
+| Date and region | 2026-08-01, Zendure EU Cloud MQTT |
+| Hardware profile | `solarflow_800_pro_2` |
+| Broker endpoint | `mqtteu.zen-iot.com:8883` |
+| Observation window | 10 min 16 s |
+| EMS loop interval | 3 s |
+| Confirmed target range | 541–725 W |
+| MQTT publishes / telemetry confirmations | 165 / 165 (100%) |
+| Broker delivery | 165 / 165 `delivered` |
+| Timeouts / rejected commands | 0 / 0 |
+
+| Publish-to-confirmation statistic | Latency |
+| --- | ---: |
+| Minimum | 2.192 s |
+| Mean | 2.884 s |
+| Population standard deviation | 0.109 s |
+| Median (p50) | 2.886 s |
+| p90 | 2.941 s |
+| p95 | 3.012 s |
+| p99 | 3.367 s |
+| Maximum | 3.395 s |
+
+Nearest-rank percentiles are used. Of the 165 confirmations, 155 (93.9%) arrived
+within 3 seconds, 10 (6.1%) took more than 3 seconds, and none took more than
+4 seconds. The p95 already exceeds a 3-second loop; this is the measurement
+basis for the 5-second Cloud MQTT recommendation in the
+[configuration reference](configuration.md#system-settings). The full time from
+an external load change to confirmation additionally includes 0–1 loop
+intervals before publish; filters and ramps can intentionally require further
+cycles.
+
+This is one device, firmware, internet connection, cloud region and short time
+window—not a service-level guarantee. Other models, regions, network conditions
+and Zendure service load can produce different results. Use the
+[hardware latency probe](../developer/mqtt-write-latency-probe.md) when a local
+HTTP read-back is available and the goal is to isolate when the setpoint first
+became visible on the inverter rather than measuring the full cloud telemetry
+confirmation round trip.
+
+### Live wiring
+
+Every write builds one correlated `CommandRecord` (`message_id`, `device_id`,
+`device_key`, `operation`, `target_power_w`, `topic`, timeline stamps). A bounded
+per-device coordinator keeps **exactly one command in flight** per physical
+device:
+
+- no active command → publish immediately;
+- the same target while active → coalesce (no republish);
+- a *changed* target while a **no-ack** command awaits telemetry confirmation →
+  **supersede**: the in-flight command can settle only via transport- and
+  device-dependent telemetry, so the latest intent retires it as terminal
+  `superseded` and publishes now — regulation is never capped at one command per
+  report cycle, and a dead write path can never hide behind queued targets.
+  Publish rate stays bounded by the controller's own deadband/ramp upstream;
+- a *changed* non-safety target while an **ack-capable** command is in flight →
+  store the single **`pending_latest_target`** (never an unbounded queue); its
+  acknowledgement window is short and bounded;
+- a **safety reduction** while active → **preempt**: a full stop to 0 W, or a
+  reduction of at least `safety_preempt_margin_w` (default 300 W), retires the
+  in-flight command as terminal `superseded` and publishes the safer target
+  **within the same cycle**, so a safety stop never waits for the old command's
+  timeout. Correlation stays strict — the retired command can never confirm the
+  replacement;
+- once the active command reaches a terminal state (rejection, supersession,
+  acknowledgement completion or either timeout) → publish the latest pending
+  target **once**.
+
+Terminal records with unresolved broker delivery remain in a bounded per-device
+evidence ledger keyed by their transport receipt. By default it retains at most
+64 records for at most 300 seconds, keeps resolved records briefly for
+diagnostics, and settles pending records on PUBACK, timeout or disconnect.
+Replacing `last_command` never orphans an older publish. Transport receipt
+generations distinguish normal raw-MID reuse and devices that share one broker
+client; the transport itself bounds its token and compatibility MID histories at
+512 entries each. A callback carries no generation, however, so an MID whose
+unresolved publish crossed a disconnect is permanently quarantined for that
+client. If its bounded tombstone is later evicted, future callbacks and
+submissions using that protocol MID remain non-attributable rather than being
+guessed. The quarantine is naturally bounded by MQTT's 65,535 packet
+identifiers. Thus an expired late callback cannot update the wrong command. An
+out-of-order reply for an older command can never affect the newer one.
+
+`dispatch_output_limit()` returns a structured `WriteDispatchResult`
+(`ems/mqtt_control/dispatch.py`) — `published` / `coalesced_active` /
+`queued_latest` / `rejected` / `failed`, with the target, message id, command
+state and reason. The controller consumes it through the shared
+`dispatch_device_write()` adapter (non-MQTT devices normalize their boolean
+result) and logs the honest, distinct events `write_output_limit_published`,
+`write_output_limit_queued`, `write_output_limit_coalesced`,
+`write_output_limit_rejected` (a refused write, WARNING) and
+`write_output_limit_failed` (a transport failure, DEBUG — already surfaced by the
+transport/health layer). A queued target is **never** logged as published. The
+boolean `write_output_limit()` remains as a compatibility wrapper.
+
+A queued target that is later flush-published (once the in-flight command
+settles) is published *inside the device client* on a subsequent read cycle, not
+through a controller `set_output_limit()` call, so it does not raise a second
+`write_output_limit_published` event; the eventual publish is instead visible in
+the device's `describe()` diagnostics (`active_command` / `last_command`).
+
+Command lifecycle transitions emit their own honest events:
+`mqtt_publish_delivered` (PUBACK observed, debug), `device_command_acknowledged`
+/ `device_command_rejected` (correlated replies), `telemetry_confirmed` (with
+`elapsed_ms`), `confirmation_timed_out` (WARNING — `broker_delivery` in the
+event separates "the broker never acknowledged the publish" from "delivered but
+the device ignored or overrode it"), `device_command_ack_timed_out`, and
+`external_control_suspected`. `write_output_limit_published` remains a
+**dispatch** event: it never means device success.
+
+### Foreign-writer detection
+
+After a locally **confirmed** target, two successive strictly-newer telemetry
+reports whose `outputLimit` is materially away from it — with no local command
+in flight — raise a conservative `external_control_suspected` WARNING and set
+the flag (with expected/observed watts) in `describe()`. The report names
+evidence only, never a specific controller; a matching report resets the streak
+and a new local confirmation clears the flag. Operators running Cloud MQTT
+control must disable Zendure HEMS, Smart Matching, Zendure schedules and any
+other simultaneous controller (the Admin preview/apply and `diagnose` surface
+this advisory as `zendure_cloud_mqtt_single_controller`).
+
+The control client subscribes to each device's verified reply topic —
+`iot/<productKey>/<deviceId>/function/invoke/reply` (leading-slash family:
+`/<productKey>/<deviceId>/function/invoke/reply`) — selected from the resolved
+power-write profile's `CommandReplyContract`
+(`ems/mqtt_control/reply_contracts.py`), and dispatches replies to
+`handle_reply()`, which correlates by `messageId` + `deviceId`. Only the legacy
+`function/invoke` automation protocol has a verified reply contract; the
+`properties/write` shape has **no** verified acknowledgement topic
+(`properties/read/reply` answers a `properties/read`, not a write), so it
+subscribes to none and can never be falsely acknowledged. The invented
+`function/reply` / `properties/read_reply` channels are not contracts. A broad
+telemetry subscription can never stand in for the verified reply topic.
+
+A bounded `command_ack_timeout_seconds` (default 10s) times out an unanswered
+command; there are **no** unlimited automatic retries. A fresh telemetry read
+confirms an acknowledged command when the observed output is newer than the
+command and within tolerance, and a bounded `confirmation_timeout_seconds`
+(default 30s) resolves an acknowledged command that never sees confirming
+telemetry.
+
+> **Status — fixture/emulator-verified, physical validation still required.** The
+> full lifecycle (records, reply correlation, one-in-flight coordination, timeout,
+> confirmation) is implemented and covered by unit tests, in-process broker
+> end-to-end tests, and an optional real-Mosquitto integration
+> (`tests/test_zendure_mqtt_broker_mosquitto.py`) that proves publish →
+> `function/invoke/reply` → callback routing → correlated acknowledgement over a
+> real broker. That is **protocol-level** verification only: the reply-topic shape
+> and the confirmation metric are **not yet validated against physical hardware**,
+> and full stability still requires real MQTT dumps or hardware validation. Treat
+> the legacy automation reply/confirmation path as fixture-verified until then.
+
+## Runtime diagnostics
+
+`ZendureMqttDeviceClient.describe()` exposes the real control state. **Static
+eligibility** (`control_supported`) is separate from **live readiness**
+(`control_ready`): readiness additionally requires the write gate enabled, the
+broker connected, valid write identifiers and fresh telemetry, so `control_ready`
+is **never** true while the broker is disconnected. The report includes
+`control_requested`, `control_supported`, `control_ready`, `broker_connected`,
+`telemetry_fresh`, `hardware_profile`, `hardware_generation` (display grouping
+only), `power_write_profile`, `supported_operations`,
+`controller_reachable_operations`, `control_block_reason`,
+`command_ack_timeout_seconds`, `confirmation_timeout_seconds`,
+`telemetry_confirmation_supported`, `pending_target`, `confirmation_deadline`,
+`last_confirmed_target_w`, `external_control_suspected` (+
+`external_control_detail`), recent unresolved-delivery summary fields, and a
+structured `active_command` / `last_command`
+(`{message_id, device_id, device_key, operation, target_power_w, topic, state,
+response_code, response_message, broker_delivery, correlation_id,
+confirmation_block_reason}`) — replacing the ambiguous single `control_enabled`
+flag (kept for compatibility, alongside `last_command_state`). Those raw routing
+fields exist only in internal in-memory diagnostics. The persisted live-status
+file, Admin, browser and support/export boundaries use the central external-status
+sanitizer: they expose masked route/topic shapes and never return a full Cloud
+route ID or product/device topic path. Subscription-failure events omit the raw
+topic entirely, so the browser log viewer cannot surface an account-scoped route
+from that path.
+
+Security-boundary classification is explicit: trusted config plus live
+`CommandRecord`, device-client and control-runtime objects may retain raw routing
+identity for internal matching; the local `zendure-mqtt-status.json` file is an
+out-of-process Admin input and is therefore persisted in masked form; Dashboard
+and Admin JSON/SSE/log/migration/upgrade responses are browser-facing redacted
+data; generated support bundles are exported redacted data. Raw identifiers stay
+inside the matching boundary. Every external transition uses the shared
+sanitizer; browser and support paths additionally supply installed config as
+sensitive context where it is available.

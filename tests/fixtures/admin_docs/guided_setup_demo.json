@@ -2671,5 +2671,43 @@
     "dashboard_reachable": true,
     "errors": [],
     "conflict": null
+  },
+  "config_status": {
+    "exists": true,
+    "path": "/opt/ems/config/config.json"
+  },
+  "system_alignment_status": {
+    "ok": true,
+    "transition": {
+      "operation_id": "demo-setup-operation",
+      "mode": "fresh_install",
+      "stage": "resources_verified",
+      "system_tag": "v0.7.0-RC",
+      "error_message": null
+    }
+  },
+  "system_alignment_idle": {
+    "ok": true,
+    "active": false,
+    "transition": null
+  },
+  "system_build_validate": {
+    "ok": true,
+    "valid": true,
+    "system_build": {
+      "canonical_tag": "v0.7.0-RC",
+      "channel": "latest",
+      "build_id": "demo-build-001",
+      "revision": "demo-revision"
+    },
+    "action_state": {
+      "selected_build": {
+        "tag": "v0.7.0-RC"
+      },
+      "busy": false,
+      "transition_stage": null,
+      "operation_id": null
+    },
+    "checks": {}
   }
 }

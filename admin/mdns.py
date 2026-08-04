@@ -198,6 +198,7 @@ def _default_verifier(candidate):
         device = verify_zendure_endpoint(
             candidate["ip"], candidate.get("port", 80),
             timeout_ms=VERIFY_TIMEOUT_MS, failure_details=failures,
+            model_hint=candidate.get("model_hint"),
         )
         return device, failures[-1] if failures else None
     if candidate.get("vendor") == "Shelly":

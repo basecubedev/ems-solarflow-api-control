@@ -1,6 +1,13 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 from pathlib import Path
 
+import pytest
+
+pytestmark = [
+    pytest.mark.contract,
+    pytest.mark.documentation,
+]
+
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPOSE = ROOT / "docker-compose.example.yml"

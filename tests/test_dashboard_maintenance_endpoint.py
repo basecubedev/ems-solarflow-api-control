@@ -19,6 +19,10 @@ from test_dashboard_server import (
     with_server,
 )
 
+pytestmark = [
+    pytest.mark.integration,
+]
+
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SECRET_TOKEN = "leaky-ha-token-SECRET-42"

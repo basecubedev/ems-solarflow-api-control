@@ -2,6 +2,7 @@
 """Deployment preparation service tests (no real Docker daemon)."""
 
 import json
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,15 +11,24 @@ import pytest
 from admin.deployment import (
     BootstrapInstaller,
     DeploymentService,
+    DeploymentJobRegistry,
     DockerCli,
     DockerCompose,
     DockerError,
+    StartJob,
     parse_pull_progress,
 )
 from admin import deployment
+from admin.guided_setup_workflow import GuidedSetupWorkflowStore
 from admin.releases import ReleaseError
+from tests.helpers.setup_config import adopt_generated_config
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.system_build,
+    pytest.mark.integration,
+    pytest.mark.simulation,
+]
 
 
 # --- fakes ---------------------------------------------------------------
@@ -170,7 +180,7 @@ class _SyncRegistry:
     def __init__(self):
         self._jobs = {}
 
-    def submit(self, job, runner):
+    def submit(self, job, runner, *, on_complete=None, on_settled=None):
         self._jobs[job.job_id] = job
         try:
             runner(job)
@@ -182,6 +192,11 @@ class _SyncRegistry:
             job.fail("workspace_write_failed", str(exc))
         except Exception:
             job.fail("prepare_failed", "Deployment preparation failed unexpectedly.")
+        finally:
+            if on_settled is not None:
+                on_settled()
+            if on_complete is not None:
+                on_complete(job.snapshot())
         return job
 
     def get(self, job_id):
@@ -225,7 +240,7 @@ def _service(
     releases_dir = _make_release(tmp_path, influx_image=influx_image)
     manager = _FakeReleaseManager(releases_dir)
     target = _write_config(tmp_path, influx)
-    return DeploymentService(
+    service = DeploymentService(
         manager,
         _ConfigExport(target),
         workspace_dir=tmp_path / "deployment",
@@ -237,7 +252,10 @@ def _service(
         dashboard_probe=dashboard_probe or (lambda _url: True),
         sleep=lambda _seconds: None,
         runtime_env={"PUID": "1000", "PGID": "1000"},
+        setup_workflows=GuidedSetupWorkflowStore(tmp_path),
     )
+    adopt_generated_config(service)
+    return service
 
 
 BUNDLED = {"enabled": True, "mode": "bundled"}
@@ -265,7 +283,7 @@ def _service_default_workspace(tmp_path, install_root):
     releases_dir = _make_release(tmp_path)
     manager = _FakeReleaseManager(releases_dir)
     target = _write_config(tmp_path)
-    return DeploymentService(
+    service = DeploymentService(
         manager,
         _ConfigExport(target),
         admin_data_dir=Path(install_root) / "data" / "admin",
@@ -280,7 +298,48 @@ def _service_default_workspace(tmp_path, install_root):
         install_context_provider=lambda: SimpleNamespace(
             install_root=Path(install_root)
         ),
+        setup_workflows=GuidedSetupWorkflowStore(
+            Path(install_root) / "data" / "admin"
+        ),
     )
+    adopt_generated_config(service)
+    return service
+
+
+def test_job_completion_callback_observes_terminal_success_without_polling(tmp_path):
+    registry = DeploymentJobRegistry()
+    job = StartJob("start-success", str(tmp_path))
+    completed = threading.Event()
+    snapshots = []
+
+    registry.submit(
+        job,
+        lambda handle: handle.succeed(),
+        on_complete=lambda snapshot: (snapshots.append(snapshot), completed.set()),
+    )
+
+    assert completed.wait(2)
+    assert [snapshot["status"] for snapshot in snapshots] == ["succeeded"]
+
+
+def test_job_completion_callback_observes_terminal_failure_without_polling(tmp_path):
+    registry = DeploymentJobRegistry()
+    job = StartJob("start-failure", str(tmp_path))
+    completed = threading.Event()
+    snapshots = []
+
+    def fail(_handle):
+        raise DockerError("compose_start_failed", "compose failed")
+
+    registry.submit(
+        job,
+        fail,
+        on_complete=lambda snapshot: (snapshots.append(snapshot), completed.set()),
+    )
+
+    assert completed.wait(2)
+    assert [snapshot["status"] for snapshot in snapshots] == ["failed"]
+    assert snapshots[0]["error"]["code"] == "compose_start_failed"
 
 
 # --- standard layout / transitional path guard ---------------------------
@@ -675,6 +734,7 @@ def test_prepare_conflict_on_changed_config_requires_overwrite(tmp_path):
 
     # Change the generated config so the workspace marker no longer matches.
     _write_config(tmp_path, influx=BUNDLED)
+    adopt_generated_config(service)
     conflict, job = _run_prepare(service)
     assert conflict["ok"] is False
     assert conflict["reason"] == "workspace_conflict"
@@ -688,6 +748,32 @@ def test_prepare_conflict_on_changed_config_requires_overwrite(tmp_path):
 
 
 # --- start ---------------------------------------------------------------
+
+
+def test_prepare_stamps_the_marker_with_its_workflow(tmp_path):
+    service = _service(tmp_path, influx=DISABLED)
+    _run_prepare(service)
+
+    marker = json.loads(Path(service.marker_path).read_text(encoding="utf-8"))
+    active = service.setup_workflows.active()
+    assert marker["workflow_id"] == active["workflow_id"]
+    assert marker["preview_id"] == active["preview"]["preview_id"]
+
+
+def test_start_rejects_a_marker_prepared_by_another_workflow(tmp_path):
+    """A superseded workflow's prepared deployment must not start under the
+    replacement workflow."""
+
+    service = _service(tmp_path, influx=DISABLED)
+    _run_prepare(service)
+    store = service.setup_workflows
+    store.finish(store.active()["workflow_id"], status="superseded")
+    store.ensure_active()
+
+    result, job = _run_start(service)
+
+    assert job is None
+    assert result["reason"] == "deployment_marker_invalid"
 
 
 def test_start_is_blocked_until_deployment_is_prepared(tmp_path):
@@ -841,6 +927,27 @@ def test_start_runs_compose_in_prepared_workspace_with_analytics_profile(tmp_pat
     assert job["dashboard_reachable"] is True
 
 
+def test_start_announces_healthcheck_before_dashboard_probe(tmp_path):
+    events = []
+
+    def dashboard_probe(_url):
+        events.append("probe")
+        return True
+
+    service = _service(tmp_path, dashboard_probe=dashboard_probe)
+    _run_prepare(service)
+
+    result = service.start(
+        on_healthcheck=lambda snapshot: events.append(
+            ("healthcheck", snapshot["steps"][-1]["key"])
+        )
+    )
+    job = service.start_job(result["job"]["job_id"])
+
+    assert job["status"] == "succeeded"
+    assert events == [("healthcheck", "checking_containers"), "probe"]
+
+
 def test_start_fails_when_only_non_ems_service_is_running(tmp_path):
     compose = _FakeCompose(
         services=[
@@ -922,6 +1029,17 @@ def test_start_retries_dashboard_probe_without_restarting_containers(tmp_path):
 def _set_fixed_ems_container(service):
     (service.workspace_dir / "docker-compose.yml").write_text(
         "services:\n  ems:\n    container_name: ems-solarflow-api-control\n",
+        encoding="utf-8",
+    )
+
+
+def _set_fixed_ems_and_influx_containers(service):
+    (service.workspace_dir / "docker-compose.yml").write_text(
+        "services:\n"
+        "  ems:\n"
+        "    container_name: ems-solarflow-api-control\n"
+        "  influxdb:\n"
+        "    container_name: ems-influxdb\n",
         encoding="utf-8",
     )
 
@@ -1152,6 +1270,50 @@ def test_resolve_conflict_removes_only_known_stopped_container_without_volumes(t
     assert docker.removed == ["ems-solarflow-api-control"]
     assert job["status"] == "succeeded"
     assert job["steps"][0]["key"].startswith("resolved_container_conflict")
+
+
+def test_resolve_conflicts_reports_each_stack_container_before_start(tmp_path):
+    docker = _FakeDocker(
+        containers={
+            "ems-solarflow-api-control": {
+                "container_name": "ems-solarflow-api-control",
+                "container_id": "ems-old",
+                "image": "ems:old",
+                "status": "exited",
+            },
+            "ems-influxdb": {
+                "container_name": "ems-influxdb",
+                "container_id": "influx-old",
+                "image": "influxdb:2.7",
+                "status": "exited",
+            },
+        }
+    )
+    compose = _FakeCompose()
+    service = _service(tmp_path, influx=BUNDLED, docker=docker, compose=compose)
+    _run_prepare(service)
+    _set_fixed_ems_and_influx_containers(service)
+
+    first = service.resolve_container_conflict(
+        "ems-solarflow-api-control", "remove_stopped_and_continue"
+    )
+
+    assert first["ok"] is True
+    assert first["continue"] is False
+    assert first["conflict"]["container_name"] == "ems-influxdb"
+    assert docker.removed == ["ems-solarflow-api-control"]
+    assert compose.up_calls == []
+
+    second = service.resolve_container_conflict(
+        "ems-influxdb", "remove_stopped_and_continue"
+    )
+    _, job = _run_start(service)
+
+    assert second["ok"] is True
+    assert second["continue"] is True
+    assert second["conflict"] is None
+    assert docker.removed == ["ems-solarflow-api-control", "ems-influxdb"]
+    assert job["status"] == "succeeded"
 
 
 def test_status_keeps_structured_conflict_visible(tmp_path):
@@ -1510,3 +1672,66 @@ def test_parse_pull_progress_counts_completed_layers():
     parse_pull_progress(state, "l2: Pulling fs layer")
     assert parse_pull_progress(state, "l1: Pull complete") == 50
     assert parse_pull_progress(state, "Status: Downloaded newer image") == 100
+
+
+def _ps_run(stdout):
+    def _run(cmd, **kwargs):
+        del cmd, kwargs
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    return _run
+
+
+@pytest.mark.parametrize(
+    "stdout",
+    [
+        "not-json\n",
+        "{ broken\n",
+        '{"Names": "ems-admin-updater-op-1"}\nnot-json\n',
+    ],
+)
+def test_inspect_container_refuses_to_read_unusable_docker_output(stdout):
+    """Unreadable output is a failure, never proof that a container is absent.
+
+    ``docker ps`` exiting 0 with output this wrapper cannot parse says nothing
+    about what is running. Returning ``None`` there is indistinguishable from a
+    verified absence, and callers that must not act on a guess would act.
+    """
+
+    docker = DockerCli(run=_ps_run(stdout))
+
+    with pytest.raises(DockerError) as excinfo:
+        docker.inspect_container("ems-admin-updater-op-1")
+
+    assert excinfo.value.code == "docker_container_inspect_unreadable"
+
+
+@pytest.mark.parametrize("stdout", ["not-json\n", "{ broken\n"])
+def test_list_containers_refuses_to_read_unusable_docker_output(stdout):
+    docker = DockerCli(run=_ps_run(stdout))
+
+    with pytest.raises(DockerError) as excinfo:
+        docker.list_containers("ems-admin-updater-")
+
+    assert excinfo.value.code == "docker_container_inspect_unreadable"
+
+
+def test_container_reads_survive_blank_and_absent_docker_output():
+    """Empty output is a valid answer: nothing matched the filter."""
+
+    docker = DockerCli(run=_ps_run("\n\n"))
+
+    assert docker.inspect_container("ems-admin-updater-op-1") is None
+    assert docker.list_containers("ems-admin-updater-") == []
+
+
+def test_inspect_container_still_reads_a_well_formed_row():
+    row = json.dumps(
+        {"Names": "/ems-admin-updater-op-1", "ID": "abc", "State": "running"}
+    )
+    docker = DockerCli(run=_ps_run(row + "\n"))
+
+    container = docker.inspect_container("ems-admin-updater-op-1")
+
+    assert container["container_name"] == "ems-admin-updater-op-1"
+    assert container["status"] == "running"

@@ -1,7 +1,13 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import logging
 
+import pytest
+
 from ems.controller import EMSController
+
+pytestmark = [
+    pytest.mark.unit,
+]
 
 
 def make_controller():

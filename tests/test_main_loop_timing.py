@@ -3,6 +3,13 @@ import ast
 import unittest
 from pathlib import Path
 
+import pytest
+
+pytestmark = [
+    pytest.mark.power_control,
+    pytest.mark.e2e,
+]
+
 
 ENTRYPOINT = (
     Path(__file__).resolve().parents[1]

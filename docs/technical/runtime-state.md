@@ -33,7 +33,7 @@ Example:
   "system": {
     "enabled": true,
     "max_total_power": 800,
-    "loop_interval": 3,
+    "loop_interval": 5,
     "min_output_limit": 35
   },
   "ha": {
@@ -88,6 +88,7 @@ further `outputLimit` writes until PV telemetry becomes positive again.
 | `max_power` | Runtime per-device power limit |
 | `offgrid_socket_mode` | Operator intent for Zendure offgrid socket mode |
 | `pv_priority_factor` | Runtime PV-first allocation weight override |
+| `identity` | Stable hardware identity (serial) used to track a device across renames; managed by the EMS |
 
 `pv_priority_factor` defaults from `config.json` and can be changed at runtime:
 
@@ -111,6 +112,68 @@ standard -> gridOffMode=0
 
 The CLI and Home Assistant only change the intent. The EMS is the only
 component that writes `gridOffMode` to hardware.
+
+## Device Lifecycle Reconciliation
+
+The EMS is authoritative for runtime device state. On every load it reconciles
+the device entries against the configured (controllable) devices, so the file
+stays clean as devices are added, renamed, or removed in `config.json`. The
+Admin Console never edits `runtime-state.json` to reconcile the device lifecycle
+(add/rename/remove) — that stays EMS-authoritative. It does mirror a small,
+whitelisted set of overlapping scalar values into runtime-state on Apply; see
+[Config → runtime convergence](#config--runtime-convergence-admin-maintenance).
+
+Devices are matched to their config entry by a stable `identity` (serial), so:
+
+- **Add** — a new controllable config device gets default runtime settings.
+- **Rename** — when a device's name changes in config but its identity is
+  unchanged, the operator's runtime settings (`max_power`,
+  `pv_priority_factor`, `ac_charge_power_w`, `offgrid_socket_mode`, …) migrate
+  to the new name instead of being lost.
+- **Remove** — a device no longer in config is pruned.
+
+Telemetry-only Zendure MQTT devices carry no controllable runtime settings and
+deliberately have no runtime-state entry (they are not flagged as missing by
+`diagnose`).
+
+Reconciliation is **fail-closed**: if the configured device list is empty or the
+config is unreadable, nothing is pruned. Before any destructive change
+(rename/prune) the EMS writes a one-step backup to `runtime-state.json.bak` and
+logs an audit event (`event=runtime_device_renamed`,
+`event=runtime_device_pruned`, `event=runtime_device_added`). Identities are
+backfilled onto pre-existing entries by name on first load, so subsequent
+renames migrate settings.
+
+## Config → runtime convergence (Admin maintenance)
+
+A few scalar values are writable in **both** `config.json` (the Admin console) and
+`runtime-state.json` (the Dashboard control tab and `emsctl`). For these keys the
+live EMS resolves the runtime value first, with the config value as the fallback,
+so an Admin edit to `config.json` alone would not take effect until a restart —
+and the runtime value would keep winning even then.
+
+To keep the two stores coherent, Admin maintenance **Apply** mirrors the keys it
+actually changed into runtime-state, one-directionally (config/Admin → runtime;
+runtime is never merged back into config). The overlapping keys are exactly the
+Dashboard runtime-write whitelist:
+
+- `system.enabled`, `system.max_total_power`, `system.loop_interval`,
+  `system.min_output_limit`
+- `winter.enabled` (and `ha.enabled` / `ha.control_enabled`)
+- per device: `enabled`, `max_power`, `pv_priority_factor`,
+  `offgrid_socket_mode`
+
+The mirror reuses the same validated whitelist writers the Dashboard uses (so the
+safety property — only whitelisted keys ever reach runtime-state — is preserved)
+and is **best-effort**: `config.json` is already written when it runs, so a value
+above the runtime power ceiling, a device not yet present in runtime (newly added
+or renamed), or a read-only/absent runtime file is reported as a per-key skip and
+never fails the Apply. New devices are seeded from config by the EMS on its next
+start. The maintenance editor also shows a per-field provenance badge (installed
+config value vs. live Dashboard override) and a **Reset live overrides** action
+that writes the installed config values back into runtime-state (it always
+writes the value; it never just clears the override, because the EMS loads
+`config.json` once per process).
 
 ## HA Fields
 

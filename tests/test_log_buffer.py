@@ -2,7 +2,13 @@
 import logging
 import threading
 
+import pytest
+
 from ems.log_buffer import RingBufferLogHandler
+
+pytestmark = [
+    pytest.mark.integration,
+]
 
 
 def make_logger(handler, name):

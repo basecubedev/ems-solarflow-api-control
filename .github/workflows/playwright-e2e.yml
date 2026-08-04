@@ -1,0 +1,161 @@
+name: Playwright E2E
+
+on:
+  pull_request:
+    paths:
+      - "admin/**"
+      - "ems/zendure_mqtt/**"
+      - "ems/mqtt_control/**"
+      - "ems/config.py"
+      - "ems/config_catalog.py"
+      - "ems/paths.py"
+      - "deploy/admin/**"
+      - "tests/e2e/**"
+      - "playwright.config.ts"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/playwright-e2e.yml"
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Pull requests run the tagged critical subsets. The full Chromium and Firefox
+  # suites run in nightly-full-suite.yml and in scripts/test-rc.sh.
+  playwright-chromium-critical:
+    name: playwright-chromium-critical
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the Chromium critical group
+        env:
+          CI: "1"
+        run: npx playwright test --project=chromium --grep "@smoke|@authority"
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: playwright-report-chromium-critical
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
+
+  playwright-firefox-smoke:
+    name: playwright-firefox-smoke
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps firefox
+
+      - name: Run the Firefox smoke group
+        env:
+          CI: "1"
+        run: npx playwright test --project=firefox --grep "@smoke"
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: playwright-report-firefox-smoke
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
+
+  # WebKit is not required per PR: run the smoke group on demand and before a
+  # release. Kept separate so a WebKit-only flake never blocks a PR.
+  playwright-webkit:
+    name: playwright-webkit-pre-release
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Install Playwright WebKit
+        run: npx playwright install --with-deps webkit
+
+      - name: Run Playwright tests (WebKit)
+        env:
+          CI: "1"
+        run: npx playwright test --project=webkit --grep "@smoke"
+
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: playwright-report-webkit
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14

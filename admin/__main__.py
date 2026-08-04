@@ -18,6 +18,7 @@ from admin.https import (
     DEFAULT_ADMIN_SSL_KEY_FILE,
     ensure_admin_ssl_context,
 )
+from admin.releases import default_admin_data_dir
 from admin.server import create_admin_runtime, create_server
 
 DEFAULT_HOST = "127.0.0.1"
@@ -104,7 +105,15 @@ def main(argv=None):
             "never to the internet."
         )
 
-    runtime = create_admin_runtime()
+    # A deterministic browser-test runtime, gated behind an env flag that is
+    # never set in a normal deployment. It fakes only external effects (Docker,
+    # release download, Admin replacement); auth/CSRF/gating stay real.
+    if _env_bool("EMS_ADMIN_TEST_MODE"):
+        from admin.test_support import build_test_runtime
+
+        runtime = build_test_runtime(data_dir=default_admin_data_dir())
+    else:
+        runtime = create_admin_runtime()
     runtime.https_configured = bool(args.https)
     runtime.https_port = int(args.https_port)
 

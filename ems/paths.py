@@ -114,6 +114,22 @@ def resolve_data_dir(explicit_path=None, *, base_dir=None):
     return Path(explicit_path) if explicit_path else _base_path(base_dir) / "data"
 
 
+ZENDURE_MQTT_STATUS_FILENAME = "zendure-mqtt-status.json"
+
+
+def resolve_zendure_mqtt_status_path(explicit_path=None, *, base_dir=None):
+    """Resolve the live Zendure MQTT telemetry status file.
+
+    The running EMS persists a credential-free status snapshot here so out-of-
+    process readers (Admin) can prefer live runtime state over a config-derived
+    fallback without talking to the broker themselves.
+    """
+
+    if explicit_path:
+        return Path(explicit_path)
+    return resolve_data_dir(base_dir=base_dir) / ZENDURE_MQTT_STATUS_FILENAME
+
+
 def resolve_compose_path(explicit_path=None, *, base_dir=None):
     """Resolve the EMS Compose file."""
 

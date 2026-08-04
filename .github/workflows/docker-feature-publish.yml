@@ -21,6 +21,12 @@ concurrency:
   group: development-build-catalogue
   cancel-in-progress: false
 
+# Feature cache scopes, disjoint from the release scopes so a feature build can
+# never touch a release cache. Bump `-v1` to reset.
+env:
+  EMS_FEATURE_CACHE_SCOPE: ems-feature-v1
+  ADMIN_FEATURE_CACHE_SCOPE: admin-feature-v1
+
 jobs:
   resolve-source:
     name: Resolve immutable source revision
@@ -94,6 +100,65 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
           echo "Resolved '${INPUT_REF}' to ${sha}"
 
+  mqtt-release-contract:
+    name: Fast Zendure MQTT development-release gate
+    needs: [resolve-source]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.resolve-source.outputs.sha }}
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run static validation
+        run: |
+          set -o pipefail
+          ruff check . 2>&1 | tee -a release-contract.log
+          python -m compileall -q \
+            admin ems dashboard scripts tests emsctl.py ems-solarflow-api-control.py \
+            2>&1 | tee -a release-contract.log
+          python tools/build_config_template.py --check 2>&1 | tee -a release-contract.log
+          node --check admin/static/admin.js 2>&1 | tee -a release-contract.log
+      - name: Run fast MQTT release gate
+        run: |
+          set -o pipefail
+          pytest -q -rs -m mqtt_release | tee -a release-contract.log | tee mqtt-release.log
+          grep -E "[1-9][0-9]* passed" mqtt-release.log >/dev/null || {
+            echo "The mqtt_release selection executed no tests." >&2
+            exit 1
+          }
+      - name: Run simulation and power-control gate
+        run: |
+          set -o pipefail
+          pytest -q -rs -m "simulation and power_control" \
+            | tee -a release-contract.log | tee power-control.log
+          grep -E "[1-9][0-9]* passed" power-control.log >/dev/null || {
+            echo "The simulation/power_control selection executed no tests." >&2
+            exit 1
+          }
+      - name: Upload release-contract log
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: mqtt-release-contract-log
+          path: release-contract.log
+          if-no-files-found: ignore
+          retention-days: 14
+
   packaged-system-build-smoke:
     name: Packaged Admin System Build smoke
     needs: [resolve-source]
@@ -104,25 +169,49 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.resolve-source.outputs.sha }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "20"
+          cache: npm
+          cache-dependency-path: package-lock.json
       - name: Install packaged browser dependencies
         run: |
           npm ci
           npx playwright install --with-deps chromium
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      # Prebuild with the Admin feature cache, then let run-packaged-admin.sh
+      # skip its build. Args mirror the script's fixed identity (locked by a test).
+      - name: Prebuild packaged Admin browser-gate image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./deploy/admin/Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ems-solarflow-admin:system-build-browser-gate
+          build-args: |
+            EMS_REVISION=deadbee1234567890abcdef1234567890abcdef1
+            EMS_BUILD_ID=dev-development-deadbee-100-1
+            EMS_CHANNEL=development
+            EMS_RELEASE_TAG=dev-development-deadbee-100-1
+            EMS_SYSTEM_TAG=dev-development-deadbee-100-1
+          cache-from: type=gha,scope=${{ env.ADMIN_FEATURE_CACHE_SCOPE }}
       - name: Run built Admin three-build smoke
         env:
           CI: "1"
+          EMS_ADMIN_PACKAGED_SKIP_BUILD: "1"
         run: npm run test:e2e:system-build-packaged
       - name: Upload packaged browser diagnostics
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: packaged-system-build-browser-gate
           path: |
             playwright-report/
             test-results/
+          if-no-files-found: ignore
           retention-days: 14
 
   mosquitto-lifecycle:
@@ -138,6 +227,10 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -153,7 +246,12 @@ jobs:
           EMS_REQUIRE_REAL_MQTT_TESTS: "1"
         run: |
           set -o pipefail
-          pytest -q -rs tests/test_zendure_mqtt_broker_mosquitto.py tests/test_mqtt_real_legacy_flow.py \
+          pytest -q -rs \
+            tests/test_zendure_mqtt_broker_mosquitto.py \
+            tests/test_mqtt_real_mosquitto.py \
+            tests/test_mqtt_real_mosquitto_acl.py \
+            tests/test_mqtt_real_mosquitto_tls.py \
+            tests/test_mqtt_real_legacy_flow.py \
             | tee mosquitto-gate.log
           grep -E "[1-9][0-9]* passed" mosquitto-gate.log >/dev/null || {
             echo "No real Mosquitto lifecycle test executed." >&2
@@ -174,22 +272,57 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt -r requirements-dev.txt
-      - name: Build and smoke real packages
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Resolve package-smoke build identity
+        id: smoke_identity
         run: |
           revision="$(git rev-parse HEAD)"
           build_id="dev-ci-gate-${revision:0:7}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          docker build -t ems-solarflow-api-control:package-smoke .
-          docker build -f deploy/admin/Dockerfile \
-            --build-arg EMS_REVISION="$revision" \
-            --build-arg EMS_BUILD_ID="$build_id" \
-            --build-arg EMS_CHANNEL=development \
-            --build-arg EMS_RELEASE_TAG="$build_id" \
-            --build-arg EMS_SYSTEM_TAG="$build_id" \
-            -t ems-solarflow-admin:package-smoke .
+          {
+            echo "revision=${revision}"
+            echo "build_id=${build_id}"
+          } >> "${GITHUB_OUTPUT}"
+      # Runs before publish-feature-ghcr, so exports mode=max to warm the
+      # feature caches for the publishing job.
+      - name: Build EMS package image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ems-solarflow-api-control:package-smoke
+          cache-from: type=gha,scope=${{ env.EMS_FEATURE_CACHE_SCOPE }}
+          cache-to: type=gha,mode=max,scope=${{ env.EMS_FEATURE_CACHE_SCOPE }}
+      - name: Build Admin package image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./deploy/admin/Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ems-solarflow-admin:package-smoke
+          build-args: |
+            EMS_REVISION=${{ steps.smoke_identity.outputs.revision }}
+            EMS_BUILD_ID=${{ steps.smoke_identity.outputs.build_id }}
+            EMS_CHANNEL=development
+            EMS_RELEASE_TAG=${{ steps.smoke_identity.outputs.build_id }}
+            EMS_SYSTEM_TAG=${{ steps.smoke_identity.outputs.build_id }}
+          cache-from: type=gha,scope=${{ env.ADMIN_FEATURE_CACHE_SCOPE }}
+          cache-to: type=gha,mode=max,scope=${{ env.ADMIN_FEATURE_CACHE_SCOPE }}
+      - name: Smoke real packages
+        run: |
           docker run --rm ems-solarflow-api-control:package-smoke python3 emsctl.py --help
           docker run --rm ems-solarflow-api-control:package-smoke test -f /app/config.template.json
           docker run --rm ems-solarflow-admin:package-smoke python -m admin --help
@@ -201,6 +334,7 @@ jobs:
     name: Build and publish feature Docker image
     needs:
       - resolve-source
+      - mqtt-release-contract
       - packaged-system-build-smoke
       - mosquitto-lifecycle
       - package-smoke
@@ -210,6 +344,7 @@ jobs:
       packages: write
     outputs:
       immutable_tag: ${{ steps.build_identity.outputs.immutable_tag }}
+      feature_tag_prefix: ${{ steps.build_identity.outputs.feature_tag_prefix }}
       display_name: ${{ steps.build_identity.outputs.display_name }}
       revision: ${{ steps.build_identity.outputs.git_commit }}
       build_id: ${{ steps.build_identity.outputs.build_id }}
@@ -227,6 +362,10 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
 
       - name: Install dependencies
         run: |
@@ -317,19 +456,28 @@ jobs:
             de.basecubedev.ems.build_serial=${{ steps.build_identity.outputs.build_serial }}
             de.basecubedev.ems.build_id=${{ steps.build_identity.outputs.build_id }}
 
+      # Imports the feature cache but never exports; the pushed build is the
+      # authoritative exporter.
       - name: Build local EMS image for content validation
-        run: |
-          docker build \
-            --build-arg EMS_RELEASE_TAG="${{ steps.build_identity.outputs.immutable_tag }}" \
-            --build-arg EMS_GIT_COMMIT="${{ steps.build_identity.outputs.git_commit }}" \
-            --build-arg EMS_GIT_COMMIT_SHORT="${{ steps.build_identity.outputs.git_commit_short }}" \
-            --build-arg EMS_GIT_DESCRIBE="${{ steps.build_identity.outputs.git_describe }}" \
-            --build-arg EMS_GIT_BRANCH="${{ inputs.ref }}" \
-            --build-arg EMS_GIT_DIRTY="false" \
-            --build-arg EMS_BUILD_ID="${{ steps.build_identity.outputs.build_id }}" \
-            --build-arg EMS_BUILD_SERIAL="${{ steps.build_identity.outputs.build_serial }}" \
-            --build-arg EMS_CHANNEL="development" \
-            -t ems-solarflow-api-control:ci .
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ems-solarflow-api-control:ci
+          build-args: |
+            EMS_RELEASE_TAG=${{ steps.build_identity.outputs.immutable_tag }}
+            EMS_GIT_COMMIT=${{ steps.build_identity.outputs.git_commit }}
+            EMS_GIT_COMMIT_SHORT=${{ steps.build_identity.outputs.git_commit_short }}
+            EMS_GIT_DESCRIBE=${{ steps.build_identity.outputs.git_describe }}
+            EMS_GIT_BRANCH=${{ inputs.ref }}
+            EMS_GIT_DIRTY=false
+            EMS_BUILD_ID=${{ steps.build_identity.outputs.build_id }}
+            EMS_BUILD_SERIAL=${{ steps.build_identity.outputs.build_serial }}
+            EMS_CHANNEL=development
+          cache-from: type=gha,scope=${{ env.EMS_FEATURE_CACHE_SCOPE }}
 
       - name: Validate EMS image runtime content
         run: |
@@ -355,6 +503,8 @@ jobs:
             EMS_BUILD_ID=${{ steps.build_identity.outputs.build_id }}
             EMS_BUILD_SERIAL=${{ steps.build_identity.outputs.build_serial }}
             EMS_CHANNEL=development
+          cache-from: type=gha,scope=${{ env.EMS_FEATURE_CACHE_SCOPE }}
+          cache-to: type=gha,mode=max,scope=${{ env.EMS_FEATURE_CACHE_SCOPE }}
 
       - name: Generate Admin Docker metadata
         id: meta_admin
@@ -378,16 +528,24 @@ jobs:
             de.basecubedev.ems.build_id=${{ steps.build_identity.outputs.build_id }}
 
       - name: Build local Admin image for startup validation
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./deploy/admin/Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ems-solarflow-admin:ci
+          build-args: |
+            EMS_REVISION=${{ steps.build_identity.outputs.git_commit }}
+            EMS_BUILD_ID=${{ steps.build_identity.outputs.build_id }}
+            EMS_CHANNEL=development
+            EMS_RELEASE_TAG=${{ steps.build_identity.outputs.immutable_tag }}
+            EMS_SYSTEM_TAG=${{ steps.build_identity.outputs.immutable_tag }}
+          cache-from: type=gha,scope=${{ env.ADMIN_FEATURE_CACHE_SCOPE }}
+
+      - name: Validate Admin image runtime content
         run: |
-          # Embed matching Setup resources + labels for the immutable dev build,
-          # so a feature build installs through the normal paired-system flow.
-          docker build -f deploy/admin/Dockerfile \
-            --build-arg EMS_REVISION="${{ steps.build_identity.outputs.git_commit }}" \
-            --build-arg EMS_BUILD_ID="${{ steps.build_identity.outputs.build_id }}" \
-            --build-arg EMS_CHANNEL="development" \
-            --build-arg EMS_RELEASE_TAG="${{ steps.build_identity.outputs.immutable_tag }}" \
-            --build-arg EMS_SYSTEM_TAG="${{ steps.build_identity.outputs.immutable_tag }}" \
-            -t ems-solarflow-admin:ci .
           docker run --rm ems-solarflow-admin:ci python -m admin --help
 
       - name: Verify Admin/EMS feature-build pair metadata
@@ -503,6 +661,8 @@ jobs:
             EMS_CHANNEL=development
             EMS_RELEASE_TAG=${{ steps.build_identity.outputs.immutable_tag }}
             EMS_SYSTEM_TAG=${{ steps.build_identity.outputs.immutable_tag }}
+          cache-from: type=gha,scope=${{ env.ADMIN_FEATURE_CACHE_SCOPE }}
+          cache-to: type=gha,mode=max,scope=${{ env.ADMIN_FEATURE_CACHE_SCOPE }}
 
       - name: Verify published Admin/EMS image pair
         id: published_pair
@@ -514,13 +674,26 @@ jobs:
         run: |
           set -euo pipefail
 
+          # `docker buildx imagetools inspect` can transiently fail (exit 255)
+          # reading a just-pushed multi-arch manifest before GHCR is consistent;
+          # retry so the identity check does not flake on registry propagation.
+          inspect() {
+            local out attempt
+            for attempt in 1 2 3 4 5; do
+              if out="$(docker buildx imagetools inspect "$@" 2>/dev/null)"; then
+                printf '%s\n' "$out"
+                return 0
+              fi
+              if [ "$attempt" -lt 5 ]; then sleep $((attempt * 3)); fi
+            done
+            echo "imagetools inspect failed after retries: $*" >&2
+            return 1
+          }
           image_digest() {
-            docker buildx imagetools inspect "$1" \
-              | awk '$1 == "Digest:" { print $2; exit }'
+            inspect "$1" | awk '$1 == "Digest:" { print $2; exit }'
           }
           image_labels() {
-            docker buildx imagetools inspect "$1" \
-              --format '{{json (index .Image "linux/amd64").Config.Labels}}'
+            inspect "$1" --format '{{json (index .Image "linux/amd64").Config.Labels}}'
           }
           verify_identity() {
             image="$1"
@@ -584,9 +757,11 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.publish-feature-ghcr.outputs.revision }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "20"
+          cache: npm
+          cache-dependency-path: package-lock.json
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -615,11 +790,13 @@ jobs:
             --arg admin_digest "$ADMIN_DIGEST" \
             --arg ems_image "ghcr.io/basecubedev/ems-solarflow-api-control:${TAG}" \
             --arg ems_digest "$EMS_DIGEST" \
+            --argjson admin_test_contract "$(jq -r .version tests/e2e/admin-test-contract.json)" \
             '{builds: [{tag: $tag, display_name: $display_name, channel: "development",
               revision: $revision, build_id: $build_id, run_id: $run_id,
               run_attempt: $run_attempt, created_at: $created_at,
               admin_image: $admin_image, admin_digest: $admin_digest,
-              ems_image: $ems_image, ems_digest: $ems_digest, installable: true}]}' \
+              ems_image: $ems_image, ems_digest: $ems_digest,
+              admin_test_contract: $admin_test_contract, installable: true}]}' \
             > remote-development-builds.json
       - name: Run Chromium against the pulled production Admin
         env:
@@ -634,12 +811,13 @@ jobs:
         run: npm run test:e2e:system-build-remote
       - name: Upload remote browser diagnostics
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: remote-packaged-system-build-browser-gate
           path: |
             playwright-report/
             test-results/
+          if-no-files-found: ignore
           retention-days: 14
 
   publish-development-catalogue:
@@ -685,15 +863,18 @@ jobs:
             --arg admin_digest "$ADMIN_DIGEST" \
             --arg ems_image "ghcr.io/basecubedev/ems-solarflow-api-control:${TAG}" \
             --arg ems_digest "$EMS_DIGEST" \
+            --argjson admin_test_contract "$(jq -r .version tests/e2e/admin-test-contract.json)" \
             '{tag: $tag, display_name: $display_name, channel: "development",
               revision: $revision, build_id: $build_id, run_id: $run_id,
               run_attempt: $run_attempt, created_at: $created_at,
               admin_image: $admin_image, admin_digest: $admin_digest,
-              ems_image: $ems_image, ems_digest: $ems_digest, installable: true}' \
+              ems_image: $ems_image, ems_digest: $ems_digest,
+              admin_test_contract: $admin_test_contract, installable: true}' \
             > catalogue-entry.json
           for retry in 1 2 3 4 5; do
-            metadata="$(gh api "${api}?ref=${CATALOGUE_BRANCH}" 2>/dev/null || true)"
-            if [[ -n "$metadata" ]]; then
+            # gh api prints the 404 body to stdout and exits non-zero for a
+            # missing file; branch on its exit code, not on the captured output.
+            if metadata="$(gh api "${api}?ref=${CATALOGUE_BRANCH}" 2>/dev/null)"; then
               sha="$(jq -r .sha <<< "$metadata")"
               jq -r .content <<< "$metadata" | base64 --decode > "$CATALOGUE_FILE"
             else
@@ -725,9 +906,11 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.publish-feature-ghcr.outputs.revision }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "20"
+          cache: npm
+          cache-dependency-path: package-lock.json
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -790,3 +973,28 @@ jobs:
           done
           echo "Could not remove the failed catalogue entry." >&2
           exit 1
+
+  prune-old-development-builds:
+    name: Prune old development image versions
+    needs: [publish-feature-ghcr, publish-development-catalogue]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout pruner
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.publish-feature-ghcr.outputs.revision }}
+      - name: Keep only the newest builds per feature branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/prune_development_builds.py \
+            --owner "${{ github.repository_owner }}" \
+            --owner-type user \
+            --package ems-solarflow-admin \
+            --package ems-solarflow-api-control \
+            --prefix "${{ needs.publish-feature-ghcr.outputs.feature_tag_prefix }}" \
+            --keep 2 \
+            --protect-tag "${{ needs.publish-feature-ghcr.outputs.immutable_tag }}"

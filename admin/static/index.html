@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -39,6 +40,7 @@
         Logout
       </button>
     </header>
+
 
     <section class="admin-view admin-auth" id="view-auth" aria-label="Admin Console login" hidden>
       <div class="admin-auth-card">
@@ -92,7 +94,7 @@
       <div class="start-gate-form">
         <div class="start-choices" role="group" aria-label="How do you want to continue?">
           <p class="start-choices-legend">How do you want to continue?</p>
-          <button type="button" class="start-choice start-choice-nav is-recommended" data-start-path="setup_new">
+          <button type="button" class="start-choice start-choice-nav is-recommended" data-start-path="setup_new" data-testid="start-fresh-install">
             <span class="start-choice-body">
               <span class="start-choice-title">Guided setup</span>
               <span class="start-choice-desc">Fresh install or clean Docker setup. Recommended for first-time users.</span>
@@ -119,7 +121,12 @@
 
       <div class="workspace-nav">
         <button type="button" class="workspace-back" data-back="landing">← Back</button>
+        <span class="workspace-view-title">Guided setup</span>
       </div>
+
+      <!-- System Build progress mounts here while Guided Setup owns the
+           active transition; otherwise parked in #system-build-parking. -->
+      <div id="setup-system-build-slot" class="system-build-slot"></div>
 
       <div class="setup-stepper" role="tablist" aria-label="Setup steps">
         <button type="button" class="setup-step active" data-setup-step="release" role="tab" aria-selected="true">
@@ -160,7 +167,7 @@
             <span class="control-stage-dot" aria-hidden="true">⤓</span>
             <div class="control-stage-title-block">
               <span class="control-stage-title">Release</span>
-              <span class="control-stage-subtitle">Select EMS version and prepare Docker setup resources</span>
+              <span class="control-stage-subtitle">Select one paired Admin + EMS System Build</span>
             </div>
           </div>
           <p class="future-note">
@@ -170,33 +177,121 @@
           </p>
           <div class="setup-summary">
             <div class="setup-summary-row">
-              <span class="setup-summary-key">Selected release</span>
-              <span id="release-selected-val" class="setup-summary-val">Latest stable</span>
+              <span class="setup-summary-key">Selected System Build</span>
+              <span id="release-selected-val" class="setup-summary-val">Not selected</span>
             </div>
             <div class="setup-summary-row">
               <span class="setup-summary-key">Status</span>
               <span id="release-status-val" class="setup-summary-val">Not started</span>
             </div>
           </div>
-          <div id="release-badges" class="device-sources" aria-label="Release classification"></div>
-          <form id="release-form" class="scan-form" autocomplete="off">
-            <label class="field">
-              <span class="field-label">EMS release</span>
-              <select id="release-select" disabled>
-                <option value="">Loading releases…</option>
-              </select>
-            </label>
-            <button id="release-download" type="submit" class="primary-button compact" disabled>
-              Prepare resources
-            </button>
-          </form>
-          <p id="release-status" class="scan-status" role="status" aria-live="polite">
-            Loading EMS releases…
-          </p>
-          <p id="release-error" class="scan-error" role="alert" hidden></p>
+          <div id="release-system-build-intro">
+            <p class="future-note">
+              The selected System Build contains matching Admin Console and EMS images.
+            </p>
+            <p class="future-note">
+              If this Admin Console does not match the selected build, the Admin
+              container will be updated and recreated first. Config, EMS data and
+              backups are not deleted. This page will reconnect automatically.
+            </p>
+            <p class="future-note">
+              EMS itself is not started until Step 05.
+            </p>
+          </div>
+          <section class="setup-block">
+            <h3 class="config-section-title">Select System Build</h3>
+            <div id="release-badges" class="device-sources" aria-label="Release classification"></div>
+            <div class="system-build-channel-help">
+              <p>Choose the System Build you want to install.</p>
+              <dl>
+                <div>
+                  <dt>Latest</dt>
+                  <dd>
+                    The current build from the main branch. Updated automatically
+                    and not a versioned release.
+                  </dd>
+                </div>
+                <div>
+                  <dt>Stable</dt>
+                  <dd>Recommended versioned releases for normal use.</dd>
+                </div>
+                <div>
+                  <dt>Unstable</dt>
+                  <dd>
+                    Release candidates for early testing. Mostly complete, but they
+                    may still contain issues.
+                  </dd>
+                </div>
+                <div>
+                  <dt>Experimental</dt>
+                  <dd>
+                    Feature builds with unfinished changes. Intended for testing
+                    only.
+                  </dd>
+                </div>
+              </dl>
+            </div>
+            <div id="release-form" class="scan-form">
+              <label class="field">
+                <span class="field-label">System Build</span>
+                <select id="release-select" data-testid="system-build-select" disabled>
+                  <option value="">Loading releases…</option>
+                </select>
+              </label>
+              <button id="release-reload" data-testid="system-build-reload" type="button" class="secondary-button compact">Reload</button>
+            </div>
+            <p id="release-status" class="scan-status" role="status" aria-live="polite">
+              Loading System Builds…
+            </p>
+            <p id="release-error" class="scan-error" role="alert" hidden></p>
+          </section>
+          <section class="setup-block" id="setup-system-build" aria-label="Admin Server compatibility">
+            <h3 class="config-section-title">Admin Server compatibility</h3>
+            <div id="setup-system-build-validation" class="config-validation-list"
+                 role="status" aria-live="polite">
+              <div class="config-validation-item" data-system-build-check="admin_image_available">
+                <span class="config-validation-icon">○</span><span>Admin image available</span>
+              </div>
+              <div class="config-validation-item" data-system-build-check="ems_image_available">
+                <span class="config-validation-icon">○</span><span>EMS image available</span>
+              </div>
+              <div class="config-validation-item" data-system-build-check="revision_matches">
+                <span class="config-validation-icon">○</span><span>Revision matches</span>
+              </div>
+              <div class="config-validation-item" data-system-build-check="build_id_matches">
+                <span class="config-validation-icon">○</span><span>Build ID matches</span>
+              </div>
+              <div class="config-validation-item" data-system-build-check="channel_matches">
+                <span class="config-validation-icon">○</span><span>Channel matches</span>
+              </div>
+              <div class="config-validation-item" data-system-build-check="embedded_resources_match"
+                   data-testid="embedded-resources-check">
+                <span class="config-validation-icon">○</span><span>Embedded resources match</span>
+              </div>
+            </div>
+            <div id="setup-system-build-recreate-notice" class="network-warning"
+                 role="status" aria-live="polite" hidden>
+              The Admin container will be recreated.<br>
+              The browser will reconnect automatically.<br>
+              EMS remains stopped.
+            </div>
+            <p id="setup-system-build-error" class="scan-error" role="alert" hidden></p>
+            <!-- Short server-backed status, shown directly above the shared action
+                 footer so the user reads it as the reason for which action is live. -->
+            <p id="setup-system-build-status" class="scan-status" role="status" aria-live="polite"
+               data-testid="system-build-status">
+              Select a System Build to continue.
+            </p>
+            <!-- The two mutually-exclusive next actions share one split footer and one
+                 button family; only the valid action is ever the active primary. -->
+            <div class="setup-step-actions setup-step-actions-split" id="setup-system-build-actions">
+              <button id="setup-system-build-align" type="button" class="primary-button compact" data-testid="admin-update-button" disabled>Update Admin Server</button>
+              <button id="setup-system-build-next" type="button" class="primary-button compact" data-testid="continue-button" disabled>Continue</button>
+            </div>
+          </section>
           <div id="release-ready-summary" class="setup-summary" hidden>
             <div class="setup-summary-row">
-              <span class="setup-summary-key">✓ Release resources prepared</span>
+              <span class="setup-summary-key">✓ System Build resources verified</span>
               <span class="setup-summary-val">Ready</span>
             </div>
             <div class="setup-summary-row">
@@ -246,14 +341,113 @@
               <span class="control-stage-subtitle">Find EMS devices and grid meters</span>
             </div>
             <div class="stage-actions">
-              <button id="networks-scan-all" type="button" class="primary-button compact" disabled>
-                Scan all
-              </button>
-              <button id="networks-refresh" type="button" class="primary-button compact refresh-button">
-                Start discovery
+              <button id="networks-scan" type="button" class="primary-button compact">
+                Scan networks
               </button>
             </div>
           </div>
+
+          <section class="discovery-preparation discovery-block" id="discovery-preparation"
+                   aria-label="Discovery preparation">
+            <div class="results-head">
+              <h2 class="section-title">Discovery preparation</h2>
+              <span id="discovery-source-count" class="pill muted" role="status"
+                    aria-live="polite">0 sources enabled</span>
+              <button id="discovery-run" type="button" class="primary-button compact">
+                Run discovery
+              </button>
+            </div>
+            <p class="future-note">
+              Choose which sources to scan and the order used to select a device
+              when it is found through more than one source. This affects discovery
+              here only; it never changes how EMS runs.
+            </p>
+            <div class="prep-priority">
+              <span class="prep-priority-title">Discovery priority</span>
+              <ol id="discovery-priority-list" class="prep-priority-list" role="list">
+                <li class="prep-priority-empty">Loading discovery sources…</li>
+              </ol>
+            </div>
+          </section>
+
+          <!-- Global manual scan: a manual CIDR/host scan feeds both Local API and
+               MQTT discovery, so it lives outside any single source's config. -->
+          <section class="discovery-manual-scan discovery-block" id="discovery-manual-scan"
+                   aria-label="Manual network scan">
+            <div class="results-head">
+              <h2 class="section-title">Manual network scan</h2>
+            </div>
+            <p class="future-note">
+              Detected networks are scanned automatically. Add a specific network
+              or host here to scan it for both Local API and MQTT devices.
+            </p>
+            <form id="scan-form" class="scan-form" autocomplete="off">
+              <label class="field">
+                <span class="field-label">Manual CIDR or single IPv4 address</span>
+                <input id="cidr-input" name="cidr" type="text" inputmode="text"
+                       placeholder="192.168.178.0/24" required>
+              </label>
+              <button id="scan-button" type="submit" class="primary-button compact">
+                Scan manually
+              </button>
+            </form>
+            <p id="scan-status" class="scan-status" role="status" aria-live="polite"
+               hidden></p>
+            <p id="scan-error" class="scan-error" role="alert" hidden></p>
+          </section>
+
+          <!-- Global discovery context: detected networks/gateways for the whole
+               scan, then live progress, shown before the unified device list. -->
+          <section class="discovery-networks discovery-block" id="discovery-networks"
+                   aria-label="Detected networks and gateways">
+            <div class="results-head">
+              <h2 class="section-title">Detected networks / gateways</h2>
+              <span id="networks-summary" class="pill muted" role="status"
+                    aria-live="polite">detecting…</span>
+            </div>
+            <div id="networks-warnings" class="networks-warnings" hidden></div>
+            <div id="networks-empty" class="networks-empty">Detecting local networks…</div>
+            <div id="networks-list" class="networks-list" role="list" hidden></div>
+            <details id="networks-docker-details" class="advanced-details" hidden>
+              <summary>Advanced: Docker/container networks</summary>
+              <div id="networks-docker-list" class="networks-list" role="list"></div>
+            </details>
+            <p id="gateway-probe-status" class="gateway-probe-hint" role="status" aria-live="polite">
+              Common router gateways are probed automatically; reachable networks are
+              added above (discovered indirectly, not directly connected to this host).
+            </p>
+          </section>
+
+          <section class="discovery-progress-section discovery-block" id="discovery-progress-section"
+                   aria-label="Discovery progress">
+            <div class="results-head">
+              <h2 class="section-title">Discovery progress</h2>
+            </div>
+            <div id="setup-discovery-progress" class="discovery-progress"
+                 role="status" aria-live="polite" hidden>
+              <div class="discovery-progress-track" aria-hidden="true">
+                <span id="setup-discovery-progress-bar"></span>
+              </div>
+              <span id="setup-discovery-progress-text"></span>
+            </div>
+            <p id="setup-discovery-idle" class="results-empty">
+              Run discovery or scan networks to see live progress here.
+            </p>
+          </section>
+
+          <section class="unified-devices discovery-block" id="unified-devices"
+                   aria-label="Detected devices">
+            <div class="results-head">
+              <h2 class="section-title">Detected devices</h2>
+              <span id="unified-count" class="pill muted">0 devices</span>
+            </div>
+            <p id="unified-empty" class="results-empty">
+              Run discovery to see detected devices here.
+            </p>
+            <div id="unified-list" class="config-available-list-style" hidden></div>
+            <div id="unified-source-summary" class="prep-source-summary" role="status"
+                 aria-live="polite" hidden></div>
+          </section>
 
           <div class="setup-summary">
             <div class="setup-summary-row">
@@ -274,106 +468,191 @@
             </div>
           </div>
 
+          <!-- Source details: secondary collapsed diagnostic/config panels, one
+               per discovery source. The unified overview above is the primary
+               result view; these stay collapsed by default. -->
+          <h2 class="section-title discovery-details-title">Details</h2>
+          <details class="advanced-details" id="local-api-details">
+            <summary>Local API discovery
+              <span id="local-api-count" class="pill muted">0 devices</span>
+            </summary>
           <div class="results-head">
             <h2 class="section-title">Discovered devices</h2>
-            <button id="setup-discovery-reset" type="button"
-                    class="secondary-button compact">Reset discovery results</button>
             <span hidden>
               <input id="results-accumulate" type="checkbox" checked>
               Keep previous results
             </span>
             <span id="results-count" class="pill muted">0 found</span>
           </div>
-          <div id="setup-discovery-progress" class="discovery-progress"
-               role="status" aria-live="polite" hidden>
-            <div class="discovery-progress-track" aria-hidden="true">
-              <span id="setup-discovery-progress-bar"></span>
-            </div>
-            <span id="setup-discovery-progress-text"></span>
-          </div>
           <div id="results-empty" class="results-empty">
             No devices yet. Discovery runs automatically.
           </div>
           <div id="results-list" class="results-list" hidden></div>
 
-          <details class="advanced-details" id="networks-details">
-            <summary>Detected networks</summary>
-            <div id="networks-warnings" class="networks-warnings" hidden></div>
-            <div id="networks-empty" class="networks-empty">Detecting local networks…</div>
-            <div id="networks-list" class="networks-list" role="list" hidden></div>
-            <details id="networks-docker-details" class="advanced-details" hidden>
-              <summary>Advanced: Docker/container networks</summary>
-              <div id="networks-docker-list" class="networks-list" role="list"></div>
-            </details>
-            <p id="gateway-probe-status" class="gateway-probe-hint" role="status" aria-live="polite">
-              Common router gateways are probed automatically; reachable networks are
-              added above (discovered indirectly, not directly connected to this host).
-            </p>
-          </details>
-
-          <details class="advanced-details" id="manual-scan-details">
-            <summary>Advanced manual scan</summary>
-            <form id="scan-form" class="scan-form" autocomplete="off">
-              <label class="field">
-                <span class="field-label">Manual CIDR or single IPv4 address</span>
-                <input id="cidr-input" name="cidr" type="text" inputmode="text"
-                       placeholder="192.168.178.0/24" required>
-              </label>
-              <button id="scan-button" type="submit" class="primary-button compact">
-                Scan manually
-              </button>
-            </form>
-            <p id="scan-status" class="scan-status" role="status" aria-live="polite">
-              Detecting networks, then scanning them automatically…
-            </p>
-            <p id="scan-error" class="scan-error" role="alert" hidden></p>
-          </details>
-
-          <details class="advanced-details" id="mdns-details">
-            <summary>Automatic mDNS discovery</summary>
-            <div class="mdns-control" aria-label="Automatic mDNS discovery">
-              <div class="mdns-control-copy">
-                <div class="mdns-control-title">
-                  <span>Automatic mDNS discovery</span>
-                  <span id="mdns-state" class="network-badge badge-advanced">checking…</span>
-                </div>
-                <p id="mdns-message" class="mdns-message" role="status" aria-live="polite">
-                  Checking automatic discovery…
-                </p>
-              </div>
-              <span id="mdns-count" class="pill muted">0 found</span>
-              <button id="mdns-refresh" type="button" class="secondary-button compact">
-                Refresh mDNS now
-              </button>
-              <button id="mdns-toggle" type="button" class="secondary-button compact" disabled>
-                Disable
-              </button>
-            </div>
-          </details>
-
           <details id="ignored-devices" class="ignored-devices" hidden>
             <summary id="ignored-summary">Ignored devices (0)</summary>
             <div id="ignored-list" class="ignored-list"></div>
           </details>
+          </details>
 
           <details class="advanced-details" id="mqtt-details">
-            <summary>MQTT broker candidates <span id="mqtt-count" class="pill muted">0 found</span></summary>
-            <div class="mdns-control">
-              <div class="mdns-control-copy">
-                <p id="mqtt-message" class="mdns-message" role="status" aria-live="polite">
-                  MQTT broker candidates are checked automatically when you scan a
-                  network. Broker candidates only; topic discovery is not implemented yet.
-                </p>
-              </div>
-              <button id="mqtt-refresh" type="button" class="secondary-button compact">
-                Refresh broker discovery
-              </button>
-            </div>
+            <summary>Local MQTT discovery <span id="mqtt-count" class="pill muted">0 brokers / 0 devices</span></summary>
             <div id="mqtt-empty" class="results-empty">
-              No MQTT broker candidates found.
+              No MQTT brokers found.
             </div>
             <div id="mqtt-list" class="results-list" hidden></div>
           </details>
+
+          <details class="advanced-details" id="zendure-cloud-details">
+            <summary>Zendure MQTT discovery
+              <span id="zendure-cloud-count" class="pill muted">not configured</span>
+            </summary>
+            <div id="zendure-cloud-empty" class="results-empty">
+              No Zendure cloud devices discovered yet.
+            </div>
+            <div id="zendure-cloud-list" class="results-list" hidden></div>
+          </details>
+
+          <details class="advanced-details" id="mqtt-proposals-details">
+            <summary>Zendure MQTT config proposals
+              <span id="mqtt-proposals-count" class="pill muted">0 proposals</span>
+            </summary>
+            <p class="mdns-message" role="status">
+              Supported Zendure MQTT inverters join the same EMS control loop as
+              local API devices. Output control is enabled for a known model whose
+              write route is verified on the MQTT broker source that connection
+              uses; every other device is added as a telemetry source, with the
+              reason shown on its card.
+            </p>
+            <p id="mqtt-proposals-message" class="mdns-message" role="status" hidden></p>
+            <div id="mqtt-proposals-empty" class="results-empty">
+              No Zendure MQTT config proposals yet.
+            </div>
+            <div id="mqtt-proposals-list" class="results-list" hidden></div>
+          </details>
+
+          <!-- Inline discovery-source configuration: parked here (hidden) and
+               moved under the matching Discovery priority row when its Configure
+               button is opened. Stable element IDs keep the existing els refs and
+               submit/click handlers valid regardless of DOM position. -->
+          <div id="inline-config-parking" hidden>
+            <div class="prep-config-block" data-inline-config="local_api">
+              <details class="advanced-details" id="mdns-details">
+                <summary>Automatic mDNS discovery</summary>
+                <div class="mdns-control" aria-label="Automatic mDNS discovery">
+                  <div class="mdns-control-copy">
+                    <div class="mdns-control-title">
+                      <span>Automatic mDNS discovery</span>
+                      <span id="mdns-state" class="network-badge badge-advanced">checking…</span>
+                    </div>
+                    <p id="mdns-message" class="mdns-message" role="status" aria-live="polite">
+                      Checking automatic discovery…
+                    </p>
+                  </div>
+                  <span id="mdns-count" class="pill muted">0 found</span>
+                  <button id="mdns-refresh" type="button" class="secondary-button compact">
+                    Refresh mDNS now
+                  </button>
+                  <button id="mdns-toggle" type="button" class="secondary-button compact" disabled>
+                    Disable
+                  </button>
+                </div>
+              </details>
+              <div class="prep-config-actions">
+                <button id="setup-discovery-reset" type="button"
+                        class="secondary-button compact">Reset discovery results</button>
+              </div>
+            </div>
+
+            <div class="prep-config-block" data-inline-config="local_mqtt">
+              <p id="mqtt-message" class="mdns-message" role="status" aria-live="polite">
+                MQTT broker candidates are checked automatically when you scan a
+                network. Refresh also listens briefly, read-only, to reachable
+                brokers and lists the Zendure hardware topics seen.
+              </p>
+              <div class="prep-config-actions">
+                <button id="mqtt-refresh" type="button" class="secondary-button compact">
+                  Refresh broker discovery
+                </button>
+              </div>
+              <div class="mqtt-credential-pool">
+                <h4 class="prep-config-subheading">Optional discovery credentials</h4>
+                <p class="mdns-message">
+                  Add one or more MQTT username/password pairs. Discovery will try
+                  anonymous access and every saved credential against reachable
+                  plain and TLS broker endpoints. Devices are only detected here;
+                  adding them happens in the config step.
+                </p>
+                <form id="mqtt-credential-form" class="scan-form" autocomplete="off">
+                  <label class="field">
+                    <span class="field-label">Label</span>
+                    <input id="mqtt-credential-label" name="mqtt-credential-label"
+                           type="text" autocomplete="off"
+                           placeholder="Home Assistant / Mosquitto">
+                  </label>
+                  <label class="field">
+                    <span class="field-label">Username</span>
+                    <input id="mqtt-credential-username" name="mqtt-credential-username"
+                           type="text" autocomplete="off">
+                  </label>
+                  <label class="field">
+                    <span class="field-label">Password</span>
+                    <input id="mqtt-credential-password" name="mqtt-credential-password"
+                           type="password" autocomplete="off">
+                  </label>
+                  <p id="mqtt-credential-message" class="mdns-message" role="status"
+                     aria-live="polite"></p>
+                  <div class="prep-config-actions">
+                    <button id="mqtt-credential-save" type="submit"
+                            class="primary-button compact">Save credential</button>
+                  </div>
+                </form>
+                <p id="mqtt-credential-empty" class="results-empty">
+                  No discovery credentials saved yet.
+                </p>
+                <div id="mqtt-credential-list" class="results-list"></div>
+              </div>
+            </div>
+
+            <div class="prep-config-block" data-inline-config="zendure_mqtt">
+              <p id="zendure-cloud-message" class="mdns-message" role="status"
+                 aria-live="polite">
+                Use your Zendure API key or HA/deviceList token to discover
+                devices through the encrypted Zendure MQTT broker. Discovery is
+                read-only and never publishes commands.
+              </p>
+              <form id="zendure-cloud-token-form" class="scan-form" autocomplete="off">
+                <label class="field">
+                  <span class="field-label" id="zendure-cloud-token-label">Zendure API key or HA token</span>
+                  <input id="zendure-cloud-token-input" name="zendure-api-key"
+                         type="password" inputmode="text" autocomplete="off"
+                         placeholder="Paste your Zendure API key or HA token">
+                </label>
+                <div class="zendure-cloud-actions">
+                  <button id="zendure-cloud-save" type="submit"
+                          class="primary-button compact">Save credential</button>
+                  <button id="zendure-cloud-test" type="button"
+                          class="secondary-button compact">Test credential</button>
+                  <button id="zendure-cloud-refresh" type="button"
+                          class="secondary-button compact">Refresh Zendure MQTT discovery</button>
+                  <button id="zendure-cloud-forget" type="button"
+                          class="secondary-button compact" hidden>Forget credential</button>
+                </div>
+              </form>
+              <div class="device-facts zendure-cloud-status">
+                <div class="device-fact"><span class="k">Credential</span>
+                  <span id="zendure-cloud-token-state" class="v">not saved</span></div>
+                <div class="device-fact"><span class="k">TLS mode</span>
+                  <span id="zendure-cloud-tls" class="v">—</span></div>
+                <div class="device-fact"><span class="k">Broker</span>
+                  <span id="zendure-cloud-broker" class="v">—</span></div>
+                <div class="device-fact"><span class="k">Last status</span>
+                  <span id="zendure-cloud-last-status" class="v">—</span></div>
+                <div class="device-fact"><span class="k">Last error</span>
+                  <span id="zendure-cloud-last-error" class="v">—</span></div>
+              </div>
+            </div>
+          </div>
         </section>
       </div>
 
@@ -397,7 +676,7 @@
                 <h3>Config validation</h3>
                 <p id="config-template-status" class="config-validation-source"
                    role="status" aria-live="polite">
-                  Prepare release resources to load config.template.json.
+                  Confirm a System Build to load config.template.json.
                 </p>
               </div>
               <span id="config-preview-ready" class="config-validation-state">Needs attention</span>
@@ -431,13 +710,15 @@
                 <p class="future-note">
                   Configure the Zendure devices EMS should control.
                 </p>
+                <div id="config-switch-confirmations" class="config-switch-confirmations"
+                     role="group" aria-live="polite" hidden></div>
                 <div id="config-draft-empty" class="results-empty">
                   No inverters in the draft yet. Verified inverters are added
                   automatically once discovered.
                 </div>
                 <div id="config-draft-list" class="config-draft-list" hidden></div>
 
-                <details class="advanced-details" id="config-available-details">
+                <details class="advanced-details add-devices-details" id="config-available-details">
                   <summary>Add more devices <span id="config-available-count" class="pill muted">0 ready</span></summary>
                   <p class="future-note">
                     Devices found by discovery. Verified inverters are added to the draft
@@ -447,7 +728,7 @@
                   <div id="config-available-empty" class="results-empty">
                     No EMS-ready devices discovered yet.
                   </div>
-                  <div id="config-available-list" class="results-list" hidden></div>
+                  <div id="config-available-list" class="config-available-list-style" hidden></div>
 
                   <details class="config-manual" id="config-manual">
                     <summary>Add a device manually</summary>
@@ -484,6 +765,77 @@
                       </button>
                     </form>
                     <p id="config-manual-error" class="scan-error" role="alert" hidden></p>
+
+                    <div class="config-manual-mqtt" id="config-manual-mqtt">
+                      <h4 class="config-subhead">Zendure MQTT broker</h4>
+                      <p class="future-note" id="config-mqtt-broker-help"></p>
+                      <form id="config-mqtt-broker-form" class="config-manual-form" autocomplete="off">
+                        <label class="field"><span class="field-label">Broker name</span>
+                          <input id="config-mqtt-broker-name" type="text" placeholder="local_mqtt">
+                        </label>
+                        <label class="field"><span class="field-label">Host / IP address</span>
+                          <input id="config-mqtt-broker-host" type="text" placeholder="192.168.1.20">
+                        </label>
+                        <label class="field"><span class="field-label">Port</span>
+                          <input id="config-mqtt-broker-port" type="text" inputmode="numeric" placeholder="1883">
+                        </label>
+                        <label class="field"><span class="field-label">Connection security</span>
+                          <select id="config-mqtt-broker-security">
+                            <option value="plain">Plain MQTT</option>
+                            <option value="tls">MQTT over TLS</option>
+                          </select>
+                        </label>
+                        <label class="field"><span class="field-label">Username (optional)</span>
+                          <input id="config-mqtt-broker-username" type="text" autocomplete="off">
+                        </label>
+                        <label class="field"><span class="field-label">Password (optional)</span>
+                          <input id="config-mqtt-broker-password" type="password" autocomplete="new-password">
+                        </label>
+                      </form>
+
+                      <h4 class="config-subhead">Zendure MQTT device</h4>
+                      <p class="future-note">
+                        Read Zendure telemetry from an MQTT broker. Use this if discovery
+                        did not find your device automatically.
+                      </p>
+                      <form id="config-mqtt-device-form" class="config-manual-form" autocomplete="off">
+                        <label class="field"><span class="field-label">Device name</span>
+                          <input id="config-mqtt-device-name" type="text" placeholder="INV_1">
+                        </label>
+                        <p class="future-note">
+                          Short unique EMS name used in config, logs, dashboard and Flowchart.
+                          Model, address and serial remain in the device details.
+                        </p>
+                        <label class="field"><span class="field-label">Physical serial number</span>
+                          <input id="config-mqtt-device-serial" type="text" placeholder="e.g. DEVICE_SN">
+                        </label>
+                        <label class="field"><span class="field-label">MQTT device ID</span>
+                          <input id="config-mqtt-device-mqttid" type="text" placeholder="exact MQTT route/payload device ID">
+                        </label>
+                        <p class="future-note" id="config-mqtt-device-mqttid-help">
+                          The exact MQTT route/payload device ID. The physical serial is never
+                          used as the MQTT route ID. Required to enable output control.
+                        </p>
+                        <label class="field"><span class="field-label">Zendure hardware generation</span>
+                          <select id="config-mqtt-device-generation"></select>
+                        </label>
+                        <label class="field"><span class="field-label">Exact hardware model</span>
+                          <select id="config-mqtt-device-model"></select>
+                        </label>
+                        <label class="field" id="config-mqtt-device-productkey-field" hidden>
+                          <span class="field-label">Product key</span>
+                          <input id="config-mqtt-device-productkey" type="text">
+                        </label>
+                        <p class="future-note" id="config-mqtt-device-control-help"></p>
+                        <p class="future-note" id="config-mqtt-device-generation-help"></p>
+                        <p class="future-note" id="config-mqtt-device-model-help"></p>
+                        <button id="config-mqtt-device-add" type="submit" class="primary-button compact">
+                          Add MQTT device
+                        </button>
+                      </form>
+                      <p id="config-mqtt-device-error" class="scan-error" role="alert" hidden></p>
+                      <div id="config-mqtt-device-list" class="config-mqtt-device-list-style" hidden></div>
+                    </div>
                   </details>
                 </details>
               </div>
@@ -498,17 +850,17 @@
               <div id="config-feature-list-features" class="feature-list" role="list"></div>
             </section>
 
-            <details class="advanced-details setup-group" data-setup-group="advanced"
-                     id="config-advanced-settings">
-              <summary>Advanced / System settings</summary>
+            <section class="setup-group" data-setup-group="advanced"
+                     id="config-advanced-settings" aria-label="Advanced / System settings">
+              <h3 class="config-section-title">Advanced / System settings</h3>
               <p class="future-note">
                 System-level and expert tuning. Most users can keep the defaults.
               </p>
               <div id="config-feature-list-advanced" class="feature-list" role="list"></div>
-            </details>
+            </section>
 
             <p id="config-feature-empty" class="results-empty">
-              Prepare release resources to load setup feature settings.
+              Confirm a System Build to load setup feature settings.
             </p>
           </div>
 
@@ -539,6 +891,36 @@
                role="status" aria-live="polite" hidden></p>
             <p id="config-apply-status" class="config-export-status"
                role="status" aria-live="polite" hidden></p>
+            <div id="config-apply-rollback" class="credential-rollback-warning"
+                 role="alert" hidden></div>
+            <div id="setup-config-conflict" class="config-validation-item config-validation-item-error"
+                 role="alert" hidden>
+              <p id="setup-config-conflict-message"></p>
+              <div class="setup-nav-inline">
+                <button id="setup-config-conflict-review" type="button" class="primary-button compact">
+                  Review current configuration
+                </button>
+                <button id="setup-config-conflict-discard" type="button" class="secondary-button compact">
+                  Discard setup
+                </button>
+              </div>
+              <details id="setup-config-conflict-details" class="advanced-details" hidden>
+                <summary>Technical details</summary>
+                <pre id="setup-config-conflict-detail" class="config-preview"></pre>
+              </details>
+            </div>
+            <div id="setup-workflow-conflict" class="config-validation-item config-validation-item-error"
+                 role="alert" hidden>
+              <p id="setup-workflow-conflict-message"></p>
+              <div class="setup-nav-inline">
+                <button id="setup-workflow-conflict-open" type="button" class="primary-button compact">
+                  Open current setup
+                </button>
+                <button id="setup-workflow-conflict-discard" type="button" class="secondary-button compact">
+                  Discard local draft
+                </button>
+              </div>
+            </div>
           </details>
           <details class="advanced-details" id="config-template-details">
             <summary>Show template details</summary>
@@ -555,9 +937,12 @@
             <span class="control-stage-dot" aria-hidden="true">▤</span>
             <div class="control-stage-title-block">
               <span class="control-stage-title">Prepare deployment</span>
-              <span class="control-stage-subtitle">Prepare the workspace and download images — EMS is not started yet</span>
+              <span class="control-stage-subtitle">Prepare the EMS workspace and download EMS/InfluxDB images</span>
             </div>
           </div>
+          <p class="future-note">
+            The Admin Console is already aligned and EMS is not started yet.
+          </p>
           <div class="setup-summary">
             <div class="setup-summary-row">
               <span class="setup-summary-key" id="deployment-config-state">Generated config pending</span>
@@ -577,7 +962,7 @@
             </div>
           </div>
 
-          <div id="deployment-docker" class="deployment-docker">
+          <div id="deployment-docker" class="deployment-docker setup-block">
             <div class="deployment-docker-head">
               <h3 class="config-section-title">Docker access</h3>
               <span id="deployment-docker-state" class="source-badge" hidden></span>
@@ -607,16 +992,18 @@
             </button>
           </div>
 
-          <h3 class="config-section-title">Images to download</h3>
-          <div id="deployment-images-empty" class="results-empty">
-            Prepare release resources and save a config to plan the images.
-          </div>
-          <div id="deployment-images" class="config-draft-list" hidden></div>
-          <p id="deployment-influx-note" class="future-note" hidden>
-            InfluxDB is not included because Analytics is disabled in the generated config.
-          </p>
+          <section class="setup-block">
+            <h3 class="config-section-title">Images to download</h3>
+            <div id="deployment-images-empty" class="results-empty">
+              Confirm a System Build and save a config to plan the images.
+            </div>
+            <div id="deployment-images" class="config-draft-list" hidden></div>
+            <p id="deployment-influx-note" class="future-note" hidden>
+              InfluxDB is not included because Analytics is disabled in the generated config.
+            </p>
+          </section>
 
-          <div id="deployment-progress" class="deployment-progress" hidden>
+          <div id="deployment-progress" class="deployment-progress setup-block" hidden>
             <h3 class="config-section-title">Progress</h3>
             <div id="deployment-steps" class="deployment-steps"></div>
           </div>
@@ -708,13 +1095,15 @@
             </div>
           </div>
 
-          <h3 class="config-section-title">Services</h3>
-          <div id="start-services-empty" class="results-empty">
-            No container status yet. Start EMS or re-check status.
-          </div>
-          <div id="start-services" class="config-draft-list" hidden></div>
+          <section class="setup-block">
+            <h3 class="config-section-title">Services</h3>
+            <div id="start-services-empty" class="results-empty">
+              No container status yet. Start EMS or re-check status.
+            </div>
+            <div id="start-services" class="config-draft-list" hidden></div>
+          </section>
 
-          <div id="start-progress" class="deployment-progress" hidden>
+          <div id="start-progress" class="deployment-progress setup-block" hidden>
             <h3 class="config-section-title">Progress</h3>
             <div id="start-steps" class="deployment-steps"></div>
           </div>
@@ -750,7 +1139,7 @@
 
           <div id="start-container-conflict" class="deployment-overwrite" hidden>
             <h3 id="start-conflict-title" class="config-section-title">
-              Existing EMS container found
+              Existing deployment container found
             </h3>
             <p id="start-conflict-message" class="future-note"></p>
             <div class="setup-summary">
@@ -788,6 +1177,7 @@
 
       <div class="setup-nav">
         <button id="setup-back" type="button" class="secondary-button compact" hidden>Back</button>
+        <button id="setup-start-over" type="button" class="secondary-button compact">Restart setup</button>
         <p id="setup-nav-error" class="scan-error" role="alert" hidden></p>
         <button id="setup-next" type="button" class="primary-button compact" disabled>Next</button>
       </div>
@@ -839,7 +1229,7 @@
       <header class="maintenance-head">
         <button type="button" id="maintenance-back-hub" class="workspace-back" data-back="maintenance-hub">← Maintenance</button>
         <div class="maintenance-head-titles">
-          <h2 class="maintenance-title">Maintenance</h2>
+          <h2 class="maintenance-title">Manual configuration / existing system</h2>
           <p class="maintenance-subtitle">Existing EMS installation overview</p>
         </div>
         <button type="button" id="maintenance-refresh" class="refresh-button">Refresh</button>
@@ -860,7 +1250,7 @@
             <span class="maintenance-caret" aria-hidden="true">▸</span>
           </button>
         </div>
-        <div class="maintenance-card-body" id="maintenance-layout-body" hidden>
+        <div class="maintenance-card-body setup-block" id="maintenance-layout-body" hidden>
           <div class="maintenance-facts">
             <div class="maintenance-fact">
               <span class="maintenance-fact-label">config/config.json</span>
@@ -904,7 +1294,7 @@
             <span class="maintenance-caret" aria-hidden="true">▸</span>
           </button>
         </div>
-        <div class="maintenance-card-body" id="maintenance-containers-body" hidden>
+        <div class="maintenance-card-body setup-block" id="maintenance-containers-body" hidden>
           <div class="maintenance-facts">
             <div class="maintenance-fact">
               <span class="maintenance-fact-label">EMS</span>
@@ -981,8 +1371,12 @@
             <span class="maintenance-caret" aria-hidden="true">▸</span>
           </button>
         </div>
-        <div class="maintenance-card-body" id="maintenance-versions-body" hidden>
+        <div class="maintenance-card-body setup-block" id="maintenance-versions-body" hidden>
           <div class="maintenance-facts">
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Admin image</span>
+              <span class="maintenance-fact-value" id="maintenance-admin-image">…</span>
+            </div>
             <div class="maintenance-fact">
               <span class="maintenance-fact-label">EMS image</span>
               <span class="maintenance-fact-value" id="maintenance-ems-image">…</span>
@@ -1009,7 +1403,7 @@
             <span class="maintenance-caret" aria-hidden="true">▸</span>
           </button>
         </div>
-        <div class="maintenance-card-body" id="maintenance-diagnostics-body" hidden>
+        <div class="maintenance-card-body setup-block" id="maintenance-diagnostics-body" hidden>
           <p class="maintenance-note">Read-only EMS checks from the installed system.</p>
           <div class="maintenance-facts">
             <div class="maintenance-fact">
@@ -1021,6 +1415,104 @@
           <p class="maintenance-note" id="maintenance-diagnostics-note">Diagnostics have not been run yet.</p>
           <p class="maintenance-note">Config upgrade is checked in dry-run mode only. No config file is changed.</p>
           <button type="button" id="maintenance-diagnostics-run" class="primary-button compact">Run diagnostics</button>
+        </div>
+      </section>
+
+      <section class="control-pipeline-stage maintenance-card" id="maintenance-zendure-mqtt" aria-label="Zendure MQTT telemetry" data-open="false">
+        <div class="control-stage-head maintenance-card-head">
+          <button type="button" class="maintenance-card-summary" data-maintenance-toggle="maintenance-zendure-mqtt" aria-expanded="false" aria-controls="maintenance-zendure-mqtt-body">
+            <span class="control-stage-title">Zendure MQTT telemetry</span>
+            <span class="maintenance-summary" id="maintenance-zendure-mqtt-summary">…</span>
+            <span class="maintenance-card-status" aria-hidden="true"></span>
+            <span class="maintenance-caret" aria-hidden="true">▸</span>
+          </button>
+        </div>
+        <div class="maintenance-card-body setup-block" id="maintenance-zendure-mqtt-body" hidden>
+          <p class="maintenance-note">This status panel is read-only and does not send commands. Configured MQTT control devices may still be controlled by the EMS runtime.</p>
+          <div class="maintenance-facts">
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Runtime</span>
+              <span class="maintenance-fact-value" id="maintenance-zendure-mqtt-state">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Endpoint</span>
+              <span class="maintenance-fact-value muted" id="maintenance-zendure-mqtt-endpoint">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Devices</span>
+              <span class="maintenance-fact-value" id="maintenance-zendure-mqtt-devices">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Invalid devices</span>
+              <span class="maintenance-fact-value" id="maintenance-zendure-mqtt-invalid">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Stale threshold</span>
+              <span class="maintenance-fact-value muted" id="maintenance-zendure-mqtt-stale">…</span>
+            </div>
+          </div>
+          <p class="maintenance-note" id="maintenance-zendure-mqtt-source"></p>
+          <p class="maintenance-note" id="maintenance-zendure-mqtt-message"></p>
+          <p class="maintenance-note muted" id="maintenance-zendure-mqtt-fallback" hidden></p>
+          <div id="maintenance-zendure-mqtt-brokers" class="results-list" hidden></div>
+          <div id="maintenance-zendure-mqtt-empty" class="results-empty">No Zendure MQTT telemetry devices are configured.</div>
+          <div id="maintenance-zendure-mqtt-list" class="results-list" hidden></div>
+        </div>
+      </section>
+
+      <section class="control-pipeline-stage maintenance-card" id="maintenance-mqtt-migration" aria-label="Zendure MQTT migration" data-open="false">
+        <div class="control-stage-head maintenance-card-head">
+          <button type="button" class="maintenance-card-summary"
+                  data-maintenance-toggle="maintenance-mqtt-migration"
+                  aria-expanded="false" aria-controls="maintenance-mqtt-migration-body">
+            <span class="control-stage-title">Zendure MQTT migration</span>
+            <span class="maintenance-summary" id="maintenance-mqtt-migration-summary">Review not loaded.</span>
+            <span class="maintenance-card-status" aria-hidden="true"></span>
+            <span class="maintenance-caret" aria-hidden="true">▸</span>
+          </button>
+        </div>
+        <div class="maintenance-card-body setup-block" id="maintenance-mqtt-migration-body" hidden>
+          <p class="maintenance-note">
+            Review and safely migrate legacy MQTT control devices using the EMS/Core migration service.
+          </p>
+          <ol class="migration-stage-list" aria-label="Migration stages">
+            <li data-mqtt-migration-stage="review">01 Review</li>
+            <li data-mqtt-migration-stage="backup">02 Backup</li>
+            <li data-mqtt-migration-stage="apply">03 Apply</li>
+            <li data-mqtt-migration-stage="validate">04 Validate</li>
+          </ol>
+          <div class="maintenance-facts">
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Migration</span>
+              <span class="maintenance-fact-value" id="maintenance-mqtt-migration-required">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Affected devices</span>
+              <span class="maintenance-fact-value" id="maintenance-mqtt-migration-affected">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Control disabled</span>
+              <span class="maintenance-fact-value" id="maintenance-mqtt-migration-disabled">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Validation</span>
+              <span class="maintenance-fact-value" id="maintenance-mqtt-migration-validation">…</span>
+            </div>
+          </div>
+          <div id="maintenance-mqtt-migration-devices" class="results-list" hidden></div>
+          <p class="maintenance-note" id="maintenance-mqtt-migration-warnings"></p>
+          <label class="mconfig-backup-choice">
+            <input type="checkbox" id="maintenance-mqtt-migration-backup" checked>
+            Create and verify a config backup before applying
+          </label>
+          <div class="mconfig-actions">
+            <button type="button" id="maintenance-mqtt-migration-apply"
+                    class="primary-button compact" disabled>Apply reviewed migration</button>
+            <button type="button" id="maintenance-mqtt-migration-refresh"
+                    class="secondary-button compact">Refresh review</button>
+          </div>
+          <p class="maintenance-note" id="maintenance-mqtt-migration-status"
+             role="status" aria-live="polite"></p>
         </div>
       </section>
 
@@ -1050,26 +1542,70 @@
               <p class="future-note">The grid meter and inverters configured for this installation.</p>
               <div class="mconfig-hardware-list" id="maintenance-config-gridmeter"></div>
               <div class="mconfig-hardware-list" id="maintenance-config-inverters"></div>
-              <div class="control-pipeline-stage mconfig-discovery-card"
-                   id="maintenance-config-discovery" role="group"
-                   aria-label="Discover and add hardware">
-                <div class="control-stage-head mconfig-discovery-head">
-                  <span class="control-stage-step">＋</span>
-                  <div>
-                    <h4 class="control-stage-title">Discover &amp; add hardware</h4>
-                    <p class="future-note">Find supported devices and prepare a safe config update.</p>
+
+              <div class="mconfig-hardware-list" id="maintenance-config-zendure-mqtt">
+                <article class="hardware-card" id="maintenance-broker-card" data-open="false">
+                  <div class="hardware-card-head">
+                    <button type="button" class="hardware-card-summary"
+                            data-maintenance-broker-toggle
+                            aria-expanded="false" aria-controls="maintenance-broker-body">
+                      <span class="hardware-card-title">Zendure MQTT broker</span>
+                      <span class="hardware-card-model" id="maintenance-broker-model">Not configured</span>
+                      <span class="hardware-card-meta" id="maintenance-broker-meta"></span>
+                    </button>
+                    <div class="hardware-card-actions">
+                      <span class="hardware-card-status" id="maintenance-broker-status">Optional</span>
+                      <button type="button" class="hardware-card-toggle"
+                              data-maintenance-broker-toggle
+                              aria-expanded="false" aria-controls="maintenance-broker-body"
+                              aria-label="Expand Zendure MQTT broker">
+                        <span aria-hidden="true">▸</span>
+                      </button>
+                    </div>
                   </div>
-                </div>
+                  <div class="hardware-card-body" id="maintenance-broker-body" hidden>
+                    <p class="future-note" id="maintenance-mqtt-broker-help"></p>
+                    <form id="maintenance-mqtt-broker-form" class="config-manual-form" autocomplete="off">
+                      <label class="field"><span class="field-label">Host / IP address</span>
+                        <input id="maintenance-mqtt-broker-host" type="text" placeholder="192.168.1.20">
+                      </label>
+                      <label class="field"><span class="field-label">Port</span>
+                        <input id="maintenance-mqtt-broker-port" type="text" inputmode="numeric" placeholder="1883">
+                      </label>
+                      <label class="field"><span class="field-label">Connection security</span>
+                        <select id="maintenance-mqtt-broker-security">
+                          <option value="plain">Plain MQTT</option>
+                          <option value="tls">MQTT over TLS</option>
+                        </select>
+                      </label>
+                      <label class="field"><span class="field-label">Username (optional)</span>
+                        <input id="maintenance-mqtt-broker-username" type="text" autocomplete="off">
+                      </label>
+                      <label class="field"><span class="field-label">Password (optional)</span>
+                        <input id="maintenance-mqtt-broker-password" type="password" autocomplete="new-password"
+                               placeholder="Leave blank to keep the stored password">
+                      </label>
+                      <label class="field checkbox-field" id="maintenance-mqtt-broker-clear-field" hidden>
+                        <input id="maintenance-mqtt-broker-clear" type="checkbox">
+                        <span class="field-label">Clear the stored broker password</span>
+                      </label>
+                    </form>
+                  </div>
+                </article>
+              </div>
+
+              <details class="advanced-details add-devices-details" id="maintenance-add-devices">
+                <summary>Add more devices <span id="maintenance-discovery-count" class="pill muted">0 found</span></summary>
+                <p class="future-note">
+                  Find supported devices and prepare a safe config update.
+                  Nothing is written until you review and apply the draft.
+                </p>
                 <p class="maintenance-note" id="maintenance-discovery-status">
-                  Start discovery to search for supported devices. Nothing is written until you review and apply the draft.
+                  Start discovery to search for supported devices.
                 </p>
                 <div class="mconfig-actions">
                   <button type="button" id="maintenance-discovery-start"
                           class="primary-button compact">Start discovery</button>
-                  <button type="button" id="maintenance-config-add-inverter"
-                          class="secondary-button compact">Add manually</button>
-                  <button type="button" id="maintenance-discovery-cancel"
-                          class="secondary-button compact" hidden>Close result</button>
                   <button type="button" id="maintenance-discovery-reset"
                           class="secondary-button compact">Reset discovery results</button>
                 </div>
@@ -1084,6 +1620,31 @@
                   <button type="submit" id="maintenance-discovery-manual-scan"
                           class="secondary-button compact">Scan</button>
                 </form>
+
+                <!-- Shared discovery-source settings: opening a row moves the
+                     matching parked setup config node (stable ids, bound
+                     handlers) into its slot; closing or leaving the view parks
+                     it again. mDNS needs no row here — it refreshes
+                     automatically on Start discovery. -->
+                <div class="maintenance-discovery-sources"
+                     id="maintenance-discovery-sources">
+                  <h5 class="prep-config-subheading">Discovery sources</h5>
+                  <p class="future-note">
+                    Optional settings Start discovery uses: MQTT credentials
+                    for password-protected local brokers and the Zendure API
+                    key for cloud discovery.
+                  </p>
+                  <details class="advanced-details maintenance-source-row"
+                           data-maintenance-source="local_mqtt">
+                    <summary>Local MQTT broker credentials</summary>
+                    <div data-maintenance-source-slot="local_mqtt"></div>
+                  </details>
+                  <details class="advanced-details maintenance-source-row"
+                           data-maintenance-source="zendure_mqtt">
+                    <summary>Zendure cloud API key</summary>
+                    <div data-maintenance-source-slot="zendure_mqtt"></div>
+                  </details>
+                </div>
                 <p id="maintenance-discovery-error" class="scan-error"
                    role="alert" hidden></p>
                 <div id="maintenance-discovery-progress" class="discovery-progress"
@@ -1098,7 +1659,56 @@
                   <h5>Discovery result</h5>
                   <div id="maintenance-discovery-results"></div>
                 </div>
-              </div>
+
+                <details class="config-manual" id="maintenance-manual">
+                  <summary>Add a device manually</summary>
+                  <p class="future-note">
+                    For hardware discovery cannot reach — add it to the draft
+                    and enter the connection details on its card. The grid
+                    meter and the Zendure MQTT broker need no add button:
+                    configure them on their always-present cards above.
+                  </p>
+                  <div class="config-manual-mqtt" id="maintenance-manual-mqtt">
+                    <h4 class="config-subhead">Local MQTT broker (optional)</h4>
+                    <p class="future-note">
+                      Fill this in to add the next Zendure MQTT device over a
+                      local broker. Leave the host blank for a cloud device.
+                      Username and password are required together for an
+                      authenticated broker.
+                    </p>
+                    <form id="maintenance-manual-mqtt-broker-form"
+                          class="config-manual-form" autocomplete="off">
+                      <label class="field"><span class="field-label">Broker name</span>
+                        <input id="maintenance-manual-mqtt-broker-name" type="text" placeholder="local_mqtt">
+                      </label>
+                      <label class="field"><span class="field-label">Host / IP address</span>
+                        <input id="maintenance-manual-mqtt-broker-host" type="text" placeholder="192.168.1.20">
+                      </label>
+                      <label class="field"><span class="field-label">Port</span>
+                        <input id="maintenance-manual-mqtt-broker-port" type="text" inputmode="numeric" placeholder="1883">
+                      </label>
+                      <label class="field"><span class="field-label">Connection security</span>
+                        <select id="maintenance-manual-mqtt-broker-security">
+                          <option value="plain">Plain MQTT</option>
+                          <option value="tls">MQTT over TLS</option>
+                        </select>
+                      </label>
+                      <label class="field"><span class="field-label">Username (optional)</span>
+                        <input id="maintenance-manual-mqtt-broker-username" type="text" autocomplete="off">
+                      </label>
+                      <label class="field"><span class="field-label">Password (optional)</span>
+                        <input id="maintenance-manual-mqtt-broker-password" type="password" autocomplete="new-password">
+                      </label>
+                    </form>
+                  </div>
+                  <div class="mconfig-actions">
+                    <button type="button" id="maintenance-config-add-inverter"
+                            class="secondary-button compact">Add inverter</button>
+                    <button type="button" id="maintenance-config-add-mqtt-device"
+                            class="secondary-button compact">Add Zendure MQTT device</button>
+                  </div>
+                </details>
+              </details>
             </div>
 
             <div class="setup-group mconfig-group" id="maintenance-config-features-section"
@@ -1108,16 +1718,17 @@
               <div class="feature-list" id="maintenance-config-features" role="list"></div>
             </div>
 
-            <details class="advanced-details setup-group mconfig-group"
-                     id="maintenance-config-advanced-section">
-              <summary>Advanced / System settings</summary>
+            <div class="setup-group mconfig-group" id="maintenance-config-advanced-section"
+                 role="group" aria-label="Advanced / System settings">
+              <h3 class="config-section-title">Advanced / System settings</h3>
               <p class="future-note">System-level and expert tuning. Most users can keep the current values.</p>
               <div class="feature-list" id="maintenance-config-advanced" role="list"></div>
-            </details>
+            </div>
 
             <div class="mconfig-actions">
               <button type="button" id="maintenance-config-preview-btn" class="primary-button compact">Preview changes</button>
               <button type="button" id="maintenance-config-reset-btn" class="secondary-button compact">Reset draft</button>
+              <button type="button" id="maintenance-config-reset-runtime-btn" class="secondary-button compact" hidden>Reset live overrides</button>
             </div>
 
             <div class="mconfig-result" id="maintenance-config-result" role="status" aria-live="polite" hidden>
@@ -1143,6 +1754,8 @@
                         class="primary-button compact">Apply reviewed draft</button>
                 <p class="maintenance-note" id="maintenance-config-apply-status"
                    role="status" aria-live="polite"></p>
+                <div id="maintenance-config-apply-rollback"
+                     class="credential-rollback-warning" role="alert" hidden></div>
                 <div class="mconfig-post-apply" id="maintenance-config-post-apply" hidden>
                   <div class="mconfig-sync-card" data-container-sync-card="post-apply">
                     <div class="control-stage-head control-stage-header">
@@ -1201,6 +1814,66 @@
           </div>
         </div>
       </section>
+
+      <section class="control-pipeline-stage maintenance-card" id="maintenance-workflow-recovery" aria-label="Workflow recovery" data-open="false">
+        <div class="control-stage-head maintenance-card-head">
+          <button type="button" class="maintenance-card-summary" data-maintenance-toggle="maintenance-workflow-recovery" aria-expanded="false" aria-controls="maintenance-workflow-recovery-body">
+            <span class="control-stage-title">Workflow recovery</span>
+            <span class="maintenance-summary" id="maintenance-workflow-recovery-summary">Not loaded yet.</span>
+            <span class="maintenance-card-status" aria-hidden="true"></span>
+            <span class="maintenance-caret" aria-hidden="true">▸</span>
+          </button>
+        </div>
+        <div class="maintenance-card-body setup-block" id="maintenance-workflow-recovery-body" hidden>
+          <p class="maintenance-note">
+            Resolve a Guided Setup or Guided Upgrade that can no longer be
+            finished or switched away from. The installed EMS, live
+            configuration, runtime data, containers, volumes and backups are
+            never changed here.
+          </p>
+          <div class="maintenance-facts">
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Current workflow</span>
+              <span class="maintenance-fact-value" id="maintenance-workflow-recovery-owner">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">State</span>
+              <span class="maintenance-fact-value" id="maintenance-workflow-recovery-state">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Reference</span>
+              <span class="maintenance-fact-value muted" id="maintenance-workflow-recovery-reference">…</span>
+            </div>
+            <div class="maintenance-fact">
+              <span class="maintenance-fact-label">Last change</span>
+              <span class="maintenance-fact-value muted" id="maintenance-workflow-recovery-age">…</span>
+            </div>
+          </div>
+          <p class="maintenance-note" id="maintenance-workflow-recovery-message" role="status" aria-live="polite"></p>
+          <div class="mconfig-actions">
+            <button type="button" id="maintenance-workflow-recovery-inspect" class="secondary-button compact">Inspect state</button>
+            <button type="button" id="maintenance-workflow-recovery-safe" class="primary-button compact" hidden>Reset guided workflow</button>
+            <button type="button" id="maintenance-workflow-recovery-advanced" class="secondary-button compact" hidden>Release stale Admin workflow state</button>
+          </div>
+          <details class="advanced-details" id="maintenance-workflow-recovery-details" hidden>
+            <summary>Show technical details</summary>
+            <div class="maintenance-facts">
+              <div class="maintenance-fact">
+                <span class="maintenance-fact-label">Affected Admin state</span>
+                <span class="maintenance-fact-value muted" id="maintenance-workflow-recovery-files">none</span>
+              </div>
+              <div class="maintenance-fact">
+                <span class="maintenance-fact-label">Always preserved</span>
+                <span class="maintenance-fact-value muted" id="maintenance-workflow-recovery-preserved">…</span>
+              </div>
+              <div class="maintenance-fact">
+                <span class="maintenance-fact-label">State fingerprint</span>
+                <span class="maintenance-fact-value muted" id="maintenance-workflow-recovery-fingerprint">…</span>
+              </div>
+            </div>
+          </details>
+        </div>
+      </section>
       </div>
 
       <div id="maintenance-upgrade-panel" hidden>
@@ -1212,12 +1885,16 @@
           </div>
         </header>
 
-        <section class="control-pipeline-stage guided-upgrade-stage" aria-label="EMS release">
+        <!-- System Build progress mounts here while Guided Upgrade owns
+             the active transition; otherwise parked in #system-build-parking. -->
+        <div id="upgrade-system-build-slot" class="system-build-slot"></div>
+
+        <section class="control-pipeline-stage guided-upgrade-stage" aria-label="Target System Build">
           <div class="control-stage-head">
             <span class="control-stage-step">01</span>
             <div class="control-stage-title-block">
-              <span class="control-stage-title">EMS release</span>
-              <span class="control-stage-subtitle">Confirm the current version and pick a target</span>
+              <span class="control-stage-title">Target System Build</span>
+              <span class="control-stage-subtitle">Pick one build — Admin and EMS are aligned together</span>
             </div>
           </div>
           <div class="maintenance-facts">
@@ -1230,22 +1907,25 @@
               <span class="maintenance-fact-value muted" id="upgrade-current-detail">…</span>
             </div>
           </div>
-          <form id="upgrade-release-form" class="scan-form" autocomplete="off">
-            <label class="field">
-              <span class="field-label">Target release</span>
-              <select id="upgrade-release-select" disabled>
-                <option value="">Loading releases…</option>
-              </select>
-            </label>
-            <button id="upgrade-prepare-btn" type="submit" class="primary-button compact" disabled>
-              Prepare target
-            </button>
-          </form>
-          <div id="upgrade-release-badges" class="device-sources" aria-label="Target release classification"></div>
-          <p id="upgrade-release-status" class="scan-status" role="status" aria-live="polite">
-            Loading EMS releases…
-          </p>
-          <p id="upgrade-release-error" class="scan-error" role="alert" hidden></p>
+          <section class="setup-block">
+            <form id="upgrade-release-form" class="scan-form" autocomplete="off">
+              <label class="field">
+                <span class="field-label">Target System Build</span>
+                <select id="upgrade-release-select" disabled>
+                  <option value="">Loading System Builds…</option>
+                </select>
+              </label>
+              <button id="upgrade-prepare-btn" type="submit" class="primary-button compact" disabled>
+                Verify System Build
+              </button>
+              <button id="upgrade-release-reload" data-testid="upgrade-system-build-reload" type="button" class="secondary-button compact">Reload</button>
+            </form>
+            <div id="upgrade-release-badges" class="device-sources" aria-label="Target System Build classification"></div>
+            <p id="upgrade-release-status" class="scan-status" role="status" aria-live="polite">
+              Loading System Builds…
+            </p>
+            <p id="upgrade-release-error" class="scan-error" role="alert" hidden></p>
+          </section>
         </section>
 
         <section class="control-pipeline-stage guided-upgrade-stage" aria-label="Upgrade options">
@@ -1253,9 +1933,10 @@
             <span class="control-stage-step">02</span>
             <div class="control-stage-title-block">
               <span class="control-stage-title">Upgrade options</span>
-              <span class="control-stage-subtitle">Safety steps are on by default — uncheck to skip</span>
+              <span class="control-stage-subtitle">Comfort steps are on by default; deploying the System Build is mandatory</span>
             </div>
           </div>
+          <section class="setup-block">
           <div class="feature-fields upgrade-options" role="group" aria-label="Upgrade steps">
             <label class="feature-field-row">
               <span class="feature-field-label">Create backup before upgrade</span>
@@ -1285,20 +1966,13 @@
               </span>
               <span class="feature-field-desc">Update inline comments and metadata to match the target.</span>
             </label>
-            <label class="feature-field-row">
-              <span class="feature-field-label">Pull target Docker image</span>
+            <div class="feature-field-row" id="upgrade-mandatory-deploy">
+              <span class="feature-field-label">Deploy the System Build</span>
               <span class="feature-field-control">
-                <input class="feature-input" type="checkbox" data-upgrade-option="pull_image" checked>
+                <span class="config-validation-state" data-tone="pending">Always</span>
               </span>
-              <span class="feature-field-desc">Download the target EMS image before switching.</span>
-            </label>
-            <label class="feature-field-row">
-              <span class="feature-field-label">Recreate EMS container</span>
-              <span class="feature-field-control">
-                <input class="feature-input" type="checkbox" data-upgrade-option="recreate" checked>
-              </span>
-              <span class="feature-field-desc">Recreate the EMS container on the new image.</span>
-            </label>
+              <span class="feature-field-desc">The target image is pulled and the EMS container is recreated — this is mandatory and cannot be turned off.</span>
+            </div>
             <label class="feature-field-row">
               <span class="feature-field-label">Run diagnostics after upgrade</span>
               <span class="feature-field-control">
@@ -1307,38 +1981,30 @@
               <span class="feature-field-desc">Run a health check once the upgrade completes.</span>
             </label>
           </div>
+          </section>
         </section>
 
-        <section class="control-pipeline-stage guided-upgrade-stage" aria-label="Admin Console">
+        <section class="control-pipeline-stage guided-upgrade-stage" aria-label="Admin alignment">
           <div class="control-stage-head">
             <span class="control-stage-step">03</span>
             <div class="control-stage-title-block">
-              <span class="control-stage-title">Admin Console</span>
-              <span class="control-stage-subtitle">Update the Admin Console first when this release needs it</span>
+              <span class="control-stage-title">Admin alignment</span>
+              <span class="control-stage-subtitle">Admin is aligned to the target System Build automatically — no separate decision</span>
             </div>
           </div>
           <div class="maintenance-facts">
             <div class="maintenance-fact">
               <span class="maintenance-fact-label">Current Admin</span>
-              <span class="maintenance-fact-value" id="admin-update-current">…</span>
+              <span class="maintenance-fact-value" id="upgrade-admin-current">…</span>
             </div>
             <div class="maintenance-fact">
-              <span class="maintenance-fact-label">Target Admin</span>
-              <span class="maintenance-fact-value muted" id="admin-update-target">…</span>
+              <span class="maintenance-fact-label">Target System Build</span>
+              <span class="maintenance-fact-value muted" id="upgrade-admin-target">Not selected</span>
             </div>
           </div>
-          <p id="admin-update-status" class="scan-status" role="status" aria-live="polite">
-            Checking whether the Admin Console needs an update…
+          <p id="upgrade-admin-alignment-status" class="scan-status" role="status" aria-live="polite">
+            A matching Admin is kept as-is. A mismatched Admin is updated automatically and the browser reconnects before EMS is deployed.
           </p>
-          <p id="admin-update-warning" class="scan-error" role="alert" hidden></p>
-          <p id="admin-update-resume-note" class="maintenance-note" role="status" aria-live="polite" hidden>
-            Admin Console updated. Continue EMS upgrade?
-          </p>
-          <div class="mconfig-actions">
-            <button type="button" id="admin-update-execute-btn" class="primary-button compact" hidden>
-              Update Admin Console
-            </button>
-          </div>
         </section>
 
         <section class="control-pipeline-stage guided-upgrade-stage" aria-label="Upgrade validation">
@@ -1365,9 +2031,9 @@
             </div>
           </section>
           <div class="mconfig-actions">
-            <button type="button" id="upgrade-plan-btn" class="primary-button compact">Plan upgrade</button>
+            <button type="button" id="upgrade-plan-btn" class="primary-button compact" disabled>Plan upgrade</button>
             <button type="button" id="upgrade-execute-btn" class="secondary-button compact" disabled>
-              Upgrade EMS
+              Upgrade system
             </button>
           </div>
         </section>
@@ -1420,6 +2086,7 @@
               <span class="control-stage-subtitle">Pick a scope — safety verification runs automatically</span>
             </div>
           </div>
+          <section class="setup-block">
           <div class="feature-fields" role="group" aria-label="Backup scope">
             <label class="feature-field-row">
               <span class="feature-field-label">Config / runtime state / dashboard auth</span>
@@ -1447,6 +2114,7 @@
             Encrypted backup creation from Admin will follow later. Existing encrypted
             backups can be inspected and restored with a password.
           </p>
+          </section>
           <div class="mconfig-actions">
             <button type="button" id="backup-create" class="primary-button compact">Create backup</button>
           </div>
@@ -1461,7 +2129,9 @@
               <span class="control-stage-subtitle">Inspect, preview a restore or delete a backup</span>
             </div>
           </div>
-          <div id="backup-list" class="backup-list" role="list"></div>
+          <section class="setup-block">
+            <div id="backup-list" class="backup-list" role="list"></div>
+          </section>
         </section>
 
         <section class="control-pipeline-stage backup-stage" id="backup-details-stage" aria-label="Backup details" hidden>
@@ -1479,8 +2149,10 @@
             </label>
             <button type="submit" class="secondary-button compact">Unlock</button>
           </form>
-          <div class="control-pipeline-values" id="backup-details-facts"></div>
-          <div id="backup-details-files" class="backup-file-list" role="list"></div>
+          <section class="setup-block">
+            <div class="control-pipeline-values" id="backup-details-facts"></div>
+            <div id="backup-details-files" class="backup-file-list" role="list"></div>
+          </section>
         </section>
 
         <section class="control-pipeline-stage backup-stage" id="backup-restore-stage" aria-label="Restore preview" hidden>
@@ -1491,6 +2163,7 @@
               <span class="control-stage-subtitle">Nothing is written until you confirm</span>
             </div>
           </div>
+          <section class="setup-block">
           <div class="feature-fields" role="group" aria-label="Restore options">
             <label class="feature-field-row">
               <span class="feature-field-label">Create rollback backup first</span>
@@ -1509,6 +2182,7 @@
           </div>
           <div class="control-pipeline-values" id="backup-restore-summary"></div>
           <div id="backup-restore-files" class="backup-file-list" role="list"></div>
+          </section>
           <p id="backup-rollback-warning" class="maintenance-note" hidden></p>
           <div class="mconfig-actions">
             <button type="button" id="backup-execute" class="primary-button compact" disabled>Restore</button>
@@ -1516,6 +2190,71 @@
           <div id="backup-restore-steps" class="config-validation-list" role="status" aria-live="polite"></div>
         </section>
       </div>
+    </div>
+    <!-- The seven-stage System Build pipeline is a task subworkflow shared
+         by Guided Setup and Guided Upgrade. It lives here, hidden, as a
+         single node and is moved into the owning task's mount slot; it is
+         never a global sibling above Login or Task Selection. -->
+    <div id="system-build-parking" hidden>
+      <section id="system-alignment-workflow" class="control-pipeline-stage system-alignment-workflow"
+               aria-label="System Build progress" hidden>
+        <div class="control-stage-head">
+          <span class="control-stage-dot" aria-hidden="true">⇄</span>
+          <div class="control-stage-title-block">
+            <span class="control-stage-title">System Build</span>
+            <span class="control-stage-subtitle">Keep the Admin Console and EMS on one verified build</span>
+          </div>
+        </div>
+        <ol class="system-alignment-stages" aria-label="System Build stages">
+          <li data-system-alignment-stage="select"><span>01</span> Select system build<small class="system-alignment-stage-state" data-system-alignment-state-label></small></li>
+          <li data-system-alignment-stage="validate"><span>02</span> Validate pair<small class="system-alignment-stage-state" data-system-alignment-state-label></small></li>
+          <li data-system-alignment-stage="align-admin"><span>03</span> Align Admin<small class="system-alignment-stage-state" data-system-alignment-state-label></small></li>
+          <li data-system-alignment-stage="reconnect"><span>04</span> Reconnect<small class="system-alignment-stage-state" data-system-alignment-state-label></small></li>
+          <li data-system-alignment-stage="verify-resources"><span>05</span> Verify resources<small class="system-alignment-stage-state" data-system-alignment-state-label></small></li>
+          <li data-system-alignment-stage="install-ems"><span>06</span> Install or upgrade EMS<small class="system-alignment-stage-state" data-system-alignment-state-label></small></li>
+          <li data-system-alignment-stage="verify-system"><span>07</span> Verify system<small class="system-alignment-stage-state" data-system-alignment-state-label></small></li>
+        </ol>
+        <div class="system-alignment-facts" aria-label="Selected System Build">
+          <span>Tag <strong id="system-alignment-tag">Not selected</strong></span>
+          <span>Build ID <strong id="system-alignment-build-id">Unknown</strong></span>
+          <span>Revision <strong id="system-alignment-revision">Unknown</strong></span>
+          <span>Admin <strong id="system-alignment-admin-image">Unknown</strong></span>
+          <span>EMS <strong id="system-alignment-ems-image">Unknown</strong></span>
+        </div>
+        <p id="system-alignment-message" class="scan-status" role="status" aria-live="polite"></p>
+        <p id="system-alignment-warning" class="network-warning" role="alert" hidden></p>
+        <div id="system-alignment-reconnect" class="maintenance-note" role="status" hidden>
+          The Admin Console is updating. This page will reconnect automatically.
+        </div>
+        <div id="system-alignment-partial" class="config-validation-card" data-tone="warning" hidden>
+          <div class="config-validation-head">
+            <div>
+              <h3>Partial System Build transition</h3>
+              <p id="system-alignment-partial-message" class="config-validation-source">
+                Admin is aligned, but EMS has not completed the matching build transition.
+              </p>
+            </div>
+            <span class="config-validation-state">Recovery available</span>
+          </div>
+          <div class="mconfig-actions">
+            <button type="button" id="system-alignment-resume" class="primary-button compact">
+              Resume transition
+            </button>
+            <button type="button" id="system-alignment-return" class="secondary-button compact">
+              Return Admin to running build
+            </button>
+            <button type="button" id="system-alignment-abandon" class="secondary-button compact">
+              Discard setup
+            </button>
+            <button type="button" id="system-alignment-retry-cleanup" class="primary-button compact" hidden>
+              Retry cleanup
+            </button>
+            <button type="button" id="system-alignment-recheck-cleanup" class="primary-button compact" hidden>
+              Recheck setup cleanup
+            </button>
+          </div>
+        </div>
+      </section>
     </div>
   </main>
   <script src="/admin.js"></script>

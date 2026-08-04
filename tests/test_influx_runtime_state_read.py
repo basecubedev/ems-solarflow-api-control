@@ -8,7 +8,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+import pytest
+
 from ems.models import DeviceState
+
+pytestmark = [
+    pytest.mark.contract,
+]
 
 
 def load_capture_module():

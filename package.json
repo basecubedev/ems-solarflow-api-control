@@ -1,0 +1,19 @@
+{
+  "name": "ems-admin-e2e",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Playwright end-to-end tests for the EMS Admin Console",
+  "scripts": {
+    "test:e2e": "playwright test",
+    "test:e2e:chromium": "playwright test --project=chromium",
+    "test:e2e:firefox": "playwright test --project=firefox",
+    "test:e2e:system-build": "playwright test tests/e2e/system-build-action-gating.spec.ts",
+    "test:e2e:system-build-packaged": "playwright test --config=playwright.packaged.config.ts",
+    "test:e2e:system-build-remote": "playwright test --config=playwright.remote-packaged.config.ts",
+    "test:e2e:admin-replacement": "playwright test --config=playwright.admin-replacement.config.ts",
+    "test:e2e:ui": "playwright test --ui"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1"
+  }
+}

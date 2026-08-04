@@ -9,14 +9,22 @@ compose never mounts the socket.
 
 import os
 import stat
+import subprocess
+from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.simulation
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.system_build,
+    pytest.mark.contract,
+    pytest.mark.simulation,
+]
 
 DEPLOY_ADMIN_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "deploy", "admin"
 )
+ROOT = Path(DEPLOY_ADMIN_DIR).parents[1]
 
 SOCKET_MOUNT = "/var/run/docker.sock:/var/run/docker.sock"
 
@@ -130,3 +138,177 @@ def test_source_compose_files_build_locally_not_from_ghcr():
         assert "build:" in compose, name
         assert "dockerfile: deploy/admin/Dockerfile" in compose, name
         assert "ghcr.io/basecubedev/ems-solarflow-admin" not in compose, name
+
+
+# --- paired local System Build identity ----------------------------------
+
+
+LOCAL_REVISION = "c7b2f136c5cc7d0a1a00002fd183baa21869799f"
+
+
+def _write_fake_launcher_tools(
+    tmp_path, *, revision=LOCAL_REVISION, dirty=False, git_available=True
+):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    capture = tmp_path / "docker-env.txt"
+
+    git = bin_dir / "git"
+    if git_available:
+        git.write_text(
+            "#!/bin/sh\n"
+            "case \" $* \" in\n"
+            "  *\" --is-inside-work-tree \"*) echo true ;;\n"
+            "  *\" rev-parse \"*\" --short\"*) printf '%.7s\\n' \"$FAKE_GIT_REVISION\" ;;\n"
+            "  *\" rev-parse \"*\" HEAD \"*) printf '%s\\n' \"$FAKE_GIT_REVISION\" ;;\n"
+            "  *\" status \"*) [ \"${FAKE_GIT_DIRTY:-0}\" = 1 ] && "
+            "printf ' M admin/server.py\\n'; exit 0 ;;\n"
+            "  *\" diff-index \"*) [ \"${FAKE_GIT_DIRTY:-0}\" = 1 ] && exit 1; exit 0 ;;\n"
+            "  *) exit 0 ;;\n"
+            "esac\n",
+            encoding="utf-8",
+        )
+    else:
+        git.write_text(
+            "#!/bin/sh\necho 'git metadata unavailable' >&2\nexit 127\n",
+            encoding="utf-8",
+        )
+    git.chmod(0o755)
+
+    docker = bin_dir / "docker"
+    docker.write_text(
+        "#!/bin/sh\n"
+        "{\n"
+        "  printf 'SYSTEM_TAG=%s\\n' \"${SYSTEM_TAG-}\"\n"
+        "  printf 'SYSTEM_CHANNEL=%s\\n' \"${SYSTEM_CHANNEL-}\"\n"
+        "  printf 'SYSTEM_REVISION=%s\\n' \"${SYSTEM_REVISION-}\"\n"
+        "  printf 'SYSTEM_BUILD_ID=%s\\n' \"${SYSTEM_BUILD_ID-}\"\n"
+        "  printf 'SYSTEM_RELEASE_TAG=%s\\n' \"${SYSTEM_RELEASE_TAG-}\"\n"
+        "  printf 'ARGV=%s\\n' \"$*\"\n"
+        "} > \"$FAKE_DOCKER_CAPTURE\"\n",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "PUID": str(os.getuid()),
+        "PGID": str(os.getgid()),
+        "FAKE_GIT_REVISION": revision,
+        "FAKE_GIT_DIRTY": "1" if dirty else "0",
+        "FAKE_DOCKER_CAPTURE": str(capture),
+        "EMS_ADMIN_DATA_DIR": str(tmp_path / "admin-data"),
+    }
+    return env, capture
+
+
+def _run_local_launcher(tmp_path, **fake_git):
+    env, capture = _write_fake_launcher_tools(tmp_path, **fake_git)
+    result = subprocess.run(
+        [str(Path(DEPLOY_ADMIN_DIR) / "start-admin-setup.sh"), "--discovery-only"],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    values = {}
+    if capture.is_file():
+        for line in capture.read_text(encoding="utf-8").splitlines():
+            key, _, value = line.partition("=")
+            values[key] = value
+    return result, values
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid") or os.getuid() == 0,
+                    reason="local launcher requires a non-root POSIX uid")
+def test_local_launcher_exports_clean_repository_system_build_identity(tmp_path):
+    result, values = _run_local_launcher(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert values == {
+        "SYSTEM_TAG": "local",
+        "SYSTEM_CHANNEL": "development",
+        "SYSTEM_REVISION": LOCAL_REVISION,
+        "SYSTEM_BUILD_ID": "local-c7b2f13",
+        "SYSTEM_RELEASE_TAG": "local",
+        "ARGV": (
+            f"compose -f {Path(DEPLOY_ADMIN_DIR) / 'docker-compose.discovery-only.yml'} "
+            "up"
+        ),
+    }
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid") or os.getuid() == 0,
+                    reason="local launcher requires a non-root POSIX uid")
+def test_local_launcher_marks_dirty_repository_identity(tmp_path):
+    result, values = _run_local_launcher(tmp_path, dirty=True)
+
+    assert result.returncode == 0, result.stderr
+    assert values["SYSTEM_BUILD_ID"] == "local-c7b2f13-dirty"
+    assert values["SYSTEM_REVISION"] == LOCAL_REVISION
+
+
+def test_local_launcher_builds_and_tags_both_fixed_repository_images():
+    script = _read("start-admin-setup.sh")
+
+    assert "docker compose $files build" in script
+    assert (
+        "ghcr.io/basecubedev/ems-solarflow-admin:local" in script
+    )
+    assert (
+        "ghcr.io/basecubedev/ems-solarflow-api-control:local" in script
+    )
+    assert 'docker build \\\n' in script
+    for build_arg in (
+        "EMS_RELEASE_TAG",
+        "EMS_GIT_COMMIT",
+        "EMS_GIT_COMMIT_SHORT",
+        "EMS_GIT_DIRTY",
+        "EMS_BUILD_ID",
+        "EMS_BUILD_SERIAL",
+        "EMS_CHANNEL",
+    ):
+        assert f"--build-arg {build_arg}=" in script
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid") or os.getuid() == 0,
+                    reason="local launcher requires a non-root POSIX uid")
+def test_local_launcher_fails_actionably_without_git_metadata(tmp_path):
+    result, values = _run_local_launcher(tmp_path, git_available=False)
+
+    assert result.returncode != 0
+    assert values == {}
+    assert "git" in result.stderr.lower()
+    assert any(word in result.stderr.lower() for word in ("revision", "metadata", "repository"))
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid") or os.getuid() == 0,
+                    reason="local launcher requires a non-root POSIX uid")
+def test_local_launcher_rejects_invalid_full_revision(tmp_path):
+    result, values = _run_local_launcher(tmp_path, revision="not-a-git-revision")
+
+    assert result.returncode != 0
+    assert values == {}
+    assert "revision" in result.stderr.lower()
+
+
+@pytest.mark.parametrize(
+    "compose_name", ("docker-compose.yml", "docker-compose.discovery-only.yml")
+)
+def test_local_compose_forwards_every_system_build_argument(compose_name):
+    compose = _read(compose_name)
+    expected = {
+        "EMS_SYSTEM_TAG": "SYSTEM_TAG",
+        "EMS_CHANNEL": "SYSTEM_CHANNEL",
+        "EMS_REVISION": "SYSTEM_REVISION",
+        "EMS_BUILD_ID": "SYSTEM_BUILD_ID",
+        "EMS_RELEASE_TAG": "SYSTEM_RELEASE_TAG",
+    }
+    assert "args:" in compose
+    for build_arg, environment_name in expected.items():
+        assert build_arg in compose, f"{compose_name} does not pass {build_arg}"
+        assert f"${{{environment_name}" in compose, (
+            f"{compose_name} does not source {build_arg} from {environment_name}"
+        )

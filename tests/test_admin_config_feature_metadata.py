@@ -12,6 +12,12 @@ from admin.config_feature_metadata import (
     get_config_feature_sections,
 )
 
+pytestmark = [
+    pytest.mark.admin,
+    pytest.mark.config,
+    pytest.mark.integration,
+]
+
 
 TEMPLATE_PATH = Path(__file__).parents[1] / "config" / "config.template.json"
 SECTION_KEYS = {
@@ -85,6 +91,7 @@ def test_sections_have_stable_required_metadata():
         "system",
         "grid_meter",
         "devices",
+        "zendure_mqtt",
         "winter",
         "battery_full_charge_assist",
         "energy_savings",
@@ -92,12 +99,20 @@ def test_sections_have_stable_required_metadata():
         "influxdb",
         "ha",
     ]
-    assert [section["order"] for section in sections] == list(range(1, 11))
+    assert [section["order"] for section in sections] == list(range(1, 12))
     for section in sections:
         assert SECTION_KEYS <= section.keys()
         assert section["level"] in LEVELS
         assert section["scope"] in SCOPES
         assert isinstance(section["collapsible"], bool)
+
+
+def test_zendure_mqtt_feature_has_no_enable_toggle():
+    # The telemetry feature is always on: the section exposes no enable toggle
+    # and no enabled_path, and the config key does not exist anymore.
+    sections = {section["id"]: section for section in get_config_feature_sections()}
+    assert sections["zendure_mqtt"].get("enabled_path") is None
+    assert "zendure_mqtt.enabled" not in get_config_feature_field_index()
 
 
 def test_fields_have_stable_required_metadata():
@@ -147,6 +162,16 @@ def test_home_assistant_metadata_is_deprecated_and_maintenance_only():
         assert fields[path]["scope"] == "maintenance"
 
 
+# Promoted to primary (normal) so they render outside Advanced settings.
+_PROMOTED_OUTPUT_CONTROL = {
+    "system.output_control.target_deadband_w",
+    "system.output_control.ramp_up_w_per_cycle",
+    "system.output_control.ramp_down_w_per_cycle",
+    "system.output_control.device_ramp_up_w_per_cycle",
+    "system.output_control.device_ramp_down_w_per_cycle",
+}
+
+
 def test_output_control_fields_are_expert_control_stability_settings():
     fields = get_config_feature_field_index()
     tuning = {
@@ -156,7 +181,16 @@ def test_output_control_fields_are_expert_control_stability_settings():
     }
 
     assert tuning
-    assert all(field["level"] == "expert" for field in tuning.values())
+    # The promoted ramp/deadband knobs are primary; the remaining smoothing
+    # and bypass tuning stays expert. All keep control_stability risk.
+    assert all(
+        tuning[path]["level"] == "normal" for path in _PROMOTED_OUTPUT_CONTROL
+    )
+    assert all(
+        field["level"] == "expert"
+        for path, field in tuning.items()
+        if path not in _PROMOTED_OUTPUT_CONTROL
+    )
     assert all(field["risk"] == "control_stability" for field in tuning.values())
 
 
@@ -165,6 +199,10 @@ def test_metadata_includes_template_defaults():
 
     assert fields["system.enabled"]["default"] is True
     assert fields["devices[].max_power"]["default"] == 800
+    # All three write gates default on in the catalog/template.
+    assert fields["system.allow_hardware_writes"]["default"] is True
+    assert fields["system.allow_mqtt_local_control_writes"]["default"] is True
+    assert fields["system.allow_mqtt_zendure_control_writes"]["default"] is True
 
 
 def test_schema_version_is_read_only_maintenance_metadata():

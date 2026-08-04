@@ -28,6 +28,7 @@ COPY dashboard/ ./dashboard/
 # Runtime dependency of ems/history (Analytics influx sync/status); the rest of
 # scripts/ is dev tooling and intentionally not shipped.
 COPY scripts/influx_utils.py ./scripts/influx_utils.py
+COPY scripts/mqtt_write_latency_probe.py ./scripts/mqtt_write_latency_probe.py
 COPY ems-solarflow-api-control.py emsctl.py README.md ./
 # Runtime and entrypoint expect the template at /app/config.template.json; the
 # canonical source lives in config/ and is copied to that image path here.
@@ -43,17 +44,18 @@ RUN mkdir -p /app/config /app/data \
 # Runtime-visible build identity. Python cannot reliably read its own image's OCI
 # labels, so CI passes the same identity in as build args (see docker-publish.yml)
 # and it is exported as env for ems.build_info. Kept last so changing per-build
-# metadata never invalidates the dependency layer above. Empty by default: a
-# plain local ``docker build`` then falls back to honest ``None`` values.
-ARG EMS_RELEASE_TAG=
-ARG EMS_GIT_COMMIT=
-ARG EMS_GIT_COMMIT_SHORT=
-ARG EMS_GIT_DESCRIBE=
-ARG EMS_GIT_BRANCH=
-ARG EMS_GIT_DIRTY=
-ARG EMS_BUILD_ID=
-ARG EMS_BUILD_SERIAL=
-ARG EMS_CHANNEL=
+# metadata never invalidates the dependency layer above. A plain source build
+# uses an explicit valid local fallback; CI replaces every value with the real
+# repository/workflow identity.
+ARG EMS_RELEASE_TAG=local
+ARG EMS_GIT_COMMIT=0000000000000000000000000000000000000000
+ARG EMS_GIT_COMMIT_SHORT=000000000000
+ARG EMS_GIT_DESCRIBE=local
+ARG EMS_GIT_BRANCH=local
+ARG EMS_GIT_DIRTY=false
+ARG EMS_BUILD_ID=local-0000000
+ARG EMS_BUILD_SERIAL=0
+ARG EMS_CHANNEL=development
 
 ENV EMS_RELEASE_TAG=$EMS_RELEASE_TAG
 ENV EMS_GIT_COMMIT=$EMS_GIT_COMMIT
@@ -64,6 +66,14 @@ ENV EMS_GIT_DIRTY=$EMS_GIT_DIRTY
 ENV EMS_BUILD_ID=$EMS_BUILD_ID
 ENV EMS_BUILD_SERIAL=$EMS_BUILD_SERIAL
 ENV EMS_CHANNEL=$EMS_CHANNEL
+
+# The same OCI identity contract as the paired Admin image. CI and the local
+# Docker contract pass one revision/build/channel/release tuple to both images.
+LABEL org.opencontainers.image.version=$EMS_RELEASE_TAG \
+      org.opencontainers.image.revision=$EMS_GIT_COMMIT \
+      de.basecubedev.ems.build_id=$EMS_BUILD_ID \
+      de.basecubedev.ems.channel=$EMS_CHANNEL \
+      de.basecubedev.ems.release_tag=$EMS_RELEASE_TAG
 
 EXPOSE 8080
 VOLUME ["/app/config", "/app/data"]

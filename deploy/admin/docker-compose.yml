@@ -35,6 +35,12 @@ services:
     build:
       context: ../..
       dockerfile: deploy/admin/Dockerfile
+      args:
+        EMS_SYSTEM_TAG: "${SYSTEM_TAG:-local}"
+        EMS_CHANNEL: "${SYSTEM_CHANNEL:-development}"
+        EMS_REVISION: "${SYSTEM_REVISION:-0000000000000000000000000000000000000000}"
+        EMS_BUILD_ID: "${SYSTEM_BUILD_ID:-local-0000000}"
+        EMS_RELEASE_TAG: "${SYSTEM_RELEASE_TAG:-local}"
     image: ems-solarflow-control-admin:local
     user: "${PUID:-1000}:${PGID:-1000}"
     # Grant the non-root container user access to the host Docker socket. The
@@ -46,7 +52,7 @@ services:
     # Bind published port to loopback so the UI is not reachable off-host by
     # default. To scan the LAN, add the docker-compose.hostnet.yml override.
     ports:
-      - "127.0.0.1:8090:8090"
+      - "${EMS_ADMIN_BIND:-127.0.0.1}:${EMS_ADMIN_PORT:-8090}:8090"
     environment:
       # Same-path mounting: these point at the real host install root and Admin
       # data dir so ems.paths resolves the live config/data/compose and any bind

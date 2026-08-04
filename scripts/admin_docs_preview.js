@@ -13,8 +13,17 @@
 (function () {
   var screen = new URLSearchParams(window.location.search).get("screen") || "landing";
 
+  // Wait for the SPA's own authenticated workflow resume to finish as well:
+  // it re-opens Guided Setup on step 01, so a driver that ran before it would
+  // be silently reset and every setup screen would capture the release step.
   function ready() {
-    return typeof authState !== "undefined" && authState && authState.authenticated;
+    return (
+      typeof authState !== "undefined" &&
+      authState &&
+      authState.authenticated &&
+      (typeof authenticatedWorkflowResumeCompleted === "undefined" ||
+        authenticatedWorkflowResumeCompleted)
+    );
   }
 
   function releaseIsReady() {
@@ -37,6 +46,21 @@
     }, 40);
   }
 
+  // Like when(), but gives up silently instead of acting on an unmet condition.
+  // Used where acting anyway would capture a different screen (a locked setup
+  // step silently falls back to step 01) rather than visibly failing.
+  function whenReady(cond, act, tries) {
+    tries = tries === undefined ? 120 : tries;
+    if (cond()) {
+      act();
+      return;
+    }
+    if (tries <= 0) return;
+    window.setTimeout(function () {
+      whenReady(cond, act, tries - 1);
+    }, 40);
+  }
+
   // Deep-link straight to a maintenance panel. Setting the final hash keeps the
   // async hashchange handler (applyHashRoute) from resetting the panel back to
   // the hub the way enterMaintenance() would.
@@ -47,16 +71,67 @@
     if (typeof setMaintenancePath === "function") setMaintenancePath(path);
   }
 
+  function expandMaintenanceCard(id) {
+    var card = document.getElementById(id);
+    if (card && card.getAttribute("data-open") !== "true" &&
+        typeof toggleMaintenanceCard === "function") {
+      toggleMaintenanceCard(id);
+    }
+  }
+
   function expandMaintenanceCards() {
     ["maintenance-layout", "maintenance-containers", "maintenance-versions"].forEach(
-      function (id) {
-        var card = document.getElementById(id);
-        if (card && card.getAttribute("data-open") !== "true" &&
-            typeof toggleMaintenanceCard === "function") {
-          toggleMaintenanceCard(id);
-        }
-      }
+      expandMaintenanceCard
     );
+  }
+
+  // Open a Guided Setup step once the wizard itself reports it unlocked. A
+  // locked step silently falls back to "release", which would make the capture a
+  // duplicate of the release screen instead of failing.
+  function stepScreen(step) {
+    // Start only unlocks once the deployment step has loaded its plan, so that
+    // step has to be opened first.
+    var prerequisite = step === "start" ? "deployment" : null;
+    function unlocked(target) {
+      return (
+        releaseIsReady() &&
+        typeof stepLocked === "function" &&
+        !stepLocked(target)
+      );
+    }
+    return function () {
+      enterSetup();
+      if (prerequisite) {
+        whenReady(
+          function () {
+            return unlocked(prerequisite);
+          },
+          function () {
+            if (setupState.activeStep !== step) setActiveStep(prerequisite);
+          }
+        );
+      }
+      whenReady(
+        function () {
+          return unlocked(step);
+        },
+        function () {
+          setActiveStep(step);
+        }
+      );
+    };
+  }
+
+  // Open the manual-maintenance panel with exactly one card expanded, so each
+  // documented card gets a focused screenshot instead of the whole panel.
+  function maintenanceCardScreen(cardId) {
+    return function () {
+      openMaintenance("manual");
+      expandMaintenanceCard(cardId);
+      window.setTimeout(function () {
+        expandMaintenanceCard(cardId);
+      }, 500);
+    };
   }
 
   // Guided-upgrade live-run steps, mirroring the plan order emitted by
@@ -168,6 +243,14 @@
     landing: function () {
       // The authenticated start gate is the default surface; nothing to do.
     },
+    // The auth gate never carries demo credentials: the fields stay empty and
+    // the preview only re-renders the gate the SPA already owns.
+    "password-setup": function () {
+      if (typeof showAuthView === "function") showAuthView("create");
+    },
+    login: function () {
+      if (typeof showAuthView === "function") showAuthView("login");
+    },
     "guided-setup-start": function () {
       enterSetup();
     },
@@ -198,28 +281,22 @@
         if (typeof renderFeatureSettings === "function") renderFeatureSettings();
       });
     },
-    "setup-start-done": function () {
-      // Drive the wizard to the final Start step showing the running EMS and the
-      // "Open EMS Dashboard" (localhost:8080) success card. The deployment state
-      // is set in memory so the Start step unlocks; the mocked deployment
-      // plan/status endpoints then render the success state.
-      enterSetup();
-      when(releaseIsReady, function () {
-        if (typeof setupState !== "undefined" && setupState.deployment) {
-          var dep = setupState.deployment;
-          dep.prepared = true;
-          dep.generated_ready = true;
-          dep.status = "succeeded";
-          dep.docker = { state: "ready" };
-          dep.workspace = "/opt/ems";
-        }
-        setActiveStep("start");
-      });
+    // Wait for the wizard's own unlock state instead of forcing it: the async
+    // deployment plan/status fetches would otherwise overwrite hand-set values
+    // and silently drop the capture back to step 01.
+    "setup-deployment": stepScreen("deployment"),
+    "setup-start-done": stepScreen("start"),
+    "maintenance-hub": function () {
+      openMaintenance("hub");
     },
     "maintenance-overview": function () {
       openMaintenance("manual");
       window.setTimeout(expandMaintenanceCards, 500);
     },
+    "maintenance-diagnostics": maintenanceCardScreen("maintenance-diagnostics"),
+    "maintenance-config-hardware": maintenanceCardScreen("maintenance-config-card"),
+    "maintenance-mqtt": maintenanceCardScreen("maintenance-zendure-mqtt"),
+    "maintenance-recovery": maintenanceCardScreen("maintenance-workflow-recovery"),
     "backup-restore": function () {
       openMaintenance("backup");
     },
@@ -282,6 +359,8 @@
   // SPA's own async bootstrap would otherwise reset the view after the first
   // drive. Driving starts immediately (not on "load"); the preview server holds
   // the load event open so the final state renders before Firefox captures it.
+  // The loop deliberately outlasts HOLD_SECONDS, so a late async callback cannot
+  // reset the view between the last drive and the screenshot.
   function driveLoop(remaining) {
     if (!ready()) {
       window.setTimeout(function () {
@@ -296,5 +375,5 @@
       }, 300);
     }
   }
-  driveLoop(8);
+  driveLoop(20);
 })();

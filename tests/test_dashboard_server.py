@@ -16,10 +16,17 @@ from dashboard.server import (
     JsonBodyLengthError,
     JsonBodyTooLarge,
     SSEConnectionLimiter,
+    _external_mqtt_status_payload,
+    _replace_external_device_names,
+    _resolve_external_device_name,
     start_dashboard_server,
 )
 from dashboard.auth import LoginRateLimiter
 from dashboard.runtime_write import build_validation_context
+
+pytestmark = [
+    pytest.mark.integration,
+]
 
 
 class StoreStub:
@@ -47,6 +54,26 @@ class StoreStub:
             "currency": "EUR",
             "today": {"inverter_output_wh": 1000},
             "yesterday": {"inverter_output_wh": 800},
+        }
+
+
+class CloudStatusStore(StoreStub):
+    route = "DASHBOARD_CLOUD_ROUTE_7501"
+    product = "DASHBOARD_PRODUCT_ACCOUNT"
+
+    def latest(self):
+        return {
+            "timestamp": "2026-06-03T12:00:00+00:00",
+            "devices": {
+                self.route: {
+                    "broker_ref": "cloud_a",
+                    "name": f"SolarFlow {self.route}",
+                    "detail": f"account product {self.product}",
+                    "write_topic": (
+                        f"iot/{self.product}/{self.route}/properties/write"
+                    ),
+                }
+            },
         }
 
 
@@ -243,6 +270,46 @@ def test_dashboard_server_serves_read_only_api_endpoints():
         server.server_close()
 
 
+def test_live_endpoint_masks_cloud_routes_using_config_scope(tmp_path):
+    store = CloudStatusStore()
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "zendure_mqtt": {
+                    "brokers": {
+                        "cloud_a": {
+                            "source": "zendure_cloud_mqtt",
+                            "host": "mqtt.example.invalid",
+                        }
+                    }
+                },
+                "devices": [
+                    {
+                        "type": "zendure_mqtt",
+                        "mqtt": {
+                            "broker_ref": "cloud_a",
+                            "product_key": store.product,
+                            "device_id": store.route,
+                        },
+                    }
+                ],
+            }
+        )
+    )
+    server, base_url = with_server(store, config_path=str(config_path))
+
+    try:
+        status, _, payload = json_response(f"{base_url}/api/live")
+        flattened = json.dumps(payload)
+        assert status == 200
+        assert store.route not in flattened
+        assert store.product not in flattened
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_read_only_gets_remain_public_when_auth_is_configured(tmp_path):
     auth_file = tmp_path / "dashboard-auth.json"
     write_password_file(auth_file, "secret-password")
@@ -288,7 +355,7 @@ class SeriesStoreStub(StoreStub):
         self.path = path
 
 
-def _seed_snapshots(path):
+def _seed_snapshots(path, device_name="WR1"):
     import sqlite3
     from datetime import datetime, timedelta, timezone
 
@@ -303,7 +370,7 @@ def _seed_snapshots(path):
                 "pv_total_w": 1000 + index * 100,
                 "inverter_output_w": 400 + index * 50,
                 "battery_power_w": 200 - index * 50,
-                "devices": {"WR1": {"pv_input_w": 600 + index * 60}},
+                "devices": {device_name: {"pv_input_w": 600 + index * 60}},
             }
         )
         con.execute(
@@ -363,6 +430,671 @@ def test_history_series_endpoint_returns_columnar_sqlite_data(tmp_path):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_masked_cloud_device_alias_round_trips_runtime_and_history(tmp_path):
+    route = "DASHBOARD_ACCOUNT_ROUTE_7501"
+    product = "DASHBOARD_ACCOUNT_PRODUCT"
+    raw_name = f"Secret Roof {route}"
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "zendure_mqtt": {
+                    "brokers": {
+                        "cloud_a": {"source": "zendure_cloud_mqtt"}
+                    }
+                },
+                "devices": [
+                    {
+                        "name": raw_name,
+                        "type": "zendure_mqtt",
+                        "mqtt": {
+                            "broker_ref": "cloud_a",
+                            "product_key": product,
+                            "device_id": route,
+                        },
+                    }
+                ],
+            }
+        )
+    )
+    auth_file = tmp_path / "dashboard-auth.json"
+    write_password_file(auth_file, "secret-password")
+    runtime_state = RuntimeStateStub()
+    runtime_state.data["devices"] = {
+        raw_name: {
+            "enabled": True,
+            "max_power": 800,
+            "offgrid_socket_mode": "off",
+            "pv_priority_factor": 1.0,
+        }
+    }
+    database_path = str(tmp_path / "dashboard.sqlite")
+    _seed_snapshots(database_path, raw_name)
+    server, base_url = with_server(
+        SeriesStoreStub(database_path),
+        runtime_state=runtime_state,
+        runtime_validation=build_validation_context(
+            config=json.loads(config_path.read_text())
+        ),
+        auth_file=str(auth_file),
+        config_path=str(config_path),
+    )
+
+    try:
+        status, _, runtime = json_response(f"{base_url}/api/runtime")
+        assert status == 200
+        aliases = list(runtime["devices"])
+        assert len(aliases) == 1
+        alias = aliases[0]
+        assert route not in alias
+        assert set(runtime["_limits"]["devices"]) == {alias}
+
+        _, login_headers, login = json_response(
+            f"{base_url}/api/auth/login",
+            method="POST",
+            payload={"password": "secret-password"},
+        )
+        status, _, updated = json_response(
+            f"{base_url}/api/runtime/device/{urllib.parse.quote(alias)}",
+            method="PATCH",
+            payload={"offgrid_socket_mode": "eco"},
+            headers={
+                "Cookie": login_headers["Set-Cookie"],
+                "X-CSRF-Token": login["csrf_token"],
+            },
+        )
+        assert status == 200
+        assert route not in json.dumps(updated)
+        assert runtime_state.data["devices"][raw_name]["offgrid_socket_mode"] == "eco"
+
+        del runtime_state.data["devices"][raw_name]
+        status, _, rejected = json_response(
+            f"{base_url}/api/runtime/device/{urllib.parse.quote(alias)}",
+            method="PATCH",
+            payload={"offgrid_socket_mode": "standard"},
+            headers={
+                "Cookie": login_headers["Set-Cookie"],
+                "X-CSRF-Token": login["csrf_token"],
+            },
+        )
+        assert status == 400
+        assert route not in json.dumps(rejected)
+
+        status, _, history = json_response(
+            f"{base_url}/api/history/series?range=24h&series=pv&devices="
+            f"{urllib.parse.quote(alias)}"
+        )
+        assert status == 200
+        assert history["devices"] == [alias]
+        assert history["series"]["pv"][0] == 600
+        assert route not in json.dumps(history)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_colliding_masked_cloud_device_names_receive_distinct_aliases(tmp_path):
+    routes = ["DASHBOARD_ACCOUNT_ALPHA_7501", "DASHBOARD_ACCOUNT_BETA_7501"]
+    product = "DASHBOARD_ACCOUNT_PRODUCT"
+    raw_names = [f"Roof {route}" for route in routes]
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "zendure_mqtt": {
+                    "brokers": {
+                        "cloud_a": {"source": "zendure_cloud_mqtt"}
+                    }
+                },
+                "devices": [
+                    {
+                        "name": name,
+                        "type": "zendure_mqtt",
+                        "mqtt": {
+                            "broker_ref": "cloud_a",
+                            "product_key": product,
+                            "device_id": route,
+                        },
+                    }
+                    for name, route in zip(raw_names, routes)
+                ],
+            }
+        )
+    )
+    runtime_state = RuntimeStateStub()
+    template = next(iter(runtime_state.data["devices"].values()))
+    runtime_state.data["devices"] = {
+        name: dict(template) for name in raw_names
+    }
+    server, base_url = with_server(
+        StoreStub(),
+        runtime_state=runtime_state,
+        runtime_validation=build_validation_context(
+            config=json.loads(config_path.read_text())
+        ),
+        config_path=str(config_path),
+    )
+
+    try:
+        status, _, runtime = json_response(f"{base_url}/api/runtime")
+        assert status == 200
+        assert len(runtime["devices"]) == 2
+        assert len(set(runtime["devices"])) == 2
+        assert not any(route in json.dumps(runtime) for route in routes)
+        assert set(runtime["devices"]) == set(runtime["_limits"]["devices"])
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_cloud_status_redaction_fails_closed_when_config_is_missing(tmp_path):
+    route = "DASHBOARD_ACCOUNT_ROUTE_7501"
+    product = "DASHBOARD_ACCOUNT_PRODUCT"
+    raw_name = f"Roof {route}"
+    missing_config_path = tmp_path / "missing-config.json"
+    config = {
+        "zendure_mqtt": {
+            "brokers": {"cloud_a": {"source": "zendure_cloud_mqtt"}}
+        },
+        "devices": [
+            {
+                "name": raw_name,
+                "type": "zendure_mqtt",
+                "mqtt": {
+                    "broker_ref": "cloud_a",
+                    "product_key": product,
+                    "device_id": route,
+                },
+            }
+        ],
+    }
+
+    class MissingConfigStore(StoreStub):
+        def latest(self):
+            return {
+                "devices": {
+                    raw_name: {
+                        "name": raw_name,
+                        "device_id": route,
+                        "product_key": product,
+                        "detail": f"route={route} product={product}",
+                        "write_topic": f"iot/{product}/{route}/properties/write",
+                    }
+                }
+            }
+
+    server, base_url = with_server(
+        MissingConfigStore(),
+        runtime_validation=build_validation_context(config=config),
+        config_path=str(missing_config_path),
+    )
+    try:
+        status, _, payload = json_response(f"{base_url}/api/live")
+        assert status == 200
+        flattened = json.dumps(payload)
+        assert route not in flattened
+        assert product not in flattened
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_cloud_status_redaction_fails_closed_with_empty_config(tmp_path):
+    route = "DASHBOARD_ACCOUNT_ROUTE_7501"
+    product = "DASHBOARD_ACCOUNT_PRODUCT"
+    diagnostic_route = "DASHBOARD_DIAGNOSTIC_ROUTE_7502"
+    metric_route = "DASHBOARD_METRIC_ROUTE_7503"
+    source_route = "DASHBOARD_SOURCE_ROUTE_7504"
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{}", encoding="utf-8")
+
+    class PartialConfigStore(StoreStub):
+        def latest(self):
+            return {
+                "device_id": route,
+                "product_key": product,
+                "detail": f"device_id={route} product_key={product}",
+                "devices": {
+                    route: {
+                        "device_id": route,
+                        "product_key": product,
+                    }
+                },
+                "diagnostic_by_route": {diagnostic_route: {"ok": False}},
+                "metrics": {metric_route: 1},
+                "sources": {source_route: {"status": "stale"}},
+            }
+
+    server, base_url = with_server(
+        PartialConfigStore(),
+        config_path=str(config_path),
+    )
+    try:
+        status, _, payload = json_response(f"{base_url}/api/live")
+        assert status == 200
+        flattened = json.dumps(payload)
+        assert route not in flattened
+        assert product not in flattened
+        assert diagnostic_route not in flattened
+        assert metric_route not in flattened
+        assert source_route not in flattened
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_cloud_status_redaction_uses_last_good_config_after_read_failure(tmp_path):
+    route = "DASHBOARD_ACCOUNT_ROUTE_7501"
+    product = "DASHBOARD_ACCOUNT_PRODUCT"
+    raw_name = f"Roof {route}"
+    config_path = tmp_path / "config.json"
+    config = {
+        "zendure_mqtt": {
+            "brokers": {"cloud_a": {"source": "zendure_cloud_mqtt"}}
+        },
+        "devices": [
+            {
+                "name": raw_name,
+                "type": "zendure_mqtt",
+                "mqtt": {
+                    "broker_ref": "cloud_a",
+                    "product_key": product,
+                    "device_id": route,
+                },
+            }
+        ],
+    }
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    class CachedConfigStore(StoreStub):
+        def latest(self):
+            return {
+                "devices": {
+                    raw_name: {
+                        "detail": f"route={route} product={product}",
+                    }
+                }
+            }
+
+    server, base_url = with_server(
+        CachedConfigStore(),
+        runtime_validation=build_validation_context(config=config),
+        config_path=str(config_path),
+    )
+    try:
+        config_path.unlink()
+        status, _, payload = json_response(f"{base_url}/api/live")
+        assert status == 200
+        flattened = json.dumps(payload)
+        assert route not in flattened
+        assert product not in flattened
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_cloud_status_redaction_retains_old_context_during_config_replacement(tmp_path):
+    old_route = "DASHBOARD_OLD_ACCOUNT_ROUTE_7501"
+    new_route = "DASHBOARD_NEW_ACCOUNT_ROUTE_7502"
+    product = "DASHBOARD_ACCOUNT_PRODUCT"
+
+    def config_for(route):
+        return {
+            "zendure_mqtt": {
+                "brokers": {"cloud_a": {"source": "zendure_cloud_mqtt"}}
+            },
+            "devices": [
+                {
+                    "name": f"Roof {route}",
+                    "type": "zendure_mqtt",
+                    "mqtt": {
+                        "broker_ref": "cloud_a",
+                        "product_key": product,
+                        "device_id": route,
+                    },
+                }
+            ],
+        }
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(config_for(old_route)), encoding="utf-8")
+
+    class ReplacedConfigStore(StoreStub):
+        def latest(self):
+            return {
+                "devices": {
+                    f"Roof {old_route}": {
+                        "detail": f"stale route {old_route}",
+                    }
+                }
+            }
+
+    server, base_url = with_server(
+        ReplacedConfigStore(), config_path=str(config_path)
+    )
+    try:
+        config_path.write_text(json.dumps(config_for(new_route)), encoding="utf-8")
+        status, _, payload = json_response(f"{base_url}/api/live")
+        assert status == 200
+        assert old_route not in json.dumps(payload)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_external_alias_scalar_replacement_is_single_pass():
+    first = "Roof ROUTE_ALPHA_7501"
+    second = "Roof …7501"
+    aliases = {
+        first: "Roof …7501 [1]",
+        second: "Roof …7501 [2]",
+    }
+
+    assert _replace_external_device_names(
+        {"devices": [first, second]}, aliases
+    ) == {"devices": ["Roof …7501 [1]", "Roof …7501 [2]"]}
+
+
+def test_fail_closed_learned_device_alias_round_trips_without_config(tmp_path):
+    raw_name = "Roof MISSING_CONFIG_CLOUD_ROUTE_7501"
+    server = SimpleNamespace(
+        config_path=str(tmp_path / "missing.json"),
+        runtime_validation={},
+    )
+
+    safe = _external_mqtt_status_payload(
+        server, {"devices": {raw_name: {"name": raw_name}}}
+    )
+    alias = next(iter(safe["devices"]))
+
+    assert raw_name not in json.dumps(safe)
+    assert _resolve_external_device_name(server, alias) == raw_name
+
+
+def test_valid_cloud_context_preserves_ordinary_status_reason_and_detail(tmp_path):
+    route = "DASHBOARD_STATUS_ROUTE_7501"
+    raw_name = f"Roof {route}"
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "zendure_mqtt": {
+                    "brokers": {
+                        "cloud_a": {"source": "zendure_cloud_mqtt"}
+                    }
+                },
+                "devices": [
+                    {
+                        "name": raw_name,
+                        "type": "zendure_mqtt",
+                        "mqtt": {
+                            "broker_ref": "cloud_a",
+                            "product_key": "DASHBOARD_STATUS_PRODUCT",
+                            "device_id": route,
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    server = SimpleNamespace(
+        config_path=str(config_path),
+        runtime_validation={},
+    )
+
+    safe = _external_mqtt_status_payload(
+        server,
+        {
+            "devices": {
+                raw_name: {
+                    "reason": "Broker delivery is still pending",
+                    "detail": "HTTP telemetry is available",
+                }
+            }
+        },
+    )
+    status = next(iter(safe["devices"].values()))
+
+    assert status["reason"] == "Broker delivery is still pending"
+    assert status["detail"] == "HTTP telemetry is available"
+    assert route not in json.dumps(safe)
+
+
+def test_valid_local_config_preserves_device_name_reason_and_detail(tmp_path):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "devices": [
+                    {
+                        "name": "Living Room",
+                        "ip": "192.0.2.10",
+                        "sn": "LOCAL-SERIAL",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    server = SimpleNamespace(
+        config_path=str(config_path),
+        runtime_validation={},
+    )
+
+    safe = _external_mqtt_status_payload(
+        server,
+        {
+            "devices": {
+                "Living Room": {
+                    "reason": "Broker delivery is still pending",
+                    "detail": "Everything is healthy",
+                }
+            }
+        },
+    )
+
+    assert safe == {
+        "devices": {
+            "Living Room": {
+                "reason": "Broker delivery is still pending",
+                "detail": "Everything is healthy",
+            }
+        }
+    }
+
+
+def test_valid_local_route_like_name_stays_consistent_in_keys_and_scalars(tmp_path):
+    trusted_name = "Local WR_ALPHA_7501"
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "devices": [
+                    {
+                        "name": trusted_name,
+                        "ip": "192.0.2.10",
+                        "sn": "LOCAL-SERIAL",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    server = SimpleNamespace(
+        config_path=str(config_path),
+        runtime_validation={},
+    )
+
+    safe = _external_mqtt_status_payload(
+        server,
+        {
+            "devices": {
+                trusted_name: {
+                    "name": trusted_name,
+                    "reason": "Broker delivery is still pending",
+                }
+            },
+            "checks": [
+                {
+                    "device": trusted_name,
+                    "message": f"Zendure device {trusted_name} is healthy",
+                }
+            ],
+        },
+    )
+
+    assert list(safe["devices"]) == [trusted_name]
+    assert safe["devices"][trusted_name]["name"] == trusted_name
+    assert safe["checks"][0]["device"] == trusted_name
+    assert trusted_name in safe["checks"][0]["message"]
+
+
+def test_valid_local_config_masks_unknown_stale_cloud_device_name(tmp_path):
+    stale_route = "ACCOUNT_ROUTE_7501"
+    stale_name = f"Roof {stale_route}"
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "devices": [
+                    {
+                        "name": "Living Room",
+                        "ip": "192.0.2.10",
+                        "sn": "LOCAL-SERIAL",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    server = SimpleNamespace(
+        config_path=str(config_path),
+        runtime_validation={},
+    )
+
+    safe = _external_mqtt_status_payload(
+        server,
+        {
+            "devices": {
+                stale_name: {
+                    "detail": f"stale route {stale_route}",
+                }
+            }
+        },
+    )
+
+    assert stale_route not in json.dumps(safe)
+    assert "stale route" in next(iter(safe["devices"].values()))["detail"]
+
+
+def test_valid_local_config_masks_unknown_stale_diagnostic_device(tmp_path):
+    stale_route = "ACCOUNT_ROUTE_7501"
+    stale_name = f"Roof-{stale_route}"
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "devices": [
+                    {
+                        "name": "Living Room",
+                        "ip": "192.0.2.10",
+                        "sn": "LOCAL-SERIAL",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    server = SimpleNamespace(
+        config_path=str(config_path),
+        runtime_validation={},
+    )
+
+    safe = _external_mqtt_status_payload(
+        server,
+        {
+            "checks": [
+                {
+                    "device": stale_name,
+                    "message": f"Zendure device {stale_name} read failed",
+                }
+            ]
+        },
+    )
+
+    assert stale_route not in json.dumps(safe)
+    assert "read failed" in safe["checks"][0]["message"]
+
+
+def test_mixed_partial_cloud_config_masks_name_only_cloud_route(tmp_path):
+    route = "SECRET_CLOUD_ROUTE_7501"
+    raw_name = f"Rejected Cloud {route}"
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "zendure_mqtt": {
+                    "brokers": {
+                        "cloud_a": {"source": "zendure_cloud_mqtt"},
+                        "local_a": {"source": "local_mqtt"},
+                    }
+                },
+                "devices": [
+                    {
+                        "name": "Local inverter",
+                        "type": "zendure_mqtt",
+                        "mqtt": {
+                            "broker_ref": "local_a",
+                            "device_id": "LOCAL_ROUTE_1234",
+                        },
+                    },
+                    {
+                        "name": raw_name,
+                        "type": "zendure_mqtt",
+                        "mqtt": {"broker_ref": "cloud_a"},
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    server = SimpleNamespace(
+        config_path=str(config_path),
+        runtime_validation={},
+    )
+
+    safe = _external_mqtt_status_payload(
+        server,
+        {"devices": {raw_name: {"name": raw_name, "status": "invalid"}}},
+    )
+
+    assert route not in json.dumps(safe)
+
+
+def test_fail_closed_diagnostic_device_field_masks_matching_free_text(tmp_path):
+    raw_name = "Roof-MISSING_CONFIG_DIAG_ROUTE_9501"
+    server = SimpleNamespace(
+        config_path=str(tmp_path / "missing.json"),
+        runtime_validation={},
+    )
+
+    safe = _external_mqtt_status_payload(
+        server,
+        {
+            "checks": [
+                {
+                    "device": raw_name,
+                    "message": f"Zendure device {raw_name} read failed",
+                }
+            ]
+        },
+    )
+
+    assert raw_name not in json.dumps(safe)
+    assert "read failed" in safe["checks"][0]["message"]
 
 
 def test_analytics_unavailable_without_influx(tmp_path):

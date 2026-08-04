@@ -10,7 +10,14 @@ import os
 
 
 import emsctl
+import pytest
+
 from ems import backup, influx_setup
+
+pytestmark = [
+    pytest.mark.backup_restore,
+    pytest.mark.unit,
+]
 
 
 def bundled_config(**overrides):

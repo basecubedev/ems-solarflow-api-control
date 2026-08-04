@@ -1,0 +1,59 @@
+{
+  "_note": "Deterministic non-secret demo data for the Maintenance 'Zendure MQTT telemetry' card. Serials, hosts and broker refs are fake; no credentials are ever included.",
+  "runtime_status": {
+    "runtime_state": "configured",
+    "endpoint": "mqtt.example.invalid:8883",
+    "configured_device_count": 2,
+    "invalid_device_count": 0,
+    "stale_after_seconds": 120,
+    "live_available": true,
+    "source": "live_runtime",
+    "message": "",
+    "brokers": [
+      {
+        "broker_ref": "demo-broker",
+        "enabled": true,
+        "running": true,
+        "connected": true,
+        "source": "local_mqtt",
+        "endpoint": "192.168.1.60:1883",
+        "device_count": 1
+      },
+      {
+        "broker_ref": "zendure-cloud",
+        "enabled": true,
+        "running": true,
+        "connected": true,
+        "source": "zendure_cloud",
+        "endpoint": "mqtt.example.invalid:8883",
+        "device_count": 1
+      }
+    ],
+    "devices": [
+      {
+        "name": "Inverter 1 (DEMO-SF800-001)",
+        "status": "online",
+        "broker_ref": "demo-broker",
+        "source": "local_mqtt",
+        "topic_family": "solarflow_800_pro",
+        "age_seconds": 4,
+        "metric_count": 9,
+        "metrics": ["soc", "pv_input_w", "output_w", "output_limit_w"],
+        "capabilities": ["telemetry", "output_control"],
+        "issues": []
+      },
+      {
+        "name": "Inverter 2 (DEMO-SF800-002)",
+        "status": "online",
+        "broker_ref": "zendure-cloud",
+        "source": "zendure_cloud",
+        "topic_family": "solarflow_800_pro",
+        "age_seconds": 11,
+        "metric_count": 9,
+        "metrics": ["soc", "pv_input_w", "output_w", "output_limit_w"],
+        "capabilities": ["telemetry", "output_control"],
+        "issues": []
+      }
+    ]
+  }
+}

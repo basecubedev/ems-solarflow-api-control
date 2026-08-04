@@ -15,6 +15,10 @@ from ems.target_control import (
     DeviceControlExplanation,
 )
 
+pytestmark = [
+    pytest.mark.contract,
+]
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -737,6 +741,18 @@ def test_frontend_battery_flow_scenarios_execute_against_app_js():
         assert(arrayDeviceHtml.includes("WR-A PV"), "array device A is rendered");
         assert(arrayDeviceHtml.includes("WR-B PV"), "array device B is rendered");
         assert(arrayDeviceHtml.includes("WR-C PV"), "array device C is rendered");
+
+        render({
+          devices: {
+            INV_1: { serial_number: "EOD1NLN9P010902", soc: 71, pv_input_w: 900, output_w: 600, battery_power_w: 300 },
+            INV_2: { serial_number: "EOD1NLN9P010611", soc: 52, pv_input_w: 500, output_w: 400, battery_power_w: -100 },
+          },
+        });
+        const compactDeviceHtml = element("deviceFlowView").innerHTML;
+        assert(compactDeviceHtml.includes("INV_1"), "Flowchart renders the first compact EMS key");
+        assert(compactDeviceHtml.includes("INV_2"), "Flowchart renders the second compact EMS key");
+        assert(!compactDeviceHtml.includes("EOD1NLN9P010902"), "Flowchart label excludes the serial number");
+        assert(!compactDeviceHtml.includes("EOD1NLN9P010611"), "Flowchart label excludes the second serial number");
 
         render({ devices: {} });
         assert(element("deviceFlowView").innerHTML.includes("No per-device telemetry available."), "empty devices do not crash");

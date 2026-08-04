@@ -6,6 +6,8 @@ import subprocess
 import sys
 
 import emsctl
+import pytest
+
 from ems import config as cfg
 from ems import config_init as config_init_mod
 
@@ -22,6 +24,10 @@ from _emsctl_test_helpers import (
     write_config,
     write_discovery_config,
 )
+
+pytestmark = [
+    pytest.mark.integration,
+]
 
 
 def visible_input(responses):
@@ -969,10 +975,14 @@ def test_config_init_grid_meter_choices_are_runtime_supported():
         "shelly",
         "shelly_3em_gen1",
         "ecotracker",
-        "zendure_smartmeter_3ct_http",
+        "zendure_grid_meter_http",
         "tasmota_http",
         "zendure_smartmeter_d0",
         "mqtt",
+        # Backward-compatible local-HTTP aliases accepted from existing configs;
+        # both share the generic Zendure local-HTTP reader.
+        "zendure_smartmeter_3ct_http",
+        "zendure_smartmeter_d0_http",
     )
 
 

@@ -14,6 +14,11 @@ from ems.controller import (
 from ems.models import DeviceState
 from ems.state_store import BatteryFullChargeStateStore
 
+pytestmark = [
+    pytest.mark.power_control,
+    pytest.mark.unit,
+]
+
 
 def device(name="WR1", max_soc=90):
     return SimpleNamespace(
