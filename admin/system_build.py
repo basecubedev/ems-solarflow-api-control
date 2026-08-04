@@ -177,6 +177,7 @@ class SystemBuild:
     ems_image: str
     ems_digest: str
     release_tag: str | None = None
+    build_serial: int | None = None
 
     def as_dict(self) -> dict:
         return {
@@ -402,6 +403,7 @@ class SystemBuildResolver:
             ems_image=ems_ref,
             ems_digest=ems_identity.digest,
             release_tag=admin_identity.release_tag,
+            build_serial=admin_identity.build_serial,
         )
 
     def _development_descriptor(self, tag, channel, admin_ref, ems_ref):
@@ -775,6 +777,12 @@ def decide_upgrade_direction(running_ems, target: SystemBuild) -> UpgradeDirecti
     ``running_ems`` is the running EMS :class:`ImageIdentity` (all-``None`` when
     it cannot be inspected). Only the resolved :class:`SystemBuild` identity and
     the running EMS identity settle the verdict; nothing is pulled or re-listed.
+
+    The target identity carries the resolved build serial. Without it the
+    serial fallback in :func:`assess_upgrade` cannot fire, so every move from a
+    running build whose tag is not SemVer-comparable — ``latest`` above all —
+    ends as ``identity_unknown`` and is refused. The release listing already
+    supplies the serial for the same decision; both paths must agree.
     """
 
     from admin.image_identity import assess_upgrade
@@ -798,6 +806,7 @@ def decide_upgrade_direction(running_ems, target: SystemBuild) -> UpgradeDirecti
         version_label=target.canonical_tag,
         revision=target.revision,
         channel=target.channel,
+        build_serial=target.build_serial,
         build_id=target.build_id,
         release_tag=target.release_tag or target.canonical_tag,
     )
