@@ -11587,6 +11587,17 @@ function upgradeResponseFingerprint(data) {
 // fingerprint is mandatory: without it Upgrade System can never run, so the UI
 // must fail closed rather than claim the build is verified. The browser never
 // decides validity locally.
+function upgradeValidationFailureText(data, missingFingerprint) {
+  const directionReason =
+    data && data.upgrade_direction && data.upgrade_direction.reason;
+  return (
+    (data && (data.message || data.error)) ||
+    (missingFingerprint
+      ? "Verification did not return a System Build fingerprint. Verify again."
+      : directionReason || "This System Build cannot be installed.")
+  );
+}
+
 function upgradeValidationAccepted(ok, data) {
   return Boolean(
     ok &&
@@ -11733,11 +11744,7 @@ async function prepareUpgradeTarget() {
         data.valid &&
         data.upgrade_allowed !== false &&
         !upgradeResponseFingerprint(data);
-      upgradeState.error =
-        (data && (data.message || data.error)) ||
-        (missingFingerprint
-          ? "Verification did not return a System Build fingerprint. Verify again."
-          : "This System Build cannot be installed.");
+      upgradeState.error = upgradeValidationFailureText(data, missingFingerprint);
       resetSystemAlignmentPresentation(tag, "validation_failed", upgradeState.error);
       renderUpgradeBadges(upgradeSelectedRelease());
       setUpgradeReleaseStatus();

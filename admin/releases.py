@@ -55,6 +55,11 @@ IDENTITY_UNVERIFIED_REASON = (
     "needed) before making any changes."
 )
 ALREADY_CURRENT_REASON = "Already running this EMS build."
+BLOCKING_UPGRADE_REASONS = {
+    OLDER_THAN_RUNNING_BUILD: OLDER_THAN_RUNNING_BUILD_REASON,
+    DOWNGRADE_BLOCKED: OLDER_THAN_RUNNING_BUILD_REASON,
+    IDENTITY_UNKNOWN: IDENTITY_UNKNOWN_REASON,
+}
 # Test/development escape hatch: allow a legacy target with no build-identity
 # labels through the ``identity_unknown`` gate (e.g. a running ``latest`` whose
 # build cannot be compared to a pre-labels stable release). Never relaxes a
