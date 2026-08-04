@@ -25,7 +25,7 @@ MAX_SYSTEM_BUILD_ID_LENGTH = 128
 _HEX_REVISION = r"[0-9a-f]{7,40}"
 _POSITIVE_INTEGER = r"[1-9][0-9]*"
 _STABLE_OR_RC = re.compile(
-    r"^v[0-9]+\.[0-9]+\.[0-9]+(?:-RC[0-9]+)?-"
+    r"^v[0-9]+\.[0-9]+\.[0-9]+(?:-RC[0-9]*)?-"
     r"[a-z0-9][a-z0-9.-]*$"
 )
 _LATEST = re.compile(r"^latest-[a-z0-9][a-z0-9.-]*$")
