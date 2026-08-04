@@ -786,7 +786,7 @@ def decide_upgrade_direction(running_ems, target: SystemBuild) -> UpgradeDirecti
     """
 
     from admin.image_identity import assess_upgrade
-    from admin.releases import _version
+    from admin.releases import BLOCKING_UPGRADE_REASONS, _version
 
     if isinstance(running_ems, dict):
         running_ems = ImageIdentity(
@@ -822,5 +822,6 @@ def decide_upgrade_direction(running_ems, target: SystemBuild) -> UpgradeDirecti
     return UpgradeDirection(
         allowed=not assessment.blocked,
         state=assessment.state,
-        reason=assessment.warning or "",
+        reason=assessment.warning
+        or BLOCKING_UPGRADE_REASONS.get(assessment.state, ""),
     )

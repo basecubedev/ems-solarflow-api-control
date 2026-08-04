@@ -2233,6 +2233,47 @@ def test_js_discovery_signature_excludes_volatile_timestamps():
         assert field in signature
 
 
+def test_js_refused_upgrade_shows_the_reason_the_backend_gave():
+    """A refused System Build must say why it cannot be installed.
+
+    The validation answers `ok`/`valid` with `upgrade_allowed: false` and
+    neither `message` nor `error`, so `upgrade_direction.reason` is the only
+    copy explaining the refusal. Ignoring it left the user with a dead-end
+    "This System Build cannot be installed."
+    """
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is required for the upgrade failure text contract")
+    failure_text = _extract_fn(_read("admin.js"), "upgradeValidationFailureText")
+    script = (
+        failure_text
+        + """
+const refused = {valid: true, upgrade_allowed: false,
+  upgrade_direction: {state: "identity_unknown", reason: "Cannot verify it is newer."}};
+console.log(JSON.stringify({
+  reason: upgradeValidationFailureText(refused, false),
+  serverMessageWins: upgradeValidationFailureText(
+    {message: "server said no", upgrade_direction: {reason: "ignored"}}, false),
+  fingerprintWins: upgradeValidationFailureText(
+    {upgrade_direction: {reason: "ignored"}}, true),
+  fallback: upgradeValidationFailureText({upgrade_direction: {reason: ""}}, false),
+}));
+"""
+    )
+
+    result = subprocess.run(
+        [node, "-e", script], text=True, capture_output=True, check=False
+    )
+
+    assert result.returncode == 0, result.stderr
+    out = json.loads(result.stdout)
+    assert out["reason"] == "Cannot verify it is newer."
+    assert out["serverMessageWins"] == "server said no"
+    assert out["fingerprintWins"].startswith("Verification did not return")
+    assert out["fallback"] == "This System Build cannot be installed."
+
+
 def _run_signature_node(setup):
     node = shutil.which("node")
     if not node:

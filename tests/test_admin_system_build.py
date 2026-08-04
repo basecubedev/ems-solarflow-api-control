@@ -198,6 +198,51 @@ def test_release_older_than_the_running_latest_stays_refused():
 
     assert direction.allowed is False
     assert direction.state == "older_than_running_build"
+    assert direction.reason
+
+
+def test_every_refused_direction_states_why():
+    """A blocked verdict must carry the text the browser shows.
+
+    The validation answers `ok`/`valid` with `upgrade_allowed: false` and
+    neither `message` nor `error`, so the direction's reason is the only copy
+    explaining the refusal. An empty reason leaves the user with nothing but
+    "This System Build cannot be installed."
+    """
+
+    running = ImageIdentity(
+        digest="sha256:running",
+        version_label="latest",
+        release_tag="latest",
+        channel="latest",
+    )
+    refused = {
+        "identity_unknown": _pair(
+            "v0.9.0-RC1", channel="rc", release_tag="v0.9.0-RC1"
+        ),
+        "older_than_running_build": _pair(
+            "v0.9.0-RC1", channel="rc", release_tag="v0.9.0-RC1", build_serial=90
+        ),
+    }
+    for expected_state, images in refused.items():
+        build = SystemBuildResolver(docker=FakeDocker(images)).resolve("v0.9.0-RC1")
+        running_for_case = (
+            running
+            if expected_state == "identity_unknown"
+            else ImageIdentity(
+                digest="sha256:running",
+                version_label="latest",
+                release_tag="latest",
+                channel="latest",
+                build_serial=104,
+            )
+        )
+
+        direction = decide_upgrade_direction(running_for_case, build)
+
+        assert direction.allowed is False
+        assert direction.state == expected_state
+        assert direction.reason, f"{expected_state} gave no reason"
 
 
 def test_rejects_latest_pair_without_canonical_release_tag():
