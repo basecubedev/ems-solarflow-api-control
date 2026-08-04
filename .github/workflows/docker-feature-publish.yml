@@ -152,7 +152,7 @@ jobs:
           }
       - name: Upload release-contract log
         if: ${{ failure() }}
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: mqtt-release-contract-log
           path: release-contract.log
@@ -205,7 +205,7 @@ jobs:
         run: npm run test:e2e:system-build-packaged
       - name: Upload packaged browser diagnostics
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: packaged-system-build-browser-gate
           path: |
@@ -811,7 +811,7 @@ jobs:
         run: npm run test:e2e:system-build-remote
       - name: Upload remote browser diagnostics
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: remote-packaged-system-build-browser-gate
           path: |
