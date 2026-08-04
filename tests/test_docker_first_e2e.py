@@ -92,11 +92,30 @@ _SECRET_KEY = re.compile(r"(?i)(password|token|secret)")
 _SENSITIVE_CONFIG_KEYS = {"sn", "ip", "url", "host_url", "token"}
 
 
+def _secret_shape(value):
+    """Describe a secret's shape without revealing it.
+
+    The InfluxDB entrypoint passes these values to ``influx setup`` on a
+    command line, where an empty value and one that reads as a flag both shift
+    every following argument by one and make the container crash-loop. A dump
+    that prints only ``***REDACTED***`` hides exactly that, so record the two
+    shapes that break it — never the value.
+    """
+
+    if not value:
+        return "***EMPTY***"
+    flag_like = " flag-like" if value.startswith("-") else ""
+    return f"***REDACTED len={len(value)}{flag_like}***"
+
+
 def _redact_env(text):
     lines = []
     for line in text.splitlines():
-        key = line.split("=", 1)[0]
-        lines.append(f"{key}=***REDACTED***" if _SECRET_KEY.search(key) else line)
+        key, separator, value = line.partition("=")
+        if separator and _SECRET_KEY.search(key):
+            lines.append(f"{key}={_secret_shape(value)}")
+        else:
+            lines.append(line)
     return "\n".join(lines)
 
 
@@ -168,6 +187,12 @@ class Project:
         env_file = self.path / ".env"
         if env_file.exists():
             out.append("\n.env (redacted):\n" + _redact_env(env_file.read_text()))
+        influx_env = self.path / "config" / "influxdb.env"
+        if influx_env.exists():
+            out.append(
+                "\nconfig/influxdb.env (redacted):\n"
+                + _redact_env(influx_env.read_text())
+            )
         config_file = self.path / "config" / "config.json"
         if config_file.exists():
             out.append("\nconfig/config.json (redacted):\n" + _redact_config(config_file.read_text()))
@@ -181,6 +206,42 @@ def _wait(predicate, timeout=30, interval=1.0):
             return True
         time.sleep(interval)
     return predicate()
+
+
+def test_the_failure_dump_shows_secret_shape_but_never_the_secret():
+    """Expose the shapes that crash the container, never a value.
+
+    An empty or flag-like init value shifts every following ``influx setup``
+    argument by one and leaves the container crash-looping, so a dump that
+    prints only ``***REDACTED***`` cannot tell that story. The secrets
+    themselves must still never reach a CI log.
+    """
+
+    secret = "s3cr3t-value-that-must-not-leak"
+    flag_like = "-leading-dash-token"
+    rendered = _redact_env(
+        "\n".join(
+            (
+                "# a comment naming TOKEN but carrying no value",
+                "DOCKER_INFLUXDB_INIT_ORG=ems",
+                f"DOCKER_INFLUXDB_INIT_PASSWORD={secret}",
+                "DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=",
+                f"INFLUXDB_TOKEN={flag_like}",
+            )
+        )
+    )
+
+    assert secret not in rendered
+    assert flag_like not in rendered
+    assert "# a comment naming TOKEN but carrying no value" in rendered
+    assert "DOCKER_INFLUXDB_INIT_ORG=ems" in rendered
+    assert "DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=***EMPTY***" in rendered
+    assert (
+        f"DOCKER_INFLUXDB_INIT_PASSWORD=***REDACTED len={len(secret)}***" in rendered
+    )
+    assert (
+        f"INFLUXDB_TOKEN=***REDACTED len={len(flag_like)} flag-like***" in rendered
+    )
 
 
 def test_ems_only_quickstart(built_image, tmp_path):

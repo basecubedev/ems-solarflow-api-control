@@ -35,6 +35,32 @@ def bundled_config(**overrides):
 # --- secret env file generation / merge -------------------------------------
 
 
+def test_a_generated_secret_never_reads_as_a_command_line_flag(monkeypatch):
+    """A leading hyphen turns the value into a flag for ``influx setup``.
+
+    The InfluxDB entrypoint passes the password and admin token on a command
+    line inside the container. A value starting with ``-`` is read as a flag
+    rather than as the preceding option's argument, which shifts everything
+    after it and leaves the container crash-looping on a malformed setup call.
+    """
+
+    drawn = iter(["-would-read-as-a-flag", "safe-token-value"])
+    monkeypatch.setattr(
+        influx_setup.secrets, "token_urlsafe", lambda _size: next(drawn)
+    )
+
+    assert influx_setup.generate_secret() == "safe-token-value"
+
+
+def test_ruling_out_flag_like_secrets_keeps_alphabet_and_length():
+    """Resampling, not trimming: a stripped token would be shorter and weaker."""
+
+    for _ in range(200):
+        token = influx_setup.generate_secret()
+        assert not token.startswith("-")
+        assert len(token) == 43
+
+
 def test_ensure_secret_file_creates_with_generated_secrets(tmp_path):
     cfg = bundled_config()
     report = influx_setup.ensure_secret_file(cfg, base_dir=str(tmp_path))
