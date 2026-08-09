@@ -78,6 +78,30 @@ LOG_SOURCES = (
     LOG_SOURCE_PACKAGES,
 )
 
+WEB_AUDIT_EVENTS = (
+    "login.success",
+    "login.failure",
+    "logout",
+    "password.change",
+    "password.reset",
+)
+
+AUDIT_RESULTS = ("success", "failure", "denied")
+
+WEB_AUDIT_REASONS = (
+    "",
+    "first_password",
+    "invalid_password",
+    "password_changed",
+    "rate_limited",
+    "session_ended",
+)
+
+MAX_SOURCE_IP_LENGTH = 64
+MAX_ACTOR_LENGTH = 64
+SOURCE_IP_RE = re.compile(r"^[0-9A-Fa-f:.%\[\]]{1,64}$")
+ACTOR_RE = re.compile(r"^[A-Za-z0-9_.@-]{1,64}$")
+
 REQUIRED_OCI_LABELS = (
     "org.opencontainers.image.source",
     "org.opencontainers.image.version",
@@ -340,6 +364,47 @@ def validate_wifi_passphrase(value, *, allow_open=True):
             f"passphrase must be {MIN_WIFI_PASSPHRASE_LENGTH}..{MAX_WIFI_PASSPHRASE_LENGTH} characters",
         )
     return value
+
+
+def validate_web_audit_event(value):
+    """Only the fixed authentication events the web service may report."""
+
+    text = _require_text(value, "invalid_audit_event", max_length=32)
+    if text not in WEB_AUDIT_EVENTS:
+        raise ValidationError("invalid_audit_event", f"{text!r} is not a web audit event")
+    return text
+
+
+def validate_audit_result(value):
+    text = _require_text(value, "invalid_audit_result", max_length=16)
+    if text not in AUDIT_RESULTS:
+        raise ValidationError("invalid_audit_result", f"{text!r} is not an audit result")
+    return text
+
+
+def validate_web_audit_reason(value):
+    if value in (None, ""):
+        return ""
+    text = _require_text(value, "invalid_audit_reason", max_length=32)
+    if text not in WEB_AUDIT_REASONS:
+        raise ValidationError("invalid_audit_reason", f"{text!r} is not an audit reason")
+    return text
+
+
+def sanitize_source_ip(value):
+    """Bound the caller-supplied source address before it reaches a log line."""
+
+    text = str(value or "").strip()
+    if not text or not SOURCE_IP_RE.match(text):
+        return ""
+    return text[:MAX_SOURCE_IP_LENGTH]
+
+
+def sanitize_actor(value):
+    text = str(value or "").strip()
+    if not text or not ACTOR_RE.match(text):
+        return ""
+    return text[:MAX_ACTOR_LENGTH]
 
 
 def validate_boolean(value, *, field="value"):

@@ -123,6 +123,24 @@ def _as_tuple(values, key, default):
     return tuple(item for item in items if item)
 
 
+def read_host_paths(path):
+    """The two movable host roots, read without building the whole config.
+
+    ``resolve_paths`` needs these before a config object exists, so they are
+    parsed on their own here instead of through ``load_config``.
+    """
+
+    try:
+        values = _read_ini(path)
+    except (OSError, ConfigError, configparser.Error):
+        return {}
+    return {
+        key: values[key]
+        for key in ("install_root", "export_root")
+        if values.get(key)
+    }
+
+
 def load_allowed_images(path):
     """Parse ``allowed-images.conf``: one repository per line plus directives."""
 
@@ -166,6 +184,24 @@ def load_allowed_images(path):
     )
 
 
+def _backup_user(values):
+    """The backup account is package-owned, so its name is not configurable.
+
+    The package creates, confines and removes exactly one account. Accepting a
+    different name here would produce a configuration the account lifecycle
+    cannot honour, which is worse than refusing it.
+    """
+
+    configured = (values.get("backup_user") or "").strip()
+    if configured and configured != DEFAULT_BACKUP_USER:
+        raise ConfigError(
+            "backup_user_unsupported",
+            f"backup_user must be {DEFAULT_BACKUP_USER}; the backup account is created and "
+            "removed by this package and no other account is managed",
+        )
+    return DEFAULT_BACKUP_USER
+
+
 def load_config(paths):
     """Load ``appliance.conf``; missing files fall back to packaged defaults."""
 
@@ -175,15 +211,14 @@ def load_config(paths):
     except FileNotFoundError:
         return ApplianceConfig(images=images)
 
+    _backup_user(values)
     return ApplianceConfig(
         web_address=values.get("web_address") or DEFAULT_WEB_ADDRESS,
         web_port=_as_int(values, "web_port", DEFAULT_WEB_PORT),
         web_user=values.get("web_user") or DEFAULT_WEB_USER,
         socket_group=values.get("socket_group") or DEFAULT_SOCKET_GROUP,
-        backup_user=values.get("backup_user") or DEFAULT_BACKUP_USER,
-        ssh_key_accounts=_as_tuple(
-            values, "ssh_key_accounts", (values.get("backup_user") or DEFAULT_BACKUP_USER,)
-        ),
+        backup_user=DEFAULT_BACKUP_USER,
+        ssh_key_accounts=_as_tuple(values, "ssh_key_accounts", (DEFAULT_BACKUP_USER,)),
         admin_container=values.get("admin_container") or DEFAULT_ADMIN_CONTAINER,
         ems_container=values.get("ems_container") or DEFAULT_EMS_CONTAINER,
         influx_container=values.get("influx_container") or DEFAULT_INFLUX_CONTAINER,

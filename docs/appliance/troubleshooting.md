@@ -9,7 +9,7 @@
 | How do I recover a failed Admin update? | [admin-recovery.md](admin-recovery.md) — the appliance rolls back automatically; otherwise use Repair or *Install version → Previous known-good*. |
 | How do I install a specific Admin version? | [admin-recovery.md](admin-recovery.md) — Expert mode, *Exact release tag*. |
 | How do I add an SSH key? | [ssh-backup-access.md](ssh-backup-access.md) |
-| How do I back up files with rsync? | [ssh-backup-access.md](ssh-backup-access.md) |
+| How do I back up files with rsync? | rsync is not available: the backup account is SFTP-only by design. Use the `sftp` commands in [ssh-backup-access.md](ssh-backup-access.md). |
 | How do I install OS updates? | [os-updates.md](os-updates.md) |
 | How do I recover access after a WLAN change? | [network-recovery.md](network-recovery.md) |
 | How do I reset the Appliance Manager password locally? | `sudo ems-appliance password-reset` — see [installation.md](installation.md). |
@@ -41,6 +41,56 @@ ls -l /run/ems-appliance-manager/
 
 The socket must be `srw-rw---- root ems-appliance`, and the web account must be
 in the `ems-appliance` group.
+
+## "Security audit degraded" is shown after signing in
+
+Authentication worked, but the appliance could not hand the event to the agent,
+so it is **not** in `/var/log/ems-appliance-manager/audit/audit.log`. The banner
+names how many events were lost. Authentication is a recovery path and keeps
+working; the appliance simply refuses to claim an entry it did not write.
+
+```bash
+systemctl status ems-appliance-agent.service
+sudo tail -n 20 /var/log/ems-appliance-manager/web/appliance.log   # audit_unavailable
+systemctl restart ems-appliance-agent.service
+```
+
+The flag stays set until the web service restarts, because a lost entry never
+appears in the authoritative trail afterwards.
+
+## The package refused to install
+
+On a live host the package fails rather than report success over a broken
+appliance. The message names the step:
+
+| Message | What to do |
+|---|---|
+| `agent failed to start` / `web service failed to start` | `journalctl -u ems-appliance-agent.service -n 200` |
+| `the installation is not usable` | `sudo ems-appliance verify-install` lists which check failed |
+| `state migration failed` | `sudo ems-appliance migrate-state` and resolve the reported findings |
+| `the read-only SFTP export root could not be configured` | `sudo /usr/lib/ems-appliance-manager/setup-export-root.sh` |
+
+A migration **conflict** is not a failure: both copies were kept, the old one as
+`<name>.migrated-conflict`. Compare them and delete the one you do not want.
+
+`unavailable  docker: docker is not installed` is a report, not an error. Docker,
+NetworkManager, OpenSSH and `acl` are optional; the features that need them are
+shown as unavailable.
+
+## Backup access shows "degraded"
+
+**SSH & Backup Access → Export access** reports what it observes, not what was
+intended. `degraded` means an export is missing from the export root, is mounted
+read-write, or sshd does not chroot the account.
+
+```bash
+sudo systemctl start ems-appliance-export.service
+findmnt /srv/ems-appliance-export/config
+sshd -T -C user=ems-backup,host=localhost,addr=127.0.0.1 | grep -i chroot
+```
+
+`pending` simply means `/opt/ems-solarflow` has no exportable directory yet; the
+export root is built as soon as one appears.
 
 ## "Sign in to use the Appliance Manager" keeps coming back
 
@@ -78,7 +128,7 @@ Use **Admin → Repair** for a preview of what is wrong. Typical findings:
 | Docker is stopped | Start Docker |
 | Container missing | Reinstall the selected version |
 | Container stopped | Start Admin |
-| Compose file or Admin service missing | Regenerate the Admin section |
+| Compose file or Admin service missing | Manual: recreate it with `install-admin-console.sh`; the repair reports `manual_action_required` |
 | Bind path missing | Recreate the directory after confirmation |
 | Port 8090 occupied | Stop the shown process yourself; the appliance never kills it |
 
@@ -92,6 +142,35 @@ if you want to install it again.
 The pulled image is not the release you asked for, or it is not from the
 project's source. The install is refused on purpose. Pick another tag; do not
 work around the check.
+
+## "digest_unresolved"
+
+The registry did not return a canonical digest for the requested tag, so the
+appliance refuses to deploy a mutable reference. Nothing was changed and the
+running Admin is untouched. Retry, or pick another tag.
+
+## "digest_pin_failed"
+
+The immutable reference could not be written into the deployment file. The
+saved bytes were restored and the running Admin was never stopped. Check that
+the compose file exists and is writable.
+
+## "known_good_image_unavailable"
+
+A rollback target is recorded but its image is gone locally and cannot be
+pulled. The rollback stops instead of falling back to a tag. Pull the image, or
+install a specific version instead.
+
+## "repair_incomplete"
+
+The repair ran but at least one check still reports a problem. The remaining
+findings are listed with the result; Expert mode shows the full table.
+
+## "manual_action_required"
+
+Nothing could be repaired automatically — for example a missing compose or
+environment file. The listed steps are yours to perform; the operation is not
+reported as a success.
 
 ## "release_channel_unresolved"
 

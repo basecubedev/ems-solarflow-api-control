@@ -19,6 +19,7 @@ ENV_CANDIDATES = (".env.admin", "admin/environment")
 
 ENV_IMAGE_KEY = "EMS_ADMIN_IMAGE"
 ENV_TAG_KEY = "EMS_ADMIN_TAG"
+ENV_DIGEST_KEY = "EMS_ADMIN_DIGEST"
 
 TAG_SOURCE_ENV = "environment"
 TAG_SOURCE_COMPOSE = "compose"
@@ -260,3 +261,44 @@ def apply_image(deployment, repository, tag):
     updated = set_service_image(compose_text, deployment.service, f"{repository}:{tag}")
     atomic_write(deployment.compose_file, updated)
     return {"file": str(deployment.compose_file), "mode": TAG_SOURCE_COMPOSE}
+
+
+def apply_digest(deployment, repository, digest, *, tag=""):
+    """Pin the Admin service to ``repository@sha256:...``.
+
+    The compose file always carries the immutable reference, whatever the
+    original deployment used, because a tag variable cannot express a digest.
+    The human-readable tag is only mirrored into the environment file so an
+    operator can still see which release the digest belongs to.
+    """
+
+    reference = f"{repository}@{digest}"
+    try:
+        compose_text = deployment.compose_file.read_text(encoding="utf-8")
+    except OSError:
+        raise DeploymentError("compose_file_missing", "the Admin compose file is unreadable")
+
+    updated = set_service_image(compose_text, deployment.service, reference)
+    atomic_write(deployment.compose_file, updated)
+
+    if deployment.env_file.is_file():
+        try:
+            env_text = deployment.env_file.read_text(encoding="utf-8")
+            env_text = set_env(env_text, ENV_IMAGE_KEY, repository)
+            if tag:
+                env_text = set_env(env_text, ENV_TAG_KEY, tag)
+            env_text = set_env(env_text, ENV_DIGEST_KEY, digest)
+            atomic_write(deployment.env_file, env_text)
+        except OSError:
+            raise DeploymentError(
+                "environment_write_failed", "the Admin environment file could not be updated"
+            )
+
+    return {"reference": reference, "compose_file": str(deployment.compose_file)}
+
+
+def environment_hash(deployment):
+    try:
+        return compose_hash(deployment.env_file.read_text(encoding="utf-8"))
+    except OSError:
+        return ""

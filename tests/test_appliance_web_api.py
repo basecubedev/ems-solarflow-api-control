@@ -13,7 +13,7 @@ import threading
 import pytest
 
 from appliance.agent import AgentHandlers
-from appliance.agent_client import InProcessAgentClient
+from appliance.agent_client import AgentUnavailableError, InProcessAgentClient
 from appliance.auth import MIN_PASSWORD_LENGTH, SESSION_COOKIE_NAME, AuthStore
 from appliance.web import ApplianceWebApp, ApplianceWebServer
 from tests.helpers.appliance import (
@@ -25,6 +25,16 @@ from tests.helpers.appliance import (
 pytestmark = [pytest.mark.integration, pytest.mark.simulation]
 
 PASSWORD = "appliance-secret-1"
+
+
+class _OfflineAgent:
+    """An agent socket that is simply not there."""
+
+    def call(self, operation, **kwargs):
+        raise AgentUnavailableError("the appliance agent is not reachable")
+
+    def available(self):
+        return False
 
 
 class Client:
@@ -209,6 +219,108 @@ def test_login_failures_and_successes_are_audited(signed_in):
     assert not any("wrong-password-here" in json.dumps(entry) for entry in services.audit.tail())
 
 
+# --- the audit trail belongs to the agent ----------------------------------
+
+
+def test_the_web_module_never_opens_the_audit_log_itself():
+    import appliance.web as web_module
+
+    assert not hasattr(web_module, "AuditLog"), (
+        "the web service must report audit events to the agent, not write the log"
+    )
+
+
+def test_every_authentication_event_is_an_allowlisted_agent_operation(signed_in):
+    services, app, client = signed_in
+    recorded = []
+    original = app.agent.call
+
+    def spy(operation, **kwargs):
+        recorded.append((operation, kwargs))
+        return original(operation, **kwargs)
+
+    app.agent.call = spy
+    client.post("/api/session/logout")
+    client.login()
+    client.post(
+        "/api/settings/password",
+        {"current_password": PASSWORD, "password": "another-secret-1", "confirmation": "another-secret-1"},
+    )
+
+    audit_calls = [entry for entry in recorded if entry[0] == "audit.record_web_event"]
+    assert [entry[1]["event"] for entry in audit_calls] == [
+        "logout",
+        "login.success",
+        "password.change",
+    ]
+    for _, fields in audit_calls:
+        assert set(fields) <= {"actor", "source_ip", "event", "result", "reason"}
+
+
+def test_authentication_survives_an_unreachable_agent(appliance):
+    services, app, client = appliance
+    app.agent = _OfflineAgent()
+    app.audit.agent = app.agent
+
+    status, payload, _ = client.post(
+        "/api/session/setup", {"password": PASSWORD, "confirmation": PASSWORD}
+    )
+    assert status == 200, payload
+    assert payload["authenticated"] is True
+    assert payload["security_audit"]["degraded"] is True
+    assert payload["security_audit"]["authoritative"] is False
+    assert payload["security_audit"]["last_error"] == "agent_unavailable"
+
+
+def test_a_degraded_audit_is_visible_on_the_session_and_settings_endpoints(appliance):
+    services, app, client = appliance
+    app.auth.create(PASSWORD, PASSWORD)
+    app.agent = _OfflineAgent()
+    app.audit.agent = app.agent
+    client.login()
+
+    _, session, _ = client.get("/api/session")
+    assert session["security_audit"]["state"] == "degraded"
+    assert session["security_audit"]["unrecorded_events"] >= 1
+    assert session["security_audit"]["message"]
+
+    _, settings, _ = client.get("/api/settings")
+    assert settings["security_audit"]["degraded"] is True
+
+
+def test_an_unrecorded_audit_event_is_written_to_the_web_owned_log(appliance):
+    services, app, client = appliance
+    app.auth.create(PASSWORD, PASSWORD)
+    app.agent = _OfflineAgent()
+    app.audit.agent = app.agent
+    client.login("wrong-password-here")
+
+    entries = app.web_log.tail()
+    assert entries, "the web service must record that an audit event was lost"
+    assert entries[-1]["event"] == "audit_unavailable"
+    assert entries[-1]["audit_event"] == "login.failure"
+    assert not any("wrong-password-here" in json.dumps(entry) for entry in entries)
+
+
+def test_the_web_log_stays_bounded(tmp_path):
+    from appliance.audit import WebLog
+
+    log = WebLog(tmp_path / "appliance.log", max_bytes=2048)
+    for index in range(400):
+        log.warn("audit_unavailable", audit_event="login.failure", error=f"attempt-{index}")
+
+    assert log.path.stat().st_size <= 2048 + 512
+    assert log.path.with_name("appliance.log.1").is_file()
+
+
+def test_a_reachable_agent_reports_a_healthy_audit(signed_in):
+    services, app, client = signed_in
+    _, session, _ = client.get("/api/session")
+    assert session["security_audit"]["state"] == "healthy"
+    assert session["security_audit"]["authoritative"] is True
+    assert session["security_audit"]["unrecorded_events"] == 0
+
+
 def test_a_password_change_invalidates_every_session(signed_in):
     services, app, client = signed_in
     status, payload, _ = client.post(
@@ -258,6 +370,20 @@ def test_a_mutation_with_a_foreign_csrf_token_is_refused(signed_in):
         "/api/admin/restart", {}, headers={"X-Appliance-CSRF": "forged"}, csrf=False
     )
     assert status == 403
+
+
+def test_a_lookalike_origin_is_refused(signed_in):
+    _, _, client = signed_in
+    # "evil-<host>" ends with the real host, so a suffix comparison would let
+    # an attacker-controlled origin through.
+    status, payload, _ = client.request(
+        "POST",
+        "/api/admin/restart",
+        {},
+        headers={"Origin": f"http://evil-127.0.0.1:{client.port}"},
+    )
+    assert status == 403
+    assert payload["error"] == "csrf_origin_rejected"
 
 
 def test_a_foreign_origin_is_refused(signed_in):

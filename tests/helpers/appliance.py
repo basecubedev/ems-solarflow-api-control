@@ -9,6 +9,7 @@ outside its temporary directory.
 
 import json
 import re
+from pathlib import Path
 
 from appliance.admin_deployment import read_service_image
 from appliance.commands import CommandError, CommandResult
@@ -72,12 +73,29 @@ passwordauthentication no
 pubkeyauthentication yes
 """
 
+# Mirrors the shipped sshd drop-in: every restriction the appliance promises
+# for the backup account, so a fake that silently drops one shows up as drift.
+SSHD_BACKUP_MATCH = """permitrootlogin no
+passwordauthentication no
+kbdinteractiveauthentication no
+pubkeyauthentication yes
+permittty no
+allowtcpforwarding no
+allowagentforwarding no
+x11forwarding no
+permittunnel no
+gatewayports no
+chrootdirectory {export_root}
+forcecommand internal-sftp -P symlink,hardlink,rename,posix-rename,remove,mkdir,rmdir,setstat,fsetstat
+"""
+
 
 class FakeHost:
     """A scripted Raspberry Pi host."""
 
-    def __init__(self, paths, *, tools=None):
+    def __init__(self, paths, *, tools=None, root=None):
         self.paths = paths
+        self.root = Path(root) if root is not None else paths.state_dir.parents[2]
         self.tools = set(
             tools
             or {
@@ -113,8 +131,50 @@ class FakeHost:
         self.nmcli_connectivity = "full"
         self.wifi_connect_ok = True
         self.listening_ports = ""
+        self.ss_exit_code = 0
+        self.ss_stderr = ""
         self.calls = []
         self.compose_up_fails = False
+        self.start_docker_succeeds = True
+        self.docker_api_broken = False
+        self.container_start_sticks = True
+        # A container that a restart policy brings straight back up: docker
+        # stop returns 0 and the container is running again a moment later.
+        self.stop_container_sticks = True
+        self.sshd_backup_match = SSHD_BACKUP_MATCH.format(export_root=paths.export_root)
+        self.sshd_config_valid = True
+        self.reload_failures = set()
+
+    def write_export_mounts(
+        self, *, read_only=True, names=("config", "backups", "data"), source_for=None
+    ):
+        """Publish the export binds in the fake ``/proc/1/mountinfo``.
+
+        The mount root and the device are what the kernel reports for a bind:
+        the source path inside its own filesystem, and that filesystem's device
+        number. Together they identify which directory a mount point publishes.
+        """
+
+        options = "ro,relatime" if read_only else "rw,relatime"
+        lines = ["21 1 0:20 / /proc rw,relatime shared:5 - proc proc rw"]
+        for index, name in enumerate(names):
+            target = self.paths.export_root / name
+            source = (source_for or (lambda item: self.paths.install_root / item))(name)
+            lines.append(
+                f"{30 + index} 1 {self.device_of(self.paths.install_root)} {source} {target} "
+                f"{options} shared:9 - ext4 /dev/root {options[:2]}"
+            )
+        mountinfo = self.root / "proc" / "1" / "mountinfo"
+        mountinfo.parent.mkdir(parents=True, exist_ok=True)
+        mountinfo.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return mountinfo
+
+    @staticmethod
+    def device_of(path):
+        import os
+
+        entry = os.stat(str(path))
+        return f"{os.major(entry.st_dev)}:{os.minor(entry.st_dev)}"
 
     # --- image / container helpers ---------------------------------------
 
@@ -253,6 +313,8 @@ class FakeHost:
         if not self.docker_running:
             return self._result("docker", args, 1, "", "Cannot connect to the Docker daemon")
         if args[:1] == ["version"]:
+            if self.docker_api_broken:
+                return self._result("docker", args, 1, "", "Cannot connect to the Docker daemon")
             return self._result("docker", args, 0, "26.1.5\n")
         if args[:1] == ["inspect"] and "container" in args:
             name = args[-1]
@@ -280,29 +342,53 @@ class FakeHost:
             return self._result("docker", args, 0)
         if args[:1] == ["stop"]:
             name = args[-1]
-            if name in self.containers:
+            if name in self.containers and self.stop_container_sticks:
                 self.containers[name]["State"]["Running"] = False
                 self.containers[name]["State"]["Status"] = "exited"
             return self._result("docker", args, 0)
-        if args[:1] == ["start"]:
+        if args[:1] in (["start"], ["restart"]):
             name = args[-1]
             if name not in self.containers:
                 return self._result("docker", args, 1, "", "No such container")
-            self.containers[name]["State"]["Running"] = True
-            self.containers[name]["State"]["Status"] = "running"
+            if self.container_start_sticks:
+                self.containers[name]["State"]["Running"] = True
+                self.containers[name]["State"]["Status"] = "running"
             return self._result("docker", args, 0)
-        if args[:1] == ["restart"]:
-            name = args[-1]
-            if name not in self.containers:
-                return self._result("docker", args, 1, "", "No such container")
-            self.containers[name]["State"]["Running"] = True
-            self.containers[name]["State"]["Status"] = "running"
-            return self._result("docker", args, 0)
+        if args[:1] == ["ps"]:
+            return self._docker_ps(args)
         if args[:1] == ["logs"]:
             return self._result("docker", args, 0, "admin log line\npassword=supersecret\n")
         if args[:1] == ["compose"]:
             return self._compose(args)
         return self._result("docker", args, 1, "", "unsupported docker command")
+
+    def _docker_ps(self, args):
+        """``docker ps --filter publish=<port>``: which containers own a port."""
+
+        wanted = ""
+        for index, value in enumerate(args):
+            if value == "--filter" and index + 1 < len(args):
+                key, _, candidate = args[index + 1].partition("=")
+                if key == "publish":
+                    wanted = candidate
+        names = []
+        for name, payload in self.containers.items():
+            if not payload["State"].get("Running"):
+                continue
+            for bindings in (payload.get("NetworkSettings") or {}).get("Ports", {}).values():
+                for binding in bindings or []:
+                    if not wanted or str(binding.get("HostPort", "")) == wanted:
+                        names.append(name)
+        return self._result("docker", args, 0, "".join(f"{name}\n" for name in sorted(set(names))))
+
+    def publish_port(self, name, host_port, *, container_port=None):
+        """Make ``name`` publish ``host_port`` the way ``docker inspect`` shows it."""
+
+        container = self.containers[name]
+        ports = container.setdefault("NetworkSettings", {}).setdefault("Ports", {})
+        key = f"{container_port or host_port}/tcp"
+        ports.setdefault(key, []).append({"HostIp": "0.0.0.0", "HostPort": str(host_port)})
+        return container
 
     def _compose(self, args):
         if self.compose_up_fails and "up" in args:
@@ -342,7 +428,23 @@ class FakeHost:
             unit = args[-1]
             self.units.setdefault(unit, {}).update({"active": "inactive", "enabled": "disabled"})
             return self._result("systemctl", args, 0)
-        if args[:1] in (["start"], ["stop"], ["reboot"], ["poweroff"], ["try-restart"]):
+        if args[:1] == ["start"]:
+            unit = args[-1]
+            self.units.setdefault(unit, {})
+            if unit == "docker.service":
+                self.docker_running = self.start_docker_succeeds
+                self.units[unit]["active"] = "active" if self.start_docker_succeeds else "failed"
+                if not self.start_docker_succeeds:
+                    return self._result("systemctl", args, 1, "", "Job for docker.service failed")
+            else:
+                self.units[unit]["active"] = "active"
+            return self._result("systemctl", args, 0)
+        if args[:1] == ["reload"]:
+            unit = args[-1]
+            if unit in self.reload_failures:
+                return self._result("systemctl", args, 1, "", f"Failed to reload {unit}")
+            return self._result("systemctl", args, 0)
+        if args[:1] in (["stop"], ["reboot"], ["poweroff"], ["try-restart"]):
             return self._result("systemctl", args, 0)
         return self._result("systemctl", args, 0)
 
@@ -436,10 +538,18 @@ class FakeHost:
         return self._result("getent", args, 2, "")
 
     def _sshd(self, args):
+        if "-t" in args:
+            if self.sshd_config_valid:
+                return self._result("sshd", args, 0, "")
+            return self._result("sshd", args, 1, "", "/etc/ssh/sshd_config: line 4: Bad option")
+        if "-C" in args and self.sshd_backup_match is not None:
+            return self._result("sshd", args, 0, self.sshd_backup_match)
         return self._result("sshd", args, 0, SSHD_CONFIG)
 
     def _ss(self, args):
-        return self._result("ss", args, 0, self.listening_ports)
+        return self._result(
+            "ss", args, self.ss_exit_code, self.listening_ports, self.ss_stderr
+        )
 
 
 class ScriptedRunner:
@@ -529,9 +639,12 @@ def appliance_paths(tmp_path):
         state_dir=tmp_path / "var" / "lib" / "ems-appliance-manager",
         log_dir=tmp_path / "var" / "log" / "ems-appliance-manager",
         runtime_dir=tmp_path / "run" / "ems-appliance-manager",
+        export_root=tmp_path / "srv" / "ems-appliance-export",
     )
     for directory in (paths.install_root, paths.config_dir, paths.runtime_dir):
         directory.mkdir(parents=True, exist_ok=True)
+    for target in paths.export_targets().values():
+        target.mkdir(parents=True, exist_ok=True)
     return paths
 
 
@@ -553,7 +666,12 @@ def appliance_config(**overrides):
 
 def build_test_services(tmp_path, *, host=None, config=None, catalogue=None, health=None, clock=None):
     paths = appliance_paths(tmp_path)
-    host = host or FakeHost(paths)
+    host = host or FakeHost(paths, root=tmp_path)
+    # A normal host has the EMS directories and their read-only binds; a test
+    # that needs one of them absent removes it explicitly.
+    for source in paths.export_paths().values():
+        source.mkdir(parents=True, exist_ok=True)
+    host.write_export_mounts()
     clock = clock or FrozenClock()
     services = build_services(
         paths=paths,

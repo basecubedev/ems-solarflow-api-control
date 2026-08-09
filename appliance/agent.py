@@ -17,7 +17,7 @@ import socketserver
 import struct
 import threading
 
-from appliance import admin_lifecycle, network, packages, ssh_service, support_archive
+from appliance import admin_lifecycle, network, packages, ssh_service, support_archive, validation
 from appliance.audit import RESULT_DENIED, RESULT_FAILURE, RESULT_SUCCESS
 from appliance.operations import (
     STATE_FAILED_RECOVERABLE,
@@ -107,7 +107,32 @@ class AgentHandlers:
         if spec.name == "operations.acknowledge":
             record = self.services.operations.acknowledge(args["operation_id"])
             return {"operation": record.to_dict()}
+        if spec.name == "audit.record_web_event":
+            return self._record_web_event(args, actor=actor, source_ip=source_ip)
         return self._read_only(spec, args)
+
+    # --- audit -----------------------------------------------------------
+
+    def _record_web_event(self, args, *, actor, source_ip):
+        """The web service's only way into the audit log.
+
+        Every field was validated against a fixed set by the protocol, so
+        nothing the browser sent can widen an action name or reach a path.
+        """
+
+        entry = self.services.audit.record(
+            args["event"],
+            user=actor,
+            source_ip=source_ip,
+            target=args["reason"],
+            result=args["result"],
+        )
+        return {
+            "recorded": True,
+            "event": args["event"],
+            "result": args["result"],
+            "timestamp": entry.get("timestamp"),
+        }
 
     # --- read-only -------------------------------------------------------
 
@@ -362,8 +387,8 @@ class _RequestHandler(socketserver.StreamRequestHandler):
             )
             return
 
-        actor = str(payload.pop("actor", "") or "")
-        source_ip = str(payload.pop("source_ip", "") or "")
+        actor = validation.sanitize_actor(payload.pop("actor", ""))
+        source_ip = validation.sanitize_source_ip(payload.pop("source_ip", ""))
         self._reply(server.handle_request_payload(payload, actor=actor, source_ip=source_ip, peer=peer))
 
     def _reply(self, payload):

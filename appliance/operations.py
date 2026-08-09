@@ -16,7 +16,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from appliance.paths import atomic_write, ensure_within
+from appliance.paths import AGENT_FILE_MODE, atomic_write, ensure_within
 from appliance.redaction import redact_mapping
 
 STATE_PLANNED = "planned"
@@ -29,6 +29,7 @@ STATE_ROLLING_BACK = "rolling_back"
 STATE_ROLLED_BACK = "rolled_back"
 STATE_FAILED_TERMINAL = "failed_terminal"
 STATE_CANCELLED = "cancelled"
+STATE_MANUAL_ACTION_REQUIRED = "manual_action_required"
 
 ALL_STATES = (
     STATE_PLANNED,
@@ -41,10 +42,17 @@ ALL_STATES = (
     STATE_ROLLED_BACK,
     STATE_FAILED_TERMINAL,
     STATE_CANCELLED,
+    STATE_MANUAL_ACTION_REQUIRED,
 )
 
 TERMINAL_STATES = frozenset(
-    {STATE_SUCCEEDED, STATE_ROLLED_BACK, STATE_FAILED_TERMINAL, STATE_CANCELLED}
+    {
+        STATE_SUCCEEDED,
+        STATE_ROLLED_BACK,
+        STATE_FAILED_TERMINAL,
+        STATE_CANCELLED,
+        STATE_MANUAL_ACTION_REQUIRED,
+    }
 )
 
 TRANSITIONS = {
@@ -57,6 +65,7 @@ TRANSITIONS = {
             STATE_ROLLING_BACK,
             STATE_FAILED_RECOVERABLE,
             STATE_FAILED_TERMINAL,
+            STATE_MANUAL_ACTION_REQUIRED,
         }
     ),
     STATE_VERIFYING: frozenset(
@@ -65,6 +74,7 @@ TRANSITIONS = {
             STATE_ROLLING_BACK,
             STATE_FAILED_RECOVERABLE,
             STATE_FAILED_TERMINAL,
+            STATE_MANUAL_ACTION_REQUIRED,
         }
     ),
     STATE_ROLLING_BACK: frozenset({STATE_ROLLED_BACK, STATE_FAILED_TERMINAL}),
@@ -73,6 +83,7 @@ TRANSITIONS = {
     STATE_ROLLED_BACK: frozenset(),
     STATE_FAILED_TERMINAL: frozenset(),
     STATE_CANCELLED: frozenset(),
+    STATE_MANUAL_ACTION_REQUIRED: frozenset(),
 }
 
 MAX_PROGRESS_ENTRIES = 200
@@ -174,10 +185,12 @@ class OperationStore:
 
     def _save(self, operation):
         operation.updated_at = self._time()
+        # The record carries the confirmation token, so it is root-only.
         atomic_write(
             self._path(operation.operation_id),
             json.dumps(asdict(operation), indent=2, sort_keys=True) + "\n",
-            mode=0o640,
+            mode=AGENT_FILE_MODE,
+            owner_root=True,
         )
         return operation
 

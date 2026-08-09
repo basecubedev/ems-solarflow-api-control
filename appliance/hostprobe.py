@@ -15,6 +15,11 @@ MODEL_FILE = "proc/device-tree/model"
 OS_RELEASE_FILE = "etc/os-release"
 UPTIME_FILE = "proc/uptime"
 MEMINFO_FILE = "proc/meminfo"
+# PID 1 is in the initial mount namespace. The agent's own namespace is a
+# snapshot taken when systemd applied ProtectHome/PrivateTmp, so /proc/self
+# would keep reporting the mount table as it looked at service start.
+HOST_MOUNTINFO_FILE = "proc/1/mountinfo"
+MOUNTINFO_FILE = "proc/self/mountinfo"
 THERMAL_FILE = "sys/class/thermal/thermal_zone0/temp"
 REBOOT_REQUIRED_FILE = "var/run/reboot-required"
 REBOOT_REQUIRED_PKGS = "var/run/reboot-required.pkgs"
@@ -127,6 +132,40 @@ class HostProbe:
             "used_mb": used // (1024 * 1024),
             "used_percent": round(used * 100.0 / total, 1) if total else None,
         }
+
+    def mounts(self):
+        """Mount point → option set, as the host sees it right now."""
+
+        return {target: record["options"] for target, record in self.mount_records().items()}
+
+    def mount_records(self):
+        """Mount point → what the kernel publishes there.
+
+        ``root`` is the path of the mounted subtree inside its own filesystem
+        and ``device`` is that filesystem's device number, so together they say
+        which directory a bind mount actually exposes.
+        """
+
+        raw = self._read(HOST_MOUNTINFO_FILE)
+        if not raw:
+            raw = self._read(MOUNTINFO_FILE)
+        table = {}
+        for line in (raw or "").splitlines():
+            fields = line.split(" ")
+            if len(fields) < 6:
+                continue
+            try:
+                separator = fields.index("-", 6)
+            except ValueError:
+                separator = len(fields)
+            table[fields[4].replace("\\040", " ")] = {
+                "options": frozenset(fields[5].split(",")),
+                "device": fields[2],
+                "root": fields[3].replace("\\040", " "),
+                "fstype": fields[separator + 1] if len(fields) > separator + 1 else "",
+                "source": fields[separator + 2] if len(fields) > separator + 2 else "",
+            }
+        return table
 
     def reboot_required(self):
         marker = self.root / REBOOT_REQUIRED_FILE

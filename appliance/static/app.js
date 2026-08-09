@@ -20,7 +20,8 @@
     operation: null,
     pending: null,
     pollTimer: null,
-    busy: false
+    busy: false,
+    securityAudit: null
   };
 
   /* ---------------------------------------------------------------- DOM */
@@ -166,8 +167,28 @@
       state.authenticated = !!payload.authenticated;
       state.passwordConfigured = !!payload.password_configured;
       state.csrf = payload.csrf_token || "";
+      state.securityAudit = payload.security_audit || null;
       return payload;
     });
+  }
+
+  /* The appliance must never imply an authentication event reached the
+     authoritative audit log when the agent could not record it. */
+  function renderAuditNotice() {
+    var audit = state.securityAudit;
+    if (!audit || !audit.degraded) return null;
+    return el("div", { class: "warning-item severe", "data-test": "audit-degraded", role: "status" }, [
+      el("strong", { text: "Security audit degraded: " }),
+      el("span", {
+        text: audit.message ||
+          "Authentication events could not be written to the audit log."
+      }),
+      el("span", {
+        class: "fact-value",
+        text: " " + format(audit.unrecorded_events) + " event(s) unrecorded" +
+          (audit.last_error ? " (" + audit.last_error + ")" : "")
+      })
+    ]);
   }
 
   function submitGate(event) {
@@ -184,6 +205,7 @@
       state.authenticated = true;
       state.passwordConfigured = true;
       state.csrf = payload.csrf_token || "";
+      state.securityAudit = payload.security_audit || null;
       document.getElementById("gate-form").reset();
       showShell();
       renderNav();
@@ -271,9 +293,17 @@
     if (!operation) return wrapper;
 
     var isTerminal = !!operation.terminal;
-    var level = operation.state === "succeeded" ? "ok"
-      : (operation.state === "rolled_back" ? "warn"
-        : (isTerminal && operation.state !== "cancelled" ? "bad" : "warn"));
+    var OUTCOMES = {
+      succeeded: { level: "ok", label: "completed" },
+      rolled_back: { level: "warn", label: "rolled back" },
+      manual_action_required: { level: "warn", label: "manual action required" },
+      failed_recoverable: { level: "bad", label: "incomplete" },
+      failed_terminal: { level: "bad", label: "failed" },
+      cancelled: { level: "idle", label: "cancelled" }
+    };
+    var outcome = OUTCOMES[operation.state] ||
+      { level: isTerminal ? "bad" : "warn", label: operation.state.replace(/_/g, " ") };
+    var level = outcome.level;
 
     var progress = el("ol", { class: "progress-list" },
       (operation.progress || []).slice(-6).map(function (entry) {
@@ -302,13 +332,99 @@
       "Current operation",
       operation.type + " · " + operation.stage,
       [
-        el("div", {}, [tone(level, operation.state.replace(/_/g, " "))]),
+        el("div", { "data-test": "operation-outcome" }, [tone(level, outcome.label)]),
         operation.error ? el("p", { class: "control-result", text: operation.error.message }) : null,
+        renderOperationDetails(operation),
         progress,
         el("div", { class: "control-stage-actions" }, actions)
       ],
       "operation-stage"
     ));
+    return wrapper;
+  }
+
+  var VERIFICATION_LABELS = {
+    container_missing: "the Admin container does not exist",
+    container_not_running: "the Admin container is not running",
+    container_still_running: "the Admin container is still running",
+    container_unhealthy: "the Docker health check reports unhealthy",
+    image_mismatch: "a different image than expected is running",
+    api_unreachable: "the Admin web interface did not answer",
+    version_unreadable: "the Admin version could not be read",
+    version_mismatch: "the running Admin reports a different version"
+  };
+
+  /* A Docker command that returned 0 is not a verified Admin, so the failing
+     fact is named instead of a generic "unhealthy". */
+  function renderVerification(verification) {
+    if (!verification || verification.verified) return null;
+    var reasons = (verification.failures || []).map(function (code) {
+      return el("li", { class: "warning-item", text: VERIFICATION_LABELS[code] || code });
+    });
+    var facts = [
+      fact("Container", verification.container_state),
+      fact("Admin endpoint", verification.api_reachable ? "answered" : "no answer"),
+      fact("Reported version", verification.version)
+    ];
+    if (expert()) {
+      facts.push(fact("Running digest", verification.active_digest, { mono: true }));
+      facts.push(fact("Expected digest", verification.expected_digest, { mono: true }));
+    }
+    return el("div", { "data-test": "verification-failure" }, [
+      el("p", { class: "control-stage-subtitle", text: "Verification failed:" }),
+      el("ul", { class: "warning-list", "data-test": "verification-reasons" }, reasons)
+    ].concat(facts));
+  }
+
+  function renderOperationDetails(operation) {
+    var result = operation.result || {};
+    var manual = result.manual_actions || [];
+    var remaining = result.remaining_findings || [];
+    var unverified = result.unverified_actions || [];
+    var verification = renderVerification(result.verification);
+    var untouched = result.admin_untouched === true;
+    if (!manual.length && !remaining.length && !unverified.length && !verification && !untouched) {
+      return null;
+    }
+
+    var wrapper = el("div", { "data-test": "operation-details" }, []);
+    /* A preflight failure costs no downtime; saying so stops an operator from
+       hunting for an outage that never happened. */
+    if (untouched) {
+      wrapper.appendChild(el("p", {
+        class: "warning-item",
+        "data-test": "admin-untouched",
+        text: "Preflight failed before anything was changed. The Admin that was running is still running and the deployment files are unchanged."
+      }));
+    }
+    if (verification) wrapper.appendChild(verification);
+    if (unverified.length) {
+      wrapper.appendChild(el("p", { class: "control-stage-subtitle", text: "Repair actions that could not be verified:" }));
+      wrapper.appendChild(el("ul", { class: "warning-list", "data-test": "unverified-actions" },
+        unverified.map(function (item) {
+          return el("li", { class: "warning-item severe" }, [
+            el("strong", { text: item.action + ": " }),
+            el("span", { text: VERIFICATION_LABELS[item.result] || item.result })
+          ]);
+        })));
+    }
+    if (manual.length) {
+      wrapper.appendChild(el("p", { class: "control-stage-subtitle", text: "Do this yourself:" }));
+      wrapper.appendChild(el("ul", { class: "warning-list", "data-test": "manual-actions" },
+        manual.map(function (item) {
+          return el("li", { class: "warning-item", text: String(item) });
+        })));
+    }
+    if (remaining.length && expert()) {
+      wrapper.appendChild(el("p", { class: "control-stage-subtitle", text: "Still failing:" }));
+      wrapper.appendChild(renderFindings(remaining));
+    } else if (remaining.length) {
+      wrapper.appendChild(el("p", {
+        class: "warning-item severe",
+        "data-test": "remaining-summary",
+        text: remaining.length + " check(s) still report a problem."
+      }));
+    }
     return wrapper;
   }
 
@@ -408,7 +524,8 @@
       if (key === "blockers" || key === "findings" || key === "packages" || key === "keys") return;
       if (value === null || typeof value === "object") return;
       if (!expert() && (key === "target_digest" || key === "target_architecture" ||
-        key === "current_digest" || key === "legacy_labels_accepted")) return;
+        key === "current_digest" || key === "legacy_labels_accepted" ||
+        key === "target_reference" || key === "target_source")) return;
       rows.push(fact(key.replace(/_/g, " "), value, { mono: /digest|revision/.test(key) }));
     });
     wrapper.appendChild(el("div", { class: "control-result" }, rows));
@@ -560,8 +677,13 @@
 
       card("Docker", [
         el("p", { class: "status-value" }, [
-          tone((docker.daemon || {}).state === "running" ? "ok" : "bad", (docker.daemon || {}).state || "unknown")
+          /* "unavailable" means Docker is not installed at all: an optional
+             host feature, not a broken appliance. */
+          tone(dockerTone(docker), (docker.daemon || {}).state || "unknown")
         ]),
+        (docker.daemon || {}).state === "unavailable"
+          ? el("p", { class: "control-stage-subtitle", text: "Docker is not installed; Admin container management is unavailable." })
+          : null,
         expert() ? fact("Engine", (docker.daemon || {}).version) : null
       ], "card-docker"),
 
@@ -594,10 +716,12 @@
     main.appendChild(cards);
 
     main.appendChild(el("h2", { class: "section-title", text: "Warnings" }));
+    var auditNotice = renderAuditNotice();
+    if (auditNotice) main.appendChild(el("ul", { class: "warning-list" }, [auditNotice]));
     var warnings = health.warnings || [];
-    if (!warnings.length) {
+    if (!warnings.length && !auditNotice) {
       main.appendChild(el("p", { class: "empty-state", text: "No warnings. The appliance looks healthy." }));
-    } else {
+    } else if (warnings.length) {
       main.appendChild(el("ul", { class: "warning-list", "data-test": "warnings" },
         warnings.map(function (warning) {
           var severe = /unhealthy|not_running|not_installed|storage_low|package_manager/.test(warning.code);
@@ -609,6 +733,13 @@
     }
 
     main.appendChild(quickActions());
+  }
+
+  function dockerTone(docker) {
+    var state = (docker.daemon || {}).state;
+    if (state === "running") return "ok";
+    if (state === "unavailable") return "warn";
+    return "bad";
   }
 
   function emsState(docker) {
@@ -1070,9 +1201,11 @@
     }
 
     main.appendChild(el("h2", { class: "section-title", text: "SSH & backup access" }));
+    /* The hint states the design; what is actually in force is reported by the
+       export card below, from the policy sshd applies. */
     main.appendChild(el("p", {
       class: "section-hint",
-      text: "Key-based SSH only. The Appliance Manager never enables password logins and never handles private keys."
+      text: "Key-based SSH only. The backup account is meant to be chrooted into the read-only export root and restricted to SFTP. The Appliance Manager never enables password logins and never handles private keys."
     }));
 
     var hardening = ssh.hardening || {};
@@ -1087,8 +1220,24 @@
         el("div", {}, [tone(((backup || {}).account || {}).exists ? "ok" : "warn",
           ((backup || {}).account || {}).exists ? "available" : "not created")]),
         fact("Authorized keys", ((backup || {}).account || {}).key_count),
+        fact("Protocol", ((backup || {}).protocol || "").toUpperCase()),
+        fact("Shell access", (backup || {}).shell_access),
         fact("Write access", (backup || {}).write_access)
-      ], "backup-account")
+      ], "backup-account"),
+      card("Export access", [
+        el("p", { class: "status-value" }, [
+          tone(exportTone(((backup || {}).export_access || {}).status),
+            ((backup || {}).export_access || {}).status || "unknown")
+        ]),
+        el("div", {}, [tone((backup || {}).confined ? "ok" : "warn",
+          (backup || {}).confined ? "confined to the export root" : "not confined")]),
+        fact("Detail", ((backup || {}).export_access || {}).detail),
+        confinementGaps(backup),
+        exportSetupReport(backup),
+        fact("Export root", (backup || {}).export_root, { mono: true }),
+        expert() ? fact("sshd chroot", ((backup || {}).chroot || {}).configured, { mono: true }) : null,
+        expert() ? fact("Forced command", ((backup || {}).chroot || {}).force_command, { mono: true }) : null
+      ], "backup-export")
     ]));
 
     main.appendChild(el("div", { class: "stage-grid" }, [
@@ -1151,13 +1300,16 @@
         el("table", { class: "data", "data-test": "backup-paths" }, [
           el("thead", {}, [el("tr", {}, [
             el("th", { text: "Name" }), el("th", { text: "Path" }),
-            el("th", { text: "Access" }), el("th", { text: "Size" })
+            el("th", { text: "Access" }), el("th", { text: "Export state" }),
+            el("th", { text: "Size" })
           ])]),
           el("tbody", {}, backup.paths.map(function (item) {
             return el("tr", {}, [
               el("td", { text: item.name }),
-              el("td", { class: "mono", text: item.path }),
+              el("td", { class: "mono", text: expert() ? item.path : "/" + item.name }),
               el("td", { text: item.access }),
+              el("td", {}, [tone(item.state === "mounted" ? "ok" : (item.exists ? "bad" : "warn"),
+                item.state === "mounted" ? "read-only export" : item.state)]),
               el("td", { text: item.exists ? item.size_mb + " MB" : "missing" })
             ]);
           }))
@@ -1165,6 +1317,10 @@
       ]));
 
       main.appendChild(el("h2", { class: "section-title", text: "Copy files from this appliance" }));
+      main.appendChild(el("p", {
+        class: "section-hint",
+        text: "The backup account accepts SFTP only; rsync and scp need a remote shell it does not have."
+      }));
       main.appendChild(el("div", { class: "stage-grid" },
         (backup.examples || []).map(function (example, index) {
           return stage(index + 1, example.title, "Run this on your own computer", [
@@ -1172,6 +1328,32 @@
           ], "backup-example");
         })));
     }
+  }
+
+  /* Which promised SSH restrictions the running daemon does not apply. Named
+     one by one, because "degraded" does not tell an operator what to fix. */
+  function confinementGaps(backup) {
+    var confinement = (backup || {}).confinement || {};
+    if (confinement.available === false) {
+      return fact("SSH confinement", "not verified — sshd could not be asked");
+    }
+    if (!(confinement.violations || []).length) return null;
+    return fact("Not enforced by sshd", confinement.violations.join(", "));
+  }
+
+  /* What the export setup last reported: a refused export source or a failed
+     watcher is only visible here. */
+  function exportSetupReport(backup) {
+    var reported = ((backup || {}).export_access || {}).reported || {};
+    if (!reported.status || reported.status === "configured") return null;
+    var detail = reported.detail ? reported.status + " — " + reported.detail : reported.status;
+    return fact("Export setup", detail);
+  }
+
+  function exportTone(status) {
+    if (status === "configured") return "ok";
+    if (status === "failed" || status === "unavailable" || status === "degraded") return "bad";
+    return "warn";
   }
 
   function renderKeyForm(ssh) {
@@ -1312,6 +1494,7 @@
       loadInto("settings", "/api/settings");
     }
     settings = settings || {};
+    var auditState = settings.security_audit || state.securityAudit || {};
 
     main.appendChild(el("h2", { class: "section-title", text: "Settings" }));
     main.appendChild(el("p", { class: "section-hint", text: "Host settings live in the appliance configuration file and are read-only here." }));
@@ -1331,7 +1514,16 @@
         fact("Automatic security updates", settings.automatic_security_updates),
         fact("Admin repository", settings.admin_repository, { mono: true }),
         fact("Prereleases allowed", settings.allow_prerelease)
-      ], "settings-updates")
+      ], "settings-updates"),
+      card("Security audit", [
+        el("p", { class: "status-value" }, [
+          tone(auditState.degraded ? "bad" : "ok", auditState.degraded ? "degraded" : "healthy")
+        ]),
+        fact("Written by", "the privileged appliance agent"),
+        fact("Recorded events", auditState.recorded_events),
+        fact("Unrecorded events", auditState.unrecorded_events),
+        auditState.last_error ? fact("Last error", auditState.last_error, { mono: true }) : null
+      ], "settings-audit")
     ]));
 
     main.appendChild(el("div", { class: "stage-grid" }, [
@@ -1397,9 +1589,12 @@
           el("th", { text: "Detail" }), el("th", { text: "Suggestion" })
         ])]),
         el("tbody", {}, findings.map(function (item) {
+          /* A check that could not run is neither a pass nor a problem. */
+          var level = item.indeterminate ? "warn" : (item.ok ? "ok" : "bad");
+          var label = item.indeterminate ? "not checked" : (item.ok ? "ok" : "problem");
           return el("tr", {}, [
             el("td", { text: item.check.replace(/_/g, " ") }),
-            el("td", {}, [tone(item.ok ? "ok" : "bad", item.ok ? "ok" : "problem")]),
+            el("td", {}, [tone(level, label)]),
             el("td", { text: item.detail }),
             el("td", { text: item.suggestion || "—" })
           ]);

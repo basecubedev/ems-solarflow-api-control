@@ -12,12 +12,11 @@ Type=simple
 # ems-appliance group only.
 User=ems-appliance-web
 Group=ems-appliance
-SupplementaryGroups=ems-appliance
+EnvironmentFile=-/etc/ems-appliance-manager/host-paths.env
 ExecStart=/usr/bin/ems-appliance web
 Restart=on-failure
 RestartSec=3
-StateDirectory=ems-appliance-manager
-LogsDirectory=ems-appliance-manager
+UMask=0027
 NoNewPrivileges=yes
 CapabilityBoundingSet=
 AmbientCapabilities=
@@ -32,7 +31,11 @@ ProtectKernelModules=yes
 ProtectKernelTunables=yes
 ProtectProc=invisible
 ProtectSystem=strict
-ReadWritePaths=/var/lib/ems-appliance-manager /var/log/ems-appliance-manager
+# Only the web-owned subtree is writable. Agent state, agent logs and the
+# audit log are root-only on disk and additionally made invisible here, so a
+# flaw in this process cannot read an operation record or a confirmation token.
+ReadWritePaths=/var/lib/ems-appliance-manager/web /var/log/ems-appliance-manager/web
+InaccessiblePaths=-/var/lib/ems-appliance-manager/agent -/var/log/ems-appliance-manager/agent -/var/log/ems-appliance-manager/audit
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=yes
 RestrictRealtime=yes

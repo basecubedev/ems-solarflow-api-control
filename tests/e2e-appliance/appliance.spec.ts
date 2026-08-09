@@ -235,6 +235,67 @@ test.describe("admin lifecycle @authority", () => {
     await expect(page.locator("#dialog-title")).toContainText("Roll back");
   });
 
+  test("a repair that cannot fix anything is not styled as success", async ({ page, request }) => {
+    await request.post("/api/test/reset", { data: { break_compose: true } });
+    await signIn(page);
+    await openView(page, "admin");
+    await Promise.all([
+      page.waitForResponse((response) => response.url().includes("/api/admin/repair")),
+      page.getByRole("button", { name: "Preview repair" }).click(),
+    ]);
+    await expect(page.locator("#dialog")).toBeVisible();
+    await Promise.all([
+      page.waitForResponse((response) => response.url().includes("/api/operations/confirm")),
+      page.locator("#dialog-confirm").click(),
+    ]);
+
+    const outcome = page.locator('[data-test="operation-outcome"] .tone');
+    await expect(outcome).toHaveText("manual action required", { timeout: 20_000 });
+    await expect(outcome).not.toHaveClass(/tone-ok/);
+    await expect(page.locator('[data-test="manual-actions"]')).toBeVisible();
+    await expect(page.locator('[data-test="manual-actions"]')).toContainText(
+      "install-admin-console.sh",
+    );
+  });
+
+  test("a digest that cannot be resolved is reported, not worked around", async ({
+    page,
+    request,
+  }) => {
+    await request.post("/api/test/reset", { data: { break_digest: true } });
+    await signIn(page);
+    await setMode(page, "expert");
+    await openView(page, "admin");
+    await page.locator('[data-test="install-channel"]').selectOption("exact");
+    await page.locator('[data-test="install-tag"]').fill("v1.1.0");
+
+    const refusal = new Promise<string>((resolve) => {
+      page.once("dialog", async (alert) => {
+        const message = alert.message();
+        await alert.dismiss();
+        resolve(message);
+      });
+    });
+    await page.locator('[data-test="install-plan"]').click();
+    expect(await refusal).toContain("digest");
+    await expect(page.locator('[data-test="admin-version"]')).toContainText("v1.0.0");
+  });
+
+  test("an install plan shows the immutable reference in expert mode", async ({ page }) => {
+    await signIn(page);
+    await setMode(page, "expert");
+    await openView(page, "admin");
+    await page.locator('[data-test="install-channel"]').selectOption("exact");
+    await page.locator('[data-test="install-tag"]').fill("v1.1.0");
+    await Promise.all([
+      page.waitForResponse((response) => response.url().includes("/api/admin/plan-install")),
+      page.locator('[data-test="install-plan"]').click(),
+    ]);
+    await expect(page.locator("#dialog")).toContainText("target reference");
+    await expect(page.locator("#dialog")).toContainText("@sha256:");
+    await page.locator("#dialog-cancel").click();
+  });
+
   test("a repair preview lists findings before anything is changed", async ({ page }) => {
     await signIn(page);
     await openView(page, "admin");
@@ -356,12 +417,23 @@ test.describe("ssh and backup access", () => {
     expect(await refusal).toContain("private key");
   });
 
-  test("password login stays disabled and rsync instructions are shown", async ({ page }) => {
+  test("password login stays disabled and sftp instructions are shown", async ({ page }) => {
     await signIn(page);
     await openView(page, "access");
     await expect(page.locator('[data-test="ssh-service"]')).toContainText("no");
-    await expect(page.locator('[data-test="backup-example"]').first()).toContainText("rsync -a");
+    // The backup account is SFTP-only, so the UI must not advertise rsync/scp.
+    await expect(page.locator('[data-test="backup-example"]').first()).toContainText("sftp -r");
+    await expect(page.locator("#main")).not.toContainText("rsync -a");
     await expect(page.locator('[data-test="backup-paths"]')).toContainText("read-only");
+  });
+
+  test("the backup card states the protocol and that there is no shell", async ({ page }) => {
+    await signIn(page);
+    await openView(page, "access");
+    const card = page.locator('[data-test="backup-account"]');
+    await expect(card).toContainText("SFTP");
+    await expect(card).toContainText("Shell access");
+    await expect(page.locator('[data-test="backup-export"]')).toBeVisible();
   });
 });
 
@@ -472,5 +544,141 @@ test.describe("settings", () => {
     ]);
     await expect(page.locator('[data-test="pw-message"]')).toContainText("signed out");
     await expect(page.locator("#gate")).toBeVisible({ timeout: 15_000 });
+  });
+});
+
+test.describe("truthful host state @smoke", () => {
+  test("a degraded security audit is stated, not implied away", async ({ page, request }) => {
+    await request.post("/api/test/reset", { data: { agent_offline: true } });
+    await signIn(page);
+
+    // Authentication is a recovery path: it must still work.
+    await expect(page.locator("#shell")).toBeVisible();
+    const notice = page.locator('[data-test="audit-degraded"]');
+    await expect(notice).toBeVisible();
+    await expect(notice).toContainText("Security audit degraded");
+    await expect(notice).toContainText("unrecorded");
+
+    await openView(page, "settings");
+    const card = page.locator('[data-test="settings-audit"]');
+    await expect(card).toContainText("degraded");
+    await expect(card).toContainText("the privileged appliance agent");
+  });
+
+  test("a healthy audit trail shows no warning", async ({ page }) => {
+    await signIn(page);
+    await expect(page.locator('[data-test="audit-degraded"]')).toHaveCount(0);
+    await openView(page, "settings");
+    await expect(page.locator('[data-test="settings-audit"]')).toContainText("healthy");
+  });
+
+  test("a lifecycle action names the fact that failed verification", async ({ page, request }) => {
+    await request.post("/api/test/reset", { data: { admin_unreachable: true } });
+    await signIn(page);
+    await Promise.all([
+      page.waitForResponse((response) => response.url().includes("/api/admin/restart")),
+      page.locator('[data-test="quick-restart-admin"]').click(),
+    ]);
+    await expect(page.locator("#dialog")).toBeVisible();
+    await Promise.all([
+      page.waitForResponse((response) => response.url().includes("/api/operations/confirm")),
+      page.locator("#dialog-confirm").click(),
+    ]);
+
+    const outcome = page.locator('[data-test="operation-outcome"] .tone');
+    await expect(outcome).not.toHaveClass(/tone-ok/, { timeout: 20_000 });
+    const reasons = page.locator('[data-test="verification-reasons"]');
+    await expect(reasons).toBeVisible();
+    await expect(reasons).toContainText("the Admin web interface did not answer");
+  });
+
+  test("a rollback that fails preflight reports that nothing was stopped", async ({
+    page,
+    request,
+  }) => {
+    await request.post("/api/test/reset", { data: { rollback_image_missing: true } });
+    await signIn(page);
+    await openView(page, "admin");
+    await Promise.all([
+      page.waitForResponse((response) => response.url().includes("/api/admin/rollback")),
+      page.getByRole("button", { name: "Roll back" }).click(),
+    ]);
+    await expect(page.locator("#dialog")).toBeVisible();
+    await Promise.all([
+      page.waitForResponse((response) => response.url().includes("/api/operations/confirm")),
+      page.locator("#dialog-confirm").click(),
+    ]);
+
+    const untouched = page.locator('[data-test="admin-untouched"]');
+    await expect(untouched).toBeVisible({ timeout: 20_000 });
+    await expect(untouched).toContainText("still running");
+    await expect(page.locator('[data-test="operation-outcome"] .tone')).not.toHaveClass(/tone-ok/);
+  });
+
+  test("an export mounted read-write is never shown as read-only", async ({ page, request }) => {
+    await request.post("/api/test/reset", { data: { export_read_write: true } });
+    await signIn(page);
+    await openView(page, "access");
+
+    const card = page.locator('[data-test="backup-export"]');
+    await expect(card).toContainText("degraded");
+    await expect(card).toContainText("not confined");
+    await expect(page.locator('[data-test="backup-paths"]')).toContainText("writable");
+  });
+
+  test("a confined export root is shown as confined and read-only", async ({ page }) => {
+    await signIn(page);
+    await openView(page, "access");
+
+    const card = page.locator('[data-test="backup-export"]');
+    await expect(card).toContainText("configured");
+    await expect(card).toContainText("confined to the export root");
+    await expect(page.locator('[data-test="backup-paths"]')).toContainText("read-only export");
+  });
+
+  test("a missing optional host feature is not styled as a failure", async ({ page, request }) => {
+    await request.post("/api/test/reset", { data: { docker_missing: true } });
+    await signIn(page);
+
+    const card = page.locator('[data-test="card-docker"]');
+    await expect(card).toContainText("unavailable");
+    await expect(card).toContainText("Docker is not installed");
+    await expect(card.locator(".tone")).not.toHaveClass(/tone-bad/);
+  });
+
+  test("an sshd policy that still permits forwarding is not shown as confined", async ({ page, request }) => {
+    await request.post("/api/test/reset", { data: { forwarding_allowed: true } });
+    await signIn(page);
+    await openView(page, "access");
+
+    const card = page.locator('[data-test="backup-export"]');
+    await expect(card).toContainText("not confined");
+    await expect(card).toContainText("Not enforced by sshd");
+    await expect(card).toContainText("allowtcpforwarding");
+  });
+
+  test("a refused export source is visible in the export card", async ({ page, request }) => {
+    await request.post("/api/test/reset", { data: { export_source_rejected: true } });
+    await signIn(page);
+    await openView(page, "access");
+
+    const card = page.locator('[data-test="backup-export"]');
+    await expect(card).toContainText("Export setup");
+    await expect(card).toContainText("failed");
+    await expect(card).toContainText("symlink");
+  });
+
+  test("a port check that could not run is not shown as ok", async ({ page, request }) => {
+    await request.post("/api/test/reset", { data: { port_check_broken: true } });
+    await signIn(page);
+    await openView(page, "admin");
+    await Promise.all([
+      page.waitForResponse((response) => response.url().includes("/api/admin/repair")),
+      page.getByRole("button", { name: "Preview repair" }).click(),
+    ]);
+
+    const row = page.locator('[data-test="repair-findings"] tr', { hasText: "admin port" });
+    await expect(row).toContainText("not checked");
+    await expect(row.locator(".tone")).toHaveClass(/tone-warn/);
   });
 });

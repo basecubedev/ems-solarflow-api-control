@@ -1,13 +1,115 @@
 #!/bin/sh
 # SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Purge withdraws what this package granted: the export mounts, the ACL entries
+# it added for the backup account, the generated host configuration and sshd
+# policy, and — only if this package created them — the account and its home.
+# EMS configuration, EMS data and EMS backups are not this package's to remove,
+# and neither is an account or a home directory it merely found.
+#
+# The generated host-paths file is read here rather than the conffile, because
+# dpkg may already have removed the conffile by the time this runs.
 set -e
+
+# The layout variables are the same ones the Python services read. dpkg never
+# sets them; they exist so this script can be driven against a fixture tree.
+CONFIG_DIR=${EMS_APPLIANCE_CONFIG_DIR:-/etc/ems-appliance-manager}
+STATE_DIR=${EMS_APPLIANCE_STATE_DIR:-/var/lib/ems-appliance-manager}
+LOG_DIR=${EMS_APPLIANCE_LOG_DIR:-/var/log/ems-appliance-manager}
+RUNTIME_DIR=${EMS_APPLIANCE_RUNTIME_DIR:-/run/ems-appliance-manager}
+SYSTEMD_DIR=${EMS_APPLIANCE_SYSTEMD_DIR:-/etc/systemd/system}
+SSHD_DIR=${EMS_APPLIANCE_SSHD_DIR:-/etc/ssh/sshd_config.d}
+HOST_PATHS="$CONFIG_DIR/host-paths.env"
+LIBDIR=${EMS_APPLIANCE_LIBDIR:-/usr/lib/ems-appliance-manager}
+SSHD_POLICY="$SSHD_DIR/ems-appliance-backup.conf"
+BACKUP_USER=ems-backup
+INSTALL_ROOT=/opt/ems-solarflow
+EXPORT_ROOT=/srv/ems-appliance-export
+EXPORTS="config backups data"
+incomplete=""
+
+host_path() {
+    [ -r "$HOST_PATHS" ] || return 0
+    sed -n "s/^$1=//p" "$HOST_PATHS" | tail -n 1
+}
+
+# The same path policy the rest of the feature applies. A generated file that
+# does not satisfy it is not used to decide what to unmount or delete.
+usable_path() {
+    case "$1" in
+        /*) ;;
+        *) return 1 ;;
+    esac
+    case "$1" in
+        */|*//*|*[!A-Za-z0-9/._-]*) return 1 ;;
+    esac
+    case "$1/" in
+        */./*|*/../*) return 1 ;;
+    esac
+    [ "$1" = "/" ] && return 1
+    return 0
+}
 
 case "$1" in
     purge)
-        # Appliance state and logs are removed on purge; EMS configuration,
-        # EMS data and EMS backups under /opt/ems-solarflow are never touched.
-        rm -rf /var/lib/ems-appliance-manager /var/log/ems-appliance-manager
-        rm -rf /run/ems-appliance-manager
+        # Same precedence as the Python services: environment, then the
+        # generated host configuration, then the packaged default.
+        value=${EMS_APPLIANCE_INSTALL_ROOT:-$(host_path EMS_APPLIANCE_INSTALL_ROOT)}
+        usable_path "$value" && INSTALL_ROOT=$value
+        value=${EMS_APPLIANCE_EXPORT_ROOT:-$(host_path EMS_APPLIANCE_EXPORT_ROOT)}
+        usable_path "$value" && EXPORT_ROOT=$value
+
+        for exported in $EXPORTS; do
+            while mountpoint -q "$EXPORT_ROOT/$exported" 2>/dev/null; do
+                umount "$EXPORT_ROOT/$exported" || break
+            done
+            if mountpoint -q "$EXPORT_ROOT/$exported" 2>/dev/null; then
+                incomplete="$incomplete $EXPORT_ROOT/$exported"
+            fi
+        done
+
+        # Only the entries this feature granted, and only when nothing is
+        # mounted over the paths any more.
+        if command -v setfacl >/dev/null 2>&1; then
+            [ -d "$INSTALL_ROOT" ] && setfacl -x "u:$BACKUP_USER" "$INSTALL_ROOT" 2>/dev/null || true
+            for exported in $EXPORTS; do
+                target="$INSTALL_ROOT/$exported"
+                [ -d "$target" ] || continue
+                mountpoint -q "$target" 2>/dev/null && continue
+                setfacl -R -x "u:$BACKUP_USER" "$target" 2>/dev/null || true
+                setfacl -R -d -x "u:$BACKUP_USER" "$target" 2>/dev/null || true
+            done
+        fi
+
+        # Account, home and key material: package-owned only.
+        if [ -x "$LIBDIR/backup-account.sh" ]; then
+            "$LIBDIR/backup-account.sh" purge \
+                || incomplete="$incomplete the-$BACKUP_USER-account"
+        else
+            incomplete="$incomplete the-$BACKUP_USER-account"
+        fi
+
+        rm -rf "$STATE_DIR" "$LOG_DIR"
+        rm -rf "$RUNTIME_DIR"
+        # Every generated artefact is withdrawn together: the environment file,
+        # the path-unit drop-in and the sshd Match policy that confined the
+        # account. A surviving policy would name a chroot that no longer exists.
+        rm -f "$HOST_PATHS" "$SSHD_POLICY"
+        rm -rf "$SYSTEMD_DIR/ems-appliance-export.path.d"
+        for exported in $EXPORTS; do
+            rmdir "$EXPORT_ROOT/$exported" 2>/dev/null || true
+        done
+        rmdir "$EXPORT_ROOT" 2>/dev/null || true
+        rmdir "$CONFIG_DIR" 2>/dev/null || true
+
+        if command -v sshd >/dev/null 2>&1 && sshd -t >/dev/null 2>&1; then
+            systemctl reload ssh.service >/dev/null 2>&1 || true
+        fi
+
+        if [ -n "$incomplete" ]; then
+            echo "ems-appliance: purge did not complete for:$incomplete" >&2
+            echo "  Resolve these by hand; the rest of the package was removed." >&2
+        fi
         ;;
     remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
         ;;

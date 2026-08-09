@@ -66,6 +66,24 @@ def test_supported_hardware_and_os_are_documented():
     assert "arm64" in installation
 
 
+def test_the_package_failure_contract_is_documented():
+    installation = read("installation.md")
+    assert "sudo ems-appliance verify-install" in installation
+    assert "deferred, not failed" in installation
+    assert "--offline" in installation
+    # An optional feature must not read like a broken installation.
+    assert "Optional host features never fail the package" in installation
+    assert "migration conflict" in installation
+
+
+def test_the_smoke_test_drivers_are_documented():
+    installation = read("installation.md")
+    assert "scripts/appliance-smoke-amd64.sh" in installation
+    assert "scripts/appliance-smoke-arm64.sh" in installation
+    assert "RESULT: NOT RUN" in installation
+    assert "never mistaken for a pass" in installation
+
+
 def test_the_local_password_reset_is_documented():
     installation = read("installation.md")
     assert "sudo ems-appliance password-reset" in installation
@@ -92,12 +110,104 @@ def test_os_update_documentation_refuses_unattended_distribution_upgrades():
     assert "never removed" in updates
 
 
-def test_ssh_and_rsync_instructions_exist():
+def test_ssh_and_file_transfer_instructions_match_the_supported_protocol():
     access = read("ssh-backup-access.md")
     assert "ssh-ed25519" in access
-    assert "rsync -a ems-backup@" in access
-    assert "scp -r ems-backup@" in access
+    assert "sftp -r ems-backup@" in access
+    assert "ForceCommand internal-sftp" in access
+    # The account cannot execute a remote command, so neither may be advertised.
+    assert "rsync and scp do not work" in access
     assert "Never paste a private key" in access
+
+
+def test_the_sftp_confinement_is_documented():
+    access = read("ssh-backup-access.md")
+    assert "ChrootDirectory /srv/ems-appliance-export" in access
+    assert "read-only bind mount" in access
+    # A doc that only promised ForceCommand would overstate the boundary.
+    assert "removes the shell but not the filesystem" in access
+    assert "ems-appliance-export.service" in access
+    assert "ems-appliance-export.path" in access
+    for state in ("configured", "pending", "degraded", "unknown"):
+        assert f"`{state}`" in access, state
+
+
+def test_the_state_split_and_socket_ownership_are_documented():
+    security = read("security-model.md")
+    assert "root:ems-appliance 0750" in security
+    assert "/var/lib/ems-appliance-manager/web" in security
+    assert "append-only" in security
+
+
+def test_agent_state_is_documented_as_private_to_root():
+    security = read("security-model.md")
+    assert "root:root 0700" in security
+    assert "neither write, read nor list" in security
+    assert "InaccessiblePaths" in security
+    # The replacement for the direct reads must be named, or the document
+    # would describe a capability the operator silently lost.
+    for operation in ("operations.list", "operations.get", "admin.get", "logs.read"):
+        assert operation in security, operation
+
+
+def test_the_agent_owned_audit_path_is_documented():
+    security = read("security-model.md")
+    assert "audit.record_web_event" in security
+    assert "security_audit" in security
+    assert "sudo ems-appliance password-reset" in security
+
+
+def test_the_relaxed_sandbox_directives_are_justified():
+    security = read("security-model.md")
+    assert "AF_UNIX AF_INET AF_INET6" in security
+    assert "RestrictSUIDSGID" in security
+    assert "Address family not supported by protocol" in security
+    assert "Operation not permitted" in security
+
+
+def test_repair_result_states_are_documented():
+    recovery = read("admin-recovery.md")
+    for state in ("succeeded", "failed_recoverable", "manual_action_required", "failed_terminal"):
+        assert state in recovery, state
+
+
+def test_the_rollback_preflight_order_is_documented():
+    recovery = read("admin-recovery.md")
+    assert "the running Admin is never stopped" in recovery
+    assert "admin_untouched" in recovery
+    for code in ("invalid_known_good_record", "known_good_image_unavailable"):
+        assert code in recovery, code
+    # The order matters: the stop must be documented as coming after the write.
+    assert recovery.index("write the rollback reference") < recovery.index(
+        "only now: stop the running Admin"
+    )
+
+
+def test_lifecycle_verification_is_documented():
+    recovery = read("admin-recovery.md")
+    assert "without a Docker health check does not count as healthy" in recovery
+    for failure in (
+        "api_unreachable",
+        "image_mismatch",
+        "version_mismatch",
+        "version_unreadable",
+        "container_missing",
+        "container_still_running",
+    ):
+        assert failure in recovery, failure
+
+
+def test_digest_pinning_is_documented():
+    recovery = read("admin-recovery.md")
+    assert "repository@sha256:" in recovery
+    assert "digest_unresolved" in recovery
+    assert "tag is never resolved again" in recovery
+
+
+def test_the_state_migration_is_documented():
+    installation = read("installation.md")
+    assert "ems-appliance migrate-state" in installation
+    assert "symlinked source" in installation
 
 
 def test_wlan_recovery_is_documented():

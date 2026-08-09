@@ -57,6 +57,11 @@ never an image reference.
 
 5. Review the preview and confirm.
 
+The plan shows the resolved **digest reference** (`repository@sha256:...`).
+That immutable reference — not the tag — is what gets deployed. If no
+canonical digest can be resolved the installation is refused with
+`digest_unresolved` before anything is touched.
+
 Execution is transactional:
 
 ```text
@@ -65,12 +70,17 @@ Execution is transactional:
 03 Save the current Compose and environment files
 04 Pull and inspect the target image
 05 Record the current known-good digest
-06 Stop the current Admin container
-07 Recreate Admin with the target image
-08 Wait for the container health check
-09 Verify the Admin API and its version on the loopback address
-10 Mark the target as known-good
+06 Write repository@sha256:... into the deployment
+07 Stop the current Admin container
+08 Recreate Admin from the immutable reference
+09 Wait for the container health check
+10 Verify the Admin API and its version on the loopback address
+11 Mark the target as known-good
 ```
+
+Step 06 happens **before** the running Admin is stopped. If the deployment
+file cannot be written, the operation ends `failed_recoverable` and the
+healthy container keeps running.
 
 Nothing is deleted: EMS configuration, EMS runtime data, backups, Admin
 persistent state, unrelated containers and Docker volumes are untouched.
@@ -83,9 +93,13 @@ If the new Admin does not become healthy, the appliance rolls back by itself:
 stop the failed target
 restore the previous Compose and environment files byte for byte
 re-pin the previous known-good digest and recreate that Admin
-verify the restored Admin
+verify the restored Admin — HTTP availability, version *and* stored digest
 record the rollback result
 ```
+
+The digest is part of the verification on purpose: an image that carries the
+expected version label and different bytes is not the Admin that was recorded
+as known good, and must not count as a successful recovery.
 
 The operation ends as `rolled_back` and shows the failure that caused it. The
 Appliance Manager itself stays reachable the whole time.
@@ -96,9 +110,89 @@ success it did not achieve.
 
 ## Roll back manually
 
-**Admin → Rollback** restores the previous known-good version. Rollback is
-digest-pinned: the recorded `sha256:` digest is restored, not just a mutable
-tag. The button is disabled when no previous known-good version exists.
+**Admin → Rollback** restores the previous known-good version by deploying the
+**stored** `repository@sha256:...` reference. The tag is never resolved again,
+so a tag that moved in the registry cannot change what a rollback installs. The
+button is disabled when no previous known-good version exists.
+
+### The plan is bound to what it was made against
+
+A confirmed plan carries a fingerprint of everything the operation depends on:
+
+```text
+compose file path and hash
+environment file path and hash
+the running Admin's image digest and version
+the target digest and its canonical repository@digest reference
+```
+
+Every field is revalidated immediately before the first mutation. A compose
+file or an Admin environment file edited after planning, or a container that
+was replaced in the meantime, stops the operation with `admin_untouched: true`
+while the current Admin is still running. Nothing is stopped, and the plan is
+simply made again.
+
+### The Admin that must come back is captured before anything changes
+
+Automatic rollback has to be able to prove *what* came back, not only that
+something did. At preflight the appliance therefore captures the running
+Admin's immutable identity — image digest, canonical reference and version —
+independently of the known-good history, because an Admin installed before this
+appliance, or one that never became healthy, has no known-good record at all.
+
+Recovery restores that identity and verifies it: the restored digest, the
+restored version and a reachable HTTP endpoint. An image carrying the same
+version label but different bytes fails recovery.
+
+If the current Admin is healthy but its digest cannot be resolved, the
+operation does not start:
+
+```text
+recovery_identity_unavailable: the running Admin cannot be identified by an
+image digest, so an automatic rollback could not be verified
+```
+
+The appliance does not present transactional safety it cannot provide.
+
+### Preflight comes before any downtime
+
+Everything that can fail is done while the current Admin keeps running:
+
+```text
+01 load the stored known-good record
+02 validate its repository, digest and canonical reference
+03 make sure the deployment file is still the one the plan was made against
+04 make sure the immutable image is present locally, pulling it by digest if needed
+05 snapshot the Compose and environment files
+06 write the rollback reference — proving the deployment can be updated
+07 only now: stop the running Admin
+08 recreate it from the rollback deployment
+09 verify HTTP availability, digest and version
+```
+
+Installing a specific version takes the same route: its target image and its
+deployment file are revalidated after the confirmation and before anything is
+stopped, so a plan that went stale between preview and confirmation costs no
+downtime.
+
+If any of steps 01–06 fails, **the running Admin is never stopped**. The
+operation reports `admin_untouched` and the UI says so explicitly, so nobody
+goes looking for an outage that did not happen:
+
+| Preflight failure | Result |
+|---|---|
+| The stored record has no valid digest or its reference disagrees | `failed_terminal`, `invalid_known_good_record` — refused already at plan time |
+| The stored image is gone and cannot be pulled by its digest | `failed_terminal`, `known_good_image_unavailable` |
+| The deployment file changed after the plan was created | `failed_terminal`, `deployment_changed_since_plan` — plan again |
+| The Compose or environment file cannot be written | `failed_recoverable`, the snapshot is restored |
+
+A mutable tag is never a fallback: if the immutable reference cannot be
+prepared, the operation ends and the current Admin keeps running.
+
+Once step 07 has run, a failure is no longer free. The appliance then puts the
+snapshot back and recreates the Admin that was running before, and the result
+carries a `recovery` block saying whether that worked — it never claims a
+restore it did not achieve.
 
 The known-good history keeps at least the current and the previous verified
 Admin:
@@ -125,14 +219,76 @@ Admin:
 | Admin container is missing | Reinstall the selected Admin version |
 | Container exists but is stopped | Start Admin |
 | Container restarts repeatedly | Review the logs, then reinstall |
-| Compose file is missing | Regenerate the Admin section from the appliance template |
-| Admin service is not defined | Regenerate the Admin section |
-| Environment file is missing | Recreate the Admin environment file |
+| Compose file is missing | Manual: recreate it with `install-admin-console.sh` |
+| Admin service is not defined | Manual: add the service with `install-admin-console.sh` |
+| Environment file is missing | Manual: recreate it with `install-admin-console.sh` |
 | Bind path is missing | Recreate the required empty directory after confirmation |
 | Port is occupied | The conflicting process is shown; it is never killed automatically |
 
 Repair also reports image availability, container state, health-check state and
 file permissions.
+
+### What the repair result means
+
+Repair performs the action and then inspects the host again. The result is the
+state the appliance is really in afterwards:
+
+| Result | Meaning |
+|---|---|
+| `succeeded` | The action ran and no blocking finding remains |
+| `failed_recoverable` | The action ran but at least one finding still blocks a healthy Admin |
+| `manual_action_required` | Nothing could be repaired automatically; the listed steps are yours |
+| `failed_terminal` | The operation could not proceed safely |
+| `cancelled` | Cancelled before anything was changed |
+
+Starting Docker is only reported as repaired when the daemon **API** answers
+afterwards, not when the start command was merely accepted.
+
+A check that could not run is shown as `not checked`, never as a pass. The
+Admin port check is the case that matters: if `ss` is missing or fails, the
+appliance reports that the port could not be inspected instead of reporting it
+as available.
+
+An action that ran but could not be verified makes the repair fail even when the
+re-inspection finds nothing else wrong; `unverified_actions` in the result names
+which action failed and why.
+
+## What "verified" means
+
+Start, restart, recreate and repair share one verification. A Docker exit code
+is not evidence, so each of these facts is checked:
+
+```text
+the container exists
+the container is running
+the active image digest matches the expected known-good digest
+the Admin HTTP endpoint answers on the loopback address
+the reported Admin version can be read
+that version matches the expected target when one is known
+```
+
+A container **without a Docker health check does not count as healthy** just
+because its process is running: the HTTP endpoint has to answer. The version is
+read from the health payload, and from the running image's
+`org.opencontainers.image.version` label when the payload does not carry one.
+
+For **Stop**, the appliance verifies that the container really stopped. A
+container that a restart policy brings straight back up is reported as
+`container_still_running`, not as a successful stop.
+
+None of these report `succeeded`:
+
+| Failure | Reported as |
+|---|---|
+| `api_unreachable` | the Docker command worked, the Admin did not answer |
+| `image_mismatch` | a different image than the recorded known-good one is running |
+| `version_mismatch` | the running Admin reports a different version |
+| `version_unreadable` | neither the health payload nor the image label names a version |
+| `container_missing` | there is nothing to start |
+| `container_still_running` | the stop did not take effect |
+
+`container_missing` and `image_mismatch` end as `manual_action_required` — a
+retry cannot fix either. The others end as `failed_recoverable`.
 
 ## Logs
 

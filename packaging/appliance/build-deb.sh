@@ -37,6 +37,8 @@ install -d "$STAGE/usr/lib/systemd/system"
 install -d "$STAGE/usr/lib/tmpfiles.d"
 install -d "$STAGE/etc/logrotate.d"
 install -d "$STAGE/etc/ems-appliance-manager"
+install -d "$STAGE/etc/ssh/sshd_config.d"
+install -d "$STAGE/usr/lib/ems-appliance-manager"
 install -d "$STAGE/usr/bin"
 install -d "$STAGE/usr/share/doc/ems-appliance-manager"
 
@@ -50,8 +52,16 @@ for file in "$ROOT"/appliance/static/*; do
 done
 
 install -m 0755 "$PACKAGING/bin/ems-appliance" "$STAGE/usr/bin/ems-appliance"
+install -m 0755 "$PACKAGING/bin/setup-export-root.sh" \
+        "$STAGE/usr/lib/ems-appliance-manager/setup-export-root.sh"
+install -m 0755 "$PACKAGING/bin/backup-account.sh" \
+        "$STAGE/usr/lib/ems-appliance-manager/backup-account.sh"
 install -m 0644 "$PACKAGING/systemd/ems-appliance-agent.service" "$STAGE/usr/lib/systemd/system/"
 install -m 0644 "$PACKAGING/systemd/ems-appliance-web.service" "$STAGE/usr/lib/systemd/system/"
+install -m 0644 "$PACKAGING/systemd/ems-appliance-export.service" "$STAGE/usr/lib/systemd/system/"
+install -m 0644 "$PACKAGING/systemd/ems-appliance-export.path" "$STAGE/usr/lib/systemd/system/"
+install -m 0644 "$PACKAGING/systemd/ems-appliance-backup-access-disable.service" \
+        "$STAGE/usr/lib/systemd/system/"
 install -m 0644 "$PACKAGING/tmpfiles/ems-appliance-manager.conf" "$STAGE/usr/lib/tmpfiles.d/"
 install -m 0644 "$PACKAGING/logrotate/ems-appliance-manager" "$STAGE/etc/logrotate.d/"
 install -m 0644 "$PACKAGING/config/appliance.conf" "$STAGE/etc/ems-appliance-manager/"

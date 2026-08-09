@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# The confinement the backup account depends on is the export root plus the
+# sshd policy. When the export service fails, the account must lose its
+# authentication before anyone can use a key against a chroot that is no longer
+# the promised one.
+[Unit]
+Description=Disable EMS SolarFlow appliance backup authentication
+Documentation=file:///usr/share/doc/ems-appliance-manager/ssh-backup-access.md
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/ems-appliance backup-access disable

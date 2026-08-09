@@ -30,6 +30,9 @@ KIND_FINGERPRINT = "fingerprint"
 KIND_SSID = "ssid"
 KIND_WIFI_PASSPHRASE = "wifi_passphrase"
 KIND_HOSTNAME = "hostname"
+KIND_AUDIT_EVENT = "audit_event"
+KIND_AUDIT_RESULT = "audit_result"
+KIND_AUDIT_REASON = "audit_reason"
 
 
 class ProtocolError(Exception):
@@ -174,6 +177,19 @@ MUTATING_OPERATIONS = (
         summary="Plan revoking every SSH key of an account",
     ),
     _spec("support.plan_archive", mutating=True, takes_lock=True, summary="Plan a support archive"),
+    # The web service owns authentication but not the audit trail: it may only
+    # ask the agent to record one of a fixed set of events, with no free-form
+    # field of its own.
+    _spec(
+        "audit.record_web_event",
+        mutating=True,
+        fields=(
+            Field("event", KIND_AUDIT_EVENT),
+            Field("result", KIND_AUDIT_RESULT),
+            Field("reason", KIND_AUDIT_REASON, required=False, default=""),
+        ),
+        summary="Record a web authentication event in the audit log",
+    ),
     _spec(
         "operations.execute",
         mutating=True,
@@ -264,6 +280,12 @@ def _coerce(field, value, context):
         return validation.validate_wifi_passphrase(value)
     if kind == KIND_HOSTNAME:
         return validation.validate_hostname(value)
+    if kind == KIND_AUDIT_EVENT:
+        return validation.validate_web_audit_event(value)
+    if kind == KIND_AUDIT_RESULT:
+        return validation.validate_audit_result(value)
+    if kind == KIND_AUDIT_REASON:
+        return validation.validate_web_audit_reason(value)
     raise ProtocolError("invalid_field_kind", f"unknown field kind {kind!r}", field=field.name)
 
 

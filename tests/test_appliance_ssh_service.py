@@ -250,9 +250,14 @@ def test_backup_access_reports_paths_and_ready_to_use_commands(tmp_path):
     assert all(item["access"] == "read-only" for item in status["paths"])
     assert names["backups"]["size_bytes"] == 2048
 
+    # The packaged sshd drop-in forces internal-sftp, so the shown commands must
+    # be SFTP; rsync and scp would need a remote shell this account does not get.
+    assert status["protocol"] == "sftp"
+    assert status["shell_access"] is False
     commands = " ".join(item["command"] for item in status["examples"])
-    assert "rsync -a ems-backup@" in commands
-    assert "scp -r ems-backup@" in commands
+    assert "sftp -r ems-backup@" in commands
+    assert "rsync" not in commands
+    assert "scp " not in commands
 
 
 def test_backup_access_never_shows_a_private_key(tmp_path):
@@ -260,3 +265,88 @@ def test_backup_access_never_shows_a_private_key(tmp_path):
     payload = str(services.backup.status())
     assert "PRIVATE KEY" not in payload
     assert "id_ed25519" not in payload
+
+
+# --- export confinement ----------------------------------------------------
+
+
+def seeded_exports(tmp_path):
+    services = appliance(tmp_path)
+    for directory in ("config", "data", "backups"):
+        (services.paths.install_root / directory).mkdir(parents=True, exist_ok=True)
+    return services
+
+
+def test_a_confined_export_root_is_reported_as_configured(tmp_path):
+    services = seeded_exports(tmp_path)
+    services.host.write_export_mounts(read_only=True)
+
+    status = services.backup.status()
+
+    assert status["confined"] is True
+    assert status["chroot"]["enforced"] is True
+    assert status["chroot"]["configured"] == str(services.paths.export_root)
+    assert status["export_access"]["status"] == "configured"
+    for entry in status["paths"]:
+        assert entry["state"] == "mounted", entry
+        assert entry["read_only"] is True, entry
+        assert entry["export_target"].endswith(entry["name"])
+
+
+def test_a_writable_export_is_never_called_read_only(tmp_path):
+    services = seeded_exports(tmp_path)
+    services.host.write_export_mounts(read_only=False)
+
+    status = services.backup.status()
+
+    assert status["confined"] is False
+    assert status["export_access"]["status"] == "degraded"
+    assert "read-write" in status["export_access"]["detail"]
+
+
+def test_an_unpublished_export_is_reported_as_degraded(tmp_path):
+    services = seeded_exports(tmp_path)
+    services.host.write_export_mounts(names=("config", "backups"))
+
+    status = services.backup.status()
+
+    assert status["confined"] is False
+    assert status["export_access"]["status"] == "degraded"
+    assert "data" in status["export_access"]["detail"]
+
+
+def test_a_missing_chroot_is_reported_even_when_the_mounts_are_right(tmp_path):
+    services = seeded_exports(tmp_path)
+    services.host.write_export_mounts(read_only=True)
+    services.host.sshd_backup_match = "forcecommand internal-sftp\npermittty no\n"
+
+    status = services.backup.status()
+
+    assert status["chroot"]["enforced"] is False
+    assert status["confined"] is False
+    assert status["export_access"]["status"] == "degraded"
+    assert "chroot" in status["export_access"]["detail"]
+
+
+def test_a_host_without_an_ems_installation_is_pending_not_broken(tmp_path):
+    import shutil
+
+    services = appliance(tmp_path)
+    for source in services.paths.export_paths().values():
+        shutil.rmtree(source, ignore_errors=True)
+    services.host.write_export_mounts(names=())
+
+    status = services.backup.status()
+
+    assert status["export_access"]["status"] == "pending"
+    assert status["export_access"]["missing"] == ["config", "backups", "data"]
+
+
+def test_the_shown_commands_use_paths_inside_the_chroot(tmp_path):
+    services = seeded_exports(tmp_path)
+    commands = " ".join(item["command"] for item in services.backup.status()["examples"])
+
+    # Inside the chroot the export root is "/", so a host path would not resolve.
+    assert ":/backups" in commands
+    assert ":/config" in commands
+    assert str(services.paths.install_root) not in commands

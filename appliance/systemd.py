@@ -76,6 +76,10 @@ class SystemdBackend:
         self._check_controllable(unit)
         return self.runner.run("systemctl", ["stop", unit], timeout=120)
 
+    def reload(self, unit):
+        self._check_controllable(unit)
+        return self.runner.run("systemctl", ["reload", unit], timeout=120)
+
     def enable(self, unit):
         self._check_controllable(unit)
         return self.runner.run("systemctl", ["enable", "--now", unit], timeout=120)

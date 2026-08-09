@@ -28,6 +28,7 @@ EXECUTABLES = {
     "ssh-keygen": ("/usr/bin/ssh-keygen",),
     "sshd": ("/usr/sbin/sshd",),
     "getent": ("/usr/bin/getent", "/bin/getent"),
+    "chage": ("/usr/bin/chage",),
     "ss": ("/usr/bin/ss", "/bin/ss"),
     "avahi-resolve": ("/usr/bin/avahi-resolve",),
 }

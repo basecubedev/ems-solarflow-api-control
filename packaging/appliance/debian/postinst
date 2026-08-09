@@ -1,50 +1,155 @@
 #!/bin/sh
 # SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Two installation contexts, one script.
+#
+# On a live host, "installed" has to mean "usable": if a required directory is
+# missing, the state migration lost data, a service will not start or the web
+# account cannot reach the agent, the package configuration fails instead of
+# reporting success over a broken appliance.
+#
+# In an image-build chroot there is no running systemd, so services cannot be
+# started. That is deferred, not failed. Everything that does not need a
+# running manager must still be correct there.
+#
+# Docker, NetworkManager and OpenSSH are optional. Their absence is reported as
+# an unavailable feature and never fails the package.
 set -e
 
 STATE_DIR=/var/lib/ems-appliance-manager
 LOG_DIR=/var/log/ems-appliance-manager
 CONFIG_DIR=/etc/ems-appliance-manager
-INSTALL_ROOT=/opt/ems-solarflow
+TMPFILES=/usr/lib/tmpfiles.d/ems-appliance-manager.conf
+UNITS="ems-appliance-agent.service ems-appliance-web.service ems-appliance-export.service ems-appliance-export.path"
+
+fail() {
+    echo "ems-appliance: $1" >&2
+    exit 1
+}
+
+note() {
+    echo "ems-appliance: $1"
+}
+
+live_system() {
+    [ -d /run/systemd/system ] || return 1
+    command -v systemctl >/dev/null 2>&1 || return 1
+    return 0
+}
 
 case "$1" in
     configure)
-        # The web service runs unprivileged and only shares a group with the
-        # agent socket; the agent itself runs as root.
+        # The web service runs unprivileged and reaches the agent socket only
+        # through this shared group; the agent itself runs as root.
         if ! getent group ems-appliance >/dev/null; then
-            addgroup --system ems-appliance
+            addgroup --system ems-appliance || fail "cannot create the ems-appliance group"
         fi
         if ! getent passwd ems-appliance-web >/dev/null; then
             adduser --system --ingroup ems-appliance --no-create-home \
-                    --home /nonexistent --shell /usr/sbin/nologin ems-appliance-web
+                    --home /nonexistent --shell /usr/sbin/nologin ems-appliance-web \
+                || fail "cannot create the ems-appliance-web account"
         fi
-        # Read-only file export account for backups; never an admin account.
-        if ! getent passwd ems-backup >/dev/null; then
-            adduser --system --group --home /var/lib/ems-backup \
-                    --shell /bin/sh ems-backup
-        fi
+        usermod -a -G ems-appliance ems-appliance-web >/dev/null 2>&1 || true
 
-        mkdir -p "$STATE_DIR" "$STATE_DIR/operations" "$STATE_DIR/known-good" \
-                 "$STATE_DIR/ssh-keys" "$STATE_DIR/compose-backup" "$STATE_DIR/packages" \
-                 "$LOG_DIR" "$CONFIG_DIR"
-        chown -R ems-appliance-web:ems-appliance "$STATE_DIR" "$LOG_DIR"
-        chmod 0750 "$STATE_DIR" "$LOG_DIR"
+        # Backup-only account: no shell, no login. Remote access is restricted
+        # to a chrooted SFTP session by the generated sshd policy. The helper
+        # records that this package created the account, which is what later
+        # allows removal to delete it — and refuses to adopt one it did not.
+        /usr/lib/ems-appliance-manager/backup-account.sh ensure \
+            || fail "the backup account could not be prepared; see the message above"
+
+        mkdir -p "$CONFIG_DIR" || fail "cannot create $CONFIG_DIR"
         chmod 0755 "$CONFIG_DIR"
 
-        # Existing EMS data is never moved or restructured by this package.
-        if [ -d "$INSTALL_ROOT" ]; then
-            for directory in config data backups; do
-                [ -d "$INSTALL_ROOT/$directory" ] && \
-                    setfacl -m u:ems-backup:rx "$INSTALL_ROOT/$directory" 2>/dev/null || true
-            done
+        # tmpfiles is the authoritative ownership model for the state layout.
+        if [ -f "$TMPFILES" ] && command -v systemd-tmpfiles >/dev/null 2>&1; then
+            systemd-tmpfiles --create "$TMPFILES" \
+                || note "systemd-tmpfiles reported a problem; the directories are created directly."
         fi
 
-        if [ -x /bin/systemctl ] || [ -x /usr/bin/systemctl ]; then
-            systemd-tmpfiles --create /usr/lib/tmpfiles.d/ems-appliance-manager.conf || true
-            systemctl daemon-reload || true
-            systemctl enable ems-appliance-agent.service ems-appliance-web.service || true
-            systemctl restart ems-appliance-agent.service || true
-            systemctl restart ems-appliance-web.service || true
+        mkdir -p "$STATE_DIR" "$LOG_DIR"
+        chown root:ems-appliance "$STATE_DIR" "$LOG_DIR"
+        chmod 0750 "$STATE_DIR" "$LOG_DIR"
+
+        for directory in "$STATE_DIR/web" "$STATE_DIR/web/auth" "$STATE_DIR/web/sessions" \
+                         "$STATE_DIR/web/ui-preferences" "$LOG_DIR/web"; do
+            mkdir -p "$directory" || fail "cannot create $directory"
+            chown ems-appliance-web:ems-appliance "$directory"
+        done
+        chmod 0700 "$STATE_DIR/web/auth" "$STATE_DIR/web/sessions"
+
+        for directory in "$STATE_DIR/agent" "$STATE_DIR/agent/operations" \
+                         "$STATE_DIR/agent/known-good" "$STATE_DIR/agent/compose-backup" \
+                         "$STATE_DIR/agent/package-state" "$STATE_DIR/agent/recovery" \
+                         "$STATE_DIR/agent/ssh-keys" "$STATE_DIR/agent/support" \
+                         "$STATE_DIR/agent/packages" "$LOG_DIR/agent" "$LOG_DIR/audit"; do
+            mkdir -p "$directory" || fail "cannot create $directory"
+        done
+
+        # An installation that predates the private-agent layout still has
+        # group-readable agent state; the shared group is for the socket only.
+        for private in "$STATE_DIR/agent" "$LOG_DIR/agent" "$LOG_DIR/audit"; do
+            chown -R root:root "$private" || fail "cannot re-own $private"
+            chmod 0700 "$private"
+            find "$private" -mindepth 1 -type d -exec chmod 0700 {} +
+            find "$private" -mindepth 1 -type f -exec chmod 0600 {} +
+        done
+
+        # Move any pre-existing shared-layout state into the web/agent split
+        # before the services start against the new paths. A conflict keeps
+        # both copies and only warns; a move that did not arrive is fatal.
+        /usr/bin/ems-appliance migrate-state --quiet \
+            || fail "state migration failed; run 'ems-appliance migrate-state' and resolve the reported findings"
+
+        # One host-path contract for Python, the export script and the path
+        # unit. Everything below already depends on it.
+        /usr/bin/ems-appliance host-config --apply >/dev/null \
+            || fail "the host path configuration could not be applied"
+
+        if live_system; then
+            # The export root needs mounts, so it is only built on a live host.
+            # A refusal leaves the confinement unproven, so the account loses
+            # its authentication before the failure is reported.
+            if ! /usr/lib/ems-appliance-manager/setup-export-root.sh; then
+                /usr/bin/ems-appliance backup-access disable >/dev/null 2>&1 || true
+                fail "the read-only SFTP export root could not be configured"
+            fi
+
+            systemctl daemon-reload || fail "systemctl daemon-reload failed"
+            # shellcheck disable=SC2086
+            systemctl enable $UNITS || fail "the appliance services could not be enabled"
+            systemctl restart ems-appliance-agent.service \
+                || fail "the appliance agent failed to start; see 'journalctl -u ems-appliance-agent.service'"
+            systemctl restart ems-appliance-web.service \
+                || fail "the appliance web service failed to start; see 'journalctl -u ems-appliance-web.service'"
+            # An export watcher that did not start means an EMS directory
+            # created later is silently never published.
+            systemctl start ems-appliance-export.path \
+                || fail "the export path watcher failed to start; see 'journalctl -u ems-appliance-export.path'"
+
+            # Fail-closed: this enables the backup account only after the
+            # effective confinement was validated, reloaded and read back, and
+            # disables its authentication otherwise. A missing OpenSSH is an
+            # unavailable feature, not a failed package.
+            /usr/bin/ems-appliance backup-access activate >/dev/null \
+                || note "the confined SFTP backup access is not active; run 'ems-appliance backup-access' for the reason."
+
+            /usr/bin/ems-appliance verify-install \
+                || fail "the installation is not usable; see the checks above"
+        else
+            # shellcheck disable=SC2086
+            SYSTEMD_OFFLINE=1 systemctl enable $UNITS >/dev/null 2>&1 || true
+            for unit in $UNITS; do
+                case "$unit" in *.path|*.service) ;; *) continue ;; esac
+                [ -e "/etc/systemd/system/multi-user.target.wants/$unit" ] && continue
+                mkdir -p /etc/systemd/system/multi-user.target.wants
+                ln -sf "/usr/lib/systemd/system/$unit" \
+                       "/etc/systemd/system/multi-user.target.wants/$unit" \
+                    || fail "cannot enable $unit for the first boot"
+            done
+            /usr/bin/ems-appliance verify-install --offline \
+                || fail "the offline installation is incomplete; see the checks above"
+            note "no running systemd: the services are enabled and start on first boot."
         fi
         ;;
     abort-upgrade|abort-remove|abort-deconfigure)

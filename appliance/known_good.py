@@ -10,7 +10,7 @@ import json
 import time
 from pathlib import Path
 
-from appliance.paths import atomic_write
+from appliance.paths import AGENT_FILE_MODE, atomic_write
 
 HISTORY_FILE = "history.json"
 MIN_RETAINED = 2
@@ -46,6 +46,12 @@ class KnownGoodStore:
         entries = self.entries()
         return entries[1] if len(entries) > 1 else None
 
+    def find_by_reference(self, reference):
+        for entry in self.entries():
+            if entry.get("admin_reference") == reference:
+                return entry
+        return None
+
     def find_by_digest(self, digest):
         for entry in self.entries():
             if entry.get("admin_digest") == digest:
@@ -61,13 +67,25 @@ class KnownGoodStore:
         revision="",
         compose_hash="",
         healthcheck=HEALTHCHECK_PASSED,
+        admin_reference="",
+        architecture="",
+        oci_source="",
+        oci_created="",
+        environment_hash="",
     ):
+        repository = str(admin_image).rpartition(":")[0] or str(admin_image)
         entry = {
             "admin_image": str(admin_image),
             "admin_digest": str(admin_digest),
             "admin_version": str(admin_version),
+            "admin_reference": str(admin_reference or f"{repository}@{admin_digest}"),
             "revision": str(revision or ""),
+            "oci_revision": str(revision or ""),
+            "oci_source": str(oci_source or ""),
+            "oci_created": str(oci_created or ""),
+            "architecture": str(architecture or ""),
             "compose_hash": str(compose_hash or ""),
+            "environment_hash": str(environment_hash or ""),
             "verified_at": self._time(),
             "healthcheck": str(healthcheck),
         }
@@ -79,6 +97,9 @@ class KnownGoodStore:
         ]
         entries.insert(0, entry)
         atomic_write(
-            self.path, json.dumps(entries[: self.max_entries], indent=2, sort_keys=True) + "\n"
+            self.path,
+            json.dumps(entries[: self.max_entries], indent=2, sort_keys=True) + "\n",
+            mode=AGENT_FILE_MODE,
+            owner_root=True,
         )
         return entry

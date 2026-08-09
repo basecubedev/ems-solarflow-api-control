@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# An EMS directory created after the appliance was installed must still become
+# an export without waiting for a reboot.
+[Unit]
+Description=Watch the EMS installation for new exportable directories
+Documentation=file:///usr/share/doc/ems-appliance-manager/ssh-backup-access.md
+
+[Path]
+PathChanged=/opt/ems-solarflow
+Unit=ems-appliance-export.service
+
+[Install]
+WantedBy=multi-user.target

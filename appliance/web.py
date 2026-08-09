@@ -26,10 +26,11 @@ from appliance.auth import (
     LoginRateLimiter,
     SessionStore,
 )
-from appliance.audit import RESULT_DENIED, RESULT_FAILURE, RESULT_SUCCESS, AuditLog
+from appliance.audit import RESULT_DENIED, RESULT_FAILURE, RESULT_SUCCESS, WebLog
 from appliance.config import load_config
 from appliance.paths import ensure_directories, resolve_paths
 from appliance.version import APPLIANCE_VERSION
+from appliance.web_audit import WebAuditReporter
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 STATIC_FILES = {
@@ -68,7 +69,10 @@ class ApplianceWebApp:
             time_fn=time_fn,
         )
         self.rate_limiter = rate_limiter or LoginRateLimiter(time_fn=time_fn)
-        self.audit = audit or AuditLog(self.paths.audit_log, time_fn=time_fn)
+        self.web_log = WebLog(self.paths.appliance_log, time_fn=time_fn)
+        self.audit = audit or WebAuditReporter(
+            self.agent, log=self.web_log, time_fn=time_fn
+        )
         self._time = time_fn or time.time
         self._lock = threading.Lock()
         # Browser tests need a deterministic reset. The endpoint only exists
@@ -85,7 +89,10 @@ class ApplianceWebApp:
         with self._lock:
             if self.rate_limiter.limited(source_ip):
                 self.audit.record(
-                    "login.failure", source_ip=source_ip, result=RESULT_DENIED, target="rate_limited"
+                    "login.failure",
+                    source_ip=source_ip,
+                    result=RESULT_DENIED,
+                    reason="rate_limited",
                 )
                 raise AuthError(
                     "login_rate_limited",
@@ -94,7 +101,12 @@ class ApplianceWebApp:
                 )
             if not self.auth.verify(password):
                 self.rate_limiter.record_failure(source_ip)
-                self.audit.record("login.failure", source_ip=source_ip, result=RESULT_FAILURE)
+                self.audit.record(
+                    "login.failure",
+                    source_ip=source_ip,
+                    result=RESULT_FAILURE,
+                    reason="invalid_password",
+                )
                 raise AuthError("invalid_credentials", "the appliance password is not correct")
             self.rate_limiter.reset(source_ip)
             session = self.sessions.create(self.auth.generation())
@@ -103,17 +115,27 @@ class ApplianceWebApp:
 
     def logout(self, session_id, *, source_ip):
         self.sessions.destroy(session_id)
-        self.audit.record("logout", source_ip=source_ip, result=RESULT_SUCCESS)
+        self.audit.record(
+            "logout", source_ip=source_ip, result=RESULT_SUCCESS, reason="session_ended"
+        )
 
     def create_first_password(self, password, confirmation, *, source_ip):
         record = self.auth.create(password, confirmation)
-        self.audit.record("password.change", source_ip=source_ip, target="first_password")
+        self.audit.record("password.change", source_ip=source_ip, reason="first_password")
         return self.sessions.create(record["generation"])
 
     def change_password(self, current, new_password, confirmation, *, source_ip):
         self.auth.change(current, new_password, confirmation)
         self.sessions.destroy_all()
-        self.audit.record("password.change", source_ip=source_ip, result=RESULT_SUCCESS)
+        self.audit.record(
+            "password.change",
+            source_ip=source_ip,
+            result=RESULT_SUCCESS,
+            reason="password_changed",
+        )
+
+    def audit_status(self):
+        return self.audit.status()
 
     # --- agent -----------------------------------------------------------
 
@@ -224,8 +246,10 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
             return False
         origin = self.headers.get("Origin")
         if origin:
-            host = self.headers.get("Host") or ""
-            if not origin.endswith(host):
+            # Compare the origin's authority exactly. A suffix comparison would
+            # accept "http://evil-<host>", which ends with the real host.
+            _, _, authority = origin.partition("://")
+            if not authority or authority.split("/", 1)[0] != (self.headers.get("Host") or ""):
                 self._error(403, "csrf_origin_rejected", "the request origin is not accepted")
                 return False
         return True
@@ -307,6 +331,8 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
         if session is not None:
             payload["csrf_token"] = session.csrf_token
             payload["expires_at"] = session.expires_at
+            # Only an authenticated caller learns anything about the host.
+            payload["security_audit"] = self.app.audit_status()
         return self._send(200, payload)
 
     def _test_reset(self, body):
@@ -321,13 +347,10 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
             self.app.paths.auth_file.unlink()
         except OSError:
             pass
-        for record in self.app.paths.operations_dir.glob("*.json"):
-            try:
-                record.unlink()
-            except OSError:
-                pass
+        # Agent state is not the web service's to touch, not even in test mode:
+        # the harness clears operation records through its own privileged hook.
         if self.app.test_reset_hook is not None:
-            self.app.test_reset_hook()
+            self.app.test_reset_hook(body)
         return self._send(200, {"reset": "appliance"})
 
     def _setup_password(self, body):
@@ -343,7 +366,11 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
             return self._error(400, exc.code, exc.message)
         return self._send(
             200,
-            {"authenticated": True, "csrf_token": session.csrf_token},
+            {
+                "authenticated": True,
+                "csrf_token": session.csrf_token,
+                "security_audit": self.app.audit_status(),
+            },
             extra_headers=[self._session_cookie(session)],
         )
 
@@ -355,7 +382,11 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
             return self._error(status, exc.code, exc.message)
         return self._send(
             200,
-            {"authenticated": True, "csrf_token": session.csrf_token},
+            {
+                "authenticated": True,
+                "csrf_token": session.csrf_token,
+                "security_audit": self.app.audit_status(),
+            },
             extra_headers=[self._session_cookie(session)],
         )
 
@@ -433,6 +464,7 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
             "ssh_key_accounts": list(config.ssh_key_accounts),
             "web_port": config.web_port,
             "admin_port": config.admin_port,
+            "security_audit": self.app.audit_status(),
             "configuration_file": str(self.app.paths.appliance_conf),
             "note": "Host settings are owned by the appliance configuration file and are "
             "read-only in the browser.",
@@ -457,7 +489,14 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
                 )
             except AuthError as exc:
                 return self._error(400, exc.code, exc.message)
-            return self._send(200, {"changed": True, "sessions_invalidated": True})
+            return self._send(
+                200,
+                {
+                    "changed": True,
+                    "sessions_invalidated": True,
+                    "security_audit": self.app.audit_status(),
+                },
+            )
 
         plan_routes = {
             "/api/admin/plan-install": ("admin.plan_install", self._install_fields),
@@ -596,7 +635,7 @@ class ApplianceWebServer(ThreadingHTTPServer):
 
 def build_server(*, paths=None, config=None, agent=None, address=None):
     paths = paths or resolve_paths()
-    ensure_directories(paths)
+    ensure_directories(paths, role="web")
     config = config or load_config(paths)
     app = ApplianceWebApp(paths=paths, config=config, agent=agent)
     bind = address or (config.web_address, config.web_port)

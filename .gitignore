@@ -82,3 +82,6 @@ test-results/
 playwright-report/
 blob-report/
 .playwright/
+
+# Appliance package build output (packaging/appliance/build-deb.sh)
+/dist/

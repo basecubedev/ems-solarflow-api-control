@@ -73,7 +73,7 @@ class SupportArchiveService:
         return payload
 
     def _destination(self, operation_id):
-        return self.paths.state_dir / "support" / f"support-{operation_id}.tar.gz"
+        return self.paths.support_dir / f"support-{operation_id}.tar.gz"
 
     def _add(self, archive, name, text):
         data = text.encode("utf-8", errors="replace")

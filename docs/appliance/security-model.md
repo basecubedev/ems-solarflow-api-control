@@ -3,18 +3,126 @@
 ## The privilege boundary
 
 ```text
-Browser  ──HTTP──▶  ems-appliance-web.service   (user ems-appliance-web)
+Browser  ──HTTP──▶  ems-appliance-web.service   (ems-appliance-web:ems-appliance)
                       no root
                       no Docker socket
                       no host command
+                      ProtectSystem=strict, writable only under
+                        /var/lib/ems-appliance-manager/web
+                        /var/log/ems-appliance-manager/web
                       │
                       │ typed JSON over a local Unix socket
                       ▼
-                    ems-appliance-agent.service (root)
+                    ems-appliance-agent.service (root:ems-appliance)
                       fixed operation allowlist
                       re-validates every field
-                      owns the durable operation store
+                      owns the durable operation store and the audit trail
 ```
+
+## Socket ownership
+
+One model, declared identically by the unit and by tmpfiles:
+
+```text
+/run/ems-appliance-manager        root:ems-appliance 0750
+/run/ems-appliance-manager/agent.sock  root:ems-appliance 0660
+agent process                     User=root  Group=ems-appliance
+web process                       User=ems-appliance-web  Group=ems-appliance
+```
+
+The agent's primary group is what makes systemd create the runtime directory
+group-owned; a root:root runtime directory would leave the web account unable
+to traverse it whatever the tmpfiles rule said. Nothing is world-traversable
+or world-readable, and a local user outside the group cannot connect.
+
+**The shared group grants the socket and nothing else.** It is not a read grant
+on state.
+
+## State ownership
+
+```text
+/var/lib/ems-appliance-manager          root:ems-appliance 0750  (traverse only)
+  web/          ems-appliance-web:ems-appliance 0750   authentication, sessions,
+                  auth/      0700                      UI preferences
+                  sessions/  0700
+  agent/        root:root 0700                         operations, known-good,
+                                                       compose backups, package
+                                                       state, recovery, ssh-keys
+/var/log/ems-appliance-manager          root:ems-appliance 0750  (traverse only)
+  web/          ems-appliance-web:ems-appliance 0750
+  agent/        root:root 0700
+  audit/        root:root 0700
+```
+
+Files the agent writes are `root:root 0600`; the agent unit runs with
+`UMask=0077` so anything it creates outside that list is root-only too.
+
+The web account can neither write, read nor list the agent tree. That matters
+because an operation record carries the live confirmation token of its plan and
+a known-good file carries the rollback identity: a group-readable record would
+hand a compromised web process both. The web unit additionally declares
+
+```text
+InaccessiblePaths=-/var/lib/ems-appliance-manager/agent
+                  -/var/log/ems-appliance-manager/agent
+                  -/var/log/ems-appliance-manager/audit
+```
+
+so the paths are not even present in its mount namespace.
+
+Nothing is lost operationally: the same state is served through the typed agent
+API — `operations.list`, `operations.get` (which never returns a confirmation
+token), `admin.get` for the known-good records, `backup.get` for export state
+and `logs.read` for bounded, redacted log output.
+
+The audit trail is written by the agent only; the appliance does not claim
+filesystem-level append-only semantics, because none are enforced.
+
+Upgrading from an installation that used the earlier group-readable layout is
+handled by the postinst, which re-owns the agent tree to `root:root` before the
+services start.
+
+## Agent sandbox
+
+The agent keeps `ProtectHome`, `PrivateTmp`, `RestrictNamespaces`,
+`LockPersonality`, `MemoryDenyWriteExecute` and `RestrictRealtime`. Two
+directives are deliberately relaxed, each for a verified reason:
+
+| Directive | Decision | Reason |
+|---|---|---|
+| `RestrictAddressFamilies` | `AF_UNIX AF_INET AF_INET6 AF_NETLINK` | The Admin health check runs on the loopback address, apt fetches repository metadata and the release index is retrieved over HTTPS. With `AF_UNIX` alone all three fail with `[Errno 97] Address family not supported by protocol`. `AF_NETLINK` is required by `ss(8)`: without it the Repair port inspection cannot run at all, and a check that cannot run must not be reported as a result. |
+| `RestrictSUIDSGID` | absent | dpkg restores setuid bits while unpacking; with the restriction a package install aborts with `error setting permissions of './usr/bin/chage': Operation not permitted`. |
+
+Every other address family stays blocked — `AF_PACKET`, `AF_BLUETOOTH`,
+`AF_VSOCK` and the rest are not reachable from the agent.
+
+### Failing closed
+
+A security boundary that could not be activated is switched off, not merely
+labelled. The backup account is the case where this is visible: its
+authentication is enabled only after the *effective* sshd policy for that
+account has been read back and matched against every restriction the appliance
+promises, and it is disabled again when the package that provides the
+confinement is removed. The appliance never keeps an account usable while the
+UI says "degraded".
+
+The boundary the account depends on is more than the sshd policy: it is the
+policy **plus** an export root that contains only the three managed mount
+points, each publishing the configured EMS directory read-only, proven from the
+kernel's mount table rather than from a report. Any gap disables the
+authentication, and a failed export run takes it away through a bounded
+`OnFailure` unit.
+
+The same rule governs host paths: a configured root, an export source or an
+export target that is not provably a real directory where it claims to be — or
+that is reached through a symbolic link in any existing parent — is refused
+before any `mkdir`, `chown`, `chmod`, ACL or mount change, rather than exported
+with a warning. Recursive ACLs are applied through an open directory handle for
+the object that was validated, so a source swapped mid-run cannot receive them.
+
+Package removal follows the same rule in the other direction. Removal stops if
+it cannot revoke the backup account's authentication, because completing it
+would leave a usable key without the chroot that confined it.
 
 A compromised web process gains exactly the operations on the allowlist, with
 values that pass the same validators the agent applies again. It gains no shell,
@@ -102,7 +210,7 @@ Recorded with timestamp, authenticated user, source IP, operation, target,
 result and operation ID:
 
 ```text
-login success and failure, logout, password change,
+login success and failure, logout, password change, password reset,
 admin install / update / rollback / repair,
 OS update, package recovery,
 SSH enable or disable, SSH key added or removed, all keys revoked,
@@ -111,12 +219,67 @@ network change, hostname change, reboot, shutdown
 
 Passwords, tokens, WLAN passphrases and full SSH keys are never recorded.
 
+### Who writes the audit log
+
+`/var/log/ems-appliance-manager/audit/audit.log` has exactly one writer: the
+privileged agent. The web service owns authentication but not the audit trail,
+so it reports an event instead of appending to the file:
+
+```json
+{"operation": "audit.record_web_event", "event": "login.failure",
+ "result": "failure", "reason": "invalid_password"}
+```
+
+`event`, `result` and `reason` are each validated against a fixed set. There is
+no free-form action name, no dictionary, no path and no way to pass a password,
+a session cookie, a CSRF token or a public key. The operation does not take the
+host mutation lock, so a login during a running Admin install is still audited.
+
+`sudo ems-appliance password-reset` runs as root and writes its own
+`password.reset` entry directly.
+
+### When the agent is unreachable
+
+Authentication is a recovery path: it must keep working when the agent is down.
+If the agent cannot be reached, the appliance does not pretend the event was
+recorded. It:
+
+- completes the authentication request normally (no unhandled exception, no
+  lockout after the first password);
+- writes a bounded `audit_unavailable` warning to the web-owned log at
+  `/var/log/ems-appliance-manager/web/appliance.log`;
+- reports `security_audit.degraded` on `/api/session`, `/api/settings` and the
+  login response, which the UI shows as **Security audit degraded** with the
+  number of unrecorded events.
+
+The degraded flag is sticky for the life of the web process, because a lost
+entry never reappears in the authoritative trail.
+
 ## One mutation at a time
 
 The durable operation store allows exactly one conflicting host mutation.
 Read-only status calls stay available. A stale browser cannot start a second
 operation: execution requires the operation ID plus the confirmation token of
 that plan, and a terminal operation cannot be restarted.
+
+## What the package may delete
+
+A package may not adopt a host account and later delete it. The backup account
+is therefore created **and recorded** by this package, in a root-only ownership
+record under `/var/lib/ems-appliance-manager/agent/package-state/`. Every
+destructive step is gated on it:
+
+| Situation | What purge does |
+|---|---|
+| the record says this package created the account and its home | removes the account, the home and the managed key files |
+| the record says the home already existed | removes the managed key files only |
+| there is no record | removes the managed key files only; the account and its home stay |
+| an account exists at install time without a record | the installation fails with a named conflict |
+
+A key file that appears next to an already preserved one is never discarded:
+both are kept and authentication stays disabled until an operator resolves it.
+Purge reports every mount and account it could not withdraw instead of claiming
+a clean removal.
 
 ## What is deliberately absent
 

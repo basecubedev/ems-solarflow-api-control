@@ -62,7 +62,7 @@ def build_services(
 ):
     paths = paths or resolve_paths()
     if create_directories:
-        ensure_directories(paths)
+        ensure_directories(paths, role="agent")
     config = config or load_config(paths)
     runner = runner or CommandRunner()
     probe = HostProbe(runner, root=root, time_fn=time_fn)
@@ -86,6 +86,7 @@ def build_services(
         health=health or HttpHealthChecker(sleep=sleep),
         operations=operations,
         runner=runner,
+        systemd=systemd,
         catalogue=catalogue or ReleaseCatalogue(config),
         time_fn=time_fn,
         sleep=sleep,

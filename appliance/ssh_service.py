@@ -103,10 +103,22 @@ class SshService:
             raise SshServiceError("account_missing", f"the host account {name} does not exist")
         return AuthorizedKeysStore(account.home, owner_uid=account.uid, owner_gid=account.gid)
 
-    def effective_config(self):
+    def effective_config(self, user=None):
+        """The configuration sshd would apply, optionally for one account.
+
+        Without a connection specification ``sshd -T`` skips every ``Match``
+        block, so the backup account's chroot and forced command are only
+        visible when the user is named.
+        """
+
         if not self.runner.available("sshd"):
             return {}
-        result = self.runner.run("sshd", ["-T"], timeout=20)
+        arguments = ["-T"]
+        if user:
+            arguments += ["-C", f"user={user},host=localhost,addr=127.0.0.1"]
+        result = self.runner.run("sshd", arguments, timeout=20)
+        if not result.ok and user:
+            result = self.runner.run("sshd", ["-T"], timeout=20)
         return parse_sshd_config(result.stdout if result.ok else "")
 
     def status(self):

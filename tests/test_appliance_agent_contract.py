@@ -8,6 +8,7 @@ no second concurrent mutation.
 """
 
 import json
+import os
 import socket
 import threading
 
@@ -68,12 +69,24 @@ def test_read_only_operations_never_take_the_mutation_lock():
         assert spec.takes_lock is False
 
 
+# Mutating operations that deliberately do not serialise against host changes:
+# operation control drives the lock itself, and an authentication audit append
+# must still succeed while an install is running.
+LOCK_EXEMPT_MUTATIONS = frozenset({"audit.record_web_event"})
+
+
 def test_mutating_plan_operations_take_the_mutation_lock():
     for spec in MUTATING_OPERATIONS:
         assert spec.mutating is True
-        if spec.name.startswith("operations."):
+        if spec.name.startswith("operations.") or spec.name in LOCK_EXEMPT_MUTATIONS:
             continue
         assert spec.takes_lock is True, spec.name
+
+
+def test_the_audit_append_never_blocks_on_a_running_host_mutation():
+    spec = OPERATIONS["audit.record_web_event"]
+    assert spec.mutating is True
+    assert spec.takes_lock is False
 
 
 def test_no_operation_declares_a_command_or_path_field():
@@ -182,6 +195,114 @@ def test_valid_operation_is_accepted(context):
 def test_optional_fields_get_their_declared_defaults(context):
     _, args = validate_request({"operation": "logs.read", "source": "audit"}, context)
     assert args["lines"] == 200
+
+
+# --- web audit events ------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "event", ["login.success", "login.failure", "logout", "password.change", "password.reset"]
+)
+def test_every_allowed_web_audit_event_validates(context, event):
+    _, args = validate_request(
+        {"operation": "audit.record_web_event", "event": event, "result": "success"}, context
+    )
+    assert args["event"] == event
+    assert args["reason"] == ""
+
+
+@pytest.mark.parametrize(
+    "event", ["admin.install", "system.reboot", "arbitrary", "login.success.extra", ""]
+)
+def test_an_audit_event_outside_the_fixed_set_is_rejected(context, event):
+    with pytest.raises(ProtocolError) as excinfo:
+        validate_request(
+            {"operation": "audit.record_web_event", "event": event, "result": "success"}, context
+        )
+    assert excinfo.value.code == "invalid_audit_event"
+
+
+def test_a_free_form_audit_reason_is_rejected(context):
+    with pytest.raises(ProtocolError) as excinfo:
+        validate_request(
+            {
+                "operation": "audit.record_web_event",
+                "event": "login.failure",
+                "result": "failure",
+                "reason": "password=hunter2",
+            },
+            context,
+        )
+    assert excinfo.value.code == "invalid_audit_reason"
+
+
+@pytest.mark.parametrize("field", ["password", "session", "csrf_token", "public_key", "detail"])
+def test_no_extra_audit_field_can_be_smuggled_in(context, field):
+    with pytest.raises(ProtocolError) as excinfo:
+        validate_request(
+            {
+                "operation": "audit.record_web_event",
+                "event": "login.success",
+                "result": "success",
+                field: "value",
+            },
+            context,
+        )
+    assert excinfo.value.code == "unknown_field"
+
+
+def test_a_web_audit_event_is_written_to_the_audit_log(handlers, services):
+    payload = handlers.dispatch(
+        {"operation": "audit.record_web_event", "event": "login.failure", "result": "failure",
+         "reason": "invalid_password"},
+        actor="appliance-admin",
+        source_ip="192.168.1.20",
+    )
+    assert payload["recorded"] is True
+
+    entry = services.audit.tail()[-1]
+    assert entry["action"] == "login.failure"
+    assert entry["result"] == "failure"
+    assert entry["target"] == "invalid_password"
+    assert entry["source_ip"] == "192.168.1.20"
+    assert entry["user"] == "appliance-admin"
+
+
+def test_an_audit_event_creates_no_operation_record(handlers, services):
+    handlers.dispatch(
+        {"operation": "audit.record_web_event", "event": "logout", "result": "success"}
+    )
+    assert services.operations.list() == []
+    assert services.operations.active() is None
+
+
+def test_a_hostile_source_address_never_reaches_the_audit_log(tmp_path, services):
+    server = AgentServer(
+        services,
+        socket_path=tmp_path / "agent.sock",
+        handlers=AgentHandlers(services, executor=lambda target: target()),
+        allowed_uids=(os.getuid(),),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        client = AgentClient(server.socket_path, timeout=5)
+        client.call(
+            "audit.record_web_event",
+            actor="appliance-admin\nadmin.install",
+            source_ip="10.0.0.1 password=secret",
+            event="login.success",
+            result="success",
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    entry = services.audit.tail()[-1]
+    assert entry["source_ip"] == ""
+    assert entry["user"] == ""
+    assert "secret" not in json.dumps(entry)
 
 
 # --- dispatch behaviour ----------------------------------------------------

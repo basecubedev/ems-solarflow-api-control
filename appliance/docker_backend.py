@@ -125,6 +125,25 @@ class DockerBackend:
             return ContainerState(name=name)
         return _container_state(name, payload)
 
+    def containers_publishing_port(self, port):
+        """Which running containers publish ``port`` on the host.
+
+        Ownership of a listening socket is a question only the engine can
+        answer; a process name like ``docker-proxy`` says nothing about which
+        container it belongs to.
+        """
+
+        result = self.runner.run(
+            "docker",
+            ["ps", "--filter", f"publish={int(port)}", "--format", "{{.Names}}"],
+            timeout=30,
+        )
+        if not result.ok:
+            raise DockerError(
+                "port_owner_unknown", f"cannot list the containers publishing port {port}"
+            )
+        return sorted({line.strip() for line in (result.stdout or "").splitlines() if line.strip()})
+
     def container_logs(self, name, lines):
         result = self.runner.run(
             "docker", ["logs", "--tail", str(int(lines)), name], timeout=self.timeout

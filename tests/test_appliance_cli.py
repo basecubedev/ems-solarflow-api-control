@@ -54,6 +54,15 @@ def test_the_documented_commands_exist():
         assert expected in actions
 
 
+def test_shared_flags_work_before_and_after_the_subcommand():
+    parser = build_parser()
+    assert parser.parse_args(["--json", "status"]).json is True
+    assert parser.parse_args(["status", "--json"]).json is True
+    assert parser.parse_args(["status"]).json is False
+    assert parser.parse_args(["--local", "repair", "--apply"]).local is True
+    assert parser.parse_args(["repair", "--local"]).local is True
+
+
 def test_status_summary_is_a_compact_operator_view():
     summary = _status_summary(
         {
@@ -84,7 +93,9 @@ def test_status_summary_tolerates_missing_sections():
 
 
 def test_password_reset_writes_a_new_password_and_rotates_the_generation(appliance_env, capsys):
-    store = AuthStore((appliance_env / "state" / "auth.json"), iterations=1000)
+    from appliance.paths import resolve_paths
+
+    store = AuthStore(resolve_paths().auth_file, iterations=1000)
     store.create("first-appliance-secret")
     first_generation = store.generation()
 
@@ -113,7 +124,7 @@ def test_password_reset_creates_the_state_directory_when_missing(tmp_path, monke
     ):
         monkeypatch.setenv(variable, str(tmp_path / name))
     assert command_password_reset(Args(password="a-fresh-appliance-secret", json=False)) == 0
-    assert (tmp_path / "state" / "auth.json").is_file()
+    assert (tmp_path / "state" / "web" / "auth" / "auth.json").is_file()
 
 
 def test_allowlist_command_prints_the_agent_operations(appliance_env, capsys):

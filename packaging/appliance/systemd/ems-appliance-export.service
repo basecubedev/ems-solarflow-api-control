@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[Unit]
+Description=EMS SolarFlow appliance read-only SFTP export root
+Documentation=file:///usr/share/doc/ems-appliance-manager/ssh-backup-access.md
+After=local-fs.target
+ConditionPathExists=/usr/lib/ems-appliance-manager/setup-export-root.sh
+OnFailure=ems-appliance-backup-access-disable.service
+
+[Service]
+Type=oneshot
+# No sandboxing directive here on purpose: any of them would give the unit a
+# private mount namespace, and the read-only bind mounts it creates would then
+# be invisible to sshd.
+EnvironmentFile=-/etc/ems-appliance-manager/host-paths.env
+ExecStart=/usr/lib/ems-appliance-manager/setup-export-root.sh
+# Authentication follows the verified boundary, never the other way round: this
+# enables the account only while the exports and the sshd policy check out, and
+# disables it otherwise.
+ExecStartPost=/usr/bin/ems-appliance backup-access activate
+
+[Install]
+WantedBy=multi-user.target

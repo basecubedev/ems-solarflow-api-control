@@ -1,13 +1,55 @@
 #!/bin/sh
 # SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# What confines the backup account is this package: the generated sshd policy
+# and the read-only bind mounts. Both go away with it, so the account's
+# authentication has to go first — a surviving key would otherwise open an
+# *unconfined* SFTP session over the whole host after the next sshd reload.
+#
+# Removal therefore fails closed: if neither the CLI nor the direct maintainer
+# fallback can take the authentication away, the package stays installed and
+# the operator is told why.
+#
+# The key material itself is preserved next to authorized_keys, so reinstalling
+# restores it once the confinement is verified again. Purge removes it.
 set -e
+
+BIN=${EMS_APPLIANCE_BIN:-/usr/bin/ems-appliance}
+LIBDIR=${EMS_APPLIANCE_LIBDIR:-/usr/lib/ems-appliance-manager}
 
 case "$1" in
     remove|deconfigure)
+        disabled=0
+        if [ -x "$BIN" ] && "$BIN" backup-access disable >/dev/null 2>&1; then
+            disabled=1
+        fi
+        if [ "$disabled" -eq 0 ] && [ -x "$LIBDIR/backup-account.sh" ]; then
+            if "$LIBDIR/backup-account.sh" disable >/dev/null 2>&1; then
+                disabled=1
+            fi
+        fi
+        if [ "$disabled" -eq 0 ]; then
+            echo "ems-appliance: the backup account's authentication could not be disabled." >&2
+            echo "  Removing the package now would leave a usable key without the chroot that" >&2
+            echo "  confines it. Run 'ems-appliance backup-access disable' and try again." >&2
+            exit 1
+        fi
+
         if [ -x /bin/systemctl ] || [ -x /usr/bin/systemctl ]; then
             systemctl stop ems-appliance-web.service || true
             systemctl stop ems-appliance-agent.service || true
-            systemctl disable ems-appliance-web.service ems-appliance-agent.service || true
+            systemctl stop ems-appliance-export.path || true
+            systemctl disable ems-appliance-web.service ems-appliance-agent.service \
+                              ems-appliance-export.service ems-appliance-export.path || true
+        fi
+        # The export binds must go before the package does, or the mount points
+        # survive as stale read-only views of EMS data.
+        if [ -x "$LIBDIR/setup-export-root.sh" ]; then
+            "$LIBDIR/setup-export-root.sh" --teardown || true
+        fi
+
+        if command -v sshd >/dev/null 2>&1 && sshd -t >/dev/null 2>&1; then
+            systemctl reload ssh.service >/dev/null 2>&1 || true
         fi
         ;;
     upgrade|failed-upgrade)

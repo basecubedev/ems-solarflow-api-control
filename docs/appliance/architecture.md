@@ -71,7 +71,8 @@ is refused as `invalid_request` before any handler runs.
 
 | Module | Responsibility |
 |---|---|
-| `paths.py` | The canonical appliance layout and path-boundary validation |
+| `paths.py` | The canonical appliance layout, the web/agent state split and path-boundary validation |
+| `migration.py` | Idempotent migration from the previous shared state layout |
 | `config.py` | `/etc` host configuration and the image allowlist |
 | `validation.py` | Every typed input validator and its stable error code |
 | `redaction.py` | Secret redaction and log bounding |
@@ -86,7 +87,20 @@ is refused as `invalid_request` before any handler runs.
 | `ssh_service.py`, `sshkeys.py`, `backup_access.py` | SSH service, public keys, read-only backup access |
 | `status.py`, `support_archive.py` | Fault-isolated status collection, bounded logs, support archive |
 | `agent.py`, `agent_client.py`, `services.py` | The privileged agent, its client and the service graph |
-| `auth.py`, `web.py`, `static/` | Authentication and the unprivileged web interface |
+| `auth.py`, `web.py`, `web_audit.py`, `static/` | Authentication, audit reporting to the agent, and the unprivileged web interface |
+| `install_check.py` | Post-install verification: is this installation actually usable |
+
+## Where each boundary is enforced
+
+| Boundary | Enforced by |
+|---|---|
+| The web process holds no privilege | separate accounts, systemd sandbox, the agent allowlist |
+| The web process cannot read privileged state | `root:root 0700` agent tree plus `InaccessiblePaths=` on the web unit |
+| The audit log has one writer | the `audit.record_web_event` agent operation; the web service never opens the file |
+| The backup account cannot leave its exports | `ChrootDirectory` plus read-only bind mounts, built by `ems-appliance-export.service` |
+| An Admin action did what it claims | the shared verification in `admin_lifecycle.verify_admin` |
+| A rollback costs no downtime unless it must | preflight before the stop, in `_execute_rollback` |
+| "Installed" means usable | `install_check.verify_installation`, run last by the postinst |
 | `cli.py` | The `ems-appliance` host CLI |
 
 ## Operation model
@@ -96,10 +110,14 @@ Every mutating action is a durable operation record, not a request or a thread:
 ```text
 planned → awaiting_confirmation → running → verifying → succeeded
                                         ↘ failed_recoverable
+                                        ↘ manual_action_required
                                         ↘ rolling_back → rolled_back
                                         ↘ failed_terminal
                               ↘ cancelled
 ```
+
+`manual_action_required` exists so a repair that performed no automatic action
+cannot be reported as a success.
 
 - Only one conflicting host mutation runs at a time; read-only status calls stay
   available throughout.
