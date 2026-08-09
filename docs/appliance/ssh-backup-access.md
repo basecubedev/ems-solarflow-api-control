@@ -86,12 +86,17 @@ Match User ems-backup
     PermitTunnel no
     GatewayPorts no
     PermitOpen none
-    ForceCommand internal-sftp -P ...
+    ForceCommand internal-sftp -P symlink,hardlink,rename,posix-rename,remove,mkdir,rmdir,setstat,fsetstat
 ```
 
 `ForceCommand internal-sftp` means the account can transfer files and nothing
 else. **rsync and scp do not work with it** — both need to execute a remote
 command. Use SFTP.
+
+The `-P` list is part of the boundary, not decoration: it denies every SFTP
+request that could write, move or delete. The appliance compares the effective
+forced command against exactly this command — a plain `internal-sftp`, a
+shorter list or an extra option is a policy violation, not an equivalent.
 
 ### The export root
 
@@ -204,6 +209,12 @@ pointed is never repeated into the status file, the journal or the UI.
 | A directory appears under `/opt/ems-solarflow` later | `ems-appliance-export.path` triggers the service |
 | Manually | `sudo systemctl start ems-appliance-export.service` |
 
+Start the **unit**, not the script it runs. The unit re-validates backup access
+afterwards, so authentication follows the boundary the run produced. Running
+`setup-export-root.sh` by hand rebuilds the mounts but leaves authentication
+where it was; `sudo ems-appliance backup-access activate` then re-enables it
+once the state is exact again.
+
 The watcher is not optional. If `ems-appliance-export.path` fails to start on a
 live host, the package installation fails rather than leaving an installation
 where a directory created later is silently never published.
@@ -224,12 +235,15 @@ effective policy for the backup account back with
 
 ```text
 ChrootDirectory                   PermitTTY no
-ForceCommand internal-sftp        AllowTcpForwarding no
+ForceCommand internal-sftp -P …   AllowTcpForwarding no
 PasswordAuthentication no         AllowAgentForwarding no
 KbdInteractiveAuthentication no   X11Forwarding no
 PubkeyAuthentication yes          PermitTunnel no
-                                  GatewayPorts no
+PermitOpen none                   GatewayPorts no
 ```
+
+The forced command is compared exactly, including its full list of denied SFTP
+requests. Everything else is compared against the value above.
 
 The sshd policy is only half the boundary. Activation additionally requires the
 export root to be exclusive and every **present** export to be exact: mounted
@@ -252,10 +266,40 @@ a file it wrote.
 |---|---|
 | `sshd_config_invalid` | `sshd -t` refused the configuration |
 | `sshd_reload_failed` | a running daemon did not reload the new policy |
+| `ssh_policy_unreadable` | `sshd -T -C user=…` could not report what the daemon would apply |
 | `confinement_not_confirmed` | a restriction the account requires is not in force |
 | `export_root_not_exclusive` | the chroot root holds something this feature does not manage |
 | `exports_not_confined` | an existing export is unmounted, read-write, or publishes something else |
 | `key_conflict` | two key files exist and only an operator can decide which is current |
+| `backup_account_home_marker_missing` | the home does not carry the ownership marker this package wrote |
+| `backup_account_home_marker_mismatch` | a file is at the marker path, but it is not the marker this package wrote |
+| `backup_account_home_identity_mismatch` | the recorded home is not that directory any more |
+| `backup_account_ownership_record_requires_migration` | the record predates the marker; see below |
+
+A policy that cannot be *read* is not a policy that holds. `ems-appliance
+host-config --apply` fails and rolls back rather than reporting an applied
+configuration whose confinement nothing confirmed, and a successful apply never
+reports an unread policy as verified:
+
+```text
+verified            every runtime component that was expected to be live was read and agreed
+offline_deferred    no running systemd; the generated files take effect on the next boot
+unavailable         a component that should have answered did not — the apply is rolled back
+```
+
+A rollback of that transaction compares the **values** the daemon applies, not
+the names of what is wrong: `PermitTTY yes` and `PermitTTY forced-commands-only`
+break the same rule and are not the same policy. A host that was already
+degraded gets that exact degraded state back, and anything that did not come
+back is named with what was expected and what is there:
+
+```json
+{
+  "ssh_policy_not_restored": {
+    "permittty": {"expected": "yes", "observed": "forced-commands-only"}
+  }
+}
+```
 
 If `ems-appliance-export.service` fails after access was active,
 `ems-appliance-backup-access-disable.service` runs as its `OnFailure` unit and
@@ -311,6 +355,30 @@ and nothing else — no account, no home, no operator data. An account that
 already exists when the package is installed is a **conflict**: the
 installation fails and names it, rather than adopting an account it would later
 delete.
+
+### An ownership record from an older version
+
+Ask the host what its record proves:
+
+```bash
+ems-appliance backup-account status
+```
+
+`current` needs nothing. `legacy_manual_migration_required` means the record
+predates the ownership marker, so backup access stays disabled until an
+administrator decides. Review the home directory it names, then adopt it
+explicitly:
+
+```bash
+sudo ems-appliance backup-account migrate-ownership
+```
+
+This refuses unless the account identity, the recorded home, the absence of a
+foreign marker, the root-owned confined home, the absence of foreign home
+content and the attribution of every key in it all check out — and it refuses a
+record with no schema version outright, because nothing in such a record can
+establish ownership. Reinstalling does **not** perform this step. See
+[security-model.md](security-model.md) for the full state table.
 
 Purge withdraws only the entries this feature added (`setfacl -x u:ems-backup`).
 ACL entries an operator set for other accounts are left alone, and EMS

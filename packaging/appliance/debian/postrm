@@ -2,13 +2,15 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # Purge withdraws what this package granted: the export mounts, the ACL entries
-# it added for the backup account, the generated host configuration and sshd
-# policy, and — only if this package created them — the account and its home.
-# EMS configuration, EMS data and EMS backups are not this package's to remove,
-# and neither is an account or a home directory it merely found.
+# it recorded for the backup account, the generated host configuration and sshd
+# policy, and — only when the recorded identity still matches — the account and
+# its home. EMS configuration, EMS data and EMS backups are not this package's
+# to remove, and neither is an account, a home, a key or an ACL entry it merely
+# found.
 #
-# The generated host-paths file is read here rather than the conffile, because
-# dpkg may already have removed the conffile by the time this runs.
+# dpkg has already removed the package's own files by the time purge runs, so
+# this cannot delegate to the account helper. The ownership rules are therefore
+# implemented twice and held together by tests/test_appliance_account_ownership.py.
 set -e
 
 # The layout variables are the same ones the Python services read. dpkg never
@@ -19,13 +21,24 @@ LOG_DIR=${EMS_APPLIANCE_LOG_DIR:-/var/log/ems-appliance-manager}
 RUNTIME_DIR=${EMS_APPLIANCE_RUNTIME_DIR:-/run/ems-appliance-manager}
 SYSTEMD_DIR=${EMS_APPLIANCE_SYSTEMD_DIR:-/etc/systemd/system}
 SSHD_DIR=${EMS_APPLIANCE_SSHD_DIR:-/etc/ssh/sshd_config.d}
+QUARANTINE_DIR=${EMS_APPLIANCE_QUARANTINE_DIR:-/var/backups/ems-appliance-manager}
 HOST_PATHS="$CONFIG_DIR/host-paths.env"
-LIBDIR=${EMS_APPLIANCE_LIBDIR:-/usr/lib/ems-appliance-manager}
+PACKAGE_STATE="$STATE_DIR/agent/package-state"
+RECORD="$PACKAGE_STATE/backup-account.json"
+MANAGED_KEYS="$PACKAGE_STATE/managed-keys.list"
+ACL_MANIFEST="$PACKAGE_STATE/acl-manifest.tsv"
+ACL_RECOVERY="$PACKAGE_STATE/acl-recovery.tsv"
+ACL_STATE_FILE="$PACKAGE_STATE/acl-transaction.state"
 SSHD_POLICY="$SSHD_DIR/ems-appliance-backup.conf"
 BACKUP_USER=ems-backup
-INSTALL_ROOT=/opt/ems-solarflow
 EXPORT_ROOT=/srv/ems-appliance-export
 EXPORTS="config backups data"
+DISABLED_SUFFIX=.disabled-by-appliance
+RECORD_SCHEMA=3
+ACL_SCHEMA=3
+HOME_MARKER_NAME=.ems-appliance-backup-home
+HOME_MARKER_SCHEMA=1
+TAB=$(printf '\t')
 incomplete=""
 
 host_path() {
@@ -50,12 +63,438 @@ usable_path() {
     return 0
 }
 
+passwd_field() {
+    getent passwd "$BACKUP_USER" 2>/dev/null | cut -d: -f"$1"
+}
+
+account_exists() {
+    getent passwd "$BACKUP_USER" >/dev/null 2>&1
+}
+
+# --- BEGIN package-home authority (byte-identical in backup-account.sh and postrm)
+# Device and inode are not a durable identity: a filesystem may hand a
+# replacement directory the inode the original just released, so the pair a
+# record was written with can describe a directory this package never created.
+# The marker is the half that survives that — a root-owned file inside a
+# root-owned home the backup account cannot write, absent from any replacement.
+record_value() {
+    [ -r "$RECORD" ] || return 0
+    sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\{0,1\}\([^\",}]*\)\"\{0,1\}.*/\1/p" "$RECORD" \
+        | head -n 1
+}
+
+home_identity() {
+    [ -n "${1:-}" ] || return 0
+    stat -c '%d:%i' "$1" 2>/dev/null || true
+}
+
+marker_value() {
+    [ -r "$2" ] || return 0
+    sed -n "s/^$1=//p" "$2" | head -n 1
+}
+
+home_marker_path() {
+    marker=$(record_value home_marker)
+    if [ -n "$marker" ]; then
+        printf '%s' "$marker"
+        return 0
+    fi
+    marker_home=$(record_value home)
+    [ -n "$marker_home" ] || return 0
+    printf '%s/%s' "$marker_home" "$HOME_MARKER_NAME"
+}
+
+home_marker_is_recorded() {
+    marker=$(home_marker_path)
+    [ -n "$marker" ] || return 1
+    [ "$marker" = "$(record_value home)/$HOME_MARKER_NAME" ] || return 1
+    if [ -L "$marker" ]; then
+        return 1
+    fi
+    [ -f "$marker" ] || return 1
+    [ "$(stat -c '%h' "$marker" 2>/dev/null || echo 0)" = "1" ] || return 1
+    [ -z "$(find "$marker" -maxdepth 0 -perm /022 2>/dev/null)" ] || return 1
+    if [ "$(id -u)" = "0" ]; then
+        [ "$(stat -c '%u' "$marker" 2>/dev/null || echo 1)" = "0" ] || return 1
+    fi
+    recorded_nonce=$(record_value home_marker_nonce)
+    [ -n "$recorded_nonce" ] || return 1
+    [ "$(marker_value schema_version "$marker")" = "$HOME_MARKER_SCHEMA" ] || return 1
+    [ "$(marker_value account "$marker")" = "$BACKUP_USER" ] || return 1
+    [ "$(marker_value uid "$marker")" = "$(record_value uid)" ] || return 1
+    [ "$(marker_value primary_gid "$marker")" = "$(record_value primary_gid)" ] || return 1
+    [ "$(marker_value home "$marker")" = "$(record_value home)" ] || return 1
+    [ "$(marker_value nonce "$marker")" = "$recorded_nonce" ] || return 1
+    return 0
+}
+
+record_says_created() {
+    [ -r "$RECORD" ] || return 1
+    [ "$(record_value schema_version)" = "$RECORD_SCHEMA" ] || return 1
+    [ "$(record_value account)" = "$BACKUP_USER" ] || return 1
+    [ "$(record_value created_by_package)" = "true" ] || return 1
+    return 0
+}
+
+identity_matches() {
+    account_exists || return 1
+    [ "$(passwd_field 3)" = "$(record_value uid)" ] || return 1
+    [ "$(passwd_field 4)" = "$(record_value primary_gid)" ] || return 1
+    [ "$(passwd_field 6)" = "$(record_value home)" ] || return 1
+    return 0
+}
+
+# The recorded home must still be that exact directory. A home that is gone,
+# unstatable, replaced, or reached through a symbolic link is somebody else's
+# state, whatever the passwd entry still says.
+home_is_recorded() {
+    recorded_home=$(record_value home)
+    [ -n "$recorded_home" ] || return 1
+    if [ -L "$recorded_home" ]; then
+        return 1
+    fi
+    [ -d "$recorded_home" ] || return 1
+    recorded_identity="$(record_value home_device):$(record_value home_inode)"
+    [ "$recorded_identity" != ":" ] || return 1
+    [ "$(home_identity "$recorded_home")" = "$recorded_identity" ] || return 1
+    home_marker_is_recorded || return 1
+    return 0
+}
+# --- END package-home authority
+
+# --- key material -----------------------------------------------------------
+
+quarantine_keys() {
+    mkdir -p "$QUARANTINE_DIR" 2>/dev/null || return 1
+    chmod 0700 "$QUARANTINE_DIR" 2>/dev/null || true
+    stamp=$(date -u +%Y%m%d%H%M%S 2>/dev/null || echo unknown)
+    target="$QUARANTINE_DIR/$(basename "$2").$BACKUP_USER.$stamp"
+    mv -f "$1" "$target" 2>/dev/null || return 1
+    chmod 0600 "$target" 2>/dev/null || true
+    echo "ems-appliance: preserved unattributed key material from $2 at $target."
+    return 0
+}
+
+# Only a key whose body hash this package recorded is this package's to remove.
+filter_key_file() {
+    file=$1
+    [ -f "$file" ] || return 0
+    kept="$file.kept.$$"
+    : > "$kept"
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in ''|\#*) continue ;; esac
+        blob=$(printf '%s\n' "$line" | awk '{print $2}')
+        if [ -n "$blob" ]; then
+            hash=$(printf '%s' "$blob" | sha256sum 2>/dev/null | cut -d' ' -f1)
+            if [ -n "$hash" ] && grep -Fxq "$hash" "$MANAGED_KEYS" 2>/dev/null; then
+                continue
+            fi
+        fi
+        printf '%s\n' "$line" >> "$kept"
+    done < "$file"
+
+    if [ -s "$kept" ]; then
+        if quarantine_keys "$kept" "$file"; then
+            rm -f "$file"
+        else
+            rm -f "$kept"
+            incomplete="$incomplete the-key-material-in-$file"
+        fi
+    else
+        rm -f "$kept" "$file"
+    fi
+    return 0
+}
+
+withdraw_managed_keys() {
+    directory=$1
+    [ -d "$directory" ] || return 0
+    filter_key_file "$directory/authorized_keys"
+    filter_key_file "$directory/authorized_keys$DISABLED_SUFFIX"
+    for conflict in "$directory/authorized_keys$DISABLED_SUFFIX".conflict*; do
+        [ -e "$conflict" ] && filter_key_file "$conflict"
+    done
+    return 0
+}
+
+# --- ACL entries ------------------------------------------------------------
+
+manifest_header() {
+    sed -n "s/^$1=//p" "$ACL_MANIFEST" 2>/dev/null | head -n 1
+}
+
+# --- BEGIN package-object identity (byte-identical in setup-export-root.sh and postrm)
+# The identity splits in two, and the split is the contract.
+#
+# Mandatory: device, inode, file type, owner, group and a generation — birth time
+# where the filesystem keeps one, status-change time otherwise. Every field of it
+# comes from stat(1), so it is readable wherever this package runs. Device and
+# inode alone are not enough: they are handed straight back out when an object is
+# unlinked, so the generation is what makes a newly created object at the same
+# path a different object, and type, owner and group are part of it because an
+# ACL entry means something different on an object whose ownership changed.
+#
+# Optional: the inode generation number ext4 and its relatives keep, which sees a
+# reuse that two creations in the same clock tick hid. It needs lsattr, which
+# this package does not depend on and which no filesystem is obliged to answer.
+# So it only ever strengthens or refuses a match, never carries one: an optional
+# signal that was recorded and cannot be read now — or the other way round —
+# leaves the mandatory comparison in charge, because whether lsattr is installed
+# is a property of the host and not of the object.
+object_identity_core() {
+    identity_target=$1
+    if [ -L "$identity_target" ] && [ -d "$identity_target" ]; then
+        identity_target="$identity_target/."
+    fi
+    stat -c '%d|%i|%F|%u|%g|%w|%z' "$identity_target" 2>/dev/null | awk -F'|' '
+        NR == 1 {
+            generation = $6
+            if (generation == "-" || generation == "?" || generation == "") generation = $7
+            gsub(/[ \t]/, "_", $3)
+            gsub(/[ \t]/, "_", generation)
+            printf "%s:%s:%s:%s:%s:%s", $1, $2, $3, $4, $5, generation
+        }'
+}
+
+object_identity_optional() {
+    identity_target=$1
+    if [ -L "$identity_target" ] && [ -d "$identity_target" ]; then
+        identity_target="$identity_target/."
+    fi
+    identity_version=$(lsattr -d -v "$identity_target" 2>/dev/null | awk 'NR == 1 { print $1 }')
+    case "$identity_version" in
+        ''|*[!0-9]*) return 0 ;;
+        *) printf 'v%s' "$identity_version" ;;
+    esac
+}
+
+object_identity() {
+    identity_core=$(object_identity_core "$1")
+    [ -n "$identity_core" ] || return 0
+    identity_extra=$(object_identity_optional "$1")
+    if [ -n "$identity_extra" ]; then
+        printf '%s:%s' "$identity_core" "$identity_extra"
+    else
+        printf '%s' "$identity_core"
+    fi
+}
+
+identity_core_of() {
+    case "$1" in
+        *:v[0-9]*) printf '%s' "${1%:*}" ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
+identity_optional_of() {
+    case "$1" in
+        *:v[0-9]*) printf '%s' "${1##*:}" ;;
+        *) return 0 ;;
+    esac
+}
+
+# Does an object still carry the identity a manifest recorded for it? The
+# mandatory half must agree exactly. The optional half refuses when both sides
+# have one and they differ, and is silent when either side does not.
+identity_agrees() {
+    [ -n "$1" ] && [ -n "$2" ] || return 1
+    [ "$(identity_core_of "$1")" = "$(identity_core_of "$2")" ] || return 1
+    recorded_optional=$(identity_optional_of "$1")
+    observed_optional=$(identity_optional_of "$2")
+    if [ -n "$recorded_optional" ] && [ -n "$observed_optional" ] \
+       && [ "$recorded_optional" != "$observed_optional" ]; then
+        return 1
+    fi
+    return 0
+}
+# --- END package-object identity
+
+current_acl_entry() {
+    if [ "$2" = "default" ]; then
+        getfacl -p --absolute-names "$1" 2>/dev/null \
+            | sed -n "s/^default:user:$BACKUP_USER:\([^[:space:]]*\).*/\1/p" | head -n 1
+    else
+        getfacl -p --absolute-names "$1" 2>/dev/null \
+            | sed -n "s/^user:$BACKUP_USER:\([^[:space:]]*\).*/\1/p" | head -n 1
+    fi
+}
+
+acl_incomplete() {
+    incomplete="$incomplete $1"
+}
+
+# An entry is this package's to withdraw only when the object is still the one
+# the manifest identified and the entry still holds exactly the permissions this
+# package left there. Anything else — a changed entry, a replaced object, a
+# descendant created later through the default ACL — belongs to whoever changed
+# it and is preserved and reported instead.
+withdraw_acl_entries() {
+    # A recovery manifest means a previous grant could not be undone completely;
+    # it names ACL state an operator still has to resolve by hand.
+    if [ -f "$ACL_RECOVERY" ]; then
+        acl_incomplete "the-acl-recovery-manifest-at-$ACL_RECOVERY"
+    fi
+    # A manifest is authoritative only while the run that wrote it says it
+    # committed. Presence is not that statement: a manifest left behind by a
+    # commit that could not be made durable describes grants that were withdrawn.
+    if [ -r "$ACL_STATE_FILE" ]; then
+        acl_state=$(head -n 1 "$ACL_STATE_FILE" 2>/dev/null | tr -d ' \t')
+        if [ "$acl_state" != "committed" ]; then
+            acl_incomplete "the-acl-transaction-left-in-${acl_state:-unknown}"
+            return 0
+        fi
+    fi
+    if [ -e "$ACL_MANIFEST.uncommitted" ]; then
+        acl_incomplete "the-uncommitted-acl-manifest-at-$ACL_MANIFEST.uncommitted"
+    fi
+    if ! command -v setfacl >/dev/null 2>&1 || ! command -v getfacl >/dev/null 2>&1; then
+        acl_incomplete "the-acl-entries-for-$BACKUP_USER"
+        return 0
+    fi
+    if [ ! -r "$ACL_MANIFEST" ] \
+       || [ "$(manifest_header schema)" != "$ACL_SCHEMA" ] \
+       || [ "$(manifest_header user)" != "$BACKUP_USER" ]; then
+        acl_incomplete "the-acl-entries-for-$BACKUP_USER"
+        return 0
+    fi
+
+    while IFS="$TAB" read -r kind object identity scope preexisting previous granted; do
+        [ "$kind" = "entry" ] || continue
+        [ -n "$object" ] && [ -n "$scope" ] && [ -n "$granted" ] || continue
+        [ -e "$object" ] || continue
+        if ! identity_agrees "$identity" "$(object_identity "$object")"; then
+            acl_incomplete "the-acl-on-the-replaced-$object"
+            continue
+        fi
+        if [ "$(current_acl_entry "$object" "$scope")" != "$granted" ]; then
+            acl_incomplete "the-changed-$scope-acl-on-$object"
+            continue
+        fi
+        [ "$previous" = "-" ] && previous=""
+        if [ "$preexisting" = "yes" ] && [ -n "$previous" ]; then
+            if [ "$scope" = "default" ]; then
+                setfacl -d -m "u:$BACKUP_USER:$previous" "$object" 2>/dev/null \
+                    || acl_incomplete "the-acl-restore-on-$object"
+            else
+                setfacl -m "u:$BACKUP_USER:$previous" "$object" 2>/dev/null \
+                    || acl_incomplete "the-acl-restore-on-$object"
+            fi
+        elif [ "$scope" = "default" ]; then
+            setfacl -d -x "u:$BACKUP_USER" "$object" 2>/dev/null \
+                || acl_incomplete "the-default-acl-on-$object"
+        else
+            setfacl -x "u:$BACKUP_USER" "$object" 2>/dev/null \
+                || acl_incomplete "the-acl-on-$object"
+        fi
+    done < "$ACL_MANIFEST"
+
+    report_unattributed_acls
+    return 0
+}
+
+# Whatever still names the backup account under a recursive grant was either
+# preserved above or created after the manifest. Neither is safe to delete.
+report_unattributed_acls() {
+    leftovers=$(mktemp 2>/dev/null) || return 0
+    while IFS="$TAB" read -r kind root identity mode; do
+        [ "$kind" = "root" ] || continue
+        [ "$mode" = "recursive" ] || continue
+        [ -d "$root" ] || continue
+        getfacl -R -p --absolute-names "$root" 2>/dev/null | awk -v user="$BACKUP_USER" '
+            /^# file:/ { file = substr($0, 9); next }
+            index($0, "user:" user ":") == 1 { print file; next }
+            index($0, "default:user:" user ":") == 1 { print file }
+        ' >> "$leftovers"
+    done < "$ACL_MANIFEST"
+
+    sort -u "$leftovers" 2>/dev/null | while IFS= read -r object; do
+        [ -n "$object" ] || continue
+        grep -Fq "${TAB}${object}${TAB}" "$ACL_MANIFEST" && continue
+        printf '%s\n' "$object"
+    done > "$leftovers.unattributed" 2>/dev/null || true
+
+    while IFS= read -r object; do
+        [ -n "$object" ] || continue
+        acl_incomplete "the-unattributed-acl-on-$object"
+    done < "$leftovers.unattributed"
+    rm -f "$leftovers" "$leftovers.unattributed"
+    return 0
+}
+
+# The manifests name what is still there and prove what was already withdrawn,
+# so a second attempt stays exact instead of guessing.
+keep_package_state() {
+    for item in "$STATE_DIR"/* "$STATE_DIR"/agent/*; do
+        [ -e "$item" ] || continue
+        case "$item" in
+            "$STATE_DIR/agent"|"$PACKAGE_STATE") continue ;;
+        esac
+        rm -rf "$item"
+    done
+    echo "ems-appliance: kept $PACKAGE_STATE; it records what purge could not withdraw." >&2
+    return 0
+}
+
+# --- the account ------------------------------------------------------------
+
+purge_backup_account() {
+    if ! record_says_created; then
+        echo "ems-appliance: the backup account $BACKUP_USER was not created by this package;" \
+             "leaving it, its home and its key material untouched."
+        rm -f "$RECORD"
+        return 0
+    fi
+
+    if account_exists && ! identity_matches; then
+        incomplete="$incomplete the-replaced-$BACKUP_USER-account"
+        echo "ems-appliance: $BACKUP_USER is not the account this package created;" \
+             "it, its home and its key material were left untouched." >&2
+        return 0
+    fi
+
+    # Nothing below may run against a home this package cannot prove is the one
+    # it created: the key files in it and the account behind it would both be
+    # somebody else's state.
+    if ! home_is_recorded; then
+        incomplete="$incomplete the-replaced-home-$(record_value home)"
+        echo "ems-appliance: $(record_value home) is no longer the home directory this package" \
+             "created; it, its key material and the account were left untouched." >&2
+        return 0
+    fi
+
+    recorded_home=$(record_value home)
+    created_home=$(record_value home_created_by_package)
+    withdraw_managed_keys "$recorded_home/.ssh"
+
+    if account_exists; then
+        deluser --quiet "$BACKUP_USER" >/dev/null 2>&1 || true
+        if account_exists; then
+            usermod --expiredate 1 --lock "$BACKUP_USER" >/dev/null 2>&1 || true
+            incomplete="$incomplete the-$BACKUP_USER-account"
+            rm -f "$RECORD"
+            return 0
+        fi
+    fi
+    if getent group "$BACKUP_USER" >/dev/null 2>&1 && command -v delgroup >/dev/null 2>&1; then
+        delgroup --quiet "$BACKUP_USER" >/dev/null 2>&1 || true
+    fi
+
+    if [ "$created_home" = "true" ] && [ -n "$recorded_home" ] && [ -d "$recorded_home" ] \
+       && [ "$recorded_home" != "/" ] && [ ! -L "$recorded_home" ]; then
+        if home_is_recorded; then
+            rm -rf "$recorded_home"
+        else
+            incomplete="$incomplete the-home-directory-$recorded_home"
+        fi
+    fi
+    rm -f "$RECORD" "$MANAGED_KEYS"
+    return 0
+}
+
 case "$1" in
     purge)
         # Same precedence as the Python services: environment, then the
         # generated host configuration, then the packaged default.
-        value=${EMS_APPLIANCE_INSTALL_ROOT:-$(host_path EMS_APPLIANCE_INSTALL_ROOT)}
-        usable_path "$value" && INSTALL_ROOT=$value
         value=${EMS_APPLIANCE_EXPORT_ROOT:-$(host_path EMS_APPLIANCE_EXPORT_ROOT)}
         usable_path "$value" && EXPORT_ROOT=$value
 
@@ -68,28 +507,15 @@ case "$1" in
             fi
         done
 
-        # Only the entries this feature granted, and only when nothing is
-        # mounted over the paths any more.
-        if command -v setfacl >/dev/null 2>&1; then
-            [ -d "$INSTALL_ROOT" ] && setfacl -x "u:$BACKUP_USER" "$INSTALL_ROOT" 2>/dev/null || true
-            for exported in $EXPORTS; do
-                target="$INSTALL_ROOT/$exported"
-                [ -d "$target" ] || continue
-                mountpoint -q "$target" 2>/dev/null && continue
-                setfacl -R -x "u:$BACKUP_USER" "$target" 2>/dev/null || true
-                setfacl -R -d -x "u:$BACKUP_USER" "$target" 2>/dev/null || true
-            done
-        fi
+        withdraw_acl_entries
+        purge_backup_account
 
-        # Account, home and key material: package-owned only.
-        if [ -x "$LIBDIR/backup-account.sh" ]; then
-            "$LIBDIR/backup-account.sh" purge \
-                || incomplete="$incomplete the-$BACKUP_USER-account"
+        if [ -n "$incomplete" ]; then
+            keep_package_state
         else
-            incomplete="$incomplete the-$BACKUP_USER-account"
+            rm -rf "$STATE_DIR"
         fi
-
-        rm -rf "$STATE_DIR" "$LOG_DIR"
+        rm -rf "$LOG_DIR"
         rm -rf "$RUNTIME_DIR"
         # Every generated artefact is withdrawn together: the environment file,
         # the path-unit drop-in and the sshd Match policy that confined the

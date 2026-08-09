@@ -269,17 +269,194 @@ is therefore created **and recorded** by this package, in a root-only ownership
 record under `/var/lib/ems-appliance-manager/agent/package-state/`. Every
 destructive step is gated on it:
 
+A name is not an identity, and neither is a device and inode pair. When a
+directory is removed the filesystem is free to hand its inode to the very next
+creation, so a replacement home can present exactly the pair the record was
+written with — on ext4 that is routine. The durable half of the home identity is
+therefore a **root-owned ownership marker** the package writes inside the home it
+created, carrying a random secret that is also stored in the root-only record:
+
+```text
+/var/lib/ems-backup                          root:root, not writable by ems-backup
+/var/lib/ems-backup/.ems-appliance-backup-home   root:root 0400, the marker
+/var/lib/ems-backup/.ssh                     root:root 0700
+```
+
+The record binds the account name, uid, primary gid, home path, the home's
+device and inode *and* the marker's secret. All of them have to match before
+anything is moved, quarantined, expired or deleted:
+
 | Situation | What purge does |
 |---|---|
 | the record says this package created the account and its home | removes the account, the home and the managed key files |
 | the record says the home already existed | removes the managed key files only |
+| the recorded home was replaced, removed or is a symbolic link | touches nothing — the account, the directory and its key material stay, and the mismatch is reported |
+| the home carries no marker, a marker naming another home, or another secret | touches nothing and reports the mismatch |
+| the account's uid, gid or home path changed | touches nothing and reports the conflict |
 | there is no record | removes the managed key files only; the account and its home stay |
 | an account exists at install time without a record | the installation fails with a named conflict |
+
+The account identity and the home identity are judged separately, because a
+fail-closed step still needs somewhere to act. `disable` follows the same rule
+in both implementations, the packaged shell and the Python service: with the
+exact package-owned account *and* home the key file is moved out of sshd's reach
+and preserved; with the account but a home this package cannot prove is its own,
+the key file in that home is not read, moved, renamed or rewritten and the
+account is expired instead; without even the account, nothing on the host is
+this package's to change. Neither path claims more than it achieved: the
+packaged `backup-account.sh disable` fails when the account cannot be expired,
+and the service reports `authentication_disabled: false` rather than a
+withdrawal that did not happen.
+
+### Records written before the marker existed
+
+A record from an older schema carries no marker, so it cannot prove that the
+home it names is the one this package created. Nothing upgrades one by itself.
+The fields such a record does carry — `created_by_package`, an account name, a
+home path, a device and an inode — are all reproducible by whatever wrote them,
+and an inode is reproducible by the filesystem the moment it is handed out
+again, so none of them establishes ownership. Until an administrator resolves
+it, backup access stays disabled and purge leaves the account and home alone.
+
+`backup-account.sh ownership-state`, mirrored by
+`ems-appliance backup-account status`, reports one closed set of states:
+
+| State | Meaning |
+|---|---|
+| `current` | the record is schema 3 and the marker in the home verifies |
+| `legacy_manual_migration_required` | the record predates the marker; an administrator has to decide |
+| `ownership_conflict` | the account or the recorded home is not the one the record describes |
+| `marker_missing` | the marker the record names is not there |
+| `marker_mismatch` | a file is at the marker path but it is not this package's marker |
+| `record_corrupt` | the record cannot be read, or carries a schema nothing can interpret |
+| `no_ownership_record` | there is no record |
+
+An install never resolves any of these. A **schema-2** record — one written
+before the marker but with the account and home identity fields — is adopted
+only by the explicit, root-only
+
+```bash
+ems-appliance backup-account migrate-ownership
+```
+
+which takes no path from anywhere but the record and refuses unless *every* one
+of the following is independently proven: the account's uid, gid and home path
+still match the record; the recorded home is still that exact directory; nothing
+already claims it with a marker; the home is root-owned and closed to other
+writers; it holds nothing but `.ssh` and the marker path, and `.ssh` holds
+nothing but the key files this package writes; and every key in it is one this
+package recorded. It prints what it is about to adopt, writes the marker and the
+record as one step, and re-verifies the result afterwards. Device and inode
+equality is a necessary condition there and never a sufficient one, and there is
+no force-adopt flag.
+
+A **schema-less** record is not adoptable at all, by this command or any other.
+It is reported, and an operator reviews the record and the directory by hand.
+
+Anything less than a full proof is left unowned and reported, because adopting
+an uncertain home is how a package ends up deleting somebody else's directory.
 
 A key file that appears next to an already preserved one is never discarded:
 both are kept and authentication stays disabled until an operator resolves it.
 Purge reports every mount and account it could not withdraw instead of claiming
 a clean removal.
+
+### ACL entries
+
+The export setup records a versioned manifest of the ACL entries it granted:
+one line per object *and* ACL scope, with the object's identity, whether the
+entry predated the package, its exact previous permissions and the exact
+permissions this package left behind. A recursive grant is expanded during the
+ACL walk, because a subtree root cannot say which descendants were changed.
+
+An object identity is not a device and inode either, and it has two halves.
+
+```text
+mandatory:  device : inode : file type : uid : gid : generation
+optional:                                                       [ : inode version ]
+```
+
+The **mandatory** half comes entirely from `stat`, so it is readable wherever
+this package runs, and it carries every match. The generation is the
+filesystem's birth time when it keeps one and the status-change time otherwise;
+type, owner and group are part of it because an ACL entry means something
+different on an object whose ownership changed.
+
+The **optional** half is the kernel's inode generation number where it is
+exposed (ext4 and relatives) — the one signal that sees a reuse two creations in
+the same clock tick hid. It needs `lsattr`, which this package does not depend
+on and which no filesystem is obliged to answer, so it only ever *strengthens* a
+match or *refuses* one: two generations that disagree describe two objects and
+the entry is preserved, while a generation recorded on one host and unreadable
+on another leaves the mandatory comparison in charge. Whether `lsattr` is
+installed is a fact about the host, not about the object that was granted an
+ACL, and a cleanup that became impossible when a tool was removed would leave
+this package's own entries behind for good. The manifest header declares which
+optional signals the run could read. A mandatory identity that cannot be
+reproduced exactly is treated as *unknown*, which preserves the entry.
+
+The whole grant is one transaction with durable, explicit states — `staging`,
+`rollback_required`, `rollback_complete`, `recovery_required`, `committed` —
+recorded in `acl-transaction.state` beside the manifest. The staging manifest is
+created and flushed and the complete pre-state is captured **before** the first
+`setfacl`; the read-back, the manifest write, the flush, the atomic rename, the
+parent-directory flush and the state commit all have to succeed. The manifest is
+authoritative only while the state says `committed`; presence alone is not that
+statement, and purge refuses to act on a manifest whose transaction did not
+commit.
+
+**The manifest and its transaction state are one authority, restored as one
+pair.** A run snapshots both before it stages anything: the manifest bytes with
+their hash, file mode and owner, and the exact transaction state beside them.
+When a failed run puts the previous manifest back, it puts that state back with
+it and re-reads both to prove it — a previously committed manifest left under
+`rollback_complete` would be a pair no later purge may act on, so the grants
+would stay on the host with nothing allowed to remove them. The restore verifies
+content, hash, file type, mode, owner and the state file's content, and a failed
+`chmod`, `chown` or flush fails the restore instead of being ignored. The
+previous state is only claimed again when the rollback put **every** ACL back;
+after an incomplete rollback `recovery_required` stands.
+
+The same applies to a run that failed before it ever renamed a manifest: the
+authoritative manifest was untouched, but the transaction state moved to
+`staging` when the run opened, so the state is put back and verified there too.
+
+If the parent-directory flush fails after the rename, the previous manifest is
+restored and verified by hash, or — when there was none — the slot is emptied.
+If neither is possible the new manifest is moved off the authoritative name to
+`acl-manifest.tsv.uncommitted` and reported, so nothing reads a manifest
+describing grants the rollback withdrew.
+
+The grant, the ownership record and the home marker all name the same
+`installation_id`: `backup-account.sh ensure` generates it once and writes it
+into the record and the marker, the export setup reads it back out of the record
+for the manifest header, and ownership verification refuses a marker that names a
+different installation.
+
+A failure at any point after the first `setfacl` restores every entry from the
+captured pre-state and verifies the restoration. What could not be put back is
+written to a root-only `acl-recovery.tsv` carrying the installation and
+operation id, the transaction state, the last step reached, the error, the
+opened roots, the expected pre-state and the observed state. Every step of that
+write — staging, flush, rename, parent flush — is checked, and a rollback whose
+evidence could not be written fails with a message naming both losses rather
+than reporting a clean cleanup.
+
+Each export source is opened once and **its descriptor is held for the whole
+transaction**. The capture, the mutation, the rollback and the rollback
+verification all act on that descriptor, and each object is re-identified
+through it immediately before it is restored. A source moved aside mid-run
+therefore has its own ACL withdrawn and the directory that took its place at the
+configured path is not written to at all. The manifest records the canonical
+path an operator recognises; that path is never the mutation authority.
+
+Removal reverts an entry only when the object is still the recorded one and
+still carries exactly the granted value — a pre-existing entry is restored to
+its previous permissions, an entry this package introduced is removed. An entry
+whose permissions changed afterwards, an object that was replaced or re-owned, a
+descendant created later through the default ACL and every `setfacl` failure are
+preserved and reported as incomplete cleanup. The manifest survives an
+incomplete purge so a second attempt stays exact instead of guessing.
 
 ## What is deliberately absent
 

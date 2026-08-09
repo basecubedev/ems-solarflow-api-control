@@ -623,7 +623,9 @@ test.describe("truthful host state @smoke", () => {
     const card = page.locator('[data-test="backup-export"]');
     await expect(card).toContainText("degraded");
     await expect(card).toContainText("not confined");
-    await expect(page.locator('[data-test="backup-paths"]')).toContainText("writable");
+    const paths = page.locator('[data-test="backup-paths"]');
+    await expect(paths).toContainText("exported read-write");
+    await expect(paths).not.toContainText("read-only export");
   });
 
   test("a confined export root is shown as confined and read-only", async ({ page }) => {

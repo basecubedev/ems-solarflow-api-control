@@ -12,9 +12,17 @@ mount was attempted" are observable facts rather than claims. The real kernel
 behaviour is proven in ``test_appliance_sftp_confinement.py``.
 """
 
+import os
+
 import pytest
 
-from tests.helpers.appliance_export_script import EXPORT_NAMES, ExportScriptHarness
+from tests.helpers.appliance_object_identity import object_identity
+from tests.helpers.appliance_export_script import (
+    BACKUP_USER,
+    EXPORT_NAMES,
+    EXPORT_SCRIPT,
+    ExportScriptHarness,
+)
 
 pytestmark = [pytest.mark.contract, pytest.mark.simulation, pytest.mark.backup_restore]
 
@@ -362,3 +370,124 @@ def test_the_script_uses_the_canonical_host_path_variables(harness):
     status = harness.status()
     assert status["root"] == str(harness.install_root), status
     assert status["export_root"] == str(harness.export_root), status
+
+
+def test_only_one_run_may_hold_the_export_root(harness):
+    """The watcher, the postinst and an operator can all start a run at once."""
+
+    result = harness.run()
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (harness.stub_dir / "export.lock").exists(), sorted(
+        item.name for item in harness.stub_dir.iterdir()
+    )
+    assert "flock" in EXPORT_SCRIPT.read_text(encoding="utf-8")
+
+
+# --- the ACL manifest -------------------------------------------------------
+
+
+def manifest_roots(harness):
+    return {
+        line.split("\t")[1]: line.split("\t")
+        for line in harness.manifest_lines()
+        if line.startswith("root\t")
+    }
+
+
+def manifest_entries(harness):
+    """Every recorded ``(object, scope)`` line, keyed for lookup."""
+
+    return {
+        (fields[1], fields[3]): fields
+        for fields in (line.split("\t") for line in harness.manifest_lines())
+        if fields[0] == "entry"
+    }
+
+
+def test_every_granted_acl_entry_is_recorded_with_its_object_identity(harness):
+    harness.run()
+
+    roots = manifest_roots(harness)
+    entries = manifest_entries(harness)
+    assert str(harness.install_root) in roots, harness.manifest_lines()
+    for name in EXPORT_NAMES:
+        source = str(harness.install_root / name)
+        assert source in roots, harness.manifest_lines()
+        assert roots[source][3] == "recursive"
+        identity = object_identity(source)
+        assert roots[source][2] == identity
+        record = entries.get((source, "access"))
+        assert record, harness.manifest_lines()
+        assert record[2] == identity, record
+
+
+def test_a_recorded_identity_is_more_than_a_device_and_inode(harness):
+    """Device and inode are reusable; what is recorded may not be."""
+
+    harness.run()
+
+    roots = manifest_roots(harness)
+    source = str(harness.install_root / "config")
+    fields = roots[source][2].split(":")
+    entry = os.stat(source)
+    assert fields[0] == str(entry.st_dev), roots[source]
+    assert fields[1] == str(entry.st_ino), roots[source]
+    assert fields[2] == "directory", roots[source]
+    assert fields[3] == str(entry.st_uid), roots[source]
+    assert fields[4] == str(entry.st_gid), roots[source]
+    assert ":".join(fields[5:]), "the identity carries no generation signal"
+
+
+def test_a_recursive_grant_records_every_object_it_changed(harness):
+    """The subtree root alone cannot say which descendants were touched."""
+
+    harness.run()
+
+    entries = manifest_entries(harness)
+    marker = str(harness.install_root / "config" / "marker")
+    assert (marker, "access") in entries, harness.manifest_lines()
+    assert entries[(marker, "access")][4] == "no", entries[(marker, "access")]
+
+
+def test_an_acl_entry_that_predates_the_installation_is_recorded_as_preserved(harness):
+    operator = harness.install_root / "config" / "operator.json"
+    operator.write_text("{}\n", encoding="utf-8")
+    harness.set_acl(operator, BACKUP_USER, "rwx")
+
+    harness.run()
+
+    record = manifest_entries(harness).get((str(operator), "access"))
+    assert record, harness.manifest_lines()
+    assert record[4] == "yes", record
+    assert record[5] == "rwx", record
+
+
+def test_the_manifest_declares_the_schema_its_reader_requires(harness):
+    harness.run()
+
+    lines = harness.manifest_lines()
+    assert "schema=3" in lines, lines
+    assert f"user={BACKUP_USER}" in lines, lines
+    for line in lines:
+        fields = line.split("\t")
+        if fields[0] == "entry":
+            assert len(fields) == 7, fields
+            assert all(field for field in fields), fields
+
+
+def test_a_second_run_does_not_record_its_own_grants_as_pre_existing(harness):
+    operator = harness.install_root / "config" / "operator.json"
+    operator.write_text("{}\n", encoding="utf-8")
+    harness.set_acl(operator, BACKUP_USER, "rwx")
+    assert harness.run().returncode == 0
+    first = manifest_entries(harness)
+
+    harness.run("--teardown")
+    assert harness.run().returncode == 0
+
+    second = manifest_entries(harness)
+    assert second.keys() == first.keys(), (sorted(first), sorted(second))
+    for key, record in second.items():
+        assert record[4:6] == first[key][4:6], (key, record, first[key])
+    assert second[(str(operator), "access")][5] == "rwx", second[(str(operator), "access")]

@@ -1235,6 +1235,9 @@
         confinementGaps(backup),
         exportSetupReport(backup),
         fact("Export root", (backup || {}).export_root, { mono: true }),
+        (((backup || {}).unmanaged_entries || []).length
+          ? fact("Unmanaged entries", (backup.unmanaged_entries || []).join(", "))
+          : null),
         expert() ? fact("sshd chroot", ((backup || {}).chroot || {}).configured, { mono: true }) : null,
         expert() ? fact("Forced command", ((backup || {}).chroot || {}).force_command, { mono: true }) : null
       ], "backup-export")
@@ -1309,7 +1312,7 @@
               el("td", { class: "mono", text: expert() ? item.path : "/" + item.name }),
               el("td", { text: item.access }),
               el("td", {}, [tone(item.state === "mounted" ? "ok" : (item.exists ? "bad" : "warn"),
-                item.state === "mounted" ? "read-only export" : item.state)]),
+                exportStateLabel(item))]),
               el("td", { text: item.exists ? item.size_mb + " MB" : "missing" })
             ]);
           }))
@@ -1348,6 +1351,20 @@
     if (!reported.status || reported.status === "configured") return null;
     var detail = reported.detail ? reported.status + " — " + reported.detail : reported.status;
     return fact("Export setup", detail);
+  }
+
+  // A mount is only "read-only export" when the kernel says it publishes the
+  // configured EMS directory; ro alone is not the same claim.
+  var EXPORT_STATE_LABELS = {
+    mounted: "read-only export",
+    foreign: "not the configured directory",
+    writable: "exported read-write",
+    not_mounted: "not published",
+    missing: "missing"
+  };
+
+  function exportStateLabel(item) {
+    return EXPORT_STATE_LABELS[item.state] || item.state;
   }
 
   function exportTone(status) {

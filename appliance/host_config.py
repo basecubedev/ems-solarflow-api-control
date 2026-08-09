@@ -14,6 +14,7 @@ that neither the operator nor this code could describe.
 """
 
 import os
+import stat
 from pathlib import Path
 
 from appliance.paths import (
@@ -25,6 +26,10 @@ from appliance.paths import (
     validate_configured_root,
     validate_root_pair,
 )
+
+# The Match block is generated from the same constant the effective policy is
+# judged against, so a change to one is a change to both.
+from appliance.ssh_policy import FORCED_COMMAND
 
 HOST_PATHS_NAME = "host-paths.env"
 PATH_UNIT = "ems-appliance-export.path"
@@ -41,16 +46,16 @@ HEADER = (
     "# The authority is /etc/ems-appliance-manager/appliance.conf.\n"
 )
 
-FORCED_COMMAND = (
-    "internal-sftp -P symlink,hardlink,rename,posix-rename,remove,mkdir,rmdir,setstat,fsetstat"
-)
 
 
 class HostConfigError(Exception):
-    def __init__(self, code, message):
+    def __init__(self, code, message, *, rollback=None):
         super().__init__(message)
         self.code = code
         self.message = message
+        # What the transaction put back, and what it could not. A caller may
+        # never turn a failed rollback into a generic failure message.
+        self.rollback = dict(rollback or {})
 
 
 def host_paths_file(paths):
@@ -141,26 +146,217 @@ def validate_configuration(paths, config):
     return True
 
 
+ARTIFACT_MODE = 0o644
+UNSAFE_ARTIFACT_MODE = stat.S_IWGRP | stat.S_IWOTH
+
+
+def _inspect_artifact(path):
+    """What is at an artefact's path, without following a link to decide it."""
+
+    try:
+        status = os.lstat(path)
+    except FileNotFoundError:
+        return {"exists": False}
+    except OSError as exc:
+        return {"exists": True, "readable": False, "reason": f"cannot be inspected ({exc})"}
+    return {
+        "exists": True,
+        "readable": True,
+        "symlink": stat.S_ISLNK(status.st_mode),
+        "regular": stat.S_ISREG(status.st_mode),
+        "mode": stat.S_IMODE(status.st_mode),
+        "uid": status.st_uid,
+        "gid": status.st_gid,
+        "device": status.st_dev,
+        "inode": status.st_ino,
+        "links": status.st_nlink,
+    }
+
+
+def _artifact_refusal(path, observed):
+    """Why this object may not be replaced by a generated artefact, or ""."""
+
+    if not observed["exists"]:
+        return ""
+    if not observed.get("readable"):
+        return observed.get("reason", "cannot be inspected")
+    if observed["symlink"]:
+        return "is a symbolic link"
+    if not observed["regular"]:
+        return "is not a regular file"
+    if observed["links"] != 1:
+        return f"has {observed['links']} hard links"
+    # Root in production; the generating identity is what makes the artefact
+    # this package's, and an unprivileged run cannot produce a root-owned file.
+    if observed["uid"] != os.geteuid():
+        return f"is owned by uid {observed['uid']}, not by uid {os.geteuid()}"
+    if observed["mode"] & UNSAFE_ARTIFACT_MODE:
+        return f"is writable by group or others (mode {observed['mode']:04o})"
+    return ""
+
+
+def _refuse_unsafe_artifacts(targets):
+    """Nothing is written until every target is missing or a generated artefact.
+
+    Replacing an object this package did not generate and reconstructing it
+    afterwards is not a rollback: a symbolic link, a device or a file somebody
+    else owns cannot be rebuilt from its bytes.
+    """
+
+    refusals = [
+        f"{path} {reason}"
+        for path, reason in (
+            (path, _artifact_refusal(path, _inspect_artifact(path))) for path in targets
+        )
+        if reason
+    ]
+    if refusals:
+        raise HostConfigError(
+            "host_artifact_not_generated",
+            "the generated host configuration was not applied: " + "; ".join(refusals),
+            rollback={
+                "applied": False,
+                "authentication_disabled": False,
+                "disk_rollback": "not_required",
+                "runtime_rollback": "not_required",
+                "remaining_drift": [],
+                "failed_steps": [],
+            },
+        )
+    return True
+
+
 def _snapshot(targets):
-    saved = {}
-    for path in targets:
-        try:
-            saved[path] = path.read_text(encoding="utf-8")
-        except OSError:
-            saved[path] = None
-    return saved
+    """Everything a restore has to be able to prove it put back."""
+
+    return {path: _inspect_artifact(path) | _snapshot_content(path) for path in targets}
+
+
+def _snapshot_content(path):
+    try:
+        return {"content": path.read_text(encoding="utf-8")}
+    except OSError:
+        return {"content": None}
+
+
+def _restore_one(path, previous):
+    """Put one artefact back exactly, and read back every property it claims."""
+
+    content = previous.get("content")
+    try:
+        if not previous.get("exists") or content is None:
+            path.unlink(missing_ok=True)
+            return not path.exists()
+        atomic_write(path, content, mode=previous.get("mode") or ARTIFACT_MODE, owner_root=True)
+        if previous.get("uid") != 0 or previous.get("gid") != 0:
+            os.chown(path, previous["uid"], previous["gid"])
+    except OSError:
+        return False
+
+    current = _inspect_artifact(path)
+    return bool(
+        current["exists"]
+        and current.get("readable")
+        and current["regular"]
+        and not current["symlink"]
+        and current["links"] == 1
+        and current["mode"] == (previous.get("mode") or ARTIFACT_MODE)
+        and current["uid"] == previous.get("uid")
+        and current["gid"] == previous.get("gid")
+        and read_text(path) == content
+    )
 
 
 def _restore(saved, written):
-    for path in written:
-        previous = saved.get(path)
+    """Put every artefact back and prove it is back; never report an unread guess."""
+
+    unrestored = [path for path in written if not _restore_one(path, saved.get(path) or {})]
+    return not unrestored, [str(path) for path in unrestored]
+
+
+def _rollback_transaction(activation, paths, config, saved, written, before):
+    """Undo the whole apply: authentication first, then disk, then runtime."""
+
+    report = {
+        "applied": False,
+        "authentication_disabled": False,
+        "disk_rollback": "failed",
+        "runtime_rollback": "not_required",
+        "remaining_drift": [],
+        "differences": {},
+        "failed_steps": [],
+    }
+    if activation is not None and hasattr(activation, "disable_authentication"):
         try:
-            if previous is None:
-                path.unlink(missing_ok=True)
-            else:
-                atomic_write(path, previous, mode=0o644, owner_root=True)
-        except OSError:
-            continue
+            report["authentication_disabled"] = bool(activation.disable_authentication())
+        except Exception:
+            report["authentication_disabled"] = False
+
+    restored, unrestored = _restore(saved, written)
+    report["disk_rollback"] = "succeeded" if restored else "failed"
+    report["remaining_drift"] = [f"{path}_not_restored" for path in unrestored]
+
+    if before is not None and activation is not None and hasattr(activation, "rollback"):
+        try:
+            runtime = activation.rollback(paths, config, before)
+        except Exception:
+            runtime = {
+                "state": "failed",
+                "drift": ["runtime_rollback_error"],
+                "failed_steps": [],
+                "differences": {},
+            }
+        report["runtime_rollback"] = runtime["state"]
+        report["remaining_drift"] += list(runtime["drift"])
+        report["differences"] = dict(runtime.get("differences") or {})
+        report["failed_steps"] = list(runtime.get("failed_steps") or [])
+    return report
+
+
+OFFLINE_BUILD_ENV = "EMS_APPLIANCE_OFFLINE_IMAGE_BUILD"
+
+
+def offline_image_build():
+    """An image build has no running host to capture, and says so explicitly."""
+
+    return os.environ.get(OFFLINE_BUILD_ENV, "").strip().lower() in ("1", "true", "yes")
+
+
+def _capture_runtime_baseline(activation, paths, config):
+    """The baseline a rollback needs, or no apply at all.
+
+    Writing first and discovering afterwards that the runtime was never read is
+    how a failed activation gets to report "runtime_rollback: not_required".
+    An activation that cannot describe the host it is about to change is a
+    refusal, not a reason to continue without a baseline.
+    """
+
+    if activation is None or not hasattr(activation, "capture"):
+        return None
+    try:
+        return activation.capture(paths, config)
+    except Exception as exc:
+        if offline_image_build():
+            return None
+        disabled = False
+        if hasattr(activation, "disable_authentication"):
+            try:
+                disabled = bool(activation.disable_authentication())
+            except Exception:
+                disabled = False
+        raise HostConfigError(
+            "runtime_snapshot_unavailable",
+            "the running host could not be read before the generated host "
+            f"configuration was applied, so nothing was written: {exc}",
+            rollback={
+                "applied": False,
+                "authentication_disabled": disabled,
+                "disk_rollback": "not_required",
+                "runtime_rollback": "unavailable",
+                "remaining_drift": ["runtime_baseline_not_captured"],
+                "failed_steps": ["runtime_snapshot"],
+            },
+        ) from exc
 
 
 def apply_host_config(
@@ -171,11 +367,19 @@ def apply_host_config(
     sshd_dir=DEFAULT_SSHD_DIR,
     activation=None,
 ):
-    """Generate every derived artefact, or leave the previous set in place."""
+    """Write, activate and verify the generated set, or put everything back.
+
+    Disk and runtime move together. A candidate that is written but not proven
+    to be in force is rolled back on both, and the caller is told which half of
+    that succeeded rather than a single "rolled back".
+    """
 
     validate_configuration(paths, config)
     planned = artifacts(paths, config, systemd_dir=systemd_dir, sshd_dir=sshd_dir)
+    _refuse_unsafe_artifacts([path for _, path, _ in planned])
     saved = _snapshot([path for _, path, _ in planned])
+    before = _capture_runtime_baseline(activation, paths, config)
+
     written = []
     try:
         for _, path, text in planned:
@@ -184,14 +388,27 @@ def apply_host_config(
             written.append(path)
         if activation is not None:
             activation(paths, config)
-    except (OSError, HostConfigError) as exc:
-        _restore(saved, written)
+    except Exception as exc:
+        rollback = _rollback_transaction(activation, paths, config, saved, written, before)
         raise HostConfigError(
-            "host_config_apply_failed",
-            f"the generated host configuration was rolled back: {exc}",
+            getattr(exc, "code", "host_config_apply_failed"),
+            f"the generated host configuration was rolled back: "
+            f"{getattr(exc, 'message', exc)}",
+            rollback=rollback,
+        )
+
+    runtime = _runtime_report(activation, paths, config, before)
+    if runtime["state"] == RUNTIME_UNAVAILABLE:
+        rollback = _rollback_transaction(activation, paths, config, saved, written, before)
+        raise HostConfigError(
+            "runtime_state_unverified",
+            "the generated host configuration was rolled back: what the running host "
+            f"applies could not be read back ({runtime['detail']})",
+            rollback=rollback,
         )
 
     return {
+        "applied": True,
         "install_root": str(paths.install_root),
         "export_root": str(paths.export_root),
         "backup_user": config.backup_user,
@@ -199,83 +416,371 @@ def apply_host_config(
         "path_unit_dropin": str(path_unit_dropin(systemd_dir)),
         "sshd_policy": str(sshd_policy_file(sshd_dir)),
         "written": [str(path) for path in written],
+        "runtime": runtime,
         "error": "",
     }
 
 
-def live_activation(*, runner=None, systemd=None):
-    """Reload systemd and prove sshd still accepts its configuration.
+SYSTEMD_RUNTIME_MARKER = "/run/systemd/system"
 
-    Returned as a callable so ``apply_host_config`` stays testable without a
-    host, and so a failure here rolls the generated files back.
+
+PATH_UNIT_ACTIVE_STATES = ("active", "waiting")
+
+RUNTIME_VERIFIED = "verified"
+RUNTIME_OFFLINE_DEFERRED = "offline_deferred"
+RUNTIME_UNAVAILABLE = "unavailable"
+SSH_POLICY_NOT_INSTALLED = "not_installed"
+
+
+def _runtime_report(activation, paths, config, before):
+    """What the running host applies now — never "not checked" called verified.
+
+    ``verified`` means every component that was expected to be live was read
+    back and agreed. A component nobody could ask about is ``unavailable``, and
+    an apply may not be reported as successful on top of one: an SSH policy that
+    could not be read is exactly the case where an account would be handed a key
+    behind a confinement nothing proved.
     """
 
-    from appliance.commands import CommandRunner
-    from appliance.systemd import UNIT_SSH, SystemdBackend
+    offline = {
+        "state": RUNTIME_OFFLINE_DEFERRED,
+        "detail": "no running systemd; the generated files take effect on the next boot",
+        "watched_path": "",
+        "active_watched_paths": None,
+        "ssh_policy_state": SSH_POLICY_NOT_INSTALLED,
+        "ssh_policy_confirmed": False,
+        "verified": False,
+    }
+    if before is None or not before.get("systemd_live"):
+        return offline
 
-    runner = runner or CommandRunner()
-    systemd = systemd or SystemdBackend(runner)
-
-    def activate(paths, config):
-        if runner.available("sshd") and not runner.run("sshd", ["-t"], timeout=30).ok:
-            raise HostConfigError(
-                "sshd_config_invalid", "the generated SSH policy is not accepted by sshd"
-            )
-        if not runner.available("systemctl"):
-            return True
-        if not runner.run("systemctl", ["daemon-reload"], timeout=60).ok:
-            raise HostConfigError("daemon_reload_failed", "systemctl daemon-reload failed")
-        if not runner.run("systemctl", ["restart", PATH_UNIT], timeout=60).ok:
-            raise HostConfigError(
-                "path_watcher_restart_failed", f"{PATH_UNIT} could not be re-armed"
-            )
-        try:
-            if systemd.unit_state(UNIT_SSH)["running"] and not systemd.reload(UNIT_SSH).ok:
-                raise HostConfigError("sshd_reload_failed", "the SSH daemon did not reload")
-        except HostConfigError:
-            raise
-        except Exception:
-            return True
-        return True
-
-    return activate
-
-
-def effective_ssh_policy(config, *, runner=None):
-    """What sshd would apply to the backup account, when it can be asked."""
-
-    from appliance.ssh_service import parse_sshd_config
-
-    if runner is None or not runner.available("sshd"):
-        return {"available": False, "chroot": "", "user": config.backup_user}
-    result = runner.run(
-        "sshd",
-        ["-T", "-C", f"user={config.backup_user},host=localhost,addr=127.0.0.1"],
-        timeout=20,
+    armed = active_watched_paths(activation.runner)
+    sshd_expected = bool(getattr(activation, "sshd_usable", False))
+    policy = effective_ssh_policy(
+        config, runner=activation.runner, export_root=paths.export_root
     )
-    if not result.ok:
-        return {"available": False, "chroot": "", "user": config.backup_user}
-    values = parse_sshd_config(result.stdout)
+    if not sshd_expected:
+        policy_state, policy_confirmed = SSH_POLICY_NOT_INSTALLED, False
+    elif not policy["available"]:
+        policy_state, policy_confirmed = RUNTIME_UNAVAILABLE, False
+    else:
+        policy_state = RUNTIME_VERIFIED if policy["confirmed"] else "not_applied"
+        policy_confirmed = bool(policy["confirmed"])
+
+    problems = []
+    if armed is None:
+        problems.append("the path watcher could not be read back")
+    if sshd_expected and policy_state != RUNTIME_VERIFIED:
+        problems.append("the effective SSH policy could not be confirmed")
+
     return {
-        "available": True,
-        "chroot": str(values.get("chrootdirectory", "")),
-        "user": config.backup_user,
+        "state": RUNTIME_UNAVAILABLE if problems else RUNTIME_VERIFIED,
+        "detail": "; ".join(problems),
+        "watched_path": (
+            str(paths.install_root) if armed and str(paths.install_root) in armed else ""
+        ),
+        "active_watched_paths": armed,
+        "ssh_policy_state": policy_state,
+        "ssh_policy_confirmed": policy_confirmed,
+        "verified": not problems,
     }
 
 
 def active_watched_paths(runner=None):
-    """The path the running watcher follows, when systemd can be asked."""
+    """The paths the running watcher follows, when systemd can be asked."""
 
     if runner is None or not runner.available("systemctl"):
         return None
     result = runner.run("systemctl", ["show", PATH_UNIT, "-p", "Paths"], timeout=30)
     if not result.ok:
         return None
-    values = []
-    for token in (result.stdout or "").partition("=")[2].split():
-        if token.startswith("/"):
-            values.append(token)
-    return values
+    return [
+        token
+        for token in (result.stdout or "").partition("=")[2].split()
+        if token.startswith("/")
+    ]
+
+
+def ssh_policy_differences(expected, observed):
+    """Every effective directive whose exact value did not come back.
+
+    Compared by value, never by violation name: a rollback that restored a
+    *different* wrong value restored nothing.
+    """
+
+    from appliance.ssh_policy import VERIFIED_OPTIONS
+
+    expected_values = expected.get("restrictions") or {}
+    observed_values = observed.get("restrictions") or {}
+    differences = {}
+    for option in VERIFIED_OPTIONS:
+        was = str((expected_values.get(option) or {}).get("value", ""))
+        now = str((observed_values.get(option) or {}).get("value", ""))
+        if was != now:
+            differences[option] = {"expected": was, "observed": now}
+    return differences
+
+
+def effective_ssh_policy(config, *, runner=None, export_root=""):
+    """The complete effective policy for the backup account, not just its chroot."""
+
+    from appliance.ssh_policy import OPTION_CHROOT, read_effective_policy
+
+    policy = read_effective_policy(runner, user=config.backup_user, export_root=export_root)
+    return {
+        "available": policy["available"],
+        "confirmed": policy["confirmed"],
+        "chroot": policy["restrictions"][OPTION_CHROOT]["value"],
+        "violations": policy["violations"],
+        "restrictions": policy["restrictions"],
+        "user": config.backup_user,
+    }
+
+
+def _default_disable_authentication(paths, config):
+    """The fail-closed step every rollback starts with."""
+
+    def disable(reason=""):
+        try:
+            from appliance.backup_confinement import build_activation
+
+            build_activation(paths=paths, config=config).disable(reason=reason)
+        except Exception:
+            return False
+        return True
+
+    return disable
+
+
+class LiveActivation:
+    """Apply the candidate to the running host, and prove it took effect.
+
+    The baseline is taken before anything is written, because a daemon that
+    cannot validate its own configuration yet — openssh-server is often
+    configured after this package on a first install — must not be able to blame
+    the generated policy and roll the whole host configuration back.
+    """
+
+    def __init__(
+        self,
+        *,
+        runner=None,
+        systemd=None,
+        marker=SYSTEMD_RUNTIME_MARKER,
+        disable_authentication=None,
+    ):
+        from appliance.commands import CommandRunner
+        from appliance.systemd import SystemdBackend
+
+        self.runner = runner or CommandRunner()
+        self.systemd = systemd or SystemdBackend(self.runner)
+        self.marker = marker
+        self._disable_authentication = disable_authentication
+        self._paths = None
+        self._config = None
+        self.sshd_usable = bool(
+            self.runner.available("sshd") and self.runner.run("sshd", ["-t"], timeout=30).ok
+        )
+
+    # --- observation ------------------------------------------------------
+
+    def systemd_live(self):
+        return bool(self.runner.available("systemctl") and os.path.isdir(self.marker))
+
+    def _unit_property(self, unit, verb):
+        result = self.runner.run("systemctl", [verb, unit], timeout=30)
+        return (result.stdout or "").strip()
+
+    def _ssh_running(self):
+        from appliance.systemd import UNIT_SSH
+
+        try:
+            return bool(self.systemd.unit_state(UNIT_SSH)["running"])
+        except Exception:
+            return None
+
+    def capture(self, paths, config):
+        """Everything about the running host the generated files decide."""
+
+        self._paths, self._config = paths, config
+        live = self.systemd_live()
+        return {
+            "systemd_live": live,
+            "path_unit_active": self._unit_property(PATH_UNIT, "is-active") if live else "",
+            "path_unit_enabled": self._unit_property(PATH_UNIT, "is-enabled") if live else "",
+            "watched_paths": active_watched_paths(self.runner) if live else None,
+            "ssh_running": self._ssh_running() if live else None,
+            "ssh_policy": effective_ssh_policy(
+                config, runner=self.runner, export_root=paths.export_root
+            ),
+        }
+
+    # --- the transaction --------------------------------------------------
+
+    def disable_authentication(self, reason="host_config_rolled_back"):
+        disable = self._disable_authentication
+        if disable is None:
+            if self._paths is None:
+                return False
+            disable = _default_disable_authentication(self._paths, self._config)
+        return bool(disable(reason))
+
+    def __call__(self, paths, config):
+        """Activate the freshly written candidate and verify it is in force."""
+
+        self._paths, self._config = paths, config
+        if self.sshd_usable and not self.runner.run("sshd", ["-t"], timeout=30).ok:
+            raise HostConfigError(
+                "sshd_config_invalid", "the generated SSH policy is not accepted by sshd"
+            )
+        if not self.systemd_live():
+            return True
+
+        if not self.runner.run("systemctl", ["daemon-reload"], timeout=60).ok:
+            raise HostConfigError("daemon_reload_failed", "systemctl daemon-reload failed")
+        # A watcher that is not running yet is started by the installation; only
+        # a running one has to be re-armed against the new path.
+        if self._unit_property(PATH_UNIT, "is-active") in PATH_UNIT_ACTIVE_STATES:
+            if not self.runner.run("systemctl", ["restart", PATH_UNIT], timeout=60).ok:
+                raise HostConfigError(
+                    "path_watcher_restart_failed", f"{PATH_UNIT} could not be re-armed"
+                )
+            # ``None`` means systemd could not be asked, which is not evidence
+            # either way; a list that does not hold the candidate root is.
+            armed = active_watched_paths(self.runner)
+            if armed is not None and str(paths.install_root) not in armed:
+                raise HostConfigError(
+                    "watched_path_not_applied",
+                    f"{PATH_UNIT} still watches {', '.join(armed) or 'nothing'}",
+                )
+        if not self.sshd_usable:
+            return True
+        self._reload_ssh()
+        policy = effective_ssh_policy(config, runner=self.runner, export_root=paths.export_root)
+        # A policy that cannot be read is not a policy that holds. Accepting it
+        # would enable the account behind a confinement nothing ever confirmed,
+        # which is the one outcome this transaction exists to prevent.
+        if not policy["available"]:
+            raise HostConfigError(
+                "ssh_policy_unreadable",
+                "the effective SSH policy for the backup account could not be read back, "
+                "so the generated confinement is unproven",
+            )
+        if not policy["confirmed"]:
+            raise HostConfigError(
+                "ssh_policy_not_applied",
+                "the running SSH daemon does not apply: " + ", ".join(policy["violations"]),
+            )
+        return True
+
+    def _reload_ssh(self):
+        from appliance.systemd import UNIT_SSH
+
+        try:
+            running = self.systemd.unit_state(UNIT_SSH)["running"]
+        except HostConfigError:
+            raise
+        except Exception:
+            return True
+        if running and not self.systemd.reload(UNIT_SSH).ok:
+            raise HostConfigError("sshd_reload_failed", "the SSH daemon did not reload")
+        return True
+
+    def rollback(self, paths, config, before):
+        """Put the running host back on the restored files, and check that it is.
+
+        The files are already restored when this runs, so re-arming the watcher
+        and reloading sshd is what makes the runtime agree with them again.
+        """
+
+        drift, failed_steps, differences = [], [], {}
+        if not before or not before.get("systemd_live"):
+            return {
+                "state": "succeeded",
+                "drift": drift,
+                "failed_steps": failed_steps,
+                "differences": differences,
+            }
+
+        try:
+            if not self.runner.run("systemctl", ["daemon-reload"], timeout=60).ok:
+                failed_steps.append("daemon_reload_failed")
+            if str(before.get("path_unit_active") or "") in PATH_UNIT_ACTIVE_STATES:
+                if not self.runner.run("systemctl", ["restart", PATH_UNIT], timeout=60).ok:
+                    failed_steps.append("path_watcher_not_re_armed")
+            if self.sshd_usable and before.get("ssh_running"):
+                if not self._reload_ssh_quietly():
+                    failed_steps.append("sshd_not_reloaded")
+        except Exception:
+            failed_steps.append("runtime_rollback_error")
+
+        # A step that failed is not drift by itself; what the host applies now is.
+        expected_paths = before.get("watched_paths")
+        if expected_paths is not None:
+            observed = active_watched_paths(self.runner)
+            if observed is None:
+                drift.append("watched_path_unverified")
+            elif sorted(observed) != sorted(expected_paths):
+                drift.append("watched_path_not_restored")
+                differences["watched_path_not_restored"] = {
+                    "expected": sorted(expected_paths),
+                    "observed": sorted(observed),
+                }
+
+        for key, verb in (("path_unit_active", "is-active"), ("path_unit_enabled", "is-enabled")):
+            expected_state = str(before.get(key) or "")
+            if not expected_state:
+                continue
+            observed_state = self._unit_property(PATH_UNIT, verb)
+            if observed_state != expected_state:
+                drift.append(f"{key}_not_restored")
+                differences[f"{key}_not_restored"] = {
+                    "expected": expected_state,
+                    "observed": observed_state,
+                }
+
+        expected_policy = before.get("ssh_policy") or {}
+        if expected_policy.get("available"):
+            policy = effective_ssh_policy(
+                config, runner=self.runner, export_root=paths.export_root
+            )
+            if not policy["available"]:
+                drift.append("ssh_policy_unverified")
+            else:
+                # Two policies can carry the same violation names and still not
+                # be the same policy: "PermitTTY yes" and "PermitTTY
+                # forced-commands-only" both violate the same expectation. What
+                # has to come back is every effective value, including the one a
+                # previously degraded host was already applying.
+                changed = ssh_policy_differences(expected_policy, policy)
+                if changed:
+                    drift.append("ssh_policy_not_restored")
+                    differences["ssh_policy_not_restored"] = changed
+
+        return {
+            "state": "failed" if drift else "succeeded",
+            "drift": sorted(set(drift)),
+            "failed_steps": sorted(set(failed_steps)),
+            "differences": differences,
+        }
+
+    def _reload_ssh_quietly(self):
+        try:
+            self._reload_ssh()
+        except Exception:
+            return False
+        return True
+
+
+def live_activation(
+    *, runner=None, systemd=None, marker=SYSTEMD_RUNTIME_MARKER, disable_authentication=None
+):
+    return LiveActivation(
+        runner=runner,
+        systemd=systemd,
+        marker=marker,
+        disable_authentication=disable_authentication,
+    )
 
 
 def describe(
@@ -309,12 +814,17 @@ def describe(
         if line.startswith("PathChanged=") and line.partition("=")[2]:
             watched = line.partition("=")[2].strip()
 
-    effective = effective_ssh_policy(config, runner=runner)
-    if effective["available"] and effective["chroot"] != str(paths.export_root):
-        drift.append("effective_ssh_chroot")
+    effective = effective_ssh_policy(config, runner=runner, export_root=paths.export_root)
+    if effective["available"]:
+        if effective["chroot"] != str(paths.export_root):
+            drift.append("effective_ssh_chroot")
+        if not effective["confirmed"]:
+            drift.append("effective_ssh_policy")
 
+    # A watcher systemd answers for but that follows nothing, or something else,
+    # would silently stop publishing an EMS directory created later.
     active_paths = active_watched_paths(runner)
-    if active_paths is not None and active_paths and str(paths.install_root) not in active_paths:
+    if active_paths is not None and str(paths.install_root) not in active_paths:
         drift.append("active_watched_path")
 
     return {

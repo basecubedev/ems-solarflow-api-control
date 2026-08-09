@@ -154,3 +154,44 @@ def read_fault(monkeypatch):
             faults[key] = error
 
     return arm
+
+
+@pytest.fixture
+def production_chroot_chain(monkeypatch, tmp_path):
+    """Report the temporary export chain as the root-owned one it stands for.
+
+    ``sshd`` refuses a ``ChrootDirectory`` whose path components are not
+    root-owned or are group- or world-writable, and the appliance enforces the
+    same rule — but only for a real root process. A temporary tree can never
+    satisfy it: everything above ``tmp_path`` belongs to whoever runs the tests,
+    which made these tests pass as a normal user and fail as root for a reason
+    that had nothing to do with what they assert.
+
+    The observation is replaced, not the rule: the chain is described the way a
+    production ``/srv/ems-appliance-export`` looks, so the surrounding
+    assertions hold in both contexts. The rule itself is covered against
+    injected observations in ``tests/test_appliance_chroot_chain_policy.py``,
+    and against a real root filesystem by the Docker export tier.
+    """
+
+    import os as os_module
+    import stat as stat_module
+
+    from appliance import export_state, paths as appliance_paths
+
+    def observed(component):
+        entry = os_module.stat(component)
+        fields = list(entry)
+        fields[0] = stat_module.S_IFMT(entry.st_mode) | 0o755
+        fields[4] = 0
+        fields[5] = 0
+        return os_module.stat_result(tuple(fields))
+
+    monkeypatch.setattr(
+        export_state,
+        "chroot_chain_problems",
+        lambda export_root: appliance_paths.chroot_chain_problems(
+            export_root, stat_fn=observed, euid=0
+        ),
+    )
+    return tmp_path

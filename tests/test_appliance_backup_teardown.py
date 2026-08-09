@@ -218,6 +218,43 @@ def test_removal_stops_when_authentication_cannot_be_revoked(package):
         container.stop()
 
 
+def test_purge_keeps_a_replacement_home_that_inherited_the_recorded_inode(package):
+    """The exact state a filesystem handing a released inode back produces."""
+
+    record = "/var/lib/ems-appliance-manager/agent/package-state/backup-account.json"
+    try:
+        container = prepared_host(package)
+    except SystemdUnavailable as exc:
+        pytest.skip(str(exc))
+    try:
+        container.shell(
+            f"mv {BACKUP_HOME} {BACKUP_HOME}-moved && mkdir -p {BACKUP_HOME}/.ssh && "
+            f"echo 'ssh-ed25519 AAAAoperator operator@laptop' > {BACKUP_HOME}/.ssh/authorized_keys"
+            " && python3 - <<'PY'\n"
+            "import json, os\n"
+            f"path = '{record}'\n"
+            "data = json.load(open(path))\n"
+            f"entry = os.stat('{BACKUP_HOME}')\n"
+            "data['home_device'] = str(entry.st_dev)\n"
+            "data['home_inode'] = str(entry.st_ino)\n"
+            "json.dump(data, open(path, 'w'))\n"
+            "PY",
+            timeout=180,
+        )
+
+        result = container.purge_package()
+
+        assert container.shell(f"test -d {BACKUP_HOME}").returncode == 0, result.stdout
+        assert (
+            container.read_file(f"{BACKUP_HOME}/.ssh/authorized_keys").strip()
+            == "ssh-ed25519 AAAAoperator operator@laptop"
+        )
+        assert container.shell("getent passwd ems-backup").returncode == 0, result.stdout
+        assert "purge did not complete" in (result.stdout + result.stderr), result.stdout
+    finally:
+        container.stop()
+
+
 def test_purge_keeps_an_account_the_package_did_not_create(package):
     """Ownership is recorded; without it, purge withdraws nothing but its own."""
 

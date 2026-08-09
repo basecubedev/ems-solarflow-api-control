@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from appliance.agent import AgentHandlers
+from appliance.agent import AgentError, AgentHandlers
 from appliance.operations import (
     STATE_FAILED_RECOVERABLE,
     STATE_FAILED_TERMINAL,
@@ -522,6 +522,26 @@ def corrupt_persisted_target(services, operation_id, **fields):
     return target
 
 
+def confirm(handlers, operation_id, token):
+    """Confirm a plan, tolerating a record that is refused at the confirmation.
+
+    A persisted target that no longer holds is refused before it is confirmed,
+    so the caller sees the refusal rather than a finished operation.
+    """
+
+    try:
+        handlers.dispatch(
+            {
+                "operation": "operations.execute",
+                "operation_id": operation_id,
+                "confirmation_token": token,
+            }
+        )
+    except AgentError:
+        pass
+    return operation_id
+
+
 def test_a_corrupted_persisted_rollback_target_fails_without_touching_admin(tmp_path):
     services = prepared_rollback(tmp_path)
     handlers = AgentHandlers(services, executor=lambda target: target())
@@ -530,18 +550,12 @@ def test_a_corrupted_persisted_rollback_target_fails_without_touching_admin(tmp_
     before = compose_image(services)
     corrupt_persisted_target(services, operation_id, digest="not-a-digest")
 
-    handlers.dispatch(
-        {
-            "operation": "operations.execute",
-            "operation_id": operation_id,
-            "confirmation_token": planned["confirmation_token"],
-        }
-    )
+    confirm(handlers, operation_id, planned["confirmation_token"])
     operation = services.operations.get(operation_id)
 
     assert operation.state == STATE_FAILED_TERMINAL, operation.result
     assert operation.result["admin_untouched"] is True, operation.result
-    assert operation.error["code"] == "invalid_known_good_record", operation.error
+    assert operation.error["code"] == "operation_plan_requires_replanning", operation.error
     assert "AttributeError" not in str(operation.error), operation.error
     assert running_admin(services) is True
     assert compose_image(services) == before
@@ -556,13 +570,7 @@ def test_a_rollback_target_with_a_mismatched_reference_is_refused(tmp_path):
         services, operation_id, reference=f"{ADMIN_REPOSITORY}@sha256:" + "b" * 64
     )
 
-    handlers.dispatch(
-        {
-            "operation": "operations.execute",
-            "operation_id": operation_id,
-            "confirmation_token": planned["confirmation_token"],
-        }
-    )
+    confirm(handlers, operation_id, planned["confirmation_token"])
     operation = services.operations.get(operation_id)
 
     assert operation.state == STATE_FAILED_TERMINAL, operation.result
@@ -570,8 +578,12 @@ def test_a_rollback_target_with_a_mismatched_reference_is_refused(tmp_path):
     assert running_admin(services) is True
 
 
-def test_a_legacy_rollback_target_without_a_reference_still_executes(tmp_path):
-    """Records written before the canonical reference field must still work."""
+def test_a_rollback_target_without_a_reference_requires_replanning(tmp_path):
+    """The immutable reference is authority, not a convenience field.
+
+    An older record could derive it from repository and digest. A persisted plan
+    may not: what it lost cannot be told apart from what was never there.
+    """
 
     services = prepared_rollback(tmp_path)
     handlers = AgentHandlers(services, executor=lambda target: target())
@@ -579,19 +591,13 @@ def test_a_legacy_rollback_target_without_a_reference_still_executes(tmp_path):
     operation_id = planned["operation"]["operation_id"]
     corrupt_persisted_target(services, operation_id, reference="")
 
-    handlers.dispatch(
-        {
-            "operation": "operations.execute",
-            "operation_id": operation_id,
-            "confirmation_token": planned["confirmation_token"],
-        }
-    )
+    confirm(handlers, operation_id, planned["confirmation_token"])
     operation = services.operations.get(operation_id)
 
-    assert operation.state == STATE_SUCCEEDED, operation.error
-
-
-# --- the plan binds the environment file too --------------------------------
+    assert operation.state == STATE_FAILED_TERMINAL, operation.error
+    assert operation.error["code"] == "operation_plan_requires_replanning", operation.error
+    assert operation.result["admin_untouched"] is True, operation.result
+    assert running_admin(services) is True
 
 
 def test_an_environment_file_changed_after_the_plan_is_refused(tmp_path):

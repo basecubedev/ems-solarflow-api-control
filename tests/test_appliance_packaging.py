@@ -474,11 +474,24 @@ def test_removal_disables_backup_authentication():
 
 def test_purge_removes_the_backup_account_its_keys_and_the_feature_acls():
     postrm = (PACKAGING / "debian" / "postrm").read_text(encoding="utf-8")
-    script = ACCOUNT_SCRIPT.read_text(encoding="utf-8")
-    assert "backup-account.sh" in postrm, postrm
     assert "setfacl" in postrm and "-x" in postrm, postrm
-    assert "deluser" in script, script
-    assert "authorized_keys" in script, script
+    assert "deluser" in postrm, postrm
+    assert "authorized_keys" in postrm, postrm
+
+
+def test_purge_does_not_depend_on_files_dpkg_has_already_removed():
+    """Only the maintainer scripts survive into purge, so the work lives there."""
+
+    postrm = (PACKAGING / "debian" / "postrm").read_text(encoding="utf-8")
+    assert "/usr/lib/ems-appliance-manager/backup-account.sh" not in postrm, postrm
+    assert "created_by_package" in postrm, postrm
+
+
+def test_purge_deletes_an_account_only_when_the_package_created_it():
+    postrm = (PACKAGING / "debian" / "postrm").read_text(encoding="utf-8")
+    gate = postrm.index("created_by_package")
+    assert postrm.index("deluser") > gate, "the ownership record must gate the deletion"
+    assert "home_created_by_package" in postrm, postrm
 
 
 def test_purge_reports_what_it_could_not_withdraw():

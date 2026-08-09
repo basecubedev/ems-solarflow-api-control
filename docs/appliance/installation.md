@@ -182,7 +182,17 @@ never mistaken for a pass:
 |---|---|
 | `0` | `RESULT: PASS` — every check passed in the guest |
 | `1` | `RESULT: FAIL` — the guest ran and a check failed |
+| `2` | the command line is wrong; nothing was attempted |
 | `3` | `RESULT: NOT RUN` — the host lacks Docker or QEMU; nothing was tested |
+
+An option that takes a value refuses the end of the arguments, an empty value
+and a following option, so `--image --keep` is a usage error rather than a run
+against a path called `--keep`. A value that legitimately starts with a dash
+uses the explicit form:
+
+```bash
+scripts/appliance-smoke-arm64.sh --image=/path/to/image.qcow2
+```
 
 The ARM64 driver needs a real aarch64 VM:
 
@@ -212,6 +222,52 @@ scripts/appliance-smoke-arm64.sh --image ~/images/debian-13-arm64.qcow2
 | Guest architecture | the guest proves `dpkg --print-architecture` is `arm64` before the package is installed, and a `PASS` without `aarch64` on the console is rejected |
 
 Working files are removed on exit unless `--keep` is given.
+
+`--output DIR` preserves the evidence a result has to be reproducible from.
+Each run gets its own `DIR/run-<run id>/` directory, so a console log from an
+earlier run can never be read as this one's:
+
+```text
+result.txt              the verdict, machine-readable — written last
+inputs.txt              firmware, base image and package with their checksums
+run.txt                 run id, start and end time, driver revision, checksums
+environment.txt         the host as the run found it, tool by tool
+missing-requirements.txt  what the run needed and did not find
+console.log             the guest serial console, in full          (once qemu ran)
+qemu-command.txt        the exact emulator invocation              (once qemu ran)
+qemu-status.txt         how the emulator ended                     (once qemu ran)
+```
+
+The first five are owed by **every** terminal result, including `NOT RUN` and a
+usage error, and they are written before the first check that can end the run —
+an evidence directory an operator was pointed at is never left empty. The last
+three are owed only once the emulator actually started, because a run that
+stopped before it has no console log to preserve. `DIR/latest.txt` names the
+most recent run directory and is replaced atomically.
+
+The only terminal outcome that owes no evidence is one where the `--output` path
+itself is the fault, since there is nowhere to write it.
+
+`result.txt` separates what the run proved from what it is allowed to be
+consumed as:
+
+```text
+result:             PASS | FAIL | NOT RUN | USAGE ERROR
+exit_code:          0 | 1 | 3 | 2
+reason_code:        a stable code, e.g. required_tool_missing, firmware_unavailable
+verified:           true | false
+qemu_started:       true | false
+evidence_complete:  true, and only written once every required file is there
+verification:       verified | unverified
+release_gate:       pass | no
+timeout:       none | expired | killed
+```
+
+A functional pass on an unverified base image exits zero and says
+`release_gate: no`; only a verified pass may be consumed as a release gate. If
+requested evidence cannot be written or copied, the run ends with `RESULT:
+EVIDENCE INCOMPLETE` and a non-zero status — it never claims to have preserved
+something it did not.
 
 ### Verify a built package without a Raspberry Pi
 

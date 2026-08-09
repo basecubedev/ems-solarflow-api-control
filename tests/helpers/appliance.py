@@ -85,6 +85,7 @@ allowagentforwarding no
 x11forwarding no
 permittunnel no
 gatewayports no
+permitopen none
 chrootdirectory {export_root}
 forcecommand internal-sftp -P symlink,hardlink,rename,posix-rename,remove,mkdir,rmdir,setstat,fsetstat
 """
@@ -110,6 +111,8 @@ class FakeHost:
                 "getent",
                 "sshd",
                 "ss",
+                "chage",
+                "usermod",
             }
         )
         self.docker_running = True
@@ -137,6 +140,7 @@ class FakeHost:
         self.compose_up_fails = False
         self.start_docker_succeeds = True
         self.docker_api_broken = False
+        self.docker_ps_fails = False
         self.container_start_sticks = True
         # A container that a restart policy brings straight back up: docker
         # stop returns 0 and the container is running again a moment later.
@@ -144,6 +148,7 @@ class FakeHost:
         self.sshd_backup_match = SSHD_BACKUP_MATCH.format(export_root=paths.export_root)
         self.sshd_config_valid = True
         self.reload_failures = set()
+        self.failing_tools = set()
 
     def write_export_mounts(
         self, *, read_only=True, names=("config", "backups", "data"), source_for=None
@@ -297,8 +302,16 @@ class FakeHost:
     def runner(self):
         return ScriptedRunner(self)
 
+    def fail_command(self, tool):
+        """Make one host tool report a failure, the way a real one can."""
+
+        self.failing_tools.add(tool)
+        return tool
+
     def handle(self, tool, args, input_text=None):
         self.calls.append((tool, tuple(args), input_text))
+        if tool in self.failing_tools:
+            return CommandResult(tool, tuple(args), 1, "", f"{tool} failed")
         handler = getattr(self, f"_{tool.replace('-', '_')}", None)
         if handler is None:
             return CommandResult(tool, tuple(args), 1, "", f"unhandled tool {tool}")
@@ -355,6 +368,8 @@ class FakeHost:
                 self.containers[name]["State"]["Status"] = "running"
             return self._result("docker", args, 0)
         if args[:1] == ["ps"]:
+            if self.docker_ps_fails:
+                return self._result("docker", args, 1, "", "cannot list containers")
             return self._docker_ps(args)
         if args[:1] == ["logs"]:
             return self._result("docker", args, 0, "admin log line\npassword=supersecret\n")
@@ -517,6 +532,12 @@ class FakeHost:
     def add_account(self, name, home, *, uid=1500, gid=1500, shell="/usr/sbin/nologin"):
         self.accounts[name] = {"home": str(home), "uid": uid, "gid": gid, "shell": shell}
         return self.accounts[name]
+
+    def _chage(self, args):
+        return self._result("chage", args, 0)
+
+    def _usermod(self, args):
+        return self._result("usermod", args, 0)
 
     def _getent(self, args):
         if args[:1] == ["passwd"]:
@@ -686,3 +707,93 @@ def build_test_services(tmp_path, *, host=None, config=None, catalogue=None, hea
     services.host = host
     services.clock = clock
     return services
+
+
+BACKUP_PUBLIC_KEY = (
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH1cQ0kFvL5gLIQ0Q0mV3P6pC5J2Xw5RIu5Hn3fJ0hVb backup\n"
+)
+
+
+def seed_backup_account(
+    services,
+    *,
+    home=None,
+    key=BACKUP_PUBLIC_KEY,
+    uid=1500,
+    record_uid=None,
+    account=True,
+    record=True,
+    bind_home=True,
+    marker=True,
+    marker_nonce=None,
+    schema_version=None,
+):
+    """A package-owned backup account: passwd entry, ownership record and key.
+
+    Activation is gated on the exact identity this package recorded, so a test
+    that wants a usable account has to seed all of it the way an installation
+    does: the passwd entry, the record, the key, the home's device and inode,
+    and the ownership marker inside the home. Leaving one out is how the
+    fail-closed paths are exercised — ``bind_home=False`` writes the record an
+    installation could never produce, ``marker=False`` the home a replacement
+    that inherited the recorded inode would present.
+    """
+
+    import json
+
+    name = services.config.backup_user
+    home = Path(home) if home is not None else services.paths.state_dir.parent / "lib" / name
+    (home / ".ssh").mkdir(parents=True, exist_ok=True)
+    if key:
+        (home / ".ssh" / "authorized_keys").write_text(key, encoding="utf-8")
+    if account:
+        services.host.add_account(name, home, uid=uid, gid=uid)
+    if record:
+        from appliance import backup_ownership
+
+        device = inode = ""
+        if bind_home:
+            entry = home.stat()
+            device, inode = str(entry.st_dev), str(entry.st_ino)
+        recorded_uid = uid if record_uid is None else record_uid
+        nonce = marker_nonce or backup_ownership.new_marker_nonce()
+        if marker:
+            path = home / backup_ownership.HOME_MARKER_NAME
+            path.write_text(
+                backup_ownership.render_home_marker(
+                    account=name,
+                    uid=recorded_uid,
+                    primary_gid=recorded_uid,
+                    home=str(home),
+                    installation_id="test-installation",
+                    nonce=nonce,
+                ),
+                encoding="utf-8",
+            )
+            path.chmod(0o400)
+        services.paths.package_state_dir.mkdir(parents=True, exist_ok=True)
+        (services.paths.package_state_dir / "backup-account.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": schema_version or backup_ownership.RECORD_SCHEMA_VERSION,
+                    "account": name,
+                    "created_by_package": True,
+                    "uid": recorded_uid,
+                    "primary_gid": recorded_uid,
+                    "home": str(home),
+                    "home_device": device,
+                    "home_inode": inode,
+                    "home_marker": str(home / backup_ownership.HOME_MARKER_NAME),
+                    "home_marker_nonce": nonce,
+                    "home_created_by_package": True,
+                    "installation_id": "test-installation",
+                }
+            ),
+            encoding="utf-8",
+        )
+    if key:
+        from appliance import backup_ownership
+
+        backup_ownership.record_managed_keys(services.paths, [key.split()[1]])
+    services.home = home
+    return home

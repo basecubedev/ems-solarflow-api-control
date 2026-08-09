@@ -62,6 +62,19 @@ That immutable reference — not the tag — is what gets deployed. If no
 canonical digest can be resolved the installation is refused with
 `digest_unresolved` before anything is touched.
 
+A confirmed plan is executed later, possibly by an agent that restarted in
+between, so the record it leaves behind is the only authority the mutation has.
+Before the first Docker or filesystem call, the persisted plan must still carry
+a known operation type, a known schema version, and — when an Admin exists — a
+complete versioned recovery identity: repository, digest, the canonical
+`repository@digest` reference, version, compose path and hash, environment path
+and hash, and the captured health state. The reference has to name exactly the
+recorded repository and digest, both paths have to be absolute, and the
+recovery fingerprints have to be the ones the plan was made against. A record
+that lost or contradicts any of these is refused with
+`operation_plan_requires_replanning` and reports `admin_untouched: true`;
+nothing is inferred from the running system.
+
 Execution is transactional:
 
 ```text
@@ -131,6 +144,54 @@ file or an Admin environment file edited after planning, or a container that
 was replaced in the meantime, stops the operation with `admin_untouched: true`
 while the current Admin is still running. Nothing is stopped, and the plan is
 simply made again.
+
+The target itself has to be internally consistent, because the reference is
+what reaches Docker and the repository and digest are what were recorded beside
+it. An install or rollback is refused unless
+
+```text
+reference == repository@digest
+repository is in the host image allowlist
+digest is sha256:<64 hex>
+tag is a release tag
+architecture is one this appliance supports
+compose_hash and environment_hash are canonical sha256 digests
+```
+
+and the nested recovery identity satisfies the same rules plus its own types:
+booleans are booleans, schema versions are numbers, hashes are digests, and its
+deployment paths are the ones the plan was made against.
+
+### The confirmation is bound to the plan that was shown
+
+The record is durable and is confirmed later, so what it holds is the whole
+authority of the mutation. When planning finishes, the appliance seals it: a
+canonical SHA-256 over the operation id, its type, its schema version, the
+complete requested target and the hash of the rendered plan. The value is
+stored in the record and shown in the plan.
+
+Confirmation and execution both recompute it. A record whose target changed
+after the plan was rendered — a partial write, a hand-edited file — is refused
+at the confirmation:
+
+```text
+operation_plan_changed: this plan is not the one that was confirmed; plan again
+admin_untouched: true
+```
+
+This is an integrity check against accidental or partial corruption. It is not
+a defence against a privileged process that can rewrite every field of the
+record, including the hash.
+
+### The image is inspected again, not trusted from the record
+
+`architecture`, `source` and `revision` are strings in a file. Before the
+running Admin is touched, the appliance inspects the image the canonical
+reference resolves to and compares its digest, architecture and OCI labels with
+what the plan recorded. An install additionally revalidates the full OCI label
+set against the requested tag; a rollback deploys an image this appliance
+already validated once, so its digest and architecture are what must still
+hold.
 
 ### The Admin that must come back is captured before anything changes
 

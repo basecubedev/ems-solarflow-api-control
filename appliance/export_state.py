@@ -16,7 +16,7 @@ import os
 import stat as stat_module
 from dataclasses import dataclass
 
-from appliance.paths import chroot_chain_problems
+from appliance.paths import chroot_chain_problems, runtime_boundary_problems
 
 EXPECTED_EXPORTS = ("config", "backups", "data")
 
@@ -171,7 +171,11 @@ def inspect_exports(paths, *, mounts=None):
     """The complete export state: exactly three managed entries, or a reason."""
 
     mounts = {} if mounts is None else mounts
-    problems = _root_problems(paths.export_root)
+    # The configured paths are re-validated here rather than only at install
+    # time: a component that became a symbolic link since would redirect what
+    # the chroot publishes.
+    boundary = runtime_boundary_problems(paths)
+    problems = boundary + _root_problems(paths.export_root)
     unmanaged = unmanaged_entries(paths.export_root)
     if unmanaged:
         problems.append(
@@ -195,6 +199,7 @@ def inspect_exports(paths, *, mounts=None):
     return {
         "export_root": str(paths.export_root),
         "expected": list(EXPECTED_EXPORTS),
+        "boundary_problems": boundary,
         "unmanaged": unmanaged,
         "entries": [item.to_dict() for item in entries],
         "pending": pending,

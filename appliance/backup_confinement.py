@@ -17,11 +17,21 @@ the key file is moved aside before the package is.
 """
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from appliance.commands import CommandRunner
 from appliance.export_state import inspect_exports
 from appliance.hostprobe import HostProbe
-from appliance.ssh_service import parse_passwd_entry, parse_sshd_config
+from appliance.ssh_policy import (
+    FORCED_COMMAND,
+    OPTION_CHROOT,
+    OPTION_FORCE_COMMAND,
+    REQUIRED_RESTRICTIONS,
+    VERIFIED_OPTIONS,
+    evaluate_policy,
+    read_effective_policy,
+)
+from appliance.ssh_service import parse_passwd_entry
 from appliance.systemd import UNIT_SSH, SystemdBackend
 
 STATE_ACTIVE = "active"
@@ -32,64 +42,16 @@ DISABLED_SUFFIX = ".disabled-by-appliance"
 CONFLICT_SUFFIX = ".conflict"
 MAX_CONFLICT_FILES = 20
 
-OPTION_CHROOT = "chrootdirectory"
-OPTION_FORCE_COMMAND = "forcecommand"
-FORCED_COMMAND = "internal-sftp"
-
-# Every restriction the appliance tells an operator is in force. Reporting a
-# subset as "confined" would be a claim the appliance never checked.
-REQUIRED_RESTRICTIONS = (
-    ("passwordauthentication", "no"),
-    ("kbdinteractiveauthentication", "no"),
-    ("pubkeyauthentication", "yes"),
-    ("permittty", "no"),
-    ("allowtcpforwarding", "no"),
-    ("allowagentforwarding", "no"),
-    ("x11forwarding", "no"),
-    ("permittunnel", "no"),
-    ("gatewayports", "no"),
-)
-
-VERIFIED_OPTIONS = (OPTION_CHROOT, OPTION_FORCE_COMMAND) + tuple(
-    option for option, _ in REQUIRED_RESTRICTIONS
-)
-
-
-def evaluate_policy(effective, *, export_root):
-    """Compare the effective sshd policy for the backup user with the promise."""
-
-    effective = effective or {}
-    restrictions = {}
-
-    chroot = str(effective.get(OPTION_CHROOT, ""))
-    restrictions[OPTION_CHROOT] = {
-        "value": chroot,
-        "expected": str(export_root),
-        "confirmed": bool(chroot) and chroot == str(export_root),
-    }
-
-    forced = str(effective.get(OPTION_FORCE_COMMAND, ""))
-    restrictions[OPTION_FORCE_COMMAND] = {
-        "value": forced,
-        "expected": FORCED_COMMAND,
-        "confirmed": forced.startswith(FORCED_COMMAND),
-    }
-
-    for option, expected in REQUIRED_RESTRICTIONS:
-        actual = str(effective.get(option, ""))
-        restrictions[option] = {
-            "value": actual,
-            "expected": expected,
-            "confirmed": actual.lower() == expected,
-        }
-
-    violations = [name for name in VERIFIED_OPTIONS if not restrictions[name]["confirmed"]]
-    return {
-        "available": bool(effective),
-        "confirmed": bool(effective) and not violations,
-        "restrictions": restrictions,
-        "violations": violations,
-    }
+__all__ = [
+    "FORCED_COMMAND",
+    "OPTION_CHROOT",
+    "OPTION_FORCE_COMMAND",
+    "REQUIRED_RESTRICTIONS",
+    "VERIFIED_OPTIONS",
+    "BackupAccessActivation",
+    "build_activation",
+    "evaluate_policy",
+]
 
 
 class BackupAccessActivation:
@@ -104,12 +66,66 @@ class BackupAccessActivation:
 
     # --- the account ------------------------------------------------------
 
-    def account_home(self):
+    def account(self):
         if not self.runner.available("getent"):
-            return None
+            return parse_passwd_entry(self.config.backup_user, "")
         result = self.runner.run("getent", ["passwd", self.config.backup_user], timeout=15)
-        account = parse_passwd_entry(self.config.backup_user, result.stdout if result.ok else "")
+        return parse_passwd_entry(self.config.backup_user, result.stdout if result.ok else "")
+
+    def account_home(self):
+        account = self.account()
         return Path(account.home) if account.exists and account.home else None
+
+    def _passwd_entry(self):
+        account = self.account()
+        if not account.exists:
+            return None
+        return SimpleNamespace(pw_uid=account.uid, pw_gid=account.gid, pw_dir=str(account.home))
+
+    def ownership(self):
+        """Is the live account, *and its home*, the exact pair this package created?"""
+
+        from appliance import backup_ownership
+
+        return backup_ownership.verify_ownership(
+            self.paths, self.config.backup_user, entry=self._passwd_entry()
+        )
+
+    def account_ownership(self):
+        """The account half alone: what a fail-closed step may still act through."""
+
+        from appliance import backup_ownership
+
+        return backup_ownership.verify_account(
+            self.paths, self.config.backup_user, entry=self._passwd_entry()
+        )
+
+    def managed_home(self):
+        """The home this package can prove it created, or ``None``.
+
+        Every mutation below is bound to this and never to the passwd entry: an
+        account whose home was replaced still points at a real directory, and
+        that directory is the operator's.
+        """
+
+        verdict = self.ownership()
+        return Path(verdict["record"].home) if verdict["owned"] else None
+
+    def authorized_keys(self):
+        """The keys sshd would accept, and how many this package can attribute."""
+
+        from appliance import backup_ownership
+        from appliance.sshkeys import parse_authorized_keys
+
+        path = self.authorized_keys_path()
+        text = ""
+        if path is not None and path.is_file():
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                text = ""
+        keys = parse_authorized_keys(text)
+        return keys, backup_ownership.unmanaged_keys(self.paths, keys)
 
     def authorized_keys_path(self):
         home = self.account_home()
@@ -152,7 +168,15 @@ class BackupAccessActivation:
     # --- fail-closed transitions ------------------------------------------
 
     def disable(self, *, reason=""):
-        """Move the key file out of sshd's reach; the material is preserved.
+        """Withdraw authentication, without touching state this package cannot claim.
+
+        Two identities decide what may happen here. With the exact package-owned
+        account *and* the exact package-owned home, the key file is moved out of
+        sshd's reach and preserved. With the account but a home this package
+        cannot prove it created, the key file in that home is the operator's:
+        it is not read, moved, renamed or rewritten, and authentication is
+        withdrawn through the account itself instead. Without even the account,
+        nothing on the host is this package's to change.
 
         An account with no authorized key has no access to revoke, so the
         account itself is only expired once there is key material that an
@@ -161,22 +185,48 @@ class BackupAccessActivation:
         both are kept and authentication stays off.
         """
 
-        keys = self.authorized_keys_path()
-        disabled = self.disabled_keys_path()
+        ownership = self.ownership()
+        if not ownership["owned"]:
+            return self._disable_through_account(reason, ownership)
+
+        home = Path(ownership["record"].home)
+        keys = home / ".ssh" / "authorized_keys"
+        disabled = keys.with_name(keys.name + DISABLED_SUFFIX)
         moved = False
-        if keys is not None and keys.is_file():
+        if keys.is_file():
             keys.replace(disabled if not disabled.exists() else self._free_conflict_path(disabled))
             moved = True
         conflicts = self.conflicted_key_files()
-        if (disabled is not None and disabled.is_file()) or conflicts:
+        if disabled.is_file() or conflicts:
             self._expire_account()
         return {
             "state": STATE_DEGRADED,
             "reason": reason,
             "authentication_disabled": True,
-            "keys_preserved": bool(disabled and disabled.is_file()),
+            "keys_preserved": disabled.is_file(),
             "keys_conflicted": [str(item) for item in conflicts],
             "changed": moved,
+            "ownership": ownership["reason"],
+            "home_owned": True,
+            "operator_state_untouched": True,
+        }
+
+    def _disable_through_account(self, reason, ownership):
+        """Fail closed without a provable home: expire the account, change nothing else."""
+
+        account = self.account_ownership()
+        expired = self._expire_account() if account["owned"] else False
+        return {
+            "state": STATE_DEGRADED,
+            "reason": reason,
+            "authentication_disabled": expired,
+            "keys_preserved": False,
+            "keys_conflicted": [],
+            "changed": False,
+            "ownership": ownership["reason"],
+            "account_owned": bool(account["owned"]),
+            "home_owned": False,
+            "operator_state_untouched": True,
         }
 
     @staticmethod
@@ -189,37 +239,36 @@ class BackupAccessActivation:
         raise OSError(f"{disabled.parent} holds too many unresolved key files")
 
     def restore(self):
-        keys = self.authorized_keys_path()
-        disabled = self.disabled_keys_path()
-        if keys is None or self.conflicted_key_files():
+        home = self.managed_home()
+        if home is None or self.conflicted_key_files():
             return False
-        if disabled.is_file() and not keys.is_file():
-            disabled.replace(keys)
-        self._unexpire_account()
-        return True
+        keys = home / ".ssh" / "authorized_keys"
+        disabled = keys.with_name(keys.name + DISABLED_SUFFIX)
+        try:
+            if disabled.is_file() and not keys.is_file():
+                disabled.replace(keys)
+        except OSError:
+            return False
+        return self._unexpire_account()
 
     def _expire_account(self):
         # Defence in depth: even with a key file restored by hand, an expired
         # account cannot open a session at all.
-        if self.runner.available("chage"):
-            self.runner.run("chage", ["-E", "1", self.config.backup_user], timeout=30)
+        if not self.runner.available("chage"):
+            return False
+        return bool(self.runner.run("chage", ["-E", "1", self.config.backup_user], timeout=30).ok)
 
     def _unexpire_account(self):
-        if self.runner.available("chage"):
-            self.runner.run("chage", ["-E", "-1", self.config.backup_user], timeout=30)
+        if not self.runner.available("chage"):
+            return True
+        return bool(self.runner.run("chage", ["-E", "-1", self.config.backup_user], timeout=30).ok)
 
     # --- activation -------------------------------------------------------
 
     def effective_policy(self):
-        if not self.runner.available("sshd"):
-            return evaluate_policy({}, export_root=self.paths.export_root)
-        result = self.runner.run(
-            "sshd",
-            ["-T", "-C", f"user={self.config.backup_user},host=localhost,addr=127.0.0.1"],
-            timeout=20,
+        return read_effective_policy(
+            self.runner, user=self.config.backup_user, export_root=self.paths.export_root
         )
-        effective = parse_sshd_config(result.stdout) if result.ok else {}
-        return evaluate_policy(effective, export_root=self.paths.export_root)
 
     def activate(self):
         """Verify the confinement, then enable or disable the account by result.
@@ -237,6 +286,22 @@ class BackupAccessActivation:
                 policy=evaluate_policy({}, export_root=self.paths.export_root),
             )
 
+        ownership = self.ownership()
+        if not ownership["owned"]:
+            # Without the exact package-owned account there is nothing this
+            # appliance may confine, and nothing it may hand a key to.
+            reason = (
+                "backup_account_missing"
+                if ownership["reason"] == "account_missing"
+                else f"backup_account_{ownership['reason']}"
+            )
+            state = (
+                STATE_UNAVAILABLE if ownership["reason"] == "account_missing" else STATE_DEGRADED
+            )
+            if state == STATE_DEGRADED:
+                return self._disabled_report(reason)
+            return self._report(state, reason)
+
         if not self.runner.run("sshd", ["-t"], timeout=30).ok:
             return self._disabled_report("sshd_config_invalid")
 
@@ -249,15 +314,28 @@ class BackupAccessActivation:
 
         exports = self.export_state()
         if not exports["exact"]:
-            reason = (
-                "export_root_not_exclusive" if exports["unmanaged"] else "exports_not_confined"
-            )
+            reason = "exports_not_confined"
+            if exports.get("boundary_problems"):
+                reason = "path_boundary_violation"
+            elif exports["unmanaged"]:
+                reason = "export_root_not_exclusive"
             return self._disabled_report(reason, policy=policy, exports=exports)
 
         if self.conflicted_key_files():
             return self._disabled_report("key_conflict", policy=policy, exports=exports)
 
-        self.restore()
+        if not self.restore():
+            return self._disabled_report("key_restore_failed", policy=policy, exports=exports)
+
+        keys, unattributed = self.authorized_keys()
+        if unattributed:
+            return self._disabled_report(
+                "key_attribution_unknown", policy=policy, exports=exports
+            )
+        if not keys:
+            return self._report(
+                STATE_UNAVAILABLE, "no_authorized_key", policy=policy, exports=exports
+            )
         return self._report(STATE_ACTIVE, "", policy=policy, exports=exports)
 
     def _reload(self):
@@ -276,20 +354,32 @@ class BackupAccessActivation:
             return False
 
     def _disabled_report(self, reason, *, policy=None, exports=None):
-        self.disable(reason=reason)
-        return self._report(STATE_DEGRADED, reason, policy=policy, exports=exports)
+        outcome = self.disable(reason=reason)
+        return self._report(
+            STATE_DEGRADED, reason, policy=policy, exports=exports, disabled=outcome
+        )
 
-    def _report(self, state, reason, *, policy=None, exports=None):
+    def _report(self, state, reason, *, policy=None, exports=None, disabled=None):
         observed = self.observe()
         preserved = observed["keys_disabled"] or bool(observed["keys_conflicted"])
+        # What the transition actually achieved outranks what the key files look
+        # like: a replacement home keeps its own key file, and authentication was
+        # withdrawn through the account instead.
+        withdrawn = (
+            bool(disabled["authentication_disabled"])
+            if disabled is not None
+            else (not observed["keys_present"] and preserved)
+        )
         return {
             "state": state,
             "reason": reason,
             "account": self.config.backup_user,
-            "authentication_disabled": not observed["keys_present"] and preserved,
+            "authentication_disabled": withdrawn,
             "keys_present": observed["keys_present"],
             "keys_preserved": preserved,
             "keys_conflicted": observed["keys_conflicted"],
+            "operator_state_untouched": bool((disabled or {}).get("operator_state_untouched", True)),
+            "home_owned": bool((disabled or {}).get("home_owned", self.managed_home() is not None)),
             "policy": policy
             or evaluate_policy({}, export_root=self.paths.export_root),
             "exports": exports if exports is not None else self.export_state(),

@@ -9,6 +9,8 @@ drift, not a detail: it is the difference between a chroot into the configured
 export root and a chroot into the packaged default.
 """
 
+import os
+
 import pytest
 
 from appliance.config import ApplianceConfig, ConfigError, load_config
@@ -21,6 +23,7 @@ from appliance.host_config import (
     sshd_policy_file,
 )
 from appliance.paths import AppliancePaths, PathBoundaryError, resolve_paths
+from tests.helpers.appliance_host_runtime import FakeHost
 
 pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.config]
 
@@ -274,6 +277,10 @@ def test_a_missing_environment_file_is_drift(tmp_path):
 # --- transactional apply ----------------------------------------------------
 
 
+@pytest.mark.skipif(
+    os.geteuid() == 0,
+    reason="the write is blocked by a directory mode, which root ignores",
+)
 def test_a_failed_artefact_write_restores_every_previous_artefact(tmp_path):
     paths = layout(tmp_path)
     systemd_dir = tmp_path / "etc" / "systemd" / "system"
@@ -324,3 +331,102 @@ def test_the_packaged_backup_user_is_accepted(tmp_path):
     write_conf(paths, "backup_user = ems-backup\n")
 
     assert load_config(paths).backup_user == "ems-backup"
+
+
+# --- live activation ---------------------------------------------------------
+
+
+def apply_with(paths, host, tmp_path, *, marker=None):
+    from appliance.host_config import live_activation
+
+    return apply_host_config(
+        paths,
+        ApplianceConfig(),
+        systemd_dir=str(tmp_path / "etc" / "systemd" / "system"),
+        sshd_dir=str(tmp_path / "etc" / "ssh" / "sshd_config.d"),
+        activation=live_activation(
+            runner=host, marker=marker or str(tmp_path), disable_authentication=lambda reason="": True
+        ),
+    )
+
+
+def host_for(tmp_path, **options):
+    return FakeHost(
+        systemd_dir=tmp_path / "etc" / "systemd" / "system",
+        sshd_dir=tmp_path / "etc" / "ssh" / "sshd_config.d",
+        **options,
+    )
+
+
+def test_an_sshd_that_cannot_validate_yet_does_not_roll_the_configuration_back(tmp_path):
+    """openssh-server is often configured after this package on a first install."""
+
+    paths = layout(tmp_path)
+    host = host_for(tmp_path, path_unit_active="inactive")
+    host.fail("sshd", "-t")
+
+    report = apply_with(paths, host, tmp_path)
+
+    assert host_paths_file(paths).is_file(), report
+    assert sshd_policy_file(str(tmp_path / "etc" / "ssh" / "sshd_config.d")).is_file()
+
+
+def test_a_policy_a_working_sshd_refuses_rolls_the_configuration_back(tmp_path):
+    paths = layout(tmp_path)
+    host = host_for(tmp_path)
+    attempts = {"count": 0}
+    original = host.run
+
+    def run(tool, args=(), **kwargs):
+        if tool == "sshd" and tuple(args)[:1] == ("-t",):
+            attempts["count"] += 1
+            if attempts["count"] > 1:
+                host.fail("sshd", "-t")
+        return original(tool, args, **kwargs)
+
+    host.run = run
+
+    with pytest.raises(HostConfigError):
+        apply_with(paths, host, tmp_path)
+
+    assert not host_paths_file(paths).exists()
+
+
+def test_an_idle_path_watcher_is_not_restarted(tmp_path):
+    paths = layout(tmp_path)
+    host = host_for(tmp_path, path_unit_active="inactive")
+
+    apply_with(paths, host, tmp_path)
+
+    assert "systemctl restart ems-appliance-export.path" not in host.sequence()
+
+
+def test_a_running_path_watcher_is_re_armed(tmp_path):
+    paths = layout(tmp_path)
+    host = host_for(tmp_path)
+
+    apply_with(paths, host, tmp_path)
+
+    assert "systemctl restart ems-appliance-export.path" in host.sequence()
+    assert host.armed_path == str(paths.install_root)
+
+
+def test_a_watcher_that_cannot_be_re_armed_rolls_the_configuration_back(tmp_path):
+    paths = layout(tmp_path)
+    host = host_for(tmp_path)
+    host.fail("systemctl", "restart", "ems-appliance-export.path")
+
+    with pytest.raises(HostConfigError):
+        apply_with(paths, host, tmp_path)
+
+    assert not host_paths_file(paths).exists()
+
+
+def test_an_image_build_root_skips_systemd_entirely(tmp_path):
+    paths = layout(tmp_path)
+    host = host_for(tmp_path)
+
+    apply_with(paths, host, tmp_path, marker=str(tmp_path / "absent-systemd"))
+
+    assert not any(tool == "systemctl" for tool, _ in host.calls), host.calls
+    assert host_paths_file(paths).is_file()

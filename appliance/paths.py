@@ -108,6 +108,34 @@ def validate_configured_root(label, value, *, lstat=None):
     return text
 
 
+def path_boundary_problems(label, value, *, lstat=None):
+    """The no-follow policy as a list of named problems instead of an exception."""
+
+    try:
+        validate_configured_root(label, value, lstat=lstat)
+    except PathBoundaryError as exc:
+        return [str(exc)]
+    return []
+
+
+def runtime_boundary_problems(paths, *, lstat=None):
+    """Re-check every configured host path the export feature acts on.
+
+    Installation validated these paths once. A component that became a symbolic
+    link afterwards would redirect an export, a chroot or a root-owned mkdir, so
+    the same policy runs again wherever the paths are used, not only when they
+    are configured.
+    """
+
+    problems = list(path_boundary_problems("the EMS installation root", paths.install_root, lstat=lstat))
+    problems += path_boundary_problems("the export root", paths.export_root, lstat=lstat)
+    for name, source in sorted(paths.export_paths().items()):
+        problems += path_boundary_problems(f"the {name} export source", source, lstat=lstat)
+    for name, target in sorted(paths.export_targets().items()):
+        problems += path_boundary_problems(f"the {name} export target", target, lstat=lstat)
+    return problems
+
+
 def validate_root_pair(install_root, export_root):
     """Two roots that overlap in either direction are one boundary, not two."""
 

@@ -16,6 +16,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from appliance.operation_schema import OPERATION_SCHEMA_VERSION
 from appliance.paths import AGENT_FILE_MODE, atomic_write, ensure_within
 from appliance.redaction import redact_mapping
 
@@ -57,7 +58,11 @@ TERMINAL_STATES = frozenset(
 
 TRANSITIONS = {
     STATE_PLANNED: frozenset({STATE_AWAITING_CONFIRMATION, STATE_CANCELLED}),
-    STATE_AWAITING_CONFIRMATION: frozenset({STATE_RUNNING, STATE_CANCELLED}),
+    # A plan refused at its own confirmation never runs, and it is not a plan
+    # the operator withdrew: it is terminally failed with nothing touched.
+    STATE_AWAITING_CONFIRMATION: frozenset(
+        {STATE_RUNNING, STATE_CANCELLED, STATE_FAILED_TERMINAL}
+    ),
     STATE_RUNNING: frozenset(
         {
             STATE_VERIFYING,
@@ -123,6 +128,9 @@ class InvalidTransitionError(OperationError):
 class Operation:
     operation_id: str
     type: str
+    # Written by this version; a record without it predates the required
+    # authority and must be replanned rather than executed.
+    schema_version: int = 0
     requested_target: dict = field(default_factory=dict)
     state: str = STATE_PLANNED
     stage: str = "planned"
@@ -220,6 +228,7 @@ class OperationStore:
             operation = Operation(
                 operation_id=self._new_id(),
                 type=operation_type,
+                schema_version=OPERATION_SCHEMA_VERSION,
                 requested_target=dict(requested_target or {}),
                 state=STATE_PLANNED,
                 stage="planned",

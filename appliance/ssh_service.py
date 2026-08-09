@@ -10,6 +10,7 @@ import time
 from dataclasses import dataclass
 
 from appliance.operations import STATE_FAILED_TERMINAL, STATE_SUCCEEDED
+from appliance.ssh_policy import parse_sshd_config
 from appliance.sshkeys import AuthorizedKeysStore, validate_public_key
 from appliance.systemd import UNIT_SSH
 from appliance.validation import ValidationError
@@ -66,26 +67,36 @@ def parse_passwd_entry(name, text):
     return Account(name=name, exists=False)
 
 
-def parse_sshd_config(text):
-    values = {}
-    for line in (text or "").splitlines():
-        entry = line.strip()
-        if not entry or entry.startswith("#"):
-            continue
-        key, _, value = entry.partition(" ")
-        if key:
-            values[key.strip().lower()] = value.strip()
-    return values
-
-
 class SshService:
-    def __init__(self, *, runner, systemd, config, operations, time_fn=None, operation_log=None):
+    def __init__(
+        self,
+        *,
+        runner,
+        systemd,
+        config,
+        operations,
+        paths=None,
+        time_fn=None,
+        operation_log=None,
+    ):
         self.runner = runner
         self.systemd = systemd
         self.config = config
         self.operations = operations
+        self.paths = paths
         self._time = time_fn or time.time
         self._operation_log = operation_log
+
+    def _attribute(self, account, blobs, *, managed):
+        """Record which keys this package wrote, so purge removes only those."""
+
+        if self.paths is None or account != self.config.backup_user:
+            return False
+        from appliance import backup_ownership
+
+        if managed:
+            return backup_ownership.record_managed_keys(self.paths, blobs)
+        return backup_ownership.forget_managed_keys(self.paths, blobs)
 
     # --- read-only -------------------------------------------------------
 
@@ -257,6 +268,7 @@ class SshService:
                 error={"code": exc.code, "message": exc.message},
             )
             raise SshServiceError(exc.code, exc.message)
+        self._attribute(account, [key.blob], managed=True)
         payload = {"account": account, "key": key.to_dict(), "key_count": len(store.list())}
         self.operations.finish(operation.operation_id, STATE_SUCCEEDED, result=payload)
         return payload
@@ -266,6 +278,7 @@ class SshService:
         fingerprint = operation.requested_target["fingerprint"]
         store = self.keystore(account)
         self._advance(operation, "writing_authorized_keys")
+        withdrawn = [key.blob for key in store.list() if key.fingerprint == fingerprint]
         try:
             removed = store.remove(fingerprint)
         except ValidationError as exc:
@@ -276,6 +289,7 @@ class SshService:
                 error={"code": exc.code, "message": exc.message},
             )
             raise SshServiceError(exc.code, exc.message)
+        self._attribute(account, withdrawn, managed=False)
         payload = {"account": account, "removed": removed, "key_count": len(store.list())}
         self.operations.finish(operation.operation_id, STATE_SUCCEEDED, result=payload)
         return payload
@@ -284,7 +298,9 @@ class SshService:
         account = operation.requested_target["account"]
         store = self.keystore(account)
         self._advance(operation, "writing_authorized_keys")
+        withdrawn = [key.blob for key in store.list()]
         removed = store.revoke_all()
+        self._attribute(account, withdrawn, managed=False)
         payload = {"account": account, "removed": removed, "key_count": 0}
         self.operations.finish(operation.operation_id, STATE_SUCCEEDED, result=payload)
         return payload

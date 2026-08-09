@@ -13,6 +13,7 @@ that a guest boots — that is the separate VM validation step.
 """
 
 import os
+import shutil
 import subprocess
 
 import pytest
@@ -26,6 +27,7 @@ DRIVER = ROOT / "scripts" / "appliance-smoke-arm64.sh"
 GUEST = ROOT / "scripts" / "appliance-guest-smoke.sh"
 
 EXIT_NOT_RUN = 3
+EXIT_USAGE = 2
 
 QEMU_STUB = """#!/bin/sh
 console=""
@@ -167,7 +169,7 @@ def sandbox(tmp_path):
 
 def run_driver(sandbox, *arguments, **environment):
     env = dict(os.environ)
-    env["PATH"] = f"{sandbox['stubs']}:{env.get('PATH', '')}"
+    env["PATH"] = sandbox.get("path") or f"{sandbox['stubs']}:{env.get('PATH', '')}"
     env["EMS_ARM64_FIRMWARE"] = str(sandbox["firmware"] / "AAVMF_CODE.fd")
     env["EMS_ARM64_FIRMWARE_VARS"] = str(sandbox["firmware"] / "AAVMF_VARS.fd")
     env["EMS_TEST_CONSOLE_FIXTURE"] = str(sandbox["console"])
@@ -528,6 +530,57 @@ def test_a_missing_signature_with_the_override_is_labelled(sandbox):
     assert "UNVERIFIED INPUT" in combined, combined
 
 
+def test_a_manifest_that_cannot_be_downloaded_is_refused(sandbox):
+    image = sandbox["mirror"] / "debian-13-genericcloud-arm64.qcow2"
+    image.write_bytes(sandbox["image"].read_bytes())
+
+    result = download(sandbox)
+
+    assert result.returncode == EXIT_NOT_RUN, result.stdout + result.stderr
+    assert "RESULT: NOT RUN" in result.stderr
+
+
+def test_a_keyring_that_does_not_verify_the_manifest_is_refused(sandbox):
+    """No configured keyring means nothing signed the manifest."""
+
+    seed_mirror(sandbox)
+
+    result = download(sandbox, EMS_ARM64_KEYRINGS=str(sandbox["tmp"] / "absent.gpg"))
+
+    assert result.returncode == EXIT_NOT_RUN, result.stdout + result.stderr
+    assert "signature could not be verified" in result.stderr, result.stderr
+
+
+def test_a_manifest_no_available_gpgv_can_verify_is_refused(sandbox):
+    """Without the stub, verification depends on whether the host ships gpgv.
+
+    Either branch must refuse: a missing gpgv is not permission to trust the
+    manifest, and a real gpgv rejects the fixture signature.
+    """
+
+    seed_mirror(sandbox)
+    (sandbox["stubs"] / "gpgv").unlink()
+
+    result = download(sandbox)
+
+    assert result.returncode == EXIT_NOT_RUN, result.stdout + result.stderr
+    assert "UNVERIFIED INPUT" not in result.stdout, result.stdout
+    assert "RESULT: NOT RUN" in result.stderr, result.stderr
+
+
+def test_the_unverified_override_cannot_be_combined_with_a_checksum(sandbox):
+    result = run_driver(
+        sandbox,
+        "--image",
+        str(sandbox["image"]),
+        "--image-sha256",
+        sha256_of(sandbox["image"]),
+        "--allow-unverified-image",
+    )
+
+    assert result.returncode == 2, result.stdout + result.stderr
+
+
 # --- guest architecture -----------------------------------------------------
 
 
@@ -547,3 +600,727 @@ def test_both_smoke_drivers_share_the_same_guest_test():
     arm64 = text()
     assert "appliance-guest-smoke.sh" in amd64
     assert "appliance-guest-smoke.sh" in arm64
+
+
+# --- a PASS marker is evidence, not a verdict -------------------------------
+
+TIMEOUT_STATUS = 124
+
+PANIC_CONSOLE = """== architecture ==
+guest: aarch64 Debian GNU/Linux 13 (trixie)
+Kernel panic - not syncing: Attempted to kill init!
+"""
+
+
+def qemu_exit(status):
+    """A stub emulator that writes the console fixture and then exits ``status``."""
+
+    body = qemu_stub()
+    head, _, _ = body.rpartition("exit 0\n")
+    return head + f"exit {status}\n"
+
+
+def install_qemu(sandbox, body):
+    path = sandbox["stubs"] / "qemu-system-aarch64"
+    path.write_text(body, encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+def test_a_pass_marker_after_a_timeout_is_not_a_pass(sandbox):
+    install_qemu(sandbox, qemu_exit(TIMEOUT_STATUS))
+
+    result = run_driver(sandbox, "--image", str(sandbox["image"]))
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "RESULT: PASS (booted" not in result.stdout, result.stdout
+    assert "timed out" in (result.stdout + result.stderr).lower(), result.stderr
+
+
+def test_a_pass_marker_after_a_qemu_failure_is_not_a_pass(sandbox):
+    install_qemu(sandbox, qemu_exit(1))
+
+    result = run_driver(sandbox, "--image", str(sandbox["image"]))
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "RESULT: PASS (booted" not in result.stdout, result.stdout
+
+
+def test_a_pass_without_the_guest_exit_marker_is_not_a_pass(sandbox):
+    sandbox["console"].write_text(
+        PASSING_CONSOLE.replace("APPLIANCE_SMOKE_EXIT: 0\n", ""), encoding="utf-8"
+    )
+
+    result = run_driver(sandbox, "--image", str(sandbox["image"]))
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "RESULT: PASS (booted" not in result.stdout, result.stdout
+
+
+def test_a_non_zero_guest_exit_marker_is_not_a_pass(sandbox):
+    sandbox["console"].write_text(
+        PASSING_CONSOLE.replace("APPLIANCE_SMOKE_EXIT: 0", "APPLIANCE_SMOKE_EXIT: 1"),
+        encoding="utf-8",
+    )
+
+    result = run_driver(sandbox, "--image", str(sandbox["image"]))
+
+    assert result.returncode != 0, result.stdout + result.stderr
+
+
+def test_a_later_failure_overrides_an_earlier_pass(sandbox):
+    sandbox["console"].write_text(
+        PASSING_CONSOLE + "RESULT: FAIL (1 check(s))\nAPPLIANCE_SMOKE_EXIT: 1\n",
+        encoding="utf-8",
+    )
+
+    result = run_driver(sandbox, "--image", str(sandbox["image"]))
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "RESULT: FAIL" in result.stdout + result.stderr
+
+
+def test_a_kernel_panic_is_never_a_pass(sandbox):
+    sandbox["console"].write_text(PANIC_CONSOLE + "RESULT: PASS\n", encoding="utf-8")
+
+    result = run_driver(sandbox, "--image", str(sandbox["image"]))
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "panic" in (result.stdout + result.stderr).lower()
+
+
+def test_the_guest_architecture_marker_is_what_proves_aarch64(sandbox):
+    """A stray "aarch64" anywhere in the log is not the guest reporting it."""
+
+    sandbox["console"].write_text(
+        "downloading debian-13-genericcloud-aarch64.qcow2\nRESULT: PASS\n"
+        "APPLIANCE_SMOKE_EXIT: 0\n",
+        encoding="utf-8",
+    )
+
+    result = run_driver(sandbox, "--image", str(sandbox["image"]))
+
+    assert result.returncode != 0, result.stdout + result.stderr
+
+
+# --- input validation -------------------------------------------------------
+
+
+def test_an_option_without_its_value_fails_with_usage(sandbox):
+    result = run_driver(sandbox, "--image")
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "--image" in result.stderr, result.stderr
+
+
+def test_a_non_numeric_memory_value_is_refused(sandbox):
+    result = run_driver(sandbox, "--image", str(sandbox["image"]), EMS_ARM64_MEMORY="lots")
+
+    assert result.returncode == EXIT_NOT_RUN, result.stdout + result.stderr
+    assert "RESULT: NOT RUN" in result.stderr
+
+
+def test_a_non_numeric_timeout_is_refused(sandbox):
+    result = run_driver(sandbox, "--image", str(sandbox["image"]), EMS_ARM64_BOOT_TIMEOUT="soon")
+
+    assert result.returncode == EXIT_NOT_RUN, result.stdout + result.stderr
+
+
+def test_a_zero_cpu_count_is_refused(sandbox):
+    result = run_driver(sandbox, "--image", str(sandbox["image"]), EMS_ARM64_CPUS="0")
+
+    assert result.returncode == EXIT_NOT_RUN, result.stdout + result.stderr
+
+
+def test_an_unwritable_output_directory_is_refused(sandbox):
+    result = run_driver(
+        sandbox,
+        "--image",
+        str(sandbox["image"]),
+        "--output",
+        str(sandbox["tmp"] / "absent" / "logs"),
+    )
+
+    assert result.returncode == EXIT_NOT_RUN, result.stdout + result.stderr
+
+
+def test_a_package_built_for_another_architecture_is_refused(sandbox):
+    """The driver must not smoke-test an amd64 package in an ARM64 guest."""
+
+    build = sandbox["stubs"] / "build-deb.sh"
+    build.write_text(
+        "#!/bin/sh\n"
+        'output=""\n'
+        'while [ $# -gt 0 ]; do case "$1" in --output) output=$2; shift 2 ;; *) shift ;; esac; done\n'
+        'name="$output/ems-appliance-manager_9.9.9_amd64.deb"\n'
+        ': > "$name"\n'
+        'cd "$output" && sha256sum "$(basename "$name")" > "$(basename "$name").sha256"\n',
+        encoding="utf-8",
+    )
+    build.chmod(0o755)
+
+    result = run_driver(
+        sandbox, "--image", str(sandbox["image"]), EMS_ARM64_BUILD_SCRIPT=str(build)
+    )
+
+    assert result.returncode == EXIT_NOT_RUN, result.stdout + result.stderr
+    assert "arm64" in result.stderr, result.stderr
+
+
+# --- cleanup ----------------------------------------------------------------
+
+
+def test_a_failed_run_still_removes_its_working_directory(sandbox):
+    install_qemu(sandbox, qemu_exit(1))
+    before = {item.name for item in sandbox["tmp"].iterdir()}
+
+    run_driver(sandbox, "--image", str(sandbox["image"]))
+
+    leftovers = {
+        item.name
+        for item in sandbox["tmp"].iterdir()
+        if item.name.startswith("ems-appliance-arm64.")
+    }
+    assert not leftovers, leftovers | before
+
+
+def evidence_runs(output):
+    """The per-run evidence directories inside an --output directory."""
+
+    return sorted(item for item in output.iterdir() if item.name.startswith("run-"))
+
+
+def only_run(output):
+    runs = evidence_runs(output)
+    assert len(runs) == 1, sorted(item.name for item in output.iterdir())
+    return runs[0]
+
+
+def test_a_failed_run_preserves_the_serial_log_when_asked(sandbox):
+    install_qemu(sandbox, qemu_exit(1))
+    output = sandbox["tmp"] / "evidence"
+    output.mkdir()
+
+    result = run_driver(sandbox, "--image", str(sandbox["image"]), "--output", str(output))
+
+    assert result.returncode != 0
+    run = only_run(output)
+    assert (run / "console.log").is_file(), sorted(item.name for item in run.iterdir())
+
+
+def test_a_failed_run_preserves_the_emulator_verdict_as_evidence(sandbox):
+    """The reason a run failed has to survive the working directory."""
+
+    install_qemu(sandbox, qemu_exit(TIMEOUT_STATUS))
+    output = sandbox["tmp"] / "evidence"
+    output.mkdir()
+
+    result = run_driver(sandbox, "--image", str(sandbox["image"]), "--output", str(output))
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    run = only_run(output)
+    assert (run / "qemu-status.txt").read_text().strip() == str(TIMEOUT_STATUS)
+    assert "qemu-system-aarch64" in (run / "qemu-command.txt").read_text()
+    assert sha256_of(sandbox["image"]) in (run / "inputs.txt").read_text()
+    summary = (run / "result.txt").read_text()
+    assert "FAIL" in summary and "timed out" in summary, summary
+
+
+# --- an option that needs a value may not read the next option as one -------
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ("--image", "--keep"),
+        ("--output", "--allow-unverified-image"),
+        ("--image-sha256", "--output"),
+        ("--image-checksum-file", "--keep"),
+        ("--image",),
+        ("--output",),
+        ("--image=",),
+        ("--output=",),
+    ],
+)
+def test_an_option_without_a_value_is_a_usage_error(sandbox, arguments):
+    result = run_driver(sandbox, *arguments)
+
+    assert result.returncode == EXIT_USAGE, result.stdout + result.stderr
+    assert "RESULT: NOT RUN" not in result.stderr, result.stderr
+    assert "requires a value" in result.stderr, result.stderr
+
+
+def test_an_explicit_inline_value_is_accepted(sandbox):
+    result = run_driver(sandbox, f"--image={sandbox['image']}")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "RESULT: PASS" in result.stdout
+
+
+def test_an_inline_checksum_is_accepted(sandbox):
+    result = run_driver(
+        sandbox,
+        f"--image={sandbox['image']}",
+        f"--image-sha256={sha256_of(sandbox['image'])}",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "UNVERIFIED INPUT" not in result.stdout + result.stderr
+
+
+# --- evidence belongs to exactly one run ------------------------------------
+
+
+def test_every_required_artefact_is_preserved(sandbox):
+    output = sandbox["tmp"] / "evidence"
+    output.mkdir()
+
+    result = run_driver(sandbox, "--image", str(sandbox["image"]), "--output", str(output))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    run = only_run(output)
+    present = sorted(item.name for item in run.iterdir())
+    for artifact in (
+        "console.log",
+        "qemu-command.txt",
+        "qemu-status.txt",
+        "inputs.txt",
+        "result.txt",
+        "run.txt",
+    ):
+        assert artifact in present, present
+
+
+def test_the_evidence_records_who_produced_it(sandbox):
+    output = sandbox["tmp"] / "evidence"
+    output.mkdir()
+
+    run_driver(sandbox, "--image", str(sandbox["image"]), "--output", str(output))
+
+    metadata = (only_run(output) / "run.txt").read_text(encoding="utf-8")
+    assert "run_id: " in metadata, metadata
+    assert "started_at: " in metadata, metadata
+    assert "ended_at: " in metadata, metadata
+    assert "driver_revision: " in metadata, metadata
+    assert sha256_of(sandbox["image"]) in metadata, metadata
+
+
+def test_two_runs_never_share_an_evidence_directory(sandbox):
+    output = sandbox["tmp"] / "evidence"
+    output.mkdir()
+
+    run_driver(sandbox, "--image", str(sandbox["image"]), "--output", str(output))
+    install_qemu(sandbox, qemu_exit(1))
+    run_driver(sandbox, "--image", str(sandbox["image"]), "--output", str(output))
+
+    runs = evidence_runs(output)
+    assert len(runs) == 2, sorted(item.name for item in output.iterdir())
+    verdicts = sorted((item / "result.txt").read_text(encoding="utf-8").splitlines()[0]
+                      for item in runs)
+    assert verdicts == ["result: FAIL", "result: PASS"], verdicts
+
+
+def test_stale_files_in_the_output_directory_are_not_this_runs_evidence(sandbox):
+    output = sandbox["tmp"] / "evidence"
+    output.mkdir()
+    (output / "console.log").write_text("a previous run\n", encoding="utf-8")
+
+    run_driver(sandbox, "--image", str(sandbox["image"]), "--output", str(output))
+
+    run = only_run(output)
+    assert "a previous run" not in (run / "console.log").read_text(encoding="utf-8")
+    assert (output / "console.log").read_text(encoding="utf-8") == "a previous run\n"
+
+
+def test_evidence_that_cannot_be_copied_is_never_reported_as_preserved(sandbox):
+    output = sandbox["tmp"] / "evidence"
+    output.mkdir()
+    # Only the copies into the evidence directory fail; everything the run
+    # needs to reach a verdict still works, so what is under test is the claim
+    # that the evidence was preserved.
+    guard = sandbox["stubs"] / "cp"
+    guard.write_text(
+        "#!/bin/sh\n"
+        'for argument in "$@"; do case "$argument" in */run-*/*) exit 1 ;; esac; done\n'
+        'exec /bin/cp "$@"\n',
+        encoding="utf-8",
+    )
+    guard.chmod(0o755)
+
+    result = run_driver(sandbox, "--image", str(sandbox["image"]), "--output", str(output))
+
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "evidence is incomplete" in result.stderr, result.stderr
+    assert "RESULT: EVIDENCE INCOMPLETE" in result.stderr, result.stderr
+
+
+# --- a verified pass and an unverified one are different results ------------
+
+
+def test_the_result_file_separates_a_release_gate_from_a_functional_pass(sandbox):
+    output = sandbox["tmp"] / "evidence"
+    output.mkdir()
+
+    run_driver(
+        sandbox,
+        "--image",
+        str(sandbox["image"]),
+        "--allow-unverified-image",
+        "--output",
+        str(output),
+    )
+
+    summary = (only_run(output) / "result.txt").read_text(encoding="utf-8")
+    assert "result: PASS" in summary, summary
+    assert "verification: unverified" in summary, summary
+    assert "release_gate: no" in summary, summary
+
+
+def test_a_verified_pass_is_marked_as_a_release_gate(sandbox):
+    output = sandbox["tmp"] / "evidence"
+    output.mkdir()
+
+    run_driver(
+        sandbox,
+        "--image",
+        str(sandbox["image"]),
+        "--image-sha256",
+        sha256_of(sandbox["image"]),
+        "--output",
+        str(output),
+    )
+
+    summary = (only_run(output) / "result.txt").read_text(encoding="utf-8")
+    assert "verification: verified" in summary, summary
+    assert "release_gate: pass" in summary, summary
+
+
+def test_a_timeout_is_classified_in_the_result(sandbox):
+    install_qemu(sandbox, qemu_exit(TIMEOUT_STATUS))
+    output = sandbox["tmp"] / "evidence"
+    output.mkdir()
+
+    run_driver(sandbox, "--image", str(sandbox["image"]), "--output", str(output))
+
+    summary = (only_run(output) / "result.txt").read_text(encoding="utf-8")
+    assert "result: FAIL" in summary, summary
+    assert "timeout: expired" in summary, summary
+    assert "release_gate: no" in summary, summary
+
+
+def test_a_completed_run_is_classified_as_untimed_out(sandbox):
+    output = sandbox["tmp"] / "evidence"
+    output.mkdir()
+
+    run_driver(sandbox, "--image", str(sandbox["image"]), "--output", str(output))
+
+    assert "timeout: none" in (only_run(output) / "result.txt").read_text(encoding="utf-8")
+
+
+# --- a terminal result always leaves a complete record ----------------------
+
+
+# What the driver itself needs before it reaches its first prerequisite check.
+# A test that removes a stub has to remove the tool, and the sandbox PATH still
+# falls through to the developer's own /usr/bin — so these runs get a PATH built
+# from exactly this list plus the stubs, and nothing else.
+DRIVER_OWN_TOOLS = (
+    "bash", "sh", "env", "sed", "date", "mkdir", "mktemp", "uname", "stat", "cp", "mv",
+    "rm", "cat", "basename", "dirname", "head", "tail", "grep", "awk", "cut", "tr",
+    "sort", "chmod", "readlink", "printf", "truncate", "git", "sha256sum", "timeout",
+)
+
+
+def without_tool(sandbox, name):
+    """Remove one prerequisite, the way a host that never installed it is."""
+
+    (sandbox["stubs"] / name).unlink()
+    shim = sandbox["tmp"] / "minimal-bin"
+    shim.mkdir(exist_ok=True)
+    for tool in DRIVER_OWN_TOOLS:
+        found = shutil.which(tool)
+        target = shim / tool
+        if found and not target.exists():
+            target.symlink_to(found)
+    sandbox["path"] = f"{sandbox['stubs']}:{shim}"
+    return name
+
+
+def result_fields(run):
+    fields = {}
+    for line in (run / "result.txt").read_text(encoding="utf-8").splitlines():
+        key, _, value = line.partition(":")
+        fields[key.strip()] = value.strip()
+    return fields
+
+
+NOT_RUN_EVIDENCE = (
+    "result.txt",
+    "inputs.txt",
+    "run.txt",
+    "environment.txt",
+    "missing-requirements.txt",
+)
+
+
+@pytest.mark.parametrize(
+    "tool", ["qemu-system-aarch64", "cloud-localds", "xorriso", "qemu-img"]
+)
+def test_a_missing_tool_still_writes_a_complete_not_run_record(sandbox, tool):
+    """An evidence directory that was asked for is never left empty."""
+
+    output = sandbox["tmp"] / "evidence"
+    without_tool(sandbox, tool)
+
+    result = run_driver(
+        sandbox, "--image", str(sandbox["image"]), "--output", str(output)
+    )
+
+    assert result.returncode == 3, result.stdout + result.stderr
+    run = only_run(output)
+    present = sorted(item.name for item in run.iterdir())
+    for artifact in NOT_RUN_EVIDENCE:
+        assert artifact in present, (artifact, present)
+    fields = result_fields(run)
+    assert fields["result"] == "NOT RUN", fields
+    assert fields["exit_code"] == "3", fields
+    assert fields["verified"] == "false", fields
+    assert fields["qemu_started"] == "false", fields
+    assert fields["evidence_complete"] == "true", fields
+    assert tool in (run / "missing-requirements.txt").read_text(encoding="utf-8")
+
+
+def test_a_missing_tool_reports_a_stable_reason_code(sandbox):
+    output = sandbox["tmp"] / "evidence"
+    without_tool(sandbox, "cloud-localds")
+
+    run_driver(sandbox, "--image", str(sandbox["image"]), "--output", str(output))
+
+    assert result_fields(only_run(output))["reason_code"] == "required_tool_missing"
+
+
+def test_missing_firmware_reports_a_stable_reason_code(sandbox):
+    output = sandbox["tmp"] / "evidence"
+
+    run_driver(
+        sandbox,
+        "--image",
+        str(sandbox["image"]),
+        "--output",
+        str(output),
+        EMS_ARM64_FIRMWARE=str(sandbox["tmp"] / "absent.fd"),
+    )
+
+    fields = result_fields(only_run(output))
+    assert fields["reason_code"] == "firmware_unavailable", fields
+    assert fields["result"] == "NOT RUN", fields
+
+
+def test_an_early_not_run_never_leaves_an_empty_run_directory(sandbox):
+    output = sandbox["tmp"] / "evidence"
+    without_tool(sandbox, "qemu-system-aarch64")
+
+    run_driver(sandbox, "--image", str(sandbox["image"]), "--output", str(output))
+
+    for run in evidence_runs(output):
+        assert sorted(item.name for item in run.iterdir()), run
+
+
+def test_a_usage_error_after_the_output_was_accepted_still_leaves_a_record(sandbox):
+    """The output directory was taken; a run that ends there owes it a result."""
+
+    output = sandbox["tmp"] / "evidence"
+
+    result = run_driver(
+        sandbox,
+        "--output",
+        str(output),
+        "--image",
+        str(sandbox["image"]),
+        "--image-sha256",
+        sha256_of(sandbox["image"]),
+        "--allow-unverified-image",
+    )
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    fields = result_fields(only_run(output))
+    assert fields["result"] == "USAGE ERROR", fields
+    assert fields["exit_code"] == "2", fields
+    assert fields["reason_code"], fields
+
+
+def test_an_invalid_output_path_owes_no_evidence(sandbox):
+    """Where the output path itself is the fault there is nowhere to write it."""
+
+    result = run_driver(
+        sandbox,
+        "--image",
+        str(sandbox["image"]),
+        "--output",
+        str(sandbox["tmp"] / "absent-parent" / "evidence"),
+    )
+
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert not (sandbox["tmp"] / "absent-parent").exists()
+
+
+def test_a_passing_run_states_that_its_evidence_is_complete(sandbox):
+    output = sandbox["tmp"] / "evidence"
+
+    run_driver(sandbox, "--image", str(sandbox["image"]), "--output", str(output))
+
+    fields = result_fields(only_run(output))
+    assert fields["result"] == "PASS", fields
+    assert fields["evidence_complete"] == "true", fields
+    assert fields["qemu_started"] == "true", fields
+
+
+def test_two_early_not_run_results_never_share_a_directory(sandbox):
+    output = sandbox["tmp"] / "evidence"
+    without_tool(sandbox, "xorriso")
+
+    run_driver(sandbox, "--image", str(sandbox["image"]), "--output", str(output))
+    run_driver(sandbox, "--image", str(sandbox["image"]), "--output", str(output))
+
+    runs = evidence_runs(output)
+    assert len(runs) == 2, sorted(item.name for item in output.iterdir())
+    for run in runs:
+        assert (run / "result.txt").is_file()
+
+
+# --- every terminal result after --output was accepted owes a record --------
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ("--image", "--keep"),
+        ("--image-sha256", "--allow-unverified-image"),
+    ],
+    ids=["image_swallows_keep", "checksum_swallows_allow_unverified"],
+)
+def test_a_parse_error_after_the_output_was_accepted_still_leaves_a_record(
+    sandbox, arguments
+):
+    """The evidence directory is taken as soon as --output parses, not later."""
+
+    output = sandbox["tmp"] / "evidence"
+
+    result = run_driver(sandbox, "--output", str(output), *arguments)
+
+    assert result.returncode == EXIT_USAGE, result.stdout + result.stderr
+    run = only_run(output)
+    fields = result_fields(run)
+    assert fields["result"] == "USAGE ERROR", fields
+    assert fields["exit_code"] == "2", fields
+    assert fields["reason_code"] == "usage_error", fields
+    assert fields["evidence_complete"] == "true", fields
+    for artifact in NOT_RUN_EVIDENCE:
+        assert (run / artifact).is_file(), sorted(item.name for item in run.iterdir())
+
+
+def test_a_repeated_output_directory_is_a_recorded_usage_error(sandbox):
+    output = sandbox["tmp"] / "evidence"
+
+    result = run_driver(sandbox, "--output", str(output), "--output", str(output))
+
+    assert result.returncode == EXIT_USAGE, result.stdout + result.stderr
+    assert result_fields(only_run(output))["result"] == "USAGE ERROR"
+
+
+def test_a_working_directory_that_cannot_be_created_is_a_complete_record(sandbox):
+    """The evidence transaction opens before the temporary directory exists."""
+
+    output = sandbox["tmp"] / "evidence"
+
+    result = run_driver(
+        sandbox,
+        "--image",
+        str(sandbox["image"]),
+        "--output",
+        str(output),
+        TMPDIR=str(sandbox["tmp"] / "absent" / "deeper"),
+    )
+
+    assert result.returncode == EXIT_NOT_RUN, result.stdout + result.stderr
+    run = only_run(output)
+    fields = result_fields(run)
+    assert fields["result"] == "NOT RUN", fields
+    assert fields["reason_code"] == "working_directory_unusable", fields
+    assert fields["evidence_complete"] == "true", fields
+    for artifact in NOT_RUN_EVIDENCE:
+        assert (run / artifact).is_file(), sorted(item.name for item in run.iterdir())
+
+
+# --- the reason code of a terminal result is the truth about it -------------
+
+
+def reason_code_of(sandbox, *arguments, **environment):
+    output = sandbox["tmp"] / "evidence"
+    run_driver(sandbox, "--output", str(output), *arguments, **environment)
+    return result_fields(only_run(output))["reason_code"]
+
+
+def test_a_passing_run_records_a_final_reason_code(sandbox):
+    assert reason_code_of(sandbox, "--image", str(sandbox["image"])) == "guest_smoke_passed"
+
+
+def test_a_guest_failure_records_a_final_reason_code(sandbox):
+    sandbox["console"].write_text(FAILING_CONSOLE, encoding="utf-8")
+
+    assert reason_code_of(sandbox, "--image", str(sandbox["image"])) == "guest_smoke_failed"
+
+
+def test_a_timeout_records_a_final_reason_code(sandbox):
+    install_qemu(sandbox, qemu_exit(TIMEOUT_STATUS))
+
+    assert reason_code_of(sandbox, "--image", str(sandbox["image"])) == "guest_timeout"
+
+
+def test_an_abnormal_emulator_exit_records_a_final_reason_code(sandbox):
+    install_qemu(sandbox, qemu_exit(1))
+
+    assert reason_code_of(sandbox, "--image", str(sandbox["image"])) == "qemu_failed"
+
+
+def test_a_kernel_panic_records_a_final_reason_code(sandbox):
+    sandbox["console"].write_text(
+        PASSING_CONSOLE.replace("RESULT: PASS", "Kernel panic - not syncing"),
+        encoding="utf-8",
+    )
+
+    assert reason_code_of(sandbox, "--image", str(sandbox["image"])) == "guest_kernel_panic"
+
+
+def test_a_foreign_architecture_records_a_final_reason_code(sandbox):
+    sandbox["console"].write_text(
+        PASSING_CONSOLE.replace("guest: aarch64", "guest: x86_64"), encoding="utf-8"
+    )
+
+    assert (
+        reason_code_of(sandbox, "--image", str(sandbox["image"]))
+        == "guest_architecture_mismatch"
+    )
+
+
+def test_a_missing_completion_marker_records_a_final_reason_code(sandbox):
+    sandbox["console"].write_text(
+        PASSING_CONSOLE.replace("APPLIANCE_SMOKE_EXIT: 0\n", ""), encoding="utf-8"
+    )
+
+    assert (
+        reason_code_of(sandbox, "--image", str(sandbox["image"]))
+        == "guest_completion_missing"
+    )
+
+
+def test_the_latest_pointer_names_the_most_recent_run(sandbox):
+    output = sandbox["tmp"] / "evidence"
+    without_tool(sandbox, "xorriso")
+
+    run_driver(sandbox, "--image", str(sandbox["image"]), "--output", str(output))
+    second = run_driver(sandbox, "--image", str(sandbox["image"]), "--output", str(output))
+
+    latest = (output / "latest.txt").read_text(encoding="utf-8").strip()
+    assert latest in [run.name for run in evidence_runs(output)], latest
+    assert latest in second.stderr + second.stdout or latest, latest

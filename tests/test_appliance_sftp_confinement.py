@@ -262,16 +262,30 @@ def test_confinement_is_reestablished_after_the_mounts_are_lost(host):
 
 
 def test_an_export_path_created_later_is_published(host):
+    """The unit is the trigger: it publishes the path and re-validates access."""
+
     host.shell(f"umount {EXPORT_ROOT}/data 2>/dev/null || true; rm -rf {INSTALL_ROOT}/data")
-    host.setup_export_root()
+    host.publish_exports()
     assert not host.shell(f"findmnt -no OPTIONS --mountpoint {EXPORT_ROOT}/data").stdout.strip()
 
     host.shell(f"mkdir -p {INSTALL_ROOT}/data && printf 'late\\n' > {INSTALL_ROOT}/data/late.json")
-    host.setup_export_root()
+    host.publish_exports()
 
     options = host.shell(f"findmnt -no OPTIONS --mountpoint {EXPORT_ROOT}/data").stdout
     assert "ro" in options.split(","), options
     assert "late" in sftp_output(host, "get /data/late.json /tmp/late.json")
+
+
+def test_a_raw_setup_run_does_not_re_enable_access_on_its_own(host):
+    """Authentication follows a verified boundary, not a script's exit code."""
+
+    host.shell("/usr/bin/ems-appliance backup-access disable >/dev/null 2>&1", timeout=180)
+    host.setup_export_root()
+
+    assert "Permission denied" in sftp_output(host, "ls /config")
+
+    host.publish_exports()
+    assert host.sftp(["ls /config"]).returncode == 0
 
 
 def test_the_agent_reads_the_host_mount_table_not_its_own_namespace(host):

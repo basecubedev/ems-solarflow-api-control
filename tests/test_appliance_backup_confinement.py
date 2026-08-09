@@ -15,13 +15,18 @@ promised one (disable the account's authentication until it is).
 import pytest
 
 from appliance.backup_confinement import (
+    FORCED_COMMAND,
     STATE_ACTIVE,
     STATE_DEGRADED,
     STATE_UNAVAILABLE,
     BackupAccessActivation,
     evaluate_policy,
 )
-from tests.helpers.appliance import build_test_services
+from tests.helpers.appliance import (
+    SSHD_BACKUP_MATCH,
+    build_test_services,
+    seed_backup_account,
+)
 
 pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.backup_restore]
 
@@ -29,32 +34,18 @@ PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH1cQ0kFvL5gLIQ0Q0mV3P6pC5J2Xw5RIu5Hn3fJ0hVb backup\n"
 )
 
-COMPLIANT = """permitrootlogin no
-passwordauthentication no
-kbdinteractiveauthentication no
-pubkeyauthentication yes
-permittty no
-allowtcpforwarding no
-allowagentforwarding no
-x11forwarding no
-permittunnel no
-gatewayports no
-chrootdirectory {export_root}
-forcecommand internal-sftp -P symlink,hardlink,rename
-"""
+# Exactly what render_sshd_policy generates, as sshd -T reports it back. A
+# weaker fixture would mean the evaluator was never tested against the policy
+# the appliance actually ships.
+COMPLIANT = SSHD_BACKUP_MATCH
 
 
 def appliance(tmp_path, *, match=None):
     services = build_test_services(tmp_path)
-    host = services.host
-    home = tmp_path / "var" / "lib" / "ems-backup"
-    (home / ".ssh").mkdir(parents=True, exist_ok=True)
-    (home / ".ssh" / "authorized_keys").write_text(PUBLIC_KEY, encoding="utf-8")
-    host.add_account("ems-backup", home)
-    host.sshd_backup_match = (
+    seed_backup_account(services, home=tmp_path / "var" / "lib" / "ems-backup", key=PUBLIC_KEY)
+    services.host.sshd_backup_match = (
         COMPLIANT.format(export_root=services.paths.export_root) if match is None else match
     )
-    services.home = home
     return services
 
 
@@ -170,7 +161,7 @@ def test_a_chroot_pointing_somewhere_else_breaks_the_confinement(tmp_path):
 # --- fail-closed activation -------------------------------------------------
 
 
-def test_a_verified_confinement_activates_backup_access(tmp_path):
+def test_a_verified_confinement_activates_backup_access(tmp_path, production_chroot_chain):
     services = appliance(tmp_path)
 
     report = activation(services).activate()
@@ -206,7 +197,7 @@ def test_a_failed_reload_of_a_running_daemon_disables_backup_authentication(tmp_
     assert not keys(services).exists()
 
 
-def test_a_stopped_daemon_needs_no_reload_to_activate(tmp_path):
+def test_a_stopped_daemon_needs_no_reload_to_activate(tmp_path, production_chroot_chain):
     """A daemon that is not running cannot be applying an older policy."""
 
     services = appliance(tmp_path)
@@ -234,7 +225,7 @@ def test_an_unconfirmed_match_policy_disables_backup_authentication(tmp_path):
     assert not keys(services).exists()
 
 
-def test_a_confirmed_confinement_restores_previously_disabled_keys(tmp_path):
+def test_a_confirmed_confinement_restores_previously_disabled_keys(tmp_path, production_chroot_chain):
     services = appliance(tmp_path)
     services.host.sshd_config_valid = False
     activation(services).activate()
@@ -287,7 +278,7 @@ def test_the_reported_status_derives_its_note_from_the_observed_policy(tmp_path)
     assert "no forwarding" not in status["note"].lower()
 
 
-def test_a_fully_verified_status_may_promise_the_restrictions(tmp_path):
+def test_a_fully_verified_status_may_promise_the_restrictions(tmp_path, production_chroot_chain):
     services = appliance(tmp_path)
     for source in services.paths.export_paths().values():
         source.mkdir(parents=True, exist_ok=True)
@@ -315,7 +306,7 @@ def seed_exports(services, *, names=("config", "backups", "data"), read_only=Tru
     return services
 
 
-def test_activation_needs_the_export_mounts_not_only_the_ssh_policy(tmp_path):
+def test_activation_needs_the_export_mounts_not_only_the_ssh_policy(tmp_path, production_chroot_chain):
     services = appliance(tmp_path)
     seed_exports(services)
 
@@ -373,7 +364,7 @@ def test_an_unmanaged_entry_in_the_export_root_disables_backup_authentication(tm
     assert not keys(services).exists()
 
 
-def test_a_missing_ems_directory_stays_pending_and_still_activates(tmp_path):
+def test_a_missing_ems_directory_stays_pending_and_still_activates(tmp_path, production_chroot_chain):
     services = appliance(tmp_path)
     seed_exports(services, names=("config", "backups"))
 
@@ -402,7 +393,7 @@ def test_a_key_conflict_keeps_both_files_and_stays_disabled(tmp_path):
     assert conflicts, sorted(item.name for item in disabled_keys(services).parent.iterdir())
 
 
-def test_a_key_conflict_blocks_activation_until_the_operator_resolves_it(tmp_path):
+def test_a_key_conflict_blocks_activation_until_the_operator_resolves_it(tmp_path, production_chroot_chain):
     services = appliance(tmp_path)
     seed_exports(services)
     disabled_keys(services).write_text("ssh-ed25519 AAAA older\n", encoding="utf-8")
@@ -442,3 +433,95 @@ def test_a_foreign_read_only_mount_is_not_reported_as_confined(tmp_path):
     assert status["confined"] is False, status["export_access"]
     config = next(item for item in status["paths"] if item["name"] == "config")
     assert config["source_verified"] is False, config
+
+
+# --- the forced command is the confinement, not its first word --------------
+
+
+def with_forced_command(services, command):
+    services.host.sshd_backup_match = "\n".join(
+        f"forcecommand {command}".rstrip() if line.startswith("forcecommand") else line
+        for line in services.host.sshd_backup_match.splitlines()
+    ) + "\n"
+    return evaluate_policy(
+        services.ssh.effective_config(user="ems-backup"),
+        export_root=str(services.paths.export_root),
+    )
+
+
+def test_the_generated_forced_command_is_the_one_the_evaluator_expects(tmp_path):
+    """One constant, or the generator and the check drift apart silently."""
+
+    from appliance import host_config
+
+    assert host_config.FORCED_COMMAND == FORCED_COMMAND
+    services = appliance(tmp_path)
+
+    policy = with_forced_command(services, FORCED_COMMAND)
+
+    assert policy["restrictions"]["forcecommand"]["confirmed"] is True, policy
+    assert policy["confirmed"] is True, policy
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "internal-sftp",
+        "internal-sftp -P remove",
+        "internal-sftp -P symlink,hardlink,rename,posix-rename,mkdir,rmdir,setstat,fsetstat",
+        FORCED_COMMAND + " -d /",
+        FORCED_COMMAND + ",extra",
+        "/usr/lib/openssh/sftp-server",
+        "/bin/bash -c true",
+        "",
+    ],
+)
+def test_a_weakened_forced_command_is_not_the_promised_confinement(tmp_path, command):
+    services = appliance(tmp_path)
+
+    policy = with_forced_command(services, command)
+
+    assert policy["restrictions"]["forcecommand"]["confirmed"] is False, policy
+    assert "forcecommand" in policy["violations"], policy
+    assert policy["confirmed"] is False, policy
+
+
+def test_a_forced_command_whose_denied_operations_are_reordered_is_accepted(tmp_path):
+    """``-P`` is a set of denied requests; its order carries no meaning."""
+
+    services = appliance(tmp_path)
+    denied = FORCED_COMMAND.partition(" -P ")[2].split(",")
+    reordered = "internal-sftp -P " + ",".join(reversed(denied))
+
+    policy = with_forced_command(services, reordered)
+
+    assert policy["restrictions"]["forcecommand"]["confirmed"] is True, policy
+
+
+def test_permitopen_is_verified_because_the_policy_promises_it(tmp_path):
+    services = appliance(tmp_path)
+    services.host.sshd_backup_match = "\n".join(
+        line
+        for line in services.host.sshd_backup_match.splitlines()
+        if not line.startswith("permitopen")
+    ) + "\n"
+
+    policy = evaluate_policy(
+        services.ssh.effective_config(user="ems-backup"),
+        export_root=str(services.paths.export_root),
+    )
+
+    assert policy["restrictions"]["permitopen"]["confirmed"] is False, policy
+    assert "permitopen" in policy["violations"], policy
+
+
+def test_a_weakened_forced_command_disables_backup_authentication(tmp_path):
+    services = appliance(tmp_path)
+    with_forced_command(services, "internal-sftp")
+
+    report = activation(services).activate()
+
+    assert report["state"] == "degraded", report
+    assert report["reason"] == "confinement_not_confirmed", report
+    assert report["authentication_disabled"] is True, report
+    assert "forcecommand" in report["policy"]["violations"], report["policy"]

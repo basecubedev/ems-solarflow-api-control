@@ -29,6 +29,7 @@ from appliance.docker_backend import (
     DockerError,
 )
 from appliance.known_good import HEALTHCHECK_PASSED
+from appliance.operation_schema import OperationSchemaError, validate_operation
 from appliance.operations import (
     STATE_FAILED_RECOVERABLE,
     STATE_FAILED_TERMINAL,
@@ -563,11 +564,15 @@ class AdminLifecycleService:
         return fields[3].rsplit(":", 1)[-1] == port
 
     def _port_owners(self, port):
-        """The containers Docker says publish this port, or None if unprovable."""
+        """The containers Docker says publish this port, or None if unprovable.
+
+        A daemon that is not running has no containers, so nothing it manages
+        can hold the port — that is a proof, not an unknown.
+        """
 
         try:
             if self.docker.daemon_state()["state"] != DAEMON_RUNNING:
-                return None
+                return []
             return self.docker.containers_publishing_port(port)
         except (DockerError, ValueError):
             return None
@@ -636,6 +641,18 @@ class AdminLifecycleService:
     # --- execution -------------------------------------------------------
 
     def execute(self, operation):
+        try:
+            validate_operation(
+                operation,
+                repositories=self.config.images.repositories,
+                architectures=self.config.supported_architectures,
+            )
+        except OperationSchemaError as exc:
+            # Nothing has been touched yet: the record is refused before the
+            # first Docker call, not repaired by guessing a missing field.
+            return self._preflight_failure(
+                operation, STATE_FAILED_TERMINAL, exc.code, exc.message
+            )
         if operation.type == TYPE_INSTALL:
             return self._execute_install(operation)
         if operation.type == TYPE_ROLLBACK:
@@ -660,7 +677,7 @@ class AdminLifecycleService:
         try:
             self._require_planned_deployment(target)
             self._require_planned_current_admin(target)
-            self._require_local_image(reference)
+            self._require_planned_image(target, reference, require_labels=True)
         except AdminLifecycleError as exc:
             return self._preflight_failure(
                 operation, STATE_FAILED_TERMINAL, exc.code, exc.message
@@ -884,7 +901,10 @@ class AdminLifecycleService:
         try:
             self._require_planned_deployment(target)
             self._require_planned_current_admin(target)
-            self._require_local_image(reference)
+            # A rollback deploys an image this appliance installed and validated
+            # once; its labels belong to that older release, so the digest and
+            # the architecture are what have to still hold.
+            self._require_planned_image(target, reference, require_labels=False)
         except AdminLifecycleError as exc:
             return self._preflight_failure(
                 operation, STATE_FAILED_TERMINAL, exc.code, exc.message
@@ -981,7 +1001,12 @@ class AdminLifecycleService:
         return payload
 
     def _rollback_recovery_failure(self, operation, saved, exc, *, verification=None):
-        """Mutation had started: put the previous deployment back if that is safe."""
+        """Mutation had started: put the exact previous Admin back, or say it is gone.
+
+        The authority is the identity captured before the rollback started, not
+        whatever the deployment resolves to now: an image that carries the same
+        version label but different bytes is not the Admin that was running.
+        """
 
         self.operations.advance(
             operation.operation_id,
@@ -989,19 +1014,41 @@ class AdminLifecycleService:
             state=STATE_ROLLING_BACK,
             detail=getattr(exc, "code", "rollback_failed"),
         )
-        recovery = {"restored": False, "error": ""}
+        target = self._recovery_target(operation)
+        recovery = {"restored": False, "error": "", "expected": target}
         try:
+            if not target["digest"]:
+                raise AdminLifecycleError(
+                    "recovery_identity_unavailable",
+                    "no immutable identity was captured for the Admin that was running",
+                )
             self._stop_admin(self.deployment())
             if not self._safe_restore(saved):
                 raise DeploymentError(
                     "deployment_restore_failed", "the previous deployment could not be written back"
                 )
+            self._require_local_image(target["reference"])
+            restored_deployment = resolve_deployment(self.paths, self.config)
+            apply_digest(
+                restored_deployment,
+                target["repository"],
+                target["digest"],
+                tag=target["version"],
+            )
             self._compose_up(resolve_deployment(self.paths, self.config))
-            check = self._verify_admin()
-            recovery = {"restored": bool(check["verified"]), "verification": check, "error": ""}
+            check = self._verify_admin(
+                expected_version=target["version"], expected_digest=target["digest"]
+            )
+            recovery = {
+                "restored": bool(check["verified"]),
+                "verification": check,
+                "expected": target,
+                "error": "" if check["verified"] else check["error"],
+            }
         except (AdminLifecycleError, DockerError, DeploymentError, OSError) as recovery_exc:
             recovery = {
                 "restored": False,
+                "expected": target,
                 "error": str(getattr(recovery_exc, "message", recovery_exc)),
             }
 
@@ -1271,9 +1318,12 @@ class AdminLifecycleService:
         preflight, while the current Admin is untouched.
         """
 
+        from appliance.operation_schema import RECOVERY_SCHEMA_VERSION
+
         fingerprint = self._deployment_fingerprint()
         if not state["installed"]:
             return {
+                "schema_version": RECOVERY_SCHEMA_VERSION,
                 "admin_present": False,
                 "digest": "",
                 "version": "",
@@ -1284,19 +1334,22 @@ class AdminLifecycleService:
             }
 
         digest = str(state["digest"] or "")
-        if not digest and state["healthy"]:
+        if not digest:
+            # Health does not weaken this: an Admin that exists may only be
+            # replaced when the appliance can prove what it would put back.
             raise AdminLifecycleError(
                 "recovery_identity_unavailable",
-                "the running Admin cannot be identified by an image digest, so an "
+                "the installed Admin cannot be identified by an image digest, so an "
                 "automatic rollback could not be verified; re-pull or reinstall the "
                 "current Admin before replacing it",
             )
         repository = self.config.images.admin_repository
         return {
+            "schema_version": RECOVERY_SCHEMA_VERSION,
             "admin_present": True,
             "digest": digest,
             "version": str(state["version"] or ""),
-            "reference": build_digest_ref(repository, digest) if digest else "",
+            "reference": build_digest_ref(repository, digest),
             "repository": repository,
             "healthy": bool(state["healthy"]),
             **fingerprint,
@@ -1307,7 +1360,10 @@ class AdminLifecycleService:
 
         planned = str(target.get("compose_hash") or "")
         if not planned:
-            return True
+            raise AdminLifecycleError(
+                "deployment_fingerprint_missing",
+                "the plan records no Admin compose hash; plan again",
+            )
         deployment = self.deployment()
         if not deployment.compose_exists:
             raise AdminLifecycleError(
@@ -1327,7 +1383,12 @@ class AdminLifecycleService:
                 "the Admin compose file changed after the plan was created; plan again",
             )
         planned_environment = str(target.get("environment_hash") or "")
-        if planned_environment and self._environment_hash() != planned_environment:
+        if not planned_environment:
+            raise AdminLifecycleError(
+                "deployment_fingerprint_missing",
+                "the plan records no Admin environment hash; plan again",
+            )
+        if self._environment_hash() != planned_environment:
             raise AdminLifecycleError(
                 "deployment_changed_since_plan",
                 "the Admin environment file changed after the plan was created; plan again",
@@ -1338,15 +1399,71 @@ class AdminLifecycleService:
         """The Admin about to be replaced must still be the one that was planned."""
 
         recovery = target.get("recovery") or {}
+        if not recovery.get("admin_present"):
+            return True
         expected = str(recovery.get("digest") or "")
         if not expected:
-            return True
+            raise AdminLifecycleError(
+                "recovery_identity_unavailable",
+                "the plan records an installed Admin without a recovery digest; plan again",
+            )
         active = str(self.detect()["digest"] or "")
         if active != expected:
             raise AdminLifecycleError(
                 "current_admin_changed_since_plan",
                 "the running Admin image changed after the plan was created; plan again",
             )
+        return True
+
+    def _require_planned_image(self, target, reference, *, require_labels):
+        """Prove the image is still exactly the one the plan described.
+
+        ``architecture``, ``source`` and ``revision`` are strings in a record; a
+        partial write can change them and nothing on the host would notice. What
+        decides is the image the reference resolves to right now, inspected
+        again while the healthy Admin is still running.
+        """
+
+        self._require_local_image(reference)
+        image = self.docker.inspect_image(reference)
+        if not image.exists:
+            raise AdminLifecycleError("image_inspect_failed", f"{reference} cannot be inspected")
+
+        planned = str(target.get("digest") or "")
+        if image.digest and image.digest != planned:
+            raise AdminLifecycleError(
+                "target_digest_mismatch",
+                f"{reference} resolves to {image.digest}, not the planned {planned}",
+            )
+        try:
+            validate_architecture(image.architecture, self.config.supported_architectures)
+        except ValidationError as exc:
+            raise AdminLifecycleError(exc.code, exc.message)
+        for field, label in (("architecture", ""), ("revision", LABEL_REVISION), (
+            "source",
+            LABEL_SOURCE,
+        )):
+            expected = str(target.get(field) or "")
+            if not expected:
+                continue
+            observed = (
+                image.architecture if not label else str(image.labels.get(label) or "")
+            )
+            if observed != expected:
+                raise AdminLifecycleError(
+                    f"target_{field}_mismatch",
+                    f"{reference} reports {field} {observed!r}, not the planned {expected!r}",
+                )
+        if require_labels:
+            try:
+                validate_oci_labels(
+                    image.labels,
+                    requested_tag=str(target.get("tag") or ""),
+                    expected_source=self.config.images.expected_source,
+                    legacy_exempt_tags=self.config.images.legacy_exempt_tags,
+                )
+            except ValidationError as exc:
+                raise AdminLifecycleError(exc.code, exc.message)
         return True
 
     def _require_local_image(self, reference):

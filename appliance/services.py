@@ -115,6 +115,7 @@ def build_services(
         systemd=systemd,
         config=config,
         operations=operations,
+        paths=paths,
         time_fn=time_fn,
         operation_log=operation_log,
     )

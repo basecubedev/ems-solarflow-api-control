@@ -17,7 +17,15 @@ import socketserver
 import struct
 import threading
 
-from appliance import admin_lifecycle, network, packages, ssh_service, support_archive, validation
+from appliance import (
+    admin_lifecycle,
+    network,
+    operation_schema,
+    packages,
+    ssh_service,
+    support_archive,
+    validation,
+)
 from appliance.audit import RESULT_DENIED, RESULT_FAILURE, RESULT_SUCCESS
 from appliance.operations import (
     STATE_FAILED_RECOVERABLE,
@@ -190,6 +198,17 @@ class AgentHandlers:
             self._audit(operation_type, actor, source_ip, RESULT_FAILURE, operation.operation_id)
             raise AgentError(getattr(exc, "code", "plan_failed"), str(getattr(exc, "message", exc)))
 
+        # The planner has finished writing the target, so this is the last
+        # moment the record and the plan describe the same thing. Sealing them
+        # together is what lets confirmation and execution prove they are still
+        # acting on the plan the operator was shown.
+        operation = self.services.operations.get(operation.operation_id)
+        authority = operation_schema.seal(operation, plan)
+        self.services.operations.update_target(operation.operation_id, authority)
+        plan = dict(plan) | {operation_schema.AUTHORITY_FIELD: authority[
+            operation_schema.AUTHORITY_FIELD
+        ]}
+
         record = self.services.operations.await_confirmation(operation.operation_id, plan)
         return {
             "operation": record.to_dict(),
@@ -270,6 +289,26 @@ class AgentHandlers:
         token = args["confirmation_token"]
         store = self.services.operations
         current = store.get(operation_id, include_token=True)
+
+        # The token proves the caller saw a plan; the authority proves the plan
+        # they saw is still the one on disk. A record whose target changed after
+        # the confirmation was rendered is refused before anything is confirmed.
+        try:
+            operation_schema.validate_confirmation(
+                current,
+                repositories=self.services.config.images.repositories,
+                architectures=self.services.config.supported_architectures,
+            )
+        except operation_schema.OperationSchemaError as exc:
+            store.finish(
+                operation_id,
+                STATE_FAILED_TERMINAL,
+                stage="preflight_failed",
+                result={"stage": "preflight", "admin_untouched": True},
+                error={"code": exc.code, "message": exc.message},
+            )
+            self._audit(current.type, actor, source_ip, RESULT_DENIED, operation_id)
+            raise AgentError(exc.code, exc.message)
 
         try:
             if current.state == STATE_FAILED_RECOVERABLE:

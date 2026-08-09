@@ -379,27 +379,35 @@ BACKUP_ACCOUNT_RECORD = "backup-account.json"
 NOLOGIN_SHELLS = ("/usr/sbin/nologin", "/sbin/nologin", "/bin/false", "/usr/bin/false")
 
 
+OWNERSHIP_PROBLEMS = {
+    "no_ownership_record": "this package has no ownership record for it",
+    "ownership_record_unsupported": "its ownership record predates the identity binding",
+    "ownership_record_requires_migration": (
+        "its ownership record predates the home ownership marker and has not been re-bound"
+    ),
+    "account_not_created_by_package": "this package did not create it",
+    "account_missing": "the account no longer exists",
+    "account_identity_mismatch": "its uid, group or home directory is not the recorded one",
+    "home_identity_mismatch": "its home directory is not the one this package created",
+    "home_marker_mismatch": (
+        "its home directory does not carry the ownership marker this package wrote"
+    ),
+}
+
+
 def backup_account_state(paths, config):
     """What the host says about the package-owned backup account."""
 
-    import json
-    import pwd
-
-    record = {}
-    try:
-        payload = json.loads(
-            (paths.package_state_dir / BACKUP_ACCOUNT_RECORD).read_text(encoding="utf-8")
-        )
-        record = payload if isinstance(payload, dict) else {}
-    except (OSError, ValueError):
-        record = {}
+    from appliance import backup_ownership
 
     name = config.backup_user
-    try:
-        entry = pwd.getpwnam(name)
+    entry = backup_ownership.account_entry(name)
+    ownership = backup_ownership.verify_ownership(paths, name, entry=entry)
+    record = ownership["record"]
+    if entry is not None:
         home, shell, exists = entry.pw_dir, entry.pw_shell, True
-    except KeyError:
-        home, shell, exists = str(record.get("home") or ""), "", False
+    else:
+        home, shell, exists = record.home, "", False
 
     keys_dir = os.path.join(home, ".ssh") if home else ""
     conflicts = []
@@ -412,7 +420,9 @@ def backup_account_state(paths, config):
     return {
         "account": name,
         "exists": exists,
-        "package_owned": bool(record.get("created_by_package")) and record.get("account") == name,
+        "package_owned": bool(ownership["owned"]),
+        "ownership_reason": ownership["reason"],
+        "record": record.to_dict(),
         "home": home,
         "shell": shell,
         "expected_shell": shell in NOLOGIN_SHELLS if exists else None,
@@ -445,12 +455,13 @@ def check_backup_account(paths, config=None):
             )
         ]
     if not state["package_owned"]:
+        reason = OWNERSHIP_PROBLEMS.get(state["ownership_reason"], state["ownership_reason"])
         return [
             _check(
                 "backup_account",
                 STATUS_FAILED,
-                f"{state['account']} exists but this package has no ownership record for it; "
-                "removal would not be able to withdraw it safely",
+                f"{state['account']} exists but {reason}; removal would not be able to "
+                "withdraw it safely",
             )
         ]
     if state["keys_conflicted"]:
@@ -478,6 +489,22 @@ def check_backup_account(paths, config=None):
             f"{state['account']} is package-owned, has no shell and its key is "
             + ("active" if state["keys_active"] else "disabled"),
         )
+    ]
+
+
+def check_path_boundaries(paths):
+    """The configured host paths must still satisfy the no-follow policy."""
+
+    from appliance.paths import runtime_boundary_problems
+
+    try:
+        problems = runtime_boundary_problems(paths)
+    except Exception as exc:
+        return [_check("path_boundaries", STATUS_FAILED, f"{exc.__class__.__name__}: {exc}")]
+    if problems:
+        return [_check("path_boundaries", STATUS_FAILED, "; ".join(problems[:3]))]
+    return [
+        _check("path_boundaries", STATUS_OK, "every configured host path is a real directory")
     ]
 
 
@@ -511,6 +538,7 @@ def verify_installation(paths=None, *, runner=None, live=None):
     checks = []
     checks.extend(check_directories(paths))
     checks.extend(check_ownership(paths))
+    checks.extend(check_path_boundaries(paths))
     checks.extend(check_host_paths(paths, runner=runner))
     checks.extend(check_units(runner, live=live))
     checks.extend(check_socket(paths, live=live))

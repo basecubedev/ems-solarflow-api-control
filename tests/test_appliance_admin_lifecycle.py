@@ -825,11 +825,27 @@ def test_a_native_listener_on_the_admin_port_is_a_conflict(tmp_path):
 
 
 def test_unprovable_ownership_is_indeterminate_never_available(tmp_path):
+    """Docker is up but cannot answer who owns the port: that is not a pass."""
+
+    services = healthy_appliance(tmp_path)
+    services.host.publish_port(ADMIN_CONTAINER, 8090)
+    services.host.listening_ports = ADMIN_LISTENER
+    services.host.docker_ps_fails = True
+
+    finding = port_finding(services)
+
+    assert finding.indeterminate is True, finding
+    assert "available" not in finding.detail.lower(), finding
+
+
+def test_a_listener_with_no_docker_daemon_running_is_a_conflict(tmp_path):
+    """No daemon means no container, so nothing Docker manages holds the port."""
+
     services = healthy_appliance(tmp_path)
     services.host.listening_ports = ADMIN_LISTENER
     services.host.docker_running = False
 
     finding = port_finding(services)
 
-    assert finding.indeterminate is True, finding
-    assert "available" not in finding.detail.lower(), finding
+    assert finding.ok is False, finding
+    assert finding.indeterminate is False, finding

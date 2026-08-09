@@ -99,15 +99,16 @@ def test_disable_keeps_both_files_when_a_preserved_copy_already_exists(host):
 
 
 def test_disable_fails_when_the_key_file_cannot_be_removed(host):
+    """A mode root can ignore proves nothing, so the move itself is faulted."""
+
     host.run("ensure")
-    host.write_key()
-    (host.home / ".ssh").chmod(0o500)
-    try:
-        result = host.run("disable")
-    finally:
-        (host.home / ".ssh").chmod(0o700)
+    keys = host.write_key()
+    host.stub_command("mv", "exit 1")
+
+    result = host.run("disable")
 
     assert result.returncode != 0, result.stdout
+    assert keys.is_file(), "the key file vanished although the move failed"
 
 
 # --- purge ------------------------------------------------------------------

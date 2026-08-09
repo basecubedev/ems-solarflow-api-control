@@ -280,7 +280,32 @@ def command_host_config(args):
     try:
         report = apply_host_config(paths, config, activation=live_activation(runner=runner))
     except HostConfigError as exc:
+        if args.json:
+            _print({"applied": False, "error": exc.code, "message": exc.message, **exc.rollback}, True)
+            return EXIT_ERROR
         print(f"error: {exc.message}", file=sys.stderr)
+        rollback = exc.rollback
+        if rollback:
+            print(
+                f"  files: {rollback.get('disk_rollback')}, "
+                f"runtime: {rollback.get('runtime_rollback')}, "
+                f"backup authentication disabled: {rollback.get('authentication_disabled')}",
+                file=sys.stderr,
+            )
+            differences = rollback.get("differences") or {}
+            for item in rollback.get("remaining_drift") or []:
+                print(f"  still not restored: {item}", file=sys.stderr)
+                detail = differences.get(item) or {}
+                if "expected" in detail:
+                    detail = {item: detail}
+                for name, values in sorted(detail.items()):
+                    if not isinstance(values, dict):
+                        continue
+                    print(
+                        f"    {name}: expected {values.get('expected')!r}, "
+                        f"observed {values.get('observed')!r}",
+                        file=sys.stderr,
+                    )
         return EXIT_ERROR
     _print(report, args.json)
     return EXIT_OK
@@ -295,7 +320,12 @@ def command_backup_access(args):
     config = load_config(paths)
     service = build_activation(paths=paths, config=config)
     if args.action == "status":
-        _print(service.observe(), args.json)
+        # A read-only revalidation: the same evidence activation uses, without
+        # changing anything. Support and package verification both need it.
+        report = dict(service.observe())
+        report["exports"] = service.export_state()
+        report["policy"] = service.effective_policy()
+        _print(report, args.json)
         return EXIT_OK
     if os.geteuid() != 0:
         print("error: changing backup access needs root", file=sys.stderr)
@@ -305,6 +335,52 @@ def command_backup_access(args):
     if args.action == "disable":
         return EXIT_OK
     return EXIT_OK if report["state"] in (STATE_ACTIVE, STATE_UNAVAILABLE) else EXIT_ERROR
+
+
+PACKAGE_LIBDIR = "/usr/lib/ems-appliance-manager"
+
+
+def _account_helper():
+    """The packaged shell that owns the record; the same one ``postinst`` calls."""
+
+    libdir = os.environ.get("EMS_APPLIANCE_LIBDIR") or PACKAGE_LIBDIR
+    return os.path.join(libdir, "backup-account.sh")
+
+
+def command_backup_account(args):
+    """Report what the ownership record proves, and adopt a legacy one on request.
+
+    Adoption is never automatic and never takes a path from anywhere but the
+    record: the helper validates the configured account and home itself, prints
+    what it is about to adopt, and refuses key material it cannot attribute.
+    """
+
+    import subprocess
+
+    from appliance import backup_ownership
+
+    paths = resolve_paths()
+    config = load_config(paths)
+    if args.action == "status":
+        report = {
+            "account": config.backup_user,
+            "state": backup_ownership.ownership_state(paths, config.backup_user),
+            "record": backup_ownership.read_record(paths).to_dict(),
+        }
+        _print(report, args.json)
+        return EXIT_OK
+
+    if os.geteuid() != 0:
+        print("error: migrating the backup ownership record needs root", file=sys.stderr)
+        return EXIT_ERROR
+    helper = _account_helper()
+    if not os.path.isfile(helper):
+        print(f"error: the packaged account helper {helper} is not installed", file=sys.stderr)
+        return EXIT_ERROR
+    completed = subprocess.run(  # noqa: S603 - fixed packaged path, no caller input
+        [helper, "migrate-ownership"], check=False, timeout=300
+    )
+    return EXIT_OK if completed.returncode == 0 else EXIT_ERROR
 
 
 def command_agent(args):
@@ -457,6 +533,20 @@ def build_parser():
         help="activate only enables the account once the effective confinement is verified",
     )
     backup_access.set_defaults(handler=command_backup_access)
+
+    backup_account = subparsers.add_parser(
+        "backup-account",
+        parents=[shared],
+        help="report the backup ownership record, or adopt a legacy one explicitly",
+    )
+    backup_account.add_argument(
+        "action",
+        nargs="?",
+        default="status",
+        choices=("status", "migrate-ownership"),
+        help="migrate-ownership adopts a record that predates the home ownership marker",
+    )
+    backup_account.set_defaults(handler=command_backup_account)
 
     agent = subparsers.add_parser(
         "agent", parents=[shared], help="run the privileged agent (systemd entry point)"

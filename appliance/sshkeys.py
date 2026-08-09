@@ -154,9 +154,11 @@ class AuthorizedKeysStore:
             pass
 
     def _write(self, keys):
+        # The directory stays root-owned on purpose: an account that cannot write
+        # it cannot replace the key file or the package's ownership marker beside
+        # it. Only the key file itself is handed to the account.
         self.ssh_dir.mkdir(parents=True, exist_ok=True)
         os.chmod(self.ssh_dir, SSH_DIR_MODE)
-        self._own(self.ssh_dir)
 
         tmp = self.ssh_dir / f".authorized_keys.{os.getpid()}.tmp"
         with open(tmp, "w", encoding="utf-8") as handle:

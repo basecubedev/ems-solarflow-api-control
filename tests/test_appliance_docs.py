@@ -257,3 +257,83 @@ def test_documentation_does_not_promise_hardware_validation_it_lacks():
         text = read(name)
         assert "certified" not in text.lower(), name
         assert "guaranteed" not in text.lower(), name
+
+
+# --- the ownership and ACL contract the code actually implements ------------
+
+
+def test_the_legacy_ownership_states_are_documented():
+    model = read("security-model.md")
+    for state in (
+        "current",
+        "legacy_manual_migration_required",
+        "ownership_conflict",
+        "marker_missing",
+        "marker_mismatch",
+        "record_corrupt",
+        "no_ownership_record",
+    ):
+        assert state in model, state
+
+
+def test_the_explicit_migration_is_documented_as_the_only_adoption():
+    model = read("security-model.md")
+    assert "backup-account migrate-ownership" in model
+    assert "no force-adopt flag" in model
+    assert "never a sufficient one" in model
+
+
+def test_a_schema_less_record_is_documented_as_unadoptable():
+    model = read("security-model.md")
+    assert "schema-less" in model.lower()
+    assert "not adoptable" in model.lower()
+
+
+def test_the_operator_document_names_the_migration_command():
+    access = read("ssh-backup-access.md")
+    assert "ems-appliance backup-account status" in access
+    assert "ems-appliance backup-account migrate-ownership" in access
+    assert "Reinstalling does" in access
+
+
+def test_the_mandatory_and_optional_identity_halves_are_documented():
+    model = read("security-model.md")
+    assert "mandatory:" in model and "optional:" in model
+    assert "lsattr" in model
+    assert "strengthens" in model
+
+
+def test_the_acl_transaction_states_are_documented():
+    model = read("security-model.md")
+    for state in (
+        "staging",
+        "rollback_required",
+        "rollback_complete",
+        "recovery_required",
+        "committed",
+    ):
+        assert f"`{state}`" in model, state
+    assert "acl-transaction.state" in model
+    assert "acl-manifest.tsv.uncommitted" in model
+
+
+def test_the_open_handle_rollback_authority_is_documented():
+    model = read("security-model.md")
+    assert "descriptor is held for the whole" in model
+    assert "never the mutation authority" in model
+
+
+def test_the_arm64_evidence_contract_is_documented():
+    installation = read("installation.md")
+    for artifact in (
+        "result.txt",
+        "inputs.txt",
+        "run.txt",
+        "environment.txt",
+        "missing-requirements.txt",
+    ):
+        assert artifact in installation, artifact
+    assert "evidence_complete" in installation
+    assert "reason_code" in installation
+    assert "latest.txt" in installation
+    assert "never left empty" in installation

@@ -136,7 +136,7 @@ def critical_failures(checks):
 # --- the healthy case -------------------------------------------------------
 
 
-def test_a_configured_export_is_verified_against_the_mount_table(tmp_path):
+def test_a_configured_export_is_verified_against_the_mount_table(tmp_path, production_chroot_chain):
     paths = appliance_paths(tmp_path)
     seed_sources(paths)
     write_status(paths, configured_status(paths))
@@ -387,7 +387,7 @@ def test_an_unexpected_entry_inside_the_export_root_fails_verification(tmp_path)
     assert "host-note.txt" in named["export_setup"]["detail"], named
 
 
-def test_a_missing_ems_directory_stays_pending_and_exact(tmp_path):
+def test_a_missing_ems_directory_stays_pending_and_exact(tmp_path, production_chroot_chain):
     paths = appliance_paths(tmp_path)
     seed_sources(paths, names=("config", "backups"))
     payload = configured_status(paths)
@@ -405,7 +405,42 @@ def test_a_missing_ems_directory_stays_pending_and_exact(tmp_path):
 
 
 def write_account_record(paths, **fields):
-    payload = {"account": "ems-backup", "created_by_package": True, "home": "/var/lib/ems-backup"}
+    """The record an installation writes, with its home bound to that directory."""
+
+    from appliance import backup_ownership
+
+    home = paths.state_dir / "backup-home"
+    home.mkdir(parents=True, exist_ok=True)
+    entry = home.stat()
+    nonce = backup_ownership.new_marker_nonce()
+    uid = fields.get("uid", 1500)
+    marker = home / backup_ownership.HOME_MARKER_NAME
+    marker.write_text(
+        backup_ownership.render_home_marker(
+            account="ems-backup",
+            uid=uid,
+            primary_gid=fields.get("primary_gid", uid),
+            home=str(home),
+            installation_id="test-installation",
+            nonce=nonce,
+        ),
+        encoding="utf-8",
+    )
+    marker.chmod(0o400)
+    payload = {
+        "schema_version": backup_ownership.RECORD_SCHEMA_VERSION,
+        "account": "ems-backup",
+        "created_by_package": True,
+        "uid": 1500,
+        "primary_gid": 1500,
+        "home": str(home),
+        "home_device": str(entry.st_dev),
+        "home_inode": str(entry.st_ino),
+        "home_marker": str(marker),
+        "home_marker_nonce": nonce,
+        "home_created_by_package": True,
+        "installation_id": "test-installation",
+    }
     payload.update(fields)
     paths.package_state_dir.mkdir(parents=True, exist_ok=True)
     (paths.package_state_dir / "backup-account.json").write_text(
@@ -424,6 +459,8 @@ def account_check(paths, monkeypatch, *, exists=True, shell="/usr/sbin/nologin",
     class Entry:
         pw_dir = home
         pw_shell = shell
+        pw_uid = 1500
+        pw_gid = 1500
 
     def getpwnam(name):
         if not exists:
@@ -496,3 +533,28 @@ def test_a_failed_export_service_fails_the_installation(tmp_path):
     named = verify(paths, units=units)
 
     assert named["export_service"]["status"] == STATUS_FAILED, named
+
+
+def test_a_replaced_account_is_not_reported_as_package_owned(tmp_path, monkeypatch):
+    """Same name, different uid: removal must not believe it owns this account."""
+
+    paths = appliance_paths(tmp_path)
+    write_account_record(paths, uid=4242)
+
+    entry = account_check(paths, monkeypatch)
+
+    assert entry["status"] == STATUS_FAILED, entry
+    assert "uid" in entry["detail"], entry
+
+
+def test_a_legacy_ownership_record_is_not_accepted_as_proof(tmp_path, monkeypatch):
+    paths = appliance_paths(tmp_path)
+    paths.package_state_dir.mkdir(parents=True, exist_ok=True)
+    (paths.package_state_dir / "backup-account.json").write_text(
+        json.dumps({"account": "ems-backup", "created_by_package": True}), encoding="utf-8"
+    )
+
+    entry = account_check(paths, monkeypatch)
+
+    assert entry["status"] == STATUS_FAILED, entry
+    assert "identity binding" in entry["detail"], entry

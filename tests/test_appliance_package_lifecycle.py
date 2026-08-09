@@ -296,11 +296,177 @@ def test_an_offline_reinstall_stays_idempotent(offline, package):
 # --- the package-owned backup account ---------------------------------------
 
 
+RECORD_FILE = "/var/lib/ems-appliance-manager/agent/package-state/backup-account.json"
+BACKUP_HOME = "/var/lib/ems-backup"
+HOME_MARKER = f"{BACKUP_HOME}/.ems-appliance-backup-home"
+
+
+def record_field(host, name):
+    return host.shell(
+        f"python3 -c \"import json;print(json.load(open('{RECORD_FILE}')).get('{name}',''))\"",
+        timeout=120,
+    ).stdout.strip()
+
+
 def test_the_install_records_that_it_created_the_backup_account(host):
-    record = host.read_file("/var/lib/ems-appliance-manager/agent/package-state/backup-account.json")
+    record = host.read_file(RECORD_FILE)
 
     assert '"created_by_package": true' in record, record
     assert '"account": "ems-backup"' in record, record
+
+
+def test_the_install_leaves_an_ownership_marker_the_account_cannot_replace(host):
+    """Device and inode are reusable; a root-owned marker in a root-owned home is not."""
+
+    marker = host.shell(f"stat -c '%U:%G %a' {HOME_MARKER}", timeout=120).stdout.strip()
+    home = host.shell(f"stat -c '%U:%G %a' {BACKUP_HOME}", timeout=120).stdout.strip()
+
+    assert marker.startswith("root:root"), marker
+    assert marker.endswith("400"), marker
+    assert home.startswith("root:root"), home
+    assert record_field(host, "home_marker") == HOME_MARKER
+    assert len(record_field(host, "home_marker_nonce")) >= 32
+
+
+def test_the_backup_account_cannot_remove_its_own_ownership_marker(host):
+    result = host.shell(
+        f"runuser -u ems-backup -- rm -f {HOME_MARKER} 2>&1 || true", timeout=120
+    )
+
+    assert host.shell(f"test -f {HOME_MARKER}").returncode == 0, result.stdout
+
+
+def test_a_reinstall_keeps_the_ownership_marker_it_already_bound(host):
+    before = record_field(host, "home_marker_nonce")
+
+    reconfigure(host)
+
+    assert record_field(host, "home_marker_nonce") == before
+    assert host.shell(f"test -f {HOME_MARKER}").returncode == 0
+
+
+def downgrade_record_to_schema_two(host):
+    host.shell(
+        "python3 - <<'PY'\n"
+        "import json\n"
+        f"path = '{RECORD_FILE}'\n"
+        "record = json.load(open(path))\n"
+        "record['schema_version'] = 2\n"
+        "record.pop('home_marker', None)\n"
+        "record.pop('home_marker_nonce', None)\n"
+        "json.dump(record, open(path, 'w'))\n"
+        "PY\n"
+        f"rm -f {HOME_MARKER}",
+        timeout=180,
+    )
+
+
+def test_a_legacy_record_is_not_migrated_by_a_reinstall(host):
+    """A schema-2 installation is reported, never upgraded behind the operator."""
+
+    downgrade_record_to_schema_two(host)
+
+    result = reconfigure(host)
+
+    assert result.returncode != 0, result.stdout
+    assert host.shell(f"test -e {HOME_MARKER}").returncode != 0, "an install adopted the home"
+    assert record_field(host, "schema_version") == "2"
+    assert "migrate-ownership" in result.stdout, result.stdout
+
+
+def test_the_explicit_migration_upgrades_a_legacy_record_in_a_real_guest(host):
+    """The one command that may adopt it, on a real Debian install."""
+
+    downgrade_record_to_schema_two(host)
+
+    result = host.shell("ems-appliance backup-account migrate-ownership", timeout=180)
+
+    assert result.returncode == 0, result.stdout
+    assert record_field(host, "schema_version") == "3"
+    assert record_field(host, "home_marker_nonce"), result.stdout
+    assert host.shell(f"test -f {HOME_MARKER}").returncode == 0
+    assert (
+        host.shell("ems-appliance backup-account status --json", timeout=120).stdout.find(
+            '"state": "current"'
+        )
+        >= 0
+    )
+
+
+def test_a_legacy_record_whose_home_was_replaced_is_not_adopted(host):
+    """An uncertain legacy home stays unowned; nothing in it is touched."""
+
+    host.shell(
+        "python3 - <<'PY'\n"
+        "import json\n"
+        f"path = '{RECORD_FILE}'\n"
+        "record = json.load(open(path))\n"
+        "record['schema_version'] = 2\n"
+        "record.pop('home_marker', None)\n"
+        "record.pop('home_marker_nonce', None)\n"
+        "json.dump(record, open(path, 'w'))\n"
+        "PY\n"
+        f"rm -f {HOME_MARKER} && mv {BACKUP_HOME} {BACKUP_HOME}-moved && "
+        f"mkdir -p {BACKUP_HOME}/.ssh && "
+        f"echo 'ssh-ed25519 AAAAoperator operator@laptop' > {BACKUP_HOME}/.ssh/authorized_keys",
+        timeout=180,
+    )
+    try:
+        result = reconfigure(host)
+
+        assert result.returncode != 0, result.stdout
+        assert host.shell(f"test -e {HOME_MARKER}").returncode != 0, "an unproven home was adopted"
+        assert (
+            host.read_file(f"{BACKUP_HOME}/.ssh/authorized_keys").strip()
+            == "ssh-ed25519 AAAAoperator operator@laptop"
+        )
+
+        # Not even on request: the explicit adoption proves the home separately.
+        requested = host.shell("ems-appliance backup-account migrate-ownership", timeout=180)
+
+        assert requested.returncode != 0, requested.stdout
+        assert host.shell(f"test -e {HOME_MARKER}").returncode != 0, "an unproven home was adopted"
+        assert (
+            host.read_file(f"{BACKUP_HOME}/.ssh/authorized_keys").strip()
+            == "ssh-ed25519 AAAAoperator operator@laptop"
+        )
+    finally:
+        host.shell(
+            f"rm -rf {BACKUP_HOME} && mv {BACKUP_HOME}-moved {BACKUP_HOME}", timeout=120
+        )
+        reconfigure(host)
+
+
+def test_a_replacement_home_is_never_reported_as_package_owned(host):
+    """The exact case an inode the filesystem handed back would hide."""
+
+    host.shell(
+        f"mv {BACKUP_HOME} {BACKUP_HOME}-moved && mkdir -p {BACKUP_HOME}/.ssh && "
+        f"python3 - <<'PY'\n"
+        "import json, os\n"
+        f"path = '{RECORD_FILE}'\n"
+        "record = json.load(open(path))\n"
+        f"entry = os.stat('{BACKUP_HOME}')\n"
+        "record['home_device'] = str(entry.st_dev)\n"
+        "record['home_inode'] = str(entry.st_ino)\n"
+        "json.dump(record, open(path, 'w'))\n"
+        "PY",
+        timeout=180,
+    )
+    try:
+        result = host.shell("/usr/bin/ems-appliance verify-install --json", timeout=300)
+        report = json.loads(result.stdout)
+
+        account = next(
+            item for item in report["checks"] if item["check"] == "backup_account"
+        )
+        assert account["status"] != "ok", account
+        assert "marker" in account["detail"], account
+    finally:
+        host.shell(
+            f"rm -rf {BACKUP_HOME} && mv {BACKUP_HOME}-moved {BACKUP_HOME}", timeout=120
+        )
+        reconfigure(host)
 
 
 def test_a_pre_existing_backup_account_fails_the_installation(package):

@@ -368,6 +368,7 @@ class SystemdContainer:
             f"chmod 0600 {home}/.ssh/authorized_keys",
             timeout=300,
         )
+        self.attribute_backup_key(home)
         self.shell(
             "mkdir -p /run/sshd; ssh-keygen -A >/dev/null 2>&1; "
             "systemctl restart ssh.service 2>/dev/null || systemctl restart sshd.service "
@@ -379,6 +380,26 @@ class SystemdContainer:
                 return True
             self.run(["sleep", "1"], timeout=30)
         raise SystemdUnavailable(f"sshd did not start:\n{self.journal('ssh.service')}")
+
+    def attribute_backup_key(self, home):
+        """Record the seeded key the way the appliance records its own.
+
+        A real installation adds the backup key through the appliance, which
+        hashes the key body into ``managed-keys.list``. A key copied straight
+        into ``authorized_keys`` is one the appliance cannot attribute, so
+        ``backup-access activate`` correctly refuses to enable the account —
+        the guest has to seed the same attribution, through the same function.
+        """
+
+        return self.shell(
+            "cd /usr/lib/ems-appliance-manager && python3 -c \""
+            "import sys; sys.path.insert(0, '.');"
+            "from appliance.paths import resolve_paths;"
+            "from appliance import backup_ownership;"
+            f"blob = open('{home}/.ssh/authorized_keys').read().split()[1];"
+            "backup_ownership.record_managed_keys(resolve_paths(), [blob])\"",
+            timeout=180,
+        )
 
     def sftp(self, commands, *, user=BACKUP_USER, key_path=BACKUP_KEY, timeout=180):
         """Run one SFTP batch as ``user`` over a real SSH connection."""
@@ -414,6 +435,20 @@ class SystemdContainer:
 
     def setup_export_root(self, timeout=300):
         return self.shell("/usr/lib/ems-appliance-manager/setup-export-root.sh 2>&1", timeout=timeout)
+
+    def publish_exports(self, timeout=300):
+        """Rebuild the export root the way the host does it.
+
+        The unit is the production path: it runs the setup script and then
+        re-validates backup access, so authentication follows the boundary the
+        run produced. Calling the script directly does neither.
+        """
+
+        return self.shell(
+            "systemctl start ems-appliance-export.service 2>&1; "
+            "systemctl is-active ems-appliance-export.service",
+            timeout=timeout,
+        )
 
     # --- fixtures inside the guest ----------------------------------------
 
