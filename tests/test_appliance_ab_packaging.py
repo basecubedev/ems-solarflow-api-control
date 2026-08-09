@@ -383,3 +383,21 @@ def test_every_shared_path_the_contract_declares_is_documented():
 
     for shared in ab_persistence.SHARED_PATHS:
         assert shared.target in document, shared.name
+
+
+def test_the_package_enables_and_starts_the_host_identity_unit():
+    """Shipping the unit is not enough; an unenabled one never runs.
+
+    The image layer enables it at build time, but a package installed onto an
+    existing A/B host has to enable it too — otherwise sshd is pointed at host
+    keys nothing ever creates.
+    """
+
+    postinst = read(ROOT / "packaging" / "appliance" / "debian" / "postinst")
+
+    assert "ems-appliance-host-identity.service" in postinst.split("AB_UNITS=")[1].split('"')[1]
+    assert "systemctl start ems-appliance-host-identity.service" in postinst
+    # Before persistence verification, which is what the unit ordering says too.
+    assert postinst.index("start ems-appliance-host-identity.service") < postinst.index(
+        "start ems-appliance-persistence.service"
+    )

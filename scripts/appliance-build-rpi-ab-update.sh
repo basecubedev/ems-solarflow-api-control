@@ -3,7 +3,8 @@
 # Wrap rpi-image-gen's A/B update artifact in this project's release metadata.
 #
 #   scripts/appliance-build-rpi-ab-update.sh --profile rpi4|rpi5 [--output DIR]
-#                          [--update FILE] [--build-id ID] [--sign-key KEYID]
+#          [--update FILE] [--build-authority FILE] [--build-id ID]
+#          [--sign-key KEYID]
 #
 # The hardware the manifest declares comes from the build profile, so an
 # artefact can only claim the board its device layer was built for.
@@ -14,6 +15,14 @@
 # generator, decided what an update is. What is added is the signed manifest
 # binding that exact archive to a layout, a hardware set and a minimum
 # Appliance Manager version.
+#
+# Provenance is not assumed. A production release names the rpi-image-gen
+# revision that built it, so it requires the build authority a completed builder
+# run wrote: the update's SHA-256, the profile, the generator revision and the
+# source tree hash all have to match before anything is signed. An artefact
+# supplied with --update and no build authority remains supported as a
+# development artefact — it is described, marked provenance_verified=false, and
+# refused for signing.
 #
 # The manifest never contains private signing material. This script signs only
 # when --sign-key names a key that is already in the caller's keyring; it never
@@ -27,12 +36,13 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 OUTPUT="$ROOT/dist"
 PROFILE=rpi5
 UPDATE=""
+BUILD_AUTHORITY=""
 BUILD_ID=""
 SIGN_KEY=${EMS_APPLIANCE_OS_SIGN_KEY:-}
 REQUIRED_TOOLS="python3 tar zstd sha256sum"
 
 usage() {
-    sed -n '3,25p' "$0"
+    sed -n '3,33p' "$0"
 }
 
 not_run() {
@@ -55,6 +65,8 @@ while [ $# -gt 0 ]; do
         --output=*) OUTPUT=${1#*=}; shift ;;
         --update) UPDATE=${2:?--update needs a file}; shift 2 ;;
         --update=*) UPDATE=${1#*=}; shift ;;
+        --build-authority) BUILD_AUTHORITY=${2:?--build-authority needs a file}; shift 2 ;;
+        --build-authority=*) BUILD_AUTHORITY=${1#*=}; shift ;;
         --build-id) BUILD_ID=${2:?--build-id needs a value}; shift 2 ;;
         --build-id=*) BUILD_ID=${1#*=}; shift ;;
         --sign-key) SIGN_KEY=${2:?--sign-key needs a key id}; shift 2 ;;
@@ -86,11 +98,87 @@ fi
     || not_run "no rpi-image-gen update artifact; build an image first or pass --update" \
                update_artifact_unavailable
 
+if [ -z "$BUILD_AUTHORITY" ]; then
+    for candidate in "$(dirname "$UPDATE")/build-authority.json" \
+                     "$OUTPUT/build-authority.json"; do
+        [ -f "$candidate" ] && BUILD_AUTHORITY=$candidate && break
+    done
+fi
+
+# Verified against the artefact before anything is described, so an update
+# edited after its build cannot be signed with that build's provenance.
+if [ -n "$BUILD_AUTHORITY" ]; then
+    [ -f "$BUILD_AUTHORITY" ] || fail "$BUILD_AUTHORITY is not a file" build_authority_unreadable
+    set +e
+    PROVENANCE=$(PYTHONPATH="$ROOT" python3 - "$BUILD_AUTHORITY" "$UPDATE" "$PROFILE" \
+        "$BUILD_ID" <<'PY'
+import sys
+
+from appliance import build_authority, rpi_image_gen
+
+path, update, profile, build_id = sys.argv[1:5]
+lock = rpi_image_gen.read_lock()
+try:
+    authority = build_authority.read(path)
+except build_authority.BuildAuthorityError as exc:
+    sys.exit(f"{exc.code}: {exc.message}")
+problems = build_authority.verify_update(
+    authority, update, profile=profile, revision=lock.commit, build_id=build_id
+)
+if problems:
+    sys.exit("; ".join(problems))
+print(f"REVISION={authority.builder.revision}")
+print(f"SOURCE_FORM={authority.builder.source_form}")
+print(f"SOURCE_TREE={authority.builder.source_tree_sha256}")
+print(f"PROJECT_REVISION={authority.project.revision}")
+print(f"PROJECT_TREE={authority.project.tree_sha256}")
+print(f"AUTHORITY_SHA256={authority.canonical_hash}")
+PY
+    )
+    verified=$?
+    set -e
+    [ $verified -eq 0 ] || fail "the build authority does not describe this artifact: $PROVENANCE" \
+                                build_authority_rejected
+    REVISION=$(echo "$PROVENANCE" | sed -n 's/^REVISION=//p')
+    SOURCE_FORM=$(echo "$PROVENANCE" | sed -n 's/^SOURCE_FORM=//p')
+    SOURCE_TREE=$(echo "$PROVENANCE" | sed -n 's/^SOURCE_TREE=//p')
+    # From the verified authority, never from this host's git: asking git again
+    # would answer for whatever tree happens to be checked out now.
+    PROJECT_REVISION=$(echo "$PROVENANCE" | sed -n 's/^PROJECT_REVISION=//p')
+    PROJECT_TREE=$(echo "$PROVENANCE" | sed -n 's/^PROJECT_TREE=//p')
+    AUTHORITY_SHA256=$(echo "$PROVENANCE" | sed -n 's/^AUTHORITY_SHA256=//p')
+    PROVENANCE_VERIFIED=true
+else
+    # Development only. The manifest must not claim a builder nobody ran.
+    REVISION=unverified
+    SOURCE_FORM=unverified
+    SOURCE_TREE=""
+    PROJECT_REVISION=unverified
+    PROJECT_TREE=""
+    AUTHORITY_SHA256=""
+    PROVENANCE_VERIFIED=false
+    echo "appliance-build-rpi-ab-update: no build authority; this is a development" \
+         "artifact and cannot be signed. Build with" \
+         "scripts/appliance-build-rpi-ab-image.sh to produce one." >&2
+fi
+
+if [ "$PROVENANCE_VERIFIED" != true ] && [ -n "$SIGN_KEY" ]; then
+    fail "a development artifact never receives production release provenance" \
+         provenance_unverified
+fi
+
 mkdir -p "$OUTPUT" || fail "cannot create $OUTPUT" output_unusable
 ARCHIVE="$OUTPUT/$NAME.tar.zst"
 [ "$UPDATE" = "$ARCHIVE" ] || cp "$UPDATE" "$ARCHIVE"
 
 echo "== describing the upstream artifact =="
+EMS_PROVENANCE_VERIFIED=$PROVENANCE_VERIFIED \
+EMS_RPI_IMAGE_GEN_REVISION=$REVISION \
+EMS_BUILD_SOURCE_FORM=$SOURCE_FORM \
+EMS_BUILD_SOURCE_TREE=$SOURCE_TREE \
+EMS_PROJECT_REVISION=$PROJECT_REVISION \
+EMS_PROJECT_TREE=$PROJECT_TREE \
+EMS_BUILD_AUTHORITY_SHA256=$AUTHORITY_SHA256 \
 PYTHONPATH="$ROOT" python3 - "$ARCHIVE" "$OUTPUT/$NAME.manifest.json" \
     "$VERSION" "$BUILD_ID" "$NAME" "$PROFILE_CONFIG" <<'PY' || fail "the artifact could not be described" describe_failed
 import hashlib
@@ -167,13 +255,12 @@ with open(archive, "rb") as handle:
     for block in iter(lambda: handle.read(1024 * 1024), b""):
         archive_digest.update(block)
 
-revision = os.environ.get("EMS_RPI_IMAGE_GEN_REVISION") or lock.commit
+verified = os.environ.get("EMS_PROVENANCE_VERIFIED") == "true"
+revision = os.environ.get("EMS_RPI_IMAGE_GEN_REVISION") or "unverified"
 created = subprocess.run(
     ["date", "-u", "+%Y-%m-%dT%H:%M:%SZ"], capture_output=True, text=True
 ).stdout.strip() or "unknown"
-project = subprocess.run(
-    ["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True
-).stdout.strip() or "unknown"
+project = os.environ.get("EMS_PROJECT_REVISION") or "unverified"
 
 payload = {
     "format_version": os_releases.MANIFEST_FORMAT_VERSION,
@@ -187,6 +274,15 @@ payload = {
     "image_layer": lock.image_layer,
     "image_layer_version": lock.image_layer_version,
     "rpi_image_gen_revision": revision,
+    # Where the revision above comes from. An artefact nobody built with the
+    # pinned generator says so here rather than inheriting the lock's answer.
+    "provenance": {
+        "verified": verified,
+        "source_form": os.environ.get("EMS_BUILD_SOURCE_FORM") or "unverified",
+        "source_tree_sha256": os.environ.get("EMS_BUILD_SOURCE_TREE") or "",
+        "project_tree_sha256": os.environ.get("EMS_PROJECT_TREE") or "",
+        "build_authority_sha256": os.environ.get("EMS_BUILD_AUTHORITY_SHA256") or "",
+    },
     "project_revision": project,
     "appliance_manager_version": version.APPLIANCE_VERSION,
     "minimum_appliance_manager_version": version.APPLIANCE_VERSION,
@@ -218,6 +314,8 @@ PY
 ( cd "$OUTPUT" && sha256sum "$NAME.tar.zst" "$NAME.manifest.json" > "$NAME.sha256" )
 
 if [ -n "$SIGN_KEY" ]; then
+    [ "$PROVENANCE_VERIFIED" = true ] \
+        || fail "a development artifact is never signed" provenance_unverified
     command -v gpg >/dev/null 2>&1 \
         || not_run "gpg is not installed, so the manifest cannot be signed" \
                    required_tool_missing
@@ -235,5 +333,10 @@ echo "artifact: $ARCHIVE"
 echo "manifest: $OUTPUT/$NAME.manifest.json"
 echo "checksum: $OUTPUT/$NAME.sha256"
 echo
+if [ "$PROVENANCE_VERIFIED" = true ]; then
+    echo "provenance: verified against $BUILD_AUTHORITY"
+else
+    echo "provenance: development (provenance_verified=false, signing_forbidden=true)"
+fi
 echo "Nothing was published, tagged or uploaded."
 echo "RESULT: PASS (described $NAME.tar.zst)"

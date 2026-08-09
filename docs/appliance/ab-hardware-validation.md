@@ -86,6 +86,14 @@ Pulling the plug on a `poweroff` is not the same test.
 | 0.5 | `scripts/appliance-build-rpi-ab-update.sh --profile rpi5 --sign-key <key>` then `appliance-inspect-rpi-ab-update.sh` | PASS, members `boot` and `system`, signature verifies |
 | 0.6 | The manifest each build produced | Both members declare `encoding: android_sparse` with distinct `encoded_sha256` and `expanded_sha256` |
 | 0.7 | `simg2img` the real `system` member and compare | Its SHA-256 equals the manifest's `expanded_sha256` and its size equals `expanded_size` |
+| 0.8 | The `build-authority.json` the build wrote | Names the source form, the generator revision, the source tree hash and the SHA-256 of both artefacts, `completed: true` |
+| 0.9 | `appliance-build-rpi-ab-update.sh --sign-key <key>` with no `--build-authority` | FAIL `provenance_unverified`; a development artefact is never signed |
+| 0.10 | Append one byte to `update.tar.zst`, then sign with its build authority | FAIL `build_authority_mismatch` |
+| 0.11 | Edit any file under the generator's `config/`, `layer/` or `image/` and rebuild | FAIL `rpi_image_gen_source_modified` before `./rpi-image-gen build` runs |
+| 0.12 | `scripts/appliance-create-source-bundle.sh` for every source or review archive | PASS: the bundle self-verifies before it is handed over, and an archive that does not round-trip is deleted rather than delivered |
+| 0.12b | `scripts/appliance-check-source-bundle.sh <bundle>` on the delivered source archive | PASS: 0 missing, 0 wrong modes, 0 wrong symlink targets, 0 undeclared, 0 unsafe, 0 duplicate, 6 symlinks preserved |
+| 0.13 | `scripts/appliance-release-gates.sh --rpi-image-gen <tree>` | Strict by default: `RESULT: PASS` and exit 0 only when every required gate PASSed; a required gate that did not run is `RESULT: NOT RUN` and exit 3; a failure is `RESULT: FAIL` and exit 1 |
+| 0.13b | The same with `--allow-not-run` on a host without the builder prerequisites | `RESULT: INCOMPLETE` and exit 0; the word PASS never appears |
 
 ### Group 1 — first boot and identity
 
@@ -143,6 +151,14 @@ Pulling the plug on a `poweroff` is not the same test.
 | 4.6 | Cut power during the commit write of `autoboot.txt` | Either the old or the new selector, both parse; no `manual_action_required` from a torn file |
 | 4.7 | Trial boot where `/persistent` is missing | Health fails, no commit |
 | 4.8 | Manual rollback to the previous known-good slot | Trial boot of the previous slot, health, commit |
+| 4.9 | Edit `/opt/ems-solarflow/docker-compose.yml` after the plan is confirmed, then trial | `deployment_authority_drift`; no `docker load`, `pull` or `compose up` runs; no commit; the browser offers a new plan and no bypass |
+| 4.10 | Edit `/opt/ems-solarflow/.env` after the plan is confirmed, then trial | As 4.9 |
+| 4.11 | Stop EMS deliberately, then update | EMS comes back stopped, its image authority is still proven, and the slot commits |
+| 4.12 | Run Admin, EMS and InfluxDB, then update | All three are reconstructed and all three are health gates |
+| 4.13 | Delete one seed archive and disconnect the WAN, then trial | The affected service is `unavailable`; the slot does not commit if it is required |
+| 4.14 | Seed an amd64 image for one service, then trial | Refused on platform; no commit |
+| 4.15 | Replace one `ssh_host_*_key.pub` on the persistent partition, then reboot | `host_identity_keypair_mismatch`; `ssh.service` does not start |
+| 4.16 | Fill the persistent partition so an `fsync` fails during first-boot key creation | `host_identity_not_durable`; no success is reported and SSH stays blocked |
 
 ### Group 5 — storage classes
 
@@ -189,32 +205,49 @@ because that file is the whole safety argument.
 
 ## Pre-hardware validation record
 
-What was actually run before the hardware gate, on 2026-08-07, against the
-image-rota integration. A result that is not listed here was not produced.
+What was actually run before the hardware gate, on 2026-08-08, after the
+deployment-authority and build-provenance work. A result that is not listed here
+was not produced.
 
 | Gate | Result |
 |---|---|
-| A/B focused suite (`tests/test_appliance_ab_*`, `test_appliance_rpi_image_gen`) | PASS — 521 passed, 1 skipped |
-| Full appliance suite (`tests/test_appliance_*`) | PASS — 1633 passed, 173 skipped |
-| Full non-Docker regression (`-m "not docker and not browser"`) | PASS — 10057 passed, 6 skipped, 212 deselected |
+| A/B focused suite (`test_appliance_ab_*`, `build_provenance`, `source_bundle`, `host_identity*`, `rpi_image_gen*`) | PASS — 805 passed, 6 skipped |
+| Full appliance suite (`-k appliance -m "not docker and not browser and not slow"`) | PASS — 1995 passed, 7 skipped |
+| Full non-Docker regression (`-m "not docker and not browser"`) | PASS — 10415 passed, 12 skipped, 212 deselected, 32m30s |
+| Docker tier (`-m docker`) | PASS — 40 passed, 172 skipped |
+| Host-identity and permission suites as a normal user | PASS — 43 passed |
+| The same suites under `unshare -r -m` (root namespace) | PASS — 43 passed |
 | Appliance UI, Chromium | PASS — 49 passed |
 | Appliance UI, Firefox | PASS — 49 passed |
-| Package build and inspection, amd64 and arm64 | PASS — both carry every A/B unit and the growth helper |
-| `ruff`, `compileall`, `node --check`, config template, `git diff --check` | PASS |
-| ShellCheck (`-S warning`) over the appliance scripts | PASS — informational findings only, all pre-existing |
-| rpi-image-gen compatibility probe against the pinned v2.7.0 checkout | PASS — every contract check |
+| Package build and inspection, amd64 and arm64 | PASS — both carry every A/B unit, the growth helper and the new authority modules |
+| `ruff`, `compileall`, `node --check` (both bundles), `git diff --check` | PASS |
+| ShellCheck over every appliance shell script | PASS — informational findings only, all pre-existing |
+| Test classification (`test_test_classification.py`) | PASS — 34 passed |
+| Pinned upstream fetch (`appliance-fetch-rpi-image-gen.sh`, tarball form) | PASS — sha256:f10e70b5… (v2.7.0), tree sha256:9ae7e080… |
+| Source authority against that real tree | PASS — every contract check; source_identity PASS |
+| Tamper detection against that real tree (one line appended to `config/trixie-minbase-ab.yaml`) | PASS — FAIL `rpi_image_gen_source_modified` |
+| Tree authority is stable across running upstream's own tooling | PASS — hash unchanged after the upstream tier imported `site/config_loader` |
+| `appliance-verify-slot-mounts.sh` against that real tree | PASS — 6 declared, 6 generated, 6 activated |
+| Source-bundle parity of the repository (`git archive` → checker) | PASS — 1088 tracked objects, 0 missing, 0 changed |
+| `appliance-release-gates.sh` against that real tree | INCOMPLETE — 2 gates PASS, 7 truthful NOT RUN; strict mode exits 3 on this host, which is the point |
 | Real update artifact (`tar -I zstd` with members `boot` and `system`) through the runtime parser, extractor and both release scripts | PASS |
 | **Real `rpi-image-gen` image build** | **NOT RUN** — `rpi_image_gen_dependencies_missing` |
 | **Real built-image inspection** | **NOT RUN** — no image to inspect |
 | **Upstream-generated `update.tar.zst`** | **NOT RUN** — produced only by a real build |
+| **Signed production release manifest** | **NOT RUN** — needs a real build authority and a signing key |
+| **systemd-in-container tiers (SFTP confinement, packaged services)** | **NOT RUN** — "systemd did not finish booting in the container" |
 | **QEMU / arm64 guest boot** | **NOT RUN** — no arm64 binfmt handler |
 | **Physical Raspberry Pi** | **NOT RUN** — no hardware |
 
-The build host was missing six of upstream's dependencies (`mmdebstrap`,
-`podman`, `uidmap`, `pv`, `btrfs-progs`, `flex`) plus `dctrl-tools`,
-`python3-debian` and `python3-jsonschema`, and had no registered arm64 binfmt
-handler, so an arm64 binary could not execute at all. Installing either needs
-root, which was not available non-interactively.
+The build host was missing twelve of upstream's dependencies (`mmdebstrap`,
+`podman`, `uidmap`, `pv`, `btrfs-progs`, `flex`, `dosfstools`, `e2fsprogs`,
+`fdisk`, `cryptsetup`, `dctrl-tools`, `python3-jsonschema`) and had no registered
+arm64 binfmt handler, so an aarch64 binary could not execute at all. Installing
+either needs root, which was not available non-interactively.
+
+The A/B page's deployment-drift rendering is covered by the frontend contract
+tier rather than the browser tier: the Playwright fixture host is deliberately a
+single-slot appliance, so the browser never renders the A/B view.
 
 The simulated tiers are not a substitute for any of the NOT RUN rows.
 
@@ -222,5 +255,9 @@ The simulated tiers are not a substitute for any of the NOT RUN rows.
 
 | Date | Board | Storage | Image build | Group | Result | Notes |
 |---|---|---|---|---|---|---|
-| — | — | — | — | 0 | NOT RUN | The build host had 6 of upstream's dependencies missing and no arm64 binfmt handler; installing either needs root. |
+| — | — | — | — | 0 | NOT RUN | The build host had 12 of upstream's dependencies missing and no arm64 binfmt handler; installing either needs root. Every source, contract and provenance gate in group 0 that does not need a build passed against the real pinned v2.7.0 tree. |
 | — | — | — | — | 1–5 | NOT RUN | No Raspberry Pi hardware was available when this gate was written. |
+
+The code-level scope is closed: every gate that does not require a builder host
+or a physical board has been run and passed. What remains is a real image build
+on a suitable builder, and then this table.

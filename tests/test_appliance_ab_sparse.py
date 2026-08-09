@@ -134,11 +134,18 @@ def test_a_filesystem_image_is_not_mistaken_for_a_container(tmp_path):
 
 
 def test_every_chunk_kind_expands_to_the_bytes_it_stands_for(tmp_path):
-    chunks = [
+    import binascii
+
+    head = [
         android_sparse.raw(b"A" * BLOCK_SIZE),
         android_sparse.fill(0x0000FFFF, 2),
         android_sparse.dont_care(3),
-        android_sparse.crc32(0),
+    ]
+    # A crc32 record asserts the running CRC of everything before it, so it
+    # carries the real value rather than a placeholder the parser ignores.
+    running = binascii.crc32(android_sparse.expanded(head)) & 0xFFFFFFFF
+    chunks = head + [
+        android_sparse.crc32(running),
         android_sparse.raw(b"Z" * BLOCK_SIZE),
     ]
     source = tmp_path / "mixed.sparse"

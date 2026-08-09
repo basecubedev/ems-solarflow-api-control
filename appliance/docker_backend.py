@@ -113,15 +113,33 @@ class DockerBackend:
 
     # --- containers ------------------------------------------------------
 
-    def inspect_container(self, name):
+    def inspect_container(self, name, *, strict=False):
+        """One container's state. ``strict`` separates absent from unknown.
+
+        "No such container" and "the daemon did not answer" are the same exit
+        status. Only the first is a state a plan may be made against, so a
+        caller that has to tell them apart asks for ``strict`` and gets an
+        error instead of a container that looks absent.
+        """
+
         result = self.runner.run(
             "docker", ["inspect", "--type", "container", "--format", "{{json .}}", name], timeout=30
         )
         if not result.ok:
+            if strict and not _container_absent(result):
+                raise DockerError(
+                    "container_state_unknown",
+                    f"the state of {name} could not be determined: "
+                    f"{(result.stderr or '').strip()[:200]}",
+                )
             return ContainerState(name=name)
         try:
             payload = json.loads(result.stdout.strip() or "{}")
         except ValueError:
+            if strict:
+                raise DockerError(
+                    "container_state_unknown", f"{name} did not inspect as JSON"
+                )
             return ContainerState(name=name)
         return _container_state(name, payload)
 
@@ -143,6 +161,20 @@ class DockerBackend:
                 "port_owner_unknown", f"cannot list the containers publishing port {port}"
             )
         return sorted({line.strip() for line in (result.stdout or "").splitlines() if line.strip()})
+
+    def exec_in_container(self, name, argv, *, timeout=60):
+        """Run one fixed command inside a container. Bounded, never a shell.
+
+        The argv is a constant in the caller. Nothing is interpolated, nothing
+        comes from a request, and the timeout is the caller's, so a service that
+        hangs fails its gate instead of holding the trial open.
+        """
+
+        return self.runner.run(
+            "docker",
+            ["exec", str(name), *[str(item) for item in argv]],
+            timeout=timeout,
+        )
 
     def container_logs(self, name, lines):
         result = self.runner.run(
@@ -270,20 +302,39 @@ def _container_state(name, payload):
     )
 
 
+def _container_absent(result):
+    return "no such" in ((result.stderr or "") + (result.stdout or "")).lower()
+
+
+def _repository_digest(reference, digests):
+    """The digest of the repository that was asked about, not just the first.
+
+    An image can carry repo digests for several repositories. Answering with
+    whichever came first would let a slot compare its Admin image against the
+    digest of something else that happens to share the layers.
+    """
+
+    repository = str(reference).partition("@")[0].rpartition(":")[0] or (
+        str(reference).partition("@")[0]
+    )
+    fallback = ""
+    for entry in digests:
+        name, _, candidate = str(entry).partition("@")
+        if not candidate:
+            continue
+        if name == repository:
+            return candidate
+        fallback = fallback or candidate
+    return fallback
+
+
 def _image_state(reference, payload):
     if not payload.get("Id"):
         return ImageState(reference=reference)
-    digests = payload.get("RepoDigests") or []
-    digest = ""
-    for entry in digests:
-        _, _, candidate = str(entry).partition("@")
-        if candidate:
-            digest = candidate
-            break
     return ImageState(
         reference=reference,
         exists=True,
-        digest=digest,
+        digest=_repository_digest(reference, payload.get("RepoDigests") or []),
         image_id=str(payload.get("Id") or ""),
         architecture=str(payload.get("Architecture") or ""),
         os=str(payload.get("Os") or ""),

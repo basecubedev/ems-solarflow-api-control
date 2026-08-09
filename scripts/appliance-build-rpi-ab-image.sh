@@ -101,9 +101,26 @@ esac
 VERSION=$(sed -n 's/^APPLIANCE_VERSION = "\(.*\)"$/\1/p' "$ROOT/appliance/version.py")
 [ -n "$VERSION" ] || fail "cannot read APPLIANCE_VERSION" version_unreadable
 [ -n "$BUILD_ID" ] || BUILD_ID=$(date -u +%Y%m%d%H%M%S 2>/dev/null || echo unknown)
-GENERATOR_REVISION=$(git -C "$GENERATOR" rev-parse HEAD 2>/dev/null || echo unknown)
-PROJECT_REVISION=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)
 NAME="ems-solarflow-appliance-${VERSION}-${PROFILE}-arm64-ab"
+
+# The project's own tree, to the same standard as the generator's. A revision
+# alone says nothing about the files this build is about to package.
+PROJECT=$(PYTHONPATH="$ROOT" python3 - "$ROOT" <<'PY'
+import sys
+
+from appliance import project_source
+
+try:
+    identity = project_source.assert_clean(sys.argv[1])
+except project_source.ProjectSourceError as exc:
+    sys.exit(f"{exc.code}: {exc.message}")
+print(f"REVISION={identity.revision}")
+print(f"TREE={identity.tree_sha256}")
+PY
+) || fail "the project source tree is not a revision this build may claim" \
+        project_source_unprovable
+PROJECT_REVISION=$(echo "$PROJECT" | sed -n 's/^REVISION=//p')
+PROJECT_TREE=$(echo "$PROJECT" | sed -n 's/^TREE=//p')
 DEVICE_LAYER=$(PYTHONPATH="$ROOT" python3 -c \
     "from appliance import rpi_image_gen as m; print(m.read_profile('$CONFIG').device_layer)") \
     || fail "$CONFIG does not resolve to a known hardware profile" hardware_profile_unknown
@@ -113,8 +130,11 @@ from appliance import rpi_image_gen as m
 print(json.dumps(list(m.read_profile('$CONFIG').compatible_board_classes)))")
 
 mkdir -p "$OUTPUT" || fail "cannot create $OUTPUT" output_unusable
-WORK="$OUTPUT/build"
-mkdir -p "$WORK" || fail "cannot create $WORK" output_unusable
+# One build, one fresh directory. A reused one is how yesterday's update.tar.zst
+# ends up beside today's metadata and gets signed as if this build produced it.
+WORK=$(PYTHONPATH="$ROOT" python3 -c \
+    "from appliance import build_authority; print(build_authority.prepare_output('$OUTPUT', build_id='$BUILD_ID'))") \
+    || fail "the build output directory could not be claimed for $BUILD_ID" output_unusable
 
 echo "== building the appliance package =="
 "$ROOT/packaging/appliance/build-deb.sh" --output "$OUTPUT" --arch arm64 >/dev/null \
@@ -125,6 +145,28 @@ for candidate in "$OUTPUT"/ems-appliance-manager_*_arm64.deb; do
 done
 [ -n "$PACKAGE" ] || fail "the package build produced no .deb" package_build_failed
 PACKAGE_SHA256=$(sha256sum "$PACKAGE" | cut -d' ' -f1)
+
+echo "== proving the source tree one last time =="
+# The compatibility probe above ran before the package build. This is the check
+# that matters: the tree ./rpi-image-gen build is about to read, proven at the
+# moment it is read, so an edit made in between cannot reach the artefact.
+SOURCE=$(PYTHONPATH="$ROOT" python3 - "$GENERATOR" <<'PY'
+import sys
+
+from appliance import rpi_image_gen
+
+try:
+    report = rpi_image_gen.assert_buildable(sys.argv[1])
+except rpi_image_gen.ImageGenError as exc:
+    sys.exit(f"{exc.code}: {exc.message}")
+print(f"FORM={report.source_identity}")
+print(f"REVISION={report.revision}")
+print(f"TREE={report.tree_digest or report.revision}")
+PY
+) || fail "$GENERATOR changed after it was checked" rpi_image_gen_source_modified
+SOURCE_FORM=$(echo "$SOURCE" | sed -n 's/^FORM=//p')
+GENERATOR_REVISION=$(echo "$SOURCE" | sed -n 's/^REVISION=//p')
+SOURCE_TREE=$(echo "$SOURCE" | sed -n 's/^TREE=//p')
 
 echo "== building the A/B image =="
 # -S makes packaging/appliance/image the source root, so the project's config
@@ -151,6 +193,79 @@ cp "$BUILT" "$OUTPUT/$NAME.img" || fail "the built image could not be collected"
 UPDATE=$(find "$WORK" -name 'update.tar.zst' -type f 2>/dev/null | head -n 1)
 [ -n "$UPDATE" ] && cp "$UPDATE" "$OUTPUT/$NAME.update.tar.zst"
 
+echo "== proving both source trees are still the ones that were read =="
+# A build takes long enough that either tree can be edited while it runs. The
+# pre-build proof closes ordinary TOCTOU; this closes the build window itself,
+# and completed authority is only issued for trees that did not move.
+PYTHONPATH="$ROOT" python3 - "$ROOT" "$PROJECT_REVISION" "$PROJECT_TREE" <<'PY' \
+    || fail "the project source tree changed while the build was running" \
+            build_source_changed_during_build
+import sys
+
+from appliance import project_source
+
+root, revision, tree = sys.argv[1:4]
+identity = project_source.ProjectSource(revision=revision, tree_sha256=tree)
+try:
+    project_source.assert_unchanged(root, identity)
+except project_source.ProjectSourceError as exc:
+    sys.exit(f"{exc.code}: {exc.message}")
+PY
+
+PYTHONPATH="$ROOT" python3 - "$GENERATOR" "$SOURCE_TREE" <<'PY' \
+    || fail "$GENERATOR changed while the build was running" \
+            build_source_changed_during_build
+import sys
+
+from appliance import rpi_image_gen
+
+root, tree = sys.argv[1:3]
+try:
+    report = rpi_image_gen.assert_buildable(root)
+except rpi_image_gen.ImageGenError as exc:
+    sys.exit(f"{exc.code}: {exc.message}")
+observed = report.tree_digest or report.revision
+if observed != tree:
+    sys.exit(f"build_source_changed_during_build: {root} hashes to {observed}, not {tree}")
+PY
+
+# What this completed run produced, hashed. Production release signing verifies
+# the artefact in front of it against exactly this, so an artefact nobody built
+# with the pinned generator cannot inherit its provenance.
+AUTHORITY=$(PYTHONPATH="$ROOT" python3 - "$WORK" "$SOURCE_FORM" "$GENERATOR_REVISION" \
+    "$SOURCE_TREE" "$PROFILE" "$PROJECT_REVISION" "$PROJECT_TREE" "$BUILD_ID" \
+    "$PACKAGE_SHA256" \
+    "$OUTPUT/$NAME.img" "$([ -n "$UPDATE" ] && echo "$OUTPUT/$NAME.update.tar.zst" || echo "")" \
+    <<'PY'
+import sys
+
+from appliance import build_authority
+
+(work, form, revision, tree, profile, project_revision, project_tree, build_id,
+ package, image, update) = sys.argv[1:12]
+authority = build_authority.BuildAuthority(
+    builder=build_authority.Builder(
+        source_form=form, revision=revision, source_tree_sha256=tree
+    ),
+    project=build_authority.Project(
+        revision=project_revision, tree_sha256=project_tree
+    ),
+    profile=profile,
+    build_id=build_id,
+    image=build_authority.Artefact(
+        path=image, sha256=build_authority.file_sha256(image)
+    ),
+    update=build_authority.Artefact(
+        path=update, sha256=build_authority.file_sha256(update) if update else ""
+    ),
+    package_sha256=package,
+    completed=True,
+)
+print(build_authority.write(work, authority))
+PY
+) || fail "the build authority could not be written" build_authority_unwritable
+cp "$AUTHORITY" "$OUTPUT/build-authority.json"
+
 cat > "$OUTPUT/$NAME.build.json" <<JSON
 {
   "format_version": 2,
@@ -162,7 +277,11 @@ cat > "$OUTPUT/$NAME.build.json" <<JSON
   "hardware_profile": "$PROFILE",
   "image_layer": "image-rota",
   "rpi_image_gen_revision": "$GENERATOR_REVISION",
+  "rpi_image_gen_source_form": "$SOURCE_FORM",
+  "rpi_image_gen_source_tree": "$SOURCE_TREE",
+  "build_authority": "build-authority.json",
   "project_revision": "$PROJECT_REVISION",
+  "project_tree_sha256": "$PROJECT_TREE",
   "appliance_package": "$(basename "$PACKAGE")",
   "appliance_package_sha256": "$PACKAGE_SHA256",
   "image_sha256": "$(cut -d' ' -f1 < "$OUTPUT/$NAME.img.sha256")",
@@ -174,6 +293,7 @@ echo
 echo "image:    $OUTPUT/$NAME.img"
 echo "checksum: $OUTPUT/$NAME.img.sha256"
 echo "metadata: $OUTPUT/$NAME.build.json"
+echo "authority: $OUTPUT/build-authority.json"
 [ -n "$UPDATE" ] && echo "update:   $OUTPUT/$NAME.update.tar.zst"
 echo
 echo "Nothing was published. Sign and publish through the release pipeline; see"

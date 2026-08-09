@@ -170,6 +170,7 @@ class ApplianceAbHost:
         self.write_board("raspberrypi,4-model-b")
         self.boot_slot(slot, tryboot=tryboot)
         self.seed_persistent_tree()
+        self.seed_host_identity()
         self.mount_defaults()
 
     # --- fixture files ---------------------------------------------------
@@ -246,6 +247,47 @@ class ApplianceAbHost:
             (self.root / directory).mkdir(parents=True, exist_ok=True)
         self._write(MACHINE_ID_SOURCE, MACHINE_ID + "\n")
         self._write("etc/machine-id", MACHINE_ID + "\n")
+        return self
+
+    def seed_host_identity(self):
+        """The persistent SSH identity an OS update is only planned against.
+
+        The private keys are fixture bytes, but the pairing is not faked: the
+        runner answers ``ssh-keygen -y`` from this table, so a test that breaks
+        the pairing fails the same verification a real appliance runs.
+        """
+
+        import base64
+        import os as _os
+
+        from appliance import host_identity
+
+        directory = self.root / str(host_identity.KEY_DIRECTORY).lstrip("/")
+        directory.mkdir(parents=True, exist_ok=True)
+        _os.chmod(directory, host_identity.DIRECTORY_MODE)
+        self.host_keys = {}
+        for key_type in host_identity.HOST_KEY_TYPES:
+            private = directory / host_identity.private_key_name(key_type)
+            public = directory / host_identity.public_key_name(key_type)
+            blob = base64.b64encode(f"{key_type}-fixture-host-key".encode("utf-8")).decode()
+            material = f"ssh-{key_type} {blob}"
+            private.write_text(
+                f"-----BEGIN OPENSSH PRIVATE KEY-----\n{blob}\n"
+                "-----END OPENSSH PRIVATE KEY-----\n",
+                encoding="utf-8",
+            )
+            _os.chmod(private, host_identity.PRIVATE_MODE)
+            public.write_text(f"{material} ems-appliance\n", encoding="utf-8")
+            _os.chmod(public, host_identity.PUBLIC_MODE)
+            self.host_keys[str(private)] = material
+        self._write(
+            host_identity.DROP_IN,
+            "".join(
+                f"HostKey {host_identity.KEY_DIRECTORY}/"
+                f"{host_identity.private_key_name(key_type)}\n"
+                for key_type in host_identity.HOST_KEY_TYPES
+            ),
+        )
         return self
 
     @property
@@ -380,12 +422,22 @@ class ApplianceAbHost:
 
     def runner(self, *, lsblk_ok=True, available=True):
         payload = json.dumps(self._lsblk)
+        host_keys = dict(getattr(self, "host_keys", {}))
 
         class _Runner(RecordingRunner):
             def available(self, tool):
                 if tool == "lsblk" and not available:
                     return False
                 return super().available(tool)
+
+            def run(self, tool, args=(), **kwargs):
+                args = tuple(args)
+                if tool == "ssh-keygen" and args[:1] == ("-y",) and len(args) >= 3:
+                    material = host_keys.get(args[2])
+                    if material is None:
+                        return CommandResult(tool, args, 1, "", "no such private key")
+                    return CommandResult(tool, args, 0, material + "\n", "")
+                return super().run(tool, args, **kwargs)
 
         replies = {
             "lsblk": CommandResult(

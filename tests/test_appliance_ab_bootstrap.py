@@ -55,10 +55,18 @@ class FakeDocker:
         return self.running
 
     def inspect_image(self, reference):
-        return SimpleNamespace(reference=reference, exists=reference in self.present, digest="")
+        return SimpleNamespace(
+            reference=reference,
+            exists=reference in self.present,
+            digest=str(reference).partition("@")[2],
+            architecture="arm64",
+            os="linux",
+        )
 
-    def inspect_container(self, name):
-        return self.containers.get(name, SimpleNamespace(name=name, image=""))
+    def inspect_container(self, name, *, strict=False):
+        return self.containers.get(
+            name, SimpleNamespace(name=name, image="", exists=False, state="missing")
+        )
 
     def pull_image(self, reference):
         self.pulls.append(reference)
@@ -94,8 +102,17 @@ def service(tmp_path, docker, **kwargs):
 
 def recorded(tmp_path, images=((ROLE_ADMIN, ADMIN, True), (ROLE_EMS, EMS, False))):
     return store(tmp_path).write(
-        [RuntimeImage(role=role, reference=reference, required=required)
-         for role, reference, required in images]
+        [
+            RuntimeImage(
+                role=role,
+                reference=reference,
+                required=required,
+                state=ab_bootstrap.STATE_RUNNING,
+                digest=reference.partition("@")[2],
+                platform={"os": "linux", "architecture": "arm64"},
+            )
+            for role, reference, required in images
+        ]
     )
 
 
@@ -127,8 +144,35 @@ def test_a_record_of_another_version_is_ignored_rather_than_misread(tmp_path):
     assert store(tmp_path).read().images == ()
 
 
-def test_the_running_admin_is_recorded_from_the_known_good_digest(tmp_path):
-    docker = FakeDocker()
+def container(image, *, name="ems-solarflow-admin", state="running"):
+    return SimpleNamespace(name=name, image=image, exists=True, state=state)
+
+
+def resolving(docker, digest):
+    docker.inspect_image = lambda reference: SimpleNamespace(
+        exists=True,
+        digest=str(reference).partition("@")[2] or digest,
+        architecture="arm64",
+        os="linux",
+    )
+    return docker
+
+
+def resolving(docker, digest):
+    docker.inspect_image = lambda reference: SimpleNamespace(
+        exists=True,
+        digest=str(reference).partition("@")[2] or digest,
+        architecture="arm64",
+        os="linux",
+    )
+    return docker
+
+
+def test_a_known_good_admin_digest_that_matches_the_running_one_is_accepted(tmp_path):
+    docker = resolving(
+        FakeDocker(containers={"ems-solarflow-admin": container(ADMIN)}),
+        ADMIN.partition("@")[2],
+    )
     known_good = SimpleNamespace(current=lambda: {"admin_reference": ADMIN})
 
     record = service(tmp_path, docker, known_good=known_good).record_running_runtime()
@@ -136,15 +180,60 @@ def test_the_running_admin_is_recorded_from_the_known_good_digest(tmp_path):
     assert record.image(ROLE_ADMIN).reference == ADMIN
 
 
+def test_a_known_good_admin_digest_that_is_not_the_running_one_blocks_planning(tmp_path):
+    """Neither side may be silently preferred; the operator has to be told."""
+
+    docker = resolving(
+        FakeDocker(containers={"ems-solarflow-admin": container(ADMIN)}),
+        ADMIN.partition("@")[2],
+    )
+    stale = "ghcr.io/example/ems-admin@sha256:" + "c" * 64
+    known_good = SimpleNamespace(current=lambda: {"admin_reference": stale})
+
+    with pytest.raises(BootstrapError) as caught:
+        service(tmp_path, docker, known_good=known_good).record_running_runtime()
+
+    assert caught.value.code == "admin_runtime_authority_drift"
+
+
+def test_a_tagged_admin_is_resolved_from_the_engine_and_checked_against_known_good(
+    tmp_path,
+):
+    docker = resolving(
+        FakeDocker(containers={"ems-solarflow-admin": container("ems-admin:latest")}),
+        "sha256:" + "a" * 64,
+    )
+    known_good = SimpleNamespace(
+        current=lambda: {"admin_reference": "ems-admin@sha256:" + "a" * 64}
+    )
+
+    record = service(tmp_path, docker, known_good=known_good).record_running_runtime()
+
+    assert record.image(ROLE_ADMIN).reference == "ems-admin@sha256:" + "a" * 64
+
+
 def test_a_container_running_a_tag_is_resolved_to_its_digest(tmp_path):
-    docker = FakeDocker(containers={"ems-admin": SimpleNamespace(image="ems-admin:1.2.3")})
+    docker = FakeDocker(
+        containers={"ems-solarflow-admin": container("ems-solarflow-admin:1.2.3")}
+    )
     docker.inspect_image = lambda reference: SimpleNamespace(
-        exists=True, digest="sha256:" + "c" * 64
+        exists=True, digest="sha256:" + "c" * 64, architecture="arm64", os="linux"
     )
 
     record = service(tmp_path, docker).record_running_runtime()
 
-    assert record.image(ROLE_ADMIN).reference == "ems-admin@sha256:" + "c" * 64
+    assert record.image(ROLE_ADMIN).reference == "ems-solarflow-admin@sha256:" + "c" * 64
+
+
+def test_a_container_state_that_cannot_be_determined_blocks_planning(tmp_path):
+    class Unreachable(FakeDocker):
+        def inspect_container(self, name, *, strict=False):
+            raise RuntimeError("cannot connect to the Docker daemon")
+
+    with pytest.raises(BootstrapError) as caught:
+        service(tmp_path, Unreachable()).record_running_runtime()
+
+    assert caught.value.code == "runtime_state_unknown"
 
 
 def test_nothing_resolvable_is_an_error_not_an_empty_record(tmp_path):
@@ -257,14 +346,49 @@ def test_a_slot_without_a_docker_daemon_cannot_rebuild(tmp_path):
     assert any("Docker daemon" in problem for problem in report.problems)
 
 
-def test_the_admin_container_is_started_after_its_image_is_available(tmp_path):
+def test_every_recorded_running_service_is_started(tmp_path):
     recorded(tmp_path)
     docker = FakeDocker(present={ADMIN, EMS})
 
     report = service(tmp_path, docker).reconstruct()
 
-    assert docker.started == ["admin"]
-    assert report.started == ("admin",)
+    assert docker.started == ["ems-solarflow-admin", "ems"]
+    assert report.started == ("ems-solarflow-admin", "ems")
+
+
+def test_a_service_recorded_as_stopped_is_not_started(tmp_path):
+    store(tmp_path).write(
+        [
+            RuntimeImage(
+                role=ROLE_ADMIN,
+                reference=ADMIN,
+                required=True,
+                state=ab_bootstrap.STATE_RUNNING,
+                digest=ADMIN.partition("@")[2],
+            ),
+            RuntimeImage(
+                role=ROLE_EMS,
+                reference=EMS,
+                state=ab_bootstrap.STATE_STOPPED_CLEAN,
+                digest=EMS.partition("@")[2],
+            ),
+        ]
+    )
+    docker = FakeDocker(present={ADMIN, EMS})
+
+    report = service(tmp_path, docker).reconstruct()
+
+    assert docker.started == ["ems-solarflow-admin"]
+    assert report.ok, report.problems
+
+
+def test_a_service_whose_image_is_unavailable_is_never_started(tmp_path):
+    recorded(tmp_path)
+    docker = FakeDocker(present={ADMIN}, pullable=set())
+
+    service(tmp_path, docker).reconstruct()
+
+    assert docker.started == ["ems-solarflow-admin"]
 
 
 def test_the_report_is_serialisable(tmp_path):
@@ -298,7 +422,7 @@ def test_only_digest_pinned_references_are_treated_as_identities():
 
 def running_containers():
     return {
-        "ems-admin": SimpleNamespace(name="ems-admin", image=ADMIN, exists=True, state="running"),
+        "ems-solarflow-admin": SimpleNamespace(name="ems-solarflow-admin", image=ADMIN, exists=True, state="running"),
         "ems-solarflow": SimpleNamespace(
             name="ems-solarflow", image=EMS, exists=True, state="running"
         ),

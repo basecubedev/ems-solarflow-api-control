@@ -125,36 +125,41 @@ tar -xzf "$ARCHIVE" -C "$STAGE/tree" --no-same-owner --no-same-permissions \
 [ -f "$STAGE/tree/$TOP_LEVEL/LICENSE" ] \
     || fail "the extracted tree is not an rpi-image-gen source tree" source_unverified
 
-PYTHONPATH="$ROOT" python3 - "$STAGE/tree/$TOP_LEVEL" "$OBSERVED" "$URL" \
-    "$RELEASE" "$COMMIT" "$TOP_LEVEL" <<'PY' || fail "the source record could not be written" output_unusable
+# The archive hash proves the download; the tree manifest recorded beside it is
+# what proves the extraction afterwards. Without it the source is verified once
+# and trusted forever, which is exactly what lets a build input be edited after
+# the fact with the record left intact.
+TREE=$(PYTHONPATH="$ROOT" python3 - "$STAGE/tree/$TOP_LEVEL" "$OBSERVED" "$URL" \
+    "$RELEASE" "$COMMIT" "$TOP_LEVEL" <<'PY'
 import json
 import sys
-from pathlib import Path
 
-from appliance.rpi_image_gen import SOURCE_IDENTITY_NAME
+from appliance import rpi_image_gen
 
 tree, digest, url, release, commit, top_level = sys.argv[1:7]
-Path(tree, SOURCE_IDENTITY_NAME).write_text(
-    json.dumps(
-        {
-            "form": "tarball",
-            "release": release,
-            "commit": commit,
-            "url": url,
-            "sha256": digest,
-            "top_level_directory": top_level,
-        },
-        indent=2,
-        sort_keys=True,
-    )
-    + "\n",
-    encoding="utf-8",
+path = rpi_image_gen.write_source_identity(
+    tree,
+    form=rpi_image_gen.SOURCE_TARBALL,
+    release=release,
+    commit=commit,
+    url=url,
+    sha256=digest,
+    top_level_directory=top_level,
 )
+print(json.loads(path.read_text(encoding="utf-8"))["tree_sha256"])
 PY
+) || fail "the source record could not be written" output_unusable
 
 mkdir -p "$(dirname "$INTO")" || fail "cannot create $(dirname "$INTO")" output_unusable
 mv "$STAGE/tree/$TOP_LEVEL" "$INTO" || fail "the tree could not be moved into place" output_unusable
 
+# The verified archive is retained beside the tree, so a tree that later fails
+# its manifest can be materialised again from the exact bytes that were checked.
+CACHE="$INTO.source"
+mkdir -p "$CACHE" && cp "$ARCHIVE" "$CACHE/rpi-image-gen.tar.gz" \
+    || echo "appliance-fetch-rpi-image-gen: the verified archive could not be cached" >&2
+
 echo "tree:   $INTO"
 echo "digest: $OBSERVED"
+echo "manifest: $TREE"
 echo "RESULT: PASS (tarball $RELEASE)"

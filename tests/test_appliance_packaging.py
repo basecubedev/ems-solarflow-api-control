@@ -380,12 +380,30 @@ REQUIRED_EXECUTABLES = {
 }
 
 
+def control_field(control, name):
+    """One deb822 field, with its continuation lines folded in.
+
+    dpkg joins a field with the lines that follow it starting with whitespace,
+    so a parser that reads only the first line silently loses half of a folded
+    Depends and calls the package under-declared.
+    """
+
+    lines = control.splitlines()
+    for index, line in enumerate(lines):
+        if not line.startswith(f"{name}:"):
+            continue
+        value = [line.partition(":")[2]]
+        for continuation in lines[index + 1 :]:
+            if not continuation[:1].isspace():
+                break
+            value.append(continuation)
+        return " ".join(part.strip() for part in value)
+    return ""
+
+
 def declared_dependencies():
     control = (PACKAGING / "debian" / "control").read_text(encoding="utf-8")
-    depends = ""
-    for block in control.split("\n"):
-        if block.startswith("Depends:"):
-            depends = block.partition(":")[2]
+    depends = control_field(control, "Depends")
     return {
         entry.split("(")[0].strip()
         for alternative in depends.split(",")

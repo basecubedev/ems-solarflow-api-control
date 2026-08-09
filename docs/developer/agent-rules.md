@@ -347,6 +347,16 @@ archives, secrets or unintended scratch files. After commit, run
 the task explicitly requires otherwise. There is no push without explicit
 instruction.
 
+Source and review archives MUST be produced with
+`scripts/appliance-create-source-bundle.sh`. It archives the git object tree
+rather than the working directory, so file modes and symlinks survive, and it
+verifies the result against that tree before handing it over — an archive that
+does not round-trip is deleted rather than delivered. Two previous review
+archives arrived with the six `local-fs.target.wants` persistence symlinks
+flattened into regular files, which produces a tree that still builds, generates
+six mount units, activates none of them, and loses every write to the shared
+paths at the next slot switch.
+
 ## 18. Validation and release claims
 
 Validation MUST match the changed risk. Use the applicable baseline:

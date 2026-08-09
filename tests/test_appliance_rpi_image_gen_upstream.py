@@ -13,7 +13,6 @@ against it, and the fixture is proven byte-identical to that tree.
 """
 
 import hashlib
-import json
 import shutil
 from pathlib import Path
 
@@ -247,23 +246,20 @@ def test_a_recorded_tarball_identity_is_accepted(tmp_path, lock):
     (root / "LICENSE").write_text("upstream\n", encoding="utf-8")
     (root / "layer/rpi/device/slot-mapper/bin").mkdir(parents=True, exist_ok=True)
     (root / "layer/rpi/device/slot-mapper/bin/rpi-slot-label").write_text("#!/bin/sh\n")
-    (root / rpi_image_gen.SOURCE_IDENTITY_NAME).write_text(
-        json.dumps(
-            {
-                "form": "tarball",
-                "release": lock.release,
-                "commit": lock.commit,
-                "url": lock.tarball["url"],
-                "sha256": lock.tarball["sha256"],
-                "top_level_directory": lock.tarball["top_level_directory"],
-            }
-        ),
-        encoding="utf-8",
+    rpi_image_gen.write_source_identity(
+        root,
+        form=rpi_image_gen.SOURCE_TARBALL,
+        release=lock.release,
+        commit=lock.commit,
+        url=lock.tarball["url"],
+        sha256=lock.tarball["sha256"],
+        top_level_directory=lock.tarball["top_level_directory"],
     )
 
     report = rpi_image_gen.probe_checkout(root, lock, which=lambda tool: f"/usr/bin/{tool}")
     assert report.source_identity == "tarball"
     assert report.compatible
+    assert report.tree_digest.startswith("sha256:")
 
 
 # --- the slot-shared generator upstream actually ships ----------------------

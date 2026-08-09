@@ -194,16 +194,36 @@ def test_only_a_missing_key_type_is_created(tmp_path):
 
 
 @requires_keygen
-def test_a_half_present_pair_is_reported_rather_than_silently_replaced(tmp_path):
+def test_a_missing_public_half_is_rebuilt_from_the_private_key(tmp_path):
+    """The crash window of first-boot placement, retried."""
+
     root = appliance(tmp_path)
-    service(root).ensure()
+    first = service(root).ensure()
     directory = root / "var/lib/ems-appliance-manager/ssh"
+    secret = (directory / private_key_name("rsa")).read_bytes()
     (directory / public_key_name("rsa")).unlink()
 
     report = service(root).ensure()
 
+    assert report.ok, report.problems
+    assert report.created == ()
+    assert (directory / private_key_name("rsa")).read_bytes() == secret
+    assert report.fingerprints["rsa"] == first.fingerprints["rsa"]
+
+
+@requires_keygen
+def test_a_public_half_without_its_private_key_is_never_replaced(tmp_path):
+    """There is no secret to recover from, so nothing is invented."""
+
+    root = appliance(tmp_path)
+    service(root).ensure()
+    directory = root / "var/lib/ems-appliance-manager/ssh"
+    (directory / private_key_name("rsa")).unlink()
+
+    report = service(root).ensure()
+
     assert not report.ok
-    assert any("ssh_host_rsa_key.pub" in problem for problem in report.problems)
+    assert any("host_key_private_half_missing" in problem for problem in report.problems)
 
 
 # --- refusals -----------------------------------------------------------------
@@ -250,11 +270,14 @@ def test_a_world_readable_private_key_is_refused(tmp_path):
     assert any("0644" in problem for problem in report.problems)
 
 
-def test_a_key_directory_owned_by_another_account_is_refused(tmp_path):
+def test_a_key_directory_owned_by_another_account_is_refused(tmp_path, monkeypatch):
+    from tests.test_appliance_host_identity_durability import owned_by_another
+
     root = appliance(tmp_path)
     directory = root / "var/lib/ems-appliance-manager/ssh"
     directory.mkdir(parents=True)
     directory.chmod(0o700)
+    owned_by_another(monkeypatch, directory)
     probe = service(root, require_root=True)
 
     with pytest.raises(HostIdentityError) as excinfo:

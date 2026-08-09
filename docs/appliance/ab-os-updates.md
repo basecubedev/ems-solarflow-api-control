@@ -70,6 +70,12 @@ that does not list it. A board it cannot identify blocks planning with
 another SoC does not boot and the appliance would be recoverable only by
 reflashing.
 
+Recognising a board and being able to update it are separate answers. CM4 and
+CM5 resolve to a board class — an operator should be told what their appliance
+is — but this project ships no `cm4-ab.yaml` or `cm5-ab.yaml` build profile, so
+they report `hardware_has_no_build_profile` rather than `supported: true`. A
+board is only supported once an installable artefact exists for it.
+
 Nothing outside that scope is claimed. In particular:
 
 - A storage class is never inferred from another. Passing on microSD says
@@ -248,6 +254,153 @@ a bind whose source directory is missing. `ems-appliance-persistence.service`
 therefore verifies the binds and fails closed, and the agent, web, bootstrap and
 health units `Requires=` it.
 
+## The deployment authority
+
+An OS update is only safe if the appliance an operator had before the reboot is
+the one they have after it. The OS is only half of that: the other half is the
+EMS deployment, which lives on the shared partition and is not part of any slot.
+
+Before a trial is armed, the running slot records one versioned, fingerprinted
+object onto the persistent partition:
+
+```json
+{
+  "schema_version": 3,
+  "captured_at": 1754630000.0,
+  "compose":     {"path": "/opt/ems-solarflow/docker-compose.yml", "sha256": "sha256:..."},
+  "environment": {"path": "/opt/ems-solarflow/.env",               "sha256": "sha256:..."},
+  "services": {
+    "admin":    {"state": "running", "image_digest": "sha256:...",
+                 "platform": {"os": "linux", "architecture": "arm64"}},
+    "ems":      {"state": "stopped_clean", "image_digest": "sha256:...", "...": "..."},
+    "influxdb": {"state": "absent",        "image_digest": "",           "...": "..."}
+  }
+}
+```
+
+Per service the state is an intent, never a boolean and never "not running":
+
+```text
+absent          not deployed on this appliance        — allowed, not a failure
+running         deployed and running                  — must come back running
+stopped_clean   exited 0, so deliberately stopped     — must come back stopped
+failed          exited non-zero                       — blocks planning
+restarting      in a restart loop                     — blocks planning
+created         created and never started             — blocks planning
+unknown         the daemon did not answer             — blocks planning
+```
+
+Only the first three are states a slot can be rebuilt into. A container that
+crashed, that is restarting, or that was created and never started says nothing
+about what the operator wanted, so it is never normalised into "stopped": an OS
+update planned against it would reconstruct an intent nobody expressed.
+
+`absent` and "expected but failed to reconstruct" are different states and are
+never conflated. A fresh Appliance with Admin installed and no EMS deployment
+yet is a supported thing to update; an EMS that was running and did not come
+back is not.
+
+The canonical hash of that object is the **deployment fingerprint**, and it is
+part of the object an operator confirms. A confirmed plan carries both halves of
+the authority, and the confirmation hash covers the whole thing:
+
+```json
+{
+  "schema_version": 1,
+  "os_write": {"device": "...", "target_slot": "B", "boot_partuuid": "...",
+               "rootfs_expanded_digest": "sha256:...", "...": "..."},
+  "deployment_fingerprint": "sha256:...",
+  "deployment_schema": 3
+}
+```
+
+They stay two values rather than one digest because they are proven against
+different things and an operator fixes them differently: `os_write` answers
+"which bytes, onto which partitions", the fingerprint answers "which appliance
+those partitions belong to".
+
+It is verified at every phase of the update:
+
+```text
+plan            captured, fingerprinted, written to the shared partition
+confirmation    the fingerprint is inside the hash the operator's plan is sealed with
+execute         recomputed and compared *before* the target slot is invalidated
+arm             proven once more, with a resolvable Admin image, before tryboot
+pending trial   the confirmed fingerprint is stored in the pending record
+bootstrap       the compose and .env digests are recomputed before Docker runs
+trial health    the fingerprint is compared again before the slot may commit
+```
+
+Two questions are asked separately at execute time, because they drift for
+different reasons: the recorded deployment *files* must still be what they were,
+and the running *services* must still resolve to the identities that were
+recorded. A compose file edited after the confirmation and an Admin container
+restarted onto another image are both "not this deployment".
+
+Drift is refused, never re-recorded:
+
+```text
+before the write    failed_recoverable, replan_required; the inactive slot is
+                    untouched, the boot default is unchanged, and the known-good
+                    history still holds its rollback candidate
+after the reboot    the trial does not commit and the appliance falls back
+```
+
+The seed is deliberately outside the authority. It is exported from the
+confirmed record afterwards and is availability, not identity: a `docker save`
+that runs out of space reports `runtime_seed_incomplete` and keeps the confirmed
+fingerprint, so the trial slot can still pull the same exact digests. What never
+happens is a tryboot into a slot that is already known to be unable to rebuild —
+the deployment and a digest-nameable Admin image are proven again immediately
+before the selector is armed.
+
+The browser is told what to do about it and offered no way around it:
+
+> The EMS deployment changed after this OS update was planned.
+> Create a new update plan before continuing.
+
+Refusing to auto-refresh is the point. A fingerprint that updated itself on
+drift would mean the operator confirmed one deployment and the appliance
+committed another.
+
+## Reconstructing the application
+
+`/var/lib/docker` is per-slot, so a freshly written slot has an empty image
+store. Before the trial reboot the recorded images are saved beside the record
+on the shared partition — one generation, hashed and sized — which is what lets
+an appliance with no WAN finish a trial.
+
+Inside the trial slot, reconstruction:
+
+```text
+1  recomputes the compose and .env digests            → drift refuses everything
+2  restores every recorded image                       seed first, registry second
+3  proves each restored image by inspecting the store  digest and OCI platform
+4  starts every service recorded as running            influxdb, admin, ems
+```
+
+`docker load` printing a name is not evidence: only an inspection of the image
+store answers which digest was imported. The platform is checked against the
+recorded one *and* against this machine's architecture, so a Pi slot cannot
+commit holding amd64 images. The registry fallback names `repository@sha256:…`
+and never a tag.
+
+A service recorded as stopped is not started and does not block the commit — but
+its image authority and its persistent data are still proven.
+
+### Rolling the OS back is not rolling the deployment back
+
+```text
+OS slot rollback   ≠   EMS configuration rollback   ≠   database rollback
+```
+
+The EMS configuration, its data and the compose file are shared, so slot A
+returning after slot B was active reconstructs against whatever the appliance is
+deployed as *now*. It does not restore an older compose file, and it does not
+undo an EMS upgrade that happened while slot B was active. The Admin/EMS
+compatibility model remains the authority for that; this mechanism only replaces
+the operating system underneath it.
+
 ## Proving the active slot
 
 Authority for "which slot am I" is never a single signal. `appliance/ab_layout.py`
@@ -281,6 +434,26 @@ both partitions are at least as large as the artifact's images
 
 "The other partition number" is never sufficient on its own.
 
+### The selector is what the next boot reconciles from
+
+A commit writes the boot selector and then the slot history. A power loss
+between them leaves an appliance running the new slot on an ordinary boot while
+its own state still says the trial never committed, and deciding that from the
+JSON alone would abandon a slot that is already the default.
+
+So the next ordinary boot asks the selector first:
+
+```text
+running the trial's target slot, no tryboot, default partition == target
+    → the commit ran; record known-good and mark the trial committed
+running the source slot, no tryboot
+    → the trial did not commit; record a fallback and consume the pending trial
+```
+
+Only `commit` ever moves the default — arming a trial writes the target into
+`[tryboot]` and leaves `[all]` on the source slot — so a default that names the
+target proves the commit ran, which in turn proves health had already passed.
+
 ## Single-slot installations
 
 A normal Raspberry Pi OS installation reports:
@@ -310,6 +483,13 @@ agent. See [installation.md](installation.md).
 | `appliance/ab_boot.py` | The `autoboot.txt` parser/serializer and the tryboot transaction |
 | `appliance/ab_health.py` | Trial-boot detection, health gates, commit and fallback |
 | `appliance/ab_blocks.py` | The block-device backend and its fake for tests |
+| `appliance/ab_bootstrap.py` | The deployment authority, seeding and reconstruction |
+| `appliance/ab_docker_health.py` | The one Docker question set a trial slot is judged by |
+| `appliance/build_authority.py` | What a completed builder run produced, and its hash |
+| `appliance/project_source.py` | This repository's own revision and tree, proven before a build reads it |
+| `appliance/source_bundle.py` | Bundle-to-tracked-tree parity, object by object, both directions |
+| `appliance/ab_state.py` | The durable state both slots read, flushed before the step it authorises |
+| `appliance/host_identity.py` | The SSH identity established once and never regenerated |
 
 ## Related documents
 

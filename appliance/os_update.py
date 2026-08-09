@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from appliance import (
     ab_blocks,
     ab_boot,
+    ab_bootstrap,
     ab_inspect,
     ab_layout,
     ab_persistence,
@@ -58,6 +59,8 @@ STAGE_READY_FOR_TRYBOOT = "ready_for_tryboot"
 STAGE_TRYBOOT_REQUESTED = "tryboot_requested"
 
 AUTHORITY_FIELD = "ab_authority"
+CONFIRMED_AUTHORITY_FIELD = "ab_confirmed_authority"
+CONFIRMED_AUTHORITY_SCHEMA_VERSION = 1
 
 # Staging writes the whole artifact to the persistent partition before any
 # block device is touched, so the space has to be there before the plan is
@@ -138,6 +141,54 @@ def authority_from_dict(payload):
         raise OsUpdateError("ab_authority_invalid", "the recorded write authority is incomplete")
 
 
+@dataclass(frozen=True)
+class ConfirmedAuthority:
+    """Everything one confirmation covers, as one object.
+
+    The write authority answers "which bytes, onto which partitions". The
+    deployment fingerprint answers "which appliance those partitions are part
+    of". They are separate values rather than one digest because they are
+    proven against different things and fail with different remedies, and both
+    are inside the hash the operator's confirmation is bound to.
+    """
+
+    os_write: WriteAuthority
+    deployment_fingerprint: str = ""
+    deployment_schema: int = 0
+    schema_version: int = CONFIRMED_AUTHORITY_SCHEMA_VERSION
+
+    def to_dict(self):
+        return {
+            "schema_version": self.schema_version,
+            "os_write": self.os_write.to_dict(),
+            "deployment_fingerprint": self.deployment_fingerprint,
+            "deployment_schema": self.deployment_schema,
+        }
+
+    def fingerprint(self):
+        payload = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def confirmed_from_dict(payload):
+    if not isinstance(payload, dict) or not payload:
+        raise OsUpdateError(
+            "ab_authority_missing", "this plan carries no confirmed authority"
+        )
+    version = payload.get("schema_version")
+    if version != CONFIRMED_AUTHORITY_SCHEMA_VERSION:
+        raise OsUpdateError(
+            "ab_authority_unsupported",
+            f"confirmed authority schema {version!r} is not schema "
+            f"{CONFIRMED_AUTHORITY_SCHEMA_VERSION}; plan again",
+        )
+    return ConfirmedAuthority(
+        os_write=authority_from_dict(payload.get("os_write") or {}),
+        deployment_fingerprint=str(payload.get("deployment_fingerprint") or ""),
+        deployment_schema=int(payload.get("deployment_schema") or 0),
+    )
+
+
 @dataclass
 class UpdatePlan:
     current_release: str
@@ -157,6 +208,7 @@ class UpdatePlan:
     blockers: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
     authority: dict = field(default_factory=dict)
+    confirmed: dict = field(default_factory=dict)
     kind: str = "update"
 
     def to_dict(self):
@@ -180,6 +232,7 @@ class UpdatePlan:
             "blockers": list(self.blockers),
             "warnings": list(self.warnings),
             AUTHORITY_FIELD: dict(self.authority),
+            CONFIRMED_AUTHORITY_FIELD: dict(self.confirmed),
         }
 
 
@@ -241,6 +294,7 @@ class OsUpdateService:
         decoder = self._decoder()
         payload["hardware"] = hardware
         payload["artifacts"] = decoder
+        payload["deployment"] = self._deployment()
         payload["readiness"] = self._readiness(layout, persistence, decoder, hardware)
         try:
             payload["ab_state"] = self.state.summary()
@@ -250,12 +304,23 @@ class OsUpdateService:
         return payload
 
     def _hardware(self):
+        """Recognising the board and being able to update it are two answers.
+
+        A Compute Module resolves to a board class — the operator should see
+        what their appliance is — but this project ships no cm4 or cm5 build
+        profile, so calling it supported would offer an update no artefact can
+        satisfy.
+        """
+
         board = self._board()
-        return {
-            "board_class": board,
-            "supported": bool(board),
-            "reason": "" if board else "hardware_not_supported",
-        }
+        installable = rpi_image_gen.board_is_installable(board)
+        if installable:
+            reason = ""
+        elif board:
+            reason = "hardware_has_no_build_profile"
+        else:
+            reason = "hardware_not_supported"
+        return {"board_class": board, "supported": installable, "reason": reason}
 
     def _decoder(self):
         from appliance import install_check
@@ -279,7 +344,64 @@ class OsUpdateService:
             "persistence_ready": bool(persistence.ok),
             "host_identity_ready": self._host_identity_ready(),
             "docker_reconstruction_ready": self._reconstruction_ready(),
+            "deployment_authority_ready": self._deployment_state()
+            == ab_bootstrap.DEPLOYMENT_AUTHORITY_READY,
             "layout_ready": bool(layout.may_mutate),
+        }
+
+    def _deployment_state(self):
+        """Bounded states an operator can act on. Never a force bypass."""
+
+        if self.bootstrap is None:
+            return ab_bootstrap.DEPLOYMENT_AUTHORITY_MISSING
+        try:
+            return self.bootstrap.deployment_state()
+        except Exception:
+            return ab_bootstrap.DEPLOYMENT_AUTHORITY_MISSING
+
+    def _deployment(self):
+        if self.bootstrap is None:
+            return {
+                "authority": ab_bootstrap.DEPLOYMENT_AUTHORITY_MISSING,
+                "seed": ab_bootstrap.DEPLOYMENT_AUTHORITY_MISSING,
+                "reconstruction": ab_bootstrap.RECONSTRUCTION_INCOMPLETE,
+                "services": [],
+                "seed_bytes": 0,
+                "drift": [],
+            }
+        try:
+            record = self.bootstrap.store.read()
+            drift = self.bootstrap.deployment_drift(record)
+            authority = self.bootstrap.deployment_state(record)
+            seed = self.bootstrap.seed_state(record)
+        except Exception as exc:
+            return {
+                "authority": ab_bootstrap.DEPLOYMENT_AUTHORITY_MISSING,
+                "seed": ab_bootstrap.DEPLOYMENT_AUTHORITY_MISSING,
+                "reconstruction": ab_bootstrap.RECONSTRUCTION_INCOMPLETE,
+                "services": [],
+                "seed_bytes": 0,
+                "drift": [str(getattr(exc, "message", exc))],
+            }
+        ready = (
+            authority == ab_bootstrap.DEPLOYMENT_AUTHORITY_READY
+            and seed == ab_bootstrap.SEED_READY
+        )
+        return {
+            "authority": authority,
+            "seed": seed,
+            "reconstruction": (
+                ab_bootstrap.RECONSTRUCTION_READY
+                if ready
+                else ab_bootstrap.RECONSTRUCTION_INCOMPLETE
+            ),
+            # Roles and states only. No path, no digest, no environment value.
+            "services": [
+                {"role": entry.role, "state": entry.state, "required": entry.required}
+                for entry in record.images
+            ],
+            "seed_bytes": self.bootstrap.seed_bytes(),
+            "drift": list(drift),
         }
 
     def _host_identity_ready(self):
@@ -371,15 +493,18 @@ class OsUpdateService:
                 }
             )
 
+        deployment = self._capture_deployment(blockers)
         target_slot = layout.inactive_slot
-        authority = {}
+        authority, confirmed = {}, {}
         boot_bytes = rootfs_bytes = 0
         if layout.may_mutate and target_slot:
             try:
                 inactive = ab_layout.prove_inactive_slot(layout, self.probe.mounts())
                 boot_bytes, rootfs_bytes = self._image_sizes(release)
                 blockers.extend(self._capacity_problems(inactive, boot_bytes, rootfs_bytes))
-                authority = self._authority(layout, inactive, release, target_slot).to_dict()
+                write = self._authority(layout, inactive, release, target_slot)
+                authority = write.to_dict()
+                confirmed = self._confirmed(write, deployment).to_dict()
             except LayoutError as exc:
                 blockers.append({"code": exc.code, "message": exc.message})
 
@@ -399,11 +524,17 @@ class OsUpdateService:
             risk="moderate" if not blockers else "blocked",
             blockers=blockers,
             authority=authority,
+            confirmed=confirmed,
             kind=kind,
         )
         self.operations.update_target(
             operation.operation_id,
-            {"release_id": release.release_id, AUTHORITY_FIELD: authority, "kind": kind},
+            {
+                "release_id": release.release_id,
+                AUTHORITY_FIELD: authority,
+                CONFIRMED_AUTHORITY_FIELD: confirmed,
+                "kind": kind,
+            },
         )
         return plan.to_dict()
 
@@ -421,11 +552,14 @@ class OsUpdateService:
                     ),
                 }
             )
-        authority = {}
+        # An OS rollback is not an application rollback: the appliance keeps the
+        # deployment it has, and the older slot has to rebuild exactly that one.
+        deployment = self._capture_deployment(blockers)
+        authority, confirmed = {}, {}
         if layout.may_mutate and layout.inactive_slot == record.slot:
             try:
                 inactive = ab_layout.prove_inactive_slot(layout, self.probe.mounts())
-                authority = WriteAuthority(
+                write = WriteAuthority(
                     layout_id=layout.manifest.layout_id,
                     slot_schema_version=layout.manifest.slot_schema_version,
                     persistent_schema_version=ab_persistence.PERSISTENT_SCHEMA_VERSION,
@@ -441,7 +575,9 @@ class OsUpdateService:
                     artifact_digest=record.artifact_digest,
                     boot_digest=record.boot_digest,
                     rootfs_digest=record.rootfs_digest,
-                ).to_dict()
+                )
+                authority = write.to_dict()
+                confirmed = self._confirmed(write, deployment).to_dict()
             except LayoutError as exc:
                 blockers.append({"code": exc.code, "message": exc.message})
 
@@ -461,11 +597,17 @@ class OsUpdateService:
             risk="moderate" if not blockers else "blocked",
             blockers=blockers,
             authority=authority,
+            confirmed=confirmed,
             kind="rollback",
         )
         self.operations.update_target(
             operation.operation_id,
-            {"rollback_slot": record.slot, AUTHORITY_FIELD: authority, "kind": "rollback"},
+            {
+                "rollback_slot": record.slot,
+                AUTHORITY_FIELD: authority,
+                CONFIRMED_AUTHORITY_FIELD: confirmed,
+                "kind": "rollback",
+            },
         )
         return plan.to_dict()
 
@@ -555,6 +697,21 @@ class OsUpdateService:
         except ab_inspect.InspectionError as exc:
             blockers.append({"code": exc.code, "message": exc.message})
 
+        # The identity is what makes the appliance the same host after the slot
+        # switch. An update planned without it comes back under a fingerprint
+        # nobody can vouch for, which is the substitution the fingerprint exists
+        # to make visible.
+        if not self._host_identity_ready():
+            blockers.append(
+                {
+                    "code": "host_identity_unproven",
+                    "message": (
+                        "the persistent SSH host identity could not be proven; the appliance "
+                        "would answer under a different fingerprint after the slot switch"
+                    ),
+                }
+            )
+
         # The tools have to be there before an artifact is fetched, not after:
         # a missing decompressor discovered mid-staging has already spent the
         # persistent partition's free space on something unreadable.
@@ -634,6 +791,61 @@ class OsUpdateService:
             )
         return problems
 
+    def _capture_deployment(self, blockers):
+        """Record the deployment this plan is bound to, at planning time.
+
+        Read-only apart from the shared runtime record itself: no seed archive
+        is written here, because a seed is availability evidence and not
+        authority, and a plan that is never confirmed must not have spent the
+        persistent partition's free space.
+
+        An appliance with no runtime bootstrap wired has no application to bind
+        to. That is the un-managed case, not a silently skipped gate: the plan
+        then carries no deployment fingerprint and execution enforces none.
+        """
+
+        if self.bootstrap is None:
+            return None
+        try:
+            record = self.bootstrap.record_running_runtime()
+        except Exception as exc:
+            blockers.append(
+                {
+                    "code": getattr(exc, "code", ab_bootstrap.DEPLOYMENT_AUTHORITY_MISSING),
+                    "message": str(getattr(exc, "message", exc)),
+                }
+            )
+            return None
+        admin = record.image(ab_bootstrap.ROLE_ADMIN)
+        if admin is None or not admin.present:
+            blockers.append(
+                {
+                    "code": ab_bootstrap.DEPLOYMENT_AUTHORITY_MISSING,
+                    "message": (
+                        "no Admin console could be resolved on this appliance, so a trial "
+                        "slot would have no recovery path to rebuild"
+                    ),
+                }
+            )
+            return None
+        drift = self.bootstrap.deployment_drift(record)
+        if drift:
+            blockers.append(
+                {
+                    "code": ab_bootstrap.DEPLOYMENT_AUTHORITY_DRIFT,
+                    "message": "the EMS deployment could not be proven: " + "; ".join(drift),
+                }
+            )
+            return None
+        return record
+
+    def _confirmed(self, write, deployment):
+        return ConfirmedAuthority(
+            os_write=write,
+            deployment_fingerprint=deployment.fingerprint if deployment else "",
+            deployment_schema=ab_bootstrap.RECORD_VERSION if deployment else 0,
+        )
+
     def _authority(self, layout, inactive, release, target_slot):
         return WriteAuthority(
             layout_id=layout.manifest.layout_id,
@@ -664,21 +876,53 @@ class OsUpdateService:
 
     def execute(self, operation):
         record = self.operations.get(operation.operation_id)
-        recorded = (record.requested_target or {}).get(AUTHORITY_FIELD) or {}
+        target = record.requested_target or {}
+        recorded = target.get(AUTHORITY_FIELD) or {}
         if not recorded:
             self._fail(operation, "ab_authority_missing", "this plan carries no write authority")
-        authority = authority_from_dict(recorded)
-        kind = str((record.requested_target or {}).get("kind") or "update")
+        confirmed_payload = target.get(CONFIRMED_AUTHORITY_FIELD) or {}
+        if self.bootstrap is not None and not confirmed_payload:
+            self._fail(
+                operation,
+                "ab_authority_missing",
+                "this plan predates the confirmed deployment authority; plan again",
+            )
+        try:
+            confirmed = (
+                confirmed_from_dict(confirmed_payload)
+                if confirmed_payload
+                else ConfirmedAuthority(os_write=authority_from_dict(recorded))
+            )
+        except OsUpdateError as exc:
+            self._fail(operation, exc.code, exc.message)
+        authority = confirmed.os_write
+        # The plan renders the write authority on its own for an operator to
+        # read; the confirmed object is what executes. Two records of the same
+        # target that disagree is not a record to write a partition from.
+        if confirmed_payload and recorded != authority.to_dict():
+            self._fail(
+                operation,
+                "ab_authority_inconsistent",
+                "this plan records two different write targets; plan again",
+            )
+        kind = str(target.get("kind") or "update")
 
         try:
             self._revalidate(authority)
         except (OsUpdateError, LayoutError, ab_inspect.InspectionError) as exc:
             self._fail(operation, exc.code, exc.message)
 
+        # The last gate before anything is destroyed. The disk matched the plan;
+        # this asks whether the appliance still does.
+        try:
+            self._revalidate_deployment(confirmed)
+        except OsUpdateError as exc:
+            self._fail_before_write(operation, authority, exc.code, exc.message)
+
         if kind == "rollback":
             # The previous known-good slot is already on the medium; a rollback
             # writes nothing and proves the slot through the same trial boot.
-            return self._arm(operation, authority, kind=kind, release_version="")
+            return self._arm(operation, confirmed, kind=kind, release_version="")
 
         release = self.catalogue.get(authority.release_id)
         archive = self.catalogue.archive_path(release)
@@ -719,8 +963,18 @@ class OsUpdateService:
 
         # The target slot stops being a known-good rollback candidate here,
         # before the first destructive byte. An interrupted write must never
-        # leave a slot that a later rollback would offer as intact.
-        self.state.invalidate_slot(authority.target_slot)
+        # leave a slot that a later rollback would offer as intact. This is also
+        # the first state write that has to be durable, so a persistent
+        # partition that cannot record it stops the update instead.
+        try:
+            self.state.invalidate_slot(authority.target_slot)
+        except Exception as exc:
+            self._fail_before_write(
+                operation,
+                authority,
+                getattr(exc, "code", "ab_state_write_failed"),
+                str(getattr(exc, "message", exc)),
+            )
 
         self.operations.advance(operation.operation_id, STAGE_WRITING_INACTIVE)
         try:
@@ -764,7 +1018,7 @@ class OsUpdateService:
         if self.arm_after_write:
             result.update(
                 self._arm(
-                    operation, authority, kind="update", release_version=release.release_version
+                    operation, confirmed, kind="update", release_version=release.release_version
                 )
             )
         return result
@@ -852,21 +1106,51 @@ class OsUpdateService:
 
     # --- the trial boot ----------------------------------------------------
 
-    def _arm(self, operation, authority, *, kind, release_version):
-        """Record the trial durably, point [tryboot] at it, then ask to reboot.
+    def _arm(self, operation, confirmed, *, kind, release_version):
+        """Seed, record the trial durably, point [tryboot] at it, then reboot.
 
-        The pending record goes first. A selector armed without it would boot a
-        slot that cannot prove what it is, which is manual_action_required; a
-        record without an armed selector is an ordinary boot of the source slot,
-        which classifies cleanly as a fallback. Both are safe, and this order is
-        the one that always leaves the trial slot able to identify itself.
+        The deployment fingerprint the pending record carries is the confirmed
+        one, never a fresh capture: the target slot has to be able to tell that
+        the deployment it rebuilds is the deployment the operator agreed to.
+
+        The pending record goes before the selector. A selector armed without it
+        would boot a slot that cannot prove what it is, which is
+        manual_action_required; a record without an armed selector is an
+        ordinary boot of the source slot, which classifies cleanly as a
+        fallback. Both are safe, and this order is the one that always leaves
+        the trial slot able to identify itself.
         """
 
-        trial = self.pending_trial(
-            operation, authority, kind=kind, release_version=release_version
-        )
-        self.state.set_pending(trial)
+        authority = confirmed.os_write
+        try:
+            fingerprint = self._trial_deployment_authority(confirmed)
+        except OsUpdateError as exc:
+            self._fail_after_write(operation, authority, exc.code, exc.message)
         seeded = self._seed_runtime()
+        trial = self.pending_trial(
+            operation,
+            authority,
+            kind=kind,
+            release_version=release_version,
+            deployment_fingerprint=fingerprint,
+        )
+        try:
+            self.state.set_pending(trial)
+        except Exception as exc:
+            code = getattr(exc, "code", "ab_state_write_failed")
+            message = str(getattr(exc, "message", exc))
+            self.operations.finish(
+                operation.operation_id,
+                STATE_FAILED_RECOVERABLE,
+                stage=STAGE_READY_FOR_TRYBOOT,
+                result={
+                    "default_slot_unchanged": True,
+                    "target_slot": authority.target_slot,
+                    "reboot_requested": False,
+                },
+                error={"code": code, "message": message},
+            )
+            raise OsUpdateError(code, message)
 
         layout = ab_layout.discover(self.probe)
         manifest = layout.manifest
@@ -908,23 +1192,54 @@ class OsUpdateService:
             payload["reboot_error"] = exc.code
         return payload
 
-    def _seed_runtime(self):
-        """Put the running slot's images where the trial slot can load them.
+    def _trial_deployment_authority(self, confirmed):
+        """Everything a trial slot needs, checked before a one-shot boot is asked for.
 
-        /var/lib/docker is per-slot, so the slot that is about to boot has an
-        empty image store. Seeding is what lets an appliance with no registry
+        A tryboot into a slot that cannot rebuild its Admin console is a
+        guaranteed fallback and a reboot the operator did not need. The
+        deployment is therefore proven once more here, and the recovery image
+        has to be nameable by digest.
+        """
+
+        record = self._revalidate_deployment(confirmed)
+        if record is None:
+            return ""
+        admin = record.image(ab_bootstrap.ROLE_ADMIN)
+        if admin is None or "@sha256:" not in str(admin.reference):
+            raise OsUpdateError(
+                "deployment_authority_missing",
+                "the recorded deployment names no Admin image the trial slot could rebuild",
+            )
+        return confirmed.deployment_fingerprint
+
+    def _seed_runtime(self):
+        """Put the confirmed deployment's images where the trial slot can load them.
+
+        ``/var/lib/docker`` is per-slot, so the slot that is about to boot has
+        an empty image store. Seeding is what lets an appliance with no registry
         access finish a trial instead of coming up without an Admin console.
-        A seed that could not be written is reported, not fatal: the trial slot
-        can still pull the same digests, and its health gates decide.
+
+        A seed is availability, never authority: it is exported from the record
+        the plan already confirmed, and a seed that could not be written or
+        flushed is reported as incomplete rather than fatal. The trial slot can
+        still pull the same exact digests, and its health gates decide.
         """
 
         if self.bootstrap is None:
-            return {"seeded": [], "reason": "no runtime bootstrap is configured"}
+            return {
+                "seeded": [],
+                "state": ab_bootstrap.SEED_INCOMPLETE,
+                "reason": "no runtime bootstrap is configured",
+            }
         try:
-            record = self.bootstrap.record_running_runtime()
-            return {"seeded": list(self.bootstrap.seed(record))}
+            seeded = list(self.bootstrap.seed(self.bootstrap.store.read()))
         except Exception as exc:
-            return {"seeded": [], "reason": getattr(exc, "code", "runtime_seed_failed")}
+            return {
+                "seeded": [],
+                "state": ab_bootstrap.SEED_INCOMPLETE,
+                "reason": getattr(exc, "code", "runtime_seed_failed"),
+            }
+        return {"seeded": seeded, "state": self.bootstrap.seed_state()}
 
     def _selector_path(self, manifest):
         return self.probe.root / str(manifest.selector_mountpoint).lstrip("/") / (
@@ -1003,6 +1318,73 @@ class OsUpdateService:
             )
         return layout
 
+    def _revalidate_deployment(self, confirmed):
+        """The appliance right now must still be the one that was confirmed.
+
+        Two separate questions, because they fail for different reasons: the
+        recorded deployment files must still be what they were, and the running
+        services must still resolve to the identities that were recorded. A
+        compose file edited after the confirmation and an Admin container
+        restarted onto another image are both "not this deployment".
+
+        Never re-recorded. A fingerprint that refreshed itself here would mean
+        the operator confirmed one appliance and this wrote an OS update for
+        another.
+        """
+
+        if self.bootstrap is None:
+            return None
+        expected = confirmed.deployment_fingerprint
+        if not expected:
+            raise OsUpdateError(
+                "deployment_authority_missing",
+                "this plan was confirmed without a deployment authority; plan again",
+            )
+        record = self.bootstrap.store.read()
+        if not record.images or not record.compose.path:
+            raise OsUpdateError(
+                "deployment_authority_missing",
+                "the recorded deployment authority is no longer readable; plan again",
+            )
+        if record.fingerprint != expected:
+            raise OsUpdateError(
+                "deployment_authority_drift",
+                "the recorded deployment is not the one this plan was confirmed for",
+            )
+        problems = tuple(self.bootstrap.deployment_drift(record)) + tuple(
+            self.bootstrap.deployment_changed(record)
+        )
+        if problems:
+            raise OsUpdateError(
+                "deployment_authority_drift",
+                "the EMS deployment changed after this update was confirmed: "
+                + "; ".join(problems),
+            )
+        return record
+
+    def _fail_before_write(self, operation, authority, code, message):
+        """Nothing has been destroyed, and this record can never succeed again.
+
+        Recoverable rather than terminal: an operator who put the deployment
+        back exactly as it was confirmed may retry, and the same revalidation
+        runs again. Anything else needs a new plan, which is what the result
+        says.
+        """
+
+        self.operations.finish(
+            operation.operation_id,
+            STATE_FAILED_RECOVERABLE,
+            stage="preflight_failed",
+            result={
+                "default_slot_unchanged": True,
+                "inactive_slot_untouched": True,
+                "replan_required": True,
+                "target_slot": authority.target_slot,
+            },
+            error={"code": code, "message": message},
+        )
+        raise OsUpdateError(code, message)
+
     def _fail(self, operation, code, message):
         self.operations.finish(
             operation.operation_id,
@@ -1015,7 +1397,15 @@ class OsUpdateService:
 
     # --- pending trial ---------------------------------------------------
 
-    def pending_trial(self, operation, authority, *, kind="update", release_version=""):
+    def pending_trial(
+        self,
+        operation,
+        authority,
+        *,
+        kind="update",
+        release_version="",
+        deployment_fingerprint="",
+    ):
         """The record the target slot reads after the reboot.
 
         Written and flushed before the reboot is requested: a trial that booted
@@ -1036,6 +1426,7 @@ class OsUpdateService:
             rootfs_digest=authority.rootfs_digest,
             release_version=release_version,
             kind=kind,
+            deployment_fingerprint=deployment_fingerprint,
         )
 
     def _boot_partition(self, authority):

@@ -60,6 +60,9 @@ class PendingTrial:
     boot_digest: str = ""
     rootfs_digest: str = ""
     release_version: str = ""
+    # The canonical hash of the EMS deployment authority this trial was planned
+    # against. Verified again in the target slot; never refreshed in place.
+    deployment_fingerprint: str = ""
 
     def to_dict(self):
         return asdict(self)
@@ -175,13 +178,21 @@ class AbStateStore:
             finally:
                 os.close(handle)
             os.replace(staged, target)
-            self._sync_directory()
         except OSError as exc:
             try:
                 os.unlink(staged)
             except OSError:
                 pass
             raise AbStateError("ab_state_write_failed", f"{name} could not be written: {exc}")
+        # The rename made the new content visible; only the directory flush
+        # makes the entry survive a power loss. A discarded result here is the
+        # difference between "the trial is recorded" and "the trial was
+        # recorded in a cache", which is the exact state this store exists for.
+        if not self._sync_directory():
+            raise AbStateError(
+                "ab_state_write_failed",
+                f"{name} was replaced but {self.directory} could not be flushed",
+            )
         return target
 
     def _remove(self, name):
@@ -191,7 +202,11 @@ class AbStateStore:
             return False
         except OSError as exc:
             raise AbStateError("ab_state_write_failed", f"{name} could not be removed: {exc}")
-        self._sync_directory()
+        if not self._sync_directory():
+            raise AbStateError(
+                "ab_state_write_failed",
+                f"{name} was removed but {self.directory} could not be flushed",
+            )
         return True
 
     def _sync_directory(self):

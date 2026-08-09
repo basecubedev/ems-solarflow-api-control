@@ -76,9 +76,24 @@ def checkout(tmp_path, lock, **overrides):
     write(root, PERSIST_GENERATOR, "#!/bin/sh\n", mode=0o755)
     write(root, "layer/rpi/device/slot-mapper/bin/rpi-slot-label", "#!/bin/sh\n", mode=0o755)
     write(root, "config/trixie-minbase-ab.yaml", "image:\n  layer: image-rota\n")
-    if overrides.get("revision", lock.commit):
-        write(root, ".git/HEAD", f"{overrides.get('revision', lock.commit)}\n")
+    if overrides.get("identity", True):
+        # A verified tarball extraction: the identity record plus the manifest
+        # of the tree it actually is. A git checkout is proven through git, so
+        # it needs a real repository and lives in the build-provenance tier.
+        record_tarball_identity(root, lock)
     return root
+
+
+def record_tarball_identity(root, lock):
+    return rpi_image_gen.write_source_identity(
+        root,
+        form=rpi_image_gen.SOURCE_TARBALL,
+        release=lock.release,
+        commit=lock.commit,
+        url=lock.tarball["url"],
+        sha256=lock.tarball["sha256"],
+        top_level_directory=lock.tarball["top_level_directory"],
+    )
 
 
 def satisfied(_binary):
@@ -87,7 +102,30 @@ def satisfied(_binary):
 
 def probe(root, lock, **kwargs):
     kwargs.setdefault("which", satisfied)
+    _reseal_tree_hash(root)
     return rpi_image_gen.probe_checkout(root, lock, **kwargs)
+
+
+def _reseal_tree_hash(root):
+    """Keep the fixture's tree hash in step with what the fixture wrote.
+
+    These tests vary the *contract* — a missing layer, a refused interface, a
+    dependency this host lacks — and every one of those edits is a legitimate
+    tree. Whether a tree may change after it was recorded is the separate
+    question the build-provenance tier asks.
+    """
+
+    path = Path(root) / rpi_image_gen.SOURCE_IDENTITY_NAME
+    if not path.is_file():
+        return
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError:
+        return
+    if "tree_sha256" not in payload:
+        return
+    payload["tree_sha256"] = rpi_image_gen.tree_digest(root)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def failed(report):
@@ -266,7 +304,7 @@ def identity(report):
 def test_a_tree_with_no_provable_identity_is_refused(tmp_path, lock):
     """A tarball extraction has no .git, and unknown is not a NOT RUN."""
 
-    report = probe(checkout(tmp_path, lock, revision=""), lock)
+    report = probe(checkout(tmp_path, lock, identity=False), lock)
 
     assert identity(report).result == FAIL
     assert not report.compatible
@@ -274,17 +312,18 @@ def test_a_tree_with_no_provable_identity_is_refused(tmp_path, lock):
     assert report.source_identity == rpi_image_gen.SOURCE_UNVERIFIED
 
 
-def test_a_checkout_at_the_pinned_revision_passes(tmp_path, lock):
+def test_a_verified_tarball_tree_passes(tmp_path, lock):
     report = probe(checkout(tmp_path, lock), lock)
 
     assert identity(report).result == PASS
-    assert report.source_identity == rpi_image_gen.SOURCE_GIT
+    assert report.source_identity == rpi_image_gen.SOURCE_TARBALL
 
 
-def test_a_checkout_at_another_revision_is_refused(tmp_path, lock):
-    root = checkout(tmp_path, lock, revision="")
-    write(root, ".git/HEAD", "ref: refs/heads/master\n")
-    write(root, ".git/refs/heads/master", "0" * 40 + "\n")
+def test_a_hand_written_git_head_proves_nothing(tmp_path, lock):
+    """Forty characters in a text file was the whole of the old authority."""
+
+    root = checkout(tmp_path, lock, identity=False)
+    write(root, ".git/HEAD", f"{lock.commit}\n")
 
     report = probe(root, lock)
 
@@ -294,21 +333,8 @@ def test_a_checkout_at_another_revision_is_refused(tmp_path, lock):
 
 
 def test_a_tarball_tree_recorded_by_the_fetch_script_is_accepted(tmp_path, lock):
-    root = checkout(tmp_path, lock, revision="")
-    write(
-        root,
-        rpi_image_gen.SOURCE_IDENTITY_NAME,
-        json.dumps(
-            {
-                "form": "tarball",
-                "release": lock.release,
-                "commit": lock.commit,
-                "url": lock.tarball["url"],
-                "sha256": lock.tarball["sha256"],
-                "top_level_directory": lock.tarball["top_level_directory"],
-            }
-        ),
-    )
+    root = checkout(tmp_path, lock, identity=False)
+    record_tarball_identity(root, lock)
 
     report = probe(root, lock)
 
@@ -318,7 +344,7 @@ def test_a_tarball_tree_recorded_by_the_fetch_script_is_accepted(tmp_path, lock)
 
 
 def test_a_tarball_record_naming_another_digest_is_refused(tmp_path, lock):
-    root = checkout(tmp_path, lock, revision="")
+    root = checkout(tmp_path, lock, identity=False)
     write(
         root,
         rpi_image_gen.SOURCE_IDENTITY_NAME,

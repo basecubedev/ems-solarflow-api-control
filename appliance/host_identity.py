@@ -99,6 +99,45 @@ def public_key_name(key_type):
     return f"{private_key_name(key_type)}.pub"
 
 
+def ssh_may_start(report):
+    """sshd is offered only once every declared key is proven.
+
+    An incomplete identity is not a degraded service to run anyway: an
+    appliance answering under a key nobody can vouch for is the state the
+    fingerprint exists to make visible.
+    """
+
+    return bool(getattr(report, "ok", False))
+
+
+def _key_material_of(text):
+    """``<type> <base64>`` from an OpenSSH public key line, comment dropped.
+
+    The comment is not part of the key. ``ssh-keygen -y`` emits none and a
+    ``.pub`` on disk usually carries one, so comparing whole lines would report
+    a mismatch for two identical keys.
+    """
+
+    for line in str(text or "").splitlines():
+        parts = line.split()
+        if len(parts) >= 2:
+            return f"{parts[0]} {parts[1]}"
+    return ""
+
+
+def _key_material(path):
+    try:
+        return _key_material_of(path.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return ""
+
+
+def _stated(exc):
+    """A problem an operator can look up: the stable code, then the detail."""
+
+    return f"{exc.code}: {exc.message}"
+
+
 class HostIdentityService:
     """Establish and prove the identity both slots share."""
 
@@ -199,7 +238,63 @@ class HostIdentityService:
                 "host_key_mode_wrong",
                 f"{private.name} is mode {mode:04o}; a private host key needs {PRIVATE_MODE:04o}",
             )
+        self.verify_keypair(key_type)
         return True
+
+    def verify_keypair(self, key_type):
+        """The ``.pub`` beside a private key has to be that key's public half.
+
+        Checking both files structurally proves nothing about their
+        relationship: replacing only the ``.pub`` yields a status report and a
+        support bundle carrying a fingerprint that is not the one sshd offers,
+        which is exactly the substitution a host-key fingerprint exists to
+        detect. So the public key is derived from the private key and compared.
+        """
+
+        derived = self.derived_public_key(key_type)
+        declared = _key_material(self.public_key(key_type))
+        if not declared:
+            raise HostIdentityError(
+                "host_key_unreadable",
+                f"{public_key_name(key_type)} carries no usable key material",
+            )
+        if derived != declared:
+            raise HostIdentityError(
+                "host_identity_keypair_mismatch",
+                f"{public_key_name(key_type)} is not the public half of "
+                f"{private_key_name(key_type)}",
+            )
+        return True
+
+    def derived_public_key(self, key_type):
+        """``ssh-keygen -y``: the public key the private key actually has.
+
+        Fixed argv through the allowlisted runner. Nothing derived here is ever
+        logged, and the private key never leaves the file it is in.
+        """
+
+        if self.runner is None:
+            raise HostIdentityError(
+                "host_key_verification_unavailable",
+                "no command runner is configured, so host keys cannot be verified",
+            )
+        private = self.private_key(key_type)
+        try:
+            result = self.runner.run("ssh-keygen", ["-y", "-f", str(private)], timeout=60)
+        except CommandError as exc:
+            raise HostIdentityError("host_key_unreadable", exc.message)
+        if not getattr(result, "ok", False):
+            raise HostIdentityError(
+                "host_key_unreadable",
+                f"{private.name} could not be read as a private host key",
+            )
+        material = _key_material_of(getattr(result, "stdout", ""))
+        if not material:
+            raise HostIdentityError(
+                "host_key_unreadable",
+                f"no public key could be derived from {private.name}",
+            )
+        return material
 
     # --- establishing it ---------------------------------------------------
 
@@ -230,8 +325,8 @@ class HostIdentityService:
             findings.append(Finding("key_directory", True, self.key_directory))
         except HostIdentityError as exc:
             return IdentityReport(
-                findings=(Finding("key_directory", False, exc.message),),
-                problems=(exc.message,),
+                findings=(Finding("key_directory", False, _stated(exc)),),
+                problems=(_stated(exc),),
             )
 
         for key_type in self.key_types:
@@ -241,6 +336,8 @@ class HostIdentityService:
                     or self.public_key(key_type).exists()
                 )
                 if present or not create:
+                    if create:
+                        self._recover_public_half(key_type)
                     self.verify_key(key_type)
                     reused.append(key_type)
                 else:
@@ -251,8 +348,8 @@ class HostIdentityService:
                     created.append(key_type)
                 findings.append(Finding(f"host_key:{key_type}", True, "present and private"))
             except HostIdentityError as exc:
-                findings.append(Finding(f"host_key:{key_type}", False, exc.message))
-                problems.append(exc.message)
+                findings.append(Finding(f"host_key:{key_type}", False, _stated(exc)))
+                problems.append(_stated(exc))
 
         findings.append(self._machine_identity_finding())
         findings.append(self._network_directory_finding())
@@ -285,6 +382,65 @@ class HostIdentityService:
                 f"{self.key_directory} could not be prepared: {exc}",
             )
         return target
+
+    def _recover_public_half(self, key_type):
+        """Finish a placement a crash interrupted. Never a new identity.
+
+        The private key is renamed into place first, so the window a power loss
+        can land in leaves a valid secret with no ``.pub`` beside it. Retrying
+        then found "something is present", tried to verify a pair, and failed
+        for as long as the appliance existed.
+
+        The public half is derived from the secret rather than invented, so the
+        fingerprint an operator verified on first boot is preserved. The mirror
+        case has no secret to derive from: a ``.pub`` alone is refused rather
+        than silently replaced by a new identity, because that is exactly the
+        substitution a host key fingerprint exists to detect.
+        """
+
+        private = self.private_key(key_type)
+        public = self.public_key(key_type)
+        if private.is_symlink() or public.is_symlink():
+            return False
+        if not private.is_file():
+            if public.is_file():
+                raise HostIdentityError(
+                    "host_key_private_half_missing",
+                    f"{public_key_name(key_type)} is present without "
+                    f"{private_key_name(key_type)}; this identity cannot be recovered",
+                )
+            return False
+        if public.is_file():
+            return False
+
+        material = self.derived_public_key(key_type)
+        staging = self.directory / f".{public_key_name(key_type)}.recovered"
+        try:
+            handle = os.open(
+                str(staging), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, PUBLIC_MODE
+            )
+            try:
+                os.write(handle, f"{material} ems-appliance\n".encode("utf-8"))
+            finally:
+                os.close(handle)
+            os.chmod(staging, PUBLIC_MODE)
+            if self.require_root:
+                os.chown(staging, 0, 0)
+        except OSError as exc:
+            raise HostIdentityError(
+                "host_key_placement_failed",
+                f"the {key_type} public host key could not be rebuilt: {exc}",
+            )
+        self._sync(staging)
+        try:
+            os.replace(staging, public)
+        except OSError as exc:
+            raise HostIdentityError(
+                "host_key_placement_failed",
+                f"the {key_type} public host key could not be placed: {exc}",
+            )
+        self._sync_directory()
+        return True
 
     def _generate(self, key_type):
         """One key pair, placed atomically so a crash leaves nothing partial."""
@@ -320,23 +476,43 @@ class HostIdentityService:
             if self.require_root:
                 os.chown(staging, 0, 0)
                 os.chown(f"{staging}.pub", 0, 0)
-            self._sync(staging)
-            os.replace(staging, self.private_key(key_type))
-            os.replace(f"{staging}.pub", self.public_key(key_type))
-            self._sync_directory()
         except OSError as exc:
             raise HostIdentityError(
                 "host_key_placement_failed", f"the {key_type} host key could not be placed: {exc}"
             )
+
+        # Every flush below is authoritative. The whole claim this module makes
+        # is that an identity established once survives a power loss, and a
+        # flush whose result was discarded proves nothing about the medium: the
+        # first boot would hand back a fingerprint that was never written.
+        self._sync(staging)
+        self._sync(f"{staging}.pub")
+        try:
+            os.replace(staging, self.private_key(key_type))
+            os.replace(f"{staging}.pub", self.public_key(key_type))
+        except OSError as exc:
+            raise HostIdentityError(
+                "host_key_placement_failed", f"the {key_type} host key could not be placed: {exc}"
+            )
+        self._sync_directory()
+        self._sync_parent()
         return key_type
 
     def _sync(self, path):
+        """Flush one path, or fail. There is no third outcome worth having."""
+
         try:
             handle = os.open(str(path), os.O_RDONLY)
-        except OSError:
-            return False
+        except OSError as exc:
+            raise HostIdentityError(
+                "host_identity_not_durable", f"{path} could not be opened to flush it: {exc}"
+            )
         try:
             os.fsync(handle)
+        except OSError as exc:
+            raise HostIdentityError(
+                "host_identity_not_durable", f"{path} could not be flushed to the medium: {exc}"
+            )
         finally:
             os.close(handle)
         return True
@@ -344,27 +520,39 @@ class HostIdentityService:
     def _sync_directory(self):
         return self._sync(self.directory)
 
+    def _sync_parent(self):
+        """The persistent directory the key directory was created in.
+
+        A directory entry is only durable once the directory that holds it is.
+        """
+
+        return self._sync(self.directory.parent)
+
     # --- what the report says ----------------------------------------------
 
     def fingerprints(self):
-        """Public fingerprints, which are the only key material ever reported."""
+        """Public fingerprints, derived from the private keys sshd serves.
+
+        Reading the ``.pub`` file would report whatever is in it. What an
+        operator compares against a login prompt has to come from the key
+        itself, so a replaced ``.pub`` produces no fingerprint at all rather
+        than a plausible wrong one.
+        """
+
+        from appliance.sshkeys import fingerprint_of
 
         found = {}
         for key_type in self.key_types:
-            public = self.public_key(key_type)
-            if not public.is_file():
+            if not self.private_key(key_type).is_file():
                 continue
             try:
-                blob = public.read_text(encoding="utf-8", errors="replace").split()
-            except OSError:
+                material = self.derived_public_key(key_type)
+            except HostIdentityError:
                 continue
-            if len(blob) >= 2:
-                from appliance.sshkeys import fingerprint_of
-
-                try:
-                    found[key_type] = fingerprint_of(blob[1])
-                except Exception:
-                    continue
+            try:
+                found[key_type] = fingerprint_of(material.split()[1])
+            except Exception:
+                continue
         return found
 
     def _machine_identity_finding(self):

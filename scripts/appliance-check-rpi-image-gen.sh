@@ -41,8 +41,8 @@ if [ -z "$GENERATOR" ]; then
         [ -d "$candidate" ] && GENERATOR=$candidate && break
     done
 fi
-[ -n "$GENERATOR" ] || {
-    echo "appliance-check-rpi-image-gen: no checkout given and none found" >&2
+[ -n "$GENERATOR" ] && [ -d "$GENERATOR" ] || {
+    echo "appliance-check-rpi-image-gen: no rpi-image-gen checkout at ${GENERATOR:-<unset>}" >&2
     echo "RESULT: NOT RUN (rpi_image_gen_unavailable)" >&2
     exit 3
 }

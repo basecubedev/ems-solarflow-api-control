@@ -16,7 +16,7 @@ import json
 
 import pytest
 
-from appliance import ab_docker_health, ab_health
+from appliance import ab_bootstrap, ab_docker_health, ab_health
 from appliance.ab_bootstrap import ROLE_ADMIN, ROLE_EMS, RuntimeImage, RuntimeRecordStore
 from appliance.ab_state import AbStateStore, PendingTrial
 from appliance.commands import CommandResult, RecordingRunner
@@ -31,13 +31,13 @@ ADMIN_REFERENCE = f"ghcr.io/basecubedev/ems-admin@{ADMIN_DIGEST}"
 EMS_REFERENCE = f"ghcr.io/basecubedev/ems-solarflow@{EMS_DIGEST}"
 
 
-def container_payload(*, image, running=True):
+def container_payload(*, image, running=True, exit_code=0):
     return {
         "Id": "c" * 64,
         "State": {
             "Running": running,
             "Status": "running" if running else "exited",
-            "ExitCode": 0 if running else 1,
+            "ExitCode": exit_code,
             "Health": {"Status": "healthy", "Log": []},
             "StartedAt": "2026-08-08T00:00:00Z",
         },
@@ -58,11 +58,12 @@ def image_payload(reference, digest):
     }
 
 
-def healthy_runner(*, containers=None, images=None, version="27.3.1"):
+def healthy_runner(*, containers=None, images=None, version="27.3.1", execs=None):
     """A recording runner that answers docker(1) like a healthy host."""
 
+    answers = dict(execs or {})
     known_containers = {
-        "ems-admin": container_payload(image=ADMIN_REFERENCE),
+        "ems-solarflow-admin": container_payload(image=ADMIN_REFERENCE),
         "ems-solarflow": container_payload(image=EMS_REFERENCE),
     }
     known_containers.update(containers or {})
@@ -87,6 +88,13 @@ def healthy_runner(*, containers=None, images=None, version="27.3.1"):
             if payload is None:
                 return CommandResult("docker", args, 1, "", "No such image")
             return CommandResult("docker", args, 0, json.dumps(payload), "")
+        if args[:1] == ("exec",):
+            answer = answers.get(args[1])
+            if answer is not None:
+                return CommandResult("docker", args, *answer)
+            return CommandResult(
+                "docker", args, 0, json.dumps({"diagnosis": {"status": "ok"}}), ""
+            )
         return CommandResult("docker", args, 0, "", "")
 
     return RecordingRunner({"docker": docker})
@@ -98,8 +106,32 @@ def production_backend(**kwargs):
     )
 
 
+ADMIN_INSTANCE_ID = "9f2c41d8a7b04e5c8d3f6a1b2c4e5f70"
+
+
 def answering_admin(url, timeout):
-    return 200, json.dumps({"service": "ems-admin", "version": "1.5.0"})
+    return 200, json.dumps(
+        {
+            "admin_instance_id": ADMIN_INSTANCE_ID,
+            "auth_configured": True,
+            "authenticated": False,
+            "requires_initial_password": False,
+            "recovery_required": False,
+        }
+    )
+
+
+def runtime_image(role, reference, *, required=False, running=True):
+    return RuntimeImage(
+        role=role,
+        reference=reference,
+        required=required,
+        state=(
+            ab_bootstrap.STATE_RUNNING if running else ab_bootstrap.STATE_STOPPED_CLEAN
+        ),
+        digest=reference.partition("@")[2],
+        platform={"os": "linux", "architecture": "arm64"},
+    )
 
 
 def trial_probe(*, backend=None, http_probe=answering_admin):
@@ -144,7 +176,7 @@ def test_the_admin_gate_requires_the_http_endpoint_to_answer():
 
 def test_the_admin_gate_refuses_a_container_that_only_exists():
     backend = production_backend(
-        containers={"ems-admin": container_payload(image=ADMIN_REFERENCE, running=False)}
+        containers={"ems-solarflow-admin": container_payload(image=ADMIN_REFERENCE, running=False)}
     )
     result = trial_probe(backend=backend).admin_runtime(ADMIN_DIGEST)
     assert not result.ok
@@ -196,8 +228,9 @@ def host(tmp_path):
     return host
 
 
-@pytest.fixture
-def state(host):
+def arm(host, fingerprint):
+    """A pending trial bound to the deployment it was planned against."""
+
     store = AbStateStore(host.ab_state_dir)
     store.ensure()
     store.set_pending(
@@ -214,6 +247,7 @@ def state(host):
             release_version="1.5.0",
             boot_digest="sha256:" + "d" * 64,
             rootfs_digest="sha256:" + "e" * 64,
+            deployment_fingerprint=fingerprint,
         )
     )
     return store
@@ -224,11 +258,16 @@ def runtime(host):
     store = RuntimeRecordStore(host.ab_state_dir)
     store.write(
         [
-            RuntimeImage(role=ROLE_ADMIN, reference=ADMIN_REFERENCE, required=True, running=True),
-            RuntimeImage(role=ROLE_EMS, reference=EMS_REFERENCE, required=False, running=True),
+            runtime_image(ROLE_ADMIN, ADMIN_REFERENCE, required=True, running=True),
+            runtime_image(ROLE_EMS, EMS_REFERENCE, running=True),
         ]
     )
     return store
+
+
+@pytest.fixture
+def state(host, runtime):
+    return arm(host, runtime.read().fingerprint)
 
 
 def test_a_healthy_trial_slot_commits_against_the_production_backend(host, state, runtime):
@@ -244,7 +283,7 @@ def test_a_healthy_trial_slot_commits_against_the_production_backend(host, state
 
 
 def test_a_missing_admin_container_blocks_the_commit(host, state, runtime):
-    backend = production_backend(containers={"ems-admin": None})
+    backend = production_backend(containers={"ems-solarflow-admin": None})
     service = build_health_service(
         host,
         state,
@@ -261,7 +300,7 @@ def test_an_admin_container_on_another_digest_blocks_the_commit(host, state, run
     other = "sha256:" + "7" * 64
     reference = f"ghcr.io/basecubedev/ems-admin@{other}"
     backend = production_backend(
-        containers={"ems-admin": container_payload(image=reference)},
+        containers={"ems-solarflow-admin": container_payload(image=reference)},
         images={reference: image_payload(reference, other)},
     )
     service = build_health_service(
@@ -276,14 +315,15 @@ def test_an_admin_container_on_another_digest_blocks_the_commit(host, state, run
     assert any("admin_runtime" in reason for reason in report.reasons)
 
 
-def test_a_stopped_ems_deployment_recorded_as_stopped_still_commits(host, state):
+def test_a_stopped_ems_deployment_recorded_as_stopped_still_commits(host):
     store = RuntimeRecordStore(host.ab_state_dir)
     store.write(
         [
-            RuntimeImage(role=ROLE_ADMIN, reference=ADMIN_REFERENCE, required=True, running=True),
-            RuntimeImage(role=ROLE_EMS, reference=EMS_REFERENCE, required=False, running=False),
+            runtime_image(ROLE_ADMIN, ADMIN_REFERENCE, required=True, running=True),
+            runtime_image(ROLE_EMS, EMS_REFERENCE, running=False),
         ]
     )
+    state = arm(host, store.read().fingerprint)
     backend = production_backend(
         containers={"ems-solarflow": container_payload(image=EMS_REFERENCE, running=False)}
     )
@@ -310,10 +350,10 @@ def test_the_daemon_probe_builds_a_fixed_argv():
 
 def test_the_container_inspection_builds_a_fixed_argv():
     backend = production_backend()
-    backend.inspect_container("ems-admin")
+    backend.inspect_container("ems-solarflow-admin")
 
     assert calls_of(backend) == [
-        ("inspect", "--type", "container", "--format", "{{json .}}", "ems-admin")
+        ("inspect", "--type", "container", "--format", "{{json .}}", "ems-solarflow-admin")
     ]
 
 

@@ -102,6 +102,7 @@ class TrialHealthService:
         systemd=None,
         docker=None,
         runtime=None,
+        bootstrap=None,
         install_check=None,
         agent_socket=None,
         time_fn=None,
@@ -115,6 +116,7 @@ class TrialHealthService:
         self.systemd = systemd
         self.docker = docker
         self.runtime = runtime
+        self.bootstrap = bootstrap
         self.install_check = install_check
         self.agent_socket = agent_socket
         self._time = time_fn or time.time
@@ -177,7 +179,7 @@ class TrialHealthService:
 
     # --- health gates ------------------------------------------------------
 
-    def gates(self, layout):
+    def gates(self, layout, pending=None):
         checks = []
         mounts = self.probe.mounts()
 
@@ -233,7 +235,7 @@ class TrialHealthService:
         )
 
         checks.extend(self._service_gates())
-        checks.extend(self._application_gates())
+        checks.extend(self._application_gates(pending))
         return checks
 
     def _ab_state_gate(self, persistence):
@@ -320,16 +322,18 @@ class TrialHealthService:
         )
         return checks
 
-    def _application_gates(self):
-        """The EMS installation survived, and the runtime came back.
+    def _application_gates(self, pending=None):
+        """The EMS installation survived, and the application came back.
 
         Committing an OS slot does not require EMS to be actively controlling
         power: an appliance that is fine but idle is still fine. What it does
         require is that the installation and its data survived the slot switch,
-        and that the containers the source slot recorded are the ones this slot
-        rebuilt — at their exact digests, with the Admin console answering.
+        that the deployment is still the one the operator confirmed, and that
+        every service the source slot recorded came back in the state it was
+        recorded in — at its exact digest.
         """
 
+        record = self._runtime_record()
         checks = []
         install_root = self.probe.root / "opt/ems-solarflow"
         checks.append(
@@ -346,11 +350,54 @@ class TrialHealthService:
                 detail="the EMS configuration and data directories survived the slot switch",
             )
         )
-        checks.extend(self._runtime_gates())
+        gate = self._deployment_authority_gate(record, pending)
+        if gate is not None:
+            checks.append(gate)
+        checks.extend(self._runtime_gates(record))
         return checks
 
-    def _runtime_gates(self):
-        """What the recorded runtime has to look like in this slot."""
+    def _deployment_authority_gate(self, record, pending):
+        """The deployment this slot rebuilt is the one the plan was made against.
+
+        The fingerprint is never refreshed here. A deployment that changed while
+        the trial was in flight means the operator confirmed one thing and the
+        appliance would be committing another, so the trial falls back and a new
+        plan is required.
+        """
+
+        if record is None or not record.images:
+            return None
+        expected = str(getattr(pending, "deployment_fingerprint", "") or "")
+        observed = record.fingerprint
+        if not expected:
+            return Gate(
+                "deployment_authority",
+                False,
+                detail="this trial was planned before the EMS deployment was recorded",
+            )
+        if expected != observed:
+            return Gate(
+                "deployment_authority",
+                False,
+                detail="the EMS deployment changed after this OS update was planned",
+            )
+        drift = self._deployment_drift(record)
+        return Gate(
+            "deployment_authority",
+            not drift,
+            detail="; ".join(drift) or "the EMS deployment is the one this update was planned for",
+        )
+
+    def _deployment_drift(self, record):
+        if self.bootstrap is None:
+            return ()
+        try:
+            return tuple(self.bootstrap.deployment_drift(record))
+        except Exception as exc:
+            return (f"the EMS deployment could not be proven: {exc}",)
+
+    def _runtime_gates(self, record=None):
+        """What the recorded application has to look like in this slot."""
 
         if self.docker is None:
             return [
@@ -371,24 +418,25 @@ class TrialHealthService:
             # Asking about containers with no daemon produces noise, not signal.
             return checks
 
-        record = self._runtime_record()
         admin = record.image(ab_bootstrap.ROLE_ADMIN) if record else None
         result = self.docker.admin_runtime(_pinned_digest(admin))
         checks.append(Gate("admin_runtime", result.ok, detail=result.detail or result.code))
 
-        ems = record.image(ab_bootstrap.ROLE_EMS) if record else None
-        if ems is not None:
-            outcome = self.docker.ems_runtime(
-                _pinned_digest(ems), expected_running=ems.running
-            )
-            checks.append(
-                Gate(
-                    "ems_runtime",
-                    outcome.ok,
-                    detail=outcome.detail or outcome.code,
-                )
-            )
+        # Only services the source slot actually had are gates. An appliance
+        # with no EMS deployment yet is a supported state, not a failed one.
+        for role, name, probe in (
+            (ab_bootstrap.ROLE_EMS, "ems_runtime", self.docker.ems_runtime),
+            (ab_bootstrap.ROLE_INFLUXDB, "influxdb_runtime", self._influx_probe()),
+        ):
+            entry = record.image(role) if record else None
+            if entry is None or probe is None:
+                continue
+            outcome = probe(_pinned_digest(entry), expected_running=entry.running)
+            checks.append(Gate(name, outcome.ok, detail=outcome.detail or outcome.code))
         return checks
+
+    def _influx_probe(self):
+        return getattr(self.docker, "influxdb_runtime", None)
 
     def _runtime_record(self):
         if self.runtime is None:
@@ -422,7 +470,7 @@ class TrialHealthService:
                 checked_at=now,
             )
 
-        gates = self.gates(layout)
+        gates = self.gates(layout, pending)
         failed = [gate.name for gate in gates if gate.required and not gate.passed]
         if failed:
             return HealthReport(
@@ -580,6 +628,54 @@ def _read_identity(path):
         return path.read_text(encoding="utf-8").strip()
     except (OSError, ValueError):
         return ""
+
+
+def reconcile_boot(probe, state, selector_path, *, time_fn=None):
+    """Make the durable state agree with the selector the firmware obeyed.
+
+    A commit writes the selector and then the slot history. A power loss in
+    between leaves an appliance running the new slot on an ordinary boot while
+    its own state still says the trial never committed — and deciding that from
+    the JSON alone would abandon a slot that is in fact already the default.
+
+    The selector is the authority here because it is what the firmware read, and
+    because only ``commit`` ever moves the default: arming a trial writes the
+    target into ``[tryboot]`` and leaves ``[all]`` on the source slot. A default
+    that names the target therefore proves the commit ran, which in turn proves
+    health had already passed.
+    """
+
+    now = (time_fn or time.time)()
+    layout = ab_layout.discover(probe)
+    pending = state.pending()
+    if pending is None or pending.committed or layout.tryboot:
+        return None
+    if layout.active_slot != pending.target_slot:
+        return None
+    try:
+        selector = SelectorTransaction(
+            selector_path, remount=False
+        ).read()
+    except SelectorError:
+        return None
+    if selector.default_partition != pending.expected_boot_partition:
+        # The default is still the source slot: this is an ordinary boot of a
+        # trial that never committed, which is a fallback and not a commit.
+        return None
+
+    record = SlotRecord(
+        slot=pending.target_slot,
+        release_version=pending.release_version or pending.target_release,
+        build_id=pending.target_build_id,
+        artifact_digest=pending.artifact_digest,
+        boot_digest=pending.boot_digest,
+        rootfs_digest=pending.rootfs_digest,
+        committed_at=now,
+        health={"result": RESULT_HEALTHY, "reconciled_from": "boot_selector"},
+    )
+    state.record_known_good(record, previous_slot=pending.source_slot)
+    state.mark_committed(pending.operation_id)
+    return record
 
 
 def classify_fallback(probe, state, *, time_fn=None):

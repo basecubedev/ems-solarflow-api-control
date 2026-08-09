@@ -103,14 +103,100 @@ None of these scripts push, publish, tag or upload anything.
 
 ```text
 build the image and the update artifact on a clean builder
-record the rpi-image-gen revision and the project git revision
 sign  <artifact>.manifest.json with the project OS-release key
 publish the manifest, the .sha256 and the detached signature next to the artifact
 never place a private key in CI configuration
 ```
 
+`scripts/appliance-release-gates.sh` runs that sequence as one driver — fetch,
+source authority, dependencies, build per board, inspect, sign, source-bundle
+parity — reporting each gate as PASS, FAIL or a truthful NOT RUN with the
+prerequisite it needs. It publishes nothing.
+
+Strict is the default, and a release must use it. "No image was built" and "the
+image is good" are not the same answer:
+
+```text
+every required gate PASS      RESULT: PASS         exit 0
+a gate failed                 RESULT: FAIL         exit 1
+a required gate never ran     RESULT: NOT RUN      exit 3
+--allow-not-run, gates skipped RESULT: INCOMPLETE  exit 0, never the word PASS
+```
+
+`--allow-not-run` exists for exploring on a host without the builder
+prerequisites. Production CI uses the default.
+
 The runtime refuses an unsigned artifact in production; see
 `appliance/os_releases.py`.
+
+## Provenance is proven, not recorded
+
+A release manifest names the rpi-image-gen revision that built it. That claim is
+only worth something if the artefact came from that builder, so it is not copied
+out of the lock:
+
+```text
+a completed build writes build-authority.json into its own output directory
+  → the generator's source form, revision and tree hash
+  → this project's full revision and tree hash
+  → the package digest and the SHA-256 of the image and the update
+  → completed: true
+production signing verifies the artefact against exactly that record
+  → update hash, profile, generator revision, generator tree hash,
+    project revision, project tree hash, build id
+```
+
+Both trees, not just upstream's. `PROJECT_REVISION=$(git rev-parse --short HEAD)`
+named the last commit and said nothing about the files the build packaged, so an
+image built from a working tree with local appliance edits, a staged change, or
+an untracked script under `packaging/` claimed the clean revision it was
+branched from. `appliance/project_source.py` refuses that outright:
+
+```text
+project_source_dirty                uncommitted or staged changes
+project_source_untracked            untracked files under appliance/, packaging/,
+                                    scripts/, config/ or .github/
+project_source_unavailable          the commit object is not in this repository
+build_source_changed_during_build   either tree moved while the build ran
+```
+
+Neither tree may move during the build either. Both are hashed again after the
+artefacts are collected, because a build is long enough to be edited during.
+
+Anything else is refused, including an `update.tar.zst` edited after its build.
+An artefact supplied with `--update` and no build authority stays supported for
+a development bench, but only as one:
+
+```text
+provenance.verified   false
+rpi_image_gen_revision  "unverified"
+--sign-key            refused with provenance_unverified
+```
+
+The source tree itself is proven twice: once by the fetch or clone, and again
+immediately before `./rpi-image-gen build` reads it. A git checkout must be at
+the pinned commit with a clean tree, a clean index, the pinned commit object
+present and nothing untracked under `bin/`, `config/`, `device/`, `image/`,
+`layer/` or `site/`. A release tarball must still match the tree manifest
+recorded beside its verified archive hash. Either failure is
+`rpi_image_gen_source_modified` or `rpi_image_gen_source_unverified`, before a
+single byte is built.
+
+## Source bundles have to be the tracked tree
+
+Persistence activation depends on symlinks tracked in git. An archive that
+flattens them into regular files produces a tree that still builds, generates
+six bind mounts, activates none of them, and discards every write to the shared
+paths at the next slot switch.
+
+```bash
+scripts/appliance-check-source-bundle.sh <bundle.tar>
+```
+
+compares the bundle against `git ls-tree` object by object — content, file mode,
+symlink mode and symlink target. Paths a bundle deliberately omits have to be
+declared with `--exclude`; a silent omission and a dropped file are
+indistinguishable from the far end.
 
 ## Update artefacts are Android Sparse containers
 
@@ -153,8 +239,14 @@ scripts/appliance-verify-slot-mounts.sh --rpi-image-gen ../rpi-image-gen
 scripts/appliance-build-rpi-ab-image.sh --profile rpi5 --rpi-image-gen ../rpi-image-gen
 scripts/appliance-build-rpi-ab-image.sh --profile rpi4 --rpi-image-gen ../rpi-image-gen
 
-# Describe and sign the update artefact the image build produced.
-scripts/appliance-build-rpi-ab-update.sh --profile rpi5 --sign-key <keyid>
+# Describe and sign the update artefact the image build produced. The build
+# authority the image build wrote is what makes signing possible at all.
+scripts/appliance-build-rpi-ab-update.sh --profile rpi5 \
+    --build-authority out/build-authority.json --sign-key <keyid>
+
+# Or all of the above as one driver, with a truthful NOT RUN per missing
+# prerequisite. Publishes nothing.
+scripts/appliance-release-gates.sh --rpi-image-gen ../rpi-image-gen --fetch
 ```
 
 A source tree that cannot prove which upstream revision it is fails with

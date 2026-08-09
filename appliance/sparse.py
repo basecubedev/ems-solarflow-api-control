@@ -20,6 +20,7 @@ the signed manifest.
 import hashlib
 import os
 import struct
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -238,11 +239,32 @@ def summarize(source, *, max_expanded_bytes=MAX_EXPANDED_BYTES):
     return _drive(Path(source), _NullSink(), max_expanded_bytes=max_expanded_bytes)
 
 
+class _Running:
+    """The SHA-256 and the CRC-32 of everything a container expands to.
+
+    ``libsparse`` keeps one running CRC over the whole expanded stream — raw
+    payloads, fill patterns and the zeros a don't-care run stands for. A
+    ``CHUNK_CRC32`` record asserts that running value where it appears, and the
+    header's ``image_checksum`` asserts the final one.
+    """
+
+    def __init__(self):
+        self.digest = hashlib.sha256()
+        self.crc = 0
+
+    def update(self, block):
+        self.digest.update(block)
+        self.crc = zlib.crc32(block, self.crc) & 0xFFFFFFFF
+
+    def hexdigest(self):
+        return self.digest.hexdigest()
+
+
 def _drive(source_path, sink, *, expected_size=None, max_expanded_bytes=MAX_EXPANDED_BYTES):
     header = inspect(
         source_path, expected_size=expected_size, max_expanded_bytes=max_expanded_bytes
     )
-    digest = hashlib.sha256()
+    digest = _Running()
     written = 0
     chunks = 0
     with open(str(source_path), "rb") as reader:
@@ -260,6 +282,14 @@ def _drive(source_path, sink, *, expected_size=None, max_expanded_bytes=MAX_EXPA
             "sparse_expanded_size_mismatch",
             f"the chunks produced {written} bytes, the header declares "
             f"{header.expanded_size}",
+        )
+    # A zero image_checksum is the format's way of saying "not computed"; any
+    # other value is a claim the container makes about itself.
+    if header.image_checksum and header.image_checksum != digest.crc:
+        raise SparseError(
+            "sparse_image_checksum_mismatch",
+            f"the container expands to CRC32 {digest.crc:#010x}, its header declares "
+            f"{header.image_checksum:#010x}",
         )
     return ExpansionReport(
         source=str(source_path),
@@ -394,8 +424,16 @@ def _expand_chunk(reader, sink, header, digest, written):
     if kind == CHUNK_CRC32:
         if payload_size != 4 or blocks:
             raise SparseError("sparse_chunk_invalid", "a crc32 chunk is malformed")
-        if len(reader.read(4)) != 4:
+        value = reader.read(4)
+        if len(value) != 4:
             raise SparseError("sparse_chunk_truncated", "a crc32 chunk ends early")
+        declared = struct.unpack("<I", value)[0]
+        if declared != digest.crc:
+            raise SparseError(
+                "sparse_crc32_chunk_mismatch",
+                f"a crc32 record declares {declared:#010x}, the chunks before it expand "
+                f"to {digest.crc:#010x}",
+            )
         return 0
     raise SparseError("sparse_chunk_unknown", f"chunk type 0x{kind:04x} is not one of the four")
 

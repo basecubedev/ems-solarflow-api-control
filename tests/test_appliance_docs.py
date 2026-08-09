@@ -477,3 +477,111 @@ def test_troubleshooting_covers_a_fallback_and_layout_drift():
     assert "returned to the previous slot" in document
     assert "layout_drift" in document
     assert "manual action is required" in document
+
+
+def test_the_deployment_authority_and_its_states_are_documented():
+    document = read("ab-os-updates.md")
+
+    assert "deployment fingerprint" in document
+    for state in (
+        "absent",
+        "running",
+        "stopped_clean",
+        "failed",
+        "restarting",
+        "created",
+        "unknown",
+    ):
+        assert state in document, state
+    assert "compose" in document and ".env" in document
+    assert "Create a new update plan before continuing" in document
+
+
+def test_the_documentation_states_that_drift_is_never_auto_refreshed():
+    document = read("ab-os-updates.md")
+
+    assert "never re-recorded" in document
+    assert "offered no way around it" in document
+
+
+def test_os_rollback_is_documented_as_not_a_deployment_rollback():
+    document = read("ab-os-updates.md")
+
+    assert "Rolling the OS back is not rolling the deployment back" in document
+    assert "OS slot rollback   ≠   EMS configuration rollback   ≠   database rollback" in (
+        document
+    )
+    assert "does not restore an older compose file" in document
+
+
+def test_reconstruction_is_documented_as_digest_and_platform_proven():
+    document = read("ab-os-updates.md")
+
+    assert "docker load" in document and "not evidence" in document
+    assert "amd64" in document
+    assert "repository@sha256" in document
+
+
+def test_the_build_provenance_gate_is_documented():
+    document = (
+        ROOT / "packaging" / "appliance" / "image" / "README.md"
+    ).read_text(encoding="utf-8")
+
+    assert "build-authority.json" in document
+    assert "provenance_unverified" in document
+    assert "rpi_image_gen_source_modified" in document
+    assert "appliance-check-source-bundle.sh" in document
+    assert "appliance-release-gates.sh" in document
+    for code in (
+        "project_source_dirty",
+        "project_source_untracked",
+        "build_source_changed_during_build",
+    ):
+        assert code in document, code
+
+
+def test_the_release_gate_exit_contract_is_documented():
+    document = (
+        ROOT / "packaging" / "appliance" / "image" / "README.md"
+    ).read_text(encoding="utf-8")
+
+    for outcome in ("RESULT: PASS", "RESULT: FAIL", "RESULT: NOT RUN", "RESULT: INCOMPLETE"):
+        assert outcome in document, outcome
+    assert "--allow-not-run" in document
+
+
+def test_the_confirmed_authority_shape_is_documented():
+    document = read("ab-os-updates.md")
+
+    assert "os_write" in document
+    assert "deployment_fingerprint" in document
+    assert "deployment_schema" in document
+    assert "replan_required" in document
+    assert "*before* the target slot is invalidated" in document
+
+
+def test_the_selector_reconciliation_rule_is_documented():
+    document = read("ab-os-updates.md")
+
+    assert "The selector is what the next boot reconciles from" in document
+    assert "Only `commit` ever moves the default" in document
+
+
+def test_the_compute_module_support_decision_is_documented():
+    document = read("ab-os-updates.md")
+
+    assert "hardware_has_no_build_profile" in document
+    assert "CM4 and\nCM5" in document or "CM4 and CM5" in document
+
+
+def test_the_hardware_gate_lists_the_new_authority_cases():
+    gate = read("ab-hardware-validation.md")
+
+    for case in (
+        "deployment_authority_drift",
+        "build_authority_mismatch",
+        "host_identity_keypair_mismatch",
+        "host_identity_not_durable",
+        "rpi_image_gen_source_modified",
+    ):
+        assert case in gate, case

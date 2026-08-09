@@ -14,7 +14,9 @@ in the agent or web API accepts a generator path.
 
 import hashlib
 import json
+import os
 import shutil
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -29,6 +31,21 @@ REASON_UNAVAILABLE = "rpi_image_gen_unavailable"
 REASON_INCOMPATIBLE = "rpi_image_gen_incompatible"
 REASON_DEPENDENCIES = "rpi_image_gen_dependencies_missing"
 REASON_SOURCE_UNVERIFIED = "rpi_image_gen_source_unverified"
+REASON_SOURCE_MODIFIED = "rpi_image_gen_source_modified"
+
+# Directories a build reads its definition from. An untracked file under any of
+# them can shadow a build input without changing a single tracked byte, which is
+# indistinguishable from the pinned upstream by any check that only reads HEAD.
+BUILD_CRITICAL_ROOTS = ("bin", "config", "device", "image", "layer", "site")
+
+# git(1) is a build-host tool. It is deliberately not on the agent's allowlist —
+# nothing in the agent or the web API resolves a source tree — so the build path
+# gets its own runner rather than widening the runtime's.
+GIT_EXECUTABLES = ("/usr/bin/git", "/bin/git", "/usr/local/bin/git")
+
+# Written by tools that read the tree, never read by a build as an input.
+TREE_IGNORED_NAMES = ("__pycache__", ".git", ".mypy_cache", ".pytest_cache")
+TREE_IGNORED_SUFFIXES = (".pyc", ".pyo")
 
 LAYER_NAME_KEY = "X-Env-Layer-Name:"
 LAYER_VERSION_KEY = "X-Env-Layer-Version:"
@@ -107,6 +124,12 @@ BOARD_CLASSES = {
 }
 
 BOARD_UNKNOWN = ""
+
+# The board classes this project actually ships an installable artefact for.
+# CM4 and CM5 are recognised so an operator is told what their appliance is,
+# rather than being told nothing — but there is no cm4 or cm5 build profile, so
+# reporting them as supported would promise an update that cannot be produced.
+INSTALLABLE_BOARD_CLASSES = ("pi4", "pi5")
 
 # An arm64 image built on anything else needs the kernel to hand aarch64
 # binaries to an emulator. That registration is host-wide and belongs to the
@@ -360,6 +383,17 @@ def detect_board_class(root="/"):
     return board_class(raw)
 
 
+def board_is_installable(board):
+    """Is there an artefact this board could actually be updated with?
+
+    Recognising a board and being able to update it are separate answers.
+    Reporting a Compute Module as supported would offer an OS update that no
+    build profile can produce.
+    """
+
+    return str(board or "") in INSTALLABLE_BOARD_CLASSES
+
+
 # --- upstream host dependencies ---------------------------------------------
 
 
@@ -527,6 +561,7 @@ class Compatibility:
     revision: str = ""
     source_identity: str = SOURCE_UNVERIFIED
     dependencies: DependencyReport = None
+    tree_digest: str = ""
 
     @property
     def compatible(self):
@@ -543,6 +578,7 @@ class Compatibility:
             "reason": self.reason,
             "revision": self.revision,
             "source_identity": self.source_identity,
+            "tree_digest": self.tree_digest,
             "dependencies": (self.dependencies or DependencyReport()).to_dict(),
             "missing_dependencies": list(self.missing_dependencies),
             "findings": [finding.to_dict() for finding in self.findings],
@@ -639,8 +675,15 @@ def build_host_state(dependencies=None, *, machine=None, binfmt_path=BINFMT_HAND
     )
 
 
-def probe_checkout(directory, lock=None, *, which=None, package_query=AUTO_PACKAGE_QUERY):
-    """Check one source tree against the pinned contract. Nothing is executed."""
+def probe_checkout(
+    directory, lock=None, *, which=None, package_query=AUTO_PACKAGE_QUERY, runner=None
+):
+    """Check one source tree against the pinned contract.
+
+    Nothing of the generator is executed. ``git`` is, for a git checkout: only
+    the repository can answer whether its own tree is clean and whether it holds
+    the pinned commit object.
+    """
 
     lock = lock or read_lock()
     if package_query is AUTO_PACKAGE_QUERY:
@@ -652,6 +695,7 @@ def probe_checkout(directory, lock=None, *, which=None, package_query=AUTO_PACKA
         return Compatibility(
             findings=(Finding("checkout", FAIL, f"{root} is not a directory"),),
             reason=REASON_UNAVAILABLE,
+            dependencies=DependencyReport(),
         )
 
     executable = root / lock.executable
@@ -704,7 +748,9 @@ def probe_checkout(directory, lock=None, *, which=None, package_query=AUTO_PACKA
     findings.append(_shared_slot_finding(root, lock))
     findings.append(_update_finding(root, lock))
 
-    identity, revision, identity_finding = _source_identity(root, lock)
+    identity, revision, identity_finding, digest, identity_reason = _source_identity(
+        root, lock, runner=runner
+    )
     findings.append(identity_finding)
 
     dependencies = probe_dependencies(
@@ -713,7 +759,9 @@ def probe_checkout(directory, lock=None, *, which=None, package_query=AUTO_PACKA
     missing = tuple(sorted(set(dependencies.missing) | set(dependencies.unverified_packages)))
     reason = ""
     if identity_finding.result == FAIL:
-        reason = REASON_SOURCE_UNVERIFIED
+        # A tree that named itself correctly and then changed is a different
+        # failure from a tree that could never say what it was.
+        reason = identity_reason or REASON_SOURCE_UNVERIFIED
     elif any(finding.result == FAIL for finding in findings):
         reason = REASON_INCOMPATIBLE
     elif missing:
@@ -725,29 +773,45 @@ def probe_checkout(directory, lock=None, *, which=None, package_query=AUTO_PACKA
         revision=revision,
         source_identity=identity,
         dependencies=dependencies,
+        tree_digest=digest,
     )
 
 
-def _source_identity(root, lock):
+def _source_identity(root, lock, *, runner=None):
     """Prove which upstream source this tree is, in either supported form.
 
-    A git checkout proves itself with HEAD. A release tarball has no ``.git``,
-    so it is proven by the identity record ``appliance-fetch-rpi-image-gen.sh``
-    writes after verifying the download's SHA-256 against the lock. Anything
-    else is unverified, and unverified is a refusal rather than a NOT RUN: a
-    source nobody can name is not the source this appliance is defined by.
+    A git checkout proves itself through git: the pinned commit object exists,
+    HEAD is that commit, the working tree and the index are clean, and nothing
+    untracked shadows a build input. Reading forty characters out of
+    ``.git/HEAD`` proves none of that, and a hand-written file has exactly that
+    shape.
+
+    A release tarball has no ``.git``, so it is proven by the identity record
+    ``appliance-fetch-rpi-image-gen.sh`` writes after verifying the download's
+    SHA-256 — plus the tree manifest recorded beside it, recomputed here. The
+    archive hash is a statement about a download; the manifest is a statement
+    about the tree a build is about to read.
+
+    Anything else is unverified, and unverified is a refusal rather than a NOT
+    RUN: a source nobody can name is not the source this appliance is defined by.
     """
 
-    revision = _revision(root)
-    if revision:
+    if (Path(root) / ".git").exists():
+        state = git_state(root, lock, runner=runner)
+        if state.ok:
+            return (
+                SOURCE_GIT,
+                state.revision,
+                Finding("source_identity", PASS, f"git {state.revision} (pinned {lock.commit})"),
+                "",
+                "",
+            )
         return (
-            SOURCE_GIT,
-            revision,
-            Finding(
-                "source_identity",
-                PASS if revision == lock.commit else FAIL,
-                f"git {revision} (pinned {lock.commit})",
-            ),
+            SOURCE_UNVERIFIED,
+            state.revision,
+            Finding("source_identity", FAIL, "; ".join(state.problems)),
+            "",
+            REASON_SOURCE_UNVERIFIED,
         )
 
     recorded = _recorded_identity(root)
@@ -761,6 +825,8 @@ def _source_identity(root, lock):
                 "this tree carries neither git metadata nor a verified source record; "
                 "fetch it with scripts/appliance-fetch-rpi-image-gen.sh",
             ),
+            "",
+            REASON_SOURCE_UNVERIFIED,
         )
 
     expected = lock.tarball or {}
@@ -778,6 +844,38 @@ def _source_identity(root, lock):
             SOURCE_UNVERIFIED,
             str(recorded.get("commit") or ""),
             Finding("source_identity", FAIL, "; ".join(problems)),
+            "",
+            REASON_SOURCE_UNVERIFIED,
+        )
+
+    declared = str(recorded.get("tree_sha256") or "")
+    observed = tree_digest(root)
+    if not declared:
+        return (
+            SOURCE_UNVERIFIED,
+            lock.commit,
+            Finding(
+                "source_identity",
+                FAIL,
+                "the source record carries no tree hash, so the extracted tree cannot be "
+                "proven unmodified; fetch it again with "
+                "scripts/appliance-fetch-rpi-image-gen.sh",
+            ),
+            observed,
+            REASON_SOURCE_UNVERIFIED,
+        )
+    if declared != observed:
+        return (
+            SOURCE_UNVERIFIED,
+            lock.commit,
+            Finding(
+                "source_identity",
+                FAIL,
+                f"the extracted tree hashes to {observed}, the source record declares "
+                f"{declared}",
+            ),
+            observed,
+            REASON_SOURCE_MODIFIED,
         )
     return (
         SOURCE_TARBALL,
@@ -785,8 +883,10 @@ def _source_identity(root, lock):
         Finding(
             "source_identity",
             PASS,
-            f"tarball {expected.get('sha256')} ({lock.release})",
+            f"tarball {expected.get('sha256')} ({lock.release}) tree {observed}",
         ),
+        observed,
+        "",
     )
 
 
@@ -798,6 +898,212 @@ def _recorded_identity(root):
     except (OSError, ValueError):
         return None
     return payload if isinstance(payload, dict) else None
+
+
+# --- the git source form -----------------------------------------------------
+
+
+def git_runner(runner=None):
+    """A command runner that may run ``git``, and nothing the agent may not."""
+
+    if runner is not None:
+        return runner
+    from appliance.commands import EXECUTABLES, CommandRunner
+
+    return CommandRunner(executables={**EXECUTABLES, "git": GIT_EXECUTABLES})
+
+
+@dataclass(frozen=True)
+class GitSourceState:
+    """What git says about a checkout, or why git could not be asked."""
+
+    revision: str = ""
+    problems: tuple = ()
+
+    @property
+    def ok(self):
+        return not self.problems
+
+
+def git_state(root, lock, *, runner=None):
+    """Prove a checkout against the pinned commit, using git's own answers."""
+
+    runner = git_runner(runner)
+    root = str(root)
+    if not runner.available("git"):
+        return GitSourceState(
+            problems=(
+                "git is not installed, so this checkout's identity cannot be proven",
+            )
+        )
+
+    def git(*args, timeout=120):
+        try:
+            return runner.run("git", ["-C", root, *args], timeout=timeout)
+        except Exception as exc:
+            return _failure(str(exc))
+
+    if not git("rev-parse", "--git-dir").ok:
+        return GitSourceState(
+            problems=(f"{root} carries .git metadata but is not a git repository",)
+        )
+
+    head = git("rev-parse", "HEAD")
+    revision = (head.stdout or "").strip() if head.ok else ""
+    problems = []
+    if not head.ok or not revision:
+        problems.append("this checkout has no resolvable HEAD")
+    elif revision != lock.commit:
+        problems.append(f"HEAD is {revision}, the lock pins {lock.commit}")
+    if not git("cat-file", "-e", f"{lock.commit}^{{commit}}").ok:
+        problems.append(f"the pinned commit object {lock.commit} is not in this repository")
+    if not git("diff", "--quiet").ok:
+        problems.append("tracked files are modified in the working tree")
+    if not git("diff", "--cached", "--quiet").ok:
+        problems.append("changes are staged in the index")
+
+    untracked = git("ls-files", "--others", "--exclude-standard", "-z")
+    if not untracked.ok:
+        problems.append("untracked files could not be enumerated")
+    else:
+        shadowed = _shadowed_build_inputs(untracked.stdout, lock)
+        if shadowed:
+            problems.append(
+                "untracked files shadow build inputs: " + ", ".join(shadowed[:5])
+            )
+    return GitSourceState(revision=revision, problems=tuple(problems))
+
+
+def _failure(message):
+    from appliance.commands import CommandResult
+
+    return CommandResult("git", (), 1, "", message)
+
+
+def _shadowed_build_inputs(stdout, lock):
+    roots = set(BUILD_CRITICAL_ROOTS)
+    files = {str(lock.executable), str(lock.host_dependencies_file)}
+    found = []
+    for entry in str(stdout or "").split("\0"):
+        path = entry.strip()
+        if not path:
+            continue
+        head = path.split("/", 1)[0]
+        if head in roots or path in files:
+            found.append(path)
+    return sorted(found)
+
+
+# --- the tarball source form -------------------------------------------------
+
+
+def tree_manifest(root, *, exclude=(SOURCE_IDENTITY_NAME,)):
+    """Every file in a source tree as path, type, mode and content identity.
+
+    Deterministic and ordered, so the same tree always produces the same
+    manifest. Symlinks are recorded by target rather than followed: a build
+    input replaced by a link to somewhere else is a different tree.
+
+    Bytecode caches and version-control metadata are outside it. Nothing reads
+    them as a build input, and upstream's own tooling writes ``__pycache__``
+    into ``site/`` the first time it runs — an authority that counted those
+    would refuse the second build on a tree the first build was fine with.
+    """
+
+    base = Path(root)
+    skipped = {str(item) for item in exclude}
+    entries = []
+    for path in sorted(base.rglob("*"), key=lambda item: str(item.relative_to(base))):
+        relative = str(path.relative_to(base))
+        if _outside_the_tree_manifest(relative, skipped):
+            continue
+        info = path.lstat()
+        mode = stat.S_IMODE(info.st_mode)
+        if stat.S_ISLNK(info.st_mode):
+            entries.append(
+                {
+                    "path": relative,
+                    "type": "symlink",
+                    "mode": mode,
+                    "target": os.readlink(path),
+                }
+            )
+        elif stat.S_ISDIR(info.st_mode):
+            entries.append({"path": relative, "type": "directory", "mode": mode})
+        elif stat.S_ISREG(info.st_mode):
+            entries.append(
+                {
+                    "path": relative,
+                    "type": "file",
+                    "mode": mode,
+                    "sha256": file_sha256(path),
+                }
+            )
+        else:
+            entries.append({"path": relative, "type": "other", "mode": mode})
+    return entries
+
+
+def _outside_the_tree_manifest(relative, skipped):
+    parts = relative.split("/")
+    if relative in skipped or parts[0] in skipped:
+        return True
+    if any(part in TREE_IGNORED_NAMES for part in parts):
+        return True
+    return relative.endswith(TREE_IGNORED_SUFFIXES)
+
+
+def tree_digest(root, *, exclude=(SOURCE_IDENTITY_NAME,)):
+    """One hash over the whole tree manifest."""
+
+    payload = json.dumps(tree_manifest(root, exclude=exclude), sort_keys=True,
+                         separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def write_source_identity(root, *, form, release, commit, url, sha256, top_level_directory):
+    """Record what was verified, including the tree the build will read.
+
+    The archive hash proves the download. The tree hash is what proves the
+    extraction afterwards, every time, right up to the moment a build starts.
+    """
+
+    target = Path(root) / SOURCE_IDENTITY_NAME
+    payload = {
+        "form": form,
+        "release": release,
+        "commit": commit,
+        "url": url,
+        "sha256": sha256,
+        "top_level_directory": top_level_directory,
+        "tree_sha256": tree_digest(root),
+    }
+    target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return target
+
+
+def assert_buildable(directory, lock=None, *, which=None, package_query=AUTO_PACKAGE_QUERY,
+                     runner=None):
+    """Prove the tree immediately before the build reads it, or refuse.
+
+    A compatibility check that ran minutes earlier says nothing about the tree
+    ``./rpi-image-gen build`` is about to open. This is the call the build
+    wrapper makes with the generator's own working directory already chosen.
+    """
+
+    lock = lock or read_lock()
+    report = probe_checkout(
+        directory, lock, which=which, package_query=package_query, runner=runner
+    )
+    if not report.compatible:
+        raise ImageGenError(
+            report.reason or REASON_INCOMPATIBLE,
+            "; ".join(
+                finding.detail for finding in report.findings if finding.result == FAIL
+            )
+            or "the source tree is not the pinned rpi-image-gen",
+        )
+    return report
 
 
 def _shared_slot_finding(root, lock):
@@ -835,18 +1141,3 @@ def _update_finding(root, lock):
             "update_artifact", FAIL, f"the archive does not carry {', '.join(missing)}"
         )
     return Finding("update_artifact", PASS, f"{lock.update_archive} ({', '.join(lock.update_members)})")
-
-
-def _revision(root):
-    head = Path(root) / ".git" / "HEAD"
-    try:
-        text = head.read_text(encoding="utf-8").strip()
-    except OSError:
-        return ""
-    if text.startswith("ref:"):
-        reference = (Path(root) / ".git" / text.split(" ", 1)[1].strip()).resolve()
-        try:
-            return reference.read_text(encoding="utf-8").strip()
-        except OSError:
-            return ""
-    return text

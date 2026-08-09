@@ -273,18 +273,36 @@ def test_access_configuration_failures_are_not_swallowed():
 # --- dependencies ----------------------------------------------------------
 
 
+def control_field(control, name):
+    """One deb822 field, with its continuation lines folded in.
+
+    dpkg joins a field with the lines that follow it starting with whitespace,
+    so a parser that reads only the first line silently loses half of a folded
+    Depends and calls the package under-declared.
+    """
+
+    lines = control.splitlines()
+    for index, line in enumerate(lines):
+        if not line.startswith(f"{name}:"):
+            continue
+        value = [line.partition(":")[2]]
+        for continuation in lines[index + 1 :]:
+            if not continuation[:1].isspace():
+                break
+            value.append(continuation)
+        return " ".join(part.strip() for part in value)
+    return ""
+
+
 def test_required_host_tools_are_declared_as_dependencies():
-    control = CONTROL.read_text(encoding="utf-8")
-    depends = re.search(r"^Depends:(.*)$", control, re.M)
-    assert depends
-    declared = depends.group(1)
+    declared = control_field(CONTROL.read_text(encoding="utf-8"), "Depends")
+    assert declared
     for package in ("python3", "systemd", "adduser", "acl", "iproute2", "procps", "ca-certificates"):
         assert package in declared, f"{package} must be a declared dependency"
 
 
 def test_optional_host_tools_stay_recommendations():
-    control = CONTROL.read_text(encoding="utf-8")
-    recommends = re.search(r"^Recommends:(.*)$", control, re.M)
+    recommends = control_field(CONTROL.read_text(encoding="utf-8"), "Recommends")
     assert recommends
     for package in ("network-manager", "openssh-server"):
-        assert package in recommends.group(1), package
+        assert package in recommends, package

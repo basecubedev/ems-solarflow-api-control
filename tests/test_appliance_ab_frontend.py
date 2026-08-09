@@ -204,6 +204,7 @@ def test_the_readiness_card_names_every_backend_prerequisite():
         "persistence_ready",
         "host_identity_ready",
         "docker_reconstruction_ready",
+        "deployment_authority_ready",
         "layout_ready",
     }
 
@@ -212,12 +213,66 @@ def test_the_readiness_card_names_every_backend_prerequisite():
 
 def test_the_plan_buttons_are_disabled_until_every_prerequisite_holds():
     assert 'disabled: !ab.may_mutate || !readiness.ready' in APP
+
+
+# --- the EMS deployment behind the OS update ---------------------------------
+
+
+def test_the_deployment_states_are_the_bounded_ones_the_agent_reports():
+    block = APP.split("AB_DEPLOYMENT_STATES = {")[1].split("\n  };")[0]
+    declared = set(re.findall(r"^\s{4}(\w+):", block, flags=re.MULTILINE))
+
+    assert declared == {
+        "deployment_authority_ready",
+        "deployment_authority_drift",
+        "deployment_authority_missing",
+        "runtime_seed_ready",
+        "runtime_seed_incomplete",
+        "application_reconstruction_ready",
+        "application_reconstruction_incomplete",
+    }
+
+
+def test_deployment_drift_explains_what_an_operator_does_about_it():
+    assert '"ab-deployment-drift"' in APP
+    assert "The EMS deployment changed after this OS update was planned." in APP
+    assert "Create a new update plan before continuing." in APP
+
+
+def test_the_browser_is_never_offered_a_way_around_deployment_drift():
+    """Drift is a new plan, not a checkbox. Nothing here forces past it."""
+
+    for smell in ("force", "ignore_drift", "override", "bypass"):
+        assert smell not in APP.split("AB_DEPLOYMENT_STATES")[1].split("renderAbUpdates")[0]
+
+
+def test_the_deployment_card_uses_the_existing_card_family():
+    block = APP.split('card("EMS deployment"')[1].split('"ab-deployment")')[0]
+    assert "status-value" in block
+    assert "tone(" in block
+    assert "fact(" in block
     assert 'disabled: !ab.may_mutate || !abState.previous_slot || !readiness.ready' in APP
 
 
 def test_a_missing_prerequisite_is_explained_rather_than_only_disabling():
     assert '"data-test": "ab-not-ready"' in APP
     assert "OS updates are unavailable: " in APP
+
+
+def test_a_pre_write_refusal_says_nothing_was_written_and_asks_for_a_new_plan():
+    """The one state an operator most needs to read correctly: no downtime."""
+
+    assert '"data-test": "ab-replan-required"' in APP
+    block = APP.split('"data-test": "ab-replan-required"')[1].split("}));")[0]
+    assert "the inactive slot is untouched" in block
+    assert "boot default is " in block
+    assert "create a new update plan" in block
+
+
+def test_the_replan_notice_uses_the_existing_warning_family():
+    block = APP.split('"data-test": "ab-replan-required"')[1].split("}));")[0]
+    assert 'class: "warning-item"' in APP.split('"data-test": "ab-replan-required"')[0][-120:]
+    assert "el(" not in block.replace("el(", "", 1)
 
 
 def test_the_readiness_card_uses_the_existing_card_family():

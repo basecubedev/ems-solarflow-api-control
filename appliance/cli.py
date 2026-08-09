@@ -668,6 +668,9 @@ def command_ab_trial_health(args):
         systemd=services.systemd,
         docker=services.ab_docker_health,
         runtime=services.ab_runtime,
+        # The gate compares the fingerprint the trial was planned against; the
+        # bootstrap service is what re-reads the files behind it.
+        bootstrap=services.ab_bootstrap,
         install_check=lambda: services.status.overview().get("health", {}).get("level") != "error",
         agent_socket=lambda: services.paths.agent_socket.exists(),
         health_window_seconds=services.config.ab_health_window_seconds,
@@ -676,6 +679,19 @@ def command_ab_trial_health(args):
     _print(report.to_dict(), args.json)
 
     if report.result == ab_health.RESULT_NOT_A_TRIAL:
+        # The selector first: an ordinary boot of the trial slot whose default
+        # already names it is a commit whose state write did not survive.
+        committed = ab_health.reconcile_boot(
+            services.ab_probe, services.ab_state, selector_path
+        )
+        if committed is not None:
+            services.audit.record("ab.commit", target=committed.slot, result="reconciled")
+            print(
+                f"reconciled: slot {committed.slot} is the boot default and is now recorded "
+                "as known-good",
+                file=sys.stderr,
+            )
+            return EXIT_OK
         record = ab_health.classify_fallback(services.ab_probe, services.ab_state)
         if record is not None:
             services.audit.record(

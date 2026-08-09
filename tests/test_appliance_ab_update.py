@@ -402,7 +402,11 @@ def test_an_authority_naming_the_active_slot_is_refused(tmp_path, host, releases
     operation, payload = plan(service)
     tampered = dict(payload[AUTHORITY_FIELD])
     tampered["root_device"] = f"{DEVICE}p4"
-    service.operations.update_target(operation.operation_id, {AUTHORITY_FIELD: tampered})
+    confirmed = dict(payload[os_update.CONFIRMED_AUTHORITY_FIELD]) | {"os_write": tampered}
+    service.operations.update_target(
+        operation.operation_id,
+        {AUTHORITY_FIELD: tampered, os_update.CONFIRMED_AUTHORITY_FIELD: confirmed},
+    )
     service.operations.await_confirmation(operation.operation_id, {"plan": True})
     record = service.operations.get(operation.operation_id, include_token=True)
     service.operations.confirm(operation.operation_id, record.confirmation_token)
@@ -550,49 +554,40 @@ def test_a_leaked_inspection_mount_blocks_the_next_plan(tmp_path, host, releases
     assert "inspection_mount_leaked" in blocker_codes(payload)
 
 
-def test_the_runtime_is_seeded_before_the_trial_reboot(tmp_path, host, releases):
+def test_the_runtime_is_seeded_before_the_trial_reboot(tmp_path):
     """A slot with no registry access must still be able to start Admin."""
 
-    class Bootstrap:
-        def __init__(self):
-            self.order = []
+    from appliance import ab_bootstrap
+    from tests.helpers.appliance_deployment import PlannedAppliance
 
-        def record_running_runtime(self):
-            self.order.append("record")
-            return object()
+    appliance = PlannedAppliance(tmp_path)
+    operation, _payload = appliance.plan()
 
-        def seed(self, record):
-            self.order.append("seed")
-            return ("admin",)
+    result = appliance.confirm_and_run(operation)
 
-    bootstrap = Bootstrap()
-    service = build_ab_service(tmp_path, host, releases)
-    service.bootstrap = bootstrap
-    operation, _payload = plan(service)
-
-    result = confirm_and_run(service, operation)
-
-    assert bootstrap.order == ["record", "seed"]
-    assert result["runtime_seed"]["seeded"] == ["admin"]
+    assert sorted(result["runtime_seed"]["seeded"]) == ["admin", "ems"]
+    assert result["runtime_seed"]["state"] == ab_bootstrap.SEED_READY
+    # The pending trial is bound to the deployment the *plan* recorded, so the
+    # target slot can tell whether it is rebuilding what the operator confirmed.
+    assert appliance.service.state.pending().deployment_fingerprint == (
+        appliance.store.read().fingerprint
+    )
 
 
-def test_a_runtime_that_cannot_be_seeded_does_not_stop_the_trial(tmp_path, host, releases):
+def test_a_runtime_that_cannot_be_seeded_does_not_stop_the_trial(tmp_path):
     """The trial slot can still pull; its health gates decide, not the seed."""
 
-    class Failing:
-        def record_running_runtime(self):
-            raise RuntimeError("no space")
+    from appliance import ab_bootstrap
+    from tests.helpers.appliance_deployment import PlannedAppliance
 
-        def seed(self, record):
-            raise AssertionError("never reached")
+    appliance = PlannedAppliance(tmp_path)
+    operation, _payload = appliance.plan()
+    appliance.engine.save_fails = True
 
-    service = build_ab_service(tmp_path, host, releases)
-    service.bootstrap = Failing()
-    operation, _payload = plan(service)
-
-    result = confirm_and_run(service, operation)
+    result = appliance.confirm_and_run(operation)
 
     assert result["runtime_seed"]["seeded"] == []
+    assert result["runtime_seed"]["state"] == ab_bootstrap.SEED_INCOMPLETE
     assert result["stage"] == "tryboot_requested"
 
 
@@ -625,5 +620,6 @@ def test_the_status_reports_decoder_readiness_apart_from_ab_support(service):
         "persistence_ready",
         "host_identity_ready",
         "docker_reconstruction_ready",
+        "deployment_authority_ready",
         "layout_ready",
     }

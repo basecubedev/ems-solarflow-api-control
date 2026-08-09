@@ -7,7 +7,15 @@ imports a service that could touch Docker, apt, systemd or ``authorized_keys``.
 
 from dataclasses import dataclass
 
-from appliance.ab_bootstrap import RuntimeRecordStore, SlotBootstrapService
+from appliance.ab_bootstrap import (
+    ROLE_ADMIN,
+    ROLE_EMS,
+    ROLE_INFLUXDB,
+    DeploymentLayout,
+    RuntimeRecordStore,
+    SlotBootstrapService,
+    host_architecture,
+)
 from appliance.ab_docker_health import DockerTrialHealth
 from appliance.ab_inspect import InactiveSlotInspector
 from appliance.ab_layout import LayoutProbe
@@ -155,15 +163,39 @@ def build_services(
     ab_probe = LayoutProbe(root=root, runner=runner)
     ab_state = AbStateStore(paths.os_update_dir, time_fn=time_fn)
     ab_runtime = RuntimeRecordStore(paths.os_update_dir, time_fn=time_fn)
+    # Container and compose-service names come from the host configuration, so
+    # the deployment the appliance records is the deployment it manages.
+    ab_deployment = DeploymentLayout(
+        compose_file=str(deployment_compose),
+        install_root=str(paths.install_root),
+        containers={
+            ROLE_ADMIN: config.admin_container,
+            ROLE_EMS: config.ems_container,
+            ROLE_INFLUXDB: config.influx_container,
+        },
+        services={
+            ROLE_ADMIN: config.admin_service,
+            ROLE_EMS: config.ems_service,
+            ROLE_INFLUXDB: config.influx_service,
+        },
+    )
     ab_bootstrap = SlotBootstrapService(
         docker=docker,
         store=ab_runtime,
         known_good=known_good,
-        compose_file=deployment_compose,
+        deployment=ab_deployment,
+        # A Pi slot must never commit with images built for another machine.
+        required_platform={"os": "linux", "architecture": host_architecture()},
     )
     # One Docker contract for the trial gates, over the same backend the rest
     # of the appliance uses. Nothing here invents a second method set.
-    ab_docker_health = DockerTrialHealth(docker, admin_url=config.admin_health_url)
+    ab_docker_health = DockerTrialHealth(
+        docker,
+        admin_url=config.admin_health_url,
+        admin_container=config.admin_container,
+        ems_container=config.ems_container,
+        influx_container=config.influx_container,
+    )
     os_update = OsUpdateService(
         paths=paths,
         config=config,

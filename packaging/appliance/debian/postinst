@@ -23,8 +23,9 @@ TMPFILES=/usr/lib/tmpfiles.d/ems-appliance-manager.conf
 UNITS="ems-appliance-agent.service ems-appliance-web.service ems-appliance-export.service ems-appliance-export.path"
 # A/B units ship in every slot and carry ConditionPathExists on the layout
 # manifest, so a single-slot appliance installs them and never activates them.
-AB_UNITS="ems-appliance-persistence.service ems-appliance-ab-health.service \
-ems-appliance-slot-bootstrap.service ems-appliance-grow-persistent.service"
+AB_UNITS="ems-appliance-host-identity.service ems-appliance-persistence.service \
+ems-appliance-ab-health.service ems-appliance-slot-bootstrap.service \
+ems-appliance-grow-persistent.service"
 AB_LAYOUT=/etc/ems-appliance-manager/ab-layout.json
 
 fail() {
@@ -126,6 +127,11 @@ case "$1" in
             # shellcheck disable=SC2086
             systemctl enable $AB_UNITS >/dev/null 2>&1 || true
             if [ -f "$AB_LAYOUT" ]; then
+                # The host identity comes first: sshd is pointed at keys on the
+                # persistent partition, and a slot that never created them would
+                # present a different fingerprint after every update.
+                systemctl start ems-appliance-host-identity.service \
+                    || fail "the persistent host identity could not be established; see 'journalctl -u ems-appliance-host-identity.service'"
                 # On an A/B appliance the shared persistence is a precondition
                 # for the services below: without it every write they accept is
                 # lost at the next slot switch.

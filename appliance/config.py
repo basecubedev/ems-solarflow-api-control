@@ -20,6 +20,13 @@ DEFAULT_ADMIN_CONTAINER = "ems-solarflow-admin"
 DEFAULT_EMS_CONTAINER = "ems-solarflow"
 DEFAULT_INFLUX_CONTAINER = "ems-influxdb"
 DEFAULT_ADMIN_SERVICE = "ems-solarflow-admin"
+DEFAULT_EMS_SERVICE = "ems"
+DEFAULT_INFLUX_SERVICE = "influxdb"
+# The Admin console's own unauthenticated status endpoint. It is the only fixed
+# loopback route Admin answers without a session, so it is what a trial slot and
+# a known-good check ask; a path Admin does not serve would 404 and fail every
+# healthy appliance.
+DEFAULT_ADMIN_HEALTH_PATH = "/api/admin/auth/status"
 DEFAULT_WEB_USER = "ems-appliance-web"
 DEFAULT_SOCKET_GROUP = "ems-appliance"
 DEFAULT_BACKUP_USER = "ems-backup"
@@ -66,8 +73,10 @@ class ApplianceConfig:
     ems_container: str = DEFAULT_EMS_CONTAINER
     influx_container: str = DEFAULT_INFLUX_CONTAINER
     admin_service: str = DEFAULT_ADMIN_SERVICE
+    ems_service: str = DEFAULT_EMS_SERVICE
+    influx_service: str = DEFAULT_INFLUX_SERVICE
     admin_port: int = DEFAULT_ADMIN_PORT
-    admin_health_path: str = "/api/health"
+    admin_health_path: str = DEFAULT_ADMIN_HEALTH_PATH
     session_timeout_seconds: int = DEFAULT_SESSION_TIMEOUT
     session_absolute_max_seconds: int = DEFAULT_SESSION_ABSOLUTE_MAX
     health_timeout_seconds: int = DEFAULT_HEALTH_TIMEOUT
@@ -232,8 +241,10 @@ def load_config(paths):
         ems_container=values.get("ems_container") or DEFAULT_EMS_CONTAINER,
         influx_container=values.get("influx_container") or DEFAULT_INFLUX_CONTAINER,
         admin_service=values.get("admin_service") or DEFAULT_ADMIN_SERVICE,
+        ems_service=values.get("ems_service") or DEFAULT_EMS_SERVICE,
+        influx_service=values.get("influx_service") or DEFAULT_INFLUX_SERVICE,
         admin_port=_as_int(values, "admin_port", DEFAULT_ADMIN_PORT),
-        admin_health_path=values.get("admin_health_path") or "/api/health",
+        admin_health_path=values.get("admin_health_path") or DEFAULT_ADMIN_HEALTH_PATH,
         session_timeout_seconds=_as_int(values, "session_timeout_seconds", DEFAULT_SESSION_TIMEOUT),
         session_absolute_max_seconds=_as_int(
             values, "session_absolute_max_seconds", DEFAULT_SESSION_ABSOLUTE_MAX

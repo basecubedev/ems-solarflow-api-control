@@ -383,7 +383,9 @@
     var unverified = result.unverified_actions || [];
     var verification = renderVerification(result.verification);
     var untouched = result.admin_untouched === true;
-    if (!manual.length && !remaining.length && !unverified.length && !verification && !untouched) {
+    var replan = result.replan_required === true;
+    if (!manual.length && !remaining.length && !unverified.length && !verification && !untouched
+        && !replan) {
       return null;
     }
 
@@ -395,6 +397,17 @@
         class: "warning-item",
         "data-test": "admin-untouched",
         text: "Preflight failed before anything was changed. The Admin that was running is still running and the deployment files are unchanged."
+      }));
+    }
+    /* An OS update refused before the first destructive byte. The operator
+       needs to know that nothing was written and that this plan is spent. */
+    if (replan) {
+      wrapper.appendChild(el("p", {
+        class: "warning-item",
+        "data-test": "ab-replan-required",
+        text: "Nothing was written: the inactive slot is untouched and the boot default is "
+          + "unchanged. The appliance is no longer the one this update was planned against, "
+          + "so create a new update plan."
       }));
     }
     if (verification) wrapper.appendChild(verification);
@@ -1030,8 +1043,43 @@
     ["artifact_decoder_ready", "Artifact decoder", "zstd is missing, so a .tar.zst artifact cannot be read."],
     ["sparse_decoder_ready", "Sparse decoder", "Update members cannot be expanded."],
     ["host_identity_ready", "Host identity", "The persistent SSH host keys could not be proven."],
-    ["docker_reconstruction_ready", "Runtime recovery", "No container runtime is recorded for the next slot."]
+    ["docker_reconstruction_ready", "Runtime recovery", "No container runtime is recorded for the next slot."],
+    ["deployment_authority_ready", "EMS deployment", "The EMS deployment this appliance runs could not be proven, so there is nothing a trial slot could rebuild."]
   ];
+
+  /* The bounded deployment states the agent reports. Each one names what an
+     operator does about it; there is deliberately no bypass in the browser,
+     because a deployment the plan was not made against is a new plan. */
+  var AB_DEPLOYMENT_STATES = {
+    deployment_authority_ready: { tone: "ok", label: "recorded",
+      hint: "The compose file and environment this update was planned against are unchanged." },
+    deployment_authority_drift: { tone: "bad", label: "changed",
+      hint: "The EMS deployment changed after this OS update was planned. Create a new update plan before continuing." },
+    deployment_authority_missing: { tone: "warn", label: "not recorded",
+      hint: "No EMS deployment has been recorded yet, so a trial slot could not rebuild it." },
+    runtime_seed_ready: { tone: "ok", label: "staged",
+      hint: "Every recorded image is staged on the persistent partition." },
+    runtime_seed_incomplete: { tone: "warn", label: "incomplete",
+      hint: "An image is missing from the staged set; the trial slot would have to reach a registry." },
+    application_reconstruction_ready: { tone: "ok", label: "ready",
+      hint: "A trial slot can rebuild this appliance without a network." },
+    application_reconstruction_incomplete: { tone: "warn", label: "not ready",
+      hint: "A trial slot could not rebuild every recorded service." }
+  };
+
+  function deploymentState(value) {
+    return AB_DEPLOYMENT_STATES[value] || { tone: "warn", label: format(value), hint: "" };
+  }
+
+  var AB_SERVICE_STATES = {
+    running: "running",
+    stopped_clean: "stopped",
+    absent: "not deployed",
+    failed: "failed",
+    restarting: "restarting",
+    created: "never started",
+    unknown: "unknown"
+  };
 
   function abReadiness(ab) {
     var readiness = ab.readiness || {};
@@ -1097,6 +1145,28 @@
         return fact(entry[1], value === undefined ? "—" : (value ? "ready" : "missing"));
       })), "ab-readiness")
     ]));
+
+    var deployment = ab.deployment || {};
+    var authority = deploymentState(deployment.authority);
+    main.appendChild(el("div", { class: "card-grid" }, [
+      card("EMS deployment", [
+        el("p", { class: "status-value" }, [tone(authority.tone, authority.label)]),
+        fact("Image staging", deploymentState(deployment.seed).label),
+        fact("Trial recovery", deploymentState(deployment.reconstruction).label),
+        expert() && deployment.seed_bytes
+          ? fact("Staged image size", Math.round(deployment.seed_bytes / (1024 * 1024)) + " MB")
+          : null
+      ].concat((deployment.services || []).map(function (entry) {
+        return fact(format(entry.role), AB_SERVICE_STATES[entry.state] || format(entry.state));
+      })), "ab-deployment")
+    ]));
+
+    if (deployment.authority === "deployment_authority_drift") {
+      main.appendChild(el("p", { class: "empty-state", "data-test": "ab-deployment-drift" }, [
+        el("strong", { text: "The EMS deployment changed after this OS update was planned. " }),
+        el("span", { text: "Create a new update plan before continuing." })
+      ]));
+    }
 
     if (!readiness.ready) {
       main.appendChild(el("p", { class: "empty-state", "data-test": "ab-not-ready" }, [
