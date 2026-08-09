@@ -1,0 +1,224 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""What must survive a slot switch, and how a host proves it will.
+
+A shared path that silently fell back to the active root filesystem looks
+completely healthy: the directory exists, the services start, everything works
+— until the first slot switch, which loses every byte written since the image
+was flashed. So the verifier never accepts existence as evidence; it requires
+each required path to be backed by the persistent partition.
+"""
+
+import pytest
+
+from appliance import ab_persistence
+from tests.helpers.appliance_ab import (
+    DEVICE,
+    PERSIST_MOUNT,
+    SLOT_PREFIX,
+    ApplianceAbHost,
+)
+
+pytestmark = [pytest.mark.unit, pytest.mark.simulation]
+
+
+@pytest.fixture
+def host(tmp_path):
+    return ApplianceAbHost(tmp_path)
+
+
+def verify(host):
+    status = host.discover()
+    return ab_persistence.verify(status, host.mounts())
+
+
+# --- the contract itself -----------------------------------------------------
+
+
+def test_the_ems_installation_is_shared():
+    targets = {shared.target for shared in ab_persistence.SHARED_PATHS}
+
+    assert "/opt/ems-solarflow" in targets
+
+
+def test_appliance_authentication_and_operation_state_are_shared():
+    targets = {shared.target for shared in ab_persistence.SHARED_PATHS}
+
+    assert "/var/lib/ems-appliance-manager" in targets
+    assert "/etc/ems-appliance-manager" in targets
+
+
+def test_network_profiles_are_shared():
+    targets = {shared.target for shared in ab_persistence.SHARED_PATHS}
+
+    assert "/etc/NetworkManager/system-connections" in targets
+
+
+def test_host_identity_is_shared_without_sharing_the_distro_ssh_configuration():
+    """Machine identity survives; each slot keeps its own sshd package state."""
+
+    targets = {shared.target for shared in ab_persistence.SHARED_PATHS}
+
+    assert "/etc/ssh" not in targets
+    assert "/etc/ssh" in ab_persistence.SLOT_LOCAL_PATHS
+    assert any(
+        ab_persistence.SSH_HOST_KEY_DIRECTORY.startswith(target.rstrip("/") + "/")
+        for target in targets
+    )
+
+
+def test_the_machine_identity_comes_from_the_shared_partition():
+    identity = ab_persistence.contract()["machine_identity"]
+
+    assert identity["source"] == ab_persistence.MACHINE_ID_SOURCE
+    assert identity["owner"] == "rpi-image-gen"
+    assert identity["stable_across_slots"] is True
+
+
+def test_the_package_database_and_system_libraries_are_slot_local():
+    for path in ("/var/lib/dpkg", "/usr", "/lib/modules", "/boot/firmware"):
+        assert path in ab_persistence.SLOT_LOCAL_PATHS, path
+
+
+def test_docker_engine_state_is_slot_local_by_decision():
+    """A rollback must never hand a newer content store to an older engine."""
+
+    assert "/var/lib/docker" in ab_persistence.SLOT_LOCAL_PATHS
+    assert "/var/lib/docker" not in {
+        shared.target for shared in ab_persistence.SHARED_PATHS
+    }
+
+
+def test_no_shared_path_is_a_parent_of_a_slot_local_path():
+    for shared in ab_persistence.SHARED_PATHS:
+        for local in ab_persistence.SLOT_LOCAL_PATHS:
+            if local == "/":
+                continue
+            assert not local.startswith(shared.target.rstrip("/") + "/"), (shared.target, local)
+
+
+def test_the_contract_is_serialisable_data():
+    contract = ab_persistence.contract()
+
+    assert contract["schema_version"] == ab_persistence.PERSISTENT_SCHEMA_VERSION
+    assert {entry["target"] for entry in contract["shared"]}
+    assert "/var/lib/docker" in contract["slot_local"]
+
+
+# --- the verifier ------------------------------------------------------------
+
+
+def test_a_healthy_appliance_verifies(host):
+    report = verify(host)
+
+    assert report.ok is True
+    assert report.state == ab_persistence.STATE_OK
+    assert report.mountpoint == PERSIST_MOUNT
+    # image-rota mounts it through upstream's slot alias; the kernel reports
+    # back whatever string was passed, so both names are the same partition.
+    assert report.source == f"{SLOT_PREFIX}/persistent"
+    assert all(entry["shared"] for entry in report.paths)
+
+
+def test_a_missing_persistent_partition_fails_closed(host):
+    host.unmount(PERSIST_MOUNT)
+
+    report = verify(host)
+
+    assert report.ok is False
+    assert report.state == ab_persistence.STATE_MISSING
+    assert "not mounted" in report.problems[0]
+
+
+def test_a_persistent_partition_of_another_identity_fails(host):
+    host.mount(PERSIST_MOUNT, "/dev/sda1")
+
+    report = verify(host)
+
+    assert report.ok is False
+    assert report.state == ab_persistence.STATE_IDENTITY_MISMATCH
+
+
+def test_a_read_only_persistent_partition_fails(host):
+    host.mount(PERSIST_MOUNT, f"{DEVICE}p6", options=("ro", "relatime"))
+
+    report = verify(host)
+
+    assert report.ok is False
+    assert report.state == ab_persistence.STATE_OPTIONS_UNEXPECTED
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "/opt/ems-solarflow",
+        "/var/lib/ems-appliance-manager",
+        "/etc/ems-appliance-manager",
+        "/var/lib/ems-appliance-os-update",
+    ],
+)
+def test_a_required_path_that_fell_back_to_the_root_filesystem_fails(host, target):
+    host.unmount(target)
+
+    report = verify(host)
+
+    assert report.ok is False
+    assert report.state == ab_persistence.STATE_PATH_NOT_SHARED
+    assert any(target in problem for problem in report.problems)
+
+
+def test_a_required_path_backed_by_the_wrong_device_fails(host):
+    host.mount("/opt/ems-solarflow", "/dev/sda1", subtree="/shared/opt/ems-solarflow")
+
+    report = verify(host)
+
+    assert report.ok is False
+    assert any("not from the persistent partition" in problem for problem in report.problems)
+
+
+def test_a_required_path_exposing_the_wrong_subtree_fails(host):
+    host.mount("/opt/ems-solarflow", f"{DEVICE}p6", subtree="/appliance/lib")
+
+    report = verify(host)
+
+    assert report.ok is False
+    assert any("exposes /appliance/lib" in problem for problem in report.problems)
+
+
+def test_an_image_declaring_another_persistent_schema_fails(host):
+    from tests.helpers.appliance_ab import layout_manifest
+
+    host.write_layout_manifest(layout_manifest() | {"persistent_schema_version": 7})
+
+    report = verify(host)
+
+    assert report.ok is False
+    assert any("persistent schema 7" in problem for problem in report.problems)
+
+
+def test_a_host_without_a_layout_reports_missing_rather_than_ok(host):
+    host.remove_layout_manifest()
+    status = host.discover()
+
+    report = ab_persistence.verify(status, host.mounts())
+
+    assert report.ok is False
+    assert report.state == ab_persistence.STATE_MISSING
+
+
+def test_the_report_survives_json(host):
+    import json
+
+    payload = json.loads(json.dumps(verify(host).to_dict()))
+
+    assert payload["ok"] is True
+    assert payload["problems"] == []
+
+
+def test_the_resolved_device_path_is_accepted_as_well_as_the_slot_alias(host):
+    """A persistent partition mounted by its real path is the same partition."""
+
+    host.mount(PERSIST_MOUNT, f"{DEVICE}p6", options=("rw", "noatime"))
+
+    report = verify(host)
+
+    assert report.ok is True

@@ -2,7 +2,11 @@
 [Unit]
 Description=EMS SolarFlow Appliance Manager privileged host agent
 Documentation=file:///usr/share/doc/ems-appliance-manager/architecture.md
-After=local-fs.target
+After=local-fs.target ems-appliance-persistence.service
+# Requires=, not Before= on the persistence unit: ordering alone would still
+# let the agent start against the read-only root's fallback copy of every
+# shared path, and lose every write at the next slot switch.
+Requires=ems-appliance-persistence.service
 Before=ems-appliance-web.service
 
 [Service]

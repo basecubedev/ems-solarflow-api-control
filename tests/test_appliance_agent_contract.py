@@ -72,7 +72,9 @@ def test_read_only_operations_never_take_the_mutation_lock():
 # Mutating operations that deliberately do not serialise against host changes:
 # operation control drives the lock itself, and an authentication audit append
 # must still succeed while an install is running.
-LOCK_EXEMPT_MUTATIONS = frozenset({"audit.record_web_event"})
+# Bookkeeping, not host mutation: neither writes anything a running operation
+# could conflict with, so neither may block on the mutation lock.
+LOCK_EXEMPT_MUTATIONS = frozenset({"audit.record_web_event", "ab.acknowledge"})
 
 
 def test_mutating_plan_operations_take_the_mutation_lock():

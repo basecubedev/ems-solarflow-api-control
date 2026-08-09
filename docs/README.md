@@ -99,6 +99,8 @@ Docker daemon or EMS itself are unavailable. It never edits EMS configuration.
 | Installation | [appliance/installation.md](appliance/installation.md) | Supported Raspberry Pi models, the `.deb`, the layout and first-run setup. |
 | Admin recovery | [appliance/admin-recovery.md](appliance/admin-recovery.md) | Install, reinstall, repair and roll back the EMS Admin container. |
 | OS updates | [appliance/os-updates.md](appliance/os-updates.md) | Security updates, full updates and package-manager recovery. |
+| A/B OS updates | [appliance/ab-os-updates.md](appliance/ab-os-updates.md) | Fail-safe A/B host images: slots, persistence, tryboot, commit and fallback. |
+| A/B hardware gate | [appliance/ab-hardware-validation.md](appliance/ab-hardware-validation.md) | The physical Raspberry Pi cases A/B support is not claimed without. |
 | SSH and backup access | [appliance/ssh-backup-access.md](appliance/ssh-backup-access.md) | SSH keys, the read-only `ems-backup` account and rsync/scp. |
 | Network recovery | [appliance/network-recovery.md](appliance/network-recovery.md) | WLAN with automatic revert, hostname changes and lockout recovery. |
 | Security model | [appliance/security-model.md](appliance/security-model.md) | The privilege boundary, the operation allowlist and secret handling. |

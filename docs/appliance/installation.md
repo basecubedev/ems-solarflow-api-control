@@ -11,6 +11,28 @@
 
 Other boards and 32-bit systems are out of scope for this release.
 
+## Two installation shapes
+
+```text
+Single-slot installation
+  the .deb on an existing Raspberry Pi OS system
+  → classic package updates
+  → a major OS generation change requires re-imaging
+
+A/B appliance image
+  ems-solarflow-appliance-<version>-arm64-ab.img, flashed to the medium
+  → image-based fail-safe host updates
+  → the inactive slot is staged, trial-booted, health-checked
+  → commit, or automatic fallback to the previous slot
+```
+
+**An existing single-slot installation is never converted in place.** Moving to
+A/B means flashing an A/B appliance image and restoring an EMS backup onto it;
+the appliance does not resize, move or repartition a running installation's
+storage, and no such action is reachable from the browser or the agent. Single-
+slot installations stay fully supported. See
+[ab-os-updates.md](ab-os-updates.md).
+
 ## Install
 
 ```bash
@@ -36,6 +58,10 @@ The package installs:
 /usr/lib/systemd/system/ems-appliance-export.service
 /usr/lib/systemd/system/ems-appliance-export.path
 /usr/lib/systemd/system/ems-appliance-backup-access-disable.service
+/usr/lib/systemd/system/ems-appliance-persistence.service
+/usr/lib/systemd/system/ems-appliance-ab-health.service
+/usr/lib/systemd/system/ems-appliance-slot-bootstrap.service
+/usr/lib/systemd/system/ems-appliance-grow-persistent.service
 /usr/lib/ems-appliance-manager/setup-export-root.sh
 /usr/lib/ems-appliance-manager/backup-account.sh
 /usr/lib/tmpfiles.d/ems-appliance-manager.conf

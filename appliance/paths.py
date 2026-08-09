@@ -18,6 +18,7 @@ DEFAULT_STATE_DIR = "/var/lib/ems-appliance-manager"
 DEFAULT_LOG_DIR = "/var/log/ems-appliance-manager"
 DEFAULT_RUNTIME_DIR = "/run/ems-appliance-manager"
 DEFAULT_EXPORT_ROOT = "/srv/ems-appliance-export"
+DEFAULT_OS_UPDATE_DIR = "/var/lib/ems-appliance-os-update"
 
 ENV_INSTALL_ROOT = "EMS_APPLIANCE_INSTALL_ROOT"
 ENV_CONFIG_DIR = "EMS_APPLIANCE_CONFIG_DIR"
@@ -303,6 +304,17 @@ class AppliancePaths:
     @property
     def packages_dir(self):
         return self.agent_state_dir / "packages"
+
+    @property
+    def os_update_dir(self):
+        """A/B state and staged artifacts, on the shared persistent partition.
+
+        Deliberately outside the agent state tree: both slots read it, and on an
+        A/B appliance it is a mount from /persist rather than part of the root
+        filesystem the update is about to replace.
+        """
+
+        return Path(DEFAULT_OS_UPDATE_DIR)
 
     @property
     def export_status_file(self):

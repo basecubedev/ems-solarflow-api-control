@@ -62,12 +62,23 @@ install -m 0644 "$PACKAGING/systemd/ems-appliance-export.service" "$STAGE/usr/li
 install -m 0644 "$PACKAGING/systemd/ems-appliance-export.path" "$STAGE/usr/lib/systemd/system/"
 install -m 0644 "$PACKAGING/systemd/ems-appliance-backup-access-disable.service" \
         "$STAGE/usr/lib/systemd/system/"
+# The A/B units ship in every slot of an image-managed appliance and are inert
+# on a single-slot host; both carry ConditionPathExists on the layout manifest.
+install -m 0644 "$PACKAGING/systemd/ems-appliance-persistence.service" \
+        "$STAGE/usr/lib/systemd/system/"
+install -m 0644 "$PACKAGING/systemd/ems-appliance-ab-health.service" \
+        "$STAGE/usr/lib/systemd/system/"
+install -m 0644 "$PACKAGING/systemd/ems-appliance-slot-bootstrap.service" \
+        "$STAGE/usr/lib/systemd/system/"
+install -m 0644 "$PACKAGING/systemd/ems-appliance-grow-persistent.service" \
+        "$STAGE/usr/lib/systemd/system/"
 install -m 0644 "$PACKAGING/tmpfiles/ems-appliance-manager.conf" "$STAGE/usr/lib/tmpfiles.d/"
 install -m 0644 "$PACKAGING/logrotate/ems-appliance-manager" "$STAGE/etc/logrotate.d/"
 install -m 0644 "$PACKAGING/config/appliance.conf" "$STAGE/etc/ems-appliance-manager/"
 install -m 0644 "$PACKAGING/config/allowed-images.conf" "$STAGE/etc/ems-appliance-manager/"
 
-for document in architecture installation admin-recovery os-updates ssh-backup-access \
+for document in architecture installation admin-recovery os-updates ab-os-updates \
+                ab-hardware-validation ab-persistence-contract ssh-backup-access \
                 network-recovery security-model troubleshooting; do
     [ -f "$ROOT/docs/appliance/$document.md" ] && \
         install -m 0644 "$ROOT/docs/appliance/$document.md" \

@@ -21,6 +21,11 @@ LOG_DIR=/var/log/ems-appliance-manager
 CONFIG_DIR=/etc/ems-appliance-manager
 TMPFILES=/usr/lib/tmpfiles.d/ems-appliance-manager.conf
 UNITS="ems-appliance-agent.service ems-appliance-web.service ems-appliance-export.service ems-appliance-export.path"
+# A/B units ship in every slot and carry ConditionPathExists on the layout
+# manifest, so a single-slot appliance installs them and never activates them.
+AB_UNITS="ems-appliance-persistence.service ems-appliance-ab-health.service \
+ems-appliance-slot-bootstrap.service ems-appliance-grow-persistent.service"
+AB_LAYOUT=/etc/ems-appliance-manager/ab-layout.json
 
 fail() {
     echo "ems-appliance: $1" >&2
@@ -118,6 +123,15 @@ case "$1" in
             systemctl daemon-reload || fail "systemctl daemon-reload failed"
             # shellcheck disable=SC2086
             systemctl enable $UNITS || fail "the appliance services could not be enabled"
+            # shellcheck disable=SC2086
+            systemctl enable $AB_UNITS >/dev/null 2>&1 || true
+            if [ -f "$AB_LAYOUT" ]; then
+                # On an A/B appliance the shared persistence is a precondition
+                # for the services below: without it every write they accept is
+                # lost at the next slot switch.
+                systemctl start ems-appliance-persistence.service \
+                    || fail "the shared persistent state could not be verified; see 'journalctl -u ems-appliance-persistence.service'"
+            fi
             systemctl restart ems-appliance-agent.service \
                 || fail "the appliance agent failed to start; see 'journalctl -u ems-appliance-agent.service'"
             systemctl restart ems-appliance-web.service \
@@ -138,8 +152,8 @@ case "$1" in
                 || fail "the installation is not usable; see the checks above"
         else
             # shellcheck disable=SC2086
-            SYSTEMD_OFFLINE=1 systemctl enable $UNITS >/dev/null 2>&1 || true
-            for unit in $UNITS; do
+            SYSTEMD_OFFLINE=1 systemctl enable $UNITS $AB_UNITS >/dev/null 2>&1 || true
+            for unit in $UNITS ems-appliance-ab-health.service; do
                 case "$unit" in *.path|*.service) ;; *) continue ;; esac
                 [ -e "/etc/systemd/system/multi-user.target.wants/$unit" ] && continue
                 mkdir -p /etc/systemd/system/multi-user.target.wants
@@ -147,6 +161,14 @@ case "$1" in
                        "/etc/systemd/system/multi-user.target.wants/$unit" \
                     || fail "cannot enable $unit for the first boot"
             done
+            # The persistence unit must be reached through local-fs.target: it
+            # has to be established before anything the appliance mounts over.
+            if [ ! -e /etc/systemd/system/local-fs.target.wants/ems-appliance-persistence.service ]; then
+                mkdir -p /etc/systemd/system/local-fs.target.wants
+                ln -sf /usr/lib/systemd/system/ems-appliance-persistence.service \
+                       /etc/systemd/system/local-fs.target.wants/ems-appliance-persistence.service \
+                    || fail "cannot enable the persistence unit for the first boot"
+            fi
             /usr/bin/ems-appliance verify-install --offline \
                 || fail "the offline installation is incomplete; see the checks above"
             note "no running systemd: the services are enabled and start on first boot."

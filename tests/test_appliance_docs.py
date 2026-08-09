@@ -17,6 +17,8 @@ DOCS = ROOT / "docs" / "appliance"
 
 REQUIRED = (
     "architecture.md",
+    "ab-os-updates.md",
+    "ab-hardware-validation.md",
     "installation.md",
     "admin-recovery.md",
     "os-updates.md",
@@ -337,3 +339,136 @@ def test_the_arm64_evidence_contract_is_documented():
     assert "reason_code" in installation
     assert "latest.txt" in installation
     assert "never left empty" in installation
+
+
+# --- A/B operating-system updates -------------------------------------------
+
+
+def test_the_three_rollbacks_are_named_as_different_things():
+    """Admin image, EMS data and OS slot recover different failures."""
+
+    document = read("ab-os-updates.md")
+
+    assert "Admin image rollback" in document
+    assert "EMS backup / restore" in document
+    assert "OS A/B rollback" in document
+    assert "EEPROM" in document
+
+
+def test_ab_is_never_claimed_for_docker_containers():
+    document = read("ab-os-updates.md")
+
+    assert "A/B **never** applies to Docker containers" in document
+    assert "the word \"slot\" is not used for" in document
+
+
+def test_the_supported_hardware_scope_is_stated_and_not_widened():
+    document = read("ab-os-updates.md")
+
+    assert "Raspberry Pi 4 or later" in document
+    assert "arm64" in document
+    assert "microSD, USB mass storage or NVMe" in document
+    assert "never inferred from another" in document
+
+
+def test_the_slot_model_and_the_selector_are_documented():
+    document = read("ab-os-updates.md")
+
+    assert "tryboot_a_b=1" in document
+    assert "[tryboot]" in document
+    assert "boot_partition" in document
+    assert "never guessed at runtime" in document
+
+
+def test_every_update_state_is_documented():
+    document = read("ab-os-updates.md")
+
+    for state in (
+        "unsupported",
+        "single_slot",
+        "ready",
+        "staging",
+        "writing_inactive",
+        "verifying_inactive",
+        "ready_for_tryboot",
+        "tryboot_requested",
+        "booted_trial",
+        "health_verifying",
+        "committing",
+        "committed",
+        "fallback_observed",
+        "failed_recoverable",
+        "manual_action_required",
+        "failed_terminal",
+    ):
+        assert state in document, state
+
+
+def test_the_persistence_contract_names_what_is_shared_and_what_is_not():
+    """The contract has one owning document; ab-os-updates.md links to it."""
+
+    document = read("ab-persistence-contract.md")
+
+    for shared in ("/opt/ems-solarflow", "/var/lib/ems-appliance-manager", "ssh_host_"):
+        assert shared in document, shared
+    for local in ("/var/lib/dpkg", "/var/lib/docker", "/lib/modules"):
+        assert local in document, local
+    assert "fails closed" in document
+    assert "ab-persistence-contract.md" in read("ab-os-updates.md")
+
+
+def test_the_docker_state_decision_is_explicit():
+    document = read("ab-persistence-contract.md")
+
+    assert "`/var/lib/docker` is slot-local by decision" in document
+    assert "seeded onto the shared partition" in document
+
+
+def test_the_persistence_contract_states_the_machine_and_ssh_decisions():
+    document = read("ab-persistence-contract.md")
+
+    assert "One physical appliance is one Linux machine" in document
+    assert "`/etc/ssh` as a whole is **not** shared" in document
+
+
+def test_no_in_place_conversion_is_offered_anywhere():
+    for name in ("ab-os-updates.md", "installation.md", "os-updates.md", "security-model.md"):
+        document = read(name)
+        assert "repartition" in document.lower(), name
+    assert "never converted in place" in read("installation.md")
+
+
+def test_the_adr_exists_and_explains_why_native_tryboot():
+    adr = (DOCS / "adr" / "ab-native-tryboot.md").read_text(encoding="utf-8")
+
+    assert "Status: accepted" in adr
+    assert "Do **not** add RAUC" in adr
+    assert "No blocking limitation of native tryboot was found" in adr
+    assert "Do not run two competing A/B mechanisms" in adr
+
+
+def test_the_hardware_gate_claims_nothing_that_was_not_run():
+    gate = read("ab-hardware-validation.md")
+
+    assert "NOT RUN" in gate
+    assert "microSD" in gate and "NVMe" in gate
+    assert "A pass on one\nclass is never reported for another" in gate.replace(
+        "**A pass on one", "A pass on one"
+    ) or "never reported for another" in gate
+
+
+def test_the_operator_documentation_states_both_update_modes():
+    document = read("os-updates.md")
+
+    assert "Single-slot" in document
+    assert "A/B appliance image" in document
+    assert "one-shot" in document
+    assert "Nothing is retried\nautomatically" in document or "not retried" in document.lower()
+
+
+def test_troubleshooting_covers_a_fallback_and_layout_drift():
+    document = read("troubleshooting.md")
+
+    assert "returned to the previous slot" in document
+    assert "layout_drift" in document
+    assert "manual action is required" in document

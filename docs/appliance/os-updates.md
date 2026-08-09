@@ -1,6 +1,18 @@
 # Operating-system updates
 
-Open **System Updates**.
+Open **System Updates**. The page has two modes, and an appliance is in exactly
+one of them:
+
+| Installation | Host updates |
+|---|---|
+| **Single-slot** — a normal Raspberry Pi OS root filesystem | Classic package updates. A major OS generation change requires re-imaging. |
+| **A/B appliance image** | Image-based fail-safe host updates: staged into the inactive slot, trial-booted, health-checked, then committed or automatically rolled back. |
+
+The mode is detected, never chosen: an appliance without an A/B layout reports
+`single_slot` and keeps the package-update behaviour described below. **The move
+to A/B requires physically re-imaging onto an A/B appliance image.** Nothing in
+the browser or the agent repartitions a running installation, and no feature to
+do so exists. See [ab-os-updates.md](ab-os-updates.md).
 
 ## What the check reports
 
@@ -60,6 +72,53 @@ There are no free-form apt arguments. **A real active package-manager lock is
 never removed** — the operation refuses with `package_lock_held` and asks you to
 wait for the other package manager to finish.
 
+## A/B image-managed appliances
+
+On an appliance built from an A/B image the page shows the slot state instead of
+a package list:
+
+```text
+OS image update available
+Current slot            A or B
+Current OS build        the build id in the running root filesystem
+Inactive slot           where the next update is staged
+Last known-good slot    what a rollback would return to
+Trial status            whether a trial boot is pending or running
+```
+
+The update path is:
+
+```text
+plan → confirmation → stage into the inactive slot → verify by read-back
+     → arm a one-shot trial boot → reboot → health check
+     → commit, or return to the current slot
+```
+
+The default boot slot does not move until a booted target slot has proven
+itself. If it does not, the next ordinary boot returns to the current slot with
+nothing changed, and the page reports the fallback. **Nothing is retried
+automatically**: a new plan and a new confirmation are required after the
+inactive slot has been staged again.
+
+`apt upgrade` is **not** the normal update path there. A live package mutation on
+an image-managed host creates slot drift and can disappear after a rollback, so
+package-manager recovery stays available in Expert mode only for repairing a
+broken active slot, and is labelled as recovery.
+
+### Rolling the operating system back
+
+*Roll back the operating system* targets only the recorded previous known-good
+slot — the one whose exact build and digests were written when it was promoted.
+It trial-boots that slot and commits it only when it proves itself, exactly like
+an update. There is no arbitrary historical image and no direct selector flip.
+
+### From the console
+
+```bash
+sudo ems-appliance ab status
+sudo ems-appliance ab verify-persistence
+```
+
 ## Major OS upgrades
 
 Unattended distribution upgrades (for example Bookworm → Trixie) are
@@ -68,6 +127,10 @@ deliberately not supported. For a major OS generation change:
 1. Create or export an EMS backup (EMS Admin Console).
 2. Flash the new supported appliance image.
 3. Restore the EMS backup.
+
+On an A/B appliance a major OS generation change arrives as a normal image
+update, because the whole root filesystem is replaced rather than upgraded in
+place.
 
 ## Reboot and shutdown
 

@@ -458,10 +458,59 @@ descendant created later through the default ACL and every `setfacl` failure are
 preserved and reported as incomplete cleanup. The manifest survives an
 incomplete purge so a second attempt stays exact instead of guessing.
 
+## A/B operating-system updates
+
+The block-device write is the most destructive thing this appliance can do, so
+its authority is the narrowest.
+
+```text
+the browser sends           release_id, and a repair flag
+the browser can never send  a device path, a partition identity, a partition number,
+                            a URL, a signing key, a checksum, a mount flag,
+                            a dd argument or a reboot string
+```
+
+Everything else is derived: the release directory and the signing keyring come
+from the root-owned `appliance.conf`, the digests come from a manifest whose
+detached signature this appliance's own keyring verified, and the devices come
+from layout discovery that cross-checks the firmware, the kernel command line,
+the mount table, the block layer and the image-build layout manifest. A
+disagreement between those is `layout_drift`, which disables every A/B mutation.
+
+An artifact without a verified signature is refused. A development override
+exists for a bench, is reachable only where the root-owned configuration enables
+it, and records a distinct verification value that no consumer can read as a
+release-gate pass.
+
+Extraction treats a verified archive as still an archive: absolute paths, parent
+traversals, nested paths, links, device nodes, unexpected or duplicate members,
+oversized members and members that produce more bytes than they declared are all
+refused, into a root-owned staging directory, with each member's digest checked
+against the manifest before any writer may read it.
+
+The confirmed operation record binds the exact physical target — device, both
+partitions, both partition identities, both digests, the layout id and the persistent
+schema — and that binding is revalidated immediately before the first write. A
+recorded target that resolves to the running slot is refused even when the record
+says otherwise.
+
+**No feature repartitions a running installation.** The command allowlist
+contains no partitioning or filesystem-creation tool, and the only partition
+change this project makes at all is growing the persistent partition on a
+freshly imaged medium during first boot, before any data exists.
+
+The audit trail carries the plan, the confirmation, the staging, the tryboot
+request, the trial boot, a health failure, the commit, an observed fallback and
+both rollback steps. It never carries signing material: the detail filter matches
+key material as a substring, so `signing_key` is dropped exactly like `key`.
+
 ## What is deliberately absent
 
 ```text
 arbitrary shell execution
+in-place conversion of a single-slot installation to A/B
+repartitioning a running installation from the browser
+EEPROM bootloader firmware-slot writes
 a browser-based terminal
 a general Linux package manager
 free-form systemd service editing

@@ -55,9 +55,11 @@ class StatusService:
         ssh,
         backup,
         operations,
+        os_update=None,
         time_fn=None,
     ):
         self.paths = paths
+        self.os_update = os_update
         self.config = config
         self.probe = probe
         self.docker = docker
@@ -103,7 +105,31 @@ class StatusService:
         return self.admin.detect()
 
     def updates(self):
-        return self.packages.check().to_dict()
+        """Package updates plus, on an image-managed host, the A/B slot state.
+
+        Both modes are reported from one place so the page can show exactly one
+        of them: a single-slot appliance keeps package updates, an A/B appliance
+        stages images into the inactive slot instead.
+        """
+
+        payload = self.packages.check().to_dict()
+        payload["ab"] = self.ab_state()
+        payload["update_mode"] = (
+            "ab_image" if payload["ab"].get("ab_supported") else "single_slot"
+        )
+        return payload
+
+    def ab_state(self):
+        if self.os_update is None:
+            return {"mode": "unsupported", "ab_supported": False, "reason": "ab_unavailable"}
+        try:
+            return self.os_update.status()
+        except Exception as exc:
+            return {
+                "mode": "unsupported",
+                "ab_supported": False,
+                "reason": getattr(exc, "code", "ab_status_unavailable"),
+            }
 
     def network_state(self):
         return self.network.status()

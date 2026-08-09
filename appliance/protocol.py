@@ -33,6 +33,7 @@ KIND_HOSTNAME = "hostname"
 KIND_AUDIT_EVENT = "audit_event"
 KIND_AUDIT_RESULT = "audit_result"
 KIND_AUDIT_REASON = "audit_reason"
+KIND_OS_RELEASE_ID = "os_release_id"
 
 
 class ProtocolError(Exception):
@@ -91,6 +92,7 @@ READ_ONLY_OPERATIONS = (
     ),
     _spec("network.wifi.scan", summary="Visible WLAN networks"),
     _spec("admin.releases", summary="Installable Admin versions"),
+    _spec("ab.status", summary="A/B slot, persistence and OS release state"),
 )
 
 MUTATING_OPERATIONS = (
@@ -177,6 +179,31 @@ MUTATING_OPERATIONS = (
         summary="Plan revoking every SSH key of an account",
     ),
     _spec("support.plan_archive", mutating=True, takes_lock=True, summary="Plan a support archive"),
+    # The browser names a release and nothing else. Every device path, PARTUUID,
+    # download URL, signing key and partition number comes from the root-owned
+    # configuration, the signed manifest or verified layout discovery.
+    _spec(
+        "ab.plan_update",
+        mutating=True,
+        takes_lock=True,
+        fields=(
+            Field("release_id", KIND_OS_RELEASE_ID),
+            Field("repair", KIND_BOOL, required=False, default=False),
+        ),
+        summary="Plan an A/B operating-system update",
+    ),
+    _spec(
+        "ab.plan_rollback",
+        mutating=True,
+        takes_lock=True,
+        summary="Plan a rollback to the previous known-good slot",
+    ),
+    _spec(
+        "ab.acknowledge",
+        mutating=True,
+        fields=(Field("operation_id", KIND_OPERATION_ID),),
+        summary="Acknowledge an A/B result or an observed fallback",
+    ),
     # The web service owns authentication but not the audit trail: it may only
     # ask the agent to record one of a fixed set of events, with no free-form
     # field of its own.
@@ -286,6 +313,8 @@ def _coerce(field, value, context):
         return validation.validate_audit_result(value)
     if kind == KIND_AUDIT_REASON:
         return validation.validate_web_audit_reason(value)
+    if kind == KIND_OS_RELEASE_ID:
+        return validation.validate_os_release_id(value)
     raise ProtocolError("invalid_field_kind", f"unknown field kind {kind!r}", field=field.name)
 
 

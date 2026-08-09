@@ -21,6 +21,7 @@ from appliance import (
     admin_lifecycle,
     network,
     operation_schema,
+    os_update,
     packages,
     ssh_service,
     support_archive,
@@ -54,6 +55,8 @@ PLAN_TYPES = {
     "ssh.plan_key_remove": ssh_service.TYPE_SSH_KEY_REMOVE,
     "ssh.plan_revoke_all": ssh_service.TYPE_SSH_REVOKE_ALL,
     "support.plan_archive": support_archive.TYPE_SUPPORT_ARCHIVE,
+    "ab.plan_update": os_update.TYPE_OS_UPDATE,
+    "ab.plan_rollback": os_update.TYPE_OS_ROLLBACK,
     "system.plan_reboot": "system.reboot",
     "system.plan_shutdown": "system.shutdown",
 }
@@ -71,6 +74,8 @@ AUDITED_PLANS = {
     ssh_service.TYPE_SSH_REVOKE_ALL: "ssh.keys_revoked",
     "system.reboot": "system.reboot",
     "system.shutdown": "system.shutdown",
+    os_update.TYPE_OS_UPDATE: "ab.update.plan",
+    os_update.TYPE_OS_ROLLBACK: "ab.rollback.plan",
 }
 
 
@@ -115,6 +120,8 @@ class AgentHandlers:
         if spec.name == "operations.acknowledge":
             record = self.services.operations.acknowledge(args["operation_id"])
             return {"operation": record.to_dict()}
+        if spec.name == "ab.acknowledge":
+            return self._acknowledge_ab(args)
         if spec.name == "audit.record_web_event":
             return self._record_web_event(args, actor=actor, source_ip=source_ip)
         return self._read_only(spec, args)
@@ -164,6 +171,8 @@ class AgentHandlers:
             return status.backup_state()
         if spec.name == "admin.releases":
             return self.services.admin.releases()
+        if spec.name == "ab.status":
+            return self._ab_status()
         if spec.name == "network.wifi.scan":
             return {"networks": self.services.network.scan()}
         if spec.name == "operations.list":
@@ -255,6 +264,12 @@ class AgentHandlers:
             return services.ssh.plan_revoke_all(operation, args["account"])
         if name == "support.plan_archive":
             return services.support.plan(operation)
+        if name == "ab.plan_update":
+            return self._require_ab().plan_update(
+                operation, args["release_id"], repair=args["repair"]
+            )
+        if name == "ab.plan_rollback":
+            return self._require_ab().plan_rollback(operation)
         if name in ("system.plan_reboot", "system.plan_shutdown"):
             return self._plan_power(operation, name)
         raise AgentError("unknown_operation", f"{name} has no planner")
@@ -367,9 +382,55 @@ class AgentHandlers:
             return services.ssh.execute
         if operation_type == support_archive.TYPE_SUPPORT_ARCHIVE:
             return services.support.execute
+        if operation_type in (os_update.TYPE_OS_UPDATE, os_update.TYPE_OS_ROLLBACK):
+            return self._execute_ab
         if operation_type in ("system.reboot", "system.shutdown"):
             return self._execute_power
         raise AgentError("unknown_operation_type", f"{operation_type} is not executable")
+
+    # --- A/B operating-system updates ------------------------------------
+
+    def _require_ab(self):
+        service = getattr(self.services, "os_update", None)
+        if service is None:
+            raise AgentError(
+                "ab_unavailable", "this appliance has no A/B operating-system update service"
+            )
+        return service
+
+    def _ab_status(self):
+        service = getattr(self.services, "os_update", None)
+        if service is None:
+            return {"mode": "unsupported", "ab_supported": False, "reason": "ab_unavailable"}
+        return service.status()
+
+    def _acknowledge_ab(self, args):
+        """Acknowledge an observed fallback in the shared A/B state.
+
+        This is not a second acknowledge of the operation record —
+        ``operations.acknowledge`` owns that. A fallback is classified on a later
+        boot, from the shared partition, and may outlive the operation record it
+        belongs to, so it is retired here. Nothing about it is retried:
+        acknowledging is what lets an operator plan the next attempt after the
+        inactive slot has been staged again.
+        """
+
+        state = getattr(self.services, "ab_state", None)
+        if state is None:
+            raise AgentError("ab_unavailable", "this appliance has no A/B state")
+        operation_id = args["operation_id"]
+        acknowledged = state.acknowledge_fallback(operation_id)
+        return {"acknowledged": acknowledged, "operation_id": operation_id}
+
+    def _execute_ab(self, operation):
+        from appliance.operations import STATE_SUCCEEDED
+
+        service = self._require_ab()
+        result = service.execute(operation)
+        self.services.operations.finish(
+            operation.operation_id, STATE_SUCCEEDED, result=result, stage=result.get("stage", "")
+        )
+        return result
 
     def _execute_power(self, operation):
         from appliance.operations import STATE_SUCCEEDED

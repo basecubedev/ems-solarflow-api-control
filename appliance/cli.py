@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import sys
+from pathlib import Path
 
 from appliance.agent import AgentHandlers, AgentServer, operation_names
 from appliance.agent_client import AgentCallError, AgentClient, AgentUnavailableError, InProcessAgentClient
@@ -441,6 +442,228 @@ def _shared_flags():
     return shared
 
 
+# --- A/B operating-system updates -------------------------------------------
+
+
+def _ab_services(args):
+    """The privileged A/B services. Root only: this path touches block devices."""
+
+    if os.geteuid() != 0:
+        print("error: this command must run as root", file=sys.stderr)
+        return None
+    return build_services(root=getattr(args, "root", "/") or "/")
+
+
+def command_ab_status(args):
+    paths = resolve_paths()
+    try:
+        result = _client(paths, local=args.local).call("ab.status")
+    except (AgentUnavailableError, AgentCallError) as exc:
+        print(f"error: {exc.message}", file=sys.stderr)
+        return EXIT_UNAVAILABLE
+    _print(result if args.json else _ab_summary(result), args.json)
+    return EXIT_OK
+
+
+def _ab_summary(status):
+    state = status.get("ab_state") or {}
+    selector = status.get("selector") or {}
+    return {
+        "mode": status.get("mode"),
+        "ab_supported": status.get("ab_supported"),
+        "reason": status.get("reason"),
+        "active_slot": status.get("active_slot"),
+        "inactive_slot": status.get("inactive_slot"),
+        "tryboot": status.get("tryboot"),
+        "known_good_slot": state.get("known_good_slot"),
+        "previous_slot": state.get("previous_slot"),
+        "default_boot_partition": selector.get("default_partition"),
+        "trial_boot_partition": selector.get("tryboot_partition"),
+        "pending_trial": bool(state.get("pending_trial")),
+        "persistence": (status.get("persistence") or {}).get("state"),
+        "drift": status.get("drift"),
+    }
+
+
+def command_ab_verify_persistence(args):
+    from appliance import ab_layout, ab_persistence
+
+    services = _ab_services(args)
+    if services is None:
+        return EXIT_ERROR
+    layout = ab_layout.discover(services.ab_probe)
+    report = ab_persistence.verify(layout, services.ab_probe.mounts())
+    if not args.quiet:
+        _print(report.to_dict(), args.json)
+    if not report.ok:
+        for problem in report.problems:
+            print(f"error: {problem}", file=sys.stderr)
+        return EXIT_ERROR
+    return EXIT_OK
+
+
+def command_ab_write_layout(args):
+    """Write the layout descriptor into a rootfs being built.
+
+    Labels only. image-rota generates the partition identities per build, so a
+    descriptor that named them would be a second authority over the same disk.
+    """
+
+    from appliance import ab_layout, ab_persistence
+
+    descriptor = {
+        "schema_version": ab_layout.LAYOUT_SCHEMA_VERSION,
+        "layout_id": args.layout_id,
+        "slot_schema_version": ab_layout.LAYOUT_SCHEMA_VERSION,
+        "persistent_schema_version": ab_persistence.PERSISTENT_SCHEMA_VERSION,
+        "image_layer": "image-rota",
+        "image_layer_version": args.image_layer_version,
+        "slot_device_prefix": "/dev/disk/by-slot",
+        "bootconfig": {"label": "bootconfig", "fstype": "vfat"},
+        "persist": {"label": "persistent", "fstype": "ext4"},
+        "selector_mountpoint": "/bootfs",
+        "persist_mountpoint": ab_persistence.PERSISTENT_MOUNTPOINT,
+        "boot_mountpoint": "/boot/firmware",
+        "shared_root": ab_persistence.SHARED_ROOT,
+        "machine_id_source": ab_persistence.MACHINE_ID_SOURCE,
+        "slots": {
+            "A": {
+                "boot": {"label": "boot_a", "fstype": "vfat"},
+                "root": {"label": "system_a", "fstype": "ext4"},
+            },
+            "B": {
+                "boot": {"label": "boot_b", "fstype": "vfat"},
+                "root": {"label": "system_b", "fstype": "ext4"},
+            },
+        },
+    }
+    # Parsing it back is the check: the build fails rather than shipping a
+    # descriptor the runtime would reject as drift on first boot.
+    ab_layout.parse_layout_manifest(descriptor)
+    target = Path(args.output)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(descriptor, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(str(target))
+    return EXIT_OK
+
+
+def command_ab_grow_persistent(args):
+    """Grow the persistent partition to the medium, once, on a fresh appliance.
+
+    image-rota sizes it at build time and does not expand it. This is the only
+    partition change the project makes, and the marker keeps it to the first
+    boot of a freshly imaged medium.
+    """
+
+    from appliance import ab_layout
+
+    services = _ab_services(args)
+    if services is None:
+        return EXIT_ERROR
+    layout = ab_layout.discover(services.ab_probe)
+    if layout.persist_device is None or layout.manifest is None:
+        print("error: the persistent partition could not be identified", file=sys.stderr)
+        return EXIT_ERROR
+    device = layout.persist_device
+    marker = services.ab_probe.root / layout.manifest.persist_mountpoint.lstrip("/") / ".grown"
+    if marker.exists():
+        return EXIT_OK
+    if services.runner.available("growpart"):
+        services.runner.run("growpart", [device.parent, str(device.number)], timeout=120)
+    if services.runner.available("resize2fs"):
+        services.runner.run("resize2fs", [device.path], timeout=600)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("grown\n", encoding="utf-8")
+    return EXIT_OK
+
+
+def command_ab_slot_bootstrap(args):
+    """Rebuild this slot's container runtime from the shared record."""
+
+    services = _ab_services(args)
+    if services is None:
+        return EXIT_ERROR
+    if services.ab_bootstrap is None:
+        print("error: no runtime bootstrap is configured", file=sys.stderr)
+        return EXIT_ERROR
+    report = services.ab_bootstrap.reconstruct()
+    _print(report.to_dict(), args.json)
+    if not report.ok:
+        for problem in report.problems:
+            print(f"error: {problem}", file=sys.stderr)
+        return EXIT_ERROR
+    return EXIT_OK
+
+
+def command_ab_trial_health(args):
+    """The trial slot judging itself, run by ems-appliance-ab-health.service.
+
+    Only a booted target slot reaches a commit here, and only after every
+    required gate passed. Anything else records what it saw and steps aside.
+    """
+
+    from appliance import ab_health
+    from appliance.ab_health import TrialHealthService
+
+    services = _ab_services(args)
+    if services is None:
+        return EXIT_ERROR
+    layout_manifest = services.ab_probe.manifest()
+    if layout_manifest is None:
+        print("this appliance has no A/B layout; nothing to verify")
+        return EXIT_OK
+
+    selector_path = (
+        services.ab_probe.root
+        / str(layout_manifest.selector_mountpoint).lstrip("/")
+        / "autoboot.txt"
+    )
+    verifier = TrialHealthService(
+        probe=services.ab_probe,
+        state=services.ab_state,
+        selector_path=selector_path,
+        runner=services.runner,
+        systemd=services.systemd,
+        docker=services.docker,
+        install_check=lambda: services.status.overview().get("health", {}).get("level") != "error",
+        agent_socket=lambda: services.paths.agent_socket.exists(),
+        health_window_seconds=services.config.ab_health_window_seconds,
+    )
+    report = verifier.evaluate()
+    _print(report.to_dict(), args.json)
+
+    if report.result == ab_health.RESULT_NOT_A_TRIAL:
+        record = ab_health.classify_fallback(services.ab_probe, services.ab_state)
+        if record is not None:
+            services.audit.record(
+                "ab.fallback_observed", target=record.target_slot, operation_id=record.operation_id
+            )
+            print(f"fallback observed: slot {record.target_slot} did not commit", file=sys.stderr)
+        return EXIT_OK
+    if report.result == ab_health.RESULT_MANUAL_ACTION_REQUIRED:
+        services.audit.record(
+            "ab.trial_health_failed", target=report.slot, result="denied",
+            operation_id=report.operation_id,
+        )
+        print("error: this trial boot cannot be proven; manual action required", file=sys.stderr)
+        return EXIT_ERROR
+    if not report.healthy:
+        services.audit.record(
+            "ab.trial_health_failed", target=report.slot, result="failure",
+            operation_id=report.operation_id,
+        )
+        if args.commit:
+            verifier.abandon(report)
+        return EXIT_ERROR
+    if not args.commit:
+        return EXIT_OK
+
+    result = verifier.commit(report)
+    services.audit.record("ab.commit", target=result["slot"], operation_id=result["operation_id"])
+    _print(result, args.json)
+    return EXIT_OK
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="ems-appliance",
@@ -547,6 +770,41 @@ def build_parser():
         help="migrate-ownership adopts a record that predates the home ownership marker",
     )
     backup_account.set_defaults(handler=command_backup_account)
+
+    ab = subparsers.add_parser(
+        "ab", parents=[shared], help="fail-safe A/B operating-system updates"
+    )
+    ab_commands = ab.add_subparsers(dest="ab_command", required=True)
+    ab_commands.add_parser(
+        "status", parents=[shared], help="slot, selector and persistence state"
+    ).set_defaults(handler=command_ab_status)
+    verify_persistence = ab_commands.add_parser(
+        "verify-persistence", parents=[shared], help="prove the shared state is really shared"
+    )
+    verify_persistence.add_argument("--quiet", action="store_true", help="report only failures")
+    verify_persistence.set_defaults(handler=command_ab_verify_persistence)
+    write_layout = ab_commands.add_parser(
+        "write-layout", parents=[shared], help="write the layout descriptor (image build)"
+    )
+    write_layout.add_argument("--layout-id", default="ems-appliance-rota-v1")
+    write_layout.add_argument("--image-layer-version", default="5.5.1")
+    write_layout.add_argument(
+        "--output", default="/etc/ems-appliance-manager/ab-layout.json"
+    )
+    write_layout.set_defaults(handler=command_ab_write_layout)
+    ab_commands.add_parser(
+        "grow-persistent", parents=[shared], help="grow the persistent partition to the medium"
+    ).set_defaults(handler=command_ab_grow_persistent)
+    ab_commands.add_parser(
+        "slot-bootstrap", parents=[shared], help="rebuild this slot's container runtime"
+    ).set_defaults(handler=command_ab_slot_bootstrap)
+    trial_health = ab_commands.add_parser(
+        "trial-health", parents=[shared], help="verify a trial boot and optionally commit it"
+    )
+    trial_health.add_argument(
+        "--commit", action="store_true", help="commit this slot when every gate passes"
+    )
+    trial_health.set_defaults(handler=command_ab_trial_health)
 
     agent = subparsers.add_parser(
         "agent", parents=[shared], help="run the privileged agent (systemd entry point)"

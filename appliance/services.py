@@ -7,6 +7,10 @@ imports a service that could touch Docker, apt, systemd or ``authorized_keys``.
 
 from dataclasses import dataclass
 
+from appliance.ab_bootstrap import RuntimeRecordStore, SlotBootstrapService
+from appliance.ab_inspect import InactiveSlotInspector
+from appliance.ab_layout import LayoutProbe
+from appliance.ab_state import AbStateStore
 from appliance.admin_lifecycle import AdminLifecycleService
 from appliance.audit import AuditLog, OperationLog
 from appliance.backup_access import BackupAccessService
@@ -18,6 +22,8 @@ from appliance.hostprobe import HostProbe
 from appliance.known_good import KnownGoodStore
 from appliance.network import NetworkService
 from appliance.operations import OperationStore
+from appliance.os_releases import OsReleaseCatalogue, ReleaseSource
+from appliance.os_update import OsUpdateService
 from appliance.packages import PackageService
 from appliance.paths import ensure_directories, resolve_paths
 from appliance.releases import ReleaseCatalogue
@@ -46,6 +52,10 @@ class ApplianceServices:
     status: object
     audit: object
     operation_log: object
+    os_update: object = None
+    ab_probe: object = None
+    ab_state: object = None
+    ab_bootstrap: object = None
 
 
 def build_services(
@@ -134,6 +144,41 @@ def build_services(
         operations=operations,
         time_fn=time_fn,
     )
+    # A/B is built on every appliance. On a single-slot host the layout probe
+    # simply reports single_slot, and every mutating plan is blocked with a
+    # reason rather than the feature being absent and unexplained.
+    from appliance.version import APPLIANCE_VERSION
+
+    ab_probe = LayoutProbe(root=root, runner=runner)
+    ab_state = AbStateStore(paths.os_update_dir, time_fn=time_fn)
+    ab_bootstrap = SlotBootstrapService(
+        docker=docker,
+        store=RuntimeRecordStore(paths.os_update_dir, time_fn=time_fn),
+        known_good=known_good,
+        compose_file=deployment_compose,
+    )
+    os_update = OsUpdateService(
+        paths=paths,
+        config=config,
+        operations=operations,
+        catalogue=OsReleaseCatalogue(
+            ReleaseSource(
+                directory=config.os_release_dir,
+                keyring=config.os_release_keyring,
+                allow_unsigned=config.allow_unsigned_os_artifacts,
+            ),
+            runner=runner,
+        ),
+        state=ab_state,
+        probe=ab_probe,
+        packages=packages,
+        runner=runner,
+        time_fn=time_fn,
+        appliance_version=APPLIANCE_VERSION,
+        inspector=InactiveSlotInspector(runner=runner, root=root),
+        bootstrap=ab_bootstrap,
+    )
+    status.os_update = os_update
     support = SupportArchiveService(
         paths=paths, config=config, status_service=status, operations=operations, time_fn=time_fn
     )
@@ -156,4 +201,8 @@ def build_services(
         status=status,
         audit=audit,
         operation_log=operation_log,
+        os_update=os_update,
+        ab_probe=ab_probe,
+        ab_state=ab_state,
+        ab_bootstrap=ab_bootstrap,
     )

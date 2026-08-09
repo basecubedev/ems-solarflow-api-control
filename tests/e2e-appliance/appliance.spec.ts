@@ -372,6 +372,21 @@ test.describe("operating-system updates", () => {
     await openView(page, "updates");
     await expect(page.locator("#main")).toContainText("flash the new supported appliance image");
   });
+
+  // The test host is a single-slot appliance, so the page must show the package
+  // mode and say what A/B would require rather than offering a conversion.
+  test("a single-slot appliance says A/B needs re-imaging", async ({ page }) => {
+    await signIn(page);
+    await openView(page, "updates");
+    await expect(page.locator('[data-test="ab-single-slot"]')).toContainText(
+      "single root filesystem",
+    );
+    await expect(page.locator('[data-test="ab-single-slot"]')).toContainText(
+      "A/B-capable appliance image",
+    );
+    await expect(page.locator('[data-test="ab-plan-update"]')).toHaveCount(0);
+    await expect(page.locator('[data-test="ab-stage-rollback"]')).toHaveCount(0);
+  });
 });
 
 test.describe("ssh and backup access", () => {

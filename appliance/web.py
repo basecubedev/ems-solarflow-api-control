@@ -415,6 +415,7 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
             "/api/admin": ("admin.get", {}),
             "/api/admin/releases": ("admin.releases", {}),
             "/api/updates": ("updates.get", {}),
+            "/api/ab": ("ab.status", {}),
             "/api/ssh/keys": ("ssh.get", {}),
             "/api/backup": ("backup.get", {}),
             "/api/operations": ("operations.list", {}),
@@ -507,6 +508,14 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
             "/api/admin/restart": ("admin.plan_lifecycle", lambda _: {"action": "restart"}),
             "/api/updates/plan": ("updates.plan", lambda b: {"scope": b.get("scope")}),
             "/api/updates/repair": ("updates.plan_repair", lambda b: {"action": b.get("action")}),
+            # The browser sends a release id and nothing else. Every device
+            # path, PARTUUID, URL, key and partition number comes from the
+            # root-owned configuration, the signed manifest or layout discovery.
+            "/api/ab/plan-update": (
+                "ab.plan_update",
+                lambda b: {"release_id": b.get("release_id"), "repair": bool(b.get("repair"))},
+            ),
+            "/api/ab/plan-rollback": ("ab.plan_rollback", lambda _: {}),
             "/api/ssh/enable": ("ssh.plan_service", lambda _: {"enabled": True}),
             "/api/ssh/disable": ("ssh.plan_service", lambda _: {"enabled": False}),
             "/api/ssh/keys": ("ssh.plan_key_add", self._key_fields),
@@ -530,11 +539,18 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
         confirm_paths = (
             "/api/admin/execute-install",
             "/api/updates/install",
+            "/api/ab/execute",
             "/api/network/wifi/apply",
             "/api/operations/confirm",
         )
         if path in confirm_paths:
             return self._confirm(session, body)
+
+        if path == "/api/ab/acknowledge":
+            result = self._agent(
+                "ab.acknowledge", session, operation_id=body.get("operation_id")
+            )
+            return None if result is None else self._send(200, result)
 
         if path == "/api/operations/cancel":
             result = self._agent(

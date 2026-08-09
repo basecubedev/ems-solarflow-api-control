@@ -187,6 +187,24 @@ class DockerBackend:
             raise DockerError("image_pull_failed", f"cannot pull {reference}")
         return result
 
+    def save_image(self, reference, path):
+        """Write one image to a file, so another slot can load it without a WAN."""
+
+        result = self.runner.run(
+            "docker", ["save", "-o", str(path), reference], timeout=max(self.timeout, 900)
+        )
+        if not result.ok:
+            raise DockerError("image_save_failed", f"cannot save {reference}")
+        return result
+
+    def load_image(self, path):
+        result = self.runner.run(
+            "docker", ["load", "-i", str(path)], timeout=max(self.timeout, 900)
+        )
+        if not result.ok:
+            raise DockerError("image_load_failed", f"cannot load {path}")
+        return result
+
     # --- compose ---------------------------------------------------------
 
     def compose(self, args, *, timeout=None):

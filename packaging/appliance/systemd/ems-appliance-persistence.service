@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[Unit]
+Description=EMS SolarFlow Appliance shared persistent state
+Documentation=file:///usr/share/doc/ems-appliance-manager/ab-persistence-contract.md
+# The unit ships in every slot but only applies to an A/B image; a single-slot
+# appliance keeps its ordinary root filesystem and this never runs there.
+ConditionPathExists=/etc/ems-appliance-manager/ab-layout.json
+# rpi-image-gen mounts /persistent and binds every declared shared path through
+# its slot-shared generator. This unit does not mount anything: it proves those
+# mounts happened, because upstream's generator guards each bind with
+# ConditionPathIsDirectory and therefore fails open. A skipped bind looks
+# healthy right up to the next slot switch, which then loses every write.
+Requires=persistent.mount
+After=persistent.mount local-fs.target
+Before=ems-appliance-agent.service ems-appliance-web.service
+Before=ems-appliance-slot-bootstrap.service ems-appliance-ab-health.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Fail closed. Every unit that could write appliance state Requires= this one,
+# so a shared path that fell back to the read-only root stops them instead of
+# letting them write somewhere the next slot switch discards.
+ExecStart=/usr/bin/ems-appliance ab verify-persistence --quiet
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

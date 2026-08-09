@@ -31,6 +31,19 @@ EXECUTABLES = {
     "chage": ("/usr/bin/chage",),
     "ss": ("/usr/bin/ss", "/bin/ss"),
     "avahi-resolve": ("/usr/bin/avahi-resolve",),
+    # A/B layout discovery and the inactive-slot write. Every path these are
+    # given comes from the root-owned layout manifest, never from a request.
+    "lsblk": ("/usr/bin/lsblk", "/bin/lsblk"),
+    "blkid": ("/usr/sbin/blkid", "/sbin/blkid"),
+    "findmnt": ("/usr/bin/findmnt", "/bin/findmnt"),
+    "mount": ("/usr/bin/mount", "/bin/mount"),
+    "umount": ("/usr/bin/umount", "/bin/umount"),
+    "fsck.vfat": ("/usr/sbin/fsck.vfat", "/sbin/fsck.vfat"),
+    "e2fsck": ("/usr/sbin/e2fsck", "/sbin/e2fsck"),
+    "blockdev": ("/usr/sbin/blockdev", "/sbin/blockdev"),
+    # Detached-signature verification of an OS release manifest, against a
+    # root-owned keyring named by the host configuration.
+    "gpg": ("/usr/bin/gpg", "/usr/bin/gpgv"),
 }
 
 

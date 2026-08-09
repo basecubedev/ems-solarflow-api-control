@@ -44,9 +44,30 @@ AUDITED_ACTIONS = (
     "system.reboot",
     "system.shutdown",
     "support.archive",
+    # A/B operating-system updates. The trail has to survive a slot switch, so
+    # it lives on the shared persistent partition like the rest of the log.
+    "ab.update.plan",
+    "ab.update.confirm",
+    "ab.update.stage_started",
+    "ab.update.stage_verified",
+    "ab.tryboot_requested",
+    "ab.trial_boot_started",
+    "ab.trial_health_failed",
+    "ab.commit",
+    "ab.fallback_observed",
+    "ab.rollback.plan",
+    "ab.rollback.commit",
 )
 
-_NEVER_LOGGED = frozenset({"password", "passphrase", "token", "public_key", "secret"})
+# Matched as substrings, not exact names: a detail key called signing_key,
+# private_key or api_token is the same thing as one called key or token, and an
+# audit trail that only recognised the exact spellings would log the rest.
+_NEVER_LOGGED = ("password", "passphrase", "token", "public_key", "secret", "key")
+
+
+def _loggable(key):
+    lowered = str(key).lower()
+    return not any(marker in lowered for marker in _NEVER_LOGGED)
 
 
 DEFAULT_MAX_BYTES = 4 * 1024 * 1024
@@ -131,9 +152,7 @@ class AuditLog(JsonlLog):
         }
         if detail:
             entry["detail"] = {
-                key: value
-                for key, value in dict(detail).items()
-                if key.lower() not in _NEVER_LOGGED
+                key: value for key, value in dict(detail).items() if _loggable(key)
             }
         return self.append(entry)
 
@@ -152,9 +171,7 @@ class WebLog(JsonlLog):
 
     def warn(self, event, **detail):
         entry = {"level": "warning", "event": str(event)}
-        entry.update(
-            {key: value for key, value in detail.items() if key.lower() not in _NEVER_LOGGED}
-        )
+        entry.update({key: value for key, value in detail.items() if _loggable(key)})
         try:
             return self.append(entry)
         except OSError:

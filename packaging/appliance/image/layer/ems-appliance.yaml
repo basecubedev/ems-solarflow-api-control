@@ -1,0 +1,93 @@
+# METABEGIN
+# X-Env-Layer-Name: ems-appliance
+# X-Env-Layer-Category: app
+# X-Env-Layer-Desc: EMS SolarFlow Appliance Manager, its Docker runtime and the
+#  shared state declaration that makes an A/B slot switch non-destructive.
+# X-Env-Layer-Version: 2.0.0
+# X-Env-Layer-Requires: image-rota,docker-ce
+#
+# X-Env-VarPrefix: emsappliance
+#
+# X-Env-Var-package:
+# X-Env-Var-package-Desc: Path to the ems-appliance-manager .deb to install.
+# X-Env-Var-package-Required: y
+# X-Env-Var-package-Valid: string
+# X-Env-Var-package-Set: y
+#
+# X-Env-Var-release_version:
+# X-Env-Var-release_version-Desc: The OS release version recorded in the build
+#  marker a trial boot compares against the pending operation.
+# X-Env-Var-release_version-Required: y
+# X-Env-Var-release_version-Valid: string
+# X-Env-Var-release_version-Set: y
+#
+# X-Env-Var-build_id:
+# X-Env-Var-build_id-Desc: The exact build this root filesystem is. A trial slot
+#  proves its identity with it, so it must be unique per build.
+# X-Env-Var-build_id-Required: y
+# X-Env-Var-build_id-Valid: string
+# X-Env-Var-build_id-Set: y
+#
+# X-Env-Var-layout_id: ems-appliance-rota-v1
+# X-Env-Var-layout_id-Desc: The layout contract the runtime is bound to.
+# X-Env-Var-layout_id-Required: n
+# X-Env-Var-layout_id-Valid: string
+# X-Env-Var-layout_id-Set: y
+#
+# METAEND
+---
+mmdebstrap:
+  packages:
+    - ca-certificates
+    - curl
+    - e2fsprogs
+    - cloud-guest-utils
+    - network-manager
+    - openssh-server
+    - python3
+    - systemd-timesyncd
+  customize-hooks:
+    # The package is built outside the image and installed here, so the same
+    # artifact an operator can install on an existing host is what both slots
+    # carry. dpkg is run in the chroot; the postinst detects that there is no
+    # running systemd and defers service startup.
+    - |-
+      set -eu
+      [ -f "$IGconf_emsappliance_package" ] || {
+         echo "ems-appliance: $IGconf_emsappliance_package is missing" >&2
+         exit 1
+      }
+      install -m 0644 "$IGconf_emsappliance_package" "$1/tmp/ems-appliance-manager.deb"
+      chroot "$1" /usr/bin/dpkg -i /tmp/ems-appliance-manager.deb
+      rm -f "$1/tmp/ems-appliance-manager.deb"
+
+    # The build marker is what a trial boot compares against the pending
+    # operation, so it names the exact build this filesystem is. It carries no
+    # slot: image-rota writes one bit-for-bit identical pair.
+    - |-
+      set -eu
+      mkdir -p "$1/etc"
+      cat > "$1/etc/ems-appliance-os-build" <<EOF
+      {
+        "architecture": "arm64",
+        "build_id": "$IGconf_emsappliance_build_id",
+        "image_layer": "image-rota",
+        "layout_id": "$IGconf_emsappliance_layout_id",
+        "release_version": "$IGconf_emsappliance_release_version",
+        "appliance_manager_version": "$(chroot "$1" /usr/bin/ems-appliance --version 2>/dev/null || echo unknown)"
+      }
+      EOF
+
+    # The layout descriptor the runtime reads. Labels only: image-rota generates
+    # the partition identities per build, and the runtime discovers them.
+    - |-
+      set -eu
+      mkdir -p "$1/etc/ems-appliance-manager"
+      chroot "$1" /usr/bin/ems-appliance ab write-layout \
+         --layout-id "$IGconf_emsappliance_layout_id" \
+         --output /etc/ems-appliance-manager/ab-layout.json
+
+    - $BDEBSTRAP_HOOKS/enable-units "$1" ems-appliance-agent.service \
+        ems-appliance-web.service ems-appliance-persistence.service \
+        ems-appliance-ab-health.service ems-appliance-slot-bootstrap.service \
+        ems-appliance-grow-persistent.service

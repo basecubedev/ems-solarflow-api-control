@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# The A/B appliance image, built with Raspberry Pi's rpi-image-gen.
+#
+#   rpi-image-gen build -c ems-appliance-ab.yaml -S packaging/appliance/image
+#
+# Nothing here declares a partition, a size, a PARTUUID or a mount. image-rota
+# owns the whole GPT, the slot labels, the persistent partition and the
+# shared-slot bind mounts; this project contributes one layer on top. See
+# ../../../docs/appliance/adr/rpi-image-gen-image-rota.md.
+include:
+  file: trixie-minbase-ab.yaml
+
+device:
+  layer: pi5
+  hostname: ems-solarflow
+
+image:
+  layer: image-rota
+  name: ems-solarflow-appliance
+  # The root filesystem stays ext4 rather than erofs: the update writer reads
+  # back and mounts what it wrote, and ext4 is what this project's inspection
+  # and its hardware validation have been exercised against.
+  rootfs_type: ext4
+  # Both slots carry Docker, the Appliance Manager and the EMS deployment, so
+  # the per-slot system partition is sized well above the minbase default.
+  boot_part_size: 256M
+  system_part_size: 4G
+  # The persistent partition holds EMS config, data and backups, the staged OS
+  # artifact and both slots' /var. It is grown to the medium on first boot.
+  data_part_size: 8G
+
+layer:
+  app: ems-appliance

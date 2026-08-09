@@ -968,6 +968,163 @@
 
   function renderUpdates(main) {
     var updates = (state.data.status || {}).updates || {};
+    var ab = updates.ab || {};
+
+    if (updates.update_mode === "ab_image" || ab.ab_supported) {
+      renderAbUpdates(main, ab);
+      return;
+    }
+    renderPackageUpdates(main, updates, ab);
+  }
+
+  /* An A/B image-managed appliance stages host images into the inactive slot.
+     Running apt through the UI there would create slot drift and could vanish
+     after a rollback, so package installation is not the normal path. */
+  function renderAbUpdates(main, ab) {
+    var abState = ab.ab_state || {};
+    var selector = ab.selector || {};
+    var pending = abState.pending_trial;
+    var fallback = abState.last_fallback;
+    var releases = ab.releases || [];
+
+    main.appendChild(el("h2", { class: "section-title", text: "Operating-system image" }));
+    main.appendChild(el("p", {
+      class: "section-hint",
+      text: "This appliance uses fail-safe A/B OS images. Host updates are staged into the "
+        + "inactive slot and tested before becoming active."
+    }));
+
+    main.appendChild(el("div", { class: "card-grid" }, [
+      card("Current slot", [
+        el("p", { class: "status-value", text: format(ab.active_slot) }),
+        fact("Current OS build", (ab.os_build || {}).build_id),
+        fact("Current OS version", (ab.os_build || {}).release_version)
+      ], "ab-current-slot"),
+      card("Inactive slot", [
+        el("p", { class: "status-value", text: format(ab.inactive_slot) }),
+        fact("Last known-good slot", abState.known_good_slot),
+        fact("Rollback candidate", abState.previous_slot)
+      ], "ab-inactive-slot"),
+      card("Trial status", [
+        el("p", { class: "status-value" }, [
+          ab.tryboot
+            ? tone("warn", "trial boot running")
+            : (pending ? tone("warn", "trial pending") : tone("ok", "no trial in flight"))
+        ]),
+        fact("Trial target slot", pending ? pending.target_slot : "—"),
+        fact("Committed", pending ? pending.committed : "—")
+      ], "ab-trial"),
+      card("Persistent data", [
+        el("p", { class: "status-value" }, [
+          (ab.persistence || {}).ok ? tone("ok", "shared") : tone("bad", "not shared")
+        ]),
+        fact("Layout", ab.may_mutate ? "proven" : "not proven"),
+        expert() ? fact("Default boot partition", selector.default_partition) : null
+      ], "ab-persistence")
+    ]));
+
+    if ((ab.drift || []).length) {
+      main.appendChild(el("p", { class: "empty-state", "data-test": "ab-drift" }, [
+        el("strong", { text: "OS updates are disabled: " }),
+        el("span", { text: (ab.drift || []).join("; ") })
+      ]));
+    }
+
+    if (fallback && !fallback.acknowledged) {
+      main.appendChild(el("p", { class: "empty-state", "data-test": "ab-fallback" }, [
+        el("strong", { text: "Automatic fallback: " }),
+        el("span", {
+          text: "slot " + fallback.target_slot + " did not commit, so this appliance returned to "
+            + "slot " + fallback.source_slot + ". Nothing is retried automatically."
+        }),
+        el("button", {
+          type: "button", class: "ghost-button compact", "data-test": "ab-acknowledge",
+          text: "Acknowledge",
+          onclick: function () {
+            api("/api/ab/acknowledge", {
+              method: "POST", body: { operation_id: fallback.operation_id }
+            }).then(function () { refresh(); });
+          }
+        })
+      ]));
+    }
+
+    var stages = [];
+    var installable = releases.filter(function (release) { return release.signed; });
+    stages.push(stage(1, "OS image update", "Staged into the inactive slot, then trial-booted", [
+      installable.length
+        ? el("div", { class: "control-stage-actions" }, installable.slice(0, 5).map(function (release) {
+            return el("button", {
+              type: "button", class: "primary-button compact",
+              "data-test": "ab-plan-update",
+              "data-release": release.release_id,
+              text: "Plan " + release.release_version,
+              disabled: !ab.may_mutate,
+              onclick: function () {
+                planOperation({
+                  endpoint: "/api/ab/plan-update",
+                  body: { release_id: release.release_id },
+                  title: "Update the operating system to " + release.release_version,
+                  confirmLabel: "Stage and trial-boot"
+                });
+              }
+            });
+          }))
+        : el("p", { class: "control-stage-subtitle", text: "No signed OS image is available." }),
+      el("p", {
+        class: "control-stage-subtitle",
+        text: "The trial boot is one-shot. If the new slot does not prove itself, the next "
+          + "ordinary boot returns to the current slot with nothing changed."
+      })
+    ], "ab-stage-update"));
+
+    stages.push(stage(2, "Roll back the operating system", "Only the recorded previous known-good slot", [
+      el("div", { class: "control-stage-actions" }, [
+        el("button", {
+          type: "button", class: "ghost-button compact", "data-test": "ab-plan-rollback",
+          text: "Plan rollback to slot " + (abState.previous_slot || "—"),
+          disabled: !ab.may_mutate || !abState.previous_slot,
+          onclick: function () {
+            planOperation({
+              endpoint: "/api/ab/plan-rollback", body: {},
+              title: "Roll back to the previous known-good slot",
+              confirmLabel: "Trial-boot the previous slot"
+            });
+          }
+        })
+      ]),
+      el("p", {
+        class: "control-stage-subtitle",
+        text: "A rollback trial-boots the previous slot and commits it only when it proves itself."
+      })
+    ], "ab-stage-rollback"));
+
+    if (expert()) {
+      stages.push(stage(3, "Package-manager recovery", "Recovery only, not the normal update path", [
+        el("div", { class: "control-stage-actions" }, [
+          repairButton("configure_pending", "Complete pending configuration"),
+          repairButton("fix_broken", "Repair dependencies")
+        ]),
+        el("p", {
+          class: "control-stage-subtitle",
+          text: "On an image-managed appliance a live package upgrade creates slot drift and can "
+            + "disappear after a rollback. Use this only to repair a broken active slot."
+        })
+      ], "ab-stage-recovery"));
+    }
+
+    main.appendChild(el("div", { class: "stage-grid" }, stages));
+
+    main.appendChild(el("p", { class: "empty-state" }, [
+      el("strong", { text: "Host OS versus applications: " }),
+      el("span", {
+        text: "A/B applies to the Raspberry Pi operating system. The EMS Admin container keeps its "
+          + "own image rollback, and EMS data keeps backup and restore."
+      })
+    ]));
+  }
+
+  function renderPackageUpdates(main, updates, ab) {
     var manager = updates.package_manager || {};
 
     main.appendChild(el("h2", { class: "section-title", text: "System updates" }));
@@ -975,6 +1132,12 @@
       class: "section-hint",
       text: "Raspberry Pi OS packages. Major distribution upgrades are not performed here."
     }));
+    main.appendChild(el("p", { class: "section-hint", "data-test": "ab-single-slot" }, [
+      el("span", {
+        text: "This appliance has a single root filesystem. Fail-safe A/B OS image updates require "
+          + "reinstalling onto an A/B-capable appliance image."
+      })
+    ]));
 
     main.appendChild(el("div", { class: "card-grid" }, [
       card("Security updates", [

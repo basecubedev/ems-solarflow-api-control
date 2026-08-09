@@ -14,7 +14,7 @@ backup format.
 
 | Layer | Owns |
 |---|---|
-| **Appliance Manager** | Raspberry Pi OS status, OS package updates, host reboot/shutdown, network and WLAN state, hostname and mDNS, Docker service state, EMS Admin container installation/restart/version/reinstall/rollback, Admin image and container diagnostics, SSH service and public keys, storage and temperature, host logs, appliance-level recovery |
+| **Appliance Manager** | Raspberry Pi OS status, OS package updates, fail-safe A/B host image updates, host reboot/shutdown, network and WLAN state, hostname and mDNS, Docker service state, EMS Admin container installation/restart/version/reinstall/rollback, Admin image and container diagnostics, SSH service and public keys, storage and temperature, host logs, appliance-level recovery |
 | **EMS Admin Console** | EMS configuration, device discovery, grid-meter and inverter configuration, control parameters, EMS runtime state, EMS diagnostics, EMS backup/restore semantics, Guided Setup, Guided Upgrade, application-level maintenance |
 | **EMS** | Energy-management logic, runtime control, device communication, configuration validation, EMS backup/restore logic, runtime safety and reconciliation |
 
@@ -22,7 +22,19 @@ Explicit non-goals: no arbitrary shell execution, no browser terminal, no
 general Linux package manager, no free-form systemd editing, no manual editing
 of arbitrary host files, no EMS configuration editing, no inverter or
 grid-meter configuration, no duplicated EMS backup format, no unrestricted
-Docker container management, no unrestricted Docker image execution.
+Docker container management, no unrestricted Docker image execution, **no
+repartitioning of a running installation** and no EEPROM firmware-slot writes.
+
+### Three rollbacks that are not the same thing
+
+```text
+Admin image rollback   Docker container   the previously running image digest
+EMS backup / restore   application data   EMS configuration, state and history
+OS A/B rollback        Raspberry Pi host  the previous known-good boot+root slot
+```
+
+A/B is never used for Docker containers, and an OS rollback never restores EMS
+data. See [ab-os-updates.md](ab-os-updates.md).
 
 ## Two host services
 
@@ -89,6 +101,10 @@ is refused as `invalid_request` before any handler runs.
 | `agent.py`, `agent_client.py`, `services.py` | The privileged agent, its client and the service graph |
 | `auth.py`, `web.py`, `web_audit.py`, `static/` | Authentication, audit reporting to the agent, and the unprivileged web interface |
 | `install_check.py` | Post-install verification: is this installation actually usable |
+| `ab_layout.py`, `ab_persistence.py` | A/B slot discovery, drift detection and the shared-persistence contract |
+| `ab_boot.py`, `ab_blocks.py`, `ab_state.py` | The boot selector, the block-device backend and the state that crosses the reboot |
+| `os_releases.py`, `os_artifacts.py`, `os_update.py`, `ab_health.py` | Signed OS release authority, bounded extraction, inactive-slot staging, trial health and commit |
+| `ab_image.py` | The declared image layout and the host-side image inspector |
 
 ## Where each boundary is enforced
 
@@ -147,6 +163,8 @@ proxy may later add `/system` and `/admin` paths in front of both.
 - [installation.md](installation.md) — install, layout and first-run setup
 - [admin-recovery.md](admin-recovery.md) — Admin install, rollback and repair
 - [os-updates.md](os-updates.md) — OS updates and package recovery
+- [ab-os-updates.md](ab-os-updates.md) — fail-safe A/B host image updates
+- [ab-hardware-validation.md](ab-hardware-validation.md) — the physical A/B gate
 - [ssh-backup-access.md](ssh-backup-access.md) — SSH keys and file backup access
 - [network-recovery.md](network-recovery.md) — WLAN, hostname and lockout recovery
 - [security-model.md](security-model.md) — the privilege boundary in detail
