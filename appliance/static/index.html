@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <title>EMS SolarFlow Appliance Manager</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to main content</a>
+
+  <div id="gate" class="gate" hidden>
+    <main class="gate-panel" aria-labelledby="gate-title">
+      <p class="brand-line">EMS SolarFlow</p>
+      <h1 id="gate-title" class="gate-title">Appliance Manager</h1>
+      <p class="badge">HOST MANAGEMENT</p>
+      <form id="gate-form" class="gate-form" autocomplete="off">
+        <p id="gate-intro" class="gate-intro"></p>
+        <div class="field">
+          <label for="gate-password" id="gate-password-label">Appliance password</label>
+          <input id="gate-password" name="password" type="password" autocomplete="current-password"
+                 required minlength="1" />
+        </div>
+        <div class="field" id="gate-confirm-field" hidden>
+          <label for="gate-confirm">Repeat password</label>
+          <input id="gate-confirm" name="confirmation" type="password"
+                 autocomplete="new-password" />
+        </div>
+        <p id="gate-error" class="form-error" role="alert" hidden></p>
+        <button id="gate-submit" class="primary-button" type="submit">Sign in</button>
+      </form>
+    </main>
+  </div>
+
+  <div id="shell" class="shell" hidden>
+    <header class="app-header">
+      <div class="identity">
+        <p class="brand-line">EMS SolarFlow</p>
+        <h1 class="product-title">Appliance Manager</h1>
+        <p class="badge">HOST MANAGEMENT</p>
+      </div>
+      <div class="header-actions">
+        <div class="mode-switch" role="group" aria-label="Detail level">
+          <button type="button" id="mode-basic" class="mode-button" aria-pressed="true">Basic</button>
+          <button type="button" id="mode-expert" class="mode-button" aria-pressed="false">Expert</button>
+        </div>
+        <button type="button" id="refresh-button" class="ghost-button">Refresh</button>
+        <button type="button" id="logout-button" class="ghost-button">Sign out</button>
+      </div>
+    </header>
+
+    <nav class="app-nav" aria-label="Appliance sections">
+      <ul id="nav-list" class="nav-list"></ul>
+    </nav>
+
+    <p id="live-region" class="visually-hidden" role="status" aria-live="polite"></p>
+
+    <main id="main" class="app-main" tabindex="-1"></main>
+  </div>
+
+  <div id="dialog-backdrop" class="dialog-backdrop" hidden>
+    <div id="dialog" class="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title">
+      <h2 id="dialog-title" class="dialog-title"></h2>
+      <div id="dialog-body" class="dialog-body"></div>
+      <p id="dialog-error" class="form-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" id="dialog-cancel" class="ghost-button">Cancel</button>
+        <button type="button" id="dialog-confirm" class="primary-button">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="reconnect" class="gate" hidden>
+    <main class="gate-panel" aria-labelledby="reconnect-title">
+      <p class="brand-line">EMS SolarFlow</p>
+      <h1 id="reconnect-title" class="gate-title">Waiting for the appliance</h1>
+      <p id="reconnect-detail" class="gate-intro" role="status" aria-live="polite"></p>
+      <button type="button" id="reconnect-retry" class="primary-button">Check now</button>
+    </main>
+  </div>
+
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

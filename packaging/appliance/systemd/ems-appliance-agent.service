@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[Unit]
+Description=EMS SolarFlow Appliance Manager privileged host agent
+Documentation=file:///usr/share/doc/ems-appliance-manager/architecture.md
+After=local-fs.target
+Before=ems-appliance-web.service
+
+[Service]
+Type=simple
+# The agent is privileged on purpose: it drives Docker, apt, systemd,
+# NetworkManager and authorized_keys. It never accepts a command string and
+# only listens on a local Unix socket.
+User=root
+Group=root
+ExecStart=/usr/bin/ems-appliance agent
+Restart=on-failure
+RestartSec=3
+RuntimeDirectory=ems-appliance-manager
+RuntimeDirectoryMode=0750
+StateDirectory=ems-appliance-manager
+LogsDirectory=ems-appliance-manager
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target

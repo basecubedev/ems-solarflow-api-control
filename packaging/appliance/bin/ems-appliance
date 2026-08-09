@@ -1,0 +1,7 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# EMS SolarFlow Appliance Manager host CLI.
+set -e
+PYTHONPATH=/usr/lib/ems-appliance-manager${PYTHONPATH:+:$PYTHONPATH}
+export PYTHONPATH
+exec /usr/bin/python3 -m appliance "$@"

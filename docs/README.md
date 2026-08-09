@@ -87,6 +87,23 @@ Normal users choose one of these two; both converge on the same standard
 | Battery full-charge assist | [battery-full-charge-assist.md](battery-full-charge-assist.md) | Optional EMS-managed full-charge assist. |
 | Quality and maintenance | [quality-and-maintenance.md](quality-and-maintenance.md) | How the project is tested, packaged and maintained. |
 
+## Raspberry Pi Appliance Manager
+
+Host management and recovery for a Raspberry Pi appliance. It runs as systemd
+services outside Docker and stays reachable when the EMS Admin container, the
+Docker daemon or EMS itself are unavailable. It never edits EMS configuration.
+
+| Topic | Document | Use |
+|---|---|---|
+| Architecture | [appliance/architecture.md](appliance/architecture.md) | Product boundaries, the two host services and the operation model. |
+| Installation | [appliance/installation.md](appliance/installation.md) | Supported Raspberry Pi models, the `.deb`, the layout and first-run setup. |
+| Admin recovery | [appliance/admin-recovery.md](appliance/admin-recovery.md) | Install, reinstall, repair and roll back the EMS Admin container. |
+| OS updates | [appliance/os-updates.md](appliance/os-updates.md) | Security updates, full updates and package-manager recovery. |
+| SSH and backup access | [appliance/ssh-backup-access.md](appliance/ssh-backup-access.md) | SSH keys, the read-only `ems-backup` account and rsync/scp. |
+| Network recovery | [appliance/network-recovery.md](appliance/network-recovery.md) | WLAN with automatic revert, hostname changes and lockout recovery. |
+| Security model | [appliance/security-model.md](appliance/security-model.md) | The privilege boundary, the operation allowlist and secret handling. |
+| Troubleshooting | [appliance/troubleshooting.md](appliance/troubleshooting.md) | Symptom-driven recovery and the error codes you may see. |
+
 ## Technical reference
 
 Architecture, internals and reference. You do not need this for a normal setup.

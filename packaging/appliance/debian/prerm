@@ -1,0 +1,17 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -e
+
+case "$1" in
+    remove|deconfigure)
+        if [ -x /bin/systemctl ] || [ -x /usr/bin/systemctl ]; then
+            systemctl stop ems-appliance-web.service || true
+            systemctl stop ems-appliance-agent.service || true
+            systemctl disable ems-appliance-web.service ems-appliance-agent.service || true
+        fi
+        ;;
+    upgrade|failed-upgrade)
+        ;;
+esac
+
+exit 0

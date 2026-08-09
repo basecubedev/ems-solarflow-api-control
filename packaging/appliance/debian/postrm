@@ -1,0 +1,20 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -e
+
+case "$1" in
+    purge)
+        # Appliance state and logs are removed on purge; EMS configuration,
+        # EMS data and EMS backups under /opt/ems-solarflow are never touched.
+        rm -rf /var/lib/ems-appliance-manager /var/log/ems-appliance-manager
+        rm -rf /run/ems-appliance-manager
+        ;;
+    remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+        ;;
+esac
+
+if [ -x /bin/systemctl ] || [ -x /usr/bin/systemctl ]; then
+    systemctl daemon-reload || true
+fi
+
+exit 0

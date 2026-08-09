@@ -1,0 +1,54 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
+set -e
+
+STATE_DIR=/var/lib/ems-appliance-manager
+LOG_DIR=/var/log/ems-appliance-manager
+CONFIG_DIR=/etc/ems-appliance-manager
+INSTALL_ROOT=/opt/ems-solarflow
+
+case "$1" in
+    configure)
+        # The web service runs unprivileged and only shares a group with the
+        # agent socket; the agent itself runs as root.
+        if ! getent group ems-appliance >/dev/null; then
+            addgroup --system ems-appliance
+        fi
+        if ! getent passwd ems-appliance-web >/dev/null; then
+            adduser --system --ingroup ems-appliance --no-create-home \
+                    --home /nonexistent --shell /usr/sbin/nologin ems-appliance-web
+        fi
+        # Read-only file export account for backups; never an admin account.
+        if ! getent passwd ems-backup >/dev/null; then
+            adduser --system --group --home /var/lib/ems-backup \
+                    --shell /bin/sh ems-backup
+        fi
+
+        mkdir -p "$STATE_DIR" "$STATE_DIR/operations" "$STATE_DIR/known-good" \
+                 "$STATE_DIR/ssh-keys" "$STATE_DIR/compose-backup" "$STATE_DIR/packages" \
+                 "$LOG_DIR" "$CONFIG_DIR"
+        chown -R ems-appliance-web:ems-appliance "$STATE_DIR" "$LOG_DIR"
+        chmod 0750 "$STATE_DIR" "$LOG_DIR"
+        chmod 0755 "$CONFIG_DIR"
+
+        # Existing EMS data is never moved or restructured by this package.
+        if [ -d "$INSTALL_ROOT" ]; then
+            for directory in config data backups; do
+                [ -d "$INSTALL_ROOT/$directory" ] && \
+                    setfacl -m u:ems-backup:rx "$INSTALL_ROOT/$directory" 2>/dev/null || true
+            done
+        fi
+
+        if [ -x /bin/systemctl ] || [ -x /usr/bin/systemctl ]; then
+            systemd-tmpfiles --create /usr/lib/tmpfiles.d/ems-appliance-manager.conf || true
+            systemctl daemon-reload || true
+            systemctl enable ems-appliance-agent.service ems-appliance-web.service || true
+            systemctl restart ems-appliance-agent.service || true
+            systemctl restart ems-appliance-web.service || true
+        fi
+        ;;
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+esac
+
+exit 0

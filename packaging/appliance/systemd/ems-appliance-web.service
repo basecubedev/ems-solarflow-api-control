@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[Unit]
+Description=EMS SolarFlow Appliance Manager web interface
+Documentation=file:///usr/share/doc/ems-appliance-manager/architecture.md
+After=network.target ems-appliance-agent.service
+Wants=ems-appliance-agent.service
+
+[Service]
+Type=simple
+# Unprivileged on purpose: this process has no Docker socket, no root and no
+# way to run a host command. It reaches the agent socket through the shared
+# ems-appliance group only.
+User=ems-appliance-web
+Group=ems-appliance
+SupplementaryGroups=ems-appliance
+ExecStart=/usr/bin/ems-appliance web
+Restart=on-failure
+RestartSec=3
+StateDirectory=ems-appliance-manager
+LogsDirectory=ems-appliance-manager
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectProc=invisible
+ProtectSystem=strict
+ReadWritePaths=/var/lib/ems-appliance-manager /var/log/ems-appliance-manager
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @obsolete
+
+[Install]
+WantedBy=multi-user.target
