@@ -8,6 +8,11 @@ was flashed. So the verifier never accepts existence as evidence; it requires
 each required path to be backed by the persistent partition.
 """
 
+import os
+import shutil
+import subprocess
+from pathlib import Path
+
 import pytest
 
 from appliance import ab_persistence
@@ -17,6 +22,8 @@ from tests.helpers.appliance_ab import (
     SLOT_PREFIX,
     ApplianceAbHost,
 )
+
+ROOT = Path(__file__).resolve().parents[1]
 
 pytestmark = [pytest.mark.unit, pytest.mark.simulation]
 
@@ -222,3 +229,70 @@ def test_the_resolved_device_path_is_accepted_as_well_as_the_slot_alias(host):
     report = verify(host)
 
     assert report.ok is True
+
+
+# --- activating what upstream generates ---------------------------------------
+
+
+def test_every_declared_path_has_an_activation_link_in_the_image():
+    """Upstream generates six mount units and activates one of them.
+
+    The units themselves are correct; only the pull-in is missing, so the image
+    ships the wants entries by name. systemd resolves a wants entry by its file
+    name, which is why a link into the generator directory is enough.
+    """
+
+    overlay = (
+        ROOT
+        / "packaging/appliance/image/layer/ems-appliance.rootfs-overlay"
+        / "etc/systemd/system/local-fs.target.wants"
+    )
+    shipped = {path.name: os.readlink(path) for path in overlay.iterdir()}
+
+    assert set(shipped) == set(ab_persistence.shared_mount_units())
+    for unit, target in shipped.items():
+        assert target == f"{ab_persistence.GENERATOR_UNIT_DIR}/{unit}"
+
+
+def test_the_persistence_unit_orders_itself_after_every_shared_mount():
+    """RequiresMountsFor is the second, project-owned guarantee."""
+
+    unit = (ROOT / "packaging/appliance/systemd/ems-appliance-persistence.service").read_text(
+        encoding="utf-8"
+    )
+    declared = " ".join(
+        line.partition("=")[2].strip()
+        for line in unit.splitlines()
+        if line.startswith("RequiresMountsFor=")
+    )
+
+    for shared in ab_persistence.SHARED_PATHS:
+        assert shared.target in declared.split(), shared.target
+
+
+def test_the_escaper_matches_systemd_for_every_shared_path():
+    if shutil.which("systemd-escape") is None:
+        pytest.skip("systemd-escape is not installed")
+
+    for shared in ab_persistence.SHARED_PATHS:
+        expected = subprocess.run(
+            ["systemd-escape", "--path", shared.target],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        assert ab_persistence.escape_path(shared.target) == expected
+
+
+@pytest.mark.parametrize(
+    "path,unit",
+    [
+        ("/", "-"),
+        ("/opt", "opt"),
+        ("/a-b", "a\\x2db"),
+        ("/.hidden", "\\x2ehidden"),
+        ("/a/b c", "a-b\\x20c"),
+    ],
+)
+def test_the_escaper_follows_the_systemd_rules(path, unit):
+    assert ab_persistence.escape_path(path) == unit

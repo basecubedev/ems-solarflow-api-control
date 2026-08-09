@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# The A/B appliance image for Raspberry Pi 5.
+#
+#   rpi-image-gen build -c <abs>/profiles/rpi5-ab.yaml -S packaging/appliance/image
+#
+# rpi5 is the upstream layer name; pi5 is only the directory it lives in, and
+# is not resolvable. image-rota accepts device class pi5.
+include:
+  file: ../shared/ems-appliance-ab.yaml
+
+device:
+  layer: rpi5
+
+image:
+  name: ems-solarflow-appliance-rpi5

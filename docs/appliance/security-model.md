@@ -467,7 +467,11 @@ its authority is the narrowest.
 the browser sends           release_id, and a repair flag
 the browser can never send  a device path, a partition identity, a partition number,
                             a URL, a signing key, a checksum, a mount flag,
-                            a dd argument or a reboot string
+                            a dd argument or a reboot string,
+                            a device layer, a hardware class, a decoder path,
+                            an rpi-image-gen source, an expanded output path,
+                            a Docker command, a health URL, an SSH key path or
+                            a shared persistence path
 ```
 
 Everything else is derived: the release directory and the signing keyring come
@@ -487,6 +491,21 @@ traversals, nested paths, links, device nodes, unexpected or duplicate members,
 oversized members and members that produce more bytes than they declared are all
 refused, into a root-owned staging directory, with each member's digest checked
 against the manifest before any writer may read it.
+
+A verified member is still not an image. `image-rota` wraps both payloads in an
+Android Sparse container, so each member is expanded before anything reaches a
+partition, and the manifest signs both identities separately — the encoded
+digest extraction checks, and the expanded digest the read-back proves. The
+expander is in-process, so there is no decoder executable to allowlist and no
+converter output size to trust: every header field, every chunk extent and the
+running total are bounded before a byte is produced, and the expanded image must
+fit the target partition first. A malformed container fails before any block
+device is opened.
+
+Hardware is an authority, not a label. The manifest carries the device layer it
+was built from and only the board classes that layer is for; the appliance
+normalises its own device tree to a bounded board class and refuses anything
+else. A board it cannot identify blocks planning rather than being guessed at.
 
 The confirmed operation record binds the exact physical target — device, both
 partitions, both partition identities, both digests, the layout id and the persistent

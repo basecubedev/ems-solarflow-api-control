@@ -17,7 +17,9 @@ whole point: an OS update that leaves an appliance with no way back to the Admin
 console has not succeeded, however cleanly the kernel booted.
 """
 
+import hashlib
 import json
+import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -26,7 +28,12 @@ from appliance.paths import AGENT_FILE_MODE, atomic_write
 
 RUNTIME_RECORD = "runtime-images.json"
 SEED_DIRECTORY = "runtime-seed"
-RECORD_VERSION = 1
+RECORD_VERSION = 2
+
+# One generation of seeds is kept. An appliance that accumulated every past
+# slot's image archives would fill the partition the next update stages into,
+# and an archive older than the record is not something to load anyway.
+SEED_RETENTION = 1
 
 ROLE_ADMIN = "admin"
 ROLE_EMS = "ems"
@@ -57,21 +64,42 @@ def _digest_pinned(reference):
 
 @dataclass(frozen=True)
 class RuntimeImage:
+    """One container the appliance is made of, and whether it was running.
+
+    ``running`` is the intent the source slot had, not a snapshot of what
+    happened to be up: an EMS an operator deliberately stopped before the
+    update must come back stopped, and must not block the commit for it.
+    """
+
     role: str
     reference: str
     required: bool = False
+    running: bool = False
 
     def to_dict(self):
-        return {"role": self.role, "reference": self.reference, "required": self.required}
+        return {
+            "role": self.role,
+            "reference": self.reference,
+            "required": self.required,
+            "running": self.running,
+        }
 
 
 @dataclass(frozen=True)
 class RuntimeRecord:
-    """What the running slot is made of, as exact digests."""
+    """What the running slot is made of, as exact digests.
+
+    The deployment is part of it. Two slots holding the same image digests but
+    different compose files are not the same appliance, so the next slot has to
+    be able to tell that what it reconstructed is what was recorded.
+    """
 
     images: tuple = ()
     recorded_at: float = 0.0
     version: int = RECORD_VERSION
+    compose_digest: str = ""
+    environment_digest: str = ""
+    seeds: dict = field(default_factory=dict)
 
     def image(self, role):
         for entry in self.images:
@@ -79,11 +107,17 @@ class RuntimeRecord:
                 return entry
         return None
 
+    def seed(self, role):
+        return dict(self.seeds.get(role) or {})
+
     def to_dict(self):
         return {
             "version": self.version,
             "recorded_at": self.recorded_at,
             "images": [entry.to_dict() for entry in self.images],
+            "compose_digest": self.compose_digest,
+            "environment_digest": self.environment_digest,
+            "seeds": {role: dict(entry) for role, entry in sorted(self.seeds.items())},
         }
 
 
@@ -163,15 +197,25 @@ class RuntimeRecordStore:
                 continue
             images.append(
                 RuntimeImage(
-                    role=role, reference=reference, required=bool(entry.get("required"))
+                    role=role,
+                    reference=reference,
+                    required=bool(entry.get("required")),
+                    running=bool(entry.get("running")),
                 )
             )
         return RuntimeRecord(
             images=tuple(images),
             recorded_at=float(payload.get("recorded_at") or 0.0),
+            compose_digest=str(payload.get("compose_digest") or ""),
+            environment_digest=str(payload.get("environment_digest") or ""),
+            seeds={
+                str(role): dict(entry)
+                for role, entry in (payload.get("seeds") or {}).items()
+                if isinstance(entry, dict)
+            },
         )
 
-    def write(self, images):
+    def write(self, images, *, compose_digest="", environment_digest="", seeds=None):
         """Record only digest-pinned references; a tag is not an identity."""
 
         pinned = []
@@ -182,7 +226,13 @@ class RuntimeRecordStore:
                     f"{entry.role} is recorded as {entry.reference}, which is a mutable tag",
                 )
             pinned.append(entry)
-        record = RuntimeRecord(images=tuple(pinned), recorded_at=self._time())
+        record = RuntimeRecord(
+            images=tuple(pinned),
+            recorded_at=self._time(),
+            compose_digest=str(compose_digest or ""),
+            environment_digest=str(environment_digest or ""),
+            seeds=dict(seeds or {}),
+        )
         self.directory.mkdir(parents=True, exist_ok=True)
         atomic_write(
             self.path,
@@ -210,45 +260,116 @@ class SlotBootstrapService:
         images = []
         admin = self._admin_reference()
         if admin:
-            images.append(RuntimeImage(role=ROLE_ADMIN, reference=admin, required=True))
+            images.append(
+                RuntimeImage(
+                    role=ROLE_ADMIN,
+                    reference=admin,
+                    required=True,
+                    running=self._running("ems-admin"),
+                )
+            )
         for role, container in ((ROLE_EMS, "ems-solarflow"), (ROLE_INFLUXDB, "influxdb")):
             reference = self._resolved_reference(container)
             if reference:
-                images.append(RuntimeImage(role=role, reference=reference, required=False))
+                images.append(
+                    RuntimeImage(
+                        role=role,
+                        reference=reference,
+                        required=False,
+                        running=self._running(container),
+                    )
+                )
         if not images:
             raise BootstrapError(
                 "runtime_not_resolvable",
                 "no running container could be resolved to a digest, so the next slot "
                 "would have nothing to rebuild from",
             )
-        return self.store.write(images)
+        return self.store.write(
+            images,
+            compose_digest=self._file_digest(self.compose_file),
+            environment_digest=self._environment_digest(),
+        )
+
+    def _file_digest(self, path):
+        if not path:
+            return ""
+        try:
+            return _digest_bytes(Path(path).read_bytes())
+        except OSError:
+            return ""
+
+    def _environment_digest(self):
+        """The deployment env beside the compose file, as one digest.
+
+        Not its contents: an .env holds credentials, and a record on the
+        persistent partition is read by both slots and by a support bundle.
+        """
+
+        if not self.compose_file:
+            return ""
+        return self._file_digest(Path(self.compose_file).parent / ".env")
 
     def seed(self, record=None):
         """Copy the recorded images beside the record on the shared partition.
 
         This is what makes an appliance with no WAN able to finish a trial: the
         new slot loads the images it needs from the medium it already has.
+        Each archive is hashed and the digest recorded, so the next slot can
+        tell an interrupted copy from a complete one before loading it.
         """
 
         record = record or self.store.read()
         directory = self.store.seed_directory
-        seeded = []
+        self._prune_seeds(record)
+        seeded, metadata = [], {}
         for entry in record.images:
             target = directory / f"{entry.role}.tar"
             try:
                 directory.mkdir(parents=True, exist_ok=True)
                 self.docker.save_image(entry.reference, target)
+                metadata[entry.role] = {
+                    "file": target.name,
+                    "reference": entry.reference,
+                    "sha256": _digest_bytes(target.read_bytes()),
+                    "size_bytes": target.stat().st_size,
+                }
+                _sync(target)
+            except BootstrapError:
+                raise
             except Exception as exc:
                 raise BootstrapError(
                     "runtime_seed_failed",
                     f"{entry.role} ({entry.reference}) could not be seeded: {exc}",
                 )
             seeded.append(entry.role)
+        _sync(directory)
+        self.store.write(
+            record.images,
+            compose_digest=record.compose_digest,
+            environment_digest=record.environment_digest,
+            seeds=metadata,
+        )
         return tuple(seeded)
 
-    def discard_seed(self):
-        import shutil
+    def _prune_seeds(self, record):
+        """Keep one generation. Old archives are the partition's free space."""
 
+        directory = self.store.seed_directory
+        if not directory.is_dir():
+            return ()
+        wanted = {f"{entry.role}.tar" for entry in record.images}
+        removed = []
+        for item in sorted(directory.iterdir()):
+            if item.name not in wanted:
+                try:
+                    item.unlink()
+                except OSError:
+                    continue
+                removed.append(item.name)
+        return tuple(removed)
+
+    def discard_seed(self):
         shutil.rmtree(self.store.seed_directory, ignore_errors=True)
         return True
 
@@ -268,7 +389,7 @@ class SlotBootstrapService:
         if not self._daemon_ready():
             return BootstrapReport(problems=("the Docker daemon is not available in this slot",))
 
-        outcomes = [self._restore(entry) for entry in record.images]
+        outcomes = [self._restore(entry, record) for entry in record.images]
         started = self._start_admin(record)
         problems = [
             f"{outcome.role} ({outcome.reference}) could not be restored: {outcome.detail}"
@@ -279,12 +400,18 @@ class SlotBootstrapService:
             outcomes=tuple(outcomes), started=tuple(started), problems=tuple(problems)
         )
 
-    def _restore(self, entry):
+    def _restore(self, entry, record=None):
         if self._image_present(entry.reference):
             return ImageOutcome(entry.role, entry.reference, SOURCE_PRESENT, entry.required)
 
         seed = self.store.seed_directory / f"{entry.role}.tar"
+        declared = (record or self.store.read()).seed(entry.role)
         if seed.is_file():
+            problem = _seed_problem(seed, declared, entry.reference)
+            if problem:
+                # A seed that does not match its record is not loaded. The
+                # registry fallback below still names the exact digest.
+                return self._pull(entry, detail=problem)
             try:
                 self.docker.load_image(seed)
             except Exception as exc:
@@ -294,20 +421,44 @@ class SlotBootstrapService:
             if self._image_present(entry.reference):
                 return ImageOutcome(entry.role, entry.reference, SOURCE_SEED, entry.required)
 
+        return self._pull(entry)
+
+    def _pull(self, entry, *, detail=""):
+        """The fallback names the exact digest; a tag could point anywhere."""
+
+        if not _digest_pinned(entry.reference):
+            return ImageOutcome(
+                entry.role,
+                entry.reference,
+                SOURCE_UNAVAILABLE,
+                entry.required,
+                "the recorded reference is a mutable tag and is never pulled",
+            )
         try:
             self.docker.pull_image(entry.reference)
         except Exception as exc:
             return ImageOutcome(
-                entry.role, entry.reference, SOURCE_UNAVAILABLE, entry.required, str(exc)
+                entry.role,
+                entry.reference,
+                SOURCE_UNAVAILABLE,
+                entry.required,
+                "; ".join(filter(None, (detail, str(exc)))),
             )
         if self._image_present(entry.reference):
-            return ImageOutcome(entry.role, entry.reference, SOURCE_REGISTRY, entry.required)
+            return ImageOutcome(
+                entry.role, entry.reference, SOURCE_REGISTRY, entry.required, detail
+            )
         return ImageOutcome(
             entry.role,
             entry.reference,
             SOURCE_UNAVAILABLE,
             entry.required,
-            "neither the seed nor the registry produced the recorded digest",
+            "; ".join(
+                filter(
+                    None,
+                    (detail, "neither the seed nor the registry produced the recorded digest"),
+                )
+            ),
         )
 
     def _start_admin(self, record):
@@ -343,6 +494,15 @@ class SlotBootstrapService:
             return str(entry["admin_reference"])
         return self._resolved_reference("ems-admin")
 
+    def _running(self, container):
+        """Was this container up when the update was planned?"""
+
+        try:
+            state = self.docker.inspect_container(container)
+        except Exception:
+            return False
+        return bool(getattr(state, "exists", False)) and getattr(state, "state", "") == "running"
+
     def _resolved_reference(self, container):
         """A container's image as repository@digest, or nothing.
 
@@ -368,3 +528,39 @@ class SlotBootstrapService:
             return ""
         repository = image.rpartition(":")[0] or image
         return f"{repository}@{digest}"
+
+
+def _digest_bytes(blob):
+    return f"sha256:{hashlib.sha256(blob).hexdigest()}"
+
+
+def _seed_problem(path, declared, reference):
+    """Is this archive the one the source slot recorded? Say why, if not."""
+
+    if not declared:
+        return "the seed archive carries no recorded digest"
+    if declared.get("reference") != reference:
+        return f"the seed was written for {declared.get('reference')}"
+    try:
+        observed = _digest_bytes(path.read_bytes())
+    except OSError as exc:
+        return f"the seed archive could not be read: {exc}"
+    if observed != declared.get("sha256"):
+        return "the seed archive does not match its recorded digest"
+    return ""
+
+
+def _sync(path):
+    import os
+
+    try:
+        handle = os.open(str(path), os.O_RDONLY)
+    except OSError:
+        return False
+    try:
+        os.fsync(handle)
+    except OSError:
+        return False
+    finally:
+        os.close(handle)
+    return True

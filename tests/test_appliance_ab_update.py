@@ -594,3 +594,36 @@ def test_a_runtime_that_cannot_be_seeded_does_not_stop_the_trial(tmp_path, host,
 
     assert result["runtime_seed"]["seeded"] == []
     assert result["stage"] == "tryboot_requested"
+
+
+# --- production prerequisites -------------------------------------------------
+
+
+def test_a_missing_artifact_decoder_blocks_the_plan(service, monkeypatch):
+    """Before the artifact is fetched, not after it has filled the partition."""
+
+    from appliance import install_check
+
+    monkeypatch.setattr(
+        install_check, "_which", lambda tool: "" if tool == "zstd" else "/usr/bin/x"
+    )
+    _operation, payload = plan(service)
+
+    codes = {blocker["code"] for blocker in payload["blockers"]}
+    assert "artifact_decoder_missing" in codes
+    assert payload["risk"] == "blocked"
+
+
+def test_the_status_reports_decoder_readiness_apart_from_ab_support(service):
+    status = service.status()
+
+    assert status["artifacts"]["sparse_decoder_ready"] is True
+    assert set(status["readiness"]) == {
+        "hardware_supported",
+        "artifact_decoder_ready",
+        "sparse_decoder_ready",
+        "persistence_ready",
+        "host_identity_ready",
+        "docker_reconstruction_ready",
+        "layout_ready",
+    }

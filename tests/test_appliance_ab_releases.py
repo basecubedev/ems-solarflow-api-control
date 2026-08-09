@@ -396,7 +396,7 @@ def test_a_foreign_architecture_is_refused(releases, layout):
 
 def test_an_artifact_that_does_not_list_this_board_is_refused(releases, layout):
     release_id = releases.publish(
-        manifest_overrides={"compatible_hardware": ("raspberrypi,3-model-b",)}
+        manifest_overrides={"compatible_hardware": ("cm4",)}
     )
     release = releases.catalogue().get(release_id)
 

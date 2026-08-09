@@ -14,10 +14,31 @@ build host, and the revision it must be is pinned in `rpi-image-gen.lock`.
 
 ```text
 rpi-image-gen.lock   the exact upstream revision and the contract it must satisfy
-config/              the rpi-image-gen configuration
+profiles/            one build profile per board: rpi4-ab.yaml, rpi5-ab.yaml
+shared/              everything the profiles have in common
 layer/               the project layer and its rootfs overlay
 assets/              files copied into the image verbatim
 ```
+
+## One image per board
+
+The device layer selects the kernel, the firmware and the SoC, so a Pi 5
+image is not a Pi 4 image. Each profile names exactly one upstream device
+layer and each artefact declares only the board class that layer is for:
+
+```text
+profiles/rpi4-ab.yaml   device layer rpi4   class pi4   ...-<version>-rpi4-arm64-ab.img
+profiles/rpi5-ab.yaml   device layer rpi5   class pi5   ...-<version>-rpi5-arm64-ab.img
+```
+
+`rpi4` and `rpi5` are upstream's layer **names**; `pi4` and `pi5` are only the
+directories they live in and do not resolve. `image-rota` accepts device
+classes `cm4`, `pi4`, `cm5` and `pi5` only.
+
+At runtime the appliance normalises its device tree to one of those bounded
+board classes and refuses an artefact that does not list it. A board it
+cannot identify blocks the update with `hardware_not_supported` rather than
+being guessed at.
 
 ## `image-rota` owns the disk
 
@@ -90,3 +111,58 @@ never place a private key in CI configuration
 
 The runtime refuses an unsigned artifact in production; see
 `appliance/os_releases.py`.
+
+## Update artefacts are Android Sparse containers
+
+`image-rota`'s genimage configuration wraps both payloads in an
+`android-sparse` container and `post-image.sh` packs those containers as the
+`boot` and `system` members of `update.tar.zst`. A member's bytes are a chunk
+table, not a filesystem.
+
+So `scripts/appliance-build-rpi-ab-update.sh` reads each member's container and
+records both identities in the signed manifest:
+
+```json
+"system": {
+  "role": "root",
+  "encoding": "android_sparse",
+  "encoded_sha256": "sha256:…",
+  "expanded_sha256": "sha256:…",
+  "expanded_size": 4294967296,
+  "filesystem": "ext4"
+}
+```
+
+The appliance expands and verifies before writing, in `appliance/sparse.py`.
+No `simg2img` is installed on the appliance; the Debian package that would
+otherwise provide it is `android-sdk-libsparse-utils`.
+
+## Building
+
+```bash
+# Fetch the pinned source. Verified before extraction; installs nothing.
+scripts/appliance-fetch-rpi-image-gen.sh --into ../rpi-image-gen
+
+# Check the source identity, the contract and this host's build dependencies.
+scripts/appliance-check-rpi-image-gen.sh --rpi-image-gen ../rpi-image-gen
+
+# Prove every declared shared path is generated *and* activated.
+scripts/appliance-verify-slot-mounts.sh --rpi-image-gen ../rpi-image-gen
+
+# One artefact per board.
+scripts/appliance-build-rpi-ab-image.sh --profile rpi5 --rpi-image-gen ../rpi-image-gen
+scripts/appliance-build-rpi-ab-image.sh --profile rpi4 --rpi-image-gen ../rpi-image-gen
+
+# Describe and sign the update artefact the image build produced.
+scripts/appliance-build-rpi-ab-update.sh --profile rpi5 --sign-key <keyid>
+```
+
+A source tree that cannot prove which upstream revision it is fails with
+`rpi_image_gen_source_unverified`; a host missing build dependencies reports
+NOT RUN with the binaries, packages and binfmt registration listed separately.
+Neither is ever a pass.
+
+There is no containerized build path. Upstream v2.7.0 builds through
+`podman unshare`, `mmdebstrap` and `genimage` on the host, and cross-building
+arm64 needs an aarch64 `binfmt_misc` registration — a host-wide kernel setting a
+container cannot supply without privileged access to the host.

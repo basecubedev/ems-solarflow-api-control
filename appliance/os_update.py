@@ -32,6 +32,8 @@ from appliance import (
     ab_persistence,
     os_artifacts,
     os_releases,
+    rpi_image_gen,
+    sparse,
 )
 from appliance.ab_blocks import BlockError
 from appliance.ab_layout import LayoutError
@@ -47,6 +49,9 @@ TYPE_OS_UPDATE = "ab.update"
 TYPE_OS_ROLLBACK = "ab.rollback"
 
 STAGE_STAGING = "staging"
+STAGE_SPARSE_VALIDATED = "sparse_validated"
+STAGE_IMAGE_EXPANDING = "image_expanding"
+STAGE_EXPANDED_VERIFIED = "expanded_verified"
 STAGE_WRITING_INACTIVE = "writing_inactive"
 STAGE_VERIFYING_INACTIVE = "verifying_inactive"
 STAGE_READY_FOR_TRYBOOT = "ready_for_tryboot"
@@ -86,6 +91,13 @@ class WriteAuthority:
     artifact_digest: str
     boot_digest: str
     rootfs_digest: str
+    boot_expanded_digest: str = ""
+    rootfs_expanded_digest: str = ""
+    boot_expanded_size: int = 0
+    rootfs_expanded_size: int = 0
+    boot_encoding: str = ""
+    rootfs_encoding: str = ""
+    hardware_profile: str = ""
 
     def to_dict(self):
         return {
@@ -104,6 +116,13 @@ class WriteAuthority:
             "artifact_digest": self.artifact_digest,
             "boot_digest": self.boot_digest,
             "rootfs_digest": self.rootfs_digest,
+            "boot_expanded_digest": self.boot_expanded_digest,
+            "rootfs_expanded_digest": self.rootfs_expanded_digest,
+            "boot_expanded_size": self.boot_expanded_size,
+            "rootfs_expanded_size": self.rootfs_expanded_size,
+            "boot_encoding": self.boot_encoding,
+            "rootfs_encoding": self.rootfs_encoding,
+            "hardware_profile": self.hardware_profile,
         }
 
     def fingerprint(self):
@@ -218,12 +237,71 @@ class OsUpdateService:
         persistence = ab_persistence.verify(layout, mounts)
         payload = layout.to_dict()
         payload["persistence"] = persistence.to_dict()
+        hardware = self._hardware()
+        decoder = self._decoder()
+        payload["hardware"] = hardware
+        payload["artifacts"] = decoder
+        payload["readiness"] = self._readiness(layout, persistence, decoder, hardware)
         try:
             payload["ab_state"] = self.state.summary()
         except Exception as exc:  # a corrupt shared state must stay visible
             payload["ab_state"] = {"error": getattr(exc, "code", "ab_state_corrupt")}
         payload["releases"] = [item.to_dict() for item in self._releases()]
         return payload
+
+    def _hardware(self):
+        board = self._board()
+        return {
+            "board_class": board,
+            "supported": bool(board),
+            "reason": "" if board else "hardware_not_supported",
+        }
+
+    def _decoder(self):
+        from appliance import install_check
+
+        return install_check.ab_decoder_state()
+
+    def _readiness(self, layout, persistence, decoder, hardware):
+        """Every production prerequisite, as one bounded set of booleans.
+
+        Deliberately not a summary of internals: each field answers a question
+        an operator can act on, and the plan action is disabled unless all of
+        them hold. The image builder is not represented — an appliance never has
+        an rpi-image-gen checkout, and a field that is always false would be
+        noise; that pair is reported by the build host's own check instead.
+        """
+
+        return {
+            "hardware_supported": bool(hardware["supported"]),
+            "artifact_decoder_ready": bool(decoder["artifact_decoder_ready"]),
+            "sparse_decoder_ready": bool(decoder["sparse_decoder_ready"]),
+            "persistence_ready": bool(persistence.ok),
+            "host_identity_ready": self._host_identity_ready(),
+            "docker_reconstruction_ready": self._reconstruction_ready(),
+            "layout_ready": bool(layout.may_mutate),
+        }
+
+    def _host_identity_ready(self):
+        from appliance.host_identity import HostIdentityService
+
+        try:
+            return bool(
+                HostIdentityService(runner=self.runner, root=self.probe.root).verify().ok
+            )
+        except Exception:
+            return False
+
+    def _reconstruction_ready(self):
+        """Can a trial slot rebuild the runtime an operator recovers through?"""
+
+        if self.bootstrap is None:
+            return False
+        try:
+            record = self.bootstrap.store.read()
+        except Exception:
+            return False
+        return any(entry.required for entry in record.images)
 
     def _releases(self):
         try:
@@ -477,6 +555,21 @@ class OsUpdateService:
         except ab_inspect.InspectionError as exc:
             blockers.append({"code": exc.code, "message": exc.message})
 
+        # The tools have to be there before an artifact is fetched, not after:
+        # a missing decompressor discovered mid-staging has already spent the
+        # persistent partition's free space on something unreadable.
+        decoder = self._decoder()
+        if not decoder["artifact_decoder_ready"]:
+            blockers.append(
+                {
+                    "code": "artifact_decoder_missing",
+                    "message": (
+                        "this appliance cannot read a .tar.zst update artifact; install "
+                        + ", ".join(decoder["packages"] or ["zstd"])
+                    ),
+                }
+            )
+
         free = self._staging_free_bytes()
         if free is not None and free < self.minimum_staging_bytes:
             blockers.append(
@@ -499,19 +592,23 @@ class OsUpdateService:
         return stats.f_bavail * stats.f_frsize
 
     def _board(self):
-        raw = ""
-        try:
-            raw = (self.probe.root / "proc/device-tree/compatible").read_text(
-                encoding="utf-8", errors="replace"
-            )
-        except (OSError, ValueError):
-            return ""
-        return raw.strip().strip("\x00").split("\x00")[0]
+        """The bounded board class this appliance is, or nothing.
+
+        A raw ``compatible`` string is not an answer an artefact can be matched
+        against: the same board answers to several, and an image built for
+        another SoC does not boot. An unidentified board blocks the update.
+        """
+
+        return rpi_image_gen.detect_board_class(self.probe.root)
 
     def _image_sizes(self, release):
-        # The manifest declares the digests; the sizes come from the staged
-        # files. Before staging, a plan reports the archive size it knows.
-        return 0, release.archive_size
+        """What each partition has to hold: the expanded image, not the member.
+
+        The manifest signs both sizes, so capacity is decided at planning time
+        rather than discovered after the archive has already been staged.
+        """
+
+        return release.boot_member().expanded_size, release.root_member().expanded_size
 
     def _capacity_problems(self, inactive, boot_bytes, rootfs_bytes):
         problems = []
@@ -552,8 +649,15 @@ class OsUpdateService:
             release_id=release.release_id,
             build_id=release.build_id,
             artifact_digest=release.archive_digest,
-            boot_digest=release.boot_member().digest,
-            rootfs_digest=release.root_member().digest,
+            boot_digest=release.boot_member().encoded_digest,
+            rootfs_digest=release.root_member().encoded_digest,
+            boot_expanded_digest=release.boot_member().expanded_digest,
+            rootfs_expanded_digest=release.root_member().expanded_digest,
+            boot_expanded_size=release.boot_member().expanded_size,
+            rootfs_expanded_size=release.root_member().expanded_size,
+            boot_encoding=release.boot_member().encoding,
+            rootfs_encoding=release.root_member().encoding,
+            hardware_profile=release.device_layer,
         )
 
     # --- execution -------------------------------------------------------
@@ -583,8 +687,35 @@ class OsUpdateService:
         self.catalogue.verify_archive(release, archive)
         staged = os_artifacts.extract(archive, self.state.staging_dir, release)
 
-        boot_source = staged.path(release.boot_member().name)
-        root_source = staged.path(release.root_member().name)
+        # Both members are containers, not filesystems. Nothing may reach a
+        # partition until each one has been structurally validated against the
+        # size the manifest signed, expanded, and hashed as what a partition
+        # will actually read back.
+        try:
+            self.operations.advance(operation.operation_id, STAGE_SPARSE_VALIDATED)
+            self._validate_members(authority, release, staged)
+            self.operations.advance(operation.operation_id, STAGE_IMAGE_EXPANDING)
+            boot_source = self._expand_member(
+                staged, release.boot_member(), authority.boot_expanded_digest
+            )
+            root_source = self._expand_member(
+                staged, release.root_member(), authority.rootfs_expanded_digest
+            )
+            self.operations.advance(operation.operation_id, STAGE_EXPANDED_VERIFIED)
+        except sparse.SparseError as exc:
+            os_artifacts.discard(self.state.staging_dir)
+            self.operations.finish(
+                operation.operation_id,
+                STATE_FAILED_RECOVERABLE,
+                stage=STAGE_IMAGE_EXPANDING,
+                result={
+                    "default_slot_unchanged": True,
+                    "target_slot": authority.target_slot,
+                    "inactive_slot_untouched": True,
+                },
+                error={"code": exc.code, "message": exc.message},
+            )
+            raise OsUpdateError(exc.code, exc.message)
 
         # The target slot stops being a known-good rollback candidate here,
         # before the first destructive byte. An interrupted write must never
@@ -594,10 +725,10 @@ class OsUpdateService:
         self.operations.advance(operation.operation_id, STAGE_WRITING_INACTIVE)
         try:
             boot_digest = self._write_partition(
-                authority.boot_device, boot_source, expected=release.boot_member().digest
+                authority.boot_device, boot_source, expected=authority.boot_expanded_digest
             )
             rootfs_digest = self._write_partition(
-                authority.root_device, root_source, expected=release.root_member().digest
+                authority.root_device, root_source, expected=authority.rootfs_expanded_digest
             )
         except BlockError as exc:
             os_artifacts.discard(self.state.staging_dir)
@@ -615,10 +746,8 @@ class OsUpdateService:
         )
         os_artifacts.discard(self.state.staging_dir)
 
-        # Matching bytes are a statement about the medium, not about the slot.
-        # The selector is not armed until the written filesystems have been
-        # mounted and proven, because after the reboot the appliance is already
-        # running whatever is there.
+        # Matching bytes are a statement about the medium, not about the slot,
+        # and after the reboot the appliance is already running what was written.
         inspection = self._inspect(operation, authority, release)
 
         result = {
@@ -639,6 +768,53 @@ class OsUpdateService:
                 )
             )
         return result
+
+    def _validate_members(self, authority, release, staged):
+        """Read every container's header before anything is expanded or written.
+
+        A signed artifact is far more likely to be wrong because the release
+        pipeline was, than because someone forged it. The bounds are checked
+        anyway: an expanded size the target partition cannot hold has to fail
+        here, not with a partially overwritten slot.
+        """
+
+        capacities = {
+            release.boot_member().name: self.backend.size(authority.boot_device),
+            release.root_member().name: self.backend.size(authority.root_device),
+        }
+        for member in (release.boot_member(), release.root_member()):
+            if member.encoding != sparse.ENCODING_ANDROID_SPARSE:
+                continue
+            sparse.inspect(staged.path(member.name), expected_size=member.expanded_size)
+            capacity = capacities[member.name]
+            if member.expanded_size > capacity:
+                raise sparse.SparseError(
+                    "inactive_partition_too_small",
+                    f"{member.name} expands to {member.expanded_size} bytes, the target "
+                    f"partition holds {capacity}",
+                )
+
+    def _expand_member(self, staged, member, expected_digest):
+        """Turn one container into the filesystem the manifest describes."""
+
+        source = staged.path(member.name)
+        if member.encoding != sparse.ENCODING_ANDROID_SPARSE:
+            return source
+        destination = staged.directory / f"{member.name}.img"
+        sparse.expand(
+            source,
+            destination,
+            expected_size=member.expanded_size,
+            expected_digest=expected_digest,
+            free_bytes=self._staging_free_bytes(),
+        )
+        # The container has served its purpose and is the larger of the two on
+        # a mostly-full staging partition.
+        try:
+            source.unlink()
+        except OSError:
+            pass
+        return destination
 
     def _inspect(self, operation, authority, release):
         """Prove the written slot before anything points the firmware at it."""

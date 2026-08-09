@@ -31,10 +31,8 @@ EXT_MAGIC = b"\x53\xef"
 TYPE_ESP_FAT = "ebd0a0a2-b9e5-4433-87c0-68b6b72699c7"
 TYPE_LINUX = "0fc63daf-8483-4772-8e79-3d69d8477de4"
 
-# What image-rota's genimage template produces, in order. The labels are the
-# contract: upstream's slot mapper derives the active slot from the boot
-# partition's PARTLABEL, and a missing or duplicated label breaks slot mapping
-# outright rather than degrading.
+# What image-rota produces, in order. The labels are the contract: upstream's
+# slot mapper derives the active slot from the boot partition's PARTLABEL.
 EXPECTED_PARTITIONS = (
     ("bootconfig", "vfat"),
     ("boot_a", "vfat"),
@@ -169,10 +167,8 @@ PASS = "pass"
 FAIL = "fail"
 NOT_RUN = "not_run"
 
-# Only a mounted filesystem answers these, and this inspector deliberately does
-# not mount. Reporting them keeps a partition-table check from being read as
-# image validation; scripts/appliance-inspect-rpi-ab-image.sh runs the mounted
-# tier when the host can.
+# Reported rather than omitted, so a partition-table check is never read as
+# image validation. The mounted tier lives in the inspect script.
 UNMOUNTED_CHECKS = (
     "slot_cmdline_selects_the_active_slot",
     "package_present_in_both_roots",

@@ -84,15 +84,34 @@ Current OS build        the build id in the running root filesystem
 Inactive slot           where the next update is staged
 Last known-good slot    what a rollback would return to
 Trial status            whether a trial boot is pending or running
+Update readiness        every production prerequisite, one line each
 ```
+
+*Update readiness* is a bounded set: the board class, the A/B layout, the
+persistent data, the artifact decoder, the sparse decoder, the persistent host
+identity and the container-runtime record. While any of them is missing the plan
+buttons are disabled and the page says which one and why — an update that cannot
+be decoded, written or recovered from is not one to offer.
 
 The update path is:
 
 ```text
-plan → confirmation → stage into the inactive slot → verify by read-back
+plan → confirmation → stage and verify the archive's members
+     → validate each Android Sparse container → expand it → verify the expanded
+       digest → write the inactive slot → verify by read-back
      → arm a one-shot trial boot → reboot → health check
      → commit, or return to the current slot
 ```
+
+Everything up to and including the expansion happens on the persistent
+partition. The inactive slot stops being a rollback candidate only immediately
+before the first destructive byte, so power loss during staging or conversion
+leaves both slots exactly as they were.
+
+The health check is what decides. It requires the Docker daemon usable, the
+Admin container running at the exact digest the previous slot recorded and its
+loopback endpoint answering, and EMS in the state it was in before the update —
+running again if it was running, still stopped if an operator had stopped it.
 
 The default boot slot does not move until a booted target slot has proven
 itself. If it does not, the next ordinary boot returns to the current slot with
@@ -117,6 +136,8 @@ an update. There is no arbitrary historical image and no direct selector flip.
 ```bash
 sudo ems-appliance ab status
 sudo ems-appliance ab verify-persistence
+sudo ems-appliance host-identity
+sudo ems-appliance verify-install
 ```
 
 ## Major OS upgrades

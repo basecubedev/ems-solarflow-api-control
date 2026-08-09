@@ -43,13 +43,32 @@ A fourth mechanism exists on the hardware itself and is also not this one:
 The A/B mechanism targets exactly this scope:
 
 ```text
-board         Raspberry Pi 4 or later
+boards        Raspberry Pi 4 Model B and Raspberry Pi 5, as separate artefacts
 os            Raspberry Pi OS Trixie, 64-bit
 architecture  arm64
 firmware      a bootloader that implements autoboot.txt and tryboot
 storage       microSD, USB mass storage or NVMe — each one only where layout
               detection proves an A/B layout on that device
 ```
+
+**One image per board, and no image claims another's hardware.** The device
+layer selects the kernel and the firmware, so a Pi 5 image is not a Pi 4 image:
+
+```text
+profiles/rpi5-ab.yaml   device layer rpi5   board class pi5
+profiles/rpi4-ab.yaml   device layer rpi4   board class pi4
+
+ems-solarflow-appliance-<version>-rpi5-arm64-ab.img
+ems-solarflow-appliance-<version>-rpi4-arm64-ab.img
+```
+
+Each signed manifest carries the `device_layer` it was built from and only the
+board classes that layer is for. At runtime the appliance normalises
+`/proc/device-tree/compatible` to a bounded board class and refuses an artefact
+that does not list it. A board it cannot identify blocks planning with
+`hardware_not_supported`; it is never guessed at, because an image built for
+another SoC does not boot and the appliance would be recoverable only by
+reflashing.
 
 Nothing outside that scope is claimed. In particular:
 
@@ -128,7 +147,13 @@ survives the reboot in the middle of the transaction.
 unsupported            this host is not an A/B appliance and never will be
 single_slot            a normal single-root installation; package updates only
 ready                  A/B layout proven, no operation in flight
-staging                artifact downloaded and being verified
+staging                artifact downloaded, members extracted and their encoded
+                       digests verified
+sparse_validated       each member's Android Sparse container structurally
+                       checked against the size the manifest signed
+image_expanding        containers being expanded into staging
+expanded_verified      each expanded image hashes to the digest the manifest
+                       declares
 writing_inactive       inactive boot and root are being written
 verifying_inactive     written images are being read back and checked
 ready_for_tryboot      inactive slot verified, selector not yet armed
@@ -148,12 +173,47 @@ Mapping onto the generic operation model:
 
 | A/B state | Operation state |
 |---|---|
-| `staging`, `writing_inactive`, `verifying_inactive`, `ready_for_tryboot`, `tryboot_requested`, `committing` | `running` |
+| `staging`, `sparse_validated`, `image_expanding`, `expanded_verified`, `writing_inactive`, `verifying_inactive`, `ready_for_tryboot`, `tryboot_requested`, `committing` | `running` |
 | `booted_trial`, `health_verifying` | `verifying` |
 | `committed` | `succeeded` |
 | `fallback_observed`, `failed_recoverable` | `failed_recoverable` |
 | `manual_action_required` | `manual_action_required` |
 | `failed_terminal` | `failed_terminal` |
+
+## Update members are containers, not filesystems
+
+`image-rota`'s genimage configuration wraps both update payloads in an
+`android-sparse` container, and its `post-image.sh` packs those containers as
+the `boot` and `system` members of `update.tar.zst`. A member's bytes are
+therefore a chunk table, and writing them to a partition produces a slot that
+matches its manifest and does not boot.
+
+So a member carries two identities and the manifest signs both:
+
+```json
+"system": {
+  "role": "root",
+  "encoding": "android_sparse",
+  "encoded_sha256": "sha256:…",
+  "expanded_sha256": "sha256:…",
+  "expanded_size": 4294967296,
+  "filesystem": "ext4"
+}
+```
+
+`encoded_sha256` is what the archive carries and what extraction verifies.
+`expanded_sha256` is what the partition receives and what the read-back proves.
+They are never the same value, and a manifest that omits the expanded pair is
+refused rather than having one inferred for it — which is why the release
+manifest format is now 2 and format 1 is readable only for diagnostics.
+
+The expander is in-process (`appliance/sparse.py`). No `simg2img` is installed:
+a decoder invoked as a subprocess would be another executable to allowlist and
+verify, and its output size would still have to be trusted afterwards. Every
+bound — magic, versions, header sizes, block size, chunk count, per-chunk
+extent, the running total, integer overflow — is checked before a byte is
+produced, and the expanded image must fit the target partition before anything
+is written.
 
 ## The one invariant
 

@@ -4,9 +4,10 @@ Section: admin
 Priority: optional
 Architecture: arm64
 Maintainer: EMS SolarFlow API Control <noreply@example.invalid>
-Depends: python3 (>= 3.9), systemd, adduser, acl, iproute2, procps, util-linux, mount, ca-certificates, passwd
+Depends: python3 (>= 3.9), systemd, adduser, acl, iproute2, procps, util-linux,
+ mount, ca-certificates, passwd, zstd, gpgv, openssh-client
 Recommends: docker.io | docker-ce, network-manager, openssh-server, openssh-sftp-server,
- avahi-daemon, avahi-utils
+ avahi-daemon, avahi-utils, dosfstools, e2fsprogs
 Homepage: https://github.com/basecubedev/ems-solarflow-api-control
 Description: EMS SolarFlow Raspberry Pi Appliance Manager
  Host management and recovery for an EMS SolarFlow appliance. Runs as two

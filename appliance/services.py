@@ -8,6 +8,7 @@ imports a service that could touch Docker, apt, systemd or ``authorized_keys``.
 from dataclasses import dataclass
 
 from appliance.ab_bootstrap import RuntimeRecordStore, SlotBootstrapService
+from appliance.ab_docker_health import DockerTrialHealth
 from appliance.ab_inspect import InactiveSlotInspector
 from appliance.ab_layout import LayoutProbe
 from appliance.ab_state import AbStateStore
@@ -56,6 +57,8 @@ class ApplianceServices:
     ab_probe: object = None
     ab_state: object = None
     ab_bootstrap: object = None
+    ab_runtime: object = None
+    ab_docker_health: object = None
 
 
 def build_services(
@@ -151,12 +154,16 @@ def build_services(
 
     ab_probe = LayoutProbe(root=root, runner=runner)
     ab_state = AbStateStore(paths.os_update_dir, time_fn=time_fn)
+    ab_runtime = RuntimeRecordStore(paths.os_update_dir, time_fn=time_fn)
     ab_bootstrap = SlotBootstrapService(
         docker=docker,
-        store=RuntimeRecordStore(paths.os_update_dir, time_fn=time_fn),
+        store=ab_runtime,
         known_good=known_good,
         compose_file=deployment_compose,
     )
+    # One Docker contract for the trial gates, over the same backend the rest
+    # of the appliance uses. Nothing here invents a second method set.
+    ab_docker_health = DockerTrialHealth(docker, admin_url=config.admin_health_url)
     os_update = OsUpdateService(
         paths=paths,
         config=config,
@@ -205,4 +212,6 @@ def build_services(
         ab_probe=ab_probe,
         ab_state=ab_state,
         ab_bootstrap=ab_bootstrap,
+        ab_runtime=ab_runtime,
+        ab_docker_health=ab_docker_health,
     )

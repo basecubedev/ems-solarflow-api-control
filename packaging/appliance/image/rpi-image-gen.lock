@@ -11,6 +11,17 @@
   "repository": "https://github.com/raspberrypi/rpi-image-gen",
   "release": "v2.7.0",
   "commit": "a7b6d4806183195f3efadb533f58c8e46393d057",
+  "tarball": {
+    "comment": [
+      "The second supported source form. A tarball has no .git, so it proves",
+      "itself by this digest instead: the fetch script verifies the download",
+      "before extracting it and records the result beside the tree. Verified",
+      "byte-identical to the pinned checkout."
+    ],
+    "url": "https://codeload.github.com/raspberrypi/rpi-image-gen/tar.gz/refs/tags/v2.7.0",
+    "sha256": "sha256:f10e70b59ec1f1daf0089b9f62a07e8d7cee5e23574b14874da02a698ab71220",
+    "top_level_directory": "rpi-image-gen-2.7.0"
+  },
   "executable": "rpi-image-gen",
   "build_command": ["build", "-c", "<config>", "-S", "<srcdir>"],
   "image_layer": "image-rota",

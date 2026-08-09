@@ -41,6 +41,10 @@ EXECUTABLES = {
     "fsck.vfat": ("/usr/sbin/fsck.vfat", "/sbin/fsck.vfat"),
     "e2fsck": ("/usr/sbin/e2fsck", "/sbin/e2fsck"),
     "blockdev": ("/usr/sbin/blockdev", "/sbin/blockdev"),
+    # Update artifacts are .tar.zst. Python's tarfile gained zstd support in
+    # 3.14 and the appliance runs 3.13, so the archive is decompressed through
+    # this binary and read as a stream.
+    "zstd": ("/usr/bin/zstd", "/bin/zstd"),
     # Detached-signature verification of an OS release manifest, against a
     # root-owned keyring named by the host configuration.
     "gpg": ("/usr/bin/gpg", "/usr/bin/gpgv"),

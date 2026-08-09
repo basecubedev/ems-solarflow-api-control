@@ -502,6 +502,38 @@ def command_ab_verify_persistence(args):
     return EXIT_OK
 
 
+def command_host_identity(args):
+    """Establish and prove the identity both slots share.
+
+    Idempotent: an existing host key is validated and left exactly as it is, so
+    the fingerprint an operator verified on first boot survives every slot
+    switch. Only public fingerprints are ever printed.
+    """
+
+    from appliance.host_identity import HostIdentityService
+
+    services = _ab_services(args)
+    if services is None:
+        return EXIT_ERROR
+    service = HostIdentityService(runner=services.runner, root=services.ab_probe.root)
+    report = service.ensure() if args.ensure else service.verify()
+    payload = report.to_dict()
+    if report.ok:
+        # sshd has the last word: a configuration it refuses must not start.
+        sshd = service.validate_sshd()
+        payload["sshd_config"] = sshd.to_dict()
+        if not sshd.ok:
+            payload["ok"] = False
+            payload["problems"] = [*payload["problems"], sshd.detail]
+    if not args.quiet or not payload["ok"]:
+        _print(payload, args.json)
+    if not payload["ok"]:
+        for problem in payload.get("problems") or []:
+            print(f"error: {problem}", file=sys.stderr)
+        return EXIT_ERROR
+    return EXIT_OK
+
+
 def command_ab_write_layout(args):
     """Write the layout descriptor into a rootfs being built.
 
@@ -547,34 +579,44 @@ def command_ab_write_layout(args):
     return EXIT_OK
 
 
-def command_ab_grow_persistent(args):
-    """Grow the persistent partition to the medium, once, on a fresh appliance.
-
-    image-rota sizes it at build time and does not expand it. This is the only
-    partition change the project makes, and the marker keeps it to the first
-    boot of a freshly imaged medium.
-    """
+def _ab_persistent(args, attribute):
+    """Read-only discovery for the one-shot growth unit. Nothing here mutates."""
 
     from appliance import ab_layout
 
     services = _ab_services(args)
     if services is None:
-        return EXIT_ERROR
+        return None
     layout = ab_layout.discover(services.ab_probe)
     if layout.persist_device is None or layout.manifest is None:
         print("error: the persistent partition could not be identified", file=sys.stderr)
+        return None
+    return {
+        "device": layout.persist_device.path,
+        "disk": layout.persist_device.parent,
+        "number": layout.persist_device.number,
+        "mountpoint": layout.manifest.persist_mountpoint,
+    }.get(attribute)
+
+
+def _print_ab_persistent(args, attribute):
+    value = _ab_persistent(args, attribute)
+    if value is None:
         return EXIT_ERROR
-    device = layout.persist_device
-    marker = services.ab_probe.root / layout.manifest.persist_mountpoint.lstrip("/") / ".grown"
-    if marker.exists():
-        return EXIT_OK
-    if services.runner.available("growpart"):
-        services.runner.run("growpart", [device.parent, str(device.number)], timeout=120)
-    if services.runner.available("resize2fs"):
-        services.runner.run("resize2fs", [device.path], timeout=600)
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.write_text("grown\n", encoding="utf-8")
+    print(value)
     return EXIT_OK
+
+
+def command_ab_persistent_device(args):
+    return _print_ab_persistent(args, "device")
+
+
+def command_ab_persistent_disk(args):
+    return _print_ab_persistent(args, "disk")
+
+
+def command_ab_persistent_partition_number(args):
+    return _print_ab_persistent(args, "number")
 
 
 def command_ab_slot_bootstrap(args):
@@ -624,7 +666,8 @@ def command_ab_trial_health(args):
         selector_path=selector_path,
         runner=services.runner,
         systemd=services.systemd,
-        docker=services.docker,
+        docker=services.ab_docker_health,
+        runtime=services.ab_runtime,
         install_check=lambda: services.status.overview().get("health", {}).get("level") != "error",
         agent_socket=lambda: services.paths.agent_socket.exists(),
         health_window_seconds=services.config.ab_health_window_seconds,
@@ -783,6 +826,16 @@ def build_parser():
     )
     verify_persistence.add_argument("--quiet", action="store_true", help="report only failures")
     verify_persistence.set_defaults(handler=command_ab_verify_persistence)
+    host_identity = subparsers.add_parser(
+        "host-identity",
+        parents=[shared],
+        help="establish and prove the persistent SSH host keys and machine identity",
+    )
+    host_identity.add_argument(
+        "--ensure", action="store_true", help="create anything missing, never regenerate"
+    )
+    host_identity.add_argument("--quiet", action="store_true", help="report only failures")
+    host_identity.set_defaults(handler=command_host_identity)
     write_layout = ab_commands.add_parser(
         "write-layout", parents=[shared], help="write the layout descriptor (image build)"
     )
@@ -793,8 +846,14 @@ def build_parser():
     )
     write_layout.set_defaults(handler=command_ab_write_layout)
     ab_commands.add_parser(
-        "grow-persistent", parents=[shared], help="grow the persistent partition to the medium"
-    ).set_defaults(handler=command_ab_grow_persistent)
+        "persistent-device", parents=[shared], help="print the persistent partition device"
+    ).set_defaults(handler=command_ab_persistent_device)
+    ab_commands.add_parser(
+        "persistent-disk", parents=[shared], help="print the disk the layout lives on"
+    ).set_defaults(handler=command_ab_persistent_disk)
+    ab_commands.add_parser(
+        "persistent-partition-number", parents=[shared], help="print its partition number"
+    ).set_defaults(handler=command_ab_persistent_partition_number)
     ab_commands.add_parser(
         "slot-bootstrap", parents=[shared], help="rebuild this slot's container runtime"
     ).set_defaults(handler=command_ab_slot_bootstrap)

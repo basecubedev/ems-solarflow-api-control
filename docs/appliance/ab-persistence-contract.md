@@ -30,6 +30,35 @@ A layer declares a shared path by dropping a `.conf` file into
 `.mount` unit per declared path, binding `/persistent/shared/<path>` over
 `<path>`.
 
+### Upstream generates every mount and activates one
+
+Run against the pinned generator, six declared paths produce six `.mount` units
+and exactly one `local-fs.target.wants` link: upstream's `ln -sf` sits outside
+both of its loops, so `unit_name` still holds the last path of the last
+configuration file. Splitting the declaration into one file per path does not
+help, because the link is outside the per-file loop too.
+
+The units themselves are correct, so the image supplies the missing activation
+rather than reimplementing the mechanism:
+
+```text
+/etc/systemd/system/local-fs.target.wants/<escaped>.mount
+    → /run/systemd/generator/<escaped>.mount        (one per declared path)
+
+ems-appliance-persistence.service
+    RequiresMountsFor=<every declared path>
+```
+
+systemd resolves a wants entry by its file name, so a link naming the
+generator's output directory is enough. `RequiresMountsFor=` gives the
+appliance's own chain the same ordering independently of `local-fs.target`.
+
+`scripts/appliance-verify-slot-mounts.sh` runs the unmodified upstream generator
+in a disposable mount namespace and compares what it wrote against what
+`appliance/ab_persistence.py` declares. The image build calls it and fails on an
+incomplete result, so a subtle upstream change becomes a build-time failure
+instead of an appliance that loses its state one update later.
+
 ### Why the appliance still verifies
 
 Upstream guards each bind with `ConditionPathIsDirectory` on its source. If the
@@ -142,6 +171,28 @@ slot-local and identical in both slots:
 
 An operator's `known_hosts` entry therefore survives an OS update, while each
 slot keeps its own OpenSSH configuration.
+
+`ems-appliance-host-identity.service` is what creates them, exactly once, on the
+first boot of an A/B appliance. It runs after the persistent mounts and before
+persistence verification, sshd and NetworkManager, and the image makes
+`ssh.service` `Requires=` it.
+
+It is idempotent by construction: an existing key is validated and left
+byte-for-byte as it is, and only an absent type is created. A new key is written
+under a staging name, fsynced and renamed into place, so a crash leaves nothing
+partial. Before sshd may read them, the directory and each key must be a real
+file rather than a symlink, root-owned and not group- or world-readable — a
+symlinked key path would let whoever could create one decide where sshd reads a
+private key from, so it is refused rather than replaced.
+
+Failure is terminal. An appliance whose key directory cannot be proven offers no
+SSH at all rather than offering it under an identity nobody can vouch for. Only
+public fingerprints are ever reported; no private key reaches a report, a log
+line or a support bundle.
+
+```bash
+sudo ems-appliance host-identity --ensure
+```
 
 Note that upstream's `openssh-server` layer ships its own
 `slot-shared.d/openssh-server.conf` declaring `Path=/etc/ssh`. This project does

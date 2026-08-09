@@ -66,12 +66,16 @@ install -m 0644 "$PACKAGING/systemd/ems-appliance-backup-access-disable.service"
 # on a single-slot host; both carry ConditionPathExists on the layout manifest.
 install -m 0644 "$PACKAGING/systemd/ems-appliance-persistence.service" \
         "$STAGE/usr/lib/systemd/system/"
+install -m 0644 "$PACKAGING/systemd/ems-appliance-host-identity.service" \
+        "$STAGE/usr/lib/systemd/system/"
 install -m 0644 "$PACKAGING/systemd/ems-appliance-ab-health.service" \
         "$STAGE/usr/lib/systemd/system/"
 install -m 0644 "$PACKAGING/systemd/ems-appliance-slot-bootstrap.service" \
         "$STAGE/usr/lib/systemd/system/"
 install -m 0644 "$PACKAGING/systemd/ems-appliance-grow-persistent.service" \
         "$STAGE/usr/lib/systemd/system/"
+install -m 0755 "$PACKAGING/bin/grow-persistent.sh" \
+        "$STAGE/usr/lib/ems-appliance-manager/grow-persistent.sh"
 install -m 0644 "$PACKAGING/tmpfiles/ems-appliance-manager.conf" "$STAGE/usr/lib/tmpfiles.d/"
 install -m 0644 "$PACKAGING/logrotate/ems-appliance-manager" "$STAGE/etc/logrotate.d/"
 install -m 0644 "$PACKAGING/config/appliance.conf" "$STAGE/etc/ems-appliance-manager/"

@@ -1,13 +1,19 @@
 #!/bin/sh
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# Build the A/B update artifact and its release metadata.
+# Wrap rpi-image-gen's A/B update artifact in this project's release metadata.
 #
-#   scripts/appliance-build-rpi-ab-update.sh [--output DIR] [--image IMG]
-#                                            [--build-id ID] [--sign-key KEYID]
+#   scripts/appliance-build-rpi-ab-update.sh --profile rpi4|rpi5 [--output DIR]
+#                          [--update FILE] [--build-id ID] [--sign-key KEYID]
 #
-# The artifact is the rpi-image-gen A/B update model wrapped in project release
-# metadata: a .tar.zst holding the boot and root filesystem images, a manifest
-# describing what it is compatible with, a checksum and a detached signature.
+# The hardware the manifest declares comes from the build profile, so an
+# artefact can only claim the board its device layer was built for.
+#
+# The archive itself is upstream's: image-rota's post-image.sh produces
+# update.tar.zst holding exactly two android-sparse members, boot and system.
+# Nothing is repacked here — repacking would mean this project, not the
+# generator, decided what an update is. What is added is the signed manifest
+# binding that exact archive to a layout, a hardware set and a minimum
+# Appliance Manager version.
 #
 # The manifest never contains private signing material. This script signs only
 # when --sign-key names a key that is already in the caller's keyring; it never
@@ -18,16 +24,15 @@
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-IMAGE_DIR="$ROOT/packaging/appliance/image"
-LAYOUT="$IMAGE_DIR/manifests/layout.json"
 OUTPUT="$ROOT/dist"
-SOURCE_IMAGE=""
+PROFILE=rpi5
+UPDATE=""
 BUILD_ID=""
 SIGN_KEY=${EMS_APPLIANCE_OS_SIGN_KEY:-}
-REQUIRED_TOOLS="python3 tar zstd sha256sum partx dd"
+REQUIRED_TOOLS="python3 tar zstd sha256sum"
 
 usage() {
-    sed -n '3,19p' "$0"
+    sed -n '3,25p' "$0"
 }
 
 not_run() {
@@ -44,10 +49,12 @@ fail() {
 
 while [ $# -gt 0 ]; do
     case "$1" in
+        --profile) PROFILE=${2:?--profile needs rpi4 or rpi5}; shift 2 ;;
+        --profile=*) PROFILE=${1#*=}; shift ;;
         --output) OUTPUT=${2:?--output needs a directory}; shift 2 ;;
         --output=*) OUTPUT=${1#*=}; shift ;;
-        --image) SOURCE_IMAGE=${2:?--image needs a file}; shift 2 ;;
-        --image=*) SOURCE_IMAGE=${1#*=}; shift ;;
+        --update) UPDATE=${2:?--update needs a file}; shift 2 ;;
+        --update=*) UPDATE=${1#*=}; shift ;;
         --build-id) BUILD_ID=${2:?--build-id needs a value}; shift 2 ;;
         --build-id=*) BUILD_ID=${1#*=}; shift ;;
         --sign-key) SIGN_KEY=${2:?--sign-key needs a key id}; shift 2 ;;
@@ -56,8 +63,6 @@ while [ $# -gt 0 ]; do
         *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
     esac
 done
-
-[ -f "$LAYOUT" ] || fail "$LAYOUT is missing" layout_missing
 
 missing=""
 for tool in $REQUIRED_TOOLS; do
@@ -68,100 +73,146 @@ done
 VERSION=$(sed -n 's/^APPLIANCE_VERSION = "\(.*\)"$/\1/p' "$ROOT/appliance/version.py")
 [ -n "$VERSION" ] || fail "cannot read APPLIANCE_VERSION" version_unreadable
 [ -n "$BUILD_ID" ] || BUILD_ID=$(date -u +%Y%m%d%H%M%S 2>/dev/null || echo unknown)
-NAME="ems-solarflow-appliance-${VERSION}-arm64-ab"
+PROFILE_CONFIG="$ROOT/packaging/appliance/image/profiles/${PROFILE}-ab.yaml"
+[ -f "$PROFILE_CONFIG" ] || fail "there is no build profile for $PROFILE" hardware_profile_unknown
+NAME="ems-solarflow-appliance-${VERSION}-${PROFILE}-arm64-ab"
 
-if [ -z "$SOURCE_IMAGE" ]; then
-    SOURCE_IMAGE=$(ls "$OUTPUT/$NAME.img" 2>/dev/null || true)
+if [ -z "$UPDATE" ]; then
+    for candidate in "$OUTPUT/$NAME.update.tar.zst" "$OUTPUT/update.tar.zst"; do
+        [ -f "$candidate" ] && UPDATE=$candidate && break
+    done
 fi
-[ -n "$SOURCE_IMAGE" ] && [ -f "$SOURCE_IMAGE" ] \
-    || not_run "no A/B image to extract from; build one first or pass --image" \
-               source_image_unavailable
+[ -n "$UPDATE" ] && [ -f "$UPDATE" ] \
+    || not_run "no rpi-image-gen update artifact; build an image first or pass --update" \
+               update_artifact_unavailable
 
 mkdir -p "$OUTPUT" || fail "cannot create $OUTPUT" output_unusable
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/ems-ab-update.XXXXXX") \
-    || not_run "a working directory could not be created" working_directory_unusable
-trap 'rm -rf "$WORK"' EXIT
+ARCHIVE="$OUTPUT/$NAME.tar.zst"
+[ "$UPDATE" = "$ARCHIVE" ] || cp "$UPDATE" "$ARCHIVE"
 
-partition_number() {
-    PYTHONPATH="$ROOT" python3 -c '
-import sys
-from appliance import ab_image
-layout = ab_image.read_layout(sys.argv[1])
-print(next(int(entry["partition"]) for entry in layout["partitions"]
-           if entry["role"] == sys.argv[2]))
-' "$LAYOUT" "$1"
-}
-
-extract() {
-    role=$1
-    target=$2
-    number=$(partition_number "$role")
-    start=$(partx --show --output START --noheadings --nr "$number" "$SOURCE_IMAGE" | tr -d ' ')
-    sectors=$(partx --show --output SECTORS --noheadings --nr "$number" "$SOURCE_IMAGE" | tr -d ' ')
-    [ -n "$start" ] && [ -n "$sectors" ] \
-        || fail "partition $number ($role) could not be located in $SOURCE_IMAGE" partition_missing
-    dd if="$SOURCE_IMAGE" of="$target" bs=512 skip="$start" count="$sectors" status=none \
-        || fail "partition $number ($role) could not be extracted" extract_failed
-}
-
-echo "== extracting the slot images =="
-extract boot_a "$WORK/boot-a.img"
-extract boot_b "$WORK/boot-b.img"
-extract root_a "$WORK/root.img"
-
-digest_of() {
-    printf 'sha256:%s' "$(sha256sum "$1" | cut -d' ' -f1)"
-}
-
-BOOT_A_DIGEST=$(digest_of "$WORK/boot-a.img")
-BOOT_B_DIGEST=$(digest_of "$WORK/boot-b.img")
-ROOT_DIGEST=$(digest_of "$WORK/root.img")
-
-echo "== packing the update artifact =="
-( cd "$WORK" && tar --sort=name --owner=0 --group=0 --numeric-owner \
-    --mtime='@0' -cf - boot-a.img boot-b.img root.img ) \
-    | zstd -19 -T0 -q -o "$OUTPUT/$NAME.tar.zst" \
-    || fail "the update archive could not be packed" pack_failed
-
-ARCHIVE_DIGEST=$(digest_of "$OUTPUT/$NAME.tar.zst")
-ARCHIVE_SIZE=$(stat -c '%s' "$OUTPUT/$NAME.tar.zst")
-
-PYTHONPATH="$ROOT" python3 - "$LAYOUT" "$OUTPUT/$NAME.manifest.json" <<PY
+echo "== describing the upstream artifact =="
+PYTHONPATH="$ROOT" python3 - "$ARCHIVE" "$OUTPUT/$NAME.manifest.json" \
+    "$VERSION" "$BUILD_ID" "$NAME" "$PROFILE_CONFIG" <<'PY' || fail "the artifact could not be described" describe_failed
+import hashlib
 import json
+import os
+import shutil
+import subprocess
 import sys
+import tempfile
 
-from appliance import ab_image, version
+from appliance import os_artifacts, os_releases, rpi_image_gen, sparse, version
 
-layout = ab_image.read_layout(sys.argv[1])
-manifest = {
-    "format_version": 1,
-    "release_version": "$VERSION",
-    "build_id": "$BUILD_ID",
-    "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)",
+archive, manifest_path, release_version, build_id, name, profile_config = sys.argv[1:7]
+lock = rpi_image_gen.read_lock()
+profile = rpi_image_gen.read_profile(profile_config)
+
+members = {}
+staging = tempfile.mkdtemp(prefix="ems-ab-describe-")
+# The same reader the appliance uses, so an archive the runtime cannot open
+# cannot be described here as if it were fine. Each member is written out
+# once so its container can be read a second time: the encoded digest is
+# what the archive carries, the expanded digest is what a partition will
+# hold, and a manifest that conflated them is how a sparse container ends up
+# on a slot.
+try:
+    with os_artifacts.open_archive(archive) as handle:
+        while True:
+            member = handle.next()
+            if member is None:
+                break
+            if not member.isfile():
+                sys.exit(f"{member.name} is not a regular file")
+            staged = os.path.join(staging, os.path.basename(member.name))
+            stream = handle.extractfile(member)
+            digest = hashlib.sha256()
+            with open(staged, "wb") as target:
+                while True:
+                    block = stream.read(1024 * 1024)
+                    if not block:
+                        break
+                    digest.update(block)
+                    target.write(block)
+            entry = {
+                "encoded_sha256": f"sha256:{digest.hexdigest()}",
+                "encoding": sparse.ENCODING_RAW,
+            }
+            if sparse.is_sparse(staged):
+                summary = sparse.summarize(staged)
+                entry.update(
+                    {
+                        "encoding": sparse.ENCODING_ANDROID_SPARSE,
+                        "expanded_sha256": summary.digest,
+                        "expanded_size": summary.bytes_written,
+                    }
+                )
+            else:
+                entry.update(
+                    {
+                        "expanded_sha256": entry["encoded_sha256"],
+                        "expanded_size": os.path.getsize(staged),
+                    }
+                )
+            members[member.name] = entry
+finally:
+    shutil.rmtree(staging, ignore_errors=True)
+
+if set(members) != set(lock.update_members):
+    sys.exit(
+        f"the archive holds {sorted(members)}, image-rota produces {sorted(lock.update_members)}"
+    )
+
+archive_digest = hashlib.sha256()
+with open(archive, "rb") as handle:
+    for block in iter(lambda: handle.read(1024 * 1024), b""):
+        archive_digest.update(block)
+
+revision = os.environ.get("EMS_RPI_IMAGE_GEN_REVISION") or lock.commit
+created = subprocess.run(
+    ["date", "-u", "+%Y-%m-%dT%H:%M:%SZ"], capture_output=True, text=True
+).stdout.strip() or "unknown"
+project = subprocess.run(
+    ["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True
+).stdout.strip() or "unknown"
+
+payload = {
+    "format_version": os_releases.MANIFEST_FORMAT_VERSION,
+    "release_version": release_version,
+    "build_id": build_id,
+    "created_at": created,
     "architecture": "arm64",
-    "compatible_hardware": ["raspberrypi,4-model-b", "raspberrypi,5-model-b"],
+    "device_layer": profile.device_layer,
+    "compatible_hardware": list(profile.compatible_board_classes),
     "os_release": "Raspberry Pi OS Trixie arm64",
-    "rpi_image_gen_revision": "${EMS_RPI_IMAGE_GEN_REVISION:-unknown}",
-    "project_revision": "$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)",
+    "image_layer": lock.image_layer,
+    "image_layer_version": lock.image_layer_version,
+    "rpi_image_gen_revision": revision,
+    "project_revision": project,
     "appliance_manager_version": version.APPLIANCE_VERSION,
     "minimum_appliance_manager_version": version.APPLIANCE_VERSION,
-    "layout_id": layout["layout_id"],
-    "slot_schema_version": layout["slot_schema_version"],
-    "persistent_schema_version": layout["persistent_schema_version"],
+    "layout_id": "ems-appliance-rota-v1",
+    "slot_schema_version": 2,
+    "persistent_schema_version": 2,
     "archive": {
-        "name": "$NAME.tar.zst",
-        "digest": "$ARCHIVE_DIGEST",
-        "size_bytes": $ARCHIVE_SIZE,
+        "name": f"{name}.tar.zst",
+        "digest": f"sha256:{archive_digest.hexdigest()}",
+        "size_bytes": os.path.getsize(archive),
         "compression": "zstd",
     },
     "members": {
-        "boot-a.img": {"digest": "$BOOT_A_DIGEST", "slot": "A", "role": "boot"},
-        "boot-b.img": {"digest": "$BOOT_B_DIGEST", "slot": "B", "role": "boot"},
-        "root.img": {"digest": "$ROOT_DIGEST", "role": "root"},
+        "boot": dict(members["boot"], role="boot", filesystem="vfat"),
+        "system": dict(members["system"], role="root", filesystem="ext4"),
     },
 }
-with open(sys.argv[2], "w", encoding="utf-8") as handle:
-    handle.write(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+# Parsing it back is the check: an artifact the runtime would refuse must not
+# leave the build host looking like a release.
+os_releases.parse_manifest(payload)
+with open(manifest_path, "w", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+for name in sorted(members):
+    entry = members[name]
+    print(f"{name}: {entry['encoding']} {entry['encoded_sha256'][:19]}... "
+          f"-> {entry['expanded_size']} bytes {entry['expanded_sha256'][:19]}...")
 PY
 
 ( cd "$OUTPUT" && sha256sum "$NAME.tar.zst" "$NAME.manifest.json" > "$NAME.sha256" )
@@ -180,9 +231,9 @@ else
 fi
 
 echo
-echo "artifact: $OUTPUT/$NAME.tar.zst"
+echo "artifact: $ARCHIVE"
 echo "manifest: $OUTPUT/$NAME.manifest.json"
 echo "checksum: $OUTPUT/$NAME.sha256"
 echo
 echo "Nothing was published, tagged or uploaded."
-echo "RESULT: PASS (built $NAME.tar.zst)"
+echo "RESULT: PASS (described $NAME.tar.zst)"

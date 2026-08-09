@@ -153,7 +153,7 @@ def test_rpi_image_gen_is_not_vendored():
 
     entries = {item.name for item in IMAGE.iterdir()}
 
-    assert entries >= {"README.md", "config", "layer", "rpi-image-gen.lock"}
+    assert entries >= {"README.md", "profiles", "shared", "layer", "rpi-image-gen.lock"}
     assert not (IMAGE / "rpi-image-gen").exists()
 
 
@@ -168,21 +168,32 @@ def test_the_project_declares_no_partition_layout_of_its_own():
 
 
 def test_the_image_config_selects_image_rota_and_declares_no_partitions():
-    config = read(IMAGE / "config" / "ems-appliance-ab.yaml")
+    shared = read(IMAGE / "shared" / "ems-appliance-ab.yaml")
 
-    assert "layer: image-rota" in config
-    assert "include:" in config
-    assert "trixie-minbase-ab.yaml" in config
+    assert "layer: image-rota" in shared
+    assert "include:" in shared
+    assert "trixie-minbase-ab.yaml" in shared
     # Prose may name them; a declaration may not.
     for forbidden in ("partuuid:", "sfdisk", "partitions:", "type_guid"):
-        assert forbidden not in config.lower()
+        assert forbidden not in shared.lower()
+
+
+def test_each_hardware_profile_adds_only_its_device_layer():
+    """One image per board. A shared base, and one line that differs."""
+
+    for name, layer in (("rpi4-ab", "rpi4"), ("rpi5-ab", "rpi5")):
+        profile = read(IMAGE / "profiles" / f"{name}.yaml")
+        assert f"layer: {layer}" in profile
+        assert "../shared/ems-appliance-ab.yaml" in profile
+        for forbidden in ("partuuid:", "sfdisk", "partitions:", "type_guid"):
+            assert forbidden not in profile.lower()
 
 
 def test_the_project_layer_installs_the_package_and_enables_the_units():
     layer = read(IMAGE / "layer" / "ems-appliance.yaml")
 
     assert "X-Env-Layer-Name: ems-appliance" in layer
-    assert "X-Env-Layer-Requires: image-rota" in layer
+    assert "X-Env-Layer-Requires: image-rota,docker-debian-trixie" in layer
     assert "dpkg -i" in layer
     assert "ems-appliance-os-build" in layer
     assert "ab write-layout" in layer
@@ -224,34 +235,36 @@ def test_the_persistent_partition_is_grown_only_once_on_a_fresh_medium():
     """Repartitioning a running installation is never reachable from anywhere."""
 
     unit = read(SYSTEMD / "ems-appliance-grow-persistent.service")
+    script = read(PACKAGING / "bin" / "grow-persistent.sh")
 
     assert "ConditionPathExists=!/persistent/.grown" in unit
-    assert "ab grow-persistent" in unit
+    assert "grow-persistent.sh" in unit
+    assert "growpart" in script
+    assert "$MARKER" in script
+
+
+def test_the_growth_script_is_the_only_thing_that_can_repartition():
+    """It is a shell unit precisely so no request-handling code path can."""
+
+    from appliance.commands import EXECUTABLES
+
+    for tool in ("growpart", "resize2fs", "sfdisk", "parted", "sgdisk"):
+        assert tool not in EXECUTABLES, tool
+    for path in (ROOT / "appliance").glob("*.py"):
+        assert "growpart" not in read(path), path.name
 
 
 # --- no in-place conversion anywhere ----------------------------------------
 
 
-@pytest.mark.parametrize("tool", ["sfdisk", "parted", "sgdisk", "mkfs"])
-def test_no_appliance_module_ever_repartitions_a_running_appliance(tool):
-    """growpart and resize2fs are reachable, and only from the one-shot unit."""
-
+@pytest.mark.parametrize(
+    "tool", ["sfdisk", "parted", "sgdisk", "growpart", "resize2fs", "mkfs"]
+)
+def test_no_appliance_module_ever_runs_a_partitioning_tool(tool):
     for path in (ROOT / "appliance").glob("*.py"):
         source = read(path)
         for call in (f'run("{tool}', f"run('{tool}", f'resolve("{tool}'):
             assert call not in source, (path.name, call)
-
-
-def test_the_partition_growth_is_confined_to_one_command():
-    """Only the fresh-medium command may resize, and only what it discovered."""
-
-    callers = [
-        path.name
-        for path in (ROOT / "appliance").glob("*.py")
-        if 'run("growpart"' in read(path) or 'run("resize2fs"' in read(path)
-    ]
-
-    assert callers == ["cli.py"]
 
 
 def test_the_image_inspector_only_reads():
@@ -267,7 +280,8 @@ def test_the_image_inspector_only_reads():
 def test_the_command_allowlist_has_no_partitioning_tool():
     from appliance.commands import EXECUTABLES
 
-    for tool in ("sfdisk", "parted", "sgdisk", "growpart", "mkfs.ext4", "mkfs.vfat", "dd"):
+    for tool in ("sfdisk", "parted", "sgdisk", "growpart", "resize2fs",
+                 "mkfs.ext4", "mkfs.vfat", "dd"):
         assert tool not in EXECUTABLES, tool
 
 

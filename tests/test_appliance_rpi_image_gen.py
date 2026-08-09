@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from appliance import rpi_image_gen
-from appliance.rpi_image_gen import FAIL, NOT_RUN, PASS
+from appliance.rpi_image_gen import FAIL, PASS
 
 pytestmark = [pytest.mark.unit, pytest.mark.simulation]
 
@@ -76,6 +76,8 @@ def checkout(tmp_path, lock, **overrides):
     write(root, PERSIST_GENERATOR, "#!/bin/sh\n", mode=0o755)
     write(root, "layer/rpi/device/slot-mapper/bin/rpi-slot-label", "#!/bin/sh\n", mode=0o755)
     write(root, "config/trixie-minbase-ab.yaml", "image:\n  layer: image-rota\n")
+    if overrides.get("revision", lock.commit):
+        write(root, ".git/HEAD", f"{overrides.get('revision', lock.commit)}\n")
     return root
 
 
@@ -145,7 +147,9 @@ def test_a_pinned_checkout_is_compatible_and_buildable(tmp_path, lock):
 
 
 def test_a_checkout_missing_build_dependencies_is_compatible_but_not_buildable(tmp_path, lock):
-    report = probe(checkout(tmp_path, lock), lock, which=lambda binary: None)
+    report = probe(
+        checkout(tmp_path, lock), lock, which=lambda binary: None, package_query=lambda _p: True
+    )
 
     assert report.compatible
     assert not report.buildable
@@ -252,36 +256,113 @@ def test_a_missing_required_path_is_refused(tmp_path, lock):
     assert "path:layer/rpi/device/slot-mapper/bin/rpi-slot-label" in failed(report)
 
 
-# --- revision ----------------------------------------------------------------
+# --- source identity ---------------------------------------------------------
 
 
-def test_a_checkout_without_git_metadata_reports_the_revision_as_not_run(tmp_path, lock):
-    report = probe(checkout(tmp_path, lock), lock)
-    revision = next(finding for finding in report.findings if finding.check == "revision")
+def identity(report):
+    return next(finding for finding in report.findings if finding.check == "source_identity")
 
-    assert revision.result == NOT_RUN
-    assert report.compatible
+
+def test_a_tree_with_no_provable_identity_is_refused(tmp_path, lock):
+    """A tarball extraction has no .git, and unknown is not a NOT RUN."""
+
+    report = probe(checkout(tmp_path, lock, revision=""), lock)
+
+    assert identity(report).result == FAIL
+    assert not report.compatible
+    assert report.reason == rpi_image_gen.REASON_SOURCE_UNVERIFIED
+    assert report.source_identity == rpi_image_gen.SOURCE_UNVERIFIED
 
 
 def test_a_checkout_at_the_pinned_revision_passes(tmp_path, lock):
-    root = checkout(tmp_path, lock)
-    write(root, ".git/HEAD", f"{lock.commit}\n")
+    report = probe(checkout(tmp_path, lock), lock)
 
-    report = probe(root, lock)
-    revision = next(finding for finding in report.findings if finding.check == "revision")
-
-    assert revision.result == PASS
+    assert identity(report).result == PASS
+    assert report.source_identity == rpi_image_gen.SOURCE_GIT
 
 
 def test_a_checkout_at_another_revision_is_refused(tmp_path, lock):
-    root = checkout(tmp_path, lock)
+    root = checkout(tmp_path, lock, revision="")
     write(root, ".git/HEAD", "ref: refs/heads/master\n")
     write(root, ".git/refs/heads/master", "0" * 40 + "\n")
 
     report = probe(root, lock)
 
     assert not report.compatible
-    assert "revision" in failed(report)
+    assert "source_identity" in failed(report)
+    assert report.reason == rpi_image_gen.REASON_SOURCE_UNVERIFIED
+
+
+def test_a_tarball_tree_recorded_by_the_fetch_script_is_accepted(tmp_path, lock):
+    root = checkout(tmp_path, lock, revision="")
+    write(
+        root,
+        rpi_image_gen.SOURCE_IDENTITY_NAME,
+        json.dumps(
+            {
+                "form": "tarball",
+                "release": lock.release,
+                "commit": lock.commit,
+                "url": lock.tarball["url"],
+                "sha256": lock.tarball["sha256"],
+                "top_level_directory": lock.tarball["top_level_directory"],
+            }
+        ),
+    )
+
+    report = probe(root, lock)
+
+    assert identity(report).result == PASS
+    assert report.source_identity == rpi_image_gen.SOURCE_TARBALL
+    assert report.compatible
+
+
+def test_a_tarball_record_naming_another_digest_is_refused(tmp_path, lock):
+    root = checkout(tmp_path, lock, revision="")
+    write(
+        root,
+        rpi_image_gen.SOURCE_IDENTITY_NAME,
+        json.dumps(
+            {
+                "form": "tarball",
+                "release": lock.release,
+                "commit": lock.commit,
+                "url": lock.tarball["url"],
+                "sha256": "sha256:" + "0" * 64,
+                "top_level_directory": lock.tarball["top_level_directory"],
+            }
+        ),
+    )
+
+    report = probe(root, lock)
+
+    assert not report.compatible
+    assert report.reason == rpi_image_gen.REASON_SOURCE_UNVERIFIED
+
+
+# --- host dependencies -------------------------------------------------------
+
+
+def test_package_only_entries_are_probed_through_the_package_database(tmp_path, lock):
+    root = checkout(tmp_path, lock)
+    write(root, "depends", "all:bash\nbuild::python3-jsonschema\nbuild::dctrl-tools\n")
+
+    report = probe(root, lock, package_query=lambda package: package != "dctrl-tools")
+
+    assert report.dependencies.missing_packages == ("dctrl-tools",)
+    assert "python3-jsonschema" in report.dependencies.resolved
+    assert not report.buildable
+
+
+def test_package_only_entries_with_no_package_database_are_not_assumed_present(tmp_path, lock):
+    root = checkout(tmp_path, lock)
+    write(root, "depends", "all:bash\nbootstrap::python3-debian\n")
+
+    report = probe(root, lock, package_query=None)
+
+    assert report.dependencies.unverified_packages == ("python3-debian",)
+    assert not report.buildable
+    assert report.reason == rpi_image_gen.REASON_DEPENDENCIES
 
 
 # --- layer metadata ----------------------------------------------------------
@@ -297,3 +378,58 @@ def test_layer_metadata_reads_the_upstream_header_block():
 
 def test_layer_metadata_of_a_file_without_a_header_is_empty():
     assert rpi_image_gen.layer_metadata("mmdebstrap:\n  packages: []\n") == ("", "")
+
+
+# --- the build host ----------------------------------------------------------
+
+
+def test_a_native_arm64_host_needs_no_emulation():
+    host = rpi_image_gen.build_host_state(machine="aarch64")
+
+    assert host.missing_binfmt == ()
+    assert host.unsupported_architecture == ""
+    assert host.buildable
+
+
+def test_an_amd64_host_without_the_handler_reports_the_binfmt_class(tmp_path):
+    host = rpi_image_gen.build_host_state(
+        machine="x86_64", binfmt_path=tmp_path / "absent"
+    )
+
+    assert host.missing_binfmt
+    assert "qemu-aarch64" in host.missing_binfmt[0]
+    assert host.unsupported_architecture == ""
+    assert not host.buildable
+
+
+def test_an_amd64_host_with_the_handler_can_cross_build(tmp_path):
+    handler = tmp_path / "qemu-aarch64"
+    handler.write_text("enabled\n")
+    host = rpi_image_gen.build_host_state(machine="x86_64", binfmt_path=handler)
+
+    assert host.buildable
+
+
+def test_an_architecture_that_can_neither_build_nor_emulate_is_named(tmp_path):
+    host = rpi_image_gen.build_host_state(
+        machine="riscv64", binfmt_path=tmp_path / "absent"
+    )
+
+    assert host.unsupported_architecture
+    assert "riscv64" in host.unsupported_architecture
+
+
+def test_missing_binaries_packages_and_binfmt_stay_separate(tmp_path, lock):
+    report = probe(
+        tmp_path and checkout(tmp_path, lock),
+        lock,
+        which=lambda binary: None,
+        package_query=lambda package: False,
+    )
+    host = rpi_image_gen.build_host_state(
+        report.dependencies, machine="x86_64", binfmt_path=tmp_path / "absent"
+    )
+
+    assert host.missing_binaries
+    assert host.missing_binfmt
+    assert set(host.missing_binaries) & set(host.missing_binfmt) == set()

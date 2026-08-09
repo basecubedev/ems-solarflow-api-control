@@ -21,7 +21,7 @@ healthy update, so nothing here requires internet reachability.
 import time
 from dataclasses import dataclass, field
 
-from appliance import ab_layout, ab_persistence
+from appliance import ab_bootstrap, ab_layout, ab_persistence
 from appliance.ab_boot import SelectorError, SelectorTransaction
 from appliance.ab_state import FallbackRecord, SlotRecord
 
@@ -101,6 +101,7 @@ class TrialHealthService:
         runner=None,
         systemd=None,
         docker=None,
+        runtime=None,
         install_check=None,
         agent_socket=None,
         time_fn=None,
@@ -113,6 +114,7 @@ class TrialHealthService:
         self.runner = runner
         self.systemd = systemd
         self.docker = docker
+        self.runtime = runtime
         self.install_check = install_check
         self.agent_socket = agent_socket
         self._time = time_fn or time.time
@@ -203,7 +205,7 @@ class TrialHealthService:
             Gate(
                 "persistent_paths",
                 persistence.ok,
-                detail="; ".join(persistence.problems) or "every shared path is backed by /persist",
+                detail="; ".join(persistence.problems) or "every shared path is backed by /persistent",
             )
         )
         checks.append(
@@ -319,13 +321,13 @@ class TrialHealthService:
         return checks
 
     def _application_gates(self):
-        """The EMS installation must still be there — not necessarily running.
+        """The EMS installation survived, and the runtime came back.
 
         Committing an OS slot does not require EMS to be actively controlling
         power: an appliance that is fine but idle is still fine. What it does
-        require is proof that the installation and its data survived the slot
-        switch, because that is exactly what a broken persistence contract
-        destroys.
+        require is that the installation and its data survived the slot switch,
+        and that the containers the source slot recorded are the ones this slot
+        rebuilt — at their exact digests, with the Admin console answering.
         """
 
         checks = []
@@ -344,39 +346,57 @@ class TrialHealthService:
                 detail="the EMS configuration and data directories survived the slot switch",
             )
         )
-
-        docker_ok = None
-        admin_ok = None
-        if self.docker is not None:
-            try:
-                docker_ok = bool(self.docker.available())
-            except Exception:
-                docker_ok = False
-            try:
-                admin_ok = bool(self.docker.inspect_admin())
-            except Exception:
-                admin_ok = False
-        checks.append(
-            Gate(
-                "docker_usable",
-                bool(docker_ok),
-                required=self.docker is not None,
-                detail="the Docker daemon answers",
-            )
-        )
-        # A slot whose Admin runtime cannot be reconstructed is not a slot an
-        # operator can recover the appliance from, so this is required. The
-        # reconstruction itself runs before health and may use a seeded image,
-        # which is what keeps an offline appliance from rolling back.
-        checks.append(
-            Gate(
-                "admin_runtime",
-                bool(admin_ok),
-                required=self.docker is not None,
-                detail="the Admin container is available and answers",
-            )
-        )
+        checks.extend(self._runtime_gates())
         return checks
+
+    def _runtime_gates(self):
+        """What the recorded runtime has to look like in this slot."""
+
+        if self.docker is None:
+            return [
+                Gate(
+                    "docker_usable",
+                    False,
+                    required=False,
+                    detail="no Docker interface is configured in this slot",
+                )
+            ]
+
+        checks = []
+        daemon = self.docker.daemon_usable()
+        checks.append(
+            Gate("docker_usable", daemon.ok, detail=daemon.detail or daemon.code)
+        )
+        if not daemon.ok:
+            # Asking about containers with no daemon produces noise, not signal.
+            return checks
+
+        record = self._runtime_record()
+        admin = record.image(ab_bootstrap.ROLE_ADMIN) if record else None
+        result = self.docker.admin_runtime(_pinned_digest(admin))
+        checks.append(Gate("admin_runtime", result.ok, detail=result.detail or result.code))
+
+        ems = record.image(ab_bootstrap.ROLE_EMS) if record else None
+        if ems is not None:
+            outcome = self.docker.ems_runtime(
+                _pinned_digest(ems), expected_running=ems.running
+            )
+            checks.append(
+                Gate(
+                    "ems_runtime",
+                    outcome.ok,
+                    detail=outcome.detail or outcome.code,
+                )
+            )
+        return checks
+
+    def _runtime_record(self):
+        if self.runtime is None:
+            return None
+        try:
+            return self.runtime.read()
+        except Exception:
+            return None
 
     # --- the verdict -------------------------------------------------------
 
@@ -544,6 +564,15 @@ class TrialHealthService:
                 "the trial slot is unhealthy and the normal reboot request was refused",
             )
         return {"rebooted": True, "slot": report.slot}
+
+
+def _pinned_digest(image):
+    """The digest half of a recorded reference. A tag is never an identity."""
+
+    if image is None:
+        return ""
+    _, _, digest = str(image.reference).partition("@")
+    return digest if digest.startswith("sha256:") else ""
 
 
 def _read_identity(path):

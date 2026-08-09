@@ -12,6 +12,15 @@ ConditionPathExists=/etc/ems-appliance-manager/ab-layout.json
 # healthy right up to the next slot switch, which then loses every write.
 Requires=persistent.mount
 After=persistent.mount local-fs.target
+# Upstream's generator writes one .mount unit per declared path and links
+# exactly one of them into local-fs.target, so five of the six binds would
+# never be activated. The image ships the missing .wants links, and this
+# pulls the same mounts in through systemd's own path dependency, so the
+# verification below cannot run before the mounts it is verifying.
+RequiresMountsFor=/opt/ems-solarflow /var/lib/ems-appliance-manager
+RequiresMountsFor=/var/log/ems-appliance-manager /etc/ems-appliance-manager
+RequiresMountsFor=/var/lib/ems-appliance-os-update
+RequiresMountsFor=/etc/NetworkManager/system-connections
 Before=ems-appliance-agent.service ems-appliance-web.service
 Before=ems-appliance-slot-bootstrap.service ems-appliance-ab-health.service
 

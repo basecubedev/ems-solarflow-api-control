@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[Unit]
+Description=EMS SolarFlow Appliance persistent host identity
+Documentation=file:///usr/share/doc/ems-appliance-manager/ab-persistence-contract.md
+# The unit ships in every slot but only applies to an A/B image; a single-slot
+# appliance keeps its own /etc/ssh and this never runs there.
+ConditionPathExists=/etc/ems-appliance-manager/ab-layout.json
+# The identity lives on the persistent partition, so it cannot be established
+# before that partition and its shared binds are there. RequiresMountsFor pulls
+# in the generated mount units the same way the persistence service does.
+Requires=persistent.mount
+After=persistent.mount local-fs.target
+RequiresMountsFor=/var/lib/ems-appliance-manager /etc/NetworkManager/system-connections
+# Everything that presents the appliance to the network comes after this, and
+# the verification of the wider persistence contract does too: a shared path
+# whose ownership was only just corrected must be checked afterwards.
+Before=ems-appliance-persistence.service
+Before=ssh.service sshd.service NetworkManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+# Idempotent. An existing host key is validated and left exactly as it is, so
+# the fingerprint an operator verified on first boot survives every slot switch.
+ExecStart=/usr/bin/ems-appliance host-identity --ensure --quiet
+TimeoutStartSec=180
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

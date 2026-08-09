@@ -25,7 +25,13 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-MANIFEST_FORMAT_VERSION = 1
+from appliance.sparse import ENCODING_ANDROID_SPARSE, ENCODING_RAW
+
+# Format 2 added the sparse authority: a member carries its encoded and its
+# expanded identity separately. A format 1 manifest cannot be upgraded here —
+# the expanded digest it never carried cannot be inferred.
+MANIFEST_FORMAT_VERSION = 2
+MANIFEST_DIAGNOSTIC_FORMATS = (1,)
 MAX_MANIFEST_BYTES = 256 * 1024
 MAX_INDEX_BYTES = 1024 * 1024
 
@@ -42,6 +48,7 @@ REQUIRED_MANIFEST_FIELDS = (
     "build_id",
     "created_at",
     "architecture",
+    "device_layer",
     "compatible_hardware",
     "os_release",
     "project_revision",
@@ -54,13 +61,9 @@ REQUIRED_MANIFEST_FIELDS = (
     "members",
 )
 
-# Exactly what an update archive may contain. Anything else is an artifact this
-# appliance does not know how to write, not an artifact it should try to write.
-#
-# These are rpi-image-gen's own names, produced by image-rota's post-image.sh:
-# one boot payload and one system payload, both android-sparse. There is no
-# per-slot boot image because upstream builds one bit-for-bit identical slot
-# pair and selects the root filesystem through /dev/disk/by-slot at boot.
+# rpi-image-gen's own member names. One boot payload and one system payload,
+# because image-rota builds one bit-for-bit identical slot pair. Anything else
+# is an artifact this appliance does not know how to write.
 MEMBER_BOOT = "boot"
 MEMBER_SYSTEM = "system"
 REQUIRED_MEMBERS = (MEMBER_BOOT, MEMBER_SYSTEM)
@@ -68,6 +71,8 @@ REQUIRED_MEMBERS = (MEMBER_BOOT, MEMBER_SYSTEM)
 # A manifest must never carry key material. These are refused outright rather
 # than ignored, so a manifest that tried cannot be quietly accepted.
 FORBIDDEN_MANIFEST_KEYS = ("private_key", "signing_key", "secret", "passphrase", "token")
+
+SUPPORTED_ENCODINGS = (ENCODING_ANDROID_SPARSE, ENCODING_RAW)
 
 
 class ReleaseError(Exception):
@@ -79,13 +84,42 @@ class ReleaseError(Exception):
 
 @dataclass(frozen=True)
 class ArtifactMember:
+    """One update payload, in both the identities it has.
+
+    ``encoded`` is what the archive carries and what extraction verifies.
+    ``expanded`` is what the partition receives and what the read-back proves.
+    They are never the same value for a sparse member, and a single ambiguous
+    digest is what let a container be written as if it were a filesystem.
+    """
+
     name: str
-    digest: str
+    encoded_digest: str
+    expanded_digest: str
+    expanded_size: int
     role: str
+    encoding: str = ""
+    filesystem: str = ""
     slot: str = ""
 
+    @property
+    def digest(self):
+        return self.encoded_digest
+
+    @property
+    def sparse(self):
+        return self.encoding == ENCODING_ANDROID_SPARSE
+
     def to_dict(self):
-        return {"name": self.name, "digest": self.digest, "role": self.role, "slot": self.slot}
+        return {
+            "name": self.name,
+            "role": self.role,
+            "encoding": self.encoding,
+            "encoded_sha256": self.encoded_digest,
+            "expanded_sha256": self.expanded_digest,
+            "expanded_size": self.expanded_size,
+            "filesystem": self.filesystem,
+            "slot": self.slot,
+        }
 
 
 @dataclass(frozen=True)
@@ -97,6 +131,7 @@ class OsRelease:
     build_id: str
     created_at: str
     architecture: str
+    device_layer: str
     compatible_hardware: tuple
     os_release: str
     project_revision: str
@@ -143,6 +178,7 @@ class OsRelease:
             "build_id": self.build_id,
             "created_at": self.created_at,
             "architecture": self.architecture,
+            "device_layer": self.device_layer,
             "compatible_hardware": list(self.compatible_hardware),
             "os_release": self.os_release,
             "project_revision": self.project_revision,
@@ -175,6 +211,52 @@ def _digest(value, *, label):
     return text
 
 
+def _member(name, entry):
+    """One member of a format 2 manifest, with both identities present.
+
+    Nothing is defaulted. An absent expanded digest is not an unencoded
+    member — it is a manifest that never described what a partition should
+    end up holding, and inferring one would defeat the whole chain.
+    """
+
+    if not isinstance(entry, dict):
+        raise ReleaseError("release_manifest_invalid", f"member {name} is not an object")
+    encoding = str(entry.get("encoding") or "")
+    if encoding not in SUPPORTED_ENCODINGS:
+        raise ReleaseError(
+            "release_manifest_invalid",
+            f"member {name} declares encoding {encoding!r}; this appliance writes "
+            + ", ".join(SUPPORTED_ENCODINGS),
+        )
+    try:
+        expanded_size = int(entry["expanded_size"])
+    except (KeyError, TypeError, ValueError):
+        raise ReleaseError(
+            "release_manifest_invalid", f"member {name} declares no expanded size"
+        )
+    if expanded_size <= 0:
+        raise ReleaseError(
+            "release_manifest_invalid", f"the expanded size of {name} must be positive"
+        )
+    encoded = _digest(entry.get("encoded_sha256"), label=f"the encoded digest of {name}")
+    expanded = _digest(entry.get("expanded_sha256"), label=f"the expanded digest of {name}")
+    if encoding == ENCODING_RAW and encoded != expanded:
+        raise ReleaseError(
+            "release_manifest_invalid",
+            f"member {name} is unencoded, so its two digests must be the same value",
+        )
+    return ArtifactMember(
+        name=name,
+        encoded_digest=encoded,
+        expanded_digest=expanded,
+        expanded_size=expanded_size,
+        role=str(entry.get("role") or ""),
+        encoding=encoding,
+        filesystem=str(entry.get("filesystem") or ""),
+        slot=str(entry.get("slot") or ""),
+    )
+
+
 def parse_manifest(payload, *, release_id="", verified=VERIFIED_NONE):
     """Turn manifest JSON into an ``OsRelease`` or refuse it."""
 
@@ -189,6 +271,12 @@ def parse_manifest(payload, *, release_id="", verified=VERIFIED_NONE):
     if missing:
         raise ReleaseError(
             "release_manifest_invalid", f"the release manifest is missing {', '.join(missing)}"
+        )
+    if payload["format_version"] in MANIFEST_DIAGNOSTIC_FORMATS:
+        raise ReleaseError(
+            "release_manifest_unsupported",
+            f"manifest format {payload['format_version']} predates the sparse authority; "
+            "its expanded digests were never recorded and cannot be inferred",
         )
     if payload["format_version"] != MANIFEST_FORMAT_VERSION:
         raise ReleaseError(
@@ -208,16 +296,7 @@ def parse_manifest(payload, *, release_id="", verified=VERIFIED_NONE):
             "release_manifest_invalid",
             f"an update artifact holds exactly {', '.join(REQUIRED_MEMBERS)}",
         )
-    members = {}
-    for name, entry in raw_members.items():
-        if not isinstance(entry, dict):
-            raise ReleaseError("release_manifest_invalid", f"member {name} is not an object")
-        members[name] = ArtifactMember(
-            name=name,
-            digest=_digest(entry.get("digest"), label=f"the digest of {name}"),
-            role=str(entry.get("role") or ""),
-            slot=str(entry.get("slot") or ""),
-        )
+    members = {name: _member(name, entry) for name, entry in raw_members.items()}
 
     try:
         size = int(archive.get("size_bytes") or 0)
@@ -232,6 +311,7 @@ def parse_manifest(payload, *, release_id="", verified=VERIFIED_NONE):
         build_id=str(payload["build_id"]),
         created_at=str(payload["created_at"]),
         architecture=str(payload["architecture"]),
+        device_layer=str(payload["device_layer"]),
         compatible_hardware=tuple(str(item) for item in payload["compatible_hardware"]),
         os_release=str(payload["os_release"]),
         project_revision=str(payload["project_revision"]),
@@ -466,12 +546,25 @@ def compatibility_problems(
                 "message": f"the artifact is {release.architecture}, this appliance is arm64",
             }
         )
-    if release.compatible_hardware and board:
+    if not board:
+        problems.append(
+            {
+                "code": "hardware_not_supported",
+                "message": (
+                    "this board could not be identified from its device tree, so no OS "
+                    "artifact can be proven to be built for it"
+                ),
+            }
+        )
+    elif release.compatible_hardware:
         if not any(str(entry) == board for entry in release.compatible_hardware):
             problems.append(
                 {
                     "code": "artifact_hardware_incompatible",
-                    "message": f"the artifact does not list {board} as compatible hardware",
+                    "message": (
+                        f"the artifact is built for {', '.join(release.compatible_hardware)}; "
+                        f"this appliance is a {board}"
+                    ),
                 }
             )
     if layout is not None and release.layout_id != layout.layout_id:

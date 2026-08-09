@@ -16,7 +16,7 @@ Before=ems-appliance-persistence.service local-fs.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/bin/ems-appliance ab grow-persistent
+ExecStart=/usr/lib/ems-appliance-manager/grow-persistent.sh
 TimeoutStartSec=300
 
 [Install]

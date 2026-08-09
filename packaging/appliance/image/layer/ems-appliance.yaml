@@ -3,8 +3,8 @@
 # X-Env-Layer-Category: app
 # X-Env-Layer-Desc: EMS SolarFlow Appliance Manager, its Docker runtime and the
 #  shared state declaration that makes an A/B slot switch non-destructive.
-# X-Env-Layer-Version: 2.0.0
-# X-Env-Layer-Requires: image-rota,docker-ce
+# X-Env-Layer-Version: 2.1.0
+# X-Env-Layer-Requires: image-rota,docker-debian-trixie
 #
 # X-Env-VarPrefix: emsappliance
 #
@@ -88,6 +88,7 @@ mmdebstrap:
          --output /etc/ems-appliance-manager/ab-layout.json
 
     - $BDEBSTRAP_HOOKS/enable-units "$1" ems-appliance-agent.service \
-        ems-appliance-web.service ems-appliance-persistence.service \
+        ems-appliance-web.service ems-appliance-host-identity.service \
+        ems-appliance-persistence.service \
         ems-appliance-ab-health.service ems-appliance-slot-bootstrap.service \
         ems-appliance-grow-persistent.service

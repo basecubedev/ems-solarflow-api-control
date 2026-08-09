@@ -10,6 +10,39 @@ Record every run in this file's results table with the board, the storage class,
 the image build ID and the date. A case that was not run is recorded as
 `NOT RUN`, never as a pass.
 
+## Verification stages
+
+Each stage is a strictly stronger claim than the one above it. Anything not
+listed as reached has not been reached.
+
+| Stage | What it proves | State |
+|---|---|---|
+| Simulation verified | The state machine, selector parser, layout authority, write-failure matrix and boot-flow simulator | Reached |
+| Real upstream config validated | Both hardware profiles resolve through rpi-image-gen's own `ConfigLoader` and `LayerManager` at the pinned revision, and the project layer's dependencies resolve beside upstream's | Reached |
+| Real upstream artefact fixture validated | The update path drives genuine Android Sparse containers through zstd, tar, the member allowlist, sparse validation, expansion and filesystem identification | Reached |
+| Real image built | `rpi-image-gen build` produces an `.img` and `update.tar.zst` from a pinned source tree | **NOT REACHED** — no build host with the upstream dependencies and an aarch64 binfmt handler |
+| Real image inspected | The partition table, labels and per-build identities of an image that was actually built | **NOT REACHED** — depends on the stage above |
+| Real Pi boot verified | Everything below | **NOT REACHED** |
+
+The last three are what this gate exists for. Nothing in the automated suites
+substitutes for them.
+
+## What the image-rota integration changed
+
+The layout, the slot mapping, the shared mounts and the update artifact are now
+`rpi-image-gen`'s, so the hardware gate has to prove upstream's mechanisms on
+this appliance's hardware, not only this project's state machine:
+
+- `rpi-ab-slot-mapper` publishes `/dev/disk/by-slot/{active,other}/{boot,system}`
+  from the booted partition's GPT label;
+- `slot-shared-generator` binds every declared path, and **fails open** when a
+  source directory is missing — the appliance's verifier must catch that;
+- `slot-perst-generator` binds `/var` per slot, which is what makes
+  `/var/lib/docker` slot-local and the slot bootstrap necessary;
+- `machine-id-sync.service` keeps one machine identity across a slot switch.
+
+None of these has been exercised on hardware yet.
+
 ## Why a simulator is not enough
 
 The automated boot-flow simulator drives the same state machine the appliance
@@ -40,6 +73,20 @@ Pulling the plug on a `poweroff` is not the same test.
 
 ## Case list
 
+### Group 0 — build the image (prerequisite)
+
+| # | Case | Expected |
+|---|---|---|
+| 0.1 | `scripts/appliance-check-rpi-image-gen.sh --rpi-image-gen <checkout>` | PASS against the pinned revision |
+| 0.2 | `scripts/appliance-build-rpi-ab-image.sh --profile rpi5` on a builder with the upstream dependencies | PASS, image and `update.tar.zst` produced |
+| 0.2b | The same with `--profile rpi4` | PASS; a separate artefact, not the Pi 5 image relabelled |
+| 0.2c | `scripts/appliance-verify-slot-mounts.sh --rpi-image-gen <tree>` | PASS: every declared shared path is generated **and** activated |
+| 0.3 | `scripts/appliance-inspect-rpi-ab-image.sh <image>` | PASS: six partitions, image-rota labels, distinct identities |
+| 0.4 | Build a second image and `--compare` it | No partition identity is reused between builds |
+| 0.5 | `scripts/appliance-build-rpi-ab-update.sh --profile rpi5 --sign-key <key>` then `appliance-inspect-rpi-ab-update.sh` | PASS, members `boot` and `system`, signature verifies |
+| 0.6 | The manifest each build produced | Both members declare `encoding: android_sparse` with distinct `encoded_sha256` and `expanded_sha256` |
+| 0.7 | `simg2img` the real `system` member and compare | Its SHA-256 equals the manifest's `expanded_sha256` and its size equals `expanded_size` |
+
 ### Group 1 — first boot and identity
 
 | # | Case | Expected |
@@ -49,6 +96,12 @@ Pulling the plug on a `poweroff` is not the same test.
 | 1.3 | `ems-appliance ab verify-persistence` | passes, `/persistent` mounted, every shared path backed by it |
 | 1.4 | Complete first-run setup, install Admin, configure EMS | Appliance and EMS reachable |
 | 1.5 | Reboot normally | Slot A boots again, all data intact |
+| 1.6 | `findmnt /` | Read-only, source `/dev/disk/by-slot/active/system` |
+| 1.7 | `ls -l /dev/disk/by-slot/` | `active/`, `other/` and `persistent` resolve to this medium |
+| 1.8 | `findmnt /var` | Bound from `/persistent/slots/system_a/var` |
+| 1.9 | `cat /etc/machine-id` and `/persistent/common/etc/machine-id` | Identical |
+| 1.10 | `ssh-keyscan` the appliance, record the host key | Recorded for case 3.x |
+| 1.11 | Insert a second appliance card in a USB reader, `ab status` | Unchanged active slot; no drift from duplicate labels |
 
 ### Group 2 — a healthy update
 
@@ -57,7 +110,13 @@ Pulling the plug on a `poweroff` is not the same test.
 | 2.1 | Stage an update artifact | Written to inactive slot B, read-back verified |
 | 2.2 | Check the selector before the trial | `[all]` still boot partition 2 |
 | 2.3 | Trial-boot B | B boots, reports `tryboot=1`, health passes |
+| 2.3a | Inspection before the trial | `inspection.ok=true`; the selector was untouched while it ran |
 | 2.4 | Commit | `[all]` boot partition 3, `[tryboot]` boot partition 2 |
+| 2.5 | `docker image ls` in slot B before commit | Admin image present, restored from the seed |
+| 2.6 | Disconnect the WAN, repeat 2.1–2.4 | The trial still commits; reconstruction used the seed only |
+| 2.7 | `cat /etc/machine-id` in slot B | Identical to the value recorded in 1.9 |
+| 2.8 | `ssh-keyscan` in slot B | Same host key as 1.10 |
+| 2.9 | `findmnt /var` in slot B | Bound from `/persistent/slots/system_b/var` |
 | 2.5 | Reboot normally | B boots as the default |
 | 2.6 | EMS configuration and data | unchanged |
 | 2.7 | SSH host key fingerprint | unchanged from before the update |
@@ -101,8 +160,10 @@ class is never reported for another.**
 ## Procedure for one storage class
 
 ```text
+ 0  Prepare a builder with rpi-image-gen's dependencies and verify the pin:
+      scripts/appliance-check-rpi-image-gen.sh --rpi-image-gen <checkout>
  1  Build the appliance image:
-      scripts/appliance-build-rpi-ab-image.sh --output out/
+      scripts/appliance-build-rpi-ab-image.sh --profile rpi5 --output out/
  2  Record the build ID and the image sha256 from the manifest.
  3  Flash the image to the target medium from the second machine.
  4  Boot with the serial console attached and capture the log.
@@ -115,12 +176,51 @@ class is never reported for another.**
 10  Record every result in the table above with the date and build IDs.
 ```
 
+The build host needs upstream's dependency set — `mmdebstrap`, `podman`,
+`uidmap`, `pv`, `btrfs-progs`, `dctrl-tools`, `python3-debian`,
+`python3-jsonschema`, `flex` — and, when it is not itself arm64, a registered
+`qemu-user-static` binfmt handler. `appliance-check-rpi-image-gen.sh` lists what
+is missing and the build wrapper refuses to start without it, reporting
+`rpi_image_gen_dependencies_missing` rather than producing a partial image.
+
 For every power-cut case, record what the selector partition contained
 afterwards (`ems-appliance ab status --json` plus a raw copy of `autoboot.txt`),
 because that file is the whole safety argument.
+
+## Pre-hardware validation record
+
+What was actually run before the hardware gate, on 2026-08-07, against the
+image-rota integration. A result that is not listed here was not produced.
+
+| Gate | Result |
+|---|---|
+| A/B focused suite (`tests/test_appliance_ab_*`, `test_appliance_rpi_image_gen`) | PASS — 521 passed, 1 skipped |
+| Full appliance suite (`tests/test_appliance_*`) | PASS — 1633 passed, 173 skipped |
+| Full non-Docker regression (`-m "not docker and not browser"`) | PASS — 10057 passed, 6 skipped, 212 deselected |
+| Appliance UI, Chromium | PASS — 49 passed |
+| Appliance UI, Firefox | PASS — 49 passed |
+| Package build and inspection, amd64 and arm64 | PASS — both carry every A/B unit and the growth helper |
+| `ruff`, `compileall`, `node --check`, config template, `git diff --check` | PASS |
+| ShellCheck (`-S warning`) over the appliance scripts | PASS — informational findings only, all pre-existing |
+| rpi-image-gen compatibility probe against the pinned v2.7.0 checkout | PASS — every contract check |
+| Real update artifact (`tar -I zstd` with members `boot` and `system`) through the runtime parser, extractor and both release scripts | PASS |
+| **Real `rpi-image-gen` image build** | **NOT RUN** — `rpi_image_gen_dependencies_missing` |
+| **Real built-image inspection** | **NOT RUN** — no image to inspect |
+| **Upstream-generated `update.tar.zst`** | **NOT RUN** — produced only by a real build |
+| **QEMU / arm64 guest boot** | **NOT RUN** — no arm64 binfmt handler |
+| **Physical Raspberry Pi** | **NOT RUN** — no hardware |
+
+The build host was missing six of upstream's dependencies (`mmdebstrap`,
+`podman`, `uidmap`, `pv`, `btrfs-progs`, `flex`) plus `dctrl-tools`,
+`python3-debian` and `python3-jsonschema`, and had no registered arm64 binfmt
+handler, so an arm64 binary could not execute at all. Installing either needs
+root, which was not available non-interactively.
+
+The simulated tiers are not a substitute for any of the NOT RUN rows.
 
 ## Results
 
 | Date | Board | Storage | Image build | Group | Result | Notes |
 |---|---|---|---|---|---|---|
+| — | — | — | — | 0 | NOT RUN | The build host had 6 of upstream's dependencies missing and no arm64 binfmt handler; installing either needs root. |
 | — | — | — | — | 1–5 | NOT RUN | No Raspberry Pi hardware was available when this gate was written. |

@@ -363,12 +363,17 @@ def test_ab_is_never_claimed_for_docker_containers():
 
 
 def test_the_supported_hardware_scope_is_stated_and_not_widened():
+    """One image per board. "Pi 4 or later" is exactly the claim to avoid."""
+
     document = read("ab-os-updates.md")
 
-    assert "Raspberry Pi 4 or later" in document
+    assert "Raspberry Pi 4 or later" not in document
+    assert "Raspberry Pi 4 Model B and Raspberry Pi 5, as separate artefacts" in document
+    assert "One image per board, and no image claims another's hardware" in document
     assert "arm64" in document
     assert "microSD, USB mass storage or NVMe" in document
     assert "never inferred from another" in document
+    assert "hardware_not_supported" in document
 
 
 def test_the_slot_model_and_the_selector_are_documented():

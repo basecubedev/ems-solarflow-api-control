@@ -2,8 +2,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Build the fail-safe A/B appliance image with Raspberry Pi's rpi-image-gen.
 #
-#   scripts/appliance-build-rpi-ab-image.sh [--output DIR] [--build-id ID]
-#                                           [--rpi-image-gen DIR]
+#   scripts/appliance-build-rpi-ab-image.sh --profile rpi4|rpi5 [--output DIR]
+#                                           [--build-id ID] [--rpi-image-gen DIR]
+#
+# One artefact per board. The device layer selects the kernel and firmware, so
+# a Pi 5 image is not a Pi 4 image and neither may claim to be the other.
 #
 # rpi-image-gen is supplied by the build host and is not vendored here. Its
 # revision is pinned in packaging/appliance/image/rpi-image-gen.lock and the
@@ -19,13 +22,13 @@ set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 IMAGE_DIR="$ROOT/packaging/appliance/image"
 LOCK="$IMAGE_DIR/rpi-image-gen.lock"
-CONFIG="ems-appliance-ab.yaml"
+PROFILE=rpi5
 OUTPUT="$ROOT/dist"
 BUILD_ID=""
 GENERATOR=${EMS_RPI_IMAGE_GEN:-}
 
 usage() {
-    sed -n '3,17p' "$0"
+    sed -n '3,21p' "$0"
 }
 
 not_run() {
@@ -42,6 +45,8 @@ fail() {
 
 while [ $# -gt 0 ]; do
     case "$1" in
+        --profile) PROFILE=${2:?--profile needs rpi4 or rpi5}; shift 2 ;;
+        --profile=*) PROFILE=${1#*=}; shift ;;
         --output) OUTPUT=${2:?--output needs a directory}; shift 2 ;;
         --output=*) OUTPUT=${1#*=}; shift ;;
         --build-id) BUILD_ID=${2:?--build-id needs a value}; shift 2 ;;
@@ -54,7 +59,8 @@ while [ $# -gt 0 ]; do
 done
 
 [ -f "$LOCK" ] || fail "$LOCK is missing" lock_missing
-[ -f "$IMAGE_DIR/config/$CONFIG" ] || fail "$IMAGE_DIR/config/$CONFIG is missing" config_missing
+CONFIG="$IMAGE_DIR/profiles/${PROFILE}-ab.yaml"
+[ -f "$CONFIG" ] || fail "there is no build profile for $PROFILE" hardware_profile_unknown
 command -v python3 >/dev/null 2>&1 || not_run "python3 is not installed" required_tool_missing
 
 if [ -z "$GENERATOR" ]; then
@@ -79,12 +85,32 @@ case $compatibility in
                rpi_image_gen_dependencies_missing ;;
 esac
 
+# An image whose shared binds are generated but never activated loses every
+# write at the next slot switch, silently. That has to fail the build.
+set +e
+"$ROOT/scripts/appliance-verify-slot-mounts.sh" --rpi-image-gen "$GENERATOR" >&2
+mounts=$?
+set -e
+case $mounts in
+    0) ;;
+    1) fail "the generated persistence units are incomplete" persistence_units_incomplete ;;
+    *) not_run "the slot-shared generator could not be verified on this host" \
+               persistence_units_unverified ;;
+esac
+
 VERSION=$(sed -n 's/^APPLIANCE_VERSION = "\(.*\)"$/\1/p' "$ROOT/appliance/version.py")
 [ -n "$VERSION" ] || fail "cannot read APPLIANCE_VERSION" version_unreadable
 [ -n "$BUILD_ID" ] || BUILD_ID=$(date -u +%Y%m%d%H%M%S 2>/dev/null || echo unknown)
 GENERATOR_REVISION=$(git -C "$GENERATOR" rev-parse HEAD 2>/dev/null || echo unknown)
 PROJECT_REVISION=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)
-NAME="ems-solarflow-appliance-${VERSION}-arm64-ab"
+NAME="ems-solarflow-appliance-${VERSION}-${PROFILE}-arm64-ab"
+DEVICE_LAYER=$(PYTHONPATH="$ROOT" python3 -c \
+    "from appliance import rpi_image_gen as m; print(m.read_profile('$CONFIG').device_layer)") \
+    || fail "$CONFIG does not resolve to a known hardware profile" hardware_profile_unknown
+BOARD_CLASSES=$(PYTHONPATH="$ROOT" python3 -c \
+    "import json
+from appliance import rpi_image_gen as m
+print(json.dumps(list(m.read_profile('$CONFIG').compatible_board_classes)))")
 
 mkdir -p "$OUTPUT" || fail "cannot create $OUTPUT" output_unusable
 WORK="$OUTPUT/build"
@@ -131,6 +157,9 @@ cat > "$OUTPUT/$NAME.build.json" <<JSON
   "release_version": "$VERSION",
   "build_id": "$BUILD_ID",
   "architecture": "arm64",
+  "device_layer": "$DEVICE_LAYER",
+  "compatible_board_classes": $BOARD_CLASSES,
+  "hardware_profile": "$PROFILE",
   "image_layer": "image-rota",
   "rpi_image_gen_revision": "$GENERATOR_REVISION",
   "project_revision": "$PROJECT_REVISION",

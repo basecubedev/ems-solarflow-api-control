@@ -194,6 +194,74 @@ def slot_shared_conf():
     return "\n".join(lines) + "\n"
 
 
+# --- activating what upstream generates --------------------------------------
+
+# The pinned generator writes one .mount unit per declared path and activates
+# exactly one of them, so the appliance supplies the rest of the activation
+# itself. See docs/appliance/ab-persistence-contract.md.
+SYSTEM_UNIT_DIR = "/etc/systemd/system"
+ACTIVATION_TARGET = "local-fs.target"
+GENERATOR_UNIT_DIR = "/run/systemd/generator"
+
+_UNRESERVED = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789:_."
+)
+
+
+def escape_path(path):
+    """``systemd-escape --path``, without needing systemd to be installed."""
+
+    text = str(path).strip("/")
+    if not text:
+        return "-"
+    escaped = []
+    for index, char in enumerate(text):
+        if char == "/":
+            # The separator. A literal dash in the path is escaped below, so
+            # the two can never be confused when a unit name is read back.
+            escaped.append("-")
+        elif char == "." and index == 0:
+            escaped.append("\\x2e")
+        elif char in _UNRESERVED:
+            escaped.append(char)
+        else:
+            escaped.append("".join(f"\\x{byte:02x}" for byte in char.encode("utf-8")))
+    return "".join(escaped)
+
+
+def mount_unit_name(target):
+    """The unit name systemd gives the bind mount at ``target``."""
+
+    return f"{escape_path(target)}.mount"
+
+
+def shared_mount_units():
+    """Every mount unit upstream's generator produces for this appliance."""
+
+    return tuple(mount_unit_name(shared.target) for shared in SHARED_PATHS)
+
+
+def activation_links():
+    """The ``local-fs.target.wants`` entries the image ships, by unit name.
+
+    Maps the path of each link to what it points at. systemd resolves a wants
+    entry by its file name, so the target only has to name where the generator
+    will have written the unit.
+    """
+
+    directory = f"{SYSTEM_UNIT_DIR}/{ACTIVATION_TARGET}.wants"
+    return {
+        f"{directory}/{unit}": f"{GENERATOR_UNIT_DIR}/{unit}"
+        for unit in shared_mount_units()
+    }
+
+
+def requires_mounts_for():
+    """The ``RequiresMountsFor=`` line the appliance units carry."""
+
+    return " ".join(shared.target for shared in SHARED_PATHS)
+
+
 def verify(status, mounts, *, schema_version=PERSISTENT_SCHEMA_VERSION):
     """Prove the persistent partition is mounted and every shared path uses it.
 

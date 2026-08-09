@@ -15,11 +15,19 @@ before it could be checked, which is the wrong order.
 
 import os
 import shutil
+import subprocess
 import tarfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from appliance.commands import EXECUTABLES
 from appliance.os_releases import ReleaseError, file_digest
+
+# Python's tarfile learned zstd in 3.14 and the appliance runs 3.13, so a
+# .tar.zst is streamed through the allowlisted binary. Streamed, not copied
+# out: the staging partition holds one copy of a multi-gigabyte artifact.
+ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
 
 MAX_MEMBERS = 16
 MAX_MEMBER_BYTES = 12 * 1024 * 1024 * 1024
@@ -83,6 +91,61 @@ def _check_member(member, expected_names):
     return name
 
 
+def _is_zstd(path):
+    try:
+        with open(path, "rb") as handle:
+            return handle.read(4) == ZSTD_MAGIC
+    except OSError:
+        return False
+
+
+def _zstd_binary():
+    for candidate in EXECUTABLES["zstd"]:
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    raise ArtifactError(
+        "artifact_decompressor_missing",
+        "zstd is not installed, so a .tar.zst update artifact cannot be read",
+    )
+
+
+@contextmanager
+def open_archive(path):
+    """Read an update archive, whatever rpi-image-gen compressed it with.
+
+    The argument vector is fixed and the path comes from the release catalogue,
+    never from a request. No shell is involved.
+    """
+
+    if not _is_zstd(path):
+        with tarfile.open(path, mode="r:*") as archive:
+            yield archive
+        return
+
+    process = subprocess.Popen(
+        [_zstd_binary(), "-d", "-c", "--", str(path)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+    )
+    try:
+        with tarfile.open(fileobj=process.stdout, mode="r|") as archive:
+            yield archive
+    finally:
+        if process.stdout is not None:
+            process.stdout.close()
+        if process.stderr is not None:
+            process.stderr.close()
+        # A refused member leaves the decompressor writing into a closed pipe;
+        # it has to be reaped either way, and never waited on indefinitely.
+        process.terminate()
+        try:
+            process.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=10)
+
+
 def prepare_staging(directory):
     """A root-owned, empty staging directory on the persistent partition."""
 
@@ -108,7 +171,7 @@ def extract(archive_path, staging_dir, release):
     total = 0
 
     try:
-        with tarfile.open(archive_path, mode="r:*") as archive:
+        with open_archive(archive_path) as archive:
             seen = 0
             while True:
                 member = archive.next()

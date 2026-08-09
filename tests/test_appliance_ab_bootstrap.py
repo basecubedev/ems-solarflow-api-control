@@ -291,3 +291,146 @@ def test_the_seed_can_be_discarded(tmp_path):
 def test_only_digest_pinned_references_are_treated_as_identities():
     assert ab_bootstrap._digest_pinned(ADMIN)
     assert not ab_bootstrap._digest_pinned("ems-admin:latest")
+
+
+# --- offline reconstruction ---------------------------------------------------
+
+
+def running_containers():
+    return {
+        "ems-admin": SimpleNamespace(name="ems-admin", image=ADMIN, exists=True, state="running"),
+        "ems-solarflow": SimpleNamespace(
+            name="ems-solarflow", image=EMS, exists=True, state="running"
+        ),
+    }
+
+
+def source_slot(tmp_path, **kwargs):
+    docker = FakeDocker(present={ADMIN, EMS}, containers=running_containers())
+    return service(tmp_path, docker, **kwargs), docker
+
+
+def test_the_record_captures_the_deployment_not_only_the_images(tmp_path):
+    """Two slots with the same digests and different compose files differ."""
+
+    compose = tmp_path / "docker-compose.yml"
+    compose.write_text("services:\n  admin:\n    image: admin\n", encoding="utf-8")
+    (tmp_path / ".env").write_text("EMS_ADMIN_PORT=8090\n", encoding="utf-8")
+    bootstrap, _docker = source_slot(tmp_path, compose_file=compose)
+
+    record = bootstrap.record_running_runtime()
+
+    assert record.compose_digest.startswith("sha256:")
+    assert record.environment_digest.startswith("sha256:")
+    assert record.compose_digest != record.environment_digest
+
+
+def test_the_record_never_carries_the_environment_contents(tmp_path):
+    compose = tmp_path / "docker-compose.yml"
+    compose.write_text("services: {}\n", encoding="utf-8")
+    (tmp_path / ".env").write_text("EMS_ADMIN_PASSWORD=hunter2\n", encoding="utf-8")
+    bootstrap, _docker = source_slot(tmp_path, compose_file=compose)
+
+    record = bootstrap.record_running_runtime()
+
+    assert "hunter2" not in json.dumps(record.to_dict())
+
+
+def test_the_record_captures_whether_each_container_was_running(tmp_path):
+    containers = running_containers()
+    containers["ems-solarflow"] = SimpleNamespace(
+        name="ems-solarflow", image=EMS, exists=True, state="exited"
+    )
+    docker = FakeDocker(present={ADMIN, EMS}, containers=containers)
+    record = service(tmp_path, docker).record_running_runtime()
+
+    assert record.image(ROLE_ADMIN).running is True
+    assert record.image(ROLE_EMS).running is False
+
+
+def test_a_seed_is_recorded_with_its_digest_and_size(tmp_path):
+    bootstrap, _docker = source_slot(tmp_path)
+    record = bootstrap.record_running_runtime()
+
+    bootstrap.seed(record)
+    stored = bootstrap.store.read()
+
+    for entry in record.images:
+        seed = stored.seed(entry.role)
+        assert seed["sha256"].startswith("sha256:")
+        assert seed["size_bytes"] > 0
+        assert seed["reference"] == entry.reference
+
+
+def test_an_offline_slot_reconstructs_from_the_seed_alone(tmp_path):
+    bootstrap, _docker = source_slot(tmp_path)
+    record = bootstrap.record_running_runtime()
+    bootstrap.seed(record)
+
+    # The trial slot: empty image store, and nothing pullable.
+    target = FakeDocker(present=set(), pullable=set())
+    report = service(tmp_path, target).reconstruct()
+
+    assert report.ok, report.problems
+    assert {outcome.source for outcome in report.outcomes} == {SOURCE_SEED}
+    assert target.pulls == []
+
+
+def test_a_seed_that_does_not_match_its_digest_is_never_loaded(tmp_path):
+    bootstrap, _docker = source_slot(tmp_path)
+    record = bootstrap.record_running_runtime()
+    bootstrap.seed(record)
+    seed = bootstrap.store.seed_directory / f"{ROLE_ADMIN}.tar"
+    seed.write_bytes(seed.read_bytes() + b"tampered")
+
+    target = FakeDocker(present=set(), pullable=set())
+    report = service(tmp_path, target).reconstruct()
+
+    assert str(seed) not in target.loaded
+    admin = next(outcome for outcome in report.outcomes if outcome.role == ROLE_ADMIN)
+    assert "does not match its recorded digest" in admin.detail
+    assert not report.ok
+
+
+def test_a_tampered_seed_still_falls_back_to_the_exact_digest(tmp_path):
+    bootstrap, _docker = source_slot(tmp_path)
+    record = bootstrap.record_running_runtime()
+    bootstrap.seed(record)
+    seed = bootstrap.store.seed_directory / f"{ROLE_ADMIN}.tar"
+    seed.write_bytes(b"not the archive that was written")
+
+    target = FakeDocker(present=set(), pullable={ADMIN, EMS})
+    report = service(tmp_path, target).reconstruct()
+
+    assert report.ok, report.problems
+    assert ADMIN in target.pulls
+    assert str(seed) not in target.loaded
+
+
+def test_the_registry_fallback_names_the_exact_digest(tmp_path):
+    bootstrap, _docker = source_slot(tmp_path)
+    record = bootstrap.record_running_runtime()
+
+    target = FakeDocker(present=set(), pullable={ADMIN, EMS})
+    report = service(tmp_path, target).reconstruct()
+
+    assert report.ok, report.problems
+    assert target.pulls
+    for reference in target.pulls:
+        assert "@sha256:" in reference
+    assert set(target.pulls) == {entry.reference for entry in record.images}
+
+
+def test_seeding_keeps_one_generation(tmp_path):
+    bootstrap, _docker = source_slot(tmp_path)
+    record = bootstrap.record_running_runtime()
+    bootstrap.store.seed_directory.mkdir(parents=True, exist_ok=True)
+    stale = bootstrap.store.seed_directory / "influxdb.tar"
+    stale.write_bytes(b"an archive from an older deployment")
+
+    bootstrap.seed(record)
+
+    assert not stale.exists()
+    assert {path.name for path in bootstrap.store.seed_directory.iterdir()} == {
+        f"{entry.role}.tar" for entry in record.images
+    }

@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Build real OS update artifacts for the release-authority tests.
 
-The archives here are genuine ``tar`` streams, so the extractor is exercised
-against actual members rather than a mock: a traversal test that never produced
-a traversing member would prove nothing. Signature verification is driven
-through the recording command runner, because ``gpg`` behaviour is not what
-these tests are about — what is under test is that the appliance refuses an
-artifact whose signature did not verify.
+The archives here are genuine ``tar`` streams holding genuine Android Sparse
+containers, which is the shape image-rota actually produces. Fixtures that used
+plain payload bytes were the reason a writer that copied member bytes onto a
+partition looked correct for as long as it did.
+
+Signature verification is driven through the recording command runner, because
+``gpg`` behaviour is not what these tests are about — what is under test is that
+the appliance refuses an artifact whose signature did not verify.
 """
 
 import io
@@ -15,13 +17,27 @@ import tarfile
 from pathlib import Path
 
 from appliance.commands import CommandResult, RecordingRunner
-from appliance.os_releases import OsReleaseCatalogue, ReleaseSource
+from appliance.os_releases import (
+    MANIFEST_FORMAT_VERSION,
+    OsReleaseCatalogue,
+    ReleaseSource,
+)
+from appliance.sparse import ENCODING_ANDROID_SPARSE
+from tests.helpers import android_sparse
 
 LAYOUT_ID = "ems-appliance-rota-v1"
-BOARD = "raspberrypi,4-model-b"
+# The bounded board class the appliance normalises its device tree to, not a
+# raw compatible string: one board answers to several, and an artefact is
+# matched against the class its device layer was built for.
+BOARD = "pi4"
 
-BOOT = b"bootfs" * 512
-ROOT = b"rootfs" * 4096
+DEVICE_LAYER = "rpi4"
+
+# The expanded filesystems, and the sparse containers image-rota wraps them in.
+BOOT_EXPANDED = android_sparse.expanded(android_sparse.image_of(b"bootfs" * 512, tail_blocks=2))
+ROOT_EXPANDED = android_sparse.expanded(android_sparse.mixed_chunks())
+BOOT = android_sparse.build(android_sparse.image_of(b"bootfs" * 512, tail_blocks=2))
+ROOT = android_sparse.build(android_sparse.mixed_chunks())
 
 
 def digest_of(blob):
@@ -55,15 +71,17 @@ def build_manifest(
     persistent_schema_version=2,
     minimum_appliance_manager_version="0.1.0",
     architecture="arm64",
+    device_layer=DEVICE_LAYER,
     compatible_hardware=(BOARD,),
     **overrides,
 ):
     payload = {
-        "format_version": 1,
+        "format_version": MANIFEST_FORMAT_VERSION,
         "release_version": release_version,
         "build_id": build_id,
         "created_at": "2026-08-07T00:00:00Z",
         "architecture": architecture,
+        "device_layer": device_layer,
         "compatible_hardware": list(compatible_hardware),
         "os_release": "Raspberry Pi OS Trixie arm64",
         "rpi_image_gen_revision": "abc1234",
@@ -88,8 +106,22 @@ def build_manifest(
 # rpi-image-gen's own member names, produced by image-rota's post-image.sh.
 # One boot payload, because upstream builds one bit-for-bit identical slot pair.
 DEFAULT_MEMBERS = {
-    "boot": {"digest": digest_of(BOOT), "role": "boot"},
-    "system": {"digest": digest_of(ROOT), "role": "root"},
+    "boot": {
+        "role": "boot",
+        "encoding": ENCODING_ANDROID_SPARSE,
+        "encoded_sha256": digest_of(BOOT),
+        "expanded_sha256": digest_of(BOOT_EXPANDED),
+        "expanded_size": len(BOOT_EXPANDED),
+        "filesystem": "vfat",
+    },
+    "system": {
+        "role": "root",
+        "encoding": ENCODING_ANDROID_SPARSE,
+        "encoded_sha256": digest_of(ROOT),
+        "expanded_sha256": digest_of(ROOT_EXPANDED),
+        "expanded_size": len(ROOT_EXPANDED),
+        "filesystem": "ext4",
+    },
 }
 
 

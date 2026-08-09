@@ -18,6 +18,7 @@ import struct
 from pathlib import Path
 from types import SimpleNamespace
 
+from appliance import ab_docker_health
 from appliance.commands import CommandResult, RecordingRunner
 
 DEVICE = "/dev/mmcblk0"
@@ -421,15 +422,27 @@ class FakeSystemd:
 
 
 class FakeDocker:
-    def __init__(self, *, daemon=True, admin=True):
+    """The same protocol production implements, and no other method names."""
+
+    def __init__(self, *, daemon=True, admin=True, ems=True):
         self.daemon = daemon
         self.admin = admin
+        self.ems = ems
 
-    def available(self):
-        return self.daemon
+    def daemon_usable(self):
+        if self.daemon:
+            return ab_docker_health.passed("the fake Docker daemon answers")
+        return ab_docker_health.failed("docker_daemon_unreachable", "the daemon is down")
 
-    def inspect_admin(self):
-        return self.admin
+    def admin_runtime(self, expected_digest):
+        if self.admin:
+            return ab_docker_health.passed("the Admin container answers")
+        return ab_docker_health.failed("admin_container_missing", "no Admin container")
+
+    def ems_runtime(self, expected_digest, *, expected_running=True):
+        if self.ems or not expected_running:
+            return ab_docker_health.passed("the EMS deployment is as recorded")
+        return ab_docker_health.failed("ems_container_not_running", "EMS is not running")
 
 
 def build_ab_service(
@@ -442,6 +455,7 @@ def build_ab_service(
     appliance_version="0.9.0",
     minimum_staging_bytes=0,
     inspector=None,
+    **overrides,
 ):
     """The whole A/B update service, wired against one fake appliance host."""
 
@@ -473,6 +487,7 @@ def build_ab_service(
         # The fixture selector is a plain file, not a FAT mount, so there is
         # nothing to remount. The remount itself is covered in the selector tests.
         remount_selector=False,
+        **overrides,
     )
     return service
 

@@ -1,0 +1,25 @@
+{
+  "comment": [
+    "Exact bytes from the pinned rpi-image-gen release. Copied, never edited:",
+    "these files are the upstream contract this appliance is built against, so a",
+    "test that changed one would be testing the project against itself.",
+    "Refresh with scripts/appliance-fetch-rpi-image-gen.sh and re-run the",
+    "upstream contract tier."
+  ],
+  "commit": "a7b6d4806183195f3efadb533f58c8e46393d057",
+  "files": {
+    "config/trixie-minbase-ab.yaml": "sha256:71ce40708649cb46df6ae047a0bf8bb5b12126c5b12d83dce6167d5942919fda",
+    "depends": "sha256:072d78b6c93e3d02267117982141e6a714c149525974f6b0c24abe7e17dde772",
+    "device/pi4/device.yaml": "sha256:76b24d5cbdd82f093e2ea420f19d4a6af3f174a4df1791f55341387de5041021",
+    "device/pi5/device.yaml": "sha256:c2d8bf5e45c8343564fd9c1d74f4a4ca3ddfc58a9cb40fe2a7c7c317adf1a51a",
+    "image/gpt/ab_userdata/device/rootfs-overlay/usr/lib/systemd/system-generators/slot-perst-generator": "sha256:7450a6313071521d4b40096efe4d35c6a0b2ed0f99f8e55f3e3466596f220bd8",
+    "image/gpt/ab_userdata/device/rootfs-overlay/usr/lib/systemd/system-generators/slot-shared-generator": "sha256:c7a4d60d11180735508c96f5b4def81fafee41af852aa6808b1eb15821d19d6b",
+    "image/gpt/ab_userdata/genimage.cfg.in.ext4": "sha256:957ea0ceadeb41769a51be6949cb6ab262f9fd749d7f21f8f140f43b9f719b4c",
+    "image/gpt/ab_userdata/image.yaml": "sha256:1ca299e608e50d46a5f90c6c17c10f2dd02ed1ba025f50dd9b16e3d596f86284",
+    "image/gpt/ab_userdata/post-image.sh": "sha256:1ad6cc4b365012242cbe82f515f5c0f76490e39dbd5ff1192360eb01bb4118e7",
+    "layer/app-container/docker/engine-bookworm.yaml": "sha256:8ce0909d752265314484c8aa109f0714411a4923f90de9289f9c7c3d63e8f957",
+    "layer/app-container/docker/engine-trixie.yaml": "sha256:2f31379d8d1a2b55e1b528ceb64243b39eb74586cc3cceea39f129279f1d1195"
+  },
+  "release": "v2.7.0",
+  "repository": "https://github.com/raspberrypi/rpi-image-gen"
+}

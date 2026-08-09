@@ -980,14 +980,79 @@
   /* An A/B image-managed appliance stages host images into the inactive slot.
      Running apt through the UI there would create slot drift and could vanish
      after a rollback, so package installation is not the normal path. */
+  /* Every state the backend can actually prove, and no state it cannot. The
+     label comes from backend authority alone; nothing here infers progress. */
+  function abLifecycle(ab) {
+    var abState = ab.ab_state || {};
+    var pending = abState.pending_trial;
+    var fallback = abState.last_fallback;
+
+    if (ab.mode === "single_slot") {
+      return { tone: "warn", label: "Single-slot appliance",
+        hint: "This installation has one root filesystem. A/B updates need an A/B image." };
+    }
+    if ((ab.drift || []).length || !ab.ab_supported) {
+      return { tone: "bad", label: "Manual action required",
+        hint: "The A/B layout could not be proven, so every OS mutation is disabled." };
+    }
+    if (fallback && !fallback.acknowledged) {
+      return { tone: "bad", label: "Fallback observed",
+        hint: "A trial slot did not commit and this appliance returned to its previous slot." };
+    }
+    if (ab.tryboot && pending && pending.committed) {
+      return { tone: "ok", label: "Committed",
+        hint: "The trial slot proved itself and is now the default." };
+    }
+    if (ab.tryboot && pending) {
+      return { tone: "warn", label: "Trial boot active — health checking",
+        hint: "This slot is running as a one-shot trial and is verifying itself." };
+    }
+    if (ab.tryboot) {
+      return { tone: "bad", label: "Manual action required",
+        hint: "This slot booted as a trial but no A/B operation is pending." };
+    }
+    if (pending && !pending.committed) {
+      return { tone: "warn", label: "Trial reboot pending",
+        hint: "An update is staged in the inactive slot and armed for a one-shot trial boot." };
+    }
+    return { tone: "ok", label: "A/B appliance ready",
+      hint: "Both slots are proven and no operation is in flight." };
+  }
+
+  /* Every production prerequisite the backend can prove, in the order an
+     operator would fix them. The plan action stays disabled while any of them
+     is false: an update that cannot be decoded, written or recovered from is
+     not one to offer. */
+  var AB_READINESS = [
+    ["hardware_supported", "Hardware", "This board is not one this appliance has an image for."],
+    ["layout_ready", "A/B layout", "The layout could not be proven."],
+    ["persistence_ready", "Persistent data", "A shared path is not backed by the persistent partition."],
+    ["artifact_decoder_ready", "Artifact decoder", "zstd is missing, so a .tar.zst artifact cannot be read."],
+    ["sparse_decoder_ready", "Sparse decoder", "Update members cannot be expanded."],
+    ["host_identity_ready", "Host identity", "The persistent SSH host keys could not be proven."],
+    ["docker_reconstruction_ready", "Runtime recovery", "No container runtime is recorded for the next slot."]
+  ];
+
+  function abReadiness(ab) {
+    var readiness = ab.readiness || {};
+    var missing = AB_READINESS.filter(function (entry) { return readiness[entry[0]] === false; });
+    return { ready: missing.length === 0, missing: missing, readiness: readiness };
+  }
+
   function renderAbUpdates(main, ab) {
     var abState = ab.ab_state || {};
     var selector = ab.selector || {};
     var pending = abState.pending_trial;
     var fallback = abState.last_fallback;
     var releases = ab.releases || [];
+    var lifecycle = abLifecycle(ab);
+    var readiness = abReadiness(ab);
 
     main.appendChild(el("h2", { class: "section-title", text: "Operating-system image" }));
+    main.appendChild(el("p", { class: "section-hint", "data-test": "ab-lifecycle" }, [
+      tone(lifecycle.tone, lifecycle.label),
+      el("span", { text: " " + lifecycle.hint })
+    ]));
     main.appendChild(el("p", {
       class: "section-hint",
       text: "This appliance uses fail-safe A/B OS images. Host updates are staged into the "
@@ -1020,8 +1085,25 @@
         ]),
         fact("Layout", ab.may_mutate ? "proven" : "not proven"),
         expert() ? fact("Default boot partition", selector.default_partition) : null
-      ], "ab-persistence")
+      ], "ab-persistence"),
+      card("Update readiness", [
+        el("p", { class: "status-value" }, [
+          readiness.ready
+            ? tone("ok", "ready")
+            : tone("bad", readiness.missing.length + " prerequisite" + (readiness.missing.length === 1 ? "" : "s") + " missing")
+        ])
+      ].concat(AB_READINESS.map(function (entry) {
+        var value = readiness.readiness[entry[0]];
+        return fact(entry[1], value === undefined ? "—" : (value ? "ready" : "missing"));
+      })), "ab-readiness")
     ]));
+
+    if (!readiness.ready) {
+      main.appendChild(el("p", { class: "empty-state", "data-test": "ab-not-ready" }, [
+        el("strong", { text: "OS updates are unavailable: " }),
+        el("span", { text: readiness.missing.map(function (entry) { return entry[2]; }).join(" ") })
+      ]));
+    }
 
     if ((ab.drift || []).length) {
       main.appendChild(el("p", { class: "empty-state", "data-test": "ab-drift" }, [
@@ -1059,7 +1141,7 @@
               "data-test": "ab-plan-update",
               "data-release": release.release_id,
               text: "Plan " + release.release_version,
-              disabled: !ab.may_mutate,
+              disabled: !ab.may_mutate || !readiness.ready,
               onclick: function () {
                 planOperation({
                   endpoint: "/api/ab/plan-update",
@@ -1083,7 +1165,7 @@
         el("button", {
           type: "button", class: "ghost-button compact", "data-test": "ab-plan-rollback",
           text: "Plan rollback to slot " + (abState.previous_slot || "—"),
-          disabled: !ab.may_mutate || !abState.previous_slot,
+          disabled: !ab.may_mutate || !abState.previous_slot || !readiness.ready,
           onclick: function () {
             planOperation({
               endpoint: "/api/ab/plan-rollback", body: {},
