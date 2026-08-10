@@ -10,6 +10,53 @@ image ships is generated from that module into
 
 Schema version: **2**.
 
+## The slot root is read-only, and that is now proven
+
+The A/B model rests on an immutable slot root: everything that has to survive a
+switch is a bind mount from the persistent partition, everything else is
+discarded, and a rollback therefore returns a slot to exactly what was flashed.
+
+Three things enforce it, and all three are checked by the image inspection:
+
+```text
+/etc/fstab            ro,relatime,commit=30 for /      (image-rota writes it;
+                                                        systemd-remount-fs
+                                                        applies it)
+cmdline.txt           ro                               (this project's layer
+                                                        adds it; upstream adds
+                                                        it only for erofs)
+mount points          every shared path and /persistent exist in the image
+```
+
+The kernel command line decides the *initial* mount and `/etc/fstab` decides
+what it stays. Neither was explicit before: the command line said nothing, so
+the first mount relied on initramfs-tools happening to default to read-only,
+and that default is not this project's to depend on.
+
+The mount points are the part that only a real read-only root exposes. systemd
+creates a missing mount point only on a filesystem it can write to, so a shared
+path with no directory in the image is a bind that never happens on hardware —
+and `/persistent` with no directory is a boot with no state at all.
+`/opt/ems-solarflow`, `/var/lib/ems-appliance-os-update` and `/persistent` were
+all missing. They are created by the image layer now, while the root is still
+writable, and `scripts/appliance-audit-root-writes.sh` runs the package's own
+boot-time write paths in a guest whose root really is read-only.
+
+### The mutable set
+
+```text
+persistent shared    the six declared paths, /home, /etc/machine-id, the journal
+slot-local mutable   /var in its entirety (upstream's slot-perst generator)
+tmpfs / ephemeral    /run, /tmp
+forbidden            every other path on the slot root
+```
+
+`/srv/ems-appliance-export` is on the read-only root on purpose: it holds only
+mount points, and its contents are the read-only binds `setup-export-root.sh`
+establishes. That script used to `chown` and `chmod` those directories
+unconditionally, which fails with `EROFS` even when the ownership and mode are
+already what was wanted; it checks first and writes only a difference now.
+
 ## The mechanism is upstream's
 
 `rpi-image-gen`'s `image-rota` layer provides the shared partition and the

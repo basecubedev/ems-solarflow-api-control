@@ -29,15 +29,31 @@ _SECRET_KEYS = (
     "cookie",
 )
 
-_ASSIGNMENT = re.compile(
-    r"(?i)\b(" + "|".join(re.escape(key) for key in _SECRET_KEYS) + r")(\s*[:=]\s*|\s+)([^\s,;\"']+)"
+# Secret on their own, wherever they appear in a compound name: "csrf_token"
+# and "current_password" name exactly what "token" and "password" do.
+_SECRET_WORDS = frozenset(
+    {
+        "password",
+        "passwd",
+        "passphrase",
+        "secret",
+        "token",
+        "apikey",
+        "authorization",
+        "psk",
+        "session",
+        "cookie",
+    }
 )
-_QUOTED_ASSIGNMENT = re.compile(
-    r"(?i)\b(" + "|".join(re.escape(key) for key in _SECRET_KEYS) + r")(\s*[:=]\s*)([\"'])[^\"']*\3"
-)
-_JSON_FIELD = re.compile(
-    r"(?i)(\"(?:" + "|".join(re.escape(key) for key in _SECRET_KEYS) + r")\"\s*:\s*)\"[^\"]*\""
-)
+
+_KEYS = "|".join(re.escape(key) for key in _SECRET_KEYS)
+# A qualifier in front of the name does not make the value public, and \b
+# cannot see the boundary in "csrf_token" because "_" is a word character.
+_QUALIFIED = r"[a-z0-9_]*(?:" + _KEYS + r")"
+
+_ASSIGNMENT = re.compile(r"(?i)\b(" + _QUALIFIED + r")(\s*[:=]\s*|\s+)([^\s,;\"']+)")
+_QUOTED_ASSIGNMENT = re.compile(r"(?i)\b(" + _QUALIFIED + r")(\s*[:=]\s*)([\"'])[^\"']*\3")
+_JSON_FIELD = re.compile(r"(?i)(\"(?:" + _QUALIFIED + r")\"\s*:\s*)\"[^\"]*\"")
 _URL_USERINFO = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)([^/\s:@]+):([^/\s@]+)@")
 _BEARER = re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}")
 _PUBLIC_KEY_BODY = re.compile(r"\b((?:ssh|sk|ecdsa)-[A-Za-z0-9@.-]+)\s+([A-Za-z0-9+/=]{20,})")
@@ -63,13 +79,31 @@ def redact_text(value):
     return text
 
 
+def _is_secret_key(key):
+    """Whether a mapping key names a secret, qualified or not.
+
+    ``key`` alone is deliberately not a secret word: a fingerprint and a
+    public key are the evidence an operator compares against the appliance,
+    so ``device_key`` and ``public_key`` stay readable while ``api_key`` and
+    ``private_key`` do not.
+    """
+
+    normalised = key.strip().lower().replace("-", "_")
+    if normalised in _SECRET_KEYS:
+        return True
+    parts = normalised.split("_")
+    if any(part in _SECRET_WORDS for part in parts):
+        return True
+    return any(f"{first}_{second}" in _SECRET_KEYS for first, second in zip(parts, parts[1:]))
+
+
 def redact_mapping(value):
     """Recursively redact secret-looking keys in a JSON-shaped structure."""
 
     if isinstance(value, dict):
         result = {}
         for key, item in value.items():
-            if isinstance(key, str) and key.strip().lower().replace("-", "_") in _SECRET_KEYS:
+            if isinstance(key, str) and _is_secret_key(key):
                 result[key] = REDACTED
             else:
                 result[key] = redact_mapping(item)

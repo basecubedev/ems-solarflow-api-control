@@ -607,6 +607,25 @@ test.describe("truthful host state @smoke", () => {
     await expect(reasons).toContainText("the Admin web interface did not answer");
   });
 
+  // An OS update refused before the first destructive byte. "Incomplete" on its
+  // own would send an operator looking for an outage that never happened.
+  test("an os update refused before the write says nothing was written", async ({
+    page,
+    request,
+  }) => {
+    await request.post("/api/test/reset", { data: { ab_deployment_drift: true } });
+    await signIn(page);
+
+    const replan = page.locator('[data-test="ab-replan-required"]');
+    await expect(replan).toBeVisible({ timeout: 20_000 });
+    await expect(replan).toContainText("the inactive slot is untouched");
+    await expect(replan).toContainText("boot default is unchanged");
+    await expect(replan).toContainText("create a new update plan");
+    await expect(page.locator('[data-test="operation-outcome"] .tone')).not.toHaveClass(
+      /tone-ok/,
+    );
+  });
+
   test("a rollback that fails preflight reports that nothing was stopped", async ({
     page,
     request,

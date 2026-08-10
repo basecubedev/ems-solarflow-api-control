@@ -64,6 +64,13 @@ archive, root, ref, prefix, output_format = sys.argv[1:6]
 exclude = tuple(sys.argv[6:])
 
 try:
+    # A bundle usually wraps its tree in one top-level directory. Detecting it
+    # is all-or-nothing, so a reviewer does not have to know which name was
+    # used and a bundle with no single root is still compared as-is.
+    if not prefix:
+        prefix = source_bundle.detect_prefix(archive)
+        if prefix and output_format != "json":
+            print(f"prefix:   {prefix} (detected)")
     report = source_bundle.verify(
         archive, root=root, ref=ref, prefix=prefix, exclude=exclude
     )

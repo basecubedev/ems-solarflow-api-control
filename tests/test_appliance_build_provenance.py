@@ -775,3 +775,161 @@ def test_the_release_gate_driver_never_signs_without_a_build_authority(tmp_path)
 
     signing = text.split("if [ -n \"$SIGN_KEY\" ]; then")[1].split("else")[0]
     assert "--build-authority" in signing
+
+
+# --- which file the build is allowed to call the image ------------------------
+
+BUILD_SCRIPT = ROOT / "scripts" / "appliance-build-rpi-ab-image.sh"
+
+
+def test_the_image_is_taken_from_the_generators_output_directory():
+    """``find -name '*.img' | head -1`` is not a way to identify an artefact.
+
+    A finished build tree contains the chroot it built, and that chroot has
+    ``/boot/firmware/kernel_2712.img`` in it. The first real rpi5 build
+    therefore published a 10 MB Raspberry Pi kernel blob as the appliance
+    image, hashed it, and wrote a *completed* build authority binding that
+    digest — with every gate upstream of it reporting PASS.
+
+    genimage writes the image to a directory named after the image, so that
+    is where it is read from.
+    """
+
+    script = BUILD_SCRIPT.read_text(encoding="utf-8")
+
+    assert "find \"$WORK\" -name '*.img'" not in script
+    assert 'image-$IMAGE_NAME' in script or 'image-${IMAGE_NAME}' in script
+
+
+def test_an_ambiguous_image_is_refused_rather_than_picked():
+    """Two candidates mean the build does not know what it built."""
+
+    script = BUILD_SCRIPT.read_text(encoding="utf-8")
+
+    assert "image_ambiguous" in script
+
+
+def test_the_image_name_comes_from_the_profile_the_build_was_given():
+    """One authority: the profile declares it, the wrapper reads it."""
+
+    script = BUILD_SCRIPT.read_text(encoding="utf-8")
+
+    assert "IMAGE_NAME=" in script
+    assert "$CONFIG" in script.split("IMAGE_NAME=")[1].split("\n")[0] or (
+        "image_name_unknown" in script
+    )
+
+
+def test_a_second_profile_does_not_overwrite_the_first_authority():
+    """Two boards built into one output directory left one authority.
+
+    The image, the update and the build metadata are all named per profile;
+    the authority was not. Building rpi4 and then rpi5 into one --output left
+    only the rpi5 authority, so the rpi4 artefact — sitting right beside it,
+    with its own digests — could no longer be signed at all.
+    """
+
+    script = BUILD_SCRIPT.read_text(encoding="utf-8")
+
+    assert '"$OUTPUT/build-authority.json"' not in script
+    assert '$NAME.build-authority.json' in script
+
+
+def test_the_release_scripts_look_for_the_same_authority_name():
+    """One name, or the gate silently signs against another board's build."""
+
+    root = BUILD_SCRIPT.parent
+    for script in ("appliance-release-gates.sh", "appliance-build-rpi-ab-update.sh"):
+        text = (root / script).read_text(encoding="utf-8")
+        assert "build-authority.json" in text, script
+        assert ".build-authority.json" in text, script
+
+
+UPDATE_SCRIPT = SCRIPTS / "appliance-build-rpi-ab-update.sh"
+
+
+def test_the_described_build_is_the_one_the_authority_names():
+    """Describing a build minted a competing id and then failed against it.
+
+    With no ``--build-id`` the update step stamped a fresh UTC timestamp and
+    then asked the build authority to confirm it, which the authority — naming
+    the build that actually ran — can never do. Every unsigned ``describe``
+    gate therefore failed with ``build_authority_mismatch`` unless the caller
+    happened to pass the same id twice, so the strict release gate could not
+    pass on its own default path. Found by running the real gate.
+    """
+
+    script = UPDATE_SCRIPT.read_text(encoding="utf-8")
+    discovered = script.index('"$OUTPUT/$NAME.build-authority.json"')
+    fallback = script.index("date -u +%Y%m%d%H%M%S")
+
+    assert discovered < fallback, "an id is invented before the authority is even located"
+    assert "build_id" in script[discovered:fallback], "the authority's id is never adopted"
+
+
+BUILDER_VM_SCRIPT = SCRIPTS / "appliance-builder-vm.sh"
+
+
+def test_the_builder_can_run_the_release_gates_it_is_the_only_host_for():
+    """The strict gate was unobtainable on every host it could run on.
+
+    The gate builds the images itself, so it needs mmdebstrap, podman, loop
+    devices and a qemu-aarch64 binfmt handler. The one component that has
+    those is the disposable builder guest — and it could only ever run the
+    build script. So a host with the prerequisites did not exist, and
+    ``RESULT: PASS`` was not reachable from anywhere.
+    """
+
+    script = BUILDER_VM_SCRIPT.read_text(encoding="utf-8")
+
+    assert "--release-gate" in script
+    assert "appliance-release-gates.sh" in script
+
+
+def test_the_gate_run_carries_the_source_bundle_gate_its_input():
+    """``source-bundle`` is a required gate and needs a bundle to check."""
+
+    script = BUILDER_VM_SCRIPT.read_text(encoding="utf-8")
+    gate_call = script.split("appliance-release-gates.sh")[-1].split("status=$?")[0]
+
+    assert "--source-bundle" in gate_call
+    assert "appliance-create-source-bundle.sh" in script
+
+
+def test_the_gate_verdict_is_the_builders_verdict():
+    """A gate that exited 3 is NOT RUN, and must not return success."""
+
+    script = BUILDER_VM_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'exit "$status"' in script
+
+
+def test_the_gate_logs_come_back_out_of_the_guest():
+    """The report is the evidence; a verdict with no logs proves nothing.
+
+    Artefact collection is ``find -maxdepth 1 -type f``, which walks straight
+    past ``dist/gates/`` — the directory holding every gate's log.
+    """
+
+    script = BUILDER_VM_SCRIPT.read_text(encoding="utf-8")
+
+    assert "gates" in script.split("== collecting artefacts ==")[1]
+
+
+UPDATE_INSPECTOR = SCRIPTS / "appliance-inspect-rpi-ab-update.sh"
+
+
+def test_the_update_inspector_expands_beside_the_artefact():
+    """Expanding a 4 GiB member into /tmp fails on an ordinary systemd host.
+
+    ``tempfile.TemporaryDirectory()`` lands in TMPDIR, and /tmp is a tmpfs
+    sized from RAM on any systemd default — 1.5 GiB on a 3 GiB builder. The
+    system member alone expands to 4 GiB, so the gate's own inspect step died
+    with ENOSPC on a machine with 60 GiB free. The directory holding the
+    archive just held a 16 GiB image, so it is the one place known to fit.
+    """
+
+    script = UPDATE_INSPECTOR.read_text(encoding="utf-8")
+    staging = script[script.index("TemporaryDirectory") : script.index("TemporaryDirectory") + 120]
+
+    assert "dir=" in staging, "the staging directory is wherever TMPDIR points"

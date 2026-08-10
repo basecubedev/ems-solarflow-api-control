@@ -16,6 +16,11 @@
 # before it is handed over. An archive that does not round-trip is deleted
 # rather than delivered.
 #
+# Alongside the bundle it writes a source authority: the bundle's digest, the
+# full project revision and the canonical tree hash the build authority uses.
+# Production finalization compares the two, because a build from one commit and
+# a source bundle from another are both individually valid artefacts.
+#
 # Read-only with respect to the repository. Nothing is published or uploaded.
 #
 # Exit status: 0 the bundle was written and verified, 1 it did not round-trip,
@@ -79,6 +84,8 @@ git -C "$ROOT" archive --format=tar --prefix="$PREFIX/" "$REVISION" \
 
 MANIFEST="${OUTPUT%.tar.gz}"
 MANIFEST="${MANIFEST%.tar}.manifest.json"
+AUTHORITY="${OUTPUT%.tar.gz}"
+AUTHORITY="${AUTHORITY%.tar}.source-authority.json"
 
 set +e
 PYTHONPATH="$ROOT" python3 - "$OUTPUT" "$ROOT" "$REVISION" "$PREFIX" "$MANIFEST" <<'PY'
@@ -121,16 +128,36 @@ set -e
 
 if [ "$verified" -ne 0 ]; then
     if [ "$KEEP" = no ]; then
-        rm -f "$OUTPUT" "$MANIFEST"
+        rm -f "$OUTPUT" "$MANIFEST" "$AUTHORITY"
         echo "appliance-create-source-bundle: the bundle did not round-trip and was deleted" >&2
     fi
     [ "$verified" -eq 3 ] && exit 3
     fail "the bundle is not the tracked tree" bundle_not_faithful
 fi
 
+# Only for a bundle that already round-tripped: an authority for an archive
+# that is not the tracked tree would name a project this bundle is not.
+PYTHONPATH="$ROOT" python3 - "$OUTPUT" "$ROOT" "$REVISION" "$AUTHORITY" <<'PY' \
+    || fail "the source authority could not be recorded" source_authority_failed
+import sys
+
+from appliance import release_inputs
+
+archive, root, revision, target = sys.argv[1:5]
+try:
+    authority = release_inputs.describe_source_bundle(archive, root=root, ref=revision)
+except Exception as error:  # noqa: BLE001 - reported, never swallowed
+    sys.exit(f"appliance-create-source-bundle: {error}")
+release_inputs.write_source_bundle_authority(target, authority)
+print(f"project:  {authority.revision}")
+print(f"tree:     {authority.tree_sha256}")
+print(f"objects:  {authority.tracked_objects} tracked, {authority.symlinks} symlink(s)")
+PY
+
 echo
 echo "bundle:   $OUTPUT"
 echo "manifest: $MANIFEST"
+echo "authority: $AUTHORITY"
 echo "ref:      $REVISION"
 echo "Nothing was published or uploaded."
 echo "RESULT: PASS ($(basename "$OUTPUT"))"

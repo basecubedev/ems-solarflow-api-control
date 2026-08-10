@@ -186,7 +186,7 @@ class DockerTrialHealth:
                 "ems_not_functional",
                 f"{self.ems_container} answered emsctl diagnose with something that is not JSON",
             )
-        status = str(((payload.get("diagnosis") or {}).get("status") or "")).lower()
+        status = str((payload.get("diagnosis") or {}).get("status") or "").lower()
         if not status:
             return failed(
                 "ems_not_functional",

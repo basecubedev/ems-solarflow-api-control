@@ -162,10 +162,17 @@ def prepare_staging(directory):
     return target
 
 
-def extract(archive_path, staging_dir, release):
-    """Extract exactly the members ``release`` declares, and verify each one."""
+def stage_members(archive_path, staging_dir, expected_names):
+    """Write exactly the named members out, refusing everything else.
 
-    expected = set(release.members)
+    The allowlist is the whole point: an update archive is untrusted input, and
+    a member that traverses out of the staging directory, or is a link, or is a
+    device node, or is simply not one of the two members a slot is written
+    from, never reaches the filesystem. Anything reading an update artefact —
+    the appliance, the inspector, an external cross-check — goes through here.
+    """
+
+    expected = set(expected_names)
     target = prepare_staging(staging_dir)
     members = {}
     total = 0
@@ -217,8 +224,16 @@ def extract(archive_path, staging_dir, release):
             "artifact_member_missing", f"the archive is missing {', '.join(missing)}"
         )
 
+    _sync_directory(target)
+    return StagedArtifact(directory=target, members=members, total_bytes=total)
+
+
+def extract(archive_path, staging_dir, release):
+    """Extract exactly the members ``release`` declares, and verify each one."""
+
+    staged = stage_members(archive_path, staging_dir, set(release.members))
     try:
-        for name, path in members.items():
+        for name, path in staged.members.items():
             observed = file_digest(path)
             declared = release.member(name).digest
             if observed != declared:
@@ -227,11 +242,9 @@ def extract(archive_path, staging_dir, release):
                     f"{name} hashes to {observed}, the manifest declares {declared}",
                 )
     except (ArtifactError, ReleaseError):
-        shutil.rmtree(target, ignore_errors=True)
+        shutil.rmtree(staged.directory, ignore_errors=True)
         raise
-
-    _sync_directory(target)
-    return StagedArtifact(directory=target, members=members, total_bytes=total)
+    return staged
 
 
 def _write_member(source, destination, expected_size):

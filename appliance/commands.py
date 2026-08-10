@@ -14,6 +14,10 @@ from dataclasses import dataclass
 
 DEFAULT_TIMEOUT = 60
 
+# Linux MAX_ARG_STRLEN. A longer member cannot reach execve at all, so refusing
+# it here turns a kernel E2BIG into the same answer on every host.
+MAX_ARGUMENT_BYTES = 128 * 1024
+
 EXECUTABLES = {
     "docker": ("/usr/bin/docker", "/usr/local/bin/docker"),
     "systemctl": ("/usr/bin/systemctl", "/bin/systemctl"),
@@ -72,6 +76,39 @@ class CommandResult:
         return self.returncode == 0 and not self.timed_out
 
 
+def validated_arguments(args):
+    """The one argument rule, shared by the real runner and the fake.
+
+    Nothing here builds a shell string, so a single argv member cannot start a
+    second command. A NUL byte can: it truncates the member on the way into
+    ``execve``, so it is refused, as is anything that is not a string.
+
+    An empty member is ordinary and is passed through. ``ssh-keygen -N '' -C ''``
+    is how OpenSSH is told "no passphrase, no comment", and refusing it made
+    every host key generation on a real appliance fail.
+
+    The fake shares this so it can never accept an argv production refuses.
+
+    These invariants hold for every host, so they are checked before the
+    executable is looked up: whether ``/usr/bin/ssh-keygen`` happens to exist
+    must not decide whether a NUL byte is reported as an invalid argument.
+    """
+
+    argv = []
+    for arg in args:
+        if not isinstance(arg, str) or "\x00" in arg:
+            raise CommandError(
+                "invalid_argument", "command arguments must be strings without NUL bytes"
+            )
+        if len(arg.encode("utf-8", "surrogatepass")) > MAX_ARGUMENT_BYTES:
+            raise CommandError(
+                "invalid_argument",
+                f"a command argument may not exceed {MAX_ARGUMENT_BYTES} bytes",
+            )
+        argv.append(arg)
+    return argv
+
+
 class CommandRunner:
     """Run an allowlisted host tool with validated arguments."""
 
@@ -107,12 +144,9 @@ class CommandRunner:
         return True
 
     def run(self, tool, args=(), *, timeout=None, input_text=None, check=False):
+        arguments = validated_arguments(args)
         executable = self.resolve(tool)
-        argv = [executable]
-        for arg in args:
-            if not isinstance(arg, str) or arg == "" or "\x00" in arg:
-                raise CommandError("invalid_argument", "command arguments must be non-empty strings")
-            argv.append(arg)
+        argv = [executable, *arguments]
 
         try:
             completed = subprocess.run(
@@ -162,8 +196,8 @@ class RecordingRunner(CommandRunner):
         return tool in EXECUTABLES
 
     def run(self, tool, args=(), *, timeout=None, input_text=None, check=False):
+        args = tuple(validated_arguments(args))
         self.resolve(tool)
-        args = tuple(args)
         self.calls.append((tool, args, input_text))
         reply = self.replies.get((tool, args))
         if reply is None:

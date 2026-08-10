@@ -9,6 +9,11 @@ partition looked correct for as long as it did.
 Signature verification is driven through the recording command runner, because
 ``gpg`` behaviour is not what these tests are about — what is under test is that
 the appliance refuses an artifact whose signature did not verify.
+
+The fake still has to answer the way gpg answers. A verifier that reads the
+signing key out of ``--status-fd`` output cannot be proven by a fake that
+returns exit 0 and says nothing, so the runner emits the same NEWSIG/GOODSIG/
+VALIDSIG lines a real verification produces.
 """
 
 import io
@@ -136,6 +141,7 @@ class ReleaseDirectory:
             self.keyring_path.write_bytes(b"fake-keyring")
         self.allow_unsigned = allow_unsigned
         self.gpg_ok = True
+        self.signing_fingerprint = "B6B70E6B2B7FEB0D649D8748480FAA4AAE458FC7"
 
     def publish(
         self,
@@ -195,9 +201,16 @@ class ReleaseDirectory:
             def run(self, tool, args=(), **kwargs):
                 if tool == "gpg":
                     self.calls.append((tool, tuple(args), None))
-                    return CommandResult(
-                        tool, tuple(args), 0 if directory.gpg_ok else 1, "", ""
+                    if not directory.gpg_ok:
+                        return CommandResult(tool, tuple(args), 1, "", "BAD signature")
+                    fingerprint = directory.signing_fingerprint
+                    status = (
+                        "[GNUPG:] NEWSIG\n"
+                        f"[GNUPG:] GOODSIG {fingerprint[-16:]} EMS Appliance Release\n"
+                        f"[GNUPG:] VALIDSIG {fingerprint} 2026-01-01 1767225600 0 4 0 22 8 00 "
+                        f"{fingerprint}\n"
                     )
+                    return CommandResult(tool, tuple(args), 0, status, "")
                 return super().run(tool, args, **kwargs)
 
         return _Runner({})

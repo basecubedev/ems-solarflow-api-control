@@ -26,6 +26,7 @@ PROFILE=rpi5
 OUTPUT="$ROOT/dist"
 BUILD_ID=""
 GENERATOR=${EMS_RPI_IMAGE_GEN:-}
+ENVIRONMENT=""
 
 usage() {
     sed -n '3,21p' "$0"
@@ -53,15 +54,34 @@ while [ $# -gt 0 ]; do
         --build-id=*) BUILD_ID=${1#*=}; shift ;;
         --rpi-image-gen) GENERATOR=${2:?--rpi-image-gen needs a directory}; shift 2 ;;
         --rpi-image-gen=*) GENERATOR=${1#*=}; shift ;;
+        --builder-environment) ENVIRONMENT=${2:?--builder-environment needs a file}; shift 2 ;;
+        --builder-environment=*) ENVIRONMENT=${1#*=}; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
     esac
 done
 
+# A profile selects a config path and a build id names a directory. Both are
+# refused before they are used to build either.
+command -v python3 >/dev/null 2>&1 || not_run "python3 is not installed" required_tool_missing
+[ -n "$BUILD_ID" ] || BUILD_ID=$(date -u +%Y%m%d%H%M%S 2>/dev/null || echo unknown)
+PYTHONPATH="$ROOT" python3 - "$PROFILE" "$BUILD_ID" <<'PY' || exit 2
+import sys
+
+from appliance import build_authority
+
+try:
+    build_authority.validate_profile(sys.argv[1])
+    build_authority.validate_build_id(sys.argv[2])
+except build_authority.BuildAuthorityError as error:
+    sys.exit(f"appliance-build-rpi-ab-image: {error.code}: {error.message}")
+PY
+
 [ -f "$LOCK" ] || fail "$LOCK is missing" lock_missing
 CONFIG="$IMAGE_DIR/profiles/${PROFILE}-ab.yaml"
 [ -f "$CONFIG" ] || fail "there is no build profile for $PROFILE" hardware_profile_unknown
-command -v python3 >/dev/null 2>&1 || not_run "python3 is not installed" required_tool_missing
+[ -z "$ENVIRONMENT" ] || [ -f "$ENVIRONMENT" ] \
+    || fail "$ENVIRONMENT is not a builder environment file" builder_environment_missing
 
 if [ -z "$GENERATOR" ]; then
     for candidate in /usr/share/rpi-image-gen /opt/rpi-image-gen "$ROOT/../rpi-image-gen"; do
@@ -100,8 +120,14 @@ esac
 
 VERSION=$(sed -n 's/^APPLIANCE_VERSION = "\(.*\)"$/\1/p' "$ROOT/appliance/version.py")
 [ -n "$VERSION" ] || fail "cannot read APPLIANCE_VERSION" version_unreadable
-[ -n "$BUILD_ID" ] || BUILD_ID=$(date -u +%Y%m%d%H%M%S 2>/dev/null || echo unknown)
 NAME="ems-solarflow-appliance-${VERSION}-${PROFILE}-arm64-ab"
+
+# What the generator will call the image it writes. The profile declares it, so
+# the profile is where it is read from rather than being guessed afterwards.
+IMAGE_NAME=$(sed -n '/^image:/,/^[^ ]/s/^[[:space:]]\{1,\}name:[[:space:]]*//p' "$CONFIG" \
+    | head -n 1 | tr -d '"'"'"' \r')
+[ -n "$IMAGE_NAME" ] \
+    || fail "$CONFIG declares no image name" image_name_unknown
 
 # The project's own tree, to the same standard as the generator's. A revision
 # alone says nothing about the files this build is about to package.
@@ -121,20 +147,33 @@ PY
         project_source_unprovable
 PROJECT_REVISION=$(echo "$PROJECT" | sed -n 's/^REVISION=//p')
 PROJECT_TREE=$(echo "$PROJECT" | sed -n 's/^TREE=//p')
-DEVICE_LAYER=$(PYTHONPATH="$ROOT" python3 -c \
-    "from appliance import rpi_image_gen as m; print(m.read_profile('$CONFIG').device_layer)") \
-    || fail "$CONFIG does not resolve to a known hardware profile" hardware_profile_unknown
-BOARD_CLASSES=$(PYTHONPATH="$ROOT" python3 -c \
-    "import json
-from appliance import rpi_image_gen as m
-print(json.dumps(list(m.read_profile('$CONFIG').compatible_board_classes)))")
+# Every value below reaches Python as an argv member. Interpolating a path or a
+# build id into the program text makes the caller's string part of the program.
+PROFILE_FACTS=$(PYTHONPATH="$ROOT" python3 - "$CONFIG" <<'PY'
+import json
+import sys
+
+from appliance import rpi_image_gen
+
+profile = rpi_image_gen.read_profile(sys.argv[1])
+print(f"DEVICE_LAYER={profile.device_layer}")
+print(f"BOARD_CLASSES={json.dumps(list(profile.compatible_board_classes))}")
+PY
+) || fail "$CONFIG does not resolve to a known hardware profile" hardware_profile_unknown
+DEVICE_LAYER=$(echo "$PROFILE_FACTS" | sed -n 's/^DEVICE_LAYER=//p')
+BOARD_CLASSES=$(echo "$PROFILE_FACTS" | sed -n 's/^BOARD_CLASSES=//p')
 
 mkdir -p "$OUTPUT" || fail "cannot create $OUTPUT" output_unusable
 # One build, one fresh directory. A reused one is how yesterday's update.tar.zst
 # ends up beside today's metadata and gets signed as if this build produced it.
-WORK=$(PYTHONPATH="$ROOT" python3 -c \
-    "from appliance import build_authority; print(build_authority.prepare_output('$OUTPUT', build_id='$BUILD_ID'))") \
-    || fail "the build output directory could not be claimed for $BUILD_ID" output_unusable
+WORK=$(PYTHONPATH="$ROOT" python3 - "$OUTPUT" "$BUILD_ID" <<'PY'
+import sys
+
+from appliance import build_authority
+
+print(build_authority.prepare_output(sys.argv[1], build_id=sys.argv[2]))
+PY
+) || fail "the build output directory could not be claimed for $BUILD_ID" output_unusable
 
 echo "== building the appliance package =="
 "$ROOT/packaging/appliance/build-deb.sh" --output "$OUTPUT" --arch arm64 >/dev/null \
@@ -185,12 +224,30 @@ LOG="$OUTPUT/$NAME.build.log"
         "IGconf_emsappliance_build_id=$BUILD_ID"
 ) >"$LOG" 2>&1 || fail "rpi-image-gen could not build the image; see $LOG" image_build_failed
 
-BUILT=$(find "$WORK" -name '*.img' -type f 2>/dev/null | head -n 1)
-[ -n "$BUILT" ] || fail "the build produced no image; see $LOG" image_build_failed
+# genimage writes the image to a directory named after it, and the profile is
+# where that name is declared. Searching the work root instead finds the chroot
+# the build just made, and the first *.img in a Raspberry Pi chroot is
+# /boot/firmware/kernel_2712.img — which one build published as the appliance
+# image, hashed, and bound into a completed build authority.
+IMAGE_DIR_NAME="$WORK/image-$IMAGE_NAME"
+[ -d "$IMAGE_DIR_NAME" ] \
+    || fail "the generator wrote no $IMAGE_DIR_NAME; see $LOG" image_build_failed
+
+BUILT="$IMAGE_DIR_NAME/$IMAGE_NAME.img"
+[ -f "$BUILT" ] || fail "the build produced no $IMAGE_NAME.img; see $LOG" image_build_failed
+
+# A second whole-disk image in the same directory means the build does not know
+# which one it made, and guessing is how the wrong artefact gets signed.
+EXTRA=$(find "$IMAGE_DIR_NAME" -maxdepth 1 -name '*.img' -type f ! -name "$IMAGE_NAME.img" \
+    2>/dev/null | wc -l)
+[ "$EXTRA" -eq 0 ] \
+    || fail "$IMAGE_DIR_NAME holds more than one image; see $LOG" image_ambiguous
+
 cp "$BUILT" "$OUTPUT/$NAME.img" || fail "the built image could not be collected" output_unusable
 ( cd "$OUTPUT" && sha256sum "$NAME.img" > "$NAME.img.sha256" )
 
-UPDATE=$(find "$WORK" -name 'update.tar.zst' -type f 2>/dev/null | head -n 1)
+UPDATE=""
+[ -f "$IMAGE_DIR_NAME/update.tar.zst" ] && UPDATE="$IMAGE_DIR_NAME/update.tar.zst"
 [ -n "$UPDATE" ] && cp "$UPDATE" "$OUTPUT/$NAME.update.tar.zst"
 
 echo "== proving both source trees are still the ones that were read =="
@@ -236,14 +293,21 @@ AUTHORITY=$(PYTHONPATH="$ROOT" python3 - "$WORK" "$SOURCE_FORM" "$GENERATOR_REVI
     "$SOURCE_TREE" "$PROFILE" "$PROJECT_REVISION" "$PROJECT_TREE" "$BUILD_ID" \
     "$PACKAGE_SHA256" \
     "$OUTPUT/$NAME.img" "$([ -n "$UPDATE" ] && echo "$OUTPUT/$NAME.update.tar.zst" || echo "")" \
+    "$ENVIRONMENT" \
     <<'PY'
 import sys
 
 from appliance import build_authority
 
 (work, form, revision, tree, profile, project_revision, project_tree, build_id,
- package, image, update) = sys.argv[1:12]
+ package, image, update, environment_path) = sys.argv[1:13]
+environment = (
+    build_authority.read_environment(environment_path)
+    if environment_path
+    else build_authority.BuilderEnvironment()
+)
 authority = build_authority.BuildAuthority(
+    environment=environment,
     builder=build_authority.Builder(
         source_form=form, revision=revision, source_tree_sha256=tree
     ),
@@ -264,7 +328,27 @@ authority = build_authority.BuildAuthority(
 print(build_authority.write(work, authority))
 PY
 ) || fail "the build authority could not be written" build_authority_unwritable
-cp "$AUTHORITY" "$OUTPUT/build-authority.json"
+# Per profile, like the image and the update beside it. A fixed name means the
+# second board built into the same directory erases the first board's
+# provenance, and an artefact whose authority is gone cannot be signed at all.
+cp "$AUTHORITY" "$OUTPUT/$NAME.build-authority.json"
+[ -n "$ENVIRONMENT" ] && cp "$ENVIRONMENT" "$OUTPUT/$NAME.builder-environment.json"
+
+MINIMUM_MEDIA_BYTES=$(PYTHONPATH="$ROOT" python3 - <<'PY'
+from appliance import media_sizing
+
+print(media_sizing.MINIMUM_MEDIA_BYTES)
+PY
+)
+
+ENVIRONMENT_SHA256=$(PYTHONPATH="$ROOT" python3 - "$OUTPUT/$NAME.build-authority.json" <<'PY'
+import sys
+
+from appliance import build_authority
+
+print(build_authority.read(sys.argv[1]).builder_environment_sha256)
+PY
+) || fail "the build authority could not be read back" build_authority_unwritable
 
 cat > "$OUTPUT/$NAME.build.json" <<JSON
 {
@@ -279,7 +363,9 @@ cat > "$OUTPUT/$NAME.build.json" <<JSON
   "rpi_image_gen_revision": "$GENERATOR_REVISION",
   "rpi_image_gen_source_form": "$SOURCE_FORM",
   "rpi_image_gen_source_tree": "$SOURCE_TREE",
-  "build_authority": "build-authority.json",
+  "build_authority": "$NAME.build-authority.json",
+  "builder_environment_sha256": "$ENVIRONMENT_SHA256",
+  "minimum_media_bytes": $MINIMUM_MEDIA_BYTES,
   "project_revision": "$PROJECT_REVISION",
   "project_tree_sha256": "$PROJECT_TREE",
   "appliance_package": "$(basename "$PACKAGE")",
@@ -293,7 +379,7 @@ echo
 echo "image:    $OUTPUT/$NAME.img"
 echo "checksum: $OUTPUT/$NAME.img.sha256"
 echo "metadata: $OUTPUT/$NAME.build.json"
-echo "authority: $OUTPUT/build-authority.json"
+echo "authority: $OUTPUT/$NAME.build-authority.json"
 [ -n "$UPDATE" ] && echo "update:   $OUTPUT/$NAME.update.tar.zst"
 echo
 echo "Nothing was published. Sign and publish through the release pipeline; see"

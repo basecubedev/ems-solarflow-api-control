@@ -876,6 +876,31 @@ acl_manifest_commit() {
     return 0
 }
 
+# chown(2) and chmod(2) fail with EROFS on a read-only filesystem whether or not
+# they would change anything. The slot root is read-only on a booted appliance
+# and these directories are created by the image build, so the wanted state is
+# checked first and only a difference is written.
+ensure_root_owned_directory() {
+    ensure_target=$1
+    ensure_label=$2
+    [ -d "$ensure_target" ] || mkdir -p "$ensure_target" \
+        || fail "cannot create $ensure_label"
+    if [ "$(id -u)" = "0" ] \
+       && [ "$(stat -c '%U:%G' "$ensure_target" 2>/dev/null)" != "root:root" ]; then
+        chown root:root "$ensure_target" || fail "cannot own $ensure_label"
+    fi
+    if [ "$(stat -c '%a' "$ensure_target" 2>/dev/null)" != "755" ]; then
+        chmod 0755 "$ensure_target" || fail "cannot set the mode of $ensure_label"
+    fi
+    [ "$(stat -c '%a' "$ensure_target" 2>/dev/null)" = "755" ] \
+        || fail "$ensure_label is $(stat -c '%a' "$ensure_target" 2>/dev/null), expected 755"
+    if [ "$(id -u)" = "0" ]; then
+        [ "$(stat -c '%U:%G' "$ensure_target" 2>/dev/null)" = "root:root" ] \
+            || fail "$ensure_label is $(stat -c '%U:%G' "$ensure_target" 2>/dev/null), expected root:root"
+    fi
+    return 0
+}
+
 # --- mounting ---------------------------------------------------------------
 
 is_read_only() {
@@ -916,16 +941,8 @@ prepare_target() {
         unmount_all "$target_dir" || fail "cannot unmount the export target for $name"
     fi
     require_export_target "$name"
-    mkdir -p "$target_dir" || fail "cannot create the export target for $name"
+    ensure_root_owned_directory "$target_dir" "the export target for $name"
     [ -L "$target_dir" ] && fail "the export target for $name became a symlink"
-    chown root:root "$target_dir" || fail "cannot own the export target for $name"
-    chmod 0755 "$target_dir" || fail "cannot set the mode of the export target for $name"
-    mode=$(stat -c '%a' "$target_dir" 2>/dev/null || echo "")
-    [ "$mode" = "755" ] || fail "the export target for $name is $mode, expected 755"
-    if [ "$(id -u)" = "0" ]; then
-        owner=$(stat -c '%U:%G' "$target_dir" 2>/dev/null || echo "")
-        [ "$owner" = "root:root" ] || fail "the export target for $name is $owner, expected root:root"
-    fi
     return 0
 }
 
@@ -1017,9 +1034,7 @@ done
 
 # --- mutation pass ----------------------------------------------------------
 
-mkdir -p "$EXPORT_ROOT" || fail "cannot create the export root"
-chown root:root "$EXPORT_ROOT" || fail "cannot own the export root"
-chmod 0755 "$EXPORT_ROOT" || fail "cannot set the mode of the export root"
+ensure_root_owned_directory "$EXPORT_ROOT" "the export root"
 
 acl_manifest_begin
 

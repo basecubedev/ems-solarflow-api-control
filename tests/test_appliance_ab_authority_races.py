@@ -25,12 +25,11 @@ from pathlib import Path
 
 import pytest
 
-from appliance import ab_bootstrap, ab_health, ab_state, os_update, source_bundle
+from appliance import ab_bootstrap, ab_health, os_update, source_bundle
 from appliance.ab_state import AbStateError, SlotRecord
 from appliance.os_update import OsUpdateError
 from tests.helpers.appliance_ab import SLOT_BOOT_PARTITION
 from tests.helpers.appliance_deployment import (
-    ADMIN_CONTAINER,
     ADMIN_SERVICE,
     EMS_CONTAINER,
     EMS_REFERENCE,
@@ -129,6 +128,70 @@ def test_a_source_bundle_altered_after_its_manifest_no_longer_matches(tmp_path):
 
     assert not report.ok
     assert "packaging/injected.sh" in report.unexpected
+
+
+def test_a_blocked_plan_never_replaces_the_authority_a_trial_is_bound_to(tmp_path):
+    """A second plan while a trial is in flight must not re-record anything."""
+
+    from appliance.operations import STATE_SUCCEEDED
+
+    appliance = PlannedAppliance(tmp_path)
+    operation, _payload = appliance.plan()
+    appliance.confirm_and_run(operation)
+    appliance.service.operations.finish(
+        operation.operation_id, STATE_SUCCEEDED, stage=os_update.STAGE_TRYBOOT_REQUESTED
+    )
+    armed = appliance.store.read()
+    seeds = dict(armed.seeds)
+
+    _second, payload = appliance.plan()
+
+    assert "ab_trial_pending" in {entry["code"] for entry in payload["blockers"]}
+    assert payload[os_update.CONFIRMED_AUTHORITY_FIELD] == {} or (
+        payload[os_update.CONFIRMED_AUTHORITY_FIELD]["deployment_fingerprint"] == ""
+    )
+    assert appliance.store.read().fingerprint == armed.fingerprint
+    assert appliance.store.read().seeds == seeds
+    assert appliance.service.state.pending().deployment_fingerprint == armed.fingerprint
+
+
+def test_a_deployment_that_changes_between_revalidation_and_arming_is_refused(tmp_path):
+    """The last window: execute revalidated, then the compose file moved."""
+
+    appliance = PlannedAppliance(tmp_path)
+    appliance.service.state.record_known_good(
+        SlotRecord(
+            slot="B",
+            release_version="1.4.0",
+            build_id="20260801-1",
+            artifact_digest="sha256:" + "a" * 64,
+        ),
+        previous_slot="B",
+    )
+    operation = appliance.service.operations.create(os_update.TYPE_OS_ROLLBACK)
+    appliance.service.plan_rollback(operation)
+    service = appliance.service
+    real = service._revalidate_deployment
+    calls = []
+
+    def drift_after_the_first_check(confirmed):
+        calls.append(len(calls) + 1)
+        record = real(confirmed)
+        if len(calls) == 1:
+            appliance.deployment.mutate_compose()
+        return record
+
+    service._revalidate_deployment = drift_after_the_first_check
+
+    with pytest.raises(OsUpdateError) as excinfo:
+        appliance.confirm_and_run(operation)
+
+    assert excinfo.value.code == "deployment_authority_drift"
+    assert calls == [1, 2]
+    assert appliance.service.state.pending() is None
+    record = appliance.service.operations.get(operation.operation_id)
+    assert record.result["inactive_slot_untouched"] is True
+    assert record.result["replan_required"] is True
 
 
 # --- phase 24: the crash matrix ----------------------------------------------

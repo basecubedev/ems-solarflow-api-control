@@ -333,6 +333,67 @@ Two traps worth knowing:
 After a run, review `git status --short docs/assets/screenshots` before
 committing.
 
+## Appliance tiers that need a real machine
+
+Three appliance claims cannot be settled by pytest, because what they assert is
+a property of a booted operating system, of a package manager, or of an image
+builder — not of a Python object. Each has a driver script; each reports PASS,
+FAIL or NOT RUN and never reports a skipped run as a pass.
+
+```bash
+# A packaged appliance in a Debian Trixie guest that really booted.
+scripts/appliance-smoke-vm-amd64.sh [--rpi-image-gen DIR] [--keep]
+
+# The real image builder, in a guest that is thrown away afterwards.
+scripts/appliance-builder-vm.sh --profile rpi5 [--profile rpi4] --output DIR
+
+# The strict release gate, in that same guest — the only host it can pass on.
+scripts/appliance-builder-vm.sh --release-gate --profile rpi5 --profile rpi4 --output DIR
+```
+
+The gate builds the images itself, so it needs the generator's prerequisites and
+cannot reach `RESULT: PASS` on a workstation that deliberately lacks them.
+`--release-gate` runs it where those prerequisites are, and brings the verdict
+and `dist/gates/` back out. The five mounted image checks stay NOT RUN inside
+the gate, because it runs unprivileged; answer them separately with
+`appliance-inspect-rpi-ab-image.sh --mount` as root in the same guest.
+
+Both need `qemu-system-x86_64`, `qemu-img`, a writable `/dev/kvm`, an ISO writer
+(`genisoimage` or `xorriso`) and network access to `cloud.debian.org`. The base
+image is cached under `$EMS_APPLIANCE_VM_CACHE` and verified against the
+published `SHA512SUMS` on every run. Nothing is installed on the developer host:
+`rpi-image-gen`'s dependency set — `mmdebstrap`, `podman`, `uidmap`, `pv`,
+`btrfs-progs`, `dctrl-tools`, `python3-jsonschema`, `cryptsetup`, `flex` — and
+the `qemu-aarch64` binfmt handler are installed inside the disposable guest.
+
+### Why a container is not enough
+
+The tier these replaced ran systemd inside a privileged container, and systemd
+never finished booting there. That is not a slow test, it is an absent one: a
+container that never builds a systemd transaction cannot disprove anything about
+unit ordering. Two defects lived behind it — a `Requires=` on a mount unit that
+only exists on an A/B image, which failed the install on every single-slot host,
+and a host key generation that could never succeed on a real appliance.
+
+### What the guest tier deliberately does not claim
+
+`appliance-guest-ab-systemd.sh` assembles an A/B appliance inside the guest from
+upstream's own generators and udev rules, and proves the six shared binds, the
+fail-open catch, the unit ordering, the failure propagation and the host
+identity. It does not produce a healthy A/B verdict, and says so: discovery
+anchors on `/proc/device-tree/chosen/bootloader/partition`, which the Raspberry
+Pi firmware writes and a generic QEMU guest does not have. Faking it would make
+the verdict a statement about the fake, so that case is reported NOT RUN and
+belongs to [../appliance/ab-hardware-validation.md](../appliance/ab-hardware-validation.md).
+
+### Reading the build back
+
+A build produces a `build-authority.json` beside the image. The inspectors
+(`appliance-inspect-rpi-ab-image.sh`, `appliance-inspect-rpi-ab-update.sh`) and
+the strict gate (`appliance-release-gates.sh`) read the artefacts rather than
+the build log, so a build that half-succeeded is caught by the thing that reads
+its output, not by the thing that produced it.
+
 ## What tests do not cover
 
 Automated tests reduce risk but do not replace real hardware validation: dry-run

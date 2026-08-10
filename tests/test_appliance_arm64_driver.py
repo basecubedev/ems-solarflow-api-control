@@ -453,81 +453,74 @@ def test_incompatible_firmware_sizes_report_not_run(sandbox):
 # --- the downloaded-image manifest ------------------------------------------
 
 
-def seed_mirror(sandbox, *, entry_name=None, checksum=None, with_signature=True):
-    """Publish an image plus a checksum manifest the driver can download."""
+def seed_pinned_cache(sandbox, *, content=None, digest=None):
+    """A cache and a lock the shared acquisition helper can answer from.
 
-    image = sandbox["mirror"] / "debian-13-genericcloud-arm64.qcow2"
-    image.write_bytes(sandbox["image"].read_bytes())
+    The driver no longer fetches its own image: every disposable guest in this
+    project resolves one pinned, digest-verified base image through
+    scripts/appliance-guest-base-image.sh. What this seeds is therefore a lock
+    and a cache entry, not a mirror.
+    """
+
     import hashlib
+    import json
 
-    digest = checksum or hashlib.sha512(image.read_bytes()).hexdigest()
-    manifest = sandbox["mirror"] / "SHA512SUMS"
-    manifest.write_text(f"{digest}  {entry_name or image.name}\n", encoding="utf-8")
-    if with_signature:
-        (sandbox["mirror"] / "SHA512SUMS.sign").write_bytes(b"signature")
-    return image
+    cache = sandbox["tmp"] / "vm-cache"
+    cache.mkdir(exist_ok=True)
+    payload = content if content is not None else sandbox["image"].read_bytes()
+    image = cache / "debian-13-genericcloud-arm64-testrun.qcow2"
+    image.write_bytes(payload)
+    lock = sandbox["tmp"] / "base-images.lock.json"
+    lock.write_text(
+        json.dumps(
+            {
+                "lock_version": 1,
+                "images": {
+                    "guest-arm64": {
+                        "filename": image.name,
+                        "url": "https://example.invalid/images/" + image.name,
+                        "sha512": digest or hashlib.sha512(payload).hexdigest(),
+                        "build_id": "testrun",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return {
+        "EMS_APPLIANCE_VM_CACHE": str(cache),
+        "EMS_APPLIANCE_VM_BASE_IMAGE_LOCK": str(lock),
+    }
 
 
 def download(sandbox, *arguments, **environment):
-    return run_driver(
-        sandbox,
-        *arguments,
-        EMS_ARM64_IMAGE_BASE="https://example.invalid/images",
-        **environment,
-    )
+    return run_driver(sandbox, *arguments, **environment)
 
 
-def test_a_signed_manifest_with_a_matching_checksum_runs(sandbox):
-    seed_mirror(sandbox)
-
-    result = download(sandbox)
+def test_the_pinned_base_image_is_accepted_and_the_driver_runs(sandbox):
+    result = download(sandbox, **seed_pinned_cache(sandbox))
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "RESULT: PASS" in result.stdout
     assert "UNVERIFIED INPUT" not in result.stdout + result.stderr
 
 
-def test_a_manifest_whose_signature_does_not_verify_is_refused(sandbox):
-    seed_mirror(sandbox)
+def test_a_cached_image_that_is_not_the_locked_one_is_refused(sandbox):
+    result = download(sandbox, **seed_pinned_cache(sandbox, digest="0" * 128))
 
-    result = download(sandbox, EMS_TEST_GPGV_RC="1")
-
-    assert result.returncode == EXIT_NOT_RUN, result.stdout + result.stderr
-    assert "RESULT: NOT RUN" in result.stderr
+    assert result.returncode != 0
+    assert "base_image_digest_mismatch" in result.stdout + result.stderr
 
 
-def test_a_signed_manifest_with_a_wrong_image_checksum_is_refused(sandbox):
-    seed_mirror(sandbox, checksum="0" * 128)
+def test_the_driver_never_fetches_a_floating_base_image():
+    text = (ROOT / "scripts/appliance-smoke-arm64.sh").read_text(encoding="utf-8")
 
-    result = download(sandbox)
-
-    assert result.returncode == EXIT_NOT_RUN, result.stdout + result.stderr
-
-
-def test_a_manifest_without_an_entry_for_the_image_is_refused(sandbox):
-    seed_mirror(sandbox, entry_name="some-other-image.qcow2")
-
-    result = download(sandbox)
-
-    assert result.returncode == EXIT_NOT_RUN, result.stdout + result.stderr
+    assert "appliance-guest-base-image.sh" in text
+    assert "base_image_unverified" in text
 
 
-def test_a_missing_signature_is_refused_without_the_override(sandbox):
-    seed_mirror(sandbox, with_signature=False)
-
-    result = download(sandbox)
-
-    assert result.returncode == EXIT_NOT_RUN, result.stdout + result.stderr
 
 
-def test_a_missing_signature_with_the_override_is_labelled(sandbox):
-    seed_mirror(sandbox, with_signature=False)
-
-    result = download(sandbox, "--allow-unverified-image")
-
-    combined = result.stdout + result.stderr
-    assert result.returncode == 0, combined
-    assert "UNVERIFIED INPUT" in combined, combined
 
 
 def test_a_manifest_that_cannot_be_downloaded_is_refused(sandbox):
@@ -540,32 +533,6 @@ def test_a_manifest_that_cannot_be_downloaded_is_refused(sandbox):
     assert "RESULT: NOT RUN" in result.stderr
 
 
-def test_a_keyring_that_does_not_verify_the_manifest_is_refused(sandbox):
-    """No configured keyring means nothing signed the manifest."""
-
-    seed_mirror(sandbox)
-
-    result = download(sandbox, EMS_ARM64_KEYRINGS=str(sandbox["tmp"] / "absent.gpg"))
-
-    assert result.returncode == EXIT_NOT_RUN, result.stdout + result.stderr
-    assert "signature could not be verified" in result.stderr, result.stderr
-
-
-def test_a_manifest_no_available_gpgv_can_verify_is_refused(sandbox):
-    """Without the stub, verification depends on whether the host ships gpgv.
-
-    Either branch must refuse: a missing gpgv is not permission to trust the
-    manifest, and a real gpgv rejects the fixture signature.
-    """
-
-    seed_mirror(sandbox)
-    (sandbox["stubs"] / "gpgv").unlink()
-
-    result = download(sandbox)
-
-    assert result.returncode == EXIT_NOT_RUN, result.stdout + result.stderr
-    assert "UNVERIFIED INPUT" not in result.stdout, result.stdout
-    assert "RESULT: NOT RUN" in result.stderr, result.stderr
 
 
 def test_the_unverified_override_cannot_be_combined_with_a_checksum(sandbox):

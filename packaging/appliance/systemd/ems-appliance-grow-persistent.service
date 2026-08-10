@@ -9,8 +9,7 @@ Documentation=file:///usr/share/doc/ems-appliance-manager/ab-persistence-contrac
 ConditionPathExists=/etc/ems-appliance-manager/ab-layout.json
 ConditionPathExists=!/persistent/.grown
 DefaultDependencies=no
-After=persistent.mount
-Requires=persistent.mount
+RequiresMountsFor=/persistent
 Before=ems-appliance-persistence.service local-fs.target
 
 [Service]

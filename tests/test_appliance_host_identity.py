@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from appliance import host_identity
-from appliance.commands import CommandResult, RecordingRunner
+from appliance.commands import CommandError, CommandResult, RecordingRunner
 from appliance.host_identity import (
     HostIdentityError,
     HostIdentityService,
@@ -317,6 +317,38 @@ def test_sshd_refusing_its_configuration_is_a_failure(tmp_path):
     assert "no host keys" in finding.detail
 
 
+@requires_keygen
+def test_a_missing_privilege_separation_directory_is_not_a_bad_configuration(tmp_path):
+    """sshd's runtime directory belongs to ssh.service, which has not started.
+
+    This unit is ordered Before=ssh.service, so /run/sshd — ssh.service's own
+    RuntimeDirectory — does not exist yet when it runs. ``sshd -t`` then exits
+    non-zero complaining about the directory rather than about the config, the
+    unit failed, and ssh.service Requires= it: SSH could never come up, and a
+    recovery that repaired the key directory never recovered. Found by driving
+    the recovery case in a booted guest.
+    """
+
+    root = appliance(tmp_path)
+
+    class NoPrivsepDir(RealKeygenRunner):
+        def run(self, tool, args=(), **kwargs):
+            if tool == "sshd":
+                self.calls.append((tool, tuple(args), None))
+                return CommandResult(
+                    tool, tuple(args), 255, "", "Missing privilege separation directory: /run/sshd"
+                )
+            return super().run(tool, args, **kwargs)
+
+    probe = service(root, runner=NoPrivsepDir({}))
+    probe.ensure()
+    finding = probe.validate_sshd()
+
+    assert finding.ok, finding.detail
+    assert "/run/sshd" in finding.detail
+    assert "not checked" in finding.detail.lower()
+
+
 def test_a_drop_in_naming_other_key_paths_is_refused(tmp_path):
     root = appliance(tmp_path, drop_in=False)
     target = root / "etc/ssh/sshd_config.d"
@@ -380,7 +412,8 @@ def test_the_unit_runs_before_everything_that_presents_the_appliance():
         ROOT / "packaging/appliance/systemd/ems-appliance-host-identity.service"
     ).read_text(encoding="utf-8")
 
-    assert "After=persistent.mount local-fs.target" in unit
+    assert "RequiresMountsFor=/persistent" in unit
+    assert "After=local-fs.target" in unit
     assert "RequiresMountsFor=/var/lib/ems-appliance-manager" in unit
     assert "Before=ems-appliance-persistence.service" in unit
     assert "Before=ssh.service sshd.service NetworkManager.service" in unit
@@ -395,3 +428,68 @@ def test_sshd_requires_the_initializer_in_the_image():
 
     assert "Requires=ems-appliance-host-identity.service" in drop_in
     assert "After=ems-appliance-host-identity.service" in drop_in
+
+
+# --- what "validated" is allowed to mean -------------------------------------
+
+
+def test_a_configuration_sshd_accepted_is_reported_as_valid():
+    service = HostIdentityService(
+        runner=RecordingRunner({("sshd", ("-t",)): (0, "", "")}),
+        root=Path("/nonexistent"),
+    )
+
+    finding = service.validate_sshd()
+
+    assert finding.ok is True
+    assert finding.status == host_identity.VALID
+    assert finding.to_dict()["state"] == "valid"
+
+
+def test_a_configuration_sshd_refused_is_reported_as_invalid():
+    service = HostIdentityService(
+        runner=RecordingRunner(
+            {("sshd", ("-t",)): (1, "", "/etc/ssh/sshd_config.d/50-ems.conf: bad option")}
+        ),
+        root=Path("/nonexistent"),
+    )
+
+    finding = service.validate_sshd()
+
+    assert finding.ok is False
+    assert finding.status == host_identity.INVALID
+    assert "bad option" in finding.detail
+
+
+def test_a_check_that_could_not_run_is_never_reported_as_validated():
+    """The reproduction: ok=True used to be the only way to say "not now"."""
+
+    service = HostIdentityService(
+        runner=RecordingRunner(
+            {("sshd", ("-t",)): (255, "", f"{host_identity.PRIVSEP_MISSING} /run/sshd")}
+        ),
+        root=Path("/nonexistent"),
+    )
+
+    finding = service.validate_sshd()
+
+    assert finding.status == host_identity.NOT_READY
+    assert finding.status != host_identity.VALID
+    assert "not checked" in finding.detail
+
+
+def test_an_uninstallable_sshd_is_not_ready_rather_than_invalid():
+    class Absent(RecordingRunner):
+        def run(self, tool, args=(), **kwargs):
+            raise CommandError("tool_unavailable", "sshd is not installed on this host")
+
+    service = HostIdentityService(runner=Absent({}), root=Path("/nonexistent"))
+
+    finding = service.validate_sshd()
+
+    assert finding.status == host_identity.NOT_READY
+    assert finding.ok is False
+
+
+def test_the_three_states_are_distinct():
+    assert len({host_identity.VALID, host_identity.NOT_READY, host_identity.INVALID}) == 3

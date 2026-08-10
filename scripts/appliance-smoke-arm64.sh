@@ -478,21 +478,22 @@ verify_downloaded_image() {
 }
 
 if [ -z "$BASE_IMAGE" ]; then
-    if ! command -v curl >/dev/null 2>&1; then
-        note_missing_requirement curl
-        fail_environment "curl is not installed (apt install curl)" required_tool_missing
-    fi
-    BASE_IMAGE="$WORK/$IMAGE_NAME"
-    echo "== downloading $IMAGE_BASE/$IMAGE_NAME =="
-    curl -fsSL -o "$BASE_IMAGE" "$IMAGE_BASE/$IMAGE_NAME" \
-        || fail_environment "cannot download the Debian 13 arm64 cloud image"
-    if verify_downloaded_image; then
-        VERIFIED=1
-    else
-        [ "$ALLOW_UNVERIFIED" -eq 1 ] \
-            || fail_environment "the downloaded image is unverified; pass --image or --allow-unverified-image"
-        echo "appliance-smoke-arm64: continuing with an unverified image on request" >&2
-    fi
+    # One acquisition policy for every disposable guest in this project: the
+    # digest packaging/appliance/vm/base-images.lock.json pins, re-checked
+    # immediately before the boot that uses it. A floating "latest" is not a
+    # base image a release tier may boot.
+    echo "== resolving the pinned arm64 base image =="
+    set +e
+    BASE_IMAGE=$(sh "$ROOT/scripts/appliance-guest-base-image.sh" --role guest-arm64)
+    base_status=$?
+    set -e
+    case "$base_status" in
+        0) VERIFIED=1 ;;
+        3) fail_environment "the pinned arm64 base image could not be obtained" \
+               base_image_unavailable ;;
+        *) fail_environment "the arm64 base image is not the one the lock pins" \
+               base_image_unverified ;;
+    esac
 fi
 [ -f "$BASE_IMAGE" ] || fail_environment "the base image $BASE_IMAGE does not exist"
 

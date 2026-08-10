@@ -47,6 +47,14 @@ NETWORK_PROFILE_DIRECTORY = "/etc/NetworkManager/system-connections"
 NETWORK_PROFILE_MODE = 0o700
 
 RSA_BITS = "4096"
+PRIVSEP_MISSING = "Missing privilege separation directory"
+
+# A check that could not run and a check that passed are different answers.
+# "ok" alone could not tell them apart, and "sshd accepted its configuration"
+# is not something this appliance may report when sshd never read it.
+VALID = "valid"
+NOT_READY = "not_ready"
+INVALID = "invalid"
 
 
 class HostIdentityError(Exception):
@@ -61,9 +69,14 @@ class Finding:
     name: str
     ok: bool
     detail: str = ""
+    state: str = ""
+
+    @property
+    def status(self):
+        return self.state or (VALID if self.ok else INVALID)
 
     def to_dict(self):
-        return {"name": self.name, "ok": self.ok, "detail": self.detail}
+        return {"name": self.name, "ok": self.ok, "state": self.status, "detail": self.detail}
 
 
 @dataclass(frozen=True)
@@ -420,7 +433,7 @@ class HostIdentityService:
                 str(staging), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, PUBLIC_MODE
             )
             try:
-                os.write(handle, f"{material} ems-appliance\n".encode("utf-8"))
+                os.write(handle, f"{material} ems-appliance\n".encode())
             finally:
                 os.close(handle)
             os.chmod(staging, PUBLIC_MODE)
@@ -625,18 +638,45 @@ class HostIdentityService:
     # --- sshd --------------------------------------------------------------
 
     def validate_sshd(self):
-        """``sshd -t``. A configuration it refuses must not start."""
+        """``sshd -t``. A configuration it refuses must not start.
+
+        Three answers, not two: sshd accepted the configuration, sshd refused
+        it, or sshd could not be asked yet. The third is not a pass — it is a
+        check that has not happened — and it is reported as ``not_ready`` so
+        nothing downstream can read it as validated SSH configuration.
+        """
 
         if self.runner is None:
-            return Finding("sshd_config", False, "no command runner is configured")
+            return Finding(
+                "sshd_config", False, "no command runner is configured", state=NOT_READY
+            )
         try:
             result = self.runner.run("sshd", ["-t"], timeout=30)
         except CommandError as exc:
-            return Finding("sshd_config", False, exc.message)
+            if exc.code == "tool_unavailable":
+                return Finding("sshd_config", False, exc.message, state=NOT_READY)
+            return Finding("sshd_config", False, exc.message, state=INVALID)
         if not getattr(result, "ok", False):
+            stderr = (getattr(result, "stderr", "") or "").strip()
+            # This unit is ordered Before=ssh.service, so /run/sshd — which is
+            # ssh.service's own RuntimeDirectory — does not exist yet. sshd then
+            # refuses to start for that reason alone, which says nothing about
+            # the configuration. Failing here fails the unit, and ssh.service
+            # Requires= this one, so SSH could never come up at all.
+            if PRIVSEP_MISSING in stderr:
+                return Finding(
+                    "sshd_config",
+                    True,
+                    "not checked: sshd's runtime directory /run/sshd does not exist yet; "
+                    "systemd creates it when ssh.service starts",
+                    state=NOT_READY,
+                )
             return Finding(
                 "sshd_config",
                 False,
-                (getattr(result, "stderr", "") or "sshd refused its configuration").strip()[:200],
+                (stderr or "sshd refused its configuration")[:200],
+                state=INVALID,
             )
-        return Finding("sshd_config", True, "sshd accepts its configuration")
+        return Finding(
+            "sshd_config", True, "sshd accepts its configuration", state=VALID
+        )

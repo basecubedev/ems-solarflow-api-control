@@ -333,6 +333,48 @@ def test_mapping_redaction_is_recursive():
     assert redacted["list"][0]["token"] == "***"
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "csrf_token=supersecret",
+        "api_token: supersecret",
+        "current_password=supersecret",
+        'ha_device_list_token="supersecret"',
+        '{"registry_token": "supersecret"}',
+    ],
+)
+def test_a_qualified_secret_name_is_still_a_secret(text):
+    """Only the bare name was redacted, so every qualified one leaked.
+
+    ``\\b`` cannot match between ``_`` and ``t``, so ``csrf_token=`` never
+    reached the rule that redacts ``token=``. The support archive is the last
+    thing standing between an operator's session and a bug report, and these
+    are the names this project actually uses.
+    """
+
+    assert "supersecret" not in redact_text(text)
+
+
+@pytest.mark.parametrize(
+    "key", ["csrf_token", "registry_token", "current_password", "client_secret_id"]
+)
+def test_a_qualified_secret_key_is_redacted_in_a_mapping(key):
+    """Mapping redaction compared the whole key, so a prefix defeated it."""
+
+    assert redact_mapping({key: "hunter2"})[key] == "***"
+
+
+@pytest.mark.parametrize("key", ["device_key", "public_key", "host_key_fingerprint"])
+def test_public_material_stays_readable(key):
+    """Over-redaction would empty the bundle of what it is collected for.
+
+    A fingerprint and a public key are the evidence an operator compares
+    against the appliance, so ``key`` is deliberately not a secret name.
+    """
+
+    assert redact_mapping({key: "SHA256:abc"})[key] == "SHA256:abc"
+
+
 def test_log_output_is_bounded_by_lines_and_bytes():
     clamped = clamp_log("\n".join(str(index) for index in range(5000)), max_lines=100)
     assert clamped["lines"] <= 100

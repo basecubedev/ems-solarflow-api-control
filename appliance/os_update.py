@@ -807,7 +807,7 @@ class OsUpdateService:
         if self.bootstrap is None:
             return None
         try:
-            record = self.bootstrap.record_running_runtime()
+            observed = self.bootstrap.observe_running_runtime()
         except Exception as exc:
             blockers.append(
                 {
@@ -816,7 +816,7 @@ class OsUpdateService:
                 }
             )
             return None
-        admin = record.image(ab_bootstrap.ROLE_ADMIN)
+        admin = observed.image(ab_bootstrap.ROLE_ADMIN)
         if admin is None or not admin.present:
             blockers.append(
                 {
@@ -828,7 +828,7 @@ class OsUpdateService:
                 }
             )
             return None
-        drift = self.bootstrap.deployment_drift(record)
+        drift = self.bootstrap.deployment_drift(observed)
         if drift:
             blockers.append(
                 {
@@ -837,7 +837,13 @@ class OsUpdateService:
                 }
             )
             return None
-        return record
+        # Only now is anything written. A plan that cannot be confirmed must
+        # not replace the deployment authority on the shared partition: a trial
+        # already in flight is bound to the fingerprint that is there, and
+        # re-recording it would make that trial fail a gate nothing had failed.
+        if blockers:
+            return None
+        return self.bootstrap.record_running_runtime()
 
     def _confirmed(self, write, deployment):
         return ConfirmedAuthority(
@@ -1125,6 +1131,11 @@ class OsUpdateService:
         try:
             fingerprint = self._trial_deployment_authority(confirmed)
         except OsUpdateError as exc:
+            # A rollback wrote nothing: its target slot still holds the build the
+            # known-good history recorded, so the honest report is the
+            # non-destructive one.
+            if kind == "rollback":
+                self._fail_before_write(operation, authority, exc.code, exc.message)
             self._fail_after_write(operation, authority, exc.code, exc.message)
         seeded = self._seed_runtime()
         trial = self.pending_trial(

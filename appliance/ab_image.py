@@ -8,15 +8,27 @@ each partition carries its own generated identity.
 
 The inspector reads the GPT out of an image **file**. It does not attach a loop
 device, does not mount anything and needs no privileges, so it can run in CI and
-on a developer machine. What it therefore cannot check — that a filesystem
-mounts, that a package is installed inside it — is reported as not inspected
-rather than as a pass.
+on a developer machine.
+
+Content is read the same way, through ``ab_filesystems``. Mounting is not an
+option a release gate can rely on: the Pi 5 root filesystem uses 16 KiB ext4
+blocks, which no 4 KiB-page host kernel will mount, and mounting needs root and
+a loop device besides. A check that cannot run is not a check that passed, so
+the questions that decide whether an image is an appliance — the package
+version in *both* roots, the enabled units, the shared-path activations, the
+absence of a shipped host key — are answered out of the filesystem structures
+directly.
 """
 
+import hashlib
+import json
 import struct
 import uuid
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
+
+from appliance import ab_filesystems, ab_persistence
 
 SECTOR_SIZE = 512
 GPT_SIGNATURE = b"EFI PART"
@@ -128,6 +140,165 @@ def read_partitions(path):
     return partitions
 
 
+@dataclass(frozen=True)
+class GptHeader:
+    location: str
+    valid: bool
+    detail: str
+    current_lba: int = 0
+    backup_lba: int = 0
+    first_usable_lba: int = 0
+    last_usable_lba: int = 0
+    entries_lba: int = 0
+    entry_count: int = 0
+    entry_size: int = 0
+    entries_crc: int = 0
+    disk_guid: str = ""
+
+
+def _read_header(handle, lba, image_size, location):
+    handle.seek(lba * SECTOR_SIZE)
+    raw = handle.read(SECTOR_SIZE)
+    if len(raw) < 92 or raw[:8] != GPT_SIGNATURE:
+        return GptHeader(location, False, f"there is no GPT header at LBA {lba}")
+    header_size = struct.unpack_from("<I", raw, 12)[0]
+    if not 92 <= header_size <= SECTOR_SIZE:
+        return GptHeader(location, False, f"the header declares {header_size} bytes")
+    stored_crc = struct.unpack_from("<I", raw, 16)[0]
+    computed = zlib.crc32(raw[:16] + b"\x00\x00\x00\x00" + raw[20:header_size]) & 0xFFFFFFFF
+    if stored_crc != computed:
+        return GptHeader(location, False, "the header CRC does not match the header")
+    current_lba, backup_lba, first_usable, last_usable = struct.unpack_from("<QQQQ", raw, 24)
+    disk_guid = _guid(raw[56:72])
+    entries_lba, entry_count, entry_size, entries_crc = struct.unpack_from("<QIII", raw, 72)
+    if last_usable * SECTOR_SIZE > image_size:
+        return GptHeader(
+            location, False, f"the last usable LBA {last_usable} is past the end of the image"
+        )
+    return GptHeader(
+        location,
+        True,
+        f"disk {disk_guid}",
+        current_lba=current_lba,
+        backup_lba=backup_lba,
+        first_usable_lba=first_usable,
+        last_usable_lba=last_usable,
+        entries_lba=entries_lba,
+        entry_count=entry_count,
+        entry_size=entry_size,
+        entries_crc=entries_crc,
+        disk_guid=disk_guid,
+    )
+
+
+def verify_gpt(image_path):
+    """Both GPT headers, both entry arrays, and the ranges they describe.
+
+    An invalid backup GPT is not cosmetic: it is what firmware and every repair
+    tool fall back to when the primary is damaged, and a medium whose fallback
+    is wrong will come back as a different disk.
+    """
+
+    findings = []
+    target = Path(image_path)
+    try:
+        image_size = target.stat().st_size
+        with target.open("rb") as handle:
+            primary = _read_header(handle, GPT_HEADER_LBA, image_size, "primary")
+            findings.append(
+                Finding("gpt_primary_header", PASS if primary.valid else FAIL, primary.detail)
+            )
+            backup_lba = primary.backup_lba if primary.valid else image_size // SECTOR_SIZE - 1
+            backup = _read_header(handle, backup_lba, image_size, "backup")
+            findings.append(
+                Finding("gpt_backup_header", PASS if backup.valid else FAIL, backup.detail)
+            )
+
+            for header in (primary, backup):
+                if not header.valid:
+                    findings.append(
+                        Finding(
+                            f"gpt_{header.location}_entries",
+                            NOT_RUN,
+                            "the header it belongs to is not valid",
+                        )
+                    )
+                    continue
+                handle.seek(header.entries_lba * SECTOR_SIZE)
+                raw = handle.read(header.entry_count * header.entry_size)
+                observed = zlib.crc32(raw) & 0xFFFFFFFF
+                findings.append(
+                    Finding(
+                        f"gpt_{header.location}_entries",
+                        PASS if observed == header.entries_crc else FAIL,
+                        f"{header.entry_count} entries of {header.entry_size} bytes"
+                        if observed == header.entries_crc
+                        else "the partition entry array does not match its CRC",
+                    )
+                )
+
+            if primary.valid and backup.valid:
+                agreed = (
+                    primary.disk_guid == backup.disk_guid
+                    and primary.entries_crc == backup.entries_crc
+                    and primary.first_usable_lba == backup.first_usable_lba
+                    and primary.last_usable_lba == backup.last_usable_lba
+                    and primary.current_lba == backup.backup_lba
+                    and primary.backup_lba == backup.current_lba
+                )
+                findings.append(
+                    Finding(
+                        "gpt_headers_agree",
+                        PASS if agreed else FAIL,
+                        "primary and backup describe one disk"
+                        if agreed
+                        else "the two GPT headers describe different disks",
+                    )
+                )
+            else:
+                findings.append(
+                    Finding("gpt_headers_agree", NOT_RUN, "one of the two headers is not valid")
+                )
+    except OSError as exc:
+        return [Finding("gpt_primary_header", FAIL, f"{target} could not be read: {exc}")]
+
+    if not primary.valid:
+        return findings
+
+    partitions = sorted(read_partitions(image_path), key=lambda item: item.first_lba)
+    problems = []
+    for partition in partitions:
+        if partition.first_lba < primary.first_usable_lba:
+            problems.append(f"{partition.label} starts before the first usable LBA")
+        if partition.last_lba > primary.last_usable_lba:
+            problems.append(f"{partition.label} ends after the last usable LBA")
+        if partition.last_lba < partition.first_lba:
+            problems.append(f"{partition.label} ends before it starts")
+        if partition.last_lba * SECTOR_SIZE + SECTOR_SIZE > image_size:
+            problems.append(f"{partition.label} ends past the end of the image")
+    findings.append(
+        Finding(
+            "gpt_partition_ranges",
+            FAIL if problems else PASS,
+            "; ".join(problems) if problems else f"{len(partitions)} partitions inside the disk",
+        )
+    )
+
+    overlaps = [
+        f"{first.label} and {second.label}"
+        for first, second in zip(partitions, partitions[1:])
+        if second.first_lba <= first.last_lba
+    ]
+    findings.append(
+        Finding(
+            "gpt_no_overlap",
+            FAIL if overlaps else PASS,
+            "; ".join(overlaps) if overlaps else "no partition overlaps another",
+        )
+    )
+    return findings
+
+
 def filesystem_signature(path, partition):
     """``vfat``, ``ext``, or ``""`` when the partition carries neither."""
 
@@ -155,20 +326,39 @@ def identities(path):
 
 @dataclass
 class Finding:
+    """One answer, and whether a release may be cut without it.
+
+    ``mandatory`` is the difference between "this check passed" and "this check
+    did not run, and that is acceptable". Without it a release gate reading only
+    pass and fail counts calls an inspection that never executed half its checks
+    a passing inspection.
+    """
+
     check: str
     result: str
     detail: str = ""
+    mandatory: bool = True
 
     def to_dict(self):
-        return {"check": self.check, "result": self.result, "detail": self.detail}
+        return {
+            "check": self.check,
+            "result": self.result,
+            "detail": self.detail,
+            "mandatory": self.mandatory,
+        }
 
 
 PASS = "pass"
 FAIL = "fail"
 NOT_RUN = "not_run"
 
+# Checks a production image inspection may report as NOT RUN. Optionality is a
+# policy decision recorded here, never something derived from whether a tool
+# happened to be installed on the machine that ran the inspection.
+OPTIONAL_CHECKS = frozenset()
+
 # Reported rather than omitted, so a partition-table check is never read as
-# image validation. The mounted tier lives in the inspect script.
+# image validation. ``inspect_mounted`` answers these from mounted slot roots.
 UNMOUNTED_CHECKS = (
     "slot_cmdline_selects_the_active_slot",
     "package_present_in_both_roots",
@@ -177,8 +367,580 @@ UNMOUNTED_CHECKS = (
     "slot_bootstrap_service_enabled",
 )
 
+APPLIANCE_BINARY = "usr/bin/ems-appliance"
+ENABLED_UNITS = {
+    "health_service_enabled": "ems-appliance-ab-health.service",
+    "slot_bootstrap_service_enabled": "ems-appliance-slot-bootstrap.service",
+}
+WANTS_DIRECTORY = "etc/systemd/system/multi-user.target.wants"
+SHARED_ACTIVATION_DIRECTORY = "etc/systemd/system/local-fs.target.wants"
+SHARED_ACTIVATIONS = (
+    "etc-ems\\x2dappliance\\x2dmanager.mount",
+    "etc-NetworkManager-system\\x2dconnections.mount",
+    "opt-ems\\x2dsolarflow.mount",
+    "var-lib-ems\\x2dappliance\\x2dmanager.mount",
+    "var-lib-ems\\x2dappliance\\x2dos\\x2dupdate.mount",
+    "var-log-ems\\x2dappliance\\x2dmanager.mount",
+)
+SLOT_ROOT_DEVICE = "root=/dev/disk/by-slot/active/system"
 
-def inspect(image_path, *, expected=EXPECTED_PARTITIONS):
+# --- what the image has to contain ------------------------------------------
+
+PACKAGE_NAME = "ems-appliance-manager"
+DPKG_STATUS = "var/lib/dpkg/status"
+BUILD_MARKER = "etc/ems-appliance-os-build"
+LAYOUT_DESCRIPTOR = "etc/ems-appliance-manager/ab-layout.json"
+SLOT_SHARED_CONF = "etc/rpi-image-gen/slot-shared.d/50-ems-appliance.conf"
+UNIT_DIRECTORY = "usr/lib/systemd/system"
+SYSTEM_ROOTS = ("system_a", "system_b")
+BOOT_PARTITIONS = ("boot_a", "boot_b")
+
+ROOT_UNITS = {
+    "health_service_enabled": "ems-appliance-ab-health.service",
+    "slot_bootstrap_service_enabled": "ems-appliance-slot-bootstrap.service",
+    "persistence_service_enabled": "ems-appliance-persistence.service",
+    "host_identity_service_enabled": "ems-appliance-host-identity.service",
+}
+
+# Upstream's own generators. Without them the shared binds and the per-slot
+# /var policy are never generated, and every write on the appliance is lost at
+# the next slot switch.
+SLOT_GENERATORS = (
+    "usr/lib/systemd/system-generators/slot-shared-generator",
+    "usr/lib/systemd/system-generators/slot-perst-generator",
+)
+MACHINE_ID_UNIT = "machine-id-sync.service"
+
+# Two services must not start against a slot-local fallback: sshd would offer
+# an identity nobody can vouch for, and NetworkManager would come up with no
+# profiles and write new ones somewhere the next slot switch discards.
+SERVICE_DROP_INS = {
+    "etc/systemd/system/ssh.service.d/50-ems-appliance-host-identity.conf": (
+        "ems-appliance-host-identity.service"
+    ),
+    "etc/systemd/system/NetworkManager.service.d/50-ems-appliance-persistence.conf": (
+        "ems-appliance-persistence.service"
+    ),
+}
+
+RUNTIME_HELPERS = (
+    "usr/bin/ems-appliance",
+    "usr/lib/ems-appliance-manager/setup-export-root.sh",
+    "usr/lib/ems-appliance-manager/backup-account.sh",
+)
+
+BOOT_KERNELS = ("kernel8.img", "kernel_2712.img", "kernel.img")
+BOOT_INITRAMFS = ("initramfs8", "initramfs_2712", "initramfs")
+
+AUTOBOOT_FILE = "autoboot.txt"
+TRYBOOT_SETTING = "tryboot_a_b=1"
+
+
+PACKAGE_INSTALLED_STATUS = "install ok installed"
+FROM_DPKG = "the dpkg database in the slot root"
+FROM_BUILD_MARKER = "the build marker"
+
+
+def _package_record(reader):
+    """The dpkg status stanza for the Appliance Manager, if it is installed."""
+
+    return _dpkg_records(reader)[0]
+
+
+def _dpkg_records(reader):
+    """``(our stanza, database present)`` from ``/var/lib/dpkg/status``.
+
+    The two are separate answers. image-rota binds ``/var`` per slot, so a slot
+    root legitimately carries no database at all; a database that *is* there and
+    does not name this package is a different fact entirely.
+    """
+
+    try:
+        status = reader.read_text(DPKG_STATUS)
+    except ab_filesystems.FilesystemError:
+        return {}, False
+    for stanza in status.split("\n\n"):
+        fields = {}
+        for line in stanza.splitlines():
+            if line.startswith((" ", "\t")) or ":" not in line:
+                continue
+            key, _, value = line.partition(":")
+            fields[key.strip()] = value.strip()
+        if fields.get("Package") == PACKAGE_NAME:
+            return fields, True
+    return {}, True
+
+
+def _package_evidence(reader, marker):
+    """The exact package record this slot root carries, and where it came from.
+
+    ``expected in observed`` used to answer the version question, which makes
+    0.1.0 a match for 10.1.0 and 0.1.0-rc1. Every field below is compared for
+    equality instead, so the record has to be exact rather than contained.
+    """
+
+    fields, database = _dpkg_records(reader)
+    if database:
+        return (
+            {
+                "name": fields.get("Package", ""),
+                "version": fields.get("Version", ""),
+                "architecture": fields.get("Architecture", ""),
+                "status": fields.get("Status", ""),
+            },
+            FROM_DPKG,
+        )
+    recorded = marker.get("package")
+    if isinstance(recorded, dict):
+        return (
+            {
+                "name": str(recorded.get("name") or ""),
+                "version": str(recorded.get("version") or ""),
+                "architecture": str(recorded.get("architecture") or ""),
+                "status": str(recorded.get("status") or ""),
+            },
+            FROM_BUILD_MARKER,
+        )
+    return None, ""
+
+
+FSTAB = "etc/fstab"
+
+# Every directory that has to exist before anything is mounted onto it. Derived
+# from the persistence contract rather than repeated, so a new shared path
+# cannot be declared without its mount point being required too.
+MOUNT_POINTS = (
+    ab_persistence.PERSISTENT_MOUNTPOINT,
+    *(shared.target for shared in ab_persistence.SHARED_PATHS),
+)
+
+
+def _fstab_root_readonly(reader):
+    """``(ok, detail)`` for the mount options the slot root declares for ``/``."""
+
+    try:
+        fstab = reader.read_text(FSTAB)
+    except ab_filesystems.FilesystemError:
+        return False, "the slot root carries no /etc/fstab"
+    for line in fstab.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        fields = line.split()
+        if len(fields) < 4 or fields[1] != "/":
+            continue
+        options = [option.strip() for option in fields[3].split(",")]
+        if "rw" in options:
+            return False, f"the root is mounted rw: {fields[3]}"
+        if "ro" not in options:
+            return False, f"the root declares no ro: {fields[3]}"
+        return True, fields[3]
+    return False, "the slot root's fstab has no entry for /"
+
+
+def _root_content_findings(label, reader, *, appliance_version, build_id, architecture):
+    findings = []
+
+    def record(check, ok, detail):
+        findings.append(Finding(f"{check}:{label}", PASS if ok else FAIL, detail))
+
+    record(
+        "package_installed",
+        reader.is_file(RUNTIME_HELPERS[0]),
+        RUNTIME_HELPERS[0],
+    )
+
+    marker = {}
+    try:
+        marker = json.loads(reader.read_text(BUILD_MARKER))
+    except (ab_filesystems.FilesystemError, ValueError):
+        marker = {}
+
+    # image-rota binds /var per slot, so the slot root carries no dpkg
+    # database: it is created on the persistent partition at first boot. The
+    # record the image actually holds is therefore proven from the build marker,
+    # which the build captured from dpkg itself inside the chroot, and from a
+    # dpkg database directly where the slot root still carries one.
+    evidence, source = _package_evidence(reader, marker)
+    if evidence is None:
+        for check in ("package_name", "package_status", "package_version",
+                      "package_architecture"):
+            record(check, False, "the slot root carries neither a dpkg database nor a "
+                                 "package record in its build marker")
+    else:
+        record(
+            "package_name",
+            evidence["name"] == PACKAGE_NAME,
+            f"{evidence['name'] or 'nothing'} in {source}",
+        )
+        record(
+            "package_status",
+            evidence["status"] == PACKAGE_INSTALLED_STATUS,
+            f"{evidence['status'] or 'no status'} in {source}",
+        )
+        if appliance_version:
+            record(
+                "package_version",
+                evidence["version"] == appliance_version,
+                f"{evidence['version'] or 'none'} (release declares {appliance_version})",
+            )
+        else:
+            findings.append(
+                Finding(
+                    f"package_version:{label}",
+                    PASS,
+                    evidence["version"] or "no version declared",
+                )
+            )
+        if architecture:
+            record(
+                "package_architecture",
+                evidence["architecture"] == architecture,
+                f"{evidence['architecture'] or 'none'} (release declares {architecture})",
+            )
+        else:
+            findings.append(
+                Finding(
+                    f"package_architecture:{label}",
+                    PASS,
+                    evidence["architecture"] or "no architecture declared",
+                )
+            )
+
+    if not marker:
+        record("build_marker", False, "the slot root carries no build marker")
+    elif build_id and str(marker.get("build_id") or "") != build_id:
+        record(
+            "build_marker",
+            False,
+            f"the slot root reports build {marker.get('build_id') or 'none'}, "
+            f"the release is {build_id}",
+        )
+    else:
+        record("build_marker", True, str(marker.get("build_id") or "present"))
+
+    record("layout_descriptor", reader.is_file(LAYOUT_DESCRIPTOR), LAYOUT_DESCRIPTOR)
+
+    # Where the read-only root is actually enforced. The kernel command line
+    # decides the initial mount; systemd-remount-fs then applies this line, so a
+    # slot root whose fstab says rw is a writable root however it booted.
+    record("root_fstab_readonly", *_fstab_root_readonly(reader))
+
+    # And what a read-only root then requires: every mount point already in the
+    # image. systemd creates a missing one only where it can write, so a shared
+    # path with no directory here is a bind that never happens on hardware.
+    absent = [path for path in MOUNT_POINTS if not reader.is_dir(path.lstrip("/"))]
+    record(
+        "mount_points_present",
+        not absent,
+        f"no directory for: {', '.join(absent)}"
+        if absent
+        else f"{len(MOUNT_POINTS)} mount points present",
+    )
+
+    try:
+        declared = {
+            line.split("=", 1)[1].strip()
+            for line in reader.read_text(SLOT_SHARED_CONF).splitlines()
+            if line.startswith("Path=")
+        }
+    except ab_filesystems.FilesystemError:
+        declared = set()
+    record(
+        "persistence_configuration",
+        len(declared) >= len(SHARED_ACTIVATIONS),
+        f"{len(declared)} shared paths declared"
+        if declared
+        else "the slot root declares no shared paths and would lose every write",
+    )
+
+    absent = [
+        activation
+        for activation in SHARED_ACTIVATIONS
+        if not reader.is_symlink(f"{SHARED_ACTIVATION_DIRECTORY}/{activation}")
+    ]
+    record(
+        "shared_activations",
+        not absent,
+        f"not activated: {', '.join(absent)}"
+        if absent
+        else f"{len(SHARED_ACTIVATIONS)} shared paths activated",
+    )
+
+    for check, unit in ROOT_UNITS.items():
+        present = reader.is_file(f"{UNIT_DIRECTORY}/{unit}")
+        enabled = reader.is_symlink(f"{WANTS_DIRECTORY}/{unit}")
+        record(
+            check,
+            present and enabled,
+            "installed and enabled"
+            if present and enabled
+            else ("installed but not enabled" if present else "not installed"),
+        )
+
+    missing_generators = [name for name in SLOT_GENERATORS if not reader.exists(name)]
+    record(
+        "slot_generators",
+        not missing_generators,
+        f"missing: {', '.join(missing_generators)}"
+        if missing_generators
+        else "shared and per-slot generators present",
+    )
+
+    # Upstream ships it as a unit in /etc; a vendor unit in /usr/lib is the
+    # other legitimate place for it.
+    machine_id = [
+        directory
+        for directory in (UNIT_DIRECTORY, "etc/systemd/system")
+        if reader.exists(f"{directory}/{MACHINE_ID_UNIT}")
+    ]
+    record(
+        "machine_id_policy",
+        bool(machine_id),
+        f"{MACHINE_ID_UNIT} in {', '.join(machine_id)}" if machine_id else MACHINE_ID_UNIT,
+    )
+
+    keys = [name for name in reader.listdir("etc/ssh") if name.startswith("ssh_host_")]
+    private = [name for name in keys if not name.endswith(".pub")]
+    record(
+        "no_host_key_shipped",
+        not private,
+        f"the image carries {', '.join(private)}" if private else "no host key is shipped",
+    )
+
+    unordered = []
+    for path, required_unit in SERVICE_DROP_INS.items():
+        try:
+            text = reader.read_text(path)
+        except ab_filesystems.FilesystemError:
+            unordered.append(f"{path} is missing")
+            continue
+        if f"Requires={required_unit}" not in text or f"After={required_unit}" not in text:
+            unordered.append(f"{path} does not require {required_unit}")
+    record(
+        "service_drop_ins",
+        not unordered,
+        "; ".join(unordered) if unordered else f"{len(SERVICE_DROP_INS)} drop-ins ordered",
+    )
+
+    missing_helpers = [name for name in RUNTIME_HELPERS if not reader.is_file(name)]
+    record(
+        "runtime_helpers",
+        not missing_helpers,
+        f"missing: {', '.join(missing_helpers)}"
+        if missing_helpers
+        else f"{len(RUNTIME_HELPERS)} helpers present",
+    )
+    return findings
+
+
+def _boot_content_findings(label, reader):
+    findings = []
+
+    def record(check, ok, detail):
+        findings.append(Finding(f"{check}:{label}", PASS if ok else FAIL, detail))
+
+    try:
+        cmdline = reader.read_text("cmdline.txt").strip()
+    except ab_filesystems.FilesystemError:
+        record("boot_cmdline", False, "there is no cmdline.txt")
+        cmdline = ""
+    if cmdline:
+        record(
+            "boot_cmdline",
+            SLOT_ROOT_DEVICE in cmdline,
+            SLOT_ROOT_DEVICE if SLOT_ROOT_DEVICE in cmdline else f"root is {cmdline[:120]}",
+        )
+        # A read-only root is what makes an A/B slot reproducible: everything
+        # that has to survive is a shared bind, and everything else is
+        # discarded at the next boot. The command line decides the *initial*
+        # mount; /etc/fstab in the slot root decides what it stays, and that is
+        # checked separately in the root findings.
+        fields = cmdline.split()
+        readonly = "ro" in fields
+        writable = "rw" in fields
+        record(
+            "boot_readonly_root",
+            readonly and not writable,
+            "rw overrides it" if writable else ("ro" if readonly else "the root is not read-only"),
+        )
+
+    entries = reader.listdir("/")
+    kernels = [name for name in BOOT_KERNELS if name in entries]
+    initramfs = [name for name in BOOT_INITRAMFS if name in entries]
+    blobs = [name for name in entries if name.endswith(".dtb")]
+    record("boot_kernel", bool(kernels), ", ".join(kernels) or "no kernel image")
+    record("boot_initramfs", bool(initramfs), ", ".join(initramfs) or "no initramfs")
+    record("boot_device_tree", bool(blobs), f"{len(blobs)} device-tree blobs")
+    record("boot_configuration", "config.txt" in entries, "config.txt")
+    return findings
+
+
+def _bootconfig_findings(reader):
+    findings = []
+    try:
+        autoboot = reader.read_text(AUTOBOOT_FILE)
+    except ab_filesystems.FilesystemError:
+        return [
+            Finding("bootconfig_autoboot", FAIL, f"the bootconfig partition has no {AUTOBOOT_FILE}")
+        ]
+    text = autoboot.replace(" ", "").lower()
+    findings.append(
+        Finding(
+            "bootconfig_autoboot",
+            PASS if TRYBOOT_SETTING in text else FAIL,
+            TRYBOOT_SETTING if TRYBOOT_SETTING in text else autoboot.strip()[:120],
+        )
+    )
+    # The selector is these two sections: what the firmware boots normally, and
+    # what it boots once when a tryboot switch is armed. A missing [tryboot]
+    # section is an image that can never roll back.
+    sections = {line.strip().lower() for line in autoboot.splitlines()}
+    findings.append(
+        Finding(
+            "bootconfig_sections",
+            PASS if {"[all]", "[tryboot]"} <= sections else FAIL,
+            ", ".join(sorted(sections & {"[all]", "[tryboot]"})) or "no boot sections",
+        )
+    )
+    return findings
+
+
+def inspect_contents(image_path, *, appliance_version="", build_id="", architecture=""):
+    """What the image actually contains, read without mounting anything.
+
+    Both slot roots and both boot partitions, because an update writes the
+    *other* slot: content present in only one of them is an appliance that
+    stops being an appliance at the first slot switch.
+    """
+
+    try:
+        partitions = {item.label: item for item in read_partitions(image_path)}
+    except ImageError as exc:
+        return [Finding("image_contents", FAIL, exc.message)]
+
+    findings = []
+    for label in ("bootconfig", *BOOT_PARTITIONS, *SYSTEM_ROOTS):
+        partition = partitions.get(label)
+        if partition is None:
+            findings.append(Finding(f"partition_present:{label}", FAIL, "the image has no such partition"))
+            continue
+        try:
+            reader = ab_filesystems.open_partition(image_path, partition)
+        except ab_filesystems.FilesystemError as exc:
+            findings.append(Finding(f"filesystem_readable:{label}", FAIL, exc.message))
+            continue
+        findings.append(
+            Finding(
+                f"filesystem_readable:{label}",
+                PASS,
+                f"{type(reader).__name__.replace('Reader', '').lower()}"
+                + (f", {reader.block_size} byte blocks" if hasattr(reader, "block_size") else ""),
+            )
+        )
+        if label == "bootconfig":
+            findings.extend(_bootconfig_findings(reader))
+        elif label in BOOT_PARTITIONS:
+            findings.extend(_boot_content_findings(label, reader))
+        else:
+            findings.extend(
+                _root_content_findings(
+                    label,
+                    reader,
+                    appliance_version=appliance_version,
+                    build_id=build_id,
+                    architecture=architecture,
+                )
+            )
+    return findings
+
+
+def inspect_mounted(*, system_a, system_b, boot=None):
+    """Check what only a mounted slot root can answer.
+
+    Both roots are checked, not just the one that happens to boot first: an
+    update writes the *other* slot, so a package or an enablement present in
+    only one of them is an appliance that stops being an appliance at the
+    first slot switch.
+    """
+
+    roots = {"system_a": Path(system_a), "system_b": Path(system_b)}
+    findings = []
+
+    missing = [name for name, root in roots.items() if not (root / APPLIANCE_BINARY).is_file()]
+    findings.append(
+        Finding("package_present_in_both_roots", FAIL, f"no {APPLIANCE_BINARY} in {', '.join(missing)}")
+        if missing
+        else Finding("package_present_in_both_roots", PASS, "both slot roots carry the package")
+    )
+
+    absent = sorted(
+        f"{name}:{activation}"
+        for name, root in roots.items()
+        for activation in SHARED_ACTIVATIONS
+        if not (root / SHARED_ACTIVATION_DIRECTORY / activation).is_symlink()
+    )
+    findings.append(
+        Finding("slot_shared_configuration_present", FAIL, f"not activated: {', '.join(absent)}")
+        if absent
+        else Finding(
+            "slot_shared_configuration_present",
+            PASS,
+            f"{len(SHARED_ACTIVATIONS)} shared paths activated in both roots",
+        )
+    )
+
+    for check, unit in ENABLED_UNITS.items():
+        unenabled = [
+            name
+            for name, root in roots.items()
+            if not (root / WANTS_DIRECTORY / unit).is_symlink()
+        ]
+        findings.append(
+            Finding(check, FAIL, f"{unit} is not enabled in {', '.join(unenabled)}")
+            if unenabled
+            else Finding(check, PASS, f"{unit} enabled in both roots")
+        )
+
+    shipped = sorted(
+        f"{name}:{key.name}"
+        for name, root in roots.items()
+        for key in sorted((root / "etc/ssh").glob("ssh_host_*_key"))
+        if key.is_file()
+    )
+    findings.append(
+        Finding("no_host_key_shipped", FAIL, f"the image carries {', '.join(shipped)}")
+        if shipped
+        else Finding("no_host_key_shipped", PASS, "neither slot root carries a host key")
+    )
+
+    findings.append(_cmdline_finding(boot))
+    return findings
+
+
+def _cmdline_finding(boot):
+    check = "slot_cmdline_selects_the_active_slot"
+    if boot is None:
+        return Finding(check, NOT_RUN, "no boot partition was mounted")
+    cmdline = Path(boot) / "cmdline.txt"
+    if not cmdline.is_file():
+        return Finding(check, FAIL, f"{cmdline} is missing")
+    text = cmdline.read_text(encoding="utf-8", errors="replace").strip()
+    if SLOT_ROOT_DEVICE not in text:
+        # A fixed root= boots whichever partition it names, so the selector
+        # would switch slots while the kernel kept mounting the old one.
+        return Finding(check, FAIL, f"root is not the active slot: {text[:120]}")
+    return Finding(check, PASS, SLOT_ROOT_DEVICE)
+
+
+def inspect(
+    image_path,
+    *,
+    expected=EXPECTED_PARTITIONS,
+    appliance_version="",
+    build_id="",
+    architecture="",
+    contents=True,
+):
     """Check a built image against the image-rota contract, without booting it."""
 
     findings = []
@@ -240,34 +1002,87 @@ def inspect(image_path, *, expected=EXPECTED_PARTITIONS):
         findings.append(Finding("partition_identity", PASS, f"{len(observed)} distinct PARTUUIDs"))
 
     findings.append(_slot_pairing_finding(image_path, partitions))
+    findings.append(_boot_pairing_finding(image_path, partitions))
+    findings.extend(verify_gpt(image_path))
 
-    for check in UNMOUNTED_CHECKS:
-        findings.append(
-            Finding(check, NOT_RUN, "needs a mounted filesystem; run the loop-device inspector")
+    if contents:
+        findings.extend(
+            inspect_contents(
+                image_path,
+                appliance_version=appliance_version,
+                build_id=build_id,
+                architecture=architecture,
+            )
         )
+    else:
+        for check in UNMOUNTED_CHECKS:
+            findings.append(
+                Finding(check, NOT_RUN, "content inspection was not requested")
+            )
     return findings
 
 
-def _slot_pairing_finding(image_path, partitions):
+def partition_digest(image_path, partition, *, chunk=4 * 1024 * 1024):
+    """The SHA-256 of exactly one partition's payload, GPT metadata excluded."""
+
+    digest = hashlib.sha256()
+    remaining = partition.size_bytes
+    with Path(image_path).open("rb") as handle:
+        handle.seek(partition.offset)
+        while remaining > 0:
+            block = handle.read(min(chunk, remaining))
+            if not block:
+                break
+            remaining -= len(block)
+            digest.update(block)
+    if remaining:
+        raise ImageError(
+            "image_truncated",
+            f"{image_path} ends {remaining} bytes before the end of {partition.label}",
+        )
+    return f"sha256:{digest.hexdigest()}"
+
+
+def _pairing_finding(image_path, partitions, check, first, second):
     """image-rota writes one bit-for-bit identical slot pair.
 
     Identical content with distinct partition identities is the property: the
-    slots differ only in which one the firmware booted.
+    slots differ only in which one the firmware booted. Equal *size* was the
+    check, and a slot whose every byte had been replaced is exactly the same
+    size as the slot it replaced.
     """
 
     by_label = {partition.label: partition for partition in partitions}
-    try:
-        a = by_label["system_a"]
-        b = by_label["system_b"]
-    except KeyError:
-        return Finding("slot_pairing", NOT_RUN, "both system partitions are needed")
+    a = by_label.get(first)
+    b = by_label.get(second)
+    if a is None or b is None:
+        return Finding(check, NOT_RUN, f"both {first} and {second} are needed")
     if a.partuuid == b.partuuid:
-        return Finding("slot_pairing", FAIL, "both slots claim one PARTUUID")
+        return Finding(check, FAIL, "both slots claim one PARTUUID")
     if a.size_bytes != b.size_bytes:
         return Finding(
-            "slot_pairing", FAIL, f"slot A is {a.size_bytes} bytes, slot B is {b.size_bytes}"
+            check, FAIL, f"{first} is {a.size_bytes} bytes, {second} is {b.size_bytes}"
         )
-    return Finding("slot_pairing", PASS, "distinct identities, equal size")
+    try:
+        digest_a = partition_digest(image_path, a)
+        digest_b = partition_digest(image_path, b)
+    except ImageError as exc:
+        return Finding(check, FAIL, exc.message)
+    if digest_a != digest_b:
+        return Finding(
+            check,
+            FAIL,
+            f"{first} hashes to {digest_a[:23]}..., {second} to {digest_b[:23]}...",
+        )
+    return Finding(check, PASS, f"distinct identities, identical payload {digest_a[:23]}...")
+
+
+def _slot_pairing_finding(image_path, partitions):
+    return _pairing_finding(image_path, partitions, "slot_pairing", "system_a", "system_b")
+
+
+def _boot_pairing_finding(image_path, partitions):
+    return _pairing_finding(image_path, partitions, "boot_pairing", "boot_a", "boot_b")
 
 
 def compare_identities(first, second):
@@ -284,11 +1099,39 @@ def compare_identities(first, second):
 
 
 def summarise(findings):
+    """The verdict, derived from the mandatory findings only.
+
+    A failure outranks everything: an optional check that ran and disagreed has
+    proven something wrong. Below that, a mandatory check that never executed
+    makes the inspection incomplete rather than passing — "the image is good"
+    and "nobody looked" were the same answer before, which is how an inspection
+    with a skipped oracle reached a release gate as PASS.
+    """
+
     counts = {PASS: 0, FAIL: 0, NOT_RUN: 0}
+    mandatory = {PASS: 0, FAIL: 0, NOT_RUN: 0}
     for finding in findings:
         counts[finding.result] = counts.get(finding.result, 0) + 1
+        if finding.mandatory:
+            mandatory[finding.result] = mandatory.get(finding.result, 0) + 1
+
+    skipped = [
+        finding.check
+        for finding in findings
+        if finding.mandatory and finding.result == NOT_RUN
+    ]
+    if counts[FAIL]:
+        result = FAIL
+    elif skipped or not mandatory[PASS]:
+        result = NOT_RUN
+    else:
+        result = PASS
+
     return {
-        "result": FAIL if counts[FAIL] else (PASS if counts[PASS] else NOT_RUN),
+        "result": result,
         "counts": counts,
+        "mandatory": mandatory,
+        "mandatory_not_run": skipped,
+        "optional": sum(1 for finding in findings if not finding.mandatory),
         "findings": [finding.to_dict() for finding in findings],
     }

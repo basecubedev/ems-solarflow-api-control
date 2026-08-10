@@ -438,8 +438,8 @@ SSH_DROP_IN = (
 def test_the_identity_is_established_only_after_the_persistent_partition():
     text = UNIT.read_text(encoding="utf-8")
 
-    assert "Requires=persistent.mount" in text
-    assert "After=persistent.mount local-fs.target" in text
+    assert "RequiresMountsFor=/persistent" in text
+    assert "After=local-fs.target" in text
     assert "RequiresMountsFor=/var/lib/ems-appliance-manager" in text
 
 

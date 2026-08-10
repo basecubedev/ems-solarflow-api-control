@@ -1,0 +1,54 @@
+{
+  "builder": {
+    "base_image_lock_id": "builder:debian-13-genericcloud-amd64-20260803-2559.qcow2",
+    "base_image_sha512": "769562604ecaac26b661167891ef922f71f4d87d50a11423fc04e51444fda0d882c87996dd1181170d233627f4728e6722db2695c0ef753dad762c4ac4ed32e1",
+    "environment_sha256": "sha256:3debc0bcc7e0a6edcc07b8bc9ad2a5db2af0fbeb8cc2678519f62af33c017dff"
+  },
+  "created_at": "2026-08-10T20:46:16Z",
+  "minimum_media_bytes": 30000000000,
+  "package": {
+    "architecture": "arm64",
+    "name": "ems-appliance-manager",
+    "sha256": "sha256:d245d0d8677047e52527492218ec3a2086576ea0448155f42ef9aad74ae0678b",
+    "version": "0.1.0"
+  },
+  "profiles": [
+    {
+      "artefacts": {
+        "build_authority": "sha256:1b5fa02358f3f00994e4a89c8b9946a5e0cee39179f29bec9decdc066bacccfc",
+        "image": "sha256:9d3d9d28b0521ffb1bf0ea6a529f7a58f91fb7d5cb0ba8481878e369c94d3794",
+        "manifest": "sha256:911e1070565148471cc33b051979ed75fc5f36eae526210f662c7a37d31056f5",
+        "signature": "sha256:3e3bf916b8a7849f3ec1f5ed28615991721527bee960a6176be4605d3da4e025",
+        "update": "sha256:e021e30cd5e460b9442364ba55da7c72593d672b61ca9803eb64782bdf4cbca2"
+      },
+      "build_id": "20260810183207",
+      "profile": "rpi5",
+      "reports": {
+        "image_inspection": "sha256:bfa103c69e1274da9e693e7cc3cc8ca3560f11ac2a0280864f2525b978841ebf",
+        "release_gate": "sha256:3ef1ae4a9a5976a22d987930dc862d0b8a189bac30fb5a4f883cd6368f43cf82",
+        "sparse_crosscheck": "sha256:fee09669b075c0aaa67d916c8e5d322039258a0da533c00c7782ee63a9908654",
+        "update_inspection": "sha256:44a53d303cf65b7770bbb37f3825234c6d52cea65641a5da87a3994895ed2a52"
+      },
+      "result": "pass"
+    }
+  ],
+  "project": {
+    "revision": "a84723d15d5089566196e5d440c2382325c0f26a",
+    "tree_sha256": "sha256:d58c4631cab1585b8968a453b1caf2feabc9ef4fae907df76651d349c683cd27"
+  },
+  "release_gate": {
+    "sha256": "sha256:3ef1ae4a9a5976a22d987930dc862d0b8a189bac30fb5a4f883cd6368f43cf82"
+  },
+  "result": "pass",
+  "runtime_gates": {
+    "sha256": "sha256:84dfa145ad910a213fa62a5025001bea8e8c52f39bdbee54c028b32f65429f0c"
+  },
+  "schema_version": 2,
+  "source_bundle": {
+    "authority_sha256": "sha256:ba481275dea63fb30c0b88231fe3415ff034617cce8d2096d0ad7c311e0a090a",
+    "bundle_sha256": "sha256:3a63d432ccc64f52cab28a17e2f0e75e0ce8ac74c4988c58623118ba936b94df",
+    "parity_sha256": "sha256:04024db86def66ed2ccaae2acf6d6a7bb11df2698566878fd8dcb2fd0f263a59",
+    "symlinks": 6,
+    "tracked_objects": 1157
+  }
+}

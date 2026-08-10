@@ -269,7 +269,7 @@ class ApplianceAbHost:
         for key_type in host_identity.HOST_KEY_TYPES:
             private = directory / host_identity.private_key_name(key_type)
             public = directory / host_identity.public_key_name(key_type)
-            blob = base64.b64encode(f"{key_type}-fixture-host-key".encode("utf-8")).decode()
+            blob = base64.b64encode(f"{key_type}-fixture-host-key".encode()).decode()
             material = f"ssh-{key_type} {blob}"
             private.write_text(
                 f"-----BEGIN OPENSSH PRIVATE KEY-----\n{blob}\n"

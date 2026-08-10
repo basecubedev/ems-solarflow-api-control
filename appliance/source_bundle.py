@@ -214,6 +214,30 @@ def _archive_members(archive, *, prefix=""):
     return members, tuple(unsafe), tuple(sorted(set(duplicate)))
 
 
+def detect_prefix(archive):
+    """The single top-level directory a bundle wraps its tree in, if there is one.
+
+    ``git archive --prefix`` is the usual shape and a reviewer should not have to
+    know which name was used. Detection is deliberately all-or-nothing: a bundle
+    whose members do not share exactly one root has no prefix, and comparing it
+    against a guessed one would report the whole tree as missing.
+    """
+
+    roots = set()
+    try:
+        with tarfile.open(archive) as handle:
+            for member in handle.getmembers():
+                name = member.name[2:] if member.name.startswith("./") else member.name
+                if not name or name.startswith("/"):
+                    return ""
+                roots.add(name.split("/", 1)[0])
+                if len(roots) > 1:
+                    return ""
+    except tarfile.TarError as exc:
+        raise SourceBundleError("bundle_unreadable", f"{archive} could not be read: {exc}")
+    return roots.pop() if len(roots) == 1 else ""
+
+
 def verify(archive, *, root, ref="HEAD", prefix="", exclude=()):
     """Compare a bundle against the tracked tree, object by object."""
 

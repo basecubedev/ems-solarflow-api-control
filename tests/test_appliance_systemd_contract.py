@@ -306,3 +306,54 @@ def test_optional_host_tools_stay_recommendations():
     assert recommends
     for package in ("network-manager", "openssh-server"):
         assert package in recommends, package
+
+
+# --- the single-slot host the package still has to install on -----------------
+
+SLOT_UNITS = (
+    "ems-appliance-persistence.service",
+    "ems-appliance-host-identity.service",
+    "ems-appliance-grow-persistent.service",
+)
+
+
+def unit_directives(unit):
+    text = (PACKAGING / "systemd" / unit).read_text(encoding="utf-8")
+    return [line for line in text.splitlines() if line and not line.startswith("#")]
+
+
+@pytest.mark.parametrize("unit", SLOT_UNITS)
+def test_no_unit_hard_requires_a_mount_that_only_the_ab_image_has(unit):
+    """``Requires=persistent.mount`` is unstartable off the A/B image.
+
+    ``ConditionPathExists=`` is evaluated when the job runs, not when the
+    transaction is built, so a literal requirement on a unit name no single-slot
+    host has fails the whole transaction with "Unit persistent.mount not found"
+    — including the agent's, which only reaches it transitively. Installing the
+    package on a supported single-slot system then fails in postinst.
+    """
+
+    directives = unit_directives(unit)
+
+    assert "Requires=persistent.mount" not in directives
+    assert not [line for line in directives if line.startswith("After=persistent.mount")]
+
+
+@pytest.mark.parametrize("unit", SLOT_UNITS)
+def test_the_persistent_partition_is_still_required_where_it_exists(unit):
+    """The requirement is expressed by path, so systemd resolves it per host.
+
+    ``RequiresMountsFor=/persistent`` adds exactly the ``Requires=`` and
+    ``After=`` on ``persistent.mount`` the literal form did, on any host where
+    ``/persistent`` is a mount point, and resolves to ``-.mount`` where it is
+    not. Fail-closed on the appliance, inert on a single-slot install.
+    """
+
+    directives = unit_directives(unit)
+
+    assert [
+        line
+        for line in directives
+        if line == "RequiresMountsFor=/persistent"
+        or line.startswith("RequiresMountsFor=/persistent ")
+    ]

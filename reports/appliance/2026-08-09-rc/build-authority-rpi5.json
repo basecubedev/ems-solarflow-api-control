@@ -1,0 +1,59 @@
+{
+  "build_id": "20260809135018",
+  "builder": {
+    "revision": "a7b6d4806183195f3efadb533f58c8e46393d057",
+    "source_form": "tarball",
+    "source_tree_sha256": "sha256:9ae7e0801afa81040da4d219eb69761a9404a4c2d6af2c34fb7f900783a2fa0f"
+  },
+  "builder_environment": {
+    "architecture": "x86_64",
+    "base_image_lock_id": "builder:debian-13-genericcloud-amd64-20260803-2559.qcow2",
+    "base_image_sha512": "769562604ecaac26b661167891ef922f71f4d87d50a11423fc04e51444fda0d882c87996dd1181170d233627f4728e6722db2695c0ef753dad762c4ac4ed32e1",
+    "binfmt_handler": "qemu-aarch64 enabled /usr/libexec/qemu-binfmt/aarch64-binfmt-P",
+    "captured_at": "2026-08-09T13:50:16Z",
+    "critical_packages": [
+      "btrfs-progs 6.14-1",
+      "cryptsetup 2:2.7.5-2",
+      "dctrl-tools 2.24-3+b1",
+      "dosfstools 4.2-1.2",
+      "e2fsprogs 1.47.2-3+b11",
+      "fdisk 2.41-5",
+      "flex 2.6.4-8.2+b4",
+      "mmdebstrap 1.5.7-1+deb13u1",
+      "mtools 4.0.48-1",
+      "podman 5.4.2+ds1-2+b2",
+      "pv 1.9.31-1",
+      "python3-jsonschema 4.19.2-6",
+      "qemu-user-static 1:10.0.11+ds-0+deb13u1",
+      "rsync 3.4.1+ds1-5+deb13u4",
+      "uidmap 1:4.17.4-2",
+      "zip 3.0-15",
+      "zstd 1.5.7+dfsg-1"
+    ],
+    "dependency_manifest_sha256": "sha256:072d78b6c93e3d02267117982141e6a714c149525974f6b0c24abe7e17dde772",
+    "kernel": "Linux 6.12.100+deb13-cloud-amd64",
+    "mmdebstrap_version": "mmdebstrap 1.5.7",
+    "os_release": "debian 13",
+    "podman_version": "podman version 5.4.2",
+    "python_version": "Python 3.13.5",
+    "qemu_version": "qemu-aarch64 version 10.0.11 (Debian 1:10.0.11+ds-0+deb13u1)",
+    "schema_version": 1
+  },
+  "builder_environment_sha256": "sha256:d4650e238078e2b84f03716bcb134862a107000a87c6df67da223697d34e46ef",
+  "completed": true,
+  "image": {
+    "path": "<builder-dist>/ems-solarflow-appliance-0.1.0-rpi5-arm64-ab.img",
+    "sha256": "sha256:ee1f4bbd5474f5b21f9967d6e4e75206b0f19c3d55d45dcee63b6a5db481f318"
+  },
+  "package_sha256": "55bb7bed5e0f84b8a2e55d380b5af14d8f45db10a5184cdfe01261e39875aed5",
+  "profile": "rpi5",
+  "project": {
+    "revision": "ec0bed2bffac922ef59f84c057a3a659210a843a",
+    "tree_sha256": "sha256:1ec4c37b2c3ba9d799500a0e409800fc89a04d944736b39fbde6c8b9ee4bf85e"
+  },
+  "schema_version": 3,
+  "update": {
+    "path": "<builder-dist>/ems-solarflow-appliance-0.1.0-rpi5-arm64-ab.update.tar.zst",
+    "sha256": "sha256:d9dc8f360db75d56fe6c5831ffba8700a5d612873f41941575218375920fec9d"
+  }
+}

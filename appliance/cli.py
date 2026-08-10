@@ -619,6 +619,33 @@ def command_ab_persistent_partition_number(args):
     return _print_ab_persistent(args, "number")
 
 
+def command_ab_persistent_geometry(args):
+    """Where the persistent partition ends and where its disk ends.
+
+    The growth helper decides whether a freshly imaged medium still has room
+    from this, so an unreadable geometry is an error and never an empty answer:
+    "the partition already fills the card" and "nobody could measure it" must
+    not reach that helper as the same result.
+    """
+
+    from appliance import ab_geometry
+
+    device = _ab_persistent(args, "device")
+    if device is None:
+        return EXIT_ERROR
+    try:
+        geometry = ab_geometry.read_geometry(device, sysfs=args.sysfs)
+    except ab_geometry.GeometryError as error:
+        print(f"error: {error.code}: {error.message}", file=sys.stderr)
+        return EXIT_ERROR
+    if args.json:
+        _print(geometry.to_dict(), True)
+    else:
+        for line in geometry.to_lines():
+            print(line)
+    return EXIT_OK
+
+
 def command_ab_slot_bootstrap(args):
     """Rebuild this slot's container runtime from the shared record."""
 
@@ -870,6 +897,11 @@ def build_parser():
     ab_commands.add_parser(
         "persistent-partition-number", parents=[shared], help="print its partition number"
     ).set_defaults(handler=command_ab_persistent_partition_number)
+    persistent_geometry = ab_commands.add_parser(
+        "persistent-geometry", parents=[shared], help="print its real start, end and disk end"
+    )
+    persistent_geometry.add_argument("--sysfs", default="/sys")
+    persistent_geometry.set_defaults(handler=command_ab_persistent_geometry)
     ab_commands.add_parser(
         "slot-bootstrap", parents=[shared], help="rebuild this slot's container runtime"
     ).set_defaults(handler=command_ab_slot_bootstrap)

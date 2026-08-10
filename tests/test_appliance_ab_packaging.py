@@ -75,7 +75,7 @@ def test_every_ab_unit_is_shipped_by_the_package(unit):
 def test_persistence_is_verified_before_anything_that_writes():
     text = read(SYSTEMD / "ems-appliance-persistence.service")
 
-    assert "Requires=persistent.mount" in text
+    assert "RequiresMountsFor=/persistent" in text
     assert "Before=ems-appliance-agent.service ems-appliance-web.service" in text
     assert "Before=ems-appliance-slot-bootstrap.service ems-appliance-ab-health.service" in text
 
@@ -199,6 +199,24 @@ def test_the_project_layer_installs_the_package_and_enables_the_units():
     assert "ab write-layout" in layer
     for unit in (*AB_UNITS, "ems-appliance-slot-bootstrap.service"):
         assert unit in layer
+
+
+def test_the_build_marker_records_what_dpkg_answered_inside_the_chroot():
+    """image-rota binds /var per slot, so the shipped root has no database.
+
+    Without this record a release gate has nothing exact to compare the
+    package name, version, architecture and installation status against, and
+    the version check falls back to matching a substring.
+    """
+
+    layer = read(IMAGE / "layer" / "ems-appliance.yaml")
+
+    assert "dpkg-query -W" in layer
+    assert "${Package}" in layer and "${Version}" in layer
+    assert "${Architecture}" in layer and "${Status}" in layer
+    assert '"package": {' in layer
+    # A build whose package is not configured must not produce an image.
+    assert '"install ok installed"' in layer
 
 
 def test_the_layer_declares_every_shared_path_to_upstreams_generator():
@@ -401,3 +419,64 @@ def test_the_package_enables_and_starts_the_host_identity_unit():
     assert postinst.index("start ems-appliance-host-identity.service") < postinst.index(
         "start ems-appliance-persistence.service"
     )
+
+
+# --- what the image layer has to install for the package to configure ---------
+
+
+def _declared_dependencies():
+    control = read(PACKAGING / "debian" / "control")
+    field = re.search(r"^Depends:(.*?)(?=^\S)", control, re.MULTILINE | re.DOTALL)
+    assert field, "the package must declare its runtime dependencies"
+    return [
+        entry.strip().split()[0]
+        for entry in field.group(1).replace("\n", " ").split(",")
+        if entry.strip()
+    ]
+
+
+def _layer_packages():
+    layer = read(PACKAGING / "image" / "layer" / "ems-appliance.yaml")
+    return re.findall(r"^\s+- (\S+)$", layer.split("customize-hooks")[0], re.MULTILINE)
+
+
+def test_the_image_layer_installs_every_dependency_the_package_declares():
+    """A dependency a base layer happens to pull in is not a dependency that is met.
+
+    The layer installs the .deb with ``dpkg -i``, which resolves nothing: a
+    declared dependency no other layer brought along leaves the package
+    unconfigured and fails the whole image build. That is what happened to the
+    first real rpi5 build — ``acl`` and ``gpgv`` were declared by the package
+    and installed by nobody.
+
+    So the layer names them all. The control file stays the single authority;
+    this keeps the layer's list derived from it rather than from whatever the
+    base happened to include on the day.
+    """
+
+    missing = [name for name in _declared_dependencies() if name not in _layer_packages()]
+
+    assert not missing, f"the image layer does not install: {', '.join(missing)}"
+
+
+def test_the_image_ships_no_host_private_keys():
+    """openssh-server's postinst makes a key pair when it is installed.
+
+    That happens inside the build chroot, so the image carries one — the same
+    one in both slots, generated on the build machine, and published with every
+    release. The first real rpi5 image did: /etc/ssh/ssh_host_ed25519_key in
+    both system slots, commented ``root@ems-appliance-builder``.
+
+    sshd uses the persistent pair because the image's drop-in names it, but a
+    private key that ships in a public artefact is compromised whether or not
+    anything reads it, and a slot whose drop-in did not apply falls back to
+    exactly these. The appliance's identity is created on first boot, onto the
+    persistent partition, and there is nothing for the image to carry.
+    """
+
+    layer = read(PACKAGING / "image" / "layer" / "ems-appliance.yaml")
+
+    assert "/etc/ssh/ssh_host_" in layer, (
+        "the layer must remove the host keys openssh-server generated in the chroot"
+    )
+    assert "rm -f" in layer

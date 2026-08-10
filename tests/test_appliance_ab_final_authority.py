@@ -37,7 +37,7 @@ from appliance import (
     source_bundle,
 )
 from appliance.ab_state import AbStateError, AbStateStore, PendingTrial
-from appliance.host_identity import HostIdentityService, private_key_name, public_key_name
+from appliance.host_identity import HostIdentityService, private_key_name
 from appliance.os_update import OsUpdateError
 from tests.helpers.appliance_deployment import (
     ADMIN_CONTAINER,
@@ -1241,7 +1241,7 @@ mkdir -p "$OUTPUT"
 : > "$OUTPUT/$NAME.img"
 : > "$OUTPUT/$NAME.update.tar.zst"
 : > "$OUTPUT/$NAME.manifest.json"
-: > "$OUTPUT/build-authority.json"
+: > "$OUTPUT/$NAME.build-authority.json"
 exit {status}
 """
 
@@ -1353,3 +1353,50 @@ def test_an_unsigned_release_is_still_a_pass(tmp_path):
 
     assert "sign-rpi5" in completed.stdout
     assert "RESULT: PASS" in completed.stdout
+
+
+@requires_git
+def test_a_bundle_prefix_is_detected_rather_than_guessed(tmp_path):
+    bundle = tmp_path / "review.tar.gz"
+    subprocess.run(
+        ["sh", str(CREATOR), "--output", str(bundle), "--prefix", "delivered"],
+        cwd=str(ROOT),
+        check=True,
+        capture_output=True,
+        timeout=900,
+    )
+
+    assert source_bundle.detect_prefix(bundle) == "delivered"
+    assert source_bundle.verify(bundle, root=ROOT, prefix="delivered").ok
+
+
+@requires_git
+def test_an_archive_with_no_single_root_has_no_detected_prefix(tmp_path):
+    archive = _repo_archive(tmp_path)
+
+    assert source_bundle.detect_prefix(archive) == ""
+
+
+@requires_git
+def test_the_checker_detects_the_prefix_of_a_canonical_bundle(tmp_path):
+    bundle = tmp_path / "review.tar.gz"
+    subprocess.run(
+        ["sh", str(CREATOR), "--output", str(bundle)],
+        cwd=str(ROOT),
+        check=True,
+        capture_output=True,
+        timeout=900,
+    )
+
+    completed = subprocess.run(
+        ["sh", str(SCRIPTS / "appliance-check-source-bundle.sh"), str(bundle)],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        timeout=900,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "(detected)" in completed.stdout
+    assert "RESULT: PASS" in completed.stdout
+    assert "symlinks: 6 preserved" in completed.stdout

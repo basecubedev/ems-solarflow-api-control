@@ -10,22 +10,89 @@ Record every run in this file's results table with the board, the storage class,
 the image build ID and the date. A case that was not run is recorded as
 `NOT RUN`, never as a pass.
 
+## CURRENT RELEASE CANDIDATE
+
+The one authoritative status block. Every claim here names the exact revision it
+was produced from; a stage reached at an older revision is a historical run and
+is recorded further down, never here.
+
+A real build vouches for **one source tree**. Production and build code changed
+after the last real images were built, so those images say nothing about this
+revision. The release-build revision below is what the current artefacts were
+built from; when it does not equal the branch HEAD, the release status is stale
+and no artefact may be called hardware-ready.
+
+<!-- CURRENT-RC-BEGIN -->
+| Property | Value |
+|---|---|
+| Branch | `feat/appliance-manager` |
+| Release-build revision (what the real image was built from) | `ec0bed2bffac922ef59f84c057a3a659210a843a` |
+| Build id | `20260809135018` |
+| Builder environment hash | `sha256:d4650e238078e2b84f03716bcb134862a107000a87c6df67da223697d34e46ef` |
+| Builder base image | `debian-13-genericcloud-amd64-20260803-2559.qcow2`, digest verified from the lock |
+| Real rpi5 build | **PASS** — 26m9s in the disposable builder guest, 17 758 703 616 byte image, build authority schema 3 complete |
+| Real rpi4 build | **NOT RUN** — only rpi5 was built in this run |
+| Builder artefact collection | **PASS** — 9 files described by the guest, all re-hashed on the host before publication |
+| Real image structural inspection | **PASS** — 6 image-rota partitions, 6 distinct PARTUUIDs, both GPT headers and entry arrays, no overlap |
+| Real slot pairing | **PASS** — `system_a`/`system_b` and `boot_a`/`boot_b` hash identically with distinct PARTUUIDs |
+| Real image content inspection | **FAIL** — 79 pass, 2 fail, 0 not run. `cmdline.txt` carries no `ro` on either boot partition, so the active slot root is mounted read-write |
+| Real update inspection | **PASS** — 18 pass, 0 fail, 0 not run, signature cryptographically verified against the trusted key |
+| Real sparse cross-check | **PASS** — `simg2img` agrees with this project's decoder on both members of the real artefact |
+| Signed production release gate | **FAIL** — everything else passes; the content inspection refuses the release |
+| Packaged runtime gate (real booted Debian Trixie guest) | **PASS** — 2026-08-09 |
+| ARM64 generic guest | **NOT RUN** — `qemu-system-aarch64` is not installed on the review host |
+| Physical Raspberry Pi | **NOT RUN** — no hardware |
+| Physical readiness | **NOT READY** |
+<!-- CURRENT-RC-END -->
+
+### The open defect this run found
+
+The image content inspection reads the artefact that would be flashed, and it
+disagrees with this project's own model. `cmdline.txt` on both boot partitions
+is:
+
+```text
+console=serial0,115200 console=tty1 root=/dev/disk/by-slot/active/system fsck.repair=yes rootwait
+```
+
+There is no `ro`. The persistence contract and the kit's expected slot layout
+both describe a read-only slot root, and the whole shared-path design rests on
+it: anything written to a path that is not one of the six shared binds is lost
+at the next slot switch, silently. Upstream's `slot-post-process.sh` adds `ro`
+only for an erofs root, and this profile builds ext4.
+
+Two ways to close it, and this is a product decision rather than a release one:
+
+- add `ro` to the boot cmdline — a boot-path change that must not be made
+  without a physical Pi to validate it, because a read-only root that is
+  missing one writable bind does not boot; or
+- correct the documented model to say the slot root is writable, and state what
+  that means for writes outside the shared paths.
+
+Nothing here decides it. The gate's job was to make the disagreement visible
+before a release claimed otherwise, and it did.
+
 ## Verification stages
 
-Each stage is a strictly stronger claim than the one above it. Anything not
-listed as reached has not been reached.
+Each stage is a strictly stronger claim than the one above it. "Reached" here
+means *reached at some revision*, with the revision named; whether it holds for
+the current candidate is the table above, and only that table.
 
-| Stage | What it proves | State |
+| Stage | What it proves | Reached at |
 |---|---|---|
-| Simulation verified | The state machine, selector parser, layout authority, write-failure matrix and boot-flow simulator | Reached |
-| Real upstream config validated | Both hardware profiles resolve through rpi-image-gen's own `ConfigLoader` and `LayerManager` at the pinned revision, and the project layer's dependencies resolve beside upstream's | Reached |
-| Real upstream artefact fixture validated | The update path drives genuine Android Sparse containers through zstd, tar, the member allowlist, sparse validation, expansion and filesystem identification | Reached |
-| Real image built | `rpi-image-gen build` produces an `.img` and `update.tar.zst` from a pinned source tree | **NOT REACHED** — no build host with the upstream dependencies and an aarch64 binfmt handler |
-| Real image inspected | The partition table, labels and per-build identities of an image that was actually built | **NOT REACHED** — depends on the stage above |
+| Simulation verified | The state machine, selector parser, layout authority, write-failure matrix and boot-flow simulator | Current |
+| Real upstream config validated | Both hardware profiles resolve through rpi-image-gen's own `ConfigLoader` and `LayerManager` at the pinned revision, and the project layer's dependencies resolve beside upstream's | Current |
+| Real upstream artefact fixture validated | The update path drives genuine Android Sparse containers through zstd, tar, the member allowlist, sparse validation, expansion and filesystem identification | Current |
+| Packaged system booted | The package installs and its units order, fail and recover under a real systemd, in a Debian Trixie guest that finished booting | Current — 2026-08-09 |
+| Real image built | `rpi-image-gen build` produces an `.img` and `update.tar.zst` from a pinned source tree | Historical — 2026-08-07, before the host-key, redaction, expansion and host-identity fixes |
+| Real image inspected | The partition table, labels and per-build identities of an image that was actually built | Historical — 2026-08-07 |
+| Real image contents inspected | The package and its exact version in both roots, the units enabled in both, six shared paths activated in both, the bootconfig selector, both boot partitions and a `root=` that names the active slot | Method current, artefact historical — the inspector no longer needs a mount, so 16 KiB ext4 is readable on any host; no image from the current revision exists to run it against |
+| Real update artefact validated | Upstream's `update.tar.zst`, its Android Sparse members staged through the production allowlist extractor and cross-checked against `simg2img` | Historical — 2026-08-07 |
+| Signed production release | A manifest signed by a trusted key, verified cryptographically, with every production gate passed | **NOT REACHED** |
 | Real Pi boot verified | Everything below | **NOT REACHED** |
 
-The last three are what this gate exists for. Nothing in the automated suites
-substitutes for them.
+The last one is what this gate exists for. Nothing in the automated suites
+substitutes for it, and nothing above it is evidence that a board boots.
 
 ## What the image-rota integration changed
 
@@ -60,13 +127,37 @@ Those are firmware and storage properties. Only hardware answers them.
 
 ```text
 Raspberry Pi 4 and Raspberry Pi 5
-one microSD card
-one USB SSD
-one NVMe drive on a Pi 5 carrier
+one microSD card, 32 GB or larger
+one USB SSD, 32 GB or larger
+one NVMe drive on a Pi 5 carrier, 32 GB or larger
 a switchable power supply for the power-cut cases
 a serial console (UART) — a Pi that will not boot shows why only here
 a second machine to re-image from
 ```
+
+### Minimum supported medium: 32 GB
+
+Not a recommendation. The image is about **16.5 GiB** — two 4 GiB slot roots,
+two 256 MiB boot partitions, a bootconfig partition and an 8 GiB persistent
+partition — and a card marketed as "16 GB" holds roughly 14.8 to 15.9 GiB of
+addressable bytes. It cannot hold the image at all.
+
+What the medium has to hold after first boot decides the rest. The persistent
+partition carries both slots' Docker stores, the seed archives an offline
+reconstruction is rebuilt from, a staged OS update, the EMS data and the
+operator's backups: **about 11.2 GiB**, against the 8 GiB the image ships. The
+measured total requirement is **about 21.2 GB**, so the smallest standard
+medium that satisfies it is 32 GB.
+
+The enforced floor is **30,000,000,000 bytes**, below the nominal 32 GB because
+vendors differ by a few percent and a genuine 32 GB card must pass. It is
+declared in `appliance/media_sizing.py`, recorded in every image's
+`minimum_media_bytes` build metadata, and measured in
+`reports/appliance/<run-id>/media-sizing.json`.
+
+The persistent partition is grown to fill the medium on first boot. That growth
+is a transaction: a card whose filesystem did not actually grow is retried on
+the next boot rather than marked as finished.
 
 The power-cut cases require cutting power at the wall or with a switchable PDU.
 Pulling the plug on a `poweroff` is not the same test.
@@ -82,6 +173,9 @@ Pulling the plug on a `poweroff` is not the same test.
 | 0.2b | The same with `--profile rpi4` | PASS; a separate artefact, not the Pi 5 image relabelled |
 | 0.2c | `scripts/appliance-verify-slot-mounts.sh --rpi-image-gen <tree>` | PASS: every declared shared path is generated **and** activated |
 | 0.3 | `scripts/appliance-inspect-rpi-ab-image.sh <image>` | PASS: six partitions, image-rota labels, distinct identities |
+| 0.3b | The same inspection's content findings | PASS with **no** NOT RUN: the package and its exact version in both slot roots, the dpkg status, the layout descriptor, the build marker, the persistence configuration, the six shared activations, the four services, the slot generators, the machine-id policy, no shipped host key, the runtime helpers, both service drop-ins, the bootconfig `tryboot_a_b=1` selector, and `root=/dev/disk/by-slot/active/system` with a read-only root on **both** boot partitions. No mount and no root: the Pi 5 root filesystem uses 16 KiB ext4 blocks that no 4 KiB-page kernel will mount |
+| 0.3c | The GPT structures | PASS: primary and backup headers, both entry-array CRCs, partition ranges inside the disk, no overlap, and `sgdisk --verify` agreeing where gdisk is installed |
+| 0.3d | The slot pairing | PASS: `system_a` and `system_b` hash to the same payload with different PARTUUIDs, and so do `boot_a` and `boot_b` |
 | 0.4 | Build a second image and `--compare` it | No partition identity is reused between builds |
 | 0.5 | `scripts/appliance-build-rpi-ab-update.sh --profile rpi5 --sign-key <key>` then `appliance-inspect-rpi-ab-update.sh` | PASS, members `boot` and `system`, signature verifies |
 | 0.6 | The manifest each build produced | Both members declare `encoding: android_sparse` with distinct `encoded_sha256` and `expanded_sha256` |
@@ -92,7 +186,16 @@ Pulling the plug on a `poweroff` is not the same test.
 | 0.11 | Edit any file under the generator's `config/`, `layer/` or `image/` and rebuild | FAIL `rpi_image_gen_source_modified` before `./rpi-image-gen build` runs |
 | 0.12 | `scripts/appliance-create-source-bundle.sh` for every source or review archive | PASS: the bundle self-verifies before it is handed over, and an archive that does not round-trip is deleted rather than delivered |
 | 0.12b | `scripts/appliance-check-source-bundle.sh <bundle>` on the delivered source archive | PASS: 0 missing, 0 wrong modes, 0 wrong symlink targets, 0 undeclared, 0 unsafe, 0 duplicate, 6 symlinks preserved |
-| 0.13 | `scripts/appliance-release-gates.sh --rpi-image-gen <tree>` | Strict by default: `RESULT: PASS` and exit 0 only when every required gate PASSed; a required gate that did not run is `RESULT: NOT RUN` and exit 3; a failure is `RESULT: FAIL` and exit 1 |
+| 0.13 | `scripts/appliance-release-gates.sh --mode builder --rpi-image-gen <tree>` | Builder qualification. Strict by default: `RESULT: PASS (builder qualification)` and exit 0 only when every required gate PASSed; a required gate that did not run is `RESULT: NOT RUN` and exit 3. It says of itself that it is not a release |
+| 0.13c | `scripts/appliance-finalize-rpi-release.sh --sign-key <key> --keyring <file> --trusted-fingerprint <fpr>` on the signing host | The trusted half: it verifies the build authority and its builder environment, signs, verifies the signature against the keyring and the trust policy, runs `--mode production` (which builds nothing and requires the signature, the full content inspection, the sparse cross-check and the source bundle), and assembles the kit. `RESULT: PASS (signed production release)` |
+| 0.13d | `scripts/appliance-hardware-validation-kit.sh --gate-report <report>` | PASS only with exactly one completed build per profile, a signed manifest, both inspection reports with nothing NOT RUN, and a gate report that says PASS. `--development-kit` reports INCOMPLETE and `physical_ready=false` |
+| 0.13e | `scripts/appliance_verify_hardware_kit.py --kit <dir> --keyring <file> --trusted-fingerprint <fpr>` | The kit re-verified from the directory rather than from the run that made it: every file re-hashed against `KIT-SHA256SUMS`, no file in the kit that the list does not name, the attestation's detached signature verified by a trusted key, every artefact the attestation binds re-hashed out of the kit's own profile directories, and no private key material. `physical_ready=true` only when all of that holds |
+| 0.13f | `scripts/appliance_runtime_gates.py --from-log <gate>=<log>` | The runtime evidence a release is bound to. Each gate carries its result, the digest of the guest log it was read out of, the environment and — for anything that did not run — the exact prerequisite. A command-line verdict can never overrule a log, and a required gate that did not run is never a pass |
+| 0.13g | `scripts/appliance-guest-sftp-session.sh` in the packaged-runtime guest | A real SFTP session with a key issued through the appliance's own authenticated key management: login, the exported directories visible, a known file fetched, `cd ..` bounded by the chroot, `/etc/passwd` unreachable, and shell, `-L`, `-R`, `-D` and `-A` all refused |
+| 0.13h | `scripts/appliance-guest-network-persistence.sh <overlay>` in the same guest | Asked of systemd rather than read from two unit files: `Requires=`/`After=ems-appliance-persistence.service` are what systemd loaded, the healthy slot starts NetworkManager, and with the persistent source taken away the verification fails closed and NetworkManager is refused instead of consuming the slot-local fallback |
+| 0.13i | `pytest tests/test_appliance_ab_docker_reconstruction.py` against a real Docker daemon | Three real contract images in a registry the test controls: the deployment authority recorded by digest, drift detected, a corrupt, a truncated and a zero-length seed each refused with the fallback naming the exact digest, `platform_mismatch` refusing an image for another architecture, a mutable tag refused at record time, and an EMS an operator stopped rebuilt and left stopped. `runtime_seed_unaddressable` is the one open defect: `docker load` cannot restore a repository digest, so the offline seed is written and never used |
+| 0.14 | The medium the image is flashed to | At least 30,000,000,000 bytes (a 32 GB card). The image is ~16.5 GiB and the persistent partition needs ~11.2 GiB once both Docker stores, the seeds, a staged update and the operator's data are on it |
+| 0.13a | `scripts/appliance-builder-vm.sh --release-gate --profile rpi5 --profile rpi4` | The gate builds the images itself, so it only reaches PASS on a host with the generator's prerequisites. This runs it in the disposable builder and brings the verdict and `dist/gates/` back; the developer host is not modified |
 | 0.13b | The same with `--allow-not-run` on a host without the builder prerequisites | `RESULT: INCOMPLETE` and exit 0; the word PASS never appears |
 
 ### Group 1 — first boot and identity
@@ -116,21 +219,21 @@ Pulling the plug on a `poweroff` is not the same test.
 | # | Case | Expected |
 |---|---|---|
 | 2.1 | Stage an update artifact | Written to inactive slot B, read-back verified |
-| 2.2 | Check the selector before the trial | `[all]` still boot partition 2 |
+| 2.2 | Check the selector before the trial | `[all]` still names slot A's boot partition, read back from `ems-appliance ab status --json` rather than assumed |
 | 2.3 | Trial-boot B | B boots, reports `tryboot=1`, health passes |
 | 2.3a | Inspection before the trial | `inspection.ok=true`; the selector was untouched while it ran |
-| 2.4 | Commit | `[all]` boot partition 3, `[tryboot]` boot partition 2 |
+| 2.4 | Commit | `[all]` names slot B's boot partition and `[tryboot]` names slot A's, both compared against `ab status --json`, never against a fixed number |
 | 2.5 | `docker image ls` in slot B before commit | Admin image present, restored from the seed |
 | 2.6 | Disconnect the WAN, repeat 2.1–2.4 | The trial still commits; reconstruction used the seed only |
 | 2.7 | `cat /etc/machine-id` in slot B | Identical to the value recorded in 1.9 |
 | 2.8 | `ssh-keyscan` in slot B | Same host key as 1.10 |
 | 2.9 | `findmnt /var` in slot B | Bound from `/persistent/slots/system_b/var` |
-| 2.5 | Reboot normally | B boots as the default |
-| 2.6 | EMS configuration and data | unchanged |
-| 2.7 | SSH host key fingerprint | unchanged from before the update |
-| 2.8 | Network settings, hostname, mDNS name | unchanged |
-| 2.9 | Admin console reachable | yes |
-| 2.10 | Appliance authentication | the same password still works |
+| 2.10 | Reboot normally | B boots as the default |
+| 2.11 | EMS configuration and data | unchanged |
+| 2.12 | SSH host key fingerprint | unchanged from before the update |
+| 2.13 | Network settings, hostname, mDNS name | unchanged |
+| 2.14 | Admin console reachable | yes |
+| 2.15 | Appliance authentication | the same password still works |
 
 ### Group 3 — the next update, in the other direction
 
@@ -173,6 +276,22 @@ class is never reported for another.**
 | USB SSD | Pi 5 | NOT RUN |
 | NVMe | Pi 5 | NOT RUN |
 
+## Which steps destroy something
+
+Four operations in this gate are not reversible, and none of them is wrapped in
+a one-click script. Each is run by hand, so the operator can read it first.
+
+| Marker | Operation | What it costs |
+|---|---|---|
+| **FLASH DESTROYS TARGET MEDIA** | Writing the image to the card, SSD or NVMe | Every partition on that device, including any appliance already on it. Confirm the device node immediately before writing; a wrong `of=` takes the workstation's own disk |
+| **POWER CUT TEST** | Cutting power at the wall or PDU mid-write | Deliberate. May leave the medium needing a re-flash, which is the point of the case |
+| **TRYBOOT REBOOT** | `reboot '0 tryboot'` | Reboots the appliance into the untested slot. Recoverable, but the appliance is offline until it comes back or falls back |
+| **ROLLBACK REBOOT** | Committing or rolling back the selector | Changes which slot boots by default. Recoverable only from the other slot |
+
+The read-only helpers below never do any of these. `capture-baseline`,
+`verify-slot`, `verify-persistence` and `collect-evidence` write no block
+device, change no selector, restart no service and touch no SSH key.
+
 ## Procedure for one storage class
 
 ```text
@@ -181,15 +300,19 @@ class is never reported for another.**
  1  Build the appliance image:
       scripts/appliance-build-rpi-ab-image.sh --profile rpi5 --output out/
  2  Record the build ID and the image sha256 from the manifest.
- 3  Flash the image to the target medium from the second machine.
+ 3  FLASH DESTROYS TARGET MEDIA — flash the image to the target medium from
+      the second machine, after confirming the device node.
  4  Boot with the serial console attached and capture the log.
- 5  Run group 1.
- 6  Build an update artifact from a second, slightly different build:
+ 5  Capture the baseline: scripts/appliance-hardware-capture-baseline.sh
+ 6  Run group 1.
+ 7  Build an update artifact from a second, slightly different build:
       scripts/appliance-build-rpi-ab-update.sh --output out/
- 7  Run group 2, capturing `ems-appliance ab status --json` after every step.
- 8  Run group 3.
- 9  Run group 4, one case per boot, re-imaging between destructive cases.
-10  Record every result in the table above with the date and build IDs.
+ 8  Run group 2, capturing `ems-appliance ab status --json` after every step.
+      Contains TRYBOOT REBOOT and ROLLBACK REBOOT.
+ 9  Run group 3.
+10  Run group 4, one case per boot, re-imaging between destructive cases.
+      Contains POWER CUT TEST and FLASH DESTROYS TARGET MEDIA.
+11  Record every result in the table above with the date and build IDs.
 ```
 
 The build host needs upstream's dependency set — `mmdebstrap`, `podman`,
@@ -199,15 +322,54 @@ The build host needs upstream's dependency set — `mmdebstrap`, `podman`,
 is missing and the build wrapper refuses to start without it, reporting
 `rpi_image_gen_dependencies_missing` rather than producing a partial image.
 
+`scripts/appliance-builder-vm.sh` provisions all of that inside a throwaway
+guest, so none of it has to be installed on a workstation. Two things about the
+build host are worth knowing before running the generator by hand:
+
+- **Do not run it as root.** `bin/ns` is `#!/bin/sh` and evals a bash function
+  definition when it is already root; on Debian, where `/bin/sh` is dash, the
+  first layer dies with `[[: not found` and exit 127. The non-root path hands
+  the same eval to bash through `podman unshare`. Rootless is the supported
+  model — `uidmap` and `dbus-user-session` are in upstream's dependency list for
+  it — and rootless podman needs a login session for its `XDG_RUNTIME_DIR`.
+- **Put `/usr/sbin` on the build user's `PATH`.** Five declared binaries
+  (`mkfs.btrfs`, `veritysetup`, `mkdosfs`, `mke2fs`, `fdisk`) live there, and
+  Debian keeps it off a non-root `PATH`, so the dependency probe reports a fully
+  provisioned machine as unusable.
+
 For every power-cut case, record what the selector partition contained
 afterwards (`ems-appliance ab status --json` plus a raw copy of `autoboot.txt`),
 because that file is the whole safety argument.
 
-## Pre-hardware validation record
+## Run history
 
-What was actually run before the hardware gate, on 2026-08-08, after the
-deployment-authority and build-provenance work. A result that is not listed here
-was not produced.
+Every block below is one dated run at one revision. None of them is the current
+status: that is the CURRENT RELEASE CANDIDATE table at the top of this file, and
+a stage reached here has to be reached again for a revision that changed the
+code it depends on.
+
+### Historical run — 2026-08-09, release-candidate hardening
+
+| Gate | Result |
+|---|---|
+| Packaged runtime gate, real booted Debian Trixie guest (`appliance-smoke-vm-amd64.sh`) | PASS — pinned base image `debian-13-genericcloud-amd64-20260803-2559.qcow2`, install, verify-install, service ordering, state boundary, packaged HTTP authentication, audit trail, export root, reinstall, A/B units inert on a single-slot guest, host identity policy |
+| Repository hygiene gate | PASS — 1103 tracked files, 0 rejected |
+| Mount-independent image content inspection against real filesystems (16 KiB ext4, FAT12/32) | PASS — every mandatory content check, 0 NOT RUN |
+| GPT structural verification, including the backup header and both entry-array CRCs | PASS |
+| Slot-pairing payload equality (`system_a`/`system_b`, `boot_a`/`boot_b`) | PASS — a single changed byte is detected |
+| Cryptographic detached-signature verification with an ephemeral test key | PASS — valid, wrong key, tampered manifest, tampered signature, missing signature and missing trust policy all behave |
+| Transactional persistent growth | PASS — grow, already-filled, growpart failure, kernel-not-reread, resize2fs failure, filesystem-not-grown, retry after a partial growth |
+| Hardware kit assembled from build authority | PASS — mixed builds, missing signature, missing gate report and a stale image all refused |
+| **Real rpi4 / rpi5 image build from this revision** | **NOT RUN** — the review host has no `mmdebstrap`, `podman` or arm64 binfmt handler, and the disposable builder guest was not run to completion in this session |
+| **ARM64 generic guest** | **NOT RUN** — `qemu-system-aarch64` is not installed on the review host |
+| **Real Docker runtime reconstruction tier** | **NOT RUN** — the guest test images and the controlled local registry it needs are not built yet |
+| **Real SFTP protocol confinement tier** | **NOT RUN** — see the guest smoke tier, which proves the drop-in and the export root but not a real SFTP session |
+| **Physical Raspberry Pi** | **NOT RUN** — no hardware |
+
+### Historical run — 2026-08-08, before the builder guest
+
+What was run after the deployment-authority and build-provenance work. A result
+that is not listed here was not produced.
 
 | Gate | Result |
 |---|---|

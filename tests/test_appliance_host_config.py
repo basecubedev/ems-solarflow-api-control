@@ -430,3 +430,84 @@ def test_an_image_build_root_skips_systemd_entirely(tmp_path):
 
     assert not any(tool == "systemctl" for tool, _ in host.calls), host.calls
     assert host_paths_file(paths).is_file()
+
+
+# --- sshd validation is three outcomes, not two -----------------------------
+#
+# `sshd_usable` was a boolean, so "openssh is not on this host" and "openssh is
+# here and cannot validate yet" were the same answer — and both were reported as
+# nothing left to prove. A first install on a host whose openssh had no host
+# keys therefore recorded an SSH policy state of "not installed", which is a
+# statement about the host and was not true.
+
+
+def test_an_sshd_that_cannot_validate_yet_is_reported_as_not_ready(tmp_path):
+    paths = layout(tmp_path)
+    host = host_for(tmp_path, path_unit_active="inactive")
+    host.fail("sshd", "-t", stderr="sshd: no hostkeys available -- exiting.")
+
+    report = apply_with(paths, host, tmp_path)
+
+    runtime = report["runtime"]
+    assert runtime["sshd_state"] == "not_ready"
+    assert "hostkeys" in runtime["sshd_detail"]
+    assert runtime["ssh_policy_state"] == "not_ready"
+    assert runtime["ssh_policy_confirmed"] is False
+
+
+def test_a_host_without_openssh_is_reported_as_not_installed(tmp_path):
+    """Different from not ready: this one really is a statement about the host."""
+
+    paths = layout(tmp_path)
+    host = host_for(tmp_path, tools=("systemctl",), path_unit_active="inactive")
+
+    runtime = apply_with(paths, host, tmp_path)["runtime"]
+
+    assert runtime["sshd_state"] == "absent"
+    assert runtime["ssh_policy_state"] == "not_installed"
+
+
+def test_a_working_sshd_is_reported_as_pass(tmp_path):
+    paths = layout(tmp_path)
+    host = host_for(tmp_path)
+
+    runtime = apply_with(paths, host, tmp_path)["runtime"]
+
+    assert runtime["sshd_state"] == "pass"
+    assert runtime["ssh_policy_state"] == "verified"
+    assert runtime["ssh_policy_confirmed"] is True
+
+
+def test_an_sshd_that_names_our_policy_is_a_failure_even_when_it_was_broken_before(tmp_path):
+    """The gap: a bad drop-in written where sshd already could not validate.
+
+    The old check only ran when sshd validated *before* the write, so on a host
+    whose openssh was not configured yet a policy sshd refuses was installed and
+    the apply reported success.
+    """
+
+    paths = layout(tmp_path)
+    host = host_for(tmp_path, path_unit_active="inactive")
+    host.fail(
+        "sshd",
+        "-t",
+        stderr="/etc/ssh/sshd_config.d/ems-appliance-backup.conf line 3: Bad configuration option",
+    )
+
+    with pytest.raises(HostConfigError) as error:
+        apply_with(paths, host, tmp_path)
+
+    assert error.value.code == "sshd_config_invalid"
+
+
+def test_a_complaint_that_is_not_about_our_policy_still_does_not_roll_back(tmp_path):
+    """openssh-server is often configured after this package on a first install."""
+
+    paths = layout(tmp_path)
+    host = host_for(tmp_path, path_unit_active="inactive")
+    host.fail("sshd", "-t", stderr="sshd: no hostkeys available -- exiting.")
+
+    report = apply_with(paths, host, tmp_path)
+
+    assert host_paths_file(paths).is_file(), report
+    assert sshd_policy_file(str(tmp_path / "etc" / "ssh" / "sshd_config.d")).is_file()

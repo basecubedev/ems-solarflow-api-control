@@ -158,16 +158,6 @@ def resolving(docker, digest):
     return docker
 
 
-def resolving(docker, digest):
-    docker.inspect_image = lambda reference: SimpleNamespace(
-        exists=True,
-        digest=str(reference).partition("@")[2] or digest,
-        architecture="arm64",
-        os="linux",
-    )
-    return docker
-
-
 def test_a_known_good_admin_digest_that_matches_the_running_one_is_accepted(tmp_path):
     docker = resolving(
         FakeDocker(containers={"ems-solarflow-admin": container(ADMIN)}),

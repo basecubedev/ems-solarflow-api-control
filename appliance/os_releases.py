@@ -340,9 +340,15 @@ class SignatureVerifier:
     and no caller-supplied option.
     """
 
-    def __init__(self, runner, *, keyring):
+    def __init__(self, runner, *, keyring, fingerprints=()):
         self.runner = runner
         self.keyring = str(keyring or "")
+        # A trust policy, not a key list: a keyring can hold more keys than a
+        # release is allowed to be signed with, and "gpg said good" does not
+        # say which key it was good for.
+        self.fingerprints = tuple(
+            str(item).replace(" ", "").upper() for item in fingerprints if str(item).strip()
+        )
 
     @property
     def available(self):
@@ -366,6 +372,8 @@ class SignatureVerifier:
             "gpg",
             [
                 "--batch",
+                "--status-fd",
+                "1",
                 "--no-default-keyring",
                 "--keyring",
                 self.keyring,
@@ -380,7 +388,57 @@ class SignatureVerifier:
                 "release_signature_invalid",
                 "the release manifest signature could not be verified against the appliance keyring",
             )
+        observed = valid_signature_fingerprints(result.stdout)
+        if not observed:
+            raise ReleaseError(
+                "release_signature_invalid",
+                "gpg reported no valid signature over the release manifest",
+            )
+        if self.fingerprints and not set(observed) & set(self.fingerprints):
+            raise ReleaseError(
+                "release_signature_untrusted",
+                f"the release manifest was signed by {observed[0]}, which is not a trusted "
+                "release key",
+            )
         return True
+
+    def fingerprints_of(self, manifest_path, signature_path):
+        """The keys a valid signature was made with, or ()."""
+
+        if not self.available or not Path(self.keyring).is_file():
+            return ()
+        result = self.runner.run(
+            "gpg",
+            [
+                "--batch",
+                "--status-fd",
+                "1",
+                "--no-default-keyring",
+                "--keyring",
+                self.keyring,
+                "--verify",
+                str(signature_path),
+                str(manifest_path),
+            ],
+            timeout=60,
+        )
+        if not result.ok:
+            return ()
+        return valid_signature_fingerprints(result.stdout)
+
+
+def valid_signature_fingerprints(status_output):
+    """The primary-key fingerprints gpg reported as VALIDSIG."""
+
+    fingerprints = []
+    for line in (status_output or "").splitlines():
+        parts = line.split()
+        if len(parts) >= 3 and parts[0] == "[GNUPG:]" and parts[1] == "VALIDSIG":
+            # Field 12 of VALIDSIG is the primary key fingerprint; field 3 is
+            # the fingerprint of the signing (sub)key.
+            primary = parts[11] if len(parts) >= 12 else parts[2]
+            fingerprints.append(primary.upper())
+    return tuple(fingerprints)
 
 
 def file_digest(path, *, chunk=1024 * 1024):

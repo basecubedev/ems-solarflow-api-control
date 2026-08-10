@@ -1,0 +1,22 @@
+{
+  "format_version": 2,
+  "release_version": "0.1.0",
+  "build_id": "20260809135018",
+  "architecture": "arm64",
+  "device_layer": "rpi5",
+  "compatible_board_classes": ["pi5"],
+  "hardware_profile": "rpi5",
+  "image_layer": "image-rota",
+  "rpi_image_gen_revision": "a7b6d4806183195f3efadb533f58c8e46393d057",
+  "rpi_image_gen_source_form": "tarball",
+  "rpi_image_gen_source_tree": "sha256:9ae7e0801afa81040da4d219eb69761a9404a4c2d6af2c34fb7f900783a2fa0f",
+  "build_authority": "ems-solarflow-appliance-0.1.0-rpi5-arm64-ab.build-authority.json",
+  "builder_environment_sha256": "sha256:d4650e238078e2b84f03716bcb134862a107000a87c6df67da223697d34e46ef",
+  "minimum_media_bytes": 30000000000,
+  "project_revision": "ec0bed2bffac922ef59f84c057a3a659210a843a",
+  "project_tree_sha256": "sha256:1ec4c37b2c3ba9d799500a0e409800fc89a04d944736b39fbde6c8b9ee4bf85e",
+  "appliance_package": "ems-appliance-manager_0.1.0_arm64.deb",
+  "appliance_package_sha256": "55bb7bed5e0f84b8a2e55d380b5af14d8f45db10a5184cdfe01261e39875aed5",
+  "image_sha256": "ee1f4bbd5474f5b21f9967d6e4e75206b0f19c3d55d45dcee63b6a5db481f318",
+  "update_artifact": "ems-solarflow-appliance-0.1.0-rpi5-arm64-ab.update.tar.zst"
+}

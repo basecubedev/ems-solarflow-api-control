@@ -8,8 +8,8 @@ ConditionPathExists=/etc/ems-appliance-manager/ab-layout.json
 # The identity lives on the persistent partition, so it cannot be established
 # before that partition and its shared binds are there. RequiresMountsFor pulls
 # in the generated mount units the same way the persistence service does.
-Requires=persistent.mount
-After=persistent.mount local-fs.target
+RequiresMountsFor=/persistent
+After=local-fs.target
 RequiresMountsFor=/var/lib/ems-appliance-manager /etc/NetworkManager/system-connections
 # Everything that presents the appliance to the network comes after this, and
 # the verification of the wider persistence contract does too: a shared path

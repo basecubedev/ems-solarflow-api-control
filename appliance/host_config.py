@@ -430,6 +430,17 @@ RUNTIME_VERIFIED = "verified"
 RUNTIME_OFFLINE_DEFERRED = "offline_deferred"
 RUNTIME_UNAVAILABLE = "unavailable"
 SSH_POLICY_NOT_INSTALLED = "not_installed"
+# sshd is installed and its configuration could not be validated. Distinct
+# from "not installed", which is a statement about the host, and from a
+# failure, which is a statement about the configuration this package wrote.
+SSH_POLICY_NOT_READY = "not_ready"
+
+# What `sshd -t` answered, as three outcomes rather than a boolean. The
+# boolean made "openssh is not on this host" and "openssh is here and cannot
+# validate yet" the same answer, and reported both as nothing to prove.
+SSHD_ABSENT = "absent"
+SSHD_NOT_READY = "not_ready"
+SSHD_PASS = "pass"
 
 
 def _runtime_report(activation, paths, config, before):
@@ -455,12 +466,20 @@ def _runtime_report(activation, paths, config, before):
         return offline
 
     armed = active_watched_paths(activation.runner)
-    sshd_expected = bool(getattr(activation, "sshd_usable", False))
+    sshd_state = str(getattr(activation, "sshd_state", SSHD_ABSENT))
+    sshd_detail = str(getattr(activation, "sshd_detail", ""))
+    sshd_expected = sshd_state == SSHD_PASS
     policy = effective_ssh_policy(
         config, runner=activation.runner, export_root=paths.export_root
     )
-    if not sshd_expected:
+    if sshd_state == SSHD_ABSENT:
         policy_state, policy_confirmed = SSH_POLICY_NOT_INSTALLED, False
+    elif sshd_state == SSHD_NOT_READY:
+        # Reported as what it is. The account stays disabled either way, so
+        # this does not roll a first install back over an openssh that has
+        # not been configured yet — it simply never claims to have proven
+        # a confinement that was never read.
+        policy_state, policy_confirmed = SSH_POLICY_NOT_READY, False
     elif not policy["available"]:
         policy_state, policy_confirmed = RUNTIME_UNAVAILABLE, False
     else:
@@ -482,6 +501,8 @@ def _runtime_report(activation, paths, config, before):
         "active_watched_paths": armed,
         "ssh_policy_state": policy_state,
         "ssh_policy_confirmed": policy_confirmed,
+        "sshd_state": sshd_state,
+        "sshd_detail": sshd_detail,
         "verified": not problems,
     }
 
@@ -578,9 +599,28 @@ class LiveActivation:
         self._disable_authentication = disable_authentication
         self._paths = None
         self._config = None
-        self.sshd_usable = bool(
-            self.runner.available("sshd") and self.runner.run("sshd", ["-t"], timeout=30).ok
-        )
+        self.sshd_state, self.sshd_detail = self._probe_sshd()
+
+    @property
+    def sshd_usable(self):
+        return self.sshd_state == SSHD_PASS
+
+    def _probe_sshd(self):
+        """Whether sshd validates, cannot validate yet, or is not here at all.
+
+        openssh-server is often configured *after* this package, so at first
+        install `sshd -t` fails for reasons that are not ours — no host keys
+        yet. That is why a baseline is taken before anything is written. It is
+        not a reason to call the result ok.
+        """
+
+        if not self.runner.available("sshd"):
+            return SSHD_ABSENT, "sshd is not installed"
+        result = self.runner.run("sshd", ["-t"], timeout=30)
+        if result.ok:
+            return SSHD_PASS, "sshd accepts its configuration"
+        detail = (result.stderr or result.stdout or "").strip().splitlines()
+        return SSHD_NOT_READY, detail[-1][:200] if detail else "sshd -t failed"
 
     # --- observation ------------------------------------------------------
 
@@ -629,9 +669,20 @@ class LiveActivation:
         """Activate the freshly written candidate and verify it is in force."""
 
         self._paths, self._config = paths, config
-        if self.sshd_usable and not self.runner.run("sshd", ["-t"], timeout=30).ok:
+        # Against the baseline this probe took before anything was written.
+        # An sshd that already could not validate must not be able to hide a
+        # policy of ours that it refuses: what decides is whether the new
+        # complaint names the file this package generated.
+        state, detail = self._probe_sshd()
+        if self.sshd_state == SSHD_PASS and state != SSHD_PASS:
             raise HostConfigError(
-                "sshd_config_invalid", "the generated SSH policy is not accepted by sshd"
+                "sshd_config_invalid",
+                f"the generated SSH policy is not accepted by sshd: {detail}",
+            )
+        if state != SSHD_PASS and SSHD_POLICY_NAME in detail:
+            raise HostConfigError(
+                "sshd_config_invalid",
+                f"sshd refuses the generated SSH policy: {detail}",
             )
         if not self.systemd_live():
             return True

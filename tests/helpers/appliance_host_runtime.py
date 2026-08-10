@@ -78,6 +78,7 @@ class FakeHost:
         self.tools = set(tools)
         self.calls = []
         self.failures = {}
+        self.messages = {}
         self.path_unit_active = path_unit_active
         self.ssh_active = ssh_active
         self.enabled = enabled
@@ -86,12 +87,22 @@ class FakeHost:
 
     # --- scripting --------------------------------------------------------
 
-    def fail(self, tool, *args, returncode=1):
+    def fail(self, tool, *args, returncode=1, stderr=""):
+        """Fail a command, optionally the way the real tool complains.
+
+        The message matters for sshd: what distinguishes "openssh is not
+        configured yet" from "openssh refuses the policy this package wrote"
+        is which file the complaint names.
+        """
+
         self.failures[(tool, tuple(args))] = returncode
+        if stderr:
+            self.messages[(tool, tuple(args))] = stderr
         return self
 
     def succeed(self, tool, *args):
         self.failures.pop((tool, tuple(args)), None)
+        self.messages.pop((tool, tuple(args)), None)
         return self
 
     def _failure(self, tool, args):
@@ -100,6 +111,13 @@ class FakeHost:
             if code is not None:
                 return code
         return 0
+
+    def _message(self, tool, args):
+        for length in range(len(args), -1, -1):
+            text = self.messages.get((tool, tuple(args[:length])))
+            if text is not None:
+                return text
+        return ""
 
     # --- the runner protocol ----------------------------------------------
 
@@ -111,6 +129,7 @@ class FakeHost:
         self.calls.append((tool, args))
         code = self._failure(tool, args)
         stdout = ""
+        stderr = self._message(tool, args)
 
         if tool == "sshd" and args[:1] == ("-T",):
             stdout = "".join(f"{key} {value}\n" for key, value in sorted(self.loaded_policy.items()))
@@ -128,7 +147,9 @@ class FakeHost:
             if args[1:2] == (UNIT_SSH,):
                 self.loaded_policy = policy_of(self.sshd_dir)
 
-        return CommandResult(tool=tool, args=args, returncode=code, stdout=stdout, stderr="")
+        return CommandResult(
+            tool=tool, args=args, returncode=code, stdout=stdout, stderr=stderr
+        )
 
     # --- observation ------------------------------------------------------
 

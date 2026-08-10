@@ -2,12 +2,25 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Check an A/B update artifact the way the appliance will, before shipping it.
 #
-#   scripts/appliance-inspect-rpi-ab-update.sh [--json] <manifest.json>
+#   scripts/appliance-inspect-rpi-ab-update.sh [--json] [--keyring FILE]
+#          [--trusted-fingerprint FPR]... [--require-signature] <manifest.json>
 #
 # The artifact is fed through the same parser, signature check and member
 # allowlist the runtime uses, so an artifact that would be refused on an
 # appliance is refused here instead of in the field. Nothing is written to a
 # block device and nothing is extracted outside a temporary directory.
+#
+# The signature is verified cryptographically, not counted. "manifest.json.asc
+# exists" is a statement about a filename: it is true of a signature made with
+# any key, over any bytes, including bytes that are no longer the ones in front
+# of the inspector. With --keyring the detached signature is checked against
+# that keyring, the signing key's fingerprint is reported, and
+# --trusted-fingerprint restricts which key a release may be signed with.
+#
+# --require-signature is production mode: an unsigned artifact, a signature
+# that does not verify, and a signature from an untrusted key are all failures.
+# Without it an unsigned artifact reports NOT RUN, which is a rehearsal and not
+# a release.
 #
 # Exit status: 0 every check passed, 1 a check failed, 2 the command line is
 # wrong, 3 the host cannot inspect.
@@ -16,14 +29,24 @@ set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 FORMAT=text
 MANIFEST=""
+KEYRING=${EMS_APPLIANCE_OS_KEYRING:-}
+FINGERPRINTS=${EMS_APPLIANCE_OS_TRUSTED_FINGERPRINTS:-}
+REQUIRE_SIGNATURE=no
 
 usage() {
-    sed -n '3,13p' "$0"
+    sed -n '3,25p' "$0"
 }
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --json) FORMAT=json; shift ;;
+        --keyring) KEYRING=${2:?--keyring needs a file}; shift 2 ;;
+        --keyring=*) KEYRING=${1#*=}; shift ;;
+        --trusted-fingerprint)
+            FINGERPRINTS="$FINGERPRINTS ${2:?--trusted-fingerprint needs a fingerprint}"
+            shift 2 ;;
+        --trusted-fingerprint=*) FINGERPRINTS="$FINGERPRINTS ${1#*=}"; shift ;;
+        --require-signature) REQUIRE_SIGNATURE=yes; shift ;;
         -h|--help) usage; exit 0 ;;
         -*) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
         *) [ -z "$MANIFEST" ] || { echo "one manifest at a time" >&2; exit 2; }
@@ -43,13 +66,16 @@ command -v python3 >/dev/null 2>&1 || {
     exit 3
 }
 
+EMS_KEYRING="$KEYRING" EMS_TRUSTED_FINGERPRINTS="$FINGERPRINTS" \
+EMS_REQUIRE_SIGNATURE="$REQUIRE_SIGNATURE" \
 PYTHONPATH="$ROOT" python3 - "$MANIFEST" "$FORMAT" <<'PY'
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
 
-from appliance import ab_persistence, os_artifacts, os_releases, rpi_image_gen, sparse
+from appliance import ab_persistence, commands, os_artifacts, os_releases, rpi_image_gen, sparse
 
 manifest_path, output_format = sys.argv[1:3]
 lock = rpi_image_gen.read_lock()
@@ -112,7 +138,10 @@ else:
         f"{observed} (manifest {release.archive_digest})",
     )
     record("archive_size", archive.stat().st_size == release.archive_size, str(archive.stat().st_size))
-    with tempfile.TemporaryDirectory() as staging:
+    # Beside the archive, not in TMPDIR: the system member expands to 4 GiB and
+    # /tmp is a RAM-sized tmpfs on any systemd default. The directory holding
+    # the archive is the one place known to have room for it.
+    with tempfile.TemporaryDirectory(dir=str(archive.parent)) as staging:
         try:
             staged = os_artifacts.extract(archive, Path(staging) / "members", release)
             record("members_extract_and_verify", True, ", ".join(sorted(staged.members)))
@@ -151,14 +180,69 @@ else:
                 f"{observed or 'unrecognised'} (manifest {member.filesystem})",
             )
 
+def record_state(check, state, detail=""):
+    findings.append({"check": check, "result": state, "detail": detail})
+
+
+# "manifest.json.asc exists" is a statement about a filename. What a release
+# needs is that these exact bytes were signed by a key this project trusts.
 signature = Path(manifest_path).with_suffix(".json.asc")
-findings.append(
-    {
-        "check": "detached_signature",
-        "result": "pass" if signature.is_file() else "not_run",
-        "detail": str(signature) if signature.is_file() else "unsigned; refused in production",
-    }
+keyring = os.environ.get("EMS_KEYRING") or ""
+trusted = tuple(
+    item for item in (os.environ.get("EMS_TRUSTED_FINGERPRINTS") or "").split() if item
 )
+required = os.environ.get("EMS_REQUIRE_SIGNATURE") == "yes"
+
+if not signature.is_file():
+    record_state(
+        "detached_signature",
+        "fail" if required else "not_run",
+        f"{signature} is missing; unsigned artifacts are refused in production",
+    )
+    record_state(
+        "signature_valid",
+        "fail" if required else "not_run",
+        "there is no signature to verify",
+    )
+else:
+    record_state("detached_signature", "pass", str(signature))
+    if not keyring:
+        record_state(
+            "signature_valid",
+            "fail" if required else "not_run",
+            "no --keyring was given, so the signature was not verified",
+        )
+    else:
+        verifier = os_releases.SignatureVerifier(
+            commands.CommandRunner(), keyring=keyring, fingerprints=trusted
+        )
+        if not verifier.available:
+            record_state(
+                "signature_valid",
+                "fail" if required else "not_run",
+                "gpg is not installed, so the signature could not be verified",
+            )
+        else:
+            try:
+                verifier.verify(manifest_path, signature)
+            except os_releases.ReleaseError as exc:
+                record_state("signature_valid", "fail", f"{exc.code}: {exc.message}")
+            else:
+                observed = verifier.fingerprints_of(manifest_path, signature)
+                record_state(
+                    "signature_valid",
+                    "pass",
+                    f"signed by {', '.join(observed) or 'a key in the keyring'}",
+                )
+                if trusted:
+                    record_state("signature_key_trusted", "pass", ", ".join(trusted))
+                else:
+                    record_state(
+                        "signature_key_trusted",
+                        "fail" if required else "not_run",
+                        "no --trusted-fingerprint policy was given, so any key in the "
+                        "keyring would have been accepted",
+                    )
 
 counts = {"pass": 0, "fail": 0, "not_run": 0}
 for finding in findings:

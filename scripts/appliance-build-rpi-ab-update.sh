@@ -82,9 +82,23 @@ for tool in $REQUIRED_TOOLS; do
 done
 [ -z "$missing" ] || not_run "not installed:$missing" required_tool_missing
 
+# Both identifiers are refused before they are used to resolve a path.
+PYTHONPATH="$ROOT" python3 - "$PROFILE" "$BUILD_ID" <<'PY' || exit 2
+import sys
+
+from appliance import build_authority
+
+profile, build_id = sys.argv[1:3]
+try:
+    build_authority.validate_profile(profile)
+    if build_id:
+        build_authority.validate_build_id(build_id)
+except build_authority.BuildAuthorityError as error:
+    sys.exit(f"appliance-build-rpi-ab-update: {error.code}: {error.message}")
+PY
+
 VERSION=$(sed -n 's/^APPLIANCE_VERSION = "\(.*\)"$/\1/p' "$ROOT/appliance/version.py")
 [ -n "$VERSION" ] || fail "cannot read APPLIANCE_VERSION" version_unreadable
-[ -n "$BUILD_ID" ] || BUILD_ID=$(date -u +%Y%m%d%H%M%S 2>/dev/null || echo unknown)
 PROFILE_CONFIG="$ROOT/packaging/appliance/image/profiles/${PROFILE}-ab.yaml"
 [ -f "$PROFILE_CONFIG" ] || fail "there is no build profile for $PROFILE" hardware_profile_unknown
 NAME="ems-solarflow-appliance-${VERSION}-${PROFILE}-arm64-ab"
@@ -99,19 +113,53 @@ fi
                update_artifact_unavailable
 
 if [ -z "$BUILD_AUTHORITY" ]; then
-    for candidate in "$(dirname "$UPDATE")/build-authority.json" \
+    for candidate in "$(dirname "$UPDATE")/$NAME.build-authority.json" \
+                     "$OUTPUT/$NAME.build-authority.json" \
+                     "$(dirname "$UPDATE")/build-authority.json" \
                      "$OUTPUT/build-authority.json"; do
         [ -f "$candidate" ] && BUILD_AUTHORITY=$candidate && break
     done
 fi
+
+# The authority records the build that produced this artefact. Minting a second
+# id here and then asking the authority to confirm it can only ever fail, so the
+# timestamp is a fallback for the development path that has no authority at all.
+if [ -z "$BUILD_ID" ] && [ -f "$BUILD_AUTHORITY" ]; then
+    BUILD_ID=$(PYTHONPATH="$ROOT" python3 - "$BUILD_AUTHORITY" <<'PY' 2>/dev/null || true
+import sys
+
+from appliance import build_authority
+
+try:
+    print(build_authority.read(sys.argv[1]).build_id)
+except Exception:
+    pass
+PY
+)
+fi
+[ -n "$BUILD_ID" ] || BUILD_ID=$(date -u +%Y%m%d%H%M%S 2>/dev/null || echo unknown)
+PYTHONPATH="$ROOT" python3 - "$BUILD_ID" <<'PY' || exit 2
+import sys
+
+from appliance import build_authority
+
+try:
+    build_authority.validate_build_id(sys.argv[1])
+except build_authority.BuildAuthorityError as error:
+    sys.exit(f"appliance-build-rpi-ab-update: {error.code}: {error.message}")
+PY
 
 # Verified against the artefact before anything is described, so an update
 # edited after its build cannot be signed with that build's provenance.
 if [ -n "$BUILD_AUTHORITY" ]; then
     [ -f "$BUILD_AUTHORITY" ] || fail "$BUILD_AUTHORITY is not a file" build_authority_unreadable
     set +e
-    PROVENANCE=$(PYTHONPATH="$ROOT" python3 - "$BUILD_AUTHORITY" "$UPDATE" "$PROFILE" \
+    # Signing is where the builder identity becomes mandatory: a production
+    # release has to be able to say which machine assembled it.
+    PROVENANCE=$(EMS_REQUIRE_BUILDER_ENVIRONMENT=$([ -n "$SIGN_KEY" ] && echo true || echo false) \
+        PYTHONPATH="$ROOT" python3 - "$BUILD_AUTHORITY" "$UPDATE" "$PROFILE" \
         "$BUILD_ID" <<'PY'
+import os
 import sys
 
 from appliance import build_authority, rpi_image_gen
@@ -123,7 +171,12 @@ try:
 except build_authority.BuildAuthorityError as exc:
     sys.exit(f"{exc.code}: {exc.message}")
 problems = build_authority.verify_update(
-    authority, update, profile=profile, revision=lock.commit, build_id=build_id
+    authority,
+    update,
+    profile=profile,
+    revision=lock.commit,
+    build_id=build_id,
+    require_environment=os.environ.get("EMS_REQUIRE_BUILDER_ENVIRONMENT") == "true",
 )
 if problems:
     sys.exit("; ".join(problems))
@@ -133,6 +186,7 @@ print(f"SOURCE_TREE={authority.builder.source_tree_sha256}")
 print(f"PROJECT_REVISION={authority.project.revision}")
 print(f"PROJECT_TREE={authority.project.tree_sha256}")
 print(f"AUTHORITY_SHA256={authority.canonical_hash}")
+print(f"ENVIRONMENT_SHA256={authority.builder_environment_sha256}")
 PY
     )
     verified=$?
@@ -147,6 +201,7 @@ PY
     PROJECT_REVISION=$(echo "$PROVENANCE" | sed -n 's/^PROJECT_REVISION=//p')
     PROJECT_TREE=$(echo "$PROVENANCE" | sed -n 's/^PROJECT_TREE=//p')
     AUTHORITY_SHA256=$(echo "$PROVENANCE" | sed -n 's/^AUTHORITY_SHA256=//p')
+    ENVIRONMENT_SHA256=$(echo "$PROVENANCE" | sed -n 's/^ENVIRONMENT_SHA256=//p')
     PROVENANCE_VERIFIED=true
 else
     # Development only. The manifest must not claim a builder nobody ran.
@@ -156,6 +211,7 @@ else
     PROJECT_REVISION=unverified
     PROJECT_TREE=""
     AUTHORITY_SHA256=""
+    ENVIRONMENT_SHA256=""
     PROVENANCE_VERIFIED=false
     echo "appliance-build-rpi-ab-update: no build authority; this is a development" \
          "artifact and cannot be signed. Build with" \
@@ -179,6 +235,7 @@ EMS_BUILD_SOURCE_TREE=$SOURCE_TREE \
 EMS_PROJECT_REVISION=$PROJECT_REVISION \
 EMS_PROJECT_TREE=$PROJECT_TREE \
 EMS_BUILD_AUTHORITY_SHA256=$AUTHORITY_SHA256 \
+EMS_BUILDER_ENVIRONMENT_SHA256=$ENVIRONMENT_SHA256 \
 PYTHONPATH="$ROOT" python3 - "$ARCHIVE" "$OUTPUT/$NAME.manifest.json" \
     "$VERSION" "$BUILD_ID" "$NAME" "$PROFILE_CONFIG" <<'PY' || fail "the artifact could not be described" describe_failed
 import hashlib
@@ -282,6 +339,7 @@ payload = {
         "source_tree_sha256": os.environ.get("EMS_BUILD_SOURCE_TREE") or "",
         "project_tree_sha256": os.environ.get("EMS_PROJECT_TREE") or "",
         "build_authority_sha256": os.environ.get("EMS_BUILD_AUTHORITY_SHA256") or "",
+        "builder_environment_sha256": os.environ.get("EMS_BUILDER_ENVIRONMENT_SHA256") or "",
     },
     "project_revision": project,
     "appliance_manager_version": version.APPLIANCE_VERSION,

@@ -32,9 +32,10 @@ runtime-state.json.*.tmp
 *.influx.csv
 *.influx.jsonl
 
-# local generated reports
-/reports/
-/reports/**
+# local generated reports. The bounded appliance release evidence under
+# reports/appliance/ is committed on purpose; nothing else here is.
+/reports/*
+!/reports/appliance/
 
 # Manual config/runtime backups (may contain secrets)
 /backup/
@@ -68,13 +69,19 @@ runtime-state.json.*.tmp
 /develop/grafana/data/
 /develop/grafana/data/**
 
+# Process core dumps. A dump carries whatever the crashed process held in
+# memory, so it must never reach a commit, a push or a release bundle.
+# scripts/check_repository_hygiene.py rejects one that gets tracked anyway.
+core
+core.*
+*.core
+
 # Python cache artifacts
 __pycache__/
 .pytest_cache/
 *.py[cod]
 *$py.class
 
-/reports
 
 # Playwright end-to-end tests
 node_modules/
