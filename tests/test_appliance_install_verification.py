@@ -619,3 +619,134 @@ def test_the_optional_ab_tools_are_recommended_not_required():
 
 def _control_file():
     return Path(__file__).resolve().parents[1] / "packaging/appliance/debian/control"
+
+
+def _round_trip(monkeypatch, script, **kwargs):
+    """Drive agent_round_trip over a scripted sequence of connect() outcomes."""
+
+    from types import SimpleNamespace
+
+    from appliance import install_check
+
+    connects = []
+    delays = []
+    deadlines = []
+    sent = []
+
+    class _Connection:
+        def settimeout(self, value):
+            deadlines.append(value)
+
+        def connect(self, path):
+            outcome = script[len(connects)]
+            connects.append(path)
+            if isinstance(outcome, BaseException):
+                raise outcome
+
+        def sendall(self, payload):
+            sent.append(payload)
+
+        def recv(self, size):
+            return b'{"status": "ok"}'
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        install_check,
+        "socket",
+        SimpleNamespace(AF_UNIX=1, SOCK_STREAM=1, socket=lambda family, kind: _Connection()),
+    )
+    result = install_check.agent_round_trip("/run/agent.sock", sleep=delays.append, **kwargs)
+    return SimpleNamespace(
+        result=result, connects=connects, delays=delays, deadlines=deadlines, sent=sent
+    )
+
+
+def test_a_first_boot_timeout_is_retried_until_the_agent_answers(monkeypatch):
+    """The ARM64 guest gate failed a package install on exactly this sequence.
+
+    Both units were active and the socket existed; the round-trip simply did not
+    land inside one attempt while the guest was still starting docker,
+    NetworkManager and polkit.
+    """
+
+    probe = _round_trip(monkeypatch, [TimeoutError(), TimeoutError(), None])
+
+    assert probe.result == "ok"
+    assert len(probe.connects) == 3
+    assert probe.delays == [1.0, 2.0]
+
+
+def test_a_refused_permission_is_never_retried(monkeypatch):
+    """A socket the web account may not use is a misconfiguration, not a delay."""
+
+    probe = _round_trip(monkeypatch, [PermissionError()])
+
+    assert probe.result == "PermissionError"
+    assert probe.connects == ["/run/agent.sock"]
+    assert probe.delays == []
+
+
+def test_the_retries_are_bounded_and_report_the_last_failure(monkeypatch):
+    probe = _round_trip(monkeypatch, [TimeoutError()] * 4, attempts=4)
+
+    assert probe.result == "TimeoutError"
+    assert len(probe.connects) == 4
+    assert len(probe.delays) == 3
+
+
+def test_the_backoff_grows_and_is_capped(monkeypatch):
+    probe = _round_trip(monkeypatch, [ConnectionRefusedError()] * 6, attempts=6)
+
+    assert probe.delays == [1.0, 2.0, 4.0, 4.0, 4.0]
+
+
+def test_a_reply_slower_than_one_attempt_is_still_waited_for(monkeypatch):
+    """Measured on a real aarch64 guest: the agent answered in 22.2 seconds.
+
+    Every attempt gave up at 8, so four attempts saw four timeouts and the
+    package installation failed with a working appliance underneath it. More
+    attempts cannot fix that — each one restarts the same deadline — so the
+    deadline is what has to grow.
+    """
+
+    from appliance import install_check
+
+    probe = _round_trip(monkeypatch, [TimeoutError()] * 3 + [None])
+
+    assert probe.result == "ok"
+    assert probe.deadlines[-1] > 22.2, probe.deadlines
+    assert max(probe.deadlines) <= install_check.WEB_TO_AGENT_TIMEOUT_MAX
+
+
+def test_the_growing_deadline_is_capped(monkeypatch):
+    from appliance import install_check
+
+    probe = _round_trip(monkeypatch, [TimeoutError()] * 8, attempts=8)
+
+    assert probe.deadlines == sorted(probe.deadlines)
+    assert max(probe.deadlines) == install_check.WEB_TO_AGENT_TIMEOUT_MAX
+
+
+def test_the_probe_asks_for_nothing_that_needs_another_subsystem(monkeypatch):
+    """The check is whether the web account can use the socket.
+
+    ``status.get`` collects the whole overview — the Docker daemon, sshd,
+    NetworkManager, the Admin container — so during a postinst its latency is
+    every one of those subsystems' cold start. That is not what this asks.
+    """
+
+    from appliance import install_check
+
+    probe = _round_trip(monkeypatch, [None])
+
+    assert probe.sent == [b'{"operation": "operations.list"}\n']
+    assert install_check.WEB_TO_AGENT_OPERATION == "operations.list"
+    assert install_check.WEB_TO_AGENT_OPERATION in protocol_read_only_names()
+
+
+def protocol_read_only_names():
+    from appliance import protocol
+
+    return {spec.name for spec in protocol.READ_ONLY_OPERATIONS}

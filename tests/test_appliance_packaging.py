@@ -555,3 +555,69 @@ def test_a_successful_export_run_revalidates_backup_access():
 def test_the_disable_unit_is_shipped_by_the_package():
     build = (PACKAGING / "build-deb.sh").read_text(encoding="utf-8")
     assert "ems-appliance-backup-access-disable.service" in build
+
+
+# --- the SFTP tiers ---------------------------------------------------------
+
+
+def test_the_policy_tier_proves_a_session_under_the_policy_it_reported():
+    """An effective policy and a session in two records are two claims.
+
+    The confinement tier used to report five protocol cases as NOT RUN because
+    it could not issue an attributable key, while a second tier proved the same
+    cases with one. Nothing then said the session had run under the policy the
+    first tier reported. It issues its own key now, through the appliance.
+    """
+
+    tier = (SCRIPTS / "appliance-guest-sftp-lifecycle.sh").read_text(encoding="utf-8")
+
+    assert "appliance-guest-issue-backup-key.sh" in tier
+    assert "sshd -T -C" in tier
+    for case in (
+        "a real sftp session with an appliance-issued key",
+        "the session root is the chroot",
+        "a path outside the chroot is not reachable",
+        "a parent-directory traversal cannot leave the chroot",
+    ):
+        assert tier.count(case) >= 2, case
+
+
+def test_a_session_that_never_opened_is_never_read_as_confinement():
+    tier = (SCRIPTS / "appliance-guest-sftp-lifecycle.sh").read_text(encoding="utf-8")
+
+    assert "NOT RUN" in tier
+    assert "exit 3" in tier
+
+
+def test_the_key_is_issued_through_the_appliance_and_never_written_by_hand():
+    issuer = (SCRIPTS / "appliance-guest-issue-backup-key.sh").read_text(encoding="utf-8")
+
+    assert "/api/ssh/keys" in issuer
+    assert "/api/operations/confirm" in issuer
+    assert "confirmation_token" in issuer
+    assert "authorized_keys" not in issuer.split("# Exit status")[-1]
+
+
+def test_both_sftp_tiers_issue_their_key_the_same_way():
+    for name in ("appliance-guest-sftp-lifecycle.sh", "appliance-guest-sftp-session.sh"):
+        text = (SCRIPTS / name).read_text(encoding="utf-8")
+        assert "appliance-guest-issue-backup-key.sh" in text, name
+
+
+def test_the_amd64_driver_carries_every_tier_it_runs():
+    driver = (SCRIPTS / "appliance-smoke-vm-amd64.sh").read_text(encoding="utf-8")
+    copied = driver.split("root@127.0.0.1:/root/")[0]
+
+    for name in (
+        "appliance-guest-sftp-lifecycle.sh",
+        "appliance-guest-sftp-session.sh",
+        "appliance-guest-issue-backup-key.sh",
+    ):
+        assert name in copied, name
+
+
+def test_the_forced_command_cannot_be_swapped_for_a_chosen_subsystem():
+    tier = (SCRIPTS / "appliance-guest-sftp-lifecycle.sh").read_text(encoding="utf-8")
+
+    assert "-s " in tier
+    assert "subsystem" in tier.lower()

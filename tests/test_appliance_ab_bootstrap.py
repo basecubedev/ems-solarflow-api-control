@@ -12,6 +12,7 @@ appliance with no registry access must still be able to finish a trial, which is
 what seeding the images onto the shared partition before the reboot buys.
 """
 
+import hashlib
 import json
 from types import SimpleNamespace
 
@@ -49,16 +50,27 @@ class FakeDocker:
         self.saved = []
         self.loaded = []
         self.started = []
+        self.overrides = []
         self.save_fails = False
 
     def daemon_running(self):
         return self.running
 
+    def image_id_of(self, reference):
+        """A stable stand-in for the image config digest docker load restores."""
+
+        blob = hashlib.sha256(str(reference).encode("utf-8")).hexdigest()
+        return f"sha256:{blob}"
+
     def inspect_image(self, reference):
+        present = reference in self.present or reference in {
+            self.image_id_of(item) for item in self.present
+        }
         return SimpleNamespace(
             reference=reference,
-            exists=reference in self.present,
+            exists=present,
             digest=str(reference).partition("@")[2],
+            image_id=self.image_id_of(reference) if reference in self.present else reference,
             architecture="arm64",
             os="linux",
         )
@@ -87,8 +99,9 @@ class FakeDocker:
         self.loaded.append(str(path))
         self.present.add(reference)
 
-    def compose_up_service(self, service):
+    def compose_up_service(self, service, *, overrides=()):
         self.started.append(service)
+        self.overrides.append(tuple(str(item) for item in overrides))
 
 
 def store(tmp_path):

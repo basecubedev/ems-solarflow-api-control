@@ -27,7 +27,14 @@ failures=0
 
 pass() { printf '  PASS  %s\n' "$1"; }
 fail() { printf '  FAIL  %s\n' "$1" >&2; failures=$((failures + 1)); }
-step() { printf '\n== %s ==\n' "$1"; }
+
+# A stage marker names the boundary a run reached, so a guest that stops says
+# where. The slug is the step name, which is what the reader already sees.
+step() {
+    printf '\nAPPLIANCE_EVIDENCE stage=%s\n' \
+        "$(printf '%s' "$1" | tr ' ' '-' | tr -cd 'A-Za-z0-9-')"
+    printf '== %s ==\n' "$1"
+}
 
 check() {
     description=$1
@@ -41,6 +48,33 @@ check_not() {
     if "$@" >/dev/null 2>&1; then fail "$description"; else pass "$description"; fi
 }
 
+# How long the agent takes to answer, when something said it did not. The
+# install check is bounded, so its verdict cannot tell a slow host from a
+# broken one; this is unbounded enough to say which, and only runs on failure.
+probe_agent() {
+    printf '\n---- agent round-trip ----\n'
+    runuser -u "$WEB_USER" -- python3 -c "
+import json, socket, sys, time
+started = time.monotonic()
+try:
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.settimeout(300)
+    s.connect('$SOCKET')
+    connected = time.monotonic() - started
+    s.sendall(b'{\"operation\": \"status.get\"}\n')
+    data = b''
+    while not data.endswith(b'\n'):
+        chunk = s.recv(65536)
+        if not chunk: break
+        data += chunk
+    print('connect_seconds: %.1f' % connected)
+    print('reply_seconds: %.1f' % (time.monotonic() - started))
+    print('ok: %s' % json.loads(data.decode()).get('ok'))
+except Exception as exc:
+    print('failed_after_seconds: %.1f' % (time.monotonic() - started))
+    print('error: %s: %s' % (exc.__class__.__name__, exc))
+" 2>&1 || true
+}
+
 dump_logs() {
     printf '\n---- %s ----\n' "$AGENT_UNIT"
     journalctl -u "$AGENT_UNIT" -n 80 --no-pager 2>&1 || true
@@ -48,6 +82,7 @@ dump_logs() {
     journalctl -u "$WEB_UNIT" -n 80 --no-pager 2>&1 || true
     printf '\n---- units ----\n'
     systemctl --failed --no-pager 2>&1 || true
+    probe_agent
 }
 
 step "architecture"
@@ -65,10 +100,16 @@ if [ -n "$EXPECTED_ARCH" ]; then
         exit 1
     fi
     pass "the guest is $EXPECTED_ARCH"
-    case "$(basename "$PACKAGE")" in
-        *_"$EXPECTED_ARCH".deb) pass "the package is built for $EXPECTED_ARCH" ;;
-        *) fail "the package is not a $EXPECTED_ARCH build" ;;
-    esac
+    # Asked of the package, not of its file name. A driver that stages the
+    # package under a neutral name — the ARM64 one copies it in as
+    # appliance.deb — would otherwise be told its own arm64 build is not an
+    # arm64 build, and a file renamed to look right would be believed.
+    PACKAGE_ARCH=$(dpkg-deb -f "$PACKAGE" Architecture 2>/dev/null)
+    if [ "$PACKAGE_ARCH" = "$EXPECTED_ARCH" ]; then
+        pass "the package is built for $EXPECTED_ARCH"
+    else
+        fail "the package declares ${PACKAGE_ARCH:-no architecture}, not $EXPECTED_ARCH"
+    fi
 fi
 
 step "install"

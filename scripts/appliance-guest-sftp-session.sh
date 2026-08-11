@@ -27,8 +27,6 @@ set -uo pipefail
 
 BACKUP_USER=${EMS_APPLIANCE_BACKUP_USER:-ems-backup}
 CLIENT_KEY=/root/appliance-issued-key
-API=http://127.0.0.1:8080
-COOKIES=/root/.appliance-session
 PASSWORD=${EMS_APPLIANCE_TEST_PASSWORD:-appliance-session-test-password}
 
 failures=0
@@ -47,77 +45,25 @@ for tool in sshd ssh sftp ssh-keygen curl jq systemctl; do
 done
 command -v ems-appliance >/dev/null 2>&1 || not_run "the package is not installed" package_missing
 
-step "the appliance's own services"
-systemctl start ems-appliance-agent.service ems-appliance-web.service \
-    || not_run "the appliance services would not start" services_unavailable
-for _ in $(seq 1 60); do
-    curl -fsS -o /dev/null "$API/api/session" 2>/dev/null && break
-    sleep 1
-done
-curl -fsS -o /dev/null "$API/api/session" 2>/dev/null \
-    || not_run "the appliance web interface never answered" web_unreachable
-pass "the agent and the web interface are running"
-
-step "an authenticated operator session"
-# The password is reset through the privileged CLI rather than guessed: an
-# earlier tier in the same guest may already have configured one, and a login
-# that fails because somebody else set the password is not evidence about
-# anything this tier is asking.
-ems-appliance password-reset --password "$PASSWORD" >/dev/null \
-    || not_run "the appliance password could not be set" password_reset_failed
-rm -f "$COOKIES"
-curl -fsS -o /dev/null -c "$COOKIES" "$API/api/session"
-LOGIN=$(curl -fsS -b "$COOKIES" -c "$COOKIES" -H 'Content-Type: application/json' \
-    -d "$(jq -nc --arg p "$PASSWORD" '{password:$p}')" "$API/api/session/login") \
-    || not_run "the appliance refused the session" session_refused
-CSRF=$(echo "$LOGIN" | jq -r '.csrf_token // empty')
-[ -n "$CSRF" ] || CSRF=$(curl -fsS -b "$COOKIES" "$API/api/session" | jq -r '.csrf_token // empty')
-[ -n "$CSRF" ] || not_run "the session carries no CSRF token" session_incomplete
-pass "an authenticated session with a CSRF token"
-
-api_post() {
-    curl -fsS -b "$COOKIES" -c "$COOKIES" -H 'Content-Type: application/json' \
-        -H "X-Appliance-CSRF: $CSRF" -d "$2" "$API$1"
-}
-
 step "a key issued through the appliance's key management"
-rm -f "$CLIENT_KEY" "$CLIENT_KEY.pub"
-ssh-keygen -q -t ed25519 -N '' -C appliance-issued -f "$CLIENT_KEY"
-PUBLIC=$(cat "$CLIENT_KEY.pub")
-PLAN=$(api_post /api/ssh/keys "$(jq -nc --arg a "$BACKUP_USER" --arg k "$PUBLIC" \
-    '{account:$a,public_key:$k}')") \
-    || not_run "the appliance refused to plan the key addition" key_plan_refused
-OPERATION=$(echo "$PLAN" | jq -r '.operation.operation_id // .operation_id // empty')
-TOKEN=$(echo "$PLAN" | jq -r '.confirmation_token // empty')
-[ -n "$OPERATION" ] || not_run "the key plan named no operation" key_plan_incomplete
-# The plan is confirmed with the token the appliance issued for it, which is
-# what binds the execution to the plan an operator was shown.
-[ -n "$TOKEN" ] || not_run "the key plan issued no confirmation token" key_plan_incomplete
-api_post /api/operations/confirm \
-    "$(jq -nc --arg o "$OPERATION" --arg t "$TOKEN" \
-        '{operation_id:$o,confirmation_token:$t}')" >/dev/null \
-    || not_run "the appliance refused to execute the key addition" key_execute_refused
-KEYS=$(curl -fsS -b "$COOKIES" "$API/api/ssh/keys")
-FINGERPRINT=$(ssh-keygen -lf "$CLIENT_KEY.pub" | awk '{print $2}')
-if echo "$KEYS" | jq -r '..|.fingerprint? // empty' | grep -qF "$FINGERPRINT"; then
+ISSUE=$(bash "$(dirname "$0")/appliance-guest-issue-backup-key.sh" \
+    --account "$BACKUP_USER" --key "$CLIENT_KEY" --password "$PASSWORD" 2>&1) \
+    || not_run "the appliance issued no key: $(printf '%s' "$ISSUE" | tail -2 | tr '\n' ' ')" \
+               key_issue_refused
+FINGERPRINT=$(printf '%s\n' "$ISSUE" | sed -n 's/^fingerprint: //p')
+if [ "$(printf '%s\n' "$ISSUE" | sed -n 's/^listed: //p')" = true ]; then
     pass "the appliance reports the key it issued ($FINGERPRINT)"
 else
     fail "the issued key is not in the appliance's own key list"
 fi
-
-step "the backup account, activated by the appliance"
-# activate is the call that reports a state; status reports the observation it
-# was derived from. Activation is also what restores the key into the account,
-# so a session before it would be testing the wrong thing.
-ACTIVATION=$(ems-appliance backup-access activate --json 2>&1)
-STATE=$(echo "$ACTIVATION" | jq -r '.state // empty' 2>/dev/null)
-if [ "$STATE" = active ]; then
+if [ "$(printf '%s\n' "$ISSUE" | sed -n 's/^activation_state: //p')" = active ]; then
     pass "backup access is active"
 else
-    fail "backup access is ${STATE:-unreported}: $(echo "$ACTIVATION" | jq -r '.reason // empty' 2>/dev/null)"
-    echo "$ACTIVATION" | head -40 | sed 's/^/    /'
+    fail "backup access is not active"
+    # This log is read for its last RESULT line; a nested one would be a
+    # second tier's answer inside this tier's record.
+    printf '%s\n' "$ISSUE" | grep -v '^RESULT:' | sed 's/^/    /'
 fi
-systemctl reload ssh.service 2>/dev/null || systemctl restart ssh.service
 
 SSH_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
           -o LogLevel=ERROR -o BatchMode=yes -o ConnectTimeout=10 -i "$CLIENT_KEY")
@@ -186,6 +132,44 @@ else
     fail "the host's /etc/passwd was readable through the session"
 fi
 
+step "the session can read and nothing else"
+# The forced command carries -P with the write operations removed, and the
+# export tree is bind-mounted read-only under the chroot. Both are asked here:
+# a refusal is only worth having if the tree is still untouched afterwards.
+refused() {
+    description=$1
+    shift
+    output=$(sftp_batch "$@")
+    if [ $? -ne 0 ]; then
+        pass "$description is refused"
+    else
+        fail "$description was allowed: $(printf '%s' "$output" | tail -1)"
+    fi
+}
+
+echo "an upload the appliance must refuse" >/root/upload-attempt.txt
+refused "writing a new file"        "put /root/upload-attempt.txt /backups/uploaded.txt"
+refused "overwriting an export"     "put /root/upload-attempt.txt /backups/known-file.txt"
+refused "renaming a file"           "rename /backups/known-file.txt /backups/moved.txt"
+refused "creating a directory"      "mkdir /backups/created-by-client"
+refused "removing a directory"      "rmdir /config"
+refused "removing a file"           "rm /backups/known-file.txt"
+refused "changing a mode"           "chmod 777 /backups/known-file.txt"
+refused "creating a symlink"        "ln -s /etc/passwd /backups/escape"
+
+AFTER=$(sftp_batch "ls /backups")
+if printf '%s' "$AFTER" | grep -q "known-file.txt" \
+   && ! printf '%s' "$AFTER" | grep -qE "uploaded.txt|moved.txt|created-by-client|escape"; then
+    pass "the exported tree is exactly as it was before the attempts"
+else
+    fail "the exported tree changed: $(printf '%s' "$AFTER" | tr '\n' ' ')"
+fi
+if grep -q "a fetched backup" /opt/ems-solarflow/backups/known-file.txt 2>/dev/null; then
+    pass "the file behind the export is unchanged on the host"
+else
+    fail "the host-side file behind the export was modified"
+fi
+
 step "the session is sftp and nothing else"
 if ssh "${SSH_OPTS[@]}" "$BACKUP_USER@127.0.0.1" 'id' >/dev/null 2>&1; then
     fail "the confined account executed a shell command"
@@ -193,14 +177,23 @@ else
     pass "shell and command execution are refused"
 fi
 
+# -L is asked differently from -R and -D. The local listener belongs to the
+# client, so it appears whatever the server allows and connecting to it proves
+# nothing; ExitOnForwardFailure does not cover it either. What decides is
+# whether the server opens the channel, so the forward is used: a granted one
+# would carry sshd's banner back from port 22, a refused one carries nothing.
 ssh "${SSH_OPTS[@]}" -N -L 127.0.0.1:18022:127.0.0.1:22 \
-    -o ExitOnForwardFailure=yes "$BACKUP_USER@127.0.0.1" >/dev/null 2>&1 &
+    "$BACKUP_USER@127.0.0.1" >/dev/null 2>&1 &
 forward_pid=$!
 sleep 3
-if kill -0 "$forward_pid" 2>/dev/null && (exec 3<>/dev/tcp/127.0.0.1/18022) 2>/dev/null; then
-    fail "local port forwarding was granted"
+BANNER=$(timeout 8 bash -c '
+    exec 3<>/dev/tcp/127.0.0.1/18022 2>/dev/null || exit 1
+    head -c 4 <&3
+' 2>/dev/null)
+if [ "$BANNER" = "SSH-" ]; then
+    fail "local port forwarding carried a connection to the host's sshd"
 else
-    pass "local port forwarding (-L) is refused"
+    pass "local port forwarding (-L) carries nothing"
 fi
 kill "$forward_pid" 2>/dev/null
 wait "$forward_pid" 2>/dev/null
@@ -231,6 +224,27 @@ if sftp -b /dev/null -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
     fail "an unauthorised key reached the confined account"
 else
     pass "a key the appliance never issued cannot log in"
+fi
+
+step "an appliance upgraded from the release that could not authenticate"
+# The defect shipped as a root-owned 0700 key directory. An upgrade has to
+# repair it, because the account can never fix it itself and a reinstall of the
+# same package used to skip the hardening for an account it already owned.
+HOME_DIR=$(getent passwd "$BACKUP_USER" | cut -d: -f6)
+chown root:root "$HOME_DIR/.ssh"
+chmod 0700 "$HOME_DIR/.ssh"
+if sftp_batch "pwd" >/dev/null 2>&1; then
+    fail "the reintroduced 0700 key directory still authenticated; the case proves nothing"
+else
+    pass "the old combination really does refuse the login"
+fi
+/usr/lib/ems-appliance-manager/backup-account.sh ensure >/dev/null 2>&1 || true
+REPAIRED=$(sftp_batch "pwd")
+if [ $? -eq 0 ] && printf '%s' "$REPAIRED" | grep -q 'Remote working directory: /'; then
+    pass "the package repaired the key directory and the login works again"
+    printf '    now: %s\n' "$(stat -c '%U:%G %a' "$HOME_DIR/.ssh")"
+else
+    fail "an upgrade did not repair the key directory: $(stat -c '%U:%G %a' "$HOME_DIR/.ssh")"
 fi
 
 printf '\n'

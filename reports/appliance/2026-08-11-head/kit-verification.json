@@ -1,0 +1,67 @@
+{
+  "attestation": {
+    "problems": [],
+    "sha256": "sha256:51d315d15c5fe0e8e02d8e3eb28bdf6b6dae1fd2690ce87c0856e0b587d16c15",
+    "signature": {
+      "code": "",
+      "detail": "signed by D16E8DE0B133BD8F7BF1E6CDA5D4C295127CB181",
+      "document_sha256": "sha256:51d315d15c5fe0e8e02d8e3eb28bdf6b6dae1fd2690ce87c0856e0b587d16c15",
+      "fingerprints": [
+        "D16E8DE0B133BD8F7BF1E6CDA5D4C295127CB181"
+      ],
+      "present": true,
+      "signature_sha256": "sha256:e84f7f257698aaf64416d4b4e2f14c9ac5721863d42ab405c13c43fbcd4fc449",
+      "trusted": true,
+      "verified": true
+    }
+  },
+  "checksum_problems": [],
+  "files_verified": 22,
+  "freshness": {
+    "certified_revision": "50645a3b69ebe345f701efb747969084326ec4a2",
+    "certified_tree": "sha256:f7ebc6c2c617f8dd7bdfd7d99ed8fd682a501c9a8a006fb9298a0d4132553d4a",
+    "current_revision": "50645a3b69ebe345f701efb747969084326ec4a2",
+    "current_tree": "sha256:f7ebc6c2c617f8dd7bdfd7d99ed8fd682a501c9a8a006fb9298a0d4132553d4a",
+    "detail": "the checkout is the certified revision and tree",
+    "stale": false
+  },
+  "kit": "/zfs/tmp/appliance-head/carried-kit",
+  "kit_manifest_sha256": "sha256:e48efe2e724989a6c774b665548c346f0b09583a6c3d1b31cd83a375ec07b945",
+  "physical_ready": true,
+  "private_key_problems": [],
+  "readiness": {
+    "invariants": {
+      "all_mandatory_inspections_pass": true,
+      "all_profiles_verified": true,
+      "attestation_artefacts_rehashed": true,
+      "attestation_result_pass": true,
+      "attestation_signature_present": true,
+      "attestation_signature_verified": true,
+      "hardware_kit_verified": true,
+      "production_gate_pass": true,
+      "release_not_stale": true,
+      "runtime_required_gates_pass": true,
+      "source_bundle_verified": true,
+      "trusted_signer": true
+    },
+    "physical_ready": true,
+    "unmet": []
+  },
+  "runtime_gates": {
+    "detail": "arm64_guest=fail, docker_reconstruction=pass, networkmanager_fail_closed=pass, package_lifecycle=pass, sftp=pass",
+    "ok": true
+  },
+  "source_binding": {
+    "authority_sha256": "sha256:a5ccea37cf2b681108ca462290de5908523e3bdf30cb301fb79b5cd84370792d",
+    "bundle_sha256": "sha256:c392de21e7307f30f9c02d3b033bcc549301cb414e719590ca2ac18b710703cd",
+    "ok": true,
+    "parity_sha256": "sha256:5bc13a29760b7ef47a3f8bcd5ba31ffa64b69f141b3e71dc02abe826e535a21e",
+    "problems": [],
+    "revision": "50645a3b69ebe345f701efb747969084326ec4a2",
+    "symlinks": 6,
+    "tracked_objects": 1178,
+    "tree_sha256": "sha256:f7ebc6c2c617f8dd7bdfd7d99ed8fd682a501c9a8a006fb9298a0d4132553d4a"
+  },
+  "stale_problems": [],
+  "verification_version": 1
+}

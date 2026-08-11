@@ -170,6 +170,7 @@ g 'export DEBIAN_FRONTEND=noninteractive
 gcp "$PACKAGE" "$ROOT/scripts/appliance-guest-smoke.sh" \
     "$ROOT/scripts/appliance-guest-sftp-lifecycle.sh" \
     "$ROOT/scripts/appliance-guest-sftp-session.sh" \
+    "$ROOT/scripts/appliance-guest-issue-backup-key.sh" \
     "$ROOT/scripts/appliance-guest-network-persistence.sh" root@127.0.0.1:/root/ >/dev/null
 
 [ -n "$EVIDENCE" ] && mkdir -p "$EVIDENCE"

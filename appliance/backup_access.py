@@ -61,6 +61,17 @@ class ExportPath:
     mounted_source: str = ""
     source_verified: bool = False
 
+    @property
+    def confined(self):
+        """Mounted, read-only and publishing the configured directory — all three.
+
+        Reported rather than left to be recombined: the three inputs are next to
+        each other in this payload, and any consumer that checks only one of
+        them would call a writable or redirected export a confined one.
+        """
+
+        return self.state == STATE_MOUNTED and self.read_only and self.source_verified
+
     def to_dict(self):
         return {
             "name": self.name,
@@ -75,6 +86,7 @@ class ExportPath:
             "read_only": self.read_only,
             "mounted_source": self.mounted_source,
             "source_verified": self.source_verified,
+            "confined": self.confined,
         }
 
 

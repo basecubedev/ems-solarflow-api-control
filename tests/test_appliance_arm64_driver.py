@@ -31,19 +31,35 @@ EXIT_USAGE = 2
 
 QEMU_STUB = """#!/bin/sh
 console=""
+evidence=""
 for argument in "$@"; do
     case "$argument" in
         file:*) console=${argument#file:} ;;
+        file,id=evidence,path=*) evidence=${argument#file,id=evidence,path=} ;;
     esac
 done
 [ -n "$console" ] || exit 1
 cat "${EMS_TEST_CONSOLE_FIXTURE:-/dev/null}" > "$console"
+# A guest that reached the dedicated port delivers its record there. The
+# console keeps whatever the guest also printed, exactly as on real hardware.
+if [ "${EMS_TEST_EVIDENCE_CHANNEL:-dedicated}" = dedicated ] && [ -n "$evidence" ]; then
+    cat "${EMS_TEST_EVIDENCE_FIXTURE:-${EMS_TEST_CONSOLE_FIXTURE:-/dev/null}}" > "$evidence"
+fi
 exit 0
 """
 
 QEMU_IMG_STUB = """#!/bin/sh
 if [ "$1" = "info" ]; then
-    printf '{ "virtual-size": 2147483648, "format": "%s" }\\n' "${EMS_TEST_IMAGE_FORMAT:-qcow2}"
+    # The shape qemu-img 9 and later actually print: the protocol node comes
+    # first and its own format is "file", so a driver that takes the first
+    # "format" in the document reads every qcow2 as unusable.
+    printf '{\\n'
+    printf '  "children": [ { "name": "file", "info": {\\n'
+    printf '      "virtual-size": 336855040, "format": "file" } } ],\\n'
+    printf '  "virtual-size": 2147483648,\\n'
+    printf '  "format": "%s",\\n' "${EMS_TEST_IMAGE_FORMAT:-qcow2}"
+    printf '  "format-specific": { "type": "%s" }\\n' "${EMS_TEST_IMAGE_FORMAT:-qcow2}"
+    printf '}\\n'
     exit "${EMS_TEST_IMAGE_INFO_RC:-0}"
 fi
 for argument in "$@"; do
@@ -156,6 +172,9 @@ def sandbox(tmp_path):
     keyring = tmp_path / "keyring.gpg"
     keyring.write_bytes(b"fake-keyring")
 
+    cache = tmp_path / "vm-cache"
+    cache.mkdir()
+
     return {
         "stubs": stubs,
         "firmware": firmware,
@@ -163,6 +182,7 @@ def sandbox(tmp_path):
         "console": console,
         "mirror": mirror,
         "keyring": keyring,
+        "cache": cache,
         "tmp": tmp_path,
     }
 
@@ -176,6 +196,12 @@ def run_driver(sandbox, *arguments, **environment):
     env["EMS_TEST_MIRROR"] = str(sandbox["mirror"])
     env["EMS_ARM64_KEYRINGS"] = str(sandbox["keyring"])
     env["TMPDIR"] = str(sandbox["tmp"])
+    # The driver's base-image step falls back to the developer's own
+    # ~/.cache/ems-appliance-vm. A case that asks what happens when an image
+    # cannot be obtained would silently be answered by a real cached image that
+    # an earlier VM run had left there, so every run gets an empty cache of its
+    # own unless the case seeds one deliberately.
+    env["EMS_APPLIANCE_VM_CACHE"] = str(sandbox["cache"])
     env.update({key: str(value) for key, value in environment.items()})
     return subprocess.run(
         [str(DRIVER), *arguments],
@@ -237,6 +263,21 @@ def test_the_guest_proves_its_architecture_before_installing_the_package():
     assert "EXPECTED_ARCH" in guest
 
 
+def test_the_package_architecture_is_asked_of_the_package_not_its_name():
+    """This driver stages the package as appliance.deb.
+
+    A file-name test would call the driver's own arm64 build "not a arm64
+    build", and would equally believe an amd64 package renamed to end in
+    _arm64.deb.
+    """
+
+    guest = GUEST.read_text(encoding="utf-8")
+
+    assert "dpkg-deb -f" in guest
+    assert "Architecture" in guest
+    assert '*_"$EXPECTED_ARCH".deb' not in guest
+
+
 def test_the_arm64_driver_asks_the_guest_for_arm64():
     assert "guest-smoke.sh /mnt/payload/appliance.deb arm64" in text()
 
@@ -267,6 +308,41 @@ def test_a_silent_guest_is_never_reported_as_a_pass(sandbox):
 
     assert result.returncode == EXIT_NOT_RUN, result.stdout + result.stderr
     assert "RESULT: NOT RUN" in result.stderr
+
+
+def test_a_symlinked_firmware_is_measured_through_the_link(sandbox):
+    """Debian ships AAVMF_CODE.fd as a symlink, which is the normal case.
+
+    `stat` without -L measures the link — 24 bytes — so the pflash bound would
+    be checked against the link and pass whatever it pointed at, and the run's
+    own inputs record would claim a 24-byte firmware.
+    """
+
+    firmware = sandbox["firmware"]
+    (firmware / "AAVMF_CODE.real.fd").write_bytes(b"\x00" * (64 * 1024 * 1024))
+    link = firmware / "AAVMF_CODE.link.fd"
+    link.symlink_to("AAVMF_CODE.real.fd")
+
+    result = run_driver(
+        sandbox, "--image", str(sandbox["image"]), EMS_ARM64_FIRMWARE=str(link)
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"{64 * 1024 * 1024} bytes" in result.stdout, result.stdout
+
+
+def test_a_symlinked_firmware_larger_than_the_slot_is_still_refused(sandbox):
+    firmware = sandbox["firmware"]
+    (firmware / "AAVMF_CODE.big.fd").write_bytes(b"\x00" * (64 * 1024 * 1024 + 1))
+    link = firmware / "AAVMF_CODE.biglink.fd"
+    link.symlink_to("AAVMF_CODE.big.fd")
+
+    result = run_driver(
+        sandbox, "--image", str(sandbox["image"]), EMS_ARM64_FIRMWARE=str(link)
+    )
+
+    assert result.returncode == EXIT_NOT_RUN, result.stdout + result.stderr
+    assert "pflash" in result.stdout + result.stderr
 
 
 def test_missing_firmware_reports_not_run(sandbox):
@@ -1291,3 +1367,78 @@ def test_the_latest_pointer_names_the_most_recent_run(sandbox):
     latest = (output / "latest.txt").read_text(encoding="utf-8").strip()
     assert latest in [run.name for run in evidence_runs(output)], latest
     assert latest in second.stderr + second.stdout or latest, latest
+
+
+# --- the guest's record travels on a channel nothing else writes to ---------
+#
+# Two real aarch64 runs failed with no diagnosis because the tier logged to the
+# boot console, which agetty claims and revokes. The record now has its own
+# virtio-serial port, and these cases hold the driver to reading that.
+
+
+def test_the_result_names_the_channel_the_record_came_from(sandbox):
+    output = sandbox["tmp"] / "evidence"
+    output.mkdir()
+
+    result = run_driver(sandbox, "--image", str(sandbox["image"]), "--output", str(output))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "record_channel: dedicated" in (only_run(output) / "result.txt").read_text()
+
+
+def test_the_record_is_preserved_beside_the_serial_log(sandbox):
+    output = sandbox["tmp"] / "evidence"
+    output.mkdir()
+
+    run_driver(sandbox, "--image", str(sandbox["image"]), "--output", str(output))
+
+    run = only_run(output)
+    assert (run / "evidence.log").is_file(), sorted(item.name for item in run.iterdir())
+    assert "RESULT: PASS" in (run / "evidence.log").read_text()
+
+
+def test_a_pass_on_the_shared_console_cannot_override_the_record(sandbox):
+    """The console is not the verdict, whatever it happens to contain."""
+
+    evidence = sandbox["tmp"] / "evidence-fixture.txt"
+    evidence.write_text(FAILING_CONSOLE, encoding="utf-8")
+
+    result = run_driver(
+        sandbox,
+        "--image",
+        str(sandbox["image"]),
+        EMS_TEST_EVIDENCE_FIXTURE=str(evidence),
+    )
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "RESULT: FAIL" in result.stderr
+
+
+def test_a_guest_that_never_reached_the_port_is_read_from_the_console_and_said_so(sandbox):
+    output = sandbox["tmp"] / "evidence"
+    output.mkdir()
+
+    result = run_driver(
+        sandbox,
+        "--image",
+        str(sandbox["image"]),
+        "--output",
+        str(output),
+        EMS_TEST_EVIDENCE_CHANNEL="console",
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "record_channel: console" in (only_run(output) / "result.txt").read_text()
+    assert "delivered no record" in result.stderr
+
+
+def test_the_driver_gives_the_guest_a_port_of_its_own():
+    assert "virtio-serial-pci" in text()
+    assert "virtserialport" in text()
+    assert "guest-evidence.sh" in text()
+
+
+def test_the_guest_tier_is_never_redirected_to_the_login_console():
+    for line in text().splitlines():
+        if "guest-smoke.sh" in line:
+            assert "> /dev/ttyAMA0" not in line, line

@@ -296,13 +296,21 @@ def verify(status, mounts, *, schema_version=PERSISTENT_SCHEMA_VERSION):
         )
 
     source = record.get("source") or ""
-    aliases = _persistent_aliases(manifest, status, source)
+    aliases = _persistent_aliases(manifest, status)
     problems = []
     state = STATE_OK
 
     if expected and source and source not in aliases:
         state = STATE_IDENTITY_MISMATCH
         problems.append(f"{mountpoint} is mounted from {source}, expected {expected}")
+    elif source:
+        # The mountpoint's own source, once it survived the check above, is the
+        # partition the binds have to come from. Without this the two checks
+        # measure one partition against two different authorities: a host whose
+        # descriptor names no resolvable device passes here and has every bind
+        # called foreign. A mismatched mountpoint never reaches this branch, so
+        # a wrong partition cannot make itself the authority for its own binds.
+        aliases = aliases | {source}
 
     options = record.get("options") or frozenset()
     for option in REQUIRED_OPTIONS:
@@ -341,19 +349,19 @@ def verify(status, mounts, *, schema_version=PERSISTENT_SCHEMA_VERSION):
     )
 
 
-def _persistent_aliases(manifest, status, observed):
+def _persistent_aliases(manifest, status):
     """Every name the persistent partition legitimately answers to.
 
     systemd mounts it through upstream's ``/dev/disk/by-slot`` alias, and the
     kernel reports back whatever string was passed, so the resolved device path
-    and the alias are the same partition under two names.
+    and the alias are the same partition under two names. What the mountpoint
+    is actually mounted from joins this set in ``verify``, but only after it
+    has been judged.
     """
 
     names = {manifest.persistent_alias}
     if status.persist_device is not None:
         names.add(status.persist_device.path)
-    if observed and observed in names:
-        names.add(observed)
     return {name for name in names if name}
 
 

@@ -254,6 +254,56 @@ def test_every_declared_path_has_an_activation_link_in_the_image():
         assert target == f"{ab_persistence.GENERATOR_UNIT_DIR}/{unit}"
 
 
+GENERATOR_SCRIPT = (
+    "image/gpt/ab_userdata/device/rootfs-overlay"
+    "/usr/lib/systemd/system-generators/slot-shared-generator"
+)
+DISCOVERY_PATHS = (Path("/usr/share/rpi-image-gen"), Path("/opt/rpi-image-gen"))
+
+
+def slot_mount_gate(tmp_path, *, with_checkout):
+    """A project root laid out the way the gate's own discovery expects."""
+
+    root = tmp_path / "project"
+    (root / "scripts").mkdir(parents=True)
+    shutil.copy(ROOT / "scripts/appliance-verify-slot-mounts.sh", root / "scripts")
+    (root / "appliance").symlink_to(ROOT / "appliance")
+    if with_checkout:
+        generator = tmp_path / "rpi-image-gen" / GENERATOR_SCRIPT
+        generator.parent.mkdir(parents=True)
+        generator.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        generator.chmod(0o755)
+    return subprocess.run(
+        ["sh", str(root / "scripts/appliance-verify-slot-mounts.sh")],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "EMS_RPI_IMAGE_GEN": ""},
+    )
+
+
+def test_the_slot_mount_gate_finds_a_sibling_checkout_without_being_told(tmp_path):
+    """A release run passes no --rpi-image-gen, and reported NOT RUN because of it.
+
+    Its sibling gate discovered the same checkout in the same run, so the six
+    shipped wants links went unproven while the report looked clean.
+    """
+
+    completed = slot_mount_gate(tmp_path, with_checkout=True)
+
+    assert "rpi_image_gen_unavailable" not in completed.stderr
+
+
+def test_the_slot_mount_gate_still_refuses_when_there_is_no_checkout(tmp_path):
+    for path in DISCOVERY_PATHS:
+        if path.is_dir():
+            pytest.skip(f"{path} would satisfy discovery on this host")
+
+    completed = slot_mount_gate(tmp_path, with_checkout=False)
+
+    assert completed.returncode == 3
+    assert "rpi_image_gen_unavailable" in completed.stderr
+
+
 def test_the_persistence_unit_orders_itself_after_every_shared_mount():
     """RequiresMountsFor is the second, project-owned guarantee."""
 
@@ -296,3 +346,53 @@ def test_the_escaper_matches_systemd_for_every_shared_path():
 )
 def test_the_escaper_follows_the_systemd_rules(path, unit):
     assert ab_persistence.escape_path(path) == unit
+
+
+def test_the_binds_are_measured_against_the_partition_the_mountpoint_uses(host):
+    """One partition, one identity — for the mountpoint and for its binds.
+
+    A real A/B guest mounted ``/persistent`` and all six shared paths from the
+    same partition, and this said the mountpoint was fine and every bind was
+    foreign. The layout descriptor named no resolvable device there, so the
+    mountpoint check had nothing to compare against and skipped it while the
+    bind check went on comparing against an alias set the running system had
+    never used. Both must ask the same question of the same partition.
+    """
+
+    real = f"{DEVICE}p6"
+    host.mount(PERSIST_MOUNT, real, options=("rw", "noatime"))
+    for shared in ab_persistence.SHARED_PATHS:
+        host.mount(shared.target, real, subtree=ab_persistence.shared_subtree(shared))
+
+    report = ab_persistence.verify(host.discover(lsblk_ok=False), host.mounts())
+
+    assert report.ok is True, report.problems
+    assert report.state == ab_persistence.STATE_OK
+    assert all(entry["shared"] for entry in report.paths)
+
+
+def test_a_bind_from_another_partition_is_still_refused_without_a_resolved_device(host):
+    """The tolerance above may not become a blanket acceptance."""
+
+    real = f"{DEVICE}p6"
+    host.mount(PERSIST_MOUNT, real, options=("rw", "noatime"))
+    host.mount("/opt/ems-solarflow", "/dev/sda1", subtree="/shared/opt/ems-solarflow")
+
+    report = ab_persistence.verify(host.discover(lsblk_ok=False), host.mounts())
+
+    assert report.ok is False
+    assert report.state == ab_persistence.STATE_PATH_NOT_SHARED
+    assert any("/dev/sda1" in problem for problem in report.problems)
+
+
+def test_a_mountpoint_of_another_identity_does_not_bless_its_binds(host):
+    """A wrong partition cannot make itself the authority for its own binds."""
+
+    host.mount(PERSIST_MOUNT, "/dev/sda1")
+    for shared in ab_persistence.SHARED_PATHS:
+        host.mount(shared.target, "/dev/sda1", subtree=ab_persistence.shared_subtree(shared))
+
+    report = ab_persistence.verify(host.discover(), host.mounts())
+
+    assert report.ok is False
+    assert report.state == ab_persistence.STATE_IDENTITY_MISMATCH

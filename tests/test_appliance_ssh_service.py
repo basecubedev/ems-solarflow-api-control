@@ -342,6 +342,78 @@ def test_a_host_without_an_ems_installation_is_pending_not_broken(tmp_path):
     assert status["export_access"]["missing"] == ["config", "backups", "data"]
 
 
+# --- what each word in the status means -------------------------------------
+#
+# Five words are reported and none of them is a synonym for another:
+#
+#   state=mounted   the kernel has a mount at that target — nothing more
+#   read_only       that mount carries "ro"
+#   source_verified that mount really publishes the configured EMS directory
+#   confined        all three of the above, per entry; policy as well, overall
+#   configured      the operator-facing verdict, which needs every one of them
+#
+# Collapsing any two of them is how a writable or redirected export starts
+# being reported as a confined one, so each is pinned separately here.
+
+
+def test_a_mounted_export_is_not_called_read_only_by_being_mounted(tmp_path):
+    services = seeded_exports(tmp_path)
+    services.host.write_export_mounts(read_only=False)
+
+    entries = {item["name"]: item for item in services.backup.status()["paths"]}
+
+    for entry in entries.values():
+        assert entry["state"] == "writable", entry
+        assert entry["read_only"] is False, entry
+        assert entry["confined"] is False, entry
+
+
+def test_a_mount_that_publishes_something_else_is_never_verified(tmp_path):
+    services = seeded_exports(tmp_path)
+    stranger = services.paths.install_root.parent / "somewhere-else"
+    stranger.mkdir(parents=True, exist_ok=True)
+    services.host.write_export_mounts(read_only=True, source_for=lambda name: stranger)
+
+    status = services.backup.status()
+    entries = {item["name"]: item for item in status["paths"]}
+
+    for entry in entries.values():
+        # Read-only and mounted, and still not the configured directory.
+        assert entry["read_only"] is True, entry
+        assert entry["source_verified"] is False, entry
+        assert entry["confined"] is False, entry
+    assert status["confined"] is False
+    assert status["export_access"]["status"] == "degraded"
+
+
+def test_confined_is_the_conjunction_and_not_any_one_of_its_parts(tmp_path):
+    services = seeded_exports(tmp_path)
+    services.host.write_export_mounts(read_only=True)
+
+    status = services.backup.status()
+
+    for entry in status["paths"]:
+        assert entry["confined"] == (
+            entry["state"] == "mounted" and entry["read_only"] and entry["source_verified"]
+        ), entry
+    assert status["confined"] is True
+    assert status["export_access"]["status"] == "configured"
+
+
+def test_the_export_verdict_still_needs_sshd_to_agree(tmp_path):
+    """Every mount right, and the account not chrooted: not configured."""
+
+    services = seeded_exports(tmp_path)
+    services.host.write_export_mounts(read_only=True)
+    services.host.sshd_backup_match = "forcecommand internal-sftp\npermittty no\n"
+
+    status = services.backup.status()
+
+    assert all(entry["confined"] for entry in status["paths"])
+    assert status["confined"] is False
+    assert status["export_access"]["status"] == "degraded"
+
+
 def test_the_shown_commands_use_paths_inside_the_chroot(tmp_path):
     services = seeded_exports(tmp_path)
     commands = " ".join(item["command"] for item in services.backup.status()["examples"])

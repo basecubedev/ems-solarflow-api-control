@@ -27,6 +27,7 @@ and ``TrialHealthService`` are used exactly as ``appliance/services.py`` builds
 them. Only the command runner is a double, and it answers real docker argv.
 """
 
+import hashlib
 import json
 
 import pytest
@@ -315,6 +316,78 @@ def test_the_fingerprint_changes_when_the_deployment_changes(tmp_path):
     assert first.fingerprint != second.fingerprint
 
 
+def test_the_slot_that_replaces_a_slot_can_still_read_what_it_wrote(tmp_path):
+    """The reader is one schema ahead across exactly the update that ships one.
+
+    The record is written by the slot being replaced and read by the slot
+    replacing it, and the trial is gated on the fingerprint the writer computed.
+    A reader that could not reproduce it would fail that gate, fall back, and
+    fail again on the next attempt with the same record — so the update that
+    introduces a schema would be the one update that can never be installed.
+    """
+
+    appliance = TrialAppliance(tmp_path)
+    appliance.capture()
+    payload = json.loads(appliance.store.path.read_text(encoding="utf-8"))
+    current = appliance.store.read().fingerprint
+
+    # What the previous schema wrote: no image id anywhere, version 3.
+    payload["version"] = 3
+    for entry in payload["images"]:
+        entry.pop("image_id", None)
+    appliance.store.path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    older = appliance.store.read()
+
+    assert older.images, "a record one schema older is not readable at all"
+    assert older.version == 3
+    assert "image_id" not in json.dumps(older.authority())
+
+    # The fingerprint the older writer computed, reproduced the way it computed
+    # it: sha256 over its own canonical authority object.
+    expected = hashlib.sha256(
+        json.dumps(older.authority(), sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    assert older.fingerprint == f"sha256:{expected}"
+    # And it is genuinely a different object from the current shape, which is
+    # what the trial gate would have tripped over.
+    assert older.fingerprint != current
+
+
+def test_an_unchanged_deployment_is_not_called_changed_by_an_older_record(tmp_path):
+    """The observation is taken at the current schema, the record is not.
+
+    Comparing them raw would make every appliance holding an older record look
+    like one whose deployment had been replaced, and block the update that would
+    have replaced the record.
+    """
+
+    appliance = TrialAppliance(tmp_path)
+    appliance.capture()
+    payload = json.loads(appliance.store.path.read_text(encoding="utf-8"))
+    payload["version"] = 3
+    for entry in payload["images"]:
+        entry.pop("image_id", None)
+    appliance.store.path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+    service = bootstrap_service(appliance.source, appliance.store, appliance.deployment)
+
+    assert service.deployment_changed() == ()
+
+
+def test_a_record_from_an_unknown_schema_is_not_guessed_at(tmp_path):
+    appliance = TrialAppliance(tmp_path)
+    appliance.capture()
+    payload = json.loads(appliance.store.path.read_text(encoding="utf-8"))
+    payload["version"] = 99
+    appliance.store.path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert appliance.store.read().images == ()
+
+
 # --- phase 1/19: the authority object itself ---------------------------------
 
 
@@ -438,12 +511,17 @@ def test_reconstruction_builds_exactly_the_expected_docker_argv(tmp_path):
     appliance.reconstruct()
 
     compose = str(appliance.deployment.compose_file)
+    # The recorded compose file is authority and is never rewritten, so the
+    # verified image is handed to compose as an overlay after it.
+    pins = str(appliance.store.directory / ab_bootstrap.RUNTIME_IMAGE_PINS)
     argv = docker_argv(appliance.target)
     assert ("version", "--format", "{{.Server.Version}}") in argv
     assert ("load", "-i", str(appliance.store.seed_directory / "admin.tar")) in argv
     assert ("image", "inspect", "--format", "{{json .}}", ADMIN_REFERENCE) in argv
     for service in (INFLUX_SERVICE, ADMIN_SERVICE, EMS_SERVICE):
-        assert ("compose", "-f", compose, "up", "-d", "--no-deps", service) in argv
+        assert (
+            "compose", "-f", compose, "-f", pins, "up", "-d", "--no-deps", service
+        ) in argv
 
 
 def test_the_registry_fallback_names_a_digest_and_never_a_tag(tmp_path):

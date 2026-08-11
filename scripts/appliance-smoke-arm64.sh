@@ -75,7 +75,14 @@ MISSING_REQUIREMENTS=""
 # is owed by every terminal result; the emulator's own artefacts are only owed
 # once the emulator ran, because a run that stopped before it has none.
 EVIDENCE_FILES="inputs.txt result.txt run.txt environment.txt missing-requirements.txt"
-EVIDENCE_FILES_AFTER_BOOT="console.log qemu-command.txt qemu-status.txt"
+EVIDENCE_FILES_AFTER_BOOT="console.log evidence.log qemu-command.txt qemu-status.txt"
+# The guest's record travels on a virtio-serial port of its own. The boot
+# console is shared with the kernel, systemd and agetty, and agetty calls
+# vhangup() on it: a tier that logged there loses the rest of its output and
+# dies on its next write. Nothing but the guest writes to this port.
+EVIDENCE_PORT_NAME=${EMS_ARM64_EVIDENCE_PORT:-org.ems.appliance.evidence}
+RECORD=""
+RECORD_CHANNEL=none
 MEMORY=${EMS_ARM64_MEMORY:-2048}
 CPUS=${EMS_ARM64_CPUS:-2}
 BOOT_TIMEOUT=${EMS_ARM64_BOOT_TIMEOUT:-1800}
@@ -136,6 +143,7 @@ record_result() {
         printf 'release_gate: %s\n' "$gate"
         printf 'qemu_started: %s\n' "$QEMU_STARTED"
         printf 'timeout: %s\n' "$TIMEOUT_CLASS"
+        printf 'record_channel: %s\n' "$RECORD_CHANNEL"
         printf 'run_id: %s\n' "$RUN_ID"
         printf 'started_at: %s\n' "$STARTED_AT"
         printf 'ended_at: %s\n' "$(timestamp)"
@@ -362,11 +370,11 @@ bounded_integer "the guest cpu count (EMS_ARM64_CPUS)" "$CPUS" 256
 bounded_integer "the boot timeout in seconds (EMS_ARM64_BOOT_TIMEOUT)" "$BOOT_TIMEOUT" 86400
 bounded_integer "the guest disk size in GiB (EMS_ARM64_DISK_GB)" "$DISK_GB" 1024
 
-for tool in qemu-system-aarch64 qemu-img cloud-localds xorriso sha256sum timeout; do
+for tool in qemu-system-aarch64 qemu-img cloud-localds xorriso sha256sum timeout python3; do
     command -v "$tool" >/dev/null 2>&1 || note_missing_requirement "$tool"
 done
 if [ -n "$MISSING_REQUIREMENTS" ]; then
-    fail_environment "not installed:$MISSING_REQUIREMENTS (apt install qemu-system-arm qemu-utils cloud-image-utils xorriso coreutils)" \
+    fail_environment "not installed:$MISSING_REQUIREMENTS (apt install qemu-system-arm qemu-utils cloud-image-utils xorriso coreutils python3)" \
                      required_tool_missing
 fi
 
@@ -403,8 +411,11 @@ fi
     || fail_environment "no readable UEFI variable-store template found for $FIRMWARE (apt install qemu-efi-aarch64)" \
                         firmware_unavailable
 
-FIRMWARE_SIZE=$(stat -c '%s' "$FIRMWARE")
-FIRMWARE_VARS_SIZE=$(stat -c '%s' "$FIRMWARE_VARS")
+# -L on purpose: the packaged AAVMF_CODE.fd is a symlink, and stat without
+# it measures the link rather than the firmware, so the pflash bound below
+# would be checked against 24 bytes and pass whatever it points at.
+FIRMWARE_SIZE=$(stat -Lc '%s' "$FIRMWARE")
+FIRMWARE_VARS_SIZE=$(stat -Lc '%s' "$FIRMWARE_VARS")
 [ "$FIRMWARE_SIZE" -le "$PFLASH_SIZE" ] \
     || fail_environment "the firmware code image is $FIRMWARE_SIZE bytes, larger than the ${PFLASH_SIZE}-byte pflash slot" \
                         firmware_incompatible
@@ -522,7 +533,11 @@ fi
 
 IMAGE_INFO=$(qemu-img info --output=json "$BASE_IMAGE" 2>/dev/null) \
     || fail_environment "qemu-img cannot read $BASE_IMAGE"
-IMAGE_FORMAT=$(printf '%s' "$IMAGE_INFO" | sed -n 's/.*"format"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+# The top-level format, not the first one in the document. qemu-img 9 and later
+# describe the protocol node first, and its format is "file", so taking the
+# first match reads every qcow2 as unusable and refuses a perfectly good image.
+IMAGE_FORMAT=$(printf '%s' "$IMAGE_INFO" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin).get("format") or "")' 2>/dev/null)
 [ "$IMAGE_FORMAT" = "$REQUIRED_FORMAT" ] \
     || fail_environment "the base image is $IMAGE_FORMAT, but a $REQUIRED_FORMAT backing image is required"
 
@@ -558,13 +573,17 @@ truncate -s "$PFLASH_SIZE" "$WORK/efi-vars.fd"
 mkdir -p "$WORK/payload"
 cp "$PACKAGE" "$WORK/payload/appliance.deb"
 cp "$ROOT/scripts/appliance-guest-smoke.sh" "$WORK/payload/guest-smoke.sh"
+cp "$ROOT/scripts/appliance-guest-evidence.sh" "$WORK/payload/guest-evidence.sh"
 xorriso -as mkisofs -quiet -V EMSDEB -o "$WORK/payload.iso" "$WORK/payload"
 
-cat > "$WORK/user-data" <<'CLOUDINIT'
+# The tier is never pointed at a terminal. Its record goes to the dedicated
+# port; the console keeps the kernel, systemd and agetty it already had, plus
+# the stage heartbeat, which nothing reads as a result.
+cat > "$WORK/user-data" <<CLOUDINIT
 #cloud-config
 runcmd:
   - [ sh, -c, "mkdir -p /mnt/payload && mount -L EMSDEB /mnt/payload" ]
-  - [ sh, -c, "sh /mnt/payload/guest-smoke.sh /mnt/payload/appliance.deb arm64 > /dev/ttyAMA0 2>&1; echo \"APPLIANCE_SMOKE_EXIT: $?\" > /dev/ttyAMA0" ]
+  - [ sh, -c, "sh /mnt/payload/guest-evidence.sh --channel-name $EVIDENCE_PORT_NAME --fallback /dev/ttyAMA0 -- /mnt/payload/guest-smoke.sh /mnt/payload/appliance.deb arm64" ]
   - [ sh, -c, "sync; poweroff" ]
 CLOUDINIT
 printf 'instance-id: ems-appliance-smoke\nlocal-hostname: ems-smoke\n' > "$WORK/meta-data"
@@ -580,6 +599,10 @@ else
 fi
 
 CONSOLE="$WORK/console.log"
+EVIDENCE_LOG="$WORK/evidence.log"
+# Created before the emulator so a run that never opened the port still leaves
+# the artefact its own evidence contract promises.
+: > "$EVIDENCE_LOG"
 QEMU_COMMAND=(
     qemu-system-aarch64
     -machine virt -m "$MEMORY" -smp "$CPUS" "${ACCEL[@]}"
@@ -589,6 +612,9 @@ QEMU_COMMAND=(
     -drive "if=virtio,format=raw,file=$WORK/seed.iso"
     -drive "if=virtio,format=raw,file=$WORK/payload.iso"
     -nographic -serial "file:$CONSOLE" -monitor none -display none
+    -device "virtio-serial-pci,id=evidence-bus"
+    -chardev "file,id=evidence,path=$EVIDENCE_LOG"
+    -device "virtserialport,bus=evidence-bus.0,chardev=evidence,name=$EVIDENCE_PORT_NAME"
     -netdev "user,id=net0" -device "virtio-net-pci,netdev=net0"
 )
 printf '%q ' timeout "$BOOT_TIMEOUT" "${QEMU_COMMAND[@]}" > "$WORK/qemu-command.txt"
@@ -606,11 +632,23 @@ if [ ! -s "$CONSOLE" ]; then
                      guest_completion_missing
 fi
 
-echo "== guest output =="
-if grep -q '^== architecture ==' "$CONSOLE"; then
-    sed -n '/^== architecture ==/,$p' "$CONSOLE"
+# The dedicated port is the record. The console is only read when the guest
+# could not reach that port and said so by delivering the record there instead;
+# that is a degraded run, and it is labelled rather than silently accepted.
+if [ -s "$EVIDENCE_LOG" ]; then
+    RECORD="$EVIDENCE_LOG"
+    RECORD_CHANNEL=dedicated
 else
-    tail -n 80 "$CONSOLE"
+    RECORD="$CONSOLE"
+    RECORD_CHANNEL=console
+    echo "appliance-smoke-arm64: the guest delivered no record on $EVIDENCE_PORT_NAME; reading the shared console" >&2
+fi
+
+echo "== guest output ($RECORD_CHANNEL channel) =="
+if grep -q '^== architecture ==' "$RECORD"; then
+    sed -n '/^== architecture ==/,$p' "$RECORD"
+else
+    tail -n 80 "$RECORD"
 fi
 
 # How the emulator ended decides whether the serial log is a complete record at
@@ -637,20 +675,33 @@ case "$qemu_status" in
 esac
 
 count_lines() {
-    grep -c "$1" "$CONSOLE" 2>/dev/null || true
+    grep -c "$1" "$RECORD" 2>/dev/null || true
 }
 
-# Guest-side evidence of failure outranks any earlier optimistic marker.
+# Which boundary the guest last reached. The stage heartbeat is on the console
+# even when the record never arrived, so a guest that stopped mid-run still
+# names the stage it stopped in.
+last_stage_note() {
+    local stage
+    stage=$(sed -n 's/.*APPLIANCE_EVIDENCE stage=\([A-Za-z0-9-]*\).*/\1/p' \
+        "$RECORD" "$CONSOLE" 2>/dev/null | tail -n 1)
+    [ -n "$stage" ] && printf ', last stage %s' "$stage"
+    return 0
+}
+
+# Guest-side evidence of failure outranks any earlier optimistic marker. A
+# kernel panic is the kernel's own statement and belongs to the console
+# whichever channel carried the tier's record.
 if grep -qi 'kernel panic' "$CONSOLE"; then
     smoke_failure "the guest hit a kernel panic" guest_kernel_panic
 fi
 if grep -qi 'cloud-init.*fatal' "$CONSOLE"; then
     smoke_failure "cloud-init reported a fatal error in the guest" guest_smoke_failed
 fi
-if grep -q '^RESULT: FAIL' "$CONSOLE"; then
-    smoke_failure "the guest smoke test reported RESULT: FAIL" guest_smoke_failed
+if grep -q '^RESULT: FAIL' "$RECORD"; then
+    smoke_failure "the guest smoke test reported RESULT: FAIL$(last_stage_note)" guest_smoke_failed
 fi
-GUEST_EXITS=$(sed -n 's/^APPLIANCE_SMOKE_EXIT:[[:space:]]*\([0-9][0-9]*\).*$/\1/p' "$CONSOLE")
+GUEST_EXITS=$(sed -n 's/^APPLIANCE_SMOKE_EXIT:[[:space:]]*\([0-9][0-9]*\).*$/\1/p' "$RECORD")
 if printf '%s\n' "$GUEST_EXITS" | grep -q '^[1-9]'; then
     smoke_failure "the guest smoke test exited non-zero (APPLIANCE_SMOKE_EXIT: $(printf '%s' "$GUEST_EXITS" | tr '\n' ' '))" \
                   guest_smoke_failed
@@ -664,7 +715,7 @@ evaluate_guest_result() {
     [ "$arch_lines" -eq 1 ] \
         || fail_environment "the guest reported $arch_lines architecture markers, expected exactly one; the run proves nothing" \
                             guest_architecture_mismatch
-    guest_uname=$(sed -n 's/^guest: \([^ ][^ ]*\).*$/\1/p' "$CONSOLE" | head -n 1)
+    guest_uname=$(sed -n 's/^guest: \([^ ][^ ]*\).*$/\1/p' "$RECORD" | head -n 1)
     case "$guest_uname" in
         aarch64|arm64) ;;
         *) fail_environment "the guest reported '$guest_uname', not aarch64; the run proves nothing" \
@@ -683,7 +734,7 @@ evaluate_guest_result() {
     [ "$result_lines" -eq 1 ] \
         || fail_environment "the guest wrote $result_lines RESULT lines, expected exactly one" \
                             guest_completion_missing
-    grep -q '^RESULT: PASS' "$CONSOLE" \
+    grep -q '^RESULT: PASS' "$RECORD" \
         || fail_environment "the guest never reported RESULT: PASS" guest_completion_missing
 }
 evaluate_guest_result

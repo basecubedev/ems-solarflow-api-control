@@ -43,8 +43,9 @@ Refused: private keys, malformed keys, empty keys, duplicate keys, unsupported
 key types, and keys above the size limit. Never paste a private key — the
 appliance never asks for one and never displays one.
 
-`authorized_keys` is written atomically with `~/.ssh` at `0700` and
-`authorized_keys` at `0600`.
+`authorized_keys` is written atomically. Both it and `~/.ssh` are owned by
+`root` with the account's own group: the directory at `0750`, the file at
+`0640`. The account can read what authorises it and cannot change it.
 
 ## Remove keys
 
@@ -134,8 +135,18 @@ writable by group or others, or sshd refuses the chroot with
 `bad ownership or modes for chroot directory`.
 
 `authorized_keys` still lives in the account's real home
-(`/var/lib/ems-backup/.ssh/authorized_keys`). sshd reads it as root *before*
-chrooting, so key management is unaffected by the confinement.
+(`/var/lib/ems-backup/.ssh/authorized_keys`), which is outside the chroot and is
+read *before* chrooting, so key management is unaffected by the confinement.
+
+It is not read as root, and assuming it was is what once made every login fail.
+OpenSSH switches to the account's own uid before opening the file, so the
+account needs search permission on `~/.ssh` and read permission on the file; it
+separately refuses either if it is writable by group or other, or owned by
+anyone but root or the account. A root-owned `0700` directory satisfies the
+second rule and fails the first — the open returns EACCES, sshd finds no key,
+and the connection is closed at `[preauth]` while `sshd -T` reports a perfectly
+correct policy. Root ownership with the account's group at `0750`/`0640`
+satisfies both.
 
 | Path in the SFTP session | Host path | Access |
 |---|---|---|

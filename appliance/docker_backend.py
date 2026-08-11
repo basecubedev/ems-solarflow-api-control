@@ -239,10 +239,13 @@ class DockerBackend:
 
     # --- compose ---------------------------------------------------------
 
-    def compose(self, args, *, timeout=None):
+    def compose(self, args, *, timeout=None, overrides=()):
         if not self.compose_file:
             raise DockerError("compose_file_missing", "no compose file is configured")
-        argv = ["compose", "-f", self.compose_file, *args]
+        argv = ["compose", "-f", self.compose_file]
+        for override in overrides:
+            argv += ["-f", str(override)]
+        argv += list(args)
         return self.runner.run("docker", argv, timeout=timeout or max(self.timeout, 600))
 
     def compose_services(self):
@@ -254,8 +257,8 @@ class DockerBackend:
             return []
         return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
-    def compose_up_service(self, service):
-        return self.compose(["up", "-d", "--no-deps", service])
+    def compose_up_service(self, service, *, overrides=()):
+        return self.compose(["up", "-d", "--no-deps", service], overrides=overrides)
 
     def compose_stop_service(self, service):
         return self.compose(["stop", service], timeout=120)

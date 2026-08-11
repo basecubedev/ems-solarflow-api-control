@@ -34,14 +34,21 @@ import platform
 import shutil
 import stat
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from appliance.paths import AGENT_FILE_MODE, atomic_write
 
 RUNTIME_RECORD = "runtime-images.json"
 SEED_DIRECTORY = "runtime-seed"
-RECORD_VERSION = 3
+RUNTIME_IMAGE_PINS = "runtime-image-pins.json"
+RECORD_VERSION = 4
+# A record is written by the slot that is being replaced and read by the slot
+# that replaces it, so the reader is a version ahead across exactly the update
+# that ships a new schema. It has to be able to read the older record and
+# reproduce the fingerprint the writer computed, or that one update could never
+# commit on any appliance — and the next attempt would fail the same way.
+READABLE_RECORD_VERSIONS = (3, RECORD_VERSION)
 
 # One generation of seeds is kept. An appliance that accumulated every past
 # slot's image archives would fill the partition the next update stages into,
@@ -219,6 +226,7 @@ class RuntimeImage:
     state: str = STATE_ABSENT
     digest: str = ""
     platform: dict = field(default_factory=dict)
+    image_id: str = ""
 
     @property
     def present(self):
@@ -237,6 +245,7 @@ class RuntimeImage:
             "present": self.present,
             "intended_running": self.running,
             "image_digest": self.digest,
+            "image_id": self.image_id,
             "platform": dict(self.platform),
         }
 
@@ -253,6 +262,7 @@ class RuntimeImage:
             state=str(payload.get("state") or STATE_ABSENT),
             digest=str(payload.get("image_digest") or ""),
             platform=dict(payload.get("platform") or {}),
+            image_id=str(payload.get("image_id") or ""),
         )
 
 
@@ -297,12 +307,22 @@ class RuntimeRecord:
         are written in a second pass after the record itself.
         """
 
+        # The shape is the one this record's own version defines, not the one
+        # the running code writes. A reader that added a field would otherwise
+        # compute a fingerprint the writer could not have produced, and the
+        # trial would fail a gate nothing had actually failed.
+        def service(entry):
+            payload = entry.to_dict()
+            if self.version < 4:
+                payload.pop("image_id", None)
+            return payload
+
         return {
             "schema_version": self.version,
             "captured_at": round(float(self.recorded_at), 3),
             "compose": self.compose.to_dict(),
             "environment": self.environment.to_dict(),
-            "services": {entry.role: entry.to_dict() for entry in sorted(
+            "services": {entry.role: service(entry) for entry in sorted(
                 self.images, key=lambda item: item.role
             )},
         }
@@ -336,6 +356,11 @@ class ImageOutcome:
     detail: str = ""
     digest: str = ""
     platform: dict = field(default_factory=dict)
+    # The name this slot may start the service from. It is the recorded
+    # repository@digest whenever the store holds it, and otherwise the verified
+    # image config digest. Never a tag: a tag can point elsewhere by the time
+    # compose resolves it.
+    runtime_reference: str = ""
 
     @property
     def available(self):
@@ -351,6 +376,7 @@ class ImageOutcome:
             "detail": self.detail,
             "image_digest": self.digest,
             "platform": dict(self.platform),
+            "runtime_reference": self.runtime_reference or self.reference,
         }
 
 
@@ -400,7 +426,8 @@ class RuntimeRecordStore:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return RuntimeRecord()
-        if not isinstance(payload, dict) or payload.get("version") != RECORD_VERSION:
+        version = payload.get("version") if isinstance(payload, dict) else None
+        if version not in READABLE_RECORD_VERSIONS:
             return RuntimeRecord()
         images = []
         for entry in payload.get("images") or []:
@@ -412,6 +439,7 @@ class RuntimeRecordStore:
         return RuntimeRecord(
             images=tuple(images),
             recorded_at=float(payload.get("recorded_at") or 0.0),
+            version=int(version),
             compose=DeploymentFile.from_dict(payload.get("compose")),
             environment=DeploymentFile.from_dict(payload.get("environment")),
             seeds={
@@ -553,6 +581,10 @@ class SlotBootstrapService:
             state=state,
             digest=str(getattr(resolved, "digest", "") or "") or reference.partition("@")[2],
             platform=_platform_of(resolved),
+            # Docker's own binding of repository@digest to the image config
+            # digest, taken while the registry is still the authority for it.
+            # It is the only identity `docker save` and `docker load` preserve.
+            image_id=str(getattr(resolved, "image_id", "") or ""),
         )
 
     def _container_state(self, container):
@@ -620,6 +652,8 @@ class SlotBootstrapService:
                     "file": target.name,
                     "reference": entry.reference,
                     "image_digest": entry.digest,
+                    "image_id": entry.image_id,
+                    "platform": dict(entry.platform),
                     "sha256": _digest_bytes(target.read_bytes()),
                     "size_bytes": target.stat().st_size,
                     "captured_at": record.recorded_at,
@@ -760,6 +794,10 @@ class SlotBootstrapService:
             observed = self.observe_running_runtime(recorded_at=record.recorded_at)
         except BootstrapError as exc:
             return (exc.message,)
+        # Compared in the recorded schema. An observation is always taken at the
+        # current one, so against an older record the two objects would differ
+        # by shape alone and every unchanged deployment would look changed.
+        observed = replace(observed, version=record.version)
         if observed.fingerprint != record.fingerprint:
             return ("the running deployment is no longer the one that was recorded",)
         return ()
@@ -842,6 +880,7 @@ class SlotBootstrapService:
                 entry.required,
                 digest=entry.digest,
                 platform=entry.platform,
+                runtime_reference=entry.reference,
             )
 
         seed = self.store.seed_directory / f"{entry.role}.tar"
@@ -869,8 +908,25 @@ class SlotBootstrapService:
                     entry.required,
                     digest=entry.digest,
                     platform=entry.platform,
+                    runtime_reference=entry.reference,
                 )
-            return self._pull(entry, detail=problem)
+            # A repository digest is a registry's name for a manifest, and
+            # `docker save` re-serialises that manifest, so no archive can carry
+            # it back. The image config digest is restored byte for byte and
+            # commits to rootfs.diff_ids, so asking Docker to confirm *that* is
+            # what makes the loaded image the recorded one.
+            restored = self._verified_by_image_id(entry, declared)
+            if restored is None:
+                return ImageOutcome(
+                    entry.role,
+                    entry.reference,
+                    SOURCE_SEED,
+                    entry.required,
+                    digest=entry.digest,
+                    platform=entry.platform,
+                    runtime_reference=entry.image_id,
+                )
+            return self._pull(entry, detail="; ".join((problem, restored)))
 
         return self._pull(entry)
 
@@ -905,6 +961,7 @@ class SlotBootstrapService:
                 detail,
                 digest=entry.digest,
                 platform=entry.platform,
+                runtime_reference=entry.reference,
             )
         return ImageOutcome(
             entry.role,
@@ -926,6 +983,7 @@ class SlotBootstrapService:
 
         available = {outcome.role for outcome in outcomes if outcome.available}
         started, refused = [], []
+        pins = self._write_image_pins(outcomes)
         for role in START_ORDER:
             entry = record.image(role)
             if entry is None or not entry.running or role not in available:
@@ -934,7 +992,7 @@ class SlotBootstrapService:
             if not service or not self.compose_file:
                 continue
             try:
-                result = self.docker.compose_up_service(service)
+                result = self.docker.compose_up_service(service, overrides=pins)
             except Exception as exc:
                 refused.append(f"{service} could not be started: {exc}")
                 continue
@@ -946,6 +1004,45 @@ class SlotBootstrapService:
                 continue
             started.append(service)
         return started, tuple(refused)
+
+    def _write_image_pins(self, outcomes):
+        """Pin every service to the image this slot actually verified.
+
+        The recorded compose file is authority and is never rewritten; this is
+        an overlay compose passes after it. Without it a service whose image
+        came out of a seed would be started from `repository@digest`, which no
+        loaded archive can carry — compose would go to the registry the seed
+        exists to avoid. With it, what starts is what was inspected.
+        """
+
+        services = {}
+        for outcome in outcomes:
+            if not outcome.available:
+                continue
+            service = self.deployment.service(outcome.role)
+            reference = outcome.runtime_reference or outcome.reference
+            if not service or not reference:
+                continue
+            # Both producers are content-addressed already; a name that is
+            # neither is not written at all, so an overlay can never be the way
+            # a mutable tag reaches a container.
+            if not _digest_pinned(reference) and not reference.startswith("sha256:"):
+                continue
+            services[service] = {"image": reference}
+        if not services:
+            return ()
+        target = self.store.directory / RUNTIME_IMAGE_PINS
+        try:
+            self.store.directory.mkdir(parents=True, exist_ok=True)
+            atomic_write(
+                target,
+                json.dumps({"services": services}, indent=2, sort_keys=True) + "\n",
+                mode=AGENT_FILE_MODE,
+                owner_root=True,
+            )
+        except OSError:
+            return ()
+        return (str(target),)
 
     # --- docker helpers ----------------------------------------------------
 
@@ -982,6 +1079,37 @@ class SlotBootstrapService:
         observed = _platform_of(state)
         for wanted in (entry.platform, self.required_platform):
             problem = _platform_problem(wanted, observed)
+            if problem:
+                return problem
+        return None
+
+    def _verified_by_image_id(self, entry, declared=None):
+        """Did the load restore exactly the image the record was written for?
+
+        Trust boundary: the seed's own metadata is never the answer. It only
+        says which image config digest to ask Docker about; Docker's inspection
+        of its store is what decides, and it has to answer with that exact id
+        and a matching platform.
+        """
+
+        expected = entry.image_id
+        if not expected:
+            return (
+                "the record carries no image id for this service, so a loaded archive "
+                "cannot be attributed to it"
+            )
+        seeded = str((declared or {}).get("image_id") or "")
+        if seeded and seeded != expected:
+            return f"the seed was written for image {seeded}, the record names {expected}"
+        state = self._inspect_image(expected)
+        if state is None or not bool(getattr(state, "exists", False)):
+            return f"the loaded archive did not put image {expected} in this slot's store"
+        observed = str(getattr(state, "image_id", "") or "")
+        if observed != expected:
+            return f"the image store answered with {observed or 'no id'} for {expected}"
+        platform = _platform_of(state)
+        for wanted in (entry.platform, self.required_platform):
+            problem = _platform_problem(wanted, platform)
             if problem:
                 return problem
         return None

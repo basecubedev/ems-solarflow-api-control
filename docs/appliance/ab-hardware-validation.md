@@ -26,51 +26,129 @@ and no artefact may be called hardware-ready.
 | Property | Value |
 |---|---|
 | Branch | `feat/appliance-manager` |
-| Release-build revision (what the real image was built from) | `ec0bed2bffac922ef59f84c057a3a659210a843a` |
-| Build id | `20260809135018` |
-| Builder environment hash | `sha256:d4650e238078e2b84f03716bcb134862a107000a87c6df67da223697d34e46ef` |
+| Release-build revision (what the real image was built from) | `50645a3b69ebe345f701efb747969084326ec4a2` |
+| Source tree | `sha256:f7ebc6c2c617f8dd7bdfd7d99ed8fd682a501c9a8a006fb9298a0d4132553d4a` |
+| Build id | `20260811155758` |
+| Builder environment hash | `sha256:b5d8c6c5f5ab04dac9f55f63d14a84752af0de4579b2057e8ad95e36a84474ac` |
 | Builder base image | `debian-13-genericcloud-amd64-20260803-2559.qcow2`, digest verified from the lock |
-| Real rpi5 build | **PASS** — 26m9s in the disposable builder guest, 17 758 703 616 byte image, build authority schema 3 complete |
-| Real rpi4 build | **NOT RUN** — only rpi5 was built in this run |
-| Builder artefact collection | **PASS** — 9 files described by the guest, all re-hashed on the host before publication |
-| Real image structural inspection | **PASS** — 6 image-rota partitions, 6 distinct PARTUUIDs, both GPT headers and entry arrays, no overlap |
+| Evidence | [`reports/appliance/2026-08-11-head/`](../../reports/appliance/2026-08-11-head/) |
+| Real rpi5 build | **PASS** — 17 758 703 616 byte image `sha256:b27faa011177…`, update `sha256:d47f33fdfcf2…` |
+| Second independent rpi5 build | **PASS** — build `20260811152312`, same revision and tree, different build id and media identifiers |
+| Real rpi4 build | **PASS** — build `20260811163217`, image inspected separately, `rpi4`/`pi4` device layer |
+| Builder artefact collection | **PASS** — every file described by the guest and re-hashed on the host before publication |
+| Real image structural inspection | **PASS** — 6 image-rota partitions, 6 distinct PARTUUIDs, both GPT headers and entry arrays, no overlap, `sgdisk` as an independent oracle |
 | Real slot pairing | **PASS** — `system_a`/`system_b` and `boot_a`/`boot_b` hash identically with distinct PARTUUIDs |
-| Real image content inspection | **FAIL** — 79 pass, 2 fail, 0 not run. `cmdline.txt` carries no `ro` on either boot partition, so the active slot root is mounted read-write |
+| Real image content inspection | **PASS** — 90 pass, 0 fail, **0 not run**, no mandatory check skipped, on *both* the rpi5 and the rpi4 image |
+| Real read-only root | **PASS** — `ro` on both boot partitions and `ro,relatime,commit=30` in both slot fstabs, on both images |
+| Real shared-path activation | **PASS** — `shared_activations` reports 6 of 6 in both slot roots of both images |
 | Real update inspection | **PASS** — 18 pass, 0 fail, 0 not run, signature cryptographically verified against the trusted key |
 | Real sparse cross-check | **PASS** — `simg2img` agrees with this project's decoder on both members of the real artefact |
-| Signed production release gate | **FAIL** — everything else passes; the content inspection refuses the release |
-| Packaged runtime gate (real booted Debian Trixie guest) | **PASS** — 2026-08-09 |
-| ARM64 generic guest | **NOT RUN** — `qemu-system-aarch64` is not installed on the review host |
+| Signed production release gate | **PASS** — 0 failed, 1 optional NOT RUN (`source-authority`, which needs generator build dependencies a workstation does not carry; it is PASS in the builder guest) |
+| Slot-mount gate in a production run | **PASS** — first run in which it executed at all; it reported NOT RUN in every earlier release |
+| Release attestation | **PASS** — signed by `D16E8DE0B133BD8F7BF1E6CDA5D4C295127CB181`, signature verified with `gpgv` against the trusted keyring |
+| Hardware validation kit | **PASS** — 22 files re-verified from a carried copy, signature and trusted signer confirmed, no private key material |
+| Runtime gate: SFTP | **PASS** — a real session in a booted guest, logging in with a key the appliance issued through its own authenticated API |
+| Runtime gate: Docker reconstruction | **PASS** — 18 cases against a real daemon, including a slot rebuilt with no registry at all |
+| Runtime gate: package lifecycle | **PASS** — 30 cases against real containers |
+| Runtime gate: NetworkManager fail-closed | **PASS** |
+| ARM64 generic guest (optional gate) | **FAIL** — a real aarch64 guest boots and both architecture checks pass; the guest smoke test then exits non-zero during the install step without reaching either of the two branches it can report. See "The ARM64 gate's finding" below |
 | Physical Raspberry Pi | **NOT RUN** — no hardware |
-| Physical readiness | **NOT READY** |
+| Physical readiness | **READY** — `physical_ready=true`, twelve readiness invariants hold, none unmet |
 <!-- CURRENT-RC-END -->
 
-### The open defect this run found
+### What the previous run left open, and what closed it
 
-The image content inspection reads the artefact that would be flashed, and it
-disagrees with this project's own model. `cmdline.txt` on both boot partitions
-is:
+The evidence committed before this run described `a84723d`, where two required
+runtime gates failed: the confined backup account could not complete an SFTP
+session, and the offline Docker seed was written on every slot switch and could
+never be loaded. Both are fixed and both now pass against real systems, so the
+committed evidence no longer describes a release that could not be cut.
+
+One gate changed from silent to loud. `slot-mounts` runs upstream's own
+slot-shared generator and compares what it writes against what
+`appliance/ab_persistence.py` declares:
 
 ```text
-console=serial0,115200 console=tty1 root=/dev/disk/by-slot/active/system fsck.repair=yes rootwait
+declared paths:      6
+generated units:     6
+upstream activation: 1
+image activation:    6
 ```
 
-There is no `ro`. The persistence contract and the kit's expected slot layout
-both describe a read-only slot root, and the whole shared-path design rests on
-it: anything written to a path that is not one of the six shared binds is lost
-at the next slot switch, silently. Upstream's `slot-post-process.sh` adds `ro`
-only for an erofs root, and this profile builds ext4.
+Upstream's `ln -sf` sits outside both of its loops, so five of the six binds are
+generated and never activated; the six links the image ships are what activate
+them. That gate had reported `NOT RUN` in every release run so far — not because
+no generator checkout existed, but because only its sibling gate looked for one.
+It now finds the same checkout its sibling does, and the real images agree:
+`shared_activations` reports 6 of 6 in both slot roots of both images.
 
-Two ways to close it, and this is a product decision rather than a release one:
+The read-only root the previous run fixed still holds. Both boot partitions of
+both images report:
 
-- add `ro` to the boot cmdline — a boot-path change that must not be made
-  without a physical Pi to validate it, because a read-only root that is
-  missing one writable bind does not boot; or
-- correct the documented model to say the slot root is writable, and state what
-  that means for writes outside the shared paths.
+```text
+boot_cmdline:boot_a       root=/dev/disk/by-slot/active/system
+boot_readonly_root:boot_a ro
+boot_cmdline:boot_b       root=/dev/disk/by-slot/active/system
+boot_readonly_root:boot_b ro
+root_fstab_readonly:system_a  ro,relatime,commit=30
+root_fstab_readonly:system_b  ro,relatime,commit=30
+```
 
-Nothing here decides it. The gate's job was to make the disagreement visible
-before a release claimed otherwise, and it did.
+### The ARM64 gate's finding
+
+`arm64_guest` is optional and does not gate `physical_ready`, and it ran here
+for the first time — `qemu-system-arm` and the AArch64 firmware were unpacked
+into a private prefix, the same way `simg2img` and `sgdisk` already are, so no
+root was needed and nothing on the host was modified.
+
+The previous run's finding is fixed. It reported:
+
+```text
+ok      ems-appliance-agent.service: active
+ok      ems-appliance-web.service: active
+failed  web_to_agent: ems-appliance-web cannot use the agent socket: TimeoutError
+```
+
+Both units were active and the socket was there; the round-trip did not land
+inside the single attempt the probe allowed, taken while containerd, docker,
+NetworkManager, avahi and polkit were all starting. `verify-install` fails
+closed, the postinst propagates it and dpkg refuses the package — correct in
+itself, but a fixed single-shot budget can fail an installation for a reason
+that resolves a second later, on a loaded or slow board as much as under
+emulation. `appliance/install_check.py` now spreads that budget over a few
+attempts with backoff, and retries only a round-trip that ran out of time or a
+socket not accepting yet. A refused permission is a misconfiguration, is
+returned on the first attempt, and still fails the installation immediately.
+
+The gate still fails, differently, and is still reported as FAIL. Run twice
+against this revision — at 2048 MB and again at 4096 MB, so memory exhaustion
+is ruled out — the guest boots, both architecture checks pass, and the smoke
+test then exits non-zero during the install step **without printing either of
+the two branches it can take**: no `pass`, no `fail`, no journal dump and no
+`RESULT:` line reaches the console.
+
+What separates the package from the emulation is that the amd64 driver runs the
+same `scripts/appliance-guest-smoke.sh` over SSH and passes it end to end, exit
+0, including the three checks that would have to fail for the install step to
+fail:
+
+```text
+PASS  the package installs and its postinst reports success
+PASS  verify-install reports a usable appliance
+PASS  ems-appliance-web can use the agent socket
+```
+
+The arm64 driver instead runs that script from cloud-init with
+`> /dev/ttyAMA0 2>&1`, the same serial console the kernel, systemd and `agetty`
+write to; the guest login prompt appears mid-step in both logs. So the failure
+is real and is not explained away, but the console cannot say which branch was
+taken. Giving that tier its own output channel is the follow-up, and it belongs
+in a release that is not already frozen and built.
+
+`arm64_guest` is optional by design: a Raspberry Pi boots its own firmware and
+its own kernel, so a generic UEFI guest can raise confidence and can never be
+the proof. Readiness does not rest on it and no artefact is called
+hardware-ready because of it.
 
 ## Verification stages
 
@@ -84,11 +162,12 @@ the current candidate is the table above, and only that table.
 | Real upstream config validated | Both hardware profiles resolve through rpi-image-gen's own `ConfigLoader` and `LayerManager` at the pinned revision, and the project layer's dependencies resolve beside upstream's | Current |
 | Real upstream artefact fixture validated | The update path drives genuine Android Sparse containers through zstd, tar, the member allowlist, sparse validation, expansion and filesystem identification | Current |
 | Packaged system booted | The package installs and its units order, fail and recover under a real systemd, in a Debian Trixie guest that finished booting | Current — 2026-08-09 |
-| Real image built | `rpi-image-gen build` produces an `.img` and `update.tar.zst` from a pinned source tree | Historical — 2026-08-07, before the host-key, redaction, expansion and host-identity fixes |
-| Real image inspected | The partition table, labels and per-build identities of an image that was actually built | Historical — 2026-08-07 |
-| Real image contents inspected | The package and its exact version in both roots, the units enabled in both, six shared paths activated in both, the bootconfig selector, both boot partitions and a `root=` that names the active slot | Method current, artefact historical — the inspector no longer needs a mount, so 16 KiB ext4 is readable on any host; no image from the current revision exists to run it against |
-| Real update artefact validated | Upstream's `update.tar.zst`, its Android Sparse members staged through the production allowlist extractor and cross-checked against `simg2img` | Historical — 2026-08-07 |
-| Signed production release | A manifest signed by a trusted key, verified cryptographically, with every production gate passed | **NOT REACHED** |
+| Real image built | `rpi-image-gen build` produces an `.img` and `update.tar.zst` from a pinned source tree | Current — `50645a3`, three images (two rpi5, one rpi4) |
+| Real image inspected | The partition table, labels and per-build identities of an image that was actually built | Current — `50645a3`, rpi5 and rpi4 |
+| Real image contents inspected | The package and its exact version in both roots, the units enabled in both, six shared paths activated in both, the bootconfig selector, both boot partitions and a `root=` that names the active slot | Current — `50645a3`, 90 pass / 0 fail / 0 not run on both images |
+| Real update artefact validated | Upstream's `update.tar.zst`, its Android Sparse members staged through the production allowlist extractor and cross-checked against `simg2img` | Current — `50645a3`, 18 pass / 0 fail / 0 not run |
+| Signed production release | A manifest signed by a trusted key, verified cryptographically, with every production gate passed | Current — `50645a3`, signed by `D16E8DE0…` and verified with `gpgv` |
+| Physical Raspberry Pi | The image boots a real board, and A/B update, rollback and persistence hold on hardware | **NOT REACHED** — no hardware |
 | Real Pi boot verified | Everything below | **NOT REACHED** |
 
 The last one is what this gate exists for. Nothing in the automated suites
@@ -134,6 +213,54 @@ a switchable power supply for the power-cut cases
 a serial console (UART) — a Pi that will not boot shows why only here
 a second machine to re-image from
 ```
+
+### How the offline seed became usable
+
+`runtime_seed_unaddressable` was the defect that made the seed dead weight: the
+slot wrote the archives and then refused to use them, so an appliance with no
+WAN fell back to the registry the seed exists to avoid.
+
+The cause is a fact about Docker, not a bug in the caller. A repository digest
+is a *registry's* name for a manifest, and `docker save` re-serialises that
+manifest on the way out — the archive is an OCI layout whose `index.json` names
+a manifest the saving host computed. The blob whose sha256 **is** the repository
+digest is not in the archive at all, so nothing can read it back, and after
+`docker load` the store answers "No such image" for `repository@sha256:...`.
+Only a pull ever writes that mapping.
+
+What does survive, byte for byte, is the image config digest — Docker's image
+ID. It commits to `rootfs.diff_ids` and therefore to the exact layer content, so
+it is an identity rather than a label. The chain the reconstruction now rests on:
+
+1. **Online, at record time.** The image is present as `repository@digest`
+   because it was pulled. `docker image inspect` reports the image ID for that
+   digest, and *Docker* is the authority for the binding. It goes into the
+   runtime record, inside the fingerprint the trial is gated on.
+2. **The archive is hashed** and its sha256, size, platform and image ID are
+   written beside it.
+3. **Offline, in the trial slot.** The archive is re-hashed against the record
+   before anything is loaded. After `docker load`, the store is inspected again
+   — first for the recorded `repository@digest`, and if the store does not hold
+   it, for the recorded image ID. That inspection has to answer with exactly
+   that ID and a matching platform, or the seed is refused and the fallback
+   still names the exact digest.
+4. **The service is started from what was verified.** The recorded compose file
+   is authority and is never rewritten; the verified reference is handed to
+   compose as an overlay after it. Both possible values are content-addressed —
+   the digest reference or the image ID — and a name that is neither is not
+   written at all, so an overlay can never be how a mutable tag reaches a
+   container.
+
+The seed's own metadata is never the authority. It only says which image ID to
+ask Docker about; Docker's inspection of its own store is what decides.
+
+The record schema went from 3 to 4 for this. A record is written by the slot
+being replaced and read by the slot replacing it, so across exactly this update
+the reader is one schema ahead — and the trial is gated on the fingerprint the
+*writer* computed. The fingerprint is therefore taken over the shape the record
+declares, not the shape the running code writes. Without that, the update
+introducing the schema would be the one update that could never commit, and
+every retry would fail identically.
 
 ### Minimum supported medium: 32 GB
 
@@ -191,9 +318,9 @@ Pulling the plug on a `poweroff` is not the same test.
 | 0.13d | `scripts/appliance-hardware-validation-kit.sh --gate-report <report>` | PASS only with exactly one completed build per profile, a signed manifest, both inspection reports with nothing NOT RUN, and a gate report that says PASS. `--development-kit` reports INCOMPLETE and `physical_ready=false` |
 | 0.13e | `scripts/appliance_verify_hardware_kit.py --kit <dir> --keyring <file> --trusted-fingerprint <fpr>` | The kit re-verified from the directory rather than from the run that made it: every file re-hashed against `KIT-SHA256SUMS`, no file in the kit that the list does not name, the attestation's detached signature verified by a trusted key, every artefact the attestation binds re-hashed out of the kit's own profile directories, and no private key material. `physical_ready=true` only when all of that holds |
 | 0.13f | `scripts/appliance_runtime_gates.py --from-log <gate>=<log>` | The runtime evidence a release is bound to. Each gate carries its result, the digest of the guest log it was read out of, the environment and — for anything that did not run — the exact prerequisite. A command-line verdict can never overrule a log, and a required gate that did not run is never a pass |
-| 0.13g | `scripts/appliance-guest-sftp-session.sh` in the packaged-runtime guest | A real SFTP session with a key issued through the appliance's own authenticated key management: login, the exported directories visible, a known file fetched, `cd ..` bounded by the chroot, `/etc/passwd` unreachable, and shell, `-L`, `-R`, `-D` and `-A` all refused |
+| 0.13g | `scripts/appliance-guest-sftp-session.sh` in the packaged-runtime guest | A real SFTP session with a key issued through the appliance's own authenticated key management: login, the exported directories visible, a known file fetched, `cd ..` bounded by the chroot, `/etc/passwd` unreachable. Read-only is asked of the protocol and the mounts together — put, overwrite, rename, mkdir, rmdir, rm, chmod and symlink all refused, with the export tree and the file behind it re-read afterwards. Shell, `-R`, `-D` and `-A` are refused; `-L` is asked by *using* the forward, because the local listener belongs to the ssh client and appears whatever the server allows. The upgrade path is included: the old root-owned `0700` key directory is put back, the login is confirmed to fail with it, and the package's own `ensure` is what makes it work again |
 | 0.13h | `scripts/appliance-guest-network-persistence.sh <overlay>` in the same guest | Asked of systemd rather than read from two unit files: `Requires=`/`After=ems-appliance-persistence.service` are what systemd loaded, the healthy slot starts NetworkManager, and with the persistent source taken away the verification fails closed and NetworkManager is refused instead of consuming the slot-local fallback |
-| 0.13i | `pytest tests/test_appliance_ab_docker_reconstruction.py` against a real Docker daemon | Three real contract images in a registry the test controls: the deployment authority recorded by digest, drift detected, a corrupt, a truncated and a zero-length seed each refused with the fallback naming the exact digest, `platform_mismatch` refusing an image for another architecture, a mutable tag refused at record time, and an EMS an operator stopped rebuilt and left stopped. `runtime_seed_unaddressable` is the one open defect: `docker load` cannot restore a repository digest, so the offline seed is written and never used |
+| 0.13i | `pytest tests/test_appliance_ab_docker_reconstruction.py` against a real Docker daemon | Three real contract images in a registry the test controls: the deployment authority recorded by digest, drift detected, a corrupt, a truncated and a zero-length seed each refused with the fallback naming the exact digest, `platform_mismatch` refusing an image for another architecture, a mutable tag refused at record time, and an EMS an operator stopped rebuilt and left stopped. A slot with an emptied image store and **no registry at all** now rebuilds every service from the seed and starts them; the containers are re-inspected and run the exact image the record names. `runtime_seed_unaddressable` is closed — see below |
 | 0.14 | The medium the image is flashed to | At least 30,000,000,000 bytes (a 32 GB card). The image is ~16.5 GiB and the persistent partition needs ~11.2 GiB once both Docker stores, the seeds, a staged update and the operator's data are on it |
 | 0.13a | `scripts/appliance-builder-vm.sh --release-gate --profile rpi5 --profile rpi4` | The gate builds the images itself, so it only reaches PASS on a host with the generator's prerequisites. This runs it in the disposable builder and brings the verdict and `dist/gates/` back; the developer host is not modified |
 | 0.13b | The same with `--allow-not-run` on a host without the builder prerequisites | `RESULT: INCOMPLETE` and exit 0; the word PASS never appears |

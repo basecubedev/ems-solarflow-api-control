@@ -48,6 +48,14 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+# The discovery appliance-check-rpi-image-gen.sh already does. Without it this
+# gate reports NOT RUN in the same run where its sibling found the very checkout
+# it needed, and the only automated proof of the shipped wants links goes silent.
+if [ -z "$GENERATOR" ]; then
+    for candidate in /usr/share/rpi-image-gen /opt/rpi-image-gen "$ROOT/../rpi-image-gen"; do
+        [ -d "$candidate" ] && GENERATOR=$candidate && break
+    done
+fi
 [ -n "$GENERATOR" ] && [ -d "$GENERATOR" ] \
     || not_run "rpi-image-gen was not found; pass --rpi-image-gen DIR" \
                rpi_image_gen_unavailable

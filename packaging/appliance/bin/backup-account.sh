@@ -237,6 +237,12 @@ keys_directory() {
     printf '%s/.ssh' "$(home_directory)"
 }
 
+account_group() {
+    group=$(passwd_field 4)
+    [ -n "$group" ] || group=$(record_value primary_gid)
+    printf '%s' "$group"
+}
+
 # --- ensure -----------------------------------------------------------------
 
 installation_id() {
@@ -259,6 +265,10 @@ new_marker_nonce() {
 # The account only ever reads its keys, so nothing in the home needs to be
 # writable by it. A root-owned home is what makes the marker below unremovable
 # by the account whose ownership it proves.
+#
+# sshd opens authorized_keys as the account, so the key directory has to be
+# searchable and the file readable by the account's own group. Root ownership
+# with no group write is what keeps that from becoming self-authorisation.
 harden_home() {
     directory=$1
     [ -d "$directory" ] || return 0
@@ -271,9 +281,18 @@ harden_home() {
     chmod 0755 "$directory" || fail "cannot set the mode of the backup home $directory"
     if [ -d "$directory/.ssh" ] && [ ! -L "$directory/.ssh" ]; then
         if [ "$(id -u)" = "0" ]; then
-            chown root:root "$directory/.ssh" || fail "cannot own $directory/.ssh"
+            chown "root:$(account_group)" "$directory/.ssh" \
+                || fail "cannot own $directory/.ssh"
         fi
-        chmod 0700 "$directory/.ssh" || fail "cannot set the mode of $directory/.ssh"
+        chmod 0750 "$directory/.ssh" || fail "cannot set the mode of $directory/.ssh"
+        for keyfile in "$directory/.ssh/authorized_keys" \
+                       "$directory/.ssh/authorized_keys$DISABLED_SUFFIX"; do
+            [ -f "$keyfile" ] && [ ! -L "$keyfile" ] || continue
+            if [ "$(id -u)" = "0" ]; then
+                chown "root:$(account_group)" "$keyfile" || fail "cannot own $keyfile"
+            fi
+            chmod 0640 "$keyfile" || fail "cannot set the mode of $keyfile"
+        done
     fi
     return 0
 }
@@ -540,6 +559,10 @@ ensure_account() {
     if account_exists; then
         if package_owns_account; then
             note "the backup account $BACKUP_USER is already owned by this package."
+            # An upgrade from a release that left the key directory unreadable
+            # by the account has to correct it; only a home this package is
+            # proven to own is touched.
+            harden_home "$(home_directory)"
             return 0
         fi
         if [ "$(ownership_state)" = "legacy_manual_migration_required" ]; then

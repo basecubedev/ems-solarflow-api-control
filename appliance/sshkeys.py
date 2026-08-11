@@ -21,8 +21,10 @@ from appliance.validation import (
 )
 
 MAX_COMMENT_LENGTH = 128
-SSH_DIR_MODE = 0o700
-AUTHORIZED_KEYS_MODE = 0o600
+# sshd opens authorized_keys as the account, so the account's group needs read
+# and search; root ownership is what stops the account authorising itself.
+SSH_DIR_MODE = 0o750
+AUTHORIZED_KEYS_MODE = 0o640
 PRIVATE_KEY_MARKERS = ("PRIVATE KEY", "PuTTY-User-Key-File")
 
 
@@ -146,19 +148,20 @@ class AuthorizedKeysStore:
             return []
 
     def _own(self, target):
-        if self.owner_uid is None or self.owner_gid is None:
+        # Ownership boundary: root owns the key material, the account's group
+        # only reads it. An account that cannot write here cannot authorise
+        # itself, replace the key file, or touch the marker beside it.
+        if self.owner_gid is None:
             return
         try:
-            os.chown(target, self.owner_uid, self.owner_gid)
+            os.chown(target, 0, self.owner_gid)
         except (OSError, PermissionError):
             pass
 
     def _write(self, keys):
-        # The directory stays root-owned on purpose: an account that cannot write
-        # it cannot replace the key file or the package's ownership marker beside
-        # it. Only the key file itself is handed to the account.
         self.ssh_dir.mkdir(parents=True, exist_ok=True)
         os.chmod(self.ssh_dir, SSH_DIR_MODE)
+        self._own(self.ssh_dir)
 
         tmp = self.ssh_dir / f".authorized_keys.{os.getpid()}.tmp"
         with open(tmp, "w", encoding="utf-8") as handle:

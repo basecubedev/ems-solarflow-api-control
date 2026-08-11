@@ -14,6 +14,7 @@ unavailable. They never fail the package.
 import os
 import socket
 import stat
+import time
 
 from appliance.paths import AGENT_DIR_MODE, resolve_paths
 
@@ -174,6 +175,72 @@ def _account_uid(name):
         return None
 
 
+WEB_TO_AGENT_ATTEMPTS = 4
+WEB_TO_AGENT_TIMEOUT = 8.0
+WEB_TO_AGENT_TIMEOUT_MAX = 64.0
+WEB_TO_AGENT_BACKOFF = 1.0
+WEB_TO_AGENT_BACKOFF_MAX = 4.0
+
+# What this check asks is whether the web account can use the socket, so it
+# asks for the cheapest thing the agent can answer: operation records it
+# already holds. status.get collects the whole overview — the Docker daemon,
+# sshd, NetworkManager, the Admin container — and during a postinst its latency
+# is every one of those subsystems' cold start, none of which is the question.
+WEB_TO_AGENT_OPERATION = "operations.list"
+
+# A socket that is not accepting yet, or a round-trip that ran out of time, is
+# what a first boot looks like while docker, NetworkManager and polkit start
+# alongside this probe. A refused permission is a real misconfiguration and is
+# never retried — retrying it would only delay the failure the operator needs.
+WEB_TO_AGENT_TRANSIENT = (TimeoutError, ConnectionRefusedError, FileNotFoundError)
+
+
+def agent_round_trip(
+    socket_path,
+    *,
+    attempts=WEB_TO_AGENT_ATTEMPTS,
+    timeout=WEB_TO_AGENT_TIMEOUT,
+    timeout_max=WEB_TO_AGENT_TIMEOUT_MAX,
+    backoff=WEB_TO_AGENT_BACKOFF,
+    sleep=time.sleep,
+):
+    """One round-trip over the agent socket, retried while it may still land.
+
+    Returns "ok" or the name of the exception the last attempt raised. An
+    attempt taken during first boot fails the whole package installation for a
+    reason that resolves a second later, so the budget is spread over a few
+    attempts — and each attempt waits longer than the last, because a reply
+    that outlasts one fixed deadline outlasts every repeat of it.
+    """
+
+    delay = backoff
+    deadline = timeout
+    request = b'{"operation": "%s"}\n' % WEB_TO_AGENT_OPERATION.encode("ascii")
+    outcome = "no_attempt"
+    for attempt in range(attempts):
+        try:
+            connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            connection.settimeout(deadline)
+            connection.connect(str(socket_path))
+            connection.sendall(request)
+            outcome = "ok" if connection.recv(64) else "empty_reply"
+            connection.close()
+            return outcome
+        except WEB_TO_AGENT_TRANSIENT as exc:
+            outcome = exc.__class__.__name__
+        except OSError as exc:
+            return exc.__class__.__name__
+        if attempt + 1 < attempts:
+            sleep(delay)
+            delay = min(delay * 2, WEB_TO_AGENT_BACKOFF_MAX)
+            # The deadline grows with the attempts, not just the pause between
+            # them. A reply that takes longer than one fixed deadline is never
+            # seen by any number of attempts that each give up at the same
+            # point — measured at 22.2s on an emulated aarch64 first boot.
+            deadline = min(deadline * 2, timeout_max)
+    return outcome
+
+
 def check_web_reaches_agent(paths, *, live, user=WEB_USER):
     """Connect to the socket as the web account, the way the service will."""
 
@@ -199,12 +266,7 @@ def check_web_reaches_agent(paths, *, live, user=WEB_USER):
             os.initgroups(user, entry.pw_gid)
             os.setgid(entry.pw_gid)
             os.setuid(entry.pw_uid)
-            connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            connection.settimeout(15)
-            connection.connect(str(paths.agent_socket))
-            connection.sendall(b'{"operation": "status.get"}\n')
-            code = b"ok" if connection.recv(64) else b"empty_reply"
-            connection.close()
+            code = agent_round_trip(paths.agent_socket).encode("ascii", "replace")
         except OSError as exc:
             code = str(exc.__class__.__name__).encode("ascii", "replace")
         finally:

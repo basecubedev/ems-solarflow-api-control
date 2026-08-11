@@ -16,12 +16,15 @@
 #   sshd's effective policy chroots that user, forces internal-sftp, and
 #   refuses a tty, port forwarding and password authentication
 #   a key the appliance never issued cannot log in
+#   a session opened with a key the appliance did issue lands in that chroot,
+#   sees the exports, cannot leave them, and cannot name its own subsystem
 #
-# What is deliberately NOT claimed here: a completed SFTP session. The
-# appliance refuses any key it cannot attribute, and issuing an attributable
-# one goes through its authenticated key management, which this tier does not
-# drive. A chroot check that passes because the login failed proves nothing, so
-# those cases report NOT RUN.
+# The session runs in the same tier as the policy on purpose: an effective
+# policy and a session proven in two separate records do not say that the
+# session ran under that policy. The key is issued through the appliance's own
+# authenticated key management. Where that cannot be reached the session cases
+# report NOT RUN — a chroot check that passes because the login failed proves
+# nothing at all.
 #
 # The package lifecycle — reinstall, remove, purge, ACL rollback and foreign
 # state preservation — is proven in tests/test_appliance_package_lifecycle.py
@@ -33,6 +36,7 @@ set -uo pipefail
 BACKUP_USER=${EMS_APPLIANCE_BACKUP_USER:-ems-backup}
 EXPORT_ROOT=/srv/ems-appliance-export
 CLIENT_KEY=/root/backup-client-key
+ISSUED_KEY=/root/lifecycle-issued-key
 
 failures=0
 step() { printf '\n== %s ==\n' "$1"; }
@@ -95,13 +99,12 @@ else
     done
 fi
 
-step "a real SFTP session"
-# A key the appliance cannot attribute is refused by design, and the only
-# supported way to issue an attributable one is the appliance's own key
-# management over its authenticated API. This tier does not drive that API, so
-# the protocol cases below are reported as NOT RUN rather than exercised with a
-# key that activation would reject: a chroot check that passes because the
-# login failed proves nothing at all.
+step "a real SFTP session under exactly that policy"
+# The effective policy above is what sshd says it would do. A session is what
+# it does. Both belong in one record, so the key is issued here, through the
+# appliance's own authenticated key management — never written into
+# authorized_keys by hand. Where that cannot be done the protocol cases report
+# NOT RUN: a chroot check that passes because the login failed proves nothing.
 not_run=0
 skip() { printf '  NOT RUN  %s\n' "$1"; not_run=$((not_run + 1)); }
 
@@ -116,13 +119,81 @@ else
     pass "a key the appliance never issued cannot log in"
 fi
 
-skip "a real sftp session with an appliance-issued key"
-skip "the session root is the chroot"
-skip "the exported directories are visible in the session"
-skip "a path outside the chroot is not reachable"
-skip "a parent-directory traversal cannot leave the chroot"
-echo "  prerequisite: an attributable key issued through the appliance's key"
-echo "  management; backup-access refuses any key it cannot attribute."
+ISSUED=0
+ISSUE_OUTPUT=$(bash "$(dirname "$0")/appliance-guest-issue-backup-key.sh" \
+    --account "$BACKUP_USER" --key "$ISSUED_KEY" 2>&1) && ISSUED=1
+if [ "$ISSUED" -eq 1 ]; then
+    pass "the appliance issued a key for $BACKUP_USER ($(echo "$ISSUE_OUTPUT" \
+        | sed -n 's/^fingerprint: //p'))"
+else
+    skip "a real sftp session with an appliance-issued key"
+    skip "the session root is the chroot"
+    skip "the exported directories are visible in the session"
+    skip "a path outside the chroot is not reachable"
+    skip "a parent-directory traversal cannot leave the chroot"
+    echo "  prerequisite: an attributable key issued through the appliance's key"
+    echo "  management; backup-access refuses any key it cannot attribute."
+    # The helper's own verdict line is dropped: this log is read for its last
+    # RESULT line, and a nested one would be a second tier's answer in it.
+    echo "$ISSUE_OUTPUT" | grep -v '^RESULT:' | sed 's/^/    /'
+fi
+
+if [ "$ISSUED" -eq 1 ]; then
+    ISSUED_OPTS=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
+                 -o LogLevel=ERROR -o BatchMode=yes -o ConnectTimeout=10 -i "$ISSUED_KEY")
+    sftp_batch() {
+        printf '%s\n' "$@" | sftp -b - "${ISSUED_OPTS[@]}" "$BACKUP_USER@127.0.0.1" 2>&1
+    }
+
+    SESSION=$(sftp_batch "pwd")
+    if [ $? -eq 0 ] && echo "$SESSION" | grep -q 'Remote working directory: /'; then
+        pass "a real sftp session with an appliance-issued key"
+        pass "the session root is the chroot"
+    else
+        fail "the sftp login failed: $(echo "$SESSION" | tail -2 | tr '\n' ' ')"
+        # Every case below asks something of a session that never opened, so
+        # they are reported as not run rather than as confinement results.
+        skip "the exported directories are visible in the session"
+        skip "a path outside the chroot is not reachable"
+        skip "a parent-directory traversal cannot leave the chroot"
+        ISSUED=0
+    fi
+fi
+
+if [ "$ISSUED" -eq 1 ]; then
+    LISTING=$(sftp_batch "ls -l /")
+    if echo "$LISTING" | grep -q "config" && echo "$LISTING" | grep -q "backups"; then
+        pass "the exported directories are visible in the session"
+    else
+        fail "the session root does not show the exports"
+    fi
+
+    rm -f /root/lifecycle-leaked-passwd
+    sftp_batch "get /etc/passwd /root/lifecycle-leaked-passwd" >/dev/null
+    if [ ! -s /root/lifecycle-leaked-passwd ]; then
+        pass "a path outside the chroot is not reachable"
+    else
+        fail "the host's /etc/passwd was readable through the session"
+    fi
+
+    ESCAPE=$(sftp_batch "cd .." "pwd")
+    if echo "$ESCAPE" | grep -q 'Remote working directory: /'; then
+        pass "a parent-directory traversal cannot leave the chroot"
+    else
+        fail "cd .. left the chroot: $(echo "$ESCAPE" | tail -1)"
+    fi
+
+    # ForceCommand internal-sftp is the whole confinement, so what the client
+    # asks for must not decide what runs. A subsystem the appliance never
+    # declared may not produce anything the client can drive.
+    SUBSYSTEM=$(timeout 30 ssh "${ISSUED_OPTS[@]}" -s "$BACKUP_USER@127.0.0.1" \
+        ems-appliance-not-a-subsystem </dev/null 2>&1 | head -c 512)
+    if printf '%s' "$SUBSYSTEM" | grep -qiE 'uid=|root@|/bin/sh|command not found'; then
+        fail "an undeclared subsystem request reached a program: $SUBSYSTEM"
+    else
+        pass "an undeclared subsystem cannot be substituted for the forced command"
+    fi
+fi
 
 printf '\n'
 if [ "$failures" -ne 0 ]; then

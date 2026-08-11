@@ -225,17 +225,23 @@ class ContractRegistry:
 
 
 class Deployment:
-    """The three contract services, running under names only this test uses."""
+    """The contract services this appliance runs, under names only this test uses."""
 
-    def __init__(self, tmp_path, registry):
+    def __init__(self, tmp_path, registry, *, roles=ab_bootstrap.ROLES, data=None):
         self.registry = registry
         # Per deployment, not per registry: the module builds the images once
         # and several cases run their own slot against them at the same names.
         self.tag = uuid.uuid4().hex[:10]
+        self.roles = tuple(roles)
         self.root = tmp_path / "deployment"
         self.root.mkdir(parents=True, exist_ok=True)
+        self.data = data
         self.compose_file = self.root / "docker-compose.yml"
         self.project = f"emscontract{self.tag}"
+        # Every role is named, even the ones this deployment does not run: a
+        # role left out of the layout falls back to the production container
+        # name, and a stray ems-influxdb on the developer's host would then be
+        # read as this appliance's.
         self.containers = {
             role: f"ems-contract-{role}-{self.tag}" for role in ab_bootstrap.ROLES
         }
@@ -243,7 +249,7 @@ class Deployment:
 
     def write(self, references):
         services = {}
-        for role in ab_bootstrap.ROLES:
+        for role in self.roles:
             services[role] = {
                 "image": references[role],
                 "container_name": self.containers[role],
@@ -251,6 +257,8 @@ class Deployment:
                 "restart": "no",
             }
         services[ab_bootstrap.ROLE_ADMIN]["ports"] = [f"127.0.0.1:{free_port()}:8080"]
+        if self.data is not None and ab_bootstrap.ROLE_EMS in services:
+            services[ab_bootstrap.ROLE_EMS]["volumes"] = [f"{self.data}:/data"]
         self.compose_file.write_text(
             json.dumps({"services": services}, indent=2, sort_keys=True) + "\n"
         )
@@ -307,10 +315,12 @@ def registry(tmp_path_factory):
 class Slot:
     """A source slot that recorded a deployment, and the target that rebuilds it."""
 
-    def __init__(self, tmp_path, registry, *, stopped=()):
+    def __init__(self, tmp_path, registry, *, stopped=(), roles=ab_bootstrap.ROLES, data=None):
         self.registry = registry
-        self.deployment = Deployment(tmp_path, registry)
-        self.deployment.write(dict(registry.references))
+        self.deployment = Deployment(tmp_path, registry, roles=roles, data=data)
+        self.deployment.write(
+            {role: registry.references[role] for role in self.deployment.roles}
+        )
         self.deployment.up()
         for role in stopped:
             run("docker", "stop", self.deployment.containers[role], timeout=120)
@@ -388,18 +398,20 @@ def test_the_recorded_deployment_is_the_one_on_disk(slot):
 
 @requires_docker
 def test_a_loaded_image_never_regains_the_digest_the_record_names(slot):
-    """The reproduction of ``runtime_seed_unaddressable``.
+    """A repository digest cannot survive an archive, and this is why.
 
-    ``docker save`` writes no repository digest into the archive — saving the
-    digest reference records ``RepoTags: null``, and saving the tag records the
-    tag and still no digest. ``docker load`` therefore imports the right bytes
-    under no name the record can ask for: the image ID is right, and
-    ``docker image inspect repository@sha256:...`` says "No such image".
+    ``docker save`` re-serialises the manifest on its way out: the archive is an
+    OCI layout whose ``index.json`` names a manifest this host computed, not the
+    one the registry signed. The blob whose sha256 *is* the repository digest is
+    not in the archive at all, so no amount of reading it can give that name
+    back, and ``docker image inspect repository@sha256:...`` says "No such
+    image" after the load.
 
-    With the classic image store there is no way to create that mapping
-    locally; only a pull writes it. So this is not a bug in the caller below,
-    and the assertion is what Docker really does rather than what the seed
-    needs it to do.
+    What does survive, byte for byte, is the image config digest — Docker's
+    image ID. It commits to ``rootfs.diff_ids`` and therefore to the layer
+    content, which is what makes it usable as an identity rather than a label.
+    So this is a fact about Docker, and the reconstruction below is built on the
+    identity that does survive rather than on the one that does not.
     """
 
     record = slot.record_and_seed()
@@ -414,12 +426,25 @@ def test_a_loaded_image_never_regains_the_digest_the_record_names(slot):
     assert loaded.exists is True
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="runtime_seed_unaddressable: docker load cannot restore a repository "
-    "digest, so the seed a slot writes for the no-WAN case is refused and the "
-    "reconstruction falls back to the registry it was meant not to need",
-)
+@requires_docker
+def test_the_record_binds_the_identity_that_survives_save_and_load(slot):
+    """Docker's own binding of repository@digest to an image id, taken online.
+
+    It is recorded while the registry is still the authority for that digest,
+    which is what makes it usable later, offline, when nothing else can attest
+    to it.
+    """
+
+    record = slot.record_and_seed()
+
+    for role in ab_bootstrap.ROLES:
+        entry = record.image(role)
+        identity = slot.backend.inspect_image(entry.reference)
+        assert identity.image_id, role
+        assert entry.image_id == identity.image_id, role
+        assert record.seed(role)["image_id"] == identity.image_id, role
+
+
 @requires_docker
 def test_a_freshly_written_slot_rebuilds_from_the_seed_with_no_registry(slot):
     record = slot.record_and_seed()
@@ -433,7 +458,67 @@ def test_a_freshly_written_slot_rebuilds_from_the_seed_with_no_registry(slot):
     for role in ab_bootstrap.ROLES:
         assert outcomes[role].source == ab_bootstrap.SOURCE_SEED, outcomes[role].detail
         assert outcomes[role].digest == record.image(role).digest
+        # What it is started from is the identity that was verified, and it is
+        # content-addressed either way — never a tag.
+        assert outcomes[role].runtime_reference == record.image(role).image_id
+        assert outcomes[role].runtime_reference.startswith("sha256:")
     assert set(report.started) == set(ab_bootstrap.ROLES)
+
+
+@requires_docker
+def test_the_containers_a_seeded_slot_starts_run_the_verified_image(slot):
+    record = slot.record_and_seed()
+    slot.empty_the_image_store()
+    slot.registry.stop()
+
+    report = slot.service.reconstruct()
+
+    assert report.ok, report.problems
+    for role in ab_bootstrap.ROLES:
+        container = slot.backend.inspect_container(slot.deployment.containers[role])
+        assert container.exists, role
+        assert container.image_id == record.image(role).image_id, role
+
+
+@requires_docker
+def test_a_seed_the_record_cannot_attribute_is_never_started(slot):
+    """The seed's own metadata is not the authority; the record is.
+
+    A seed archive that loads an image the record does not name must not be
+    accepted just because it loaded cleanly.
+    """
+
+    record = slot.record_and_seed()
+    stranger = "sha256:" + "b" * 64
+    slot.store.write(
+        [
+            entry if entry.role != ab_bootstrap.ROLE_ADMIN
+            else ab_bootstrap.RuntimeImage(
+                role=entry.role,
+                reference=entry.reference,
+                required=entry.required,
+                state=entry.state,
+                digest=entry.digest,
+                platform=entry.platform,
+                image_id=stranger,
+            )
+            for entry in record.images
+        ],
+        compose=record.compose,
+        environment=record.environment,
+        seeds=record.seeds,
+        recorded_at=record.recorded_at,
+    )
+    slot.empty_the_image_store()
+    slot.registry.stop()
+
+    report = slot.service.reconstruct()
+
+    outcomes = outcomes_by_role(report)
+    admin = outcomes[ab_bootstrap.ROLE_ADMIN]
+    assert admin.source == ab_bootstrap.SOURCE_UNAVAILABLE, admin.detail
+    assert not report.ok
+    assert stranger in admin.detail or "image id" in admin.detail, admin.detail
 
 
 @requires_docker
@@ -587,8 +672,14 @@ def test_an_ems_that_was_deliberately_stopped_comes_back_stopped(tmp_path, regis
 
         outcomes = outcomes_by_role(report)
         assert report.ok, report.problems
-        # The image authority still had to be satisfied for the stopped service.
-        assert outcomes[ab_bootstrap.ROLE_EMS].source == ab_bootstrap.SOURCE_REGISTRY
+        # The image authority still had to be satisfied for the stopped service:
+        # it is restored and verified like any other, and only the *starting* is
+        # skipped. Which source it came from is not what this case is about, so
+        # both are accepted — the seed is simply the one that answers first now.
+        assert outcomes[ab_bootstrap.ROLE_EMS].source in (
+            ab_bootstrap.SOURCE_SEED,
+            ab_bootstrap.SOURCE_REGISTRY,
+        )
         assert outcomes[ab_bootstrap.ROLE_EMS].digest == record.image(
             ab_bootstrap.ROLE_EMS
         ).digest
@@ -637,3 +728,63 @@ def test_the_contract_images_carry_no_project_source():
     assert "COPY . " not in ADMIN_DOCKERFILE
     assert str(ROOT) not in ADMIN_DOCKERFILE + EMS_DOCKERFILE + INFLUX_DOCKERFILE
     assert os.environ.get("EMS_CONTRACT_HEALTHY") is None
+
+
+# --- deployments that are not the three-service default ----------------------
+
+
+@requires_docker
+def test_an_appliance_that_never_ran_influxdb_reconstructs_without_it(tmp_path, registry):
+    """A service the operator never deployed is not one to invent on a rebuild."""
+
+    registry.start_again()
+    roles = (ab_bootstrap.ROLE_ADMIN, ab_bootstrap.ROLE_EMS)
+    slot = Slot(tmp_path, registry, roles=roles)
+    try:
+        record = slot.record_and_seed()
+        assert {image.role for image in record.images} == set(roles)
+        slot.empty_the_image_store()
+        slot.registry.stop()
+
+        report = slot.service.reconstruct()
+
+        outcomes = outcomes_by_role(report)
+        assert report.ok, report.problems
+        assert ab_bootstrap.ROLE_INFLUXDB not in outcomes
+        assert ab_bootstrap.ROLE_INFLUXDB not in report.started
+        for role in roles:
+            assert outcomes[role].source == ab_bootstrap.SOURCE_SEED, outcomes[role].detail
+            assert outcomes[role].digest == record.image(role).digest
+    finally:
+        slot.teardown()
+        slot.registry.start_again()
+
+
+@requires_docker
+def test_the_data_a_service_wrote_survives_the_rebuild(tmp_path, registry):
+    """Reconstruction restores images and containers, never persistent data."""
+
+    registry.start_again()
+    data = tmp_path / "persistent-data"
+    data.mkdir()
+    slot = Slot(tmp_path, registry, data=data)
+    try:
+        (data / "state.json").write_text('{"written": "before the rebuild"}\n')
+        slot.record_and_seed()
+        slot.empty_the_image_store()
+        slot.registry.stop()
+
+        report = slot.service.reconstruct()
+        assert report.ok, report.problems
+
+        assert (data / "state.json").read_text() == '{"written": "before the rebuild"}\n'
+        seen = slot.backend.exec_in_container(
+            slot.deployment.containers[ab_bootstrap.ROLE_EMS],
+            ["cat", "/data/state.json"],
+            timeout=60,
+        )
+        assert seen.ok, seen.stderr
+        assert "before the rebuild" in seen.stdout
+    finally:
+        slot.teardown()
+        slot.registry.start_again()
