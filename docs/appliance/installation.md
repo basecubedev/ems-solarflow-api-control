@@ -11,6 +11,14 @@
 
 Other boards and 32-bit systems are out of scope for this release.
 
+The **Raspberry Pi 3 and 3B+ cannot run the A/B appliance image**, and that is
+not a sizing decision that a future release could revisit cheaply: the image
+uses a GPT layout and the EEPROM boot selector that Pi 4 and Pi 5 firmware
+provide, and a Pi 3 boot ROM reads neither. See
+[adr/raspberry-pi-3-ab-support.md](adr/raspberry-pi-3-ab-support.md) for the
+evidence, and [../user/hardware-requirements.md](../user/hardware-requirements.md)
+for what a Pi 3 can and cannot be used for.
+
 ## Two installation shapes
 
 ```text
@@ -227,10 +235,22 @@ sudo apt install qemu-system-arm qemu-efi-aarch64 cloud-image-utils xorriso \
                  curl gpgv debian-archive-keyring
 ```
 
-It boots `debian-13-genericcloud-arm64.qcow2` with EFI firmware, hands the
-package and the guest script in on a second ISO, and reads the result from the
-serial console. Under full emulation on an x86 host this takes a long time;
-on an aarch64 host with `/dev/kvm` it uses KVM automatically.
+It boots `debian-13-genericcloud-arm64.qcow2` with EFI firmware and hands the
+package and the guest scripts in on a second ISO. Under full emulation on an
+x86 host this takes a long time; on an aarch64 host with `/dev/kvm` it uses KVM
+automatically.
+
+The guest's record does not travel on the boot console. `agetty` claims that
+console and calls `vhangup()` on it, which revokes every descriptor already
+open there, so a tier that logged to it lost the rest of its output and died on
+its next write — a real failure that took two runs to become readable. The
+record goes to a virtio-serial port nothing else writes to, delivered once on a
+fresh open after the tier has finished, and is preserved as `evidence.log`
+beside `console.log`. The console keeps the boot log plus an
+`APPLIANCE_EVIDENCE stage=...` heartbeat, so a guest that never finishes still
+names the stage it stopped in. `result.txt` records which channel the record
+came from; reading it from the shared console is a labelled fallback, never a
+silent one.
 
 For a release validation the run has to be reproducible, so the driver refuses
 to guess:

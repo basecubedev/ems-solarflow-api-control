@@ -50,6 +50,21 @@ protocol, the per-device control capability and the transport write gate.
 [Device compatibility reports](https://github.com/basecubedev/ems-solarflow-api-control/issues/new?template=device_compatibility_report.yml)
 (working *or* broken) are very welcome.
 
+## Hardware requirements
+
+The machine EMS runs *on* — 64-bit `arm64` or `amd64`.
+
+| RAM | Recommended configuration |
+|-----|---------------------------|
+| 512 MB | EMS without InfluxDB |
+| 1 GB | EMS with InfluxDB |
+| >1 GB | Additional headroom |
+
+InfluxDB stores energy history and is optional — control does not need it. The
+A/B appliance image needs a Raspberry Pi 4 or 5; a Raspberry Pi 3 cannot boot it.
+A/B deployment does not double runtime RAM requirements because only one slot is
+active at a time. [Details and the full Pi matrix](docs/user/hardware-requirements.md).
+
 ## Get started
 
 > [!TIP]
@@ -98,6 +113,8 @@ upfront. EMS reaches your devices over any one of:
 ## Documentation
 
 - Step-by-step guides: [Admin Console](docs/user/admin/index.md) · [EMS Dashboard](docs/user/dashboard/index.md)
+- [Hardware requirements](docs/user/hardware-requirements.md) · [Raspberry Pi compatibility](docs/user/hardware-requirements.md#raspberry-pi-compatibility) · [A/B deployment](docs/appliance/ab-os-updates.md)
+- [Appliance installation](docs/appliance/installation.md) · [Administration](docs/user/admin-console.md) · [Troubleshooting](docs/user/troubleshooting.md)
 - [User documentation](docs/user/)
 - [Technical reference](docs/technical/)
 - [Developer documentation](docs/developer/)

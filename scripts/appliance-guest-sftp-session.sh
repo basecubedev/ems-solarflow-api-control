@@ -156,10 +156,15 @@ refused "removing a directory"      "rmdir /config"
 refused "removing a file"           "rm /backups/known-file.txt"
 refused "changing a mode"           "chmod 777 /backups/known-file.txt"
 refused "creating a symlink"        "ln -s /etc/passwd /backups/escape"
+# sftp(1) ln without -s is a hardlink through the hardlink@openssh.com
+# extension, and a hardlink is not bounded by the chroot the way a path is: it
+# names an inode. The read-only export mount is what has to refuse it.
+refused "creating a hardlink"       "ln /backups/known-file.txt /backups/hardlink-escape"
+refused "hardlinking across exports" "ln /config/config.json /backups/hardlink-config"
 
 AFTER=$(sftp_batch "ls /backups")
 if printf '%s' "$AFTER" | grep -q "known-file.txt" \
-   && ! printf '%s' "$AFTER" | grep -qE "uploaded.txt|moved.txt|created-by-client|escape"; then
+   && ! printf '%s' "$AFTER" | grep -qE "uploaded.txt|moved.txt|created-by-client|escape|hardlink"; then
     pass "the exported tree is exactly as it was before the attempts"
 else
     fail "the exported tree changed: $(printf '%s' "$AFTER" | tr '\n' ' ')"

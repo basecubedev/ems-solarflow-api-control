@@ -103,6 +103,28 @@ def test_the_repository_tracks_six_persistence_activation_links():
 
 
 @requires_git
+def test_the_tracked_links_are_exactly_the_declared_persistence_paths():
+    """Six is the count the contract asks for, not a number to match on its own.
+
+    The count and the targets were checked; which units they activate was only
+    ever asked of the working tree. A declared path renamed without its link
+    renamed leaves six tracked symlinks that activate the wrong units, and git
+    is the authority a delivery is built from.
+    """
+
+    from appliance import ab_persistence
+
+    tracked = {
+        entry.path.rsplit("/", 1)[1]
+        for entry in source_bundle.tracked_entries(ROOT, ref="HEAD")
+        if entry.kind == source_bundle.SYMLINK and entry.path.startswith(f"{WANTS}/")
+    }
+
+    assert tracked == set(ab_persistence.shared_mount_units())
+    assert len(tracked) == len(ab_persistence.SHARED_PATHS)
+
+
+@requires_git
 def test_the_activation_links_point_at_the_generated_units():
     """Each link activates a unit the slot-shared generator writes at boot."""
 

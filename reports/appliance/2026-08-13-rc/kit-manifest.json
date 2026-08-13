@@ -1,0 +1,159 @@
+{
+  "builds": [
+    {
+      "artefacts": {
+        "build_authority": {
+          "file": "ems-solarflow-appliance-0.1.0-rpi5-arm64-ab.build-authority.json",
+          "sha256": "sha256:1d1190a235cd913ca27ce83208c217aa8f21eb25d29b114ca0ef78b0bdec67d1"
+        },
+        "build_metadata": {
+          "file": "ems-solarflow-appliance-0.1.0-rpi5-arm64-ab.build.json",
+          "sha256": "sha256:2663bfb33c7904a0fd06cf8962c99c53defecfdd4e128ab9abe4127615abb327"
+        },
+        "builder_environment": {
+          "file": "ems-solarflow-appliance-0.1.0-rpi5-arm64-ab.builder-environment.json",
+          "sha256": "sha256:c939a1ec6db6aca411525bfbb69a423d7e8282aaeb0c462958bb0c33bf9696b9"
+        },
+        "image": {
+          "file": "ems-solarflow-appliance-0.1.0-rpi5-arm64-ab.img",
+          "sha256": "sha256:3491820e0a2b8b0977a65c0296e5c780ff245b817db8e9cf6a3a738f7a9bac6e"
+        },
+        "image_checksum": {
+          "file": "ems-solarflow-appliance-0.1.0-rpi5-arm64-ab.img.sha256",
+          "sha256": "sha256:90b84ee023fceaa04453ba20b26664465f9aaeea01b40754d4a8389b3ed31a9c"
+        },
+        "image_inspection": {
+          "file": "image-inspection-rpi5.json",
+          "sha256": "sha256:8295f344601411f23e3482b6045387cf5f8487c85bd63d70cfba0a711d0a39b4"
+        },
+        "manifest": {
+          "file": "ems-solarflow-appliance-0.1.0-rpi5-arm64-ab.manifest.json",
+          "sha256": "sha256:b6d69df0971031cfb58dcdf77aa04431cd4088c532c018f9a272c86bceaa9a4d"
+        },
+        "release_archive": {
+          "file": "ems-solarflow-appliance-0.1.0-rpi5-arm64-ab.tar.zst",
+          "sha256": "sha256:8fed57b2cf98b189a336be1fdc99e1538dbd70dd3d78fee3076e965323c32736"
+        },
+        "signature": {
+          "file": "ems-solarflow-appliance-0.1.0-rpi5-arm64-ab.manifest.json.asc",
+          "sha256": "sha256:b71154c810393dc8da18839a6559a4cc6e68515838d85309aa5dd1facb55dae4"
+        },
+        "sparse_crosscheck": {
+          "file": "sparse-crosscheck-rpi5.json",
+          "sha256": "sha256:7da058ca2fef002d37847e841435d4a653b1d541f4f139a1bd1cdbde3ba67dac"
+        },
+        "update": {
+          "file": "ems-solarflow-appliance-0.1.0-rpi5-arm64-ab.update.tar.zst",
+          "sha256": "sha256:8fed57b2cf98b189a336be1fdc99e1538dbd70dd3d78fee3076e965323c32736"
+        },
+        "update_inspection": {
+          "file": "update-inspection-rpi5.json",
+          "sha256": "sha256:f8cbbe556d10342a70e7c46eacdf541c7b600dccb4491ac0e5a742a9b6959806"
+        }
+      },
+      "build_authority_sha256": "sha256:728e8f1e7a542a526cb4e83d6346d14c7e738162110a5fb1c8623a124394e9a5",
+      "build_id": "20260813200255",
+      "builder_environment_sha256": "sha256:67c5a0885b7307e9715087ca2d58c7cbebb012123fe3ea54ca36d1d7cc588d32",
+      "package_sha256": "cd38cc8546b35e48898d03199e9f500248c6f0ff2671931e87689369a65d5e81",
+      "prefix": "ems-solarflow-appliance-0.1.0-rpi5-arm64-ab",
+      "problems": [],
+      "profile": "rpi5",
+      "project_revision": "01a61335c35b3ffabca1121983f8f161c0e36f75",
+      "project_tree_sha256": "sha256:695881c540e1b651e0b1c6f72ba4f54a09d13f00cc104440358b6bb5df990622",
+      "upstream_revision": "a7b6d4806183195f3efadb533f58c8e46393d057",
+      "upstream_tree_sha256": "sha256:9ae7e0801afa81040da4d219eb69761a9404a4c2d6af2c34fb7f900783a2fa0f"
+    }
+  ],
+  "development_kit": false,
+  "documents": [
+    "release-attestation.json",
+    "release-attestation.json.asc",
+    "release-gate-report.txt",
+    "runtime-gates.json",
+    "source-bundle-authority.json",
+    "source-bundle-parity.json",
+    "source-bundle.tar.gz"
+  ],
+  "kit_version": 2,
+  "media": {
+    "image_bytes": 17750294528,
+    "minimum_media_bytes": 30000000000,
+    "partitions": {
+      "boot_bytes": 268435456,
+      "bootconfig_bytes": 33554432,
+      "persistent_initial_bytes": 8589934592,
+      "system_bytes": 4294967296
+    },
+    "persistent_requirement": {
+      "application_data_bytes": 2147483648,
+      "docker_seed_bytes": 740294656,
+      "docker_store_per_slot_bytes": 943718400,
+      "safety_margin_bytes": 1073741824,
+      "total_bytes": 11985223680,
+      "update_staging_bytes": 6136266752
+    },
+    "recommended_media_bytes": 21145583616,
+    "supported_media_label": "32 GB",
+    "unsupported_media_reason": "the appliance image is about 16.5 GiB and a card marketed as 16 GB holds less than that"
+  },
+  "physical_ready": true,
+  "readiness": {
+    "invariants": {
+      "all_mandatory_inspections_pass": true,
+      "all_profiles_verified": true,
+      "attestation_artefacts_rehashed": true,
+      "attestation_result_pass": true,
+      "attestation_signature_present": true,
+      "attestation_signature_verified": true,
+      "production_gate_pass": true,
+      "release_not_stale": true,
+      "runtime_required_gates_pass": true,
+      "source_bundle_verified": true,
+      "trusted_signer": true
+    },
+    "physical_ready": true,
+    "unmet": []
+  },
+  "release_attestation": {
+    "detail": "sha256:66606c92b9b4f0749f99f45a53d7a5398255747e4916ce86f21fb8b45548970e",
+    "ok": true,
+    "problems": [],
+    "signature": {
+      "code": "",
+      "detail": "signed by D16E8DE0B133BD8F7BF1E6CDA5D4C295127CB181",
+      "document_sha256": "sha256:3900a148c96cb244484c11065a3c3efa0b7cb6a5f8f816a3011ba2ee2c9df71b",
+      "fingerprints": [
+        "D16E8DE0B133BD8F7BF1E6CDA5D4C295127CB181"
+      ],
+      "present": true,
+      "signature_sha256": "sha256:00aa777742ad9e647bfaa9ee62069643f52124a4f520643e0982073645d71f3f",
+      "trusted": true,
+      "verified": true
+    }
+  },
+  "release_gate": {
+    "detail": "RESULT: PASS",
+    "ok": true
+  },
+  "runtime_gates": {
+    "detail": "arm64_guest=pass, docker_reconstruction=pass, networkmanager_fail_closed=pass, package_lifecycle=pass, sftp=pass",
+    "ok": true
+  },
+  "source_binding": {
+    "authority_sha256": "sha256:9a02296c89bb94f019692f20182e1fd713929f8cf8f955561a2e0ba5075623c0",
+    "bundle_sha256": "sha256:e66defa169e9de37fb08d4d236fc615624b2fb6feffab3ffd3442b8bc724578e",
+    "ok": true,
+    "parity_sha256": "sha256:d7f14f4a5e73dc27bef798770d511e18775d7976e2cb0f5e48fc369299cfe368",
+    "problems": [],
+    "revision": "01a61335c35b3ffabca1121983f8f161c0e36f75",
+    "symlinks": 6,
+    "tracked_objects": 1221,
+    "tree_sha256": "sha256:695881c540e1b651e0b1c6f72ba4f54a09d13f00cc104440358b6bb5df990622"
+  },
+  "trust_policy": {
+    "fingerprints": [
+      "D16E8DE0B133BD8F7BF1E6CDA5D4C295127CB181"
+    ],
+    "keyring_sha256": "sha256:f7cb67cc77000e0ae58920d59b761933b22e9cc519501cbb61cb3cc7aedabb5c"
+  }
+}

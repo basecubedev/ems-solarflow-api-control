@@ -32,6 +32,12 @@ PERSIST_GENERATOR = (
 )
 
 DEVICE_LAYERS = ("device/pi4/device.yaml", "device/pi5/device.yaml")
+
+# Upstream defines a Raspberry Pi 3 board layer, but image-rota does not accept
+# its device class. It is kept out of DEVICE_LAYERS — which means "the layers
+# this project builds from" — and named separately so the refusal can be proven
+# against real pinned bytes rather than an absence.
+PI3_DEVICE_LAYER = "device/pi3/device.yaml"
 DOCKER_LAYERS = (
     "layer/app-container/docker/engine-trixie.yaml",
     "layer/app-container/docker/engine-bookworm.yaml",
@@ -140,6 +146,50 @@ def layer_field(text, field):
 def layer_list(text, field):
     value = layer_field(text, field)
     return tuple(item.strip() for item in value.split(",") if item.strip())
+
+
+def _header_field(text, key):
+    for raw in str(text).splitlines():
+        line = raw.strip().lstrip("#").strip()
+        if line.startswith(key):
+            return line[len(key) :].strip()
+    return ""
+
+
+def var_requires_rules(text):
+    """The externally-required variables of a layer, paired with their rules.
+
+    ``X-Env-VarRequires`` and ``X-Env-VarRequires-Valid`` are two comma-separated
+    lists matched by position. The split is upstream's own — see
+    ``site/pipeline.py`` — so a rule read here is the rule a build enforces.
+    """
+
+    names = [item.strip() for item in _header_field(text, "X-Env-VarRequires:").split(",")]
+    rules = [item.strip() for item in _header_field(text, "X-Env-VarRequires-Valid:").split(",")]
+    return {
+        name: (rules[index] if index < len(rules) else "")
+        for index, name in enumerate(names)
+        if name
+    }
+
+
+def rule_accepts(rule, value):
+    """Does one ``X-Env-...-Valid`` rule accept ``value``?
+
+    Only the rule forms this project's layers actually use are implemented, and
+    an unknown form raises rather than defaulting to "accepted": a rule this
+    helper silently passed would turn a refused board into a supported one.
+    """
+
+    import re
+
+    if rule == "string":
+        return True
+    if rule.startswith("regex:"):
+        return re.match(rule[len("regex:") :], str(value)) is not None
+    if rule.startswith("keywords:"):
+        return str(value) in {item.strip() for item in rule[len("keywords:") :].split(",")}
+    raise NotImplementedError(f"unsupported validation rule: {rule!r}")
 
 
 def site_tooling(source):

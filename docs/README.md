@@ -68,6 +68,7 @@ Normal users choose one of these two; both converge on the same standard
 | First-run checklist | [first-run-checklist.md](first-run-checklist.md) | Safe validation sequence after the first config edit. |
 | Common commands | [common-commands.md](common-commands.md) | Daily Docker-first command sheet with native equivalents. |
 | Config layout | [user/config-layout.md](user/config-layout.md) | Standard `config/config.json` layout and legacy migration. |
+| Hardware requirements | [user/hardware-requirements.md](user/hardware-requirements.md) | RAM, storage and which Raspberry Pi models fit which install shape. |
 | Supported setups | [user/supported-setups.md](user/supported-setups.md) | Whether your grid meter and devices fit EMS. |
 | Connection types | [user/connection-types.md](user/connection-types.md) | Local API, Local MQTT and Zendure cloud MQTT — which hardware fits which. |
 | FAQ | [user/faq.md](user/faq.md) | Short answers for Admin, Docker, config, dashboard, backups and updates. |

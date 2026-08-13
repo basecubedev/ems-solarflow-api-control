@@ -60,7 +60,8 @@ setup: [developer-setup.md](../developer/developer-setup.md).
 | Topic | Document |
 | --- | --- |
 | What the project is | [Project overview](project-overview.md) |
-| Whether your hardware fits | [Supported setups](supported-setups.md) |
+| Whether your devices fit | [Supported setups](supported-setups.md) |
+| RAM, storage and which Raspberry Pi | [Hardware requirements](hardware-requirements.md) |
 | Local API vs Local MQTT vs cloud | [Connection types](connection-types.md) |
 | Before enabling hardware writes | [Safety](safety.md) |
 | Standard config layout | [Config layout](config-layout.md) |

@@ -1,0 +1,46 @@
+{
+  "created_at": "2026-08-12T00:08:36Z",
+  "gates": {
+    "arm64_guest": {
+      "environment": "amd64 qemu/kvm guest and aarch64 qemu/tcg guest, Debian 13 trixie, pinned base images 20260803-2559",
+      "evidence_sha256": "sha256:9a0c3158f72005048d34d3de8c1470aa2ab5b212348fd9973b09803300fe5699",
+      "reason": "RESULT: PASS (booted aarch64 guest, verified input)",
+      "result": "pass"
+    },
+    "docker_reconstruction": {
+      "environment": "amd64 qemu/kvm guest and aarch64 qemu/tcg guest, Debian 13 trixie, pinned base images 20260803-2559",
+      "evidence_sha256": "sha256:c4da4efee99319618fa79c58c3748dd43e5ea3584bb9cddaa027f9660b7538f6",
+      "reason": "RESULT: PASS",
+      "result": "pass"
+    },
+    "networkmanager_fail_closed": {
+      "environment": "amd64 qemu/kvm guest and aarch64 qemu/tcg guest, Debian 13 trixie, pinned base images 20260803-2559",
+      "evidence_sha256": "sha256:f8454441a20d53e5e3cb997cd7992b9621e5ceb835f7a940ca87e8fe64b585e3",
+      "reason": "RESULT: PASS",
+      "result": "pass"
+    },
+    "package_lifecycle": {
+      "environment": "amd64 qemu/kvm guest and aarch64 qemu/tcg guest, Debian 13 trixie, pinned base images 20260803-2559",
+      "evidence_sha256": "sha256:e82c3ef0643e6248957696fa564f97eeb2e000f4d809ffbdd63a965ea7175c5d",
+      "reason": "RESULT: PASS",
+      "result": "pass"
+    },
+    "sftp": {
+      "environment": "amd64 qemu/kvm guest and aarch64 qemu/tcg guest, Debian 13 trixie, pinned base images 20260803-2559",
+      "evidence_sha256": "sha256:1c17af16049f6f2c6b244f7b4d6bc5ed4ca9e5413f5fe7c6624fcec1fe29b471",
+      "reason": "RESULT: PASS",
+      "result": "pass"
+    }
+  },
+  "optional": [
+    "arm64_guest"
+  ],
+  "required": [
+    "sftp",
+    "package_lifecycle",
+    "docker_reconstruction",
+    "networkmanager_fail_closed"
+  ],
+  "result": "pass",
+  "schema_version": 1
+}

@@ -788,3 +788,41 @@ def test_the_data_a_service_wrote_survives_the_rebuild(tmp_path, registry):
     finally:
         slot.teardown()
         slot.registry.start_again()
+
+
+@requires_docker
+def test_an_influxdb_that_was_deliberately_stopped_comes_back_stopped(tmp_path, registry):
+    """The optional role is the one a trial is most tempted to tidy up.
+
+    A stopped EMS is a required service the gate has to account for. InfluxDB
+    is optional, so "not running" and "not deployed" look alike from a distance
+    — and a trial that started it anyway would have invented a state the source
+    slot never had.
+    """
+
+    registry.start_again()
+    stopped = Slot(tmp_path, registry, stopped=(ab_bootstrap.ROLE_INFLUXDB,))
+    try:
+        record = stopped.record_and_seed()
+        assert record.image(
+            ab_bootstrap.ROLE_INFLUXDB
+        ).state == ab_bootstrap.STATE_STOPPED_CLEAN
+        stopped.empty_the_image_store()
+
+        report = stopped.service.reconstruct()
+
+        outcomes = outcomes_by_role(report)
+        assert report.ok, report.problems
+        assert outcomes[ab_bootstrap.ROLE_INFLUXDB].digest == record.image(
+            ab_bootstrap.ROLE_INFLUXDB
+        ).digest
+        assert ab_bootstrap.ROLE_INFLUXDB not in report.started
+        assert ab_bootstrap.ROLE_ADMIN in report.started
+        assert ab_bootstrap.ROLE_EMS in report.started
+        state = stopped.backend.inspect_container(
+            stopped.deployment.containers[ab_bootstrap.ROLE_INFLUXDB]
+        )
+        assert state.state != "running"
+    finally:
+        stopped.teardown()
+        stopped.registry.start_again()

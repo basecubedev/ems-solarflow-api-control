@@ -106,6 +106,45 @@ in a disposable mount namespace and compares what it wrote against what
 incomplete result, so a subtle upstream change becomes a build-time failure
 instead of an appliance that loses its state one update later.
 
+### The six links are the fragile part of a delivery
+
+The activation links are the only symlinks in this repository, and they point
+at `/run/systemd/generator/`, a directory that exists only inside a booted
+appliance. On any other machine they are dangling by design, and that is what
+makes them easy to lose in transit rather than in git:
+
+```text
+tar czf  archive.tar.gz tree/      6 links preserved
+tar czhf archive.tar.gz tree/      0 links, "file removed before it could be
+                                   read" per link — and exit status 0
+```
+
+`--dereference` resolves each link, finds nothing at the far end, warns, skips
+it and still succeeds. A tree unpacked from such an archive builds, generates
+six mount units, activates none of them, and loses every write to the shared
+paths at the next slot switch. Both archives produced for earlier independent
+reviews arrived in exactly that shape.
+
+Nothing about it is a repository defect: `git ls-tree HEAD` carries all six as
+mode `120000` with the expected targets, and so do the index and the working
+tree. So the defence is on the delivery path rather than in the tree:
+
+```text
+scripts/appliance-create-source-bundle.sh   writes from the git object tree
+                                            (git archive), never the working
+                                            directory, then verifies the result
+                                            object by object and deletes a
+                                            bundle that does not round-trip
+scripts/appliance-check-source-bundle.sh    the same check for an archive that
+                                            arrived from somewhere else
+```
+
+Both report `symlinks: 6 preserved`, and the tracked link names are asserted to
+be exactly the declared mount units, so six links activating the wrong six
+paths is a failure rather than a matching count. In a built image the same
+property is read back per slot as `shared_activations: 6 shared paths
+activated`.
+
 ### Why the appliance still verifies
 
 Upstream guards each bind with `ConditionPathIsDirectory` on its source. If the
@@ -318,8 +357,19 @@ reachable at its normal path afterwards.
 | slot-shared declaration matches the contract | contract test |
 | Fail-closed unit ordering | contract test on the unit files |
 | Runtime reconstruction from a seed | unit/simulation verified |
+| A healthy slot verifies in a booted systemd guest | verified in the amd64 guest gate |
+| A slot whose persistent source is gone fails closed | verified in the amd64 guest gate |
 | Real bind mounts on a booted image | **not yet verified on hardware** |
 | Machine identity across a real slot switch | **not yet verified on hardware** |
+
+The healthy-slot half used to report NOT RUN. The verifier asked two different
+authorities about one partition: the mountpoint check compares against the
+device the layout descriptor resolves to and skips when there is none, while
+the bind check went on comparing against an alias set the running system had
+never used, so a guest with `/persistent` and all six binds on the same
+partition was told every bind was foreign. The mountpoint's own source now
+joins that set — after it has survived its own check, so a partition of the
+wrong identity cannot become the authority for its own binds.
 
 See [`ab-hardware-validation.md`](ab-hardware-validation.md) for what physical
 validation still has to establish.

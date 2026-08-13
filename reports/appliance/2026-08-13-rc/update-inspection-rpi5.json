@@ -1,0 +1,100 @@
+{
+  "counts": {
+    "fail": 0,
+    "not_run": 0,
+    "pass": 18
+  },
+  "findings": [
+    {
+      "check": "manifest_parses",
+      "detail": "20260813200255",
+      "result": "pass"
+    },
+    {
+      "check": "members_are_upstreams",
+      "detail": "boot, system",
+      "result": "pass"
+    },
+    {
+      "check": "image_layer",
+      "detail": "image-rota",
+      "result": "pass"
+    },
+    {
+      "check": "persistent_schema",
+      "detail": "2",
+      "result": "pass"
+    },
+    {
+      "check": "hardware",
+      "detail": "pi5",
+      "result": "pass"
+    },
+    {
+      "check": "archive_present",
+      "detail": "/zfs/tmp/appliance-head/rpi5-2/ems-solarflow-appliance-0.1.0-rpi5-arm64-ab.tar.zst",
+      "result": "pass"
+    },
+    {
+      "check": "archive_digest",
+      "detail": "sha256:8fed57b2cf98b189a336be1fdc99e1538dbd70dd3d78fee3076e965323c32736 (manifest sha256:8fed57b2cf98b189a336be1fdc99e1538dbd70dd3d78fee3076e965323c32736)",
+      "result": "pass"
+    },
+    {
+      "check": "archive_size",
+      "detail": "327822906",
+      "result": "pass"
+    },
+    {
+      "check": "members_extract_and_verify",
+      "detail": "boot, system",
+      "result": "pass"
+    },
+    {
+      "check": "member_is_sparse:boot",
+      "detail": "android_sparse",
+      "result": "pass"
+    },
+    {
+      "check": "member_expands:boot",
+      "detail": "268435456 bytes, sha256:37398176d3014106341b049d380642923d66583ea453d6940d41c45cb4364a35",
+      "result": "pass"
+    },
+    {
+      "check": "member_filesystem:boot",
+      "detail": "vfat (manifest vfat)",
+      "result": "pass"
+    },
+    {
+      "check": "member_is_sparse:system",
+      "detail": "android_sparse",
+      "result": "pass"
+    },
+    {
+      "check": "member_expands:system",
+      "detail": "4294967296 bytes, sha256:94d70f1814c2ecf9422d548d7dd162115ef386fc42c459b5f721191374daf9f8",
+      "result": "pass"
+    },
+    {
+      "check": "member_filesystem:system",
+      "detail": "ext4 (manifest ext4)",
+      "result": "pass"
+    },
+    {
+      "check": "detached_signature",
+      "detail": "/zfs/tmp/appliance-head/rpi5-2/ems-solarflow-appliance-0.1.0-rpi5-arm64-ab.manifest.json.asc",
+      "result": "pass"
+    },
+    {
+      "check": "signature_valid",
+      "detail": "signed by D16E8DE0B133BD8F7BF1E6CDA5D4C295127CB181",
+      "result": "pass"
+    },
+    {
+      "check": "signature_key_trusted",
+      "detail": "D16E8DE0B133BD8F7BF1E6CDA5D4C295127CB181",
+      "result": "pass"
+    }
+  ],
+  "result": "pass"
+}

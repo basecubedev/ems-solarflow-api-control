@@ -68,6 +68,32 @@ def test_supported_hardware_and_os_are_documented():
     assert "arm64" in installation
 
 
+def test_the_unsupported_raspberry_pi_3_is_documented_where_platforms_are_declared():
+    """A board that cannot boot the image must be named next to the ones that can.
+
+    An operator holding a Pi 3 reads the supported table, sees "Raspberry Pi 4,
+    Raspberry Pi 5", and reasonably wonders whether 3 is merely untested. It is
+    not, and the reason is a boot chain rather than a benchmark.
+    """
+
+    installation = read("installation.md")
+    assert "Raspberry Pi 3" in installation
+    assert "adr/raspberry-pi-3-ab-support.md" in installation
+    assert (DOCS / "adr" / "raspberry-pi-3-ab-support.md").is_file()
+
+
+def test_the_pi3_decision_record_keeps_its_evidence():
+    """The ADR is only useful if it still says which facts decided it."""
+
+    adr = (DOCS / "adr" / "raspberry-pi-3-ab-support.md").read_text(encoding="utf-8")
+    assert "regex:^(cm4|pi4|cm5|pi5)$" in adr
+    assert "bootcode.bin" in adr
+    assert "0xEE" in adr or "0xee" in adr
+    # The decision has a stated trigger for being revisited rather than being
+    # permanent by omission.
+    assert "tests/test_appliance_pi3_support.py" in adr
+
+
 def test_the_package_failure_contract_is_documented():
     installation = read("installation.md")
     assert "sudo ems-appliance verify-install" in installation
