@@ -8,7 +8,7 @@ describes it; it does not restate it as a second authority. The declaration the
 image ships is generated from that module into
 `packaging/appliance/image/layer/ems-appliance.rootfs-overlay/etc/rpi-image-gen/slot-shared.d/50-ems-appliance.conf`.
 
-Schema version: **2**.
+Schema version: **3**.
 
 ## The slot root is read-only, and that is now proven
 
@@ -125,7 +125,7 @@ six mount units, activates none of them, and loses every write to the shared
 paths at the next slot switch. Both archives produced for earlier independent
 reviews arrived in exactly that shape.
 
-Nothing about it is a repository defect: `git ls-tree HEAD` carries all six as
+Nothing about it is a repository defect: `git ls-tree HEAD` carries all seven as
 mode `120000` with the expected targets, and so do the index and the working
 tree. So the defence is on the delivery path rather than in the tree:
 
@@ -379,7 +379,7 @@ The healthy-slot half used to report NOT RUN. The verifier asked two different
 authorities about one partition: the mountpoint check compares against the
 device the layout descriptor resolves to and skips when there is none, while
 the bind check went on comparing against an alias set the running system had
-never used, so a guest with `/persistent` and all six binds on the same
+never used, so a guest with `/persistent` and all seven binds on the same
 partition was told every bind was foreign. The mountpoint's own source now
 joins that set — after it has survived its own check, so a partition of the
 wrong identity cannot become the authority for its own binds.

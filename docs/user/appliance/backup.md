@@ -28,12 +28,6 @@ directories and nothing else, it has no shell, and it cannot write. If any part
 of that confinement cannot be proved, activation switches the account off rather
 than leaving it half-open.
 
-> **After flashing, this needs one manual step.** The account is created when
-> the image is built, but the record proving the appliance owns it cannot be
-> written until the box actually runs. Until that is addressed, activation on a
-> freshly flashed appliance reports that it does not own the account. See
-> [When it stops working](recovery.md).
-
 ## Getting the files
 
 **SFTP only.** Not `scp`, not `rsync` — the account is confined to an SFTP

@@ -88,7 +88,10 @@ with open(sys.argv[1], "w", encoding="utf-8") as handle:
     handle.write(f"machine identity:  {lock.machine_id_source}\n")
     handle.write(f"update archive:    {lock.update_archive} members {', '.join(lock.update_members)}\n")
     handle.write(f"member encoding:   {lock.update_member_format}\n\n")
-    handle.write("shared paths, all six of which must be bound from the persistent partition:\n")
+    handle.write(
+        f"shared paths, all {len(ab_persistence.SHARED_PATHS)} of which must be "
+        "bound from the persistent partition:\n"
+    )
     for shared in ab_persistence.SHARED_PATHS:
         handle.write(f"  {shared.target}\n")
     handle.write("\nactivation links the image ships (upstream links only the last):\n")

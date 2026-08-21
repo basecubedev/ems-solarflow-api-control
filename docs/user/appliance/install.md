@@ -3,6 +3,11 @@
 Writing the appliance image onto an SD card. About twenty minutes, most of it
 waiting.
 
+> **Not confirmed on physical hardware.** The appliance image is derived and
+> tested in emulation, not on a Raspberry Pi the maintainer owns — see
+> [what that means](index.md#what-not-confirmed-means). This page asks you to
+> erase a card, so it is worth knowing before you start.
+
 > **No appliance image has been published yet.** The steps below are complete
 > and the file names are the ones a release will carry, but until the first
 > release appears on the
@@ -27,11 +32,12 @@ Two files belong together:
 
 | Board | File |
 | --- | --- |
-| Raspberry Pi 5 | `ems-solarflow-appliance-<version>-rpi5-arm64-ab.img.xz` |
-| Raspberry Pi 4 | `ems-solarflow-appliance-<version>-rpi4-arm64-ab.img.xz` |
+| Raspberry Pi 5 | `ems-solarflow-appliance-<version>-rpi5-arm64-ab.img` |
+| Raspberry Pi 4 | `ems-solarflow-appliance-<version>-rpi4-arm64-ab.img` |
 
-Download the `.img.xz` **and** the `.sha256` file beside it. The second one is
-how you check the first arrived intact.
+Download the `.img` **and** the `.img.sha256` file beside it. The second one
+is how you check the first arrived intact. The image is written uncompressed,
+so expect a download of about 17 GB.
 
 Not sure which board you have? The Pi 5 has a fan connector next to the USB-C
 socket and two camera ports. If in doubt, the model is printed on the board
@@ -45,20 +51,20 @@ ways that look like broken hardware. This step takes ten seconds.
 **Windows** (PowerShell, in the download folder):
 
 ```powershell
-Get-FileHash ems-solarflow-appliance-*-arm64-ab.img.xz -Algorithm SHA256
-Get-Content ems-solarflow-appliance-*-arm64-ab.img.xz.sha256
+Get-FileHash ems-solarflow-appliance-*-arm64-ab.img -Algorithm SHA256
+Get-Content ems-solarflow-appliance-*-arm64-ab.img.sha256
 ```
 
 **macOS**:
 
 ```bash
-shasum -a 256 -c ems-solarflow-appliance-*-arm64-ab.img.xz.sha256
+shasum -a 256 -c ems-solarflow-appliance-*-arm64-ab.img.sha256
 ```
 
 **Linux**:
 
 ```bash
-sha256sum -c ems-solarflow-appliance-*-arm64-ab.img.xz.sha256
+sha256sum -c ems-solarflow-appliance-*-arm64-ab.img.sha256
 ```
 
 macOS and Linux print `OK` when it matches. On Windows, compare the two lines
@@ -75,8 +81,7 @@ Windows, macOS and Linux, and it verifies what it wrote.
 1. Install it from [raspberrypi.com/software](https://www.raspberrypi.com/software/).
 2. Put the card in the reader.
 3. Open Imager. Under **Operating System**, scroll to the bottom and choose
-   **Use custom** — then pick the `.img.xz` you downloaded. Imager unpacks it
-   for you; you do not need to extract it first.
+   **Use custom** — then pick the `.img` you downloaded.
 4. Under **Storage**, choose your card. *Read this line twice.* Imager lists
    every removable disk, and it will happily erase a backup drive.
 5. Press **Write** and confirm. It asks whether to apply OS customisation —
@@ -87,7 +92,7 @@ Windows, macOS and Linux, and it verifies what it wrote.
 When Imager says it is done, eject the card.
 
 > balenaEtcher also works if you already use it. Imager is recommended because
-> it handles `.img.xz` directly and is maintained by the board's own vendor.
+> it verifies what it wrote and is maintained by the board's own vendor.
 
 ## 4. Start the appliance
 

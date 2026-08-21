@@ -128,6 +128,13 @@ A compromised web process gains exactly the operations on the allowlist, with
 values that pass the same validators the agent applies again. It gains no shell,
 no path and no image reference.
 
+That is a bound on the *shape* of what it can do, not on its privilege. The
+allowlist includes installing packages as root, deploying a container image,
+adding an SSH key, writing an OS image to a block device and rebooting, so
+reaching the agent socket as an allowed uid is an appliance-takeover capability.
+The web tier is therefore high-value and is hardened as such -- it is not a
+low-privilege front end that happens to sit in front of the real boundary.
+
 ## What the agent accepts
 
 Every request names an operation from `appliance/protocol.py` and carries typed
@@ -156,7 +163,10 @@ cannot regress silently.
 - Callers name a tool from a fixed allowlist; there is no caller-supplied
   executable and no `PATH` search of an arbitrary name.
 - Arguments are a list, `shell=False`, never a single command string.
-- Every argument must be a non-empty string without NUL bytes.
+- Every argument must be a string without NUL bytes, and is bounded in size.
+  An empty member is legitimate and is passed through: `ssh-keygen -N '' -C ''`
+  is how OpenSSH is told "no passphrase, no comment", and refusing it made every
+  host key generation on a real appliance fail.
 - Docker access is treated as root-equivalent and stays behind the agent. The
   Docker socket is never exposed to the web process.
 

@@ -159,3 +159,45 @@ def test_the_rc_status_block_cannot_quietly_go_stale():
             f"the block says Stale=False while naming {recorded.group(1)[:12]} "
             f"and the checkout is at {head[:12]}"
         )
+
+
+def test_the_prose_above_the_block_cannot_contradict_it():
+    """Two sentences, five lines apart, said opposite things about staleness.
+
+    The table row is generated from the evidence; the prose is written by hand,
+    so it is the half that drifts.
+    """
+
+    import re
+
+    root = Path(__file__).resolve().parents[1]
+    page = (root / "docs/appliance/ab-hardware-validation.md").read_text(encoding="utf-8")
+    intro, _, rest = page.partition("<!-- CURRENT-RC-BEGIN -->")
+    body = rest.split("<!-- CURRENT-RC-END -->")[0]
+    stale = re.search(r"\|\s*Stale\s*\|\s*\*\*(True|False)\*\*", body)
+
+    assert stale, "the block does not state whether it is stale"
+    if stale.group(1) == "True":
+        assert "It is not stale here" not in intro
+
+
+def test_readiness_is_not_claimed_while_the_evidence_is_stale():
+    """`release_not_stale` is one of the required readiness invariants, so a
+    stale release cannot also be physically ready. Saying so anyway is how a
+    release status survives the thing that was supposed to invalidate it."""
+
+    import re
+
+    root = Path(__file__).resolve().parents[1]
+    body = (
+        (root / "docs/appliance/ab-hardware-validation.md")
+        .read_text(encoding="utf-8")
+        .split("<!-- CURRENT-RC-BEGIN -->")[1]
+        .split("<!-- CURRENT-RC-END -->")[0]
+    )
+    stale = re.search(r"\|\s*Stale\s*\|\s*\*\*(True|False)\*\*", body)
+    readiness = re.search(r"\|\s*Physical readiness\s*\|\s*\*\*([A-Z ]+)\*\*", body)
+
+    assert stale and readiness
+    if stale.group(1) == "True":
+        assert readiness.group(1).strip() != "READY"

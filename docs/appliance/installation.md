@@ -4,7 +4,7 @@
 
 | Item | Supported |
 |---|---|
-| Hardware | Raspberry Pi 4, Raspberry Pi 5 |
+| Hardware | Raspberry Pi 4, Raspberry Pi 5 — **reverse-engineered**: derived and tested in emulation, not confirmed on a physical board (see [the hardware gate](ab-hardware-validation.md)) |
 | Operating system | Raspberry Pi OS 64-bit (Trixie). The appliance image is built from Trixie; the manager package also installs on Bookworm |
 | Architecture | `arm64` only |
 | Package | `ems-appliance-manager_<version>_arm64.deb` |

@@ -495,3 +495,24 @@ def test_the_image_installs_the_mdns_responder_every_document_relies_on():
 
     assert "avahi-daemon" in packages
     assert "avahi-utils" in packages
+
+
+def test_the_documented_schema_version_is_the_one_the_code_declares():
+    """A header that drifts silently is worse than no header: the schema version
+    is what binds a slot's state to the code that may read it."""
+
+    document = read(ROOT / "docs" / "appliance" / "ab-persistence-contract.md")
+
+    assert (
+        f"Schema version: **{ab_persistence.PERSISTENT_SCHEMA_VERSION}**." in document
+    ), "the persistence contract names a different schema version than the code"
+
+
+def test_the_hardware_kit_counts_the_shared_paths_it_prints():
+    """The operator is told how many binds to expect; a hardcoded count drifts."""
+
+    kit = read(ROOT / "scripts" / "appliance-hardware-validation-kit.sh")
+
+    assert "len(ab_persistence.SHARED_PATHS)" in kit
+    for spelled in (" all six ", " all seven ", " all eight "):
+        assert spelled not in kit, f"the kit hardcodes a count: {spelled.strip()}"

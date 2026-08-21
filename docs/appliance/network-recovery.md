@@ -88,8 +88,11 @@ On an appliance image the recovery paths are therefore, in order:
    the WLAN profile, and fix it there.
 2. Wait out the WLAN revert. A change that loses connectivity returns to the
    previous profile on its own, so a wrong passphrase is not a lockout.
-3. Add your own SSH key through the manager **while it is still reachable** —
-   that is what turns a future lockout into something a shell can fix.
+3. Add your own SSH key through the manager **while it is still reachable**.
+   That does not buy you a shell — the only key-eligible account is
+   `ems-backup`, which is chroot-confined, read-only and SFTP-only. What it buys
+   is the ability to retrieve your configuration, data and backups from a box
+   you can otherwise no longer reach, so step 4 costs you nothing.
 4. Re-flash. Configuration and data live on the shared partition and are not
    erased by writing a new system image, but take a backup first if you can.
 

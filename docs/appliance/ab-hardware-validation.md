@@ -19,8 +19,24 @@ is recorded further down, never here.
 A real build vouches for **one source tree**. The release-build revision below
 is what the current artefacts were built from; when it does not equal the branch
 HEAD, the release status is stale and no artefact may be called hardware-ready.
-It is not stale here: `release-result.json` reports `stale: false`, because the
-checkout is the exact revision and tree the artefacts were built from.
+
+**It is stale here.** Development has continued past the revision the artefacts
+were built from, so nothing in the table below describes what a build from HEAD
+would produce. Two consequences worth stating plainly, because the table alone
+does not:
+
+- `release_not_stale` is one of the twelve required readiness invariants, so
+  while this block is stale the release is **not** physically ready, whatever
+  `physical_ready` said at the revision it was computed at.
+- The release-build revision is not reachable from this branch. History was
+  rewritten after it was produced, and it survives only on a local backup ref
+  that was never pushed, so a third party who clones `feat/appliance-manager`
+  cannot check it out, cannot recompute its tree hash and cannot re-run the
+  freshness check -- it fails with `project_source_unavailable`.
+
+Everything below therefore reads as: *this is what a build from that revision
+proved, at that revision.* Re-running the finalizer at the current HEAD is what
+would make it a statement about the release.
 
 <!-- CURRENT-RC-BEGIN -->
 | Property | Value |
@@ -56,7 +72,7 @@ checkout is the exact revision and tree the artefacts were built from.
 | Full regression at this revision | **PASS** — 10 986 passed, 12 skipped, 0 failed (`pytest -m "not docker"`) |
 | Appliance browser E2E | **PASS** — 100 passed, Chromium and Firefox |
 | Physical Raspberry Pi | **NOT RUN** — no hardware |
-| Physical readiness | **READY** — `physical_ready=true`, twelve readiness invariants hold, none unmet; `physical_tested=false` |
+| Physical readiness | **NOT READY** — at the release-build revision `physical_ready=true` with twelve invariants held and none unmet (`physical_tested=false`); the branch has since moved past that revision, and `release_not_stale` is one of those twelve, so the verdict does not carry to HEAD |
 <!-- CURRENT-RC-END -->
 
 ### What the previous run left open, and what closed it

@@ -149,6 +149,38 @@ Edit the smallest relevant module rather than the entry script or `controller.py
 when the change is localized (e.g. target math → `target_control.py`, runtime
 state shape → `runtime_state.py`).
 
+### Raspberry Pi Appliance (`appliance/`)
+
+A second product in this repository, and the largest new subsystem: a Debian
+package plus systemd units that manage a Raspberry Pi host running the EMS in
+Docker. It is not part of the EMS control loop and must not import from `ems/`.
+
+- Two processes, one privilege boundary: an unprivileged web service
+  (`web.py`, `static/app.js`) talks over a unix socket to a root agent
+  (`agent.py`, `commands.py`) that executes an allowlisted set of operations.
+  The allowlist is enforced on the agent side (`protocol.py`,
+  `operation_schema.py`); reaching that socket as an allowed uid is an
+  appliance-takeover capability.
+- Fail-safe A/B OS updates own the `ab_*.py` modules plus `os_update.py`,
+  `os_fetch.py` and `os_releases.py`. This is bricking-class code: a trial slot
+  commits itself only after its own health gates pass, and nothing else commits
+  it. Read `docs/appliance/ab-os-updates.md` and
+  `docs/appliance/ab-persistence-contract.md` before touching it.
+- Release trust (`release_trust.py`, `release_attestation.py`,
+  `os_releases.py`) is fail-closed by design. Do not weaken a verification path
+  to make a gate pass.
+- Not confirmed on physical hardware. `docs/appliance/ab-hardware-validation.md`
+  is the authority on what has and has not been proven; never upgrade a claim
+  there without the evidence it names.
+
+Compile check and tests:
+
+```bash
+python3 -m py_compile appliance/*.py && node --check appliance/static/app.js
+pytest tests/ -k appliance -m "not docker and not browser and not slow"
+npx playwright test --config=playwright.appliance.config.ts
+```
+
 `emsctl.py` is a separate large CLI for safe runtime-state edits and diagnostics
 (`status`, `device ...`, `system ...`, `winter`, `ha`, `diagnose ...`,
 `dashboard set-password`). The `diagnose` service layer

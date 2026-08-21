@@ -750,3 +750,53 @@ def test_the_faq_names_every_connection_a_device_can_be_reached_on():
     for connection in ("Local API", "Local MQTT", "Zendure cloud MQTT"):
         assert connection in setups, f"supported-setups.md no longer names {connection}"
         assert connection in faq, f"the FAQ does not name {connection}"
+
+
+def test_the_flashing_guide_names_the_files_the_build_produces():
+    """The page frames the checksum step as the safety gate, so every command it
+    gives has to work against artefacts that exist."""
+
+    root = Path(__file__).resolve().parents[1]
+    guide = (root / "docs" / "user" / "appliance" / "install.md").read_text(encoding="utf-8")
+    build = (
+        root / "scripts" / "appliance-build-rpi-ab-image.sh"
+    ).read_text(encoding="utf-8")
+
+    assert '"$NAME.img" > "$NAME.img.sha256"' in build
+    assert ".img.xz" not in guide, "the guide names an artefact the build never writes"
+    assert "-arm64-ab.img.sha256" in guide
+
+
+def test_the_security_model_does_not_claim_a_check_the_code_does_not_make():
+    """An empty argv member is deliberately legitimate; the document said the
+    opposite, so a reader auditing the boundary would look for enforcement that
+    is not there -- and might restore it, breaking host key generation."""
+
+    model = read("security-model.md")
+
+    assert "must be a non-empty string" not in model
+    assert "An empty member is legitimate" in model
+
+
+def test_the_security_model_states_what_reaching_the_agent_is_worth():
+    """"No shell" bounds the shape of the actions, not their privilege."""
+
+    model = read("security-model.md")
+
+    assert "appliance-takeover capability" in model
+
+
+def test_the_page_that_erases_a_card_says_the_image_is_unconfirmed():
+    """The caveat belongs where the destructive step is, not only on an index."""
+
+    root = Path(__file__).resolve().parents[1]
+    guide = (root / "docs" / "user" / "appliance" / "install.md").read_text(encoding="utf-8")
+
+    assert "Not confirmed on physical hardware" in guide
+    assert "what that means" in guide
+
+
+def test_the_maintainer_platform_table_carries_the_support_tier():
+    platforms = read("installation.md")
+
+    assert "reverse-engineered" in platforms.lower()

@@ -99,12 +99,6 @@ touch it and says which stage it reached.
 Wait for it to finish. If it never does, the message names the file holding that
 state and you can remove it.
 
-## Backup access says it does not own the account
-
-Expected on a freshly flashed appliance today, and not something you did wrong.
-The account exists but the proof that this package created it cannot be written
-until the box runs. It is a known gap; see the note in [Backups](backup.md).
-
 ## The password is lost
 
 There is no email recovery, no reset button and no login account to fall back
