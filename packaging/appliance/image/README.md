@@ -84,17 +84,13 @@ See [../../../docs/appliance/ab-persistence-contract.md](../../../docs/appliance
 
 ## Building
 
-```bash
-scripts/appliance-check-rpi-image-gen.sh --rpi-image-gen ../rpi-image-gen
-scripts/appliance-build-rpi-ab-image.sh  --output out/
-scripts/appliance-inspect-rpi-ab-image.sh out/ems-solarflow-appliance-*.img
-scripts/appliance-build-rpi-ab-update.sh --output out/
-scripts/appliance-inspect-rpi-ab-update.sh out/ems-solarflow-appliance-*.manifest.json
-```
+One image per board, and the board is not optional: a build without
+`--profile` produces rpi5 only. The full procedure, including fetching and
+verifying the pinned generator, is under [Building](#building-1) below.
 
 Every script checks its prerequisites first and reports `NOT RUN` with the
-missing tool or a stable reason code when the host cannot build. A skipped build
-is never a pass. A checkout that is not the pinned contract is
+missing tool or a stable reason code when the host cannot build. A skipped
+build is never a pass. A checkout that is not the pinned contract is
 `rpi_image_gen_incompatible` and stops the build; there is no fallback.
 
 None of these scripts push, publish, tag or upload anything.

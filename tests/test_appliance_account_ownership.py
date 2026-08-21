@@ -259,7 +259,7 @@ def test_the_record_and_the_marker_name_one_installation(host):
     host.run("ensure")
 
     record = host.record()
-    marker = backup_ownership.read_home_marker(host.home_marker())
+    marker = backup_ownership.read_declaration(host.home_marker())
 
     assert marker["installation_id"] == record["installation_id"], (marker, record)
 

@@ -60,10 +60,12 @@ The machine EMS runs *on* — 64-bit `arm64` or `amd64`.
 | 1 GB | EMS with InfluxDB |
 | >1 GB | Additional headroom |
 
-InfluxDB stores energy history and is optional — control does not need it. The
-A/B appliance image needs a Raspberry Pi 4 or 5; a Raspberry Pi 3 cannot boot it.
-A/B deployment does not double runtime RAM requirements because only one slot is
-active at a time. [Details and the full Pi matrix](docs/user/hardware-requirements.md).
+InfluxDB stores energy history and is optional — control does not need it. A/B
+deployment does not double runtime RAM because only one slot is active at a time.
+The A/B appliance image needs a Raspberry Pi 4 or 5 and a 32 GB card, and is **not
+confirmed on physical hardware**; a Raspberry Pi 3 cannot boot it at all.
+[Pi matrix](docs/user/hardware-requirements.md) ·
+[appliance guides](docs/user/appliance/index.md).
 
 ## Get started
 

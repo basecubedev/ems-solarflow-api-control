@@ -168,7 +168,8 @@ cannot regress silently.
 | Minimum length | 12 characters |
 | Default password | none — the first start must create one |
 | Independence | separate from the EMS Admin password and store |
-| Session cookie | `HttpOnly`, `SameSite=Strict`, `Path=/`, `Secure` behind TLS |
+| Transport | **Plain HTTP on every interface.** The manager terminates no TLS and has no certificate; anyone who can reach the port sees the login page |
+| Session cookie | `HttpOnly`, `SameSite=Strict`, `Path=/`. The `Secure` attribute is set only when a reverse proxy in front of it terminates TLS — the appliance never does |
 | CSRF | `X-Appliance-CSRF` must match the session token on every mutation; a foreign `Origin` is refused |
 | Rate limiting | 5 failures per source address per 5 minutes, then `429` |
 | Expiration | idle timeout plus an absolute maximum lifetime |
@@ -279,7 +280,7 @@ created, carrying a random secret that is also stored in the root-only record:
 ```text
 /var/lib/ems-backup                          root:root, not writable by ems-backup
 /var/lib/ems-backup/.ems-appliance-backup-home   root:root 0400, the marker
-/var/lib/ems-backup/.ssh                     root:root 0700
+/var/lib/ems-backup/.ssh                     root:ems-backup 0750, so sshd can read authorized_keys
 ```
 
 The record binds the account name, uid, primary gid, home path, the home's
@@ -331,7 +332,9 @@ it, backup access stays disabled and purge leaves the account and home alone.
 | `record_corrupt` | the record cannot be read, or carries a schema nothing can interpret |
 | `no_ownership_record` | there is no record |
 
-An install never resolves any of these. A **schema-2** record — one written
+An install resolves exactly one of these, `no_ownership_record`, and only in the
+situation the A/B image creates — see [the account the image carries](#the-account-the-image-carries)
+below. A **schema-2** record — one written
 before the marker but with the account and home identity fields — is adopted
 only by the explicit, root-only
 
@@ -360,6 +363,52 @@ A key file that appears next to an already preserved one is never discarded:
 both are kept and authentication stays disabled until an operator resolves it.
 Purge reports every mount and account it could not withdraw instead of claiming
 a clean removal.
+
+### The account the image carries
+
+On an A/B appliance `/etc` is read-only and slot-local, so the backup account
+has to be created in the build chroot. Everything that proves this package
+created it — the ownership record and the home marker — is written to paths the
+persistent partition covers, and on the first boot those mounts are empty. The
+device therefore wakes up beside an account with no record, which is
+indistinguishable from an account somebody else placed. Refusing it is correct,
+and it left the operator to set up backup access by hand.
+
+The image also carries a slot-local **origin declaration** at
+`/usr/lib/ems-appliance-manager/backup-account-origin`: written by the postinst
+in the build chroot, read-only at runtime, and out of reach of the shared
+mounts. It names the account the build created — uid, gid, home, shell — and a
+nonce.
+
+The first boot may act on it, and only under all of the following:
+
+- there is no ownership record at all; a record that is present and does not
+  match is a conflict, and the declaration is not a second opinion about it
+- the declaration is a single-linked regular file, not reached through a
+  symbolic link, not writable by group or others, and root-owned
+- its schema is one this release understands and it names *this* account
+- the passwd entry matches it in **every** field: uid, gid, home and shell
+- the home it names is the configured home, so the directory is judged by the
+  same rule that judges it during a normal install: adopted only when it is
+  empty, root-owned and closed to other writers
+
+What it then does is bind the record and the marker to the home that is mounted
+*now*, and record the declaration's nonce in the record. It creates no account
+and writes nothing outside the shared paths, which is what makes it possible on
+a read-only root at all.
+
+What makes this safe is not the file's location alone. The declaration is a
+*description*, not a capability: acting on it requires a passwd entry that
+matches it in every field, and passwd is in the read-only slot root. Forging a
+declaration therefore buys nothing unless the account it describes can also be
+created, which that root does not allow. The one account that does match is the
+one the build put there — and adopting it is what this is for.
+
+It cannot be spent twice: after the first boot the record exists and ownership
+is proven the ordinary way, and if that record is later deleted the home is no
+longer empty — the marker is in it — so no second adoption can happen. Purge
+withdraws the declaration along with the account, because dpkg did not install
+it and would leave it behind.
 
 ### ACL entries
 
@@ -522,6 +571,25 @@ The audit trail carries the plan, the confirmation, the staging, the tryboot
 request, the trial boot, a health failure, the commit, an observed fallback and
 both rollback steps. It never carries signing material: the detail filter matches
 key material as a substring, so `signing_key` is dropped exactly like `key`.
+
+## Operating-system update trust
+
+An OS artefact is installed only if a signature over its manifest verifies
+against a keyring this host was given. Three settings in
+`/etc/ems-appliance-manager/appliance.conf` decide that, and all three are host
+authority: the browser can influence none of them.
+
+| Setting | Default | What it decides |
+|---|---|---|
+| `os_release_keyring` | `/etc/ems-appliance-manager/os-release-keyring.gpg` | The trust anchor. **No package ships a key here** — a trust anchor the device brings itself is one whoever shipped the device controls. Until an operator installs one, every artefact is refused and the manager reports it as an unmet readiness prerequisite rather than failing at install time |
+| `os_release_dir` | `/var/lib/ems-appliance-os-update/releases` | Where verified releases live. A shared path, so it survives a slot switch |
+| `os_release_index_url` | empty | An `https` index naming downloadable releases. The index is never trusted: it may only name candidates, and what is installed is decided by the signature |
+| `allow_unsigned_os_artifacts` | `false` | A development-bench escape hatch reachable from the root CLI only. It is never a release-gate pass, is recorded as a distinct verification state, and the browser can never reach it |
+
+Verification uses `gpgv` against that keyring alone — not the invoking user's
+keyring, and not a keyserver. A release signed by a key the keyring does not
+hold is refused with the same finality as an unsigned one.
+
 
 ## What is deliberately absent
 

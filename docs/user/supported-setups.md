@@ -128,6 +128,31 @@ physical hardware. Please report results (see below).
 | Older Hub / Hyper | Hub 1200, Hub 2000, Hyper 2000, AIO 2400, Ace 1500, SuperBase V | MQTT control (local or cloud) | Reverse-engineered: exact listed models carry a legacy JSON write profile derived from external projects; that JSON report family is the local-broker path that stays enabled. Control still requires capability and transport gates; not confirmed on maintainer-owned physical hardware (Ace 1500 / SuperBase are telemetry-only). |
 | Any device via API key | Any Zendure device | Zendure cloud MQTT | Telemetry supported; Apply provisions the runtime broker credential; control requires an exact supported model and every control-eligibility condition above. |
 
+## The appliance image
+
+The dedicated Raspberry Pi image is held to the same vocabulary as the inverter
+support above.
+
+| Component | Status |
+|---|---|
+| Appliance image (Pi 4 / Pi 5) | **Reverse-engineered** — built and exercised automatically, never confirmed on a physical Raspberry Pi |
+
+Everything about it is tested without hardware: the package installs and its
+services start on a booted aarch64 guest under emulation, the A/B update
+mechanism runs against a real Docker engine, the read-only system layout is
+audited, and the release gates declare what each of them proved. None of that is
+a Raspberry Pi.
+
+What only real hardware settles:
+
+- the firmware's one-shot trial boot, which the whole update path depends on
+- whether a slot reaches its health check inside the window on a real card
+- behaviour when power is cut mid-update
+- SD-card wear
+
+Until someone runs one and reports back, "hardware-ready" would be a claim
+without evidence. See the [appliance guides](appliance/index.md).
+
 ## Help improve compatibility
 
 The MQTT paths above need real-device reports. Please open a

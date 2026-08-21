@@ -64,7 +64,7 @@ If you can no longer reach the appliance:
    `http://<address>:8088`.
 3. **Connect Ethernet.** Ethernet keeps working independently of the WLAN
    profile; the appliance is reachable on its wired address.
-4. **Use the console or SSH:**
+4. **From a shell, if you have one:**
 
    ```bash
    nmcli connection show
@@ -72,8 +72,29 @@ If you can no longer reach the appliance:
    sudo ems-appliance status
    ```
 
-5. **Check the appliance from the console** with `sudo ems-appliance status`;
-   the network section shows what NetworkManager reports.
+### Whether you have a shell at all
+
+This matters more than the commands above, and the two installation shapes
+differ:
+
+| Shape | Console or SSH login |
+|---|---|
+| Manager package on your own Raspberry Pi OS | Yes — your own account, the one you set up when you installed the OS |
+| **A/B appliance image** | **No.** The image ships no login account, no default password and no authorized key, on purpose: a shipped credential is a credential every device shares |
+
+On an appliance image the recovery paths are therefore, in order:
+
+1. Reach the manager over **Ethernet**, which keeps working independently of
+   the WLAN profile, and fix it there.
+2. Wait out the WLAN revert. A change that loses connectivity returns to the
+   previous profile on its own, so a wrong passphrase is not a lockout.
+3. Add your own SSH key through the manager **while it is still reachable** —
+   that is what turns a future lockout into something a shell can fix.
+4. Re-flash. Configuration and data live on the shared partition and are not
+   erased by writing a new system image, but take a backup first if you can.
+
+Step 3 is the one worth doing early. There is no way to add a key to a box you
+can no longer reach.
 
 ## First-boot provisioning portal
 

@@ -35,6 +35,8 @@ MANAGED_KEYS_NAME = "managed-keys.list"
 ACL_MANIFEST_NAME = "acl-manifest.tsv"
 
 HOME_MARKER_NAME = ".ems-appliance-backup-home"
+ACCOUNT_ORIGIN_NAME = "backup-account-origin"
+ACCOUNT_ORIGIN_SCHEMA_VERSION = 1
 HOME_MARKER_SCHEMA_VERSION = 1
 HOME_MARKER_MODE = 0o400
 UNSAFE_MARKER_MODE = stat.S_IWGRP | stat.S_IWOTH
@@ -230,7 +232,35 @@ def render_home_marker(*, account, uid, primary_gid, home, installation_id, nonc
     )
 
 
-def read_home_marker(path):
+def render_account_origin(*, account, uid, primary_gid, home, shell, nonce):
+    """The slot-local declaration the image carries about the account it baked in.
+
+    ``/etc`` is read-only and slot-local on an A/B appliance, so the account has
+    to exist before the device runs; the ownership record and the home marker
+    live on the shared partition and are not there yet on the first boot. This
+    is what lets that boot tell the account the build created from one somebody
+    else put in the same passwd file -- and nothing more than that.
+    """
+
+    return (
+        "# ems-appliance backup account origin. Written by the package; do not edit.\n"
+        f"schema_version={ACCOUNT_ORIGIN_SCHEMA_VERSION}\n"
+        f"account={account}\n"
+        f"uid={uid}\n"
+        f"primary_gid={primary_gid}\n"
+        f"home={home}\n"
+        f"shell={shell}\n"
+        f"nonce={nonce}\n"
+    )
+
+
+def read_declaration(path):
+    """Read one ``key=value`` declaration written by the packaged shell.
+
+    The home marker and the account origin are the same layout, so they are the
+    same reader.
+    """
+
     values = {}
     try:
         text = Path(str(path)).read_text(encoding="utf-8")
@@ -282,7 +312,7 @@ def verify_home(record):
     if not _marker_file_usable(marker):
         return MARKER_MISMATCH
 
-    values = read_home_marker(marker)
+    values = read_declaration(marker)
     if _as_int(values.get("schema_version")) != HOME_MARKER_SCHEMA_VERSION:
         return MARKER_MISMATCH
     if values.get("account") != record.account:

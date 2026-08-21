@@ -224,6 +224,14 @@ run_case() {
     return 0
 }
 
+# The state a flashed device boots in: account in the image, persistent
+# partition empty. That is what the case below is about, so it is staged here.
+rm -f /var/lib/ems-appliance-manager/agent/package-state/backup-account.json 2>/dev/null || true
+rm -rf /var/lib/ems-backup/..?* /var/lib/ems-backup/.[!.]* /var/lib/ems-backup/* 2>/dev/null || true
+chmod 0755 /var/lib/ems-backup 2>/dev/null || true
+
+run_case "the backup account is established without writing the slot root" \
+    /usr/lib/ems-appliance-manager/backup-account.sh ensure
 run_case "the export root is built without writing the slot root" \
     /usr/lib/ems-appliance-manager/setup-export-root.sh
 run_case "the host identity is ensured" \

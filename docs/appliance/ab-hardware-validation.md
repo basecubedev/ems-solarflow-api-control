@@ -28,7 +28,7 @@ checkout is the exact revision and tree the artefacts were built from.
 | Branch | `feat/appliance-manager` |
 | Release-build revision (what the real images were built from) | `01a61335c35b3ffabca1121983f8f161c0e36f75` |
 | Source tree | `sha256:695881c540e1b651e0b1c6f72ba4f54a09d13f00cc104440358b6bb5df990622` |
-| Stale | **False** — the checkout is the exact revision and tree the artefacts were built from |
+| Stale | **True** — development has continued past the revision above. The artefacts and their evidence are unchanged and still describe that revision; the working tree no longer matches it, so nothing here describes what a build from HEAD would produce |
 | rpi-image-gen | `a7b6d4806183` v2.7.0, tarball form, digest verified from the lock |
 | Builder environment hash | `sha256:67c5a0885b7307e9715087ca2d58c7cbebb012123fe3ea54ca36d1d7cc588d32` |
 | Builder base image | `debian-13-genericcloud-amd64-20260803-2559.qcow2`, digest verified from the lock |
@@ -225,6 +225,29 @@ uses, but it models the firmware. It cannot prove that:
 - the storage controller for NVMe or USB behaves like the SD path.
 
 Those are firmware and storage properties. Only hardware answers them.
+
+### What an emulated boot of the real image does reach (2026-08-21)
+
+The kernel and initramfs were read out of the real rpi5 image's FAT boot
+partition with `mtools` — no mount, no root — and booted under
+`qemu-system-aarch64 -machine virt -cpu cortex-a76`. This is not a substitute
+for hardware and does not close any case above. It moves one line:
+
+- the image's own kernel runs: `6.18.39+rpt-rpi-2712`, 16K pages, to
+  `Run /init as init process`
+- the image's own initramfs runs, `systemd-udevd` starts
+- **`scripts/local-premount/90-rpi-ab-root` executes** — the first time outside
+  a fixture — and its fail-closed branch is confirmed on the real artefact:
+  `FATAL: AB missing /dev/disk/by-slot/active/system - rebooting`. It does not
+  guess, does not fall back to a partition, names what is missing and reboots.
+
+The happy path is out of reach there, and not because of a defect.
+`usr/bin/rpi-bootdev-tag` reads `/proc/device-tree/chosen/bootloader/boot-mode`
+and `.../partition`, which only the Raspberry Pi bootloader writes; without it
+no device is tagged `RPI_ONBOOTDEV`, so `99-rpi-01-abslot.rules` creates no
+`disk/by-slot/*` links. Presenting the image as virtio and as NVMe both fail at
+that same point. Reaching the happy path would mean forging those device-tree
+nodes, which would test the forgery rather than the device.
 
 ## Required equipment
 

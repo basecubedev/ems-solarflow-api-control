@@ -214,7 +214,7 @@ def test_an_ensure_run_records_the_marker_it_wrote(host):
     assert record["schema_version"] == backup_ownership.RECORD_SCHEMA_VERSION, record
     assert record["home_marker"] == str(host.home_marker()), record
     assert len(record["home_marker_nonce"]) >= 32, record
-    values = backup_ownership.read_home_marker(host.home_marker())
+    values = backup_ownership.read_declaration(host.home_marker())
     assert values["nonce"] == record["home_marker_nonce"], values
     assert values["home"] == str(host.home), values
     assert values["account"] == BACKUP_USER, values

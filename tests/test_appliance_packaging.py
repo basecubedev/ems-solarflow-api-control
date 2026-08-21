@@ -552,6 +552,27 @@ def test_a_successful_export_run_revalidates_backup_access():
     assert "ExecStartPost=/usr/bin/ems-appliance backup-access activate" in export, export
 
 
+def test_the_first_boot_gets_a_chance_to_establish_the_account():
+    """The image bakes the account into a read-only /etc and the proof of it
+    onto a partition that is empty until this boot mounts it. Nothing else runs
+    between those two facts."""
+
+    export = EXPORT_SERVICE_UNIT.read_text(encoding="utf-8")
+
+    assert "ExecStartPre=-/usr/lib/ems-appliance-manager/backup-account.sh ensure" in export
+
+
+def test_establishing_the_account_may_not_take_the_export_root_down():
+    """A conflict this cannot resolve is not a reason to stop exporting; the
+    activation step downstream is what refuses on unresolved ownership."""
+
+    export = EXPORT_SERVICE_UNIT.read_text(encoding="utf-8")
+
+    for line in export.splitlines():
+        if line.startswith("ExecStartPre") and "backup-account.sh" in line:
+            assert line.startswith("ExecStartPre=-"), line
+
+
 def test_the_disable_unit_is_shipped_by_the_package():
     build = (PACKAGING / "build-deb.sh").read_text(encoding="utf-8")
     assert "ems-appliance-backup-access-disable.service" in build

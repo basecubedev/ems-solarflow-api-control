@@ -28,7 +28,7 @@ import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
-from appliance import ab_filesystems, ab_persistence
+from appliance import ab_filesystems, ab_persistence, backup_ownership
 
 SECTOR_SIZE = 512
 GPT_SIGNATURE = b"EFI PART"
@@ -427,7 +427,16 @@ RUNTIME_HELPERS = (
     "usr/bin/ems-appliance",
     "usr/lib/ems-appliance-manager/setup-export-root.sh",
     "usr/lib/ems-appliance-manager/backup-account.sh",
+    # Written by the postinst, not shipped by dpkg: without it a flashed image
+    # cannot establish ownership of the account it carries.
+    f"usr/lib/ems-appliance-manager/{backup_ownership.ACCOUNT_ORIGIN_NAME}",
 )
+
+# A board that never reaches the network cannot be asked anything, and the image
+# ships no login account. The serial line is the only channel a first boot has,
+# and it is where the A/B root resolution reports its own refusal.
+SERIAL_CONSOLES = ("serial", "ttyAMA", "ttyS", "ttyUSB")
+FIRMWARE_UART_SETTINGS = ("enable_uart=1", "BOOT_UART=1", "uart_2ndstage=1")
 
 BOOT_KERNELS = ("kernel8.img", "kernel_2712.img", "kernel.img")
 BOOT_INITRAMFS = ("initramfs8", "initramfs_2712", "initramfs")
@@ -763,6 +772,14 @@ def _boot_content_findings(label, reader):
             readonly and not writable,
             "rw overrides it" if writable else ("ro" if readonly else "the root is not read-only"),
         )
+        consoles = [field.split("=", 1)[1] for field in fields if field.startswith("console=")]
+        serial = [name for name in consoles if name.split(",")[0].startswith(SERIAL_CONSOLES)]
+        record(
+            "boot_console",
+            bool(serial),
+            ", ".join(serial)
+            or (f"only {', '.join(consoles)}" if consoles else "the kernel names no console"),
+        )
 
     entries = reader.listdir("/")
     kernels = [name for name in BOOT_KERNELS if name in entries]
@@ -772,6 +789,16 @@ def _boot_content_findings(label, reader):
     record("boot_initramfs", bool(initramfs), ", ".join(initramfs) or "no initramfs")
     record("boot_device_tree", bool(blobs), f"{len(blobs)} device-tree blobs")
     record("boot_configuration", "config.txt" in entries, "config.txt")
+    try:
+        configuration = reader.read_text("config.txt").replace(" ", "")
+    except ab_filesystems.FilesystemError:
+        configuration = ""
+    asked = [setting for setting in FIRMWARE_UART_SETTINGS if setting in configuration]
+    record(
+        "boot_firmware_uart",
+        bool(asked),
+        ", ".join(asked) or "the firmware is not asked to use the serial line",
+    )
     return findings
 
 

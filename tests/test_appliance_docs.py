@@ -611,3 +611,142 @@ def test_the_hardware_gate_lists_the_new_authority_cases():
         "rpi_image_gen_source_modified",
     ):
         assert case in gate, case
+
+
+def test_the_media_requirement_appears_where_a_buyer_reads_it():
+    """media_sizing.py enforces 30 GB while the hardware page said "a few GB".
+    The number only existed in the maintainer gate, so a reader bought a card
+    that cannot hold the image."""
+
+    from appliance import media_sizing
+
+    page = (ROOT / "docs/user/hardware-requirements.md").read_text(encoding="utf-8")
+
+    assert media_sizing.SUPPORTED_MEDIA_LABEL in page
+    assert "16 GB" in page, "the size that does not work is worth naming"
+
+
+# --- what a first boot on real hardware leaves behind ------------------------
+# The appliance ships no login account and the image is not confirmed on a
+# physical board, so the first person to try one has exactly two channels when
+# it does not come up: the serial line, and the partitions their computer can
+# read. Both are promised in the user guide, and neither was checked against
+# what the image actually is.
+
+USER_DOCS = ROOT / "docs" / "user" / "appliance"
+
+
+def user_doc(name):
+    return (USER_DOCS / name).read_text(encoding="utf-8")
+
+
+def flowed(name):
+    """The guide as one line, so an assertion about a sentence survives rewrapping."""
+
+    return " ".join(user_doc(name).split())
+
+
+def test_the_serial_console_the_guide_sends_people_to_is_asserted_of_the_image():
+    from appliance import ab_image
+
+    guide = user_doc("recovery.md")
+
+    assert "115200" in guide
+    assert "SERIAL_CONSOLES" in dir(ab_image)
+    assert "boot_console" in (ROOT / "appliance" / "ab_image.py").read_text(encoding="utf-8")
+
+
+def test_the_firmware_speaks_before_the_kernel_and_the_image_is_held_to_it():
+    """The failure a serial line answers that nothing else can is the one that
+    happens before the kernel runs."""
+
+    from appliance import ab_image
+
+    assert ab_image.FIRMWARE_UART_SETTINGS
+    assert "boot_firmware_uart" in (ROOT / "appliance" / "ab_image.py").read_text(encoding="utf-8")
+
+
+def test_the_partitions_the_guide_tells_people_to_open_are_the_ones_that_are_fat():
+    from appliance import ab_image
+
+    readable = ("bootconfig", *ab_image.BOOT_PARTITIONS)
+    every = (*readable, *ab_image.SYSTEM_ROOTS, "persistent")
+    assert len(readable) == 3 and len(every) == 6
+    assert "Three of its six partitions are FAT" in flowed("recovery.md")
+
+
+def test_the_files_the_guide_asks_for_are_files_the_image_check_reads():
+    from appliance import ab_image
+
+    guide = user_doc("recovery.md")
+
+    for name in (ab_image.AUTOBOOT_FILE, "cmdline.txt", "config.txt"):
+        assert name in guide, f"the guide does not name {name}"
+
+
+def test_the_first_hardware_report_asks_for_the_capture_that_cannot_be_redone():
+    """A boot that fails leaves nothing behind, so the serial capture has to be
+    started before the board is powered on -- the guide has to say so first."""
+
+    index = flowed("index.md")
+
+    assert "Before you power it on" in index
+    assert "recovery.md#watch-it-boot" in index
+
+
+# --- the FAQ is a third place the appliance is described ---------------------
+# It answers for all three setup paths, so it repeats numbers and words that
+# belong to something else. Repeating them is fine; nobody checking them is not.
+
+FAQ = ROOT / "docs" / "user" / "faq.md"
+
+
+def test_the_port_the_faq_tells_people_to_open_is_the_port_the_appliance_serves():
+    from appliance.config import DEFAULT_WEB_PORT
+
+    faq = FAQ.read_text(encoding="utf-8")
+
+    assert f":{DEFAULT_WEB_PORT}" in faq
+
+
+LANDING_PAGES = (
+    Path("docs/README.md"),
+    Path("docs/user/index.md"),
+    Path("docs/user/faq.md"),
+)
+
+
+@pytest.mark.parametrize("page", LANDING_PAGES, ids=lambda page: page.name)
+def test_every_page_a_reader_lands_on_says_the_same_thing_about_the_appliance(page):
+    """Three pages introduce it. A reader who meets a different claim on each
+    cannot tell which one is current."""
+
+    text = " ".join((ROOT / page).read_text(encoding="utf-8").split())
+
+    assert "not confirmed on physical hardware" in text.replace("**", "")
+
+
+def test_that_claim_is_the_tier_the_support_table_assigns_it():
+    setups = " ".join(
+        (ROOT / "docs" / "user" / "supported-setups.md").read_text(encoding="utf-8").split()
+    )
+
+    assert "Appliance image (Pi 4 / Pi 5) | **Reverse-engineered**" in setups
+
+
+def test_the_faq_does_not_offer_a_login_the_image_has_no_account_for():
+    faq = " ".join(FAQ.read_text(encoding="utf-8").split())
+
+    assert "ships no login account" in faq
+
+
+def test_the_faq_names_every_connection_a_device_can_be_reached_on():
+    """It described an address-only world after MQTT became a control transport,
+    which made "each device needs a real IP address" simply wrong."""
+
+    faq = FAQ.read_text(encoding="utf-8")
+    setups = (ROOT / "docs" / "user" / "supported-setups.md").read_text(encoding="utf-8")
+
+    for connection in ("Local API", "Local MQTT", "Zendure cloud MQTT"):
+        assert connection in setups, f"supported-setups.md no longer names {connection}"
+        assert connection in faq, f"the FAQ does not name {connection}"

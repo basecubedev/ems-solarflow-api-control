@@ -42,8 +42,14 @@ container EMS deploys is published for both, so there is no emulation and no
 
 Use something you would trust with a database that writes continuously. A decent
 SD card is workable; a good USB SSD or NVMe is noticeably better and lasts
-longer, especially with InfluxDB enabled. Budget a few GB for the system plus
-whatever history you intend to keep.
+longer, especially with InfluxDB enabled.
+
+How much you need depends on which shape you run:
+
+| Shape | Minimum | Why |
+|---|---|---|
+| Docker deployment | A few GB plus your history | The OS is already there; EMS adds containers and a database |
+| A/B appliance image | **32 GB** | Two complete system slots plus a shared data partition. A 16 GB card cannot hold the image at all, and the appliance refuses one below 30 GB rather than filling it and failing later |
 
 ## Raspberry Pi compatibility
 

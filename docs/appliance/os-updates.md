@@ -87,11 +87,17 @@ Trial status            whether a trial boot is pending or running
 Update readiness        every production prerequisite, one line each
 ```
 
-*Update readiness* is a bounded set: the board class, the A/B layout, the
-persistent data, the artifact decoder, the sparse decoder, the persistent host
-identity and the container-runtime record. While any of them is missing the plan
-buttons are disabled and the page says which one and why — an update that cannot
-be decoded, written or recovered from is not one to offer.
+*Update readiness* is a bounded set, and the page lists it in full rather than
+summarising it: the board class, the A/B layout, the persistent data, the
+artifact decoder, the sparse decoder, the persistent host identity, the
+container-runtime record, the EMS deployment this appliance runs, and the
+release keyring an artefact has to be signed against. While any of them is
+missing the plan buttons are disabled and the page says which one and why — an
+update that cannot be verified, decoded, written or recovered from is not one to
+offer.
+
+The list is produced by `OsUpdateService._readiness()`; the manager renders
+whatever that returns, so the two cannot drift.
 
 The update path is:
 

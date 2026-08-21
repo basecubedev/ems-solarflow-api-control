@@ -1,40 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Appliance Manager UI journeys against the deterministic test server.
 // Every assertion waits on a locator or a response, never on a fixed timeout.
-import { expect, test, Page, APIRequestContext } from "@playwright/test";
-
-const PASSWORD = "appliance-secret-1";
-const PUBLIC_KEY =
-  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIl8UiJHP3y4t+H+uVmVWcN/BNvqHg2f6urH8+puRXdf " +
-  "appliance-test@example.invalid";
-
-async function resetAppliance(request: APIRequestContext) {
-  const response = await request.post("/api/test/reset", { data: {} });
-  expect(response.ok()).toBeTruthy();
-}
-
-async function signIn(page: Page) {
-  await page.goto("/");
-  await expect(page.locator("#gate")).toBeVisible();
-  await page.locator("#gate-password").fill(PASSWORD);
-  await page.locator("#gate-confirm").fill(PASSWORD);
-  await Promise.all([
-    page.waitForResponse((response) => response.url().includes("/api/session/setup")),
-    page.locator("#gate-submit").click(),
-  ]);
-  await expect(page.locator("#shell")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Appliance overview" })).toBeVisible();
-}
-
-async function openView(page: Page, view: string) {
-  await page.locator(`[data-test="nav-${view}"]`).click();
-  await expect(page.locator(`[data-test="nav-${view}"]`)).toHaveAttribute("aria-current", "page");
-}
-
-async function setMode(page: Page, mode: "basic" | "expert") {
-  await page.locator(`#mode-${mode}`).click();
-  await expect(page.locator(`#mode-${mode}`)).toHaveAttribute("aria-pressed", "true");
-}
+import { expect, test } from "@playwright/test";
+import { PASSWORD, PUBLIC_KEY, openView, resetAppliance, setMode, signIn } from "./helpers";
 
 // Playwright gives every test its own browser context, so localStorage and
 // cookies start empty; only the shared server state needs resetting.

@@ -5,7 +5,7 @@
 | Item | Supported |
 |---|---|
 | Hardware | Raspberry Pi 4, Raspberry Pi 5 |
-| Operating system | Raspberry Pi OS 64-bit (Bookworm) |
+| Operating system | Raspberry Pi OS 64-bit (Trixie). The appliance image is built from Trixie; the manager package also installs on Bookworm |
 | Architecture | `arm64` only |
 | Package | `ems-appliance-manager_<version>_arm64.deb` |
 
@@ -66,6 +66,7 @@ The package installs:
 /usr/lib/systemd/system/ems-appliance-export.service
 /usr/lib/systemd/system/ems-appliance-export.path
 /usr/lib/systemd/system/ems-appliance-backup-access-disable.service
+/usr/lib/systemd/system/ems-appliance-host-identity.service
 /usr/lib/systemd/system/ems-appliance-persistence.service
 /usr/lib/systemd/system/ems-appliance-ab-health.service
 /usr/lib/systemd/system/ems-appliance-slot-bootstrap.service
@@ -73,6 +74,7 @@ The package installs:
 /usr/lib/ems-appliance-manager/setup-export-root.sh
 /usr/lib/ems-appliance-manager/backup-account.sh
 /usr/lib/ems-appliance-manager/install-admin-console.sh
+/usr/lib/ems-appliance-manager/grow-persistent.sh
 /usr/lib/tmpfiles.d/ems-appliance-manager.conf
 /etc/logrotate.d/ems-appliance-manager
 /etc/ems-appliance-manager/appliance.conf
@@ -87,6 +89,19 @@ they always agree with the configured host paths:
 /etc/systemd/system/ems-appliance-export.path.d/host-paths.conf
 /etc/ssh/sshd_config.d/ems-appliance-backup.conf
 ```
+
+A fourth is generated from the account rather than from the configuration, when
+the installation creates the backup account:
+
+```text
+/usr/lib/ems-appliance-manager/backup-account-origin
+```
+
+It describes the account that was created, and it is what lets a flashed A/B
+image establish ownership of an account it could not create at runtime — see
+[the security model](security-model.md#the-account-the-image-carries). On a
+system you installed the package on yourself it is written and never read.
+Purge removes it.
 
 and creates the service accounts `ems-appliance-web` (unprivileged, `nologin`),
 `ems-backup` (read-only file export) and `ems-deploy` (owner of the hosted

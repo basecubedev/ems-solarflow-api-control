@@ -32,6 +32,11 @@ it changes, and what to do when the result differs.
 | [Backup and restore](admin/backup-restore.md) | Snapshots, previews, rollback |
 | [Diagnostics and recovery](admin/diagnostics-recovery.md) | Evidence, support bundles, stuck workflows |
 
+### Appliance — [all guides](appliance/index.md)
+
+Flashing a Raspberry Pi, first start, updates, network, backups and recovery
+for the dedicated appliance image.
+
 ### EMS Dashboard — [all guides](dashboard/index.md)
 
 | Guide | Use |
@@ -45,12 +50,17 @@ it changes, and what to do when the result differs.
 
 ## Setup paths
 
-Two user paths, both converging on the same standard `config/config.json`.
+Three user paths, all converging on the same standard `config/config.json`.
 
 | Path | Audience | Start |
 | --- | --- | --- |
 | Admin Console | Most users | [admin-console.md](admin-console.md) |
 | Docker Bootstrap | Shell-only Docker users | [docker-bootstrap.md](docker-bootstrap.md) |
+| Appliance image | A Raspberry Pi 4 or 5 dedicated to EMS | [appliance/index.md](appliance/index.md) |
+
+The appliance is a prepared image rather than an install onto an existing
+system. It is **not confirmed on physical hardware** — see
+[what that means](appliance/index.md#what-not-confirmed-means).
 
 Developer Setup is a source-checkout path for contributing, not a normal user
 setup: [developer-setup.md](../developer/developer-setup.md).

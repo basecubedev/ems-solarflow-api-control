@@ -138,12 +138,18 @@ def test_readme_has_supported_hardware_summary():
     assert "real power hardware" in text
 
 
-def test_readme_marks_mqtt_device_control_as_roadmap():
+def test_readme_does_not_call_mqtt_control_a_future_feature():
+    """It was on the roadmap once. The word survived the feature shipping, and a
+    test named for the old state is how it would survive again."""
+
     text = read(ROOT / "README.md")
-    section = text.split("## Supported hardware at a glance", 1)[1].split("##", 1)[0]
-    assert "Roadmap" in section
-    assert "MQTT" in section
-    assert "device" in section or "inverter" in section
+    section = text.split("## Supported hardware at a glance", 1)[1].split("\n## ", 1)[0]
+    # One line, so an assertion about a sentence survives rewrapping.
+    flowed = " ".join(section.split())
+
+    assert "MQTT control is an implemented EMS transport" in flowed
+    assert "not a future feature" in flowed
+    assert "not building the feature" in flowed
 
 
 def test_supported_setups_page_lives_under_user_docs():
@@ -267,6 +273,17 @@ def test_docs_index_routes_by_audience():
     assert "developer/developer-setup.md" in text
 
 
+def test_faq_names_every_setup_path_a_user_can_take():
+    """It answered for two of the three, which made the choice look like two."""
+
+    text = read(ROOT / "docs" / "user" / "faq.md")
+
+    assert "Admin Console" in text
+    assert "Docker Bootstrap" in text
+    assert "appliance/index.md" in text
+    assert "## Appliance image" in text
+
+
 def test_docs_index_names_three_operating_models():
     text = read(ROOT / "docs" / "README.md")
     assert "Admin Console" in text
@@ -363,7 +380,7 @@ def test_faq_answers_admin_console_user_questions():
     for expected in [
         "What is the Admin Console?",
         "Should I choose Setup or Maintenance?",
-        "Should I use the Admin Console or Docker Bootstrap?",
+        "Which setup path should I choose?",
         "What is Developer Setup?",
         "Are Admin Console backups normal EMS backups?",
         "Is the Admin Console safe to expose to the internet?",

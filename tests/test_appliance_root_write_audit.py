@@ -154,6 +154,10 @@ def test_the_declared_mutable_paths_really_are_mutable(audit):
 def test_the_boot_write_paths_run_without_writing_the_root(audit):
     """The other defect: a chown that changes nothing still fails with EROFS."""
 
+    # The first attempt at first-boot account ownership put adduser here and
+    # this case reported "not a write: cannot create the ems-backup account".
+    # Passing means the boot path establishes ownership without touching /etc.
+    assert_case(audit, "the backup account is established without writing the slot root")
     assert_case(audit, "the export root is built without writing the slot root")
     assert_case(audit, "the host identity is ensured")
     assert_case(audit, "no file was created outside the declared mutable set")

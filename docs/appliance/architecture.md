@@ -104,6 +104,9 @@ is refused as `invalid_request` before any handler runs.
 | `ab_layout.py`, `ab_persistence.py` | A/B slot discovery, drift detection and the shared-persistence contract |
 | `ab_boot.py`, `ab_blocks.py`, `ab_state.py` | The boot selector, the block-device backend and the state that crosses the reboot |
 | `os_releases.py`, `os_artifacts.py`, `os_update.py`, `ab_health.py` | Signed OS release authority, bounded extraction, inactive-slot staging, trial health and commit |
+| `os_fetch.py` | The HTTPS transport that brings a signed release onto the device |
+| `admin_bootstrap.py`, `admin_transition.py` | The first Admin deployment, and standing back while Admin replaces itself |
+| `cli.py` | The `ems-appliance` host CLI |
 | `ab_image.py` | The declared image layout and the host-side image inspector |
 
 ## Where each boundary is enforced
@@ -117,7 +120,6 @@ is refused as `invalid_request` before any handler runs.
 | An Admin action did what it claims | the shared verification in `admin_lifecycle.verify_admin` |
 | A rollback costs no downtime unless it must | preflight before the stop, in `_execute_rollback` |
 | "Installed" means usable | `install_check.verify_installation`, run last by the postinst |
-| `cli.py` | The `ems-appliance` host CLI |
 
 ## Operation model
 

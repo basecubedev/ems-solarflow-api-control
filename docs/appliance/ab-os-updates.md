@@ -351,7 +351,7 @@ object onto the persistent partition:
 
 ```json
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "captured_at": 1754630000.0,
   "compose":     {"path": "/opt/ems-solarflow/docker-compose.yml", "sha256": "sha256:..."},
   "environment": {"path": "/opt/ems-solarflow/.env",               "sha256": "sha256:..."},
@@ -396,7 +396,7 @@ the authority, and the confirmation hash covers the whole thing:
   "os_write": {"device": "...", "target_slot": "B", "boot_partuuid": "...",
                "rootfs_expanded_digest": "sha256:...", "...": "..."},
   "deployment_fingerprint": "sha256:...",
-  "deployment_schema": 3
+  "deployment_schema": 4
 }
 ```
 

@@ -73,6 +73,10 @@ CMDLINE = (
     "console=serial0,115200 root=/dev/disk/by-slot/active/system rootfstype=ext4 ro fsck.repair=yes"
 )
 
+# What a real image carries: the firmware talks on the same line the kernel
+# later takes over, per board.
+CONFIG = "arm_64bit=1\n\n[pi4]\nenable_uart=1\n\n[pi5]\nBOOT_UART=1\n\n[all]\nuart_2ndstage=1\n"
+
 
 def populate_root(
     base,
@@ -88,11 +92,10 @@ def populate_root(
     """A slot root carrying exactly what an appliance image has to carry."""
 
     base.mkdir(parents=True, exist_ok=True)
-    (base / "usr/bin").mkdir(parents=True)
-    (base / "usr/bin/ems-appliance").write_text("#!/bin/sh\n")
-    (base / "usr/lib/ems-appliance-manager").mkdir(parents=True)
-    for helper in ("setup-export-root.sh", "backup-account.sh"):
-        (base / "usr/lib/ems-appliance-manager" / helper).write_text("#!/bin/sh\n")
+    for helper in ab_image.RUNTIME_HELPERS:
+        path = base / helper
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("#!/bin/sh\n")
 
     if dpkg:
         (base / "var/lib/dpkg").mkdir(parents=True)
@@ -280,7 +283,7 @@ def build_appliance_image(tmp_path, **overrides):
         work / "boot.fat",
         {
             "cmdline.txt": overrides.get("cmdline", CMDLINE),
-            "config.txt": "arm_64bit=1\n",
+            "config.txt": overrides.get("config", CONFIG),
             "kernel8.img": b"\x00" * 1024,
             "initramfs8": b"\x00" * 1024,
             "bcm2712-rpi-5-b.dtb": b"\x00" * 512,
@@ -545,6 +548,79 @@ def test_a_shipped_host_key_is_a_failure(tmp_path):
 
     assert found["no_host_key_shipped:system_a"][0] == FAIL
     assert "ssh_host_ed25519_key" in found["no_host_key_shipped:system_a"][1]
+
+
+# The appliance ships no login account, so a board that never reaches the
+# network cannot be asked anything. The serial line is the only channel left,
+# and it is the one that carries the A/B root resolution's own refusal. It comes
+# from the generator's defaults, which is exactly why it is asserted here: a
+# generator bump that dropped it would take the only first-boot diagnosis with
+# it, and nothing would say so.
+
+
+@requires_mkfs
+def test_both_slots_narrate_their_boot_on_a_serial_line(tmp_path):
+    (tmp_path / "work").mkdir()
+    (tmp_path / "work/empty").mkdir()
+    image = build_appliance_image(tmp_path)
+
+    found = contents(image)
+
+    assert found["boot_console:boot_a"][0] == PASS
+    assert found["boot_console:boot_b"][0] == PASS
+
+
+@requires_mkfs
+def test_a_boot_that_only_talks_to_a_screen_is_a_failure(tmp_path):
+    """tty1 is not a diagnosis: a box that never comes up has nothing attached."""
+
+    (tmp_path / "work").mkdir()
+    (tmp_path / "work/empty").mkdir()
+    image = build_appliance_image(
+        tmp_path, cmdline="console=tty1 root=/dev/disk/by-slot/active/system ro"
+    )
+
+    found = contents(image)
+
+    assert found["boot_console:boot_a"][0] == FAIL
+
+
+@requires_mkfs
+def test_a_boot_with_no_console_at_all_is_a_failure(tmp_path):
+    (tmp_path / "work").mkdir()
+    (tmp_path / "work/empty").mkdir()
+    image = build_appliance_image(
+        tmp_path, cmdline="root=/dev/disk/by-slot/active/system ro"
+    )
+
+    found = contents(image)
+
+    assert found["boot_console:boot_a"][0] == FAIL
+
+
+@requires_mkfs
+def test_the_firmware_is_asked_to_speak_before_the_kernel_does(tmp_path):
+    """A failure earlier than the kernel is the one a serial line answers that
+    nothing else can."""
+
+    (tmp_path / "work").mkdir()
+    (tmp_path / "work/empty").mkdir()
+    image = build_appliance_image(tmp_path)
+
+    found = contents(image)
+
+    assert found["boot_firmware_uart:boot_a"][0] == PASS
+
+
+@requires_mkfs
+def test_a_firmware_that_stays_silent_is_a_failure(tmp_path):
+    (tmp_path / "work").mkdir()
+    (tmp_path / "work/empty").mkdir()
+    image = build_appliance_image(tmp_path, config="arm_64bit=1\n")
+
+    found = contents(image)
+
+    assert found["boot_firmware_uart:boot_a"][0] == FAIL
 
 
 @requires_mkfs

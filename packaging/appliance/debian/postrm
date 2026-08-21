@@ -22,6 +22,8 @@ RUNTIME_DIR=${EMS_APPLIANCE_RUNTIME_DIR:-/run/ems-appliance-manager}
 SYSTEMD_DIR=${EMS_APPLIANCE_SYSTEMD_DIR:-/etc/systemd/system}
 SSHD_DIR=${EMS_APPLIANCE_SSHD_DIR:-/etc/ssh/sshd_config.d}
 QUARANTINE_DIR=${EMS_APPLIANCE_QUARANTINE_DIR:-/var/backups/ems-appliance-manager}
+ORIGIN_DIR=${EMS_APPLIANCE_ORIGIN_DIR:-/usr/lib/ems-appliance-manager}
+ORIGIN="$ORIGIN_DIR/backup-account-origin"
 HOST_PATHS="$CONFIG_DIR/host-paths.env"
 PACKAGE_STATE="$STATE_DIR/agent/package-state"
 RECORD="$PACKAGE_STATE/backup-account.json"
@@ -522,6 +524,11 @@ case "$1" in
         # account. A surviving policy would name a chroot that no longer exists.
         rm -f "$HOST_PATHS" "$SSHD_POLICY"
         rm -rf "$SYSTEMD_DIR/ems-appliance-export.path.d"
+        # The postinst wrote this one, so dpkg does not know to take it away. A
+        # declaration outliving the account it describes would offer the next
+        # installation an identity nobody can check any more.
+        rm -f "$ORIGIN"
+        rmdir "$ORIGIN_DIR" 2>/dev/null || true
         for exported in $EXPORTS; do
             rmdir "$EXPORT_ROOT/$exported" 2>/dev/null || true
         done

@@ -148,6 +148,8 @@ class BackupAccountHarness:
         self.acl_manifest = self.package_state / "acl-manifest.tsv"
         self.managed_keys = self.package_state / "managed-keys.list"
         self.quarantine_dir = self.root / "var" / "backups" / "ems-appliance-manager"
+        self.origin_dir = self.root / "usr" / "lib" / "ems-appliance-manager"
+        self.origin_nonce = ""
         self.environment = {}
         self._install_stubs()
         self.marker.parent.mkdir(parents=True, exist_ok=True)
@@ -323,6 +325,40 @@ class BackupAccountHarness:
         self.marker.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         return payload
 
+    @property
+    def origin(self):
+        from appliance import backup_ownership
+
+        return self.origin_dir / backup_ownership.ACCOUNT_ORIGIN_NAME
+
+    def write_origin(self, **fields):
+        """The declaration the build chroot bakes into the slot root."""
+
+        from appliance import backup_ownership
+
+        self.origin_nonce = fields.pop("nonce", None) or backup_ownership.new_marker_nonce()
+        values = {
+            "account": self.account,
+            "uid": self.account_field(2) or "1500",
+            "primary_gid": self.account_field(3) or "1500",
+            "home": self.account_field(5) or str(self.home),
+            "shell": self.account_field(6) or "/usr/sbin/nologin",
+            "nonce": self.origin_nonce,
+        }
+        schema = fields.pop("schema_version", None)
+        values.update(fields)
+        text = backup_ownership.render_account_origin(**values)
+        if schema is not None:
+            text = text.replace(
+                f"schema_version={backup_ownership.ACCOUNT_ORIGIN_SCHEMA_VERSION}\n",
+                f"schema_version={schema}\n",
+                1,
+            )
+        self.origin_dir.mkdir(parents=True, exist_ok=True)
+        self.origin.write_text(text, encoding="utf-8")
+        self.origin.chmod(0o444)
+        return self.origin
+
     def write_home_marker(self, home, nonce, *, account=None, uid=1500, gid=1500):
         """The root-owned marker ``ensure`` leaves inside the home it created."""
 
@@ -383,6 +419,7 @@ class BackupAccountHarness:
         env["EMS_APPLIANCE_SYSTEMD_DIR"] = str(self.systemd_dir)
         env["EMS_APPLIANCE_SSHD_DIR"] = str(self.sshd_dir)
         env["EMS_APPLIANCE_QUARANTINE_DIR"] = str(self.quarantine_dir)
+        env["EMS_APPLIANCE_ORIGIN_DIR"] = str(self.origin_dir)
         env.update({key: str(value) for key, value in self.environment.items()})
         env.update({key: str(value) for key, value in extra.items()})
         return env

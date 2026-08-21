@@ -127,3 +127,35 @@ def test_the_kit_still_refuses_a_real_key_beside_the_artefacts():
 
     assert "BEGIN (OPENSSH" in text
     assert "private_key_in_kit" in text
+
+
+def test_the_rc_status_block_cannot_quietly_go_stale():
+    """The block declares itself the authoritative status source and defines its
+    own invalidation rule -- and nothing enforced it, so it read "Stale: False"
+    while development had moved six commits past the revision it names."""
+
+    import re
+    import subprocess
+
+    root = Path(__file__).resolve().parents[1]
+    block = (root / "docs/appliance/ab-hardware-validation.md").read_text(encoding="utf-8")
+    body = block.split("<!-- CURRENT-RC-BEGIN -->")[1].split("<!-- CURRENT-RC-END -->")[0]
+
+    recorded = re.search(r"Release-build revision[^|]*\|\s*`([0-9a-f]{40})`", body)
+    stale = re.search(r"\|\s*Stale\s*\|\s*\*\*(True|False)\*\*", body)
+
+    assert recorded, "the block records no release-build revision"
+    assert stale, "the block does not state whether it is stale"
+
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=False, cwd=root, timeout=60,
+    ).stdout.strip()
+    if not head:
+        pytest.skip("no git checkout to compare against")
+
+    if recorded.group(1) != head:
+        assert stale.group(1) == "True", (
+            f"the block says Stale=False while naming {recorded.group(1)[:12]} "
+            f"and the checkout is at {head[:12]}"
+        )

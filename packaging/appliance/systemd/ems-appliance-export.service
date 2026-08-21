@@ -12,6 +12,10 @@ Type=oneshot
 # private mount namespace, and the read-only bind mounts it creates would then
 # be invisible to sshd.
 EnvironmentFile=-/etc/ems-appliance-manager/host-paths.env
+# Ownership of an imaged account can only be established once the shared mounts
+# are up. Non-fatal on purpose: unresolved ownership is what the activation step
+# below already refuses on, and it is no reason to stop exporting.
+ExecStartPre=-/usr/lib/ems-appliance-manager/backup-account.sh ensure
 ExecStart=/usr/lib/ems-appliance-manager/setup-export-root.sh
 # Authentication follows the verified boundary, never the other way round: this
 # enables the account only while the exports and the sshd policy check out, and

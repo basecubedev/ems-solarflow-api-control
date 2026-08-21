@@ -35,6 +35,9 @@ RECORD_SCHEMA=3
 LEGACY_RECORD_SCHEMA=2
 HOME_MARKER_NAME=.ems-appliance-backup-home
 HOME_MARKER_SCHEMA=1
+ORIGIN_DIR=${EMS_APPLIANCE_ORIGIN_DIR:-/usr/lib/ems-appliance-manager}
+ORIGIN="$ORIGIN_DIR/backup-account-origin"
+ORIGIN_SCHEMA=1
 
 warnings=""
 
@@ -335,6 +338,7 @@ abandon_home_marker() {
 
 write_record() {
     created_home=$1
+    origin_nonce=${2:-}
     mkdir -p "$RECORD_DIR" || fail "cannot create $RECORD_DIR"
     chmod 0700 "$RECORD_DIR" 2>/dev/null || true
     home=$(passwd_field 6)
@@ -364,6 +368,7 @@ write_record() {
         printf '  "home_marker_nonce": "%s",\n' "$nonce"
         printf '  "home_created_by_package": %s,\n' "$created_home"
         printf '  "installation_id": "%s",\n' "$installation"
+        printf '  "origin_nonce": "%s",\n' "$origin_nonce"
         printf '  "managed_keys_file": "%s",\n' "$MANAGED_KEYS"
         printf '  "authorized_keys": "%s/.ssh/authorized_keys",\n' "$home"
         printf '  "recorded_at": "%s"\n' \
@@ -374,6 +379,91 @@ write_record() {
     mv -f "$staged" "$RECORD" || abandon_home_marker "$home" "cannot write $RECORD"
     [ -f "$MANAGED_KEYS" ] || : > "$MANAGED_KEYS"
     chmod 0600 "$MANAGED_KEYS" 2>/dev/null || true
+}
+
+# --- the account the image carries ------------------------------------------
+# An imaged appliance has the account in a read-only /etc and the record and
+# marker proving it behind mounts that are empty on the first boot. This
+# slot-local declaration settles that one question -- whether the passwd entry
+# is the one the build wrote -- and no other; the home is still judged by
+# inspect_pre_existing_home. See docs/appliance/security-model.md.
+
+origin_value() {
+    marker_value "$1" "$ORIGIN"
+}
+
+origin_file_usable() {
+    [ -e "$ORIGIN" ] || [ -L "$ORIGIN" ] || return 1
+    require_real_chain "$ORIGIN_DIR"
+    if [ -L "$ORIGIN" ]; then
+        return 1
+    fi
+    [ -f "$ORIGIN" ] || return 1
+    [ "$(stat -c '%h' "$ORIGIN" 2>/dev/null || echo 0)" = "1" ] || return 1
+    [ -z "$(find "$ORIGIN" -maxdepth 0 -perm /022 2>/dev/null)" ] || return 1
+    if [ "$(id -u)" = "0" ]; then
+        [ "$(stat -c '%u' "$ORIGIN" 2>/dev/null || echo 1)" = "0" ] || return 1
+    fi
+    return 0
+}
+
+origin_describes_account() {
+    origin_file_usable || return 1
+    [ "$(origin_value schema_version)" = "$ORIGIN_SCHEMA" ] || return 1
+    [ "$(origin_value account)" = "$BACKUP_USER" ] || return 1
+    [ -n "$(origin_value nonce)" ] || return 1
+    [ "$(origin_value home)" = "$DEFAULT_HOME" ] || return 1
+    [ "$(origin_value uid)" = "$(passwd_field 3)" ] || return 1
+    [ "$(origin_value primary_gid)" = "$(passwd_field 4)" ] || return 1
+    [ "$(origin_value home)" = "$(passwd_field 6)" ] || return 1
+    [ "$(origin_value shell)" = "$(passwd_field 7)" ] || return 1
+    return 0
+}
+
+adopt_from_origin() {
+    inspect_pre_existing_home
+    write_record "$home_created_by_package" "$(origin_value nonce)"
+    note "adopted the backup account $BACKUP_USER described by the origin declaration at $ORIGIN."
+    return 0
+}
+
+# Not fatal on purpose: a failure here costs the next boot its adoption, not
+# this run its account. The image inspection is what refuses an image without it.
+write_origin_declaration() {
+    mkdir -p "$ORIGIN_DIR" 2>/dev/null || true
+    if [ ! -d "$ORIGIN_DIR" ] || [ -L "$ORIGIN" ]; then
+        caution "the origin declaration could not be placed at $ORIGIN; a flashed image
+  built from this root will need the backup account established by hand."
+        return 0
+    fi
+    nonce=$(new_marker_nonce)
+    staged="$ORIGIN.staged"
+    rm -f "$staged" 2>/dev/null || true
+    if ! {
+        printf '# ems-appliance backup account origin. Written by the package; do not edit.\n'
+        printf 'schema_version=%s\n' "$ORIGIN_SCHEMA"
+        printf 'account=%s\n' "$BACKUP_USER"
+        printf 'uid=%s\n' "$(passwd_field 3)"
+        printf 'primary_gid=%s\n' "$(passwd_field 4)"
+        printf 'home=%s\n' "$(passwd_field 6)"
+        printf 'shell=%s\n' "$(passwd_field 7)"
+        printf 'nonce=%s\n' "$nonce"
+    } > "$staged" 2>/dev/null; then
+        rm -f "$staged" 2>/dev/null || true
+        caution "the origin declaration could not be written at $ORIGIN; a flashed image
+  built from this root will need the backup account established by hand."
+        return 0
+    fi
+    if [ "$(id -u)" = "0" ]; then
+        chown root:root "$staged" 2>/dev/null || true
+    fi
+    chmod 0444 "$staged" 2>/dev/null || true
+    mv -f "$staged" "$ORIGIN" 2>/dev/null || {
+        rm -f "$staged" 2>/dev/null || true
+        caution "the origin declaration could not be installed at $ORIGIN; a flashed image
+  built from this root will need the backup account established by hand."
+    }
+    return 0
 }
 
 # Every key in the home has to be one this package wrote. A key it cannot
@@ -578,6 +668,10 @@ ensure_account() {
   Nothing was changed. Review that record and that directory by hand; remove or rename
   the account, or restore a current ownership record, then install again."
         fi
+        if [ "$(ownership_state)" = "no_ownership_record" ] && origin_describes_account; then
+            adopt_from_origin
+            return 0
+        fi
         if record_says_created; then
             fail "the account $BACKUP_USER is no longer the account this package created;
   its uid, group or home directory changed. The appliance will not take it over.
@@ -594,6 +688,7 @@ ensure_account() {
         || fail "cannot create the $BACKUP_USER account"
 
     write_record "$home_created_by_package"
+    write_origin_declaration
     note "created the package-owned backup account $BACKUP_USER."
     return 0
 }

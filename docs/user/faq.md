@@ -60,19 +60,82 @@ existing config is backed up first.
 
 ## Operating models
 
-### Should I use the Admin Console or Docker Bootstrap?
+### Which setup path should I choose?
 
-Use the **Admin Console** if you want a browser-guided setup with device
-discovery and maintenance. Use **Docker Bootstrap** if you prefer copy/paste
-shell commands without the browser wizard. Both use the same `config/config.json`
-layout, so you can switch later. See the
-[Docker Bootstrap guide](docker-bootstrap.md).
+There are three. Use the **Admin Console** if you want a browser-guided setup
+with device discovery and maintenance. Use **Docker Bootstrap** if you prefer
+copy/paste shell commands without the browser wizard. Use the **appliance
+image** if you want a Raspberry Pi that does nothing else and manages itself.
+The first two use the same `config/config.json` layout, so you can switch later.
+See the [Docker Bootstrap guide](docker-bootstrap.md) and the
+[appliance guides](appliance/index.md).
 
 ### What is Developer Setup?
 
 Developer Setup is a Git checkout with a local Python environment, for
 development, debugging and contributing. It is **not** the normal user path. See
 the [Developer Setup guide](../developer/developer-setup.md).
+
+## Appliance image
+
+### What is the appliance image?
+
+A ready-made Raspberry Pi system that runs EMS and nothing else: operating
+system, containers, an update mechanism that keeps a second copy of the system
+so a bad update can fall back, and a small web interface to drive all of it. You
+flash one card. See the [appliance guides](appliance/index.md).
+
+### Which Raspberry Pi do I need?
+
+A Raspberry Pi 4 or 5, and a card of 32 GB or larger. The images for the two
+boards are not interchangeable, and a Pi 3 or older cannot run them at all.
+
+### Has anyone run it on a real Pi?
+
+Not yet. It is built and exercised automatically on every change, but it is
+**not confirmed on physical hardware** — the same wording this project uses for
+the Zendure Hub and Hyper generations. See
+[what that means](appliance/index.md#what-not-confirmed-means), and
+[if you are the first](appliance/index.md#if-you-are-the-first) if you try one.
+
+### Do I really need an Ethernet cable?
+
+For the first start, yes. There is no way to put WLAN credentials on the card
+beforehand; you set up WLAN afterwards from the appliance itself. See
+[Network](appliance/network.md).
+
+### How do I reach it?
+
+`http://ems-solarflow.local:8088`, or the address your router lists for a device
+called `ems-solarflow`. The first page asks you to choose a password. See
+[First start](appliance/first-start.md).
+
+### Can I install other software on it?
+
+No. The card is managed as a whole, so anything installed by hand disappears at
+the next system update.
+
+### What happens if an OS update fails?
+
+The new system is written into a second slot and booted on trial. A trial that
+does not become healthy falls back to the slot that was working. Configuration
+and data live on a separate partition and survive both directions. See
+[Updates](appliance/updates.md).
+
+### Where is my config on the appliance?
+
+Under `/opt/ems-solarflow`, on the shared partition that survives system
+updates. You reach it through the appliance's SSH backup export rather than by
+logging in — the image ships no login account. See
+[Backups](appliance/backup.md).
+
+### It does not come up at all. What now?
+
+Two things are readable without the network. Three of the card's six partitions
+are FAT, so any computer opens them and can show which slot the firmware chose.
+And the appliance narrates its whole start-up on a serial line, which is the
+only way to see *why* a boot failed. Both are in
+[When it stops working](appliance/recovery.md).
 
 ## Config and files
 
@@ -225,6 +288,12 @@ No. Run it only on a trusted local network, or behind a deliberate reverse-proxy
 and auth setup. A deployment-capable Admin container controls the host Docker
 engine, which is effectively root-equivalent.
 
+### Is the appliance web interface safe to expose to the internet?
+
+No, for the same reason. It serves plain HTTP on your local network, so anyone
+who can reach its port sees the login page — which is why the password you set
+on the first start matters even at home. It manages the host it runs on.
+
 ### Does the Admin Console use the EMS Dashboard password?
 
 Yes. The Admin Console uses the same password file as the EMS Dashboard:
@@ -266,7 +335,8 @@ the real LAN. See [troubleshooting.md](troubleshooting.md) for more.
 
 ### How do I create a support bundle?
 
-If the Admin Console offers a support bundle action, use that first.
+If the Admin Console offers a support bundle action, use that first. On the
+appliance, use **Support archive** in its own web interface.
 
 For Docker Bootstrap or advanced shell use:
 
@@ -282,17 +352,26 @@ No. Home Assistant is optional.
 
 ### Do I have to use Docker?
 
-No, but Docker is recommended for normal users.
+No, but Docker is recommended for normal users. The appliance image runs the
+same containers, without asking you to manage Docker yourself.
 
 ### Which grid meters are supported?
 
 Shelly, Shelly 3EM Gen1, EcoTracker, and Tasmota HTTP setups are documented in
 [supported-setups.md](supported-setups.md).
 
+### How does EMS reach my Zendure devices?
+
+Over one of three connections: **Local API** (HTTP to the device's own address),
+**Local MQTT** (your own broker) or **Zendure cloud MQTT**. Which ones a given
+model supports, and how far each is validated, is in
+[supported-setups.md](supported-setups.md).
+
 ### Can I use multiple Zendure inverters?
 
-Yes, if each configured device has a real IP address, serial number, and suitable
-limits.
+Yes. Each configured device needs a serial number, suitable limits, and a way to
+be reached — an address for Local API, or a broker and its own device id for
+either MQTT path. Devices on different connections can be mixed.
 
 ### Can I keep using the Zendure app?
 
@@ -301,9 +380,11 @@ Zendure `outputLimit`.
 
 ### Does EMS need internet or cloud access?
 
-Control is local-first. Docker image pulls, updates, and optional support
-workflows need internet access; normal EMS control uses local devices and your
-configured local meter.
+Control is local-first: with Local API or Local MQTT devices, nothing about a
+control decision leaves your network. Docker image pulls, updates and optional
+support workflows need internet access. The one exception is a device you
+deliberately configure on **Zendure cloud MQTT** — that connection is the cloud,
+by definition.
 
 ### Is native Python still supported?
 
@@ -362,4 +443,5 @@ docker compose logs -f
 ### What should I do before opening an issue?
 
 Run diagnose, create a support bundle, and include what hardware and grid meter
-type you use.
+type you use. For the appliance, the report that helps most is described under
+[if you are the first](appliance/index.md#if-you-are-the-first).
