@@ -131,3 +131,18 @@ def test_a_failed_image_build_keeps_the_tree_and_says_where():
 
     assert "kept for diagnosis" in text
     assert "du -sh" in text
+
+
+def test_an_atomic_write_flushes_the_directory_entry_too():
+    """The rename is a directory operation. Without flushing the parent, a power
+    cut can leave the entry pointing at nothing while the bytes are durable --
+    which is how a zero-length state file appears on a headless appliance."""
+
+    import inspect
+
+    from appliance import paths
+
+    source = inspect.getsource(paths.atomic_write)
+
+    assert "_sync_parent" in source
+    assert "os.fsync" in inspect.getsource(paths._sync_parent)

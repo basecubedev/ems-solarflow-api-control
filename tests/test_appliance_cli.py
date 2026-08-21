@@ -185,3 +185,66 @@ def test_a_disable_that_withdrew_authentication_reports_success(appliance_env, m
     )
 
     assert command_backup_access(Args(action="disable", json=True)) == EXIT_OK
+
+
+def test_a_corrupt_ab_record_asks_for_an_operator_instead_of_crashing(tmp_path, capsys):
+    """The boot-time command runs as a systemd unit on a headless box. A
+    traceback there is a failed unit with no verdict; the designed answer for a
+    record nothing can read is manual_action_required."""
+
+    import json
+
+    from appliance import cli
+    from tests.helpers.appliance_ab import ApplianceAbHost
+    from appliance.ab_state import AbStateStore
+
+    host = ApplianceAbHost(tmp_path, slot="B", tryboot=True)
+    store = AbStateStore(host.ab_state_dir)
+    store.ensure()
+    (host.ab_state_dir / "pending-trial.json").write_text("{ not json", encoding="utf-8")
+
+    from appliance import ab_health, ab_state
+
+    payload = {}
+    original = cli._print
+    cli._print = lambda document, as_json: payload.update(document)
+    try:
+        result = cli.report_unreadable_ab_state(
+            ab_state.AbStateError("ab_state_unreadable", "pending-trial.json is not JSON"),
+            as_json=True,
+        )
+    finally:
+        cli._print = original
+
+    assert result == cli.EXIT_ERROR
+    assert payload["result"] == ab_health.RESULT_MANUAL_ACTION_REQUIRED
+    assert payload["code"] == "ab_state_unreadable"
+    assert json.dumps(payload)
+
+
+def test_local_is_an_escape_hatch_not_a_second_way_in(tmp_path):
+    """A privileged in-process stack beside the live agent is a second writer to
+    the same state, and the operation lock only serialises callers that share a
+    store."""
+
+    from appliance import cli
+
+    class _Paths:
+        agent_socket = tmp_path / "agent.sock"
+
+    class _Available:
+        def __init__(self, _socket):
+            pass
+
+        def available(self):
+            return True
+
+    original = cli.AgentClient
+    cli.AgentClient = _Available
+    try:
+        with pytest.raises(SystemExit) as exit_error:
+            cli._client(_Paths(), local=True)
+    finally:
+        cli.AgentClient = original
+
+    assert "second" in str(exit_error.value)

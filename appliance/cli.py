@@ -52,12 +52,23 @@ def _print_human(payload, depth):
 
 
 def _client(paths, *, local=False):
-    """Prefer the running agent; fall back to an in-process privileged client."""
+    """Prefer the running agent; fall back to an in-process privileged client.
 
-    if not local:
-        client = AgentClient(paths.agent_socket)
-        if client.available():
-            return client
+    ``--local`` is the escape hatch for an agent that is not running, not a
+    second way in beside one that is: a privileged in-process stack alongside
+    the live agent would be a second writer to the same state, and the
+    operation lock only serialises callers that share a store.
+    """
+
+    client = AgentClient(paths.agent_socket)
+    if client.available():
+        if local:
+            raise SystemExit(
+                "the appliance agent is running; --local would start a second "
+                "privileged stack against the same state. Stop "
+                "ems-appliance-agent.service first, or drop --local"
+            )
+        return client
     if os.geteuid() != 0:
         raise SystemExit(
             "the appliance agent is not running and this command needs root; "
@@ -675,6 +686,29 @@ def command_ab_slot_bootstrap(args):
     return EXIT_OK
 
 
+def report_unreadable_ab_state(exc, *, as_json):
+    """The designed verdict for a record nothing can read.
+
+    This command runs as a systemd unit on a headless box, so a traceback is a
+    failed unit with no verdict at all. Nothing here may guess which slot is
+    safe: an unreadable or schema-mismatched record becomes an operator's
+    decision, which is exactly what manual_action_required means.
+    """
+
+    from appliance import ab_health
+
+    _print(
+        {
+            "result": ab_health.RESULT_MANUAL_ACTION_REQUIRED,
+            "reasons": [exc.message],
+            "code": exc.code,
+        },
+        as_json,
+    )
+    print(f"the A/B state could not be read: {exc.message}", file=sys.stderr)
+    return EXIT_ERROR
+
+
 def command_ab_trial_health(args):
     """The trial slot judging itself, run by ems-appliance-ab-health.service.
 
@@ -682,7 +716,7 @@ def command_ab_trial_health(args):
     required gate passed. Anything else records what it saw and steps aside.
     """
 
-    from appliance import ab_health
+    from appliance import ab_health, ab_state
     from appliance.ab_health import TrialHealthService
 
     services = _ab_services(args)
@@ -713,7 +747,10 @@ def command_ab_trial_health(args):
         agent_socket=lambda: services.paths.agent_socket.exists(),
         health_window_seconds=services.config.ab_health_window_seconds,
     )
-    report = verifier.evaluate_settled()
+    try:
+        report = verifier.evaluate_settled()
+    except (ab_health.AbHealthError, ab_state.AbStateError) as exc:
+        return report_unreadable_ab_state(exc, as_json=args.json)
     _print(report.to_dict(), args.json)
 
     if report.result == ab_health.RESULT_NOT_A_TRIAL:

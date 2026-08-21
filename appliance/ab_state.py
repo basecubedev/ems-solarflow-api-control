@@ -168,7 +168,12 @@ class AbStateStore:
 
         self.ensure()
         target = self._path(name)
-        staged = target.with_name(f".{target.name}.staged")
+        # A fixed staging name is a shared mutable path: two writers -- the
+        # agent and a deliberate root CLI invocation -- would truncate each
+        # other's half-written file and one of them would rename the other's
+        # bytes into place. The pid makes the staging file this writer's own,
+        # the way paths.atomic_write already does.
+        staged = target.with_name(f".{target.name}.{os.getpid()}.staged")
         text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
         try:
             handle = os.open(str(staged), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, STATE_MODE)

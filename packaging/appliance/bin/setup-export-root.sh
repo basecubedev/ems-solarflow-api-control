@@ -972,21 +972,24 @@ bind_read_only() {
 # --- entry point ------------------------------------------------------------
 
 case "${1:-}" in
-    --teardown)
-        teardown
-        exit 0
-        ;;
-    "") ;;
+    --teardown|"") ;;
     *) echo "usage: $0 [--teardown]" >&2; exit 2 ;;
 esac
 
 # The path watcher, the postinst and an operator can all start a run at the
 # same moment. Two runs interleaving would unmount what the other just bound,
-# so only one may hold the export root at a time.
+# so only one may hold the export root at a time. The lock is taken before the
+# dispatch, not after it: a teardown unmounts exactly what a concurrent setup
+# is binding, so it needs the lock at least as much as a setup does.
 LOCK_FILE=${EMS_APPLIANCE_EXPORT_LOCK:-/run/ems-appliance-export.lock}
 if [ -z "${EMS_APPLIANCE_EXPORT_LOCKED:-}" ] && command -v flock >/dev/null 2>&1 \
    && ( : >> "$LOCK_FILE" ) 2>/dev/null; then
     EMS_APPLIANCE_EXPORT_LOCKED=1 exec flock -w 300 "$LOCK_FILE" "$0" "$@"
+fi
+
+if [ "${1:-}" = "--teardown" ]; then
+    teardown
+    exit 0
 fi
 
 validate_configured_path "the EMS installation root" "$INSTALL_ROOT"

@@ -590,4 +590,23 @@ def atomic_write(path, text, mode=0o640, *, owner_root=False):
     if owner_root:
         own_by_root(tmp)
     os.replace(tmp, target)
+    # The rename itself is a directory operation: without flushing the parent,
+    # a power cut can leave the entry pointing at nothing while the file's own
+    # bytes are already durable. ab_state.py and ab_bootstrap.py treat this as
+    # mandatory for their own writes; every caller here inherits it now.
+    _sync_parent(target)
     return target
+
+
+def _sync_parent(target):
+    try:
+        handle = os.open(str(Path(target).parent), os.O_RDONLY)
+    except OSError:
+        return False
+    try:
+        os.fsync(handle)
+    except OSError:
+        return False
+    finally:
+        os.close(handle)
+    return True

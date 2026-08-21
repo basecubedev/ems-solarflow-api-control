@@ -519,3 +519,32 @@ def _trial_health_service(appliance, engine, *, state=None):
         runner=appliance.host.runner(),
         time_fn=lambda: 1100.0,
     )
+
+
+def test_two_writers_do_not_share_one_staging_file(tmp_path):
+    """A fixed staging name lets a second writer truncate the first's
+    half-written bytes and rename them into place as its own."""
+
+    import os
+
+    from appliance.ab_state import AbStateStore
+
+    store = AbStateStore(tmp_path / "ab")
+    store.ensure()
+    staged = []
+
+    real_open = os.open
+
+    def watching_open(path, flags, *args):
+        if ".staged" in str(path):
+            staged.append(str(path))
+        return real_open(path, flags, *args)
+
+    os.open = watching_open
+    try:
+        store.record_known_good(SlotRecord(slot="A", release_version="1.0.0", build_id="b"))
+    finally:
+        os.open = real_open
+
+    assert staged, "no staging file was used"
+    assert str(os.getpid()) in staged[0], staged
