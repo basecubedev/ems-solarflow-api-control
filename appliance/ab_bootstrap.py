@@ -112,6 +112,15 @@ DOCKER_DAEMON_UNAVAILABLE = "docker_daemon_unavailable"
 SEED_READY = "runtime_seed_ready"
 SEED_INCOMPLETE = "runtime_seed_incomplete"
 
+# One bound for the whole reconstruction rather than per image. Each role may
+# spend up to 900 s in `docker load` and 600 s in a pull fallback, so three
+# roles could ask for 75 minutes -- far past both the unit's start timeout and
+# the health window that is stamped from boot. Exceeding this is reported as a
+# problem the trial slot can act on; being SIGKILLed is not.
+DEFAULT_RECONSTRUCTION_BUDGET_SECONDS = 1200
+
+RECONSTRUCTION_TIMED_OUT = "application_reconstruction_timed_out"
+
 RECONSTRUCTION_READY = "application_reconstruction_ready"
 RECONSTRUCTION_INCOMPLETE = "application_reconstruction_incomplete"
 
@@ -489,10 +498,14 @@ class SlotBootstrapService:
         compose_file=None,
         deployment=None,
         required_platform=None,
+        reconstruction_budget_seconds=DEFAULT_RECONSTRUCTION_BUDGET_SECONDS,
+        time_fn=None,
     ):
         self.docker = docker
         self.store = store
         self.known_good = known_good
+        self.reconstruction_budget_seconds = max(int(reconstruction_budget_seconds), 0)
+        self._time = time_fn or time.monotonic
         if deployment is None:
             deployment = DeploymentLayout(compose_file=str(compose_file or ""))
         self.deployment = deployment
@@ -856,7 +869,7 @@ class SlotBootstrapService:
                 problems=("the Docker daemon is not available in this slot",),
             )
 
-        outcomes = [self._restore(entry, record) for entry in record.images]
+        outcomes, exhausted = self._restore_within_budget(record)
         started, refused = self._start_services(record, outcomes)
         problems = [
             f"{outcome.role} ({outcome.reference}) could not be restored: {outcome.detail}"
@@ -864,12 +877,43 @@ class SlotBootstrapService:
             if outcome.required and not outcome.available
         ]
         problems.extend(refused)
+        if exhausted:
+            problems.append(
+                f"the {self.reconstruction_budget_seconds}s reconstruction budget was "
+                "exhausted before every recorded service was restored"
+            )
         return BootstrapReport(
             outcomes=tuple(outcomes),
             started=tuple(started),
             problems=tuple(problems),
             code="" if not problems else RECONSTRUCTION_INCOMPLETE,
         )
+
+    def _restore_within_budget(self, record):
+        """Restore each recorded image while the budget lasts.
+
+        A role the budget did not reach is reported as unavailable with the
+        reason named, so the health gates fail on a fact instead of on the
+        silence a killed process leaves behind.
+        """
+
+        deadline = self._time() + self.reconstruction_budget_seconds
+        outcomes, exhausted = [], False
+        for entry in record.images:
+            if self.reconstruction_budget_seconds and self._time() >= deadline:
+                exhausted = True
+                outcomes.append(
+                    ImageOutcome(
+                        entry.role,
+                        entry.reference,
+                        SOURCE_UNAVAILABLE,
+                        entry.required,
+                        "the reconstruction budget was exhausted before this image",
+                    )
+                )
+                continue
+            outcomes.append(self._restore(entry, record))
+        return outcomes, exhausted
 
     def _restore(self, entry, record=None):
         if self._verified_image(entry) is None:

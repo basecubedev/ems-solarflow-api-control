@@ -348,6 +348,12 @@ class ApplianceAbHost:
         self._write_cell("proc/device-tree/chosen/bootloader/boot-mode", mode)
         return self
 
+    def set_bootloader_build_date(self, epoch_seconds):
+        self._write_cell(
+            "proc/device-tree/chosen/bootloader/build-date", int(epoch_seconds)
+        )
+        return self
+
     def _write_cell(self, relative, value):
         path = self.root / relative
         path.parent.mkdir(parents=True, exist_ok=True)

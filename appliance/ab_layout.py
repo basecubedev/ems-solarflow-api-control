@@ -50,6 +50,15 @@ REASON_BLOCK_LAYER_UNAVAILABLE = "block_layer_unavailable"
 BOOTLOADER_PARTITION = "proc/device-tree/chosen/bootloader/partition"
 BOOTLOADER_TRYBOOT = "proc/device-tree/chosen/bootloader/tryboot"
 BOOTLOADER_BOOT_MODE = "proc/device-tree/chosen/bootloader/boot-mode"
+BOOTLOADER_BUILD_DATE = "proc/device-tree/chosen/bootloader/build-date"
+
+# tryboot is a firmware feature: a bootloader that predates it ignores the
+# selector entirely and boots the default slot, so an appliance would write an
+# update, request a trial, observe an ordinary boot of the old slot and report a
+# fallback -- correct, and for a reason nothing names. 2021-04-29 is the
+# declared minimum; it is a policy number, documented in
+# docs/appliance/ab-os-updates.md, not something derived from the code.
+MINIMUM_BOOTLOADER_BUILD_DATE = 1619654400
 CMDLINE = "proc/cmdline"
 HOST_MOUNTINFO = "proc/1/mountinfo"
 MOUNTINFO = "proc/self/mountinfo"
@@ -58,6 +67,14 @@ SLOT_LINK_ROLES = ("active/boot", "active/system", "other/boot", "other/system",
 
 # The boot modes upstream's slot mapper supports, and the device each names.
 BOOT_MODE_DEVICES = {1: "mmcblk0", 6: "nvme0n1"}
+
+# USB mass storage enumerates as sda, sdb, ... in attach order, so the mode
+# names a bus rather than a device. Without this a USB-booted appliance loses
+# the medium disambiguation entirely and a second attached appliance medium --
+# which the hardware validation procedure explicitly asks the tester to attach
+# -- makes the layout ambiguous.
+BOOT_MODE_USB = 4
+USB_DISK_PREFIX = "sd"
 
 LSBLK_COLUMNS = "PATH,TYPE,SIZE,PARTUUID,PARTLABEL,FSTYPE,MOUNTPOINT,PKNAME,PARTN"
 
@@ -374,6 +391,11 @@ class LayoutProbe:
 
         return _device_tree_cell(self._read_bytes(BOOTLOADER_PARTITION))
 
+    def bootloader_build_date(self):
+        """The firmware build date the device tree publishes, or ``0``."""
+
+        return _device_tree_cell(self._read_bytes(BOOTLOADER_BUILD_DATE))
+
     def boot_mode(self):
         """The firmware's boot mode, which names the medium it booted from."""
 
@@ -635,6 +657,15 @@ def _booted_partition(probe, partitions, number):
         return None, f"the firmware booted {wanted}, which the block layer does not report"
 
     candidates = [entry for entry in partitions if entry.number == number]
+    if mode == BOOT_MODE_USB and len(candidates) > 1:
+        on_usb = [
+            entry
+            for entry in candidates
+            if entry.parent.rpartition("/")[2].startswith(USB_DISK_PREFIX)
+        ]
+        if len(on_usb) == 1:
+            return on_usb[0], ""
+        candidates = on_usb or candidates
     if len(candidates) == 1:
         return candidates[0], ""
     if not candidates:
@@ -788,3 +819,20 @@ def prove_inactive_slot(status, mounts):
                     f"{device.path} is mounted writable at {target}",
                 )
     return inactive
+
+
+def bootloader_too_old(probe):
+    """Whether the firmware predates tryboot, or ``None`` when it cannot be read.
+
+    Never a refusal on an unreadable probe: a boot chain that does not publish
+    the cell must not make every appliance unable to plan an update. The caller
+    turns ``None`` into a warning naming ``rpi-eeprom-update`` instead.
+    """
+
+    try:
+        built = int(probe.bootloader_build_date() or 0)
+    except Exception:
+        return None
+    if built <= 0:
+        return None
+    return built < MINIMUM_BOOTLOADER_BUILD_DATE

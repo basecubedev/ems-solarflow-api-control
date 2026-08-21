@@ -635,3 +635,67 @@ def test_the_update_plan_names_the_control_gap_before_it_is_confirmed():
 
     assert "output limit" in CONTROL_GAP_WARNING
     assert "trial boot" in CONTROL_GAP_WARNING
+
+
+# --- the staging preflight has to be able to refuse ---------------------------
+
+
+def test_the_staging_requirement_comes_from_the_artifact_not_a_flat_floor():
+    """The regression: a 2 GiB floor against a measured 5.7 GiB requirement.
+
+    The check exists to refuse an update that cannot be staged, and it could
+    never fire for the artefact this project actually ships.
+    """
+
+    from appliance import media_sizing
+    from appliance.os_update import staging_requirement_bytes
+
+    assert staging_requirement_bytes() >= media_sizing.UPDATE_STAGING_BYTES
+
+
+def test_a_known_artifact_asks_for_what_it_will_actually_occupy():
+    from appliance.os_update import staging_requirement_bytes
+
+    class _Member:
+        expanded_size = 3 * 1024**3
+
+    class _Release:
+        archive_size = 2 * 1024**3
+
+        def boot_member(self):
+            return _Member()
+
+        def root_member(self):
+            return _Member()
+
+    needed = staging_requirement_bytes(_Release())
+
+    assert needed >= 8 * 1024**3
+
+
+def test_a_manifest_naming_no_board_is_refused_rather_than_waved_through():
+    """An empty compatible_hardware list bypassed the whole board branch, so the
+    check that keeps a Pi 4 artifact off a Pi 5 did not run at all."""
+
+    from appliance import os_releases
+
+    class _Release:
+        architecture = "arm64"
+        compatible_hardware = ()
+        layout_id = "ems-appliance-rota-v1"
+        release_version = "1.5.0"
+        build_id = "b"
+        persistent_schema_version = 1
+        minimum_appliance_manager_version = "0.1.0"
+        os_release = "trixie"
+        device_layer = "pi5"
+
+    problems = os_releases.compatibility_problems(
+        _Release(),
+        layout=None,
+        board="pi5",
+        appliance_version="9.9.9",
+        persistent_schema_version=1,
+    )
+
+    assert any(p["code"] == "artifact_hardware_unspecified" for p in problems)

@@ -365,3 +365,63 @@ def test_relative_slot_links_are_read_as_the_devices_they_name(host):
 
     assert links["active/system"] == device_of("system_a")
     assert links["persistent"] == device_of("persistent")
+
+
+# --- the firmware has to be able to do tryboot at all -------------------------
+
+
+def test_a_bootloader_older_than_tryboot_is_named(tmp_path):
+    """Without tryboot the firmware ignores the selector and boots the default.
+
+    The appliance then writes the slot, asks for a trial, gets an ordinary boot
+    of the old slot, and reports "fallback observed" -- correct, and for a
+    reason no diagnostic names.
+    """
+
+    host = ApplianceAbHost(tmp_path, slot="A")
+    host.set_bootloader_build_date(ab_layout.MINIMUM_BOOTLOADER_BUILD_DATE - 86_400)
+
+    assert ab_layout.bootloader_too_old(host.probe()) is True
+
+
+def test_a_current_bootloader_is_accepted(tmp_path):
+    host = ApplianceAbHost(tmp_path, slot="A")
+    host.set_bootloader_build_date(ab_layout.MINIMUM_BOOTLOADER_BUILD_DATE + 86_400)
+
+    assert ab_layout.bootloader_too_old(host.probe()) is False
+
+
+def test_an_unreadable_bootloader_date_is_unknown_not_a_refusal(tmp_path):
+    """A probe that cannot read the firmware must not block every appliance."""
+
+    host = ApplianceAbHost(tmp_path, slot="A")
+
+    assert ab_layout.bootloader_too_old(host.probe()) is None
+
+
+def test_a_usb_booted_appliance_is_disambiguated_by_its_bus(tmp_path):
+    """Boot mode 4 names a bus, not a device: USB enumerates in attach order.
+
+    The hardware procedure asks the tester to attach a second appliance medium,
+    which is exactly when an undisambiguated partition number goes ambiguous.
+    """
+
+    from appliance.ab_layout import BOOT_MODE_USB, _booted_partition
+
+    class _Probe:
+        def boot_mode(self):
+            return BOOT_MODE_USB
+
+    class _Entry:
+        def __init__(self, path, parent, number):
+            self.path, self.parent, self.number = path, parent, number
+
+    partitions = [
+        _Entry("/dev/mmcblk0p3", "/dev/mmcblk0", 3),
+        _Entry("/dev/sda3", "/dev/sda", 3),
+    ]
+
+    entry, problem = _booted_partition(_Probe(), partitions, 3)
+
+    assert problem == ""
+    assert entry.path == "/dev/sda3"

@@ -642,7 +642,20 @@ def compatibility_problems(
                 ),
             }
         )
-    elif release.compatible_hardware:
+    elif not release.compatible_hardware:
+        # An empty list used to fall through the whole branch, so a manifest
+        # that named no board at all passed the board check that exists to keep
+        # a Pi 4 artifact off a Pi 5.
+        problems.append(
+            {
+                "code": "artifact_hardware_unspecified",
+                "message": (
+                    "the artifact manifest names no compatible hardware, so it cannot be "
+                    "proven to be built for this board"
+                ),
+            }
+        )
+    else:
         if not any(str(entry) == board for entry in release.compatible_hardware):
             problems.append(
                 {

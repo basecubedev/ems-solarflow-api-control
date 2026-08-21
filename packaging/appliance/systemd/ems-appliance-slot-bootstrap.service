@@ -22,7 +22,10 @@ Type=oneshot
 RemainAfterExit=yes
 User=root
 ExecStart=/usr/bin/ems-appliance ab slot-bootstrap
-TimeoutStartSec=900
+# Has to outlast the reconstruction budget the service grants itself, or systemd
+# kills a restore in progress and the trial slot fails a gate that never says
+# why. The budget is the bound; this is the margin around it.
+TimeoutStartSec=1500
 Restart=no
 
 [Install]

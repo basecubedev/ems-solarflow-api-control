@@ -561,3 +561,57 @@ def test_seeding_keeps_one_generation(tmp_path):
     assert {path.name for path in bootstrap.store.seed_directory.iterdir()} == {
         f"{entry.role}.tar" for entry in record.images
     }
+
+
+# --- the reconstruction has to fit inside the budgets around it ---------------
+
+
+def test_reconstruction_is_bounded_and_reports_instead_of_being_killed(tmp_path):
+    """The regression: three roles, each allowed up to 900 s of docker load and
+    600 s of pull, under a unit that killed the whole thing at 900 s. A SIGKILL
+    mid-restore leaves no report at all, so the trial slot fails a gate that
+    never says why."""
+
+    docker = FakeDocker()
+    bootstrap = service(tmp_path, docker)
+    recorded(tmp_path)
+
+    clock = {"now": 0.0}
+
+    def slow_restore(entry, record=None):
+        clock["now"] += ab_bootstrap.DEFAULT_RECONSTRUCTION_BUDGET_SECONDS
+        return ab_bootstrap.ImageOutcome(
+            entry.role, entry.reference, ab_bootstrap.SOURCE_PRESENT, entry.required
+        )
+
+    bootstrap._restore = slow_restore
+    bootstrap._time = lambda: clock["now"]
+
+    report = bootstrap.reconstruct()
+
+    assert any("budget" in problem for problem in report.problems), report.problems
+
+
+def test_the_unit_outlives_the_reconstruction_budget_it_grants():
+    import re
+    from pathlib import Path as _Path
+
+    units = _Path(__file__).resolve().parents[1] / "packaging" / "appliance" / "systemd"
+    text = (units / "ems-appliance-slot-bootstrap.service").read_text(encoding="utf-8")
+    match = re.search(r"^TimeoutStartSec=(\d+)", text, re.M)
+
+    assert match
+    assert int(match.group(1)) > ab_bootstrap.DEFAULT_RECONSTRUCTION_BUDGET_SECONDS
+
+
+def test_the_budget_leaves_room_for_the_health_verdict_inside_the_window():
+    """Reconstruction runs before the health check, and the health window is
+    stamped from boot: a budget that fills it rolls back every update."""
+
+    from appliance import ab_health
+
+    assert (
+        ab_bootstrap.DEFAULT_RECONSTRUCTION_BUDGET_SECONDS
+        + ab_health.DEFAULT_SETTLE_SECONDS
+        < ab_health.DEFAULT_HEALTH_WINDOW_SECONDS
+    )

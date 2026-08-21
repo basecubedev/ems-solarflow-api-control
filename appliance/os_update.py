@@ -32,6 +32,7 @@ from appliance import (
     ab_inspect,
     ab_layout,
     ab_persistence,
+    media_sizing,
     os_artifacts,
     os_releases,
     rpi_image_gen,
@@ -65,8 +66,34 @@ CONFIRMED_AUTHORITY_SCHEMA_VERSION = 1
 
 # Staging writes the whole artifact to the persistent partition before any
 # block device is touched, so the space has to be there before the plan is
-# confirmed rather than discovered halfway through.
-MINIMUM_STAGING_BYTES = 2 * 1024 * 1024 * 1024
+# confirmed rather than discovered halfway through. The floor is the project's
+# own measured requirement rather than a round number: a 2 GiB floor could
+# never refuse the ~5.7 GiB artifact this project ships, which is the only case
+# the check exists for.
+MINIMUM_STAGING_BYTES = media_sizing.UPDATE_STAGING_BYTES
+
+# Room for the archive alongside the members expanded out of it.
+STAGING_MARGIN_FRACTION = 0.1
+
+
+def staging_requirement_bytes(release=None):
+    """How much room staging this artifact actually needs.
+
+    Without a release the answer is the measured floor. With one it is what that
+    artifact will occupy: the archive plus both expanded members, and a margin,
+    because a smaller update must not be refused for a larger one's size.
+    """
+
+    if release is None:
+        return MINIMUM_STAGING_BYTES
+    members = 0
+    for member in (release.boot_member(), release.root_member()):
+        if member is not None:
+            members += int(getattr(member, "expanded_size", 0) or 0)
+    needed = int(getattr(release, "archive_size", 0) or 0) + members
+    if needed <= 0:
+        return MINIMUM_STAGING_BYTES
+    return int(needed * (1 + STAGING_MARGIN_FRACTION))
 
 
 class OsUpdateError(Exception):
@@ -493,7 +520,7 @@ class OsUpdateService:
         return self._plan_recorded_slot(operation, layout, record)
 
     def _plan(self, operation, layout, release, *, kind, repair=False):
-        blockers = self._preconditions(layout, operation)
+        blockers = self._preconditions(layout, operation, release=release)
         board = self._board()
         problems = os_releases.compatibility_problems(
             release,
@@ -548,7 +575,7 @@ class OsUpdateService:
             automatic_fallback=FALLBACK_DESCRIPTION,
             risk="moderate" if not blockers else "blocked",
             blockers=blockers,
-            warnings=[CONTROL_GAP_WARNING],
+            warnings=self._plan_warnings(layout),
             authority=authority,
             confirmed=confirmed,
             kind=kind,
@@ -622,7 +649,7 @@ class OsUpdateService:
             automatic_fallback=FALLBACK_DESCRIPTION,
             risk="moderate" if not blockers else "blocked",
             blockers=blockers,
-            warnings=[CONTROL_GAP_WARNING],
+            warnings=self._plan_warnings(layout),
             authority=authority,
             confirmed=confirmed,
             kind="rollback",
@@ -640,7 +667,7 @@ class OsUpdateService:
 
     # --- preconditions ---------------------------------------------------
 
-    def _preconditions(self, layout, operation=None):
+    def _preconditions(self, layout, operation=None, release=None):
         blockers = []
         if layout.mode == ab_layout.MODE_SINGLE_SLOT:
             blockers.append(
@@ -707,6 +734,23 @@ class OsUpdateService:
                     }
                 )
 
+        # tryboot is a firmware feature. Without it the selector is ignored and
+        # the trial never happens, which surfaces only as an unexplained
+        # fallback after the reboot.
+        if layout.mode == ab_layout.MODE_AB:
+            too_old = ab_layout.bootloader_too_old(self.probe)
+            if too_old is True:
+                blockers.append(
+                    {
+                        "code": "bootloader_too_old",
+                        "message": (
+                            "this Raspberry Pi's bootloader predates tryboot, so a trial "
+                            "boot would be ignored and the update could never commit; "
+                            "run `sudo rpi-eeprom-update -a` and reboot first"
+                        ),
+                    }
+                )
+
         pending = self.state.pending()
         if pending is not None and not pending.committed:
             blockers.append(
@@ -754,19 +798,33 @@ class OsUpdateService:
                 }
             )
 
-        free = self._staging_free_bytes()
-        if free is not None and free < self.minimum_staging_bytes:
-            blockers.append(
-                {
-                    "code": "insufficient_staging_space",
-                    "message": (
-                        f"the persistent partition has {free // (1024 * 1024)} MiB free; "
-                        f"staging an OS artifact needs at least "
-                        f"{self.minimum_staging_bytes // (1024 * 1024)} MiB"
-                    ),
-                }
-            )
+        # A rollback stages nothing: the target slot is already written.
+        if release is not None or operation is None:
+            required = max(self.minimum_staging_bytes, staging_requirement_bytes(release))
+            free = self._staging_free_bytes()
+            if free is not None and required and free < required:
+                blockers.append(
+                    {
+                        "code": "insufficient_staging_space",
+                        "message": (
+                            f"the persistent partition has {free // (1024 * 1024)} MiB free; "
+                            f"staging this OS artifact needs at least "
+                            f"{required // (1024 * 1024)} MiB"
+                        ),
+                    }
+                )
         return blockers
+
+    def _plan_warnings(self, layout):
+        warnings = [CONTROL_GAP_WARNING]
+        if layout.mode == ab_layout.MODE_AB:
+            if ab_layout.bootloader_too_old(self.probe) is None:
+                warnings.append(
+                    "this appliance does not publish its bootloader version, so tryboot "
+                    "support could not be confirmed; run `sudo rpi-eeprom-update -a` "
+                    "before the first OS update if it has never been run"
+                )
+        return warnings
 
     def _staging_free_bytes(self):
         try:
