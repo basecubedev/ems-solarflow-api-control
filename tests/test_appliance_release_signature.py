@@ -338,3 +338,94 @@ def test_verification_works_with_only_the_binary_the_image_ships(tmp_path):
     assert verifier.available
     assert verifier.verify(manifest, signature)
     assert verifier.fingerprints_of(manifest, signature) == (key.fingerprint,)
+
+
+# --- a key that is no longer usable is not a valid signature ------------------
+
+
+class StatusRunner:
+    """A gpgv whose status output is scripted; exit status stays 0.
+
+    That combination is the point: gpgv reports EXPKEYSIG or REVKEYSIG *and*
+    VALIDSIG, and still exits 0, so a verifier that reads only the exit status
+    and VALIDSIG accepts a signature made with a key that was revoked.
+    """
+
+    def __init__(self, status):
+        self.status = status
+
+    def available(self, _name):
+        return True
+
+    def run(self, _executable, _args, **_kwargs):
+        return commands.CommandResult(
+            tool="gpgv", args=(), returncode=0, stdout=self.status, stderr=""
+        )
+
+
+def status_lines(marker):
+    return "\n".join(
+        [
+            "[GNUPG:] NEWSIG",
+            f"[GNUPG:] {marker} 480FAA4AAE458FC7 EMS Release Test",
+            "[GNUPG:] VALIDSIG " + " ".join(["AA" * 20] + ["x"] * 8) + " " + "BB" * 20,
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    "marker,code",
+    [
+        ("EXPKEYSIG", "release_signature_key_expired"),
+        ("REVKEYSIG", "release_signature_key_revoked"),
+        ("EXPSIG", "release_signature_expired"),
+    ],
+)
+def test_a_signature_from_an_unusable_key_is_refused(tmp_path, marker, code):
+    keyring = tmp_path / "trusted.gpg"
+    keyring.write_bytes(b"keyring")
+    manifest = tmp_path / "release.json"
+    manifest.write_text("{}\n")
+    signature = tmp_path / "release.json.asc"
+    signature.write_text("signature\n")
+
+    verifier = os_releases.SignatureVerifier(
+        StatusRunner(status_lines(marker)), keyring=str(keyring)
+    )
+
+    with pytest.raises(os_releases.ReleaseError) as error:
+        verifier.verify(manifest, signature)
+
+    assert error.value.code == code
+
+
+def test_an_ordinary_good_signature_is_still_accepted(tmp_path):
+    keyring = tmp_path / "trusted.gpg"
+    keyring.write_bytes(b"keyring")
+    manifest = tmp_path / "release.json"
+    manifest.write_text("{}\n")
+    signature = tmp_path / "release.json.asc"
+    signature.write_text("signature\n")
+
+    verifier = os_releases.SignatureVerifier(
+        StatusRunner(status_lines("GOODSIG")), keyring=str(keyring)
+    )
+
+    assert verifier.verify(manifest, signature) is True
+
+
+def test_the_fingerprint_query_refuses_an_unusable_key_too(tmp_path):
+    """A caller that only asks who signed must not be handed a revoked key."""
+
+    keyring = tmp_path / "trusted.gpg"
+    keyring.write_bytes(b"keyring")
+    manifest = tmp_path / "release.json"
+    manifest.write_text("{}\n")
+    signature = tmp_path / "release.json.asc"
+    signature.write_text("signature\n")
+
+    verifier = os_releases.SignatureVerifier(
+        StatusRunner(status_lines("REVKEYSIG")), keyring=str(keyring)
+    )
+
+    assert verifier.fingerprints_of(manifest, signature) == ()

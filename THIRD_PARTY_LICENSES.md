@@ -153,6 +153,7 @@ upstream `dist/` output.
 | Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream | Files |
 |---|---|---|---|:---:|:---:|---|---|
 | `uPlot` | 1.6.31 | MIT | Canvas charts on the Dashboard History and Analytics tabs | ✅ | ✅ | https://github.com/leeoniya/uPlot | `dashboard/static/uPlot.iife.min.js`, `dashboard/static/uPlot.min.css`, `dashboard/static/uPlot.LICENSE` |
+| `rpi-image-gen` | v2.7.0 | BSD-3-Clause | Twelve upstream files copied verbatim as the A/B image contract the appliance is built against | ❌ | ❌ | https://github.com/raspberrypi/rpi-image-gen | `tests/fixtures/rpi_image_gen/` (twelve files, listed with their SHA-256 in `source-manifest.json`), `tests/fixtures/rpi_image_gen/UPSTREAM.LICENSE` |
 
 Provenance, verified on 2026-08-04 against the upstream `1.6.31` tag:
 
@@ -168,6 +169,14 @@ bundle carries no banner, which is why the full MIT text is kept next to both
 files in [`dashboard/static/uPlot.LICENSE`](dashboard/static/uPlot.LICENSE)
 (Copyright (c) 2022 Leon Sorokin). `Dockerfile` copies the whole `dashboard/`
 tree, so the notice ships with every image.
+
+The `rpi-image-gen` files are test fixtures: they are the upstream contract the
+appliance image is built against, so a test that edited one would be testing the
+project against itself. They are not imported by any runtime module and are not
+copied into any image or package, which is why both Runtime and Distributed are
+marked ✗. Their exact bytes and the release they came from are recorded in
+[`tests/fixtures/rpi_image_gen/source-manifest.json`](tests/fixtures/rpi_image_gen/source-manifest.json);
+refresh them with `scripts/appliance-fetch-rpi-image-gen.sh`.
 
 No other third-party source is vendored. There is no icon package, no web font,
 no CSS framework and no `data:` embedded asset: `dashboard/static/` and

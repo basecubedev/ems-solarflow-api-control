@@ -13,6 +13,7 @@ against it, and the fixture is proven byte-identical to that tree.
 """
 
 import hashlib
+import json
 import shutil
 from pathlib import Path
 
@@ -416,3 +417,24 @@ def test_the_pinned_tree_passes_the_projects_own_compatibility_probe(upstream_to
         finding.to_dict() for finding in report.findings if finding.result == rpi_image_gen.FAIL
     ]
     assert report.source_identity in (rpi_image_gen.SOURCE_GIT, rpi_image_gen.SOURCE_TARBALL)
+
+
+def test_the_vendored_upstream_tree_is_in_the_licence_inventory():
+    """Twelve upstream files are committed verbatim; the inventory has to say so.
+
+    The repository ships a CI gate whose whole purpose is to keep that inventory
+    true, and it cannot see this tree on its own.
+    """
+
+    root = Path(__file__).resolve().parents[1]
+    inventory = (root / "THIRD_PARTY_LICENSES.md").read_text(encoding="utf-8")
+    manifest = json.loads(
+        (root / "tests" / "fixtures" / "rpi_image_gen" / "source-manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert "rpi-image-gen" in inventory
+    assert manifest["release"] in inventory
+    assert (root / "tests" / "fixtures" / "rpi_image_gen" / "UPSTREAM.LICENSE").is_file()
+    assert "No other third-party source is vendored" in inventory

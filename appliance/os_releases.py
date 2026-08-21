@@ -385,6 +385,12 @@ class SignatureVerifier:
                 "release_signature_invalid",
                 "the release manifest signature could not be verified against the appliance keyring",
             )
+        unusable = unusable_signature(result.stdout)
+        if unusable is not None:
+            code, reason = unusable
+            raise ReleaseError(
+                code, f"the release manifest signature is not usable: {reason}"
+            )
         observed = valid_signature_fingerprints(result.stdout)
         if not observed:
             raise ReleaseError(
@@ -400,7 +406,12 @@ class SignatureVerifier:
         return True
 
     def fingerprints_of(self, manifest_path, signature_path):
-        """The keys a valid signature was made with, or ()."""
+        """The keys a usable signature was made with, or ().
+
+        A revoked or expired key still produces VALIDSIG, so the same refusal
+        `verify` applies is applied here: a caller that only asks this question
+        must not be handed a fingerprint it would then treat as trusted.
+        """
 
         if not self.available or not Path(self.keyring).is_file():
             return ()
@@ -418,7 +429,30 @@ class SignatureVerifier:
         )
         if not result.ok:
             return ()
+        if unusable_signature(result.stdout) is not None:
+            return ()
         return valid_signature_fingerprints(result.stdout)
+
+
+# gpgv reports these *alongside* VALIDSIG and still exits 0, so a verifier that
+# reads only the exit status and VALIDSIG accepts a signature made with a key
+# that was revoked or has expired.
+UNUSABLE_SIGNATURE_MARKERS = {
+    "EXPKEYSIG": ("release_signature_key_expired", "the signing key has expired"),
+    "REVKEYSIG": ("release_signature_key_revoked", "the signing key was revoked"),
+    "EXPSIG": ("release_signature_expired", "the signature has expired"),
+    "ERRSIG": ("release_signature_invalid", "the signature could not be checked"),
+}
+
+
+def unusable_signature(status_output):
+    """The first reason gpg gave for not trusting an otherwise valid signature."""
+
+    for line in (status_output or "").splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0] == "[GNUPG:]" and parts[1] in UNUSABLE_SIGNATURE_MARKERS:
+            return UNUSABLE_SIGNATURE_MARKERS[parts[1]]
+    return None
 
 
 def valid_signature_fingerprints(status_output):
