@@ -1641,7 +1641,9 @@
 
     main.appendChild(el("div", { class: "stage-grid" }, [
       stage(1, "WLAN", "Scan, select and apply with automatic revert", [renderWifiForm()], "network-wifi"),
-      stage(2, "Hostname", "Changes the appliance and Admin URLs", [renderHostnameForm()], "network-hostname-stage")
+      stage(2, "Hostname", "Changes the appliance and Admin URLs", [renderHostnameForm()], "network-hostname-stage"),
+      stage(3, "Timezone", "Decides when the EMS opens an hour-based control window",
+        [renderTimezoneForm()], "network-timezone-stage")
     ]));
   }
 
@@ -1707,6 +1709,32 @@
             planOperation({
               endpoint: "/api/network/hostname", body: { hostname: input.value.trim() },
               title: "Change the appliance hostname", confirmLabel: "Apply"
+            });
+          }
+        })
+      ])
+    ]);
+  }
+
+  function renderTimezoneForm() {
+    var current = ((state.data.status || {}).system || {}).timezone || "UTC";
+    var input = el("input", {
+      id: "timezone-input", type: "text", "data-test": "timezone-input", value: current
+    });
+    return el("div", { class: "inline-form" }, [
+      el("p", { class: "section-hint", "data-test": "timezone-current",
+        text: "The EMS runs its control windows in this zone. Currently " + current + "." }),
+      el("div", { class: "field" }, [
+        el("label", { for: "timezone-input", text: "Timezone (IANA name)" }), input
+      ]),
+      el("div", { class: "control-stage-actions" }, [
+        el("button", {
+          type: "button", class: "primary-button compact",
+          "data-test": "timezone-plan", text: "Plan timezone change",
+          onclick: function () {
+            planOperation({
+              endpoint: "/api/system/timezone", body: { timezone: input.value.trim() },
+              title: "Change the appliance timezone", confirmLabel: "Apply"
             });
           }
         })

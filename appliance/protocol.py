@@ -44,6 +44,7 @@ KIND_FINGERPRINT = "fingerprint"
 KIND_SSID = "ssid"
 KIND_WIFI_PASSPHRASE = "wifi_passphrase"
 KIND_HOSTNAME = "hostname"
+KIND_TIMEZONE = "timezone"
 KIND_AUDIT_EVENT = "audit_event"
 KIND_AUDIT_RESULT = "audit_result"
 KIND_AUDIT_REASON = "audit_reason"
@@ -201,6 +202,13 @@ MUTATING_OPERATIONS = (
         ),
         summary="Plan a WLAN change with automatic revert",
         timeout_seconds=WIFI_OPERATION_TIMEOUT,
+    ),
+    _spec(
+        "system.timezone.plan",
+        mutating=True,
+        takes_lock=True,
+        fields=(Field("timezone", KIND_TIMEZONE),),
+        summary="Plan the timezone the EMS runs its control windows in",
     ),
     _spec(
         "network.hostname.plan",
@@ -386,6 +394,8 @@ def _coerce(field, value, context):
         return validation.validate_wifi_passphrase(value)
     if kind == KIND_HOSTNAME:
         return validation.validate_hostname(value)
+    if kind == KIND_TIMEZONE:
+        return validation.validate_timezone(value)
     if kind == KIND_AUDIT_EVENT:
         return validation.validate_web_audit_event(value)
     if kind == KIND_AUDIT_RESULT:

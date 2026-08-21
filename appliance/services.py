@@ -30,6 +30,7 @@ from appliance.health import HttpHealthChecker
 from appliance.hostprobe import HostProbe
 from appliance.known_good import KnownGoodStore
 from appliance.network import NetworkService
+from appliance.timezone_config import TimezoneService
 from appliance.operations import OperationStore
 from appliance.os_fetch import OsFetchService
 from appliance.os_releases import OsReleaseCatalogue, ReleaseSource
@@ -59,6 +60,7 @@ class ApplianceServices:
     ssh: object
     backup: object
     support: object
+    timezone: object
     status: object
     audit: object
     operation_log: object
@@ -138,6 +140,7 @@ def build_services(
         operation_log=operation_log,
         revert_intent_dir=paths.recovery_dir,
     )
+    timezone = TimezoneService(paths=paths, config=config, operations=operations)
     ssh = SshService(
         runner=runner,
         systemd=systemd,
@@ -256,6 +259,7 @@ def build_services(
         ssh=ssh,
         backup=backup,
         support=support,
+        timezone=timezone,
         status=status,
         audit=audit,
         operation_log=operation_log,

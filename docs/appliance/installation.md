@@ -1,5 +1,25 @@
 # Raspberry Pi Appliance Manager — Installation
 
+## Timezone
+
+The appliance host runs on UTC and stays there: `/etc/localtime` lives on the
+read-only slot root, so a host timezone could not survive a slot switch and
+`timedatectl` cannot write one at all on an A/B image.
+
+What the EMS actually needs is the zone its containers run in, because that is
+what decides when an hour-based control window opens — a winter midday charge
+window set to hour 12 fires at 12:00 local only if the container agrees what
+local means. Set it in the appliance UI under **Network → Timezone**, or in
+`appliance.conf`:
+
+```ini
+timezone = Europe/Berlin
+```
+
+The value chosen in the UI is written to `/etc/ems-appliance-manager/timezone`,
+which is a shared path, and it outranks the packaged default. It reaches the
+containers as `TZ` the next time the deployment starts.
+
 ## Supported platforms
 
 | Item | Supported |

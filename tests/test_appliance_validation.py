@@ -5,6 +5,8 @@ Everything a browser can influence passes through these validators before it
 reaches a host command, so each rejection here is a security boundary.
 """
 
+from pathlib import Path
+
 import pytest
 
 from appliance import validation
@@ -387,3 +389,67 @@ def test_log_output_is_bounded_by_lines_and_bytes():
 def test_bounded_log_is_redacted_as_well():
     bounded = bounded_redacted_log("line one\npassword=supersecret\n", max_lines=10)
     assert "supersecret" not in bounded["text"]
+
+
+# --- the zone the EMS runs its control windows in ------------------------------
+
+
+def test_the_image_does_not_inherit_somebody_elses_clock():
+    """Upstream defaults to Europe/London. An appliance sold as needing no
+    configuration must not silently run a UK clock."""
+
+    import yaml
+
+    shared = (
+        Path(__file__).resolve().parents[1]
+        / "packaging" / "appliance" / "image" / "shared" / "ems-appliance-ab.yaml"
+    )
+    document = yaml.safe_load(shared.read_text(encoding="utf-8"))
+
+    assert (document.get("locale") or {}).get("timezone") == "UTC"
+
+
+def test_the_operator_choice_outranks_the_packaged_default(tmp_path):
+    """appliance.conf is a conffile an admin edits; a value set in the UI must
+    not rewrite it, and must survive a slot switch."""
+
+    from appliance.config import load_config
+    from appliance.paths import AppliancePaths
+
+    paths = AppliancePaths(
+        install_root=tmp_path / "opt",
+        config_dir=tmp_path / "etc",
+        state_dir=tmp_path / "state",
+        log_dir=tmp_path / "log",
+        runtime_dir=tmp_path / "run",
+    )
+    paths.config_dir.mkdir(parents=True)
+    paths.appliance_conf.write_text("[appliance]\ntimezone = UTC\n", encoding="utf-8")
+
+    assert load_config(paths).timezone == "UTC"
+
+    paths.timezone_file.write_text("Europe/Berlin\n", encoding="utf-8")
+
+    assert load_config(paths).timezone == "Europe/Berlin"
+
+
+def test_the_chosen_zone_reaches_the_containers():
+    """/etc/localtime is on the read-only slot root, so the host cannot carry
+    it. The containers are what runs the EMS's local-hour windows."""
+
+    import inspect
+
+    from appliance import admin_bootstrap
+
+    source = inspect.getsource(admin_bootstrap)
+
+    assert 'environment["TZ"]' in source
+
+
+def test_a_timezone_that_does_not_resolve_is_refused():
+    from appliance.validation import ValidationError, validate_timezone
+
+    assert validate_timezone("Europe/Berlin") == "Europe/Berlin"
+    for bad in ("Europe/Nowhere", "../../etc/passwd", "", "a" * 80):
+        with pytest.raises(ValidationError):
+            validate_timezone(bad)

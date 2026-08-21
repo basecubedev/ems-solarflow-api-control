@@ -20,6 +20,8 @@ DEFAULT_LOG_LINES = 200
 RELEASE_TAG_RE = re.compile(r"^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.]{0,31})?$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 IMAGE_REPOSITORY_RE = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)+$")
+TIMEZONE_RE = re.compile(r"\A[A-Za-z][A-Za-z0-9_+-]*(?:/[A-Za-z0-9_+-]+){0,2}\Z")
+
 HOSTNAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 CONTAINER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 OPERATION_ID_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -256,6 +258,31 @@ def validate_hostname(value):
             "hostname must be an RFC 1123 label of letters, digits and hyphens",
         )
     return lowered
+
+
+def validate_timezone(value):
+    """An IANA zone name that the host actually carries.
+
+    Checked against the zoneinfo database rather than a pattern: a name that
+    parses but does not resolve would leave every container on UTC while the UI
+    claimed otherwise, which is the failure this setting exists to prevent.
+    """
+
+    text = _require_text(value, "invalid_timezone", max_length=64)
+    if not TIMEZONE_RE.match(text):
+        raise ValidationError(
+            "invalid_timezone",
+            "a timezone is an IANA name such as Europe/Berlin",
+        )
+    try:
+        import zoneinfo
+
+        zoneinfo.ZoneInfo(text)
+    except Exception:
+        raise ValidationError(
+            "unknown_timezone", f"{text} is not a timezone this appliance carries"
+        )
+    return text
 
 
 def validate_container_name(value, allowed_containers):

@@ -431,3 +431,32 @@ def test_the_agent_recovers_an_armed_revert_at_startup():
     source = inspect.getsource(cli.command_agent)
 
     assert "recover_revert()" in source
+
+
+def test_a_timezone_change_is_planned_confirmed_and_stored(tmp_path):
+    """The whole path: plan, confirm, and a value that outlives the process."""
+
+    from appliance.config import load_config
+
+    services = build_test_services(tmp_path)
+    operation, plan = plan_and_execute(
+        services, "system.timezone.plan", timezone="Europe/Berlin"
+    )
+
+    assert operation.state == STATE_SUCCEEDED
+    assert plan["timezone"] == "Europe/Berlin"
+    assert plan["previous_timezone"] == "UTC"
+    assert services.paths.timezone_file.read_text(encoding="utf-8").strip() == "Europe/Berlin"
+    assert load_config(services.paths).timezone == "Europe/Berlin"
+
+
+def test_a_timezone_the_appliance_does_not_carry_is_refused(tmp_path):
+    services = build_test_services(tmp_path)
+    handlers = handlers_for(services)
+
+    with pytest.raises(Exception) as error:
+        handlers.dispatch(
+            {"operation": "system.timezone.plan", "timezone": "Europe/Nowhere"}
+        )
+
+    assert "timezone" in str(error.value).lower()

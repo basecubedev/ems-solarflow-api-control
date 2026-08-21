@@ -88,6 +88,7 @@ class StatusService:
                 "ems_data": self.probe.filesystem(str(self.paths.ems_data_dir)),
             },
             "hostname": self.probe.hostname(),
+            "timezone": str(getattr(self.config, "timezone", "UTC") or "UTC"),
             "services": self.systemd.unit_states(
                 (UNIT_APPLIANCE_WEB, UNIT_APPLIANCE_AGENT, UNIT_DOCKER)
             ),

@@ -13,6 +13,14 @@ include:
 device:
   hostname: ems-solarflow
 
+# Upstream defaults to Europe/London. An appliance sold as needing no
+# configuration must not inherit somebody else's clock, and /etc/localtime lives
+# on the read-only slot root, so the host stays on a deterministic UTC and the
+# operator's zone is carried into the containers as TZ instead -- see
+# `timezone` in appliance.conf.
+locale:
+  timezone: UTC
+
 image:
   layer: image-rota
   # The root filesystem stays ext4 rather than erofs: the update writer reads

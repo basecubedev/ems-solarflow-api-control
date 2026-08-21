@@ -59,6 +59,7 @@ STATUS_FOR_CODE = {
     "peer_not_allowed": 403,
     "unknown_operation_id": 404,
     "unknown_operation": 400,
+    "timezone_unchanged": 409,
 }
 
 _OPERATION_ID = re.compile(r"^[0-9a-f]{32}$")
@@ -605,6 +606,10 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
             "/api/network/hostname": (
                 "network.hostname.plan",
                 lambda b: {"hostname": b.get("hostname")},
+            ),
+            "/api/system/timezone": (
+                "system.timezone.plan",
+                lambda b: {"timezone": b.get("timezone")},
             ),
             "/api/system/reboot": ("system.plan_reboot", lambda _: {}),
             "/api/system/shutdown": ("system.plan_shutdown", lambda _: {}),

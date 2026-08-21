@@ -61,3 +61,15 @@ Windows configurations do not answer.
 
 - [Network recovery](../../appliance/network-recovery.md) — what to do with a
   keyboard and screen when it is unreachable
+
+## Timezone
+
+The appliance keeps its own clock on UTC, which never changes. What you can set
+is the zone the EMS uses, and that matters: a charge window you set for midday
+only happens at midday if the EMS agrees what midday means where you live.
+
+Open **Network**, scroll to **Timezone**, and enter the name of your zone —
+`Europe/Berlin`, `Europe/Vienna`, `America/New_York`. These are IANA names; the
+appliance refuses one it does not carry rather than quietly staying on UTC.
+
+The new zone takes effect the next time the EMS containers start.

@@ -13,6 +13,8 @@ from pathlib import Path
 
 SECTION = "appliance"
 
+DEFAULT_TIMEZONE = "UTC"
+
 DEFAULT_WEB_ADDRESS = "0.0.0.0"
 # Not 8080: docker-compose.yml publishes the EMS dashboard there, and the
 # appliance exists to host that deployment rather than displace it.
@@ -78,6 +80,7 @@ class AllowedImages:
 
 @dataclass(frozen=True)
 class ApplianceConfig:
+    timezone: str = DEFAULT_TIMEZONE
     web_address: str = DEFAULT_WEB_ADDRESS
     web_port: int = DEFAULT_WEB_PORT
     web_user: str = DEFAULT_WEB_USER
@@ -256,18 +259,29 @@ def _deployment_user(values):
     )
 
 
+def _read_timezone(paths):
+    """The operator's choice, which outranks the packaged default."""
+
+    try:
+        return paths.timezone_file.read_text(encoding="utf-8").strip()
+    except (OSError, AttributeError):
+        return ""
+
+
 def load_config(paths):
     """Load ``appliance.conf``; missing files fall back to packaged defaults."""
 
     images = load_allowed_images(paths.allowed_images_conf)
+    chosen_zone = _read_timezone(paths)
     try:
         values = _read_ini(paths.appliance_conf)
     except FileNotFoundError:
-        return ApplianceConfig(images=images)
+        return ApplianceConfig(images=images, timezone=chosen_zone or DEFAULT_TIMEZONE)
 
     _backup_user(values)
     _deployment_user(values)
     return ApplianceConfig(
+        timezone=chosen_zone or values.get("timezone") or DEFAULT_TIMEZONE,
         web_address=values.get("web_address") or DEFAULT_WEB_ADDRESS,
         web_port=_as_int(values, "web_port", DEFAULT_WEB_PORT),
         web_user=values.get("web_user") or DEFAULT_WEB_USER,

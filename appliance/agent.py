@@ -26,6 +26,7 @@ from appliance import (
     packages,
     ssh_service,
     support_archive,
+    timezone_config,
     validation,
 )
 from appliance.audit import RESULT_DENIED, RESULT_FAILURE, RESULT_SUCCESS
@@ -52,6 +53,7 @@ PLAN_TYPES = {
     "updates.plan_repair": packages.TYPE_UPDATE_REPAIR,
     "network.wifi.plan": network.TYPE_WIFI,
     "network.hostname.plan": network.TYPE_HOSTNAME,
+    "system.timezone.plan": timezone_config.TYPE_TIMEZONE,
     "ssh.plan_service": ssh_service.TYPE_SSH_SERVICE,
     "ssh.plan_key_add": ssh_service.TYPE_SSH_KEY_ADD,
     "ssh.plan_key_remove": ssh_service.TYPE_SSH_KEY_REMOVE,
@@ -72,6 +74,7 @@ AUDITED_PLANS = {
     packages.TYPE_UPDATE_REPAIR: "updates.repair",
     network.TYPE_WIFI: "network.wifi",
     network.TYPE_HOSTNAME: "network.hostname",
+    timezone_config.TYPE_TIMEZONE: "system.timezone",
     ssh_service.TYPE_SSH_KEY_ADD: "ssh.key_added",
     ssh_service.TYPE_SSH_KEY_REMOVE: "ssh.key_removed",
     ssh_service.TYPE_SSH_REVOKE_ALL: "ssh.keys_revoked",
@@ -110,6 +113,7 @@ SERVICE_ERRORS = (
     ValidationError,
     OperationError,
     support_archive.SupportArchiveError,
+    timezone_config.TimezoneError,
 )
 
 
@@ -283,6 +287,8 @@ class AgentHandlers:
             )
         if name == "network.hostname.plan":
             return services.network.plan_hostname(operation, args["hostname"])
+        if name == "system.timezone.plan":
+            return services.timezone.plan(operation, args["timezone"])
         if name == "ssh.plan_service":
             return services.ssh.plan_service(operation, args["enabled"])
         if name == "ssh.plan_key_add":
@@ -417,6 +423,8 @@ class AgentHandlers:
             return services.ssh.execute
         if operation_type == support_archive.TYPE_SUPPORT_ARCHIVE:
             return services.support.execute
+        if operation_type == timezone_config.TYPE_TIMEZONE:
+            return services.timezone.execute
         if operation_type in (os_update.TYPE_OS_UPDATE, os_update.TYPE_OS_ROLLBACK):
             return self._execute_ab
         if operation_type == TYPE_OS_FETCH:

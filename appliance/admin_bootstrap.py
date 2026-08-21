@@ -196,6 +196,10 @@ class DeploymentBootstrap:
         environment = dict(os.environ)
         environment["PUID"] = str(uid)
         environment["PGID"] = str(gid)
+        # /etc/localtime is on the read-only slot root, so the host cannot carry
+        # the operator's zone across a slot switch. The containers can, and they
+        # are what runs the EMS's local-hour control windows.
+        environment["TZ"] = str(getattr(self.config, "timezone", "UTC") or "UTC")
         try:
             completed = self._run(  # noqa: S603 - fixed packaged path, no caller input
                 command,

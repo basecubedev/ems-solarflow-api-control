@@ -243,6 +243,17 @@ class AppliancePaths:
         return self.admin_dir / "bootstrap-state.json"
 
     @property
+    def timezone_file(self):
+        """The operator's chosen zone, on a shared path both slots see.
+
+        Separate from appliance.conf, which is a packaged conffile an admin
+        edits: a value set through the web UI must not rewrite the package's
+        own file, and must survive a slot switch.
+        """
+
+        return self.config_dir / "timezone"
+
+    @property
     def appliance_conf(self):
         return self.config_dir / "appliance.conf"
 
