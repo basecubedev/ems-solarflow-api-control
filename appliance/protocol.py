@@ -19,6 +19,14 @@ DEFAULT_OPERATION_TIMEOUT = 30
 # allowed 600s by the service that runs it.
 IMAGE_OPERATION_TIMEOUT = 900
 
+# Operations that shell out to apt or nmcli reach subprocess budgets far past
+# the default: `packages.check()` alone allows 240 s and a wifi rescan 60 s. A
+# client timeout below what the server may legitimately spend does not protect
+# anything -- it abandons a call that is still running and, for a planner,
+# strands the operation lock behind it.
+SLOW_PROBE_TIMEOUT = 300
+WIFI_OPERATION_TIMEOUT = 120
+
 KIND_RELEASE_CHANNEL = "release_channel"
 KIND_RELEASE_TAG = "release_tag"
 KIND_BOOL = "bool"
@@ -91,15 +99,32 @@ def _spec(
 
 
 READ_ONLY_OPERATIONS = (
-    _spec("status.get", summary="Aggregated appliance overview"),
+    _spec(
+        "status.get",
+        summary="Aggregated appliance overview",
+        timeout_seconds=SLOW_PROBE_TIMEOUT,
+    ),
     _spec("system.get", summary="Host, OS and hardware status"),
-    _spec("network.get", summary="Interfaces, addresses, DNS and mDNS"),
+    _spec(
+        "network.get",
+        summary="Interfaces, addresses, DNS and mDNS",
+        timeout_seconds=WIFI_OPERATION_TIMEOUT,
+    ),
     _spec("docker.get", summary="Docker daemon and managed containers"),
     _spec("admin.get", summary="Admin container, image and health"),
-    _spec("updates.get", summary="Package update and reboot state"),
+    _spec(
+        "updates.get",
+        summary="Package update and reboot state",
+        timeout_seconds=SLOW_PROBE_TIMEOUT,
+    ),
     _spec("ssh.get", summary="SSH service state and authorized keys"),
     _spec("backup.get", summary="Backup account and export paths"),
     _spec("operations.list", summary="Recent appliance operations"),
+    _spec(
+        "support.read_archive",
+        fields=(Field("operation_id", KIND_OPERATION_ID),),
+        summary="Read a finished support archive",
+    ),
     _spec(
         "operations.get",
         fields=(Field("operation_id", KIND_OPERATION_ID),),
@@ -113,7 +138,11 @@ READ_ONLY_OPERATIONS = (
         ),
         summary="Bounded, redacted log output",
     ),
-    _spec("network.wifi.scan", summary="Visible WLAN networks"),
+    _spec(
+        "network.wifi.scan",
+        summary="Visible WLAN networks",
+        timeout_seconds=WIFI_OPERATION_TIMEOUT,
+    ),
     _spec("admin.releases", summary="Installable Admin versions"),
     _spec("ab.status", summary="A/B slot, persistence and OS release state"),
     _spec("ab.sources", summary="OS releases the configured index offers"),
@@ -171,6 +200,7 @@ MUTATING_OPERATIONS = (
             Field("hidden", KIND_BOOL, required=False, default=False),
         ),
         summary="Plan a WLAN change with automatic revert",
+        timeout_seconds=WIFI_OPERATION_TIMEOUT,
     ),
     _spec(
         "network.hostname.plan",
@@ -209,7 +239,13 @@ MUTATING_OPERATIONS = (
         fields=(Field("account", KIND_ACCOUNT),),
         summary="Plan revoking every SSH key of an account",
     ),
-    _spec("support.plan_archive", mutating=True, takes_lock=True, summary="Plan a support archive"),
+    _spec(
+        "support.plan_archive",
+        mutating=True,
+        takes_lock=True,
+        summary="Plan a support archive",
+        timeout_seconds=SLOW_PROBE_TIMEOUT,
+    ),
     # The browser names a release and nothing else. Every device path, PARTUUID,
     # download URL, signing key and partition number comes from the root-owned
     # configuration, the signed manifest or verified layout discovery.

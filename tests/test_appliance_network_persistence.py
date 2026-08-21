@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """What NetworkManager is allowed to start against.
 
-``/etc/NetworkManager/system-connections`` is one of the six shared paths bound
+``/etc/NetworkManager/system-connections`` is one of the seven shared paths bound
 from the persistent partition, so it holds the operator's real profiles and the
 credentials that make the appliance reachable at all.
 

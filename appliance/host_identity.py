@@ -164,6 +164,7 @@ class HostIdentityService:
         network_directory=NETWORK_PROFILE_DIRECTORY,
         machine_id_source=ab_persistence.MACHINE_ID_SOURCE,
         require_root=None,
+        persistent_mounts=None,
     ):
         self.runner = runner
         self.root = Path(root)
@@ -172,6 +173,7 @@ class HostIdentityService:
         self.network_directory = str(network_directory)
         self.machine_id_source = str(machine_id_source)
         self.require_root = os.geteuid() == 0 if require_root is None else bool(require_root)
+        self._persistent_mounts = persistent_mounts
 
     # --- paths -------------------------------------------------------------
 
@@ -189,6 +191,36 @@ class HostIdentityService:
         return self.directory / public_key_name(key_type)
 
     # --- verification ------------------------------------------------------
+
+    def verify_on_persistent_partition(self):
+        """The key directory has to be the shared one, not the slot's own /var.
+
+        This is the one state-writing unit that cannot order itself after the
+        persistence verification -- it deliberately runs before it, because a
+        shared path whose ownership it just corrected has to be checked
+        afterwards. So the check the unit cannot express belongs here: if a
+        shared bind was silently skipped the directory still exists, on the
+        slot's own filesystem, and an identity minted there is lost at the next
+        slot switch while every client sees a changed host key.
+        """
+
+        if self._persistent_mounts is None:
+            return
+        mounts = self._persistent_mounts() or {}
+        target = str(self.key_directory)
+        enclosing = ""
+        for mountpoint in mounts:
+            point = str(mountpoint)
+            if (target == point or target.startswith(point.rstrip("/") + "/")) and len(
+                point
+            ) > len(enclosing):
+                enclosing = point
+        if not enclosing:
+            raise HostIdentityError(
+                "host_identity_not_shared",
+                f"{target} is not backed by the persistent partition, so a host key "
+                "created there would not survive a slot switch",
+            )
 
     def verify_directory(self):
         """The key directory must be a real, root-owned, private directory.
@@ -332,6 +364,7 @@ class HostIdentityService:
         created, reused, problems = [], [], []
 
         try:
+            self.verify_on_persistent_partition()
             if create:
                 self._ensure_directory()
             self.verify_directory()

@@ -6,6 +6,7 @@ redaction; no host file is copied verbatim. The manifest lists exactly what the
 archive contains so a user can see it before sharing it.
 """
 
+import base64
 import io
 import json
 import tarfile
@@ -26,9 +27,19 @@ EXCLUDED_BY_DEFAULT = (
     "tokens",
 )
 
+# The agent response cap is 8 MiB; base64 adds a third, so this leaves
+# room for the envelope around the bytes.
+MAX_ARCHIVE_BYTES = 5 * 1024 * 1024
+
 MAX_LOG_LINES = 400
 
 
+
+class SupportArchiveError(Exception):
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+        self.message = message
 class SupportArchiveService:
     def __init__(self, *, paths, config, status_service, operations, time_fn=None):
         self.paths = paths
@@ -71,6 +82,33 @@ class SupportArchiveService:
         }
         self.operations.finish(operation.operation_id, STATE_SUCCEEDED, result=payload)
         return payload
+
+    def read(self, operation_id):
+        """Hand a finished archive to the caller.
+
+        The web account never reads agent state directly -- everything
+        privileged reaches it through this API and no other way -- so the bytes
+        travel with the response rather than by relaxing the directory.
+        """
+
+        destination = self._destination(operation_id)
+        try:
+            data = destination.read_bytes()
+        except OSError:
+            raise SupportArchiveError(
+                "support_archive_not_found",
+                "no support archive exists for this operation",
+            )
+        if len(data) > MAX_ARCHIVE_BYTES:
+            raise SupportArchiveError(
+                "support_archive_too_large",
+                "the support archive is too large to be served; copy it off over SFTP",
+            )
+        return {
+            "name": destination.name,
+            "size_bytes": len(data),
+            "content_base64": base64.b64encode(data).decode("ascii"),
+        }
 
     def _destination(self, operation_id):
         return self.paths.support_dir / f"support-{operation_id}.tar.gz"

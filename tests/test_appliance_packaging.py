@@ -349,7 +349,7 @@ def test_logrotate_bounds_the_appliance_logs():
 def test_the_cli_wrapper_runs_the_packaged_python_module():
     wrapper = (PACKAGING / "bin" / "ems-appliance").read_text(encoding="utf-8")
     assert "PYTHONPATH=/usr/lib/ems-appliance-manager" in wrapper
-    assert "python3 -m appliance" in wrapper
+    assert "python3 -P -m appliance" in wrapper
 
 
 # --- runtime dependencies ---------------------------------------------------
@@ -663,3 +663,17 @@ def test_the_admin_installer_the_repair_advice_names_is_shipped():
         encoding="utf-8"
     )
     assert "install-admin-console.sh" in lifecycle
+
+
+def test_the_root_cli_wrapper_keeps_the_callers_environment_off_sys_path():
+    """`sudo ems-appliance` runs as root from wherever the operator stood.
+
+    `python3 -m` puts the working directory first on sys.path, so a module
+    planted in a writable directory would be imported by the privileged CLI,
+    and an inherited PYTHONPATH would be appended to the packaged one.
+    """
+
+    wrapper = (PACKAGING / "bin" / "ems-appliance").read_text(encoding="utf-8")
+
+    assert "python3 -P -m appliance" in wrapper
+    assert "${PYTHONPATH" not in wrapper

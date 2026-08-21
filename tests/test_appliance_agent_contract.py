@@ -520,10 +520,13 @@ def test_a_planner_that_pulls_an_image_may_take_longer_than_the_default():
         assert operation_timeout(name) > DEFAULT_TIMEOUT, name
 
 
-def test_a_read_only_call_keeps_the_short_timeout():
+def test_a_cheap_read_only_call_keeps_the_short_timeout():
+    """Cheap is the rule; the exceptions are the calls that shell out to apt or
+    nmcli, and those declare their own budget rather than inheriting this one."""
+
     from appliance.agent_client import DEFAULT_TIMEOUT, operation_timeout
 
-    for name in ("status.get", "admin.get", "ab.status"):
+    for name in ("admin.get", "ab.status", "docker.get", "ssh.get"):
         assert operation_timeout(name) == DEFAULT_TIMEOUT, name
 
 
@@ -546,3 +549,25 @@ def test_an_unreachable_agent_still_fails_fast(tmp_path):
 
     with pytest.raises(AgentUnavailableError):
         client.call("admin.plan_install", channel="latest_stable", reinstall=False)
+
+
+def test_no_operation_times_out_below_what_it_may_legitimately_spend():
+    """A client timeout under the server's own subprocess budget abandons a call
+    that is still running, and for a planner it strands the operation lock."""
+
+    from appliance import protocol
+
+    slow = {
+        "status.get": protocol.SLOW_PROBE_TIMEOUT,
+        "updates.get": protocol.SLOW_PROBE_TIMEOUT,
+        "support.plan_archive": protocol.SLOW_PROBE_TIMEOUT,
+        "network.get": protocol.WIFI_OPERATION_TIMEOUT,
+        "network.wifi.scan": protocol.WIFI_OPERATION_TIMEOUT,
+        "network.wifi.plan": protocol.WIFI_OPERATION_TIMEOUT,
+    }
+    specs = protocol.OPERATIONS
+
+    for name, expected in slow.items():
+        assert name in specs, name
+        assert specs[name].timeout_seconds >= expected, name
+        assert specs[name].timeout_seconds > protocol.DEFAULT_OPERATION_TIMEOUT, name

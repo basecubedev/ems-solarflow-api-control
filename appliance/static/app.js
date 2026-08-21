@@ -10,6 +10,12 @@
   var VIEW_KEY = "ems-appliance-view";
   var POLL_INTERVAL = 2000;
 
+  /* Cancel is only a legal transition out of a plan that has not started.
+     Offering it during a running image write produced an internal-state alert
+     rather than a cancellation; interrupting those needs a cooperative flag the
+     executors poll, not a state flip. */
+  var CANCELLABLE_STATES = ["planned", "awaiting_confirmation", "failed_recoverable"];
+
   var state = {
     authenticated: false,
     passwordConfigured: false,
@@ -320,10 +326,15 @@
         text: "Acknowledge", onclick: acknowledgeOperation
       }));
     }
-    if (!isTerminal) {
+    if (CANCELLABLE_STATES.indexOf(operation.state) !== -1) {
       actions.push(el("button", {
         type: "button", class: "ghost-button compact", "data-test": "cancel-operation",
         text: "Cancel", onclick: cancelOperation
+      }));
+    } else if (!isTerminal) {
+      actions.push(el("p", {
+        class: "control-result", "data-test": "operation-uninterruptible",
+        text: "This operation cannot be interrupted."
       }));
     }
 
@@ -779,7 +790,13 @@
     var auditNotice = renderAuditNotice();
     if (auditNotice) main.appendChild(el("ul", { class: "warning-list" }, [auditNotice]));
     var warnings = health.warnings || [];
-    if (!warnings.length && !auditNotice) {
+    if (status.error) {
+      main.appendChild(el("p", {
+        class: "empty-state", "data-test": "status-unavailable",
+        text: "Appliance status is unavailable (" + format(status.error) + "). "
+          + "Nothing below has been read from the appliance."
+      }));
+    } else if (!warnings.length && !auditNotice) {
       main.appendChild(el("p", { class: "empty-state", text: "No warnings. The appliance looks healthy." }));
     } else if (warnings.length) {
       main.appendChild(el("ul", { class: "warning-list", "data-test": "warnings" },

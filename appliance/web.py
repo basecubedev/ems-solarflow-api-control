@@ -7,10 +7,13 @@ no Docker socket, no root and no way to run a host command, so a flaw here
 cannot escalate beyond the agent's fixed allowlist.
 """
 
+import base64
+import hashlib
 import json
 import os
 import posixpath
 import re
+import secrets
 import threading
 import time
 from http import cookies
@@ -39,10 +42,17 @@ STATIC_FILES = {
 }
 MAX_BODY_BYTES = 64 * 1024
 
+# A peer that connects and never finishes a request line would otherwise hold
+# a worker thread for ever, and the appliance UI is the only recovery path
+# there is when an Admin install or a rollback has gone wrong.
+CONNECTION_TIMEOUT_SECONDS = 15
+
 TEST_MODE_ENV = "EMS_APPLIANCE_TEST_MODE"
 TEST_RESET_PATH = "/api/test/reset"
 
 STATUS_FOR_CODE = {
+    "support_archive_not_found": 404,
+    "support_archive_too_large": 409,
     "agent_unavailable": 503,
     "operation_conflict": 409,
     "confirmation_token_mismatch": 403,
@@ -80,38 +90,85 @@ class ApplianceWebApp:
         self.test_mode = os.environ.get(TEST_MODE_ENV) == "1"
         self.test_reset_hook = None
 
+    def names_this_appliance(self, host):
+        """Whether a Host header names an address this appliance answers to.
+
+        Loopback and the configured hostname, with or without the mDNS suffix
+        and with any port. Anything else is a request that reached us under a
+        name somebody else controls, which is what DNS rebinding produces.
+        """
+
+        name = (host or "").strip().lower()
+        if not name:
+            return False
+        if name.startswith("["):
+            name = name.partition("]")[0].lstrip("[")
+        elif name.count(":") == 1:
+            name = name.partition(":")[0]
+        if name in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+            return True
+        try:
+            configured = str(self.probe_hostname() or "").strip().lower()
+        except Exception:
+            configured = ""
+        if configured and name in (configured, f"{configured}.local"):
+            return True
+        # An address literal is the appliance's own LAN address as typed by the
+        # operator; a name we cannot resolve to ourselves is not.
+        return bool(re.fullmatch(r"[0-9.]+", name)) or bool(re.fullmatch(r"[0-9a-f:]+", name))
+
+    def probe_hostname(self):
+        import socket
+
+        return socket.gethostname()
+
     # --- session ---------------------------------------------------------
 
     def session_for(self, session_id):
         return self.sessions.get(session_id, self.auth.generation())
 
     def login(self, password, *, source_ip):
+        """The lock serialises the rate limiter and the session store, nothing else.
+
+        Deriving the password hash costs hundreds of milliseconds on a Pi and
+        recording an audit event is a round trip to the agent; holding the lock
+        across either lets a handful of unauthenticated attempts make the login
+        page unusable for the operator.
+        """
+
         with self._lock:
-            if self.rate_limiter.limited(source_ip):
-                self.audit.record(
-                    "login.failure",
-                    source_ip=source_ip,
-                    result=RESULT_DENIED,
-                    reason="rate_limited",
-                )
-                raise AuthError(
-                    "login_rate_limited",
-                    f"too many failed attempts; try again in "
-                    f"{self.rate_limiter.retry_after(source_ip)} seconds",
-                )
-            if not self.auth.verify(password):
+            limited = self.rate_limiter.limited(source_ip)
+            retry_after = self.rate_limiter.retry_after(source_ip) if limited else 0
+        if limited:
+            self.audit.record(
+                "login.failure",
+                source_ip=source_ip,
+                result=RESULT_DENIED,
+                reason="rate_limited",
+            )
+            raise AuthError(
+                "login_rate_limited",
+                f"too many failed attempts; try again in {retry_after} seconds",
+            )
+
+        verified = self.auth.verify(password)
+
+        if not verified:
+            with self._lock:
                 self.rate_limiter.record_failure(source_ip)
-                self.audit.record(
-                    "login.failure",
-                    source_ip=source_ip,
-                    result=RESULT_FAILURE,
-                    reason="invalid_password",
-                )
-                raise AuthError("invalid_credentials", "the appliance password is not correct")
+            self.audit.record(
+                "login.failure",
+                source_ip=source_ip,
+                result=RESULT_FAILURE,
+                reason="invalid_password",
+            )
+            raise AuthError("invalid_credentials", "the appliance password is not correct")
+
+        with self._lock:
             self.rate_limiter.reset(source_ip)
             session = self.sessions.create(self.auth.generation())
-            self.audit.record("login.success", source_ip=source_ip, result=RESULT_SUCCESS)
-            return session
+        self.audit.record("login.success", source_ip=source_ip, result=RESULT_SUCCESS)
+        return session
 
     def logout(self, session_id, *, source_ip):
         self.sessions.destroy(session_id)
@@ -148,6 +205,13 @@ class ApplianceWebApp:
 class ApplianceRequestHandler(BaseHTTPRequestHandler):
     server_version = f"EMSApplianceManager/{APPLIANCE_VERSION}"
     protocol_version = "HTTP/1.1"
+    timeout = CONNECTION_TIMEOUT_SECONDS
+
+    def handle_one_request(self):
+        try:
+            super().handle_one_request()
+        except TimeoutError:
+            self.close_connection = True
 
     @property
     def app(self):
@@ -241,15 +305,24 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
 
     def _require_csrf(self, session):
         token = self.headers.get(CSRF_HEADER) or ""
-        if not token or token != session.csrf_token:
+        if not token or not secrets.compare_digest(token, session.csrf_token or ""):
             self._error(403, "csrf_token_invalid", "the CSRF token is missing or invalid")
+            return False
+        host = (self.headers.get("Host") or "").split("/", 1)[0]
+        if not self.app.names_this_appliance(host):
+            # Under DNS rebinding the browser makes Origin and Host agree on the
+            # attacker's name, so comparing them proves nothing on its own.
+            self._error(403, "csrf_host_rejected", "the request names another host")
             return False
         origin = self.headers.get("Origin")
         if origin:
             # Compare the origin's authority exactly. A suffix comparison would
-            # accept "http://evil-<host>", which ends with the real host.
+            # accept "http://evil-<host>", which ends with the real host. An
+            # absent Origin is left to the token and the SameSite cookie: a
+            # browser always sends one, and refusing without it would only lock
+            # out non-browser callers that already hold a 256-bit token.
             _, _, authority = origin.partition("://")
-            if not authority or authority.split("/", 1)[0] != (self.headers.get("Host") or ""):
+            if not authority or authority.split("/", 1)[0] != host:
                 self._error(403, "csrf_origin_rejected", "the request origin is not accepted")
                 return False
         return True
@@ -276,6 +349,8 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
             return self._serve_static(path[len("/static/") :])
         if path == "/api/session":
             return self._session_state()
+        if path.startswith("/api/support/archive/"):
+            return self._download_support_archive(path[len("/api/support/archive/") :])
         if path.startswith("/api/"):
             return self._api_get(path)
         return self._error(404, "not_found", "unknown path")
@@ -618,6 +693,40 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
     def _serve_index(self):
         return self._serve_file("index.html", "text/html; charset=utf-8")
 
+    def _download_support_archive(self, operation_id):
+        """Hand the operator the archive the docs tell them to attach.
+
+        On an A/B image there is no shell and the archive lives in root-owned
+        agent state, so without this route it could be created and never
+        retrieved. The bytes come through the agent like every other privileged
+        read; the web process never reaches that directory itself.
+        """
+
+        session = self._require_session()
+        if session is None:
+            return None
+        if not re.fullmatch(r"[0-9a-f]{32}", operation_id or ""):
+            return self._error(400, "invalid_request", "that is not an operation id")
+        payload = self._agent("support.read_archive", session, operation_id=operation_id)
+        if payload is None:
+            return None
+        try:
+            body = base64.b64decode(payload["content_base64"], validate=True)
+        except (KeyError, ValueError):
+            return self._error(502, "agent_response_invalid", "the archive could not be read")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/gzip")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header(
+            "Content-Disposition", f'attachment; filename="{payload["name"]}"'
+        )
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+        return None
+
     def _serve_static(self, name):
         if name not in STATIC_FILES:
             return self._error(404, "not_found", "unknown asset")
@@ -630,9 +739,21 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
                 body = handle.read()
         except OSError:
             return self._error(404, "not_found", "asset unavailable")
+        etag = '"' + hashlib.sha256(body).hexdigest()[:32] + '"'
+        if self.headers.get("If-None-Match") == etag:
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            return None
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        # Revalidate every time: an appliance-manager update changes app.js
+        # against an API that changed with it, and a cached copy of the old one
+        # is a UI that misreports the host it is talking to.
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("ETag", etag)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header(

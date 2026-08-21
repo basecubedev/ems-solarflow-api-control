@@ -486,3 +486,39 @@ def test_a_first_boot_creates_the_keys_and_a_trial_slot_reuses_them(tmp_path):
     assert sorted(second.reused) == sorted(host_identity.HOST_KEY_TYPES)
     assert second.fingerprints == first.fingerprints
     assert host_identity.ssh_may_start(second)
+
+
+# --- the identity must not land on a slot-local filesystem --------------------
+
+
+def test_a_key_directory_that_is_not_on_the_persistent_partition_is_refused(tmp_path):
+    """The regression: this is the one state-writing unit that cannot Requires=
+    the persistence verification, because it deliberately runs before it. If a
+    shared bind is silently skipped the directory still exists -- on the slot's
+    own /var -- and the host identity is minted there, so every client sees a
+    changed host key after the next slot switch."""
+
+    from appliance.host_identity import HostIdentityService
+
+    service = HostIdentityService(
+        root=tmp_path,
+        require_root=False,
+        persistent_mounts=lambda: {},
+    )
+
+    report = service.ensure()
+
+    assert not report.ok
+    assert any("persistent" in problem for problem in report.problems), report.problems
+
+
+def test_the_shipped_command_passes_the_mount_table_to_the_guard():
+    """A guard nothing constructs is test-only code."""
+
+    import inspect
+
+    from appliance import cli
+
+    source = inspect.getsource(cli.command_host_identity)
+
+    assert "persistent_mounts=" in source

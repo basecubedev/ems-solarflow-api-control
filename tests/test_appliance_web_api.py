@@ -660,3 +660,111 @@ def test_an_unreachable_agent_is_reported_as_service_unavailable(tmp_path):
         server.server_close()
         thread.join(timeout=5)
     assert resolve_paths is not None
+
+
+# --- hardening at the network edge --------------------------------------------
+
+
+def test_a_non_string_password_is_a_refusal_not_a_traceback(appliance):
+    """Unauthenticated input must not be able to crash the login route."""
+
+    _services, app, client = appliance
+    app.auth.create(PASSWORD, PASSWORD)
+
+    status, payload, _ = client.post("/api/session/login", {"password": {"not": "a string"}})
+
+    assert status in (400, 401)
+    assert "_raw" not in payload
+
+
+def test_a_non_string_password_is_refused_by_the_store_itself():
+    from appliance.auth import hash_password, verify_password_record
+
+    record = hash_password(PASSWORD, iterations=1000)
+
+    assert verify_password_record(PASSWORD, record) is True
+    assert verify_password_record({"not": "a string"}, record) is False
+    assert verify_password_record(["also", "not"], record) is False
+    assert verify_password_record(None, record) is False
+
+
+def test_a_request_naming_a_foreign_host_is_refused(signed_in):
+    """DNS rebinding makes Origin and Host agree on the attacker's name.
+
+    Comparing one against the other therefore proves nothing unless the Host is
+    itself checked against what this appliance answers to.
+    """
+
+    _services, _app, client = signed_in
+
+    status, payload, _ = client.post(
+        "/api/network/scan",
+        headers={"Host": "attacker.example", "Origin": "http://attacker.example"},
+    )
+
+    assert status == 403
+    assert payload["error"] == "csrf_host_rejected"
+
+
+def test_a_support_archive_can_actually_be_retrieved(signed_in):
+    """The docs tell an operator to attach it, and on an A/B image there is no
+    shell and the file lives in root-owned agent state."""
+
+    services, _app, client = signed_in
+    planned = client.post("/api/support/archive")[1]
+    operation_id = planned["operation"]["operation_id"]
+    confirmed = client.post(
+        "/api/operations/confirm",
+        {"operation_id": operation_id, "confirmation_token": planned["confirmation_token"]},
+    )
+    assert confirmed[0] == 200, confirmed[1]
+
+    connection = http.client.HTTPConnection("127.0.0.1", client.port, timeout=10)
+    connection.request(
+        "GET", f"/api/support/archive/{operation_id}", headers={"Cookie": client.cookie}
+    )
+    response = connection.getresponse()
+    body = response.read()
+    disposition = response.getheader("Content-Disposition") or ""
+    connection.close()
+
+    assert response.status == 200, body[:200]
+    assert body[:2] == b"\x1f\x8b", "not a gzip stream"
+    assert operation_id in disposition
+
+
+def test_a_support_archive_download_needs_a_session(appliance):
+    _services, _app, client = appliance
+
+    connection = http.client.HTTPConnection("127.0.0.1", client.port, timeout=10)
+    connection.request("GET", "/api/support/archive/op-1")
+    status = connection.getresponse().status
+    connection.close()
+
+    assert status == 401
+
+
+def test_a_support_archive_path_cannot_name_anything_but_an_operation(signed_in):
+    _services, _app, client = signed_in
+
+    connection = http.client.HTTPConnection("127.0.0.1", client.port, timeout=10)
+    connection.request(
+        "GET", "/api/support/archive/..%2f..%2fetc%2fpasswd", headers={"Cookie": client.cookie}
+    )
+    status = connection.getresponse().status
+    connection.close()
+
+    assert status in (400, 404)
+
+
+def test_an_archive_that_was_never_created_is_a_404_not_a_traceback(signed_in):
+    _services, _app, client = signed_in
+
+    connection = http.client.HTTPConnection("127.0.0.1", client.port, timeout=10)
+    connection.request(
+        "GET", "/api/support/archive/" + "0" * 32, headers={"Cookie": client.cookie}
+    )
+    status = connection.getresponse().status
+    connection.close()
+
+    assert status == 404

@@ -61,7 +61,7 @@ def hash_password(password, iterations=DEFAULT_ITERATIONS):
 
 
 def verify_password_record(password, record):
-    if not password or not isinstance(record, dict):
+    if not isinstance(password, str) or not password or not isinstance(record, dict):
         return False
     if record.get("algorithm") != ALGORITHM:
         return False

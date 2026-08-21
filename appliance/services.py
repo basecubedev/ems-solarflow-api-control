@@ -136,6 +136,7 @@ def build_services(
         time_fn=time_fn,
         sleep=sleep,
         operation_log=operation_log,
+        revert_intent_dir=paths.recovery_dir,
     )
     ssh = SshService(
         runner=runner,

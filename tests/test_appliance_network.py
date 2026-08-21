@@ -335,3 +335,99 @@ def test_a_joined_wlan_without_an_address_is_not_accepted(tmp_path):
 
     assert operation.state == STATE_FAILED_TERMINAL
     assert operation.result["reverted"] is True
+
+
+def test_a_cancelled_wlan_plan_does_not_retain_the_passphrase(tmp_path):
+    """The plan-to-apply window is the whole intended lifetime of a PSK."""
+
+    services = build_test_services(tmp_path)
+    handlers = handlers_for(services)
+    planned = handlers.dispatch(
+        {"operation": "network.wifi.plan", "ssid": "GuestNet", "passphrase": PASSPHRASE}
+    )
+    operation_id = planned["operation"]["operation_id"]
+    assert services.network._secrets
+
+    handlers.dispatch({"operation": "operations.cancel", "operation_id": operation_id})
+
+    assert not services.network._secrets
+
+
+def test_a_failed_scan_is_reported_by_the_scan_operation(tmp_path):
+    """An empty list said "no networks here", which is a different fact."""
+
+    from appliance.network import NetworkError
+
+    services = build_test_services(tmp_path)
+    services.host.nmcli_scan_ok = False
+
+    with pytest.raises(NetworkError) as error:
+        services.network.scan()
+
+    assert error.value.code == "wifi_scan_failed"
+
+
+def test_a_failed_scan_still_leaves_an_overview_to_read(tmp_path):
+    """Signal strength is decoration; losing it must not lose the whole page."""
+
+    services = build_test_services(tmp_path)
+    services.host.nmcli_scan_ok = False
+
+    record = services.network.status()
+
+    assert record["interfaces"]
+
+
+# --- the revert has to survive the process that armed it ----------------------
+
+
+def test_a_crash_inside_the_revert_window_still_restores_the_previous_profile(tmp_path):
+    """The regression: the revert was an in-memory step of the executing call.
+
+    A power cut or an agent restart inside the 90-180 s window left the new
+    profile active with nothing to take it back, and NetworkManager reconnects
+    to it on every boot afterwards -- the lockout the whole feature exists to
+    prevent.
+    """
+
+    services = build_test_services(tmp_path)
+    services.network.arm_revert("op-1", "HomeNet")
+
+    assert services.network.pending_revert() is not None
+
+    restored = services.network.recover_revert()
+
+    assert restored == "HomeNet"
+    assert ("nmcli", ("connection", "up", "HomeNet"), None) in services.host.calls
+    assert services.network.pending_revert() is None
+
+
+def test_a_completed_wlan_change_leaves_no_revert_armed(tmp_path):
+    from appliance.agent import AgentHandlers
+
+    services = build_test_services(tmp_path)
+    handlers = AgentHandlers(services, executor=lambda target: target())
+    planned = handlers.dispatch(
+        {"operation": "network.wifi.plan", "ssid": "GuestNet", "passphrase": "correct-horse"}
+    )
+    handlers.dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+
+    assert services.network.pending_revert() is None
+
+
+def test_the_agent_recovers_an_armed_revert_at_startup():
+    """A durable intent nothing reads at boot is not durable."""
+
+    import inspect
+
+    from appliance import cli
+
+    source = inspect.getsource(cli.command_agent)
+
+    assert "recover_revert()" in source

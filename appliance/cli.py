@@ -397,6 +397,12 @@ def command_agent(args):
     recovered = services.operations.recover_interrupted()
     if recovered:
         print(f"recovered {len(recovered)} interrupted operation(s)")
+    # A WLAN change interrupted inside its revert window left the new profile
+    # active with nothing to take it back; NetworkManager then reconnects to it
+    # on every boot.
+    restored = services.network.recover_revert()
+    if restored:
+        print(f"restored the previous WLAN profile {restored}")
     server = AgentServer(services, socket_path=args.socket or paths.agent_socket)
     print(f"appliance agent listening on {server.socket_path}")
     try:
@@ -516,7 +522,11 @@ def command_host_identity(args):
     services = _ab_services(args)
     if services is None:
         return EXIT_ERROR
-    service = HostIdentityService(runner=services.runner, root=services.ab_probe.root)
+    service = HostIdentityService(
+        runner=services.runner,
+        root=services.ab_probe.root,
+        persistent_mounts=services.ab_probe.mounts,
+    )
     report = service.ensure() if args.ensure else service.verify()
     payload = report.to_dict()
     if report.ok:

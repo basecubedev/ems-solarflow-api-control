@@ -11,12 +11,16 @@ passphrases are handed to ``nmcli`` on stdin, never in argv, so they never
 appear in the host process table.
 """
 
+import json
 import time
+
+from pathlib import Path
 
 from appliance import ab_layout
 from dataclasses import dataclass, field
 
 from appliance.operations import STATE_FAILED_TERMINAL, STATE_SUCCEEDED, STATE_VERIFYING
+from appliance.paths import atomic_write
 from appliance.validation import validate_hostname
 
 TYPE_WIFI = "network.wifi"
@@ -142,7 +146,7 @@ def parse_wifi_list(text):
 
 class NetworkService:
     def __init__(self, *, runner, probe, config, operations, time_fn=None, sleep=None,
-                 operation_log=None, ab_probe=None):
+                 operation_log=None, ab_probe=None, revert_intent_dir=None):
         self.runner = runner
         self.probe = probe
         self.config = config
@@ -151,6 +155,7 @@ class NetworkService:
         self._time = time_fn or time.monotonic
         self._sleep = sleep or time.sleep
         self._operation_log = operation_log
+        self._revert_intent_dir = revert_intent_dir
         # WLAN passphrases live in memory between plan and apply only; they are
         # never written to the operation record, a log or the state directory.
         self._secrets = {}
@@ -207,7 +212,18 @@ class NetworkService:
         return record
 
     def _signal_for(self, ssid):
-        for network in self.scan(rescan=False):
+        """Signal strength is decoration on the overview, never its verdict.
+
+        A scan that failed is reported by the scan operation; making the whole
+        status call fail over a missing signal bar would replace a degraded
+        overview with no overview at all.
+        """
+
+        try:
+            networks = self.scan(rescan=False)
+        except NetworkError:
+            return None
+        for network in networks:
             if network["ssid"] == ssid:
                 return network["signal"]
         return None
@@ -219,7 +235,12 @@ class NetworkService:
         if rescan:
             args += ["--rescan", "yes"]
         result = self.runner.run("nmcli", args, timeout=60)
-        return parse_wifi_list(result.stdout if result.ok else "")
+        if not result.ok:
+            raise NetworkError(
+                "wifi_scan_failed",
+                "the WLAN scan did not complete; no network list could be read",
+            )
+        return parse_wifi_list(result.stdout)
 
     def active_wifi_profile(self):
         result = self.runner.run(
@@ -342,6 +363,77 @@ class NetworkService:
             "running slot; the hostname is fixed at build time and cannot be changed here",
         )
 
+    # --- the revert has to outlive the call that armed it -------------------
+
+    def _revert_intent_path(self):
+        if self._revert_intent_dir is None:
+            return None
+        return Path(self._revert_intent_dir) / "wifi-revert.json"
+
+    def arm_revert(self, operation_id, previous_profile):
+        """Record the profile to fall back to before nmcli is touched at all.
+
+        The revert used to be a step of the executing call, so a power cut or an
+        agent restart inside the window left the new profile active with nothing
+        to take it back -- and NetworkManager reconnects to it on every boot
+        afterwards, which is the lockout this whole feature exists to prevent.
+        """
+
+        path = self._revert_intent_path()
+        if path is None or not previous_profile:
+            return None
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write(
+            path,
+            json.dumps(
+                {"operation_id": str(operation_id), "previous_profile": str(previous_profile)}
+            )
+            + "\n",
+        )
+        return str(path)
+
+    def pending_revert(self):
+        path = self._revert_intent_path()
+        if path is None or not path.is_file():
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+
+    def disarm_revert(self):
+        path = self._revert_intent_path()
+        if path is not None:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
+    def recover_revert(self):
+        """Reactivate an armed profile the process that armed it never reached."""
+
+        intent = self.pending_revert()
+        if not intent:
+            return None
+        previous = str(intent.get("previous_profile") or "")
+        if not previous:
+            self.disarm_revert()
+            return None
+        self._revert(previous)
+        self.disarm_revert()
+        return previous
+
+    def discard_secret(self, operation_id):
+        """Drop a passphrase a plan will never apply.
+
+        The plan-to-apply window is the whole intended lifetime, but a plan that
+        is cancelled, expires or fails before execution never reaches the pop in
+        _execute_wifi, so without this the PSK for every network the operator
+        thought about stays in the long-lived root process.
+        """
+
+        self._secrets.pop(operation_id, None)
+
     # --- execution -------------------------------------------------------
 
     def execute(self, operation):
@@ -356,6 +448,8 @@ class NetworkService:
         ssid = target["ssid"]
         previous = target.get("previous_profile") or ""
         passphrase = self._secrets.pop(operation.operation_id, "")
+
+        self.arm_revert(operation.operation_id, previous)
 
         self._advance(operation, "applying_wifi")
         args = ["device", "wifi", "connect", ssid]
@@ -373,6 +467,7 @@ class NetworkService:
         connected = self._wait_for_wifi(ssid)
 
         if result.ok and connected:
+            self.disarm_revert()
             payload = {
                 "ssid": ssid,
                 "connectivity": self.connectivity(),
@@ -384,6 +479,7 @@ class NetworkService:
 
         self._advance(operation, "reverting_wifi")
         reverted = self._revert(previous)
+        self.disarm_revert()
         payload = {
             "ssid": ssid,
             "reverted": reverted,

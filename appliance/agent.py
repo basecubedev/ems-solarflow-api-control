@@ -102,6 +102,17 @@ def _inline_executor(target):
     return None
 
 
+# The one list of errors a service may raise that are a refusal rather than a
+# defect. Both the socket server and the in-process client answer on it, so it
+# lives here rather than being spelled out twice.
+SERVICE_ERRORS = (
+    AgentError,
+    ValidationError,
+    OperationError,
+    support_archive.SupportArchiveError,
+)
+
+
 class AgentHandlers:
     """Dispatch a validated request onto the privileged services."""
 
@@ -118,8 +129,11 @@ class AgentHandlers:
             return self._plan(spec, args, actor=actor, source_ip=source_ip)
         if spec.name == "operations.execute":
             return self._execute_operation(args, actor=actor, source_ip=source_ip)
+        if spec.name == "support.read_archive":
+            return self.services.support.read(args["operation_id"])
         if spec.name == "operations.cancel":
             record = self.services.operations.cancel(args["operation_id"])
+            self.services.network.discard_secret(args["operation_id"])
             return {"operation": record.to_dict()}
         if spec.name == "operations.acknowledge":
             record = self.services.operations.acknowledge(args["operation_id"])
@@ -241,6 +255,7 @@ class AgentHandlers:
 
     def _abandon_plan(self, operation, operation_type, actor, source_ip):
         self.services.operations.cancel(operation.operation_id)
+        self.services.network.discard_secret(operation.operation_id)
         self._audit(operation_type, actor, source_ip, RESULT_FAILURE, operation.operation_id)
 
     def _build_plan(self, name, operation, args):
@@ -583,7 +598,7 @@ class AgentServer(socketserver.ThreadingUnixStreamServer):
                 "ok": False,
                 "error": {"code": exc.code, "message": exc.message, "field": exc.field},
             }
-        except (AgentError, ValidationError, OperationError) as exc:
+        except SERVICE_ERRORS as exc:
             return {
                 "ok": False,
                 "error": {

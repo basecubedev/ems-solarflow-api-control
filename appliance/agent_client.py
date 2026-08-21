@@ -121,10 +121,8 @@ class InProcessAgentClient:
         self.handlers = handlers
 
     def call(self, operation, *, actor="", source_ip="", timeout=None, **fields):
-        from appliance.agent import AgentError
-        from appliance.operations import OperationError
+        from appliance.agent import SERVICE_ERRORS
         from appliance.protocol import ProtocolError
-        from appliance.validation import ValidationError
 
         try:
             return self.handlers.dispatch(
@@ -132,7 +130,7 @@ class InProcessAgentClient:
             )
         except ProtocolError as exc:
             raise AgentCallError(exc.code, exc.message, field=exc.field)
-        except (AgentError, ValidationError, OperationError) as exc:
+        except SERVICE_ERRORS as exc:
             raise AgentCallError(
                 getattr(exc, "code", "operation_failed"), str(getattr(exc, "message", exc))
             )

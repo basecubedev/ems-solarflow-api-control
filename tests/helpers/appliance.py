@@ -134,6 +134,7 @@ class FakeHost:
         self.dpkg_selections = "libfoo\tinstall\nheld-package\thold\n"
         self.nmcli_connectivity = "full"
         self.wifi_connect_ok = True
+        self.nmcli_scan_ok = True
         # The WLAN device's own view, which is what "the operator can still
         # reach me" actually depends on. Host-wide connectivity is a different
         # question and this fake keeps the two separable on purpose.
@@ -515,6 +516,8 @@ class FakeHost:
         if "device show" in joined:
             return self._result("nmcli", args, 0, self._device_show())
         if "device wifi list" in joined:
+            if not self.nmcli_scan_ok:
+                return self._result("nmcli", args, 1, "", "Error: scan failed")
             return self._result("nmcli", args, 0, NMCLI_WIFI_LIST)
         if "connection show --active" in joined:
             return self._result("nmcli", args, 0, "HomeNet:802-11-wireless:wlan0\n")
