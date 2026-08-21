@@ -703,7 +703,7 @@ def command_ab_trial_health(args):
         agent_socket=lambda: services.paths.agent_socket.exists(),
         health_window_seconds=services.config.ab_health_window_seconds,
     )
-    report = verifier.evaluate()
+    report = verifier.evaluate_settled()
     _print(report.to_dict(), args.json)
 
     if report.result == ab_health.RESULT_NOT_A_TRIAL:

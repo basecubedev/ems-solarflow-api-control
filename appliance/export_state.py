@@ -36,25 +36,39 @@ def device_id(entry):
     return f"{os.major(entry.st_dev)}:{os.minor(entry.st_dev)}"
 
 
-def path_within_filesystem(path):
-    """A path the way ``mountinfo`` names it: relative to its own mount root.
+def path_within_filesystem(path, *, mounts=None, is_mount=None):
+    """A path the way ``mountinfo`` names it: relative to its filesystem's root.
 
     Binding ``/persistent/ems/config`` publishes a record whose root reads
     ``/ems/config``, because the persistent partition is mounted at
     ``/persistent``. The absolute path only equals that text while the source
     happens to sit on the filesystem mounted at ``/`` — true on a developer
     machine, false on the A/B appliance.
+
+    Stopping at the nearest mount point is not enough there either: on the A/B
+    image the enclosing directory is itself a bind whose own root is not ``/``,
+    so ``/opt/ems-solarflow/config`` is published as
+    ``/shared/opt/ems-solarflow/config``. The enclosing mount's root has to be
+    carried along, or every export reads as foreign and backup access disables
+    itself on each boot.
     """
 
+    at_mount = is_mount or (lambda candidate: os.path.ismount(candidate))
     current = Path(path)
     parts = []
-    while current != current.parent and not os.path.ismount(str(current)):
+    while current != current.parent and not at_mount(str(current)):
         parts.append(current.name)
         current = current.parent
-    return "/" + "/".join(reversed(parts)) if parts else "/"
+    tail = "/" + "/".join(reversed(parts)) if parts else "/"
+
+    enclosing = (mounts or {}).get(str(current)) or {}
+    root = str(enclosing.get("root") or "/").rstrip("/")
+    if not root:
+        return tail
+    return root if tail == "/" else root + tail
 
 
-def publishes_source(source, record):
+def publishes_source(source, record, *, mounts=None, is_mount=None):
     """Whether the mount record really publishes ``source``.
 
     Two independent facts have to agree: the mount carries the filesystem the
@@ -67,7 +81,9 @@ def publishes_source(source, record):
         return False
     if record.get("device") != device_id(source_entry):
         return False
-    return str(record.get("root") or "") == path_within_filesystem(source)
+    return str(record.get("root") or "") == path_within_filesystem(
+        source, mounts=mounts, is_mount=is_mount
+    )
 
 
 @dataclass(frozen=True)
@@ -140,7 +156,7 @@ def _root_problems(export_root):
     return problems
 
 
-def _inspect_one(name, source, target, record):
+def _inspect_one(name, source, target, record, mounts=None):
     source_present = False
     detail = ""
     try:
@@ -173,7 +189,7 @@ def _inspect_one(name, source, target, record):
     options = record.get("options") or frozenset()
     read_only = "ro" in options
     mounted_source = str(record.get("root") or "")
-    verified = source_present and publishes_source(source, record)
+    verified = source_present and publishes_source(source, record, mounts=mounts)
     if not verified:
         detail = detail or f"{target} does not publish {source}"
         state = STATE_FOREIGN
@@ -214,7 +230,9 @@ def inspect_exports(paths, *, mounts=None):
     sources = paths.export_paths()
     targets = paths.export_targets()
     entries = [
-        _inspect_one(name, sources[name], targets[name], mounts.get(str(targets[name])))
+        _inspect_one(
+            name, sources[name], targets[name], mounts.get(str(targets[name])), mounts
+        )
         for name in EXPECTED_EXPORTS
     ]
 

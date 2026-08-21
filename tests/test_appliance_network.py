@@ -276,3 +276,62 @@ def test_a_single_slot_appliance_still_changes_its_hostname(tmp_path):
 
     assert operation.state == STATE_SUCCEEDED
     assert services.host.hostname == "ems-pi5"
+
+
+# --- what "the WLAN worked" is measured on -----------------------------------
+
+
+def test_a_wlan_without_internet_is_still_a_successful_join(tmp_path):
+    """`nmcli general CONNECTIVITY` is an HTTP fetch to the internet.
+
+    An EMS is sold on having no cloud dependency, and a LAN behind a filtering
+    resolver never reaches `full`. Tearing the join down after 90 s would mean
+    that network can never be joined at all.
+    """
+
+    services = build_test_services(tmp_path)
+    services.host.nmcli_connectivity = "limited"
+
+    operation, _ = plan_and_execute(
+        services, "network.wifi.plan", ssid="GuestNet", passphrase=PASSPHRASE
+    )
+
+    assert operation.state == STATE_SUCCEEDED
+    assert operation.result["reverted"] is False
+    assert operation.result["ssid"] == "GuestNet"
+
+
+def test_a_wlan_that_never_joined_is_reverted_even_with_ethernet_up(tmp_path):
+    """The other direction: host-wide connectivity says nothing about the WLAN.
+
+    With a cable plugged in the host reads `full` whatever the radio did, so a
+    join onto a wrong network would be recorded as success and never reverted --
+    and the lockout appears later, when the cable is pulled.
+    """
+
+    services = build_test_services(tmp_path)
+    services.host.wifi_connect_ok = False
+    services.host.nmcli_connectivity = "full"
+
+    operation, _ = plan_and_execute(
+        services, "network.wifi.plan", ssid="GuestNet", passphrase=PASSPHRASE
+    )
+
+    assert operation.state == STATE_FAILED_TERMINAL
+    assert operation.error["code"] == "wifi_connection_failed"
+    assert operation.result["reverted"] is True
+
+
+def test_a_joined_wlan_without_an_address_is_not_accepted(tmp_path):
+    """Associated is not reachable: DHCP still has to have answered."""
+
+    services = build_test_services(tmp_path)
+    services.host.wifi_address = ""
+    services.host.nmcli_connectivity = "full"
+
+    operation, _ = plan_and_execute(
+        services, "network.wifi.plan", ssid="GuestNet", passphrase=PASSPHRASE
+    )
+
+    assert operation.state == STATE_FAILED_TERMINAL
+    assert operation.result["reverted"] is True

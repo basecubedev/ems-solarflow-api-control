@@ -27,9 +27,11 @@ User=root
 # commits a slot that is not on trial, and a run that cannot prove the pending
 # operation leaves the appliance for an operator instead of guessing.
 ExecStart=/usr/bin/ems-appliance ab trial-health --commit
-# Bounded on purpose: a trial slot must never stay pending indefinitely. The
-# window is host-authoritative and configurable through appliance.conf.
-TimeoutStartSec=300
+# Bounded on purpose: a trial slot must never stay pending indefinitely. This
+# has to outlast the settle budget the health check spends waiting for a
+# cold-started deployment to answer, or systemd kills the verdict before it is
+# reached and a healthy slot is abandoned for being slow.
+TimeoutStartSec=600
 # A failed health check is a result, not a crash to retry into.
 Restart=no
 

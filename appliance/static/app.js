@@ -1153,9 +1153,17 @@
     ["artifact_decoder_ready", "Artifact decoder", "zstd is missing, so a .tar.zst artifact cannot be read."],
     ["sparse_decoder_ready", "Sparse decoder", "Update members cannot be expanded."],
     ["host_identity_ready", "Host identity", "The persistent SSH host keys could not be proven."],
-    ["docker_reconstruction_ready", "Runtime recovery", "No container runtime is recorded for the next slot."],
-    ["deployment_authority_ready", "EMS deployment", "The EMS deployment this appliance runs could not be proven, so there is nothing a trial slot could rebuild."],
     ["release_keyring_ready", "Release keyring", "No OS release keyring is installed, so no update artifact can be verified and every one of them is refused."]
+  ];
+
+  /* Reported by the backend and shown on the EMS deployment card, but never a
+     plan precondition: planning is what writes the runtime record both of them
+     describe, so gating the plan action on them leaves a freshly flashed
+     appliance unable to ever record one. The server still refuses a plan it
+     cannot bind to a running Admin container, and drift is still a new plan. */
+  var AB_INFORMATIONAL_READINESS = [
+    "docker_reconstruction_ready",
+    "deployment_authority_ready"
   ];
 
   /* The bounded deployment states the agent reports. Each one names what an
@@ -1194,7 +1202,10 @@
 
   function abReadiness(ab) {
     var readiness = ab.readiness || {};
-    var missing = AB_READINESS.filter(function (entry) { return readiness[entry[0]] === false; });
+    var missing = AB_READINESS.filter(function (entry) {
+      return AB_INFORMATIONAL_READINESS.indexOf(entry[0]) === -1
+        && readiness[entry[0]] === false;
+    });
     return { ready: missing.length === 0, missing: missing, readiness: readiness };
   }
 

@@ -75,3 +75,73 @@ def test_a_missing_source_is_refused(tmp_path):
     record = {"root": "/ems/config", "device": "0:0", "options": frozenset({"ro"})}
 
     assert not publishes_source(tmp_path / "absent", record)
+
+
+# --- the A/B shape ------------------------------------------------------------
+
+
+def test_a_source_under_a_bind_is_named_through_that_binds_own_root(tmp_path):
+    """The regression, in the shape the appliance actually has.
+
+    On the A/B image ``/opt/ems-solarflow`` is itself a bind of
+    ``/persistent/shared/opt/ems-solarflow``, so the kernel records the export's
+    root as ``/shared/opt/ems-solarflow/config``. Walking only to the nearest
+    mount point stops at ``/opt/ems-solarflow`` and answers ``/config``, so every
+    export reads as foreign and backup access disables itself on every boot.
+
+    The expected text is written out here rather than derived from the function
+    under test, which would agree with itself either way.
+    """
+
+    source = tmp_path / "opt" / "ems-solarflow" / "config"
+    source.mkdir(parents=True)
+    enclosing = tmp_path / "opt" / "ems-solarflow"
+    mounts = {
+        str(enclosing): {
+            "root": "/shared/opt/ems-solarflow",
+            "device": device_id(os.stat(str(enclosing))),
+            "options": frozenset({"rw"}),
+        }
+    }
+
+    assert (
+        path_within_filesystem(source, mounts=mounts, is_mount=lambda p: p == str(enclosing))
+        == "/shared/opt/ems-solarflow/config"
+    )
+
+
+def test_an_export_of_a_source_under_a_bind_is_accepted(tmp_path):
+    source = tmp_path / "opt" / "ems-solarflow" / "config"
+    source.mkdir(parents=True)
+    enclosing = tmp_path / "opt" / "ems-solarflow"
+    enclosing_record = {
+        "root": "/shared/opt/ems-solarflow",
+        "device": device_id(os.stat(str(enclosing))),
+        "options": frozenset({"rw"}),
+    }
+    mounts = {str(enclosing): enclosing_record}
+    record = record_for(source, root="/shared/opt/ems-solarflow/config")
+
+    assert publishes_source(
+        source, record, mounts=mounts, is_mount=lambda p: p == str(enclosing)
+    )
+
+
+def test_a_sibling_under_the_same_bind_is_still_refused(tmp_path):
+    """The bind root is carried along, not used to wave the comparison through."""
+
+    source = tmp_path / "opt" / "ems-solarflow" / "config"
+    source.mkdir(parents=True)
+    enclosing = tmp_path / "opt" / "ems-solarflow"
+    mounts = {
+        str(enclosing): {
+            "root": "/shared/opt/ems-solarflow",
+            "device": device_id(os.stat(str(enclosing))),
+            "options": frozenset({"rw"}),
+        }
+    }
+    record = record_for(source, root="/shared/opt/ems-solarflow/data")
+
+    assert not publishes_source(
+        source, record, mounts=mounts, is_mount=lambda p: p == str(enclosing)
+    )

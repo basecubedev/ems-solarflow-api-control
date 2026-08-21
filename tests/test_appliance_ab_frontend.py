@@ -192,18 +192,58 @@ def test_the_ui_offers_no_writable_device_input():
 # --- update readiness ---------------------------------------------------------
 
 
+def gating_readiness():
+    block = APP.split("AB_READINESS = [")[1].split("];")[0]
+    return set(re.findall(r'\["(\w+)", "[^"]+", "[^"]+"\]', block))
+
+
+def informational_readiness():
+    block = APP.split("AB_INFORMATIONAL_READINESS = [")[1].split("];")[0]
+    return set(re.findall(r'"(\w+)"', block))
+
+
 def test_the_readiness_card_names_every_backend_prerequisite(tmp_path):
     """The list is the backend's, not the frontend's idea of one, and not a
     third copy kept here either: it is read from the service that produces it.
+
+    Every field the backend reports is accounted for as either a plan gate or a
+    deliberately informational one, so a new backend prerequisite cannot be
+    silently dropped on the floor.
     """
 
     from tests.helpers.appliance import build_test_services
 
-    block = APP.split("AB_READINESS = [")[1].split("];")[0]
-    declared = set(re.findall(r'\["(\w+)", "[^"]+", "[^"]+"\]', block))
     services = build_test_services(tmp_path)
 
-    assert declared == set(services.os_update.status()["readiness"])
+    assert gating_readiness() | informational_readiness() == set(
+        services.os_update.status()["readiness"]
+    )
+    assert not gating_readiness() & informational_readiness()
+
+
+def test_planning_is_not_gated_on_what_planning_itself_records(tmp_path):
+    """The deadlock: a fresh appliance has never planned, so no runtime record
+    exists, so both deployment fields read false. Gating the plan action on them
+    means the record they describe can never come into being. The server still
+    refuses a plan it cannot bind to a running Admin container.
+    """
+
+    from tests.helpers.appliance import build_test_services
+
+    readiness = build_test_services(tmp_path).os_update.status()["readiness"]
+
+    assert readiness["docker_reconstruction_ready"] is False
+    assert readiness["deployment_authority_ready"] is False
+    assert "docker_reconstruction_ready" not in gating_readiness()
+    assert "deployment_authority_ready" not in gating_readiness()
+
+
+def test_an_informational_field_cannot_gate_the_plan_even_if_relisted():
+    """The rule lives in the filter, not in what someone remembered to omit."""
+
+    block = APP.split("function abReadiness(")[1].split("\n  }")[0]
+
+    assert "AB_INFORMATIONAL_READINESS.indexOf(entry[0]) === -1" in block
 
 
 def test_the_plan_buttons_are_disabled_until_every_prerequisite_holds():

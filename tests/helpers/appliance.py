@@ -134,6 +134,13 @@ class FakeHost:
         self.dpkg_selections = "libfoo\tinstall\nheld-package\thold\n"
         self.nmcli_connectivity = "full"
         self.wifi_connect_ok = True
+        # The WLAN device's own view, which is what "the operator can still
+        # reach me" actually depends on. Host-wide connectivity is a different
+        # question and this fake keeps the two separable on purpose.
+        self.wifi_ssid = "HomeNet"
+        self.wifi_device_state = "connected"
+        self.wifi_address = "192.168.1.50/24"
+        self.wifi_gateway = "192.168.1.1"
         self.listening_ports = ""
         self.ss_exit_code = 0
         self.ss_stderr = ""
@@ -504,9 +511,9 @@ class FakeHost:
         if "general" in joined and "CONNECTIVITY" in joined:
             return self._result("nmcli", args, 0, f"{self.nmcli_connectivity}\n")
         if "device status" in joined:
-            return self._result("nmcli", args, 0, NMCLI_DEVICE_STATUS)
+            return self._result("nmcli", args, 0, self._device_status())
         if "device show" in joined:
-            return self._result("nmcli", args, 0, NMCLI_DEVICE_SHOW)
+            return self._result("nmcli", args, 0, self._device_show())
         if "device wifi list" in joined:
             return self._result("nmcli", args, 0, NMCLI_WIFI_LIST)
         if "connection show --active" in joined:
@@ -514,11 +521,32 @@ class FakeHost:
         if "device wifi connect" in joined:
             if not self.wifi_connect_ok:
                 return self._result("nmcli", args, 1, "", "Error: Connection activation failed")
+            self.wifi_ssid = args[args.index("connect") + 1]
+            self.wifi_device_state = "connected"
             return self._result("nmcli", args, 0, "Device 'wlan0' successfully activated\n")
         if "connection up" in joined:
             self.nmcli_connectivity = "full"
             return self._result("nmcli", args, 0, "Connection successfully activated\n")
         return self._result("nmcli", args, 0, "")
+
+    def _device_status(self):
+        return (
+            f"wlan0:wifi:{self.wifi_device_state}:{self.wifi_ssid}\n"
+            "eth0:ethernet:unavailable:\n"
+            "lo:loopback:unmanaged:\n"
+        )
+
+    def _device_show(self):
+        lines = [
+            f"GENERAL.CONNECTION:{self.wifi_ssid}",
+            f"GENERAL.SSID:{self.wifi_ssid}",
+        ]
+        if self.wifi_address:
+            lines.append(f"IP4.ADDRESS[1]:{self.wifi_address}")
+        if self.wifi_gateway:
+            lines.append(f"IP4.GATEWAY:{self.wifi_gateway}")
+            lines.append(f"IP4.DNS[1]:{self.wifi_gateway}")
+        return "\n".join(lines) + "\n"
 
     def _hostnamectl(self, args):
         if args[:1] == ["--static"]:

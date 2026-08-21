@@ -37,6 +37,13 @@ TRIAL_ABSENT = "ordinary_boot"
 DEFAULT_HEALTH_WINDOW_SECONDS = 1800
 MIN_HEALTH_WINDOW_SECONDS = 120
 
+# How long a freshly reconstructed deployment is given to answer before its
+# silence counts against it. `docker compose up -d` returns when the containers
+# were created, not when they serve, so the first sample is about the clock and
+# not about the slot.
+DEFAULT_SETTLE_SECONDS = 240
+SETTLE_INTERVAL_SECONDS = 10
+
 
 class AbHealthError(Exception):
     def __init__(self, code, message):
@@ -90,6 +97,10 @@ class HealthReport:
         }
 
 
+def _gates_failing(report):
+    return any(gate.required and not gate.passed for gate in report.gates)
+
+
 class TrialHealthService:
     """Detect a trial boot, judge it, and commit or step aside."""
 
@@ -109,6 +120,7 @@ class TrialHealthService:
         time_fn=None,
         uptime=None,
         health_window_seconds=DEFAULT_HEALTH_WINDOW_SECONDS,
+        settle_seconds=DEFAULT_SETTLE_SECONDS,
         remount_selector=True,
     ):
         self.probe = probe
@@ -126,6 +138,7 @@ class TrialHealthService:
         self.health_window_seconds = max(
             int(health_window_seconds), MIN_HEALTH_WINDOW_SECONDS
         )
+        self.settle_seconds = max(int(settle_seconds), 0)
         self.remount_selector = remount_selector
 
     # --- trial detection --------------------------------------------------
@@ -511,6 +524,35 @@ class TrialHealthService:
             gates=gates,
             checked_at=now,
         )
+
+    def evaluate_settled(self, *, sleep=None):
+        """The boot-time verdict: evaluate until the deployment settles or fails.
+
+        Only a required gate that is *still* failing at the end of the settle
+        budget is a reason to abandon a slot. Terminal verdicts are returned
+        untouched -- an exceeded window has every gate passing and retrying it
+        would only spend the window it already lost, and a boot that is not a
+        trial has nothing to wait for.
+
+        The budget never reaches past the health window: settling is an inner
+        bound, and the window stays the outer one.
+        """
+
+        pause = sleep or time.sleep
+        report = self.evaluate()
+        if report.result != RESULT_UNHEALTHY or not _gates_failing(report):
+            return report
+
+        deadline = self._time() + min(
+            self.settle_seconds,
+            max(0.0, self.health_window_seconds - self._uptime()),
+        )
+        while self._time() < deadline:
+            pause(min(SETTLE_INTERVAL_SECONDS, max(0.0, deadline - self._time())))
+            report = self.evaluate()
+            if report.result != RESULT_UNHEALTHY or not _gates_failing(report):
+                return report
+        return report
 
     # --- commit ------------------------------------------------------------
 

@@ -2,9 +2,13 @@
 """Network overview, WLAN changes with automatic revert, and hostname changes.
 
 A WLAN change can disconnect the operator, so the previously working profile is
-kept and reactivated when the new one does not reach connectivity within the
-configured timeout. WLAN passphrases are handed to ``nmcli`` on stdin, never in
-argv, so they never appear in the host process table.
+kept and reactivated when the new one does not reach the operator within the
+configured timeout. What "reached" means is measured on the WLAN device itself
+-- joined the requested SSID and holds an address -- and never on host-wide
+connectivity, which NetworkManager decides by fetching a URL over the internet
+and which therefore answers a different question in both directions. WLAN
+passphrases are handed to ``nmcli`` on stdin, never in argv, so they never
+appear in the host process table.
 """
 
 import time
@@ -18,7 +22,6 @@ from appliance.validation import validate_hostname
 TYPE_WIFI = "network.wifi"
 TYPE_HOSTNAME = "network.hostname"
 
-CONNECTIVITY_FULL = "full"
 STATE_CONNECTED = "connected"
 
 WIFI_PROFILE_PREFIX = "ems-appliance-"
@@ -232,6 +235,38 @@ class NetworkService:
         result = self.runner.run("nmcli", ["-t", "-f", "CONNECTIVITY", "general"], timeout=20)
         return (result.stdout or "").strip() or "unknown"
 
+    def wifi_link(self, ssid):
+        """Whether a WLAN device actually joined ``ssid`` and reached L3.
+
+        This is what "the operator can still reach me" depends on. Host-wide
+        connectivity is a different question: NetworkManager decides it by
+        fetching a URL over the internet, so with a cable plugged in it reads
+        ``full`` whatever the radio did, and on a LAN with no internet or a
+        filtering resolver it never reads ``full`` even when the join was
+        perfect. Neither direction is a verdict about the WLAN.
+        """
+
+        status = self.runner.run(
+            "nmcli", ["-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status"], timeout=20
+        )
+        for interface in parse_device_status(status.stdout if status.ok else ""):
+            if interface.kind != "wifi":
+                continue
+            if not interface.state.startswith(STATE_CONNECTED):
+                continue
+            detail = self.runner.run(
+                "nmcli",
+                ["-t", "-f", "IP4,IP6,GENERAL", "device", "show", interface.device],
+                timeout=20,
+            )
+            parsed = parse_device_details(detail.stdout if detail.ok else "")
+            joined = parsed["ssid"] or interface.connection
+            if joined != ssid:
+                continue
+            if parsed["addresses"]:
+                return True
+        return False
+
     # --- planning --------------------------------------------------------
 
     def plan_wifi(self, operation, *, ssid, passphrase, hidden=False):
@@ -335,7 +370,7 @@ class NetworkService:
         result = self.runner.run("nmcli", args, timeout=90, input_text=input_text)
 
         self._advance(operation, "waiting_for_connectivity", state=STATE_VERIFYING)
-        connected = self._wait_for_connectivity()
+        connected = self._wait_for_wifi(ssid)
 
         if result.ok and connected:
             payload = {
@@ -368,10 +403,10 @@ class NetworkService:
         )
         raise NetworkError("wifi_connection_failed", "the new WLAN did not reach connectivity")
 
-    def _wait_for_connectivity(self):
+    def _wait_for_wifi(self, ssid):
         deadline = self._time() + self.config.wifi_revert_timeout_seconds
         while True:
-            if self.connectivity() == CONNECTIVITY_FULL:
+            if self.wifi_link(ssid):
                 return True
             if self._time() >= deadline:
                 return False

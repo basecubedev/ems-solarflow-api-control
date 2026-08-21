@@ -11,7 +11,7 @@ silent pass.
 
 import pytest
 
-from appliance import ab_health
+from appliance import ab_docker_health, ab_health
 from appliance.ab_boot import parse_selector
 from appliance.ab_health import (
     RESULT_HEALTHY,
@@ -78,6 +78,38 @@ def pending(**overrides):
 def service(host, state, **kwargs):
     kwargs.setdefault("time_fn", lambda: 1100.0)
     return build_health_service(host, state, **kwargs)
+
+
+class Clock:
+    """A clock only the settle loop moves, so no test waits on real time."""
+
+    def __init__(self, start=1100.0):
+        self.now = start
+        self.slept = 0.0
+
+    def time(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+        self.slept += seconds
+
+
+class ColdStartDocker(FakeDocker):
+    """An Admin container that answers only from the nth probe onward."""
+
+    def __init__(self, *, probes_before_ready=3, **kwargs):
+        super().__init__(**kwargs)
+        self.probes = 0
+        self.probes_before_ready = probes_before_ready
+
+    def admin_runtime(self, expected_digest):
+        self.probes += 1
+        if self.probes < self.probes_before_ready:
+            return ab_docker_health.failed(
+                "admin_http_unhealthy", "the Admin container is still starting"
+            )
+        return ab_docker_health.passed("the Admin container answers")
 
 
 # --- trial detection ---------------------------------------------------------
@@ -320,6 +352,10 @@ def test_the_window_outlasts_every_unit_ordered_before_the_health_check():
     assert appliance_config.DEFAULT_AB_HEALTH_WINDOW > budget
     assert ab_health.DEFAULT_HEALTH_WINDOW_SECONDS > budget
 
+    # systemd must not kill the verdict before the settle budget is spent:
+    # a slot abandoned for being slow is the failure this whole file guards.
+    assert start_timeout("ems-appliance-ab-health.service") > ab_health.DEFAULT_SETTLE_SECONDS
+
 
 def test_the_health_window_is_never_shorter_than_the_documented_floor(host, state):
     verified = service(host, state, health_window_seconds=5)
@@ -510,3 +546,86 @@ def test_a_fallback_names_the_current_known_good_slot(tmp_path):
     record = ab_health.classify_fallback(host.probe(), store)
 
     assert record.known_good_slot == "A"
+
+
+# --- settling a cold-started deployment --------------------------------------
+
+
+def test_a_cold_started_deployment_is_given_time_before_it_is_abandoned(host, state):
+    """The regression: the gates fire seconds after `compose up -d` returned.
+
+    A single sample taken then says nothing about the slot, only that the
+    containers have not finished starting. Rolling back on it means an OS update
+    can never succeed on a board slower than the builder.
+    """
+
+    state.set_pending(pending())
+    clock = Clock()
+    docker = ColdStartDocker(probes_before_ready=3)
+
+    report = service(
+        host, state, docker=docker, time_fn=clock.time
+    ).evaluate_settled(sleep=clock.sleep)
+
+    assert report.result == RESULT_HEALTHY
+    assert docker.probes == 3
+    assert clock.slept > 0
+
+
+def test_a_deployment_that_never_answers_is_still_abandoned(host, state):
+    state.set_pending(pending())
+    clock = Clock()
+
+    report = service(
+        host, state, docker=FakeDocker(admin=False), time_fn=clock.time
+    ).evaluate_settled(sleep=clock.sleep)
+
+    assert report.result == RESULT_UNHEALTHY
+    assert clock.slept >= ab_health.DEFAULT_SETTLE_SECONDS
+
+
+def test_settling_never_outlives_the_health_window(host, state):
+    """The window is the outer bound; settling may not spend past it."""
+
+    state.set_pending(pending())
+    host.set_uptime(150.0)
+    clock = Clock()
+
+    report = service(
+        host,
+        state,
+        docker=FakeDocker(admin=False),
+        time_fn=clock.time,
+        health_window_seconds=200,
+    ).evaluate_settled(sleep=clock.sleep)
+
+    assert report.result == RESULT_UNHEALTHY
+    assert clock.slept <= 50
+
+
+def test_an_exceeded_window_is_a_verdict_and_is_not_retried(host, state):
+    """Every gate passed; only the window failed. Retrying just burns it."""
+
+    state.set_pending(pending())
+    host.set_uptime(9_999.0)
+    clock = Clock()
+
+    report = service(
+        host, state, time_fn=clock.time, health_window_seconds=200
+    ).evaluate_settled(sleep=clock.sleep)
+
+    assert report.result == RESULT_UNHEALTHY
+    assert any("window" in reason for reason in report.reasons)
+    assert clock.slept == 0
+
+
+def test_a_boot_that_is_not_a_trial_is_not_retried(tmp_path):
+    host = ApplianceAbHost(tmp_path, slot="A", tryboot=False)
+    store = AbStateStore(host.ab_state_dir)
+    store.ensure()
+    clock = Clock()
+
+    report = service(host, store, time_fn=clock.time).evaluate_settled(sleep=clock.sleep)
+
+    assert report.result == RESULT_NOT_A_TRIAL
+    assert clock.slept == 0

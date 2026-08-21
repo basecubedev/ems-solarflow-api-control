@@ -100,6 +100,7 @@ check() {
 make_medium() {
     persist_size=$1
     detach
+    ensure_loop_nodes
     rm -f "$IMAGE"
     truncate -s "$((IMAGE_MIB * MIB))" "$IMAGE"
     sfdisk --quiet --label gpt "$IMAGE" >/dev/null <<EOF
@@ -114,6 +115,30 @@ EOF
     ensure_partition_nodes
     [ -b "${LOOP}p6" ] || { echo "the kernel did not present ${LOOP}p6" >&2; exit 1; }
     mkfs.ext4 -q -F "${LOOP}p6" >/dev/null 2>&1
+}
+
+# Flashing: the same file grows under a table that still describes the old size,
+# which is exactly what writing a 16.5 GB image onto a 32 GB card produces. The
+# medium keeps the image's GPT, backup header and all, until something grows it.
+enlarge_medium() {
+    grown_mib=$1
+    detach
+    truncate -s "$((grown_mib * MIB))" "$IMAGE"
+    LOOP=$(losetup --show --find --partscan "$IMAGE")
+    ensure_partition_nodes
+    [ -b "${LOOP}p6" ] || { echo "the kernel did not present ${LOOP}p6" >&2; exit 1; }
+}
+
+# `losetup --find` asks the kernel for the next free loop number host-wide, so a
+# container whose /dev was populated before the host used more of them is handed
+# a number it has no node for. Without udev nothing creates it, and losetup fails
+# on a device the kernel did allocate.
+ensure_loop_nodes() {
+    n=0
+    while [ "$n" -lt 64 ]; do
+        [ -b "/dev/loop$n" ] || mknod "/dev/loop$n" b 7 "$n" 2>/dev/null || true
+        n=$((n + 1))
+    done
 }
 
 # The kernel creates the partitions; udev creates their device nodes. A
@@ -260,6 +285,29 @@ run_helper
 [ "$(marker_field outcome)" = already_filled ] \
     && check ok "and is marked already_filled" \
     || check no "and is marked already_filled" "outcome=$(marker_field outcome)"
+
+echo
+echo "== a smaller image flashed onto a larger medium =="
+detach
+make_medium "$((IMAGE_MIB - PERSIST_START_MIB - 1))MiB"
+enlarge_medium "$((IMAGE_MIB * 2))"
+make_appliance_stub
+mount_persistent
+before_partition=$(partition_bytes)
+run_helper
+after_partition=$(partition_bytes)
+say "partition ${before_partition} -> ${after_partition} on a medium twice the image"
+[ "$HELPER_STATUS" -eq 0 ] \
+    && check ok "the image's own table is not read as filling the card" \
+    || check no "the image's own table is not read as filling the card" \
+              "exit $HELPER_STATUS: $(cat "$WORK/err.log")"
+[ "$(marker_field outcome)" = grown ] \
+    && check ok "first boot grows instead of marking already_filled" \
+    || check no "first boot grows instead of marking already_filled" \
+              "outcome=$(marker_field outcome)"
+[ "$after_partition" -gt "$before_partition" ] \
+    && check ok "the partition really reached the enlarged medium" \
+    || check no "the partition really reached the enlarged medium" "still ${after_partition}"
 
 echo
 echo "== growpart fails =="

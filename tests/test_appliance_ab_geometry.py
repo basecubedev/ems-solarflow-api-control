@@ -29,6 +29,12 @@ DISK_SECTORS = 32 * 1024 * MIB // SECTOR
 PREFIX_SECTORS = 17 * 1024 * MIB // SECTOR
 IMAGED_SECTORS = 8 * 1024 * MIB // SECTOR
 
+FLASHED_LAST_USABLE_LBA = 34_684_934
+FLASHED_ALTERNATE_LBA = 34_684_967
+FLASHED_PERSISTENT_START = 17_907_712
+FLASHED_PERSISTENT_SECTORS = 16_777_216
+CARD_SECTORS = 30_000_000_000 // SECTOR
+
 
 def build_sysfs(
     tmp_path,
@@ -61,11 +67,29 @@ def build_sysfs(
     return sysfs
 
 
-def gpt_opener(last_usable_lba, *, logical_block_size=512, signature=ab_geometry.GPT_SIGNATURE):
-    """A disk whose primary GPT header declares ``last_usable_lba``."""
+def gpt_opener(
+    last_usable_lba,
+    *,
+    logical_block_size=512,
+    signature=ab_geometry.GPT_SIGNATURE,
+    alternate_lba=None,
+):
+    """A disk whose primary GPT header declares ``last_usable_lba``.
 
+    ``alternate_lba`` is the block the header says its backup copy occupies. A
+    table written for the medium it sits on names that medium's last block; a
+    table flashed from a smaller image names the image's. The default is the
+    self-consistent one: the backup header plus the 128-entry array of 128
+    bytes, in whatever block size the disk presents -- 33 blocks at 512, 5 at
+    4096.
+    """
+
+    if alternate_lba is None:
+        entry_blocks = -(-128 * 128 // logical_block_size)
+        alternate_lba = last_usable_lba + entry_blocks + 1
     header = bytearray(logical_block_size)
     header[0:8] = signature
+    struct.pack_into("<Q", header, ab_geometry.GPT_ALTERNATE_LBA_OFFSET, alternate_lba)
     struct.pack_into("<Q", header, ab_geometry.GPT_LAST_USABLE_OFFSET, last_usable_lba)
     payload = bytes(logical_block_size) + bytes(header)
 
@@ -109,6 +133,34 @@ def test_a_grown_last_partition_is_not_read_as_short(tmp_path):
     assert geometry.tail_sectors == 0
     # What the old check would have computed, for contrast: 17 GiB of prefix.
     assert geometry.disk_bytes - geometry.size_bytes > 17 * 1024 * MIB - MIB
+
+
+def test_a_freshly_flashed_image_does_not_read_as_filling_the_card(tmp_path):
+    """The regression: a flashed card carries the *image's* table, not its own.
+
+    Every number is read out of the published rpi5 artefact
+    (ems-solarflow-appliance-0.1.0-rpi5-arm64-ab.img, 17,758,703,616 bytes), so
+    this is the real first boot: the image's GPT bounds the 16.5 GB it was built
+    as, the card underneath is 30 GB, and the persistent partition is the last
+    of six. Believing that table skips growth for ever.
+    """
+
+    sysfs = build_sysfs(
+        tmp_path,
+        disk_sectors=CARD_SECTORS,
+        start_sector=FLASHED_PERSISTENT_START,
+        sectors=FLASHED_PERSISTENT_SECTORS,
+    )
+
+    geometry = ab_geometry.read_geometry(
+        "/dev/mmcblk0p6",
+        sysfs=sysfs,
+        opener=gpt_opener(FLASHED_LAST_USABLE_LBA, alternate_lba=FLASHED_ALTERNATE_LBA),
+    )
+
+    assert not geometry.fills_disk
+    assert geometry.usable_end_source == ab_geometry.FROM_DISK_END
+    assert geometry.tail_bytes > 12 * 1000 * 1000 * 1000
 
 
 def test_an_ungrown_partition_still_reports_its_real_tail(tmp_path):
@@ -162,6 +214,35 @@ def test_a_table_that_is_not_a_gpt_falls_back_rather_than_trusting_it(tmp_path):
     )
 
     assert geometry.usable_end_source == ab_geometry.FROM_DISK_END
+
+
+def test_a_gpt_whose_backup_header_is_not_at_the_end_is_not_believed(tmp_path):
+    """The table describes some other medium, so its bound is not this one's."""
+
+    sysfs = build_sysfs(tmp_path)
+
+    geometry = ab_geometry.read_geometry(
+        "/dev/mmcblk0p6",
+        sysfs=sysfs,
+        opener=gpt_opener(DISK_SECTORS - 34, alternate_lba=DISK_SECTORS // 2),
+    )
+
+    assert geometry.usable_end_source == ab_geometry.FROM_DISK_END
+
+
+def test_a_relocated_backup_header_makes_the_gpt_authoritative_again(tmp_path):
+    """What growth does: growpart moves the backup copy to the medium's end."""
+
+    sysfs = build_sysfs(tmp_path, disk_sectors=CARD_SECTORS)
+
+    geometry = ab_geometry.read_geometry(
+        "/dev/mmcblk0p6",
+        sysfs=sysfs,
+        opener=gpt_opener(CARD_SECTORS - 34),
+    )
+
+    assert geometry.usable_end_source == ab_geometry.FROM_GPT
+    assert geometry.usable_end_sector == CARD_SECTORS - 33
 
 
 def test_a_gpt_that_claims_more_than_the_disk_holds_is_not_believed(tmp_path):

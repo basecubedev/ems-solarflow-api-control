@@ -32,6 +32,7 @@ SYSFS_SECTOR = 512
 
 GPT_SIGNATURE = b"EFI PART"
 GPT_HEADER_LBA = 1
+GPT_ALTERNATE_LBA_OFFSET = 32
 GPT_LAST_USABLE_OFFSET = 48
 
 # One mebibyte of alignment grain: the boot helper's growth tool aligns a grown
@@ -153,12 +154,15 @@ def _partition_sysfs(device, *, sysfs):
     return resolved
 
 
-def _gpt_usable_end(disk_path, logical_block_size, *, opener=None):
+def _gpt_usable_end(disk_path, logical_block_size, disk_sectors, *, opener=None):
     """The last usable LBA the disk's own GPT declares, as a 512-byte sector.
 
-    ``None`` when the table cannot be read: a medium whose primary header is
-    damaged is still growable, it simply loses the exact bound and falls back to
-    a conservative reserve.
+    ``None`` when the table cannot be read, or when it does not describe *this*
+    medium. A freshly flashed card carries the image's table, whose bound is the
+    image's size: believing it would report a 16 GB image as filling a 32 GB
+    card and skip first-boot growth for ever. The header names where its backup
+    copy lives, so a table written for a smaller medium is recognisable without
+    trusting any other size.
     """
 
     open_disk = opener or (lambda path: Path(path).open("rb"))
@@ -170,8 +174,12 @@ def _gpt_usable_end(disk_path, logical_block_size, *, opener=None):
         return None
     if len(header) < GPT_LAST_USABLE_OFFSET + 8 or header[:8] != GPT_SIGNATURE:
         return None
+    (alternate_lba,) = struct.unpack_from("<Q", header, GPT_ALTERNATE_LBA_OFFSET)
     (last_usable_lba,) = struct.unpack_from("<Q", header, GPT_LAST_USABLE_OFFSET)
     if last_usable_lba <= 0:
+        return None
+    disk_lba_count = disk_sectors * SYSFS_SECTOR // logical_block_size
+    if alternate_lba != disk_lba_count - 1:
         return None
     # The GPT names the last usable block inclusively; every sector count here
     # is exclusive of its end.
@@ -210,7 +218,7 @@ def read_geometry(device, *, sysfs="/sys", opener=None):
             f"{device} ends at sector {start_sector + sectors} of a {disk_sectors}-sector {disk}",
         )
 
-    gpt_end = _gpt_usable_end(disk, logical_block_size, opener=opener)
+    gpt_end = _gpt_usable_end(disk, logical_block_size, disk_sectors, opener=opener)
     if gpt_end is not None and start_sector + sectors <= gpt_end <= disk_sectors:
         usable_end_sector = gpt_end
         usable_end_source = FROM_GPT
