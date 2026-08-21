@@ -275,8 +275,29 @@ class PackageService:
             ],
         }
 
+    def _root_is_read_only(self):
+        try:
+            return bool(os.statvfs("/").f_flag & os.ST_RDONLY)
+        except OSError:
+            return False
+
     def _blockers(self, state):
         blockers = []
+        if self._root_is_read_only():
+            # On an A/B image the slot root is read-only and belongs to the
+            # running slot: apt would fail partway through, and anything it did
+            # manage to write is discarded at the next slot switch. The UI hides
+            # the path; the refusal has to exist on this side of the socket too.
+            blockers.append(
+                {
+                    "code": "read_only_root",
+                    "message": (
+                        "this appliance runs an A/B image, where the root filesystem belongs "
+                        "to the running slot and is read-only; host packages come with an OS "
+                        "update instead"
+                    ),
+                }
+            )
         if state.lock_state == LOCK_HELD:
             blockers.append(
                 {

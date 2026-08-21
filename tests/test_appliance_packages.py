@@ -379,3 +379,33 @@ def test_no_distribution_upgrade_is_reachable(tmp_path):
     with pytest.raises(Exception) as excinfo:
         handlers.dispatch({"operation": "updates.plan", "scope": "dist-upgrade"})
     assert getattr(excinfo.value, "code", "") == "invalid_update_scope"
+
+
+def test_apt_is_refused_on_a_read_only_root(tmp_path, monkeypatch):
+    """The UI hides the path on an A/B image, but the browser is not the gate:
+    apt would fail partway and anything it wrote is discarded at the next slot
+    switch."""
+
+    import os
+
+    from tests.helpers.appliance import build_test_services
+
+    services = build_test_services(tmp_path)
+    real_statvfs = os.statvfs
+
+    def read_only(path):
+        result = real_statvfs(path)
+        if str(path) == "/":
+            class _Stat:
+                f_flag = result.f_flag | os.ST_RDONLY
+                f_frsize = result.f_frsize
+                f_blocks = result.f_blocks
+                f_bavail = result.f_bavail
+                f_bfree = result.f_bfree
+            return _Stat()
+        return result
+
+    monkeypatch.setattr(os, "statvfs", read_only)
+    blockers = services.packages._blockers(services.packages.check())
+
+    assert any(b["code"] == "read_only_root" for b in blockers), blockers

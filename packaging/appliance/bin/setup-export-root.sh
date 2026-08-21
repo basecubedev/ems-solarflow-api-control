@@ -1079,9 +1079,13 @@ for name in $EXPORTS; do
     [ -n "$identity" ] || fail "$name cannot be identified in $INSTALL_ROOT"
 
     acl_capture_before "$handle" recursive "$source_dir"
-    setfacl -R -m "u:${BACKUP_USER}:rX" "$handle" \
+    # The mask is set with the entry, not left to be derived. A named-user ACL
+    # is capped by the mask, and on a 0600 file or a 0700 directory -- which is
+    # what the EMS writes its secrets as -- the derived mask is empty, so the
+    # grant would read as present in getfacl and be effective for nothing.
+    setfacl -R -m "u:${BACKUP_USER}:rX,m::rX" "$handle" \
         || acl_abort "cannot set the read ACL on $name"
-    setfacl -R -d -m "u:${BACKUP_USER}:rX" "$handle" \
+    setfacl -R -d -m "u:${BACKUP_USER}:rX,m::rX" "$handle" \
         || acl_abort "cannot set the default ACL on $name"
 
     [ "$(readlink "$handle" 2>/dev/null)" = "$source_dir" ] \

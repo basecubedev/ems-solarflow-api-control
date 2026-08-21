@@ -85,18 +85,23 @@ def setfacl(arguments):
         for item in map(key_for, targets(path, recursive)):
             entries = state.setdefault(item, {"access": {}, "default": {}})
             if modify:
-                fields = modify.split(":")
-                if len(fields) != 3 or fields[0] not in ("u", "user"):
-                    continue
-                # A default ACL only exists on a directory, as with real setfacl.
-                if kind == "default" and not os.path.isdir(item):
-                    continue
-                entries[kind][fields[1]] = fields[2]
+                # Real setfacl takes a comma-separated list, and the mask is set
+                # alongside the entry it would otherwise cap. Only named-user
+                # entries are modelled here, which is what the script reads back.
+                for spec in modify.split(","):
+                    fields = spec.split(":")
+                    if len(fields) != 3 or fields[0] not in ("u", "user"):
+                        continue
+                    # A default ACL only exists on a directory, as with real setfacl.
+                    if kind == "default" and not os.path.isdir(item):
+                        continue
+                    entries[kind][fields[1]] = fields[2]
             elif remove:
-                fields = remove.split(":")
-                if len(fields) < 2 or fields[0] not in ("u", "user"):
-                    continue
-                entries[kind].pop(fields[1], None)
+                for spec in remove.split(","):
+                    fields = spec.split(":")
+                    if len(fields) < 2 or fields[0] not in ("u", "user"):
+                        continue
+                    entries[kind].pop(fields[1], None)
     save(state)
     return 0
 

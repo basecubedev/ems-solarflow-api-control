@@ -341,7 +341,7 @@ def test_the_release_channel_has_no_mutable_fallback_configured():
 
 def test_logrotate_bounds_the_appliance_logs():
     rules = (PACKAGING / "logrotate" / "ems-appliance-manager").read_text(encoding="utf-8")
-    assert "/var/log/ems-appliance-manager/*.log" in rules
+    assert "/var/log/ems-appliance-manager/web/*.log" in rules
     assert "rotate" in rules
     assert "create 0640 ems-appliance-web ems-appliance" in rules
 
@@ -677,3 +677,58 @@ def test_the_root_cli_wrapper_keeps_the_callers_environment_off_sys_path():
 
     assert "python3 -P -m appliance" in wrapper
     assert "${PYTHONPATH" not in wrapper
+
+
+def test_every_tool_the_growth_helper_runs_is_declared_and_checked():
+    """A first boot that cannot grow the medium is the one failure an operator
+    cannot see coming: the helper runs before anything is reachable."""
+
+    from appliance.install_check import AB_REQUIRED_TOOLS
+
+    control = (PACKAGING / "debian" / "control").read_text(encoding="utf-8")
+    checked = {tool for tool, _package, _purpose in AB_REQUIRED_TOOLS}
+    helper = (PACKAGING / "bin" / "grow-persistent.sh").read_text(encoding="utf-8")
+
+    for tool, package in (
+        ("growpart", "cloud-guest-utils"),
+        ("resize2fs", "e2fsprogs"),
+        ("dumpe2fs", "e2fsprogs"),
+    ):
+        assert tool in helper, f"{tool} is no longer used by the helper"
+        assert tool in checked, f"verify-install does not check {tool}"
+        depends = control.split("Depends:")[1].split("Recommends:")[0]
+        assert package in depends, f"{package} is not a dependency"
+
+
+def test_removal_disables_every_unit_installation_enabled():
+    """A dangling .wants symlink is a unit systemd still tries to start."""
+
+    import re
+
+    postinst = (PACKAGING / "debian" / "postinst").read_text(encoding="utf-8")
+    prerm = (PACKAGING / "debian" / "prerm").read_text(encoding="utf-8")
+
+    enabled = set()
+    for block in re.findall(r'(?:AB_)?UNITS="([^"]+)"', postinst):
+        enabled.update(block.split())
+
+    assert enabled, "no unit list was found in postinst"
+    for unit in enabled:
+        assert unit in prerm, f"{unit} is enabled on install and never disabled"
+
+
+def test_the_logrotate_rules_match_files_that_exist():
+    """After the web/agent split the shipped stanza matched nothing at all."""
+
+    rules = (PACKAGING / "logrotate" / "ems-appliance-manager").read_text(encoding="utf-8")
+
+    assert "/var/log/ems-appliance-manager/web/*.log" in rules
+    assert "/var/log/ems-appliance-manager/agent/*.log" in rules
+    # The audit trail is the record of what was done to this appliance.
+    assert "/var/log/ems-appliance-manager/audit" not in rules
+
+
+def test_a_shipped_etc_file_is_a_conffile():
+    conffiles = (PACKAGING / "debian" / "conffiles").read_text(encoding="utf-8").split()
+
+    assert "/etc/logrotate.d/ems-appliance-manager" in conffiles

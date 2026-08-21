@@ -49,6 +49,9 @@ AB_REQUIRED_TOOLS = (
     ("mount", "mount", "inspecting a written slot read-only"),
     ("umount", "mount", "releasing an inspection mount"),
     ("ssh-keygen", "openssh-client", "creating the persistent host identity"),
+    ("growpart", "cloud-guest-utils", "growing the persistent partition on first boot"),
+    ("resize2fs", "e2fsprogs", "growing the persistent filesystem into it"),
+    ("dumpe2fs", "e2fsprogs", "measuring the persistent filesystem before growing it"),
 )
 
 # Wanted for a filesystem check before an inspection mount, not required for

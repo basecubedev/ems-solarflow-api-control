@@ -39,8 +39,15 @@ case "$1" in
             systemctl stop ems-appliance-web.service || true
             systemctl stop ems-appliance-agent.service || true
             systemctl stop ems-appliance-export.path || true
+            # Every unit postinst enabled, or removal leaves dangling .wants
+            # symlinks behind for the A/B half.
             systemctl disable ems-appliance-web.service ems-appliance-agent.service \
-                              ems-appliance-export.service ems-appliance-export.path || true
+                              ems-appliance-export.service ems-appliance-export.path \
+                              ems-appliance-host-identity.service \
+                              ems-appliance-persistence.service \
+                              ems-appliance-ab-health.service \
+                              ems-appliance-slot-bootstrap.service \
+                              ems-appliance-grow-persistent.service || true
         fi
         # The export binds must go before the package does, or the mount points
         # survive as stale read-only views of EMS data.

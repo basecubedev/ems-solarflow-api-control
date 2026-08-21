@@ -262,14 +262,30 @@ def test_the_persistent_partition_is_grown_only_once_on_a_fresh_medium():
 
 
 def test_the_growth_script_is_the_only_thing_that_can_repartition():
-    """It is a shell unit precisely so no request-handling code path can."""
+    """It is a shell unit precisely so no request-handling code path can.
+
+    The allowlist is the real gate: commands.py refuses to run anything that is
+    not in it. Naming a tool is not invoking one -- verify-install has to know
+    growpart exists in order to report it missing -- so what is checked here is
+    that no module hands one of these to a runner.
+    """
+
+    import ast
 
     from appliance.commands import EXECUTABLES
 
-    for tool in ("growpart", "resize2fs", "sfdisk", "parted", "sgdisk"):
+    repartitioning = {"growpart", "resize2fs", "sfdisk", "parted", "sgdisk"}
+    for tool in repartitioning:
         assert tool not in EXECUTABLES, tool
+
     for path in (ROOT / "appliance").glob("*.py"):
-        assert "growpart" not in read(path), path.name
+        tree = ast.parse(read(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not node.args:
+                continue
+            first = node.args[0]
+            if isinstance(first, ast.Constant) and first.value in repartitioning:
+                raise AssertionError(f"{path.name} invokes {first.value}")
 
 
 # --- no in-place conversion anywhere ----------------------------------------

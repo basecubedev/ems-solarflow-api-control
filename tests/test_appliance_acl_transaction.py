@@ -11,6 +11,8 @@ that failed halfway has to be put back rather than reported as a partial
 success.
 """
 
+from pathlib import Path
+
 import pytest
 
 from tests.helpers.appliance_export_script import BACKUP_USER, ExportScriptHarness
@@ -592,3 +594,17 @@ def test_a_reinstall_that_changed_nothing_reports_nothing(harness):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "changed after the last" not in result.stderr, result.stderr
     assert "re-granted" not in (harness.status().get("detail") or ""), harness.status()
+
+
+def test_the_read_grant_sets_the_mask_that_would_otherwise_cap_it():
+    """A named-user ACL is capped by the mask, and the mask is derived from the
+    group bits: on the 0600 files the EMS writes its secrets as, a grant that
+    leaves the mask alone is present in getfacl and effective for nothing."""
+
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "packaging" / "appliance" / "bin" / "setup-export-root.sh"
+    ).read_text(encoding="utf-8")
+
+    assert 'setfacl -R -m "u:${BACKUP_USER}:rX,m::rX"' in script
+    assert 'setfacl -R -d -m "u:${BACKUP_USER}:rX,m::rX"' in script

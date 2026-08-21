@@ -607,14 +607,18 @@ def test_the_declared_package_dependencies_cover_every_required_ab_tool():
         assert package in depends, package
 
 
-def test_the_optional_ab_tools_are_recommended_not_required():
+def test_the_optional_ab_tools_are_at_least_recommended():
+    """A package that became a hard dependency for another tool satisfies this
+    too: a stronger guarantee is not a missing weaker one."""
+
     from appliance import install_check
 
     control = _control_file().read_text(encoding="utf-8")
+    depends = control.split("Depends:", 1)[1].split("Recommends:", 1)[0]
     recommends = control.split("Recommends:", 1)[1].split("\nHomepage:", 1)[0]
 
     for _tool, package, _purpose in install_check.AB_OPTIONAL_TOOLS:
-        assert package in recommends, package
+        assert package in recommends or package in depends, package
 
 
 def _control_file():

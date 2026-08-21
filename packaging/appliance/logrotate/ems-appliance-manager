@@ -1,5 +1,15 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-/var/log/ems-appliance-manager/*.log {
+#
+# The web and agent logs are already bounded in-process; this is the second
+# bound, and it matters on an SD card. The two trees have different owners and
+# are rotated separately because the web account must never gain write access
+# to anything the agent owns.
+#
+# The audit trail under audit/ is deliberately absent: it is the record of what
+# was done to this appliance, it is bounded where it is written, and rotation
+# by anything but the agent would be a way to shorten it.
+
+/var/log/ems-appliance-manager/web/*.log {
     weekly
     rotate 8
     missingok
@@ -9,4 +19,16 @@
     copytruncate
     su ems-appliance-web ems-appliance
     create 0640 ems-appliance-web ems-appliance
+}
+
+/var/log/ems-appliance-manager/agent/*.log {
+    weekly
+    rotate 8
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    su root root
+    create 0640 root root
 }
