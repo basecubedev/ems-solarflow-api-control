@@ -54,3 +54,16 @@ anything — the same actions are available in both.
 - [Updates](updates.md)
 - [Network](network.md)
 - [Backups](backup.md)
+
+## While the appliance is down
+
+The EMS is what tells your battery and inverter what to do, and they keep the
+last instruction until they get a new one. Whenever the appliance restarts —
+a reboot, a shutdown, an operating-system update — that instruction stays in
+force and nothing replaces it with a safe default. An OS update is the longest
+of these, because it also waits for the new system to prove itself and to bring
+the containers back.
+
+Nothing is damaged by this; the hardware simply carries on doing what it was
+last told. It is worth knowing before you start an update at a moment when the
+setpoint matters.

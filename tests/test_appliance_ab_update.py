@@ -624,3 +624,14 @@ def test_the_status_reports_decoder_readiness_apart_from_ab_support(service):
         "layout_ready",
         "release_keyring_ready",
     }
+
+
+def test_the_update_plan_names_the_control_gap_before_it_is_confirmed():
+    """The EMS is the single writer of the inverter's output limit, and the
+    devices hold the last commanded value until something writes again. An OS
+    update produces the longest gap any appliance operation does."""
+
+    from appliance.os_update import CONTROL_GAP_WARNING
+
+    assert "output limit" in CONTROL_GAP_WARNING
+    assert "trial boot" in CONTROL_GAP_WARNING

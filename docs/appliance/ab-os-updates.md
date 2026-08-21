@@ -8,6 +8,20 @@ The decision to build on the native Raspberry Pi `tryboot` mechanism rather than
 on a third-party update framework is recorded in
 [adr/ab-native-tryboot.md](adr/ab-native-tryboot.md).
 
+
+## What stops while an update runs
+
+The EMS is the single writer of the Zendure devices' output limit, and a device
+holds whatever was last written to it until something writes again. An OS update
+stops the EMS for the slot write, the reboot, the trial boot and the container
+reconstruction that follows it — the longest control gap any appliance operation
+produces. For that whole time the inverter keeps charging or discharging at the
+setpoint it was last given; nothing commands a safe value first, and nothing
+falls back to one on its own.
+
+Plan an update for a time when that is acceptable. The plan states this before
+you confirm it, and the same is true of a reboot, a shutdown and a rollback.
+
 ## Three rollbacks that are not the same thing
 
 The appliance already had two rollback mechanisms before this one existed. They

@@ -237,6 +237,18 @@ class UpdatePlan:
         }
 
 
+# The EMS is the single writer of the inverter's output limit, and the devices
+# hold whatever was last written until something writes again. An OS update
+# stops it for the write, the reboot, the trial boot and the runtime
+# reconstruction, so the control gap is the longest any appliance operation
+# produces and the operator has to be told before confirming.
+CONTROL_GAP_WARNING = (
+    "EMS control stops for the whole update: the slot write, the reboot, the "
+    "trial boot and the container reconstruction after it. The inverter keeps "
+    "the output limit last commanded to it for that entire time; nothing "
+    "commands a safe value first."
+)
+
 FALLBACK_DESCRIPTION = (
     "The trial boot is one-shot. If the new slot does not prove itself, the next "
     "ordinary boot returns to the current slot with nothing changed."
@@ -536,6 +548,7 @@ class OsUpdateService:
             automatic_fallback=FALLBACK_DESCRIPTION,
             risk="moderate" if not blockers else "blocked",
             blockers=blockers,
+            warnings=[CONTROL_GAP_WARNING],
             authority=authority,
             confirmed=confirmed,
             kind=kind,
@@ -609,6 +622,7 @@ class OsUpdateService:
             automatic_fallback=FALLBACK_DESCRIPTION,
             risk="moderate" if not blockers else "blocked",
             blockers=blockers,
+            warnings=[CONTROL_GAP_WARNING],
             authority=authority,
             confirmed=confirmed,
             kind="rollback",
