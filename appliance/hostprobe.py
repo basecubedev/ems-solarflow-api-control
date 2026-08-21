@@ -14,6 +14,24 @@ from pathlib import Path
 MODEL_FILE = "proc/device-tree/model"
 OS_RELEASE_FILE = "etc/os-release"
 UPTIME_FILE = "proc/uptime"
+
+
+def uptime_seconds(root="/"):
+    """Seconds since this boot, from the kernel.
+
+    The one reader in this project. It is what the A/B trial window measures,
+    because a wall clock on a board with no real-time clock does not survive
+    the reboot the window spans.
+    """
+
+    try:
+        raw = (Path(root) / UPTIME_FILE).read_text(encoding="utf-8", errors="replace").split()
+    except OSError:
+        return 0.0
+    try:
+        return float(raw[0]) if raw else 0.0
+    except ValueError:
+        return 0.0
 MEMINFO_FILE = "proc/meminfo"
 # PID 1 is in the initial mount namespace. The agent's own namespace is a
 # snapshot taken when systemd applied ProtectHome/PrivateTmp, so /proc/self
@@ -64,8 +82,7 @@ class HostProbe:
         }
 
     def uptime(self):
-        raw = (self._read(UPTIME_FILE) or "").split()
-        seconds = float(raw[0]) if raw else 0.0
+        seconds = uptime_seconds(self.root)
         return {"seconds": int(seconds), "days": int(seconds // 86400)}
 
     def system_time(self):

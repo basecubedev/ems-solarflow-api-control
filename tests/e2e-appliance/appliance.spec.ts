@@ -258,6 +258,46 @@ test.describe("admin lifecycle @authority", () => {
     );
   });
 
+  test("an appliance that never had Admin offers to install it, not to repair it", async ({
+    page,
+    request,
+  }) => {
+    await request.post("/api/test/reset", { data: { never_installed: true } });
+    await signIn(page);
+    await openView(page, "admin");
+
+    await expect(page.locator('[data-test="admin-bootstrap-install"]')).toBeVisible();
+    await expect(page.locator('[data-test="admin-repair-stage"]')).toHaveCount(0);
+    await expect(page.locator('[data-test="admin-rollback-stage"]')).toHaveCount(0);
+
+    await Promise.all([
+      page.waitForResponse((response) => response.url().includes("/api/admin/plan-install")),
+      page.locator('[data-test="admin-bootstrap-plan"]').click(),
+    ]);
+    await expect(page.locator("#dialog")).toBeVisible();
+    await expect(page.locator('[data-test="plan-creates-deployment"]')).toContainText(
+      "docker-compose.admin.yml",
+    );
+  });
+
+  test("typing survives the two-second poll", async ({ page }) => {
+    await signIn(page);
+    await setMode(page, "expert");
+    await openView(page, "admin");
+
+    await page.locator('[data-test="install-channel"]').selectOption("exact");
+    const tag = page.locator('[data-test="install-tag"]');
+    await tag.click();
+    await tag.type("v1.1.0", { delay: 40 });
+
+    // Long enough for at least two poll ticks to have rebuilt the page.
+    await page.waitForResponse((response) => response.url().includes("/api/operations"));
+    await page.waitForResponse((response) => response.url().includes("/api/operations"));
+
+    await expect(tag).toHaveValue("v1.1.0");
+    await expect(tag).toBeFocused();
+  });
+
   test("a digest that cannot be resolved is reported, not worked around", async ({
     page,
     request,

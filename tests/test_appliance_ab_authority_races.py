@@ -28,6 +28,7 @@ import pytest
 from appliance import ab_bootstrap, ab_health, os_update, source_bundle
 from appliance.ab_state import AbStateError, SlotRecord
 from appliance.os_update import OsUpdateError
+from appliance.ab_persistence import PERSISTENT_SCHEMA_VERSION
 from tests.helpers.appliance_ab import SLOT_BOOT_PARTITION
 from tests.helpers.appliance_deployment import (
     ADMIN_SERVICE,
@@ -482,7 +483,7 @@ def test_the_whole_plan_bootstrap_health_path_runs_on_production_adapters(tmp_pa
             "release_version": "1.5.0",
             "build_id": payload["target_build_id"],
             "layout_id": "ems-appliance-rota-v1",
-            "persistent_schema_version": 2,
+            "persistent_schema_version": PERSISTENT_SCHEMA_VERSION,
             "slot_schema_version": 2,
         }
     )

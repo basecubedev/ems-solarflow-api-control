@@ -19,7 +19,7 @@ cd "$(dirname "$0")/.."
 
 GATES="static python-full simulation-power-control authority security
 system-build docker-first chromium-full firefox-full admin-replacement
-generated-files clean-tree"
+appliance-manager generated-files clean-tree"
 
 if [ "${1:-}" = "--list" ]; then
     printf '%s\n' $GATES
@@ -74,6 +74,11 @@ gate_firefox_full() {
 gate_admin_replacement() {
     run_stage "rc/admin-replacement" \
         npx playwright test --config=playwright.admin-replacement.config.ts
+}
+
+gate_appliance_manager() {
+    run_stage "rc/appliance-manager" \
+        npx playwright test --config=playwright.appliance.config.ts
 }
 
 gate_generated_files() {

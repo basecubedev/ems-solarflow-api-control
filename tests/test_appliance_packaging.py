@@ -316,7 +316,7 @@ def test_the_shipped_configuration_loads(tmp_path):
     )
     config = load_config(paths)
 
-    assert config.web_port == 8080
+    assert config.web_port == 8088
     assert config.admin_port == 8090
     assert config.web_user == "ems-appliance-web"
     assert config.socket_group == "ems-appliance"
@@ -621,3 +621,24 @@ def test_the_forced_command_cannot_be_swapped_for_a_chosen_subsystem():
 
     assert "-s " in tier
     assert "subsystem" in tier.lower()
+
+
+def test_the_admin_installer_the_repair_advice_names_is_shipped():
+    """Three repair findings tell the operator to run install-admin-console.sh.
+
+    On a freshly flashed appliance that script is the only thing that can write
+    the Admin compose and environment files, and the Admin console is in turn
+    the only supported way to deploy EMS. Naming a tool the image does not carry
+    leaves a new owner with a manager that can update Admin but never install it.
+    """
+
+    build = (PACKAGING / "build-deb.sh").read_text(encoding="utf-8")
+    installer = PACKAGING.parents[1] / "deploy" / "admin" / "install-admin-console.sh"
+
+    assert installer.is_file()
+    assert "install-admin-console.sh" in build
+
+    lifecycle = (PACKAGING.parents[1] / "appliance" / "admin_lifecycle.py").read_text(
+        encoding="utf-8"
+    )
+    assert "install-admin-console.sh" in lifecycle

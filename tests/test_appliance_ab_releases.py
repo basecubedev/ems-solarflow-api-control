@@ -16,6 +16,7 @@ from appliance import os_artifacts, os_releases
 from appliance.ab_layout import parse_layout_manifest
 from appliance.os_artifacts import ArtifactError
 from appliance.os_releases import VERIFIED_DEVELOPMENT, VERIFIED_SIGNATURE, ReleaseError
+from appliance.ab_persistence import PERSISTENT_SCHEMA_VERSION
 from tests.helpers.appliance_ab import layout_manifest
 from tests.helpers.appliance_ab_artifacts import (
     BOARD,
@@ -100,10 +101,13 @@ def test_the_verification_call_names_the_configured_keyring_only(releases):
     catalogue.get(release_id)
 
     tool, args, _ = catalogue.runner.calls[0]
-    assert tool == "gpg"
-    assert "--keyring" in args
+    assert tool == "gpgv"
+    assert args.count("--keyring") == 1
     assert args[args.index("--keyring") + 1] == str(releases.keyring_path)
-    assert "--verify" in args
+    # gpgv verifies and nothing else, so the trailing pair is the whole subject:
+    # a detached signature over the manifest it is supposed to cover.
+    assert args[-1].endswith(".manifest.json")
+    assert args[-2] == f"{args[-1]}.asc"
 
 
 def test_an_unknown_release_id_is_refused(releases):
@@ -374,7 +378,7 @@ def problems(release, layout, **overrides):
         "layout": layout,
         "board": BOARD,
         "appliance_version": "0.9.0",
-        "persistent_schema_version": 2,
+        "persistent_schema_version": PERSISTENT_SCHEMA_VERSION,
         "current_build_id": "20260801-1",
     }
     values.update(overrides)
@@ -459,3 +463,30 @@ def test_the_release_projection_survives_json(releases):
     assert payload["signed"] is True
     assert payload["members"]["system"]["role"] == "root"
     assert "keyring" not in payload
+
+
+def test_readiness_reports_a_missing_release_keyring(tmp_path):
+    """The keyring path is configured by default and shipped by no package, so
+    without this the appliance looks update-ready and refuses every artifact at
+    the last moment instead of saying up front that it can verify nothing.
+    """
+
+    from tests.helpers.appliance import build_test_services
+
+    services = build_test_services(tmp_path)
+    readiness = services.os_update.status()["readiness"]
+
+    assert readiness["release_keyring_ready"] is False
+
+
+def test_readiness_accepts_a_keyring_that_is_present(tmp_path):
+    from tests.helpers.appliance import build_test_services
+
+    keyring = tmp_path / "os-release-keyring.gpg"
+    keyring.write_bytes(b"\x99 a public key")
+    services = build_test_services(tmp_path)
+    services.os_update.config = services.os_update.config.__class__(
+        **{**services.os_update.config.__dict__, "os_release_keyring": str(keyring)}
+    )
+
+    assert services.os_update.status()["readiness"]["release_keyring_ready"] is True

@@ -55,7 +55,7 @@ def host(package):
     try:
         container.install_package(package)
         if not container.wait_for_unit(AGENT_UNIT):
-            pytest.skip(f"the agent did not start:\n{container.journal(AGENT_UNIT)}")
+            pytest.fail(f"the agent did not start:\n{container.journal(AGENT_UNIT)}")
         container.wait_for_path(SOCKET_PATH)
         yield container
     finally:

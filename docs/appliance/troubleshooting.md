@@ -130,7 +130,7 @@ Use **Admin → Repair** for a preview of what is wrong. Typical findings:
 | Docker is stopped | Start Docker |
 | Container missing | Reinstall the selected version |
 | Container stopped | Start Admin |
-| Compose file or Admin service missing | Manual: recreate it with `install-admin-console.sh`; the repair reports `manual_action_required` |
+| Compose file or Admin service missing | Manual: recreate it with `install-admin-console.sh`; the repair reports `manual_action_required`. On an appliance that never had Admin, use **Admin → Install Admin** instead |
 | Bind path missing | Recreate the directory after confirmation |
 | Port 8090 occupied | Stop the shown process yourself; the appliance never kills it |
 

@@ -8,6 +8,8 @@ argv, so they never appear in the host process table.
 """
 
 import time
+
+from appliance import ab_layout
 from dataclasses import dataclass, field
 
 from appliance.operations import STATE_FAILED_TERMINAL, STATE_SUCCEEDED, STATE_VERIFYING
@@ -137,11 +139,12 @@ def parse_wifi_list(text):
 
 class NetworkService:
     def __init__(self, *, runner, probe, config, operations, time_fn=None, sleep=None,
-                 operation_log=None):
+                 operation_log=None, ab_probe=None):
         self.runner = runner
         self.probe = probe
         self.config = config
         self.operations = operations
+        self.ab_probe = ab_probe
         self._time = time_fn or time.monotonic
         self._sleep = sleep or time.sleep
         self._operation_log = operation_log
@@ -268,6 +271,7 @@ class NetworkService:
         }
 
     def plan_hostname(self, operation, hostname):
+        self._require_writable_hostname()
         current = self.probe.hostname()
         target = validate_hostname(hostname)
         if target == current["hostname"]:
@@ -283,6 +287,25 @@ class NetworkService:
             "admin_url": f"http://{target}.local:{self.config.admin_port}",
             "warning": "The appliance URL changes. Bookmarks using the old name stop working.",
         }
+
+    def _require_writable_hostname(self):
+        """An A/B image cannot keep a hostname, so it does not offer to.
+
+        ``/etc`` is read-only on a slot root and is not one of the declared
+        shared paths, so hostnamectl cannot write it and a value that somehow
+        stuck would be gone at the next slot switch. Failing during execution
+        would only tell the operator after they confirmed.
+        """
+
+        if self.ab_probe is None:
+            return False
+        if ab_layout.discover(self.ab_probe).mode != ab_layout.MODE_AB:
+            return False
+        raise NetworkError(
+            "hostname_not_changeable_on_ab",
+            "this appliance runs an A/B image, where /etc is read-only and belongs to the "
+            "running slot; the hostname is fixed at build time and cannot be changed here",
+        )
 
     # --- execution -------------------------------------------------------
 

@@ -38,6 +38,7 @@ from appliance import (  # noqa: E402
     release_trust,
     runtime_gates,
 )
+from appliance.release_inputs import gate_passed, inspection_passed  # noqa: E402
 
 VERIFICATION_VERSION = 1
 MANIFEST = "kit-manifest.json"
@@ -118,6 +119,32 @@ def private_key_problems(kit):
         except OSError:
             continue
     return [f"{name} carries private key material" for name in leaked]
+
+
+def independent_inspections(kit, manifest):
+    """Every profile's mandatory inspection, read from its own report.
+
+    The manifest's ``physical_ready`` is the kit's own summary of this, and a
+    verifier that reads a summary verifies the summary.
+    """
+
+    reports, problems = [], []
+    for record in manifest.get("builds") or []:
+        profile = str(record.get("profile") or "")
+        prefix = str(record.get("prefix") or "")
+        if not profile or not prefix:
+            problems.append("a build names no profile")
+            continue
+        report = kit / profile / f"reports/image-inspection-{profile}.json"
+        if not report.is_file():
+            report = kit / profile / f"image-inspection-{profile}.json"
+        ok, detail = inspection_passed(report)
+        reports.append(ok)
+        if not ok:
+            problems.append(f"{profile}: {detail}")
+    if not reports:
+        return False, "the kit describes no build to inspect"
+    return all(reports), "; ".join(problems) or "every mandatory inspection passed"
 
 
 def build_locations(kit, manifest):
@@ -216,6 +243,7 @@ def main(argv=None):
                 reports=reports,
                 prefixes=prefixes,
                 gate_report=kit / GATE_REPORT,
+                runtime_gates=kit / RUNTIME_GATES,
             )
         )
         binding = release_trust.verify_source_binding(
@@ -240,9 +268,15 @@ def main(argv=None):
     if attestation is not None and args.project_root:
         freshness = release_trust.freshness(attestation, root=args.project_root)
 
+    gate_ok_independent, gate_independent_detail = gate_passed(kit / GATE_REPORT)
+    inspections_ok_independent, inspections_detail = independent_inspections(kit, manifest)
+
     verdict = release_trust.readiness(
         {
-            "production_gate_pass": bool(manifest.get("release_gate", {}).get("ok")),
+            # Read from the report the attestation proved the identity of, not
+            # from the unsigned manifest's summary of it: a kit that claims a
+            # gate it did not pass is exactly what this verifier exists to catch.
+            "production_gate_pass": gate_ok_independent,
             "attestation_result_pass": attestation is not None
             and attestation.result == release_attestation.PASS,
             "attestation_signature_present": signature.present,
@@ -252,7 +286,7 @@ def main(argv=None):
             and not attestation_problems,
             "source_bundle_verified": binding is not None and binding.ok,
             "all_profiles_verified": not stale,
-            "all_mandatory_inspections_pass": bool(manifest.get("physical_ready")),
+            "all_mandatory_inspections_pass": inspections_ok_independent,
             "runtime_required_gates_pass": gates_ok,
             "release_not_stale": not stale and (freshness is None or not freshness.stale),
             "hardware_kit_verified": not checksums and not leaked,

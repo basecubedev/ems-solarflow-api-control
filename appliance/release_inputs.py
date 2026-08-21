@@ -103,6 +103,56 @@ class SourceBundleAuthority:
         }
 
 
+# The two verdicts a release kit is judged by. They live here so the kit
+# builder, the kit verifier and the release result all read a report the
+# same way, instead of one of them believing a manifest's summary of it.
+def inspection_passed(path):
+    """The verdict, and the mandatory checks it was derived from.
+
+    A report that classifies its findings is read through that classification:
+    a named optional oracle that did not run is not the same defect as a
+    mandatory check nobody executed. A report from before the classification
+    existed is held to the stricter rule — no skipped check at all.
+    """
+
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False, "the inspection report could not be read"
+    result = str(payload.get("result") or "")
+    counts = payload.get("counts") or {}
+    if result != "pass":
+        return False, f"the inspection reports {result or 'nothing'}"
+    if counts.get("fail"):
+        return False, f"{counts['fail']} failed check(s)"
+    skipped = payload.get("mandatory_not_run")
+    if skipped is None:
+        if counts.get("not_run"):
+            return False, f"{counts['not_run']} check(s) never ran"
+        return True, "pass"
+    if skipped:
+        return False, f"mandatory check(s) never ran: {', '.join(skipped)}"
+    return True, "pass"
+
+
+def gate_passed(path):
+    """The gate report's own verdict.
+
+    Only meaningful once the attestation has proven *which* file this is: the
+    words RESULT: PASS are a claim anyone can write, and a stale report from a
+    previous build carries them just as convincingly.
+    """
+
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False, "the release gate report could not be read"
+    if "RESULT: PASS" not in text:
+        last = [line for line in text.splitlines() if line.startswith("RESULT:")]
+        return False, last[-1] if last else "the report carries no verdict"
+    return True, "RESULT: PASS"
+
+
 def describe_source_bundle(bundle, *, root, ref="HEAD", created_at=None):
     """Record what this bundle is, from the object tree it was archived from.
 

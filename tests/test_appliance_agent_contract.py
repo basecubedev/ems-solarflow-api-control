@@ -505,3 +505,44 @@ def test_no_host_process_is_started_by_a_refused_request(handlers, services):
     with pytest.raises(ProtocolError):
         handlers.dispatch({"operation": "admin.plan_install", "channel": "exact", "tag": "latest"})
     assert services.host.calls == []
+
+
+# --- how long a caller waits ------------------------------------------------
+
+
+def test_a_planner_that_pulls_an_image_may_take_longer_than_the_default():
+    """The 30s default cut off planners that pull, and the caller giving up
+    left the operation it had already created holding the lock."""
+
+    from appliance.agent_client import DEFAULT_TIMEOUT, operation_timeout
+
+    for name in ("admin.plan_install", "admin.plan_rollback", "ab.plan_update", "ab.plan_fetch"):
+        assert operation_timeout(name) > DEFAULT_TIMEOUT, name
+
+
+def test_a_read_only_call_keeps_the_short_timeout():
+    from appliance.agent_client import DEFAULT_TIMEOUT, operation_timeout
+
+    for name in ("status.get", "admin.get", "ab.status"):
+        assert operation_timeout(name) == DEFAULT_TIMEOUT, name
+
+
+def test_the_registry_is_the_only_place_a_timeout_is_declared():
+    """One owner: the spec that already carries mutating and takes_lock."""
+
+    from appliance import protocol
+    from appliance.agent_client import operation_timeout
+
+    for name, spec in protocol.OPERATIONS.items():
+        assert operation_timeout(name) == spec.timeout_seconds, name
+
+
+def test_an_unreachable_agent_still_fails_fast(tmp_path):
+    """Patience for a working agent must not become patience for a dead one."""
+
+    from appliance.agent_client import AgentClient, AgentUnavailableError
+
+    client = AgentClient(tmp_path / "missing.sock")
+
+    with pytest.raises(AgentUnavailableError):
+        client.call("admin.plan_install", channel="latest_stable", reinstall=False)

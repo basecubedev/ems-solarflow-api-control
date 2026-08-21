@@ -335,7 +335,7 @@ def parse_manifest(payload, *, release_id="", verified=VERIFIED_NONE):
 class SignatureVerifier:
     """Detached-signature verification against a root-owned keyring.
 
-    The keyring path comes from the host configuration only. ``gpg`` is invoked
+    The keyring path comes from the host configuration only. ``gpgv`` is invoked
     through the allowlisted command runner with a fixed argv; there is no shell
     and no caller-supplied option.
     """
@@ -352,7 +352,7 @@ class SignatureVerifier:
 
     @property
     def available(self):
-        return bool(self.keyring) and self.runner is not None and self.runner.available("gpg")
+        return bool(self.keyring) and self.runner is not None and self.runner.available("gpgv")
 
     def verify(self, manifest_path, signature_path):
         if not self.keyring:
@@ -364,20 +364,17 @@ class SignatureVerifier:
             raise ReleaseError(
                 "release_keyring_missing", f"the OS release keyring {self.keyring} does not exist"
             )
-        if self.runner is None or not self.runner.available("gpg"):
+        if self.runner is None or not self.runner.available("gpgv"):
             raise ReleaseError(
-                "release_verification_unavailable", "gpg is not installed on this appliance"
+                "release_verification_unavailable", "gpgv is not installed on this appliance"
             )
         result = self.runner.run(
-            "gpg",
+            "gpgv",
             [
-                "--batch",
                 "--status-fd",
                 "1",
-                "--no-default-keyring",
                 "--keyring",
                 self.keyring,
-                "--verify",
                 str(signature_path),
                 str(manifest_path),
             ],
@@ -408,15 +405,12 @@ class SignatureVerifier:
         if not self.available or not Path(self.keyring).is_file():
             return ()
         result = self.runner.run(
-            "gpg",
+            "gpgv",
             [
-                "--batch",
                 "--status-fd",
                 "1",
-                "--no-default-keyring",
                 "--keyring",
                 self.keyring,
-                "--verify",
                 str(signature_path),
                 str(manifest_path),
             ],

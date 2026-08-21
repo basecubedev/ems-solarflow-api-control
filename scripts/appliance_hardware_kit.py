@@ -49,6 +49,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from appliance import build_authority, media_sizing, release_trust, runtime_gates  # noqa: E402
+from appliance.release_inputs import gate_passed, inspection_passed  # noqa: E402
 
 KIT_VERSION = 2
 AUTHORITY_SUFFIX = ".build-authority.json"
@@ -223,54 +224,9 @@ def verify_build(authority, entries):
     return problems
 
 
-def inspection_passed(path):
-    """The verdict, and the mandatory checks it was derived from.
-
-    A report that classifies its findings is read through that classification:
-    a named optional oracle that did not run is not the same defect as a
-    mandatory check nobody executed. A report from before the classification
-    existed is held to the stricter rule — no skipped check at all.
-    """
-
-    try:
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return False, "the inspection report could not be read"
-    result = str(payload.get("result") or "")
-    counts = payload.get("counts") or {}
-    if result != "pass":
-        return False, f"the inspection reports {result or 'nothing'}"
-    if counts.get("fail"):
-        return False, f"{counts['fail']} failed check(s)"
-    skipped = payload.get("mandatory_not_run")
-    if skipped is None:
-        if counts.get("not_run"):
-            return False, f"{counts['not_run']} check(s) never ran"
-        return True, "pass"
-    if skipped:
-        return False, f"mandatory check(s) never ran: {', '.join(skipped)}"
-    return True, "pass"
-
-
-def gate_passed(path):
-    """The gate report's own verdict.
-
-    Only meaningful once the attestation has proven *which* file this is: the
-    words RESULT: PASS are a claim anyone can write, and a stale report from a
-    previous build carries them just as convincingly.
-    """
-
-    try:
-        text = Path(path).read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return False, "the release gate report could not be read"
-    if "RESULT: PASS" not in text:
-        last = [line for line in text.splitlines() if line.startswith("RESULT:")]
-        return False, last[-1] if last else "the report carries no verdict"
-    return True, "RESULT: PASS"
-
-
-def attestation_problems(attestation, dist, reports, gate_report, wanted, authorities):
+def attestation_problems(
+    attestation, dist, reports, gate_report, wanted, authorities, runtime_gates=None
+):
     """Does one signed attestation describe exactly these builds?
 
     A kit assembled from whatever a directory happened to contain could not tell
@@ -319,6 +275,7 @@ def attestation_problems(attestation, dist, reports, gate_report, wanted, author
             reports=reports,
             prefixes=prefixes,
             gate_report=gate_report,
+            runtime_gates=runtime_gates,
         )
     )
     return problems
@@ -480,7 +437,13 @@ def main(argv=None):
             attestation_detail = f"{error.code}: {error.message}"
         else:
             attestation_problems_found = attestation_problems(
-                attestation, dist, reports, args.gate_report, wanted, authorities
+                attestation,
+                dist,
+                reports,
+                args.gate_report,
+                wanted,
+                authorities,
+                runtime_gates=args.runtime_gates or None,
             )
             attestation_ok = not attestation_problems_found
             attestation_detail = (

@@ -390,7 +390,11 @@ EVIDENCE_ARGS="--source-authority $SOURCE_AUTHORITY --source-bundle $SOURCE_BUND
 EVIDENCE_ARGS="$EVIDENCE_ARGS --source-parity $PARITY"
 [ -n "$RUNTIME_GATES" ] && EVIDENCE_ARGS="$EVIDENCE_ARGS --runtime-gates $RUNTIME_GATES"
 
+# A kit directory outlives the run that filled it, so a run that built no kit
+# hands over no manifest: an earlier run's readiness is not this release's.
+KIT_MANIFEST_ARG=""
 if [ "$BUILD_KIT" = yes ]; then
+    KIT_MANIFEST_ARG="--kit-manifest $KIT/kit-manifest.json"
     echo
     echo "== the kit an operator carries to the hardware =="
     KIT_ARGS=""
@@ -422,7 +426,7 @@ PYTHONPATH="$ROOT" python3 "$ROOT/scripts/appliance_release_result.py" \
     --markdown "$DIST/release-result.md" \
     --attestation "$ATTESTATION" --gate-report "$REPORT" \
     --package "$PACKAGE" --project-root "$ROOT" \
-    --kit-manifest "$KIT/kit-manifest.json" \
+    $KIT_MANIFEST_ARG \
     $TRUST_ARGS $EVIDENCE_ARGS $RESULT_PROFILE_ARGS \
     || fail "the release result does not add up to a ready release" release_result_incomplete
 

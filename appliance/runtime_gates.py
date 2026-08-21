@@ -42,6 +42,33 @@ REQUIRED_GATES = (
 OPTIONAL_GATES = ("arm64_guest",)
 GATES = REQUIRED_GATES + OPTIONAL_GATES
 
+# What each gate establishes, and where it stops. A bare "pass" is read as a
+# claim about the whole subject; these travel with the evidence so a release
+# reader sees the same limits the gate was written with.
+GATE_SCOPES = {
+    "sftp": (
+        "the chrooted SFTP policy confines the backup account to the export "
+        "root, against a real sshd"
+    ),
+    "package_lifecycle": (
+        "install, upgrade, remove and purge of the built package against real "
+        "dpkg and systemd in a container"
+    ),
+    "docker_reconstruction": (
+        "Docker save, load and digest-pinned pull mechanics against contract "
+        "stand-in images built by this test. It does not exercise the project's "
+        "own Admin, EMS or InfluxDB images, which are arm64 and run on hardware "
+        "this gate does not have"
+    ),
+    "networkmanager_fail_closed": (
+        "a WLAN change that loses connectivity reverts to the previous profile"
+    ),
+    "arm64_guest": (
+        "the package installs and its services start on a booted aarch64 guest "
+        "under emulation. Not a Raspberry Pi: no Pi firmware and no tryboot"
+    ),
+}
+
 
 class RuntimeGateError(Exception):
     def __init__(self, code, message):
@@ -65,6 +92,7 @@ class GateRecord:
     reason: str = ""
     evidence_sha256: str = ""
     environment: str = ""
+    scope: str = ""
 
     @property
     def required(self):
@@ -76,6 +104,7 @@ class GateRecord:
             "reason": self.reason,
             "evidence_sha256": self.evidence_sha256,
             "environment": self.environment,
+            "scope": self.scope or GATE_SCOPES.get(self.name, ""),
         }
 
 
@@ -141,6 +170,7 @@ def record(name, result, *, reason="", evidence=None, environment=""):
         reason=reason,
         evidence_sha256=digest,
         environment=environment,
+        scope=GATE_SCOPES.get(name, ""),
     )
 
 

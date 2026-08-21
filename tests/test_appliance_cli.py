@@ -8,11 +8,20 @@ state directory.
 """
 
 import json
+import os
 
 import pytest
 
 from appliance.auth import AuthStore
-from appliance.cli import _status_summary, build_parser, command_password_reset, main
+from appliance.cli import (
+    EXIT_ERROR,
+    EXIT_OK,
+    _status_summary,
+    build_parser,
+    command_backup_access,
+    command_password_reset,
+    main,
+)
 from appliance.paths import (
     ENV_CONFIG_DIR,
     ENV_INSTALL_ROOT,
@@ -133,3 +142,46 @@ def test_allowlist_command_prints_the_agent_operations(appliance_env, capsys):
     assert "status.get" in payload["operations"]
     assert "admin.plan_install" in payload["operations"]
     assert not [name for name in payload["operations"] if "exec" in name and "operations" not in name]
+
+
+def test_a_disable_that_did_not_revoke_anything_reports_failure(appliance_env, monkeypatch):
+    """``prerm`` treats a zero exit as proof that backup access is off.
+
+    Without a provable account the service withdraws nothing, so reporting
+    success there removes the package while the SSH backup account stays
+    reachable.
+    """
+
+    class _Service:
+        def disable(self, *, reason=""):
+            return {
+                "state": "degraded",
+                "reason": reason,
+                "authentication_disabled": False,
+                "changed": False,
+            }
+
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(
+        "appliance.backup_confinement.build_activation", lambda **kwargs: _Service()
+    )
+
+    assert command_backup_access(Args(action="disable", json=True)) == EXIT_ERROR
+
+
+def test_a_disable_that_withdrew_authentication_reports_success(appliance_env, monkeypatch):
+    class _Service:
+        def disable(self, *, reason=""):
+            return {
+                "state": "degraded",
+                "reason": reason,
+                "authentication_disabled": True,
+                "changed": True,
+            }
+
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(
+        "appliance.backup_confinement.build_activation", lambda **kwargs: _Service()
+    )
+
+    assert command_backup_access(Args(action="disable", json=True)) == EXIT_OK

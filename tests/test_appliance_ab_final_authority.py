@@ -952,7 +952,15 @@ def test_the_canonical_creator_produces_a_bundle_that_passes_parity(tmp_path):
 
 
 @requires_git
-def test_the_canonical_creator_preserves_the_six_persistence_symlinks(tmp_path):
+def shared_path_count():
+    """One activation symlink per declared shared path, from the declaration."""
+
+    from appliance import ab_persistence
+
+    return len(ab_persistence.SHARED_PATHS)
+
+
+def test_the_canonical_creator_preserves_every_persistence_symlink(tmp_path):
     bundle = tmp_path / "review.tar.gz"
     subprocess.run(
         ["sh", str(CREATOR), "--output", str(bundle)],
@@ -970,7 +978,7 @@ def test_the_canonical_creator_preserves_the_six_persistence_symlinks(tmp_path):
             if member.issym() and f"{WANTS}/" in member.name
         ]
 
-    assert len(links) == 6, links
+    assert len(links) == shared_path_count(), links
     assert prefix is not None
 
 
@@ -995,7 +1003,7 @@ def test_the_canonical_creator_writes_a_manifest_beside_the_bundle(tmp_path):
     assert manifest["unexpected"] == []
     assert manifest["unsafe"] == []
     assert manifest["duplicate"] == []
-    assert manifest["symlinks"] == 6
+    assert manifest["symlinks"] == shared_path_count()
     assert len(manifest["ref"]) == 40
 
 
@@ -1399,4 +1407,4 @@ def test_the_checker_detects_the_prefix_of_a_canonical_bundle(tmp_path):
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert "(detected)" in completed.stdout
     assert "RESULT: PASS" in completed.stdout
-    assert "symlinks: 6 preserved" in completed.stdout
+    assert f"symlinks: {shared_path_count()} preserved" in completed.stdout

@@ -50,8 +50,10 @@ EXECUTABLES = {
     # this binary and read as a stream.
     "zstd": ("/usr/bin/zstd", "/bin/zstd"),
     # Detached-signature verification of an OS release manifest, against a
-    # root-owned keyring named by the host configuration.
-    "gpg": ("/usr/bin/gpg", "/usr/bin/gpgv"),
+    # root-owned keyring named by the host configuration. gpgv, not gpg: it is
+    # what the image installs, it needs no writable home on a read-only root,
+    # and it cannot fall back to a default keyring.
+    "gpgv": ("/usr/bin/gpgv",),
 }
 
 

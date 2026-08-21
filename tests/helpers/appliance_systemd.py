@@ -18,6 +18,8 @@ import subprocess
 import uuid
 from pathlib import Path
 
+from appliance.config import DEFAULT_WEB_PORT
+
 ROOT = Path(__file__).resolve().parents[2]
 BUILD_SCRIPT = ROOT / "packaging" / "appliance" / "build-deb.sh"
 
@@ -115,6 +117,10 @@ def repack_with_version(package, version, destination):
     return target
 
 
+REQUIRED_PACKAGES = ("systemd", "systemd-sysv", "adduser", "python3")
+PREREQUISITE_MARKER = "/run/ems-appliance-prerequisites-missing"
+
+
 class SystemdContainer:
     """A booted Debian container used as a disposable appliance host."""
 
@@ -128,10 +134,13 @@ class SystemdContainer:
     def start(self):
         if not docker_available():
             raise SystemdUnavailable("docker is not available")
+        # The failure is recorded rather than swallowed: without these packages
+        # the container boots into something that is not an appliance host, and
+        # every check above it then fails for reasons that never name apt.
         boot = (
-            "apt-get update -qq >/dev/null 2>&1; "
-            "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "
-            "systemd systemd-sysv adduser python3 >/dev/null 2>&1; "
+            "{ apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install "
+            f"-y -qq {' '.join(REQUIRED_PACKAGES)}; }} >/dev/null 2>&1 "
+            f"|| touch {PREREQUISITE_MARKER}; "
             "exec /lib/systemd/systemd"
         )
         result = subprocess.run(
@@ -151,7 +160,18 @@ class SystemdContainer:
             raise SystemdUnavailable(f"cannot start a systemd container: {result.stderr.strip()}")
         self.started = True
         self._await_boot()
+        self._require_prerequisites()
         return self
+
+    def _require_prerequisites(self):
+        marker = self.run(["test", "-e", PREREQUISITE_MARKER], timeout=30)
+        if marker.returncode == 0:
+            self.stop()
+            raise SystemdUnavailable(
+                "the container has no package archive: apt could not install "
+                f"{', '.join(REQUIRED_PACKAGES)}. This tier needs network access to "
+                "Debian, and without it the backup and SFTP checks below verify nothing"
+            )
 
     def _await_boot(self):
         deadline = BOOT_TIMEOUT
@@ -529,8 +549,15 @@ class SystemdContainer:
 
     # --- the installed web service ----------------------------------------
 
-    def drive_web_service(self, *, password=SMOKE_PASSWORD, port=8080, timeout=600):
-        """Run the packaged HTTP flow and return the client's JSON report."""
+    def drive_web_service(self, *, password=SMOKE_PASSWORD, port=None, timeout=600):
+        """Run the packaged HTTP flow and return the client's JSON report.
+
+        The port comes from the module that owns it, never from a copy here.
+        A second constant is a probe that keeps pointing at the old port after
+        the service moves, and then reports the move as "connection refused".
+        """
+
+        port = DEFAULT_WEB_PORT if port is None else port
 
         self.copy_in(HTTP_CLIENT, "/root/appliance_http_client.py")
         result = self.run(

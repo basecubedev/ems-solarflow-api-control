@@ -31,6 +31,7 @@ from appliance.hostprobe import HostProbe
 from appliance.known_good import KnownGoodStore
 from appliance.network import NetworkService
 from appliance.operations import OperationStore
+from appliance.os_fetch import OsFetchService
 from appliance.os_releases import OsReleaseCatalogue, ReleaseSource
 from appliance.os_update import OsUpdateService
 from appliance.packages import PackageService
@@ -62,6 +63,7 @@ class ApplianceServices:
     audit: object
     operation_log: object
     os_update: object = None
+    os_fetch: object = None
     ab_probe: object = None
     ab_state: object = None
     ab_bootstrap: object = None
@@ -80,6 +82,7 @@ def build_services(
     time_fn=None,
     sleep=None,
     create_directories=True,
+    admin_bootstrap=None,
 ):
     paths = paths or resolve_paths()
     if create_directories:
@@ -112,6 +115,7 @@ def build_services(
         time_fn=time_fn,
         sleep=sleep,
         operation_log=operation_log,
+        bootstrap=admin_bootstrap,
     )
     packages = PackageService(
         runner=runner,
@@ -122,9 +126,11 @@ def build_services(
         time_fn=time_fn,
         operation_log=operation_log,
     )
+    ab_probe = LayoutProbe(root=root, runner=runner)
     network = NetworkService(
         runner=runner,
         probe=probe,
+        ab_probe=ab_probe,
         config=config,
         operations=operations,
         time_fn=time_fn,
@@ -160,7 +166,6 @@ def build_services(
     # reason rather than the feature being absent and unexplained.
     from appliance.version import APPLIANCE_VERSION
 
-    ab_probe = LayoutProbe(root=root, runner=runner)
     ab_state = AbStateStore(paths.os_update_dir, time_fn=time_fn)
     ab_runtime = RuntimeRecordStore(paths.os_update_dir, time_fn=time_fn)
     # Container and compose-service names come from the host configuration, so
@@ -218,6 +223,19 @@ def build_services(
         bootstrap=ab_bootstrap,
     )
     status.os_update = os_update
+    # The transport is a separate service from the one that applies an update:
+    # acquiring a release and writing a slot are different authorities, and the
+    # fetch needs the host probe for the clock the A/B layout probe knows
+    # nothing about.
+    os_fetch = OsFetchService(
+        paths=paths,
+        config=config,
+        catalogue=os_update.catalogue,
+        probe=probe,
+        operations=operations,
+        time_fn=time_fn,
+        operation_log=operation_log,
+    )
     support = SupportArchiveService(
         paths=paths, config=config, status_service=status, operations=operations, time_fn=time_fn
     )
@@ -241,6 +259,7 @@ def build_services(
         audit=audit,
         operation_log=operation_log,
         os_update=os_update,
+        os_fetch=os_fetch,
         ab_probe=ab_probe,
         ab_state=ab_state,
         ab_bootstrap=ab_bootstrap,

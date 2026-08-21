@@ -151,7 +151,7 @@ verification → result**.
 ## Network endpoints
 
 ```text
-http://ems-solarflow.local:8080   Raspberry Pi Appliance Manager
+http://ems-solarflow.local:8088   Raspberry Pi Appliance Manager
 http://ems-solarflow.local:8090   EMS Admin Console
 ```
 

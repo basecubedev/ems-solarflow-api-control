@@ -21,6 +21,7 @@ from appliance import (
     admin_lifecycle,
     network,
     operation_schema,
+    os_releases,
     os_update,
     packages,
     ssh_service,
@@ -28,6 +29,7 @@ from appliance import (
     validation,
 )
 from appliance.audit import RESULT_DENIED, RESULT_FAILURE, RESULT_SUCCESS
+from appliance.os_fetch import TYPE_OS_FETCH, FetchError
 from appliance.operations import (
     STATE_FAILED_RECOVERABLE,
     STATE_FAILED_TERMINAL,
@@ -57,6 +59,7 @@ PLAN_TYPES = {
     "support.plan_archive": support_archive.TYPE_SUPPORT_ARCHIVE,
     "ab.plan_update": os_update.TYPE_OS_UPDATE,
     "ab.plan_rollback": os_update.TYPE_OS_ROLLBACK,
+    "ab.plan_fetch": TYPE_OS_FETCH,
     "system.plan_reboot": "system.reboot",
     "system.plan_shutdown": "system.shutdown",
 }
@@ -76,6 +79,7 @@ AUDITED_PLANS = {
     "system.shutdown": "system.shutdown",
     os_update.TYPE_OS_UPDATE: "ab.update.plan",
     os_update.TYPE_OS_ROLLBACK: "ab.rollback.plan",
+    TYPE_OS_FETCH: "ab.fetch.plan",
 }
 
 
@@ -173,6 +177,8 @@ class AgentHandlers:
             return self.services.admin.releases()
         if spec.name == "ab.status":
             return self._ab_status()
+        if spec.name == "ab.sources":
+            return self._require_fetch().index()
         if spec.name == "network.wifi.scan":
             return {"networks": self.services.network.scan()}
         if spec.name == "operations.list":
@@ -200,12 +206,20 @@ class AgentHandlers:
             packages.PackageError,
             network.NetworkError,
             ssh_service.SshServiceError,
+            os_update.OsUpdateError,
+            os_releases.ReleaseError,
+            FetchError,
             ValidationError,
             OperationError,
         ) as exc:
-            self.services.operations.cancel(operation.operation_id)
-            self._audit(operation_type, actor, source_ip, RESULT_FAILURE, operation.operation_id)
+            self._abandon_plan(operation, operation_type, actor, source_ip)
             raise AgentError(getattr(exc, "code", "plan_failed"), str(getattr(exc, "message", exc)))
+        except BaseException:
+            # The lock this planner took outlives the exception unless it is
+            # released here, and a lock nobody releases blocks every later
+            # operation on the appliance.
+            self._abandon_plan(operation, operation_type, actor, source_ip)
+            raise
 
         # The planner has finished writing the target, so this is the last
         # moment the record and the plan describe the same thing. Sealing them
@@ -224,6 +238,10 @@ class AgentHandlers:
             "plan": plan,
             "confirmation_token": record.confirmation_token,
         }
+
+    def _abandon_plan(self, operation, operation_type, actor, source_ip):
+        self.services.operations.cancel(operation.operation_id)
+        self._audit(operation_type, actor, source_ip, RESULT_FAILURE, operation.operation_id)
 
     def _build_plan(self, name, operation, args):
         services = self.services
@@ -270,6 +288,8 @@ class AgentHandlers:
             )
         if name == "ab.plan_rollback":
             return self._require_ab().plan_rollback(operation)
+        if name == "ab.plan_fetch":
+            return self._require_fetch().plan_fetch(operation, args["release_id"])
         if name in ("system.plan_reboot", "system.plan_shutdown"):
             return self._plan_power(operation, name)
         raise AgentError("unknown_operation", f"{name} has no planner")
@@ -384,6 +404,8 @@ class AgentHandlers:
             return services.support.execute
         if operation_type in (os_update.TYPE_OS_UPDATE, os_update.TYPE_OS_ROLLBACK):
             return self._execute_ab
+        if operation_type == TYPE_OS_FETCH:
+            return self._execute_fetch
         if operation_type in ("system.reboot", "system.shutdown"):
             return self._execute_power
         raise AgentError("unknown_operation_type", f"{operation_type} is not executable")
@@ -397,6 +419,23 @@ class AgentHandlers:
                 "ab_unavailable", "this appliance has no A/B operating-system update service"
             )
         return service
+
+    def _require_fetch(self):
+        service = getattr(self.services, "os_fetch", None)
+        if service is None:
+            raise AgentError(
+                "ab_unavailable", "this appliance has no OS release download service"
+            )
+        return service
+
+    def _execute_fetch(self, operation):
+        from appliance.operations import STATE_SUCCEEDED
+
+        result = self._require_fetch().execute(operation)
+        self.services.operations.finish(
+            operation.operation_id, STATE_SUCCEEDED, result=result
+        )
+        return result
 
     def _ab_status(self):
         service = getattr(self.services, "os_update", None)

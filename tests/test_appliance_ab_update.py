@@ -292,7 +292,7 @@ def test_the_trial_reboot_uses_one_fixed_argument(service):
     reboots = [
         args for tool, args, _ in service.runner.calls if tool == "systemctl" and args[:1] == ("reboot",)
     ]
-    assert reboots == [("reboot", "0 tryboot")]
+    assert reboots == [("reboot", "--reboot-argument=0 tryboot")]
 
 
 def test_the_target_slot_stops_being_a_rollback_candidate_before_the_first_byte(
@@ -622,4 +622,5 @@ def test_the_status_reports_decoder_readiness_apart_from_ab_support(service):
         "docker_reconstruction_ready",
         "deployment_authority_ready",
         "layout_ready",
+        "release_keyring_ready",
     }

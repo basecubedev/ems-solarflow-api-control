@@ -71,7 +71,13 @@ class Client:
 
 
 def main(argv):
-    base = argv[1] if len(argv) > 1 else "http://127.0.0.1:8080"
+    # Required, not defaulted: this script is copied into the guest and cannot
+    # import the module that owns the port. A fallback here would answer the
+    # question the caller was supposed to answer, and answer it wrongly the
+    # moment the service moves.
+    if len(argv) < 2 or not argv[1].strip():
+        raise SystemExit("usage: appliance_http_client.py <base-url> [password]")
+    base = argv[1]
     password = argv[2] if len(argv) > 2 else "packaged-smoke-password"
     client = Client(base)
     report = {}

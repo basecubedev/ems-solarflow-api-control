@@ -243,3 +243,36 @@ def test_an_unchanged_hostname_is_refused(tmp_path):
     with pytest.raises(Exception) as excinfo:
         handlers.dispatch({"operation": "network.hostname.plan", "hostname": "ems-solarflow"})
     assert getattr(excinfo.value, "code", "") == "hostname_unchanged"
+
+
+def test_an_ab_appliance_refuses_a_hostname_change_instead_of_failing_at_it(tmp_path):
+    """On an A/B image /etc is read-only and slot-local: hostnamectl cannot
+    write it, and a value that somehow stuck would not survive a slot switch.
+    Offering the operation and failing in execution is worse than not offering
+    it, because the operator only learns after confirming.
+    """
+
+    import json
+
+    from tests.helpers.appliance_ab import layout_manifest
+
+    services = build_test_services(tmp_path)
+    manifest = tmp_path / "etc" / "ems-appliance-manager" / "ab-layout.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(json.dumps(layout_manifest()), encoding="utf-8")
+    handlers = handlers_for(services)
+
+    with pytest.raises(Exception) as excinfo:
+        handlers.dispatch({"operation": "network.hostname.plan", "hostname": "ems-pi5"})
+
+    assert getattr(excinfo.value, "code", "") == "hostname_not_changeable_on_ab"
+    assert services.host.hostname == "ems-solarflow"
+
+
+def test_a_single_slot_appliance_still_changes_its_hostname(tmp_path):
+    services = build_test_services(tmp_path)
+
+    operation, _ = plan_and_execute(services, "network.hostname.plan", hostname="ems-pi5")
+
+    assert operation.state == STATE_SUCCEEDED
+    assert services.host.hostname == "ems-pi5"

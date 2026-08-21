@@ -8,6 +8,7 @@ supported single-slot appliance rather than a broken A/B one.
 """
 
 import json
+import os
 from dataclasses import replace
 
 import pytest
@@ -18,6 +19,7 @@ from tests.helpers.appliance_ab import (
     DEVICE,
     PARTUUIDS,
     ApplianceAbHost,
+    device_of,
     layout_manifest,
     lsblk_payload,
 )
@@ -346,3 +348,20 @@ def test_the_status_dictionary_names_no_secret_and_survives_json(host):
     assert payload["layout_id"]
     assert payload["selector"]["default_partition"] == 2
     assert payload["selector"]["tryboot_partition"] == 3
+
+
+def test_relative_slot_links_are_read_as_the_devices_they_name(host):
+    """udev writes ``/dev`` symlinks relative to their own directory.
+
+    Comparing that text against an absolute device path reports drift on every
+    boot of a real appliance and disables all A/B mutation.
+    """
+
+    link = host.root / "dev/disk/by-slot/active/system"
+    assert not os.path.isabs(os.readlink(link))
+
+    probe = ab_layout.LayoutProbe(root=host.root, runner=host.runner())
+    links = probe.slot_links(probe.manifest())
+
+    assert links["active/system"] == device_of("system_a")
+    assert links["persistent"] == device_of("persistent")

@@ -25,6 +25,7 @@ from appliance.backup_confinement import (
 from tests.helpers.appliance import (
     SSHD_BACKUP_MATCH,
     build_test_services,
+    mount_root_of,
     seed_backup_account,
 )
 
@@ -411,13 +412,21 @@ def test_a_key_conflict_blocks_activation_until_the_operator_resolves_it(tmp_pat
 
 
 def test_the_status_reports_the_mounted_source_identity(tmp_path):
+    """``mounted_source`` is the kernel's root field, not the absolute path.
+
+    The two are the same string only while the EMS directories share a
+    filesystem with ``/``. On the appliance they live on the persistent
+    partition, so the status reports the path inside that partition.
+    """
+
     services = appliance(tmp_path)
     seed_exports(services)
 
     status = services.backup.status()
 
     config = next(item for item in status["paths"] if item["name"] == "config")
-    assert config["mounted_source"] == str(services.paths.install_root / "config"), config
+    assert config["mounted_source"] == mount_root_of(services.paths.install_root / "config"), config
+    assert config["path"] == str(services.paths.install_root / "config"), config
     assert config["source_verified"] is True, config
 
 

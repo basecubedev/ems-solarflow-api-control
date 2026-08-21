@@ -142,6 +142,14 @@ def main():
 
         if options.get("break_compose"):
             (services.paths.install_root / "docker-compose.admin.yml").unlink()
+        if options.get("never_installed"):
+            # A freshly flashed appliance: an empty deployment root and no
+            # container that any compose file would describe.
+            (services.paths.install_root / "docker-compose.admin.yml").unlink()
+            (services.paths.install_root / ".env.admin").unlink(missing_ok=True)
+            host.containers.pop(ADMIN_CONTAINER, None)
+            for entry in services.known_good.directory.glob("*.json"):
+                entry.unlink()
         if options.get("break_digest"):
             host.registry[f"{ADMIN_REPOSITORY}:v1.1.0"]["RepoDigests"] = []
         if options.get("agent_offline") and live["app"] is not None:

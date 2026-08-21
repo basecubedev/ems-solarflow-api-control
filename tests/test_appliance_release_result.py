@@ -10,6 +10,8 @@ Every number here is read out of the report that produced it, and readiness is
 derived from the evidence rather than asserted beside it.
 """
 
+import hashlib
+import re
 import json
 import subprocess
 import sys
@@ -143,3 +145,69 @@ def test_a_run_that_proved_nothing_is_never_physically_ready(tmp_path):
     assert payload["physical_ready"] is False
     assert payload["physical_tested"] is False
     assert result.returncode == 1
+
+
+# --- a kit manifest has to belong to this release ---------------------------
+
+
+def test_a_kit_manifest_from_another_run_is_not_evidence_for_this_one(tmp_path):
+    """--no-kit skips building the kit but the finalizer passed the path
+    anyway, so a manifest left in the directory by an earlier run was read as
+    this release's hardware readiness."""
+
+    dist = tmp_path / "dist"
+    write_reports(dist)
+    stale = dist / "kit" / "kit-manifest.json"
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text(
+        json.dumps(
+            {
+                "kit_version": 1,
+                "physical_ready": True,
+                "development_kit": False,
+                "source_binding": {"bundle_sha256": "sha256:" + "a" * 64},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    _result, payload = generate(dist, tmp_path, "--kit-manifest", str(stale))
+
+    assert payload["hardware_kit"]["physical_ready"] is False
+    assert "another release" in payload["hardware_kit"]["detail"]
+
+
+def test_a_kit_manifest_bound_to_this_release_is_evidence(tmp_path):
+    dist = tmp_path / "dist"
+    write_reports(dist)
+    bundle = tmp_path / "source-bundle.tar"
+    bundle.write_bytes(b"a source bundle")
+    digest = "sha256:" + hashlib.sha256(bundle.read_bytes()).hexdigest()
+    manifest = dist / "kit" / "kit-manifest.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "kit_version": 1,
+                "physical_ready": True,
+                "development_kit": False,
+                "source_binding": {"bundle_sha256": digest},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    _result, payload = generate(
+        dist, tmp_path, "--kit-manifest", str(manifest), "--source-bundle", str(bundle)
+    )
+
+    assert payload["hardware_kit"]["physical_ready"] is True
+
+
+def test_the_finalizer_passes_no_kit_manifest_when_it_built_no_kit():
+    """Belt and braces: the path is not handed over at all in --no-kit runs."""
+
+    finalize = (ROOT / "scripts/appliance-finalize-rpi-release.sh").read_text(encoding="utf-8")
+    unconditional = re.search(r'^\s*--kit-manifest "\$KIT/kit-manifest\.json" \\\\?$', finalize, re.M)
+
+    assert unconditional is None, "the kit manifest path is passed unconditionally"

@@ -17,7 +17,7 @@ the device ``/persistent`` is mounted from rather than against its own existence
 
 from dataclasses import dataclass
 
-PERSISTENT_SCHEMA_VERSION = 2
+PERSISTENT_SCHEMA_VERSION = 3
 
 PERSISTENT_MOUNTPOINT = "/persistent"
 SHARED_ROOT = "/persistent/shared"
@@ -101,6 +101,15 @@ SHARED_PATHS = (
         category=CATEGORY_NETWORK,
         target="/etc/NetworkManager/system-connections",
         description="persistent NetworkManager connection profiles",
+    ),
+    SharedPath(
+        name="backup_account",
+        category=CATEGORY_APPLIANCE,
+        target="/var/lib/ems-backup",
+        description=(
+            "the confined backup account's home: the operator's authorized_keys and "
+            "the ownership marker proving this package created it"
+        ),
     ),
 )
 

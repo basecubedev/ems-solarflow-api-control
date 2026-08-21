@@ -19,6 +19,7 @@ tmpfs and the per-slot and shared mounts made the way upstream's generators
 make them.
 """
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -52,6 +53,14 @@ requires_docker = pytest.mark.skipif(
 )
 
 
+def package_filename(arch):
+    """What build-deb.sh writes, from the version module it reads itself."""
+
+    from appliance.version import APPLIANCE_VERSION
+
+    return f"ems-appliance-manager_{APPLIANCE_VERSION}_{arch}.deb"
+
+
 @pytest.fixture(scope="module")
 def audit(tmp_path_factory):
     """One guest build and one audit run; every case below reads its report."""
@@ -71,9 +80,9 @@ def audit(tmp_path_factory):
          "--output", str(work / "deb"), "--arch", "amd64"],
         capture_output=True, text=True, check=False, timeout=900,
     )
-    package = work / "deb/ems-appliance-manager_0.1.0_amd64.deb"
+    package = work / "deb" / package_filename("amd64")
     if not package.is_file():
-        pytest.skip(f"the package could not be built: {built.stderr.strip()[-200:]}")
+        pytest.fail(f"the package could not be built: {built.stderr.strip()[-400:]}")
 
     shutil.copy2(package, work / "package.deb")
     # symlinks=True: the overlay activates its bind mounts with links into
@@ -89,7 +98,7 @@ def audit(tmp_path_factory):
         capture_output=True, text=True, check=False, timeout=1800,
     )
     if build.returncode != 0:
-        pytest.skip(f"the guest could not be built: {build.stderr.strip()[-300:]}")
+        pytest.fail(f"the guest could not be built: {build.stderr.strip()[-400:]}")
 
     result = subprocess.run(
         ["docker", "run", "--rm", "--privileged", "--read-only",
@@ -101,7 +110,7 @@ def audit(tmp_path_factory):
         capture_output=True, text=True, check=False, timeout=1800,
     )
     if "RESULT:" not in result.stdout:
-        pytest.skip("the guest could not run the audit: " + result.stderr.strip()[-300:])
+        pytest.fail("the guest could not run the audit: " + result.stderr.strip()[-400:])
     return result
 
 
@@ -148,3 +157,40 @@ def test_the_boot_write_paths_run_without_writing_the_root(audit):
     assert_case(audit, "the export root is built without writing the slot root")
     assert_case(audit, "the host identity is ensured")
     assert_case(audit, "no file was created outside the declared mutable set")
+
+
+# --- the gate has to stay a gate --------------------------------------------
+
+
+def test_the_audit_finds_the_package_whatever_version_it_carries(monkeypatch):
+    """The filename was pinned to a literal while build-deb.sh derives the
+    version from appliance/version.py. Bumping the version made the file
+    unfindable, which skipped the whole read-only-root audit -- silently.
+
+    Checked against a version this project does not carry, so a literal that
+    happens to equal today's version cannot pass.
+    """
+
+    from appliance import version
+
+    monkeypatch.setattr(version, "APPLIANCE_VERSION", "9.9.9-test")
+
+    assert package_filename("arm64") == "ems-appliance-manager_9.9.9-test_arm64.deb"
+
+
+def test_build_deb_takes_the_version_from_the_module_the_audit_reads():
+    build = (ROOT / "packaging/appliance/build-deb.sh").read_text(encoding="utf-8")
+
+    assert "appliance/version.py" in build
+    assert "APPLIANCE_VERSION" in build
+
+
+def test_a_failure_to_run_the_audit_is_not_reported_as_success():
+    """Only a missing Docker is an environment limit. A package that will not
+    build, a guest that will not build and an audit that will not run are this
+    gate failing to do its job, and a skip reports them as passing."""
+
+    source = Path(__file__).read_text(encoding="utf-8")
+    skips = re.findall(r"pytest\.skip\(\s*f?\"([^\"]{0,60})", source)
+
+    assert all("docker" in reason.lower() for reason in skips), skips

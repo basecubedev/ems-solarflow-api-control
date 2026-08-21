@@ -218,6 +218,9 @@ def _sync_directory(directory):
 # --- the tryboot transaction ------------------------------------------------
 
 REBOOT_TRYBOOT_ARGUMENT = "0 tryboot"
+# systemd 253 dropped the positional argument to "systemctl reboot"; the image
+# is Debian 13, so only the option form reaches reboot(2).
+REBOOT_TRYBOOT_OPTION = f"--reboot-argument={REBOOT_TRYBOOT_ARGUMENT}"
 
 
 class SelectorTransaction:
@@ -344,7 +347,7 @@ def request_trial_reboot(runner):
         raise SelectorError(
             "tryboot_reboot_unavailable", "systemctl is not available to request a trial boot"
         )
-    result = runner.run("systemctl", ["reboot", REBOOT_TRYBOOT_ARGUMENT], timeout=30)
+    result = runner.run("systemctl", ["reboot", REBOOT_TRYBOOT_OPTION], timeout=30)
     if not result.ok:
         raise SelectorError(
             "tryboot_reboot_failed", "the firmware did not accept the one-shot trial boot request"

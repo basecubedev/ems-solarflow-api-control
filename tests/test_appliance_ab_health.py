@@ -262,12 +262,63 @@ def test_a_host_without_docker_configured_is_not_failed_for_it(host, state):
 
 
 def test_a_trial_that_exceeded_its_window_is_unhealthy(host, state):
-    state.set_pending(pending(trial_requested_at=1.0))
+    state.set_pending(pending())
+    host.set_uptime(9_999.0)
 
     report = service(host, state, health_window_seconds=200).evaluate()
 
     assert report.result == RESULT_UNHEALTHY
     assert any("window" in reason for reason in report.reasons)
+
+
+def test_the_window_is_measured_from_this_boot_not_across_the_reboot(host, state):
+    """The board has no RTC. After a cold boot the clock can sit behind the
+    stamp the trial was requested with, and a wall-clock difference is then
+    negative: the window never expires and a stuck trial stays pending."""
+
+    state.set_pending(pending(trial_requested_at=5_000_000.0))
+    host.set_uptime(9_999.0)
+
+    report = service(host, state, time_fn=lambda: 1_000.0, health_window_seconds=200).evaluate()
+
+    assert report.result == RESULT_UNHEALTHY
+    assert any("window" in reason for reason in report.reasons)
+
+
+def test_a_long_pre_reboot_stamp_does_not_shorten_the_window(host, state):
+    state.set_pending(pending(trial_requested_at=1.0))
+    host.set_uptime(30.0)
+
+    report = service(
+        host, state, time_fn=lambda: 5_000_000.0, health_window_seconds=200
+    ).evaluate()
+
+    assert report.result == RESULT_HEALTHY
+
+
+def test_the_window_outlasts_every_unit_ordered_before_the_health_check():
+    """A window shorter than that chain rolls back slots that are simply slow."""
+
+    import re
+    from pathlib import Path as _Path
+
+    from appliance import config as appliance_config
+
+    units = _Path(__file__).resolve().parents[1] / "packaging" / "appliance" / "systemd"
+
+    def start_timeout(name):
+        match = re.search(
+            r"^TimeoutStartSec=(\d+)", (units / name).read_text(encoding="utf-8"), re.M
+        )
+        assert match, f"{name} declares no TimeoutStartSec"
+        return int(match.group(1))
+
+    budget = start_timeout("ems-appliance-persistence.service") + start_timeout(
+        "ems-appliance-slot-bootstrap.service"
+    )
+
+    assert appliance_config.DEFAULT_AB_HEALTH_WINDOW > budget
+    assert ab_health.DEFAULT_HEALTH_WINDOW_SECONDS > budget
 
 
 def test_the_health_window_is_never_shorter_than_the_documented_floor(host, state):

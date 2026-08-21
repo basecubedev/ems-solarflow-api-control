@@ -384,8 +384,9 @@
     var verification = renderVerification(result.verification);
     var untouched = result.admin_untouched === true;
     var replan = result.replan_required === true;
+    var bootstrapFailed = result.bootstrap_failed === true;
     if (!manual.length && !remaining.length && !unverified.length && !verification && !untouched
-        && !replan) {
+        && !replan && !bootstrapFailed) {
       return null;
     }
 
@@ -397,6 +398,18 @@
         class: "warning-item",
         "data-test": "admin-untouched",
         text: "Preflight failed before anything was changed. The Admin that was running is still running and the deployment files are unchanged."
+      }));
+    }
+    /* A first installation failed. There was no Admin to keep running, so the
+       one thing the operator needs is whether the deployment files now exist:
+       that decides whether a retry installs or creates. */
+    if (bootstrapFailed) {
+      wrapper.appendChild(el("p", {
+        class: "warning-item",
+        "data-test": "admin-bootstrap-failed",
+        text: result.deployment_created
+          ? "The deployment files were created but Admin did not come up. This appliance still has no working Admin; installing again updates the deployment that now exists."
+          : "Nothing was written. This appliance still has no Admin installation and no deployment files were created."
       }));
     }
     /* An OS update refused before the first destructive byte. The operator
@@ -450,13 +463,34 @@
     }).catch(function () { return null; });
   }
 
+  /* The poll keeps an operation's progress live. Rebuilding the whole view for
+     that destroys whatever the operator is typing, so while a field of theirs
+     has focus only the banner is replaced. */
+  function isEditing() {
+    var active = document.activeElement;
+    var main = document.getElementById("main");
+    if (!active || !main || !main.contains(active)) return false;
+    return /^(input|select|textarea)$/i.test(active.tagName);
+  }
+
+  function refreshBanner() {
+    var main = document.getElementById("main");
+    var existing = main && main.querySelector('[data-test="operation-banner"]');
+    if (existing) main.replaceChild(renderOperationBanner(), existing);
+  }
+
+  function renderPolled() {
+    if (isEditing()) {
+      refreshBanner();
+      return;
+    }
+    render();
+  }
+
   function startPolling() {
     stopPolling();
     state.pollTimer = window.setInterval(function () {
-      pollOperations().then(function () {
-        if (!state.operation || !state.operation.terminal) render();
-        else render();
-      });
+      pollOperations().then(renderPolled);
     }, POLL_INTERVAL);
   }
 
@@ -539,9 +573,22 @@
       if (!expert() && (key === "target_digest" || key === "target_architecture" ||
         key === "current_digest" || key === "legacy_labels_accepted" ||
         key === "target_reference" || key === "target_source")) return;
+      if (key === "bootstrap") return;
       rows.push(fact(key.replace(/_/g, " "), value, { mono: /digest|revision/.test(key) }));
     });
     wrapper.appendChild(el("div", { class: "control-result" }, rows));
+
+    /* The only plan that creates files rather than editing them, so it says
+       which files, before the operator confirms it. */
+    if (plan.creates_deployment) {
+      wrapper.appendChild(el("div", { class: "control-result", "data-test": "plan-creates-deployment" }, [
+        el("p", { class: "control-stage-subtitle", text: "This creates the Admin deployment; nothing exists to replace." }),
+        fact("compose file", plan.creates_deployment.compose_file, { mono: true }),
+        fact("environment file", plan.creates_deployment.environment_file, { mono: true }),
+        expert() ? fact("installer", plan.creates_deployment.installer, { mono: true }) : null,
+        expert() ? fact("owner", plan.creates_deployment.owner_uid + ":" + plan.creates_deployment.owner_gid) : null
+      ].filter(Boolean)));
+    }
 
     (plan.blockers || []).forEach(function (blocker) {
       wrapper.appendChild(el("p", { class: "warning-item severe" }, [
@@ -772,9 +819,20 @@
   }
 
   function quickActions() {
+    /* Nothing is deployed yet: restarting and repairing have no target, so the
+       one action offered is the one that applies. */
+    var bootstrap = ((state.data.status || {}).admin || {}).bootstrap_required === true;
     return el("div", { class: "stage-grid" }, [
-      stage(1, "Admin recovery", "Restart, repair or update the EMS Admin container", [
-        el("div", { class: "control-stage-actions" }, [
+      stage(1, "Admin recovery", bootstrap
+        ? "No EMS Admin is installed on this appliance yet"
+        : "Restart, repair or update the EMS Admin container", [
+        el("div", { class: "control-stage-actions" }, bootstrap ? [
+          el("button", {
+            type: "button", class: "primary-button compact", "data-test": "quick-install-admin",
+            text: "Install Admin",
+            onclick: function () { selectView("admin"); }
+          })
+        ] : [
           el("button", {
             type: "button", class: "primary-button compact", "data-test": "quick-restart-admin",
             text: "Restart Admin",
@@ -843,6 +901,23 @@
     }
 
     main.appendChild(el("h2", { class: "section-title", text: "EMS Admin" }));
+
+    if ((admin.transition || {}).state === "live") {
+      main.appendChild(el("p", { class: "empty-state", "data-test": "admin-transition-live" }, [
+        el("strong", { text: "The Admin console is replacing itself right now. " }),
+        el("span", {
+          text: "Installing, rolling back, repairing, starting, stopping and restarting are "
+            + "refused until that finishes, because both would write the same deployment files. "
+            + "Stage: " + (admin.transition.stage || "unnamed") + "."
+        })
+      ]));
+    }
+
+    if (admin.bootstrap_required) {
+      renderAdminBootstrap(main, releases);
+      return;
+    }
+
     main.appendChild(el("p", {
       class: "section-hint",
       text: "Install, reinstall, restart, repair and roll back the EMS Admin container. The Appliance Manager stays reachable throughout."
@@ -913,6 +988,32 @@
     main.appendChild(logPanel("admin_container", "Admin container log"));
   }
 
+  /* No deployment exists yet: a freshly flashed appliance has an empty
+     /opt/ems-solarflow. Lifecycle, repair and rollback have nothing to act on,
+     so the page offers the one thing that applies — creating it. */
+  function renderAdminBootstrap(main, releases) {
+    main.appendChild(el("p", {
+      class: "section-hint",
+      text: "No EMS Admin installation was found on this appliance. Installing it creates the deployment under /opt/ems-solarflow and starts the version you choose. EMS itself is set up afterwards from Admin's own guided setup."
+    }));
+
+    main.appendChild(el("div", { class: "card-grid" }, [
+      card("Installed version", [
+        el("p", { class: "status-value", text: "not installed" }),
+        el("div", {}, [tone("warn", "no deployment")]),
+        fact("Deployment", "will be created on install")
+      ], "admin-bootstrap-state")
+    ]));
+
+    main.appendChild(el("div", { class: "stage-grid" }, [
+      stage(1, "Install Admin", "Choose a version, then review the plan before anything is written", [
+        renderInstallForm(releases, { bootstrap: true })
+      ], "admin-bootstrap-install")
+    ]));
+
+    main.appendChild(logPanel("admin_container", "Admin container log"));
+  }
+
   function lifecycleButton(action, label) {
     return el("button", {
       type: "button", class: "ghost-button compact", "data-test": "admin-" + action,
@@ -923,13 +1024,19 @@
     });
   }
 
-  function renderInstallForm(releases) {
+  function renderInstallForm(releases, options) {
+    var opts = options || {};
     var wrapper = el("div", { class: "inline-form" });
-    var channelSelect = el("select", { id: "install-channel", "data-test": "install-channel" }, [
-      el("option", { value: "latest_stable", text: "Latest stable" }),
-      el("option", { value: "current", text: "Current stable (reinstall)" }),
-      el("option", { value: "previous_known_good", text: "Previous known-good" })
-    ]);
+    /* A first installation has no current version and no known-good history,
+       so only the channels that can resolve without one are offered. */
+    var channelSelect = el("select", { id: "install-channel", "data-test": "install-channel" },
+      opts.bootstrap
+        ? [el("option", { value: "latest_stable", text: "Latest stable" })]
+        : [
+          el("option", { value: "latest_stable", text: "Latest stable" }),
+          el("option", { value: "current", text: "Current stable (reinstall)" }),
+          el("option", { value: "previous_known_good", text: "Previous known-good" })
+        ]);
     if (expert()) {
       channelSelect.appendChild(el("option", { value: "exact", text: "Exact release tag" }));
     }
@@ -948,9 +1055,11 @@
       el("label", { for: "install-channel", text: "Version" }), channelSelect
     ]));
     wrapper.appendChild(tagField);
-    wrapper.appendChild(el("div", { class: "fact-row" }, [
-      el("label", { for: "install-reinstall", text: "Reinstall the same version" }), reinstall
-    ]));
+    if (!opts.bootstrap) {
+      wrapper.appendChild(el("div", { class: "fact-row" }, [
+        el("label", { for: "install-reinstall", text: "Reinstall the same version" }), reinstall
+      ]));
+    }
 
     if (releases && releases.error) {
       wrapper.appendChild(el("p", { class: "control-stage-subtitle", text: "Release list unavailable: " + releases.error }));
@@ -963,10 +1072,11 @@
 
     wrapper.appendChild(el("div", { class: "control-stage-actions" }, [
       el("button", {
-        type: "button", class: "primary-button compact", "data-test": "install-plan",
-        text: "Plan installation",
+        type: "button", class: "primary-button compact",
+        "data-test": opts.bootstrap ? "admin-bootstrap-plan" : "install-plan",
+        text: opts.bootstrap ? "Install Admin" : "Plan installation",
         onclick: function () {
-          var body = { channel: channelSelect.value, reinstall: reinstall.checked };
+          var body = { channel: channelSelect.value, reinstall: opts.bootstrap ? false : reinstall.checked };
           if (channelSelect.value === "exact") {
             body.tag = document.getElementById("install-tag").value.trim();
           }
@@ -1044,7 +1154,8 @@
     ["sparse_decoder_ready", "Sparse decoder", "Update members cannot be expanded."],
     ["host_identity_ready", "Host identity", "The persistent SSH host keys could not be proven."],
     ["docker_reconstruction_ready", "Runtime recovery", "No container runtime is recorded for the next slot."],
-    ["deployment_authority_ready", "EMS deployment", "The EMS deployment this appliance runs could not be proven, so there is nothing a trial slot could rebuild."]
+    ["deployment_authority_ready", "EMS deployment", "The EMS deployment this appliance runs could not be proven, so there is nothing a trial slot could rebuild."],
+    ["release_keyring_ready", "Release keyring", "No OS release keyring is installed, so no update artifact can be verified and every one of them is refused."]
   ];
 
   /* The bounded deployment states the agent reports. Each one names what an
@@ -1085,6 +1196,61 @@
     var readiness = ab.readiness || {};
     var missing = AB_READINESS.filter(function (entry) { return readiness[entry[0]] === false; });
     return { ready: missing.length === 0, missing: missing, readiness: readiness };
+  }
+
+  /* What the configured index offers. An index entry is a candidate and
+     nothing more: the signature over the release manifest is what decides
+     whether the download may be kept, so nothing here is presented as
+     trustworthy. */
+  function renderAbSources(sources, ab) {
+    if (sources === null || sources === undefined) {
+      return el("p", { class: "control-stage-subtitle", text: "Reading the release index\u2026" });
+    }
+    if (!sources.configured) {
+      return el("p", { class: "control-stage-subtitle", "data-test": "ab-sources-unconfigured" }, [
+        el("span", {
+          text: "No release index is configured, so this appliance cannot download an OS image. "
+            + "Set os_release_index_url in appliance.conf, or place a signed release in the "
+            + "release directory yourself."
+        })
+      ]);
+    }
+    if (sources.error) {
+      return el("p", { class: "control-stage-subtitle", "data-test": "ab-sources-error" }, [
+        el("strong", { text: "The release index could not be read: " }),
+        el("span", { text: sources.error })
+      ]);
+    }
+    var offered = (sources.releases || []).filter(function (entry) { return !entry.present; });
+    if (!offered.length) {
+      return el("p", { class: "control-stage-subtitle", "data-test": "ab-sources-empty",
+        text: "The release index offers nothing this appliance does not already have." });
+    }
+    return el("div", {}, [
+      el("div", { class: "control-stage-actions" }, offered.slice(0, 5).map(function (entry) {
+        return el("button", {
+          type: "button", class: "primary-button compact",
+          "data-test": "ab-plan-fetch",
+          "data-release": entry.release_id,
+          text: "Download " + entry.release_id,
+          disabled: !ab.may_mutate,
+          onclick: function () {
+            planOperation({
+              endpoint: "/api/ab/plan-fetch",
+              body: { release_id: entry.release_id },
+              title: "Download the OS release " + entry.release_id,
+              confirmLabel: "Download"
+            });
+          }
+        });
+      })),
+      el("p", {
+        class: "control-stage-subtitle",
+        text: "The download size is only known once the release manifest has been fetched and "
+          + "its signature verified against this appliance's keyring. A release that fails that "
+          + "check is discarded and never appears in the list above."
+      })
+    ]);
   }
 
   function renderAbUpdates(main, ab) {
@@ -1202,8 +1368,23 @@
     }
 
     var stages = [];
+    var step = 0;
+    function nextStep() { step += 1; return step; }
+
+    /* Nothing can be installed that is not here yet. The download comes first
+       because on a fresh appliance the release list below is empty and the
+       operator would otherwise have no way to fill it. */
+    var sources = state.data.abSources;
+    if (sources === undefined) {
+      state.data.abSources = null;
+      loadInto("abSources", "/api/ab/sources");
+    }
+    stages.push(stage(nextStep(), "Download an OS release", "Fetched over HTTPS, then verified against the appliance keyring", [
+      renderAbSources(sources, ab)
+    ], "ab-stage-fetch"));
+
     var installable = releases.filter(function (release) { return release.signed; });
-    stages.push(stage(1, "OS image update", "Staged into the inactive slot, then trial-booted", [
+    stages.push(stage(nextStep(), "OS image update", "Staged into the inactive slot, then trial-booted", [
       installable.length
         ? el("div", { class: "control-stage-actions" }, installable.slice(0, 5).map(function (release) {
             return el("button", {
@@ -1230,7 +1411,7 @@
       })
     ], "ab-stage-update"));
 
-    stages.push(stage(2, "Roll back the operating system", "Only the recorded previous known-good slot", [
+    stages.push(stage(nextStep(), "Roll back the operating system", "Only the recorded previous known-good slot", [
       el("div", { class: "control-stage-actions" }, [
         el("button", {
           type: "button", class: "ghost-button compact", "data-test": "ab-plan-rollback",
@@ -1252,7 +1433,7 @@
     ], "ab-stage-rollback"));
 
     if (expert()) {
-      stages.push(stage(3, "Package-manager recovery", "Recovery only, not the normal update path", [
+      stages.push(stage(nextStep(), "Package-manager recovery", "Recovery only, not the normal update path", [
         el("div", { class: "control-stage-actions" }, [
           repairButton("configure_pending", "Complete pending configuration"),
           repairButton("fix_broken", "Repair dependencies")

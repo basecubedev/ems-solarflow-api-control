@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from appliance import agent, audit, os_update, protocol, validation
+from appliance import agent, audit, os_fetch, os_update, protocol, validation
 from appliance.protocol import OPERATIONS, ProtocolError, ValidationContext, validate_request
 from appliance.validation import ValidationError
 
@@ -140,6 +140,15 @@ def test_acknowledging_is_bookkeeping_and_never_blocks_a_host_mutation():
 def test_the_ab_plans_map_onto_operation_types():
     assert agent.PLAN_TYPES["ab.plan_update"] == os_update.TYPE_OS_UPDATE
     assert agent.PLAN_TYPES["ab.plan_rollback"] == os_update.TYPE_OS_ROLLBACK
+    assert agent.PLAN_TYPES["ab.plan_fetch"] == os_fetch.TYPE_OS_FETCH
+
+
+# Read-only A/B endpoints. Everything else under ab.* must be a plan, so that
+# execution can only happen through operations.execute with its confirmation
+# token. The list is spelled out rather than pattern-matched: a new endpoint
+# should have to be named here by somebody who thought about which it is.
+AB_READ_ONLY = ("ab.status", "ab.sources")
+AB_NON_EXECUTING = ("ab.acknowledge",)
 
 
 def test_there_is_no_unaudited_ab_execution_endpoint():
@@ -148,12 +157,18 @@ def test_there_is_no_unaudited_ab_execution_endpoint():
     for name in OPERATIONS:
         if not name.startswith("ab."):
             continue
-        assert name in (
-            "ab.status",
-            "ab.plan_update",
-            "ab.plan_rollback",
-            "ab.acknowledge",
-        ), name
+        if name in AB_READ_ONLY + AB_NON_EXECUTING:
+            assert not OPERATIONS[name].mutating or name in AB_NON_EXECUTING, name
+            continue
+        assert name.startswith("ab.plan_"), name
+        assert name in agent.PLAN_TYPES, name
+
+
+def test_every_ab_read_only_endpoint_really_is_read_only():
+    for name in AB_READ_ONLY:
+        assert name in OPERATIONS, name
+        assert OPERATIONS[name].mutating is False, name
+        assert name not in agent.PLAN_TYPES, name
 
 
 # --- audit -------------------------------------------------------------------
@@ -268,7 +283,11 @@ def test_the_ab_page_reuses_the_control_stage_family():
     source = app_source()
     section = source[source.index("function renderAbUpdates") : source.index("function renderPackageUpdates")]
 
-    assert "stage(1," in section
+    # The stage numbers are computed, because the page grew a first stage that
+    # only exists on an appliance with a release index. What matters to the
+    # style guide is that it is the shared stage() helper doing the rendering,
+    # not that the literal "1" appears here.
+    assert "stages.push(stage(" in section
     assert 'class: "card-grid"' in section
     assert 'class: "stage-grid"' in section
     assert "control-stage-actions" in section

@@ -72,6 +72,7 @@ The package installs:
 /usr/lib/systemd/system/ems-appliance-grow-persistent.service
 /usr/lib/ems-appliance-manager/setup-export-root.sh
 /usr/lib/ems-appliance-manager/backup-account.sh
+/usr/lib/ems-appliance-manager/install-admin-console.sh
 /usr/lib/tmpfiles.d/ems-appliance-manager.conf
 /etc/logrotate.d/ems-appliance-manager
 /etc/ems-appliance-manager/appliance.conf
@@ -87,12 +88,16 @@ they always agree with the configured host paths:
 /etc/ssh/sshd_config.d/ems-appliance-backup.conf
 ```
 
-and creates the service accounts `ems-appliance-web` (unprivileged, `nologin`)
-and `ems-backup` (read-only file export), plus the shared `ems-appliance` group
-that guards the agent socket.
+and creates the service accounts `ems-appliance-web` (unprivileged, `nologin`),
+`ems-backup` (read-only file export) and `ems-deploy` (owner of the hosted
+deployment and the uid its containers run as), plus the shared `ems-appliance`
+group that guards the agent socket.
 
 Installation never moves, rewrites or restructures an existing EMS installation
-under `/opt/ems-solarflow`.
+under `/opt/ems-solarflow`. `ems-deploy` only takes ownership of a deployment
+root nothing was ever installed in — which is what a freshly flashed appliance
+has. A root that already holds files keeps the owner it has, and the appliance
+runs the containers as that owner.
 
 ## Moving the host paths
 
@@ -427,11 +432,21 @@ again changes nothing.
 
 ## First start
 
+The first boot requires a wired Ethernet connection. The image ships no WLAN
+profile and there is no way to preconfigure one on the card; WLAN is configured
+afterwards from the Network page.
+
 Open the appliance:
 
 ```text
-http://ems-solarflow.local:8080
+http://ems-solarflow.local:8088
 ```
+
+The name is published by `avahi-daemon`, which the image installs. When it does
+not resolve — some networks and some Windows configurations block mDNS — use the
+address instead. Look the appliance up in your router's list of connected
+devices (usually under *DHCP*, *Clients* or *Network*; the entry is named
+`ems-solarflow`), then open `http://<address>:8088`.
 
 The first start requires:
 
@@ -501,5 +516,5 @@ package with `apt`; the previous package is retained under
 
 For a prebuilt appliance image: include the package, enable both units, create
 the directory layout through the shipped tmpfiles rules and verify on first
-boot that `http://ems-solarflow.local:8080` serves the first-run password page.
+boot that `http://ems-solarflow.local:8088` serves the first-run password page.
 Publish the image checksum next to the package checksum.

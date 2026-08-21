@@ -152,7 +152,7 @@ def test_the_trial_reboot_argument_is_a_constant():
     text = source("ab_boot.py")
 
     assert 'REBOOT_TRYBOOT_ARGUMENT = "0 tryboot"' in text
-    assert '"systemctl", ["reboot", REBOOT_TRYBOOT_ARGUMENT]' in text
+    assert '"systemctl", ["reboot", REBOOT_TRYBOOT_OPTION]' in text
 
 
 def test_the_generator_path_never_reaches_the_agent_or_the_web_service():

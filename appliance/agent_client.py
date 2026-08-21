@@ -12,6 +12,13 @@ DEFAULT_TIMEOUT = 30
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 
 
+def operation_timeout(operation, default=DEFAULT_TIMEOUT):
+    from appliance.protocol import OPERATIONS
+
+    spec = OPERATIONS.get(str(operation))
+    return spec.timeout_seconds if spec is not None else default
+
+
 class AgentUnavailableError(Exception):
     code = "agent_unavailable"
 
@@ -45,6 +52,11 @@ class AgentClient:
         return connection
 
     def call(self, operation, *, actor="", source_ip="", timeout=None, **fields):
+        # The operation registry owns how long each one may take. A caller that
+        # gives up while the agent is still planning leaves the operation it
+        # started holding the lock.
+        if timeout is None:
+            timeout = operation_timeout(operation)
         payload = {"operation": operation, **fields}
         if actor:
             payload["actor"] = actor

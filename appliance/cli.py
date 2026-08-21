@@ -334,7 +334,8 @@ def command_backup_access(args):
     report = service.disable(reason="requested") if args.action == "disable" else service.activate()
     _print(report, args.json)
     if args.action == "disable":
-        return EXIT_OK
+        # prerm reads this exit code as proof that authentication is withdrawn.
+        return EXIT_OK if report.get("authentication_disabled") else EXIT_ERROR
     return EXIT_OK if report["state"] in (STATE_ACTIVE, STATE_UNAVAILABLE) else EXIT_ERROR
 
 

@@ -1,14 +1,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Whether an archive of this repository is still this repository.
 
-Persistence activation depends on six symlinks tracked in git:
+Persistence activation depends on one symlink per shared path, tracked in git:
 
     packaging/appliance/image/layer/ems-appliance.rootfs-overlay/
         etc/systemd/system/local-fs.target.wants/*.mount
 
 They are what makes each generated bind mount actually mount. Both archives
 produced for the last independent review arrived without them — every link had
-become a regular file — and an image built from such a tree would generate six
+become a regular file — and an image built from such a tree would generate the
 mount units, activate none of them, and lose every write to the shared paths at
 the next slot switch. Silently.
 
@@ -89,7 +89,9 @@ def flattened_archive(destination, *, ref="HEAD"):
 
 
 @requires_git
-def test_the_repository_tracks_six_persistence_activation_links():
+def test_the_repository_tracks_one_activation_link_per_shared_path():
+    from appliance import ab_persistence
+
     entries = source_bundle.tracked_entries(ROOT, ref="HEAD")
     links = [
         entry
@@ -97,7 +99,9 @@ def test_the_repository_tracks_six_persistence_activation_links():
         if entry.path.startswith(f"{WANTS}/") and entry.kind == source_bundle.SYMLINK
     ]
 
-    assert len(links) == 6, sorted(entry.path for entry in links)
+    assert len(links) == len(ab_persistence.SHARED_PATHS), sorted(
+        entry.path for entry in links
+    )
     for entry in links:
         assert entry.path.endswith(".mount")
 
@@ -154,13 +158,15 @@ def test_a_faithful_bundle_matches_the_tracked_tree(tmp_path):
 def test_a_bundle_that_dereferenced_its_symlinks_fails(tmp_path):
     """Exactly the shape both review archives arrived in."""
 
+    from appliance import ab_persistence
+
     archive = flattened_archive(tmp_path / "flattened.tar")
 
     report = source_bundle.verify(archive, root=ROOT, ref="HEAD")
 
     assert not report.ok
     dropped = {path for path, _reason in report.mismatched if path.startswith(f"{WANTS}/")}
-    assert len(dropped) == 6, sorted(dropped)
+    assert len(dropped) == len(ab_persistence.SHARED_PATHS), sorted(dropped)
     assert all("symlink" in reason for path, reason in report.mismatched if path in dropped)
 
 

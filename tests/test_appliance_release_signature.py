@@ -308,3 +308,33 @@ def test_the_status_parser_ignores_everything_that_is_not_a_valid_signature():
     assert os_releases.valid_signature_fingerprints(output) == ("BB" * 20,)
     assert os_releases.valid_signature_fingerprints("") == ()
     assert os_releases.valid_signature_fingerprints("gpg: BAD signature") == ()
+
+
+requires_gpgv = pytest.mark.skipif(
+    shutil.which("gpgv") is None, reason="gpgv verifies a release manifest on the appliance"
+)
+
+
+@requires_gpg
+@requires_gpgv
+def test_verification_works_with_only_the_binary_the_image_ships(tmp_path):
+    """The A/B image installs ``gpgv`` and no full ``gpg``.
+
+    A dev host has both, so a verifier that speaks gpg's option syntax passes
+    every test here and still refuses every signed update on real hardware.
+    """
+
+    key = SigningKey(tmp_path / "gnupg", "Appliance Release <release@example.invalid>")
+    keyring = key.keyring(tmp_path / "trusted.gpg")
+    manifest = tmp_path / "release.json"
+    manifest.write_text('{"release_version": "1.5.0"}\n')
+    signature = key.sign(manifest)
+
+    runner = commands.CommandRunner(executables={"gpgv": (shutil.which("gpgv"),)})
+    verifier = os_releases.SignatureVerifier(
+        runner, keyring=keyring, fingerprints=(key.fingerprint,)
+    )
+
+    assert verifier.available
+    assert verifier.verify(manifest, signature)
+    assert verifier.fingerprints_of(manifest, signature) == (key.fingerprint,)

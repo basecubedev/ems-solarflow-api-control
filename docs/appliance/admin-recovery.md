@@ -18,6 +18,43 @@ Open **Admin** in the navigation.
 Each action shows a preview, asks for confirmation and then reports progress and
 a result. The Overview page has the same **Restart Admin** action.
 
+## First installation on a freshly flashed appliance
+
+A flashed appliance ships `/opt/ems-solarflow` as an empty directory: there is
+no Admin container, no compose file, and nothing that would ever have created
+one. The Admin page recognises that state and shows a single action instead of
+the usual lifecycle, repair and rollback stages.
+
+1. Open **Admin**. The page reads *No EMS Admin installation was found on this
+   appliance*.
+2. Choose the version. *Latest stable* is the only channel offered — there is
+   no current version and no known-good history to fall back on. Expert mode
+   adds *Exact release tag*.
+3. Press **Install Admin**. The plan names the files it will create and the
+   image digest it validated. Nothing is written yet.
+4. Confirm. Only now does the appliance run the packaged installer
+   (`/usr/lib/ems-appliance-manager/install-admin-console.sh`), pin the
+   validated digest into the compose file it wrote, start Admin and verify it.
+
+EMS itself is not deployed here. Once Admin is running, its own guided setup
+installs EMS — the appliance deliberately has no second way to do that.
+
+### What the appliance will not do
+
+- **Overwrite a deployment.** The plan is bound to there being nothing. If a
+  deployment appears between planning and confirming, execution stops with
+  `deployment_appeared_since_plan` and nothing is written.
+- **Adopt somebody else's installation.** A deployment root that already holds
+  files keeps the owner it has. Only a root nothing was installed in is handed
+  to the `ems-deploy` account the package creates.
+- **Run the containers as root.** The hosted containers run as the owner of
+  `/opt/ems-solarflow`. If that resolves to root, the plan is refused rather
+  than started.
+- **Roll back a first installation.** There is no previous Admin to restore. A
+  failure reports `failed_recoverable` and says whether the deployment files
+  were created, so a retry is either another first installation or a normal
+  one.
+
 ## Install a specific Admin version
 
 1. Open **Admin → Install version**.
@@ -270,6 +307,41 @@ Admin:
 }
 ```
 
+## When Admin is replacing itself
+
+Two layers can write the same Admin deployment. This page is one of them; the
+Admin console is the other, through System Build and Guided Upgrade. Admin is
+the only side that can be halfway through — with a worker running and a durable
+record of where it got to — so the appliance yields to it.
+
+While that record is live, **Install, Roll back, Repair, Start, Stop and
+Restart are refused** with `admin_transition_in_flight`. The message names the
+stage Admin reached and the file holding it. Reading still works: status,
+version, health and logs are unaffected.
+
+The appliance never edits or deletes that record. It belongs to Admin.
+
+### It yields to a live transition, not to a stuck one
+
+The appliance is what an operator reaches for when Admin is broken, so a
+transition that has passed its own expiry does **not** block anything, and
+neither does one the appliance cannot read. Those are the wedged states this
+page exists to fix, and refusing to help then would make the recovery tool part
+of the problem.
+
+In practice:
+
+| Admin's record | Appliance |
+|---|---|
+| none | works normally |
+| live, within its expiry | refuses Admin-mutating operations |
+| past its expiry | works normally |
+| corrupt or unreadable | works normally |
+
+If Admin is genuinely stuck inside a live transition, either wait for the
+expiry or delete
+`<install root>/data/admin/state/pending-transition.json` yourself.
+
 ## Repair
 
 **Admin → Repair** inspects and shows a preview before it changes anything:
@@ -280,7 +352,7 @@ Admin:
 | Admin container is missing | Reinstall the selected Admin version |
 | Container exists but is stopped | Start Admin |
 | Container restarts repeatedly | Review the logs, then reinstall |
-| Compose file is missing | Manual: recreate it with `install-admin-console.sh` |
+| Compose file is missing | Manual: recreate it with `install-admin-console.sh`. With no Admin container either, the Admin page offers **Install Admin** instead |
 | Admin service is not defined | Manual: add the service with `install-admin-console.sh` |
 | Environment file is missing | Manual: recreate it with `install-admin-console.sh` |
 | Bind path is missing | Recreate the required empty directory after confirmation |
@@ -367,7 +439,7 @@ sudo ems-appliance repair --apply
 
 ## Recovering a failed Admin update — checklist
 
-1. Open `http://ems-solarflow.local:8080` (works even when Admin is down).
+1. Open `http://ems-solarflow.local:8088` (works even when Admin is down).
 2. **Overview** shows the Admin warning; **Admin** shows the failed operation.
 3. Read the error, then **Acknowledge** the result.
 4. If the automatic rollback already restored the previous version, you are

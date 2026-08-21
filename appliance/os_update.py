@@ -22,6 +22,7 @@ import hashlib
 import json
 import os
 import time
+from pathlib import Path
 from dataclasses import dataclass, field
 
 from appliance import (
@@ -347,7 +348,19 @@ class OsUpdateService:
             "deployment_authority_ready": self._deployment_state()
             == ab_bootstrap.DEPLOYMENT_AUTHORITY_READY,
             "layout_ready": bool(layout.may_mutate),
+            "release_keyring_ready": self._release_keyring_ready(),
         }
+
+    def _release_keyring_ready(self):
+        """No trust anchor means every artifact is refused at the last moment.
+
+        The path is configured by default but shipped by no package, so an
+        appliance that never had one installed looks ready until an operator
+        confirms an update.
+        """
+
+        keyring = str(getattr(self.config, "os_release_keyring", "") or "")
+        return bool(keyring) and Path(keyring).is_file()
 
     def _deployment_state(self):
         """Bounded states an operator can act on. Never a force bypass."""

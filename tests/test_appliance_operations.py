@@ -261,3 +261,25 @@ def test_secret_looking_target_values_never_leave_the_store(tmp_path):
     store = store_at(tmp_path)
     operation = store.create("network.wifi", {"ssid": "HomeNet", "passphrase": "hunter2hunter2"})
     assert operation.to_dict()["requested_target"]["passphrase"] == "***"
+
+
+def test_an_unexpected_planner_error_still_releases_the_operation_lock(tmp_path):
+    """A planner that raises something nobody anticipated must not wedge the
+    appliance: the record it created holds the lock every later operation needs.
+    """
+
+    from tests.helpers.appliance import build_test_services
+    from appliance.agent import AgentHandlers
+
+    services = build_test_services(tmp_path)
+
+    def explode(*args, **kwargs):
+        raise TypeError("a bug nobody wrote a handler for")
+
+    services.admin.plan_repair = explode
+    handlers = AgentHandlers(services, executor=lambda target: target())
+
+    with pytest.raises(TypeError):
+        handlers.dispatch({"operation": "admin.plan_repair"})
+
+    assert services.operations.active() is None

@@ -33,6 +33,13 @@
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+. "$ROOT/scripts/lib/workdir.sh"
+# Staging goes to the configured work root rather than to /tmp, which is a
+# tmpfs on many hosts. How much room the describe step needs depends on the
+# artefact it was handed, so the size is checked there and not here.
+TMPDIR=$(ems_work_dir ems-appliance-update) || exit 1
+export TMPDIR
+trap 'rm -rf "$TMPDIR"' EXIT
 OUTPUT="$ROOT/dist"
 PROFILE=rpi5
 UPDATE=""
@@ -246,7 +253,7 @@ import subprocess
 import sys
 import tempfile
 
-from appliance import os_artifacts, os_releases, rpi_image_gen, sparse, version
+from appliance import ab_persistence, os_artifacts, os_releases, rpi_image_gen, sparse, version
 
 archive, manifest_path, release_version, build_id, name, profile_config = sys.argv[1:7]
 lock = rpi_image_gen.read_lock()
@@ -346,7 +353,7 @@ payload = {
     "minimum_appliance_manager_version": version.APPLIANCE_VERSION,
     "layout_id": "ems-appliance-rota-v1",
     "slot_schema_version": 2,
-    "persistent_schema_version": 2,
+    "persistent_schema_version": ab_persistence.PERSISTENT_SCHEMA_VERSION,
     "archive": {
         "name": f"{name}.tar.zst",
         "digest": f"sha256:{archive_digest.hexdigest()}",

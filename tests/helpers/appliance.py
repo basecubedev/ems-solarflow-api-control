@@ -11,6 +11,7 @@ import json
 import re
 from pathlib import Path
 
+from admin.container_names import DEFAULT_EMS_CONTAINER
 from appliance.admin_deployment import read_service_image
 from appliance.commands import CommandError, CommandResult
 from appliance.config import ApplianceConfig, AllowedImages
@@ -21,7 +22,7 @@ from appliance.services import build_services
 ADMIN_REPOSITORY = "ghcr.io/basecubedev/ems-solarflow-admin"
 IMAGE_SOURCE = "https://github.com/basecubedev/ems-solarflow-api-control"
 ADMIN_CONTAINER = "ems-solarflow-admin"
-EMS_CONTAINER = "ems-solarflow"
+EMS_CONTAINER = DEFAULT_EMS_CONTAINER
 ADMIN_SERVICE = "ems-solarflow-admin"
 
 TAG_VARIABLE = re.compile(r"\$\{EMS_ADMIN_TAG(?::-([^}]*))?\}")
@@ -166,7 +167,8 @@ class FakeHost:
             target = self.paths.export_root / name
             source = (source_for or (lambda item: self.paths.install_root / item))(name)
             lines.append(
-                f"{30 + index} 1 {self.device_of(self.paths.install_root)} {source} {target} "
+                f"{30 + index} 1 {self.device_of(self.paths.install_root)} "
+                f"{self.mount_root_of(source)} {target} "
                 f"{options} shared:9 - ext4 /dev/root {options[:2]}"
             )
         mountinfo = self.root / "proc" / "1" / "mountinfo"
@@ -180,6 +182,10 @@ class FakeHost:
 
         entry = os.stat(str(path))
         return f"{os.major(entry.st_dev)}:{os.minor(entry.st_dev)}"
+
+    @staticmethod
+    def mount_root_of(path):
+        return mount_root_of(path)
 
     # --- image / container helpers ---------------------------------------
 
@@ -685,7 +691,16 @@ def appliance_config(**overrides):
     return ApplianceConfig(**values)
 
 
-def build_test_services(tmp_path, *, host=None, config=None, catalogue=None, health=None, clock=None):
+def build_test_services(
+    tmp_path,
+    *,
+    host=None,
+    config=None,
+    catalogue=None,
+    health=None,
+    clock=None,
+    admin_bootstrap=None,
+):
     paths = appliance_paths(tmp_path)
     host = host or FakeHost(paths, root=tmp_path)
     # A normal host has the EMS directories and their read-only binds; a test
@@ -703,6 +718,7 @@ def build_test_services(tmp_path, *, host=None, config=None, catalogue=None, hea
         catalogue=catalogue or StaticCatalogue(["v1.1.0", "v1.0.0"]),
         time_fn=clock,
         sleep=clock.sleep,
+        admin_bootstrap=admin_bootstrap,
     )
     services.host = host
     services.clock = clock
@@ -797,3 +813,30 @@ def seed_backup_account(
         backup_ownership.record_managed_keys(services.paths, [key.split()[1]])
     services.home = home
     return home
+
+
+def mount_root_of(path):
+    """The root field the kernel would publish for a bind of ``path``.
+
+    Taken from the running kernel's own mount table rather than computed the
+    way production computes it, so the fixtures model the contract instead of
+    restating the implementation. It is the absolute path only while the source
+    sits on the filesystem mounted at ``/``; under a temporary directory on its
+    own filesystem it is not, which is exactly the appliance's case.
+    """
+
+    import os
+
+    best = "/"
+    with open("/proc/self/mountinfo", encoding="utf-8") as handle:
+        for line in handle:
+            fields = line.split()
+            if len(fields) < 5:
+                continue
+            point = fields[4].replace("\\040", " ")
+            if (str(path) == point or str(path).startswith(point.rstrip("/") + "/")) and len(
+                point
+            ) > len(best):
+                best = point
+    relative = os.path.relpath(str(path), best)
+    return "/" if relative == "." else "/" + relative

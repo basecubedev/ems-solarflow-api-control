@@ -27,6 +27,7 @@ RequiresMountsFor=/opt/ems-solarflow /var/lib/ems-appliance-manager
 RequiresMountsFor=/var/log/ems-appliance-manager /etc/ems-appliance-manager
 RequiresMountsFor=/var/lib/ems-appliance-os-update
 RequiresMountsFor=/etc/NetworkManager/system-connections
+RequiresMountsFor=/var/lib/ems-backup
 Before=ems-appliance-agent.service ems-appliance-web.service
 Before=ems-appliance-slot-bootstrap.service ems-appliance-ab-health.service
 

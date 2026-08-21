@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 
 from appliance import ab_bootstrap, ab_layout, ab_persistence
 from appliance.ab_boot import SelectorError, SelectorTransaction
+from appliance.hostprobe import uptime_seconds
 from appliance.ab_state import FallbackRecord, SlotRecord
 
 RESULT_HEALTHY = "healthy"
@@ -33,7 +34,7 @@ RESULT_MANUAL_ACTION_REQUIRED = "manual_action_required"
 TRIAL_DETECTED = "trial_boot"
 TRIAL_ABSENT = "ordinary_boot"
 
-DEFAULT_HEALTH_WINDOW_SECONDS = 300
+DEFAULT_HEALTH_WINDOW_SECONDS = 1800
 MIN_HEALTH_WINDOW_SECONDS = 120
 
 
@@ -106,6 +107,7 @@ class TrialHealthService:
         install_check=None,
         agent_socket=None,
         time_fn=None,
+        uptime=None,
         health_window_seconds=DEFAULT_HEALTH_WINDOW_SECONDS,
         remount_selector=True,
     ):
@@ -120,6 +122,7 @@ class TrialHealthService:
         self.install_check = install_check
         self.agent_socket = agent_socket
         self._time = time_fn or time.time
+        self._uptime = uptime or (lambda: uptime_seconds(getattr(probe, "root", "/")))
         self.health_window_seconds = max(
             int(health_window_seconds), MIN_HEALTH_WINDOW_SECONDS
         )
@@ -482,9 +485,11 @@ class TrialHealthService:
                 reasons=[f"health gate failed: {name}" for name in failed],
                 checked_at=now,
             )
-        if pending.trial_requested_at and (
-            now - pending.trial_requested_at > self.health_window_seconds
-        ):
+        # Measured from this boot, never across the reboot the trial spans: the
+        # board has no real-time clock, so a wall-clock difference can come out
+        # negative and never expire at all.
+        booted_for = self._uptime()
+        if booted_for > self.health_window_seconds:
             return HealthReport(
                 result=RESULT_UNHEALTHY,
                 slot=layout.active_slot,
@@ -493,7 +498,8 @@ class TrialHealthService:
                 gates=gates,
                 reasons=[
                     "the trial slot did not reach its health verification inside the "
-                    f"{self.health_window_seconds}s window"
+                    f"{self.health_window_seconds}s window "
+                    f"({int(booted_for)}s after boot)"
                 ],
                 checked_at=now,
             )

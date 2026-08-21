@@ -192,23 +192,18 @@ def test_the_ui_offers_no_writable_device_input():
 # --- update readiness ---------------------------------------------------------
 
 
-def test_the_readiness_card_names_every_backend_prerequisite():
-    """The list is the backend's, not the frontend's idea of one."""
+def test_the_readiness_card_names_every_backend_prerequisite(tmp_path):
+    """The list is the backend's, not the frontend's idea of one, and not a
+    third copy kept here either: it is read from the service that produces it.
+    """
+
+    from tests.helpers.appliance import build_test_services
 
     block = APP.split("AB_READINESS = [")[1].split("];")[0]
     declared = set(re.findall(r'\["(\w+)", "[^"]+", "[^"]+"\]', block))
-    fields = {
-        "hardware_supported",
-        "artifact_decoder_ready",
-        "sparse_decoder_ready",
-        "persistence_ready",
-        "host_identity_ready",
-        "docker_reconstruction_ready",
-        "deployment_authority_ready",
-        "layout_ready",
-    }
+    services = build_test_services(tmp_path)
 
-    assert declared == fields
+    assert declared == set(services.os_update.status()["readiness"])
 
 
 def test_the_plan_buttons_are_disabled_until_every_prerequisite_holds():

@@ -60,13 +60,16 @@ done
 [ -f "$ARCHIVE" ] || not_run "no artefact at $ARCHIVE" artefact_unavailable
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+. "$ROOT/scripts/lib/workdir.sh"
+# the crosscheck expands roughly 8.5G of sparse members.
+CROSSCHECK_WORK_BYTES=$((12 * 1024 * 1024 * 1024))
 command -v zstd >/dev/null 2>&1 || not_run "zstd is missing" zstd_unavailable
 command -v docker >/dev/null 2>&1 || not_run "docker is missing, so there is no second decoder" \
     external_decoder_unavailable
 docker info >/dev/null 2>&1 || not_run "the Docker daemon is not reachable" \
     external_decoder_unavailable
 
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/ems-appliance-crosscheck.XXXXXX")
+WORK=$(ems_work_dir ems-appliance-crosscheck "$CROSSCHECK_WORK_BYTES") || exit 1
 trap 'rm -rf "$WORK"' EXIT
 
 mkdir -p "$WORK/ours" "$WORK/theirs"

@@ -480,3 +480,18 @@ def test_the_image_ships_no_host_private_keys():
         "the layer must remove the host keys openssh-server generated in the chroot"
     )
     assert "rm -f" in layer
+
+
+def test_the_image_installs_the_mdns_responder_every_document_relies_on():
+    """``ems-solarflow.local`` is the only address the documentation gives.
+
+    The appliance's own hostname path restarts ``avahi-daemon.service`` and its
+    command allowlist carries ``avahi-resolve``, so the responder is not
+    optional here: without it the first thing a new owner is told to type
+    cannot resolve, and no document names an alternative.
+    """
+
+    packages = _layer_packages()
+
+    assert "avahi-daemon" in packages
+    assert "avahi-utils" in packages

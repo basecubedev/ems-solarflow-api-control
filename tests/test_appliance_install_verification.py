@@ -21,7 +21,7 @@ from appliance.install_check import (
     STATUS_UNAVAILABLE,
     check_export,
 )
-from tests.helpers.appliance import appliance_paths
+from tests.helpers.appliance import appliance_paths, mount_root_of
 
 pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.backup_restore]
 
@@ -106,7 +106,7 @@ def mounts(paths, *, read_only=True, names=None, source_for=None):
         source = (source_for or (lambda item: str(paths.install_root / item)))(name)
         table[str(target)] = {
             "options": options,
-            "root": source,
+            "root": mount_root_of(source),
             "device": device_of(paths.install_root),
             "source": "/dev/root",
             "fstype": "ext4",

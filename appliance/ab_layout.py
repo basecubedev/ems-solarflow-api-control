@@ -22,6 +22,7 @@ booted and then considers only that device's partitions.
 """
 
 import json
+import os
 import struct
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -399,20 +400,27 @@ class LayoutProbe:
             return {}
 
     def slot_links(self, manifest):
-        """Upstream's ``/dev/disk/by-slot`` symlinks, unresolved.
+        """Upstream's ``/dev/disk/by-slot`` symlinks, as device paths.
 
-        The link text is what matters: it names a device on the booted medium,
-        and resolving it against a fixture root would rewrite that answer.
+        The link text names a device on the booted medium, so it is read
+        without resolving it against the probe root — resolving would rewrite
+        that answer under a fixture. udev writes every ``/dev`` symlink
+        relative to its own directory, so a relative target is joined back onto
+        the link's own location in the booted namespace, never onto the root.
         """
 
         links = {}
-        prefix = self.root / manifest.slot_device_prefix.strip("/")
+        base = manifest.slot_device_prefix.rstrip("/")
+        prefix = self.root / base.strip("/")
         for role in SLOT_LINK_ROLES:
             target = prefix / role
             try:
-                links[role] = str(Path(target).readlink())
+                text = str(Path(target).readlink())
             except (OSError, ValueError):
                 continue
+            if not os.path.isabs(text):
+                text = os.path.normpath(os.path.join(os.path.dirname(f"{base}/{role}"), text))
+            links[role] = text
         return links
 
     def mounts(self):

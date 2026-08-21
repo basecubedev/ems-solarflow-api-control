@@ -335,6 +335,65 @@ def test_a_source_bundle_substituted_after_the_attestation_is_refused(release):
 
 
 @requires_gpg
+def test_runtime_gate_evidence_substituted_after_the_attestation_is_refused(release):
+    """The attestation signs a digest of the runtime-gate evidence, and nothing
+    compared the shipped file against it: a swapped file passed every check
+    while the signature still verified. The substitute below passes every gate,
+    so only that digest can tell it apart."""
+
+    from appliance import release_attestation
+    from appliance import runtime_gates as gate_module
+
+    attestation = release_attestation.read(release.attestation)
+    entry = attestation.profiles[0]
+    kwargs = {
+        "dist": {entry.profile: release.dist},
+        "reports": {entry.profile: release.dist / "reports"},
+        "prefixes": {entry.profile: release.prefix},
+        "gate_report": release.gate,
+    }
+
+    assert not release_attestation.verify(
+        attestation, runtime_gates=release.gates, **kwargs
+    ), "the untouched release must verify"
+
+    gate_module.write(
+        release.gates,
+        gate_module.build(
+            [
+                gate_module.record(name, "pass", reason="", environment="substituted")
+                for name in gate_module.REQUIRED_GATES
+            ],
+            created_at="2026-08-11T00:00:00Z",
+        ),
+    )
+
+    problems = release_attestation.verify(attestation, runtime_gates=release.gates, **kwargs)
+
+    assert any("runtime gate evidence" in problem for problem in problems), problems
+
+
+@requires_gpg
+def test_runtime_gate_evidence_the_attestation_names_may_not_be_omitted(release):
+    """Passing nothing must not be the way past the check."""
+
+    from appliance import release_attestation
+
+    attestation = release_attestation.read(release.attestation)
+    entry = attestation.profiles[0]
+
+    problems = release_attestation.verify(
+        attestation,
+        dist={entry.profile: release.dist},
+        reports={entry.profile: release.dist / "reports"},
+        prefixes={entry.profile: release.prefix},
+        gate_report=release.gate,
+    )
+
+    assert any("runtime gate evidence" in problem for problem in problems), problems
+
+
+@requires_gpg
 def test_a_source_authority_substituted_after_the_attestation_is_refused(release):
     payload = json.loads(release.source["authority"].read_text())
     payload["project"]["revision"] = "f" * 40

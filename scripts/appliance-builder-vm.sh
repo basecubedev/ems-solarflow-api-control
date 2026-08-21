@@ -28,6 +28,9 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+. "$ROOT/scripts/lib/workdir.sh"
+# the builder VM grows to 60G and collects multi-GB artefacts beside it.
+BUILDER_WORK_BYTES=$((70 * 1024 * 1024 * 1024))
 CACHE=${EMS_APPLIANCE_VM_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/ems-appliance-vm}
 SSH_PORT=${EMS_APPLIANCE_BUILDER_SSH_PORT:-2322}
 OUTPUT="$ROOT/dist"
@@ -73,7 +76,7 @@ command -v genisoimage >/dev/null 2>&1 || command -v xorriso >/dev/null 2>&1 \
 git -C "$ROOT" diff --quiet && git -C "$ROOT" diff --cached --quiet \
     || not_run "the project source tree has uncommitted changes" project_source_dirty
 
-WORK=$(mktemp -d "${TMPDIR:-/tmp}/ems-appliance-builder.XXXXXX")
+WORK=$(ems_work_dir ems-appliance-builder "$BUILDER_WORK_BYTES") || exit 1
 GUEST_PID=""
 cleanup() {
     if [ -n "$GUEST_PID" ] && kill -0 "$GUEST_PID" 2>/dev/null; then

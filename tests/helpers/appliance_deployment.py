@@ -18,6 +18,7 @@ import json
 from pathlib import Path
 
 from appliance.commands import CommandResult, RecordingRunner
+from appliance.ab_persistence import PERSISTENT_SCHEMA_VERSION
 
 ADMIN_DIGEST = "sha256:" + "a1" * 32
 EMS_DIGEST = "sha256:" + "b2" * 32
@@ -447,7 +448,7 @@ class TrialAppliance:
                 "release_version": "1.5.0",
                 "build_id": "20260807-1",
                 "layout_id": "ems-appliance-rota-v1",
-                "persistent_schema_version": 2,
+                "persistent_schema_version": PERSISTENT_SCHEMA_VERSION,
                 "slot_schema_version": 2,
             }
         )

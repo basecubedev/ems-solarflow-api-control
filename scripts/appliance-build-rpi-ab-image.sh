@@ -175,6 +175,21 @@ print(build_authority.prepare_output(sys.argv[1], build_id=sys.argv[2]))
 PY
 ) || fail "the build output directory could not be claimed for $BUILD_ID" output_unusable
 
+# Roughly 15G of chroot and intermediate images. Every artefact a release ships
+# is copied out of here, so a finished build has no use for it -- but a failed
+# one is the only place the failure can be examined, and silently keeping it is
+# how a dist directory grows by 15G per attempt.
+release_work_cleanup() {
+    status=$?
+    if [ "$status" -eq 0 ]; then
+        rm -rf "$WORK"
+    elif [ -d "$WORK" ]; then
+        echo "build tree kept for diagnosis: $WORK ($(du -sh "$WORK" 2>/dev/null | cut -f1))" >&2
+    fi
+    return "$status"
+}
+trap release_work_cleanup EXIT
+
 echo "== building the appliance package =="
 "$ROOT/packaging/appliance/build-deb.sh" --output "$OUTPUT" --arch arm64 >/dev/null \
     || fail "the arm64 package build failed" package_build_failed

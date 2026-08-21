@@ -28,6 +28,7 @@ from appliance.os_releases import (
     ReleaseSource,
 )
 from appliance.sparse import ENCODING_ANDROID_SPARSE
+from appliance.ab_persistence import PERSISTENT_SCHEMA_VERSION
 from tests.helpers import android_sparse
 
 LAYOUT_ID = "ems-appliance-rota-v1"
@@ -73,7 +74,7 @@ def build_manifest(
     members,
     layout_id=LAYOUT_ID,
     slot_schema_version=2,
-    persistent_schema_version=2,
+    persistent_schema_version=PERSISTENT_SCHEMA_VERSION,
     minimum_appliance_manager_version="0.1.0",
     architecture="arm64",
     device_layer=DEVICE_LAYER,
@@ -199,7 +200,7 @@ class ReleaseDirectory:
 
         class _Runner(RecordingRunner):
             def run(self, tool, args=(), **kwargs):
-                if tool == "gpg":
+                if tool == "gpgv":
                     self.calls.append((tool, tuple(args), None))
                     if not directory.gpg_ok:
                         return CommandResult(tool, tuple(args), 1, "", "BAD signature")

@@ -54,6 +54,21 @@ def test_appliance_authentication_and_operation_state_are_shared():
     assert "/etc/ems-appliance-manager" in targets
 
 
+def test_the_backup_accounts_keys_are_shared():
+    """The operator's SSH backup key lives in that home. On a slot-local /var it
+    is gone at the next slot switch, and remote backup access with it."""
+
+    targets = {shared.target for shared in ab_persistence.SHARED_PATHS}
+
+    assert "/var/lib/ems-backup" in targets
+
+
+def test_the_backup_home_is_declared_to_the_generator_that_mounts_it():
+    conf = ab_persistence.slot_shared_conf()
+
+    assert "Path=/var/lib/ems-backup" in conf
+
+
 def test_network_profiles_are_shared():
     targets = {shared.target for shared in ab_persistence.SHARED_PATHS}
 

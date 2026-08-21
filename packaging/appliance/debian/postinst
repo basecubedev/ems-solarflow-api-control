@@ -57,6 +57,22 @@ case "$1" in
         fi
         usermod -a -G ems-appliance ems-appliance-web >/dev/null 2>&1 || true
 
+        # Owner of the hosted deployment and the uid its containers run as. A
+        # flashed appliance has no human account, so without this there is
+        # nobody for /opt/ems-solarflow to belong to and the compose files
+        # this project generates would have to run the containers as root.
+        # The directory stays the authority: the appliance reads the owner
+        # from it and never looks this name up at runtime, which is what keeps
+        # a slot-local /etc/passwd from disagreeing with a shared /opt.
+        if ! getent group ems-deploy >/dev/null; then
+            addgroup --system ems-deploy || fail "cannot create the ems-deploy group"
+        fi
+        if ! getent passwd ems-deploy >/dev/null; then
+            adduser --system --ingroup ems-deploy --no-create-home \
+                    --home /nonexistent --shell /usr/sbin/nologin ems-deploy \
+                || fail "cannot create the ems-deploy account"
+        fi
+
         # Backup-only account: no shell, no login. Remote access is restricted
         # to a chrooted SFTP session by the generated sshd policy. The helper
         # records that this package created the account, which is what later

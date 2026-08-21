@@ -130,14 +130,28 @@ def read_runtime_gates(path):
     }
 
 
-def read_kit_manifest(path):
-    """What the hardware kit said about itself, re-read from the kit directory."""
+def read_kit_manifest(path, *, source_bundle=""):
+    """What the hardware kit said about itself, re-read from the kit directory.
+
+    A kit directory outlives the run that filled it, so the manifest is only
+    evidence once it names the source bundle this run was built from. Without
+    that, a --no-kit run reads an earlier run's readiness as its own.
+    """
 
     if not path or not Path(path).is_file():
         return {"physical_ready": False, "detail": "no hardware kit manifest"}
     payload = read_json(path)
     if payload is None:
         return {"physical_ready": False, "detail": "the kit manifest could not be read"}
+    bound = str((payload.get("source_binding") or {}).get("bundle_sha256") or "")
+    expected = file_sha256(source_bundle) if source_bundle and Path(source_bundle).is_file() else ""
+    if not expected or bound != expected:
+        return {
+            "physical_ready": False,
+            "development_kit": bool(payload.get("development_kit")),
+            "sha256": file_sha256(path),
+            "detail": "the kit manifest belongs to another release build",
+        }
     return {
         "physical_ready": bool(payload.get("physical_ready")),
         "development_kit": bool(payload.get("development_kit")),
@@ -272,7 +286,9 @@ def main(argv=None):
         result["profiles"][profile] = entry
 
     result["runtime_gates"] = read_runtime_gates(args.runtime_gates)
-    result["hardware_kit"] = read_kit_manifest(args.kit_manifest)
+    result["hardware_kit"] = read_kit_manifest(
+        args.kit_manifest, source_bundle=args.source_bundle
+    )
 
     # The trust anchor comes from the operator running this, never from the
     # release: a document that named the key it should be checked against would
@@ -296,6 +312,7 @@ def main(argv=None):
                 reports=reports,
                 prefixes=prefixes,
                 gate_report=args.gate_report,
+                runtime_gates=args.runtime_gates or None,
             )
             binding = release_trust.verify_source_binding(
                 attestation,

@@ -416,6 +416,7 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
             "/api/admin/releases": ("admin.releases", {}),
             "/api/updates": ("updates.get", {}),
             "/api/ab": ("ab.status", {}),
+            "/api/ab/sources": ("ab.sources", {}),
             "/api/ssh/keys": ("ssh.get", {}),
             "/api/backup": ("backup.get", {}),
             "/api/operations": ("operations.list", {}),
@@ -516,6 +517,10 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
                 lambda b: {"release_id": b.get("release_id"), "repair": bool(b.get("repair"))},
             ),
             "/api/ab/plan-rollback": ("ab.plan_rollback", lambda _: {}),
+            "/api/ab/plan-fetch": (
+                "ab.plan_fetch",
+                lambda b: {"release_id": b.get("release_id")},
+            ),
             "/api/ssh/enable": ("ssh.plan_service", lambda _: {"enabled": True}),
             "/api/ssh/disable": ("ssh.plan_service", lambda _: {"enabled": False}),
             "/api/ssh/keys": ("ssh.plan_key_add", self._key_fields),

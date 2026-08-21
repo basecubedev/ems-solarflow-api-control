@@ -14,12 +14,14 @@ question, answered in docs/appliance/ab-hardware-validation.md.
 """
 
 import json
+import os
 import struct
 from pathlib import Path
 from types import SimpleNamespace
 
 from appliance import ab_docker_health
 from appliance.commands import CommandResult, RecordingRunner
+from appliance.ab_persistence import PERSISTENT_SCHEMA_VERSION
 
 DEVICE = "/dev/mmcblk0"
 BOOT_MODE_SD = 1
@@ -68,7 +70,7 @@ DEFAULT_OS_BUILD = {
     "layout_id": LAYOUT_ID,
     "artifact_digest": "sha256:" + "a" * 64,
     "rootfs_digest": "sha256:" + "b" * 64,
-    "persistent_schema_version": 2,
+    "persistent_schema_version": PERSISTENT_SCHEMA_VERSION,
     "slot_schema_version": 2,
 }
 
@@ -78,7 +80,7 @@ def layout_manifest():
         "schema_version": 2,
         "layout_id": LAYOUT_ID,
         "slot_schema_version": 2,
-        "persistent_schema_version": 2,
+        "persistent_schema_version": PERSISTENT_SCHEMA_VERSION,
         "image_layer": "image-rota",
         "image_layer_version": IMAGE_LAYER_VERSION,
         "slot_device_prefix": SLOT_PREFIX,
@@ -172,6 +174,11 @@ class ApplianceAbHost:
         self.seed_persistent_tree()
         self.seed_host_identity()
         self.mount_defaults()
+        self.set_uptime(30.0)
+
+    def set_uptime(self, seconds):
+        self._write("proc/uptime", f"{float(seconds):.2f} 0.00\n")
+        return seconds
 
     # --- fixture files ---------------------------------------------------
 
@@ -188,6 +195,17 @@ class ApplianceAbHost:
             path.unlink()
         path.symlink_to(target)
         return path
+
+    def _udev_symlink(self, relative, target):
+        """A ``/dev`` symlink the way udev writes one: relative to its own directory.
+
+        Every ``/dev/disk/by-*`` entry on a real host points at ``../../<node>``.
+        A fixture that writes the absolute path instead cannot see a comparison
+        that only holds for absolute text.
+        """
+
+        link = "/" + str(relative).lstrip("/")
+        return self._symlink(relative, os.path.relpath(str(target), os.path.dirname(link)))
 
     def write_layout_manifest(self, payload):
         return self._write(
@@ -315,11 +333,11 @@ class ApplianceAbHost:
 
         other = "B" if slot == "A" else "A"
         prefix = SLOT_PREFIX.lstrip("/")
-        self._symlink(f"{prefix}/active/boot", device_of(SLOT_LABELS[slot]["boot"]))
-        self._symlink(f"{prefix}/active/system", device_of(SLOT_LABELS[slot]["root"]))
-        self._symlink(f"{prefix}/other/boot", device_of(SLOT_LABELS[other]["boot"]))
-        self._symlink(f"{prefix}/other/system", device_of(SLOT_LABELS[other]["root"]))
-        self._symlink(f"{prefix}/persistent", device_of("persistent"))
+        self._udev_symlink(f"{prefix}/active/boot", device_of(SLOT_LABELS[slot]["boot"]))
+        self._udev_symlink(f"{prefix}/active/system", device_of(SLOT_LABELS[slot]["root"]))
+        self._udev_symlink(f"{prefix}/other/boot", device_of(SLOT_LABELS[other]["boot"]))
+        self._udev_symlink(f"{prefix}/other/system", device_of(SLOT_LABELS[other]["root"]))
+        self._udev_symlink(f"{prefix}/persistent", device_of("persistent"))
         return self
 
     def boot_partition_directly(self, partition):

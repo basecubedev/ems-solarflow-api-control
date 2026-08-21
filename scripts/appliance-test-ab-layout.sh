@@ -16,6 +16,7 @@
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+. "$ROOT/scripts/lib/workdir.sh"
 LOOP=0
 IMAGE=""
 
@@ -41,9 +42,9 @@ while [ $# -gt 0 ]; do
 done
 
 cd "$ROOT"
-: "${TMPDIR:=/zfs/tmp/tmp}"
-[ -d "$TMPDIR" ] || TMPDIR=/tmp
+TMPDIR=$(ems_work_dir ems-appliance-ab-layout) || exit 1
 export TMPDIR
+trap 'rm -rf "$TMPDIR"' EXIT
 
 present=""
 for suite in $SUITES; do

@@ -22,6 +22,7 @@ AGENT_UNIT=ems-appliance-agent.service
 WEB_UNIT=ems-appliance-web.service
 EXPORT_ROOT=/srv/ems-appliance-export
 PASSWORD=appliance-smoke-password-1
+APPLIANCE_CONF=/etc/ems-appliance-manager/appliance.conf
 
 failures=0
 
@@ -178,11 +179,19 @@ done
 check "$WEB_USER owns its own state" test "$(stat -c %U "$STATE_DIR/web")" = "$WEB_USER"
 
 step "packaged HTTP authentication"
-if python3 - "$PASSWORD" <<'PY'
+# The port comes from the configuration the running web service was started
+# with, never from a copy in this script. A second constant here is a check
+# that keeps passing after the port moves, and then fails on the day the gate
+# is finally run — which is exactly how this one was found.
+WEB_PORT=$(sed -n 's/^[[:space:]]*web_port[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' \
+    "$APPLIANCE_CONF" 2>/dev/null | head -n 1)
+if [ -z "$WEB_PORT" ]; then
+    fail "$APPLIANCE_CONF names no web_port, so the packaged HTTP flow cannot be checked"
+elif python3 - "$PASSWORD" "$WEB_PORT" <<'PY'
 import json, sys, urllib.error, urllib.request
 
 PASSWORD = sys.argv[1]
-BASE = "http://127.0.0.1:8080"
+BASE = "http://127.0.0.1:%s" % sys.argv[2]
 cookie = csrf = ""
 
 

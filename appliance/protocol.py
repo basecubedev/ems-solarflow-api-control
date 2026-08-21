@@ -13,6 +13,12 @@ from dataclasses import dataclass
 from appliance import validation
 from appliance.validation import ValidationError
 
+# Enough for a read-only call or a plan that only inspects the host.
+DEFAULT_OPERATION_TIMEOUT = 30
+# A plan that pulls and inspects a container image; the Docker pull alone is
+# allowed 600s by the service that runs it.
+IMAGE_OPERATION_TIMEOUT = 900
+
 KIND_RELEASE_CHANNEL = "release_channel"
 KIND_RELEASE_TAG = "release_tag"
 KIND_BOOL = "bool"
@@ -59,11 +65,28 @@ class OperationSpec:
     takes_lock: bool = False
     fields: tuple = ()
     summary: str = ""
+    # How long a caller waits for this one. A planner that pulls an image works
+    # far longer than the default, and a caller that gives up first leaves the
+    # operation it started holding the lock.
+    timeout_seconds: int = DEFAULT_OPERATION_TIMEOUT
 
 
-def _spec(name, *, mutating=False, takes_lock=False, fields=(), summary=""):
+def _spec(
+    name,
+    *,
+    mutating=False,
+    takes_lock=False,
+    fields=(),
+    summary="",
+    timeout_seconds=DEFAULT_OPERATION_TIMEOUT,
+):
     return OperationSpec(
-        name=name, mutating=mutating, takes_lock=takes_lock, fields=tuple(fields), summary=summary
+        name=name,
+        mutating=mutating,
+        takes_lock=takes_lock,
+        fields=tuple(fields),
+        summary=summary,
+        timeout_seconds=timeout_seconds,
     )
 
 
@@ -93,6 +116,7 @@ READ_ONLY_OPERATIONS = (
     _spec("network.wifi.scan", summary="Visible WLAN networks"),
     _spec("admin.releases", summary="Installable Admin versions"),
     _spec("ab.status", summary="A/B slot, persistence and OS release state"),
+    _spec("ab.sources", summary="OS releases the configured index offers"),
 )
 
 MUTATING_OPERATIONS = (
@@ -106,8 +130,15 @@ MUTATING_OPERATIONS = (
             Field("reinstall", KIND_BOOL, required=False, default=False),
         ),
         summary="Plan an Admin installation",
+        timeout_seconds=IMAGE_OPERATION_TIMEOUT,
     ),
-    _spec("admin.plan_rollback", mutating=True, takes_lock=True, summary="Plan an Admin rollback"),
+    _spec(
+        "admin.plan_rollback",
+        mutating=True,
+        takes_lock=True,
+        summary="Plan an Admin rollback",
+        timeout_seconds=IMAGE_OPERATION_TIMEOUT,
+    ),
     _spec("admin.plan_repair", mutating=True, takes_lock=True, summary="Plan an Admin repair"),
     _spec(
         "admin.plan_lifecycle",
@@ -191,12 +222,24 @@ MUTATING_OPERATIONS = (
             Field("repair", KIND_BOOL, required=False, default=False),
         ),
         summary="Plan an A/B operating-system update",
+        timeout_seconds=IMAGE_OPERATION_TIMEOUT,
     ),
     _spec(
         "ab.plan_rollback",
         mutating=True,
         takes_lock=True,
         summary="Plan a rollback to the previous known-good slot",
+    ),
+    # Same rule as the update: the browser names a release id and nothing else.
+    # The three URLs come from the configured index, and what they are allowed
+    # to deliver comes from the signature over the manifest.
+    _spec(
+        "ab.plan_fetch",
+        mutating=True,
+        takes_lock=True,
+        fields=(Field("release_id", KIND_OS_RELEASE_ID),),
+        summary="Plan a download of a signed OS release",
+        timeout_seconds=IMAGE_OPERATION_TIMEOUT,
     ),
     _spec(
         "ab.acknowledge",

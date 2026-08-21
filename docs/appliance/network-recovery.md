@@ -45,7 +45,7 @@ configuration, refreshes mDNS, warns that the URL changes, requires an explicit
 confirmation and then shows the new URLs:
 
 ```text
-http://<new-hostname>.local:8080   Appliance Manager
+http://<new-hostname>.local:8088   Appliance Manager
 http://<new-hostname>.local:8090   EMS Admin Console
 ```
 
@@ -58,8 +58,10 @@ If you can no longer reach the appliance:
 1. **Wait for the automatic revert.** When the new network fails, the previous
    profile is reactivated within the revert timeout and the old address works
    again.
-2. **Try the mDNS name** `http://ems-solarflow.local:8080` — the IP address may
-   have changed while the name did not.
+2. **Try the mDNS name** `http://ems-solarflow.local:8088` — the IP address may
+   have changed while the name did not. When the name does not resolve, find
+   the appliance in your router's list of connected devices and open
+   `http://<address>:8088`.
 3. **Connect Ethernet.** Ethernet keeps working independently of the WLAN
    profile; the appliance is reachable on its wired address.
 4. **Use the console or SSH:**

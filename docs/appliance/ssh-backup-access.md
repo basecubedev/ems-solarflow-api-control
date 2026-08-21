@@ -17,6 +17,19 @@ PubkeyAuthentication   yes
 is no operation in the appliance that can turn on password authentication.
 **Disable SSH** stops and disables it.
 
+## The account across a slot switch
+
+`/var/lib/ems-backup` is a shared path, so the key you deployed and the marker
+proving this package created the home both survive an OS update. They did not
+before: on a slot-local `/var` the next slot switch left a fresh home, and
+remote backup access with it.
+
+On an imaged appliance the account is established at first boot by
+`ems-appliance-backup-account.service`, not by the package installation. The
+ownership record binds the home's device and inode, and one written while the
+image was being built names a filesystem the device never sees.
+
+
 ## Add an SSH public key
 
 1. Choose the account. Only accounts listed in

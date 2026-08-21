@@ -14,10 +14,14 @@ from pathlib import Path
 SECTION = "appliance"
 
 DEFAULT_WEB_ADDRESS = "0.0.0.0"
-DEFAULT_WEB_PORT = 8080
+# Not 8080: docker-compose.yml publishes the EMS dashboard there, and the
+# appliance exists to host that deployment rather than displace it.
+DEFAULT_WEB_PORT = 8088
 DEFAULT_ADMIN_PORT = 8090
 DEFAULT_ADMIN_CONTAINER = "ems-solarflow-admin"
-DEFAULT_EMS_CONTAINER = "ems-solarflow"
+# Kept equal to admin/container_names.py by tests/test_appliance_project_identity.py;
+# the appliance runs outside every container and cannot import it.
+DEFAULT_EMS_CONTAINER = "ems-solarflow-api-control"
 DEFAULT_INFLUX_CONTAINER = "ems-influxdb"
 DEFAULT_ADMIN_SERVICE = "ems-solarflow-admin"
 DEFAULT_EMS_SERVICE = "ems"
@@ -30,6 +34,10 @@ DEFAULT_ADMIN_HEALTH_PATH = "/api/admin/auth/status"
 DEFAULT_WEB_USER = "ems-appliance-web"
 DEFAULT_SOCKET_GROUP = "ems-appliance"
 DEFAULT_BACKUP_USER = "ems-backup"
+# Owner of the hosted deployment and the uid its containers run as. The
+# compose files this project generates bind host paths in at the same path,
+# so the identity has to be a real non-root account on the host.
+DEFAULT_DEPLOYMENT_USER = "ems-deploy"
 DEFAULT_ADMIN_REPOSITORY = "ghcr.io/basecubedev/ems-solarflow-admin"
 DEFAULT_IMAGE_SOURCE = "https://github.com/basecubedev/ems-solarflow-api-control"
 DEFAULT_SESSION_TIMEOUT = 1800
@@ -39,7 +47,14 @@ DEFAULT_WIFI_REVERT_TIMEOUT = 90
 DEFAULT_MIN_FREE_MB = 1024
 DEFAULT_OS_RELEASE_DIR = "/var/lib/ems-appliance-os-update/releases"
 DEFAULT_OS_RELEASE_KEYRING = "/etc/ems-appliance-manager/os-release-keyring.gpg"
-DEFAULT_AB_HEALTH_WINDOW = 300
+# Where signed OS releases are fetched from. Empty means this appliance has
+# no transport: releases must then be placed in os_release_dir by hand.
+DEFAULT_OS_RELEASE_INDEX_URL = ""
+# Larger than every unit ordered before the health check can start
+# (persistence 120s + slot bootstrap 900s), or a healthy trial that simply took
+# a while to reconstruct its runtime is rolled back. A contract test holds this
+# against the shipped unit files.
+DEFAULT_AB_HEALTH_WINDOW = 1800
 
 
 class ConfigError(Exception):
@@ -68,6 +83,7 @@ class ApplianceConfig:
     web_user: str = DEFAULT_WEB_USER
     socket_group: str = DEFAULT_SOCKET_GROUP
     backup_user: str = DEFAULT_BACKUP_USER
+    deployment_user: str = DEFAULT_DEPLOYMENT_USER
     ssh_key_accounts: tuple = (DEFAULT_BACKUP_USER,)
     admin_container: str = DEFAULT_ADMIN_CONTAINER
     ems_container: str = DEFAULT_EMS_CONTAINER
@@ -87,6 +103,7 @@ class ApplianceConfig:
     release_index_url: str = ""
     os_release_dir: str = DEFAULT_OS_RELEASE_DIR
     os_release_keyring: str = DEFAULT_OS_RELEASE_KEYRING
+    os_release_index_url: str = DEFAULT_OS_RELEASE_INDEX_URL
     # A development bench may install an unsigned artifact from the root CLI.
     # It is never a release-gate pass and the browser can never reach it.
     allow_unsigned_os_artifacts: bool = False
@@ -202,22 +219,41 @@ def load_allowed_images(path):
     )
 
 
-def _backup_user(values):
-    """The backup account is package-owned, so its name is not configurable.
+def _package_owned_account(values, key, expected, reason):
+    """A package-created account name is not configurable.
 
-    The package creates, confines and removes exactly one account. Accepting a
-    different name here would produce a configuration the account lifecycle
-    cannot honour, which is worse than refusing it.
+    The package creates exactly one account per role and removes it again.
+    Accepting a different name here would produce a configuration the account
+    lifecycle cannot honour, which is worse than refusing it.
     """
 
-    configured = (values.get("backup_user") or "").strip()
-    if configured and configured != DEFAULT_BACKUP_USER:
+    configured = (values.get(key) or "").strip()
+    if configured and configured != expected:
         raise ConfigError(
-            "backup_user_unsupported",
-            f"backup_user must be {DEFAULT_BACKUP_USER}; the backup account is created and "
-            "removed by this package and no other account is managed",
+            f"{key}_unsupported",
+            f"{key} must be {expected}; {reason}",
         )
-    return DEFAULT_BACKUP_USER
+    return expected
+
+
+def _backup_user(values):
+    return _package_owned_account(
+        values,
+        "backup_user",
+        DEFAULT_BACKUP_USER,
+        "the backup account is created and removed by this package and no other "
+        "account is managed",
+    )
+
+
+def _deployment_user(values):
+    return _package_owned_account(
+        values,
+        "deployment_user",
+        DEFAULT_DEPLOYMENT_USER,
+        "the deployment owner is created and removed by this package and no other "
+        "account is managed",
+    )
 
 
 def load_config(paths):
@@ -230,12 +266,14 @@ def load_config(paths):
         return ApplianceConfig(images=images)
 
     _backup_user(values)
+    _deployment_user(values)
     return ApplianceConfig(
         web_address=values.get("web_address") or DEFAULT_WEB_ADDRESS,
         web_port=_as_int(values, "web_port", DEFAULT_WEB_PORT),
         web_user=values.get("web_user") or DEFAULT_WEB_USER,
         socket_group=values.get("socket_group") or DEFAULT_SOCKET_GROUP,
         backup_user=DEFAULT_BACKUP_USER,
+        deployment_user=DEFAULT_DEPLOYMENT_USER,
         ssh_key_accounts=_as_tuple(values, "ssh_key_accounts", (DEFAULT_BACKUP_USER,)),
         admin_container=values.get("admin_container") or DEFAULT_ADMIN_CONTAINER,
         ems_container=values.get("ems_container") or DEFAULT_EMS_CONTAINER,
@@ -259,6 +297,7 @@ def load_config(paths):
         release_index_url=values.get("release_index_url") or "",
         os_release_dir=values.get("os_release_dir") or DEFAULT_OS_RELEASE_DIR,
         os_release_keyring=values.get("os_release_keyring") or DEFAULT_OS_RELEASE_KEYRING,
+        os_release_index_url=(values.get("os_release_index_url") or "").strip(),
         allow_unsigned_os_artifacts=_as_bool(values, "allow_unsigned_os_artifacts", False),
         ab_health_window_seconds=_as_int(
             values, "ab_health_window_seconds", DEFAULT_AB_HEALTH_WINDOW

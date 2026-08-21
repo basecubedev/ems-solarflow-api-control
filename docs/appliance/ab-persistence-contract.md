@@ -188,6 +188,18 @@ Every important path is exactly one of:
 
 All of `/opt/ems-solarflow` is one shared path.
 
+## The schema version is a one-way door
+
+`ab_persistence.PERSISTENT_SCHEMA_VERSION` is compared strictly against the
+`persistent_schema_version` the running image declares. An appliance whose
+manager implements a newer schema than its image reports
+`persistence_identity_mismatch`, which withholds `persistence_ready` and blocks
+the very update that would reconcile the two.
+
+Adding or removing a shared path therefore changes this number, and doing so
+after a release needs a migration path. Version 3 added `/var/lib/ems-backup`
+before any image shipped, which is the only moment such a change is free.
+
 ### Appliance
 
 | Path | Class | Notes |
@@ -196,6 +208,7 @@ All of `/opt/ems-solarflow` is one shared path.
 | `/var/log/ems-appliance-manager` | shared | appliance, agent and audit logs |
 | `/etc/ems-appliance-manager` | shared | host configuration, image allowlist, the A/B layout descriptor |
 | `/var/lib/ems-appliance-os-update` | shared | staged artifacts, the pending trial record, known-good and fallback state, the runtime seed |
+| `/var/lib/ems-backup` | shared | the confined backup account's home: the operator's `authorized_keys` and the marker proving this package created it |
 
 `/var/lib/ems-appliance-os-update` being shared is what makes A/B work at all:
 the trial slot reads the pending record the source slot wrote, and the

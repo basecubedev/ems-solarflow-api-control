@@ -51,6 +51,22 @@ ADMIN_REPLACEMENT_FIELDS = (
     "environment_hash",
 )
 
+# A first installation has no deployment to bind to: the compose and
+# environment files do not exist yet, so there are no bytes whose hash could
+# say "still the one the plan was made against". What it binds to instead is
+# the absence itself, revalidated at execution — see
+# ``AdminLifecycleService._require_absent_deployment``.
+BOOTSTRAP_FIELD = "bootstrap"
+
+ADMIN_BOOTSTRAP_FIELDS = (
+    "repository",
+    "tag",
+    "digest",
+    "reference",
+    "compose_file",
+    "environment_file",
+)
+
 REQUIRED_FIELDS = {
     TYPE_ADMIN_INSTALL: ADMIN_REPLACEMENT_FIELDS + ("architecture",),
     TYPE_ADMIN_ROLLBACK: ADMIN_REPLACEMENT_FIELDS,
@@ -220,6 +236,22 @@ def _require_hash(value, label):
     return text
 
 
+def is_bootstrap(target):
+    """Does this record create the deployment instead of editing one?
+
+    Only a real boolean answers: a truthy string in a record that decides
+    whether the appliance is allowed to write a deployment file is a record to
+    refuse, not to interpret.
+    """
+
+    value = (target or {}).get(BOOTSTRAP_FIELD)
+    if value is None or value is False:
+        return False
+    if value is True:
+        return True
+    raise OperationSchemaError("the plan does not say clearly whether it bootstraps; plan again")
+
+
 def validate_admin_target(target, *, repositories=(), architectures=(), require_release_tag=True):
     """The immutable identity an Admin replacement is allowed to deploy.
 
@@ -251,8 +283,9 @@ def validate_admin_target(target, *, repositories=(), architectures=(), require_
         raise OperationSchemaError(
             "the plan reference does not name the recorded repository and digest"
         )
-    for field in HASH_FIELDS:
-        _require_hash(target.get(field), f"planned {field}")
+    if not is_bootstrap(target):
+        for field in HASH_FIELDS:
+            _require_hash(target.get(field), f"planned {field}")
     return True
 
 
@@ -358,6 +391,13 @@ def validate_operation(operation, *, repositories=(), architectures=()):
     target = operation.requested_target or {}
     if not isinstance(target, dict):
         raise OperationSchemaError("the plan target is not a mapping")
+
+    if is_bootstrap(target):
+        if operation.type != TYPE_ADMIN_INSTALL:
+            raise OperationSchemaError(
+                f"a {operation.type} may not create a deployment; plan again"
+            )
+        required = ADMIN_BOOTSTRAP_FIELDS + ("architecture",)
 
     missing = [field for field in required if not _present(target, field)]
     if missing:

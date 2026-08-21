@@ -206,3 +206,38 @@ def test_the_finalizer_assembles_the_kit_only_after_the_gate_passed():
 
     assert gate_index < kit_index
     assert "release_gate_failed" in text[gate_index:kit_index]
+
+
+# --- a gate has to say what it proved ---------------------------------------
+
+
+def test_every_required_gate_declares_what_it_establishes():
+    """"docker_reconstruction: pass" reads as "the EMS containers were proven".
+    That gate exercises Docker's save/load/pull mechanics against contract
+    stand-ins; the project's real arm64 images run in it nowhere. A gate whose
+    name promises more than its evidence is how a release status comes to rest
+    on something nobody checked."""
+
+    from appliance import runtime_gates
+
+    for name in runtime_gates.REQUIRED_GATES:
+        assert name in runtime_gates.GATE_SCOPES, name
+        assert runtime_gates.GATE_SCOPES[name].strip(), name
+
+
+def test_the_container_gate_names_the_stand_ins_it_used():
+    from appliance import runtime_gates
+
+    scope = runtime_gates.GATE_SCOPES["docker_reconstruction"]
+
+    assert "contract" in scope.lower() or "stand-in" in scope.lower()
+
+
+def test_the_scope_travels_with_the_evidence():
+    """A scope only in a source comment is one no reader of the release sees."""
+
+    from appliance import runtime_gates
+
+    record = runtime_gates.record("docker_reconstruction", "pass", environment="test")
+
+    assert record.to_dict()["scope"] == runtime_gates.GATE_SCOPES["docker_reconstruction"]

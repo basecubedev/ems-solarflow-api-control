@@ -58,6 +58,10 @@ mmdebstrap:
     - util-linux
     - zstd
     # What the appliance itself needs beyond the package's own dependencies.
+    # avahi publishes ems-solarflow.local, which is the only address the
+    # documentation gives a new owner and the one the hostname path restarts.
+    - avahi-daemon
+    - avahi-utils
     - curl
     - e2fsprogs
     - cloud-guest-utils
@@ -147,7 +151,8 @@ mmdebstrap:
                         /var/log/ems-appliance-manager \
                         /etc/ems-appliance-manager \
                         /var/lib/ems-appliance-os-update \
-                        /etc/NetworkManager/system-connections; do
+                        /etc/NetworkManager/system-connections \
+                        /var/lib/ems-backup; do
          install -d -m 0755 "$1$mountpoint"
       done
 

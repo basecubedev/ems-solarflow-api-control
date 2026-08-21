@@ -15,6 +15,7 @@ script wrote — the mount table and the directory itself are the evidence.
 import os
 import stat as stat_module
 from dataclasses import dataclass
+from pathlib import Path
 
 from appliance.paths import chroot_chain_problems, runtime_boundary_problems
 
@@ -33,6 +34,40 @@ def device_id(entry):
     """``major:minor`` of a stat result, the form ``mountinfo`` uses."""
 
     return f"{os.major(entry.st_dev)}:{os.minor(entry.st_dev)}"
+
+
+def path_within_filesystem(path):
+    """A path the way ``mountinfo`` names it: relative to its own mount root.
+
+    Binding ``/persistent/ems/config`` publishes a record whose root reads
+    ``/ems/config``, because the persistent partition is mounted at
+    ``/persistent``. The absolute path only equals that text while the source
+    happens to sit on the filesystem mounted at ``/`` — true on a developer
+    machine, false on the A/B appliance.
+    """
+
+    current = Path(path)
+    parts = []
+    while current != current.parent and not os.path.ismount(str(current)):
+        parts.append(current.name)
+        current = current.parent
+    return "/" + "/".join(reversed(parts)) if parts else "/"
+
+
+def publishes_source(source, record):
+    """Whether the mount record really publishes ``source``.
+
+    Two independent facts have to agree: the mount carries the filesystem the
+    source lives on, and it is rooted at the source's place inside it.
+    """
+
+    try:
+        source_entry = os.stat(str(source))
+    except OSError:
+        return False
+    if record.get("device") != device_id(source_entry):
+        return False
+    return str(record.get("root") or "") == path_within_filesystem(source)
 
 
 @dataclass(frozen=True)
@@ -138,14 +173,7 @@ def _inspect_one(name, source, target, record):
     options = record.get("options") or frozenset()
     read_only = "ro" in options
     mounted_source = str(record.get("root") or "")
-    verified = False
-    if source_present:
-        try:
-            verified = mounted_source == str(source) and record.get("device") == device_id(
-                os.stat(str(source))
-            )
-        except OSError:
-            verified = False
+    verified = source_present and publishes_source(source, record)
     if not verified:
         detail = detail or f"{target} does not publish {source}"
         state = STATE_FOREIGN

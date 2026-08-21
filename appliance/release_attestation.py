@@ -304,7 +304,7 @@ def _location(value, profile):
     return Path(value)
 
 
-def verify(attestation, *, dist, reports, prefixes, gate_report):
+def verify(attestation, *, dist, reports, prefixes, gate_report, runtime_gates=None):
     """Re-hash every file the attestation names. Nothing here reads a verdict.
 
     ``prefixes`` maps a profile to the artefact basename its release uses, so a
@@ -315,6 +315,17 @@ def verify(attestation, *, dist, reports, prefixes, gate_report):
     problems = []
     if attestation.result != PASS:
         problems.append(f"{MISMATCH}: the attestation itself records {attestation.result!r}")
+
+    declared_gates = str((attestation.runtime_gates or {}).get("sha256") or "")
+    if declared_gates:
+        if runtime_gates is None:
+            problems.append(
+                f"{MISMATCH}: the attestation records runtime gate evidence that was not supplied"
+            )
+        else:
+            problems.extend(
+                _compare("release", "runtime gate evidence", Path(runtime_gates), declared_gates)
+            )
 
     for entry in attestation.profiles:
         prefix = prefixes.get(entry.profile)

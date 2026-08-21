@@ -12,6 +12,12 @@ import time
 from dataclasses import dataclass
 
 from appliance import admin_deployment
+from appliance.admin_bootstrap import (
+    BootstrapError,
+    DeploymentBootstrap,
+    installer_path as bootstrap_installer_path,
+)
+from appliance import admin_transition
 from appliance.admin_deployment import (
     DeploymentError,
     apply_digest,
@@ -29,7 +35,11 @@ from appliance.docker_backend import (
     DockerError,
 )
 from appliance.known_good import HEALTHCHECK_PASSED
-from appliance.operation_schema import OperationSchemaError, validate_operation
+from appliance.operation_schema import (
+    OperationSchemaError,
+    is_bootstrap,
+    validate_operation,
+)
 from appliance.operations import (
     STATE_FAILED_RECOVERABLE,
     STATE_FAILED_TERMINAL,
@@ -140,6 +150,7 @@ class AdminLifecycleService:
         time_fn=None,
         sleep=None,
         operation_log=None,
+        bootstrap=None,
     ):
         self.paths = paths
         self.config = config
@@ -150,10 +161,12 @@ class AdminLifecycleService:
         self.runner = runner
         self.systemd = systemd
         self.catalogue = catalogue or ReleaseCatalogue(config)
+        self.bootstrap = bootstrap or DeploymentBootstrap(paths, config)
         self._time = time_fn or time.time
         self._sleep = sleep or time.sleep
         self._operation_log = operation_log
         self.last_repair_verification = None
+        self.last_admin_transition = None
 
     # --- detection -------------------------------------------------------
 
@@ -193,6 +206,13 @@ class AdminLifecycleService:
             HEALTH_HEALTHY,
             HEALTH_NONE,
         )
+        # A flashed appliance has an empty deployment root: no compose file
+        # names the Admin service, and no container was ever created from one.
+        # That is the only state a first installation may create files in.
+        record["bootstrap_required"] = not deployment.service_defined and not container.exists
+        record["transition"] = admin_transition.read_transition(
+            admin_transition.transition_path(self.paths, deployment)
+        )
         return record
 
     def releases(self):
@@ -219,7 +239,13 @@ class AdminLifecycleService:
         state = self.detect()
         self._advance(operation, "preflight")
         self._require_docker(state)
-        self._require_deployment(state)
+        self._require_no_admin_transition()
+        bootstrap = self._deployment_state(state)
+        if bootstrap:
+            # Planning must stay a preview, so the only thing done here is to
+            # prove the deployment could be created: the account, the owner and
+            # the packaged installer are checked, nothing is written.
+            owner = self._bootstrap_owner()
 
         try:
             target = resolve_channel(
@@ -273,6 +299,7 @@ class AdminLifecycleService:
         recovery = self._capture_recovery_identity(state)
         plan = {
             "type": TYPE_INSTALL,
+            "bootstrap": bootstrap,
             "repository": repository,
             "target_tag": target.tag,
             "target_channel": target.channel,
@@ -296,6 +323,15 @@ class AdminLifecycleService:
                 "unrelated containers and volumes",
             ],
         }
+        if bootstrap:
+            # Announced, not done: the files appear when the operator confirms.
+            plan["creates_deployment"] = {
+                "installer": str(bootstrap_installer_path()),
+                "compose_file": state["deployment"]["compose_file"],
+                "environment_file": state["deployment"]["env_file"],
+                "owner_uid": owner[0],
+                "owner_gid": owner[1],
+            }
         values = {
             "repository": repository,
             "tag": target.tag,
@@ -308,6 +344,8 @@ class AdminLifecycleService:
             "recovery": recovery,
             **self._deployment_fingerprint(),
         }
+        if bootstrap:
+            values["bootstrap"] = True
         self.operations.update_target(operation.operation_id, values)
         operation.requested_target.update(values)
         return plan
@@ -316,6 +354,7 @@ class AdminLifecycleService:
         state = self.detect()
         self._advance(operation, "preflight")
         self._require_docker(state)
+        self._require_no_admin_transition()
         self._require_deployment(state)
 
         previous = self.known_good.previous()
@@ -360,6 +399,7 @@ class AdminLifecycleService:
     def plan_lifecycle(self, operation, action):
         state = self.detect()
         self._require_docker(state)
+        self._require_no_admin_transition()
         operation.requested_target.update({"action": action})
         self.operations.update_target(operation.operation_id, {"action": action})
         return {
@@ -370,6 +410,7 @@ class AdminLifecycleService:
         }
 
     def plan_repair(self, operation):
+        self._require_no_admin_transition()
         findings = self.inspect_repair()
         actions = [item.action for item in findings if item.action]
         manual = [
@@ -669,6 +710,7 @@ class AdminLifecycleService:
         tag = target["tag"]
         digest = target.get("digest") or ""
         reference = target.get("reference") or build_digest_ref(repository, digest)
+        bootstrap = is_bootstrap(target)
 
         # A plan can be confirmed minutes later, by which time the image may be
         # gone and the deployment file may have been edited. Both are checked
@@ -682,6 +724,14 @@ class AdminLifecycleService:
             return self._preflight_failure(
                 operation, STATE_FAILED_TERMINAL, exc.code, exc.message
             )
+
+        # The first write of the whole operation. Everything above proved the
+        # appliance is still in the state the operator confirmed.
+        if bootstrap:
+            try:
+                self._bootstrap_deployment(operation, tag)
+            except AdminLifecycleError as exc:
+                return self._bootstrap_failure(operation, exc)
 
         deployment = self.deployment()
         saved = snapshot(deployment)
@@ -735,6 +785,11 @@ class AdminLifecycleService:
                     lifecycle_failure_message("install", verification),
                 )
         except (AdminLifecycleError, DockerError, DeploymentError) as exc:
+            if bootstrap:
+                # There is no previous Admin to restore: this appliance had
+                # none. Saying so beats running a rollback that would only
+                # start the image that just failed.
+                return self._bootstrap_failure(operation, exc)
             return self._rollback_after_failure(operation, saved, before, exc)
 
         self._advance(operation, "recording_result")
@@ -758,9 +813,41 @@ class AdminLifecycleService:
             "reference": reference,
             "known_good": entry,
             "verification": self._verification_summary(),
+            "bootstrapped": bootstrap,
         }
         self.operations.finish(operation.operation_id, STATE_SUCCEEDED, result=result)
         return result
+
+    def _bootstrap_failure(self, operation, exc):
+        """A first installation failed, so the appliance still has no Admin.
+
+        Recoverable, not terminal: nothing that existed was replaced, and the
+        operator can plan again once the reported cause is fixed.
+        """
+
+        # Deliberately not ``admin_untouched``: that says the Admin which was
+        # running is still running, and here there never was one.
+        payload = {
+            "stage": "bootstrap",
+            "bootstrap_failed": True,
+            # Whether the installer got as far as writing files decides what a
+            # retry is: another bootstrap, or a normal install over what is
+            # already there. Reporting it is what lets the operator tell.
+            "deployment_created": self.deployment().service_defined,
+            "current": self._verification_summary(),
+        }
+        self.operations.finish(
+            operation.operation_id,
+            STATE_FAILED_RECOVERABLE,
+            stage="bootstrap_failed",
+            result=payload,
+            error={
+                "code": getattr(exc, "code", "bootstrap_failed"),
+                "message": f"{getattr(exc, 'message', exc)}; this appliance still has no "
+                "Admin installation",
+            },
+        )
+        return payload
 
     def _recovery_target(self, operation):
         """What automatic recovery must put back, and prove it put back.
@@ -1275,6 +1362,91 @@ class AdminLifecycleService:
                 f"the compose file does not define the {deployment['service']} service",
             )
 
+    def _require_no_admin_transition(self):
+        """Stand back while the Admin console is replacing itself.
+
+        Two layers write the same deployment files. Admin is the one that can
+        be halfway through, with a worker running and a durable record, so this
+        side yields -- but only to a record that is still live. An expired or
+        unreadable transition is the wedged state an operator came here to fix,
+        and refusing to help then would make the recovery tool part of the
+        problem.
+        """
+
+        record = admin_transition.read_transition(
+            admin_transition.transition_path(self.paths, self.deployment())
+        )
+        self.last_admin_transition = record
+        if admin_transition.blocks_admin_mutation(record):
+            raise AdminLifecycleError(
+                "admin_transition_in_flight", admin_transition.refusal_message(record)
+            )
+        return record
+
+    def _deployment_state(self, state):
+        """Is there a deployment to edit, or one to create? Refuse anything else.
+
+        A missing deployment is not an error for an installation — it is the
+        state a flashed appliance is in, and the one case where this appliance
+        may write a deployment file. A *container* without a deployment is not
+        that case: something else created it, and creating files around it
+        would be a second authority over the same Admin.
+        """
+
+        if state["deployment"]["service_defined"]:
+            return False
+        if state["installed"]:
+            # Something created this container without a compose file the
+            # appliance can find. Writing one around it would put a second
+            # authority on the same Admin, so the exact gap is reported and
+            # the operator repairs it instead.
+            self._require_deployment(state)
+        return True
+
+    def _bootstrap_owner(self):
+        """The uid/gid a created deployment will belong to."""
+
+        try:
+            return self.bootstrap.identity()
+        except BootstrapError as exc:
+            raise AdminLifecycleError(exc.code, exc.message)
+
+    def _require_absent_deployment(self):
+        """A bootstrap was planned against nothing; nothing is what it may find.
+
+        This is the bootstrap's half of the deployment authority: an install
+        that edits files proves the bytes did not change, and an install that
+        creates them proves there is still nothing to overwrite.
+        """
+
+        deployment = self.deployment()
+        if deployment.service_defined:
+            raise AdminLifecycleError(
+                "deployment_appeared_since_plan",
+                "an Admin deployment was created after the plan; plan again so the "
+                "existing one is updated instead of overwritten",
+            )
+        return True
+
+    def _bootstrap_deployment(self, operation, tag):
+        """Create the deployment with the packaged installer, then prove it exists."""
+
+        self._advance(operation, "creating_deployment", detail=str(bootstrap_installer_path()))
+        try:
+            owner = self.bootstrap.identity(claim=True)
+            record = self.bootstrap.run(tag=tag, uid=owner[0], gid=owner[1])
+        except BootstrapError as exc:
+            raise AdminLifecycleError(exc.code, exc.message)
+
+        deployment = self.deployment()
+        if not deployment.service_defined:
+            raise AdminLifecycleError(
+                "bootstrap_incomplete",
+                f"the Admin installer ran but no compose file defines the "
+                f"{deployment.service} service",
+            )
+        return record
+
     def _stop_admin(self, deployment):
         container = self.docker.inspect_container(self.config.admin_container)
         if container.exists:
@@ -1358,6 +1530,8 @@ class AdminLifecycleService:
     def _require_planned_deployment(self, target):
         """The deployment must still be the one the plan was made against."""
 
+        if is_bootstrap(target):
+            return self._require_absent_deployment()
         planned = str(target.get("compose_hash") or "")
         if not planned:
             raise AdminLifecycleError(

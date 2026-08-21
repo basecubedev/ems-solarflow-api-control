@@ -28,6 +28,12 @@ ENV_RUNTIME_DIR = "EMS_APPLIANCE_RUNTIME_DIR"
 ENV_EXPORT_ROOT = "EMS_APPLIANCE_EXPORT_ROOT"
 ENV_BACKUP_USER = "EMS_APPLIANCE_BACKUP_USER"
 ENV_EXPORT_STATUS_FILE = "EMS_APPLIANCE_EXPORT_STATUS_FILE"
+ENV_PACKAGE_LIBDIR = "EMS_APPLIANCE_LIBDIR"
+
+# Where the package puts the shell helpers it ships. The maintainer scripts and
+# the Python side must name the same directory, or a helper the appliance offers
+# to run is one that is not there.
+DEFAULT_PACKAGE_LIBDIR = "/usr/lib/ems-appliance-manager"
 
 # Host paths are configured, never requested. The same character policy applies
 # in Python, in the packaged shell tooling and in the generated systemd drop-in,
@@ -37,6 +43,18 @@ ALLOWED_PATH_CHARACTERS = set(
 )
 
 AGENT_SOCKET_NAME = "agent.sock"
+
+
+def package_helper(name):
+    """Absolute path of a shell helper this package ships.
+
+    The directory is fixed by the package, never by a request: the override
+    exists so the test suite and an unpackaged developer run can point at a
+    staged tree, exactly as the maintainer scripts already do.
+    """
+
+    libdir = os.environ.get(ENV_PACKAGE_LIBDIR) or DEFAULT_PACKAGE_LIBDIR
+    return Path(libdir) / name
 
 
 class PathBoundaryError(Exception):

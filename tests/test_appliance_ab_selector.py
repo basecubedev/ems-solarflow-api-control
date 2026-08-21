@@ -19,8 +19,10 @@ from appliance.ab_boot import (
     parse_selector,
     read_selector,
     render_selector,
+    request_trial_reboot,
     write_selector,
 )
+from appliance.commands import RecordingRunner
 
 pytestmark = [pytest.mark.unit, pytest.mark.simulation]
 
@@ -155,3 +157,20 @@ def test_an_unreadable_selector_is_an_error_not_a_default(tmp_path):
         read_selector(tmp_path / "absent.txt")
 
     assert caught.value.code == "selector_unreadable"
+
+
+def test_the_trial_reboot_passes_its_argument_as_an_option():
+    """systemd 253 removed the positional argument to ``systemctl reboot``.
+
+    The appliance image is Debian 13 (systemd 257), so the positional form is
+    rejected before the firmware ever sees the request and every A/B update
+    stalls armed but not rebooted.
+    """
+
+    runner = RecordingRunner(default="")
+
+    request_trial_reboot(runner)
+
+    tool, args, _ = runner.calls[-1]
+    assert tool == "systemctl"
+    assert args == ("reboot", "--reboot-argument=0 tryboot")

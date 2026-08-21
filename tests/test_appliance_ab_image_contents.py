@@ -666,3 +666,32 @@ def test_a_drop_in_that_only_orders_and_does_not_require_is_a_failure(tmp_path):
 
     assert found["service_drop_ins:system_a"][0] == FAIL
     assert "does not require" in found["service_drop_ins:system_a"][1]
+
+
+def test_the_docker_daemon_configuration_is_placed_in_the_image():
+    """Container logs land on the shared persistent partition, so an appliance
+    without rotation fills the partition its own updates need. /etc is
+    slot-local and read-only at runtime, so this can only be baked in."""
+
+    import json
+
+    root = Path(__file__).resolve().parents[1]
+    overlay = (
+        root
+        / "packaging/appliance/image/layer/ems-appliance.rootfs-overlay"
+        / "etc/docker/daemon.json"
+    )
+
+    assert overlay.is_file(), "the Docker daemon configuration reaches no image"
+    payload = json.loads(overlay.read_text(encoding="utf-8"))
+    assert payload["log-opts"]["max-size"]
+    assert payload["log-opts"]["max-file"]
+
+
+def test_the_package_never_rewrites_a_hosts_docker_configuration():
+    """On a plain host /etc/docker/daemon.json is the operator's file."""
+
+    root = Path(__file__).resolve().parents[1]
+    for script in ("postinst", "prerm", "postrm"):
+        text = (root / "packaging/appliance/debian" / script).read_text(encoding="utf-8")
+        assert "daemon.json" not in text, script

@@ -141,6 +141,92 @@ boot_partition=3
 matching the labels in the layout descriptor against block-device discovery on
 the medium the firmware actually booted. See "Proving the active slot" below.
 
+## How a release reaches the appliance
+
+The appliance installs from `os_release_dir`, and until an update is in that
+directory there is nothing to install. Two ways fill it.
+
+**Downloading it.** Set `os_release_index_url` in `appliance.conf` to an
+`https` URL serving a release index, and **Updates → Download an OS release**
+offers what it lists. The index is a plain JSON document:
+
+```json
+{
+  "format_version": 1,
+  "releases": [
+    {
+      "release_id": "ems-solarflow-appliance-0.2.0-rpi5-arm64-ab",
+      "manifest_url": "https://.../ems-solarflow-appliance-0.2.0-rpi5-arm64-ab.manifest.json",
+      "signature_url": "https://.../ems-solarflow-appliance-0.2.0-rpi5-arm64-ab.manifest.json.asc",
+      "archive_url": "https://.../ems-solarflow-appliance-0.2.0-rpi5-arm64-ab.tar.zst"
+    }
+  ]
+}
+```
+
+GitHub Releases can host both the index and the files it names.
+
+**Copying it in.** Place the manifest, its `.asc` signature and the archive in
+`os_release_dir` by hand. Nothing about the install path differs afterwards —
+the same signature check decides, whichever way the files arrived. An appliance
+with no `os_release_index_url` says so in the manager rather than implying an
+update could arrive on its own.
+
+### What the index is allowed to decide: nothing
+
+An index entry names a candidate. It is fetched over `https` and never trusted,
+because everything that decides what is written comes from the signed manifest:
+
+1. the manifest and its detached signature are fetched into a staging directory
+   inside `os_release_dir`,
+2. the signature is verified against `os_release_keyring`,
+3. only then are the archive's name, size and digest read from it,
+4. the archive is fetched under exactly that declared size and hashed as it
+   streams,
+5. the digest is compared against the verified manifest,
+6. only then is anything moved into `os_release_dir`, manifest last.
+
+An index that lies therefore costs bandwidth and nothing else. A download that
+fails any step leaves the release directory as it was: the staging directory is
+removed, and because the manifest is moved in last, an interrupted fetch leaves
+files the catalogue does not offer rather than a release whose archive is
+missing. A release already present is never silently refetched or overwritten.
+
+Plain `http` is refused rather than upgraded, including after a redirect —
+being told that the configured URL is insecure is more useful than being
+quietly given a different one.
+
+### The keyring is not shipped with the appliance
+
+`os_release_keyring` points at `/etc/ems-appliance-manager/os-release-keyring.gpg`
+by default, and **no package puts a key there**. That is deliberate: a trust
+anchor an appliance ships with itself is one an attacker who ships appliances
+also controls. Until an operator installs the public key of whoever signs their
+releases, every artifact is refused.
+
+The manager says so rather than letting an update fail at the last moment:
+**Release keyring** appears in the update-readiness list and is red until the
+file exists. Install it with the key you obtained out of band:
+
+```bash
+sudo install -m 0644 release-key.gpg \
+     /etc/ems-appliance-manager/os-release-keyring.gpg
+```
+
+On an A/B appliance `/etc` belongs to the running slot, so this has to be
+repeated after a slot switch unless the key is baked into the image you build.
+
+### The clock comes first
+
+This board has no real-time clock. After a power cut it starts somewhere in the
+past until `systemd-timesyncd` catches up, and both the TLS certificate check
+and the release signature are judged against that time. A download started
+before the clock is synchronised fails with certificate and signature errors
+that say nothing about a clock, so the appliance checks first and refuses with
+`clock_not_synchronised`. A clock it cannot confirm counts as unsynchronised.
+
+Wait for time synchronisation after a cold boot and try again.
+
 ## Update states
 
 An A/B operation is a durable record in the existing appliance operation store

@@ -22,6 +22,7 @@ import pytest
 
 from appliance import os_artifacts, os_releases, rpi_image_gen, sparse
 from appliance.os_artifacts import ArtifactError
+from appliance.ab_persistence import PERSISTENT_SCHEMA_VERSION
 from tests.helpers import android_sparse, appliance_ab_filesystems as filesystems
 
 pytestmark = [pytest.mark.integration, pytest.mark.simulation]
@@ -85,7 +86,7 @@ def manifest_for(archive, *, members=None):
         "minimum_appliance_manager_version": "0.9.0",
         "layout_id": "ems-appliance-rota-v1",
         "slot_schema_version": 2,
-        "persistent_schema_version": 2,
+        "persistent_schema_version": PERSISTENT_SCHEMA_VERSION,
         "archive": {
             "name": archive.name,
             "digest": os_releases.file_digest(archive),

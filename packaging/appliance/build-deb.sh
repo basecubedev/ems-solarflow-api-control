@@ -56,6 +56,11 @@ install -m 0755 "$PACKAGING/bin/setup-export-root.sh" \
         "$STAGE/usr/lib/ems-appliance-manager/setup-export-root.sh"
 install -m 0755 "$PACKAGING/bin/backup-account.sh" \
         "$STAGE/usr/lib/ems-appliance-manager/backup-account.sh"
+# The project's own Admin installer, unmodified. It is what writes the Admin
+# compose and environment files on a host that has none, so it is the appliance's
+# bootstrap too rather than a second installer that would drift from it.
+install -m 0755 "$ROOT/deploy/admin/install-admin-console.sh" \
+        "$STAGE/usr/lib/ems-appliance-manager/install-admin-console.sh"
 install -m 0644 "$PACKAGING/systemd/ems-appliance-agent.service" "$STAGE/usr/lib/systemd/system/"
 install -m 0644 "$PACKAGING/systemd/ems-appliance-web.service" "$STAGE/usr/lib/systemd/system/"
 install -m 0644 "$PACKAGING/systemd/ems-appliance-export.service" "$STAGE/usr/lib/systemd/system/"
