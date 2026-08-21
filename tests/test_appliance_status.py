@@ -247,3 +247,47 @@ def test_support_archive_contains_a_manifest_and_no_secrets(tmp_path):
     assert manifest["files"]
     assert "supersecret" not in contents
     assert "PRIVATE KEY" not in contents
+
+
+def test_a_full_persistent_partition_is_a_warning(tmp_path):
+    """On an A/B appliance / is a read-only slot partition whose usage cannot
+    move; everything that grows is on the persistent one, which was measured and
+    then never evaluated."""
+
+    from tests.helpers.appliance import build_test_services
+
+    services = build_test_services(tmp_path)
+    sections = {
+        "system": {
+            "status": "ok",
+            "storage": {
+                "root": {"available": True, "used_percent": 12},
+                "ems_data": {"available": True, "used_percent": 97},
+            },
+        }
+    }
+
+    health = services.status._health(sections)
+    codes = {warning["code"] for warning in health["warnings"]}
+
+    assert "persistent_storage_low" in codes
+    assert "storage_low" not in codes
+
+
+def test_a_full_slot_root_is_still_a_warning(tmp_path):
+    from tests.helpers.appliance import build_test_services
+
+    services = build_test_services(tmp_path)
+    sections = {
+        "system": {
+            "status": "ok",
+            "storage": {
+                "root": {"available": True, "used_percent": 95},
+                "ems_data": {"available": True, "used_percent": 10},
+            },
+        }
+    }
+
+    codes = {w["code"] for w in services.status._health(sections)["warnings"]}
+
+    assert "storage_low" in codes

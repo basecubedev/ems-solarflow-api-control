@@ -768,3 +768,33 @@ def test_an_archive_that_was_never_created_is_a_404_not_a_traceback(signed_in):
     connection.close()
 
     assert status == 404
+
+
+def test_a_wildcard_listener_answers_over_ipv6_too():
+    """The documented first-contact address is an mDNS name, and avahi
+    publishes an AAAA alongside the A on any LAN with IPv6. A browser may try
+    that first, and an IPv4-only listener refuses it."""
+
+    import socket
+
+    app = ApplianceWebApp(paths=None, config=None, agent=_OfflineAgent())
+    server = ApplianceWebServer(app, ("0.0.0.0", 0))
+    try:
+        assert server.address_family == socket.AF_INET6
+        assert server.socket.getsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY) == 0
+    finally:
+        server.server_close()
+
+
+def test_an_explicit_address_is_still_honoured():
+    """An operator who pinned a loopback listener keeps it."""
+
+    import socket
+
+    app = ApplianceWebApp(paths=None, config=None, agent=_OfflineAgent())
+    server = ApplianceWebServer(app, ("127.0.0.1", 0))
+    try:
+        assert server.address_family == socket.AF_INET
+        assert server.server_address[0] == "127.0.0.1"
+    finally:
+        server.server_close()

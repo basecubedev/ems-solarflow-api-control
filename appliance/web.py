@@ -13,6 +13,7 @@ import json
 import os
 import posixpath
 import re
+import socket
 import secrets
 import threading
 import time
@@ -772,12 +773,36 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
 
 
 class ApplianceWebServer(ThreadingHTTPServer):
+    """Dual-stack when asked to listen everywhere.
+
+    The documented way to reach a fresh appliance is its mDNS name, and avahi
+    publishes an AAAA record alongside the A one on any LAN with IPv6. A
+    browser's Happy Eyeballs may then try the IPv6 address first, and an
+    IPv4-only listener refuses it -- on the one page an operator has.
+    """
+
     daemon_threads = True
     allow_reuse_address = True
 
     def __init__(self, app, address):
         self.app = app
+        host = str(address[0])
+        if host in ("0.0.0.0", "::"):
+            self.address_family = socket.AF_INET6
+            address = ("::", address[1])
+        elif ":" in host:
+            self.address_family = socket.AF_INET6
         super().__init__(address, ApplianceRequestHandler)
+
+    def server_bind(self):
+        if self.address_family == socket.AF_INET6:
+            try:
+                self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+            except OSError:
+                # A kernel with ipv6.bindv6only forced on answers IPv6 only;
+                # that is the operator's setting, not something to fail over.
+                pass
+        super().server_bind()
 
 
 def build_server(*, paths=None, config=None, agent=None, address=None):

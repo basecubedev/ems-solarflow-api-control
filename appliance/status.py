@@ -225,10 +225,26 @@ class StatusService:
 
         system = sections.get("system", {})
         if system.get("status") == SECTION_OK:
-            root = (system.get("storage") or {}).get("root") or {}
-            if root.get("available") and (root.get("used_percent") or 0) >= 90:
-                warnings.append({"code": "storage_low", "message": "the root filesystem is nearly full"})
-                level = HEALTH_DEGRADED
+            storage = system.get("storage") or {}
+            # On an A/B appliance / is the slot's fixed system partition,
+            # written once at build time and mounted read-only, so its usage
+            # cannot move. Everything that grows -- EMS data and backups, both
+            # slots' /var, the Docker stores, the journal and the update
+            # staging -- is on the persistent partition, which was measured and
+            # then never judged.
+            for name, label in (
+                ("root", "the root filesystem"),
+                ("ems_data", "the persistent partition"),
+            ):
+                entry = storage.get(name) or {}
+                if entry.get("available") and (entry.get("used_percent") or 0) >= 90:
+                    warnings.append(
+                        {
+                            "code": "storage_low" if name == "root" else "persistent_storage_low",
+                            "message": f"{label} is nearly full",
+                        }
+                    )
+                    level = HEALTH_DEGRADED
 
         last = None
         operations = sections.get("operations", {})

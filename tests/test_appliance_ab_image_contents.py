@@ -771,3 +771,23 @@ def test_the_package_never_rewrites_a_hosts_docker_configuration():
     for script in ("postinst", "prerm", "postrm"):
         text = (root / "packaging/appliance/debian" / script).read_text(encoding="utf-8")
         assert "daemon.json" not in text, script
+
+
+def test_the_journal_is_bounded_against_the_partition_budget():
+    """/var/log/journal exists on this image, so journald stores persistently
+    and its default SystemMaxUse is 10% of the filesystem -- hundreds of
+    megabytes continuously rewritten on an SD card. /etc is slot-local and
+    read-only at runtime, so this can only be baked in."""
+
+    root = Path(__file__).resolve().parents[1]
+    overlay = (
+        root
+        / "packaging/appliance/image/layer/ems-appliance.rootfs-overlay"
+        / "etc/systemd/journald.conf.d/50-ems-appliance.conf"
+    )
+
+    assert overlay.is_file(), "the journald configuration reaches no image"
+    text = overlay.read_text(encoding="utf-8")
+    assert "SystemMaxUse=" in text
+    assert "SystemMaxFileSize=" in text
+    assert "Compress=yes" in text

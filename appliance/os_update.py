@@ -538,12 +538,19 @@ class OsUpdateService:
         if downgrade:
             blockers.append(downgrade)
         if release.verified != os_releases.VERIFIED_SIGNATURE:
-            blockers.append(
-                {
-                    "code": "artifact_not_signed",
-                    "message": "this artifact carries no verified signature and is not installable",
-                }
-            )
+            message = "this artifact carries no verified signature and is not installable"
+            # The board has no RTC. gpgv judges a signature against the system
+            # clock, so a perfectly good signature is refused after a power cut
+            # until timesyncd catches up -- and says nothing about the clock.
+            # The fetch path checks this before downloading; a hand-placed
+            # artifact reaches verification without ever passing that gate.
+            if self._clock_unsynchronised():
+                message += (
+                    "; the system clock is not synchronised either, and this board has no "
+                    "real-time clock, so a valid signature would be refused right now. "
+                    "Wait for time synchronisation before concluding the artifact is bad"
+                )
+            blockers.append({"code": "artifact_not_signed", "message": message})
 
         deployment = self._capture_deployment(blockers)
         target_slot = layout.inactive_slot
@@ -825,6 +832,12 @@ class OsUpdateService:
                     "before the first OS update if it has never been run"
                 )
         return warnings
+
+    def _clock_unsynchronised(self):
+        try:
+            return self.probe.system_time().get("ntp_synchronized") is not True
+        except Exception:
+            return False
 
     def _staging_free_bytes(self):
         try:
