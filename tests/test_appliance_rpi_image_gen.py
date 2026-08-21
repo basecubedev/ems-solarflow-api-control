@@ -32,7 +32,16 @@ PERSIST_GENERATOR = (
 
 @pytest.fixture
 def lock():
-    return rpi_image_gen.read_lock(LOCK)
+    """The shipped lock, with the pinned tree hash dropped.
+
+    These tests build synthetic trees, whose digest cannot be the pinned one.
+    What they exercise is the identity machinery, not the pin; the pin itself is
+    proven against the real tree in the upstream tier.
+    """
+
+    from dataclasses import replace
+
+    return replace(rpi_image_gen.read_lock(LOCK), tree_sha256="")
 
 
 def write(root, relative, text, *, mode=0o644):

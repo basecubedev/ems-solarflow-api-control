@@ -350,11 +350,21 @@ def main(argv=None):
         "all_mandatory_inspections_pass": inspections_passed(result["profiles"]),
         "runtime_required_gates_pass": result["runtime_gates"].get("result") == "pass",
         "release_not_stale": not result.get("freshness", {}).get("stale", True),
-        "hardware_kit_verified": bool(result["hardware_kit"].get("physical_ready")),
     }
-    verdict = release_trust.readiness(
-        invariants, required=release_trust.KIT_READINESS_INVARIANTS
-    )
+    # A run that built no kit hands over no manifest, so requiring the kit
+    # invariant would make --no-kit unable to produce a ready result at all
+    # rather than a result that is honest about carrying no kit. The invariant
+    # set that was applied is recorded, so "no kit was built" can never be read
+    # as "the kit was verified".
+    if args.kit_manifest:
+        invariants["hardware_kit_verified"] = bool(
+            result["hardware_kit"].get("physical_ready")
+        )
+        required = release_trust.KIT_READINESS_INVARIANTS
+    else:
+        required = release_trust.READINESS_INVARIANTS
+    verdict = release_trust.readiness(invariants, required=required)
+    result["hardware_kit_required"] = bool(args.kit_manifest)
     result["readiness"] = verdict.to_dict()
     result["physical_ready"] = verdict.ready
 

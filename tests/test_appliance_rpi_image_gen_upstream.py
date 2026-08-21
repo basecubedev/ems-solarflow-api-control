@@ -38,7 +38,16 @@ ROTA_DEVICE_CLASSES = frozenset({"cm4", "pi4", "cm5", "pi5"})
 
 @pytest.fixture
 def lock():
-    return rpi_image_gen.read_lock(LOCK)
+    """The shipped lock without its tree pin.
+
+    Tests that build a synthetic tree cannot satisfy the digest of the real one.
+    The pin is exercised against that tree by
+    test_the_pinned_tree_hash_matches_the_pinned_tree.
+    """
+
+    from dataclasses import replace
+
+    return replace(rpi_image_gen.read_lock(LOCK), tree_sha256="")
 
 
 def upstream_device_layers():
@@ -438,3 +447,36 @@ def test_the_vendored_upstream_tree_is_in_the_licence_inventory():
     assert manifest["release"] in inventory
     assert (root / "tests" / "fixtures" / "rpi_image_gen" / "UPSTREAM.LICENSE").is_file()
     assert "No other third-party source is vendored" in inventory
+
+
+def test_the_lock_pins_the_tree_it_verifies_against():
+    """The record beside an extracted tree is written by the same fetch that
+    extracted it, so it cannot be the authority for it. This file is reviewed
+    and committed, which is what makes it one."""
+
+    from appliance import rpi_image_gen
+
+    root = Path(__file__).resolve().parents[1]
+    lock = rpi_image_gen.read_lock(
+        root / "packaging" / "appliance" / "image" / "rpi-image-gen.lock"
+    )
+
+    assert lock.tree_sha256.startswith("sha256:")
+    assert len(lock.tree_sha256) == len("sha256:") + 64
+
+
+def test_the_pinned_tree_hash_matches_the_pinned_tree():
+    """The pin is only worth anything if it is the digest of the real tree."""
+
+    from appliance import rpi_image_gen
+
+    source = upstream.real_source_tree()
+    if source is None:
+        pytest.skip(f"{upstream.SOURCE_ENV} names no pinned checkout")
+
+    root = Path(__file__).resolve().parents[1]
+    lock = rpi_image_gen.read_lock(
+        root / "packaging" / "appliance" / "image" / "rpi-image-gen.lock"
+    )
+
+    assert rpi_image_gen.tree_digest(source) == lock.tree_sha256

@@ -120,6 +120,18 @@ mmdebstrap:
          echo "ems-appliance: the package is '$status', not installed" >&2
          exit 1
       }
+      # The full package set of the rootfs. The rootfs is assembled from live
+      # Debian mirrors, so the image's inputs are not otherwise recoverable
+      # after the fact: without this, an attestation binds who built it and
+      # from which git tree, and says nothing about what went into it.
+      chroot "$1" dpkg-query -W -f='${binary:Package}\t${Version}\t${Architecture}\n' \
+         > "$1/etc/ems-appliance-os-packages" 2>/dev/null || {
+         echo "ems-appliance: the package set of the rootfs could not be recorded" >&2
+         exit 1
+      }
+      packages_sha256=$(sha256sum "$1/etc/ems-appliance-os-packages" | cut -d' ' -f1)
+      packages_count=$(wc -l < "$1/etc/ems-appliance-os-packages" | tr -d ' ')
+
       cat > "$1/etc/ems-appliance-os-build" <<EOF
       {
         "architecture": "arm64",
@@ -133,6 +145,11 @@ mmdebstrap:
           "version": "$version",
           "architecture": "$arch",
           "status": "$status"
+        },
+        "os_packages": {
+          "manifest": "/etc/ems-appliance-os-packages",
+          "count": $packages_count,
+          "sha256": "sha256:$packages_sha256"
         }
       }
       EOF

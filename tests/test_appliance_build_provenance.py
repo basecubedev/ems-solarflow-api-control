@@ -51,7 +51,15 @@ requires_zstd = pytest.mark.skipif(
 
 @pytest.fixture
 def lock():
-    return rpi_image_gen.read_lock()
+    """The shipped lock without its tree pin.
+
+    These tests build synthetic trees, whose digest cannot be the pinned one.
+    The pin is exercised against the real tree in the upstream tier.
+    """
+
+    from dataclasses import replace
+
+    return replace(rpi_image_gen.read_lock(), tree_sha256="")
 
 
 # --- a source tree that satisfies everything except its identity --------------
@@ -427,8 +435,17 @@ def test_the_check_script_reports_a_modified_tarball_tree_as_a_failure(tmp_path,
         timeout=300,
     )
 
+    output = result.stdout + result.stderr
+
     assert result.returncode == 1
-    assert rpi_image_gen.REASON_SOURCE_MODIFIED in result.stdout + result.stderr
+    # The script reads the shipped lock, which pins the digest of the real
+    # tree, so a synthetic one is refused for disagreeing with the pin before
+    # its own modification is reached. Both are refusals of the same thing:
+    # this is not the source the release is built from.
+    assert (
+        rpi_image_gen.REASON_SOURCE_MODIFIED in output
+        or rpi_image_gen.REASON_SOURCE_UNVERIFIED in output
+    ), output
 
 
 # --- finding 5: an artefact cannot claim a build it did not come from ---------
@@ -933,3 +950,19 @@ def test_the_update_inspector_expands_beside_the_artefact():
     staging = script[script.index("TemporaryDirectory") : script.index("TemporaryDirectory") + 120]
 
     assert "dir=" in staging, "the staging directory is wherever TMPDIR points"
+
+
+def test_a_tree_that_agrees_with_the_lock_and_was_then_modified_is_modified(tmp_path, lock):
+    """The modification path stays reachable: the pin shadows it only for a tree
+    that was never the pinned one to begin with."""
+
+    from dataclasses import replace
+
+    root = tarball_source(tmp_path, lock)
+    recorded = rpi_image_gen.tree_digest(root)
+    pinned = replace(lock, tree_sha256=recorded)
+
+    (root / "config/trixie-minbase-ab.yaml").write_text("image:\n  layer: other\n")
+    report = rpi_image_gen.probe_checkout(root, pinned, which=lambda tool: f"/usr/bin/{tool}")
+
+    assert report.reason == rpi_image_gen.REASON_SOURCE_MODIFIED

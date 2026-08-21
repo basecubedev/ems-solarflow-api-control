@@ -211,3 +211,42 @@ def test_the_finalizer_passes_no_kit_manifest_when_it_built_no_kit():
     unconditional = re.search(r'^\s*--kit-manifest "\$KIT/kit-manifest\.json" \\\\?$', finalize, re.M)
 
     assert unconditional is None, "the kit manifest path is passed unconditionally"
+
+
+def test_a_run_without_a_kit_can_still_reach_a_verdict():
+    """--no-kit asked for the kit invariant anyway, so it could never produce a
+    ready result -- not a stricter one, an unreachable one."""
+
+    from appliance import release_trust
+
+    invariants = {name: True for name in release_trust.READINESS_INVARIANTS}
+    verdict = release_trust.readiness(
+        invariants, required=release_trust.READINESS_INVARIANTS
+    )
+
+    assert verdict.ready
+    assert "hardware_kit_verified" not in verdict.to_dict()["invariants"]
+
+
+def test_a_run_with_a_kit_still_has_to_prove_it():
+    from appliance import release_trust
+
+    invariants = {name: True for name in release_trust.READINESS_INVARIANTS}
+    verdict = release_trust.readiness(
+        invariants, required=release_trust.KIT_READINESS_INVARIANTS
+    )
+
+    assert not verdict.ready
+    assert "hardware_kit_verified" in verdict.unmet
+
+
+def test_the_result_records_which_invariant_set_was_applied():
+    """"No kit was built" must never read as "the kit was verified"."""
+
+    source = (
+        Path(__file__).resolve().parents[1] / "scripts" / "appliance_release_result.py"
+    ).read_text(encoding="utf-8")
+
+    assert 'result["hardware_kit_required"]' in source
+    assert "release_trust.KIT_READINESS_INVARIANTS" in source
+    assert "release_trust.READINESS_INVARIANTS" in source

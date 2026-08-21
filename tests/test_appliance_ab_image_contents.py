@@ -791,3 +791,19 @@ def test_the_journal_is_bounded_against_the_partition_budget():
     assert "SystemMaxUse=" in text
     assert "SystemMaxFileSize=" in text
     assert "Compress=yes" in text
+
+
+def test_the_image_records_the_package_set_it_was_assembled_from():
+    """The rootfs comes from live Debian mirrors, so its inputs are not
+    recoverable after the fact. Without this an attestation binds who built the
+    image and from which git tree, and says nothing about what went into it."""
+
+    root = Path(__file__).resolve().parents[1]
+    layer = (
+        root / "packaging/appliance/image/layer/ems-appliance.yaml"
+    ).read_text(encoding="utf-8")
+
+    assert "dpkg-query -W" in layer
+    assert "/etc/ems-appliance-os-packages" in layer
+    assert '"os_packages"' in layer
+    assert "packages_sha256" in layer

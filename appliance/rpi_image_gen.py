@@ -170,6 +170,7 @@ class Lock:
     refused_paths: tuple = ()
     host_dependencies_file: str = "depends"
     update_member_format: str = ""
+    tree_sha256: str = ""
     tarball: dict = None
 
     def to_dict(self):
@@ -203,6 +204,7 @@ def read_lock(path=None):
             repository=str(payload["repository"]),
             release=str(payload["release"]),
             commit=str(payload["commit"]),
+            tree_sha256=str(payload.get("tree_sha256") or ""),
             executable=str(payload["executable"]),
             image_layer=str(payload["image_layer"]),
             image_layer_version=str(payload["image_layer_version"]),
@@ -848,8 +850,28 @@ def _source_identity(root, lock, *, runner=None):
             REASON_SOURCE_UNVERIFIED,
         )
 
-    declared = str(recorded.get("tree_sha256") or "")
+    # The record beside the tree was written by the same fetch that extracted
+    # it, so it cannot be the authority for it. The lock is reviewed and
+    # committed; that is what makes it one. The record is still compared, so a
+    # tree that satisfies the lock but disagrees with its own record is caught
+    # too.
+    declared = str(lock.tree_sha256 or recorded.get("tree_sha256") or "")
     observed = tree_digest(root)
+    recorded_digest = str(recorded.get("tree_sha256") or "")
+    if lock.tree_sha256 and recorded_digest and recorded_digest != lock.tree_sha256:
+        return (
+            SOURCE_UNVERIFIED,
+            lock.commit,
+            Finding(
+                "source_identity",
+                FAIL,
+                "the source record disagrees with the pinned tree hash in "
+                "rpi-image-gen.lock; fetch it again with "
+                "scripts/appliance-fetch-rpi-image-gen.sh",
+            ),
+            observed,
+            REASON_SOURCE_UNVERIFIED,
+        )
     if not declared:
         return (
             SOURCE_UNVERIFIED,
