@@ -80,13 +80,24 @@ def test_the_baseline_records_the_selector_it_is_arguing_about():
 
 
 def test_the_selector_is_found_rather_than_assumed():
-    """The mountpoint differs between an appliance and a plain Pi OS image."""
+    """The mountpoint differs between an appliance and a plain Pi OS image.
+
+    The candidates are asserted by name, and every one the loop iterates is
+    checked -- a substring window around the filename accepted any loop that
+    happened to mention one of them.
+    """
+
+    import re
 
     text = source("appliance-hardware-capture-baseline.sh")
-    selector = text[text.index("autoboot.txt") - 400 : text.index("autoboot.txt") + 400]
+    loop = re.search(r"for mountpoint in ([^;\n]+); do", text)
 
-    assert "/bootfs" in selector
-    assert "for " in selector
+    assert loop, "the selector is not searched for at all"
+    candidates = loop.group(1).split()
+
+    assert "/bootfs" in candidates, candidates
+    assert "/boot/firmware" in candidates, candidates
+    assert '[ -f "$mountpoint/autoboot.txt" ] || continue' in text
 
 
 @pytest.mark.parametrize("name", HELPERS)

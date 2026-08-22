@@ -36,10 +36,17 @@ def unavailable(kind):
     return f"{kind} is not a filesystem this helper builds"
 
 
-def fat_image(size, *, label="BOOT", files=None):
-    """A real FAT filesystem, or a plausible boot sector when mtools is absent."""
+def fat_image(size, *, label="BOOT", files=None, real_only=False):
+    """A real FAT filesystem, or a plausible boot sector when mtools is absent.
 
-    if unavailable("vfat"):
+    ``real_only`` refuses the substitute, for the assertions that only mean
+    something against a filesystem this helper did not write by hand.
+    """
+
+    reason = unavailable("vfat")
+    if reason:
+        if real_only:
+            raise SyntheticFilesystem(reason)
         return _fat_boot_sector(size, label=label)
     handle, path = tempfile.mkstemp(suffix=".vfat")
     os.close(handle)
@@ -97,10 +104,22 @@ def _fat_boot_sector(size, *, label):
     return bytes(sector) + b"\x00" * (size - 512)
 
 
-def ext4_image(size, *, label="SYSTEM"):
-    """A real ext4 filesystem, or a superblock the type probe recognises."""
+class SyntheticFilesystem(RuntimeError):
+    """A caller asked for a real filesystem and this host cannot build one."""
 
-    if unavailable("ext4"):
+
+def ext4_image(size, *, label="SYSTEM", real_only=False):
+    """A real ext4 filesystem, or a superblock the type probe recognises.
+
+    ``real_only`` is for the assertions that are only worth anything against a
+    real one: degrading silently there turns a filesystem check into a
+    round-trip of bytes this helper wrote itself.
+    """
+
+    reason = unavailable("ext4")
+    if reason:
+        if real_only:
+            raise SyntheticFilesystem(reason)
         return _ext4_superblock(size, label=label)
     handle, path = tempfile.mkstemp(suffix=".ext4")
     os.close(handle)

@@ -147,8 +147,21 @@ class HostProbe:
             "used_percent": round(used * 100.0 / total, 1) if total else None,
         }
 
+    def _path(self, absolute):
+        root = Path(self.root)
+        if root == Path("/"):
+            return Path(absolute)
+        return root / str(absolute).lstrip("/")
+
     def filesystem(self, path):
-        target = Path(path)
+        """Usage of the filesystem carrying ``path``, through the probe root.
+
+        Every other read here is root-relative; this one was not, so a test
+        host answered from its own ``/var`` and the disk-space blocker fired --
+        or did not -- depending on how full the machine running the suite was.
+        """
+
+        target = self._path(path)
         try:
             stats = os.statvfs(str(target))
         except OSError:

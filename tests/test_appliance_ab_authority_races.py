@@ -548,3 +548,74 @@ def test_two_writers_do_not_share_one_staging_file(tmp_path):
 
     assert staged, "no staging file was used"
     assert str(os.getpid()) in staged[0], staged
+
+
+# --- a record nothing can read -----------------------------------------------
+
+
+def test_a_corrupt_record_is_a_named_error_not_a_guess(tmp_path):
+    """Every reader of this store has to fail closed: a slot whose pending trial
+    cannot be parsed is exactly the state that must become an operator's
+    decision rather than a default."""
+
+    import json
+
+    from appliance.ab_state import AbStateError, AbStateStore
+
+    store = AbStateStore(tmp_path / "ab")
+    store.ensure()
+    (store.directory / "pending-trial.json").write_text("{ not json", encoding="utf-8")
+
+    with pytest.raises(AbStateError) as error:
+        store.pending()
+
+    assert error.value.code
+    assert "pending-trial.json" in error.value.message
+    assert json.dumps({"code": error.value.code})
+
+
+def test_a_record_from_a_newer_schema_is_refused(tmp_path):
+    """A slot rolled back to older code must not read a newer slot's state as
+    if it were its own."""
+
+    import json
+
+    from appliance.ab_state import AB_STATE_SCHEMA_VERSION, AbStateError, AbStateStore
+
+    store = AbStateStore(tmp_path / "ab")
+    store.ensure()
+    (store.directory / "pending-trial.json").write_text(
+        json.dumps({"schema_version": AB_STATE_SCHEMA_VERSION + 1, "pending": {}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AbStateError):
+        store.pending()
+
+
+def test_acknowledging_a_fallback_is_recorded_and_is_not_a_retry(tmp_path):
+    """Acknowledging lets an operator plan the next attempt; it re-arms nothing,
+    and the write-back had never been executed."""
+
+    from appliance.ab_state import AbStateStore, FallbackRecord
+
+    store = AbStateStore(tmp_path / "ab")
+    store.ensure()
+    store.record_fallback(
+        FallbackRecord(
+            operation_id="op-1",
+            target_slot="B",
+            source_slot="A",
+            observed_at=1000.0,
+            target_release="ems-solarflow-appliance-1.5.0-arm64-ab",
+            target_build_id="20260807-1",
+        )
+    )
+
+    assert store.acknowledge_fallback("op-1") is True
+    assert store.fallbacks()[0].acknowledged is True
+    assert store.pending() is None
+
+    reopened = AbStateStore(tmp_path / "ab")
+    assert reopened.fallbacks()[0].acknowledged is True
+    assert reopened.acknowledge_fallback("op-does-not-exist") is False

@@ -409,3 +409,22 @@ def test_apt_is_refused_on_a_read_only_root(tmp_path, monkeypatch):
     blockers = services.packages._blockers(services.packages.check())
 
     assert any(b["code"] == "read_only_root" for b in blockers), blockers
+
+
+def test_the_disk_space_check_reads_the_probe_root_not_the_host(tmp_path):
+    """These tests used to answer from the machine running them: a developer
+    with a full /var saw the blocker, CI did not, and neither was testing the
+    appliance."""
+
+    from appliance.hostprobe import HostProbe
+
+    probe = HostProbe(root=tmp_path)
+    absent = probe.filesystem("/var")
+
+    assert absent["available"] is False
+
+    (tmp_path / "var").mkdir()
+    present = probe.filesystem("/var")
+
+    assert present["available"] is True
+    assert present["path"].startswith(str(tmp_path))

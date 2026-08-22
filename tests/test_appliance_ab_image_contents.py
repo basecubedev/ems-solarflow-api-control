@@ -807,3 +807,45 @@ def test_the_image_records_the_package_set_it_was_assembled_from():
     assert "/etc/ems-appliance-os-packages" in layer
     assert '"os_packages"' in layer
     assert "packages_sha256" in layer
+
+
+def test_a_hung_userspace_still_gets_a_reboot():
+    """Tryboot protects against a slot that does not boot. A slot whose kernel
+    comes up and whose userspace then hangs looks like a successful boot to the
+    firmware, the health check never runs, and a headless appliance is
+    unreachable until somebody pulls the power."""
+
+    root = Path(__file__).resolve().parents[1]
+    overlay = (
+        root
+        / "packaging/appliance/image/layer/ems-appliance.rootfs-overlay"
+        / "etc/systemd/system.conf.d/50-ems-appliance-watchdog.conf"
+    )
+
+    assert overlay.is_file(), "the watchdog configuration reaches no image"
+    text = overlay.read_text(encoding="utf-8")
+    assert "RuntimeWatchdogSec=" in text
+    assert "RebootWatchdogSec=" in text
+
+
+def test_the_filesystem_helper_refuses_to_substitute_when_asked_not_to():
+    """A helper that degrades silently turns a filesystem assertion into a
+    round-trip of bytes it wrote itself, and the caller cannot tell."""
+
+    from tests.helpers import appliance_ab_filesystems as fs
+
+    if fs.unavailable("ext4") is None and fs.unavailable("vfat") is None:
+        pytest.skip("both real tools are present; there is nothing to substitute")
+
+    for kind, builder in (("ext4", fs.ext4_image), ("vfat", fs.fat_image)):
+        if fs.unavailable(kind) is None:
+            continue
+        with pytest.raises(fs.SyntheticFilesystem):
+            builder(1024 * 1024, real_only=True)
+
+
+def test_the_substitute_is_still_offered_where_only_the_type_matters():
+    from tests.helpers import appliance_ab_filesystems as fs
+
+    assert fs.ext4_image(1024 * 1024)[:8]
+    assert fs.fat_image(1024 * 1024)[:8]

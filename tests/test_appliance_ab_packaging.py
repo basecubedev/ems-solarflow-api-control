@@ -56,13 +56,30 @@ def directives(text, key):
 # --- the units ---------------------------------------------------------------
 
 
+# Both markers exist only on an A/B image: the layout descriptor is written into
+# the shared configuration, the build marker into each slot root. Either makes a
+# unit inert on a single-slot appliance, and the persistence verifier
+# deliberately uses the second one -- the first lives inside a bind it exists to
+# verify, so a skipped bind would silently skip the verifier too.
+AB_ONLY_MARKERS = (
+    "/etc/ems-appliance-manager/ab-layout.json",
+    "/etc/ems-appliance-os-build",
+)
+
+
 @pytest.mark.parametrize("unit", AB_UNITS)
 def test_every_ab_unit_is_inert_without_an_ab_layout(unit):
     """The same package installs on a single-slot appliance and does nothing."""
 
     text = read(SYSTEMD / unit)
+    conditions = [
+        line.split("=", 1)[1]
+        for line in text.splitlines()
+        if line.startswith("ConditionPathExists=")
+    ]
 
-    assert "ConditionPathExists=/etc/ems-appliance-manager/ab-layout.json" in text
+    assert conditions, f"{unit} would run on a single-slot appliance"
+    assert any(path in AB_ONLY_MARKERS for path in conditions), conditions
 
 
 @pytest.mark.parametrize("unit", AB_UNITS)

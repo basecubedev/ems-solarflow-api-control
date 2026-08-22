@@ -425,3 +425,40 @@ def test_a_usb_booted_appliance_is_disambiguated_by_its_bus(tmp_path):
 
     assert problem == ""
     assert entry.path == "/dev/sda3"
+
+
+def test_the_parser_reads_what_this_host_s_lsblk_actually_prints():
+    """The fixture is hand-authored, so it can only prove the parser against a
+    shape somebody wrote down. A column renamed or retyped upstream would move
+    the whole layout discovery onto guesses, and nothing here would notice."""
+
+    import json
+    import shutil
+    import subprocess
+
+    from appliance.ab_layout import LSBLK_COLUMNS, _flatten_lsblk
+
+    binary = shutil.which("lsblk")
+    if binary is None:
+        pytest.skip("lsblk is not installed")
+
+    result = subprocess.run(
+        [binary, "--json", "--bytes", "--paths", "--output", LSBLK_COLUMNS],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    # A column this lsblk does not know is a real defect, not an environment
+    # problem: the production call would fail the same way and layout discovery
+    # would fall back to guesses.
+    assert result.returncode == 0, (
+        f"lsblk refused the columns this project reads: {result.stderr.strip()}"
+    )
+
+    entries = _flatten_lsblk(json.loads(result.stdout))
+
+    assert entries, "the parser found no device on a host that has some"
+    for entry in entries:
+        assert entry.path.startswith("/dev/")
+        assert isinstance(entry.size_bytes, int)

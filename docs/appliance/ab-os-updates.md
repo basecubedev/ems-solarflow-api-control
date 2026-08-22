@@ -9,6 +9,19 @@ on a third-party update framework is recorded in
 [adr/ab-native-tryboot.md](adr/ab-native-tryboot.md).
 
 
+## What a fallback cannot cover on its own
+
+Tryboot is a one-shot flag: a slot that does not boot at all never consumes it,
+so the next boot returns to the previous slot without anything having to decide
+that. What it does not cover is the other shape of failure -- a slot whose
+kernel comes up, whose userspace then hangs, and which therefore looks like a
+successful boot to the firmware. The health check never runs, the trial neither
+commits nor falls back, and a headless appliance stays unreachable.
+
+The image enables the SoC watchdog for that case: systemd pets it while it is
+running, and a userspace that stops petting it is rebooted, which is what puts
+the one-shot flag back in play.
+
 ## What stops while an update runs
 
 The EMS is the single writer of the Zendure devices' output limit, and a device

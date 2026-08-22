@@ -131,10 +131,46 @@ def test_a_read_back_shorter_than_the_image_is_an_error(fake, source):
     assert caught.value.code == "block_read_short"
 
 
-def test_a_partition_smaller_than_the_image_is_visible_before_the_write(fake):
-    fake.set_size("/dev/fake5", 10)
+def test_a_partition_smaller_than_the_image_is_refused_at_planning_time():
+    """The capacity gate, not the fake: asserting that a size you just set is
+    the size you set proves nothing. The refusal lives in the plan, because the
+    manifest signs both expanded sizes and capacity must be decided before the
+    archive is staged, not discovered after it."""
 
-    assert fake.size("/dev/fake5") < len(PAYLOAD)
+    from appliance.os_update import OsUpdateService
+
+    class _Part:
+        def __init__(self, size):
+            self.size_bytes = size
+
+    class _Inactive:
+        slot = "B"
+        boot = _Part(1024)
+        root = _Part(1024)
+
+    problems = OsUpdateService._capacity_problems(
+        object(), _Inactive(), 4096, 8192
+    )
+
+    assert [item["code"] for item in problems] == [
+        "inactive_partition_too_small",
+        "inactive_partition_too_small",
+    ]
+    assert "4096 bytes" in problems[0]["message"]
+
+
+def test_a_partition_large_enough_raises_no_capacity_problem():
+    from appliance.os_update import OsUpdateService
+
+    class _Part:
+        size_bytes = 1024 * 1024
+
+    class _Inactive:
+        slot = "B"
+        boot = _Part()
+        root = _Part()
+
+    assert OsUpdateService._capacity_problems(object(), _Inactive(), 4096, 8192) == []
 
 
 # --- the real backend against a plain file -----------------------------------

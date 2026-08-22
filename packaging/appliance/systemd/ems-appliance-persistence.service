@@ -4,7 +4,13 @@ Description=EMS SolarFlow Appliance shared persistent state
 Documentation=file:///usr/share/doc/ems-appliance-manager/ab-persistence-contract.md
 # The unit ships in every slot but only applies to an A/B image; a single-slot
 # appliance keeps its ordinary root filesystem and this never runs there.
-ConditionPathExists=/etc/ems-appliance-manager/ab-layout.json
+#
+# Anchored on the slot-local build marker, deliberately not on the layout
+# descriptor: that descriptor lives under /etc/ems-appliance-manager, which is
+# itself one of the shared binds this unit exists to verify. A skipped bind
+# would take the descriptor with it, the condition would read false, and the one
+# unit that fails closed would quietly skip -- exactly when it is needed.
+ConditionPathExists=/etc/ems-appliance-os-build
 # rpi-image-gen mounts /persistent and binds every declared shared path through
 # its slot-shared generator. This unit does not mount anything: it proves those
 # mounts happened, because upstream's generator guards each bind with

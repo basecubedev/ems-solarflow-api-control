@@ -411,3 +411,28 @@ def test_a_mountpoint_of_another_identity_does_not_bless_its_binds(host):
 
     assert report.ok is False
     assert report.state == ab_persistence.STATE_IDENTITY_MISMATCH
+
+
+def test_the_verifier_is_not_gated_on_a_file_inside_what_it_verifies():
+    """The layout descriptor lives under /etc/ems-appliance-manager, which is
+    one of the shared binds this unit exists to prove. Conditioning on it means
+    a skipped bind silently skips the verifier too."""
+
+    from appliance import ab_persistence
+
+    root = Path(__file__).resolve().parents[1]
+    unit = (
+        root / "packaging/appliance/systemd/ems-appliance-persistence.service"
+    ).read_text(encoding="utf-8")
+
+    condition = [
+        line.split("=", 1)[1]
+        for line in unit.splitlines()
+        if line.startswith("ConditionPathExists=")
+    ]
+
+    assert condition, "the unit states no condition"
+    for path in condition:
+        for shared in ab_persistence.SHARED_PATHS:
+            assert not path.startswith(shared.target.rstrip("/") + "/"), path
+            assert path != shared.target, path
