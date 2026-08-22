@@ -17,7 +17,7 @@ from appliance import agent, audit, os_fetch, os_update, protocol, validation
 from appliance.protocol import OPERATIONS, ProtocolError, ValidationContext, validate_request
 from appliance.validation import ValidationError
 
-pytestmark = [pytest.mark.contract, pytest.mark.simulation]
+pytestmark = [pytest.mark.contract, pytest.mark.simulation, pytest.mark.appliance]
 
 ROOT = Path(__file__).resolve().parents[1]
 

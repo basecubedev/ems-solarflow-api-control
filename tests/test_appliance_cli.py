@@ -30,7 +30,7 @@ from appliance.paths import (
     ENV_STATE_DIR,
 )
 
-pytestmark = [pytest.mark.unit, pytest.mark.simulation]
+pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.appliance]
 
 
 @pytest.fixture

@@ -20,7 +20,7 @@ from tests.helpers.android_sparse import BLOCK_SIZE
 from tests.helpers.appliance_ab import ApplianceAbHost, build_ab_service
 from tests.helpers.appliance_ab_artifacts import ReleaseDirectory, digest_of
 
-pytestmark = [pytest.mark.unit, pytest.mark.simulation]
+pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.appliance]
 
 RELEASE_ID = "ems-solarflow-appliance-1.5.0-rpi5-arm64-ab"
 

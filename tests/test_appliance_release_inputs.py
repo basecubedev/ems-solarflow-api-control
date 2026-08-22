@@ -24,7 +24,7 @@ import pytest
 
 from appliance import build_authority, release_inputs
 
-pytestmark = [pytest.mark.unit, pytest.mark.system_build]
+pytestmark = [pytest.mark.unit, pytest.mark.system_build, pytest.mark.appliance]
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILDER_LOCK = ROOT / "packaging/appliance/vm/base-images.lock.json"

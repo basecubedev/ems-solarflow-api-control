@@ -33,8 +33,9 @@ require_replacement_canary_env
 gate_static() {
     run_stage "static: ruff" ruff check .
     run_stage "static: compileall" "$PYTHON" -m compileall -q \
-        admin ems dashboard scripts tests emsctl.py ems-solarflow-api-control.py
+        admin appliance ems dashboard scripts tests emsctl.py ems-solarflow-api-control.py
     run_stage "static: admin.js" node --check admin/static/admin.js
+    run_stage "static: appliance app.js" node --check appliance/static/app.js
     run_stage "static: whitespace" git diff --check
 }
 
@@ -60,7 +61,10 @@ gate_system_build() {
 }
 
 gate_docker_first() {
-    run_pytest_tier "rc/docker-first" -q -rs -m "docker"
+    # A release gate may not pass on skips: a guest that cannot boot or cannot
+    # reach a package archive is this tier failing, not the host lacking it.
+    EMS_REQUIRE_APPLIANCE_CONTAINER_TESTS=1 \
+        run_pytest_tier "rc/docker-first" -q -rs -m "docker"
 }
 
 gate_chromium_full() {

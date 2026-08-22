@@ -18,7 +18,7 @@ from appliance.operations import (
 )
 from tests.helpers.appliance import ADMIN_CONTAINER, ADMIN_REPOSITORY, build_test_services
 
-pytestmark = [pytest.mark.integration, pytest.mark.simulation]
+pytestmark = [pytest.mark.integration, pytest.mark.simulation, pytest.mark.appliance]
 
 
 def appliance(tmp_path, *, running=True):

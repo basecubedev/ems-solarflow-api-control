@@ -23,7 +23,7 @@ from appliance.install_check import (
 )
 from tests.helpers.appliance import appliance_paths, mount_root_of
 
-pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.backup_restore]
+pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.backup_restore, pytest.mark.appliance]
 
 EXPORT_SERVICE = "ems-appliance-export.service"
 EXPORT_PATH = "ems-appliance-export.path"

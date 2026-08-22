@@ -31,7 +31,7 @@ import pytest
 from appliance import ab_filesystems, ab_image
 from appliance.ab_image import FAIL, PASS
 
-pytestmark = [pytest.mark.integration, pytest.mark.simulation]
+pytestmark = [pytest.mark.integration, pytest.mark.simulation, pytest.mark.appliance]
 
 SECTOR = ab_image.SECTOR_SIZE
 APPLIANCE_VERSION = "0.1.0"

@@ -28,7 +28,7 @@ import yaml
 from appliance import build_authority, rpi_image_gen
 from tests.helpers import upstream_rpi_image_gen as upstream
 
-pytestmark = [pytest.mark.contract, pytest.mark.simulation]
+pytestmark = [pytest.mark.contract, pytest.mark.simulation, pytest.mark.appliance]
 
 ROOT = Path(__file__).resolve().parents[1]
 PROFILE_DIR = ROOT / "packaging" / "appliance" / "image" / "profiles"

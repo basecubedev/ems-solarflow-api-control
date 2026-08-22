@@ -7,12 +7,13 @@ does not fail -- it just stops being evidence, quietly, and the specs rot
 against a UI that moved on.
 """
 
+import ast
 import re
 from pathlib import Path
 
 import pytest
 
-pytestmark = [pytest.mark.unit, pytest.mark.simulation]
+pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.appliance]
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = "playwright.appliance.config.ts"
@@ -80,22 +81,54 @@ def test_the_container_tiers_skip_only_on_a_real_prerequisite():
         path
         for path in (ROOT / "tests").glob("test_appliance_*.py")
         if path.name != Path(__file__).name
-        and "SystemdContainer" in path.read_text(encoding="utf-8")
+        and "appliance_systemd" in path.read_text(encoding="utf-8")
     ]
 
     assert container_tiers, "no container tier was found to check"
 
     offenders = []
     for path in container_tiers:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if "pytest.skip(" not in line:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for handler in ast.walk(tree):
+            if not isinstance(handler, ast.ExceptHandler):
                 continue
-            # A prerequisite the host does not have. Anything else is this tier
-            # failing, and a skip reports that as passing.
-            if not any(token in line for token in ("docker", "str(exc)")):
-                offenders.append(f"{path.name}: {line.strip()[:90]}")
+            if not any(
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "skip"
+                for node in ast.walk(handler)
+            ):
+                continue
+            caught = ast.unparse(handler.type) if handler.type else "everything"
+            # A prerequisite the host does not have is a skip. A tier that
+            # booted and then failed is not, and a skip reports it as passing.
+            if caught != "SystemdUnavailable":
+                offenders.append(f"{path.name}: skips on {caught}")
 
     assert not offenders, offenders
+
+
+def test_a_tier_failure_is_a_different_exception_from_a_missing_prerequisite():
+    """The split is what keeps `except ...: pytest.skip()` from swallowing it."""
+
+    from tests.helpers.appliance_systemd import SystemdTierFailure, SystemdUnavailable
+
+    assert not issubclass(SystemdTierFailure, SystemdUnavailable)
+    assert not issubclass(SystemdUnavailable, SystemdTierFailure)
+
+
+def test_a_job_can_declare_the_container_tier_load_bearing(monkeypatch):
+    """Where a green result is meant to mean these ran, a skip is a failure."""
+
+    from tests.helpers import appliance_systemd
+
+    monkeypatch.setenv("EMS_REQUIRE_APPLIANCE_CONTAINER_TESTS", "1")
+    with pytest.raises(appliance_systemd.SystemdTierFailure):
+        appliance_systemd.unavailable("docker is not available")
+
+    monkeypatch.delenv("EMS_REQUIRE_APPLIANCE_CONTAINER_TESTS")
+    with pytest.raises(appliance_systemd.SystemdUnavailable):
+        appliance_systemd.unavailable("docker is not available")
 
 
 def test_a_missing_package_archive_names_itself():
@@ -106,3 +139,43 @@ def test_a_missing_package_archive_names_itself():
 
     assert "PREREQUISITE_MARKER" in helper
     assert "no package archive" in helper
+
+
+# --- the job has to be able to run what it collects ---------------------------
+
+
+def appliance_job():
+    text = (WORKFLOWS / "playwright-e2e.yml").read_text(encoding="utf-8")
+    return text.split("playwright-appliance:")[1].split("\n  playwright-")[0]
+
+
+def test_every_project_the_job_runs_is_a_browser_it_installed():
+    """A project that was never downloaded fails at launch, not at assertion."""
+
+    job = appliance_job()
+    config = (ROOT / CONFIG).read_text(encoding="utf-8")
+    declared = set(re.findall(r'name:\s*"(\w+)"', config))
+    run = [line for line in job.splitlines() if "playwright test" in line][0]
+    install = [line for line in job.splitlines() if "playwright install" in line][0]
+
+    selected = set(re.findall(r"--project=(\w+)", run)) or declared
+
+    assert declared, "the appliance config declares no projects"
+    for project in selected:
+        assert project in install, f"the job runs {project} without installing it"
+
+
+def test_a_spec_that_writes_into_the_repository_is_not_collected_by_default():
+    """The RC tier ends in a clean-tree check; a capture run would fail it."""
+
+    config = (ROOT / CONFIG).read_text(encoding="utf-8")
+    writing = [
+        path.name
+        for path in (ROOT / "tests" / "e2e-appliance").glob("*.spec.ts")
+        if "docs/assets" in path.read_text(encoding="utf-8")
+    ]
+
+    assert writing, "no capture spec found; this guard has lost its subject"
+    for name in writing:
+        assert name in config, f"{name} writes into the repository but is not excluded"
+    assert "testIgnore" in config

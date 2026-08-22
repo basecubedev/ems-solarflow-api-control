@@ -28,8 +28,7 @@ pytestmark = [
     pytest.mark.integration,
     pytest.mark.docker,
     pytest.mark.slow,
-    pytest.mark.skipif(not docker_available(), reason="a Docker daemon is required"),
-]
+    pytest.mark.skipif(not docker_available(), reason="a Docker daemon is required"), pytest.mark.appliance,]
 
 SECRETS = (
     "appliance-permission-probe",
@@ -41,10 +40,7 @@ SECRETS = (
 @pytest.fixture(scope="module")
 def host():
     container = PermissionHost()
-    try:
-        container.start()
-    except RuntimeError as exc:  # pragma: no cover - environment dependent
-        pytest.skip(str(exc))
+    container.start()
     try:
         yield container
     finally:

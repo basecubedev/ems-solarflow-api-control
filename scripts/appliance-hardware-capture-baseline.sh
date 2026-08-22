@@ -53,7 +53,7 @@ capture() {
 # The runtime's own view first: it is the authority the operator is testing.
 capture ab-status.json ems-appliance ab status --json
 capture verify-persistence.json ems-appliance ab verify-persistence --json
-capture verify-install.json ems-appliance verify --json
+capture verify-install.json ems-appliance verify-install --json
 capture host-identity.json ems-appliance host-identity --json
 
 # Then the block and mount reality the runtime derived it from.

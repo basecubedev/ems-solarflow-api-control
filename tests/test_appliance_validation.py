@@ -15,7 +15,7 @@ from appliance.paths import AppliancePaths, PathBoundaryError, ensure_within
 from appliance.redaction import bounded_redacted_log, clamp_log, redact_mapping, redact_text
 from appliance.validation import ValidationError
 
-pytestmark = [pytest.mark.unit, pytest.mark.simulation]
+pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.appliance]
 
 ALLOWED = ("ghcr.io/basecubedev/ems-solarflow-admin",)
 SOURCE = "https://github.com/basecubedev/ems-solarflow-api-control"

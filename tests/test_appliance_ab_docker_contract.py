@@ -23,7 +23,7 @@ from appliance.commands import CommandResult, RecordingRunner
 from appliance.docker_backend import DockerBackend
 from tests.helpers.appliance_ab import PARTUUIDS, ApplianceAbHost, build_health_service
 
-pytestmark = [pytest.mark.integration, pytest.mark.simulation]
+pytestmark = [pytest.mark.integration, pytest.mark.simulation, pytest.mark.appliance]
 
 ADMIN_DIGEST = "sha256:" + "1" * 64
 EMS_DIGEST = "sha256:" + "2" * 64

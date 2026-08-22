@@ -27,7 +27,7 @@ from appliance.commands import CommandResult
 from appliance.paths import AppliancePaths
 from tests.helpers.appliance_host_runtime import FakeHost
 
-pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.config]
+pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.config, pytest.mark.appliance]
 
 
 @pytest.fixture

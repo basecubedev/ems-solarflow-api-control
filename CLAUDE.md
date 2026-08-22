@@ -81,6 +81,7 @@ Targeted tiers — do not run the full suite for a localized change
 ./scripts/test-admin.sh authority     # one Admin functional area
 ./scripts/test-mqtt.sh
 ./scripts/test-pr.sh core             # one pull-request group
+./scripts/test-pr.sh appliance        # the appliance group
 ./scripts/test-rc.sh --list           # the release-candidate gates
 ```
 
@@ -88,7 +89,7 @@ Markers (`pytest.ini`, `--strict-markers` is on) have two independent
 dimensions. Execution level, exactly one per module: `unit`, `contract`,
 `integration`, `e2e`; plus `docker`, `browser`, `slow`. Functional areas, any
 number: `admin`, `setup`, `maintenance`, `workflow`, `authority`, `config`,
-`mqtt`, `power_control`, `backup_restore`, `system_build`. `simulation`,
+`mqtt`, `power_control`, `backup_restore`, `system_build`, `appliance`. `simulation`,
 `regression` and `mqtt_release` remain for the existing gates. Classify a new
 module with a module-level `pytestmark`; `tests/test_test_classification.py`
 enforces the rules.

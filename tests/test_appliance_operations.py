@@ -31,7 +31,7 @@ from appliance.operations import (
     UnknownOperationError,
 )
 
-pytestmark = [pytest.mark.unit, pytest.mark.simulation]
+pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.appliance]
 
 
 class Clock:

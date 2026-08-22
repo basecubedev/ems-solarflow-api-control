@@ -52,6 +52,23 @@ done
 [ -n "$PACKAGE" ] || { echo "--package is required" >&2; usage >&2; exit 2; }
 [ -f "$PACKAGE" ] || not_run "no package at $PACKAGE" package_unavailable
 [ "$(id -u)" = "0" ] || not_run "the audit needs root inside its own guest" not_root
+
+# This installs the package, binds /var and /home away and remounts / read-only.
+# Inside a disposable guest that is the point; on a workstation it is a machine
+# left in that state, with no unwind. Root alone does not tell the two apart, so
+# containment is required rather than assumed.
+if [ -z "${EMS_AUDIT_DISPOSABLE_GUEST:-}" ]; then
+    contained=no
+    [ -f /.dockerenv ] && contained=yes
+    if command -v systemd-detect-virt >/dev/null 2>&1 \
+       && systemd-detect-virt -q --container; then
+        contained=yes
+    fi
+    [ "$contained" = yes ] || not_run \
+        "this audit rewrites the host it runs on and found no container around it; \
+run it in a disposable guest, or set EMS_AUDIT_DISPOSABLE_GUEST=1 if you are sure" \
+        not_contained
+fi
 [ -n "$WORK" ] || WORK=$(mktemp -d "${TMPDIR:-/tmp}/ems-root-audit.XXXXXX")
 mkdir -p "$WORK"
 

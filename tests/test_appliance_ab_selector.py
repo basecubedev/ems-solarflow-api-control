@@ -24,7 +24,7 @@ from appliance.ab_boot import (
 )
 from appliance.commands import RecordingRunner
 
-pytestmark = [pytest.mark.unit, pytest.mark.simulation]
+pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.appliance]
 
 COMMITTED = """# ems-appliance boot selector. Generated; do not edit.
 [all]

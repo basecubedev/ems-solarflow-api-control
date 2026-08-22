@@ -42,7 +42,7 @@ import pytest
 from appliance import ab_bootstrap, commands
 from appliance.docker_backend import DockerBackend, DockerError
 
-pytestmark = [pytest.mark.integration, pytest.mark.docker, pytest.mark.system_build]
+pytestmark = [pytest.mark.integration, pytest.mark.docker, pytest.mark.system_build, pytest.mark.appliance]
 
 ROOT = Path(__file__).resolve().parents[1]
 REGISTRY_IMAGE = "registry:2"

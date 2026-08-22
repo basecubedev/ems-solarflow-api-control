@@ -53,7 +53,7 @@ from tests.helpers.appliance_deployment import (
     bootstrap_service,
 )
 
-pytestmark = [pytest.mark.integration, pytest.mark.simulation]
+pytestmark = [pytest.mark.integration, pytest.mark.simulation, pytest.mark.appliance]
 
 
 # --- finding 1: the recorded runtime is rebuilt, not just Admin --------------

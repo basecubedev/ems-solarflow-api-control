@@ -25,7 +25,7 @@ from tests.helpers.appliance_ab import (
 
 ROOT = Path(__file__).resolve().parents[1]
 
-pytestmark = [pytest.mark.unit, pytest.mark.simulation]
+pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.appliance]
 
 
 @pytest.fixture

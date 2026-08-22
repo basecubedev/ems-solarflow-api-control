@@ -29,7 +29,7 @@ from tests.helpers.appliance_ab import (
     build_health_service,
 )
 
-pytestmark = [pytest.mark.unit, pytest.mark.simulation]
+pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.appliance]
 
 
 @pytest.fixture

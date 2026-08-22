@@ -16,7 +16,7 @@ import pytest
 
 from appliance.export_state import device_id, path_within_filesystem, publishes_source
 
-pytestmark = [pytest.mark.unit, pytest.mark.simulation]
+pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.appliance]
 
 
 def record_for(path, *, root, options=("ro",)):

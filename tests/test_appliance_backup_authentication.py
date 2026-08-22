@@ -33,7 +33,7 @@ import pytest
 from appliance.sshkeys import AUTHORIZED_KEYS_MODE, SSH_DIR_MODE, AuthorizedKeysStore
 from tests.helpers.appliance_backup_account import PACKAGE_BIN, BackupAccountHarness
 
-pytestmark = [pytest.mark.contract, pytest.mark.simulation, pytest.mark.backup_restore]
+pytestmark = [pytest.mark.contract, pytest.mark.simulation, pytest.mark.backup_restore, pytest.mark.appliance]
 
 ED25519 = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIl8UiJHP3y4t+H+uVmVWcN/BNvqHg2f6urH8+puRXdf "

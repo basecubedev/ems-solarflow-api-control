@@ -18,7 +18,7 @@ from appliance.config import load_allowed_images, load_config
 from appliance.paths import AppliancePaths
 from appliance.version import APPLIANCE_VERSION, SUPPORTED_ARCHITECTURES, SUPPORTED_PI_MODELS
 
-pytestmark = [pytest.mark.contract, pytest.mark.simulation]
+pytestmark = [pytest.mark.contract, pytest.mark.simulation, pytest.mark.appliance]
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGING = ROOT / "packaging" / "appliance"

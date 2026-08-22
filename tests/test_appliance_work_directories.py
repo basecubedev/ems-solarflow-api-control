@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = [pytest.mark.unit, pytest.mark.simulation]
+pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.appliance]
 
 ROOT = Path(__file__).resolve().parents[1]
 LIBRARY = ROOT / "scripts" / "lib" / "workdir.sh"

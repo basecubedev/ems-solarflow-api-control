@@ -26,7 +26,7 @@ from appliance.os_fetch import (
 )
 from tests.helpers.appliance import build_test_services
 
-pytestmark = [pytest.mark.integration, pytest.mark.simulation]
+pytestmark = [pytest.mark.integration, pytest.mark.simulation, pytest.mark.appliance]
 
 RELEASE_ID = "ems-solarflow-appliance-0.2.0-rpi5-arm64-ab"
 ARCHIVE_NAME = f"{RELEASE_ID}.tar.zst"

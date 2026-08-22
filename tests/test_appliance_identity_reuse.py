@@ -28,7 +28,7 @@ from tests.helpers.appliance_object_identity import (
     object_identity,
 )
 
-pytestmark = [pytest.mark.contract, pytest.mark.simulation, pytest.mark.backup_restore]
+pytestmark = [pytest.mark.contract, pytest.mark.simulation, pytest.mark.backup_restore, pytest.mark.appliance]
 
 OPERATOR_KEY = "ssh-ed25519 AAAAoperator operator@laptop\n"
 

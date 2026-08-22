@@ -7,11 +7,13 @@ server, so no capture contains a real host name, address, serial or key.
 ## Regenerating
 
 ```bash
-npx playwright test --config=playwright.appliance.config.ts capture-docs --project=chromium
+EMS_APPLIANCE_CAPTURE_DOCS=1 npx playwright test \
+    --config=playwright.appliance.config.ts capture-docs --project=chromium
 ```
 
-The capture project is selected by name and is not part of the normal appliance
-suite, which runs in CI on every change to `appliance/**`.
+The captures are excluded from the config unless that variable is set, so the
+normal appliance suite -- which runs in CI on every change to `appliance/**`,
+and in the RC tier ahead of a clean-tree check -- can never overwrite them.
 
 ## Capture IDs
 

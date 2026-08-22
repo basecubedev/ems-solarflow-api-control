@@ -18,7 +18,7 @@ import pytest
 
 from appliance import media_sizing
 
-pytestmark = [pytest.mark.contract, pytest.mark.simulation]
+pytestmark = [pytest.mark.contract, pytest.mark.simulation, pytest.mark.appliance]
 
 ROOT = Path(__file__).resolve().parents[1]
 PROFILE = ROOT / "packaging/appliance/image/shared/ems-appliance-ab.yaml"

@@ -12,7 +12,7 @@ from appliance.operations import STATE_SUCCEEDED
 from appliance.ssh_service import parse_passwd_entry, parse_sshd_config
 from tests.helpers.appliance import build_test_services
 
-pytestmark = [pytest.mark.integration, pytest.mark.simulation]
+pytestmark = [pytest.mark.integration, pytest.mark.simulation, pytest.mark.appliance]
 
 ED25519 = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIl8UiJHP3y4t+H+uVmVWcN/BNvqHg2f6urH8+puRXdf "

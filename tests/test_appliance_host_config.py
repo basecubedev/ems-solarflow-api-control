@@ -25,7 +25,7 @@ from appliance.host_config import (
 from appliance.paths import AppliancePaths, PathBoundaryError, resolve_paths
 from tests.helpers.appliance_host_runtime import FakeHost
 
-pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.config]
+pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.config, pytest.mark.appliance]
 
 
 def layout(tmp_path, *, install_root=None, export_root=None):

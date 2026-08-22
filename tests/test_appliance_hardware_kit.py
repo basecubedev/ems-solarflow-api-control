@@ -25,7 +25,7 @@ import pytest
 from appliance import build_authority, release_attestation, runtime_gates
 from tests.test_appliance_release_signature import SigningKey
 
-pytestmark = [pytest.mark.integration, pytest.mark.simulation]
+pytestmark = [pytest.mark.integration, pytest.mark.simulation, pytest.mark.appliance]
 
 ROOT = Path(__file__).resolve().parents[1]
 KIT = ROOT / "scripts/appliance_hardware_kit.py"
@@ -625,3 +625,39 @@ def test_a_ready_kit_carries_the_attestation_it_was_assembled_against(tmp_path):
     manifest = kit_manifest(output)
     assert manifest["release_attestation"]["ok"] is True
     assert manifest["release_attestation"]["detail"].startswith("sha256:")
+
+
+def test_the_baseline_capture_calls_subcommands_that_exist():
+    """A capture of a subcommand that does not exist writes an empty file, and
+    the run still printed RESULT: PASS over it."""
+
+    import re
+
+    from appliance import cli
+
+    root = Path(__file__).resolve().parents[1]
+    script = (root / "scripts" / "appliance-hardware-capture-baseline.sh").read_text(
+        encoding="utf-8"
+    )
+    parser_source = (root / "appliance" / "cli.py").read_text(encoding="utf-8")
+
+    invoked = set(re.findall(r"^capture \S+ ems-appliance ([\w-]+)", script, re.M))
+
+    assert invoked, "no ems-appliance capture was found"
+    for command in invoked:
+        assert f'"{command}"' in parser_source, f"{command} is not a subcommand"
+    assert cli  # the module imports, so the parser above is the real one
+
+
+def test_a_broken_persistence_is_a_failure_not_an_unreachable_runtime():
+    """`verify-persistence` exits non-zero *because* the persistence is broken.
+    Conflating that with an unreachable runtime turned every real finding into
+    NOT RUN -- neither a pass nor a problem anyone looks at."""
+
+    root = Path(__file__).resolve().parents[1]
+    script = (root / "scripts" / "appliance-hardware-verify-persistence.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'REPORT=$(ems-appliance ab verify-persistence --json 2>/dev/null)\n' in script
+    assert "|| not_run" not in script.split("REPORT=")[1].split("\n")[0]

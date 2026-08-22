@@ -40,13 +40,16 @@ LEGACY = frozenset({"simulation", "regression", "mqtt_release"})
 
 # The pull-request groups from scripts/test-pr.sh. Functional markers overlap by
 # design, so execution ownership is resolved by a fixed priority:
-# docker > power-control > mqtt > admin > core. Each group subtracts the ones
-# that outrank it, which makes the five groups an exact partition.
+# docker > power-control > mqtt > admin > appliance > core. Each group subtracts
+# the ones that outrank it, which makes the six groups an exact partition.
 PR_GROUPS = {
     "power-control": "power_control and not docker",
     "mqtt": "mqtt and not power_control and not docker",
     "admin": "admin and not mqtt and not power_control and not docker",
-    "core": "not admin and not mqtt and not power_control and not docker",
+    "appliance": "appliance and not admin and not mqtt and not power_control and not docker",
+    "core": (
+        "not appliance and not admin and not mqtt and not power_control and not docker"
+    ),
     "docker": "docker",
 }
 PYTHON_PR_GROUPS = {name: expr for name, expr in PR_GROUPS.items() if name != "docker"}

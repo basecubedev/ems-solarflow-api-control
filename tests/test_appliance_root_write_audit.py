@@ -26,18 +26,45 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = [pytest.mark.integration, pytest.mark.docker, pytest.mark.system_build]
+pytestmark = [pytest.mark.integration, pytest.mark.docker, pytest.mark.system_build, pytest.mark.appliance]
 
 ROOT = Path(__file__).resolve().parents[1]
 OVERLAY = ROOT / "packaging/appliance/image/layer/ems-appliance.rootfs-overlay"
 AUDIT = "appliance-audit-root-writes.sh"
 
+GUEST_EXTRA_PACKAGES = ("openssh-server",)
+
+
+def declared_dependencies():
+    """The package's own Depends field, which is the authority for what the
+    guest has to carry. dpkg -i resolves nothing, so a dependency added to the
+    control file and not installed here fails the whole tier at build time --
+    which is how cloud-guest-utils and e2fsprogs took this gate down once."""
+
+    control = (ROOT / "packaging/appliance/debian/control").read_text(encoding="utf-8")
+    field = re.search(r"^Depends:(.*?)(?=^\S)", control, re.MULTILINE | re.DOTALL)
+    assert field, "the control file declares no Depends field"
+    names = []
+    for entry in field.group(1).replace("\n", " ").split(","):
+        name = entry.strip().split()[0] if entry.strip() else ""
+        if name:
+            names.append(name)
+    return tuple(names)
+
+
+def guest_packages():
+    """Everything apt has to place before dpkg runs: the declared dependencies,
+    plus an sshd, which the guest needs to exercise the forced SFTP command and
+    the package deliberately never depends on -- it ships the client only."""
+
+    return tuple(dict.fromkeys(declared_dependencies() + GUEST_EXTRA_PACKAGES))
+
+
 DOCKERFILE = """
 FROM debian:trixie-slim
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \\
-      systemd python3 acl iproute2 procps util-linux mount ca-certificates \\
-      passwd zstd gpgv openssh-client openssh-server \\
+      {packages} \\
     && rm -rf /var/lib/apt/lists/*
 COPY package.deb /tmp/pkg.deb
 RUN dpkg -i /tmp/pkg.deb && rm -f /tmp/pkg.deb
@@ -47,6 +74,23 @@ RUN install -d -m 0755 /persistent /opt/ems-solarflow /var/lib/ems-appliance-man
       /var/log/ems-appliance-manager /etc/ems-appliance-manager \\
       /var/lib/ems-appliance-os-update /etc/NetworkManager/system-connections
 """
+
+def test_the_guest_installs_every_dependency_the_package_declares():
+    """dpkg -i resolves nothing, so a dependency apt has not placed first fails
+    the image build and with it every test in this tier -- reported as five
+    errors about a Dockerfile rather than about the missing package. The list is
+    derived from the control file instead of repeated, so it cannot drift again;
+    cloud-guest-utils and e2fsprogs are named because their absence is what
+    took this gate down."""
+
+    installed = set(guest_packages())
+
+    assert set(declared_dependencies()) <= installed
+    assert {"cloud-guest-utils", "e2fsprogs"} <= installed
+    assert " ".join(guest_packages()) in DOCKERFILE.format(
+        packages=" ".join(guest_packages())
+    )
+
 
 requires_docker = pytest.mark.skipif(
     shutil.which("docker") is None, reason="a real Docker daemon runs this tier"
@@ -90,7 +134,9 @@ def audit(tmp_path_factory):
     # has run. Following them here would resolve them on the build host, where
     # they are dangling, and copy nothing.
     shutil.copytree(OVERLAY, work / "overlay", symlinks=True)
-    (work / "Dockerfile").write_text(DOCKERFILE)
+    (work / "Dockerfile").write_text(
+        DOCKERFILE.format(packages=" ".join(guest_packages()))
+    )
 
     tag = "ems-appliance-root-audit:pytest"
     build = subprocess.run(
@@ -198,3 +244,19 @@ def test_a_failure_to_run_the_audit_is_not_reported_as_success():
     skips = re.findall(r"pytest\.skip\(\s*f?\"([^\"]{0,60})", source)
 
     assert all("docker" in reason.lower() for reason in skips), skips
+
+
+def test_the_audit_refuses_a_host_it_would_rewrite():
+    """It installs the package, binds /var and /home away and remounts / to
+    read-only, with no unwind. In a disposable guest that is the point; on a
+    workstation it is a machine left in that state, and `id -u` cannot tell the
+    two apart."""
+
+    script = (
+        Path(__file__).resolve().parents[1] / "scripts" / "appliance-audit-root-writes.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "/.dockerenv" in script
+    assert "systemd-detect-virt" in script
+    assert "not_contained" in script
+    assert "EMS_AUDIT_DISPOSABLE_GUEST" in script

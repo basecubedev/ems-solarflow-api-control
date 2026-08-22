@@ -27,7 +27,7 @@ from tests.helpers.appliance import (
     build_test_services,
 )
 
-pytestmark = [pytest.mark.integration, pytest.mark.simulation]
+pytestmark = [pytest.mark.integration, pytest.mark.simulation, pytest.mark.appliance]
 
 MUTATING_PLANS = (
     ("admin.plan_install", {"channel": "exact", "tag": "v1.1.0"}),

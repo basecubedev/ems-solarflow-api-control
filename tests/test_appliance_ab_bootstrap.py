@@ -32,7 +32,7 @@ from appliance.ab_bootstrap import (
     SlotBootstrapService,
 )
 
-pytestmark = [pytest.mark.unit, pytest.mark.simulation]
+pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.appliance]
 
 ADMIN = "ghcr.io/example/ems-admin@sha256:" + "a" * 64
 EMS = "ghcr.io/example/ems-solarflow@sha256:" + "b" * 64

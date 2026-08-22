@@ -35,8 +35,7 @@ from tests.helpers.appliance_systemd import (
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.docker,
-    pytest.mark.slow,
-]
+    pytest.mark.slow, pytest.mark.appliance,]
 
 pytestmark.append(
     pytest.mark.skipif(not docker_available(), reason="a Docker daemon is required")

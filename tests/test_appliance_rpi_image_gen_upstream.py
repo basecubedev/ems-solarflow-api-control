@@ -23,7 +23,7 @@ import yaml
 from appliance import rpi_image_gen
 from tests.helpers import upstream_rpi_image_gen as upstream
 
-pytestmark = [pytest.mark.contract, pytest.mark.simulation]
+pytestmark = [pytest.mark.contract, pytest.mark.simulation, pytest.mark.appliance]
 
 ROOT = Path(__file__).resolve().parents[1]
 IMAGE_DIR = ROOT / "packaging" / "appliance" / "image"
@@ -480,3 +480,18 @@ def test_the_pinned_tree_hash_matches_the_pinned_tree():
     )
 
     assert rpi_image_gen.tree_digest(source) == lock.tree_sha256
+
+
+def test_a_job_actually_names_a_tree_for_the_upstream_tier():
+    """These tests skip unless something points them at a real tree, so without
+    a job that fetches one they were five tests nobody had ever run."""
+
+    root = Path(__file__).resolve().parents[1]
+    workflows = root / ".github" / "workflows"
+    naming = [
+        path.name
+        for path in workflows.glob("*.yml")
+        if upstream.SOURCE_ENV in path.read_text(encoding="utf-8")
+    ]
+
+    assert naming, f"no workflow sets {upstream.SOURCE_ENV}"

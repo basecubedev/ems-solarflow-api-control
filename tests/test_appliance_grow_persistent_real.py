@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = [pytest.mark.integration, pytest.mark.docker, pytest.mark.system_build]
+pytestmark = [pytest.mark.integration, pytest.mark.docker, pytest.mark.system_build, pytest.mark.appliance]
 
 ROOT = Path(__file__).resolve().parents[1]
 DRIVER = "scripts/appliance-test-grow-persistent.sh"

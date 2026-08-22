@@ -40,7 +40,7 @@ from tests.helpers.appliance_deployment import (
     bootstrap_service,
 )
 
-pytestmark = [pytest.mark.integration, pytest.mark.simulation]
+pytestmark = [pytest.mark.integration, pytest.mark.simulation, pytest.mark.appliance]
 
 ROOT = Path(__file__).resolve().parents[1]
 

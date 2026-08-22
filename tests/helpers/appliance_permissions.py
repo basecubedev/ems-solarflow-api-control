@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import uuid
 from pathlib import Path
+from tests.helpers.appliance_systemd import SystemdTierFailure
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -78,12 +79,16 @@ class PermissionHost:
             timeout=300,
         )
         if result.returncode != 0:
-            raise RuntimeError(f"cannot start the permission host: {result.stderr.strip()}")
+            raise SystemdTierFailure(
+                f"cannot start the permission host: {result.stderr.strip()}"
+            )
         self.started = True
         provision = self.shell(_PROVISION, timeout=900)
         if provision.returncode != 0:
             self.stop()
-            raise RuntimeError(f"cannot provision the permission host: {provision.stderr}")
+            raise SystemdTierFailure(
+                f"cannot provision the permission host: {provision.stderr}"
+            )
         return self
 
     def stop(self):
@@ -141,7 +146,7 @@ class PermissionHost:
             script += f"install -d -o {owner} -g {group} -m {mode} {path}\n"
         result = self.shell(script, timeout=180)
         if result.returncode != 0:
-            raise RuntimeError(f"cannot apply the appliance layout: {result.stderr}")
+            raise SystemdTierFailure(f"cannot apply the appliance layout: {result.stderr}")
         return self
 
     def reset_state(self, rules):
@@ -161,7 +166,9 @@ class PermissionHost:
             if self.exists(f"{RUNTIME_DIR}/agent.sock"):
                 return True
             self.run(["sleep", "1"], timeout=30)
-        raise RuntimeError(f"the appliance agent did not start:\n{self.read('/tmp/agent.out')}")
+        raise SystemdTierFailure(
+            f"the appliance agent did not start:\n{self.read('/tmp/agent.out')}"
+        )
 
     def stop_agent(self):
         # The bracket keeps the pattern from matching this shell's own command

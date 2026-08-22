@@ -31,7 +31,7 @@ from tests.helpers.appliance import (
     build_test_services,
 )
 
-pytestmark = [pytest.mark.contract, pytest.mark.simulation]
+pytestmark = [pytest.mark.contract, pytest.mark.simulation, pytest.mark.appliance]
 
 
 @pytest.fixture

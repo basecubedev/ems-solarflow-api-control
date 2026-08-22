@@ -13,7 +13,7 @@ from appliance.network import parse_device_status, parse_wifi_list
 from appliance.operations import STATE_FAILED_TERMINAL, STATE_SUCCEEDED
 from tests.helpers.appliance import build_test_services
 
-pytestmark = [pytest.mark.integration, pytest.mark.simulation]
+pytestmark = [pytest.mark.integration, pytest.mark.simulation, pytest.mark.appliance]
 
 PASSPHRASE = "correct-horse-battery"
 

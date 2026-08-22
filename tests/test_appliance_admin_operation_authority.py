@@ -22,7 +22,7 @@ from tests.helpers.appliance import (
     build_test_services,
 )
 
-pytestmark = [pytest.mark.integration, pytest.mark.simulation]
+pytestmark = [pytest.mark.integration, pytest.mark.simulation, pytest.mark.appliance]
 
 
 def appliance(tmp_path, *, tag="v1.0.0", available=("v1.1.0", "v1.0.0"), catalogue=None):

@@ -20,7 +20,7 @@ import pytest
 from appliance import backup_ownership
 from tests.helpers.appliance_backup_account import BACKUP_USER, BackupAccountHarness
 
-pytestmark = [pytest.mark.contract, pytest.mark.simulation, pytest.mark.backup_restore]
+pytestmark = [pytest.mark.contract, pytest.mark.simulation, pytest.mark.backup_restore, pytest.mark.appliance]
 
 FOREIGN_KEY = "ssh-ed25519 AAAAforeign somebody@elsewhere\n"
 FOREIGN_MARKER_TEXT = "schema_version=1\naccount=ems-backup\nnonce=guessed\n"

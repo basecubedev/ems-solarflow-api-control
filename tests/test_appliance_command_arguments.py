@@ -31,7 +31,7 @@ from appliance.commands import (
     RecordingRunner,
 )
 
-pytestmark = [pytest.mark.unit, pytest.mark.simulation]
+pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.appliance]
 
 RUNNERS = ("real", "recording")
 

@@ -127,6 +127,7 @@ Each group runs independently and mirrors one CI job:
 
 ```bash
 ./scripts/test-pr.sh core
+./scripts/test-pr.sh appliance
 ./scripts/test-pr.sh admin
 ./scripts/test-pr.sh mqtt
 ./scripts/test-pr.sh power-control
@@ -135,13 +136,13 @@ Each group runs independently and mirrors one CI job:
 ./scripts/test-pr.sh firefox-smoke
 ```
 
-The five groups are an **exact partition**: every collected test runs in exactly
+The six groups are an **exact partition**: every collected test runs in exactly
 one of them, and none runs twice. Functional markers stay overlapping
 descriptions of behavior — a module may be both `admin` and `mqtt`. Only
 *execution ownership* is exclusive, resolved by a fixed priority:
 
 ```text
-docker > power-control > mqtt > admin > core
+docker > power-control > mqtt > admin > appliance > core
 ```
 
 | Group | Marker expression |
@@ -149,7 +150,8 @@ docker > power-control > mqtt > admin > core
 | `power-control` | `power_control and not docker` |
 | `mqtt` | `mqtt and not power_control and not docker` |
 | `admin` | `admin and not mqtt and not power_control and not docker` |
-| `core` | `not admin and not mqtt and not power_control and not docker` |
+| `appliance` | `appliance and not admin and not mqtt and not power_control and not docker` |
+| `core` | `not appliance and not admin and not mqtt and not power_control and not docker` |
 | `docker` | `docker` |
 
 `tests/test_test_classification.py` proves both directions: the union equals the

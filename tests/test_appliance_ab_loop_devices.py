@@ -20,7 +20,7 @@ import pytest
 from appliance import ab_blocks
 from appliance.ab_blocks import RealBlockBackend
 
-pytestmark = [pytest.mark.integration, pytest.mark.simulation]
+pytestmark = [pytest.mark.integration, pytest.mark.simulation, pytest.mark.appliance]
 
 PAYLOAD = b"appliance-rootfs-image" * 1024
 

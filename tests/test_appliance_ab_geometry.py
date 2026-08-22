@@ -20,7 +20,7 @@ import pytest
 
 from appliance import ab_geometry
 
-pytestmark = [pytest.mark.unit, pytest.mark.system_build]
+pytestmark = [pytest.mark.unit, pytest.mark.system_build, pytest.mark.appliance]
 
 SECTOR = ab_geometry.SYSFS_SECTOR
 MIB = 1024 * 1024

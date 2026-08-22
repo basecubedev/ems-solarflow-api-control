@@ -24,7 +24,7 @@ from tests.helpers.appliance_ab import (
 )
 from tests.helpers.appliance_ab_artifacts import ReleaseDirectory
 
-pytestmark = [pytest.mark.unit, pytest.mark.simulation]
+pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.appliance]
 
 RELEASE_ID = "ems-solarflow-appliance-1.5.0-arm64-ab"
 NEW_BUILD = "20260807-1"

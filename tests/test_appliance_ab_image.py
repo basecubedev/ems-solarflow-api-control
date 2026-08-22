@@ -26,7 +26,7 @@ import pytest
 from appliance import ab_image
 from appliance.ab_image import FAIL, NOT_RUN, PASS
 
-pytestmark = [pytest.mark.unit, pytest.mark.simulation]
+pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.appliance]
 
 ROOT = Path(__file__).resolve().parents[1]
 SECTOR = ab_image.SECTOR_SIZE

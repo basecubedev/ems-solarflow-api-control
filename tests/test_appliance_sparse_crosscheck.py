@@ -20,7 +20,7 @@ import pytest
 
 from appliance import os_artifacts
 
-pytestmark = [pytest.mark.unit, pytest.mark.simulation]
+pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.appliance]
 
 ROOT = Path(__file__).resolve().parents[1]
 CROSSCHECK = ROOT / "scripts/appliance-crosscheck-sparse.sh"

@@ -26,7 +26,7 @@ from tests.helpers.appliance_backup_account import (
 )
 from tests.helpers.appliance_export_script import EXPORT_SCRIPT
 
-pytestmark = [pytest.mark.contract, pytest.mark.simulation, pytest.mark.backup_restore]
+pytestmark = [pytest.mark.contract, pytest.mark.simulation, pytest.mark.backup_restore, pytest.mark.appliance]
 
 
 @pytest.fixture

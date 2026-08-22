@@ -26,7 +26,7 @@ from tests.helpers.appliance_ab_artifacts import (
     digest_of,
 )
 
-pytestmark = [pytest.mark.unit, pytest.mark.simulation]
+pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.appliance]
 
 
 @pytest.fixture

@@ -19,7 +19,7 @@ from appliance.packages import (
 )
 from tests.helpers.appliance import build_test_services
 
-pytestmark = [pytest.mark.integration, pytest.mark.simulation]
+pytestmark = [pytest.mark.integration, pytest.mark.simulation, pytest.mark.appliance]
 
 NO_UPDATES = "Reading package lists...\nBuilding dependency tree...\n0 upgraded, 0 newly installed.\n"
 

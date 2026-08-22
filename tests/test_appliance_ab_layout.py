@@ -24,7 +24,7 @@ from tests.helpers.appliance_ab import (
     lsblk_payload,
 )
 
-pytestmark = [pytest.mark.unit, pytest.mark.simulation]
+pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.appliance]
 
 
 @pytest.fixture

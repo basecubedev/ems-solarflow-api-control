@@ -18,7 +18,7 @@ import pytest
 
 from appliance.paths import chroot_chain_problems
 
-pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.backup_restore]
+pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.backup_restore, pytest.mark.appliance]
 
 EXPORT_ROOT = "/srv/ems-appliance-export"
 

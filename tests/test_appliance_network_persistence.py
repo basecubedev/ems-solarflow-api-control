@@ -23,7 +23,7 @@ import pytest
 
 from appliance import ab_image, ab_persistence
 
-pytestmark = [pytest.mark.contract, pytest.mark.simulation]
+pytestmark = [pytest.mark.contract, pytest.mark.simulation, pytest.mark.appliance]
 
 ROOT = Path(__file__).resolve().parents[1]
 OVERLAY = ROOT / "packaging/appliance/image/layer/ems-appliance.rootfs-overlay"

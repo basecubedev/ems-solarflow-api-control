@@ -15,7 +15,7 @@ import pytest
 from appliance import rpi_image_gen
 from appliance.rpi_image_gen import FAIL, PASS
 
-pytestmark = [pytest.mark.unit, pytest.mark.simulation]
+pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.appliance]
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCK = ROOT / "packaging" / "appliance" / "image" / "rpi-image-gen.lock"

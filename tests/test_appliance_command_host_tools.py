@@ -15,7 +15,7 @@ import pytest
 
 from appliance.commands import CommandError, CommandRunner
 
-pytestmark = [pytest.mark.integration, pytest.mark.simulation]
+pytestmark = [pytest.mark.integration, pytest.mark.simulation, pytest.mark.appliance]
 
 requires_ssh_keygen = pytest.mark.skipif(
     shutil.which("ssh-keygen") is None,

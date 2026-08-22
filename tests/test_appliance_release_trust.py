@@ -34,7 +34,7 @@ from tests.test_appliance_hardware_kit import (
 )
 from tests.test_appliance_release_signature import SigningKey
 
-pytestmark = [pytest.mark.integration, pytest.mark.system_build]
+pytestmark = [pytest.mark.integration, pytest.mark.system_build, pytest.mark.appliance]
 
 ROOT = Path(__file__).resolve().parents[1]
 RESULT = ROOT / "scripts/appliance_release_result.py"

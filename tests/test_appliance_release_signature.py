@@ -28,7 +28,7 @@ import pytest
 from appliance import commands, os_releases
 from tests.test_appliance_ab_artifact_format import build_upstream_archive
 
-pytestmark = [pytest.mark.integration, pytest.mark.simulation]
+pytestmark = [pytest.mark.integration, pytest.mark.simulation, pytest.mark.appliance]
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"

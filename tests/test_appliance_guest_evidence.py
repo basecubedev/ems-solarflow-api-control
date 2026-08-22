@@ -22,7 +22,7 @@ import subprocess
 
 import pytest
 
-pytestmark = [pytest.mark.contract, pytest.mark.simulation]
+pytestmark = [pytest.mark.contract, pytest.mark.simulation, pytest.mark.appliance]
 
 from pathlib import Path  # noqa: E402  (after pytestmark on purpose)
 

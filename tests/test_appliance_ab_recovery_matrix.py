@@ -39,7 +39,7 @@ from tests.helpers.appliance_deployment import (
     bootstrap_service,
 )
 
-pytestmark = [pytest.mark.integration, pytest.mark.simulation]
+pytestmark = [pytest.mark.integration, pytest.mark.simulation, pytest.mark.appliance]
 
 
 def unhealthy(url, timeout):

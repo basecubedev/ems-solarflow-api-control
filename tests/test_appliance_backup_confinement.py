@@ -29,7 +29,7 @@ from tests.helpers.appliance import (
     seed_backup_account,
 )
 
-pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.backup_restore]
+pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.backup_restore, pytest.mark.appliance]
 
 PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH1cQ0kFvL5gLIQ0Q0mV3P6pC5J2Xw5RIu5Hn3fJ0hVb backup\n"

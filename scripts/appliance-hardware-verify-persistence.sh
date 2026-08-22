@@ -39,8 +39,15 @@ if [ "$FORMAT" = json ]; then
     exit $?
 fi
 
-REPORT=$(ems-appliance ab verify-persistence --json 2>/dev/null) \
-    || not_run "the runtime could not report its persistence state" verify_unavailable
+# Status and payload are kept apart on purpose: `verify-persistence` exits
+# non-zero *because* the persistence is broken, which is this check finding what
+# it was written to find. Treating that as an unreachable runtime turned every
+# real failure into NOT RUN -- the one outcome that is neither a pass nor a
+# problem anybody looks at.
+REPORT=$(ems-appliance ab verify-persistence --json 2>/dev/null)
+if [ -z "$REPORT" ] || ! printf '%s' "$REPORT" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null; then
+    not_run "the runtime could not report its persistence state" verify_unavailable
+fi
 
 python3 - "$REPORT" <<'PY'
 import json

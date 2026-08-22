@@ -22,7 +22,7 @@ from tests.helpers.appliance import (
     build_test_services,
 )
 
-pytestmark = [pytest.mark.integration, pytest.mark.simulation]
+pytestmark = [pytest.mark.integration, pytest.mark.simulation, pytest.mark.appliance]
 
 PASSWORD = "appliance-secret-1"
 

@@ -23,7 +23,7 @@ import pytest
 from appliance import backup_ownership
 from tests.helpers.appliance_backup_account import BACKUP_USER, BackupAccountHarness
 
-pytestmark = [pytest.mark.contract, pytest.mark.simulation, pytest.mark.backup_restore]
+pytestmark = [pytest.mark.contract, pytest.mark.simulation, pytest.mark.backup_restore, pytest.mark.appliance]
 
 SHIPPED_SHELL = "/usr/sbin/nologin"
 SHIPPED_UID = 1500

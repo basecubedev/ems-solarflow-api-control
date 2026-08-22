@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = [pytest.mark.contract, pytest.mark.documentation]
+pytestmark = [pytest.mark.contract, pytest.mark.documentation, pytest.mark.appliance]
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / "docs" / "appliance"

@@ -22,7 +22,7 @@ from appliance.migration import (
 )
 from tests.helpers.appliance import appliance_paths
 
-pytestmark = [pytest.mark.unit, pytest.mark.simulation]
+pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.appliance]
 
 
 def legacy_installation(tmp_path):

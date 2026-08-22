@@ -21,7 +21,7 @@ from appliance import ab_inspect, ab_persistence
 from appliance.ab_inspect import FAIL, PASS, InactiveSlotInspector, InspectionError
 from appliance.commands import CommandResult, RecordingRunner
 
-pytestmark = [pytest.mark.unit, pytest.mark.simulation]
+pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.appliance]
 
 RELEASE = SimpleNamespace(
     release_version="1.5.0",

@@ -3,12 +3,12 @@
 #
 # Pull-request tiers. Each group runs independently and mirrors one CI job.
 #
-#   core admin mqtt power-control docker chromium-critical firefox-smoke
+#   core appliance admin mqtt power-control docker chromium-critical firefox-smoke
 #
-# The five groups are an exact partition: every collected test is owned by
+# The six groups are an exact partition: every collected test is owned by
 # exactly one of them. Functional markers stay overlapping descriptions of
 # behavior; only execution ownership is exclusive, resolved by the fixed
-# priority docker > power-control > mqtt > admin > core.
+# priority docker > power-control > mqtt > admin > appliance > core.
 # tests/test_test_classification.py proves both directions.
 # See docs/developer/testing.md.
 set -euo pipefail
@@ -22,7 +22,11 @@ group="${1:-}"
 case "$group" in
     core)
         run_pytest_tier "pr/core" -q \
-            -m "not admin and not mqtt and not power_control and not docker" "$@"
+            -m "not appliance and not admin and not mqtt and not power_control and not docker" "$@"
+        ;;
+    appliance)
+        run_pytest_tier "pr/appliance" -q \
+            -m "appliance and not admin and not mqtt and not power_control and not docker" "$@"
         ;;
     admin)
         run_pytest_tier "pr/admin" -q \
@@ -50,7 +54,7 @@ case "$group" in
             npx playwright test --project=firefox --grep "@smoke" "$@"
         ;;
     *)
-        printf 'usage: %s {core|admin|mqtt|power-control|docker|chromium-critical|firefox-smoke}\n' \
+        printf 'usage: %s {core|appliance|admin|mqtt|power-control|docker|chromium-critical|firefox-smoke}\n' \
             "$0" >&2
         exit 2
         ;;

@@ -25,7 +25,7 @@ import pytest
 
 from appliance import build_authority
 
-pytestmark = [pytest.mark.contract, pytest.mark.simulation]
+pytestmark = [pytest.mark.contract, pytest.mark.simulation, pytest.mark.appliance]
 
 ROOT = Path(__file__).resolve().parents[1]
 CAPTURE = ROOT / "scripts/appliance-capture-builder-environment.sh"

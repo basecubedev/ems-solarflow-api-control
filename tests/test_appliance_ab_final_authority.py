@@ -59,7 +59,7 @@ from tests.helpers.appliance_deployment import (
     trial_health,
 )
 
-pytestmark = [pytest.mark.integration, pytest.mark.simulation]
+pytestmark = [pytest.mark.integration, pytest.mark.simulation, pytest.mark.appliance]
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
@@ -1167,10 +1167,11 @@ def _project_repo(tmp_path):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text, encoding="utf-8")
     subprocess.run(["git", "-C", str(project), "init", "-q"], check=True)
+    for key, value in (("user.email", "t@e"), ("user.name", "t")):
+        subprocess.run(["git", "-C", str(project), "config", key, value], check=True)
     subprocess.run(["git", "-C", str(project), "add", "-A"], check=True)
     subprocess.run(
-        ["git", "-C", str(project), "-c", "user.email=t@e", "-c", "user.name=t",
-         "commit", "-qm", "initial"],
+        ["git", "-C", str(project), "commit", "-qm", "initial"],
         check=True,
         capture_output=True,
     )

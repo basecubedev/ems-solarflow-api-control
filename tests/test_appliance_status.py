@@ -23,7 +23,7 @@ from appliance.status import (
 from appliance.support_archive import EXCLUDED_BY_DEFAULT
 from tests.helpers.appliance import ADMIN_CONTAINER, ADMIN_REPOSITORY, build_test_services
 
-pytestmark = [pytest.mark.unit, pytest.mark.simulation]
+pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.appliance]
 
 OS_RELEASE = """PRETTY_NAME="Debian GNU/Linux 12 (bookworm)"
 NAME="Raspberry Pi OS"

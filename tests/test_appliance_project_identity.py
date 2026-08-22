@@ -18,7 +18,7 @@ import pytest
 from admin.container_names import DEFAULT_EMS_CONTAINER
 from appliance import config as appliance_config
 
-pytestmark = [pytest.mark.unit, pytest.mark.simulation]
+pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.appliance]
 
 ROOT = Path(__file__).resolve().parents[1]
 SHIPPED_CONFIG = ROOT / "packaging" / "appliance" / "config" / "appliance.conf"

@@ -35,7 +35,7 @@ from appliance.host_identity import (
     public_key_name,
 )
 
-pytestmark = [pytest.mark.unit, pytest.mark.simulation]
+pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.appliance]
 
 ROOT = Path(__file__).resolve().parents[1]
 MACHINE_ID = "0123456789abcdef0123456789abcdef"

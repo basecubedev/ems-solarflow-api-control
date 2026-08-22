@@ -9,6 +9,11 @@ const BASE_URL = `http://127.0.0.1:${PORT}`;
 
 export default defineConfig({
   testDir: "./tests/e2e-appliance",
+  // The docs captures write into the tracked PNGs under
+  // docs/assets/screenshots/appliance/, so a default run -- CI, and the RC gate
+  // that ends in a clean-tree check -- must not collect them. Regenerating is a
+  // deliberate act that says so.
+  testIgnore: process.env.EMS_APPLIANCE_CAPTURE_DOCS ? [] : ["capture-docs.spec.ts"],
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,

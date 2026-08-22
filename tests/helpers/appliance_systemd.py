@@ -12,6 +12,7 @@ systemd instance — units are started by systemd, not simulated.
 """
 
 import json
+import os
 import shlex
 import shutil
 import subprocess
@@ -52,7 +53,38 @@ HTTP_CLIENT = Path(__file__).with_name("appliance_http_client.py")
 
 
 class SystemdUnavailable(RuntimeError):
-    """The environment cannot host a real systemd instance."""
+    """A prerequisite this host does not have. Legitimately a skip."""
+
+
+class SystemdTierFailure(RuntimeError):
+    """This tier failed. Never a skip.
+
+    A container that could not be started, could not reach a package archive or
+    never finished booting is not the environment lacking something -- it is the
+    tier not running. Deliberately not a subclass of SystemdUnavailable, so the
+    call sites that skip on a prerequisite cannot swallow it by accident.
+    """
+
+
+def require_container_tier():
+    """Refuse to skip where the caller declared the tier load-bearing.
+
+    Set EMS_REQUIRE_APPLIANCE_CONTAINER_TESTS=1 in any job whose green result is
+    meant to mean these checks ran.
+    """
+
+    return os.environ.get("EMS_REQUIRE_APPLIANCE_CONTAINER_TESTS", "") not in ("", "0")
+
+
+def unavailable(message):
+    """Raise the right one for a missing prerequisite."""
+
+    if require_container_tier():
+        raise SystemdTierFailure(
+            f"{message} -- but EMS_REQUIRE_APPLIANCE_CONTAINER_TESTS is set, "
+            "so this tier may not be skipped here"
+        )
+    raise SystemdUnavailable(message)
 
 
 def docker_available():
@@ -133,7 +165,7 @@ class SystemdContainer:
 
     def start(self):
         if not docker_available():
-            raise SystemdUnavailable("docker is not available")
+            unavailable("docker is not available")
         # The failure is recorded rather than swallowed: without these packages
         # the container boots into something that is not an appliance host, and
         # every check above it then fails for reasons that never name apt.
@@ -157,7 +189,9 @@ class SystemdContainer:
             timeout=300,
         )
         if result.returncode != 0:
-            raise SystemdUnavailable(f"cannot start a systemd container: {result.stderr.strip()}")
+            raise SystemdTierFailure(
+                f"cannot start a systemd container: {result.stderr.strip()}"
+            )
         self.started = True
         self._await_boot()
         self._require_prerequisites()
@@ -167,7 +201,7 @@ class SystemdContainer:
         marker = self.run(["test", "-e", PREREQUISITE_MARKER], timeout=30)
         if marker.returncode == 0:
             self.stop()
-            raise SystemdUnavailable(
+            raise SystemdTierFailure(
                 "the container has no package archive: apt could not install "
                 f"{', '.join(REQUIRED_PACKAGES)}. This tier needs network access to "
                 "Debian, and without it the backup and SFTP checks below verify nothing"
@@ -181,7 +215,7 @@ class SystemdContainer:
                 return
             subprocess.run(["sleep", "3"], check=False)
             deadline -= 3
-        raise SystemdUnavailable("systemd did not finish booting in the container")
+        raise SystemdTierFailure("systemd did not finish booting in the container")
 
     def stop(self):
         if not self.started:
@@ -374,11 +408,11 @@ class SystemdContainer:
             timeout=900,
         )
         if result.returncode != 0:
-            raise SystemdUnavailable("openssh-server is not installable in this guest")
+            raise SystemdTierFailure("openssh-server is not installable in this guest")
 
         home = self.shell(f"getent passwd {user} | cut -d: -f6").stdout.strip()
         if not home:
-            raise SystemdUnavailable(f"the {user} account has no home directory")
+            raise SystemdTierFailure(f"the {user} account has no home directory")
         self.shell(
             f"rm -f {key_path} {key_path}.pub; "
             f"ssh-keygen -t ed25519 -N '' -C appliance-test -f {key_path} >/dev/null 2>&1; "
@@ -399,7 +433,7 @@ class SystemdContainer:
             if self.shell("ss -ltn | grep -q ':22 '").returncode == 0:
                 return True
             self.run(["sleep", "1"], timeout=30)
-        raise SystemdUnavailable(f"sshd did not start:\n{self.journal('ssh.service')}")
+        raise SystemdTierFailure(f"sshd did not start:\n{self.journal('ssh.service')}")
 
     def attribute_backup_key(self, home):
         """Record the seeded key the way the appliance records its own.
@@ -518,7 +552,7 @@ class SystemdContainer:
             if self.port_listening(port):
                 return url
             self.run(["sleep", "1"], timeout=30)
-        raise SystemdUnavailable(
+        raise SystemdTierFailure(
             f"the release index fixture did not start:\n{self.read_file('/tmp/release-index.log')}"
         )
 
@@ -622,7 +656,7 @@ class OfflineRootContainer(SystemdContainer):
 
     def start(self):
         if not docker_available():
-            raise SystemdUnavailable("docker is not available")
+            unavailable("docker is not available")
         result = subprocess.run(
             ["docker", "run", "-d", "--name", self.name, self.image, "sleep", "infinity"],
             capture_output=True,
@@ -631,7 +665,7 @@ class OfflineRootContainer(SystemdContainer):
             timeout=300,
         )
         if result.returncode != 0:
-            raise SystemdUnavailable(f"cannot start an offline guest: {result.stderr.strip()}")
+            raise SystemdTierFailure(f"cannot start an offline guest: {result.stderr.strip()}")
         self.started = True
         prepared = self.shell(
             "apt-get update -qq >/dev/null 2>&1; "
@@ -642,5 +676,5 @@ class OfflineRootContainer(SystemdContainer):
         )
         if prepared.returncode != 0:
             self.stop()
-            raise SystemdUnavailable(f"cannot prepare an offline guest: {prepared.stderr}")
+            raise SystemdTierFailure(f"cannot prepare an offline guest: {prepared.stderr}")
         return self

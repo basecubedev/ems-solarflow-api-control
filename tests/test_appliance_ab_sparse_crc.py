@@ -29,7 +29,7 @@ from appliance import sparse
 from appliance.sparse import SparseError
 from tests.helpers import android_sparse
 
-pytestmark = [pytest.mark.unit, pytest.mark.simulation]
+pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.appliance]
 
 BLOCK = 4096
 
