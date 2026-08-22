@@ -45,6 +45,7 @@ KIND_SSID = "ssid"
 KIND_WIFI_PASSPHRASE = "wifi_passphrase"
 KIND_HOSTNAME = "hostname"
 KIND_TIMEZONE = "timezone"
+KIND_SECRET = "secret"
 KIND_AUDIT_EVENT = "audit_event"
 KIND_AUDIT_RESULT = "audit_result"
 KIND_AUDIT_REASON = "audit_reason"
@@ -121,6 +122,15 @@ READ_ONLY_OPERATIONS = (
     _spec("ssh.get", summary="SSH service state and authorized keys"),
     _spec("backup.get", summary="Backup account and export paths"),
     _spec("operations.list", summary="Recent appliance operations"),
+    # The appliance password lives in the file the Admin console and the
+    # dashboard share, mode 0600 in the EMS deployment root. The unprivileged
+    # web process cannot read it, so it asks -- the hash never leaves the agent.
+    _spec("auth.state", summary="Whether a password is set, and its generation"),
+    _spec(
+        "auth.verify",
+        fields=(Field("password", KIND_SECRET),),
+        summary="Check a password against the shared store",
+    ),
     _spec(
         "support.read_archive",
         fields=(Field("operation_id", KIND_OPERATION_ID),),
@@ -202,6 +212,25 @@ MUTATING_OPERATIONS = (
         ),
         summary="Plan a WLAN change with automatic revert",
         timeout_seconds=WIFI_OPERATION_TIMEOUT,
+    ),
+    _spec(
+        "auth.create",
+        mutating=True,
+        fields=(
+            Field("password", KIND_SECRET),
+            Field("confirmation", KIND_SECRET, required=False, default=""),
+        ),
+        summary="Set the first appliance password",
+    ),
+    _spec(
+        "auth.change",
+        mutating=True,
+        fields=(
+            Field("current_password", KIND_SECRET),
+            Field("password", KIND_SECRET),
+            Field("confirmation", KIND_SECRET, required=False, default=""),
+        ),
+        summary="Change the shared password",
     ),
     _spec(
         "system.timezone.plan",
@@ -396,6 +425,8 @@ def _coerce(field, value, context):
         return validation.validate_hostname(value)
     if kind == KIND_TIMEZONE:
         return validation.validate_timezone(value)
+    if kind == KIND_SECRET:
+        return validation.validate_secret(value)
     if kind == KIND_AUDIT_EVENT:
         return validation.validate_web_audit_event(value)
     if kind == KIND_AUDIT_RESULT:

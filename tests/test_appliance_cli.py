@@ -117,10 +117,13 @@ def test_password_reset_writes_a_new_password_and_rotates_the_generation(applian
     assert "invalidated" in capsys.readouterr().out
 
 
-def test_password_reset_refuses_a_short_password(appliance_env, capsys):
-    exit_code = command_password_reset(Args(password="short", json=False))
-    assert exit_code == 1
-    assert "at least" in capsys.readouterr().err
+def test_password_reset_accepts_any_non_empty_password(appliance_env):
+    """No minimum length: the same password opens the Admin console and the
+    dashboard, which have never imposed one, and a minimum here would refuse to
+    change a password set from the EMS side."""
+
+    assert command_password_reset(Args(password="short", json=False)) == 0
+
 
 
 def test_password_reset_creates_the_state_directory_when_missing(tmp_path, monkeypatch):
@@ -133,7 +136,8 @@ def test_password_reset_creates_the_state_directory_when_missing(tmp_path, monke
     ):
         monkeypatch.setenv(variable, str(tmp_path / name))
     assert command_password_reset(Args(password="a-fresh-appliance-secret", json=False)) == 0
-    assert (tmp_path / "state" / "web" / "auth" / "auth.json").is_file()
+    # The store is the one the Admin console and the dashboard share.
+    assert (tmp_path / "opt" / "config" / "dashboard-auth.json").is_file()
 
 
 def test_allowlist_command_prints_the_agent_operations(appliance_env, capsys):

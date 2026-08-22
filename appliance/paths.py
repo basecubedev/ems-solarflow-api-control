@@ -268,12 +268,17 @@ class AppliancePaths:
         return self.state_dir / "web"
 
     @property
-    def web_auth_dir(self):
-        return self.web_state_dir / "auth"
-
-    @property
     def auth_file(self):
-        return self.web_auth_dir / "auth.json"
+        """The password the appliance, the Admin console and the dashboard share.
+
+        One secret for one local box: two stores produced two weak passwords
+        rather than one strong one, and `emsctl dashboard set-password` only
+        ever changed half of it. Mode 0600 in the EMS deployment root, which is
+        a shared path, so it survives a slot switch -- and the unprivileged web
+        process cannot read it, which is why it asks the agent.
+        """
+
+        return self.install_root / "config" / "dashboard-auth.json"
 
     @property
     def web_sessions_dir(self):
@@ -434,7 +439,6 @@ class AppliancePaths:
     def web_directories(self):
         return (
             self.web_state_dir,
-            self.web_auth_dir,
             self.web_sessions_dir,
             self.web_preferences_dir,
             self.web_log_dir,
@@ -526,7 +530,7 @@ def directory_modes(paths, *, role="all"):
     """The ``(directory, mode)`` pairs this role is responsible for."""
 
     targets = [(paths.state_dir, SHARED_ROOT_MODE), (paths.log_dir, SHARED_ROOT_MODE)]
-    private = (paths.web_auth_dir, paths.web_sessions_dir)
+    private = (paths.web_sessions_dir,)
     if role in (ROLE_WEB, "all"):
         for directory in paths.web_directories():
             targets.append(

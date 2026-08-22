@@ -135,6 +135,53 @@ reaching the agent socket as an allowed uid is an appliance-takeover capability.
 The web tier is therefore high-value and is hardened as such -- it is not a
 low-privilege front end that happens to sit in front of the real boundary.
 
+## One password, and what that costs
+
+The appliance manager, the Admin console and the EMS dashboard share one
+password, in the file Admin and the dashboard already shared:
+`<install_root>/config/dashboard-auth.json`. Setting it in the appliance UI on
+first boot sets it for all three; `emsctl dashboard set-password` and
+`ems-appliance password-reset` both change all three.
+
+This is a deliberate decision, not an accident of implementation. The appliance
+is a local device on a private network, and two passwords reliably produce two
+weak ones rather than one strong one — plus a `set-password` that silently
+changed only half of the system.
+
+**What it costs.** The Admin console sees the plaintext at every login. If that
+container is compromised, the attacker holds the password that also opens the
+appliance manager, and through it the host agent — which installs packages as
+root, writes OS images to block devices and reboots. Sharing the secret means
+accepting that a compromise of the application tier reaches the host tier. On a
+box you own, on your own network, that trade is reasonable; it would not be on a
+multi-tenant or internet-facing host.
+
+**What is not shared.** Only the secret. The appliance keeps its own sessions,
+its own rate limiting and its own audit trail, and the unprivileged web process
+never reads the file: it asks the agent, so the hash does not leave the
+privileged side. The file belongs to the identity the EMS containers run as,
+because they have to read it too.
+
+**Without the agent, the appliance cannot authenticate at all.** The file is
+mode 0600 and belongs to the deployment: to the identity the EMS containers run
+as once Admin has installed, and to root before that, when the deployment root
+is still root-owned and nothing has been adopted. The web tier runs as
+`ems-appliance-web`, a third account that owns it in neither case, so the
+unprivileged web process has no way to check a password on its own. Before the
+secret was shared the web account owned its own password file and could sign an
+operator in while the agent was down; that availability is gone, and it is the
+second thing this trade costs. It is accepted because an appliance whose agent is unreachable cannot perform a single
+privileged action anyway — but it is never disguised. Login, first-time setup
+and password change all answer `503 agent_unavailable` and say the agent could
+not be reached, never `401` and "the password is not correct": an operator must
+not be sent hunting for a secret that is in fact correct, and a transport
+failure must not spend the rate limiter that would then lock them out once the
+agent returns.
+
+**A missing file is a refusal, not an opening.** Admin and the dashboard answer
+`auth_not_configured`; the appliance offers first-time setup. A host agent that
+opened instead would be the worst of the three to get that wrong.
+
 ## What the agent accepts
 
 Every request names an operation from `appliance/protocol.py` and carries typed
@@ -175,9 +222,9 @@ cannot regress silently.
 | Control | Implementation |
 |---|---|
 | Password hashing | PBKDF2-SHA256, 600 000 iterations, 32-byte salt |
-| Minimum length | 12 characters |
+| Minimum length | none — see "One password, and what that costs" |
 | Default password | none — the first start must create one |
-| Independence | separate from the EMS Admin password and store |
+| Independence | none — one secret for the Appliance Manager, the Admin console and the dashboard, in one shared store |
 | Transport | **Plain HTTP on every interface.** The manager terminates no TLS and has no certificate; anyone who can reach the port sees the login page |
 | Session cookie | `HttpOnly`, `SameSite=Strict`, `Path=/`. The `Secure` attribute is set only when a reverse proxy in front of it terminates TLS — the appliance never does |
 | CSRF | `X-Appliance-CSRF` must match the session token on every mutation; a foreign `Origin` is refused |

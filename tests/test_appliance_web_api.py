@@ -14,8 +14,8 @@ import pytest
 
 from appliance.agent import AgentHandlers
 from appliance.agent_client import AgentUnavailableError, InProcessAgentClient
-from appliance.auth import MIN_PASSWORD_LENGTH, SESSION_COOKIE_NAME, AuthStore
-from appliance.web import ApplianceWebApp, ApplianceWebServer
+from appliance.auth import SESSION_COOKIE_NAME, AuthStore
+from appliance.web import AgentAuth, ApplianceWebApp, ApplianceWebServer
 from tests.helpers.appliance import (
     ADMIN_CONTAINER,
     ADMIN_REPOSITORY,
@@ -151,17 +151,25 @@ def test_first_password_creates_a_session(appliance):
     assert "SameSite=Strict" in headers["Set-Cookie"]
 
 
-def test_first_password_must_be_confirmed_and_long_enough(appliance):
+def test_first_password_must_be_confirmed_and_not_empty(appliance):
+    """One password opens the appliance, Admin and the dashboard, so one rule
+    holds for all three: the other two have always accepted any non-empty one,
+    and a stricter rule here would refuse to change a password set from there."""
+
     _, _, client = appliance
-    status, payload, _ = client.post("/api/session/setup", {"password": "short", "confirmation": "short"})
+    status, payload, _ = client.post("/api/session/setup", {"password": "", "confirmation": ""})
     assert status == 400
-    assert payload["error"] == "password_too_short"
-    assert MIN_PASSWORD_LENGTH >= 12
+    assert payload["error"] == "password_required"
+
+    status, payload, _ = client.post(
+        "/api/session/setup", {"password": "short", "confirmation": "short"}
+    )
+    assert status == 200, payload
 
     status, payload, _ = client.post(
         "/api/session/setup", {"password": PASSWORD, "confirmation": "different-one-here"}
     )
-    assert payload["error"] == "password_mismatch"
+    assert payload["error"] in ("password_mismatch", "password_already_configured")
 
 
 def test_setup_is_refused_once_a_password_exists(appliance):
@@ -798,3 +806,39 @@ def test_an_explicit_address_is_still_honoured():
         assert server.server_address[0] == "127.0.0.1"
     finally:
         server.server_close()
+
+
+def test_an_unreachable_agent_is_not_reported_as_a_wrong_password(appliance):
+    """The shared password lives root-owned in the deployment root, so the
+    unprivileged web process cannot check it without the agent. That is the
+    cost of one secret for all three interfaces, and it is accepted -- but it
+    must be stated. Answering 401 sends an operator hunting for a password that
+    is in fact correct, spends the rate limiter on a transport failure, and
+    hides the one fact that explains every other symptom on the page.
+    """
+
+    services, app, client = appliance
+    app.auth = AgentAuth(_OfflineAgent())
+
+    status, payload, _ = client.post("/api/session/login", {"password": PASSWORD})
+
+    assert status == 503, payload
+    assert payload["error"] == "agent_unavailable"
+    assert "not correct" not in payload["message"]
+
+
+def test_a_transport_failure_does_not_count_against_the_rate_limiter(appliance):
+    """An agent that flaps must not lock the operator out once it returns."""
+
+    services, app, client = appliance
+    app.auth = AgentAuth(_OfflineAgent())
+
+    for _ in range(8):
+        status, _, _ = client.post("/api/session/login", {"password": PASSWORD})
+        assert status == 503
+
+    app.auth = AuthStore(services.paths.auth_file, iterations=1000)
+    app.auth.create(PASSWORD, PASSWORD)
+    status, payload, _ = client.post("/api/session/login", {"password": PASSWORD})
+
+    assert status == 200, payload

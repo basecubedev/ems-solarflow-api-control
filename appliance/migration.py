@@ -16,6 +16,9 @@ from pathlib import Path
 
 OWNER_WEB = "web"
 OWNER_AGENT = "agent"
+# The shared password file is read from inside the EMS containers, so it belongs
+# to the identity they run as -- not to the web account and not to root.
+OWNER_DEPLOYMENT = "deployment"
 
 RESULT_MIGRATED = "migrated"
 RESULT_SKIPPED = "skipped"
@@ -24,6 +27,7 @@ RESULT_CONFLICT = "conflict"
 RESULT_REFUSED = "refused"
 RESULT_FAILED = "failed"
 
+DEPLOYMENT_USER = "ems-deploy"
 WEB_USER = "ems-appliance-web"
 APPLIANCE_GROUP = "ems-appliance"
 
@@ -120,7 +124,11 @@ def _ids(name, group):
 def _apply_ownership(path, owner, *, mode=None):
     """Set the final owner and mode; missing accounts are not an error."""
 
-    if owner == OWNER_WEB:
+    if owner == OWNER_DEPLOYMENT:
+        uid, gid = _ids(DEPLOYMENT_USER, DEPLOYMENT_USER)
+        directory_mode = DIRECTORY_MODE if mode is None else mode
+        file_mode = 0o600
+    elif owner == OWNER_WEB:
         uid, gid = _ids(WEB_USER, APPLIANCE_GROUP)
         directory_mode = DIRECTORY_MODE if mode is None else mode
         file_mode = FILE_MODE
@@ -288,7 +296,9 @@ def migration_plan(paths):
     """The legacy shared layout mapped onto its owner in the new split."""
 
     return (
-        (paths.legacy_auth_file, paths.auth_file, OWNER_WEB, PRIVATE_DIRECTORY_MODE),
+        # An appliance installed before the password became shared carries the
+        # old web-owned file; it moves to the store the Admin console reads.
+        (paths.legacy_auth_file, paths.auth_file, OWNER_DEPLOYMENT, DIRECTORY_MODE),
         (paths.legacy_state_file, paths.state_file, OWNER_WEB, DIRECTORY_MODE),
         (paths.legacy_operations_dir, paths.operations_dir, OWNER_AGENT, AGENT_DIRECTORY_MODE),
         (paths.legacy_known_good_dir, paths.known_good_dir, OWNER_AGENT, AGENT_DIRECTORY_MODE),
@@ -321,7 +331,7 @@ def migrate_state(paths, *, create_directories=True):
                 directory,
                 OWNER_WEB,
                 mode=PRIVATE_DIRECTORY_MODE
-                if directory in (paths.web_auth_dir, paths.web_sessions_dir)
+                if directory == paths.web_sessions_dir
                 else DIRECTORY_MODE,
             )
         for directory in paths.agent_directories():

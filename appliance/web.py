@@ -26,7 +26,6 @@ from appliance.auth import (
     CSRF_HEADER,
     SESSION_COOKIE_NAME,
     AuthError,
-    AuthStore,
     LoginRateLimiter,
     SessionStore,
 )
@@ -66,6 +65,106 @@ STATUS_FOR_CODE = {
 _OPERATION_ID = re.compile(r"^[0-9a-f]{32}$")
 
 
+class AgentAuth:
+    """The shared password store, reached the way the web process reaches
+    everything else privileged: through the agent.
+
+    The file is the one the Admin console and the dashboard share, mode 0600 in
+    the EMS deployment root, so this process cannot read it and does not try.
+    The hash never leaves the agent; only a verdict comes back.
+    """
+
+    def __init__(self, agent):
+        self.agent = agent
+        self._last_generation = ""
+
+    def _state(self):
+        try:
+            return self.agent.call("auth.state")
+        except (AgentUnavailableError, AgentCallError):
+            # A password store this cannot reach is not an absent one. Treating
+            # it as absent would offer first-time setup on a configured box.
+            return {"configured": True, "_unreachable": True}
+
+    def configured(self):
+        return bool(self._state().get("configured"))
+
+    def state_is_known(self):
+        """Whether the answer above was read or assumed.
+
+        configured() reports True for a store it cannot reach, so a configured
+        box is never offered first-time setup. That is the right refusal and the
+        wrong reason: callers that turn it into a message must be able to say
+        the state could not be determined rather than assert a password exists.
+        """
+
+        return not self._state().get("_unreachable")
+
+    def generation(self):
+        """The marker sessions are bound to.
+
+        A failed agent call must not answer this: an empty generation differs
+        from every live session's, so a single socket timeout would log out
+        every signed-in operator. The last known answer is kept instead, and a
+        state that was never read at all yields a value no session carries only
+        because none has been created yet.
+        """
+
+        state = self._state()
+        if state.get("_unreachable"):
+            return self._last_generation
+        self._last_generation = str(state.get("generation") or "")
+        return self._last_generation
+
+    def verify(self, password):
+        """A store this cannot reach has not said the password is wrong.
+
+        The shared secret is root-owned in the deployment root, so without the
+        agent the unprivileged web process cannot check it at all. That is the
+        accepted cost of one password for all three interfaces -- but returning
+        False here would report it as a wrong password: an operator hunting a
+        secret that is in fact correct, a rate limiter spent on a transport
+        failure, and the one fact that explains the whole page hidden.
+        """
+
+        try:
+            return bool(self.agent.call("auth.verify", password=password).get("ok"))
+        except AgentCallError:
+            return False
+        except AgentUnavailableError as exc:
+            raise AuthError("agent_unavailable", str(getattr(exc, "message", exc)))
+
+    def create(self, password, confirmation=None):
+        return self._mutate(
+            "auth.create", password=password, confirmation=confirmation or ""
+        )
+
+    def change(self, current_password, new_password, confirmation=None):
+        return self._mutate(
+            "auth.change",
+            current_password=current_password,
+            password=new_password,
+            confirmation=confirmation or "",
+        )
+
+    def _mutate(self, operation, **fields):
+        """A refused password is an answer, not a transport failure.
+
+        The callers handle AuthError, which is what a password that is too
+        short or a wrong current password used to be before this store moved
+        behind the agent. Letting AgentCallError out instead drops the
+        connection with no HTTP response at all -- on the one page a fresh
+        appliance offers.
+        """
+
+        try:
+            return self.agent.call(operation, **fields)
+        except AgentCallError as exc:
+            raise AuthError(exc.code, exc.message)
+        except AgentUnavailableError as exc:
+            raise AuthError("agent_unavailable", str(getattr(exc, "message", exc)))
+
+
 class ApplianceWebApp:
     """Routing, session handling and agent delegation."""
 
@@ -74,7 +173,7 @@ class ApplianceWebApp:
         self.paths = paths or resolve_paths()
         self.config = config or load_config(self.paths)
         self.agent = agent or AgentClient(self.paths.agent_socket)
-        self.auth = auth or AuthStore(self.paths.auth_file, time_fn=time_fn)
+        self.auth = auth or AgentAuth(self.agent)
         self.sessions = sessions or SessionStore(
             idle_timeout=self.config.session_timeout_seconds,
             absolute_max=self.config.session_absolute_max_seconds,
@@ -136,6 +235,10 @@ class ApplianceWebApp:
         recording an audit event is a round trip to the agent; holding the lock
         across either lets a handful of unauthenticated attempts make the login
         page unusable for the operator.
+
+        An attempt the agent could not judge is audited but never counted: the
+        password was never read, so it must not push an operator towards a
+        lockout that outlives the outage.
         """
 
         with self._lock:
@@ -153,7 +256,13 @@ class ApplianceWebApp:
                 f"too many failed attempts; try again in {retry_after} seconds",
             )
 
-        verified = self.auth.verify(password)
+        try:
+            verified = self.auth.verify(password)
+        except AuthError as exc:
+            self.audit.record(
+                "login.failure", source_ip=source_ip, result=RESULT_FAILURE, reason=exc.code
+            )
+            raise
 
         if not verified:
             with self._lock:
@@ -179,9 +288,9 @@ class ApplianceWebApp:
         )
 
     def create_first_password(self, password, confirmation, *, source_ip):
-        record = self.auth.create(password, confirmation)
+        self.auth.create(password, confirmation)
         self.audit.record("password.change", source_ip=source_ip, reason="first_password")
-        return self.sessions.create(record["generation"])
+        return self.sessions.create(self.auth.generation())
 
     def change_password(self, current, new_password, confirmation, *, source_ip):
         self.auth.change(current, new_password, confirmation)
@@ -431,6 +540,12 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
         return self._send(200, {"reset": "appliance"})
 
     def _setup_password(self, body):
+        if not self.app.auth.state_is_known():
+            return self._error(
+                503,
+                "agent_unavailable",
+                "the appliance agent is not reachable, so the password cannot be set",
+            )
         if self.app.auth.configured():
             return self._error(
                 409, "password_already_configured", "an appliance password already exists"
@@ -440,7 +555,7 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
                 body.get("password"), body.get("confirmation"), source_ip=self._client_ip()
             )
         except AuthError as exc:
-            return self._error(400, exc.code, exc.message)
+            return self._error(STATUS_FOR_CODE.get(exc.code, 400), exc.code, exc.message)
         return self._send(
             200,
             {
@@ -455,7 +570,9 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
         try:
             session = self.app.login(body.get("password"), source_ip=self._client_ip())
         except AuthError as exc:
-            status = 429 if exc.code == "login_rate_limited" else 401
+            status = 429 if exc.code == "login_rate_limited" else STATUS_FOR_CODE.get(
+                exc.code, 401
+            )
             return self._error(status, exc.code, exc.message)
         return self._send(
             200,
@@ -567,7 +684,7 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
                     source_ip=self._client_ip(),
                 )
             except AuthError as exc:
-                return self._error(400, exc.code, exc.message)
+                return self._error(STATUS_FOR_CODE.get(exc.code, 400), exc.code, exc.message)
             return self._send(
                 200,
                 {

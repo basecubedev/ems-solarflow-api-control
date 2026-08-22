@@ -74,7 +74,12 @@ def test_read_only_operations_never_take_the_mutation_lock():
 # must still succeed while an install is running.
 # Bookkeeping, not host mutation: neither writes anything a running operation
 # could conflict with, so neither may block on the mutation lock.
-LOCK_EXEMPT_MUTATIONS = frozenset({"audit.record_web_event", "ab.acknowledge"})
+# The lock serialises *host* mutations -- an image write, an apt run. Setting a
+# password is not one, and must not queue behind one: an operator who cannot set
+# their first password while an OS update runs is locked out of their own box.
+LOCK_EXEMPT_MUTATIONS = frozenset(
+    {"audit.record_web_event", "ab.acknowledge", "auth.create", "auth.change"}
+)
 
 
 def test_mutating_plan_operations_take_the_mutation_lock():
@@ -571,3 +576,31 @@ def test_no_operation_times_out_below_what_it_may_legitimately_spend():
         assert name in specs, name
         assert specs[name].timeout_seconds >= expected, name
         assert specs[name].timeout_seconds > protocol.DEFAULT_OPERATION_TIMEOUT, name
+
+
+def test_setting_a_password_never_queues_behind_a_host_mutation():
+    """An operator who cannot set their first password while an OS update runs
+    is locked out of the only interface they have."""
+
+    from appliance import protocol
+
+    for name in ("auth.create", "auth.change"):
+        spec = protocol.OPERATIONS[name]
+        assert spec.mutating is True
+        assert spec.takes_lock is False, name
+
+
+def test_a_password_never_travels_as_an_ordinary_argument():
+    """It crosses the agent socket, so it has to be a kind the validator knows
+    not to alter -- stripping whitespace would change a password into one the
+    operator cannot type back."""
+
+    from appliance import protocol
+    from appliance.validation import validate_secret
+
+    for name in ("auth.verify", "auth.create", "auth.change"):
+        for field in protocol.OPERATIONS[name].fields:
+            if "password" in field.name or field.name == "confirmation":
+                assert field.kind == protocol.KIND_SECRET, (name, field.name)
+
+    assert validate_secret("  padded  ") == "  padded  "

@@ -35,6 +35,11 @@ sudo ems-appliance rollback-manager
 
 The web process cannot reach `/run/ems-appliance-manager/agent.sock`.
 
+**Signing in fails with this too, and that is not a wrong password.** The shared
+password is checked by the agent, so while the socket is unreachable the login
+page answers `503 agent_unavailable` rather than refusing the password. Restart
+the agent; nothing about the password needs changing.
+
 ```bash
 systemctl status ems-appliance-agent.service
 systemctl restart ems-appliance-agent.service
@@ -48,8 +53,10 @@ in the `ems-appliance` group.
 
 Authentication worked, but the appliance could not hand the event to the agent,
 so it is **not** in `/var/log/ems-appliance-manager/audit/audit.log`. The banner
-names how many events were lost. Authentication is a recovery path and keeps
-working; the appliance simply refuses to claim an entry it did not write.
+names how many events were lost; the appliance refuses to claim an entry it did
+not write. You are signed in because the agent answered at login — if it stops
+answering afterwards, the next sign-in will fail with `agent_unavailable` until
+it is back.
 
 ```bash
 systemctl status ems-appliance-agent.service

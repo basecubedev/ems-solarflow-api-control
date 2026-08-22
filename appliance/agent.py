@@ -25,6 +25,7 @@ from appliance import (
     os_update,
     packages,
     ssh_service,
+    auth,
     support_archive,
     timezone_config,
     validation,
@@ -114,6 +115,7 @@ SERVICE_ERRORS = (
     OperationError,
     support_archive.SupportArchiveError,
     timezone_config.TimezoneError,
+    auth.AuthError,
 )
 
 
@@ -133,6 +135,21 @@ class AgentHandlers:
             return self._plan(spec, args, actor=actor, source_ip=source_ip)
         if spec.name == "operations.execute":
             return self._execute_operation(args, actor=actor, source_ip=source_ip)
+        if spec.name == "auth.state":
+            store = self.services.auth
+            return {"configured": store.configured(), "generation": store.generation()}
+        if spec.name == "auth.verify":
+            return {"ok": bool(self.services.auth.verify(args["password"]))}
+        if spec.name == "auth.create":
+            self.services.auth.create(args["password"], args.get("confirmation") or None)
+            return {"generation": self.services.auth.generation()}
+        if spec.name == "auth.change":
+            self.services.auth.change(
+                args["current_password"],
+                args["password"],
+                args.get("confirmation") or None,
+            )
+            return {"generation": self.services.auth.generation()}
         if spec.name == "support.read_archive":
             return self.services.support.read(args["operation_id"])
         if spec.name == "operations.cancel":

@@ -22,13 +22,25 @@ test.describe("authentication @smoke", () => {
     await expect(page.locator("body")).not.toContainText("Raspberry Pi 5");
   });
 
-  test("a short password is refused with a visible reason", async ({ page }) => {
+  test("a mismatched confirmation is refused with a visible reason", async ({ page }) => {
     await page.goto("/");
-    await page.locator("#gate-password").fill("short");
-    await page.locator("#gate-confirm").fill("short");
+    await page.locator("#gate-password").fill("one-secret");
+    await page.locator("#gate-confirm").fill("another-secret");
     await page.locator("#gate-submit").click();
     await expect(page.locator("#gate-error")).toBeVisible();
-    await expect(page.locator("#gate-error")).toContainText("at least");
+    await expect(page.locator("#gate-error")).toContainText("do not match");
+    await expect(page.locator("#shell")).toBeHidden();
+  });
+
+  test("a short password is accepted, because the length is the operator's", async ({ page }) => {
+    await page.goto("/");
+    await page.locator("#gate-password").fill("x");
+    await page.locator("#gate-confirm").fill("x");
+    await Promise.all([
+      page.waitForResponse((response) => response.url().includes("/api/session/setup")),
+      page.locator("#gate-submit").click(),
+    ]);
+    await expect(page.locator("#shell")).toBeVisible();
   });
 
   test("sign in, reload and sign out", async ({ page }) => {
@@ -553,7 +565,10 @@ test.describe("settings", () => {
   test("host settings are read-only and the password can be changed", async ({ page }) => {
     await signIn(page);
     await openView(page, "settings");
-    await expect(page.locator('[data-test="settings-appliance"]')).toContainText("8080");
+    const settings = await (await page.request.get("/api/settings")).json();
+    await expect(page.locator('[data-test="settings-appliance"]')).toContainText(
+      String(settings.web_port),
+    );
     await expect(page.locator('[data-test="settings-updates"]')).toContainText(
       "ghcr.io/basecubedev/ems-solarflow-admin",
     );

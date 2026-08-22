@@ -485,9 +485,9 @@ devices (usually under *DHCP*, *Clients* or *Network*; the entry is named
 
 The first start requires:
 
-1. **Create an Appliance Manager password.** There is no default password. It is
-   independent from the EMS Admin password, so you can still sign in when the
-   EMS install root is unreadable.
+1. **Create a password.** There is no default one. The same password opens the
+   Appliance Manager, the Admin console and the dashboard, and changing it from
+   any of them changes it for all three.
 2. **Confirm the hostname** (Network section).
 3. **Confirm the timezone** (Overview → system time).
 4. **Review the network state** (Network section).
@@ -496,8 +496,11 @@ The first start requires:
 Before authentication the interface exposes nothing but the login page and
 whether a password exists yet.
 
-Password rules: at least 12 characters, hashed with PBKDF2-SHA256
-(600 000 iterations). Sessions use a `HttpOnly`, `SameSite=Strict` cookie, an
+Password rules: any non-empty password, hashed with PBKDF2-SHA256
+(600 000 iterations). There is no minimum length: the same password opens the
+Admin console and the dashboard, which have never imposed one, and how strong it
+is, is the operator's decision about their own device. Sessions use a
+`HttpOnly`, `SameSite=Strict` cookie, an
 idle timeout, an absolute maximum lifetime, CSRF validation on every mutation
 and login rate limiting.
 

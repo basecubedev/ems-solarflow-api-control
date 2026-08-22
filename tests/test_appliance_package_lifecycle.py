@@ -20,6 +20,7 @@ import pytest
 
 from tests.helpers.appliance_systemd import (
     AGENT_UNIT,
+    INSTALL_ROOT,
     LOG_DIR,
     SOCKET_PATH,
     STATE_DIR,
@@ -184,17 +185,19 @@ def test_broken_state_ownership_fails_verification(host):
 def test_a_migration_conflict_is_reported_without_failing_the_install(host, package):
     """Both copies are preserved and the operator decides; that is not fatal."""
 
+    shared = f"{INSTALL_ROOT}/config/dashboard-auth.json"
     host.shell(
+        f"mkdir -p {INSTALL_ROOT}/config && "
         f"printf '{{\"generation\": \"legacy\"}}' > {STATE_DIR}/auth.json && "
-        f"printf '{{\"generation\": \"current\"}}' > {STATE_DIR}/web/auth/auth.json",
+        f"printf '{{\"generation\": \"current\"}}' > {shared}",
         timeout=120,
     )
     result = host.install_package(package)
 
     assert result.returncode == 0, result.stdout
-    preserved = host.shell(f"ls {STATE_DIR}/web/auth", timeout=60).stdout
-    assert "auth.json.migrated-conflict" in preserved, preserved
-    assert "current" in host.read_file(f"{STATE_DIR}/web/auth/auth.json")
+    preserved = host.shell(f"ls {INSTALL_ROOT}/config", timeout=60).stdout
+    assert "dashboard-auth.json.migrated-conflict" in preserved, preserved
+    assert "current" in host.read_file(shared)
     assert host.shell("/usr/bin/ems-appliance verify-install").returncode == 0
 
 
@@ -241,7 +244,7 @@ def test_an_offline_install_succeeds_without_starting_anything(offline, package)
 
 def test_an_offline_install_still_builds_the_complete_layout(offline):
     for directory in (
-        f"{STATE_DIR}/web/auth",
+        f"{STATE_DIR}/web/sessions",
         f"{STATE_DIR}/agent/operations",
         f"{STATE_DIR}/agent/known-good",
         f"{LOG_DIR}/agent",
@@ -252,6 +255,10 @@ def test_an_offline_install_still_builds_the_complete_layout(offline):
     assert offline.stat(f"{STATE_DIR}/agent")["owner"] == "root"
     assert offline.stat(f"{STATE_DIR}/agent")["mode"] == "700"
     assert offline.stat(f"{STATE_DIR}/web")["owner"] == WEB_USER
+    assert offline.stat(f"{STATE_DIR}/web/auth") is None, (
+        "the web account owns no password store; the shared secret lives in the "
+        "EMS deployment root"
+    )
 
 
 def test_an_offline_install_enables_the_units_for_the_first_boot(offline):

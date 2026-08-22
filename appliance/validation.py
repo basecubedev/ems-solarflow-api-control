@@ -260,6 +260,30 @@ def validate_hostname(value):
     return lowered
 
 
+MAX_PASSWORD_LENGTH = 1024
+
+
+def validate_secret(value):
+    """A password on its way to the agent: bounded, but never altered.
+
+    Deliberately not _require_text: that strips surrounding whitespace, which
+    would silently change a password into one the operator cannot type back.
+    Length is bounded so a request cannot become a denial of service against
+    600 000 PBKDF2 rounds; everything else about it is the auth store's
+    business.
+    """
+
+    if not isinstance(value, str):
+        raise ValidationError("invalid_password", "value must be a string")
+    if len(value) > MAX_PASSWORD_LENGTH:
+        raise ValidationError(
+            "invalid_password", f"value exceeds {MAX_PASSWORD_LENGTH} characters"
+        )
+    if "\x00" in value:
+        raise ValidationError("invalid_password", "value must not contain a NUL byte")
+    return value
+
+
 def validate_timezone(value):
     """An IANA zone name that the host actually carries.
 

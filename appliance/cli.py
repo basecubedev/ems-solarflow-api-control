@@ -144,8 +144,19 @@ def command_repair(args):
 def command_password_reset(args):
     paths = resolve_paths()
     ensure_directories(paths)
-    store = AuthStore(paths.auth_file)
-    if os.geteuid() != 0 and not os.access(str(paths.auth_file.parent), os.W_OK):
+    from appliance.auth import deployment_owner
+
+    store = AuthStore(paths.auth_file, owner=deployment_owner(paths.install_root))
+    # The store lives in the EMS deployment root now. Its parent may not exist
+    # yet on a box where nothing has been deployed, so writability of a
+    # directory is not the question -- being allowed to write there is.
+    parent = paths.auth_file.parent
+    try:
+        parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    writable = parent.is_dir() and os.access(str(parent), os.W_OK)
+    if os.geteuid() != 0 and not writable:
         print("error: run this command as root", file=sys.stderr)
         return EXIT_ERROR
 
@@ -158,7 +169,6 @@ def command_password_reset(args):
     except AuthError as exc:
         print(f"error: {exc.message}", file=sys.stderr)
         return EXIT_ERROR
-    _chown_web_user(paths)
     _record_password_reset(paths)
     print("appliance password updated; all existing sessions were invalidated")
     return EXIT_OK
@@ -174,18 +184,6 @@ def _record_password_reset(paths):
     except OSError:
         print("warning: the password reset could not be written to the audit log", file=sys.stderr)
 
-
-def _chown_web_user(paths):
-    import pwd
-
-    try:
-        entry = pwd.getpwnam("ems-appliance-web")
-    except KeyError:
-        return
-    try:
-        os.chown(paths.auth_file, entry.pw_uid, entry.pw_gid)
-    except OSError:
-        pass
 
 
 def command_operations(args):

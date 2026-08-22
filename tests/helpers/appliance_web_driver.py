@@ -15,6 +15,7 @@ import urllib.error
 import urllib.request
 
 from appliance.agent_client import AgentClient, AgentUnavailableError
+from appliance.auth import AuthStore
 from appliance.config import load_config
 from appliance.paths import ensure_directories, resolve_paths
 from appliance.web import ApplianceWebApp, ApplianceWebServer
@@ -27,11 +28,23 @@ REPORT_MARKER = "APPLIANCE_REPORT:"
 
 
 class ScriptedAgent:
-    """Stands in for the agent socket and records every typed call it receives."""
+    """Stands in for the agent socket and records every typed call it receives.
 
-    def __init__(self, *, reachable=True):
+    The four auth operations are answered from a real AuthStore, because the
+    shared password moved behind this boundary: the web tier no longer reads
+    the file at all, so a stub that only records calls would make every login
+    fail for a reason that has nothing to do with what is being tested. The
+    store sits on a web-owned path -- the real one is root-owned in the
+    deployment root, which this process must not be able to write, and proving
+    that is the live-agent scenario's job.
+    """
+
+    def __init__(self, *, reachable=True, auth_path=None):
         self.reachable = reachable
         self.calls = []
+        paths = resolve_paths()
+        self.auth_path = auth_path or (paths.web_state_dir / "scripted-auth.json")
+        self.auth = AuthStore(self.auth_path, iterations=1000)
 
     def call(self, operation, *, actor="", source_ip="", timeout=None, **fields):
         entry = {"operation": operation, "actor": actor, "source_ip": source_ip}
@@ -39,6 +52,25 @@ class ScriptedAgent:
         self.calls.append(entry)
         if not self.reachable:
             raise AgentUnavailableError("the appliance agent is not reachable")
+        return self._auth(operation, fields)
+
+    def _auth(self, operation, fields):
+        """Mirrors appliance/agent.py, which is the only other implementation."""
+
+        if operation == "auth.state":
+            return {"configured": self.auth.configured(), "generation": self.auth.generation()}
+        if operation == "auth.verify":
+            return {"ok": bool(self.auth.verify(fields["password"]))}
+        if operation == "auth.create":
+            self.auth.create(fields["password"], fields.get("confirmation") or None)
+            return {"generation": self.auth.generation()}
+        if operation == "auth.change":
+            self.auth.change(
+                fields["current_password"],
+                fields["password"],
+                fields.get("confirmation") or None,
+            )
+            return {"generation": self.auth.generation()}
         return {"recorded": True}
 
     def available(self):
@@ -115,7 +147,7 @@ def authentication_scenario(agent):
     try:
         report["setup"] = client.request("POST", "/api/session/setup",
                                          {"password": PASSWORD, "confirmation": PASSWORD})
-        report["auth_file_exists"] = app.paths.auth_file.is_file()
+        report["auth_file_exists"] = getattr(agent, "auth_path", app.paths.auth_file).is_file()
         report["session_after_setup"] = client.request("GET", "/api/session")
 
         report["logout"] = client.request("POST", "/api/session/logout")

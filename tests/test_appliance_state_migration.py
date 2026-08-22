@@ -70,7 +70,7 @@ def test_migration_creates_the_split_layout(tmp_path):
     paths = appliance_paths(tmp_path)
     migrate_state(paths)
 
-    for directory in (paths.web_auth_dir, paths.web_sessions_dir, paths.web_preferences_dir):
+    for directory in (paths.web_sessions_dir, paths.web_preferences_dir):
         assert directory.is_dir(), directory
     for directory in (paths.operations_dir, paths.known_good_dir, paths.compose_backup_dir):
         assert directory.is_dir(), directory
@@ -141,7 +141,7 @@ def test_running_the_migration_twice_changes_nothing(tmp_path):
 def test_a_partially_completed_migration_finishes(tmp_path):
     paths = legacy_installation(tmp_path)
     # Only the auth file made it across before the previous run was interrupted.
-    paths.web_auth_dir.mkdir(parents=True, exist_ok=True)
+    paths.auth_file.parent.mkdir(parents=True, exist_ok=True)
     paths.auth_file.write_text(paths.legacy_auth_file.read_text())
     paths.legacy_auth_file.unlink()
 
@@ -173,7 +173,7 @@ def test_a_symlinked_source_is_refused_not_followed(tmp_path):
 
 def test_a_destination_conflict_preserves_both_copies(tmp_path):
     paths = legacy_installation(tmp_path)
-    paths.web_auth_dir.mkdir(parents=True, exist_ok=True)
+    paths.auth_file.parent.mkdir(parents=True, exist_ok=True)
     paths.auth_file.write_text('{"algorithm": "pbkdf2-sha256", "generation": "newer"}')
 
     report = migrate_state(paths)
@@ -182,14 +182,14 @@ def test_a_destination_conflict_preserves_both_copies(tmp_path):
     assert conflicts, report.to_dict()
     assert not report.ok
     assert "newer" in paths.auth_file.read_text()
-    preserved = paths.web_auth_dir / "auth.json.migrated-conflict"
+    preserved = paths.auth_file.parent / (paths.auth_file.name + ".migrated-conflict")
     assert preserved.is_file()
     assert "abc" in preserved.read_text()
 
 
 def test_identical_content_on_both_sides_is_not_a_conflict(tmp_path):
     paths = legacy_installation(tmp_path)
-    paths.web_auth_dir.mkdir(parents=True, exist_ok=True)
+    paths.auth_file.parent.mkdir(parents=True, exist_ok=True)
     paths.auth_file.write_text(paths.legacy_auth_file.read_text())
 
     report = migrate_state(paths)
@@ -201,7 +201,7 @@ def test_identical_content_on_both_sides_is_not_a_conflict(tmp_path):
 
 def test_a_migration_finding_is_reported_and_recorded(tmp_path):
     paths = legacy_installation(tmp_path)
-    paths.web_auth_dir.mkdir(parents=True, exist_ok=True)
+    paths.auth_file.parent.mkdir(parents=True, exist_ok=True)
     paths.auth_file.write_text('{"generation": "newer"}')
 
     report = migrate_state(paths)
@@ -222,7 +222,7 @@ def test_directory_modes_after_migration(tmp_path):
     paths = legacy_installation(tmp_path)
     migrate_state(paths)
 
-    assert stat.S_IMODE(paths.web_auth_dir.stat().st_mode) == 0o700
+    assert stat.S_IMODE(paths.web_sessions_dir.stat().st_mode) == 0o700
     assert stat.S_IMODE(paths.operations_dir.stat().st_mode) == 0o700
     assert stat.S_IMODE(paths.audit_log_dir.stat().st_mode) == 0o700
     assert stat.S_IMODE(paths.agent_state_dir.stat().st_mode) == 0o700
@@ -241,3 +241,19 @@ def test_migrated_agent_files_are_root_only(tmp_path):
     for record in paths.known_good_dir.rglob("*"):
         if record.is_file():
             assert stat.S_IMODE(record.stat().st_mode) == 0o600, record
+
+
+def test_no_auth_directory_is_created_under_the_web_state(tmp_path):
+    """The password left this tree when it became shared: it lives in the EMS
+    deployment root now, where Admin and the dashboard read it too. The web
+    account owns no password store at all any more, so creating a private
+    directory for one -- and enforcing its mode on every migration -- promises a
+    secret that is not there and would send anyone looking to the wrong place.
+    """
+
+    paths = appliance_paths(tmp_path)
+    migrate_state(paths)
+
+    assert not (paths.web_state_dir / "auth").exists()
+    assert not hasattr(paths, "web_auth_dir")
+    assert paths.auth_file == paths.install_root / "config" / "dashboard-auth.json"

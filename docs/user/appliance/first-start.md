@@ -32,7 +32,9 @@ always works.
 ## 2. Set the password
 
 The first page asks you to choose a password, twice. There is no default
-password and no account name — one password protects the whole interface.
+password and no account name — one password protects the whole interface. It is
+the same password the EMS Admin console and the dashboard will ask for later,
+and changing it in any of the three changes it everywhere.
 
 Choose something you can find again. There is no email recovery, and the image
 ships no login account to fall back on — if it is lost, the way back is writing
@@ -75,3 +77,10 @@ Admin Console, on port 8090, once it is installed.
 | Connection refused on the address | Give it another two minutes; the first start reboots once |
 | The page loads but the password is rejected | The password is set once, on the very first visit. If someone already set one and it is unknown, see [When it stops working](recovery.md) |
 | Nothing on the network at all | [When it stops working](recovery.md) |
+
+## One password for everything
+
+The password you set here is the same one you will use for the EMS Admin
+console and the dashboard. You set it once, and you can change it later from
+either side — in the appliance under **Access**, or on the EMS host with
+`emsctl dashboard set-password`. There is no second password to remember.

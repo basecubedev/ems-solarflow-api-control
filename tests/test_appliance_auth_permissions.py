@@ -166,28 +166,29 @@ def test_the_group_readable_layout_also_refuses_a_direct_web_write(group_readabl
 # --- availability when the agent is gone ------------------------------------
 
 
-def test_authentication_survives_an_unreachable_agent(packaged):
-    """A missing agent must never lock an operator out of the recovery UI."""
+def test_an_unreachable_agent_says_so_rather_than_blaming_the_password(packaged):
+    """This tier once required authentication to work without the agent, and it
+    did: the web account owned its own password file. One shared secret ended
+    that. The file is root-owned in the EMS deployment root so that Admin, the
+    dashboard and the appliance authenticate against the same password, and the
+    unprivileged web process therefore cannot check it alone.
+
+    The lost availability is accepted -- without the agent no privileged action
+    is possible anyway -- but it must be visible. What must never happen is the
+    appliance answering 401: an operator would hunt a password that is correct,
+    every attempt would spend the rate limiter, and the one fact that explains
+    the whole page would stay hidden. Every call still answers; none hangs.
+    """
 
     report = packaged.drive_web("authentication_agent_down")
 
     assert report["scenario_error"] == "", report["scenario_error"]
-    setup = report["setup"]
-    assert setup["completed"] is True, f"setup must answer without the agent: {setup}"
-    assert setup["status"] == 200, setup
-    assert report["login_failure"]["completed"] is True
-    assert report["login_failure"]["status"] == 401
-    assert report["login_success"]["status"] == 200
-
-
-def test_an_unreachable_agent_is_reported_as_degraded_security_audit(packaged):
-    report = packaged.drive_web("authentication_agent_down")
-
-    session = report["session_after_setup"]["body"]
-    audit = session.get("security_audit") or {}
-    assert audit.get("authoritative") is False, session
-    assert audit.get("degraded") is True, session
-    assert audit.get("last_error"), session
+    for step in ("setup", "login_failure", "login_success"):
+        answer = report[step]
+        assert answer["completed"] is True, f"{step} must answer at all: {answer}"
+        assert answer["status"] == 503, answer
+        assert answer["body"]["error"] == "agent_unavailable", answer
+        assert "not correct" not in answer["body"].get("message", ""), answer
 
 
 def test_a_reachable_agent_reports_a_healthy_security_audit(packaged):
@@ -199,11 +200,21 @@ def test_a_reachable_agent_reports_a_healthy_security_audit(packaged):
 
 
 def test_a_degraded_audit_is_recorded_in_the_web_owned_log(packaged):
+    """The audit trail is root-owned, so an unreachable agent cannot be written
+    to it; the web tier records the loss in its own log instead of dropping it.
+
+    The event asserted is a login refusal, not a password change: with the agent
+    gone the shared store cannot be written at all, so no password event can
+    occur. That the degraded audit is also surfaced on the session and settings
+    endpoints needs a session, which an appliance in this state cannot issue --
+    test_appliance_web_api.py covers that where one exists.
+    """
+
     packaged.drive_web("authentication_agent_down")
 
     web_log = packaged.read(WEB_LOG)
     assert "audit_unavailable" in web_log, web_log
-    assert "password.change" in web_log, web_log
+    assert "login.failure" in web_log, web_log
 
 
 # --- agent state confidentiality --------------------------------------------

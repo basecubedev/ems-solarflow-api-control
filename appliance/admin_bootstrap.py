@@ -40,6 +40,12 @@ def installer_path():
     return package_helper(INSTALLER_NAME)
 
 
+# Written by the appliance before anything is deployed, so its presence is not
+# evidence that an installation happened. Named exactly: any other file in a
+# root-owned deployment root still refuses adoption.
+APPLIANCE_SCAFFOLD_FILES = frozenset({"config/dashboard-auth.json"})
+
+
 class DeploymentBootstrap:
     """Owner identity and packaged installer for a first Admin deployment."""
 
@@ -109,7 +115,7 @@ class DeploymentBootstrap:
 
     @staticmethod
     def _unclaimed_directories(root):
-        """Every directory below an install root nothing was ever installed in.
+        """Every path below an install root nothing was ever installed in.
 
         A boot scaffolds ``config``, ``data`` and ``backups`` before Admin is
         ever installed, so an empty-directory test on the root alone would
@@ -118,22 +124,38 @@ class DeploymentBootstrap:
         first one found ends the walk and the answer is no — as does anything
         that cannot be read or is not a plain directory, because a root this
         cannot see all of is not one to take over.
+
+        One file is scaffolding rather than an installation: the password the
+        appliance, the Admin console and the dashboard share. The appliance
+        writes it on first boot, before anything is deployed, so treating it as
+        evidence of an installation would make setting a password the thing that
+        prevents ever installing Admin. It is named exactly, not tolerated as a
+        class, and it is handed over with the directories.
         """
 
-        directories = [root]
+        claimed = [root]
         pending = [root]
         while pending:
+            current = pending.pop()
             try:
-                entries = list(pending.pop().iterdir())
+                entries = list(current.iterdir())
             except OSError:
                 return None
             for entry in entries:
                 if entry.is_dir() and not entry.is_symlink():
-                    directories.append(entry)
+                    claimed.append(entry)
                     pending.append(entry)
                     continue
-                return None
-        return directories
+                if entry.is_symlink() or not entry.is_file():
+                    return None
+                try:
+                    relative = entry.relative_to(root).as_posix()
+                except ValueError:
+                    return None
+                if relative not in APPLIANCE_SCAFFOLD_FILES:
+                    return None
+                claimed.append(entry)
+        return claimed
 
     def _adopt(self, root, directories, *, claim):
         account = self.config.deployment_user
@@ -152,9 +174,10 @@ class DeploymentBootstrap:
             )
         if not claim:
             return (entry.pw_uid, entry.pw_gid)
-        # The scaffolded directories go with the root. Handing over the root
-        # alone would leave the installer unable to write inside its own
-        # deployment, which is a failure with no useful message.
+        # The scaffolded directories and the shared password file go with the
+        # root. Handing over the root alone would leave the installer unable to
+        # write inside its own deployment, and would leave the containers unable
+        # to read the password they authenticate against.
         for directory in directories:
             try:
                 self._chown(directory, entry.pw_uid, entry.pw_gid)

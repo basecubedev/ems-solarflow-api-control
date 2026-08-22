@@ -93,12 +93,12 @@ case "$1" in
         chown root:ems-appliance "$STATE_DIR" "$LOG_DIR"
         chmod 0750 "$STATE_DIR" "$LOG_DIR"
 
-        for directory in "$STATE_DIR/web" "$STATE_DIR/web/auth" "$STATE_DIR/web/sessions" \
+        for directory in "$STATE_DIR/web" "$STATE_DIR/web/sessions" \
                          "$STATE_DIR/web/ui-preferences" "$LOG_DIR/web"; do
             mkdir -p "$directory" || fail "cannot create $directory"
             chown ems-appliance-web:ems-appliance "$directory"
         done
-        chmod 0700 "$STATE_DIR/web/auth" "$STATE_DIR/web/sessions"
+        chmod 0700 "$STATE_DIR/web/sessions"
 
         for directory in "$STATE_DIR/agent" "$STATE_DIR/agent/operations" \
                          "$STATE_DIR/agent/known-good" "$STATE_DIR/agent/compose-backup" \

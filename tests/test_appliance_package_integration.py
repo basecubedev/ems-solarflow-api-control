@@ -19,8 +19,8 @@ from tests.helpers.appliance_systemd import (
     AGENT_UNIT,
     APPLIANCE_GROUP,
     BACKUP_USER,
-    LOG_DIR,
-    RUNTIME_DIR,
+    INSTALL_ROOT,
+    LOG_DIR,    RUNTIME_DIR,
     SOCKET_PATH,
     STATE_DIR,
     WEB_UNIT,
@@ -521,8 +521,10 @@ def test_the_web_service_startup_order_is_effective(host):
 def test_a_package_upgrade_preserves_state_and_permissions(host, package, tmp_path_factory):
     marker = f"{STATE_DIR}/agent/known-good/history.json"
     host.shell(f"printf '[{{\"admin_version\": \"v9.9.9\"}}]' > {marker}")
-    auth = f"{STATE_DIR}/web/auth/auth.json"
-    host.shell(f"printf '{{\"generation\": \"keep-me\"}}' > {auth} && chown {WEB_USER} {auth}")
+    # The password store is shared with the Admin console and lives in the EMS
+    # deployment root, so an upgrade must leave it exactly where it is.
+    auth = f"{INSTALL_ROOT}/config/dashboard-auth.json"
+    host.shell(f"mkdir -p {INSTALL_ROOT}/config && printf '{{\"salt\": \"keep-me\"}}' > {auth}")
 
     upgraded = repack_with_version(package, "0.1.1", tmp_path_factory.mktemp("upgrade"))
     host.install_package(upgraded)
@@ -546,7 +548,8 @@ def test_the_package_migrates_a_legacy_shared_layout(host, package):
         f"rm -rf {STATE_DIR}/web {STATE_DIR}/agent; "
         f"mkdir -p {STATE_DIR}/known-good {STATE_DIR}/operations; "
         f"printf '[{{\"admin_version\": \"v0.9.9\"}}]' > {STATE_DIR}/known-good/history.json; "
-        f"printf '{{\"generation\": \"legacy\"}}' > {STATE_DIR}/auth.json",
+        f"printf '{{\"generation\": \"legacy\"}}' > {STATE_DIR}/auth.json; "
+        f"rm -f {INSTALL_ROOT}/config/dashboard-auth.json",
         timeout=120,
     )
 
@@ -554,9 +557,12 @@ def test_the_package_migrates_a_legacy_shared_layout(host, package):
 
     assert result.returncode == 0, result.stdout
     assert "v0.9.9" in host.shell(f"cat {STATE_DIR}/agent/known-good/history.json").stdout
-    assert "legacy" in host.shell(f"cat {STATE_DIR}/web/auth/auth.json").stdout
+    auth = f"{INSTALL_ROOT}/config/dashboard-auth.json"
+    assert "legacy" in host.shell(f"cat {auth}").stdout
     assert host.stat(f"{STATE_DIR}/agent/known-good")["owner"] == "root"
-    assert host.stat(f"{STATE_DIR}/web/auth")["owner"] == WEB_USER
+    assert host.stat(auth)["owner"] != WEB_USER, (
+        "the shared password is the deployment's, not the web account's"
+    )
     assert not host.exists(f"{STATE_DIR}/auth.json")
 
     host.shell("/usr/bin/ems-appliance migrate-state", timeout=300)
@@ -564,3 +570,32 @@ def test_the_package_migrates_a_legacy_shared_layout(host, package):
 
     host.shell(f"systemctl start {AGENT_UNIT} {WEB_UNIT}", timeout=120)
     assert host.wait_for_path(SOCKET_PATH)
+
+
+def test_a_legacy_password_never_overwrites_the_shared_one(host, package):
+    """The old file belongs to one interface; the new one opens all three.
+
+    Letting the legacy copy win would silently replace a password the operator
+    set through Admin or the dashboard with one the appliance alone knew --
+    logging them out of everything at once, from a path nobody invoked on
+    purpose. The live file stays and the old copy is preserved beside it.
+
+    Found by accident, which is why it is pinned here: this module shares one
+    container, the upgrade test above had already placed a shared password, and
+    the migration test below it only passed in isolation.
+    """
+
+    auth = f"{INSTALL_ROOT}/config/dashboard-auth.json"
+    host.shell(
+        f"systemctl stop {WEB_UNIT} {AGENT_UNIT}; "
+        f"mkdir -p {INSTALL_ROOT}/config; "
+        f"printf '{{\"salt\": \"the-live-one\"}}' > {auth}; "
+        f"printf '{{\"generation\": \"legacy\"}}' > {STATE_DIR}/auth.json",
+        timeout=120,
+    )
+
+    result = host.shell("/usr/bin/ems-appliance migrate-state 2>&1", timeout=300)
+
+    assert result.returncode == 0, result.stdout
+    assert "the-live-one" in host.shell(f"cat {auth}").stdout
+    assert "legacy" not in host.shell(f"cat {auth}").stdout
