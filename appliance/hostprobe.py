@@ -38,6 +38,8 @@ MEMINFO_FILE = "proc/meminfo"
 # would keep reporting the mount table as it looked at service start.
 HOST_MOUNTINFO_FILE = "proc/1/mountinfo"
 MOUNTINFO_FILE = "proc/self/mountinfo"
+UNDERVOLTAGE_FILE = "sys/class/hwmon/hwmon0/in0_lcrit_alarm"
+
 THERMAL_FILE = "sys/class/thermal/thermal_zone0/temp"
 REBOOT_REQUIRED_FILE = "var/run/reboot-required"
 REBOOT_REQUIRED_PKGS = "var/run/reboot-required.pkgs"
@@ -113,6 +115,20 @@ class HostProbe:
             return {"celsius": None, "available": False}
         celsius = value / 1000.0 if value > 200 else value
         return {"celsius": round(celsius, 1), "available": True}
+
+    def power(self):
+        """Whether the board is reporting an under-voltage condition.
+
+        A Pi that browns out under load corrupts a slot write and produces
+        failures that look like anything but a power supply. The alarm is a
+        sticky bit on the Raspberry Pi hwmon device; a board that does not
+        publish it is reported as unknown rather than as healthy.
+        """
+
+        raw = (self._read(UNDERVOLTAGE_FILE) or "").strip()
+        if raw not in ("0", "1"):
+            return {"available": False, "under_voltage": None}
+        return {"available": True, "under_voltage": raw == "1"}
 
     def memory(self):
         values = {}

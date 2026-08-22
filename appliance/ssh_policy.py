@@ -25,8 +25,15 @@ DENIED_SFTP_REQUESTS = (
     "rmdir",
     "setstat",
     "fsetstat",
+    "lsetstat",
+    "fsync",
+    "copy-data",
 )
-FORCED_COMMAND = f"{SFTP_PROGRAM} -P {','.join(DENIED_SFTP_REQUESTS)}"
+# -R makes the whole subsystem read-only in sshd itself. The -P list stays as
+# the second, explicit refusal of the individual write requests: the read-only
+# mounts and this flag are two independent reasons a write fails, and the
+# generated policy is what an operator reads to know that.
+FORCED_COMMAND = f"{SFTP_PROGRAM} -R -P {','.join(DENIED_SFTP_REQUESTS)}"
 
 # Every restriction the appliance tells an operator is in force. Reporting a
 # subset as "confined" would be a claim the appliance never checked.
@@ -64,15 +71,19 @@ def forced_command_confirmed(forced):
     """Is this exactly the confinement the appliance generates?
 
     A prefix match would accept a plain ``internal-sftp``: the same program
-    with none of the write operations denied. The denied set is compared as a
-    set because ``-P`` carries no order, and any further token is refused
-    because it is an option nobody evaluated.
+    with none of the write operations denied. Both refusals have to be present
+    -- ``-R`` makes the subsystem read-only in sshd itself, ``-P`` names the
+    individual requests -- the denied set is compared as a set because ``-P``
+    carries no order, and any further token is refused because it is an option
+    nobody evaluated.
     """
 
     tokens = str(forced or "").split()
-    if len(tokens) != 3 or tokens[0] != SFTP_PROGRAM or tokens[1] != "-P":
+    if len(tokens) != 4 or tokens[0] != SFTP_PROGRAM:
         return False
-    return set(tokens[2].split(",")) == set(DENIED_SFTP_REQUESTS)
+    if tokens[1] != "-R" or tokens[2] != "-P":
+        return False
+    return set(tokens[3].split(",")) == set(DENIED_SFTP_REQUESTS)
 
 
 def evaluate_policy(effective, *, export_root):

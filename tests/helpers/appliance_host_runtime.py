@@ -11,6 +11,7 @@ really change them succeeds.
 
 from appliance.commands import CommandResult
 from appliance.host_config import PATH_UNIT, path_unit_dropin, sshd_policy_file
+from appliance import ssh_policy
 from appliance.ssh_policy import parse_sshd_config
 
 UNIT_SSH = "ssh.service"
@@ -25,7 +26,7 @@ BASE_POLICY = {
     "x11forwarding": "no",
     "permittunnel": "no",
     "gatewayports": "no",
-    "forcecommand": "internal-sftp -P symlink,hardlink",
+    "forcecommand": ssh_policy.FORCED_COMMAND,
 }
 
 

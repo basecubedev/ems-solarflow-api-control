@@ -500,7 +500,7 @@ def test_a_forced_command_whose_denied_operations_are_reordered_is_accepted(tmp_
 
     services = appliance(tmp_path)
     denied = FORCED_COMMAND.partition(" -P ")[2].split(",")
-    reordered = "internal-sftp -P " + ",".join(reversed(denied))
+    reordered = "internal-sftp -R -P " + ",".join(reversed(denied))
 
     policy = with_forced_command(services, reordered)
 
@@ -534,3 +534,16 @@ def test_a_weakened_forced_command_disables_backup_authentication(tmp_path):
     assert report["reason"] == "confinement_not_confirmed", report
     assert report["authentication_disabled"] is True, report
     assert "forcecommand" in report["policy"]["violations"], report["policy"]
+
+
+def test_a_forced_command_without_the_read_only_flag_is_refused(tmp_path):
+    """-R makes the subsystem read-only in sshd itself. Without it the write
+    refusal comes only from the mounts, which is one control where the policy
+    an operator reads promises two."""
+
+    services = appliance(tmp_path)
+    denied = FORCED_COMMAND.partition(" -P ")[2]
+
+    policy = with_forced_command(services, f"internal-sftp -P {denied}")
+
+    assert policy["restrictions"]["forcecommand"]["confirmed"] is False, policy

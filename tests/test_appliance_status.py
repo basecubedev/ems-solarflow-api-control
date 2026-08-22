@@ -291,3 +291,32 @@ def test_a_full_slot_root_is_still_a_warning(tmp_path):
     codes = {w["code"] for w in services.status._health(sections)["warnings"]}
 
     assert "storage_low" in codes
+
+
+def test_an_under_voltage_board_is_reported(tmp_path):
+    """A Pi that browns out under load corrupts a slot write and fails in ways
+    that look like anything but a power supply."""
+
+    from appliance.hostprobe import HostProbe
+
+    alarm = tmp_path / "sys/class/hwmon/hwmon0"
+    alarm.mkdir(parents=True)
+    (alarm / "in0_lcrit_alarm").write_text("1\n")
+
+    assert HostProbe(root=tmp_path).power() == {"available": True, "under_voltage": True}
+
+
+def test_a_healthy_supply_is_reported_as_such(tmp_path):
+    from appliance.hostprobe import HostProbe
+
+    alarm = tmp_path / "sys/class/hwmon/hwmon0"
+    alarm.mkdir(parents=True)
+    (alarm / "in0_lcrit_alarm").write_text("0\n")
+
+    assert HostProbe(root=tmp_path).power()["under_voltage"] is False
+
+
+def test_a_board_that_publishes_no_alarm_is_unknown_not_healthy(tmp_path):
+    from appliance.hostprobe import HostProbe
+
+    assert HostProbe(root=tmp_path).power() == {"available": False, "under_voltage": None}

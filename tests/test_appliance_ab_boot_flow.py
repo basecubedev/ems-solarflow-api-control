@@ -15,7 +15,9 @@ way is the physical gate in docs/appliance/ab-hardware-validation.md.
 
 import pytest
 
+from appliance import ab_boot
 from appliance.ab_health import RESULT_HEALTHY, RESULT_UNHEALTHY
+from appliance.commands import RecordingRunner
 from appliance.ab_state import SlotRecord
 from appliance.os_update import OsUpdateError
 from tests.helpers.appliance_ab import BootFlowSimulator, FakeSystemd
@@ -302,3 +304,76 @@ def test_an_interrupted_write_never_leaves_a_bootable_rollback_candidate(tmp_pat
 
     assert pi.state.slots().record("B") is None
     assert pi.state.slots().previous_slot == ""
+
+
+# --- the remount every A/B update depends on ---------------------------------
+
+
+def selector_on_a_read_only_partition(tmp_path):
+    mountpoint = tmp_path / "bootconfig"
+    mountpoint.mkdir()
+    path = mountpoint / "autoboot.txt"
+    path.write_text(
+        ab_boot.render_selector(ab_boot.Selector(default_partition=2, tryboot_partition=3)),
+        encoding="utf-8",
+    )
+    return path, mountpoint
+
+
+def test_arming_a_trial_remounts_the_selector_writable_and_back(tmp_path):
+    """On a real Pi the selector partition is FAT, mounted read-only. Every A/B
+    update goes through this, and no test executed it: a wrong argv, mountpoint
+    or allowlist entry would surface only as selector_write_failed on hardware.
+    """
+
+    path, mountpoint = selector_on_a_read_only_partition(tmp_path)
+    runner = RecordingRunner(default="")
+    transaction = ab_boot.SelectorTransaction(
+        path, runner=runner, mountpoint=mountpoint, remount=True
+    )
+
+    transaction.arm_trial(default_partition=2, trial_partition=3)
+
+    mounts = [tuple(call[1]) for call in runner.calls if call[0] == "mount"]
+
+    assert mounts == [
+        ("-o", "remount,rw", str(mountpoint)),
+        ("-o", "remount,ro", str(mountpoint)),
+    ], mounts
+    assert ab_boot.read_selector(path).tryboot_partition == 3
+
+
+def test_a_selector_partition_that_cannot_be_remounted_is_a_named_refusal(tmp_path):
+    path, mountpoint = selector_on_a_read_only_partition(tmp_path)
+
+    class _NoMount(RecordingRunner):
+        def available(self, tool):
+            return tool != "mount"
+
+    transaction = ab_boot.SelectorTransaction(
+        path, runner=_NoMount(default=""), mountpoint=mountpoint, remount=True
+    )
+
+    with pytest.raises(ab_boot.SelectorError) as error:
+        transaction.arm_trial(default_partition=2, trial_partition=3)
+
+    assert error.value.code == "selector_remount_unavailable"
+
+
+def test_a_failed_remount_leaves_the_selector_untouched(tmp_path):
+    path, mountpoint = selector_on_a_read_only_partition(tmp_path)
+    before = path.read_text(encoding="utf-8")
+
+    runner = RecordingRunner(
+        replies={("mount", ("-o", "remount,rw", str(mountpoint))): (1, "", "read-only")},
+        default="",
+    )
+    transaction = ab_boot.SelectorTransaction(
+        path, runner=runner, mountpoint=mountpoint, remount=True
+    )
+
+    with pytest.raises(ab_boot.SelectorError) as error:
+        transaction.arm_trial(default_partition=2, trial_partition=3)
+
+    assert error.value.code == "selector_remount_failed"
+    assert path.read_text(encoding="utf-8") == before

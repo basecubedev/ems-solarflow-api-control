@@ -800,3 +800,20 @@ def test_the_maintainer_platform_table_carries_the_support_tier():
     platforms = read("installation.md")
 
     assert "reverse-engineered" in platforms.lower()
+
+
+def test_every_appliance_module_appears_in_the_module_map():
+    """A map missing a third of its subsystems sends a reader looking in the
+    wrong place, and nothing noticed as the branch grew."""
+
+    root = Path(__file__).resolve().parents[1]
+    document = read("architecture.md")
+    modules = sorted(
+        path.stem
+        for path in (root / "appliance").glob("*.py")
+        if path.stem not in ("__init__", "__main__")
+    )
+
+    missing = [name for name in modules if f"`{name}.py`" not in document]
+
+    assert not missing, missing

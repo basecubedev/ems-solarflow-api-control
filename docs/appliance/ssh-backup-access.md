@@ -106,7 +106,7 @@ Match User ems-backup
     PermitTunnel no
     GatewayPorts no
     PermitOpen none
-    ForceCommand internal-sftp -P symlink,hardlink,rename,posix-rename,remove,mkdir,rmdir,setstat,fsetstat
+    ForceCommand internal-sftp -R -P symlink,hardlink,rename,posix-rename,remove,mkdir,rmdir,setstat,fsetstat,lsetstat,fsync,copy-data
 ```
 
 `ForceCommand internal-sftp` means the account can transfer files and nothing

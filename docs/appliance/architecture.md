@@ -108,6 +108,22 @@ is refused as `invalid_request` before any handler runs.
 | `admin_bootstrap.py`, `admin_transition.py` | The first Admin deployment, and standing back while Admin replaces itself |
 | `cli.py` | The `ems-appliance` host CLI |
 | `ab_image.py` | The declared image layout and the host-side image inspector |
+| `ab_geometry.py`, `ab_filesystems.py`, `media_sizing.py` | Real partition geometry, filesystem identity and what the medium has to hold |
+| `ab_bootstrap.py`, `ab_docker_health.py` | Rebuilding a slot's container runtime, and the gates that judge it |
+| `ab_inspect.py`, `sparse.py` | Mount-independent inspection of a written image, and Android-sparse expansion |
+| `host_identity.py`, `host_config.py` | The identity both slots share, and one host-path contract for everything that reads it |
+| `ssh_policy.py`, `backup_confinement.py`, `backup_ownership.py`, `export_state.py` | The generated sshd policy, what the chroot actually is, and who owns the account a purge may remove |
+| `timezone_config.py` | The zone the EMS runs its local-hour control windows in |
+| `operation_schema.py` | The typed request shape every operation is validated against |
+| `release_trust.py`, `release_attestation.py`, `release_inputs.py` | What a signed release vouches for, and the readiness invariants that bound it |
+| `build_authority.py`, `source_bundle.py`, `project_source.py` | Which build an artefact came from, and the source tree it can be rebuilt from |
+| `rpi_image_gen.py`, `runtime_gates.py` | The pinned upstream generator and the runtime evidence a release is bound to |
+| `audit.py` | The append-only record of what was done to this appliance |
+| `health.py` | Whether a deployed container is answering, and how long to wait for it |
+| `version.py` | The appliance version, its supported architectures and board models |
+
+Every module under `appliance/` appears here; `tests/test_appliance_docs.py`
+proves it, so a new one cannot arrive unmentioned.
 
 ## Where each boundary is enforced
 

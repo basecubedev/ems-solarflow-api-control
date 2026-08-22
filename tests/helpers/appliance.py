@@ -88,7 +88,7 @@ permittunnel no
 gatewayports no
 permitopen none
 chrootdirectory {export_root}
-forcecommand internal-sftp -P symlink,hardlink,rename,posix-rename,remove,mkdir,rmdir,setstat,fsetstat
+forcecommand internal-sftp -R -P symlink,hardlink,rename,posix-rename,remove,mkdir,rmdir,setstat,fsetstat,lsetstat,fsync,copy-data
 """
 
 

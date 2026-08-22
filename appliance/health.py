@@ -6,6 +6,7 @@ The appliance additionally asks the Admin HTTP endpoint on the loopback address
 before it marks a version known-good.
 """
 
+import http.client
 import json
 import time
 import urllib.error
@@ -48,7 +49,16 @@ class HttpHealthChecker:
                 status = getattr(response, "status", None) or response.getcode()
         except urllib.error.HTTPError as exc:
             return HealthResult(reachable=False, status_code=exc.code, error="http_error")
-        except (urllib.error.URLError, OSError, ValueError) as exc:
+        except (
+            urllib.error.URLError,
+            http.client.HTTPException,
+            OSError,
+            ValueError,
+        ) as exc:
+            # A container that is still starting can drop the connection while
+            # the body is being read, which surfaces as IncompleteRead or
+            # BadStatusLine rather than a URLError. "Not answering yet" is what
+            # this probe exists to report, not something for it to raise.
             return HealthResult(reachable=False, error=str(exc.__class__.__name__))
 
         version = ""

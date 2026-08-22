@@ -82,6 +82,7 @@ class StatusService:
             "uptime": self.probe.uptime(),
             "time": self.probe.system_time(),
             "temperature": self.probe.temperature(),
+            "power": self.probe.power(),
             "memory": self.probe.memory(),
             "storage": {
                 "root": self.probe.filesystem("/"),

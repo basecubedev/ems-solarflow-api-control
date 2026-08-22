@@ -248,3 +248,71 @@ def test_local_is_an_escape_hatch_not_a_second_way_in(tmp_path):
         cli.AgentClient = original
 
     assert "second" in str(exit_error.value)
+
+
+# --- the two handlers that only ever run at boot -----------------------------
+
+
+class _Args:
+    def __init__(self, **fields):
+        self.json = True
+        self.root = "/"
+        self.commit = False
+        self.__dict__.update(fields)
+
+
+def _boot_services(monkeypatch, services):
+    from appliance import cli
+
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(cli, "build_services", lambda **_kwargs: services)
+
+
+def test_slot_bootstrap_reports_a_missing_runtime_bootstrap(monkeypatch, capsys, tmp_path):
+    """The service layer under these two is well covered; the glue was not, and
+    a mistake here surfaces only as a failed systemd unit on a real Pi."""
+
+    from appliance import cli
+    from tests.helpers.appliance import build_test_services
+
+    services = build_test_services(tmp_path)
+    services.ab_bootstrap = None
+    _boot_services(monkeypatch, services)
+
+    assert cli.command_ab_slot_bootstrap(_Args()) == cli.EXIT_ERROR
+    assert "no runtime bootstrap" in capsys.readouterr().err
+
+
+def test_slot_bootstrap_reports_what_reconstruction_found(monkeypatch, capsys, tmp_path):
+    from appliance import cli
+    from tests.helpers.appliance import build_test_services
+
+    services = build_test_services(tmp_path)
+
+    class _Bootstrap:
+        def reconstruct(self):
+            from appliance.ab_bootstrap import BootstrapReport
+
+            return BootstrapReport(
+                code="runtime_record_missing",
+                problems=("the shared partition carries no runtime record",),
+            )
+
+    services.ab_bootstrap = _Bootstrap()
+    _boot_services(monkeypatch, services)
+
+    assert cli.command_ab_slot_bootstrap(_Args()) == cli.EXIT_ERROR
+    output = capsys.readouterr()
+    assert "no runtime record" in output.err
+    assert json.loads(output.out)["code"] == "runtime_record_missing"
+
+
+def test_a_non_root_caller_never_reaches_the_block_layer(monkeypatch, capsys):
+    """These commands touch block devices; the refusal is the first thing."""
+
+    from appliance import cli
+
+    monkeypatch.setattr(cli.os, "geteuid", lambda: 1000)
+
+    assert cli.command_ab_slot_bootstrap(_Args()) == cli.EXIT_ERROR
+    assert "must run as root" in capsys.readouterr().err
