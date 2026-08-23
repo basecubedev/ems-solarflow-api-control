@@ -23,6 +23,12 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 IMAGE_DIR="$ROOT/packaging/appliance/image"
 LOCK="$IMAGE_DIR/rpi-image-gen.lock"
 PROFILE=rpi5
+# This script builds the A/B image. The single-slot image is a different
+# product with a different post-build gate set, so it has its own script; the
+# name is here rather than spelled into the config path and the artefact name
+# separately, because those two disagreeing is how an image gets published
+# under the other variant's name.
+VARIANT=ab
 OUTPUT="$ROOT/dist"
 BUILD_ID=""
 GENERATOR=${EMS_RPI_IMAGE_GEN:-}
@@ -81,7 +87,7 @@ except build_authority.BuildAuthorityError as error:
 PY
 
 [ -f "$LOCK" ] || fail "$LOCK is missing" lock_missing
-CONFIG="$IMAGE_DIR/profiles/${PROFILE}-ab.yaml"
+CONFIG="$IMAGE_DIR/profiles/${PROFILE}-${VARIANT}.yaml"
 [ -f "$CONFIG" ] || fail "there is no build profile for $PROFILE" hardware_profile_unknown
 [ -z "$ENVIRONMENT" ] || [ -f "$ENVIRONMENT" ] \
     || fail "$ENVIRONMENT is not a builder environment file" builder_environment_missing
@@ -123,7 +129,7 @@ esac
 
 VERSION=$(sed -n 's/^APPLIANCE_VERSION = "\(.*\)"$/\1/p' "$ROOT/appliance/version.py")
 [ -n "$VERSION" ] || fail "cannot read APPLIANCE_VERSION" version_unreadable
-NAME="ems-solarflow-appliance-${VERSION}-${PROFILE}-arm64-ab"
+NAME="ems-solarflow-appliance-${VERSION}-${PROFILE}-arm64-${VARIANT}"
 
 # What the generator will call the image it writes. The profile declares it, so
 # the profile is where it is read from rather than being guessed afterwards.
@@ -320,7 +326,7 @@ PY
 # the artefact in front of it against exactly this, so an artefact nobody built
 # with the pinned generator cannot inherit its provenance.
 AUTHORITY=$(PYTHONPATH="$ROOT" python3 - "$WORK" "$SOURCE_FORM" "$GENERATOR_REVISION" \
-    "$SOURCE_TREE" "$PROFILE" "$PROJECT_REVISION" "$PROJECT_TREE" "$BUILD_ID" \
+    "$SOURCE_TREE" "$PROFILE" "$VARIANT" "$PROJECT_REVISION" "$PROJECT_TREE" "$BUILD_ID" \
     "$PACKAGE_SHA256" \
     "$OUTPUT/$NAME.img" "$([ -n "$UPDATE" ] && echo "$OUTPUT/$NAME.update.tar.zst" || echo "")" \
     "$ENVIRONMENT" \
@@ -329,8 +335,8 @@ import sys
 
 from appliance import build_authority
 
-(work, form, revision, tree, profile, project_revision, project_tree, build_id,
- package, image, update, environment_path) = sys.argv[1:13]
+(work, form, revision, tree, profile, variant, project_revision, project_tree,
+ build_id, package, image, update, environment_path) = sys.argv[1:14]
 environment = (
     build_authority.read_environment(environment_path)
     if environment_path
@@ -345,6 +351,7 @@ authority = build_authority.BuildAuthority(
         revision=project_revision, tree_sha256=project_tree
     ),
     profile=profile,
+    variant=variant,
     build_id=build_id,
     image=build_authority.Artefact(
         path=image, sha256=build_authority.file_sha256(image)

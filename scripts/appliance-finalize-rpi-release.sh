@@ -180,6 +180,10 @@ for profile in profiles:
         problems.append(f"{profile}: {error.code}: {error.message}")
         continue
     prefix = matches[0].name[: -len(".build-authority.json")]
+    # Two images are built for the same board and differ only in this suffix.
+    # Taking it from the artefact's own name and handing it to the verifier is
+    # what stops one variant's authority vouching for the other's artefact.
+    variant = prefix.rsplit("-", 1)[-1]
     image = dist / f"{prefix}.img"
     update = dist / f"{prefix}.update.tar.zst"
     if not image.is_file():
@@ -188,14 +192,14 @@ for profile in profiles:
     problems.extend(
         f"{profile}: {problem}"
         for problem in build_authority.verify_image(
-            authority, image, profile=profile, require_environment=True
+            authority, image, profile=profile, variant=variant, require_environment=True
         )
     )
     if update.is_file():
         problems.extend(
             f"{profile}: {problem}"
             for problem in build_authority.verify_update(
-                authority, update, profile=profile, require_environment=True
+                authority, update, profile=profile, variant=variant, require_environment=True
             )
         )
     # The three bindings a valid-on-its-own artefact does not give you.

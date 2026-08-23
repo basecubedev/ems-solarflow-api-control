@@ -453,7 +453,8 @@ def test_the_check_script_reports_a_modified_tarball_tree_as_a_failure(tmp_path,
 # --- finding 5: an artefact cannot claim a build it did not come from ---------
 
 
-def build_authority_payload(update, *, profile="rpi5", build_id="20260808-1", **overrides):
+def build_authority_payload(update, *, profile="rpi5", variant="ab",
+                            build_id="20260808-1", **overrides):
     payload = {
         "schema_version": build_authority.SCHEMA_VERSION,
         "builder": {
@@ -462,6 +463,7 @@ def build_authority_payload(update, *, profile="rpi5", build_id="20260808-1", **
             "source_tree_sha256": "sha256:" + "5" * 64,
         },
         "profile": profile,
+        "variant": variant,
         "project": {"revision": "a" * 40, "tree_sha256": "sha256:" + "6" * 64},
         "build_id": build_id,
         "completed": True,
@@ -968,3 +970,80 @@ def test_a_tree_that_agrees_with_the_lock_and_was_then_modified_is_modified(tmp_
     report = rpi_image_gen.probe_checkout(root, pinned, which=lambda tool: f"/usr/bin/{tool}")
 
     assert report.reason == rpi_image_gen.REASON_SOURCE_MODIFIED
+
+
+# --- which of two images this build was --------------------------------------
+#
+# Two variants are built for the same board, from the same tree, in the same
+# build. Everything else in the authority is identical between them, so this is
+# the only field that stops an A/B record vouching for a single-slot artefact.
+
+
+def authority_for(variant, **overrides):
+    from appliance import build_authority as ba
+
+    fields = {
+        "builder": ba.Builder(
+            source_form="tarball", revision="v2.7.0", source_tree_sha256="sha256:" + "a" * 64
+        ),
+        "project": ba.Project(revision="b" * 40, tree_sha256="sha256:" + "c" * 64),
+        "profile": "rpi5",
+        "variant": variant,
+        "build_id": "20260823-1",
+        "completed": True,
+    }
+    fields.update(overrides)
+    return ba.BuildAuthority(**fields)
+
+
+def test_an_authority_that_names_no_variant_is_refused():
+    """No default that names one: not saying must fail, not be assumed."""
+
+    problems = build_authority.verify_image(authority_for(""), Path("/nonexistent"))
+
+    assert any("is not a supported image variant" in problem for problem in problems)
+
+
+def test_an_authority_for_the_other_variant_cannot_vouch_for_this_release():
+    problems = build_authority.verify_image(
+        authority_for("ab"), Path("/nonexistent"), variant="single"
+    )
+
+    assert any(
+        "names variant 'ab', this release is 'single'" in problem for problem in problems
+    )
+
+
+def test_the_matching_variant_raises_no_variant_problem():
+    problems = build_authority.verify_image(
+        authority_for("single"), Path("/nonexistent"), variant="single"
+    )
+
+    assert not any("variant" in problem for problem in problems)
+
+
+def test_the_variant_is_covered_by_the_hash_that_identifies_the_record():
+    """A hash that ignored it would let one record be relabelled as the other."""
+
+    assert authority_for("ab").canonical_hash != authority_for("single").canonical_hash
+
+
+def test_a_record_from_before_the_variant_existed_still_reads_but_vouches_for_nothing():
+    """Release evidence is a record of what was produced, so it stays readable.
+
+    Refusing to parse it to make room for a field it could not have carried
+    would be rewriting history to fit the code. What it can no longer do is
+    stand behind an artefact: it names no variant, and no variant is not a
+    supported one.
+    """
+
+    payload = authority_for("ab").to_dict()
+    del payload["variant"]
+
+    authority = build_authority.parse(payload)
+
+    assert authority.variant == ""
+    assert any(
+        "is not a supported image variant" in problem
+        for problem in build_authority.verify_image(authority, Path("/nonexistent"))
+    )

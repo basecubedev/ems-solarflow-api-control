@@ -54,12 +54,13 @@ def environment():
 
 
 def build_dist(
-    tmp_path, *, profile="rpi5", build_id=BUILD_ID, signed=True, complete=True, project=None
+    tmp_path, *, profile="rpi5", variant="ab", build_id=BUILD_ID, signed=True,
+    complete=True, project=None
 ):
     dist = tmp_path / "dist"
     reports = dist / "reports"
     reports.mkdir(parents=True, exist_ok=True)
-    prefix = f"ems-solarflow-appliance-{VERSION}-{profile}-arm64-ab"
+    prefix = f"ems-solarflow-appliance-{VERSION}-{profile}-arm64-{variant}"
 
     image = dist / f"{prefix}.img"
     image.write_bytes(b"an appliance image" * 64)
@@ -77,6 +78,7 @@ def build_dist(
             revision="c" * 40, tree_sha256="sha256:" + "d" * 64
         ),
         profile=profile,
+        variant=variant,
         build_id=build_id,
         image=build_authority.Artefact(
             path=str(image), sha256=build_authority.file_sha256(image)
