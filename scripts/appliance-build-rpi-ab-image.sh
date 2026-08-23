@@ -182,7 +182,11 @@ PY
 release_work_cleanup() {
     status=$?
     if [ "$status" -eq 0 ]; then
-        rm -rf "$WORK"
+        # The chroot holds directories owned by the accounts the package
+        # creates, so removal can fail for a build that produced everything.
+        # The verdict belongs to the build, not to the tidying after it.
+        rm -rf "$WORK" 2>/dev/null \
+            || echo "the build tree could not be removed: $WORK" >&2
     elif [ -d "$WORK" ]; then
         echo "build tree kept for diagnosis: $WORK ($(du -sh "$WORK" 2>/dev/null | cut -f1))" >&2
     fi

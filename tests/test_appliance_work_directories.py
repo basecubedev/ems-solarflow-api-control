@@ -146,3 +146,53 @@ def test_an_atomic_write_flushes_the_directory_entry_too():
 
     assert "_sync_parent" in source
     assert "os.fsync" in inspect.getsource(paths._sync_parent)
+
+
+def _extract_shell_function(name, script_name):
+    """The function on its own, so the test runs the real one and not a copy."""
+
+    text = script(script_name)
+    start = text.index(f"{name}() {{")
+    depth = 0
+    for index in range(start, len(text)):
+        if text[index] == "{":
+            depth += 1
+        elif text[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : index + 1]
+    raise AssertionError(f"{name} is not a closed function")
+
+
+def test_a_successful_build_is_not_failed_by_a_cleanup_it_cannot_finish(tmp_path):
+    """The verdict belongs to the build, not to the tidying after it.
+
+    The chroot holds directories owned by the accounts the package creates, so
+    ``rm -rf`` returns non-zero for a build that produced and verified every
+    artefact. Under ``set -e`` the trap then aborts before its own
+    ``return "$status"``, and the wrapper prints RESULT: FAIL over a good build
+    -- a gate reporting a result it did not earn.
+    """
+
+    work = tmp_path / "work"
+    (work / "kept").mkdir(parents=True)
+    work.chmod(0o500)
+    try:
+        harness = tmp_path / "harness.sh"
+        harness.write_text(
+            "set -eu\n"
+            f'WORK="{work}"\n'
+            + _extract_shell_function(
+                "release_work_cleanup", "appliance-build-rpi-ab-image.sh"
+            )
+            + "\ntrap release_work_cleanup EXIT\nexit 0\n",
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            ["sh", str(harness)], capture_output=True, text=True, timeout=60
+        )
+    finally:
+        work.chmod(0o700)
+
+    assert result.returncode == 0, f"a successful build was failed by cleanup: {result.stderr}"
+
