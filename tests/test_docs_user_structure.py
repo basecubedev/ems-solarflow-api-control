@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # One ceiling for the root README, asserted from three directions below. Three
 # separate literals had already drifted apart (110, 110, 130), which means the
 # loosest one was the only rule actually in force.
-README_MAX_LINES = 130
+README_MAX_LINES = 150
 
 
 def read(path):
@@ -57,11 +57,12 @@ def test_readme_is_router_not_manual():
 
 
 def test_readme_is_router_sized():
-    # Router target: short. 130 lines is the hard ceiling (top-of-file status
-    # badges included). It was 110 until the host sizing table landed: telling
-    # someone how much RAM their machine needs is routing, not a manual, and it
-    # is the one question that has to be answered before any of the links below
-    # are worth following.
+    # Router target: short. 150 lines is the hard ceiling (top-of-file status
+    # badges included). It was 110 until the host sizing table landed, and 130
+    # until Get started split into the two ways in -- a dedicated Raspberry Pi
+    # or a machine you already run. Which of the two you are is the first
+    # question, and answering it is routing; at 130 the split only fitted by
+    # compressing prose until it read like a telegram.
     lines = read(ROOT / "README.md").splitlines()
     assert len(lines) <= README_MAX_LINES, len(lines)
 
@@ -86,14 +87,14 @@ def test_readme_has_copy_paste_admin_console_start():
 
 def test_readme_admin_console_start_requires_no_git_checkout():
     text = read(ROOT / "README.md")
-    admin_section = text.split("## Get started", 1)[1].split("##", 1)[0]
+    admin_section = text.split("## Get started", 1)[1].split("\n## ", 1)[0]
     assert "install-admin-console.sh" in admin_section
     assert "git clone" not in admin_section
 
 
 def test_readme_admin_console_defaults_to_host_networking():
     text = read(ROOT / "README.md")
-    admin_section = text.split("## Get started", 1)[1].split("##", 1)[0]
+    admin_section = text.split("## Get started", 1)[1].split("\n## ", 1)[0]
     # Normal users are never told to pass --hostnet; host networking is the
     # documented default and --bridge is the opt-in.
     assert "--hostnet" not in admin_section
@@ -429,7 +430,7 @@ def test_faq_start_path_uses_installer_not_source_launcher():
 
 def test_readme_recommended_admin_console_uses_positive_instruction():
     text = read(ROOT / "README.md")
-    section = text.split("## Get started", 1)[1].split("##", 1)[0]
+    section = text.split("## Get started", 1)[1].split("\n## ", 1)[0]
     assert "Start with the Admin Console" in section
     assert "Install and start it" in section
     assert "No Git checkout" not in section
@@ -568,7 +569,7 @@ def test_docs_index_marks_developer_setup_as_developer_path():
 
 def test_docs_index_operating_models_mark_developer_setup_not_for_normal_users():
     text = read(ROOT / "docs" / "README.md")
-    section = text.split("## Operating models", 1)[1].split("##", 1)[0]
+    section = text.split("## Operating models", 1)[1].split("\n## ", 1)[0]
     assert "Admin Console" in section
     assert "Docker Bootstrap" in section
     assert "Developer Setup" in section

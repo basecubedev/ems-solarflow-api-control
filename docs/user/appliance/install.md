@@ -91,8 +91,40 @@ Windows, macOS and Linux, and it verifies what it wrote.
 
 When Imager says it is done, eject the card.
 
-> balenaEtcher also works if you already use it. Imager is recommended because
-> it verifies what it wrote and is maintained by the board's own vendor.
+> balenaEtcher also works if you already use it. Both are open source. Imager is
+> recommended because it verifies what it wrote and is maintained by the board's
+> own vendor.
+
+### On a Linux machine with no desktop
+
+If you have no graphical session, write the card from a shell. There is no
+undo and no confirmation prompt: the command overwrites whatever you name,
+immediately and completely.
+
+```bash
+lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,MODEL
+```
+
+Find your card by **size and model** — not by the letter, which changes between
+plugs. It is the whole disk (`/dev/sdX`, `/dev/mmcblk0`), never a partition
+(`/dev/sdX1`). Unmount anything the desktop auto-mounted, then:
+
+```bash
+sudo dd if=ems-solarflow-appliance-<version>-arm64-ab.img of=/dev/sdX \
+        bs=4M conv=fsync status=progress
+sudo sync
+```
+
+`dd` does not verify. Read the image back and compare it against the file you
+wrote, which is what Imager does for you:
+
+```bash
+sudo cmp -n "$(stat -c %s ems-solarflow-appliance-<version>-arm64-ab.img)" \
+        ems-solarflow-appliance-<version>-arm64-ab.img /dev/sdX
+```
+
+Silence means the card matches the image. Any output means it does not — write
+it again before you boot it.
 
 ## 4. Start the appliance
 
