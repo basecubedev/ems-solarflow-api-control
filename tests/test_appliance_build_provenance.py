@@ -86,14 +86,16 @@ def source_tree(tmp_path, lock, *, name="rpi-image-gen"):
     write(root, lock.executable, "#!/bin/bash\n", mode=0o755)
     write(root, "LICENSE", "upstream\n")
     write(root, lock.host_dependencies_file, "all:bash\nbuild:mmdebstrap\n")
-    write(
-        root,
-        lock.image_layer_path,
-        "# METABEGIN\n"
-        f"# X-Env-Layer-Name: {lock.image_layer}\n"
-        f"# X-Env-Layer-Version: {lock.image_layer_version}\n"
-        "# METAEND\n",
-    )
+    for slug in sorted(lock.image_layers):
+        pinned = lock.layer(slug)
+        write(
+            root,
+            pinned.path,
+            "# METABEGIN\n"
+            f"# X-Env-Layer-Name: {pinned.name}\n"
+            f"# X-Env-Layer-Version: {pinned.version}\n"
+            "# METAEND\n",
+        )
     write(
         root,
         "image/gpt/ab_userdata/post-image.sh",

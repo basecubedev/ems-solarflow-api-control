@@ -114,6 +114,51 @@ def test_image_rota_accepts_only_the_pi4_and_pi5_device_classes(lock):
     assert "regex:^(cm4|pi4|cm5|pi5)$" in text
 
 
+def test_the_lock_pins_the_single_slot_image_layer_upstream_actually_ships(lock):
+    pinned = lock.layer("single")
+    text = upstream.read(upstream.IMAGE_RPIOS)
+
+    assert upstream.layer_field(text, "Name") == pinned.name
+    assert upstream.layer_field(text, "Version") == pinned.version
+    assert tuple(upstream.layer_list(text, "Requires")) == ("image-base", "rpi-storage-binder")
+
+
+def test_the_lock_and_the_variant_table_name_the_same_image_layers(lock):
+    """Two files, one fact, and a test so they cannot drift apart.
+
+    The lock stays self-describing because it is the artefact that gets
+    reviewed; the variant table stays authoritative for the runtime because it
+    is what a booted appliance can read. Neither may quietly become wrong.
+    """
+
+    from appliance import image_variants
+
+    assert set(lock.image_layers) == set(image_variants.VARIANTS)
+    for slug, variant in image_variants.VARIANTS.items():
+        assert lock.layer(slug).name == variant.image_layer, slug
+
+
+def test_the_single_slot_root_is_writable_and_named_by_slot():
+    """What makes apt possible, read out of upstream's own bytes.
+
+    The A/B image mounts its root read-only, which is why it cannot be patched
+    in place. image-rpios writes the opposite fstab, and points the kernel at
+    the same by-slot name its udev rules create.
+    """
+
+    setup = upstream.read(upstream.IMAGE_RPIOS_SETUP)
+    rules = upstream.read(upstream.IMAGE_RPIOS_SLOT_RULES)
+
+    assert "/dev/disk/by-slot/system  /  ext4 rw," in setup
+    assert "root=/dev/disk/by-slot/system" in setup
+    assert 'ENV{ID_FS_LABEL}=="ROOT", SYMLINK+="disk/by-slot/system"' in rules
+
+
+def test_upstream_single_slot_config_selects_image_rpios():
+    payload = yaml.safe_load(upstream.read(upstream.UPSTREAM_SINGLE_CONFIG))
+    assert payload["image"]["layer"] == "image-rpios"
+
+
 def test_upstream_exposes_the_trixie_docker_layer_and_its_capability():
     trixie = upstream.read("layer/app-container/docker/engine-trixie.yaml")
     assert upstream.layer_field(trixie, "Name") == "docker-debian-trixie"
@@ -174,7 +219,8 @@ def test_the_project_layer_requires_layers_upstream_defines():
     """``X-Env-Layer-Requires`` names layers, and every one must exist."""
 
     upstream_names = set(upstream_device_layers().values())
-    upstream_names.add(upstream.layer_field(upstream.read(upstream.IMAGE_ROTA), "Name"))
+    for relative in (upstream.IMAGE_ROTA, upstream.IMAGE_RPIOS):
+        upstream_names.add(upstream.layer_field(upstream.read(relative), "Name"))
     for relative in upstream.DOCKER_LAYERS:
         upstream_names.add(upstream.layer_field(upstream.read(relative), "Name"))
 

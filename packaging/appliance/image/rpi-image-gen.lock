@@ -9,12 +9,13 @@
     "<srcdir>"
   ],
   "comment": [
-    "The exact rpi-image-gen revision this project's A/B appliance image is",
-    "built against. Pinned rather than tracking master: image-rota owns the",
-    "partition table, the slot identities and the shared-slot mount mechanism,",
-    "so an upstream change to any of them changes what this appliance is.",
-    "appliance/rpi_image_gen.py verifies a checkout against this file and",
-    "refuses to build against anything else.",
+    "The exact rpi-image-gen revision this project's appliance images are built",
+    "against. Pinned rather than tracking master: image-rota owns the partition",
+    "table, the slot identities and the shared-slot mount mechanism, and",
+    "image-rpios owns the single-slot layout and the by-slot links its root is",
+    "mounted through, so an upstream change to any of them changes what this",
+    "appliance is. appliance/rpi_image_gen.py verifies a checkout against this",
+    "file and refuses to build against anything else.",
     "tree_sha256 is the canonical digest of the extracted tree, excluding the",
     "source record itself. The record beside the tree is written by the same",
     "fetch that extracted it, so it cannot be the authority for it: this file",
@@ -23,9 +24,18 @@
   "commit": "a7b6d4806183195f3efadb533f58c8e46393d057",
   "executable": "rpi-image-gen",
   "host_dependencies_file": "depends",
-  "image_layer": "image-rota",
-  "image_layer_path": "image/gpt/ab_userdata/image.yaml",
-  "image_layer_version": "5.5.1",
+  "image_layers": {
+    "ab": {
+      "name": "image-rota",
+      "path": "image/gpt/ab_userdata/image.yaml",
+      "version": "5.5.1"
+    },
+    "single": {
+      "name": "image-rpios",
+      "path": "image/mbr/simple_dual/image.yaml",
+      "version": "2.2.1"
+    }
+  },
   "lock_version": 1,
   "machine_id_source": "/persistent/common/etc/machine-id",
   "partition_labels": {
@@ -61,7 +71,11 @@
     "image/gpt/ab_userdata/device/rootfs-overlay/usr/lib/systemd/system-generators/slot-shared-generator",
     "image/gpt/ab_userdata/device/rootfs-overlay/usr/lib/systemd/system-generators/slot-perst-generator",
     "layer/rpi/device/slot-mapper/bin/rpi-slot-label",
-    "config/trixie-minbase-ab.yaml"
+    "config/trixie-minbase-ab.yaml",
+    "config/trixie-minbase.yaml",
+    "image/mbr/simple_dual/setup.sh",
+    "image/mbr/simple_dual/genimage.cfg.in.ext4",
+    "image/mbr/simple_dual/device/rootfs-overlay/etc/udev/rules.d/99-rpi-05-image.rules"
   ],
   "shared_root": "/persistent/shared",
   "shared_slot_conf_dir": "/etc/rpi-image-gen/slot-shared.d",

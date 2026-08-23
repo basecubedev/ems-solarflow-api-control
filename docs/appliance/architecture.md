@@ -118,6 +118,7 @@ is refused as `invalid_request` before any handler runs.
 | `release_trust.py`, `release_attestation.py`, `release_inputs.py` | What a signed release vouches for, and the readiness invariants that bound it |
 | `build_authority.py`, `source_bundle.py`, `project_source.py` | Which build an artefact came from, and the source tree it can be rebuilt from |
 | `rpi_image_gen.py`, `runtime_gates.py` | The pinned upstream generator and the runtime evidence a release is bound to |
+| `image_variants.py` | The two shapes an appliance image can have, and every fact that follows from choosing one |
 | `audit.py` | The append-only record of what was done to this appliance |
 | `health.py` | Whether a deployed container is answering, and how long to wait for it |
 | `version.py` | The appliance version, its supported architectures and board models |

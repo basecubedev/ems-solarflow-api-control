@@ -20,6 +20,8 @@ import stat
 from dataclasses import dataclass
 from pathlib import Path
 
+from appliance import image_variants
+
 LOCK_NAME = "rpi-image-gen.lock"
 SOURCE_IDENTITY_NAME = ".rpi-image-gen-source.json"
 
@@ -147,14 +149,22 @@ class ImageGenError(Exception):
 
 
 @dataclass(frozen=True)
+class LockedLayer:
+    """One upstream image layer, as the lock pins it."""
+
+    slug: str
+    name: str
+    path: str
+    version: str
+
+
+@dataclass(frozen=True)
 class Lock:
     repository: str
     release: str
     commit: str
     executable: str
-    image_layer: str
-    image_layer_version: str
-    image_layer_path: str
+    image_layers: dict
     shared_slot_mechanism: str
     shared_slot_conf_dir: str
     shared_root: str
@@ -172,6 +182,34 @@ class Lock:
     update_member_format: str = ""
     tree_sha256: str = ""
     tarball: dict = None
+
+    def layer(self, slug):
+        """The pinned upstream image layer one variant is built from.
+
+        Both variants are declared in the lock rather than derived from
+        ``image_variants``: the lock is the file that gets reviewed, and a
+        contract test keeps the two from disagreeing.
+        """
+
+        entry = self.image_layers[slug]
+        return LockedLayer(
+            slug=slug,
+            name=str(entry["name"]),
+            path=str(entry["path"]),
+            version=str(entry["version"]),
+        )
+
+    @property
+    def image_layer(self):
+        return self.layer(image_variants.VARIANT_AB).name
+
+    @property
+    def image_layer_version(self):
+        return self.layer(image_variants.VARIANT_AB).version
+
+    @property
+    def image_layer_path(self):
+        return self.layer(image_variants.VARIANT_AB).path
 
     def to_dict(self):
         return {
@@ -206,9 +244,14 @@ def read_lock(path=None):
             commit=str(payload["commit"]),
             tree_sha256=str(payload.get("tree_sha256") or ""),
             executable=str(payload["executable"]),
-            image_layer=str(payload["image_layer"]),
-            image_layer_version=str(payload["image_layer_version"]),
-            image_layer_path=str(payload["image_layer_path"]),
+            image_layers={
+                str(slug): {
+                    "name": str(entry["name"]),
+                    "path": str(entry["path"]),
+                    "version": str(entry["version"]),
+                }
+                for slug, entry in dict(payload["image_layers"]).items()
+            },
             shared_slot_mechanism=str(payload["shared_slot_mechanism"]),
             shared_slot_conf_dir=str(payload["shared_slot_conf_dir"]),
             shared_root=str(payload["shared_root"]),
@@ -726,26 +769,35 @@ def probe_checkout(
             )
         )
 
-    layer = root / lock.image_layer_path
-    if layer.is_file():
+    # Every variant this project can build, not only the one being built now:
+    # a checkout that could not build the other image is a checkout this
+    # project is not pinned to, and finding that out at release time is late.
+    for slug in sorted(lock.image_layers):
+        pinned = lock.layer(slug)
+        layer = root / pinned.path
+        if not layer.is_file():
+            findings.append(
+                Finding(f"image_layer:{slug}", FAIL, f"{pinned.path} is missing")
+            )
+            findings.append(
+                Finding(f"image_layer_version:{slug}", NOT_RUN, "the layer file is missing")
+            )
+            continue
         name, version = layer_metadata(layer.read_text(encoding="utf-8", errors="replace"))
         findings.append(
             Finding(
-                "image_layer",
-                PASS if name == lock.image_layer else FAIL,
-                f"{name or 'unnamed'} (expected {lock.image_layer})",
+                f"image_layer:{slug}",
+                PASS if name == pinned.name else FAIL,
+                f"{name or 'unnamed'} (expected {pinned.name})",
             )
         )
         findings.append(
             Finding(
-                "image_layer_version",
-                PASS if version == lock.image_layer_version else FAIL,
-                f"{version or 'unversioned'} (expected {lock.image_layer_version})",
+                f"image_layer_version:{slug}",
+                PASS if version == pinned.version else FAIL,
+                f"{version or 'unversioned'} (expected {pinned.version})",
             )
         )
-    else:
-        findings.append(Finding("image_layer", FAIL, f"{lock.image_layer_path} is missing"))
-        findings.append(Finding("image_layer_version", NOT_RUN, "the layer file is missing"))
 
     findings.append(_shared_slot_finding(root, lock))
     findings.append(_update_finding(root, lock))

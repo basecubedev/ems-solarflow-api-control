@@ -59,14 +59,20 @@ def checkout(tmp_path, lock, **overrides):
     write(root, lock.executable, "#!/bin/bash\n", mode=0o755)
     write(root, "LICENSE", "upstream\n")
     write(root, "depends", "all:bash\nbuild:mmdebstrap\n")
-    write(
-        root,
-        lock.image_layer_path,
-        "# METABEGIN\n"
-        f"# X-Env-Layer-Name: {overrides.get('layer_name', lock.image_layer)}\n"
-        f"# X-Env-Layer-Version: {overrides.get('layer_version', lock.image_layer_version)}\n"
-        "# METAEND\n",
-    )
+    for slug in sorted(lock.image_layers):
+        pinned = lock.layer(slug)
+        # Overrides without a slug still mean the A/B layer, which is what the
+        # refusal tests written before there was a second one are about.
+        suffix = "" if slug == "ab" else f"_{slug}"
+        write(
+            root,
+            pinned.path,
+            "# METABEGIN\n"
+            f"# X-Env-Layer-Name: {overrides.get(f'layer_name{suffix}', pinned.name)}\n"
+            f"# X-Env-Layer-Version: "
+            f"{overrides.get(f'layer_version{suffix}', pinned.version)}\n"
+            "# METAEND\n",
+        )
     write(
         root,
         "image/gpt/ab_userdata/post-image.sh",
@@ -85,6 +91,14 @@ def checkout(tmp_path, lock, **overrides):
     write(root, PERSIST_GENERATOR, "#!/bin/sh\n", mode=0o755)
     write(root, "layer/rpi/device/slot-mapper/bin/rpi-slot-label", "#!/bin/sh\n", mode=0o755)
     write(root, "config/trixie-minbase-ab.yaml", "image:\n  layer: image-rota\n")
+    write(root, "config/trixie-minbase.yaml", "image:\n  layer: image-rpios\n")
+    write(root, "image/mbr/simple_dual/setup.sh", "#!/bin/bash\n", mode=0o755)
+    write(root, "image/mbr/simple_dual/genimage.cfg.in.ext4", "partition root {}\n")
+    write(
+        root,
+        "image/mbr/simple_dual/device/rootfs-overlay/etc/udev/rules.d/99-rpi-05-image.rules",
+        'SUBSYSTEM=="block", SYMLINK+="disk/by-slot/system"\n',
+    )
     if overrides.get("identity", True):
         # A verified tarball extraction: the identity record plus the manifest
         # of the tree it actually is. A git checkout is proven through git, so
@@ -250,7 +264,7 @@ def test_a_checkout_without_image_rota_is_refused(tmp_path, lock):
     report = probe(checkout(tmp_path, lock, layer_name="image-base"), lock)
 
     assert not report.compatible
-    assert "image_layer" in failed(report)
+    assert "image_layer:ab" in failed(report)
 
 
 def test_a_different_image_rota_version_is_refused(tmp_path, lock):
@@ -259,7 +273,37 @@ def test_a_different_image_rota_version_is_refused(tmp_path, lock):
     report = probe(checkout(tmp_path, lock, layer_version="6.0.0"), lock)
 
     assert not report.compatible
-    assert "image_layer_version" in failed(report)
+    assert "image_layer_version:ab" in failed(report)
+
+
+def test_a_checkout_without_the_single_slot_image_layer_is_refused(tmp_path, lock):
+    """Both variants are verified, not only the one about to be built.
+
+    A checkout that could not build the other image is a checkout this project
+    is not pinned to, and finding that out at release time is late.
+    """
+
+    report = probe(checkout(tmp_path, lock, layer_name_single="image-base"), lock)
+
+    assert not report.compatible
+    assert "image_layer:single" in failed(report)
+
+
+def test_a_different_single_slot_layer_version_is_refused(tmp_path, lock):
+    report = probe(checkout(tmp_path, lock, layer_version_single="9.9.9"), lock)
+
+    assert not report.compatible
+    assert "image_layer_version:single" in failed(report)
+
+
+def test_a_missing_single_slot_layer_file_is_never_reported_as_a_pass(tmp_path, lock):
+    root = checkout(tmp_path, lock)
+    (root / lock.layer("single").path).unlink()
+
+    report = probe(root, lock)
+
+    assert not report.compatible
+    assert "image_layer:single" in failed(report)
 
 
 def test_a_checkout_without_the_shared_slot_generator_is_refused(tmp_path, lock):
