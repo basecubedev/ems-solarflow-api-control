@@ -508,3 +508,37 @@ def test_a_host_with_no_build_marker_at_all_fails_closed(host):
 
     assert report.ok is False
     assert report.state == ab_persistence.STATE_MISSING
+
+
+def test_every_shared_path_has_an_activation_the_inspector_checks():
+    """The inspector's list was written by hand and was one short.
+
+    /var/lib/ems-backup was missing from it, so an image that shipped without
+    that .wants link passed inspection: the bind would never have been
+    activated, and every backup written to it would have been lost at the first
+    slot switch. The list is derived now, and this is what keeps it derived.
+    """
+
+    from appliance import ab_image
+
+    expected = {shared.target for shared in ab_persistence.SHARED_PATHS}
+
+    assert len(ab_image.SHARED_ACTIVATIONS) == len(expected)
+    assert "var-lib-ems\\x2dbackup.mount" in ab_image.SHARED_ACTIVATIONS
+
+
+def test_the_shipped_image_activates_exactly_the_paths_the_contract_declares():
+    """Derivation is only useful if it matches the bytes the image carries."""
+
+    from pathlib import Path
+
+    from appliance import ab_image
+
+    overlay = (
+        Path(__file__).resolve().parents[1]
+        / "packaging/appliance/image/layer/ems-appliance.rootfs-overlay"
+        / ab_image.SHARED_ACTIVATION_DIRECTORY
+    )
+    shipped = sorted(entry.name for entry in overlay.iterdir())
+
+    assert shipped == sorted(ab_image.SHARED_ACTIVATIONS)

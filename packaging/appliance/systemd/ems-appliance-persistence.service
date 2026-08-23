@@ -28,7 +28,7 @@ ConditionPathExists=/etc/ems-appliance-os-build
 RequiresMountsFor=/persistent
 After=local-fs.target
 # Upstream's generator writes one .mount unit per declared path and links
-# exactly one of them into local-fs.target, so five of the six binds would
+# exactly one of them into local-fs.target, so six of the seven binds would
 # never be activated. The image ships the missing .wants links, and this
 # pulls the same mounts in through systemd's own path dependency, so the
 # verification below cannot run before the mounts it is verifying.

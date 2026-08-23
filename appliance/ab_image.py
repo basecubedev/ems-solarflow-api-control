@@ -28,7 +28,7 @@ import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
-from appliance import ab_filesystems, ab_persistence, backup_ownership
+from appliance import ab_filesystems, ab_persistence, backup_ownership, image_variants
 
 SECTOR_SIZE = 512
 GPT_SIGNATURE = b"EFI PART"
@@ -135,6 +135,57 @@ def read_partitions(path):
                 label=label,
                 first_lba=first_lba,
                 last_lba=last_lba,
+            )
+        )
+    return partitions
+
+
+MBR_TABLE_OFFSET = 446
+MBR_ENTRY_SIZE = 16
+MBR_ENTRY_COUNT = 4
+MBR_SIGNATURE = b"\x55\xaa"
+
+# An MBR carries no partition names. Upstream's genimage template assigns the
+# boot partition type 0x0C (FAT32 LBA) and the root 0x83 (Linux), so that is
+# what the name is taken from -- an entry of any other type is left unnamed
+# rather than guessed at, because a wrong name here would inspect the wrong
+# filesystem and report the answer as though it were about the right one.
+MBR_PARTITION_LABELS = {0x0C: "boot", 0x83: "root"}
+
+
+def read_mbr_partitions(path):
+    """The MBR partition entries of an image file, without mounting anything.
+
+    The single-slot image is not a GPT image, so ``read_partitions`` above
+    would refuse it outright. Same shape out, so everything downstream reads
+    one kind of partition.
+    """
+
+    target = Path(path)
+    try:
+        with target.open("rb") as handle:
+            sector = handle.read(SECTOR_SIZE)
+    except OSError as exc:
+        raise ImageError("image_unreadable", f"{target} could not be read: {exc}")
+    if len(sector) < SECTOR_SIZE or sector[510:512] != MBR_SIGNATURE:
+        raise ImageError("image_not_mbr", f"{target} does not carry an MBR partition table")
+
+    partitions = []
+    for index in range(MBR_ENTRY_COUNT):
+        start = MBR_TABLE_OFFSET + index * MBR_ENTRY_SIZE
+        entry = sector[start : start + MBR_ENTRY_SIZE]
+        kind = entry[4]
+        first_lba, sectors = struct.unpack("<II", entry[8:16])
+        if not kind or not sectors:
+            continue
+        partitions.append(
+            ImagePartition(
+                number=index + 1,
+                partuuid="",
+                type_guid=f"0x{kind:02x}",
+                label=MBR_PARTITION_LABELS.get(kind, ""),
+                first_lba=first_lba,
+                last_lba=first_lba + sectors - 1,
             )
         )
     return partitions
@@ -374,15 +425,57 @@ ENABLED_UNITS = {
 }
 WANTS_DIRECTORY = "etc/systemd/system/multi-user.target.wants"
 SHARED_ACTIVATION_DIRECTORY = "etc/systemd/system/local-fs.target.wants"
-SHARED_ACTIVATIONS = (
-    "etc-ems\\x2dappliance\\x2dmanager.mount",
-    "etc-NetworkManager-system\\x2dconnections.mount",
-    "opt-ems\\x2dsolarflow.mount",
-    "var-lib-ems\\x2dappliance\\x2dmanager.mount",
-    "var-lib-ems\\x2dappliance\\x2dos\\x2dupdate.mount",
-    "var-log-ems\\x2dappliance\\x2dmanager.mount",
+
+
+def _mount_unit_name(path):
+    """The .mount unit systemd generates for a path, by its own escaping rules.
+
+    Derived rather than written out. The list used to be typed by hand and was
+    one short: /var/lib/ems-backup was missing, so an image that never
+    activated the backup bind passed inspection, and every backup it wrote
+    would have been lost at the next slot switch.
+    """
+
+    escaped = []
+    for index, character in enumerate(path.strip("/")):
+        if character == "/":
+            escaped.append("-")
+        elif (character.isascii() and character.isalnum()) or character == "_" or (
+            character == "." and index
+        ):
+            escaped.append(character)
+        else:
+            escaped.append(f"\\x{ord(character):02x}")
+    return "".join(escaped) + ".mount"
+
+
+SHARED_ACTIVATIONS = tuple(
+    sorted(_mount_unit_name(shared.target) for shared in ab_persistence.SHARED_PATHS)
 )
-SLOT_ROOT_DEVICE = "root=/dev/disk/by-slot/active/system"
+SLOT_ROOT_DEVICE = image_variants.variant(image_variants.VARIANT_AB).root_device
+
+
+@dataclass(frozen=True)
+class RootExpectations:
+    """What a root filesystem of one image variant has to contain.
+
+    The checks an image is subjected to are not a matter of taste: an A/B slot
+    root that is writable is broken, and a single-slot root that is not is
+    unpatchable. Reporting the inapplicable half as passing would let an
+    inspection of the wrong kind of image read as a clean one, so a check that
+    does not apply is reported NOT RUN and counts as not having run.
+    """
+
+    variant: str
+    root_device: str
+    fstab_readonly: bool
+    layout_descriptor: bool
+    shared_persistence: bool
+    slot_generators: bool
+    machine_id_policy: bool
+    service_drop_ins: bool
+    units: dict
+
 
 # --- what the image has to contain ------------------------------------------
 
@@ -401,6 +494,40 @@ ROOT_UNITS = {
     "persistence_service_enabled": "ems-appliance-persistence.service",
     "host_identity_service_enabled": "ems-appliance-host-identity.service",
 }
+
+# The units a single-slot root must carry enabled. It has no slot to bootstrap,
+# no trial to judge and no persistence to prove, so what is left is the pair
+# that is the appliance.
+SINGLE_SLOT_UNITS = {
+    "agent_service_enabled": "ems-appliance-agent.service",
+    "web_service_enabled": "ems-appliance-web.service",
+}
+
+ROOT_EXPECTATIONS = {
+    image_variants.VARIANT_AB: RootExpectations(
+        variant=image_variants.VARIANT_AB,
+        root_device=image_variants.variant(image_variants.VARIANT_AB).root_device,
+        fstab_readonly=True,
+        layout_descriptor=True,
+        shared_persistence=True,
+        slot_generators=True,
+        machine_id_policy=True,
+        service_drop_ins=True,
+        units=ROOT_UNITS,
+    ),
+    image_variants.VARIANT_SINGLE: RootExpectations(
+        variant=image_variants.VARIANT_SINGLE,
+        root_device=image_variants.variant(image_variants.VARIANT_SINGLE).root_device,
+        fstab_readonly=False,
+        layout_descriptor=False,
+        shared_persistence=False,
+        slot_generators=False,
+        machine_id_policy=False,
+        service_drop_ins=False,
+        units=SINGLE_SLOT_UNITS,
+    ),
+}
+
 
 # Upstream's own generators. Without them the shared binds and the per-slot
 # /var policy are never generated, and every write on the appliance is lost at
@@ -524,13 +651,20 @@ MOUNT_POINTS = (
 )
 
 
-def _fstab_root_readonly(reader):
-    """``(ok, detail)`` for the mount options the slot root declares for ``/``."""
+def _fstab_root_mode(reader, *, readonly):
+    """``(ok, detail)`` for the mount options the root declares for ``/``.
 
+    Both directions are a real verdict, not a preference. An A/B slot root that
+    is writable loses every write at the next slot switch; a single-slot root
+    that is read-only cannot be patched by apt, which is the only way that
+    variant is patched at all.
+    """
+
+    required, forbidden = ("ro", "rw") if readonly else ("rw", "ro")
     try:
         fstab = reader.read_text(FSTAB)
     except ab_filesystems.FilesystemError:
-        return False, "the slot root carries no /etc/fstab"
+        return False, "the root carries no /etc/fstab"
     for line in fstab.splitlines():
         if line.lstrip().startswith("#"):
             continue
@@ -538,19 +672,35 @@ def _fstab_root_readonly(reader):
         if len(fields) < 4 or fields[1] != "/":
             continue
         options = [option.strip() for option in fields[3].split(",")]
-        if "rw" in options:
-            return False, f"the root is mounted rw: {fields[3]}"
-        if "ro" not in options:
-            return False, f"the root declares no ro: {fields[3]}"
+        if forbidden in options:
+            return False, f"the root is mounted {forbidden}: {fields[3]}"
+        if required not in options:
+            return False, f"the root declares no {required}: {fields[3]}"
         return True, fields[3]
-    return False, "the slot root's fstab has no entry for /"
+    return False, "the root's fstab has no entry for /"
 
 
-def _root_content_findings(label, reader, *, appliance_version, build_id, architecture):
+def _root_content_findings(label, reader, *, appliance_version, build_id, architecture,
+                           expectations=None):
+    expectations = expectations or ROOT_EXPECTATIONS[image_variants.VARIANT_AB]
     findings = []
 
     def record(check, ok, detail):
         findings.append(Finding(f"{check}:{label}", PASS if ok else FAIL, detail))
+
+    def skip(check, detail):
+        """A check this variant has nothing to answer with.
+
+        Never PASS: "the image is good" and "nobody looked" reaching a release
+        gate as the same answer is exactly what summarise() exists to stop. But
+        not mandatory either, because a check that cannot apply to this image
+        is not a missing oracle -- it is a question about a mechanism this
+        variant does not have, and the detail says which. A mandatory NOT RUN
+        would make every single-slot inspection incomplete by construction, and
+        an inspection that can never pass is one nobody reads.
+        """
+
+        findings.append(Finding(f"{check}:{label}", NOT_RUN, detail, mandatory=False))
 
     record(
         "package_installed",
@@ -627,55 +777,79 @@ def _root_content_findings(label, reader, *, appliance_version, build_id, archit
     else:
         record("build_marker", True, str(marker.get("build_id") or "present"))
 
-    record("layout_descriptor", reader.is_file(LAYOUT_DESCRIPTOR), LAYOUT_DESCRIPTOR)
+    present = reader.is_file(LAYOUT_DESCRIPTOR)
+    if expectations.layout_descriptor:
+        record("layout_descriptor", present, LAYOUT_DESCRIPTOR)
+    else:
+        # Not "not applicable": a single-slot image carrying this would tell the
+        # runtime it has slots, and every A/B path would then act on a host that
+        # has none. Its absence is the mechanism, so its presence is a failure.
+        record(
+            "layout_descriptor_absent",
+            not present,
+            f"{LAYOUT_DESCRIPTOR} would claim slots this image does not have"
+            if present
+            else "no layout descriptor, as a single-slot image requires",
+        )
 
-    # Where the read-only root is actually enforced. The kernel command line
-    # decides the initial mount; systemd-remount-fs then applies this line, so a
-    # slot root whose fstab says rw is a writable root however it booted.
-    record("root_fstab_readonly", *_fstab_root_readonly(reader))
+    # Where the mount mode is actually enforced. The kernel command line decides
+    # the initial mount; systemd-remount-fs then applies this line, so a root
+    # whose fstab disagrees is that mode however it booted.
+    record(
+        "root_fstab_readonly" if expectations.fstab_readonly else "root_fstab_writable",
+        *_fstab_root_mode(reader, readonly=expectations.fstab_readonly),
+    )
 
     # And what a read-only root then requires: every mount point already in the
     # image. systemd creates a missing one only where it can write, so a shared
     # path with no directory here is a bind that never happens on hardware.
-    absent = [path for path in MOUNT_POINTS if not reader.is_dir(path.lstrip("/"))]
-    record(
-        "mount_points_present",
-        not absent,
-        f"no directory for: {', '.join(absent)}"
-        if absent
-        else f"{len(MOUNT_POINTS)} mount points present",
-    )
+    if expectations.shared_persistence:
+        absent = [path for path in MOUNT_POINTS if not reader.is_dir(path.lstrip("/"))]
+        record(
+            "mount_points_present",
+            not absent,
+            f"no directory for: {', '.join(absent)}"
+            if absent
+            else f"{len(MOUNT_POINTS)} mount points present",
+        )
+    else:
+        skip("mount_points_present", "a writable root creates its own directories")
 
-    try:
-        declared = {
-            line.split("=", 1)[1].strip()
-            for line in reader.read_text(SLOT_SHARED_CONF).splitlines()
-            if line.startswith("Path=")
-        }
-    except ab_filesystems.FilesystemError:
-        declared = set()
-    record(
-        "persistence_configuration",
-        len(declared) >= len(SHARED_ACTIVATIONS),
-        f"{len(declared)} shared paths declared"
-        if declared
-        else "the slot root declares no shared paths and would lose every write",
-    )
+    if expectations.shared_persistence:
+        try:
+            declared = {
+                line.split("=", 1)[1].strip()
+                for line in reader.read_text(SLOT_SHARED_CONF).splitlines()
+                if line.startswith("Path=")
+            }
+        except ab_filesystems.FilesystemError:
+            declared = set()
+        record(
+            "persistence_configuration",
+            len(declared) >= len(SHARED_ACTIVATIONS),
+            f"{len(declared)} shared paths declared"
+            if declared
+            else "the slot root declares no shared paths and would lose every write",
+        )
 
-    absent = [
-        activation
-        for activation in SHARED_ACTIVATIONS
-        if not reader.is_symlink(f"{SHARED_ACTIVATION_DIRECTORY}/{activation}")
-    ]
-    record(
-        "shared_activations",
-        not absent,
-        f"not activated: {', '.join(absent)}"
-        if absent
-        else f"{len(SHARED_ACTIVATIONS)} shared paths activated",
-    )
+        absent = [
+            activation
+            for activation in SHARED_ACTIVATIONS
+            if not reader.is_symlink(f"{SHARED_ACTIVATION_DIRECTORY}/{activation}")
+        ]
+        record(
+            "shared_activations",
+            not absent,
+            f"not activated: {', '.join(absent)}"
+            if absent
+            else f"{len(SHARED_ACTIVATIONS)} shared paths activated",
+        )
+    else:
+        reason = "there is no second slot for a write to be lost to"
+        skip("persistence_configuration", reason)
+        skip("shared_activations", reason)
 
-    for check, unit in ROOT_UNITS.items():
+    for check, unit in expectations.units.items():
         present = reader.is_file(f"{UNIT_DIRECTORY}/{unit}")
         enabled = reader.is_symlink(f"{WANTS_DIRECTORY}/{unit}")
         record(
@@ -686,27 +860,33 @@ def _root_content_findings(label, reader, *, appliance_version, build_id, archit
             else ("installed but not enabled" if present else "not installed"),
         )
 
-    missing_generators = [name for name in SLOT_GENERATORS if not reader.exists(name)]
-    record(
-        "slot_generators",
-        not missing_generators,
-        f"missing: {', '.join(missing_generators)}"
-        if missing_generators
-        else "shared and per-slot generators present",
-    )
+    if expectations.slot_generators:
+        missing_generators = [name for name in SLOT_GENERATORS if not reader.exists(name)]
+        record(
+            "slot_generators",
+            not missing_generators,
+            f"missing: {', '.join(missing_generators)}"
+            if missing_generators
+            else "shared and per-slot generators present",
+        )
+    else:
+        skip("slot_generators", "image-rpios generates no slot binds")
 
     # Upstream ships it as a unit in /etc; a vendor unit in /usr/lib is the
     # other legitimate place for it.
-    machine_id = [
-        directory
-        for directory in (UNIT_DIRECTORY, "etc/systemd/system")
-        if reader.exists(f"{directory}/{MACHINE_ID_UNIT}")
-    ]
-    record(
-        "machine_id_policy",
-        bool(machine_id),
-        f"{MACHINE_ID_UNIT} in {', '.join(machine_id)}" if machine_id else MACHINE_ID_UNIT,
-    )
+    if expectations.machine_id_policy:
+        machine_id = [
+            directory
+            for directory in (UNIT_DIRECTORY, "etc/systemd/system")
+            if reader.exists(f"{directory}/{MACHINE_ID_UNIT}")
+        ]
+        record(
+            "machine_id_policy",
+            bool(machine_id),
+            f"{MACHINE_ID_UNIT} in {', '.join(machine_id)}" if machine_id else MACHINE_ID_UNIT,
+        )
+    else:
+        skip("machine_id_policy", "one root keeps its own machine id")
 
     keys = [name for name in reader.listdir("etc/ssh") if name.startswith("ssh_host_")]
     private = [name for name in keys if not name.endswith(".pub")]
@@ -716,21 +896,28 @@ def _root_content_findings(label, reader, *, appliance_version, build_id, archit
         f"the image carries {', '.join(private)}" if private else "no host key is shipped",
     )
 
-    unordered = []
-    for path, required_unit in SERVICE_DROP_INS.items():
-        try:
-            text = reader.read_text(path)
-        except ab_filesystems.FilesystemError:
-            unordered.append(f"{path} is missing")
-            continue
-        if f"Requires={required_unit}" not in text or f"After={required_unit}" not in text:
-            unordered.append(f"{path} does not require {required_unit}")
-    record(
-        "service_drop_ins",
-        not unordered,
-        "; ".join(unordered) if unordered else f"{len(SERVICE_DROP_INS)} drop-ins ordered",
-    )
+    if expectations.service_drop_ins:
+        unordered = []
+        for path, required_unit in SERVICE_DROP_INS.items():
+            try:
+                text = reader.read_text(path)
+            except ab_filesystems.FilesystemError:
+                unordered.append(f"{path} is missing")
+                continue
+            if f"Requires={required_unit}" not in text or f"After={required_unit}" not in text:
+                unordered.append(f"{path} does not require {required_unit}")
+        record(
+            "service_drop_ins",
+            not unordered,
+            "; ".join(unordered) if unordered else f"{len(SERVICE_DROP_INS)} drop-ins ordered",
+        )
+    else:
+        # Both drop-ins order a service behind a unit that only exists to make an
+        # A/B slot switch non-destructive. Shipping them here would order sshd
+        # and NetworkManager behind units that never run.
+        skip("service_drop_ins", "neither drop-in guards a mechanism this image has")
 
+    # Checked either way: these are the appliance, not the layout.
     missing_helpers = [name for name in RUNTIME_HELPERS if not reader.is_file(name)]
     record(
         "runtime_helpers",
@@ -742,7 +929,8 @@ def _root_content_findings(label, reader, *, appliance_version, build_id, archit
     return findings
 
 
-def _boot_content_findings(label, reader):
+def _boot_content_findings(label, reader, *, expectations=None):
+    expectations = expectations or ROOT_EXPECTATIONS[image_variants.VARIANT_AB]
     findings = []
 
     def record(check, ok, detail):
@@ -754,24 +942,40 @@ def _boot_content_findings(label, reader):
         record("boot_cmdline", False, "there is no cmdline.txt")
         cmdline = ""
     if cmdline:
+        # Both variants mount their root through a by-slot name, but not the
+        # same one: the A/B image is pointed at whichever slot is active, the
+        # single-slot image at the only one there is.
+        device = f"root={expectations.root_device}"
         record(
             "boot_cmdline",
-            SLOT_ROOT_DEVICE in cmdline,
-            SLOT_ROOT_DEVICE if SLOT_ROOT_DEVICE in cmdline else f"root is {cmdline[:120]}",
+            device in cmdline,
+            device if device in cmdline else f"root is {cmdline[:120]}",
         )
         # A read-only root is what makes an A/B slot reproducible: everything
         # that has to survive is a shared bind, and everything else is
-        # discarded at the next boot. The command line decides the *initial*
-        # mount; /etc/fstab in the slot root decides what it stays, and that is
-        # checked separately in the root findings.
+        # discarded at the next boot. A single-slot root is the opposite, and
+        # for the same kind of reason: apt is how it is patched at all. The
+        # command line decides the *initial* mount; /etc/fstab in the root
+        # decides what it stays, and that is checked in the root findings.
         fields = cmdline.split()
         readonly = "ro" in fields
         writable = "rw" in fields
-        record(
-            "boot_readonly_root",
-            readonly and not writable,
-            "rw overrides it" if writable else ("ro" if readonly else "the root is not read-only"),
-        )
+        if expectations.fstab_readonly:
+            record(
+                "boot_readonly_root",
+                readonly and not writable,
+                "rw overrides it"
+                if writable
+                else ("ro" if readonly else "the root is not read-only"),
+            )
+        else:
+            record(
+                "boot_writable_root",
+                writable and not readonly,
+                "ro overrides it"
+                if readonly
+                else ("rw" if writable else "the root is not asked to be writable"),
+            )
         consoles = [field.split("=", 1)[1] for field in fields if field.startswith("console=")]
         serial = [name for name in consoles if name.split(",")[0].startswith(SERIAL_CONSOLES)]
         record(
@@ -832,21 +1036,43 @@ def _bootconfig_findings(reader):
     return findings
 
 
-def inspect_contents(image_path, *, appliance_version="", build_id="", architecture=""):
+# What each variant's image is made of, and in which order it is inspected.
+VARIANT_PARTITIONS = {
+    image_variants.VARIANT_AB: ("bootconfig", *BOOT_PARTITIONS, *SYSTEM_ROOTS),
+    image_variants.VARIANT_SINGLE: ("boot", "root"),
+}
+VARIANT_ROOT_LABELS = {
+    image_variants.VARIANT_AB: frozenset(SYSTEM_ROOTS),
+    image_variants.VARIANT_SINGLE: frozenset({"root"}),
+}
+VARIANT_BOOT_LABELS = {
+    image_variants.VARIANT_AB: frozenset(BOOT_PARTITIONS),
+    image_variants.VARIANT_SINGLE: frozenset({"boot"}),
+}
+
+
+def inspect_contents(image_path, *, variant=image_variants.VARIANT_AB, appliance_version="",
+                     build_id="", architecture=""):
     """What the image actually contains, read without mounting anything.
 
-    Both slot roots and both boot partitions, because an update writes the
-    *other* slot: content present in only one of them is an appliance that
-    stops being an appliance at the first slot switch.
+    For the A/B image: both slot roots and both boot partitions, because an
+    update writes the *other* slot, and content present in only one of them is
+    an appliance that stops being an appliance at the first slot switch. For
+    the single-slot image there is one of each, and the expectations of what
+    they must contain differ with it.
     """
 
+    expectations = ROOT_EXPECTATIONS[variant]
+    reader_for_table = (
+        read_partitions if variant == image_variants.VARIANT_AB else read_mbr_partitions
+    )
     try:
-        partitions = {item.label: item for item in read_partitions(image_path)}
+        partitions = {item.label: item for item in reader_for_table(image_path)}
     except ImageError as exc:
         return [Finding("image_contents", FAIL, exc.message)]
 
     findings = []
-    for label in ("bootconfig", *BOOT_PARTITIONS, *SYSTEM_ROOTS):
+    for label in VARIANT_PARTITIONS[variant]:
         partition = partitions.get(label)
         if partition is None:
             findings.append(Finding(f"partition_present:{label}", FAIL, "the image has no such partition"))
@@ -866,8 +1092,8 @@ def inspect_contents(image_path, *, appliance_version="", build_id="", architect
         )
         if label == "bootconfig":
             findings.extend(_bootconfig_findings(reader))
-        elif label in BOOT_PARTITIONS:
-            findings.extend(_boot_content_findings(label, reader))
+        elif label in VARIANT_BOOT_LABELS[variant]:
+            findings.extend(_boot_content_findings(label, reader, expectations=expectations))
         else:
             findings.extend(
                 _root_content_findings(
@@ -876,6 +1102,7 @@ def inspect_contents(image_path, *, appliance_version="", build_id="", architect
                     appliance_version=appliance_version,
                     build_id=build_id,
                     architecture=architecture,
+                    expectations=expectations,
                 )
             )
     return findings
