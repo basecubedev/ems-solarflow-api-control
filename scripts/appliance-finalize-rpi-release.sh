@@ -4,6 +4,7 @@
 #
 #   scripts/appliance-finalize-rpi-release.sh --sign-key KEYID --keyring FILE
 #          --trusted-fingerprint FPR... [--dist DIR] [--profile rpi4|rpi5]...
+#          [--variant ab|single]
 #          --source-bundle FILE [--source-authority FILE] [--runtime-gates FILE]
 #          --package FILE [--builder-lock FILE] [--kit DIR] [--no-kit]
 #
@@ -50,6 +51,11 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 DIST="$ROOT/dist"
 KIT="$ROOT/dist/hardware-validation"
 PROFILES=""
+# One variant per release run. Both variants of a board can sit in the same dist
+# directory, and their artefact names differ only in this suffix -- so it is
+# what tells the finalizer which pair of files it is finalising, rather than
+# leaving it to find two build authorities and refuse both.
+VARIANT=ab
 SIGN_KEY=${EMS_APPLIANCE_OS_SIGN_KEY:-}
 KEYRING=${EMS_APPLIANCE_OS_KEYRING:-}
 FINGERPRINTS=${EMS_APPLIANCE_OS_TRUSTED_FINGERPRINTS:-}
@@ -86,6 +92,8 @@ while [ $# -gt 0 ]; do
         --trusted-fingerprint=*) FINGERPRINTS="$FINGERPRINTS ${1#*=}"; shift ;;
         --dist) DIST=${2:?--dist needs a directory}; shift 2 ;;
         --dist=*) DIST=${1#*=}; shift ;;
+        --variant) VARIANT=${2:?--variant needs ab or single}; shift 2 ;;
+        --variant=*) VARIANT=${1#*=}; shift ;;
         --profile) PROFILES="$PROFILES ${2:?--profile needs rpi4 or rpi5}"; shift 2 ;;
         --profile=*) PROFILES="$PROFILES ${1#*=}"; shift ;;
         --source-bundle) SOURCE_BUNDLE=${2:?--source-bundle needs a file}; shift 2 ;;
@@ -138,6 +146,11 @@ VERSION=$(sed -n 's/^APPLIANCE_VERSION = "\(.*\)"$/\1/p' "$ROOT/appliance/versio
 [ -n "$VERSION" ] || fail "the appliance version could not be read" version_unreadable
 
 [ -n "$PROFILES" ] || PROFILES="rpi4 rpi5"
+case "$VARIANT" in
+    ab|single) ;;
+    *) echo "--variant is ab or single, not $VARIANT" >&2; exit 2 ;;
+esac
+export EMS_RELEASE_VARIANT="$VARIANT"
 
 echo "== the builds this release would be cut from =="
 # Before anything is signed: one completed authority per profile, its builder
@@ -169,8 +182,9 @@ print(
     f"{source.tracked_objects} objects {source.symlinks} symlinks"
 )
 
+variant = os.environ.get("EMS_RELEASE_VARIANT") or "ab"
 for profile in profiles:
-    matches = sorted(dist.glob(f"*-{profile}-*.build-authority.json"))
+    matches = sorted(dist.glob(f"*-{profile}-arm64-{variant}.build-authority.json"))
     if len(matches) != 1:
         problems.append(f"{profile}: {len(matches)} build authorities in {dist}")
         continue
@@ -180,10 +194,6 @@ for profile in profiles:
         problems.append(f"{profile}: {error.code}: {error.message}")
         continue
     prefix = matches[0].name[: -len(".build-authority.json")]
-    # Two images are built for the same board and differ only in this suffix.
-    # Taking it from the artefact's own name and handing it to the verifier is
-    # what stops one variant's authority vouching for the other's artefact.
-    variant = prefix.rsplit("-", 1)[-1]
     image = dist / f"{prefix}.img"
     update = dist / f"{prefix}.update.tar.zst"
     if not image.is_file():
@@ -309,9 +319,10 @@ source = release_inputs.read_source_bundle_authority(os.environ["EMS_SOURCE_AUTH
 package = release_inputs.read_package(os.environ["EMS_PACKAGE"])
 runtime_gate_evidence = os.environ.get("EMS_RUNTIME_GATES") or ""
 
+variant = os.environ.get("EMS_RELEASE_VARIANT") or "ab"
 entries, environment = [], None
 for profile in profiles:
-    prefix = f"ems-solarflow-appliance-{version}-{profile}-arm64-ab"
+    prefix = f"ems-solarflow-appliance-{version}-{profile}-arm64-{variant}"
     authority = build_authority.read(dist / f"{prefix}.build-authority.json")
     environment = authority.environment
     entries.append(

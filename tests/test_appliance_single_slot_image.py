@@ -441,3 +441,28 @@ def test_the_growth_unit_is_ordered_before_anything_that_fills_the_root():
     joined = " ".join(before)
     for unit_name in ("ems-appliance-agent.service", "docker.service"):
         assert unit_name in joined, unit_name
+
+
+FINALIZER = SCRIPTS / "appliance-finalize-rpi-release.sh"
+
+
+def test_the_finalizer_finalises_one_variant_rather_than_finding_two():
+    """Both variants of a board can sit in one dist directory.
+
+    Their artefact names differ only in the suffix, so a glob that ignored it
+    would find two build authorities for one profile and refuse both -- and the
+    refusal would read as a broken build rather than an ambiguous request.
+    """
+
+    script = text(FINALIZER)
+
+    assert "--variant is ab or single" in script
+    assert 'arm64-{variant}.build-authority.json' in script
+    assert "arm64-ab" not in script
+
+
+def test_the_release_attestation_describes_the_variant_it_was_given():
+    script = text(FINALIZER)
+    block = script.split("entries, environment = [], None", 1)[1]
+
+    assert 'arm64-{variant}' in block.split("\n\n", 1)[0] or 'arm64-{variant}' in block[:400]
