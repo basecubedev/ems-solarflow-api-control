@@ -341,3 +341,62 @@ def test_both_of_the_builder_vms_branches_pass_the_variant_on(branch, marker):
     """
 
     assert marker in text(SCRIPTS / "appliance-builder-vm.sh"), branch
+
+
+# --- what a release of it has to pass ----------------------------------------
+
+GATES = SCRIPTS / "appliance-release-gates.sh"
+
+
+def test_the_gate_runner_builds_one_variant_per_run():
+    """The gate list itself differs between them, so one verdict cannot cover
+    both -- it would be a verdict about neither."""
+
+    script = text(GATES)
+
+    assert "--variant is ab or single" in script
+    assert '--variant "$VARIANT"' in script
+    assert "arm64-${VARIANT}" in script
+
+
+@pytest.mark.parametrize("gate", [
+    "slot-mounts",
+    "inspect-update-*",
+    "describe-*",
+    "sign-*",
+    "verify-signature-*",
+    "crosscheck-*",
+])
+def test_no_gate_about_an_absent_mechanism_is_required_of_a_single_slot_release(gate):
+    """A gate this image does not have cannot be required of it.
+
+    Stated in the script rather than left to follow from how those gates happen
+    to be reported today: if that reporting ever became NOT RUN, a release
+    would start failing on the absence of an archive it never produces.
+    """
+
+    script = text(GATES)
+    guard = script.split("applies_to_variant() {", 1)[1].split("}", 1)[0]
+
+    assert gate in guard
+
+
+def test_an_absent_gate_is_named_rather_than_silently_dropped():
+    """A gate list that quietly gets shorter is one nobody can tell apart from
+    a gate list that was passed."""
+
+    script = text(GATES)
+
+    assert "NOT APPLICABLE (this image has one root and no binds)" in script
+    assert "NOT APPLICABLE (this image has no update archive)" in script
+
+
+def test_the_inspector_is_told_the_variant_rather_than_sniffing_it():
+    """Deciding it from the file would judge an image by the contract it
+    already satisfies rather than the one it was built to."""
+
+    inspector = text(SCRIPTS / "appliance-inspect-rpi-ab-image.sh")
+
+    assert "unknown variant: $VARIANT" in inspector
+    assert 'variant=variant' in inspector
+    assert 'if variant == "ab":' in inspector

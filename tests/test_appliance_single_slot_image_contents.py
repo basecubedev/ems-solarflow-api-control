@@ -291,3 +291,67 @@ def test_the_units_a_single_slot_host_can_run_are_the_ones_required(single_image
     assert findings["web_service_enabled:root"].result == PASS
     for check in ("health_service_enabled:root", "persistence_service_enabled:root"):
         assert check not in findings
+
+
+# --- the whole inspection ----------------------------------------------------
+
+
+@requires_mkfs
+def test_the_whole_inspection_of_a_correct_single_slot_image_passes(single_image):
+    findings = ab_image.inspect(single_image, variant=SINGLE, contents=True,
+                                appliance_version=APPLIANCE_VERSION, build_id=BUILD_ID,
+                                architecture="arm64")
+
+    summary = ab_image.summarise(findings)
+
+    assert summary["counts"][FAIL] == 0, [
+        entry for entry in summary["findings"] if entry["result"] == FAIL
+    ]
+    assert summary["result"] == PASS
+    assert summary["mandatory_not_run"] == []
+
+
+@requires_mkfs
+def test_the_gpt_questions_are_reported_as_unanswered_rather_than_omitted(single_image):
+    """A shorter report must not be mistakable for a cleaner one."""
+
+    findings = by_check(ab_image.inspect(single_image, variant=SINGLE, contents=False))
+
+    for check in ("partition_identity", "slot_pairing", "boot_pairing", "gpt_header_pair"):
+        assert findings[check].result == NOT_RUN, check
+        assert "no GPT" in findings[check].detail
+
+
+def test_a_gpt_image_inspected_as_single_slot_is_refused(tmp_path):
+    """The variant is not a hint the inspector may talk itself out of.
+
+    A GPT image carries a protective MBR, so the MBR reader does not refuse it
+    outright -- it finds the single 0xEE entry that exists to stop exactly this
+    kind of tool from writing to a GPT disk. That entry is not a partition this
+    project produces, so it is left unnamed and the count is wrong.
+    """
+
+    sector = bytearray(512)
+    offset = ab_image.MBR_TABLE_OFFSET
+    sector[offset + 4] = 0xEE
+    sector[offset + 8 : offset + 16] = struct.pack("<II", 1, 0xFFFFFFFF)
+    sector[510:512] = ab_image.MBR_SIGNATURE
+    protective = tmp_path / "gpt.img"
+    protective.write_bytes(bytes(sector))
+
+    partitions = ab_image.read_mbr_partitions(protective)
+    findings = ab_image.inspect(protective, variant=SINGLE, contents=False)
+
+    assert [item.label for item in partitions] == [""]
+    assert any(
+        finding.check == "partition_count" and finding.result == FAIL
+        for finding in findings
+    ), [finding.to_dict() for finding in findings]
+
+
+@requires_mkfs
+def test_a_single_slot_image_inspected_as_ab_is_refused(single_image):
+    findings = ab_image.inspect(single_image, variant="ab", contents=False)
+
+    assert findings[0].result == FAIL
+    assert "GPT" in findings[0].detail

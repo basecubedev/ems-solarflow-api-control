@@ -56,6 +56,12 @@ EXPECTED_PARTITIONS = (
 
 SLOT_LABELS = {"A": ("boot_a", "system_a"), "B": ("boot_b", "system_b")}
 
+# What image-rpios writes: an MBR with a FAT boot partition and one ext4 root.
+SINGLE_SLOT_PARTITIONS = (
+    ("boot", "vfat"),
+    ("root", "ext"),
+)
+
 
 class ImageError(Exception):
     def __init__(self, code, message):
@@ -1189,27 +1195,42 @@ def _cmdline_finding(boot):
 def inspect(
     image_path,
     *,
-    expected=EXPECTED_PARTITIONS,
+    variant=image_variants.VARIANT_AB,
+    expected=None,
     appliance_version="",
     build_id="",
     architecture="",
     contents=True,
 ):
-    """Check a built image against the image-rota contract, without booting it."""
+    """Check a built image against its variant's contract, without booting it.
+
+    The two variants do not merely expect different partitions, they expect a
+    different kind of table: image-rota owns a six-partition GPT, image-rpios an
+    MBR with two. So the checks that are about the GPT -- the independent sgdisk
+    oracle, the header pair, the slot and boot pairings, the PARTUUID
+    uniqueness -- have nothing to read on a single-slot image. They are reported
+    as not having run, with the reason, and never as passing.
+    """
+
+    is_ab = variant == image_variants.VARIANT_AB
+    if expected is None:
+        expected = EXPECTED_PARTITIONS if is_ab else SINGLE_SLOT_PARTITIONS
+    table = "GPT" if is_ab else "MBR"
 
     findings = []
     try:
-        partitions = read_partitions(image_path)
+        partitions = (read_partitions if is_ab else read_mbr_partitions)(image_path)
     except ImageError as exc:
         return [Finding("partition_table", FAIL, exc.message)]
 
-    findings.append(Finding("partition_table", PASS, f"{len(partitions)} GPT partitions"))
+    findings.append(Finding("partition_table", PASS, f"{len(partitions)} {table} partitions"))
     if len(partitions) != len(expected):
         findings.append(
             Finding(
                 "partition_count",
                 FAIL,
-                f"image-rota produces {len(expected)} partitions, the image has {len(partitions)}",
+                f"{image_variants.variant(variant).image_layer} produces {len(expected)} "
+                f"partitions, the image has {len(partitions)}",
             )
         )
         return findings
@@ -1227,13 +1248,17 @@ def inspect(
         else:
             findings.append(Finding(f"label:{label}", PASS, f"partition {partition.number}"))
 
-        wanted_type = TYPE_ESP_FAT if fstype == "vfat" else TYPE_LINUX
-        if partition.type_guid.lower() != wanted_type:
-            findings.append(
-                Finding(f"type:{label}", FAIL, f"image has type {partition.type_guid}")
-            )
-        else:
-            findings.append(Finding(f"type:{label}", PASS, partition.type_guid))
+        # An MBR names a one-byte type, not a GUID, and read_mbr_partitions
+        # only produced this label because that byte said so -- checking it
+        # again here would be checking the reader against itself.
+        if is_ab:
+            wanted_type = TYPE_ESP_FAT if fstype == "vfat" else TYPE_LINUX
+            if partition.type_guid.lower() != wanted_type:
+                findings.append(
+                    Finding(f"type:{label}", FAIL, f"image has type {partition.type_guid}")
+                )
+            else:
+                findings.append(Finding(f"type:{label}", PASS, partition.type_guid))
 
         signature = filesystem_signature(image_path, partition)
         if not signature:
@@ -1247,22 +1272,33 @@ def inspect(
         else:
             findings.append(Finding(f"filesystem:{label}", PASS, signature))
 
-    observed = [partition.partuuid for partition in partitions]
-    if len(set(observed)) != len(observed):
-        findings.append(
-            Finding("partition_identity", FAIL, "two partitions claim the same PARTUUID")
-        )
-    else:
-        findings.append(Finding("partition_identity", PASS, f"{len(observed)} distinct PARTUUIDs"))
+    if is_ab:
+        observed = [partition.partuuid for partition in partitions]
+        if len(set(observed)) != len(observed):
+            findings.append(
+                Finding("partition_identity", FAIL, "two partitions claim the same PARTUUID")
+            )
+        else:
+            findings.append(
+                Finding("partition_identity", PASS, f"{len(observed)} distinct PARTUUIDs")
+            )
 
-    findings.append(_slot_pairing_finding(image_path, partitions))
-    findings.append(_boot_pairing_finding(image_path, partitions))
-    findings.extend(verify_gpt(image_path))
+        findings.append(_slot_pairing_finding(image_path, partitions))
+        findings.append(_boot_pairing_finding(image_path, partitions))
+        findings.extend(verify_gpt(image_path))
+    else:
+        # Reported rather than omitted, so a reader can see that this image was
+        # not asked a question it has no answer to -- and cannot mistake a
+        # shorter report for a cleaner one.
+        reason = "an MBR image carries no GPT and no second slot"
+        for check in ("partition_identity", "slot_pairing", "boot_pairing", "gpt_header_pair"):
+            findings.append(Finding(check, NOT_RUN, reason, mandatory=False))
 
     if contents:
         findings.extend(
             inspect_contents(
                 image_path,
+                variant=variant,
                 appliance_version=appliance_version,
                 build_id=build_id,
                 architecture=architecture,
