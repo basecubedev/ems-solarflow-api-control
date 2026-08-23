@@ -82,6 +82,22 @@ Take the **single-slot image** if you would rather patch weekly with `apt` than
 write most of a gigabyte to an SD card for every OS release, and you can get to
 the machine if something goes wrong.
 
+### How each shape gets its updates
+
+| | `.deb` on your own OS | Single-slot image | A/B image |
+|---|---|---|---|
+| Operating system | `apt` | `apt` | a signed image, trial-booted |
+| Appliance Manager | a new `.deb`, by hand | a new `.deb`, by hand | comes with the OS image |
+| Admin and EMS containers | the Admin console | the Admin console | the Admin console |
+
+The Manager is installed with `dpkg`, not from an APT repository, so `apt` does
+not offer it an upgrade on either of the first two shapes: you download the new
+`.deb`, check its checksum and install it, exactly as at first install.
+`sudo ems-appliance rollback-manager` reinstalls the previous one if a new
+package misbehaves. Only the A/B image ships the Manager as part of the
+operating-system image, because there the root filesystem is read-only and
+`dpkg` could not write to it anyway.
+
 **An installation is never converted in place** — not a `.deb` installation
 into either image, and not one image into the other. The partition tables are not
 different sizes of the same thing; they are different table types with
