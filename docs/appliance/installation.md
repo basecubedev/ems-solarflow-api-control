@@ -122,10 +122,12 @@ The package installs:
 /usr/lib/systemd/system/ems-appliance-ab-health.service
 /usr/lib/systemd/system/ems-appliance-slot-bootstrap.service
 /usr/lib/systemd/system/ems-appliance-grow-persistent.service
+/usr/lib/systemd/system/ems-appliance-grow-root.service
 /usr/lib/ems-appliance-manager/setup-export-root.sh
 /usr/lib/ems-appliance-manager/backup-account.sh
 /usr/lib/ems-appliance-manager/install-admin-console.sh
 /usr/lib/ems-appliance-manager/grow-persistent.sh
+/usr/lib/ems-appliance-manager/grow-root.sh
 /usr/lib/tmpfiles.d/ems-appliance-manager.conf
 /etc/logrotate.d/ems-appliance-manager
 /etc/ems-appliance-manager/appliance.conf

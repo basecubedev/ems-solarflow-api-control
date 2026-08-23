@@ -164,6 +164,9 @@ def test_only_the_units_a_single_slot_host_can_run_are_enabled():
 
     assert "ems-appliance-agent.service" in enabled
     assert "ems-appliance-web.service" in enabled
+    # The medium an owner flashed is whatever they had; the image's root is
+    # whatever the build declared. This is what claims the difference.
+    assert "ems-appliance-grow-root.service" in enabled
     for unit in (
         "ems-appliance-host-identity.service",
         "ems-appliance-persistence.service",
@@ -400,3 +403,41 @@ def test_the_inspector_is_told_the_variant_rather_than_sniffing_it():
     assert "unknown variant: $VARIANT" in inspector
     assert 'variant=variant' in inspector
     assert 'if variant == "ab":' in inspector
+
+
+# --- claiming the rest of the medium -----------------------------------------
+
+PACKAGING = ROOT / "packaging" / "appliance"
+GROW_ROOT = PACKAGING / "bin" / "grow-root.sh"
+GROW_ROOT_UNIT = PACKAGING / "systemd" / "ems-appliance-grow-root.service"
+
+
+def test_the_growth_helper_and_its_unit_are_shipped_by_the_package():
+    build = text(PACKAGING / "build-deb.sh")
+
+    assert "systemd/ems-appliance-grow-root.service" in build
+    assert "bin/grow-root.sh" in build
+    assert GROW_ROOT.stat().st_mode & 0o111
+
+
+def test_the_growth_unit_runs_once_and_only_on_an_imaged_medium():
+    """A .deb installation on somebody else's Raspberry Pi OS has no marker,
+    and the appliance promises never to repartition storage it did not write."""
+
+    unit = text(GROW_ROOT_UNIT)
+
+    assert "ConditionPathExists=/etc/ems-appliance-os-build" in unit
+    assert "ConditionPathExists=!/var/lib/ems-appliance-manager/.root-grown" in unit
+    assert "ExecStart=/usr/lib/ems-appliance-manager/grow-root.sh" in unit
+
+
+def test_the_growth_unit_is_ordered_before_anything_that_fills_the_root():
+    """Docker and the appliance write to the filesystem being resized."""
+
+    unit = text(GROW_ROOT_UNIT)
+    before = [line for line in unit.splitlines() if line.startswith("Before=")]
+
+    assert before, "the growth must be ordered before its writers"
+    joined = " ".join(before)
+    for unit_name in ("ems-appliance-agent.service", "docker.service"):
+        assert unit_name in joined, unit_name

@@ -639,7 +639,7 @@ things a physical boot has to answer for.
 | The agent and the web service actually come up | NOT RUN | needs a booted guest |
 | Debian's `sshd-keygen.service` produces the host keys on first boot | NOT RUN | the unit ships enabled with `ConditionPathIsReadWrite=/etc/ssh`, read out of the built rpi5 rootfs; that it fires is unproven |
 | `apt full-upgrade` completes on the booted image | NOT RUN | the source-level refusal is lifted; that a real upgrade completes is a different claim |
-| The root partition grows to the medium on first boot | NOT RUN | not implemented yet |
+| The root partition grows to the medium on first boot | NOT RUN | the transaction is covered by `tests/test_appliance_grow_root.py` against a fake medium; growing a **mounted** MBR root with real `growpart` and online `resize2fs` is not |
 
 What *is* established, and how:
 
@@ -652,3 +652,17 @@ What *is* established, and how:
   `tests/test_appliance_rpi_image_gen_upstream.py`.
 
 Neither is a boot. Do not upgrade any row above without the evidence it names.
+
+The root growth deserves naming separately, because it is the one thing here
+that *writes to a partition table*. Its A/B twin grows a partition that is
+mounted too, and has been exercised against real `growpart` and `resize2fs` on
+a loop device — but on a GPT, and not on the filesystem the script is itself
+running from. Until a real single-slot image has booted and grown its own root,
+that step is unproven, and a single-slot appliance simply uses the root the
+build sized.
+
+What is proven without hardware: the helper refuses any medium that does not
+*positively* say it was flashed from a single-slot appliance image, so a `.deb`
+installation on somebody else's Raspberry Pi OS is never repartitioned; and a
+growth that fails at any step leaves no marker, so the next boot retries rather
+than recording a card as finished that never grew.

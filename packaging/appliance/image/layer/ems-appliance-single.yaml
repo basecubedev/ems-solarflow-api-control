@@ -203,4 +203,4 @@ mmdebstrap:
     # /etc/ssh -- makes the appliance's own pair on first boot. The A/B image
     # needs its own producer only because that condition is false there.
     - $BDEBSTRAP_HOOKS/enable-units "$1" ems-appliance-agent.service \
-        ems-appliance-web.service
+        ems-appliance-web.service ems-appliance-grow-root.service

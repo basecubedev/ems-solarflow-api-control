@@ -81,6 +81,10 @@ install -m 0644 "$PACKAGING/systemd/ems-appliance-grow-persistent.service" \
         "$STAGE/usr/lib/systemd/system/"
 install -m 0755 "$PACKAGING/bin/grow-persistent.sh" \
         "$STAGE/usr/lib/ems-appliance-manager/grow-persistent.sh"
+install -m 0644 "$PACKAGING/systemd/ems-appliance-grow-root.service" \
+        "$STAGE/usr/lib/systemd/system/"
+install -m 0755 "$PACKAGING/bin/grow-root.sh" \
+        "$STAGE/usr/lib/ems-appliance-manager/grow-root.sh"
 install -m 0644 "$PACKAGING/tmpfiles/ems-appliance-manager.conf" "$STAGE/usr/lib/tmpfiles.d/"
 install -m 0644 "$PACKAGING/logrotate/ems-appliance-manager" "$STAGE/etc/logrotate.d/"
 install -m 0644 "$PACKAGING/config/appliance.conf" "$STAGE/etc/ems-appliance-manager/"
