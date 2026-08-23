@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Everything the A/B appliance image is, except which board it is for. The
+# hardware profiles under ../profiles/ include this file and add exactly one
+# thing each: the upstream device layer. Nothing here declares a partition, a
+# size, a PARTUUID or a mount — image-rota owns the whole GPT, the slot labels,
+# the persistent partition and the shared-slot bind mounts.
+#
+# See ../../../../docs/appliance/adr/rpi-image-gen-image-rota.md.
+include:
+  file: trixie-minbase-ab.yaml
+
+device:
+  hostname: ems-solarflow
+
+# Upstream defaults to Europe/London. An appliance sold as needing no
+# configuration must not inherit somebody else's clock, and /etc/localtime lives
+# on the read-only slot root, so the host stays on a deterministic UTC and the
+# operator's zone is carried into the containers as TZ instead -- see
+# `timezone` in appliance.conf.
+locale:
+  timezone: UTC
+
+image:
+  layer: image-rota
+  # The root filesystem stays ext4 rather than erofs: the update writer reads
+  # back and mounts what it wrote, and ext4 is what this project's inspection
+  # and its hardware validation have been exercised against.
+  rootfs_type: ext4
+  # Both slots carry Docker, the Appliance Manager and the EMS deployment, so
+  # the per-slot system partition is sized well above the minbase default.
+  boot_part_size: 256M
+  system_part_size: 4G
+  # The persistent partition holds EMS config, data and backups, the staged OS
+  # artifact and both slots' /var. It is grown to the medium on first boot.
+  data_part_size: 8G
+
+layer:
+  app: ems-appliance

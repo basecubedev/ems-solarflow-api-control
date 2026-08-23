@@ -1,0 +1,11 @@
+{
+  "bundle_sha256": "sha256:e66defa169e9de37fb08d4d236fc615624b2fb6feffab3ffd3442b8bc724578e",
+  "created_at": "2026-08-13T21:34:38Z",
+  "project": {
+    "revision": "01a61335c35b3ffabca1121983f8f161c0e36f75",
+    "tree_sha256": "sha256:695881c540e1b651e0b1c6f72ba4f54a09d13f00cc104440358b6bb5df990622"
+  },
+  "schema_version": 1,
+  "symlinks": 6,
+  "tracked_objects": 1221
+}

@@ -17,14 +17,17 @@ contributing.
 
 ## Operating models
 
-Admin Console and Docker Bootstrap are the two user setup paths; both converge on
-the same standard `config/config.json` layout. Developer Setup is a
+Admin Console, Docker Bootstrap and the appliance image are the three user setup
+paths; all converge on the same standard `config/config.json` layout. The
+appliance is **not confirmed on physical hardware** -- see
+[what that means](user/appliance/index.md#what-not-confirmed-means). Developer Setup is a
 source-checkout path for development and contributing, not a normal user setup.
 
 | Path | Audience | Start here |
 | --- | --- | --- |
 | Admin Console | Most users | [Admin Console](user/admin-console.md) |
 | Docker Bootstrap | Shell-only Docker users | [Docker Bootstrap](user/docker-bootstrap.md) |
+| Appliance image | A Raspberry Pi 4 or 5 dedicated to EMS | [Appliance guides](user/appliance/index.md) |
 | Developer Setup | Developers and contributors only | [Developer Setup](developer/developer-setup.md) |
 
 ## User documentation
@@ -44,13 +47,15 @@ changes, and what to do when the result differs.
 
 ### Setup paths
 
-Normal users choose one of these two; both converge on the same standard
-`config/config.json` layout.
+The three paths named under [Operating models](#operating-models), in detail.
+The first two install onto a machine you already run and converge on the same
+standard `config/config.json` layout; the third is a whole system.
 
 | Model | Document | Use |
 |---|---|---|
 | Admin Console | [user/admin-console.md](user/admin-console.md) | Recommended browser-guided setup, discovery, maintenance, updates and backups. |
 | Docker Bootstrap | [user/docker-bootstrap.md](user/docker-bootstrap.md) | Shell-only Docker install without the browser wizard. |
+| Appliance image | [user/appliance/index.md](user/appliance/index.md) | A flashed Raspberry Pi that runs EMS and nothing else, and updates itself. |
 
 ### Admin Console guides
 
@@ -68,9 +73,10 @@ Normal users choose one of these two; both converge on the same standard
 | First-run checklist | [first-run-checklist.md](first-run-checklist.md) | Safe validation sequence after the first config edit. |
 | Common commands | [common-commands.md](common-commands.md) | Daily Docker-first command sheet with native equivalents. |
 | Config layout | [user/config-layout.md](user/config-layout.md) | Standard `config/config.json` layout and legacy migration. |
+| Hardware requirements | [user/hardware-requirements.md](user/hardware-requirements.md) | RAM, storage and which Raspberry Pi models fit which install shape. |
 | Supported setups | [user/supported-setups.md](user/supported-setups.md) | Whether your grid meter and devices fit EMS. |
 | Connection types | [user/connection-types.md](user/connection-types.md) | Local API, Local MQTT and Zendure cloud MQTT — which hardware fits which. |
-| FAQ | [user/faq.md](user/faq.md) | Short answers for Admin, Docker, config, dashboard, backups and updates. |
+| FAQ | [user/faq.md](user/faq.md) | Short answers for Admin, Docker, the appliance, config, dashboard, backups and updates. |
 | Troubleshooting | [user/troubleshooting.md](user/troubleshooting.md) | Short, Admin-first guide for common problems. |
 | Safety | [user/safety.md](user/safety.md) | Simple pre-live checklist for hardware writes. |
 
@@ -86,6 +92,30 @@ Normal users choose one of these two; both converge on the same standard
 | Winter mode | [winter-mode.md](winter-mode.md) | Optional winter minSoc ramp and reconciliation. |
 | Battery full-charge assist | [battery-full-charge-assist.md](battery-full-charge-assist.md) | Optional EMS-managed full-charge assist. |
 | Quality and maintenance | [quality-and-maintenance.md](quality-and-maintenance.md) | How the project is tested, packaged and maintained. |
+
+## Raspberry Pi Appliance Manager
+
+**Technical reference.** For flashing a card and everyday use, see the
+[appliance user guides](user/appliance/index.md).
+
+Host management and recovery for a Raspberry Pi appliance. It runs as systemd
+services outside Docker and stays reachable when the EMS Admin container, the
+Docker daemon or EMS itself are unavailable. It never edits EMS configuration.
+
+| Topic | Document | Use |
+|---|---|---|
+| Architecture | [appliance/architecture.md](appliance/architecture.md) | Product boundaries, the two host services and the operation model. |
+| Installation | [appliance/installation.md](appliance/installation.md) | Supported Raspberry Pi models, the `.deb`, the layout and first-run setup. |
+| Admin recovery | [appliance/admin-recovery.md](appliance/admin-recovery.md) | Install, reinstall, repair and roll back the EMS Admin container. |
+| OS updates | [appliance/os-updates.md](appliance/os-updates.md) | Security updates, full updates and package-manager recovery. |
+| A/B OS updates | [appliance/ab-os-updates.md](appliance/ab-os-updates.md) | Fail-safe A/B host images: slots, persistence, tryboot, commit and fallback. |
+| A/B hardware gate | [appliance/ab-hardware-validation.md](appliance/ab-hardware-validation.md) | The physical Raspberry Pi cases A/B support is not claimed without. |
+| SSH and backup access | [appliance/ssh-backup-access.md](appliance/ssh-backup-access.md) | SSH keys and the read-only, chroot-confined `ems-backup` account. SFTP only — rsync and scp are refused. |
+| Network recovery | [appliance/network-recovery.md](appliance/network-recovery.md) | WLAN with automatic revert, hostname changes and lockout recovery. |
+| Security model | [appliance/security-model.md](appliance/security-model.md) | The privilege boundary, the operation allowlist and secret handling. |
+| Troubleshooting | [appliance/troubleshooting.md](appliance/troubleshooting.md) | Symptom-driven recovery and the error codes you may see. |
+| A/B persistence contract | [appliance/ab-persistence-contract.md](appliance/ab-persistence-contract.md) | Which paths survive a slot switch, which deliberately do not, and the schema version that binds them. |
+| Decision records | [appliance/adr/](appliance/adr/) | Why the appliance is shaped the way it is. |
 
 ## Technical reference
 

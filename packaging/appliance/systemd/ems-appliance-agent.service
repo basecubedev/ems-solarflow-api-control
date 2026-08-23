@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[Unit]
+Description=EMS SolarFlow Appliance Manager privileged host agent
+Documentation=file:///usr/share/doc/ems-appliance-manager/architecture.md
+After=local-fs.target ems-appliance-persistence.service
+# Requires=, not Before= on the persistence unit: ordering alone would still
+# let the agent start against the read-only root's fallback copy of every
+# shared path, and lose every write at the next slot switch.
+Requires=ems-appliance-persistence.service
+Before=ems-appliance-web.service
+
+[Service]
+Type=simple
+# The agent is privileged on purpose: it drives Docker, apt, systemd,
+# NetworkManager and authorized_keys. It never accepts a command string and
+# only listens on a local Unix socket.
+User=root
+# The primary group owns the runtime directory and the socket, so the web
+# account reaches the agent through group membership and nothing else. It must
+# stay identical to the tmpfiles rule for /run/ems-appliance-manager.
+Group=ems-appliance
+# The generated host-path contract: the same roots the export setup script
+# and the verification CLI use. Optional so an unconfigured host still boots.
+EnvironmentFile=-/etc/ems-appliance-manager/host-paths.env
+ExecStart=/usr/bin/ems-appliance agent
+Restart=on-failure
+RestartSec=3
+# Everything the agent creates is root-only by default; the socket is chmodded
+# to 0660 explicitly because it is the one thing the web account may reach.
+UMask=0077
+RuntimeDirectory=ems-appliance-manager
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=no
+
+# AF_INET/AF_INET6 are required: the Admin health check runs against the
+# loopback address, apt fetches repository metadata and the release index is
+# retrieved over HTTPS. With AF_UNIX alone every one of those fails with
+# "[Errno 97] Address family not supported by protocol".
+# AF_NETLINK is required too: the Repair port inspection runs ss(8), which
+# opens a netlink socket. Without it the check cannot run at all.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+# RestrictSUIDSGID is deliberately absent: dpkg restores setuid bits while
+# unpacking, and with the restriction a package install aborts with
+# "error setting permissions of './usr/bin/chage': Operation not permitted".
+ProtectHome=yes
+PrivateTmp=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+
+[Install]
+WantedBy=multi-user.target

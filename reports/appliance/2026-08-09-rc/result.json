@@ -1,0 +1,150 @@
+{
+  "branch": "feat/appliance-manager",
+  "clean_base": "329fdfbae22df03486f4daa2f0e84432a2ac68af",
+  "gates": {
+    "arm64_generic_guest": {
+      "detail": "qemu-system-aarch64 is not installed on the review host, and nothing is installed on a developer's machine to change that",
+      "result": "NOT RUN"
+    },
+    "browser_tests": {
+      "detail": "no Appliance UI file changed in this work, so the browser tier has nothing new to prove",
+      "result": "NOT RUN"
+    },
+    "builder_artifact_collection": {
+      "detail": "9 files described by the guest, all 9 re-hashed on the host and verified before publication",
+      "evidence": "output-manifest-rpi5.json",
+      "result": "PASS"
+    },
+    "canonical_source_bundle": {
+      "detail": "1127 tracked objects, 6 symlinks preserved, 0 missing, 0 mismatched, 0 unexpected, 0 unsafe, 0 duplicate",
+      "result": "PASS",
+      "tool": "scripts/appliance-create-source-bundle.sh + scripts/appliance-check-source-bundle.sh"
+    },
+    "detached_signature_verification": {
+      "detail": "real gpg, ephemeral test key: valid signature, wrong key, untrusted key in the keyring, tampered manifest, tampered signature, missing signature and missing trust policy all behave",
+      "result": "PASS"
+    },
+    "docker_runtime_reconstruction": {
+      "detail": "the guest test images (Admin, EMS, Influx) and the controlled local registry the offline-seed and exact-digest-fallback cases need are not built",
+      "prerequisite": "build the three contract test images in the guest and run a local registry",
+      "result": "NOT RUN"
+    },
+    "focused_appliance_suite": {
+      "command": "pytest tests/ -k 'appliance or repository_hygiene' -m 'not docker and not browser and not slow'",
+      "detail": "2370 passed, 7 skipped, 8641 deselected",
+      "result": "PASS"
+    },
+    "full_non_docker_regression": {
+      "command": "pytest tests/ -m 'not docker and not browser'",
+      "detail": "10796 passed, 12 skipped, 212 deselected, 1691.65s",
+      "result": "PASS"
+    },
+    "gpt_structural_verification": {
+      "detail": "primary and backup headers, both entry-array CRCs, ranges inside the disk, no overlap; sgdisk oracle NOT RUN on this host (gdisk is not installed)",
+      "result": "PASS"
+    },
+    "hardware_kit_assembly": {
+      "detail": "the finalizer assembles the kit only after the production gate passes, and it did not",
+      "result": "NOT RUN"
+    },
+    "hardware_kit_authority": {
+      "detail": "assembled from build authority; mixed build ids, a missing signature, a missing gate report, a stale image and an inspection with a NOT RUN check are all refused; a development kit reports INCOMPLETE",
+      "result": "PASS"
+    },
+    "image_content_inspection_method": {
+      "detail": "mount-independent ext4 (16 KiB blocks) and FAT12/32 readers, exercised against filesystems mkfs really made; every mandatory content check with 0 NOT RUN",
+      "result": "PASS",
+      "tool": "tests/test_appliance_ab_image_contents.py"
+    },
+    "packaged_runtime_guest": {
+      "detail": "real booted Debian GNU/Linux 13 (trixie), kernel 6.12.100+deb13-cloud-amd64, from the pinned base image debian-13-genericcloud-amd64-20260803-2559.qcow2",
+      "result": "PASS",
+      "tool": "scripts/appliance-smoke-vm-amd64.sh"
+    },
+    "persistent_growth_transaction": {
+      "detail": "grow, already-filled, growpart failure, partition table not re-read, resize2fs failure, filesystem not grown, retry after a partial growth, marker published by rename",
+      "result": "PASS"
+    },
+    "physical_raspberry_pi": {
+      "detail": "no hardware",
+      "result": "NOT RUN"
+    },
+    "quality": {
+      "detail": "ruff, compileall, node --check on both bundles, git diff --check, ShellCheck warning-clean over every changed appliance script",
+      "result": "PASS"
+    },
+    "real_image_content_inspection": {
+      "detail": "79 pass, 2 fail, 0 not run. The failure is real: cmdline.txt on both boot partitions has no ro, so the slot root is mounted read-write while the persistence contract and the kit's expected layout describe a read-only root",
+      "evidence": "image-inspection-rpi5.json",
+      "result": "FAIL"
+    },
+    "real_image_structural_inspection": {
+      "detail": "6 image-rota partitions, 6 distinct PARTUUIDs, both GPT headers and entry arrays, ranges inside the disk, no overlap; sgdisk oracle NOT RUN (gdisk is not installed)",
+      "result": "PASS"
+    },
+    "real_rpi4_build": {
+      "detail": "only rpi5 was built in this run",
+      "prerequisite": "the same builder guest with --profile rpi4",
+      "result": "NOT RUN"
+    },
+    "real_rpi5_build": {
+      "detail": "built in the disposable builder guest from project ec0bed2, 26m9s, 17758703616 byte image, build 20260809135018, build authority schema 3 complete with a builder environment",
+      "evidence": "build-authority-rpi5.json, builder-environment-rpi5.json, build-metadata-rpi5.json",
+      "result": "PASS"
+    },
+    "real_slot_pairing": {
+      "detail": "system_a and system_b hash to sha256:630f2828..., boot_a and boot_b to sha256:227d36f3..., with distinct PARTUUIDs",
+      "result": "PASS"
+    },
+    "real_sparse_crosscheck": {
+      "detail": "simg2img agreed with appliance/sparse.py on both members of the real 327897001 byte update artefact; the members were staged through the production allowlist extractor",
+      "result": "PASS"
+    },
+    "real_update_inspection": {
+      "detail": "18 pass, 0 fail, 0 not run, including a cryptographically verified signature by the trusted key",
+      "evidence": "update-inspection-rpi5.json",
+      "result": "PASS"
+    },
+    "repository_hygiene": {
+      "detail": "tracked tree carries no core dump, private key, VM disk or unallowlisted oversized blob",
+      "result": "PASS",
+      "tool": "scripts/check_repository_hygiene.py"
+    },
+    "sftp_protocol_session": {
+      "detail": "an attributable key has to be issued through the appliance's authenticated key management; backup-access refuses any key it cannot attribute, and a chroot check that passes because the login failed proves nothing",
+      "prerequisite": "drive the appliance key-management API from the guest tier",
+      "result": "NOT RUN"
+    },
+    "signed_production_release_gate": {
+      "detail": "sign, update inspection, signature verification, sparse cross-check and source bundle all PASS on the real artefacts; the image content inspection fails on the read-write slot root, so the gate refuses the release",
+      "evidence": "release-gate-report.txt",
+      "result": "FAIL"
+    },
+    "slot_pairing_payload_equality": {
+      "detail": "system_a/system_b and boot_a/boot_b payloads are hashed; a single changed byte is detected",
+      "result": "PASS"
+    },
+    "sshd_effective_policy_guest": {
+      "detail": "sshd -T -C for the backup account: chroot to the export root, forced internal-sftp, no tty, no port forwarding, no password authentication; a key the appliance never issued cannot log in",
+      "result": "PASS",
+      "tool": "scripts/appliance-guest-sftp-lifecycle.sh"
+    }
+  },
+  "open_defect": {
+    "code": "boot_readonly_root",
+    "decision_needed": "either add ro to the boot cmdline (a boot-path change that needs hardware validation) or correct the documented model; not decided here",
+    "detail": "cmdline.txt carries no ro on either boot partition, so the active slot root is mounted read-write. The persistence contract and the kit's expected slot layout both describe a read-only root. Upstream's slot-post-process.sh adds ro only for erofs."
+  },
+  "physical_ready": false,
+  "physical_tested": false,
+  "release_build": {
+    "build_id": "20260809135018",
+    "builder_environment_sha256": "sha256:d4650e238078e2b84f03716bcb134862a107000a87c6df67da223697d34e46ef",
+    "certified_project_tree_sha256": "recorded in build-authority-rpi5.json",
+    "certified_revision": "ec0bed2bffac922ef59f84c057a3a659210a843a",
+    "reason": "two later commits correct what this build exposed, so HEAD is ahead of the built revision; the release cannot ship either way while the content inspection fails",
+    "stale": true
+  },
+  "run_id": "2026-08-09-rc",
+  "schema": "one gate per key; every value is PASS, FAIL, NOT RUN or INCOMPLETE"
+}

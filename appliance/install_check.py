@@ -1,0 +1,714 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""Post-install verification.
+
+A package that reports success while the agent never started, the socket is
+missing or the web account cannot reach it leaves an appliance that looks
+installed and is not. This module answers one question — is this installation
+actually usable — and separates two things that must never be confused: a
+critical failure, and a host feature that is simply not installed.
+
+Optional host features (Docker, NetworkManager, OpenSSH) are reported as
+unavailable. They never fail the package.
+"""
+
+import os
+import socket
+import stat
+import time
+
+from appliance.paths import AGENT_DIR_MODE, resolve_paths
+
+STATUS_OK = "ok"
+STATUS_FAILED = "failed"
+STATUS_DEFERRED = "deferred"
+STATUS_UNAVAILABLE = "unavailable"
+
+AGENT_UNIT = "ems-appliance-agent.service"
+WEB_UNIT = "ems-appliance-web.service"
+
+WEB_USER = "ems-appliance-web"
+APPLIANCE_GROUP = "ems-appliance"
+
+OPTIONAL_FEATURES = (
+    ("docker", "docker", "Admin container management"),
+    ("network_manager", "nmcli", "WLAN and hostname management"),
+    ("openssh", "sshd", "SSH key management and backup export"),
+    ("acl", "setfacl", "read-only export permissions"),
+)
+
+# Every external executable the A/B update path needs, and the Debian package
+# that provides it. No sparse decoder appears here: it is implemented in
+# appliance/sparse.py, so android-sdk-libsparse-utils is not required.
+AB_REQUIRED_TOOLS = (
+    ("zstd", "zstd", "reading a .tar.zst update artifact"),
+    ("gpgv", "gpgv", "verifying a release manifest signature"),
+    ("lsblk", "util-linux", "discovering the A/B layout"),
+    ("blkid", "util-linux", "proving a partition identity"),
+    ("findmnt", "util-linux", "proving what is mounted where"),
+    ("blockdev", "util-linux", "flushing a written partition"),
+    ("mount", "mount", "inspecting a written slot read-only"),
+    ("umount", "mount", "releasing an inspection mount"),
+    ("ssh-keygen", "openssh-client", "creating the persistent host identity"),
+    ("growpart", "cloud-guest-utils", "growing the persistent partition on first boot"),
+    ("resize2fs", "e2fsprogs", "growing the persistent filesystem into it"),
+    ("dumpe2fs", "e2fsprogs", "measuring the persistent filesystem before growing it"),
+)
+
+# Wanted for a filesystem check before an inspection mount, not required for
+# the update itself: a slot is proven by its digest and its mount either way.
+AB_OPTIONAL_TOOLS = (
+    ("fsck.vfat", "dosfstools", "checking a written boot filesystem"),
+    ("e2fsck", "e2fsprogs", "checking a written root filesystem"),
+)
+
+# systemd is not running inside an image-build chroot. Everything that does not
+# need a running manager must still be correct there.
+SYSTEMD_RUNTIME_MARKER = "/run/systemd/system"
+
+
+def systemd_running(marker=SYSTEMD_RUNTIME_MARKER):
+    return os.path.isdir(marker)
+
+
+def _which(tool):
+    for directory in (os.environ.get("PATH") or "/usr/sbin:/usr/bin:/sbin:/bin").split(":"):
+        candidate = os.path.join(directory, tool)
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return ""
+
+
+def _check(name, status, detail, *, critical=True):
+    return {"check": name, "status": status, "detail": detail, "critical": bool(critical)}
+
+
+def _unit_active(runner, unit):
+    if runner is None or not runner.available("systemctl"):
+        return None
+    result = runner.run("systemctl", ["is-active", unit], timeout=30)
+    return (result.stdout or "").strip()
+
+
+def check_units(runner, *, live):
+    checks = []
+    for unit in (AGENT_UNIT, WEB_UNIT):
+        if not live:
+            checks.append(
+                _check(unit, STATUS_DEFERRED, "no running systemd; the unit starts on first boot")
+            )
+            continue
+        state = _unit_active(runner, unit)
+        if state == "active":
+            checks.append(_check(unit, STATUS_OK, "active"))
+        else:
+            checks.append(
+                _check(unit, STATUS_FAILED, f"is-active reports {state or 'unknown'}")
+            )
+    return checks
+
+
+def check_socket(paths, *, live):
+    path = paths.agent_socket
+    if not live:
+        return [_check("agent_socket", STATUS_DEFERRED, "created when the agent starts")]
+    if not path.exists():
+        return [_check("agent_socket", STATUS_FAILED, f"{path} does not exist")]
+    mode = stat.S_IMODE(path.stat().st_mode)
+    if mode & 0o007:
+        return [_check("agent_socket", STATUS_FAILED, f"{path} is world-accessible ({mode:o})")]
+    return [_check("agent_socket", STATUS_OK, f"{path} mode {mode:o}")]
+
+
+def check_directories(paths):
+    checks = []
+    for directory in (paths.state_dir, paths.log_dir, *paths.web_directories()):
+        if directory.is_dir():
+            continue
+        return [_check("directories", STATUS_FAILED, f"{directory} is missing")]
+    for directory in paths.agent_directories():
+        if not directory.is_dir():
+            return [_check("directories", STATUS_FAILED, f"{directory} is missing")]
+    checks.append(_check("directories", STATUS_OK, "the appliance layout is complete"))
+    return checks
+
+
+def check_ownership(paths):
+    """Agent state must belong to root alone; web state to the web account."""
+
+    problems = []
+    for directory in paths.agent_directories():
+        try:
+            entry = directory.stat()
+        except OSError as exc:
+            problems.append(f"{directory}: {exc.__class__.__name__}")
+            continue
+        if entry.st_uid != 0 or entry.st_gid != 0:
+            problems.append(f"{directory} is {entry.st_uid}:{entry.st_gid}, expected 0:0")
+        if stat.S_IMODE(entry.st_mode) != AGENT_DIR_MODE:
+            problems.append(
+                f"{directory} is {stat.S_IMODE(entry.st_mode):o}, expected {AGENT_DIR_MODE:o}"
+            )
+    if problems:
+        return [_check("state_ownership", STATUS_FAILED, "; ".join(problems[:4]))]
+
+    web_uid = _account_uid(WEB_USER)
+    if web_uid is None:
+        return [_check("state_ownership", STATUS_FAILED, f"the {WEB_USER} account does not exist")]
+    for directory in paths.web_directories():
+        try:
+            if directory.stat().st_uid != web_uid:
+                return [
+                    _check(
+                        "state_ownership",
+                        STATUS_FAILED,
+                        f"{directory} does not belong to {WEB_USER}",
+                    )
+                ]
+        except OSError as exc:
+            return [_check("state_ownership", STATUS_FAILED, f"{directory}: {exc.__class__.__name__}")]
+    return [_check("state_ownership", STATUS_OK, "agent state is root-only, web state is web-owned")]
+
+
+def _account_uid(name):
+    import pwd
+
+    try:
+        return pwd.getpwnam(name).pw_uid
+    except KeyError:
+        return None
+
+
+WEB_TO_AGENT_ATTEMPTS = 4
+WEB_TO_AGENT_TIMEOUT = 8.0
+WEB_TO_AGENT_TIMEOUT_MAX = 64.0
+WEB_TO_AGENT_BACKOFF = 1.0
+WEB_TO_AGENT_BACKOFF_MAX = 4.0
+
+# What this check asks is whether the web account can use the socket, so it
+# asks for the cheapest thing the agent can answer: operation records it
+# already holds. status.get collects the whole overview — the Docker daemon,
+# sshd, NetworkManager, the Admin container — and during a postinst its latency
+# is every one of those subsystems' cold start, none of which is the question.
+WEB_TO_AGENT_OPERATION = "operations.list"
+
+# A socket that is not accepting yet, or a round-trip that ran out of time, is
+# what a first boot looks like while docker, NetworkManager and polkit start
+# alongside this probe. A refused permission is a real misconfiguration and is
+# never retried — retrying it would only delay the failure the operator needs.
+WEB_TO_AGENT_TRANSIENT = (TimeoutError, ConnectionRefusedError, FileNotFoundError)
+
+
+def agent_round_trip(
+    socket_path,
+    *,
+    attempts=WEB_TO_AGENT_ATTEMPTS,
+    timeout=WEB_TO_AGENT_TIMEOUT,
+    timeout_max=WEB_TO_AGENT_TIMEOUT_MAX,
+    backoff=WEB_TO_AGENT_BACKOFF,
+    sleep=time.sleep,
+):
+    """One round-trip over the agent socket, retried while it may still land.
+
+    Returns "ok" or the name of the exception the last attempt raised. An
+    attempt taken during first boot fails the whole package installation for a
+    reason that resolves a second later, so the budget is spread over a few
+    attempts — and each attempt waits longer than the last, because a reply
+    that outlasts one fixed deadline outlasts every repeat of it.
+    """
+
+    delay = backoff
+    deadline = timeout
+    request = b'{"operation": "%s"}\n' % WEB_TO_AGENT_OPERATION.encode("ascii")
+    outcome = "no_attempt"
+    for attempt in range(attempts):
+        try:
+            connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            connection.settimeout(deadline)
+            connection.connect(str(socket_path))
+            connection.sendall(request)
+            outcome = "ok" if connection.recv(64) else "empty_reply"
+            connection.close()
+            return outcome
+        except WEB_TO_AGENT_TRANSIENT as exc:
+            outcome = exc.__class__.__name__
+        except OSError as exc:
+            return exc.__class__.__name__
+        if attempt + 1 < attempts:
+            sleep(delay)
+            delay = min(delay * 2, WEB_TO_AGENT_BACKOFF_MAX)
+            # The deadline grows with the attempts, not just the pause between
+            # them. A reply that takes longer than one fixed deadline is never
+            # seen by any number of attempts that each give up at the same
+            # point — measured at 22.2s on an emulated aarch64 first boot.
+            deadline = min(deadline * 2, timeout_max)
+    return outcome
+
+
+def check_web_reaches_agent(paths, *, live, user=WEB_USER):
+    """Connect to the socket as the web account, the way the service will."""
+
+    if not live:
+        return [_check("web_to_agent", STATUS_DEFERRED, "the agent is not running yet")]
+    import pwd
+
+    try:
+        entry = pwd.getpwnam(user)
+    except KeyError:
+        return [_check("web_to_agent", STATUS_FAILED, f"the {user} account does not exist")]
+    if os.geteuid() != 0:
+        return [
+            _check("web_to_agent", STATUS_DEFERRED, "run as root to test the web account's access")
+        ]
+
+    read_fd, write_fd = os.pipe()
+    pid = os.fork()
+    if pid == 0:  # child: drop to the web account and try the real socket
+        os.close(read_fd)
+        code = b"fork_failed"
+        try:
+            os.initgroups(user, entry.pw_gid)
+            os.setgid(entry.pw_gid)
+            os.setuid(entry.pw_uid)
+            code = agent_round_trip(paths.agent_socket).encode("ascii", "replace")
+        except OSError as exc:
+            code = str(exc.__class__.__name__).encode("ascii", "replace")
+        finally:
+            try:
+                os.write(write_fd, code)
+            finally:
+                os._exit(0)
+
+    os.close(write_fd)
+    try:
+        result = os.read(read_fd, 64).decode("ascii", "replace")
+    finally:
+        os.close(read_fd)
+        os.waitpid(pid, 0)
+
+    if result == "ok":
+        return [_check("web_to_agent", STATUS_OK, f"{user} reached the agent socket")]
+    return [
+        _check("web_to_agent", STATUS_FAILED, f"{user} cannot use the agent socket: {result}")
+    ]
+
+
+EXPORT_SERVICE_UNIT = "ems-appliance-export.service"
+EXPORT_PATH_UNIT = "ems-appliance-export.path"
+
+# What the setup script reported, and what that means for the installation.
+# "pending" and "unavailable" are states an operator can resolve later; the
+# rest are the feature reporting success while it is broken.
+EXPORT_STATUS_VERDICTS = {
+    "configured": (STATUS_OK, False),
+    "pending": (STATUS_OK, False),
+    "unavailable": (STATUS_UNAVAILABLE, False),
+    "degraded": (STATUS_FAILED, True),
+    "failed": (STATUS_FAILED, True),
+}
+
+
+def _unit_enabled(runner, unit):
+    if runner is None or not runner.available("systemctl"):
+        return None
+    return (runner.run("systemctl", ["is-enabled", unit], timeout=30).stdout or "").strip()
+
+
+def _unit_failed(runner, unit):
+    return _unit_active(runner, unit) == "failed"
+
+
+def _recorded_export(paths):
+    import json
+
+    try:
+        payload = json.loads(paths.export_status_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def check_export(paths, runner, *, live, mounts=None, sshd=None):
+    """Is the read-only SFTP export what the package says it is?
+
+    OpenSSH may be absent and the EMS directories may not exist yet — both are
+    reported and neither fails the package. A watcher that did not start, a
+    refused export path or a bind that is mounted read-write are failures: they
+    would otherwise be invisible until a backup was needed.
+    """
+
+    if not live:
+        return [
+            _check(name, STATUS_DEFERRED, "started on first boot", critical=False)
+            for name in ("export_service", "export_path_unit", "export_setup")
+        ]
+
+    checks = []
+    enabled = _unit_enabled(runner, EXPORT_SERVICE_UNIT)
+    if _unit_failed(runner, EXPORT_SERVICE_UNIT):
+        checks.append(
+            _check(
+                "export_service",
+                STATUS_FAILED,
+                f"{EXPORT_SERVICE_UNIT} is failed; backup authentication was disabled with it",
+            )
+        )
+    elif enabled in ("enabled", "static", "enabled-runtime"):
+        checks.append(_check("export_service", STATUS_OK, f"{EXPORT_SERVICE_UNIT} is {enabled}"))
+    else:
+        checks.append(
+            _check(
+                "export_service",
+                STATUS_FAILED,
+                f"{EXPORT_SERVICE_UNIT} is {enabled or 'unknown'}, expected enabled",
+            )
+        )
+
+    active = _unit_active(runner, EXPORT_PATH_UNIT)
+    if active in ("active", "waiting"):
+        checks.append(_check("export_path_unit", STATUS_OK, f"{EXPORT_PATH_UNIT} is {active}"))
+    else:
+        checks.append(
+            _check(
+                "export_path_unit",
+                STATUS_FAILED,
+                f"{EXPORT_PATH_UNIT} is {active or 'unknown'}; a new EMS directory would "
+                "never be published",
+            )
+        )
+
+    checks.append(_check_export_setup(paths, mounts=mounts, sshd=sshd))
+    return checks
+
+
+def _check_export_setup(paths, *, mounts=None, sshd=None):
+    """The status file is diagnostic input; the export root is the evidence."""
+
+    from appliance.export_state import inspect_exports, verify_reported_exports
+
+    recorded = _recorded_export(paths)
+    if recorded is None:
+        if sshd is False or (sshd is None and not _which("sshd")):
+            return _check(
+                "export_setup",
+                STATUS_UNAVAILABLE,
+                "openssh-server is not installed; SFTP backup access is unavailable",
+                critical=False,
+            )
+        return _check("export_setup", STATUS_FAILED, "the export setup never reported a state")
+
+    status = str(recorded.get("status") or "")
+    verdict, critical = EXPORT_STATUS_VERDICTS.get(status, (STATUS_FAILED, True))
+    detail = str(recorded.get("detail") or "").strip()
+    summary = f"the export setup reports {status or 'nothing'}" + (f": {detail}" if detail else "")
+
+    state = inspect_exports(paths, mounts=_mount_table(paths) if mounts is None else mounts)
+    if state["unmanaged"] and status != "unavailable":
+        return _check(
+            "export_setup",
+            STATUS_FAILED,
+            "the SFTP chroot is not exclusive: " + ", ".join(state["unmanaged"]),
+        )
+    if verdict != STATUS_OK or status != "configured":
+        return _check("export_setup", verdict, summary, critical=critical)
+
+    problems = verify_reported_exports(recorded, state, paths)
+    if problems:
+        return _check("export_setup", STATUS_FAILED, "; ".join(problems[:4]))
+    return _check("export_setup", STATUS_OK, summary)
+
+
+def _mount_table(paths):
+    from appliance.hostprobe import HostProbe
+
+    try:
+        return HostProbe(None).mount_records()
+    except Exception:
+        return {}
+
+
+def check_host_paths(paths, config=None, runner=None):
+    """The generated host-path files must still agree with the configuration."""
+
+    from appliance.config import load_config
+    from appliance.host_config import describe
+
+    try:
+        report = describe(paths, config or load_config(paths), runner=runner)
+    except Exception as exc:
+        return [_check("host_paths", STATUS_FAILED, f"{exc.__class__.__name__}: {exc}")]
+    if not report["environment_present"]:
+        return [
+            _check(
+                "host_paths",
+                STATUS_FAILED,
+                f"{report['environment_file']} is missing; run 'ems-appliance host-config --apply'",
+            )
+        ]
+    if not report["consistent"]:
+        return [
+            _check(
+                "host_paths",
+                STATUS_FAILED,
+                "the generated host configuration disagrees with appliance.conf: "
+                + ", ".join(report["drift"] or ["the watched path"]),
+            )
+        ]
+    return [
+        _check(
+            "host_paths",
+            STATUS_OK,
+            f"install root {report['install_root']}, export root {report['export_root']}",
+        )
+    ]
+
+
+BACKUP_ACCOUNT_RECORD = "backup-account.json"
+NOLOGIN_SHELLS = ("/usr/sbin/nologin", "/sbin/nologin", "/bin/false", "/usr/bin/false")
+
+
+OWNERSHIP_PROBLEMS = {
+    "no_ownership_record": "this package has no ownership record for it",
+    "ownership_record_unsupported": "its ownership record predates the identity binding",
+    "ownership_record_requires_migration": (
+        "its ownership record predates the home ownership marker and has not been re-bound"
+    ),
+    "account_not_created_by_package": "this package did not create it",
+    "account_missing": "the account no longer exists",
+    "account_identity_mismatch": "its uid, group or home directory is not the recorded one",
+    "home_identity_mismatch": "its home directory is not the one this package created",
+    "home_marker_mismatch": (
+        "its home directory does not carry the ownership marker this package wrote"
+    ),
+}
+
+
+def backup_account_state(paths, config):
+    """What the host says about the package-owned backup account."""
+
+    from appliance import backup_ownership
+
+    name = config.backup_user
+    entry = backup_ownership.account_entry(name)
+    ownership = backup_ownership.verify_ownership(paths, name, entry=entry)
+    record = ownership["record"]
+    if entry is not None:
+        home, shell, exists = entry.pw_dir, entry.pw_shell, True
+    else:
+        home, shell, exists = record.home, "", False
+
+    keys_dir = os.path.join(home, ".ssh") if home else ""
+    conflicts = []
+    if keys_dir and os.path.isdir(keys_dir):
+        conflicts = sorted(
+            item
+            for item in os.listdir(keys_dir)
+            if item.startswith("authorized_keys.disabled-by-appliance.conflict")
+        )
+    return {
+        "account": name,
+        "exists": exists,
+        "package_owned": bool(ownership["owned"]),
+        "ownership_reason": ownership["reason"],
+        "record": record.to_dict(),
+        "home": home,
+        "shell": shell,
+        "expected_shell": shell in NOLOGIN_SHELLS if exists else None,
+        "keys_active": bool(keys_dir and os.path.isfile(os.path.join(keys_dir, "authorized_keys"))),
+        "keys_disabled": bool(
+            keys_dir
+            and os.path.isfile(os.path.join(keys_dir, "authorized_keys.disabled-by-appliance"))
+        ),
+        "keys_conflicted": conflicts,
+    }
+
+
+def check_backup_account(paths, config=None):
+    """A backup account this package does not own cannot be removed safely."""
+
+    from appliance.config import load_config
+
+    try:
+        state = backup_account_state(paths, config or load_config(paths))
+    except Exception as exc:
+        return [_check("backup_account", STATUS_FAILED, f"{exc.__class__.__name__}: {exc}")]
+
+    if not state["exists"]:
+        return [
+            _check(
+                "backup_account",
+                STATUS_UNAVAILABLE,
+                f"the {state['account']} account does not exist; SFTP backup access is unavailable",
+                critical=False,
+            )
+        ]
+    if not state["package_owned"]:
+        reason = OWNERSHIP_PROBLEMS.get(state["ownership_reason"], state["ownership_reason"])
+        return [
+            _check(
+                "backup_account",
+                STATUS_FAILED,
+                f"{state['account']} exists but {reason}; removal would not be able to "
+                "withdraw it safely",
+            )
+        ]
+    if state["keys_conflicted"]:
+        return [
+            _check(
+                "backup_account",
+                STATUS_FAILED,
+                f"{state['account']} has unresolved key files ("
+                + ", ".join(state["keys_conflicted"])
+                + "); authentication stays disabled until they are resolved",
+            )
+        ]
+    if not state["expected_shell"]:
+        return [
+            _check(
+                "backup_account",
+                STATUS_FAILED,
+                f"{state['account']} has the shell {state['shell'] or 'unknown'}, expected a nologin shell",
+            )
+        ]
+    return [
+        _check(
+            "backup_account",
+            STATUS_OK,
+            f"{state['account']} is package-owned, has no shell and its key is "
+            + ("active" if state["keys_active"] else "disabled"),
+        )
+    ]
+
+
+def check_path_boundaries(paths):
+    """The configured host paths must still satisfy the no-follow policy."""
+
+    from appliance.paths import runtime_boundary_problems
+
+    try:
+        problems = runtime_boundary_problems(paths)
+    except Exception as exc:
+        return [_check("path_boundaries", STATUS_FAILED, f"{exc.__class__.__name__}: {exc}")]
+    if problems:
+        return [_check("path_boundaries", STATUS_FAILED, "; ".join(problems[:3]))]
+    return [
+        _check("path_boundaries", STATUS_OK, "every configured host path is a real directory")
+    ]
+
+
+def check_optional_features():
+    checks = []
+    for name, tool, purpose in OPTIONAL_FEATURES:
+        if _which(tool):
+            checks.append(_check(name, STATUS_OK, f"{tool} is available", critical=False))
+        else:
+            checks.append(
+                _check(
+                    name,
+                    STATUS_UNAVAILABLE,
+                    f"{tool} is not installed; {purpose} is unavailable",
+                    critical=False,
+                )
+            )
+    return checks
+
+
+def ab_decoder_state():
+    """Whether this appliance can read and write an OS update artifact.
+
+    ``ab_supported`` is about the disk; this is about the tools. They are kept
+    apart on purpose: an A/B appliance missing zstd can still boot, roll back and
+    report — it simply must not be offered an update it cannot decode.
+    """
+
+    missing = [
+        {"tool": tool, "package": package, "purpose": purpose}
+        for tool, package, purpose in AB_REQUIRED_TOOLS
+        if not _which(tool)
+    ]
+    degraded = [
+        {"tool": tool, "package": package, "purpose": purpose}
+        for tool, package, purpose in AB_OPTIONAL_TOOLS
+        if not _which(tool)
+    ]
+    return {
+        "artifact_decoder_ready": not any(entry["tool"] == "zstd" for entry in missing),
+        # Built in, so it is ready wherever the Appliance Manager itself is.
+        "sparse_decoder_ready": True,
+        "ready": not missing,
+        "missing": missing,
+        "degraded": degraded,
+        "packages": sorted({entry["package"] for entry in missing}),
+    }
+
+
+def check_ab_tools():
+    """One check per A/B tool, so verify-install names what to install."""
+
+    state = ab_decoder_state()
+    checks = []
+    for tool, package, purpose in AB_REQUIRED_TOOLS:
+        present = bool(_which(tool))
+        checks.append(
+            _check(
+                f"ab_tool:{tool}",
+                STATUS_OK if present else STATUS_FAILED,
+                f"{tool} is available" if present else f"{tool} is missing; install {package} ({purpose})",
+                critical=False,
+            )
+        )
+    for tool, package, purpose in AB_OPTIONAL_TOOLS:
+        present = bool(_which(tool))
+        checks.append(
+            _check(
+                f"ab_tool:{tool}",
+                STATUS_OK if present else STATUS_UNAVAILABLE,
+                f"{tool} is available" if present else f"{tool} is not installed; {purpose} is skipped",
+                critical=False,
+            )
+        )
+    checks.append(
+        _check(
+            "ab_artifact_decoder",
+            STATUS_OK if state["artifact_decoder_ready"] else STATUS_FAILED,
+            "update artifacts can be decompressed and expanded"
+            if state["artifact_decoder_ready"]
+            else "zstd is missing, so a .tar.zst update artifact cannot be read",
+            critical=False,
+        )
+    )
+    return checks
+
+
+def verify_installation(paths=None, *, runner=None, live=None):
+    """Return a report; ``ok`` is false only when a critical check failed."""
+
+    paths = paths or resolve_paths()
+    if runner is None:
+        from appliance.commands import CommandRunner
+
+        runner = CommandRunner()
+    live = systemd_running() if live is None else bool(live)
+
+    checks = []
+    checks.extend(check_directories(paths))
+    checks.extend(check_ownership(paths))
+    checks.extend(check_path_boundaries(paths))
+    checks.extend(check_host_paths(paths, runner=runner))
+    checks.extend(check_units(runner, live=live))
+    checks.extend(check_socket(paths, live=live))
+    checks.extend(check_web_reaches_agent(paths, live=live))
+    checks.extend(check_export(paths, runner, live=live))
+    checks.extend(check_backup_account(paths))
+    checks.extend(check_optional_features())
+    checks.extend(check_ab_tools())
+
+    failures = [item for item in checks if item["critical"] and item["status"] == STATUS_FAILED]
+    return {
+        "ok": not failures,
+        "live_system": live,
+        "checks": checks,
+        "failures": [f"{item['check']}: {item['detail']}" for item in failures],
+        "unavailable": [
+            item["check"] for item in checks if item["status"] == STATUS_UNAVAILABLE
+        ],
+    }

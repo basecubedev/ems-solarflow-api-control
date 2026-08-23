@@ -1,0 +1,29 @@
+{
+  "image_bytes": 17750294528,
+  "method": {
+    "docker_seed_bytes": "docker save of the published Admin, EMS and Influx images, measured 2026-08-09",
+    "docker_store_per_slot_bytes": "docker images size column for the same three images",
+    "partition_sizes": "packaging/appliance/image/shared/ems-appliance-ab.yaml",
+    "update_staging_bytes": "the system member expands to the whole 4 GiB root, plus the boot member and the compressed archive"
+  },
+  "minimum_media_bytes": 30000000000,
+  "partitions": {
+    "boot_bytes": 268435456,
+    "bootconfig_bytes": 33554432,
+    "persistent_initial_bytes": 8589934592,
+    "system_bytes": 4294967296
+  },
+  "persistent_requirement": {
+    "application_data_bytes": 2147483648,
+    "docker_seed_bytes": 740294656,
+    "docker_store_per_slot_bytes": 943718400,
+    "safety_margin_bytes": 1073741824,
+    "total_bytes": 11985223680,
+    "update_staging_bytes": 6136266752
+  },
+  "policy": "Policy A: 32 GB is the smallest supported medium; the persistent partition is grown to fill it on first boot.",
+  "recommended_media_bytes": 21145583616,
+  "run_id": "2026-08-09-rc",
+  "supported_media_label": "32 GB",
+  "unsupported_media_reason": "the appliance image is about 16.5 GiB and a card marketed as 16 GB holds less than that"
+}

@@ -11,7 +11,10 @@ on:
       - "ems/paths.py"
       - "deploy/admin/**"
       - "tests/e2e/**"
+      - "appliance/**"
+      - "tests/e2e-appliance/**"
       - "playwright.config.ts"
+      - "playwright.appliance.config.ts"
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/playwright-e2e.yml"
@@ -155,6 +158,50 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: playwright-report-webkit
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
+
+  # The Raspberry Pi Appliance Manager UI. Its own config and its own
+  # deterministic test server, so it shares nothing with the Admin suite above.
+  playwright-appliance:
+    name: playwright-appliance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium firefox
+
+      - name: Run the appliance manager suite
+        env:
+          CI: "1"
+        run: npx playwright test --config=playwright.appliance.config.ts
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report-appliance
           path: |
             playwright-report/
             test-results/

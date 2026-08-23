@@ -1,0 +1,17 @@
+source-authority             NOT RUN (see /zfs/tmp/appliance-rc2/rpi5-1/gates/source-authority.log)
+slot-mounts                  NOT RUN (see /zfs/tmp/appliance-rc2/rpi5-1/gates/slot-mounts.log)
+artefacts-rpi5               PASS
+inspect-image-rpi5           PASS
+sign-rpi5                    PASS
+inspect-update-rpi5          PASS
+verify-signature-rpi5        PASS
+crosscheck-rpi5              PASS
+source-bundle                PASS
+
+mode:     production
+logs:     /zfs/tmp/appliance-rc2/rpi5-1/gates
+reports:  /zfs/tmp/appliance-rc2/rpi5-1/reports
+failed:   0
+not run:  2 (0 required)
+Nothing was published, tagged or uploaded.
+RESULT: PASS (production release, 2 optional gate(s) NOT RUN)

@@ -1,0 +1,212 @@
+# METABEGIN
+# X-Env-Layer-Name: ems-appliance
+# X-Env-Layer-Category: app
+# X-Env-Layer-Desc: EMS SolarFlow Appliance Manager, its Docker runtime and the
+#  shared state declaration that makes an A/B slot switch non-destructive.
+# X-Env-Layer-Version: 2.1.0
+# X-Env-Layer-Requires: image-rota,docker-debian-trixie
+#
+# X-Env-VarPrefix: emsappliance
+#
+# X-Env-Var-package:
+# X-Env-Var-package-Desc: Path to the ems-appliance-manager .deb to install.
+# X-Env-Var-package-Required: y
+# X-Env-Var-package-Valid: string
+# X-Env-Var-package-Set: y
+#
+# X-Env-Var-release_version:
+# X-Env-Var-release_version-Desc: The OS release version recorded in the build
+#  marker a trial boot compares against the pending operation.
+# X-Env-Var-release_version-Required: y
+# X-Env-Var-release_version-Valid: string
+# X-Env-Var-release_version-Set: y
+#
+# X-Env-Var-build_id:
+# X-Env-Var-build_id-Desc: The exact build this root filesystem is. A trial slot
+#  proves its identity with it, so it must be unique per build.
+# X-Env-Var-build_id-Required: y
+# X-Env-Var-build_id-Valid: string
+# X-Env-Var-build_id-Set: y
+#
+# X-Env-Var-layout_id: ems-appliance-rota-v1
+# X-Env-Var-layout_id-Desc: The layout contract the runtime is bound to.
+# X-Env-Var-layout_id-Required: n
+# X-Env-Var-layout_id-Valid: string
+# X-Env-Var-layout_id-Set: y
+#
+# METAEND
+---
+mmdebstrap:
+  packages:
+    # Everything ems-appliance-manager declares as a runtime dependency. The
+    # package is installed below with dpkg, which resolves nothing, so a
+    # dependency that only some base layer happened to pull in is a dependency
+    # that is not met: the package stays unconfigured and the image build fails.
+    # tests/test_appliance_ab_packaging.py keeps this list equal to the control
+    # file's Depends, which remains the one place they are declared.
+    - acl
+    - adduser
+    - ca-certificates
+    - gpgv
+    - iproute2
+    - mount
+    - openssh-client
+    - passwd
+    - procps
+    - python3
+    - systemd
+    - util-linux
+    - zstd
+    # What the appliance itself needs beyond the package's own dependencies.
+    # avahi publishes ems-solarflow.local, which is the only address the
+    # documentation gives a new owner and the one the hostname path restarts.
+    - avahi-daemon
+    - avahi-utils
+    - curl
+    - e2fsprogs
+    - cloud-guest-utils
+    - network-manager
+    - openssh-server
+    - systemd-timesyncd
+  customize-hooks:
+    # openssh-server's postinst generates a host key pair when it is installed,
+    # and it is installed in the build chroot — so the image carried one, the
+    # same one in both slots, made on the build machine and published with the
+    # release. sshd uses the persistent pair because the drop-in names it, but a
+    # private key that ships in a public artefact is compromised whether or not
+    # anything reads it, and a slot whose drop-in did not apply falls back to
+    # exactly these. This appliance's identity is created on first boot, onto
+    # the persistent partition, so there is nothing here for the image to carry.
+    - |-
+      set -eu
+      rm -f "$1"/etc/ssh/ssh_host_*_key "$1"/etc/ssh/ssh_host_*_key.pub
+    # The package is built outside the image and installed here, so the same
+    # artifact an operator can install on an existing host is what both slots
+    # carry. dpkg is run in the chroot; the postinst detects that there is no
+    # running systemd and defers service startup.
+    - |-
+      set -eu
+      [ -f "$IGconf_emsappliance_package" ] || {
+         echo "ems-appliance: $IGconf_emsappliance_package is missing" >&2
+         exit 1
+      }
+      install -m 0644 "$IGconf_emsappliance_package" "$1/tmp/ems-appliance-manager.deb"
+      chroot "$1" /usr/bin/dpkg -i /tmp/ems-appliance-manager.deb
+      rm -f "$1/tmp/ems-appliance-manager.deb"
+
+    # The build marker is what a trial boot compares against the pending
+    # operation, so it names the exact build this filesystem is. It carries no
+    # slot: image-rota writes one bit-for-bit identical pair.
+    #
+    # The package record is dpkg's own answer, captured here because it cannot
+    # be captured later: image-rota binds /var per slot, so the shipped root
+    # filesystem carries no dpkg database at all. Without it a release gate has
+    # nothing exact to compare a package name, version, architecture or
+    # installation status against.
+    - |-
+      set -eu
+      mkdir -p "$1/etc"
+      package=$(chroot "$1" /usr/bin/dpkg-query -W \
+         -f='${Package}\t${Version}\t${Architecture}\t${Status}' \
+         ems-appliance-manager) || {
+         echo "ems-appliance: dpkg does not report the package as installed" >&2
+         exit 1
+      }
+      name=$(printf '%s' "$package" | cut -f1)
+      version=$(printf '%s' "$package" | cut -f2)
+      arch=$(printf '%s' "$package" | cut -f3)
+      status=$(printf '%s' "$package" | cut -f4)
+      [ "$status" = "install ok installed" ] || {
+         echo "ems-appliance: the package is '$status', not installed" >&2
+         exit 1
+      }
+      # The full package set of the rootfs. The rootfs is assembled from live
+      # Debian mirrors, so the image's inputs are not otherwise recoverable
+      # after the fact: without this, an attestation binds who built it and
+      # from which git tree, and says nothing about what went into it.
+      chroot "$1" dpkg-query -W -f='${binary:Package}\t${Version}\t${Architecture}\n' \
+         > "$1/etc/ems-appliance-os-packages" 2>/dev/null || {
+         echo "ems-appliance: the package set of the rootfs could not be recorded" >&2
+         exit 1
+      }
+      packages_sha256=$(sha256sum "$1/etc/ems-appliance-os-packages" | cut -d' ' -f1)
+      packages_count=$(wc -l < "$1/etc/ems-appliance-os-packages" | tr -d ' ')
+
+      cat > "$1/etc/ems-appliance-os-build" <<EOF
+      {
+        "architecture": "arm64",
+        "build_id": "$IGconf_emsappliance_build_id",
+        "image_layer": "image-rota",
+        "layout_id": "$IGconf_emsappliance_layout_id",
+        "release_version": "$IGconf_emsappliance_release_version",
+        "appliance_manager_version": "$(chroot "$1" /usr/bin/ems-appliance --version 2>/dev/null || echo unknown)",
+        "package": {
+          "name": "$name",
+          "version": "$version",
+          "architecture": "$arch",
+          "status": "$status"
+        },
+        "os_packages": {
+          "manifest": "/etc/ems-appliance-os-packages",
+          "count": $packages_count,
+          "sha256": "sha256:$packages_sha256"
+        }
+      }
+      EOF
+
+    # Every mount point the appliance needs, created while the image is still
+    # writable. systemd creates a missing one only on a filesystem it can write
+    # to, and the slot root is read-only from the first boot onwards: a shared
+    # path with no directory in the image is a bind mount that never happens on
+    # hardware, and /persistent with no directory is a boot that has no state at
+    # all. Kept in step with appliance/ab_persistence.py by an image check.
+    - |-
+      set -eu
+      for mountpoint in /persistent \
+                        /opt/ems-solarflow \
+                        /var/lib/ems-appliance-manager \
+                        /var/log/ems-appliance-manager \
+                        /etc/ems-appliance-manager \
+                        /var/lib/ems-appliance-os-update \
+                        /etc/NetworkManager/system-connections \
+                        /var/lib/ems-backup; do
+         install -d -m 0755 "$1$mountpoint"
+      done
+
+    # The slot root is read-only. image-rota already says so in /etc/fstab, which
+    # is what systemd-remount-fs enforces once userspace is up; the kernel command
+    # line said nothing, so the *initial* mount depended on initramfs-tools
+    # defaulting to read-only. That default is not this project's to rely on, and
+    # a boot where it did not hold would let the first writes of a boot land on a
+    # filesystem the next slot switch discards. Upstream only adds ro for erofs.
+    - |-
+      set -eu
+      cmdline="$1/boot/firmware/cmdline.txt"
+      [ -f "$cmdline" ] || {
+         echo "ems-appliance: $cmdline is missing" >&2
+         exit 1
+      }
+      grep -qE '(^| )ro( |$)' "$cmdline" || sed -i '1s|$| ro|' "$cmdline"
+      grep -qE '(^| )rw( |$)' "$cmdline" && {
+         echo "ems-appliance: the kernel command line asks for a writable root" >&2
+         exit 1
+      }
+      grep -qE '(^| )ro( |$)' "$cmdline" || {
+         echo "ems-appliance: ro could not be added to the kernel command line" >&2
+         exit 1
+      }
+
+    # The layout descriptor the runtime reads. Labels only: image-rota generates
+    # the partition identities per build, and the runtime discovers them.
+    - |-
+      set -eu
+      mkdir -p "$1/etc/ems-appliance-manager"
+      chroot "$1" /usr/bin/ems-appliance ab write-layout \
+         --layout-id "$IGconf_emsappliance_layout_id" \
+         --output /etc/ems-appliance-manager/ab-layout.json
+
+    - $BDEBSTRAP_HOOKS/enable-units "$1" ems-appliance-agent.service \
+        ems-appliance-web.service ems-appliance-host-identity.service \
+        ems-appliance-persistence.service \
+        ems-appliance-ab-health.service ems-appliance-slot-bootstrap.service \
+        ems-appliance-grow-persistent.service

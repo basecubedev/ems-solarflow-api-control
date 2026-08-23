@@ -1,0 +1,46 @@
+{
+  "created_at": "2026-08-11T17:05:45Z",
+  "gates": {
+    "arm64_guest": {
+      "environment": "amd64 qemu/kvm guest and aarch64 qemu/tcg guest, Debian 13 trixie, pinned base images 20260803-2559",
+      "evidence_sha256": "sha256:9d2530cfc30073492fe95cbfcc4917c6a34745f5c673eaf881002d6739fff092",
+      "reason": "RESULT: FAIL (the guest smoke test exited non-zero (APPLIANCE_SMOKE_EXIT: 1))",
+      "result": "fail"
+    },
+    "docker_reconstruction": {
+      "environment": "amd64 qemu/kvm guest and aarch64 qemu/tcg guest, Debian 13 trixie, pinned base images 20260803-2559",
+      "evidence_sha256": "sha256:b0b5f91948056c064522370bf5333f71d4e853c850a62d4f4fa05fa9732f8cac",
+      "reason": "RESULT: PASS",
+      "result": "pass"
+    },
+    "networkmanager_fail_closed": {
+      "environment": "amd64 qemu/kvm guest and aarch64 qemu/tcg guest, Debian 13 trixie, pinned base images 20260803-2559",
+      "evidence_sha256": "sha256:7ffb4491278846b0baaf62e5722c8f82f99151e116f7f355e3df77e6bc1fa976",
+      "reason": "RESULT: PASS (1 case(s) NOT RUN; the refusal was proven, the control held)",
+      "result": "pass"
+    },
+    "package_lifecycle": {
+      "environment": "amd64 qemu/kvm guest and aarch64 qemu/tcg guest, Debian 13 trixie, pinned base images 20260803-2559",
+      "evidence_sha256": "sha256:df57805de957ac07ba1001b261360d2f3b663de7ffe42c299775f88f0f749ac9",
+      "reason": "RESULT: PASS",
+      "result": "pass"
+    },
+    "sftp": {
+      "environment": "amd64 qemu/kvm guest and aarch64 qemu/tcg guest, Debian 13 trixie, pinned base images 20260803-2559",
+      "evidence_sha256": "sha256:babeb7f7f454b0385e40d402ef523ab91261e901887e943b88e8a6d78fe35f7e",
+      "reason": "RESULT: PASS",
+      "result": "pass"
+    }
+  },
+  "optional": [
+    "arm64_guest"
+  ],
+  "required": [
+    "sftp",
+    "package_lifecycle",
+    "docker_reconstruction",
+    "networkmanager_fail_closed"
+  ],
+  "result": "pass",
+  "schema_version": 1
+}

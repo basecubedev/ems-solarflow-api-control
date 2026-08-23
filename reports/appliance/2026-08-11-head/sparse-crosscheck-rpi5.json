@@ -1,0 +1,32 @@
+{
+  "artefact_sha256": "sha256:d47f33fdfcf248a4eae1b15efbfa5bfd0738b6488deccf7f74689c4319c40ce2",
+  "external_decoder": "simg2img",
+  "members": [
+    {
+      "external": {
+        "expanded_sha256": "sha256:90678cf33e4f5da1c9989de1b75c5d55ad57e3c021ec026332f2cd719a57632c",
+        "expanded_size": 268435456
+      },
+      "member": "boot",
+      "project": {
+        "expanded_sha256": "sha256:90678cf33e4f5da1c9989de1b75c5d55ad57e3c021ec026332f2cd719a57632c",
+        "expanded_size": 268435456
+      },
+      "result": "pass"
+    },
+    {
+      "external": {
+        "expanded_sha256": "sha256:a0410952364315cf30b21fa9217550b5b5669c23ec5e96e6fbe1c9ee3db726c4",
+        "expanded_size": 4294967296
+      },
+      "member": "system",
+      "project": {
+        "expanded_sha256": "sha256:a0410952364315cf30b21fa9217550b5b5669c23ec5e96e6fbe1c9ee3db726c4",
+        "expanded_size": 4294967296
+      },
+      "result": "pass"
+    }
+  ],
+  "result": "pass",
+  "schema_version": 1
+}

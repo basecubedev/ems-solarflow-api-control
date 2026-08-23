@@ -42,7 +42,7 @@ jobs:
 
       - name: Compile Python files
         run: |
-          python -m compileall admin ems dashboard scripts tests emsctl.py ems-solarflow-api-control.py
+          python -m compileall admin appliance ems dashboard scripts tests emsctl.py ems-solarflow-api-control.py
 
       - name: Check generated config template
         run: |
@@ -70,6 +70,7 @@ jobs:
       matrix:
         group:
           - core
+          - appliance
           - admin
           - mqtt
           - power-control
@@ -91,6 +92,12 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
           python -m pip install -r requirements-dev.txt
+
+      # Without these the filesystem fixtures fall back to hand-written
+      # superblocks, and the assertions about a written slot's filesystem
+      # become a round-trip of bytes the tests wrote themselves.
+      - name: Install the filesystem tools the fixtures build with
+        run: sudo apt-get install -y --no-install-recommends mtools e2fsprogs
 
       - name: Verify dependency imports
         run: |
@@ -217,7 +224,9 @@ jobs:
   docker-first-e2e:
     name: Docker-first setup e2e
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Booting a systemd container per tier is minutes of work each, and the
+    # appliance tiers added around two hundred of them.
+    timeout-minutes: 75
     permissions:
       contents: read
 
@@ -244,6 +253,11 @@ jobs:
         run: printf 'pytest -q -rs -m docker tests/\n'
 
       - name: Run real-Docker e2e tests
+        env:
+          # This job's green result is meant to mean the container tiers ran.
+          # Without this, a guest that cannot boot or reach a package archive
+          # reports as a skip and the job passes having proven nothing.
+          EMS_REQUIRE_APPLIANCE_CONTAINER_TESTS: "1"
         run: |
           pytest -q -rs -m docker tests/
 

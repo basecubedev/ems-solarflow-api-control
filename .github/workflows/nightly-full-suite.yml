@@ -167,6 +167,45 @@ jobs:
         run: |
           pytest -q -m system_build tests/
 
+  upstream-generator:
+    name: Pinned rpi-image-gen tree
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      # The five upstream-tree tests skip unless something names a real tree, so
+      # nothing ever ran them: the contract the A/B image is built against was
+      # bound only by the release gates. The fetch verifies the tarball against
+      # the lock before extracting, so this job proves the pin too.
+      - name: Fetch the pinned generator tree
+        run: |
+          scripts/appliance-fetch-rpi-image-gen.sh --into "$RUNNER_TEMP/rpi-image-gen"
+
+      - name: Report the selected tier
+        run: printf 'pytest -q -rs tests/test_appliance_rpi_image_gen_upstream.py\n'
+
+      - name: Run the upstream contract tier
+        env:
+          EMS_RPI_IMAGE_GEN: ${{ runner.temp }}/rpi-image-gen
+        run: |
+          pytest -q -rs tests/test_appliance_rpi_image_gen_upstream.py
+
+
 # The Admin replacement and recovery journey is NOT duplicated here. It may only
 # run against immutable published digests resolved and verified from the
 # Development catalogue, which admin-replacement-canary.yml owns end to end

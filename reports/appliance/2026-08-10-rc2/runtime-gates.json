@@ -1,0 +1,46 @@
+{
+  "created_at": "2026-08-10T20:40:31Z",
+  "gates": {
+    "arm64_guest": {
+      "environment": "amd64 qemu/kvm guest, Debian 13 trixie, pinned base image 20260803-2559",
+      "evidence_sha256": "sha256:83a4eae3fcc01886ef0ac10b33913f72a28c8a4a9af2ae49f75e6a23d553636d",
+      "reason": "RESULT: NOT RUN",
+      "result": "not_run"
+    },
+    "docker_reconstruction": {
+      "environment": "amd64 qemu/kvm guest, Debian 13 trixie, pinned base image 20260803-2559",
+      "evidence_sha256": "sha256:7f1e86438c31f9961dde8d14bdb9b7074f504058f39cf25ad0219e675489ceeb",
+      "reason": "RESULT: FAIL (runtime_seed_unaddressable: the offline seed is written and never used)",
+      "result": "fail"
+    },
+    "networkmanager_fail_closed": {
+      "environment": "amd64 qemu/kvm guest, Debian 13 trixie, pinned base image 20260803-2559",
+      "evidence_sha256": "sha256:7ffb4491278846b0baaf62e5722c8f82f99151e116f7f355e3df77e6bc1fa976",
+      "reason": "RESULT: PASS (1 case(s) NOT RUN; the refusal was proven, the control held)",
+      "result": "pass"
+    },
+    "package_lifecycle": {
+      "environment": "amd64 qemu/kvm guest, Debian 13 trixie, pinned base image 20260803-2559",
+      "evidence_sha256": "sha256:bdaed37ff500cb4433fca1a24e74955e9591c01e02708951950495be64610d52",
+      "reason": "RESULT: PASS",
+      "result": "pass"
+    },
+    "sftp": {
+      "environment": "amd64 qemu/kvm guest, Debian 13 trixie, pinned base image 20260803-2559",
+      "evidence_sha256": "sha256:7bf38f6b3dcceace18934fd3c85f67ae536708a84ae8e07abbc2ca6d207017c2",
+      "reason": "RESULT: FAIL (1)",
+      "result": "fail"
+    }
+  },
+  "optional": [
+    "arm64_guest"
+  ],
+  "required": [
+    "sftp",
+    "package_lifecycle",
+    "docker_reconstruction",
+    "networkmanager_fail_closed"
+  ],
+  "result": "fail",
+  "schema_version": 1
+}

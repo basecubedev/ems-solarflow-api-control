@@ -1,0 +1,46 @@
+# METABEGIN
+# X-Env-Layer-Name: docker-debian-bookworm
+# X-Env-Layer-Category: container
+# X-Env-Layer-Desc: Docker engine and framework for Debian Bookworm
+# X-Env-Layer-Version: 2.1.0
+# X-Env-Layer-Provides: docker
+# X-Env-Layer-Requires: device-user-admin,sys-build-base
+#
+# X-Env-VarRequires: IGconf_sys_apt_keydir
+# X-Env-VarRequires-Valid: string
+#
+# X-Env-VarPrefix: docker
+#
+# X-Env-Var-trust_user1: n
+# X-Env-Var-trust_user1-Desc: Make $IGconf_device_user1 a member of the docker
+#  group and therefore able to run containers (and applications) without
+#  requiring root privileges. Enabling this has security implications.
+#  See:
+#  https://docs.docker.com/engine/security/#docker-daemon-attack-surface
+# X-Env-Var-trust_user1-Required: n
+# X-Env-Var-trust_user1-Valid: bool
+# X-Env-Var-trust_user1-Set: y
+# METAEND
+---
+mmdebstrap:
+  architectures:
+    - arm64
+  mirrors:
+    - ${IGTOP}/templates/debian/apt/docker-bookworm.sources
+  setup-hooks:
+    - mkdir -p $1/usr/share/keyrings/
+    - curl -fsSL https://download.docker.com/linux/debian/gpg -o $1/usr/share/keyrings/docker.asc
+    - chmod a+r $1/usr/share/keyrings/docker.asc
+    - cp -p $1/usr/share/keyrings/docker.asc $IGconf_sys_apt_keydir
+  packages:
+    - docker-ce
+    - docker-ce-cli
+    - containerd.io
+    - docker-buildx-plugin
+    - docker-compose-plugin
+  customize-hooks:
+    - chroot $1 sh -c "groupadd -f -r docker"
+    - |-
+      if igconf isy docker_trust_user1 ; then
+         chroot $1 sh -c "adduser $IGconf_device_user1 docker"
+      fi

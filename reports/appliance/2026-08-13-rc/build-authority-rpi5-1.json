@@ -1,0 +1,41 @@
+{
+  "build_id": "20260813192741",
+  "builder": {
+    "revision": "a7b6d4806183195f3efadb533f58c8e46393d057",
+    "source_form": "tarball",
+    "source_tree_sha256": "sha256:9ae7e0801afa81040da4d219eb69761a9404a4c2d6af2c34fb7f900783a2fa0f"
+  },
+  "builder_environment": {
+    "architecture": "",
+    "base_image_lock_id": "",
+    "base_image_sha512": "",
+    "binfmt_handler": "",
+    "captured_at": "",
+    "critical_packages": [],
+    "dependency_manifest_sha256": "",
+    "kernel": "",
+    "mmdebstrap_version": "",
+    "os_release": "",
+    "podman_version": "",
+    "python_version": "",
+    "qemu_version": "",
+    "schema_version": 1
+  },
+  "builder_environment_sha256": "sha256:ff9d8b04d89fb6db15d4fca6de9101f3f402d6435112ab7a01f6e40dce154f7d",
+  "completed": true,
+  "image": {
+    "path": "/build/dist/ems-solarflow-appliance-0.1.0-rpi5-arm64-ab.img",
+    "sha256": "sha256:0a38ca57400b2900e54feb537100403d962c4756ffc647c5afdecdc8c9462607"
+  },
+  "package_sha256": "05e4150a884f91cb3f349689a2de415e33d9e1650f620434a704051eed8b0907",
+  "profile": "rpi5",
+  "project": {
+    "revision": "01a61335c35b3ffabca1121983f8f161c0e36f75",
+    "tree_sha256": "sha256:695881c540e1b651e0b1c6f72ba4f54a09d13f00cc104440358b6bb5df990622"
+  },
+  "schema_version": 3,
+  "update": {
+    "path": "/build/dist/ems-solarflow-appliance-0.1.0-rpi5-arm64-ab.update.tar.zst",
+    "sha256": "sha256:bd8bf71452380cc2e65458ff769b7f4a5ccfd5ecf8c8471b4010e9cf84795b6f"
+  }
+}

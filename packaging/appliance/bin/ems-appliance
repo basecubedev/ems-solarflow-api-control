@@ -1,0 +1,10 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# EMS SolarFlow Appliance Manager host CLI.
+set -e
+# The caller's PYTHONPATH is dropped rather than appended, and -P keeps the
+# working directory off sys.path: this runs as root from wherever an operator
+# happened to be standing.
+PYTHONPATH=/usr/lib/ems-appliance-manager
+export PYTHONPATH
+exec /usr/bin/python3 -P -m appliance "$@"

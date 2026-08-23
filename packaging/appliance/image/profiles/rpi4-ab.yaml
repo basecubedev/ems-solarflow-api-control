@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# The A/B appliance image for Raspberry Pi 4.
+#
+#   rpi-image-gen build -c <abs>/profiles/rpi4-ab.yaml -S packaging/appliance/image
+#
+# A separate artefact, not a compatibility claim on the Pi 5 image: the device
+# layer selects a different kernel and firmware, so one image cannot be both.
+include:
+  file: ../shared/ems-appliance-ab.yaml
+
+device:
+  layer: rpi4
+
+image:
+  name: ems-solarflow-appliance-rpi4

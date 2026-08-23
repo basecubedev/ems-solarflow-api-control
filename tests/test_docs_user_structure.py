@@ -17,6 +17,11 @@ pytestmark = [
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# One ceiling for the root README, asserted from three directions below. Three
+# separate literals had already drifted apart (110, 110, 130), which means the
+# loosest one was the only rule actually in force.
+README_MAX_LINES = 150
+
 
 def read(path):
     return path.read_text(encoding="utf-8")
@@ -35,7 +40,7 @@ def test_user_docs_document_shared_admin_dashboard_password():
 def test_readme_mentions_first_start_password_without_becoming_security_manual():
     text = read(ROOT / "README.md")
     assert "shared EMS/Admin password" in text or "Admin Console password" in text
-    assert len(text.splitlines()) <= 130
+    assert len(text.splitlines()) <= README_MAX_LINES
 
 
 # --- README is a compact router, not a manual -----------------------------
@@ -52,10 +57,14 @@ def test_readme_is_router_not_manual():
 
 
 def test_readme_is_router_sized():
-    # Router target: short. 110 lines is the hard ceiling (top-of-file status
-    # badges included).
+    # Router target: short. 150 lines is the hard ceiling (top-of-file status
+    # badges included). It was 110 until the host sizing table landed, and 130
+    # until Get started split into the two ways in -- a dedicated Raspberry Pi
+    # or a machine you already run. Which of the two you are is the first
+    # question, and answering it is routing; at 130 the split only fitted by
+    # compressing prose until it read like a telegram.
     lines = read(ROOT / "README.md").splitlines()
-    assert len(lines) <= 110, len(lines)
+    assert len(lines) <= README_MAX_LINES, len(lines)
 
 
 def test_readme_routes_to_three_setup_paths():
@@ -78,14 +87,14 @@ def test_readme_has_copy_paste_admin_console_start():
 
 def test_readme_admin_console_start_requires_no_git_checkout():
     text = read(ROOT / "README.md")
-    admin_section = text.split("## Get started", 1)[1].split("##", 1)[0]
+    admin_section = text.split("## Get started", 1)[1].split("\n## ", 1)[0]
     assert "install-admin-console.sh" in admin_section
     assert "git clone" not in admin_section
 
 
 def test_readme_admin_console_defaults_to_host_networking():
     text = read(ROOT / "README.md")
-    admin_section = text.split("## Get started", 1)[1].split("##", 1)[0]
+    admin_section = text.split("## Get started", 1)[1].split("\n## ", 1)[0]
     # Normal users are never told to pass --hostnet; host networking is the
     # documented default and --bridge is the opt-in.
     assert "--hostnet" not in admin_section
@@ -130,12 +139,18 @@ def test_readme_has_supported_hardware_summary():
     assert "real power hardware" in text
 
 
-def test_readme_marks_mqtt_device_control_as_roadmap():
+def test_readme_does_not_call_mqtt_control_a_future_feature():
+    """It was on the roadmap once. The word survived the feature shipping, and a
+    test named for the old state is how it would survive again."""
+
     text = read(ROOT / "README.md")
-    section = text.split("## Supported hardware at a glance", 1)[1].split("##", 1)[0]
-    assert "Roadmap" in section
-    assert "MQTT" in section
-    assert "device" in section or "inverter" in section
+    section = text.split("## Supported hardware at a glance", 1)[1].split("\n## ", 1)[0]
+    # One line, so an assertion about a sentence survives rewrapping.
+    flowed = " ".join(section.split())
+
+    assert "MQTT control is an implemented EMS transport" in flowed
+    assert "not a future feature" in flowed
+    assert "not building the feature" in flowed
 
 
 def test_supported_setups_page_lives_under_user_docs():
@@ -184,6 +199,61 @@ def test_validated_devices_ledger_ties_each_row_to_evidence():
         assert row[evidence_col], f"{device}: missing 'Evidence'"
 
 
+# --- Host hardware sizing --------------------------------------------------
+
+
+def test_readme_states_the_host_memory_tiers():
+    """The RAM question decides the install shape, so the router answers it."""
+
+    text = read(ROOT / "README.md")
+    section = text.split("## Hardware requirements", 1)[1].split("\n## ", 1)[0]
+    for tier in ("512 MB", "1 GB", ">1 GB"):
+        assert tier in section, tier
+    assert "InfluxDB" in section
+    assert "docs/user/hardware-requirements.md" in section
+
+
+def test_readme_says_ab_does_not_double_runtime_memory():
+    """Two slots on the medium is not two systems in memory.
+
+    Left unsaid, the sizing table reads as "double it for A/B", which would rule
+    out hardware that is in fact fine.
+    """
+
+    text = read(ROOT / "README.md")
+    assert "only one slot is" in text
+    assert "does not double runtime RAM" in text
+
+
+def test_the_hardware_requirements_page_covers_memory_and_raspberry_pi():
+    page = ROOT / "docs" / "user" / "hardware-requirements.md"
+    assert page.is_file()
+    text = read(page)
+    for tier in ("512 MB", "1 GB", ">1 GB"):
+        assert tier in text, tier
+    assert "## Raspberry Pi compatibility" in text
+    assert "only one slot" in text
+    # The optional half of the sizing answer: control must not appear to depend
+    # on the history database.
+    assert "InfluxDB" in text
+    assert "arm64" in text
+
+
+def test_the_hardware_page_states_the_pi3_limit_without_overclaiming_the_rest():
+    """The A/B refusal is definite; the Docker path on a Pi 3 is untested.
+
+    Collapsing those two into one verdict is the failure mode in both
+    directions — "Pi 3 works" and "Pi 3 is useless" are each wrong.
+    """
+
+    text = read(ROOT / "docs" / "user" / "hardware-requirements.md")
+    section = text.split("### Raspberry Pi 3 and 3B+", 1)[1].split("\n## ", 1)[0]
+    assert "does not support" in section
+    assert "not tested" in section.lower() or "nobody has tested" in section
+    assert "not listed as supported" in section
+    assert "guaranteed" not in text.lower()
+
+
 # --- Docs are split by audience -------------------------------------------
 
 
@@ -202,6 +272,17 @@ def test_docs_index_routes_by_audience():
     assert "user/admin-console.md" in text
     assert "technical/admin-discovery.md" in text
     assert "developer/developer-setup.md" in text
+
+
+def test_faq_names_every_setup_path_a_user_can_take():
+    """It answered for two of the three, which made the choice look like two."""
+
+    text = read(ROOT / "docs" / "user" / "faq.md")
+
+    assert "Admin Console" in text
+    assert "Docker Bootstrap" in text
+    assert "appliance/index.md" in text
+    assert "## Appliance image" in text
 
 
 def test_docs_index_names_three_operating_models():
@@ -300,7 +381,7 @@ def test_faq_answers_admin_console_user_questions():
     for expected in [
         "What is the Admin Console?",
         "Should I choose Setup or Maintenance?",
-        "Should I use the Admin Console or Docker Bootstrap?",
+        "Which setup path should I choose?",
         "What is Developer Setup?",
         "Are Admin Console backups normal EMS backups?",
         "Is the Admin Console safe to expose to the internet?",
@@ -349,7 +430,7 @@ def test_faq_start_path_uses_installer_not_source_launcher():
 
 def test_readme_recommended_admin_console_uses_positive_instruction():
     text = read(ROOT / "README.md")
-    section = text.split("## Get started", 1)[1].split("##", 1)[0]
+    section = text.split("## Get started", 1)[1].split("\n## ", 1)[0]
     assert "Start with the Admin Console" in section
     assert "Install and start it" in section
     assert "No Git checkout" not in section
@@ -402,7 +483,7 @@ def test_readme_stays_compact_router():
     assert "git clone" not in text
     assert "docker compose exec ems python3 emsctl.py diagnose" not in text
     assert '"dry_run"' not in text
-    assert len(text.splitlines()) <= 110
+    assert len(text.splitlines()) <= README_MAX_LINES
 
 
 # --- User docs stay simple; technical detail keeps its home ---------------
@@ -488,7 +569,7 @@ def test_docs_index_marks_developer_setup_as_developer_path():
 
 def test_docs_index_operating_models_mark_developer_setup_not_for_normal_users():
     text = read(ROOT / "docs" / "README.md")
-    section = text.split("## Operating models", 1)[1].split("##", 1)[0]
+    section = text.split("## Operating models", 1)[1].split("\n## ", 1)[0]
     assert "Admin Console" in section
     assert "Docker Bootstrap" in section
     assert "Developer Setup" in section

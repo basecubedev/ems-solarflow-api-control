@@ -1,0 +1,70 @@
+{
+  "attestation": {
+    "problems": [],
+    "sha256": "sha256:eb3b9fe565d52ed53dee1ed6080417fd96ea4374a4eabdddfa85fdfa08087fa6",
+    "signature": {
+      "code": "",
+      "detail": "signed by 3BBFB52A6C856EA78C3DC47527FE69546B62D118",
+      "document_sha256": "sha256:eb3b9fe565d52ed53dee1ed6080417fd96ea4374a4eabdddfa85fdfa08087fa6",
+      "fingerprints": [
+        "3BBFB52A6C856EA78C3DC47527FE69546B62D118"
+      ],
+      "present": true,
+      "signature_sha256": "sha256:2ecb0887cf35eb6bd6d93e7169dc555961b51667e33287cd3ce9969dfbde31db",
+      "trusted": true,
+      "verified": true
+    }
+  },
+  "checksum_problems": [],
+  "files_verified": 22,
+  "freshness": {
+    "certified_revision": "a84723d15d5089566196e5d440c2382325c0f26a",
+    "certified_tree": "sha256:d58c4631cab1585b8968a453b1caf2feabc9ef4fae907df76651d349c683cd27",
+    "current_revision": "a84723d15d5089566196e5d440c2382325c0f26a",
+    "current_tree": "sha256:d58c4631cab1585b8968a453b1caf2feabc9ef4fae907df76651d349c683cd27",
+    "detail": "the checkout is the certified revision and tree",
+    "stale": false
+  },
+  "kit": "/zfs/tmp/appliance-rc2/carried-kit",
+  "kit_manifest_sha256": "sha256:36742c50fcf41502d9088bbebc836d6af3f0c6dc45d43a016b70bbc50da8bcb8",
+  "physical_ready": false,
+  "private_key_problems": [],
+  "readiness": {
+    "invariants": {
+      "all_mandatory_inspections_pass": false,
+      "all_profiles_verified": true,
+      "attestation_artefacts_rehashed": true,
+      "attestation_result_pass": true,
+      "attestation_signature_present": true,
+      "attestation_signature_verified": true,
+      "hardware_kit_verified": true,
+      "production_gate_pass": true,
+      "release_not_stale": true,
+      "runtime_required_gates_pass": false,
+      "source_bundle_verified": true,
+      "trusted_signer": true
+    },
+    "physical_ready": false,
+    "unmet": [
+      "all_mandatory_inspections_pass",
+      "runtime_required_gates_pass"
+    ]
+  },
+  "runtime_gates": {
+    "detail": "arm64_guest=not_run, docker_reconstruction=fail, networkmanager_fail_closed=pass, package_lifecycle=pass, sftp=fail",
+    "ok": false
+  },
+  "source_binding": {
+    "authority_sha256": "sha256:ba481275dea63fb30c0b88231fe3415ff034617cce8d2096d0ad7c311e0a090a",
+    "bundle_sha256": "sha256:3a63d432ccc64f52cab28a17e2f0e75e0ce8ac74c4988c58623118ba936b94df",
+    "ok": true,
+    "parity_sha256": "sha256:04024db86def66ed2ccaae2acf6d6a7bb11df2698566878fd8dcb2fd0f263a59",
+    "problems": [],
+    "revision": "a84723d15d5089566196e5d440c2382325c0f26a",
+    "symlinks": 6,
+    "tracked_objects": 1157,
+    "tree_sha256": "sha256:d58c4631cab1585b8968a453b1caf2feabc9ef4fae907df76651d349c683cd27"
+  },
+  "stale_problems": [],
+  "verification_version": 1
+}

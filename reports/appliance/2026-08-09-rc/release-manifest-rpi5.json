@@ -1,0 +1,53 @@
+{
+  "appliance_manager_version": "0.1.0",
+  "architecture": "arm64",
+  "archive": {
+    "compression": "zstd",
+    "digest": "sha256:d9dc8f360db75d56fe6c5831ffba8700a5d612873f41941575218375920fec9d",
+    "name": "ems-solarflow-appliance-0.1.0-rpi5-arm64-ab.tar.zst",
+    "size_bytes": 327897001
+  },
+  "build_id": "20260809135018",
+  "compatible_hardware": [
+    "pi5"
+  ],
+  "created_at": "2026-08-09T14:44:38Z",
+  "device_layer": "rpi5",
+  "format_version": 2,
+  "image_layer": "image-rota",
+  "image_layer_version": "5.5.1",
+  "layout_id": "ems-appliance-rota-v1",
+  "members": {
+    "boot": {
+      "encoded_sha256": "sha256:f3c5ed806e76db2b2fc87f9afa69db737ca7a8b8762e73ae84c1e100c6b4d67d",
+      "encoding": "android_sparse",
+      "expanded_sha256": "sha256:227d36f33f69655d52b3264b46ddec05576e36026329d478e3f83574fa9909f7",
+      "expanded_size": 268435456,
+      "filesystem": "vfat",
+      "role": "boot"
+    },
+    "system": {
+      "encoded_sha256": "sha256:a88f027d6bf056f94e139cf9836c7e9b59c718bb5932e9256a2a746025b4c892",
+      "encoding": "android_sparse",
+      "expanded_sha256": "sha256:630f2828fe98c37ab332429a4ed015039de69ba24152d6b208868b55bb08d11f",
+      "expanded_size": 4294967296,
+      "filesystem": "ext4",
+      "role": "root"
+    }
+  },
+  "minimum_appliance_manager_version": "0.1.0",
+  "os_release": "Raspberry Pi OS Trixie arm64",
+  "persistent_schema_version": 2,
+  "project_revision": "ec0bed2bffac922ef59f84c057a3a659210a843a",
+  "provenance": {
+    "build_authority_sha256": "sha256:7aaec4eec46a7e178f3fb24771ff862795d79fbd02430ad8e04cabac9fb5cd2e",
+    "builder_environment_sha256": "sha256:d4650e238078e2b84f03716bcb134862a107000a87c6df67da223697d34e46ef",
+    "project_tree_sha256": "sha256:1ec4c37b2c3ba9d799500a0e409800fc89a04d944736b39fbde6c8b9ee4bf85e",
+    "source_form": "tarball",
+    "source_tree_sha256": "sha256:9ae7e0801afa81040da4d219eb69761a9404a4c2d6af2c34fb7f900783a2fa0f",
+    "verified": true
+  },
+  "release_version": "0.1.0",
+  "rpi_image_gen_revision": "a7b6d4806183195f3efadb533f58c8e46393d057",
+  "slot_schema_version": 2
+}

@@ -4,7 +4,7 @@
 [![Playwright E2E](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/playwright-e2e.yml/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/playwright-e2e.yml)
 [![CodeQL](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/github-code-scanning/codeql)
 [![Dependabot](https://img.shields.io/badge/Dependabot-enabled-brightgreen?logo=dependabot)](.github/dependabot.yml)
-![automated tests](https://img.shields.io/badge/automated%20tests-8400%2B-blue)
+![automated tests](https://img.shields.io/badge/automated%20tests-12300%2B-blue)
 [![Test-Driven Development](https://img.shields.io/badge/Test--Driven%20Development-contract--first-blue)](docs/developer/testing.md#development-approach)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.14-blue)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue)](LICENSE)
@@ -50,7 +50,38 @@ protocol, the per-device control capability and the transport write gate.
 [Device compatibility reports](https://github.com/basecubedev/ems-solarflow-api-control/issues/new?template=device_compatibility_report.yml)
 (working *or* broken) are very welcome.
 
+## Hardware requirements
+
+The machine EMS runs *on* — 64-bit `arm64` or `amd64`.
+
+| RAM | Recommended configuration |
+|-----|---------------------------|
+| 512 MB | EMS without InfluxDB |
+| 1 GB | EMS with InfluxDB |
+| >1 GB | Additional headroom |
+
+InfluxDB stores energy history and is optional — control does not need it. A/B
+deployment does not double runtime RAM because only one slot is active at a time.
+[Pi matrix](docs/user/hardware-requirements.md).
+
 ## Get started
+
+### On a dedicated Raspberry Pi 4 or 5
+
+The **appliance image** turns the board into a box that runs EMS and nothing
+else: flash one card, plug in Ethernet, power on. No shell to learn, no operating
+system to maintain, and A/B updates that roll themselves back if the new one does
+not come up.
+
+Needs a Pi 4 or a Pi 5 and a 32 GB card — a Pi 3 cannot boot it. The image is
+**not yet confirmed on physical hardware**; read what that means before you rely
+on one.
+
+[Flashing the card](docs/user/appliance/install.md) ·
+[First start](docs/user/appliance/first-start.md) ·
+[All appliance guides](docs/user/appliance/index.md)
+
+### On a machine you already run
 
 > [!TIP]
 > **New here? Start with the Admin Console — the recommended path for most
@@ -73,7 +104,7 @@ the browser. Host networking is the default (best for local discovery); add
 
 ![Admin Console start page](docs/assets/screenshots/admin/admin-landing.png)
 
-Full guide with demo videos of a fresh install and a guided update:
+Full guide, with demo videos of a fresh install and a guided update:
 [docs/user/admin-console.md](docs/user/admin-console.md#what-the-admin-console-looks-like)
 
 ### Other ways to install
@@ -98,6 +129,8 @@ upfront. EMS reaches your devices over any one of:
 ## Documentation
 
 - Step-by-step guides: [Admin Console](docs/user/admin/index.md) · [EMS Dashboard](docs/user/dashboard/index.md)
+- [Hardware requirements](docs/user/hardware-requirements.md) · [Raspberry Pi compatibility](docs/user/hardware-requirements.md#raspberry-pi-compatibility) · [A/B deployment](docs/appliance/ab-os-updates.md)
+- [Appliance installation](docs/appliance/installation.md) · [Administration](docs/user/admin-console.md) · [Troubleshooting](docs/user/troubleshooting.md)
 - [User documentation](docs/user/)
 - [Technical reference](docs/technical/)
 - [Developer documentation](docs/developer/)

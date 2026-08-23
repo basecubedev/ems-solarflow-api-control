@@ -1,0 +1,74 @@
+{
+  "builds": [
+    {
+      "authority_file": "ems-solarflow-appliance-0.1.0-rpi5-arm64-ab.build-authority.json",
+      "authority_sha256": "sha256:86479e6b1c48377994afa5a83459583c78aa37f27169da576d7bb893f10e7f5f",
+      "build_id": "20260809135018",
+      "builder_environment_sha256": "sha256:d4650e238078e2b84f03716bcb134862a107000a87c6df67da223697d34e46ef",
+      "completed": true,
+      "image_file": "ems-solarflow-appliance-0.1.0-rpi5-arm64-ab.img",
+      "image_sha256": "sha256:ee1f4bbd5474f5b21f9967d6e4e75206b0f19c3d55d45dcee63b6a5db481f318",
+      "profile": "rpi5",
+      "update_file": "ems-solarflow-appliance-0.1.0-rpi5-arm64-ab.update.tar.zst",
+      "update_sha256": "sha256:d9dc8f360db75d56fe6c5831ffba8700a5d612873f41941575218375920fec9d"
+    }
+  ],
+  "dist": "<builder-dist>",
+  "files": [
+    {
+      "path": "ems-appliance-manager_0.1.0_arm64.deb",
+      "required": true,
+      "sha256": "sha256:55bb7bed5e0f84b8a2e55d380b5af14d8f45db10a5184cdfe01261e39875aed5",
+      "size_bytes": 284072
+    },
+    {
+      "path": "ems-appliance-manager_0.1.0_arm64.deb.sha256",
+      "required": true,
+      "sha256": "sha256:88d03995554d8c6ec5a9ff5f3d0577f9e288ce1944152f66829761d57687fa41",
+      "size_bytes": 104
+    },
+    {
+      "path": "ems-solarflow-appliance-0.1.0-rpi5-arm64-ab.build-authority.json",
+      "required": true,
+      "sha256": "sha256:86479e6b1c48377994afa5a83459583c78aa37f27169da576d7bb893f10e7f5f",
+      "size_bytes": 2456
+    },
+    {
+      "path": "ems-solarflow-appliance-0.1.0-rpi5-arm64-ab.build.json",
+      "required": true,
+      "sha256": "sha256:1de2b4ee5c48f53605b796ea6d6d95800284139fb7e450137b8b8aee409463f8",
+      "size_bytes": 1192
+    },
+    {
+      "path": "ems-solarflow-appliance-0.1.0-rpi5-arm64-ab.build.log",
+      "required": false,
+      "sha256": "sha256:0b7e4f3e06e67b14f6215020088cc894508843042b22899a8f583abe0767bf74",
+      "size_bytes": 52439
+    },
+    {
+      "path": "ems-solarflow-appliance-0.1.0-rpi5-arm64-ab.builder-environment.json",
+      "required": true,
+      "sha256": "sha256:db37e2b51cc4031816834e42a131d5e9e1e25f448e17706e7d9ca6f78272f67e",
+      "size_bytes": 1312
+    },
+    {
+      "path": "ems-solarflow-appliance-0.1.0-rpi5-arm64-ab.img",
+      "required": true,
+      "sha256": "sha256:ee1f4bbd5474f5b21f9967d6e4e75206b0f19c3d55d45dcee63b6a5db481f318",
+      "size_bytes": 17758703616
+    },
+    {
+      "path": "ems-solarflow-appliance-0.1.0-rpi5-arm64-ab.img.sha256",
+      "required": true,
+      "sha256": "sha256:5880ca3ab8d8c8780edf3df55144ebb58c605dba7092c436fffc73a680aae0f1",
+      "size_bytes": 114
+    },
+    {
+      "path": "ems-solarflow-appliance-0.1.0-rpi5-arm64-ab.update.tar.zst",
+      "required": true,
+      "sha256": "sha256:d9dc8f360db75d56fe6c5831ffba8700a5d612873f41941575218375920fec9d",
+      "size_bytes": 327897001
+    }
+  ],
+  "schema_version": 1
+}

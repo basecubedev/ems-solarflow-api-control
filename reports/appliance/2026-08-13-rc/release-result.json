@@ -1,0 +1,172 @@
+{
+  "builder": {
+    "base_image_lock_id": "builder:debian-13-genericcloud-amd64-20260803-2559.qcow2",
+    "base_image_sha512": "769562604ecaac26b661167891ef922f71f4d87d50a11423fc04e51444fda0d882c87996dd1181170d233627f4728e6722db2695c0ef753dad762c4ac4ed32e1",
+    "environment_sha256": "sha256:67c5a0885b7307e9715087ca2d58c7cbebb012123fe3ea54ca36d1d7cc588d32"
+  },
+  "certified_revision": "01a61335c35b3ffabca1121983f8f161c0e36f75",
+  "certified_tree_sha256": "sha256:695881c540e1b651e0b1c6f72ba4f54a09d13f00cc104440358b6bb5df990622",
+  "freshness": {
+    "certified_revision": "01a61335c35b3ffabca1121983f8f161c0e36f75",
+    "certified_tree": "sha256:695881c540e1b651e0b1c6f72ba4f54a09d13f00cc104440358b6bb5df990622",
+    "current_revision": "01a61335c35b3ffabca1121983f8f161c0e36f75",
+    "current_tree": "sha256:695881c540e1b651e0b1c6f72ba4f54a09d13f00cc104440358b6bb5df990622",
+    "detail": "the checkout is the certified revision and tree",
+    "stale": false
+  },
+  "hardware_kit": {
+    "detail": "the kit verified itself",
+    "development_kit": false,
+    "physical_ready": true,
+    "sha256": "sha256:f63541269dac1c0f06c8d07d670acb4be490107b549c0796518c87942c43f9ca"
+  },
+  "media": {
+    "image_bytes": 17750294528,
+    "minimum_media_bytes": 30000000000,
+    "partitions": {
+      "boot_bytes": 268435456,
+      "bootconfig_bytes": 33554432,
+      "persistent_initial_bytes": 8589934592,
+      "system_bytes": 4294967296
+    },
+    "persistent_requirement": {
+      "application_data_bytes": 2147483648,
+      "docker_seed_bytes": 740294656,
+      "docker_store_per_slot_bytes": 943718400,
+      "safety_margin_bytes": 1073741824,
+      "total_bytes": 11985223680,
+      "update_staging_bytes": 6136266752
+    },
+    "recommended_media_bytes": 21145583616,
+    "supported_media_label": "32 GB",
+    "unsupported_media_reason": "the appliance image is about 16.5 GiB and a card marketed as 16 GB holds less than that"
+  },
+  "package": {
+    "architecture": "arm64",
+    "name": "ems-appliance-manager",
+    "sha256": "sha256:cd38cc8546b35e48898d03199e9f500248c6f0ff2671931e87689369a65d5e81",
+    "version": "0.1.0"
+  },
+  "physical_ready": true,
+  "physical_tested": false,
+  "profiles": {
+    "rpi5": {
+      "build_id": "20260813200255",
+      "builder_environment_sha256": "sha256:67c5a0885b7307e9715087ca2d58c7cbebb012123fe3ea54ca36d1d7cc588d32",
+      "image_bytes": 17758703616,
+      "image_inspection": {
+        "fail": 0,
+        "mandatory_not_run": [],
+        "not_run": 0,
+        "pass": 90,
+        "result": "pass",
+        "sha256": "sha256:8295f344601411f23e3482b6045387cf5f8487c85bd63d70cfba0a711d0a39b4"
+      },
+      "image_sha256": "sha256:3491820e0a2b8b0977a65c0296e5c780ff245b817db8e9cf6a3a738f7a9bac6e",
+      "package_sha256": "cd38cc8546b35e48898d03199e9f500248c6f0ff2671931e87689369a65d5e81",
+      "project_revision": "01a61335c35b3ffabca1121983f8f161c0e36f75",
+      "project_tree_sha256": "sha256:695881c540e1b651e0b1c6f72ba4f54a09d13f00cc104440358b6bb5df990622",
+      "sparse_crosscheck": {
+        "fail": 0,
+        "mandatory_not_run": [],
+        "not_run": 0,
+        "pass": 0,
+        "result": "pass",
+        "sha256": "sha256:7da058ca2fef002d37847e841435d4a653b1d541f4f139a1bd1cdbde3ba67dac"
+      },
+      "update_bytes": 327822906,
+      "update_inspection": {
+        "fail": 0,
+        "mandatory_not_run": [],
+        "not_run": 0,
+        "pass": 18,
+        "result": "pass",
+        "sha256": "sha256:f8cbbe556d10342a70e7c46eacdf541c7b600dccb4491ac0e5a742a9b6959806"
+      },
+      "update_sha256": "sha256:8fed57b2cf98b189a336be1fdc99e1538dbd70dd3d78fee3076e965323c32736"
+    }
+  },
+  "project": {
+    "revision": "01a61335c35b3ffabca1121983f8f161c0e36f75",
+    "tree_sha256": "sha256:695881c540e1b651e0b1c6f72ba4f54a09d13f00cc104440358b6bb5df990622"
+  },
+  "readiness": {
+    "invariants": {
+      "all_mandatory_inspections_pass": true,
+      "all_profiles_verified": true,
+      "attestation_artefacts_rehashed": true,
+      "attestation_result_pass": true,
+      "attestation_signature_present": true,
+      "attestation_signature_verified": true,
+      "hardware_kit_verified": true,
+      "production_gate_pass": true,
+      "release_not_stale": true,
+      "runtime_required_gates_pass": true,
+      "source_bundle_verified": true,
+      "trusted_signer": true
+    },
+    "physical_ready": true,
+    "unmet": []
+  },
+  "release_attestation": {
+    "artefacts_rehashed": true,
+    "canonical_hash": "sha256:66606c92b9b4f0749f99f45a53d7a5398255747e4916ce86f21fb8b45548970e",
+    "rehash_problems": [],
+    "result": "pass",
+    "sha256": "sha256:3900a148c96cb244484c11065a3c3efa0b7cb6a5f8f816a3011ba2ee2c9df71b",
+    "signature": {
+      "code": "",
+      "detail": "signed by D16E8DE0B133BD8F7BF1E6CDA5D4C295127CB181",
+      "document_sha256": "sha256:3900a148c96cb244484c11065a3c3efa0b7cb6a5f8f816a3011ba2ee2c9df71b",
+      "fingerprints": [
+        "D16E8DE0B133BD8F7BF1E6CDA5D4C295127CB181"
+      ],
+      "present": true,
+      "signature_sha256": "sha256:00aa777742ad9e647bfaa9ee62069643f52124a4f520643e0982073645d71f3f",
+      "trusted": true,
+      "verified": true
+    }
+  },
+  "release_gate": {
+    "detail": "RESULT: PASS (production release, 1 optional gate(s) NOT RUN)",
+    "result": "pass",
+    "sha256": "sha256:96e6055138011b5a4f9e4be25b843ec7d6fe0223b3387f933ca85d2ee7a17931"
+  },
+  "run_id": "",
+  "runtime_gates": {
+    "detail": "every required runtime gate passed",
+    "gates": {
+      "arm64_guest": "pass",
+      "docker_reconstruction": "pass",
+      "networkmanager_fail_closed": "pass",
+      "package_lifecycle": "pass",
+      "sftp": "pass"
+    },
+    "result": "pass",
+    "sha256": "sha256:8909a54f46602f2434010402fd16026f5b5625c38097d0d5f3e6d4892126b9b2",
+    "unmet": []
+  },
+  "schema_version": 2,
+  "source_binding": {
+    "authority_sha256": "sha256:9a02296c89bb94f019692f20182e1fd713929f8cf8f955561a2e0ba5075623c0",
+    "bundle_sha256": "sha256:e66defa169e9de37fb08d4d236fc615624b2fb6feffab3ffd3442b8bc724578e",
+    "ok": true,
+    "parity_sha256": "sha256:d7f14f4a5e73dc27bef798770d511e18775d7976e2cb0f5e48fc369299cfe368",
+    "problems": [],
+    "revision": "01a61335c35b3ffabca1121983f8f161c0e36f75",
+    "symlinks": 6,
+    "tracked_objects": 1221,
+    "tree_sha256": "sha256:695881c540e1b651e0b1c6f72ba4f54a09d13f00cc104440358b6bb5df990622"
+  },
+  "source_bundle": {
+    "sha256": "sha256:e66defa169e9de37fb08d4d236fc615624b2fb6feffab3ffd3442b8bc724578e",
+    "symlinks": 6,
+    "tracked_objects": 1221
+  },
+  "trust_policy": {
+    "fingerprints": [
+      "D16E8DE0B133BD8F7BF1E6CDA5D4C295127CB181"
+    ],
+    "keyring_sha256": "sha256:f7cb67cc77000e0ae58920d59b761933b22e9cc519501cbb61cb3cc7aedabb5c"
+  }
+}

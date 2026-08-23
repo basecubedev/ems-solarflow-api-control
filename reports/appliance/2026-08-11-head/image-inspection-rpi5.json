@@ -1,0 +1,557 @@
+{
+  "counts": {
+    "fail": 0,
+    "not_run": 0,
+    "pass": 90
+  },
+  "findings": [
+    {
+      "check": "partition_table",
+      "detail": "6 GPT partitions",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "partition_count",
+      "detail": "6",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "label:bootconfig",
+      "detail": "partition 1",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "type:bootconfig",
+      "detail": "ebd0a0a2-b9e5-4433-87c0-68b6b72699c7",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "filesystem:bootconfig",
+      "detail": "vfat",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "label:boot_a",
+      "detail": "partition 2",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "type:boot_a",
+      "detail": "ebd0a0a2-b9e5-4433-87c0-68b6b72699c7",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "filesystem:boot_a",
+      "detail": "vfat",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "label:boot_b",
+      "detail": "partition 3",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "type:boot_b",
+      "detail": "ebd0a0a2-b9e5-4433-87c0-68b6b72699c7",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "filesystem:boot_b",
+      "detail": "vfat",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "label:system_a",
+      "detail": "partition 4",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "type:system_a",
+      "detail": "0fc63daf-8483-4772-8e79-3d69d8477de4",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "filesystem:system_a",
+      "detail": "ext",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "label:system_b",
+      "detail": "partition 5",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "type:system_b",
+      "detail": "0fc63daf-8483-4772-8e79-3d69d8477de4",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "filesystem:system_b",
+      "detail": "ext",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "label:persistent",
+      "detail": "partition 6",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "type:persistent",
+      "detail": "0fc63daf-8483-4772-8e79-3d69d8477de4",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "filesystem:persistent",
+      "detail": "ext",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "partition_identity",
+      "detail": "6 distinct PARTUUIDs",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "slot_pairing",
+      "detail": "distinct identities, identical payload sha256:a0410952364315cf...",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "boot_pairing",
+      "detail": "distinct identities, identical payload sha256:90678cf33e4f5da1...",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "gpt_primary_header",
+      "detail": "disk 934b8c9c-6bfd-4db3-ba53-77a1e8305f1d",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "gpt_backup_header",
+      "detail": "disk 934b8c9c-6bfd-4db3-ba53-77a1e8305f1d",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "gpt_primary_entries",
+      "detail": "128 entries of 128 bytes",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "gpt_backup_entries",
+      "detail": "128 entries of 128 bytes",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "gpt_headers_agree",
+      "detail": "primary and backup describe one disk",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "gpt_partition_ranges",
+      "detail": "6 partitions inside the disk",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "gpt_no_overlap",
+      "detail": "no partition overlaps another",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "filesystem_readable:bootconfig",
+      "detail": "fat",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "bootconfig_autoboot",
+      "detail": "tryboot_a_b=1",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "bootconfig_sections",
+      "detail": "[all], [tryboot]",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "filesystem_readable:boot_a",
+      "detail": "fat",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "boot_cmdline:boot_a",
+      "detail": "root=/dev/disk/by-slot/active/system",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "boot_readonly_root:boot_a",
+      "detail": "ro",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "boot_kernel:boot_a",
+      "detail": "kernel_2712.img",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "boot_initramfs:boot_a",
+      "detail": "initramfs_2712",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "boot_device_tree:boot_a",
+      "detail": "20 device-tree blobs",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "boot_configuration:boot_a",
+      "detail": "config.txt",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "filesystem_readable:boot_b",
+      "detail": "fat",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "boot_cmdline:boot_b",
+      "detail": "root=/dev/disk/by-slot/active/system",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "boot_readonly_root:boot_b",
+      "detail": "ro",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "boot_kernel:boot_b",
+      "detail": "kernel_2712.img",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "boot_initramfs:boot_b",
+      "detail": "initramfs_2712",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "boot_device_tree:boot_b",
+      "detail": "20 device-tree blobs",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "boot_configuration:boot_b",
+      "detail": "config.txt",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "filesystem_readable:system_a",
+      "detail": "ext4, 16384 byte blocks",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "package_installed:system_a",
+      "detail": "usr/bin/ems-appliance",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "package_name:system_a",
+      "detail": "ems-appliance-manager in the build marker",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "package_status:system_a",
+      "detail": "install ok installed in the build marker",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "package_version:system_a",
+      "detail": "0.1.0 (release declares 0.1.0)",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "package_architecture:system_a",
+      "detail": "arm64 (release declares arm64)",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "build_marker:system_a",
+      "detail": "20260811155758",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "layout_descriptor:system_a",
+      "detail": "etc/ems-appliance-manager/ab-layout.json",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "root_fstab_readonly:system_a",
+      "detail": "ro,relatime,commit=30",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "mount_points_present:system_a",
+      "detail": "7 mount points present",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "persistence_configuration:system_a",
+      "detail": "6 shared paths declared",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "shared_activations:system_a",
+      "detail": "6 shared paths activated",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "health_service_enabled:system_a",
+      "detail": "installed and enabled",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "slot_bootstrap_service_enabled:system_a",
+      "detail": "installed and enabled",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "persistence_service_enabled:system_a",
+      "detail": "installed and enabled",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "host_identity_service_enabled:system_a",
+      "detail": "installed and enabled",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "slot_generators:system_a",
+      "detail": "shared and per-slot generators present",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "machine_id_policy:system_a",
+      "detail": "machine-id-sync.service in etc/systemd/system",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "no_host_key_shipped:system_a",
+      "detail": "no host key is shipped",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "service_drop_ins:system_a",
+      "detail": "2 drop-ins ordered",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "runtime_helpers:system_a",
+      "detail": "3 helpers present",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "filesystem_readable:system_b",
+      "detail": "ext4, 16384 byte blocks",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "package_installed:system_b",
+      "detail": "usr/bin/ems-appliance",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "package_name:system_b",
+      "detail": "ems-appliance-manager in the build marker",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "package_status:system_b",
+      "detail": "install ok installed in the build marker",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "package_version:system_b",
+      "detail": "0.1.0 (release declares 0.1.0)",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "package_architecture:system_b",
+      "detail": "arm64 (release declares arm64)",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "build_marker:system_b",
+      "detail": "20260811155758",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "layout_descriptor:system_b",
+      "detail": "etc/ems-appliance-manager/ab-layout.json",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "root_fstab_readonly:system_b",
+      "detail": "ro,relatime,commit=30",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "mount_points_present:system_b",
+      "detail": "7 mount points present",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "persistence_configuration:system_b",
+      "detail": "6 shared paths declared",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "shared_activations:system_b",
+      "detail": "6 shared paths activated",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "health_service_enabled:system_b",
+      "detail": "installed and enabled",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "slot_bootstrap_service_enabled:system_b",
+      "detail": "installed and enabled",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "persistence_service_enabled:system_b",
+      "detail": "installed and enabled",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "host_identity_service_enabled:system_b",
+      "detail": "installed and enabled",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "slot_generators:system_b",
+      "detail": "shared and per-slot generators present",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "machine_id_policy:system_b",
+      "detail": "machine-id-sync.service in etc/systemd/system",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "no_host_key_shipped:system_b",
+      "detail": "no host key is shipped",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "service_drop_ins:system_b",
+      "detail": "2 drop-ins ordered",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "runtime_helpers:system_b",
+      "detail": "3 helpers present",
+      "mandatory": true,
+      "result": "pass"
+    },
+    {
+      "check": "gpt_independent_oracle",
+      "detail": "sgdisk found no problems",
+      "mandatory": true,
+      "result": "pass"
+    }
+  ],
+  "mandatory": {
+    "fail": 0,
+    "not_run": 0,
+    "pass": 90
+  },
+  "mandatory_not_run": [],
+  "optional": 0,
+  "result": "pass"
+}

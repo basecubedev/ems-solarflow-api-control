@@ -1,0 +1,68 @@
+{
+  "lock_version": 1,
+  "comment": [
+    "The exact cloud images every disposable guest in this project boots from.",
+    "The builder guest runs as root, installs build dependencies, receives the",
+    "project source and the pinned generator, and produces the images a release",
+    "is cut from: it is part of the supply chain, so it may not boot whatever",
+    "'latest' happened to publish today.",
+    "Each entry names one immutable Debian build directory and the digest this",
+    "project measured for that file. The digest in this file is the authority.",
+    "Debian's own SHA512SUMS is recorded for provenance, not as the check: a",
+    "verifier that fetches its expectation from the same place as the artefact",
+    "proves only that the two arrived together.",
+    "scripts/appliance-guest-base-image.sh downloads to .part, verifies, renames",
+    "atomically, and re-hashes a cached image before every boot. A role without",
+    "an entry, or a missing digest, is a failure and never a skipped check."
+  ],
+  "images": {
+    "builder": {
+      "comment": "Disposable rpi-image-gen builder. Runs as root, produces release images.",
+      "distribution": "debian",
+      "release": "trixie",
+      "release_version": "13",
+      "variant": "genericcloud",
+      "architecture": "amd64",
+      "build_id": "20260803-2559",
+      "published": "2026-08-03",
+      "url": "https://cloud.debian.org/images/cloud/trixie/20260803-2559/debian-13-genericcloud-amd64-20260803-2559.qcow2",
+      "filename": "debian-13-genericcloud-amd64-20260803-2559.qcow2",
+      "sha512": "769562604ecaac26b661167891ef922f71f4d87d50a11423fc04e51444fda0d882c87996dd1181170d233627f4728e6722db2695c0ef753dad762c4ac4ed32e1",
+      "checksum_source": "https://cloud.debian.org/images/cloud/trixie/20260803-2559/SHA512SUMS",
+      "checksum_signature_source": "https://cloud.debian.org/images/cloud/trixie/20260803-2559/SHA512SUMS.sign",
+      "format": "qcow2"
+    },
+    "smoke-amd64": {
+      "comment": "Packaged-runtime guest: real systemd, real sshd, real Docker.",
+      "distribution": "debian",
+      "release": "trixie",
+      "release_version": "13",
+      "variant": "genericcloud",
+      "architecture": "amd64",
+      "build_id": "20260803-2559",
+      "published": "2026-08-03",
+      "url": "https://cloud.debian.org/images/cloud/trixie/20260803-2559/debian-13-genericcloud-amd64-20260803-2559.qcow2",
+      "filename": "debian-13-genericcloud-amd64-20260803-2559.qcow2",
+      "sha512": "769562604ecaac26b661167891ef922f71f4d87d50a11423fc04e51444fda0d882c87996dd1181170d233627f4728e6722db2695c0ef753dad762c4ac4ed32e1",
+      "checksum_source": "https://cloud.debian.org/images/cloud/trixie/20260803-2559/SHA512SUMS",
+      "checksum_signature_source": "https://cloud.debian.org/images/cloud/trixie/20260803-2559/SHA512SUMS.sign",
+      "format": "qcow2"
+    },
+    "guest-arm64": {
+      "comment": "Generic ARM64 systemd guest. Not a Raspberry Pi: no Pi firmware, no tryboot.",
+      "distribution": "debian",
+      "release": "trixie",
+      "release_version": "13",
+      "variant": "genericcloud",
+      "architecture": "arm64",
+      "build_id": "20260803-2559",
+      "published": "2026-08-03",
+      "url": "https://cloud.debian.org/images/cloud/trixie/20260803-2559/debian-13-genericcloud-arm64-20260803-2559.qcow2",
+      "filename": "debian-13-genericcloud-arm64-20260803-2559.qcow2",
+      "sha512": "fa3c6a469deb88835871c04fa4ac5865de7947806c09bb49045f4427ddf8e7a8763ba018526f380958784f6bcdc2786cc55fe58775fe1b066f8ae7f3d9f9de6f",
+      "checksum_source": "https://cloud.debian.org/images/cloud/trixie/20260803-2559/SHA512SUMS",
+      "checksum_signature_source": "https://cloud.debian.org/images/cloud/trixie/20260803-2559/SHA512SUMS.sign",
+      "format": "qcow2"
+    }
+  }
+}

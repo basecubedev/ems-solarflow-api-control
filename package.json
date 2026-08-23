@@ -11,6 +11,9 @@
     "test:e2e:system-build-packaged": "playwright test --config=playwright.packaged.config.ts",
     "test:e2e:system-build-remote": "playwright test --config=playwright.remote-packaged.config.ts",
     "test:e2e:admin-replacement": "playwright test --config=playwright.admin-replacement.config.ts",
+    "test:e2e:appliance": "playwright test --config=playwright.appliance.config.ts",
+    "test:e2e:appliance:chromium": "playwright test --config=playwright.appliance.config.ts --project=chromium",
+    "test:e2e:appliance:firefox": "playwright test --config=playwright.appliance.config.ts --project=firefox",
     "test:e2e:ui": "playwright test --ui"
   },
   "devDependencies": {

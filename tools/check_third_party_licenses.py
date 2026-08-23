@@ -76,7 +76,7 @@ EXPECTED_FLAGS = {
     OPTIONAL_PLATFORM: ("❌", "❌"),
 }
 
-STATIC_DIRS = ("dashboard/static", "admin/static")
+STATIC_DIRS = ("dashboard/static", "admin/static", "appliance/static")
 PROJECT_LICENSE_HEADER = "SPDX-License-Identifier: AGPL-3.0-or-later"
 
 _HEADING = re.compile(r"^(#{2,3})\s+(.+?)\s*$")
