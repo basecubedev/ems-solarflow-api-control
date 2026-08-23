@@ -21,8 +21,10 @@ LOG_DIR=/var/log/ems-appliance-manager
 CONFIG_DIR=/etc/ems-appliance-manager
 TMPFILES=/usr/lib/tmpfiles.d/ems-appliance-manager.conf
 UNITS="ems-appliance-agent.service ems-appliance-web.service ems-appliance-export.service ems-appliance-export.path"
-# A/B units ship in every slot and carry ConditionPathExists on the layout
-# manifest, so a single-slot appliance installs them and never activates them.
+# A/B units ship in every slot and are gated by ConditionPathExists, so a
+# single-slot appliance installs them and never activates them. Four are gated
+# on the layout manifest below; the persistence unit is gated on the build
+# marker instead and answers for itself -- see its own unit file for why.
 AB_UNITS="ems-appliance-host-identity.service ems-appliance-persistence.service \
 ems-appliance-ab-health.service ems-appliance-slot-bootstrap.service \
 ems-appliance-grow-persistent.service"
