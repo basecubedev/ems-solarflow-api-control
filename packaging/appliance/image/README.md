@@ -1,10 +1,21 @@
-# EMS SolarFlow A/B appliance image
+# EMS SolarFlow appliance images
 
-Project-owned configuration for building the fail-safe A/B appliance image with
-Raspberry Pi's own `rpi-image-gen`. The architecture is described in
-[../../../docs/appliance/ab-os-updates.md](../../../docs/appliance/ab-os-updates.md)
-and the decision to build on `image-rota` in
-[../../../docs/appliance/adr/rpi-image-gen-image-rota.md](../../../docs/appliance/adr/rpi-image-gen-image-rota.md).
+Project-owned configuration for building the appliance images with Raspberry
+Pi's own `rpi-image-gen`. Two variants are built from this directory:
+
+| | `ab` | `single` |
+|---|---|---|
+| upstream image layer | `image-rota` | `image-rpios` |
+| partition table | GPT, six partitions | MBR, boot and root |
+| root | read-only, one per slot | writable |
+| OS updates | a signed image, trial-booted | `apt` |
+
+The architecture is described in
+[../../../docs/appliance/ab-os-updates.md](../../../docs/appliance/ab-os-updates.md),
+the decision to build on `image-rota` in
+[../../../docs/appliance/adr/rpi-image-gen-image-rota.md](../../../docs/appliance/adr/rpi-image-gen-image-rota.md),
+and why there is a second variant at all in
+[../../../docs/appliance/adr/single-slot-image-variant.md](../../../docs/appliance/adr/single-slot-image-variant.md).
 
 **`rpi-image-gen` is not vendored here.** This directory contains only the
 configuration and the layer this project owns. The generator is supplied by the
@@ -14,9 +25,9 @@ build host, and the revision it must be is pinned in `rpi-image-gen.lock`.
 
 ```text
 rpi-image-gen.lock   the exact upstream revision and the contract it must satisfy
-profiles/            one build profile per board: rpi4-ab.yaml, rpi5-ab.yaml
-shared/              everything the profiles have in common
-layer/               the project layer and its rootfs overlay
+profiles/            one build profile per board and variant: rpi{4,5}-{ab,single}.yaml
+shared/              everything the profiles of one variant have in common
+layer/               the two project layers and their rootfs overlays
 assets/              files copied into the image verbatim
 ```
 
@@ -27,9 +38,15 @@ image is not a Pi 4 image. Each profile names exactly one upstream device
 layer and each artefact declares only the board class that layer is for:
 
 ```text
-profiles/rpi4-ab.yaml   device layer rpi4   class pi4   ...-<version>-rpi4-arm64-ab.img
-profiles/rpi5-ab.yaml   device layer rpi5   class pi5   ...-<version>-rpi5-arm64-ab.img
+profiles/rpi4-ab.yaml       device layer rpi4   class pi4   ...-rpi4-arm64-ab.img
+profiles/rpi5-ab.yaml       device layer rpi5   class pi5   ...-rpi5-arm64-ab.img
+profiles/rpi4-single.yaml   device layer rpi4   class pi4   ...-rpi4-arm64-single.img
+profiles/rpi5-single.yaml   device layer rpi5   class pi5   ...-rpi5-arm64-single.img
 ```
+
+Four artefacts per release. Nothing is shared between a board's two variants
+except the source tree they were built from: they have separate build
+authorities, and a release refuses an authority that names the other one.
 
 `rpi4` and `rpi5` are upstream's layer **names**; `pi4` and `pi5` are only the
 directories they live in and do not resolve. `image-rota` accepts device
