@@ -85,6 +85,9 @@ install -m 0644 "$PACKAGING/tmpfiles/ems-appliance-manager.conf" "$STAGE/usr/lib
 install -m 0644 "$PACKAGING/logrotate/ems-appliance-manager" "$STAGE/etc/logrotate.d/"
 install -m 0644 "$PACKAGING/config/appliance.conf" "$STAGE/etc/ems-appliance-manager/"
 install -m 0644 "$PACKAGING/config/allowed-images.conf" "$STAGE/etc/ems-appliance-manager/"
+# Deliberately not a conffile: it is the trust anchor for OS updates, not a
+# setting, and a local edit must not survive an upgrade that rotates the key.
+install -m 0644 "$PACKAGING/config/os-release-keyring.gpg" "$STAGE/etc/ems-appliance-manager/"
 
 for document in architecture installation admin-recovery os-updates ab-os-updates \
                 ab-hardware-validation ab-persistence-contract ssh-backup-access \

@@ -196,3 +196,36 @@ def test_a_successful_build_is_not_failed_by_a_cleanup_it_cannot_finish(tmp_path
 
     assert result.returncode == 0, f"a successful build was failed by cleanup: {result.stderr}"
 
+
+def test_the_build_publishes_a_compressed_image_with_its_own_checksum():
+    """A 16.5 GiB image is not a download anyone completes, and no common
+    release host accepts it: GitHub caps a release asset at 2 GB. Compressed it
+    is roughly 486 MB, and Raspberry Pi Imager and balenaEtcher write .img.xz
+    straight to the card, so the operator unpacks nothing.
+
+    The checksum has to cover the file that was actually downloaded. A digest
+    over the raw image cannot verify the compressed one, which is how a good
+    download gets discarded as corrupt -- the defect the RC review recorded.
+    """
+
+    text = script("appliance-build-rpi-ab-image.sh")
+
+    assert "xz" in text, "the build produces no compressed image"
+    assert '$NAME.img.xz.sha256' in text
+    assert '$NAME.img.sha256' in text, "the raw image keeps its own checksum"
+
+
+def test_the_build_refuses_up_front_if_it_cannot_compress():
+    """A missing tool must not surface after the image was already built.
+
+    The compression step runs at the end of a build that takes roughly
+    twenty-five minutes. Discovering there that xz is absent spends all of it
+    and, by the script's own rule, a host that cannot build reports NOT RUN
+    rather than a failure it did not earn.
+    """
+
+    text = script("appliance-build-rpi-ab-image.sh")
+    preflight = text.split("cp \"$BUILT\"", 1)[0]
+
+    assert 'command -v xz' in preflight, "xz is used but never verified up front"
+    assert "required_tool_missing" in preflight

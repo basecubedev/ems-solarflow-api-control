@@ -732,3 +732,27 @@ def test_a_shipped_etc_file_is_a_conffile():
     conffiles = (PACKAGING / "debian" / "conffiles").read_text(encoding="utf-8").split()
 
     assert "/etc/logrotate.d/ems-appliance-manager" in conffiles
+
+
+# --- the OS release transport ----------------------------------------------
+
+
+def test_the_package_ships_the_keyring_os_updates_are_verified_against():
+    """The public half has to be on the card before the card is flashed.
+
+    Verification is fail-closed: an appliance whose keyring is absent refuses
+    every release with ``release_keyring_missing``. That refusal is correct, but
+    it cannot be repaired afterwards on an A/B image -- the slot root is
+    read-only and apt is refused agent-side -- so an image flashed without this
+    file can never accept an OS update at all. The private half is not in this
+    repository and never will be.
+    """
+
+    keyring = PACKAGING / "config" / "os-release-keyring.gpg"
+
+    assert keyring.is_file(), "the package ships no OS release keyring"
+    assert keyring.stat().st_size > 0
+    assert b"PRIVATE KEY" not in keyring.read_bytes()
+
+    build = (PACKAGING / "build-deb.sh").read_text(encoding="utf-8")
+    assert "os-release-keyring.gpg" in build, "the keyring is never installed"

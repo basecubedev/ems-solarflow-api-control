@@ -201,7 +201,7 @@ b "set -eu
    git clone --quiet /root/source.bundle /build/source
    git -C /build/source checkout --quiet $REVISION
    /build/rpi-image-gen/install_deps.sh
-   apt-get install -y -qq qemu-user-static binfmt-support zstd gpgv gdisk \
+   apt-get install -y -qq qemu-user-static binfmt-support zstd xz-utils gpgv gdisk \
        android-sdk-libsparse-utils >/dev/null
    systemctl restart systemd-binfmt.service || true
    grep -q '^builder:' /etc/subuid || echo 'builder:100000:65536' >>/etc/subuid

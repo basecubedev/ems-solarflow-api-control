@@ -8,12 +8,10 @@ waiting.
 > [what that means](index.md#what-not-confirmed-means). This page asks you to
 > erase a card, so it is worth knowing before you start.
 
-> **No appliance image has been published yet.** The steps below are complete
-> and the file names are the ones a release will carry, but until the first
-> release appears on the
-> [Releases page](https://github.com/basecubedev/ems-solarflow-api-control/releases)
-> there is nothing to download. If you build your own, the build writes the
-> same names into `dist/`.
+> **Check the [Releases page](https://github.com/basecubedev/ems-solarflow-api-control/releases)
+> before you start.** If no appliance image is listed there yet, there is
+> nothing to download; the steps below are complete and the file names are the
+> ones a release carries. A local build writes the same names into `dist/`.
 
 ## Before you start
 
@@ -28,16 +26,26 @@ Everything on the card is erased. There is no undo.
 
 ## 1. Download the image for your board
 
+**Where to get it.** On the project's
+[Releases page](https://github.com/basecubedev/ems-solarflow-api-control/releases),
+open the newest release and scroll to **Assets** — a collapsed list at the
+bottom of the release notes. The image files are there.
+
+Not under **Packages** in the sidebar. That holds the EMS and Admin container
+images, which the appliance downloads by itself once it runs; you never fetch
+those by hand.
+
 Two files belong together:
 
 | Board | File |
 | --- | --- |
-| Raspberry Pi 5 | `ems-solarflow-appliance-<version>-rpi5-arm64-ab.img` |
-| Raspberry Pi 4 | `ems-solarflow-appliance-<version>-rpi4-arm64-ab.img` |
+| Raspberry Pi 5 | `ems-solarflow-appliance-<version>-rpi5-arm64-ab.img.xz` |
+| Raspberry Pi 4 | `ems-solarflow-appliance-<version>-rpi4-arm64-ab.img.xz` |
 
-Download the `.img` **and** the `.img.sha256` file beside it. The second one
-is how you check the first arrived intact. The image is written uncompressed,
-so expect a download of about 17 GB.
+Download the `.img.xz` **and** the `.img.xz.sha256` file beside it. The second
+one is how you check the first arrived intact. The download is roughly 500 MB
+and expands to 16.5 GiB on the card. Both Imager and balenaEtcher expand it
+while they write, so **do not unpack it yourself.**
 
 Not sure which board you have? The Pi 5 has a fan connector next to the USB-C
 socket and two camera ports. If in doubt, the model is printed on the board
@@ -51,20 +59,20 @@ ways that look like broken hardware. This step takes ten seconds.
 **Windows** (PowerShell, in the download folder):
 
 ```powershell
-Get-FileHash ems-solarflow-appliance-*-arm64-ab.img -Algorithm SHA256
-Get-Content ems-solarflow-appliance-*-arm64-ab.img.sha256
+Get-FileHash ems-solarflow-appliance-*-arm64-ab.img.xz -Algorithm SHA256
+Get-Content ems-solarflow-appliance-*-arm64-ab.img.xz.sha256
 ```
 
 **macOS**:
 
 ```bash
-shasum -a 256 -c ems-solarflow-appliance-*-arm64-ab.img.sha256
+shasum -a 256 -c ems-solarflow-appliance-*-arm64-ab.img.xz.sha256
 ```
 
 **Linux**:
 
 ```bash
-sha256sum -c ems-solarflow-appliance-*-arm64-ab.img.sha256
+sha256sum -c ems-solarflow-appliance-*-arm64-ab.img.xz.sha256
 ```
 
 macOS and Linux print `OK` when it matches. On Windows, compare the two lines
@@ -81,7 +89,8 @@ Windows, macOS and Linux, and it verifies what it wrote.
 1. Install it from [raspberrypi.com/software](https://www.raspberrypi.com/software/).
 2. Put the card in the reader.
 3. Open Imager. Under **Operating System**, scroll to the bottom and choose
-   **Use custom** — then pick the `.img` you downloaded.
+   **Use custom** — then pick the `.img.xz` you downloaded. Imager expands it
+   while it writes; there is nothing to unpack first.
 4. Under **Storage**, choose your card. *Read this line twice.* Imager lists
    every removable disk, and it will happily erase a backup drive.
 5. Press **Write** and confirm. It asks whether to apply OS customisation —
@@ -94,6 +103,18 @@ When Imager says it is done, eject the card.
 > balenaEtcher also works if you already use it. Both are open source. Imager is
 > recommended because it verifies what it wrote and is maintained by the board's
 > own vendor.
+
+**If your tool cannot read `.xz`** — some older writers, including
+Win32DiskImager, only take a plain `.img` — unpack it first and write the
+result. You need 16.5 GiB of free space for the unpacked file.
+
+| | |
+| --- | --- |
+| Windows | [7-Zip](https://www.7-zip.org/): right-click the file, **7-Zip → Extract Here** |
+| macOS, Linux | `xz -d ems-solarflow-appliance-<version>-<rpi4\|rpi5>-arm64-ab.img.xz` |
+
+Note that the `.sha256` file covers the **compressed** download, so check it
+before unpacking — afterwards it no longer matches anything you have.
 
 ### On a Linux machine with no desktop
 
@@ -110,17 +131,18 @@ plugs. It is the whole disk (`/dev/sdX`, `/dev/mmcblk0`), never a partition
 (`/dev/sdX1`). Unmount anything the desktop auto-mounted, then:
 
 ```bash
-sudo dd if=ems-solarflow-appliance-<version>-arm64-ab.img of=/dev/sdX \
-        bs=4M conv=fsync status=progress
+IMG=ems-solarflow-appliance-<version>-<rpi4|rpi5>-arm64-ab.img.xz
+xz -dc "$IMG" | sudo dd of=/dev/sdX bs=4M conv=fsync status=progress
 sudo sync
 ```
 
-`dd` does not verify. Read the image back and compare it against the file you
-wrote, which is what Imager does for you:
+`dd` does not verify. Read the card back and compare it against the image,
+which is what Imager does for you. The card is larger than the image, so the
+comparison is bounded by the image's own uncompressed length:
 
 ```bash
-sudo cmp -n "$(stat -c %s ems-solarflow-appliance-<version>-arm64-ab.img)" \
-        ems-solarflow-appliance-<version>-arm64-ab.img /dev/sdX
+xz -dc "$IMG" | sudo cmp -n "$(xz --robot --list "$IMG" \
+        | awk -F'\t' '$1=="file" {print $5}')" - /dev/sdX
 ```
 
 Silence means the card matches the image. Any output means it does not — write

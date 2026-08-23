@@ -48,7 +48,7 @@ Single-slot installation
   → a major OS generation change requires re-imaging
 
 A/B appliance image
-  ems-solarflow-appliance-<version>-<rpi4|rpi5>-arm64-ab.img, flashed to the medium
+  ems-solarflow-appliance-<version>-<rpi4|rpi5>-arm64-ab.img.xz, flashed to the medium
   → image-based fail-safe host updates
   → the inactive slot is staged, trial-booted, health-checked
   → commit, or automatic fallback to the previous slot

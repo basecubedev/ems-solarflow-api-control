@@ -64,6 +64,9 @@ done
 # A profile selects a config path and a build id names a directory. Both are
 # refused before they are used to build either.
 command -v python3 >/dev/null 2>&1 || not_run "python3 is not installed" required_tool_missing
+# Checked here rather than at the compression step, which runs after a
+# twenty-five minute build.
+command -v xz >/dev/null 2>&1 || not_run "xz is not installed" required_tool_missing
 [ -n "$BUILD_ID" ] || BUILD_ID=$(date -u +%Y%m%d%H%M%S 2>/dev/null || echo unknown)
 PYTHONPATH="$ROOT" python3 - "$PROFILE" "$BUILD_ID" <<'PY' || exit 2
 import sys
@@ -265,6 +268,14 @@ EXTRA=$(find "$IMAGE_DIR_NAME" -maxdepth 1 -name '*.img' -type f ! -name "$IMAGE
 cp "$BUILT" "$OUTPUT/$NAME.img" || fail "the built image could not be collected" output_unusable
 ( cd "$OUTPUT" && sha256sum "$NAME.img" > "$NAME.img.sha256" )
 
+# The raw image is 16.5 GiB and mostly empty; no common release host accepts a
+# file that size. Imager and balenaEtcher write .img.xz straight to the card,
+# so the operator unpacks nothing. Its checksum covers the compressed file,
+# because a digest over the raw image cannot verify what was downloaded.
+xz -T0 -6 -k -c "$OUTPUT/$NAME.img" > "$OUTPUT/$NAME.img.xz" \
+    || fail "the image could not be compressed" output_unusable
+( cd "$OUTPUT" && sha256sum "$NAME.img.xz" > "$NAME.img.xz.sha256" )
+
 UPDATE=""
 [ -f "$IMAGE_DIR_NAME/update.tar.zst" ] && UPDATE="$IMAGE_DIR_NAME/update.tar.zst"
 [ -n "$UPDATE" ] && cp "$UPDATE" "$OUTPUT/$NAME.update.tar.zst"
@@ -397,6 +408,8 @@ JSON
 echo
 echo "image:    $OUTPUT/$NAME.img"
 echo "checksum: $OUTPUT/$NAME.img.sha256"
+echo "publish:  $OUTPUT/$NAME.img.xz"
+echo "checksum: $OUTPUT/$NAME.img.xz.sha256"
 echo "metadata: $OUTPUT/$NAME.build.json"
 echo "authority: $OUTPUT/$NAME.build-authority.json"
 [ -n "$UPDATE" ] && echo "update:   $OUTPUT/$NAME.update.tar.zst"

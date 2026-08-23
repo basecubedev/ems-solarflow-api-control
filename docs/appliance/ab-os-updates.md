@@ -89,6 +89,11 @@ ems-solarflow-appliance-<version>-rpi5-arm64-ab.img
 ems-solarflow-appliance-<version>-rpi4-arm64-ab.img
 ```
 
+The build keeps the raw image -- the build authority binds its digest -- and
+publishes it compressed beside it as `.img.xz` with its own checksum. The raw
+form is 16.5 GiB and mostly empty; compressed it is roughly 500 MB, and Imager
+and balenaEtcher write the compressed file straight to a card.
+
 Each signed manifest carries the `device_layer` it was built from and only the
 board classes that layer is for. At runtime the appliance normalises
 `/proc/device-tree/compatible` to a bounded board class and refuses an artefact
