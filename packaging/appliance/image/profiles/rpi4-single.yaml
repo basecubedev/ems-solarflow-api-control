@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# The single-slot appliance image for Raspberry Pi 4.
+#
+#   rpi-image-gen build -c <abs>/profiles/rpi4-single.yaml -S packaging/appliance/image
+#
+# One writable root, patched by apt. The A/B image for the same board is a
+# different product, not a different setting: see rpi4-ab.yaml.
+include:
+  file: ../shared/ems-appliance-single.yaml
+
+device:
+  layer: rpi4
+
+image:
+  name: ems-solarflow-appliance-rpi4-single

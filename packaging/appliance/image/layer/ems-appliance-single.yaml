@@ -1,0 +1,206 @@
+# METABEGIN
+# X-Env-Layer-Name: ems-appliance-single
+# X-Env-Layer-Category: app
+# X-Env-Layer-Desc: EMS SolarFlow Appliance Manager and its Docker runtime on a
+#  single writable root filesystem, patched in place by apt.
+# X-Env-Layer-Version: 1.0.0
+# X-Env-Layer-Requires: image-rpios,docker-debian-trixie
+#
+# X-Env-VarPrefix: emsappliance
+#
+# X-Env-Var-package:
+# X-Env-Var-package-Desc: Path to the ems-appliance-manager .deb to install.
+# X-Env-Var-package-Required: y
+# X-Env-Var-package-Valid: string
+# X-Env-Var-package-Set: y
+#
+# X-Env-Var-release_version:
+# X-Env-Var-release_version-Desc: The OS release version recorded in the build
+#  marker. There is no trial boot here, so it is provenance, not a gate.
+# X-Env-Var-release_version-Required: y
+# X-Env-Var-release_version-Valid: string
+# X-Env-Var-release_version-Set: y
+#
+# X-Env-Var-build_id:
+# X-Env-Var-build_id-Desc: The exact build this root filesystem is. It names one
+#  artefact for the whole product, so it must be unique per build.
+# X-Env-Var-build_id-Required: y
+# X-Env-Var-build_id-Valid: string
+# X-Env-Var-build_id-Set: y
+#
+# METAEND
+---
+# A second layer file rather than a switch inside the first one, because
+# upstream leaves no choice: it resolves a layer name to its latest version
+# only, refuses a name and version that collide, and derives the overlay
+# directory from this file's own stem. Both variants are built from one source
+# root, so they cannot be told apart per build any other way.
+#
+# Everything here that is not about slots is deliberately identical to
+# ems-appliance.yaml, and a contract test keeps the shared hooks byte-equal.
+#
+# Nothing but DEB822 fields and their space-indented continuations may appear
+# above METAEND: upstream's layer loader parses that block, and a prose line
+# there fails the whole layer to load -- which is how the first real build of
+# this variant ended, with "Layer 'ems-appliance-single' not found".
+mmdebstrap:
+  packages:
+    # Everything ems-appliance-manager declares as a runtime dependency. The
+    # package is installed below with dpkg, which resolves nothing, so a
+    # dependency that only some base layer happened to pull in is a dependency
+    # that is not met: the package stays unconfigured and the image build fails.
+    # tests/test_appliance_ab_packaging.py keeps this list equal to the control
+    # file's Depends, which remains the one place they are declared.
+    - acl
+    - adduser
+    - ca-certificates
+    - gpgv
+    - iproute2
+    - mount
+    - openssh-client
+    - passwd
+    - procps
+    - python3
+    - systemd
+    - util-linux
+    - zstd
+    # What the appliance itself needs beyond the package's own dependencies.
+    # avahi publishes ems-solarflow.local, which is the only address the
+    # documentation gives a new owner and the one the hostname path restarts.
+    - avahi-daemon
+    - avahi-utils
+    - curl
+    - e2fsprogs
+    - cloud-guest-utils
+    - network-manager
+    - openssh-server
+    - systemd-timesyncd
+  customize-hooks:
+    # openssh-server's postinst generates a host key pair when it is installed,
+    # and it is installed in the build chroot — so the image would carry one,
+    # the same one on every appliance flashed from it, made on the build machine
+    # and published with the release. A private key that ships in a public
+    # artefact is compromised whether or not anything reads it.
+    #
+    # Nothing replaces it here, and nothing has to: Debian ships
+    # sshd-keygen.service enabled, and on this variant's writable root its
+    # ConditionPathIsReadWrite=/etc/ssh holds, so the appliance makes its own
+    # pair on first boot. The A/B image needs a producer of its own precisely
+    # because that condition is false on a read-only slot root.
+    - |-
+      set -eu
+      rm -f "$1"/etc/ssh/ssh_host_*_key "$1"/etc/ssh/ssh_host_*_key.pub
+    # The package is built outside the image and installed here, so the same
+    # artifact an operator can install on an existing host is what the image
+    # carries. dpkg is run in the chroot; the postinst detects that there is no
+    # running systemd and defers service startup.
+    - |-
+      set -eu
+      [ -f "$IGconf_emsappliance_package" ] || {
+         echo "ems-appliance: $IGconf_emsappliance_package is missing" >&2
+         exit 1
+      }
+      install -m 0644 "$IGconf_emsappliance_package" "$1/tmp/ems-appliance-manager.deb"
+      chroot "$1" /usr/bin/dpkg -i /tmp/ems-appliance-manager.deb
+      rm -f "$1/tmp/ems-appliance-manager.deb"
+
+    # The build marker names the exact build this filesystem is. Nothing here
+    # boots on trial, so it is provenance rather than a gate -- except for
+    # image_layer, which is read at every boot: it is what tells the persistence
+    # verifier that this appliance has no shared partition to prove, and the
+    # verifier fails closed unless it says so positively.
+    #
+    # The package record is dpkg's own answer. It is captured here to stay
+    # equal to the A/B image's marker, so one release gate can read either.
+    - |-
+      set -eu
+      mkdir -p "$1/etc"
+      package=$(chroot "$1" /usr/bin/dpkg-query -W \
+         -f='${Package}\t${Version}\t${Architecture}\t${Status}' \
+         ems-appliance-manager) || {
+         echo "ems-appliance: dpkg does not report the package as installed" >&2
+         exit 1
+      }
+      name=$(printf '%s' "$package" | cut -f1)
+      version=$(printf '%s' "$package" | cut -f2)
+      arch=$(printf '%s' "$package" | cut -f3)
+      status=$(printf '%s' "$package" | cut -f4)
+      [ "$status" = "install ok installed" ] || {
+         echo "ems-appliance: the package is '$status', not installed" >&2
+         exit 1
+      }
+      # The full package set of the rootfs. The rootfs is assembled from live
+      # Debian mirrors, so the image's inputs are not otherwise recoverable
+      # after the fact: without this, an attestation binds who built it and
+      # from which git tree, and says nothing about what went into it.
+      chroot "$1" dpkg-query -W -f='${binary:Package}\t${Version}\t${Architecture}\n' \
+         > "$1/etc/ems-appliance-os-packages" 2>/dev/null || {
+         echo "ems-appliance: the package set of the rootfs could not be recorded" >&2
+         exit 1
+      }
+      packages_sha256=$(sha256sum "$1/etc/ems-appliance-os-packages" | cut -d' ' -f1)
+      packages_count=$(wc -l < "$1/etc/ems-appliance-os-packages" | tr -d ' ')
+
+      cat > "$1/etc/ems-appliance-os-build" <<EOF
+      {
+        "architecture": "arm64",
+        "build_id": "$IGconf_emsappliance_build_id",
+        "image_layer": "image-rpios",
+        "release_version": "$IGconf_emsappliance_release_version",
+        "appliance_manager_version": "$(chroot "$1" /usr/bin/ems-appliance --version 2>/dev/null || echo unknown)",
+        "package": {
+          "name": "$name",
+          "version": "$version",
+          "architecture": "$arch",
+          "status": "$status"
+        },
+        "os_packages": {
+          "manifest": "/etc/ems-appliance-os-packages",
+          "count": $packages_count,
+          "sha256": "sha256:$packages_sha256"
+        }
+      }
+      EOF
+
+    # The opposite of the A/B image, and the whole point of this variant.
+    # image-rpios writes an fstab that mounts the root rw, which is what
+    # systemd-remount-fs enforces once userspace is up; the kernel command line
+    # upstream ships says neither, so the *initial* mount would depend on
+    # initramfs-tools defaulting to read-only. This project does not rely on
+    # that default in either direction, so the intent is stated explicitly --
+    # and a ro that arrived from anywhere is refused, because apt on a
+    # read-only root is the failure this variant exists to avoid.
+    - |-
+      set -eu
+      cmdline="$1/boot/firmware/cmdline.txt"
+      [ -f "$cmdline" ] || {
+         echo "ems-appliance: $cmdline is missing" >&2
+         exit 1
+      }
+      grep -qE '(^| )ro( |$)' "$cmdline" && {
+         echo "ems-appliance: the kernel command line asks for a read-only root" >&2
+         exit 1
+      }
+      grep -qE '(^| )rw( |$)' "$cmdline" || sed -i '1s|$| rw|' "$cmdline"
+      grep -qE '(^| )rw( |$)' "$cmdline" || {
+         echo "ems-appliance: rw could not be added to the kernel command line" >&2
+         exit 1
+      }
+
+    # No ab write-layout hook, and that absence is the mechanism: with no
+    # /etc/ems-appliance-manager/ab-layout.json the runtime discovers
+    # MODE_SINGLE_SLOT, refuses every mutating A/B plan with a reason, and
+    # reports single_slot to the dashboard. There is no descriptor this CLI
+    # could write that would describe an image with one root.
+    #
+    # No mount-point hook either: the A/B layer pre-creates those directories
+    # because its root is read-only from the first boot onwards, and here the
+    # package's own postinst and tmpfiles create what they need.
+    #
+    # No host-identity unit: the layer above deletes the host keys the build
+    # chroot generated, and on a writable root Debian's own sshd-keygen.service
+    # -- shipped enabled, ConditionFirstBoot=yes, ConditionPathIsReadWrite=
+    # /etc/ssh -- makes the appliance's own pair on first boot. The A/B image
+    # needs its own producer only because that condition is false there.
+    - $BDEBSTRAP_HOOKS/enable-units "$1" ems-appliance-agent.service \
+        ems-appliance-web.service

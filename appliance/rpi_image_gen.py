@@ -78,20 +78,12 @@ class HardwareProfile:
     compatible_board_classes: tuple
     description: str
 
-    @property
-    def artifact_suffix(self):
-        return f"{self.name}-arm64-ab"
-
-    def artifact_basename(self, version):
-        return f"ems-solarflow-appliance-{version}-{self.artifact_suffix}"
-
     def to_dict(self):
         return {
             "name": self.name,
             "device_layer": self.device_layer,
             "device_class": self.device_class,
             "compatible_board_classes": list(self.compatible_board_classes),
-            "artifact_suffix": self.artifact_suffix,
             "description": self.description,
         }
 
@@ -301,11 +293,22 @@ def file_sha256(path, *, chunk=1024 * 1024):
 
 @dataclass(frozen=True)
 class BuildProfile:
-    """One rpi-image-gen config this project builds, and what it is for."""
+    """One rpi-image-gen config this project builds, and what it is for.
+
+    A profile is a board *and* a variant. The board comes from its own device
+    layer; the variant comes from the shared config it includes, because that
+    is where the upstream image layer is named -- and naming it twice is how
+    two files come to disagree about which image they build.
+    """
 
     path: Path
     hardware: HardwareProfile
+    variant: object
     image_name: str
+
+    @property
+    def artifact_suffix(self):
+        return self.variant.artifact_suffix(self.hardware.name)
 
     @property
     def name(self):
@@ -324,13 +327,15 @@ class BuildProfile:
         return self.hardware.compatible_board_classes
 
     def artifact_basename(self, version):
-        return self.hardware.artifact_basename(version)
+        return f"ems-solarflow-appliance-{version}-{self.artifact_suffix}"
 
     def to_dict(self):
         return {
             "name": self.name,
             "config": str(self.path),
             "image_name": self.image_name,
+            "variant": self.variant.slug,
+            "artifact_suffix": self.artifact_suffix,
             **self.hardware.to_dict(),
         }
 
@@ -384,8 +389,41 @@ def read_profile(path):
             f"{target.name} selects device layer {layer!r}, which this project has no profile for",
         )
     return BuildProfile(
-        path=target, hardware=hardware, image_name=values.get("image.name", "")
+        path=target,
+        hardware=hardware,
+        variant=_profile_variant(target, values),
+        image_name=values.get("image.name", ""),
     )
+
+
+def _profile_variant(target, values):
+    """Which image this profile builds, read from the config it includes.
+
+    The profile itself names only a board. The image layer is one level up, in
+    the shared config, which is also the file that has to be right for the
+    build to be the image it claims -- so that is where the answer is taken
+    from, and an unrecognised one is refused rather than defaulted.
+    """
+
+    included = values.get("include.file", "")
+    if not included:
+        raise ImageGenError("profile_invalid", f"{target.name} includes no shared configuration")
+    shared = (target.parent / included).resolve()
+    try:
+        text = shared.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ImageGenError(
+            "profile_unreadable", f"{target.name} includes {included}, which could not be read: {exc}"
+        )
+    layer = _config_values(text).get("image.layer", "")
+    variant = image_variants.variant_of_image_layer(layer)
+    if variant is None:
+        raise ImageGenError(
+            "profile_variant_unknown",
+            f"{shared.name} builds image layer {layer or 'nothing'!r}, "
+            "which this project has no image variant for",
+        )
+    return variant
 
 
 def profiles(directory=None):
